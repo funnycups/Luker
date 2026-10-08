@@ -183,6 +183,7 @@ import * as ITERATION_LIBRARY_API_NS from './iteration-library/index.js';
 import * as LUKER_TABS_API from './extensions/luker-tabs.js';
 import * as FIELD_HELP_API from './extensions/field-help.js';
 import { skillsApi } from './skills/api.js';
+import * as RUN_PANEL_API_NS from './run-panel/index.js';
 import { SECRET_KEYS, secret_state } from './secrets.js';
 import { EmbeddingService } from './embedding-service.js';
 import * as LIB_BUNDLE from '../lib.js';
@@ -208,6 +209,16 @@ const ITERATION_LIBRARY_API = Object.freeze({
     tools: ITERATION_LIBRARY_API_NS.tools,
     proposalBus: ITERATION_LIBRARY_API_NS.proposalBus,
     bindIterWorkspaceResizer: ITERATION_LIBRARY_API_NS.bindIterWorkspaceResizer,
+});
+
+const RUN_PANEL_API = Object.freeze({
+    createRunStore: RUN_PANEL_API_NS.createRunStore,
+    createRunPanel: RUN_PANEL_API_NS.createRunPanel,
+    PanelRenderer: RUN_PANEL_API_NS.PanelRenderer,
+    DEFAULT_KIND_ICONS: RUN_PANEL_API_NS.DEFAULT_KIND_ICONS,
+    events: RUN_PANEL_API_NS.events,
+    withRound: RUN_PANEL_API_NS.withRound,
+    withStreamingSection: RUN_PANEL_API_NS.withStreamingSection,
 });
 
 function safeClone(value, fallback = {}) {
@@ -2475,6 +2486,7 @@ export function getContext() {
         readPluginFloors: (options = {}) => readPluginFloors(getContext(), options),
         floorRecordToTaskMessage,
         iterationLibrary: ITERATION_LIBRARY_API,
+        runPanel: RUN_PANEL_API,
         edits: EDITS_API,
         renderLukerTabs: LUKER_TABS_API.renderLukerTabs,
         renderFieldHelpButton: FIELD_HELP_API.renderFieldHelpButton,

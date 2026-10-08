@@ -93,13 +93,13 @@ describe('RunStateStore — subscribe / unsubscribe', () => {
         unsubA(); unsubB();
     });
 
-    test('clearCurrentRun emits RUN_CLEARED', async () => {
+    test('clearCurrentRun emits RUN_CLEARED with the runId', async () => {
         const { subscribe } = await import('../../public/scripts/extensions/orchestrator/run-state/store.js');
         const events = [];
         const unsub = subscribe((e) => events.push(e));
-        startRun({ mode: 'director', chatKey: 'chatA' });
+        const runId = startRun({ mode: 'director', chatKey: 'chatA' });
         clearCurrentRun();
-        expect(events[events.length - 1]).toEqual({ type: evt.RUN_CLEARED });
+        expect(events[events.length - 1]).toEqual({ type: evt.RUN_CLEARED, runId });
         unsub();
     });
 });

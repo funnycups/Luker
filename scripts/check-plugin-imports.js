@@ -52,6 +52,7 @@ const LUKER_PLATFORM_DIRS = new Set([
     'skills',
     'lib',
     'vendor',
+    'run-panel',
 ]);
 
 const IMPORT_RE = /(?:^|[\s;])import(?:\s+(?:[^'"]+from\s+)?)?['"]([^'"]+)['"]/g;

@@ -15,6 +15,7 @@
 | [角色卡替换流程](/zh-CN/development/extension-api/character-replace-flow) | 替换角色卡时运行的注册表：卡绑定保护槽位与替换后世界书动作 |
 | [UI 与弹窗](/zh-CN/development/extension-api/ui-and-popups) | 弹窗、加载器、模板、消息格式化 |
 | [IterationStudio](/zh-CN/development/extension-api/iteration-studio) | AI 驱动迭代编辑的共享弹窗框架 —— 对话、会话、diff 预览、批准 / 拒绝生命周期。adapter 提供工件形状和工具 |
+| [运行面板](/zh-CN/development/extension-api/run-panel) | 多步 LLM 任务的共享内存内运行轨迹 —— 轮次、流式分节、停止、导出。插件通过工厂式 store 与面板驱动它 |
 | [插件集成](/zh-CN/development/extension-api/plugin-integration) | 正则运行时、搜索工具、扩展 API 注册表、事件系统、i18n、设置存储、调试与抓取器注册、tokenization、工具函数、符号与常量 |
 | [底层端点](/zh-CN/development/extension-api/low-level-endpoints) | 原始 HTTP 路由（仅供高级 / 调试场景使用） |
 

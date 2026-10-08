@@ -1,9 +1,9 @@
-// public/scripts/extensions/orchestrator/run-state/types.js
+// public/scripts/run-panel/types.js
 /**
- * @typedef {'director'|'loop'|'agenda'|'spec'} RunMode
- * @typedef {'running'|'committed'|'aborted'|'error'} RunStatus
+ * @typedef {string} RunMode   Consumer-defined label (e.g. 'director'|'loop'|'agenda'|'spec'|'search').
+ * @typedef {string} RunStatus Consumer-defined; 'running' while live, any terminal string after finishRun.
  * @typedef {'running'|'done'|'failed'} StepStatus
- * @typedef {'reasoning'|'text'|'tool_call'|'tool_result'|'sub_agent'|'note'|'messages_dump'} SectionKind
+ * @typedef {string} SectionKind Consumer-defined; common: reasoning|text|tool_call|tool_result|sub_agent|note.
  */
 
 /**
@@ -47,6 +47,8 @@
  * @property {TokensSpent|null} tokensSpent
  * @property {number|null} cost
  * @property {(() => void)|null} abortFn
+ * @property {(() => void)|null} stopFn
+ * @property {boolean} quiet
  */
 
 export {};

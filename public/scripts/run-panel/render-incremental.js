@@ -1,17 +1,19 @@
-// public/scripts/extensions/orchestrator/run-panel/render-incremental.js
+// public/scripts/run-panel/render-incremental.js
 /**
- * Translates RunStateStore events into incremental DOM updates inside
- * #luker-orch-run-panel. No framework; just direct DOM ops.
+ * Translates run-store events into incremental DOM updates inside a
+ * run-panel root. No framework; just direct DOM ops.
  *
  * SECTION_APPENDED is the high-frequency event. We coalesce within a
  * single rAF so a fast token stream produces at most ~60 DOM writes/s.
+ *
+ * Consumer-specific values are injected via constructor options:
+ * `store`, `t`, `kindIcons`, `defaultCollapsedKinds`, `modeLabels`,
+ * `exportFilename`, `onStop`.
  */
 
-import * as EV from '../run-state/events.js';
-import { getCurrentRun } from '../run-state/store.js';
-import { i18n, i18nFormat } from '../i18n.js';
+import * as EV from './events.js';
 
-const KIND_ICON = {
+export const DEFAULT_KIND_ICONS = Object.freeze({
     reasoning: '💭',
     text: '📝',
     tool_call: '🔧',
@@ -19,11 +21,24 @@ const KIND_ICON = {
     sub_agent: '🤖',
     note: '💡',
     messages_dump: '📦',
-};
+});
 
 export class PanelRenderer {
-    constructor(rootEl) {
+    constructor(rootEl, options = {}) {
         this.root = rootEl;
+        this.store = options.store;
+        if (!this.store || typeof this.store.getCurrentRun !== 'function') {
+            throw new Error('PanelRenderer requires a store option');
+        }
+        this.t = typeof options.t === 'function' ? options.t : (s) => String(s ?? '');
+        this.kindIcons = options.kindIcons || DEFAULT_KIND_ICONS;
+        this.defaultCollapsedKinds = new Set(options.defaultCollapsedKinds || []);
+        this.modeLabels = options.modeLabels || {};
+        this.exportFilename = typeof options.exportFilename === 'function'
+            ? options.exportFilename
+            : ({ runId, mode }) => `run-${runId}-${mode}.json`;
+        this.onStop = typeof options.onStop === 'function' ? options.onStop : null;
+
         this.bodyEl = rootEl.querySelector('.panel-body');
         this.roundsListEl = rootEl.querySelector('.rounds-list');
         this.finalOutputEl = rootEl.querySelector('.final-output');
@@ -36,32 +51,17 @@ export class PanelRenderer {
         this._pendingAppends = new Map();
         this._rafScheduled = false;
         this._scrollPinned = true;
-        // Tracks round/section keys the user has clicked the <summary> on.
-        // Auto-collapse on terminal status skips any entry in here so a
-        // manually-pinned section stays pinned. We key off summary clicks
-        // (which also covers keyboard Enter/Space synthetic clicks) rather
-        // than the `toggle` event — toggle fires asynchronously on a
-        // macrotask and also fires for programmatic `.open = ...` flips,
-        // so any same-tick suppression flag is cleared by the time the
-        // listener runs and the initial creation-time `open = true` would
-        // mark every round/section as "user-pinned" before any real
-        // interaction.
         this._manualToggles = new Set();
         this._elapsedTimer = null;
-        // Per-round wall-clock tickers. Same 200ms cadence as the global
-        // header timer so displayed seconds stay in sync. Terminal status
-        // events / run finish / clear all sweep this map.
         this._roundTimers = new Map();
 
         this._bindScrollPin();
     }
 
-    /**
-     * Format wall-clock milliseconds for the per-round elapsed display.
-     * Sub-minute keeps 100 ms precision so short agents don't look frozen;
-     * >= 60s switches to `Xm YYs` because the panel row is narrow and
-     * trailing decimals just add noise at that scale.
-     */
+    _run() {
+        return this.store.getCurrentRun();
+    }
+
     _formatElapsed(ms) {
         if (!Number.isFinite(ms) || ms < 0) ms = 0;
         const totalSec = ms / 1000;
@@ -84,12 +84,6 @@ export class PanelRenderer {
         this._roundTimers.clear();
     }
 
-    /**
-     * Flip `<details>.open` programmatically. Programmatic flips never
-     * trigger the `<summary>` click handler, so `_manualToggles` stays
-     * clean and the auto-fold paths can keep using it as a user-pin
-     * signal.
-     */
     _setDetailsOpen(detailsEl, open) {
         if (!detailsEl) return;
         if (detailsEl.open === Boolean(open)) return;
@@ -113,7 +107,7 @@ export class PanelRenderer {
         if (!btn) {
             btn = document.createElement('button');
             btn.className = 'jump-latest';
-            btn.textContent = i18n('Jump to latest');
+            btn.textContent = this.t('Jump to latest');
             btn.addEventListener('click', () => {
                 this.bodyEl.scrollTop = this.bodyEl.scrollHeight;
                 this._scrollPinned = true;
@@ -144,25 +138,19 @@ export class PanelRenderer {
     }
 
     _renderRunStart() {
-        const run = getCurrentRun();
+        const run = this._run();
         if (!run) return;
         this.root.dataset.state = 'open';
         this.roundsListEl.innerHTML = '';
         this._manualToggles.clear();
         this._sweepRoundTimers();
-        // Clear any "no active run" empty-state that may have been planted
-        // by a prior menu-triggered openRunPanel() call.
         const empty = this.bodyEl.querySelector(':scope > .empty-state');
         if (empty) empty.remove();
         if (this.finalOutputEl) this.finalOutputEl.hidden = true;
-        this.modeBadgeEl.textContent = run.mode;
+        this.modeBadgeEl.textContent = this.modeLabels[run.mode] || run.mode;
         this.modeBadgeEl.dataset.mode = run.mode;
         this.headerStatusEl.dataset.status = run.status;
         this.stopBtnEl.hidden = false;
-        // Reset the disabled state from any prior `stop()` click. Kept
-        // together with `hidden = false` so a fresh run always starts
-        // with an interactive button regardless of how the previous run
-        // ended (finished normally / user-aborted / errored mid-tool).
         this.stopBtnEl.disabled = false;
         this._startElapsedTimer();
         this._renderHeader();
@@ -170,10 +158,10 @@ export class PanelRenderer {
 
     _startElapsedTimer() {
         if (this._elapsedTimer) clearInterval(this._elapsedTimer);
-        const run = getCurrentRun();
+        const run = this._run();
         if (!run) return;
         const tick = () => {
-            const r = getCurrentRun();
+            const r = this._run();
             if (!r) return;
             const end = r.endedAt ?? performance.now();
             const sec = ((end - r.startedAt) / 1000).toFixed(1);
@@ -184,7 +172,7 @@ export class PanelRenderer {
     }
 
     _renderHeader() {
-        const run = getCurrentRun();
+        const run = this._run();
         if (!run) return;
         const numRounds = run.rounds.length;
         const numToolCalls = run.rounds.reduce(
@@ -194,12 +182,12 @@ export class PanelRenderer {
         const tokensFmt = typeof tokens === 'number'
             ? (tokens > 999 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens))
             : tokens;
-        this.summaryEl.textContent = i18nFormat('${0} rounds · ${1} tool calls · ${2} tokens',
+        this.summaryEl.textContent = this.t('${0} rounds · ${1} tool calls · ${2} tokens',
             numRounds, numToolCalls, tokensFmt);
     }
 
     _renderRoundAppended(roundId) {
-        const run = getCurrentRun();
+        const run = this._run();
         if (!run) return;
         const round = run.rounds.find(r => r.id === roundId);
         if (!round) return;
@@ -210,12 +198,8 @@ export class PanelRenderer {
         li.dataset.status = round.status;
 
         const details = document.createElement('details');
-        details.open = true; // running round defaults open
+        details.open = true;
         const summary = document.createElement('summary');
-        // Structured children so status/elapsed can be updated in place
-        // without wiping the label. Direct textContent assignment (the
-        // old approach) also erased whatever elapsed span we appended,
-        // making the timing invisible one status tick later.
         const dot = document.createElement('span');
         dot.className = 'round-dot';
         dot.textContent = '●';
@@ -238,13 +222,6 @@ export class PanelRenderer {
         ol.className = 'sections-list';
         details.appendChild(ol);
 
-        // Track manual toggles so subsequent status updates don't override
-        // user-driven expand/collapse decisions. We listen on `<summary>`
-        // click (which covers keyboard Enter/Space too — the browser
-        // synthesizes a click) instead of the details `toggle` event:
-        // toggle is a macrotask that also fires for programmatic
-        // `.open = ...` flips, so it can't distinguish the initial
-        // creation-time set from a real interaction.
         summary.addEventListener('click', () => {
             this._manualToggles.add(`round:${roundId}`);
         });
@@ -252,17 +229,12 @@ export class PanelRenderer {
         li.appendChild(details);
         this.roundsListEl.appendChild(li);
 
-        // If this round is already terminal (replayFromStore path re-
-        // running _renderRoundAppended for a finished round), freeze
-        // elapsed to endedAt and skip the ticker entirely. Otherwise
-        // start a 200 ms ticker; it self-stops when the round hits
-        // terminal via _renderRoundStatus, or gets swept on run finish.
         if (round.endedAt != null) {
             elapsedSpan.textContent = this._formatElapsed(round.endedAt - round.startedAt);
         } else {
-            this._stopRoundTimer(roundId); // paranoid: avoid duplicate on re-append
+            this._stopRoundTimer(roundId);
             const tick = () => {
-                const r = getCurrentRun();
+                const r = this._run();
                 const rd = r?.rounds.find(x => x.id === roundId);
                 if (!rd) { this._stopRoundTimer(roundId); return; }
                 const end = rd.endedAt ?? performance.now();
@@ -284,7 +256,7 @@ export class PanelRenderer {
         if (!ol) return;
         if (ol.querySelector(`[data-section-id="${CSS.escape(sectionId)}"]`)) return;
 
-        const run = getCurrentRun();
+        const run = this._run();
         const round = run?.rounds.find(r => r.id === roundId);
         const section = round?.sections.find(s => s.id === sectionId);
         if (!section) return;
@@ -296,17 +268,16 @@ export class PanelRenderer {
         sli.dataset.status = section.status;
 
         const details = document.createElement('details');
-        const isMessagesDump = section.kind === 'messages_dump';
-        details.open = !isMessagesDump; // messages_dump deep-folds by default
+        details.open = !this.defaultCollapsedKinds.has(section.kind);
 
         const summary = document.createElement('summary');
-        const icon = KIND_ICON[section.kind] || '•';
+        const icon = this.kindIcons[section.kind] || '•';
         const titleSpan = document.createElement('span');
         titleSpan.textContent = `${icon} ${section.title}`;
         summary.appendChild(titleSpan);
         const copyBtn = document.createElement('button');
         copyBtn.className = 'copy-btn';
-        copyBtn.title = i18n('Copy');
+        copyBtn.title = this.t('Copy');
         copyBtn.textContent = '⧉';
         copyBtn.addEventListener('click', (e) => {
             e.preventDefault();
@@ -360,10 +331,6 @@ export class PanelRenderer {
         );
         if (!li) return;
         li.dataset.status = status;
-        // Auto-fold finished sections so a long run doesn't keep every
-        // tool_call / tool_result expanded — mobile dies under that.
-        // Skip when the user has manually toggled this section: their
-        // pin overrides the auto-fold.
         if (status === 'done' || status === 'failed') {
             if (!this._manualToggles.has(`section:${roundId}:${sectionId}`)) {
                 const details = li.querySelector(':scope > details');
@@ -380,12 +347,8 @@ export class PanelRenderer {
         if (summary) {
             const statusSpan = summary.querySelector('.round-status');
             if (statusSpan) statusSpan.textContent = status;
-            // Freeze the elapsed display to endedAt (store already wrote
-            // it on terminal transition — see run-state/store.js
-            // setRoundStatus). Ticker gets stopped below so this final
-            // value sticks.
             if (status === 'done' || status === 'failed') {
-                const run = getCurrentRun();
+                const run = this._run();
                 const round = run?.rounds.find(r => r.id === roundId);
                 const elapsedSpan = summary.querySelector('.round-elapsed');
                 if (round && elapsedSpan && round.endedAt != null) {
@@ -403,20 +366,14 @@ export class PanelRenderer {
     }
 
     _renderRunFinished(status) {
-        const run = getCurrentRun();
+        const run = this._run();
         if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
         this._sweepRoundTimers();
-        // Tick the timer one final time so the displayed elapsed reflects endedAt.
         if (run && this.elapsedEl) {
             const end = run.endedAt ?? performance.now();
             const sec = ((end - run.startedAt) / 1000).toFixed(1);
             this.elapsedEl.textContent = `${sec}s`;
         }
-        // Freeze per-round elapsed to endedAt for anything still visible.
-        // Covers aborted rounds whose SECTION/ROUND_STATUS never fired
-        // (store's setRoundStatus is the only place endedAt gets written,
-        // so for those we fall back to the run's endedAt as an
-        // approximation — matches how the header .elapsed reads).
         if (run) {
             for (const round of run.rounds) {
                 const li = this.roundsListEl.querySelector(`[data-round-id="${CSS.escape(round.id)}"]`);
@@ -432,10 +389,6 @@ export class PanelRenderer {
             this.finalOutputEl.hidden = false;
             this.finalOutputEl.querySelector('pre').textContent = run.finalText;
         }
-        // Final sweep: collapse every round/section that never reached
-        // a terminal status — covers aborted runs and edge cases where
-        // a SECTION_STATUS / ROUND_STATUS event was skipped. The final
-        // output stays open; user-pinned entries stay pinned.
         for (const li of this.roundsListEl.querySelectorAll('.round')) {
             const roundId = li.dataset.roundId;
             if (!roundId || this._manualToggles.has(`round:${roundId}`)) continue;
@@ -463,7 +416,7 @@ export class PanelRenderer {
     }
 
     async _copySection(roundId, sectionId, btn) {
-        const run = getCurrentRun();
+        const run = this._run();
         const round = run?.rounds.find(r => r.id === roundId);
         const section = round?.sections.find(s => s.id === sectionId);
         if (!section) return;
@@ -493,15 +446,14 @@ export class PanelRenderer {
     }
 
     exportTrace() {
-        const run = getCurrentRun();
+        const run = this._run();
         if (!run) return;
         const snapshot = JSON.parse(JSON.stringify(run, (k, v) => (k === 'abortFn' ? undefined : v)));
         const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        const ts = new Date().toISOString().replace(/[:.]/g, '-');
         a.href = url;
-        a.download = `orch-run-${run.runId}-${run.mode}-${ts}.json`;
+        a.download = this.exportFilename({ runId: run.runId, mode: run.mode });
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -509,37 +461,16 @@ export class PanelRenderer {
     }
 
     stop() {
-        const run = getCurrentRun();
+        const run = this._run();
         if (!run) return;
-        // Immediate UI acknowledgement so the user knows the click
-        // registered even when the actual abort is stuck waiting on an
-        // in-flight tool call / LLM stream. The button gets disabled
-        // (no double-fires), the elapsed timer is frozen client-side
-        // so it stops ticking, and the header dot swaps to a stopping
-        // pseudo-status. All of these are undone by `_renderRunFinished`
-        // when the runtime eventually reaches its terminal state, so
-        // the visual truth converges with the store even though the
-        // click-time freeze is speculative.
+        if (this.onStop) {
+            try { this.onStop(run); } catch (_) { /* ignore */ }
+            return;
+        }
         if (this.stopBtnEl) this.stopBtnEl.disabled = true;
         if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
-        // Freeze per-round tickers too so their displayed seconds stop
-        // climbing while we wait for the runtime to actually reject.
-        // _renderRunFinished will overwrite these with endedAt-based
-        // final values once the store transitions.
         this._sweepRoundTimers();
         if (this.headerStatusEl) this.headerStatusEl.dataset.status = 'stopping';
-        // Prefer the fast-unwind `stopFn` over the raw `abortFn` when
-        // the run was registered with one: it resolves the main.js
-        // `Promise.race([orchestrationTask, stopRequestPromise])`
-        // immediately, taking the clean 'cancelled by user' branch
-        // that emits the cancelled event + tears down the toast without
-        // waiting for the LLM sender to reject. `stopFn` itself calls
-        // the same underlying abort internally (via `pluginAbortController`),
-        // so we do not need to also invoke `abortFn` — that would
-        // double-fire `stopGeneration()` and log a spurious "stopped
-        // by user" toast when nothing was streaming. For runtime-only
-        // runs (iter-studio simulation, standalone loop, etc.) `stopFn`
-        // is null and we fall back to the raw `abortFn`.
         try {
             if (run.stopFn) {
                 run.stopFn();
@@ -549,19 +480,15 @@ export class PanelRenderer {
         } catch (_) { /* ignore */ }
     }
 
-    /**
-     * Rebuild the panel from the live store snapshot. Used when the user
-     * manually opens the panel during (or after) a quiet run — those
-     * skip the auto-open + incremental wiring on RUN_STARTED, so the
-     * panel DOM is empty until we replay the round/section history.
-     *
-     * Tail sections that are still mid-stream stay live: the rAF append
-     * coalescer keeps pointing at the freshly-recreated <pre> nodes, so
-     * subsequent SECTION_APPENDED events continue to land in the right
-     * spot without rebinding.
-     */
+    destroy() {
+        if (this._elapsedTimer) { clearInterval(this._elapsedTimer); this._elapsedTimer = null; }
+        this._sweepRoundTimers();
+        this._pendingAppends.clear();
+        this._rafScheduled = false;
+    }
+
     replayFromStore() {
-        const run = getCurrentRun();
+        const run = this._run();
         if (!run) return;
         this._renderRunStart();
         for (const round of run.rounds) {

@@ -1,6 +1,6 @@
-/* public/scripts/extensions/orchestrator/run-panel/panel.css */
+/* public/scripts/run-panel/panel.css — shared run panel, scoped under .luker-run-panel / .luker-run-panel-pill */
 
-#luker-orch-run-panel {
+.luker-run-panel {
     --panel-bg: var(--SmartThemeBlurTintColor, rgba(20, 22, 30, 0.96));
     --panel-fg: var(--SmartThemeBodyColor, #e8e8ee);
     --panel-accent: var(--SmartThemeQuoteColor, #5aa3ff);
@@ -11,15 +11,15 @@
     color: var(--panel-fg);
 }
 
-#luker-orch-run-panel[data-state="closed"] {
+.luker-run-panel[data-state="closed"] {
     display: none;
 }
 
-#luker-orch-run-panel .panel-backdrop {
+.luker-run-panel .panel-backdrop {
     display: none;
 }
 
-#luker-orch-run-panel .panel-shell {
+.luker-run-panel .panel-shell {
     position: fixed;
     pointer-events: auto;
     z-index: 9000;
@@ -34,7 +34,7 @@
 
 /* Sidebar layout (>=1024px) */
 @media (min-width: 1024px) {
-    #luker-orch-run-panel[data-layout="sidebar"] .panel-shell {
+    .luker-run-panel[data-layout="sidebar"] .panel-shell {
         top: 0;
         right: 0;
         width: 420px;
@@ -45,7 +45,7 @@
 
 /* Drawer layout (<1024px) */
 @media (max-width: 1023px) {
-    #luker-orch-run-panel[data-layout="drawer"] .panel-backdrop {
+    .luker-run-panel[data-layout="drawer"] .panel-backdrop {
         display: block;
         position: fixed;
         top: 0;
@@ -56,7 +56,7 @@
         pointer-events: auto;
         z-index: 8999;
     }
-    #luker-orch-run-panel[data-layout="drawer"] .panel-shell {
+    .luker-run-panel[data-layout="drawer"] .panel-shell {
         left: 0;
         right: 0;
         width: 100vw;
@@ -67,7 +67,7 @@
         border-top-right-radius: 18px;
         border-top: 1px solid rgba(255,255,255,0.08);
     }
-    #luker-orch-run-panel[data-layout="drawer"] .panel-shell::before {
+    .luker-run-panel[data-layout="drawer"] .panel-shell::before {
         content: '';
         display: block;
         width: 40px;
@@ -78,20 +78,20 @@
     }
 }
 
-#luker-orch-run-panel .panel-header {
+.luker-run-panel .panel-header {
     padding: 10px 12px;
     border-bottom: 1px solid rgba(255,255,255,0.06);
     flex-shrink: 0;
 }
 
-#luker-orch-run-panel .panel-title {
+.luker-run-panel .panel-title {
     display: flex;
     gap: 8px;
     align-items: center;
     font-size: 13px;
 }
 
-#luker-orch-run-panel .mode-badge {
+.luker-run-panel .mode-badge {
     padding: 2px 6px;
     border-radius: 4px;
     background: rgba(255,255,255,0.08);
@@ -100,21 +100,21 @@
     letter-spacing: 0.5px;
 }
 
-#luker-orch-run-panel .status-dot {
+.luker-run-panel .status-dot {
     width: 8px; height: 8px; border-radius: 50%;
     background: var(--panel-running);
 }
-#luker-orch-run-panel .status-dot[data-status="committed"] { background: var(--panel-accent); }
-#luker-orch-run-panel .status-dot[data-status="aborted"] { background: var(--panel-warn); }
-#luker-orch-run-panel .status-dot[data-status="error"] { background: var(--panel-danger); }
+.luker-run-panel .status-dot[data-status="committed"] { background: var(--panel-accent); }
+.luker-run-panel .status-dot[data-status="aborted"] { background: var(--panel-warn); }
+.luker-run-panel .status-dot[data-status="error"] { background: var(--panel-danger); }
 
-#luker-orch-run-panel .panel-actions {
+.luker-run-panel .panel-actions {
     display: flex;
     gap: 4px;
     margin-top: 6px;
     justify-content: flex-end;
 }
-#luker-orch-run-panel .panel-actions button {
+.luker-run-panel .panel-actions button {
     background: rgba(255,255,255,0.06);
     border: 1px solid rgba(255,255,255,0.1);
     color: var(--panel-fg);
@@ -123,37 +123,37 @@
     font-size: 12px;
     cursor: pointer;
 }
-#luker-orch-run-panel .panel-actions button:hover {
+.luker-run-panel .panel-actions button:hover {
     background: rgba(255,255,255,0.12);
 }
 
-#luker-orch-run-panel .panel-summary {
+.luker-run-panel .panel-summary {
     margin-top: 6px;
     font-size: 11px;
     opacity: 0.7;
 }
 
-#luker-orch-run-panel .panel-body {
+.luker-run-panel .panel-body {
     flex: 1;
     overflow-y: auto;
     padding: 10px 12px;
     contain: strict;
 }
 
-#luker-orch-run-panel .rounds-list,
-#luker-orch-run-panel .sections-list {
+.luker-run-panel .rounds-list,
+.luker-run-panel .sections-list {
     list-style: none;
     padding: 0;
     margin: 0;
 }
 
-#luker-orch-run-panel .round {
+.luker-run-panel .round {
     margin-bottom: 8px;
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 6px;
 }
 
-#luker-orch-run-panel .round > details > summary {
+.luker-run-panel .round > details > summary {
     padding: 6px 8px;
     cursor: pointer;
     font-size: 12px;
@@ -163,7 +163,7 @@
     gap: 4px;
 }
 
-#luker-orch-run-panel .round > details > summary .round-elapsed {
+.luker-run-panel .round > details > summary .round-elapsed {
     margin-left: auto;
     opacity: 0.55;
     font-size: 11px;
@@ -173,28 +173,28 @@
     flex-shrink: 0;
 }
 
-#luker-orch-run-panel .round[data-status="failed"] > details > summary .round-elapsed {
+.luker-run-panel .round[data-status="failed"] > details > summary .round-elapsed {
     /* Failed rounds already tint their whole summary red; ease the
        elapsed span back toward neutral so it stays legible against
        the accent color rather than reinforcing it. */
     opacity: 0.75;
 }
 
-#luker-orch-run-panel .round[data-status="failed"] > details > summary {
+.luker-run-panel .round[data-status="failed"] > details > summary {
     color: var(--panel-danger);
 }
 
-#luker-orch-run-panel .section {
+.luker-run-panel .section {
     margin: 4px 8px;
     border-left: 2px solid rgba(255,255,255,0.06);
     padding-left: 6px;
 }
 
-#luker-orch-run-panel .section[data-status="failed"] {
+.luker-run-panel .section[data-status="failed"] {
     border-left-color: var(--panel-danger);
 }
 
-#luker-orch-run-panel .section > details > summary {
+.luker-run-panel .section > details > summary {
     padding: 4px 0;
     cursor: pointer;
     font-size: 12px;
@@ -203,7 +203,7 @@
     align-items: center;
 }
 
-#luker-orch-run-panel .section pre {
+.luker-run-panel .section pre {
     margin: 4px 0 8px;
     padding: 6px 8px;
     background: color-mix(in srgb, var(--panel-fg) 6%, transparent);
@@ -216,11 +216,11 @@
     max-width: 100%;
 }
 
-#luker-orch-run-panel .section pre:empty {
+.luker-run-panel .section pre:empty {
     display: none;
 }
 
-#luker-orch-run-panel .copy-btn {
+.luker-run-panel .copy-btn {
     margin-left: auto;
     background: transparent;
     border: none;
@@ -229,29 +229,29 @@
     cursor: pointer;
     padding: 0 4px;
 }
-#luker-orch-run-panel .section:hover .copy-btn { opacity: 0.9; }
+.luker-run-panel .section:hover .copy-btn { opacity: 0.9; }
 
-#luker-orch-run-panel .final-output {
+.luker-run-panel .final-output {
     margin-top: 16px;
     padding: 10px;
     border: 1px solid var(--panel-accent);
     border-radius: 6px;
     background: rgba(90, 163, 255, 0.05);
 }
-#luker-orch-run-panel .final-output header {
+.luker-run-panel .final-output header {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     opacity: 0.7;
     margin-bottom: 6px;
 }
-#luker-orch-run-panel .final-output pre {
+.luker-run-panel .final-output pre {
     margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
 }
 
-#luker-orch-run-panel .jump-latest {
+.luker-run-panel .jump-latest {
     position: absolute;
     right: 12px;
     bottom: 12px;
@@ -265,7 +265,7 @@
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
 
-#luker-orch-run-panel .empty-state {
+.luker-run-panel .empty-state {
     padding: 24px 16px;
     text-align: center;
     opacity: 0.6;
@@ -278,7 +278,7 @@
    bar itself, so it never covers #top-bar buttons (left icons) or
    #top-settings-holder buttons (User Settings / Advanced Formatting /
    Extensions on the right). */
-#luker-orch-run-pill {
+.luker-run-panel-pill {
     position: fixed;
     top: calc(var(--topBarBlockSize, 30px) + 4px);
     left: 50%;
@@ -298,4 +298,4 @@
     overflow: hidden;
     text-overflow: ellipsis;
 }
-#luker-orch-run-pill[hidden] { display: none; }
+.luker-run-panel-pill[hidden] { display: none; }
