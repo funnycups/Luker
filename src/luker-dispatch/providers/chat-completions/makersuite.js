@@ -50,6 +50,7 @@ import {
 } from '../../../util.js';
 import { normalizeGeminiResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { normalizeReasoningToken } from './reasoning-params.js';
 
 const API_MAKERSUITE = 'https://generativelanguage.googleapis.com';
 const API_VERTEX_AI = 'https://us-central1-aiplatform.googleapis.com';
@@ -280,19 +281,32 @@ export async function dispatchMakerSuite(ctx) {
         }
 
         if (isThinkingConfigModel(model)) {
+            const reasoningToken = normalizeReasoningToken(reasoningEffort);
             const thinkingConfig = { includeThoughts: includeReasoning };
 
-            const thinkingBudget = calculateGoogleBudgetTokens(generationConfig.maxOutputTokens, reasoningEffort, model);
-            if (typeof thinkingBudget === 'number' && Number.isInteger(thinkingBudget)) {
-                thinkingConfig.thinkingBudget = thinkingBudget;
-            }
-
-            if (typeof thinkingBudget === 'string' && thinkingBudget.length > 0) {
-                thinkingConfig.thinkingLevel = thinkingBudget;
+            if (reasoningToken === 'off') {
+                const supportsOff = modelIdMatchesFamily(model, /^gemini-(2\.5-(flash|flash-lite)|3[.\d]*-(flash|pro))/) && !modelIdMatchesFamily(model, /^gemini-2\.5-pro/);
+                if (supportsOff) {
+                    if (modelIdMatchesFamily(model, /^gemini-3/)) {
+                        const lacksMinimalThinking = modelIdMatchesFamily(model, /^gemini-3\.7-flash/)
+                            || modelIdMatchesFamily(model, /^gemini-3[.\d]*-pro/);
+                        thinkingConfig.thinkingLevel = lacksMinimalThinking ? 'low' : 'minimal';
+                    } else {
+                        thinkingConfig.thinkingBudget = 0;
+                    }
+                }
+            } else {
+                const thinkingBudget = calculateGoogleBudgetTokens(generationConfig.maxOutputTokens, reasoningToken, model);
+                if (typeof thinkingBudget === 'number' && Number.isInteger(thinkingBudget)) {
+                    thinkingConfig.thinkingBudget = thinkingBudget;
+                }
+                if (typeof thinkingBudget === 'string' && thinkingBudget.length > 0) {
+                    thinkingConfig.thinkingLevel = thinkingBudget;
+                }
             }
 
             // Vertex doesn't allow mixing disabled thinking with includeThoughts
-            if (useVertexAi && thinkingBudget === 0 && thinkingConfig.includeThoughts) {
+            if (useVertexAi && thinkingConfig.thinkingBudget === 0 && thinkingConfig.includeThoughts) {
                 console.info('Thinking budget is 0, but includeThoughts is true. Thoughts will not be included in the response.');
                 thinkingConfig.includeThoughts = false;
             }

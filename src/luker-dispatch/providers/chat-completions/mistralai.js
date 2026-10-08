@@ -13,6 +13,7 @@
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { convertMistralMessages, getPromptNames } from '../../../prompt-converters.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { normalizeReasoningToken } from './reasoning-params.js';
 
 const API_MISTRAL = 'https://api.mistral.ai/v1';
 
@@ -66,6 +67,13 @@ export async function dispatchMistralAI(ctx) {
             'random_seed': body.seed === -1 ? undefined : body.seed,
             'stop': Array.isArray(body.stop) && body.stop.length > 0 ? body.stop : undefined,
         };
+
+        const mistralToken = normalizeReasoningToken(body.reasoning_effort);
+        if (mistralToken === 'off') {
+            requestBody.reasoning_effort = 'none';
+        } else if (mistralToken !== 'auto') {
+            requestBody.reasoning_effort = mistralToken === 'medium' ? 'high' : mistralToken;
+        }
 
         if (Array.isArray(body.tools) && body.tools.length > 0) {
             requestBody.tools = body.tools;

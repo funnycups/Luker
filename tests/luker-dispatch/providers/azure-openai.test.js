@@ -94,6 +94,18 @@ describe('dispatchAzureOpenAI', () => {
         expect(init.signal).toBe(ctx.signal);
     });
 
+    test('reasoning_effort off maps to none for allowlisted models and is omitted otherwise', async () => {
+        const allow = fakeCtx({ body: { model: 'gpt-5.4', reasoning_effort: 'off' } });
+        await dispatchAzureOpenAI(allow);
+        const allowed = JSON.parse(allow.fetch.mock.calls[0][1].body);
+        expect(allowed.reasoning_effort).toBe('none');
+
+        const drop = fakeCtx({ body: { model: 'gemini-3.8-flash-high', reasoning_effort: 'off' } });
+        await dispatchAzureOpenAI(drop);
+        const dropped = JSON.parse(drop.fetch.mock.calls[0][1].body);
+        expect(dropped.reasoning_effort).toBeUndefined();
+    });
+
     test('missing configuration (no api key): emits error, no fetch', async () => {
         const ctx = fakeCtx({ secret: '' });
         await dispatchAzureOpenAI(ctx);

@@ -171,4 +171,28 @@ describe('dispatchAimlapi', () => {
         const errs = ctx._emitted.filter(e => e.kind === 'error');
         expect(errs.length).toBeGreaterThan(0);
     });
+
+    describe('reasoning_effort mapping', () => {
+        function wireBody(ctx) {
+            return JSON.parse(ctx.fetch.mock.calls[0][1].body);
+        }
+
+        test('off maps to none', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'off' } });
+            await dispatchAimlapi(ctx);
+            expect(wireBody(ctx).reasoning_effort).toBe('none');
+        });
+
+        test('high maps to high', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'high' } });
+            await dispatchAimlapi(ctx);
+            expect(wireBody(ctx).reasoning_effort).toBe('high');
+        });
+
+        test('auto omits reasoning_effort', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'auto' } });
+            await dispatchAimlapi(ctx);
+            expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+        });
+    });
 });

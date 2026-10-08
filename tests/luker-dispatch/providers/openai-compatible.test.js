@@ -260,6 +260,32 @@ describe('dispatchOpenAICompatible', () => {
             return JSON.parse(ctx.fetch.mock.calls[0][1].body);
         }
 
+        test('CUSTOM maps off to none and forwards canonical levels', async () => {
+            const off = fakeCtx({
+                body: { chat_completion_source: CHAT_COMPLETION_SOURCES.CUSTOM, custom_url: 'http://127.0.0.1:8317/v1', model: 'x', reasoning_effort: 'off' },
+                secretMap: { api_key_custom: 'c-key' },
+            });
+            await dispatchOpenAICompatible(off);
+            expect(wireBody(off).reasoning_effort).toBe('none');
+
+            const high = fakeCtx({
+                body: { chat_completion_source: CHAT_COMPLETION_SOURCES.CUSTOM, custom_url: 'http://127.0.0.1:8317/v1', model: 'x', reasoning_effort: 'xhigh' },
+                secretMap: { api_key_custom: 'c-key' },
+            });
+            await dispatchOpenAICompatible(high);
+            expect(wireBody(high).reasoning_effort).toBe('xhigh');
+        });
+
+        test('OPENAI maps off to none and xhigh per model', async () => {
+            const off = fakeCtx({ body: { model: 'gpt-5.4', reasoning_effort: 'off' }, secretMap: { api_key_openai: 'oa-key' } });
+            await dispatchOpenAICompatible(off);
+            expect(wireBody(off).reasoning_effort).toBe('none');
+
+            const xhigh = fakeCtx({ body: { model: 'gpt-5.4', reasoning_effort: 'xhigh' }, secretMap: { api_key_openai: 'oa-key' } });
+            await dispatchOpenAICompatible(xhigh);
+            expect(wireBody(xhigh).reasoning_effort).toBe('xhigh');
+        });
+
         test('CUSTOM forwards resolved effort for non-OpenAI model names', async () => {
             for (const effort of ['minimal', 'low', 'medium', 'high']) {
                 const ctx = fakeCtx({
@@ -348,6 +374,107 @@ describe('dispatchOpenAICompatible', () => {
             });
             await dispatchOpenAICompatible(ctx);
             expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+        });
+    });
+
+    describe('passthrough aggregator reasoning mapping', () => {
+        function wireBody(ctx) {
+            return JSON.parse(ctx.fetch.mock.calls[0][1].body);
+        }
+        function providerCtx(source, secretMap, extra = {}) {
+            return fakeCtx({ body: { chat_completion_source: source, ...extra }, secretMap });
+        }
+
+        test('PERPLEXITY off→none, high→high, auto omitted', async () => {
+            const off = providerCtx(CHAT_COMPLETION_SOURCES.PERPLEXITY, { api_key_perplexity: 'pk' }, { reasoning_effort: 'off' });
+            await dispatchOpenAICompatible(off);
+            expect(wireBody(off).reasoning_effort).toBe('none');
+
+            const high = providerCtx(CHAT_COMPLETION_SOURCES.PERPLEXITY, { api_key_perplexity: 'pk' }, { reasoning_effort: 'high' });
+            await dispatchOpenAICompatible(high);
+            expect(wireBody(high).reasoning_effort).toBe('high');
+
+            const auto = providerCtx(CHAT_COMPLETION_SOURCES.PERPLEXITY, { api_key_perplexity: 'pk' }, { reasoning_effort: 'auto' });
+            await dispatchOpenAICompatible(auto);
+            expect(wireBody(auto).reasoning_effort).toBeUndefined();
+        });
+
+        test('FIREWORKS off→none, high→high, auto omitted', async () => {
+            const off = providerCtx(CHAT_COMPLETION_SOURCES.FIREWORKS, { api_key_fireworks: 'fk' }, { reasoning_effort: 'off' });
+            await dispatchOpenAICompatible(off);
+            expect(wireBody(off).reasoning_effort).toBe('none');
+
+            const high = providerCtx(CHAT_COMPLETION_SOURCES.FIREWORKS, { api_key_fireworks: 'fk' }, { reasoning_effort: 'high' });
+            await dispatchOpenAICompatible(high);
+            expect(wireBody(high).reasoning_effort).toBe('high');
+
+            const auto = providerCtx(CHAT_COMPLETION_SOURCES.FIREWORKS, { api_key_fireworks: 'fk' }, { reasoning_effort: 'auto' });
+            await dispatchOpenAICompatible(auto);
+            expect(wireBody(auto).reasoning_effort).toBeUndefined();
+        });
+
+        test('NANOGPT maps effort and include_reasoning to the reasoning object', async () => {
+            const off = providerCtx(CHAT_COMPLETION_SOURCES.NANOGPT, { api_key_nanogpt: 'nk' }, { reasoning_effort: 'off', include_reasoning: true });
+            await dispatchOpenAICompatible(off);
+            expect(wireBody(off).reasoning).toEqual({ effort: 'none' });
+
+            const high = providerCtx(CHAT_COMPLETION_SOURCES.NANOGPT, { api_key_nanogpt: 'nk' }, { reasoning_effort: 'high', include_reasoning: true });
+            await dispatchOpenAICompatible(high);
+            expect(wireBody(high).reasoning).toEqual({ effort: 'high' });
+
+            const auto = providerCtx(CHAT_COMPLETION_SOURCES.NANOGPT, { api_key_nanogpt: 'nk' }, { reasoning_effort: 'auto', include_reasoning: true });
+            await dispatchOpenAICompatible(auto);
+            expect(wireBody(auto).reasoning).toBeUndefined();
+
+            const excluded = providerCtx(CHAT_COMPLETION_SOURCES.NANOGPT, { api_key_nanogpt: 'nk' }, { reasoning_effort: 'high', include_reasoning: false });
+            await dispatchOpenAICompatible(excluded);
+            expect(wireBody(excluded).reasoning.exclude).toBe(true);
+        });
+
+        test('POLLINATIONS off→none, high→high, auto omitted (authenticated branch)', async () => {
+            const off = providerCtx(CHAT_COMPLETION_SOURCES.POLLINATIONS, { api_key_pollinations: 'pk' }, { reasoning_effort: 'off' });
+            await dispatchOpenAICompatible(off);
+            expect(wireBody(off).reasoning_effort).toBe('none');
+
+            const high = providerCtx(CHAT_COMPLETION_SOURCES.POLLINATIONS, { api_key_pollinations: 'pk' }, { reasoning_effort: 'high' });
+            await dispatchOpenAICompatible(high);
+            expect(wireBody(high).reasoning_effort).toBe('high');
+
+            const auto = providerCtx(CHAT_COMPLETION_SOURCES.POLLINATIONS, { api_key_pollinations: 'pk' }, { reasoning_effort: 'auto' });
+            await dispatchOpenAICompatible(auto);
+            expect(wireBody(auto).reasoning_effort).toBeUndefined();
+        });
+
+        test('WORKERS_AI off→none, high→high, auto omitted', async () => {
+            const base = { workers_ai_account_id: 'acct-1' };
+            const off = providerCtx(CHAT_COMPLETION_SOURCES.WORKERS_AI, { api_key_workers_ai: 'wk' }, { ...base, reasoning_effort: 'off' });
+            await dispatchOpenAICompatible(off);
+            expect(wireBody(off).reasoning_effort).toBe('none');
+
+            const high = providerCtx(CHAT_COMPLETION_SOURCES.WORKERS_AI, { api_key_workers_ai: 'wk' }, { ...base, reasoning_effort: 'high' });
+            await dispatchOpenAICompatible(high);
+            expect(wireBody(high).reasoning_effort).toBe('high');
+
+            const auto = providerCtx(CHAT_COMPLETION_SOURCES.WORKERS_AI, { api_key_workers_ai: 'wk' }, { ...base, reasoning_effort: 'auto' });
+            await dispatchOpenAICompatible(auto);
+            expect(wireBody(auto).reasoning_effort).toBeUndefined();
+        });
+
+        test('GROQ off→reasoning_format hidden, high→reasoning_effort, auto omitted', async () => {
+            const off = providerCtx(CHAT_COMPLETION_SOURCES.GROQ, { api_key_groq: 'gk' }, { reasoning_effort: 'off' });
+            await dispatchOpenAICompatible(off);
+            expect(wireBody(off).reasoning_format).toBe('hidden');
+            expect(wireBody(off).reasoning_effort).toBeUndefined();
+
+            const high = providerCtx(CHAT_COMPLETION_SOURCES.GROQ, { api_key_groq: 'gk' }, { reasoning_effort: 'high' });
+            await dispatchOpenAICompatible(high);
+            expect(wireBody(high).reasoning_effort).toBe('high');
+            expect(wireBody(high).reasoning_format).toBeUndefined();
+
+            const auto = providerCtx(CHAT_COMPLETION_SOURCES.GROQ, { api_key_groq: 'gk' }, { reasoning_effort: 'auto' });
+            await dispatchOpenAICompatible(auto);
+            expect(wireBody(auto).reasoning_effort).toBeUndefined();
+            expect(wireBody(auto).reasoning_format).toBeUndefined();
         });
     });
 
@@ -866,29 +993,33 @@ describe('dispatchOpenAICompatible', () => {
                 expect(wireBody(k27Ctx).thinking).toEqual({ type: 'enabled' });
             });
 
-            test('kimi-k3 maps ST efforts: min/low→low, medium/high→high, max→max, auto omitted', async () => {
+            test('kimi-k3 maps canonical efforts: minimal/low→low, medium/high/xhigh→high, max→max, off/auto omitted', async () => {
                 for (const [effort, expected] of [
-                    ['min', 'low'], ['low', 'low'],
+                    ['minimal', 'low'], ['low', 'low'],
                     ['medium', 'high'], ['high', 'high'],
-                    ['max', 'max'],
+                    ['xhigh', 'high'], ['max', 'max'],
                 ]) {
                     const ctx = moonshotCtx({ model: 'kimi-k3', reasoning_effort: effort });
                     await dispatchOpenAICompatible(ctx);
                     expect(wireBody(ctx).reasoning_effort).toBe(expected);
                 }
-                const autoCtx = moonshotCtx({ model: 'kimi-k3', reasoning_effort: 'auto' });
-                await dispatchOpenAICompatible(autoCtx);
-                expect(wireBody(autoCtx).reasoning_effort).toBeUndefined();
+                for (const effort of ['auto', 'off']) {
+                    const ctx = moonshotCtx({ model: 'kimi-k3', reasoning_effort: effort });
+                    await dispatchOpenAICompatible(ctx);
+                    expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+                }
             });
 
-            test('kimi-k2.6 maps min→disabled, other efforts→enabled, absent/auto→server default', async () => {
-                const disabledCtx = moonshotCtx({ model: 'kimi-k2.6', reasoning_effort: 'min' });
+            test('kimi-k2.6 maps off→disabled, other efforts→enabled, absent/auto→enabled', async () => {
+                const disabledCtx = moonshotCtx({ model: 'kimi-k2.6', reasoning_effort: 'off' });
                 await dispatchOpenAICompatible(disabledCtx);
                 expect(wireBody(disabledCtx).thinking).toEqual({ type: 'disabled', keep: 'all' });
 
-                const enabledCtx = moonshotCtx({ model: 'kimi-k2.6', reasoning_effort: 'high' });
-                await dispatchOpenAICompatible(enabledCtx);
-                expect(wireBody(enabledCtx).thinking).toEqual({ type: 'enabled', keep: 'all' });
+                for (const effort of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+                    const enabledCtx = moonshotCtx({ model: 'kimi-k2.6', reasoning_effort: effort });
+                    await dispatchOpenAICompatible(enabledCtx);
+                    expect(wireBody(enabledCtx).thinking).toEqual({ type: 'enabled', keep: 'all' });
+                }
 
                 const autoCtx = moonshotCtx({ model: 'kimi-k2.6', reasoning_effort: 'auto' });
                 await dispatchOpenAICompatible(autoCtx);
@@ -899,14 +1030,20 @@ describe('dispatchOpenAICompatible', () => {
                 expect(wireBody(absentCtx).thinking).toEqual({ type: 'enabled', keep: 'all' });
             });
 
-            test('kimi-k2.7-code always sends thinking enabled regardless of effort', async () => {
-                const withEffort = moonshotCtx({ model: 'kimi-k2.7-code', reasoning_effort: 'auto' });
-                await dispatchOpenAICompatible(withEffort);
-                expect(wireBody(withEffort).thinking).toEqual({ type: 'enabled' });
+            test('kimi-k2.7-code sends thinking enabled for auto/levels, nothing for off', async () => {
+                for (const effort of ['auto', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+                    const withEffort = moonshotCtx({ model: 'kimi-k2.7-code', reasoning_effort: effort });
+                    await dispatchOpenAICompatible(withEffort);
+                    expect(wireBody(withEffort).thinking).toEqual({ type: 'enabled' });
+                }
 
                 const withoutEffort = moonshotCtx({ model: 'kimi-k2.7-code' });
                 await dispatchOpenAICompatible(withoutEffort);
                 expect(wireBody(withoutEffort).thinking).toEqual({ type: 'enabled' });
+
+                const offCtx = moonshotCtx({ model: 'kimi-k2.7-code', reasoning_effort: 'off' });
+                await dispatchOpenAICompatible(offCtx);
+                expect(wireBody(offCtx).thinking).toBeUndefined();
             });
 
             test('unknown/non-kimi-thinking model gets no reasoning params', async () => {
@@ -961,6 +1098,72 @@ describe('dispatchOpenAICompatible', () => {
             await dispatchOpenAICompatible(ctx2);
             const [url2] = ctx2.fetch.mock.calls[0];
             expect(String(url2)).toBe('https://api.siliconflow.cn/v1/chat/completions');
+        });
+
+        test('ZAI reasoning_effort toggles thinking and forwards the level, auto omitted', async () => {
+            const offCtx = fakeCtx({
+                body: { chat_completion_source: CHAT_COMPLETION_SOURCES.ZAI, reasoning_effort: 'off' },
+                secretMap: { api_key_zai: 'zk' },
+            });
+            await dispatchOpenAICompatible(offCtx);
+            const offBody = JSON.parse(offCtx.fetch.mock.calls[0][1].body);
+            expect(offBody.thinking).toEqual({ type: 'disabled' });
+            expect(offBody.reasoning_effort).toBeUndefined();
+
+            const highCtx = fakeCtx({
+                body: { chat_completion_source: CHAT_COMPLETION_SOURCES.ZAI, reasoning_effort: 'high' },
+                secretMap: { api_key_zai: 'zk' },
+            });
+            await dispatchOpenAICompatible(highCtx);
+            const highBody = JSON.parse(highCtx.fetch.mock.calls[0][1].body);
+            expect(highBody.thinking).toEqual({ type: 'enabled' });
+            expect(highBody.reasoning_effort).toBe('high');
+
+            const lowCtx = fakeCtx({
+                body: { chat_completion_source: CHAT_COMPLETION_SOURCES.ZAI, reasoning_effort: 'low' },
+                secretMap: { api_key_zai: 'zk' },
+            });
+            await dispatchOpenAICompatible(lowCtx);
+            expect(JSON.parse(lowCtx.fetch.mock.calls[0][1].body).reasoning_effort).toBe('low');
+
+            const maxCtx = fakeCtx({
+                body: { chat_completion_source: CHAT_COMPLETION_SOURCES.ZAI, reasoning_effort: 'max' },
+                secretMap: { api_key_zai: 'zk' },
+            });
+            await dispatchOpenAICompatible(maxCtx);
+            expect(JSON.parse(maxCtx.fetch.mock.calls[0][1].body).reasoning_effort).toBe('max');
+
+            const autoCtx = fakeCtx({
+                body: { chat_completion_source: CHAT_COMPLETION_SOURCES.ZAI, reasoning_effort: 'auto' },
+                secretMap: { api_key_zai: 'zk' },
+            });
+            await dispatchOpenAICompatible(autoCtx);
+            const autoBody = JSON.parse(autoCtx.fetch.mock.calls[0][1].body);
+            expect(autoBody.thinking).toBeUndefined();
+            expect(autoBody.reasoning_effort).toBeUndefined();
+        });
+
+        test('SILICONFLOW reasoning_effort toggles enable_thinking, auto omitted', async () => {
+            const offCtx = fakeCtx({
+                body: { chat_completion_source: CHAT_COMPLETION_SOURCES.SILICONFLOW, reasoning_effort: 'off' },
+                secretMap: { api_key_siliconflow: 'sk' },
+            });
+            await dispatchOpenAICompatible(offCtx);
+            expect(JSON.parse(offCtx.fetch.mock.calls[0][1].body).enable_thinking).toBe(false);
+
+            const highCtx = fakeCtx({
+                body: { chat_completion_source: CHAT_COMPLETION_SOURCES.SILICONFLOW, reasoning_effort: 'high' },
+                secretMap: { api_key_siliconflow: 'sk' },
+            });
+            await dispatchOpenAICompatible(highCtx);
+            expect(JSON.parse(highCtx.fetch.mock.calls[0][1].body).enable_thinking).toBe(true);
+
+            const autoCtx = fakeCtx({
+                body: { chat_completion_source: CHAT_COMPLETION_SOURCES.SILICONFLOW, reasoning_effort: 'auto' },
+                secretMap: { api_key_siliconflow: 'sk' },
+            });
+            await dispatchOpenAICompatible(autoCtx);
+            expect(JSON.parse(autoCtx.fetch.mock.calls[0][1].body).enable_thinking).toBeUndefined();
         });
 
         test('OPENROUTER (URL, OPENROUTER_HEADERS present, transforms honored)', async () => {

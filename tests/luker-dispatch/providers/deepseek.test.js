@@ -193,4 +193,34 @@ describe('dispatchDeepSeek', () => {
         const [, attachedKey] = ctx._attachCalls[0];
         expect(attachedKey).toBe('plugin-proxy-key');
     });
+
+    test('reasoning_effort off disables thinking and omits the effort field', async () => {
+        const ctx = fakeCtx({ body: { reasoning_effort: 'off' } });
+        await dispatchDeepSeek(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        const body = JSON.parse(init.body);
+        expect(body.thinking).toEqual({ type: 'disabled' });
+        expect(body.reasoning_effort).toBeUndefined();
+    });
+
+    test('reasoning_effort high enables thinking and forwards the effort', async () => {
+        const ctx = fakeCtx({ body: { reasoning_effort: 'high' } });
+        await dispatchDeepSeek(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        const body = JSON.parse(init.body);
+        expect(body.thinking).toEqual({ type: 'enabled' });
+        expect(body.reasoning_effort).toBe('high');
+    });
+
+    test('reasoning_effort auto omits all reasoning params', async () => {
+        const ctx = fakeCtx({ body: { reasoning_effort: 'auto' } });
+        await dispatchDeepSeek(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        const body = JSON.parse(init.body);
+        expect(body.thinking).toBeUndefined();
+        expect(body.reasoning_effort).toBeUndefined();
+    });
 });

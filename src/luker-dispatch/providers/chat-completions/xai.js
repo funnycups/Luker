@@ -12,6 +12,7 @@
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { convertXAIMessages, getPromptNames } from '../../../prompt-converters.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { normalizeReasoningToken } from './reasoning-params.js';
 
 const API_XAI = 'https://api.x.ai/v1';
 
@@ -66,10 +67,11 @@ export async function dispatchXai(ctx) {
             bodyParams.stop = body.stop;
         }
 
-        if (body.reasoning_effort) {
-            // xAI only accepts 'high' or 'low'; anything else collapses to 'low'
-            // (mirror legacy sendXaiRequest behavior).
-            bodyParams.reasoning_effort = body.reasoning_effort === 'high' ? 'high' : 'low';
+        const xaiToken = normalizeReasoningToken(body.reasoning_effort);
+        if (xaiToken !== 'auto' && xaiToken !== 'off') {
+            // xAI only accepts 'high' or 'low'; every lower bucket collapses to
+            // 'low' and 'xhigh' collapses to 'high'.
+            bodyParams.reasoning_effort = xaiToken === 'high' || xaiToken === 'xhigh' ? 'high' : 'low';
         }
 
         if (body.json_schema) {

@@ -11,6 +11,7 @@
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { normalizeReasoningToken } from './reasoning-params.js';
 
 const API_CHUTES = 'https://llm.chutes.ai/v1';
 
@@ -60,6 +61,11 @@ export async function dispatchChutes(ctx) {
             };
         }
 
+        const chutesToken = normalizeReasoningToken(body.reasoning_effort);
+        if (chutesToken !== 'auto') {
+            bodyParams.enable_thinking = chutesToken !== 'off';
+        }
+
         const requestBody = {
             'messages': body.messages,
             'model': body.model,
@@ -74,7 +80,6 @@ export async function dispatchChutes(ctx) {
             'top_k': body.top_k,
             'seed': body.seed,
             'stop': body.stop,
-            'reasoning_effort': body.reasoning_effort,
             'logit_bias': body.logit_bias,
             ...bodyParams,
         };

@@ -100,7 +100,7 @@ import { renderTemplateAsync } from './templates.js';
 import { SlashCommandEnumValue } from './slash-commands/SlashCommandEnumValue.js';
 import { commonEnumProviders } from './slash-commands/SlashCommandCommonEnumsProvider.js';
 import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
-import { t } from './i18n.js';
+import { t, translate } from './i18n.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { AbortReason } from './util/AbortReason.js';
@@ -127,6 +127,15 @@ import {
 } from './extensions/function-call-runtime.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
+import {
+    getReasoningOptions,
+    getReasoningHint,
+    supportsReasoningOutput,
+    normalizeReasoningToken,
+    buildReasoningEffortBySource,
+    REASONING_EFFORT_LABEL_KEYS,
+    REASONING_EFFORT_LABELS,
+} from './reasoning-effort.js';
 import { encodeCardBoundOptionValue, decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
 import { readSelectedPresetRef, decideSavePresetDispatch } from './character/save-dispatch.js';
 import { hasUnsavedOpenAIPresetChanges as hasUnsavedOpenAIPresetChangesImpl } from './character/has-unsaved-openai-preset-changes.js';
@@ -676,7 +685,7 @@ export const settingsToUpdate = {
     gemini_cache_keep_recent_turns: ['#connection_profile_gemini_cache_keep_recent_turns', 'gemini_cache_keep_recent_turns', false, true],
     tool_call_recurse_limit: ['#tool_call_recurse_limit', 'tool_call_recurse_limit', false, false],
     show_thoughts: ['#openai_show_thoughts', 'show_thoughts', true, false],
-    reasoning_effort: ['#openai_reasoning_effort', 'reasoning_effort', false, false],
+    reasoning_effort_by_source: ['#NULL_SELECTOR', 'reasoning_effort_by_source', false, false],
     verbosity: ['#openai_verbosity', 'verbosity', false, false],
     enable_web_search: ['#openai_enable_web_search', 'enable_web_search', true, false],
     seed: ['#seed_openai', 'seed', false, false],
@@ -942,6 +951,7 @@ const default_settings = {
     custom_prompt_post_processing: custom_prompt_post_processing_types.NONE,
     show_thoughts: true,
     reasoning_effort: reasoning_effort_types.auto,
+    reasoning_effort_by_source: {},
     verbosity: verbosity_levels.auto,
     enable_web_search: false,
     request_images: false,
@@ -3454,126 +3464,14 @@ function groupModelsByVendor(array, source) {
 }
 
 /**
- * Get the reasoning effort from chat completion settings
+ * Resolve the reasoning effort token for the active chat completion source.
  * @param {ChatCompletionSettings} settings Chat completion settings
- * @param {string} model Model name (optional, used for ElectronHub)
- * @returns {string} Reasoning effort, if present
+ * @returns {string|undefined} Canonical reasoning effort token, or undefined for auto
  */
-function getReasoningEffort(settings = null, model = null) {
-    settings = settings ?? oai_settings;
-    model = model ?? getChatCompletionModel(settings);
-
-    // These sources expect the effort as string.
-    const reasoningEffortSources = [
-        chat_completion_sources.OPENAI,
-        chat_completion_sources.AZURE_OPENAI,
-        chat_completion_sources.CUSTOM,
-        chat_completion_sources.XAI,
-        chat_completion_sources.AIMLAPI,
-        chat_completion_sources.OPENROUTER,
-        chat_completion_sources.POLLINATIONS,
-        chat_completion_sources.PERPLEXITY,
-        chat_completion_sources.COMETAPI,
-        chat_completion_sources.ELECTRONHUB,
-        chat_completion_sources.CHUTES,
-        chat_completion_sources.DEEPSEEK,
-        chat_completion_sources.FIREWORKS,
-    ];
-
-    if (!reasoningEffortSources.includes(settings.chat_completion_source)) {
-        return settings.reasoning_effort;
-    }
-
-    function resolveReasoningEffort() {
-        if (settings.chat_completion_source === chat_completion_sources.DEEPSEEK) {
-            switch (settings.reasoning_effort) {
-                case reasoning_effort_types.auto:
-                    return undefined;
-                case reasoning_effort_types.min:
-                case reasoning_effort_types.low:
-                    return reasoning_effort_types.low;
-                case reasoning_effort_types.max:
-                    return reasoning_effort_types.max;
-                default:
-                    return reasoning_effort_types.high;
-            }
-        }
-
-        if (settings.chat_completion_source === chat_completion_sources.FIREWORKS) {
-            switch (settings.reasoning_effort) {
-                case reasoning_effort_types.auto:
-                    return undefined;
-                case reasoning_effort_types.min:
-                    return reasoning_effort_types.low;
-                default:
-                    return settings.reasoning_effort;
-            }
-        }
-
-        if (settings.chat_completion_source === chat_completion_sources.CUSTOM && /^koboldcpp\/(.+)$/.test(model)) {
-            switch (settings.reasoning_effort) {
-                case reasoning_effort_types.auto:
-                    return undefined;
-                case reasoning_effort_types.min:
-                    return 'minimal';
-                case reasoning_effort_types.low:
-                    return 'low';
-                case reasoning_effort_types.medium:
-                    return 'medium';
-                case reasoning_effort_types.high:
-                    return 'high';
-                case reasoning_effort_types.max:
-                    return 'xhigh';
-                default:
-                    return settings.reasoning_effort;
-            }
-        }
-
-        switch (settings.reasoning_effort) {
-            case reasoning_effort_types.auto:
-                return undefined;
-            case reasoning_effort_types.min:
-                if ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source)) {
-                    if (/^gpt-5\.(4|5|6)/.test(model)) {
-                        return 'none';
-                    }
-                    if (/^gpt-5/.test(model)) {
-                        return reasoning_effort_types.min;
-                    }
-                }
-
-                return reasoning_effort_types.low;
-            case reasoning_effort_types.max:
-                if ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source)
-                    && /^gpt-6-astra/.test(model)) {
-                    return reasoning_effort_types.max;
-                }
-                if ([chat_completion_sources.OPENAI, chat_completion_sources.AZURE_OPENAI].includes(settings.chat_completion_source)
-                    && /^gpt-5\.6/.test(model)) {
-                    // GPT-5.6 reserves "max" effort for the Responses API.
-                    return 'xhigh';
-                }
-                return reasoning_effort_types.high;
-            default:
-                return settings.reasoning_effort;
-        }
-    }
-
-    const reasoningEffort = resolveReasoningEffort();
-
-    // Check if the resolved effort supported by the model
-    if (settings.chat_completion_source === chat_completion_sources.ELECTRONHUB) {
-        if (Array.isArray(model_list) && reasoningEffort) {
-            const currentModel = model_list.find(m => m.id === model);
-            const supportedEfforts = currentModel?.metadata?.supported_reasoning_efforts;
-            if (Array.isArray(supportedEfforts) && supportedEfforts.includes(reasoningEffort)) {
-                return reasoningEffort;
-            }
-            return undefined;
-        }
-    }
-
-    return reasoningEffort;
+function getReasoningEffort(settings) {
+    const source = String(settings.chat_completion_source || '');
+    const token = normalizeReasoningToken(settings.reasoning_effort_by_source?.[source] ?? 'auto');
+    return token === 'auto' ? undefined : token;
 }
 
 /**
@@ -3733,7 +3631,7 @@ export async function createGenerationParameters(settings, model, type, messages
         'char_name': name2,
         'group_names': getGroupNames(),
         'include_reasoning': Boolean(settings.show_thoughts),
-        'reasoning_effort': getReasoningEffort(settings, model),
+        'reasoning_effort': getReasoningEffort(settings),
         'enable_web_search': Boolean(settings.enable_web_search),
         'request_images': Boolean(settings.request_images),
         'request_image_resolution': String(settings.request_image_resolution),
@@ -3930,7 +3828,7 @@ export async function createGenerationParameters(settings, model, type, messages
         // is set the backend enables thinking, so strip tool_choice here. `tools` stays,
         // service falls back to auto behavior; callers that forced a named function
         // (e.g. orchestrator agenda planner) must handle non-call via retry.
-        if (generate_data.reasoning_effort) {
+        if (generate_data.reasoning_effort && generate_data.reasoning_effort !== 'off') {
             delete generate_data.tool_choice;
         }
     }
@@ -4093,7 +3991,7 @@ export async function createGenerationParameters(settings, model, type, messages
         if (/gpt-5-chat-latest/.test(model)) {
             delete generate_data.tools;
             delete generate_data.tool_choice;
-        } else if (/gpt-5\.(1|2|3|4)/.test(model) && !/chat-latest/.test(model) && !generate_data.reasoning_effort) {
+        } else if (/gpt-5\.(1|2|3|4)/.test(model) && !/chat-latest/.test(model) && (!generate_data.reasoning_effort || generate_data.reasoning_effort === 'off')) {
             delete generate_data.frequency_penalty;
             delete generate_data.presence_penalty;
             delete generate_data.logit_bias;
@@ -6113,6 +6011,10 @@ function migrateChatCompletionSettings(settings) {
             }
         }
     }
+
+    if (!settings.reasoning_effort_by_source || !Object.keys(settings.reasoning_effort_by_source).length) {
+        settings.reasoning_effort_by_source = buildReasoningEffortBySource(settings.reasoning_effort ?? 'auto');
+    }
 }
 
 /**
@@ -6256,6 +6158,7 @@ function loadOpenAISettings(data, settings) {
     setNamesBehaviorControls();
     setContinuePostfixControls();
     setToolReasoningControls();
+    syncReasoningEffortUI();
     ToolManager.RECURSE_LIMIT = oai_settings.tool_call_recurse_limit;
 
     // Mirror the HTML-declared model options between each input-driven source's
@@ -6339,6 +6242,7 @@ async function syncOpenAIPresetUiAfterApply() {
     calculateOpenRouterCost();
     calculateElectronHubCost();
     calculateChutesCost();
+    syncReasoningEffortUI();
 
     if (!CSS.supports('field-sizing', 'content')) {
         const autoHeightSelectors = [
@@ -6861,6 +6765,39 @@ function setToolReasoningControls() {
     const isEnabled = oai_settings.show_thoughts;
     $('#tool_reasoning_mode').prop('disabled', !isEnabled);
     $('#openrouter_interleaved_thinking_disabled_hint').toggle(!isEnabled);
+}
+
+const REASONING_HINT_TEXT = {
+    varies: 'Reasoning effort support varies by model. Refer to each model\'s documentation.',
+    uniform: 'All models on this provider support the listed reasoning efforts.',
+    always_on: 'Models on this provider always think and cannot disable it.',
+};
+
+function syncReasoningEffortUI() {
+    const source = String(oai_settings.chat_completion_source || '');
+    const options = getReasoningOptions(source);
+    const $effort = $('#openai_reasoning_effort');
+    const $thoughts = $('#openai_show_thoughts');
+
+    $('#openai_show_thoughts_block').toggle(supportsReasoningOutput(source));
+
+    if (options.length > 0) {
+        const stored = normalizeReasoningToken(oai_settings.reasoning_effort_by_source?.[source] ?? 'auto');
+        const value = options.includes(stored) ? stored : 'auto';
+        const $options = options.map(token => {
+            const key = REASONING_EFFORT_LABEL_KEYS[token];
+            const label = REASONING_EFFORT_LABELS[token] ?? token;
+            return $('<option></option>').val(token).text(translate(label, key)).attr('data-i18n', key ?? '');
+        });
+        $effort.empty().append($options).val(value);
+    }
+
+    const hint = getReasoningHint(source);
+    const hintText = hint ? translate(REASONING_HINT_TEXT[hint] ?? '') : '';
+    $('#openai_reasoning_effort_hint').toggle(Boolean(hintText)).text(hintText);
+
+    const thinkingOff = $effort.val() === 'off';
+    $thoughts.prop('disabled', thinkingOff);
 }
 
 async function getStatusOpen() {
@@ -10339,6 +10276,7 @@ export function initOpenAI() {
         reconnectOpenAi();
         forceCharacterEditorTokenize();
         updateFeatureSupportFlags();
+        syncReasoningEffortUI();
         eventSource.emit(event_types.CHATCOMPLETION_SOURCE_CHANGED, oai_settings.chat_completion_source);
     });
 
@@ -10586,7 +10524,10 @@ export function initOpenAI() {
     });
 
     $('#openai_reasoning_effort').on('input', function () {
-        oai_settings.reasoning_effort = String($(this).val());
+        const source = String(oai_settings.chat_completion_source || '');
+        oai_settings.reasoning_effort_by_source ??= {};
+        oai_settings.reasoning_effort_by_source[source] = normalizeReasoningToken(String($(this).val()));
+        syncReasoningEffortUI();
         saveSettingsDebounced();
     });
 

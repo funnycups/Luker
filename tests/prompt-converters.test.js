@@ -108,11 +108,17 @@ describe('calculateClaudeBudgetTokens', () => {
 
         test('min returns "low"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'min', true, true)).toBe('low'));
 
+        test('minimal returns "low"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'minimal', true, true)).toBe('low'));
+
+        test('off returns null', () => expect(mod.calculateClaudeBudgetTokens(8192, 'off', true, true)).toBeNull());
+
         test('low returns "low"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'low', true, true)).toBe('low'));
 
         test('medium returns "medium"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'medium', true, true)).toBe('medium'));
 
         test('high returns "high"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'high', true, true)).toBe('high'));
+
+        test('xhigh returns "xhigh"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'xhigh', true, true)).toBe('xhigh'));
 
         test('max returns "max"', () => expect(mod.calculateClaudeBudgetTokens(8192, 'max', true, true)).toBe('max'));
     });
@@ -122,9 +128,18 @@ describe('calculateClaudeBudgetTokens', () => {
             expect(mod.calculateClaudeBudgetTokens(8192, 'auto', true, false)).toBeNull();
         });
 
+        test('off returns null', () => {
+            expect(mod.calculateClaudeBudgetTokens(8192, 'off', true, false)).toBeNull();
+        });
+
         test('min returns 1024 regardless of maxTokens', () => {
             expect(mod.calculateClaudeBudgetTokens(100, 'min', true, false)).toBe(1024);
             expect(mod.calculateClaudeBudgetTokens(100000, 'min', true, false)).toBe(1024);
+        });
+
+        test('minimal returns 1024 regardless of maxTokens', () => {
+            expect(mod.calculateClaudeBudgetTokens(100, 'minimal', true, false)).toBe(1024);
+            expect(mod.calculateClaudeBudgetTokens(100000, 'minimal', true, false)).toBe(1024);
         });
 
         test('low is 10% of maxTokens, floored to 1024', () => {
@@ -143,6 +158,10 @@ describe('calculateClaudeBudgetTokens', () => {
 
         test('max is 95% of maxTokens', () => {
             expect(mod.calculateClaudeBudgetTokens(40000, 'max', true, false)).toBe(38000);
+        });
+
+        test('xhigh is 95% of maxTokens', () => {
+            expect(mod.calculateClaudeBudgetTokens(40000, 'xhigh', true, false)).toBe(38000);
         });
 
         test('non-streaming caps at 21333', () => {
@@ -258,6 +277,38 @@ describe('calculateGoogleBudgetTokens', () => {
 
         test('caps at 32768', () => {
             expect(mod.calculateGoogleBudgetTokens(500000, 'max', 'gemini-2.5-pro')).toBe(32768);
+        });
+    });
+
+    describe('canonical minimal / xhigh tokens', () => {
+        test('flash minimal returns 0, xhigh returns capped max', () => {
+            expect(mod.calculateGoogleBudgetTokens(8192, 'minimal', 'gemini-2.0-flash')).toBe(0);
+            expect(mod.calculateGoogleBudgetTokens(500000, 'xhigh', 'gemini-2.0-flash')).toBe(24576);
+        });
+
+        test('flash-lite minimal returns 0, xhigh returns capped max', () => {
+            expect(mod.calculateGoogleBudgetTokens(8192, 'minimal', 'gemini-2.0-flash-lite')).toBe(0);
+            expect(mod.calculateGoogleBudgetTokens(500000, 'xhigh', 'gemini-2.0-flash-lite')).toBe(24576);
+        });
+
+        test('pro minimal returns 128, xhigh returns capped max', () => {
+            expect(mod.calculateGoogleBudgetTokens(8192, 'minimal', 'gemini-2.5-pro')).toBe(128);
+            expect(mod.calculateGoogleBudgetTokens(500000, 'xhigh', 'gemini-2.5-pro')).toBe(32768);
+        });
+
+        test('gemini-3 flash minimal returns minimal, xhigh returns high', () => {
+            expect(mod.calculateGoogleBudgetTokens(8192, 'minimal', 'gemini-3.5-flash')).toBe('minimal');
+            expect(mod.calculateGoogleBudgetTokens(8192, 'xhigh', 'gemini-3.5-flash')).toBe('high');
+        });
+
+        test('gemini-3.7 flash minimal degrades to low, xhigh returns high', () => {
+            expect(mod.calculateGoogleBudgetTokens(8192, 'minimal', 'gemini-3.7-flash')).toBe('low');
+            expect(mod.calculateGoogleBudgetTokens(8192, 'xhigh', 'gemini-3.7-flash')).toBe('high');
+        });
+
+        test('gemini-3 pro minimal returns low, xhigh returns high', () => {
+            expect(mod.calculateGoogleBudgetTokens(8192, 'minimal', 'gemini-3.0-pro')).toBe('low');
+            expect(mod.calculateGoogleBudgetTokens(8192, 'xhigh', 'gemini-3.0-pro')).toBe('high');
         });
     });
 

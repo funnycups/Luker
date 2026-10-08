@@ -21,6 +21,7 @@ import {
 } from '../../../prompt-converters.js';
 import { getConfigValue } from '../../../util.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { passthroughReasoningEffort } from './reasoning-params.js';
 
 const API_ELECTRONHUB = 'https://api.electronhub.ai/v1';
 
@@ -80,9 +81,11 @@ export async function dispatchElectronHub(ctx) {
             bodyParams.tool_choice = body.tool_choice;
         }
 
-        if (body.reasoning_effort) {
-            bodyParams.reasoning_effort = body.reasoning_effort;
-        }
+        const effort = passthroughReasoningEffort(body.reasoning_effort);
+        const reasoning = {};
+        if (effort) reasoning.effort = effort;
+        if (!body.include_reasoning) reasoning.exclude = true;
+        if (Object.keys(reasoning).length) bodyParams.reasoning = reasoning;
 
         if (body.json_schema) {
             bodyParams.response_format = {

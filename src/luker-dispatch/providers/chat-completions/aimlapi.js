@@ -12,6 +12,7 @@
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { AIMLAPI_HEADERS } from '../../../constants.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { passthroughReasoningEffort } from './reasoning-params.js';
 
 const API_AIMLAPI = 'https://api.aimlapi.com/v1';
 
@@ -53,8 +54,9 @@ export async function dispatchAimlapi(ctx) {
             bodyParams.stop = body.stop;
         }
 
-        if (body.reasoning_effort) {
-            bodyParams.reasoning_effort = body.reasoning_effort;
+        const effort = passthroughReasoningEffort(body.reasoning_effort);
+        if (effort) {
+            bodyParams.reasoning_effort = effort;
         }
 
         if (body.json_schema) {

@@ -98,16 +98,33 @@ describe('buildResponsesRequestBody', () => {
         ]);
     });
 
-    test('reasoning effort maps min->minimal; include_reasoning requests summary auto; max_tokens -> max_output_tokens', () => {
+    test('reasoning effort maps minimal on base gpt-5; include_reasoning requests summary auto; max_tokens -> max_output_tokens', () => {
         const requestBody = buildResponsesRequestBody({
-            model: 'gpt-5.5',
-            reasoning_effort: 'min',
+            model: 'gpt-5',
+            reasoning_effort: 'minimal',
             include_reasoning: true,
             max_tokens: 300,
         });
         expect(requestBody.reasoning).toEqual({ effort: 'minimal', summary: 'auto' });
         expect(requestBody.max_output_tokens).toBe(300);
         expect(requestBody.max_tokens).toBeUndefined();
+    });
+
+    test('canonical max maps to max on the responses API and off maps to none', () => {
+        const max = buildResponsesRequestBody({ model: 'gpt-5.6', reasoning_effort: 'max' });
+        expect(max.reasoning).toEqual({ effort: 'max' });
+
+        const off = buildResponsesRequestBody({ model: 'gpt-5.6', reasoning_effort: 'off' });
+        expect(off.reasoning).toEqual({ effort: 'none' });
+    });
+
+    test('off with include_reasoning does not request a summary', () => {
+        const requestBody = buildResponsesRequestBody({
+            model: 'gpt-5.6',
+            reasoning_effort: 'off',
+            include_reasoning: true,
+        });
+        expect(requestBody.reasoning).toEqual({ effort: 'none' });
     });
 
     test('tool_choice function object unwraps to flat shape', () => {

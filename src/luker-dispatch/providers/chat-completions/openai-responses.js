@@ -11,7 +11,6 @@
 // Consumes a DispatchContext (see src/luker-dispatch/context.js) and emits
 // head/chunk/end/error events; never touches Express.
 
-import { OPENAI_REASONING_EFFORT_MAP } from '../../../constants.js';
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import {
     excludeKeysByYaml,
@@ -20,6 +19,7 @@ import {
 } from '../../../util.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
+import { resolveOpenAIEffort } from './reasoning-params.js';
 
 const DEFAULT_RESPONSES_BASE_URL = 'https://api.openai.com/v1';
 
@@ -136,14 +136,11 @@ export function buildResponsesRequestBody(body) {
     const topP = Number(body.top_p);
     if (Number.isFinite(topP)) requestBody.top_p = topP;
 
-    if (body.reasoning_effort || body.include_reasoning) {
+    const responsesEffort = resolveOpenAIEffort(body.reasoning_effort, body.model, { responsesApi: true });
+    if (responsesEffort || body.include_reasoning) {
         requestBody.reasoning = {};
-        if (body.reasoning_effort) {
-            requestBody.reasoning.effort = OPENAI_REASONING_EFFORT_MAP[body.reasoning_effort] ?? body.reasoning_effort;
-        }
-        if (body.include_reasoning) {
-            requestBody.reasoning.summary = 'auto';
-        }
+        if (responsesEffort) requestBody.reasoning.effort = responsesEffort;
+        if (body.include_reasoning && responsesEffort !== 'none') requestBody.reasoning.summary = 'auto';
     }
 
     /** @type {object[]} */

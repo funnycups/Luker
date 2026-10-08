@@ -226,4 +226,31 @@ describe('dispatchCohere', () => {
         const errs = ctx._emitted.filter(e => e.kind === 'error');
         expect(errs.length).toBeGreaterThan(0);
     });
+
+    test('reasoning_effort off disables thinking', async () => {
+        const ctx = fakeCtx({ body: { reasoning_effort: 'off' } });
+        await dispatchCohere(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        const body = JSON.parse(init.body);
+        expect(body.thinking).toEqual({ type: 'disabled' });
+    });
+
+    test('reasoning_effort high enables thinking', async () => {
+        const ctx = fakeCtx({ body: { reasoning_effort: 'high' } });
+        await dispatchCohere(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        const body = JSON.parse(init.body);
+        expect(body.thinking).toEqual({ type: 'enabled' });
+    });
+
+    test('reasoning_effort auto omits thinking', async () => {
+        const ctx = fakeCtx({ body: { reasoning_effort: 'auto' } });
+        await dispatchCohere(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        const body = JSON.parse(init.body);
+        expect(body.thinking).toBeUndefined();
+    });
 });

@@ -27,6 +27,7 @@ import {
     getPromptNames,
     calculateClaudeBudgetTokens,
 } from '../../../prompt-converters.js';
+import { normalizeReasoningToken } from './reasoning-params.js';
 import {
     buildClaudeTool,
     color,
@@ -151,12 +152,12 @@ export async function dispatchClaude(ctx) {
             useTools,
             getPromptNames({ body }),
         );
-        const useThinking = modelIdMatchesFamily(body.model, /^claude-(3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/);
+        const useThinking = modelIdMatchesFamily(body.model, /^claude-(3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5|haiku-5-5)/);
         const useWebSearch = modelIdMatchesFamily(body.model, /^claude-(3-5|3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/) && Boolean(body.enable_web_search);
         const isLimitedSampling = modelIdMatchesFamily(body.model, /^claude-(opus-4-1|sonnet-4-5|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6)/);
         const useVerbosity = modelIdMatchesFamily(body.model, /^claude-(opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/);
         const noPrefillModel = modelIdMatchesFamily(body.model, /^claude-(opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/);
-        const isAdaptiveModel = modelIdMatchesFamily(body.model, /^claude-(opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/) || (enableAdaptiveThinking && modelIdMatchesFamily(body.model, /^claude-(opus-4-6|sonnet-4-6)/));
+        const isAdaptiveModel = modelIdMatchesFamily(body.model, /^claude-(haiku-5|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/) || (enableAdaptiveThinking && modelIdMatchesFamily(body.model, /^claude-(opus-4-6|sonnet-4-6)/));
         const noSamplingModel = modelIdMatchesFamily(body.model, /^claude-(opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/);
         let fixThinkingPrefill = false;
 
@@ -265,11 +266,30 @@ export async function dispatchClaude(ctx) {
             delete requestBody.top_k;
         }
 
-        const reasoningEffort = body.reasoning_effort;
+        const reasoningToken = normalizeReasoningToken(body.reasoning_effort);
         const includeReasoning = Boolean(body.include_reasoning);
-        const budgetTokens = calculateClaudeBudgetTokens(requestBody.max_tokens, reasoningEffort, requestBody.stream, isAdaptiveModel);
+        const isAlwaysThinking = modelIdMatchesFamily(body.model, /^claude-(fable-5|mythos-5|mythos-preview|opus-5-5)/);
+        const canDisable = modelIdMatchesFamily(body.model, /^claude-(sonnet-5|opus-5|haiku-5-5|sonnet-5-5|opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|opus-4-5|sonnet-4-5|haiku-4-5)/);
+        const effortClampHigh = modelIdMatchesFamily(body.model, /^claude-(opus-5|haiku-5-5|sonnet-5-5)/);
 
-        if (useThinking && typeof budgetTokens === 'string') {
+        let effectiveToken = reasoningToken;
+        if (effortClampHigh && (effectiveToken === 'xhigh' || effectiveToken === 'max')) {
+            effectiveToken = 'high';
+        }
+
+        const budgetTokens = calculateClaudeBudgetTokens(requestBody.max_tokens, effectiveToken, requestBody.stream, isAdaptiveModel);
+
+        if (reasoningToken === 'off' && canDisable && !isAlwaysThinking) {
+            if (modelIdMatchesFamily(body.model, /^claude-sonnet-5-5/)) {
+                fixThinkingPrefill = true;
+                requestBody.thinking = { type: 'between_tools' };
+            } else if (modelIdMatchesFamily(body.model, /^claude-(opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|opus-4-5|sonnet-4-5|haiku-4-5)/)) {
+                // Thinking is off by default on these models; send nothing.
+            } else {
+                fixThinkingPrefill = true;
+                requestBody.thinking = { type: 'disabled' };
+            }
+        } else if (useThinking && typeof budgetTokens === 'string') {
             fixThinkingPrefill = true;
             requestBody.thinking = { type: 'adaptive' };
             if (noSamplingModel && includeReasoning) {
@@ -278,10 +298,6 @@ export async function dispatchClaude(ctx) {
             requestBody.output_config ??= {};
             requestBody.output_config.effort = budgetTokens;
             delete requestBody.top_k;
-        } else if (useThinking && modelIdMatchesFamily(body.model, /^claude-(fable|mythos-5|mythos-preview|opus-5|sonnet-5)/) && reasoningEffort === 'auto' && includeReasoning) {
-            // Fable/Claude 5 auto thinking is already enabled, but readable summaries require an explicit display request.
-            fixThinkingPrefill = true;
-            requestBody.thinking = { type: 'adaptive', display: 'summarized' };
         } else if (useThinking && Number.isInteger(budgetTokens)) {
             fixThinkingPrefill = true;
             const minThinkTokens = 1024;
@@ -295,6 +311,11 @@ export async function dispatchClaude(ctx) {
             delete requestBody.temperature;
             delete requestBody.top_p;
             delete requestBody.top_k;
+        } else if (useThinking && includeReasoning && (reasoningToken === 'auto' || reasoningToken === 'off')
+            && modelIdMatchesFamily(body.model, /^claude-(fable|mythos-5|mythos-preview|opus-5|sonnet-5)/)) {
+            // These families think by default; readable summaries require an explicit display request.
+            fixThinkingPrefill = true;
+            requestBody.thinking = { type: 'adaptive', display: 'summarized' };
         }
 
         if ((fixThinkingPrefill || noPrefillModel) && convertedPrompt.messages.length && convertedPrompt.messages[convertedPrompt.messages.length - 1].role === 'assistant') {

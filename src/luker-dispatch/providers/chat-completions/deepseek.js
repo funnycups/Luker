@@ -20,6 +20,7 @@ import {
 import { excludeKeysByYaml, mergeObjectWithYaml } from '../../../util.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
+import { normalizeReasoningToken } from './reasoning-params.js';
 
 const API_DEEPSEEK = 'https://api.deepseek.com/beta';
 
@@ -101,13 +102,16 @@ export async function dispatchDeepSeek(ctx) {
         );
         ensureDeepSeekReasoningContent(processedMessages);
 
-        if (body.reasoning_effort) {
-            bodyParams.reasoning_effort = body.reasoning_effort;
-            bodyParams.thinking = { type: 'enabled' };
-            // DeepSeek thinking mode rejects `tool_choice` (returns 400). Strip it here
-            // so the frontend patch is not the only line of defense; `tools` stays and
-            // the service falls back to auto behavior. Forced-function callers rely on retry.
-            delete bodyParams.tool_choice;
+        const reasoningToken = normalizeReasoningToken(body.reasoning_effort);
+        if (reasoningToken !== 'auto') {
+            bodyParams.thinking = { type: reasoningToken === 'off' ? 'disabled' : 'enabled' };
+            if (reasoningToken !== 'off') {
+                bodyParams.reasoning_effort = reasoningToken;
+                // DeepSeek thinking mode rejects `tool_choice` (returns 400). Strip it here
+                // so the frontend patch is not the only line of defense; `tools` stays and
+                // the service falls back to auto behavior. Forced-function callers rely on retry.
+                delete bodyParams.tool_choice;
+            }
         }
 
         const requestBody = {

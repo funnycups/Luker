@@ -170,4 +170,35 @@ describe('dispatchElectronHub', () => {
         const errs = ctx._emitted.filter(e => e.kind === 'error');
         expect(errs.length).toBeGreaterThan(0);
     });
+
+    describe('reasoning_effort mapping', () => {
+        function wireBody(ctx) {
+            return JSON.parse(ctx.fetch.mock.calls[0][1].body);
+        }
+
+        test('off maps to reasoning.effort none', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'off', include_reasoning: true } });
+            await dispatchElectronHub(ctx);
+            expect(wireBody(ctx).reasoning).toEqual({ effort: 'none' });
+        });
+
+        test('high maps to reasoning.effort high', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'high', include_reasoning: true } });
+            await dispatchElectronHub(ctx);
+            expect(wireBody(ctx).reasoning).toEqual({ effort: 'high' });
+        });
+
+        test('auto omits the reasoning object when reasoning is included', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'auto', include_reasoning: true } });
+            await dispatchElectronHub(ctx);
+            expect(wireBody(ctx).reasoning).toBeUndefined();
+        });
+
+        test('include_reasoning false sets reasoning.exclude true', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'high', include_reasoning: false } });
+            await dispatchElectronHub(ctx);
+            expect(wireBody(ctx).reasoning.exclude).toBe(true);
+            expect(wireBody(ctx).reasoning.effort).toBe('high');
+        });
+    });
 });

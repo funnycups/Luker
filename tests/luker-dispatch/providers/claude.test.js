@@ -362,4 +362,93 @@ describe('dispatchClaude', () => {
         const [, attachedKey] = ctx._attachCalls[0];
         expect(attachedKey).toBe('sk-ant-stored');
     });
+
+    describe('per-model reasoning_effort mapping', () => {
+        async function send(body) {
+            const fetchMock = jest.fn(async () => new Response(JSON.stringify({
+                id: 'msg_1', type: 'message', role: 'assistant',
+                content: [{ type: 'text', text: 'ok' }],
+                stop_reason: 'end_turn',
+                usage: { input_tokens: 1, output_tokens: 1 },
+            }), { status: 200, headers: { 'content-type': 'application/json' } }));
+            const ctx = fakeCtx({ onFetch: fetchMock, body });
+            await dispatchClaude(ctx);
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            return {
+                sent: JSON.parse(fetchMock.mock.calls[0][1].body),
+                ctx,
+            };
+        }
+
+        test('sonnet-5 off disables thinking', async () => {
+            const { sent } = await send({ model: 'claude-sonnet-5', reasoning_effort: 'off' });
+            expect(sent.thinking).toEqual({ type: 'disabled' });
+        });
+
+        test('opus-5 off disables thinking', async () => {
+            const { sent } = await send({ model: 'claude-opus-5', reasoning_effort: 'off' });
+            expect(sent.thinking).toEqual({ type: 'disabled' });
+        });
+
+        test('opus-5 max clamps effort to high with adaptive thinking', async () => {
+            const { sent } = await send({ model: 'claude-opus-5', reasoning_effort: 'max' });
+            expect(sent.thinking?.type).not.toBe('disabled');
+            expect(sent.thinking).toEqual({ type: 'adaptive' });
+            expect(sent.output_config?.effort).toBe('high');
+        });
+
+        test('opus-4-5 minimal uses extended thinking with 1024 budget', async () => {
+            const { sent } = await send({ model: 'claude-opus-4-5', max_tokens: 8192, reasoning_effort: 'minimal' });
+            expect(sent.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+        });
+
+        test('opus-4-7 off omits the thinking key', async () => {
+            const { sent } = await send({ model: 'claude-opus-4-7', reasoning_effort: 'off' });
+            expect(sent).not.toHaveProperty('thinking');
+        });
+
+        test('opus-4-6 off omits the thinking key', async () => {
+            const { sent } = await send({ model: 'claude-opus-4-6', reasoning_effort: 'off' });
+            expect(sent).not.toHaveProperty('thinking');
+        });
+
+        test('fable-5 off is ignored and sends no thinking key', async () => {
+            const { sent, ctx } = await send({ model: 'claude-fable-5', reasoning_effort: 'off' });
+            expect(sent).not.toHaveProperty('thinking');
+            expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+        });
+
+        test('sonnet-5-5 off uses between_tools thinking', async () => {
+            const { sent } = await send({ model: 'claude-sonnet-5-5', reasoning_effort: 'off' });
+            expect(sent.thinking).toEqual({ type: 'between_tools' });
+        });
+
+        test('sonnet-5 auto with include_reasoning requests summarized display', async () => {
+            const { sent } = await send({ model: 'claude-sonnet-5', reasoning_effort: 'auto', include_reasoning: true });
+            expect(sent.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+        });
+
+        test('fable-5 off with include_reasoning still honors summarized display', async () => {
+            const { sent } = await send({ model: 'claude-fable-5', reasoning_effort: 'off', include_reasoning: true });
+            expect(sent.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+        });
+
+        test('haiku-5-5 high uses adaptive thinking with output_config effort', async () => {
+            const { sent } = await send({ model: 'claude-haiku-5-5', reasoning_effort: 'high' });
+            expect(sent.thinking).toEqual({ type: 'adaptive' });
+            expect(sent.output_config?.effort).toBe('high');
+            expect(sent.thinking?.budget_tokens).toBeUndefined();
+        });
+
+        test('haiku-5-5 max clamps adaptive effort to high', async () => {
+            const { sent } = await send({ model: 'claude-haiku-5-5', reasoning_effort: 'max' });
+            expect(sent.thinking).toEqual({ type: 'adaptive' });
+            expect(sent.output_config?.effort).toBe('high');
+        });
+
+        test('legacy min token maps to minimal on an extended-thinking model', async () => {
+            const { sent } = await send({ model: 'claude-opus-4-5', max_tokens: 8192, reasoning_effort: 'min' });
+            expect(sent.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+        });
+    });
 });

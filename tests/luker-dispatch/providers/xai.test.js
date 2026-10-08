@@ -169,4 +169,40 @@ describe('dispatchXai', () => {
         const errs = ctx._emitted.filter(e => e.kind === 'error');
         expect(errs.length).toBeGreaterThan(0);
     });
+
+    describe('reasoning_effort mapping', () => {
+        function wireBody(ctx) {
+            return JSON.parse(ctx.fetch.mock.calls[0][1].body);
+        }
+
+        test('off and auto omit reasoning_effort', async () => {
+            for (const effort of ['off', 'auto']) {
+                const ctx = fakeCtx({ body: { reasoning_effort: effort } });
+                await dispatchXai(ctx);
+                expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+            }
+        });
+
+        test('low maps to low', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'low' } });
+            await dispatchXai(ctx);
+            expect(wireBody(ctx).reasoning_effort).toBe('low');
+        });
+
+        test('high and xhigh collapse to high', async () => {
+            for (const effort of ['high', 'xhigh']) {
+                const ctx = fakeCtx({ body: { reasoning_effort: effort } });
+                await dispatchXai(ctx);
+                expect(wireBody(ctx).reasoning_effort).toBe('high');
+            }
+        });
+
+        test('minimal and medium collapse to low', async () => {
+            for (const effort of ['minimal', 'medium']) {
+                const ctx = fakeCtx({ body: { reasoning_effort: effort } });
+                await dispatchXai(ctx);
+                expect(wireBody(ctx).reasoning_effort).toBe('low');
+            }
+        });
+    });
 });

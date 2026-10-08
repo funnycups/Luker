@@ -168,4 +168,31 @@ describe('dispatchChutes', () => {
         const errs = ctx._emitted.filter(e => e.kind === 'error');
         expect(errs.length).toBeGreaterThan(0);
     });
+
+    describe('reasoning_effort mapping', () => {
+        function wireBody(ctx) {
+            return JSON.parse(ctx.fetch.mock.calls[0][1].body);
+        }
+
+        test('off sets enable_thinking false and drops reasoning_effort', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'off' } });
+            await dispatchChutes(ctx);
+            expect(wireBody(ctx).enable_thinking).toBe(false);
+            expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+        });
+
+        test('high sets enable_thinking true and drops reasoning_effort', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'high' } });
+            await dispatchChutes(ctx);
+            expect(wireBody(ctx).enable_thinking).toBe(true);
+            expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+        });
+
+        test('auto omits enable_thinking and reasoning_effort', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'auto' } });
+            await dispatchChutes(ctx);
+            expect(wireBody(ctx).enable_thinking).toBeUndefined();
+            expect(wireBody(ctx).reasoning_effort).toBeUndefined();
+        });
+    });
 });

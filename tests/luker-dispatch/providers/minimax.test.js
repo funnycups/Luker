@@ -173,4 +173,34 @@ describe('dispatchMinimax', () => {
         const errs = ctx._emitted.filter(e => e.kind === 'error');
         expect(errs.length).toBeGreaterThan(0);
     });
+
+    test('reasoning_effort off disables thinking and omits the effort field', async () => {
+        const ctx = fakeCtx({ body: { reasoning_effort: 'off' } });
+        await dispatchMinimax(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        const body = JSON.parse(init.body);
+        expect(body.thinking).toEqual({ type: 'disabled' });
+        expect(body.reasoning_effort).toBeUndefined();
+    });
+
+    test('reasoning_effort high enables thinking and forwards the effort', async () => {
+        const ctx = fakeCtx({ body: { reasoning_effort: 'high' } });
+        await dispatchMinimax(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        const body = JSON.parse(init.body);
+        expect(body.thinking).toEqual({ type: 'enabled' });
+        expect(body.reasoning_effort).toBe('high');
+    });
+
+    test('reasoning_effort auto omits all reasoning params', async () => {
+        const ctx = fakeCtx({ body: { reasoning_effort: 'auto' } });
+        await dispatchMinimax(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        const body = JSON.parse(init.body);
+        expect(body.thinking).toBeUndefined();
+        expect(body.reasoning_effort).toBeUndefined();
+    });
 });

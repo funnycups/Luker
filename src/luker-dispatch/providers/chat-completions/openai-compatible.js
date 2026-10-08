@@ -26,9 +26,7 @@
 import {
     CHAT_COMPLETION_SOURCES,
     GEMINI_SAFETY,
-    NANOGPT_REASONING_EFFORT_MAP,
     OPENAI_FIXED_REASONING_EFFORT,
-    OPENAI_REASONING_EFFORT_MAP,
     OPENAI_REASONING_EFFORT_MODELS,
     OPENAI_VERBOSITY_MODELS,
     OPENROUTER_HEADERS,
@@ -63,6 +61,7 @@ import {
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { GeminiHistoryCache } from '../../gemini-history-cache.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
+import { resolveOpenAIEffort, passthroughReasoningEffort, applyReasoningExclude, normalizeReasoningToken } from './reasoning-params.js';
 
 const geminiHistoryCache = new GeminiHistoryCache();
 
@@ -268,8 +267,9 @@ async function resolveOpenRouter(ctx) {
     const bodyParams = {
         transforms: getOpenRouterTransforms(body),
         plugins: getOpenRouterPlugins(body),
-        reasoning: { exclude: !includeReasoning },
+        reasoning: {},
     };
+    applyReasoningExclude(bodyParams.reasoning, includeReasoning);
     if (body.logprobs > 0) {
         bodyParams.top_logprobs = body.logprobs;
         bodyParams.logprobs = true;
@@ -288,7 +288,8 @@ async function resolveOpenRouter(ctx) {
         bodyParams.provider.quantizations = body.quantizations;
     }
     if (body.use_fallback) bodyParams.route = 'fallback';
-    if (body.reasoning_effort) bodyParams.reasoning.effort = body.reasoning_effort;
+    const openrouterEffort = passthroughReasoningEffort(body.reasoning_effort);
+    if (openrouterEffort) bodyParams.reasoning.effort = openrouterEffort;
     if (body.verbosity) bodyParams.verbosity = body.verbosity;
     if (body.json_schema) {
         bodyParams.response_format = {
@@ -382,7 +383,9 @@ async function resolvePerplexity(ctx) {
     const apiKey = ctx.secrets.read(SECRET_KEYS.PERPLEXITY);
     const headers = {};
     /** @type {any} */
-    const bodyParams = { reasoning_effort: body.reasoning_effort };
+    const bodyParams = {};
+    const effort = passthroughReasoningEffort(body.reasoning_effort);
+    if (effort) bodyParams.reasoning_effort = effort;
     body.messages = postProcessPrompt(body.messages, PROMPT_PROCESSING_TYPE.STRICT, getPromptNames(shim(ctx)));
     if (body.json_schema) {
         bodyParams.response_format = {
@@ -401,6 +404,12 @@ async function resolveGroq(ctx) {
     const headers = {};
     /** @type {any} */
     const bodyParams = {};
+    const groqToken = normalizeReasoningToken(body.reasoning_effort);
+    if (groqToken === 'off') {
+        bodyParams.reasoning_format = 'hidden';
+    } else if (groqToken !== 'auto') {
+        bodyParams.reasoning_effort = groqToken;
+    }
     if (body.json_schema) {
         bodyParams.response_format = {
             type: 'json_schema',
@@ -423,8 +432,9 @@ async function resolveFireworks(ctx) {
     const headers = {};
     /** @type {any} */
     const bodyParams = {};
-    if (body.reasoning_effort) {
-        bodyParams.reasoning_effort = body.reasoning_effort;
+    const effort = passthroughReasoningEffort(body.reasoning_effort);
+    if (effort) {
+        bodyParams.reasoning_effort = effort;
     }
     if (body.json_schema) {
         bodyParams.response_format = {
@@ -464,10 +474,11 @@ async function resolveNanogpt(ctx) {
     if (body.min_p !== undefined) bodyParams.min_p = body.min_p;
     if (body.top_a !== undefined) bodyParams.top_a = body.top_a;
     if (body.repetition_penalty !== undefined) bodyParams.repetition_penalty = body.repetition_penalty;
-    if (body.reasoning_effort) {
-        const effort = NANOGPT_REASONING_EFFORT_MAP[body.reasoning_effort] ?? body.reasoning_effort;
-        bodyParams.reasoning = { effort: effort };
-    }
+    const effort = passthroughReasoningEffort(body.reasoning_effort);
+    const reasoning = {};
+    if (effort) reasoning.effort = effort;
+    if (!body.include_reasoning) reasoning.exclude = true;
+    if (Object.keys(reasoning).length) bodyParams.reasoning = reasoning;
     const isClaude = /(?:^|\/)claude[-_]/.test(body.model);
     if (enableSystemPromptCache && isClaude) {
         bodyParams.cache_control = { 'enabled': true, 'ttl': cacheTTL };
@@ -488,7 +499,8 @@ async function resolvePollinations(ctx) {
         seed: body.seed ?? Math.floor(Math.random() * 99999999),
     };
     if (!isAnonymous) {
-        bodyParams.reasoning_effort = body.reasoning_effort;
+        const effort = passthroughReasoningEffort(body.reasoning_effort);
+        if (effort) bodyParams.reasoning_effort = effort;
         if (body.json_schema) {
             bodyParams.response_format = {
                 type: 'json_schema',
@@ -546,18 +558,21 @@ function getKimiModelFamily(model) {
 }
 
 function applyMoonshotReasoningParams(bodyParams, model, effort) {
-    const hasEffort = typeof effort === 'string' && effort.length > 0;
+    const token = normalizeReasoningToken(effort);
     const family = getKimiModelFamily(model);
     if (family === 'k3') {
-        if (!hasEffort || effort === 'auto') {
+        if (token === 'auto' || token === 'off') {
             return;
         }
-        // K3 accepts low/high/max only; ST's six buckets collapse onto them.
-        const K3_EFFORT_MAP = { min: 'low', low: 'low', medium: 'high', high: 'high', max: 'max' };
-        bodyParams.reasoning_effort = K3_EFFORT_MAP[effort];
+        // K3 accepts low/high/max only; the canonical buckets collapse onto them.
+        const K3_EFFORT_MAP = { minimal: 'low', low: 'low', medium: 'high', high: 'high', xhigh: 'high', max: 'max' };
+        bodyParams.reasoning_effort = K3_EFFORT_MAP[token];
         return;
     }
     if (family === 'k2.7-code') {
+        if (token === 'off') {
+            return;
+        }
         bodyParams.thinking = { type: 'enabled' };
         return;
     }
@@ -565,12 +580,7 @@ function applyMoonshotReasoningParams(bodyParams, model, effort) {
         // keep:'all' = Preserved Thinking. K2.6's server default is keep:null,
         // which silently drops echoed historical reasoning_content — without
         // this, the reasoning we replay from chat history is ignored upstream.
-        if (!hasEffort || effort === 'auto') {
-            bodyParams.thinking = { type: 'enabled', keep: 'all' };
-            return;
-        }
-        // min is the only ST bucket that maps to thinking off; the rest enable it.
-        bodyParams.thinking = { type: effort === 'min' ? 'disabled' : 'enabled', keep: 'all' };
+        bodyParams.thinking = { type: token === 'off' ? 'disabled' : 'enabled', keep: 'all' };
     }
 }
 
@@ -621,7 +631,13 @@ async function resolveZai(ctx) {
     const headers = { 'Accept-Language': 'en-US,en' };
     /** @type {any} */
     const bodyParams = {};
-    if (body.reasoning_effort) bodyParams.thinking = { type: 'enabled' };
+    const zaiToken = normalizeReasoningToken(body.reasoning_effort);
+    if (zaiToken !== 'auto') {
+        bodyParams.thinking = { type: zaiToken === 'off' ? 'disabled' : 'enabled' };
+        if (zaiToken !== 'off') {
+            bodyParams.reasoning_effort = zaiToken;
+        }
+    }
     if (body.json_schema) {
         setJsonObjectFormat(bodyParams, body.messages, body.json_schema);
     }
@@ -637,6 +653,10 @@ async function resolveSiliconflow(ctx) {
     const headers = {};
     /** @type {any} */
     const bodyParams = {};
+    const siliconflowToken = normalizeReasoningToken(body.reasoning_effort);
+    if (siliconflowToken !== 'auto') {
+        bodyParams.enable_thinking = siliconflowToken !== 'off';
+    }
     if (body.json_schema) {
         setJsonObjectFormat(bodyParams, body.messages, body.json_schema);
     }
@@ -660,6 +680,8 @@ async function resolveWorkersai(ctx) {
     const headers = {};
     /** @type {any} */
     const bodyParams = { repetition_penalty: body.repetition_penalty };
+    const effort = passthroughReasoningEffort(body.reasoning_effort);
+    if (effort) bodyParams.reasoning_effort = effort;
     if (body.json_schema) {
         bodyParams.response_format = {
             type: 'json_schema',
@@ -720,12 +742,13 @@ export async function dispatchOpenAICompatible(ctx) {
         // Reasoning effort. Official OpenAI stays on the model allowlist.
         // Custom forwards any resolved effort: the endpoint may be a proxy
         // whose model names are not in OPENAI_REASONING_EFFORT_MODELS.
-        if (body.reasoning_effort && source === CHAT_COMPLETION_SOURCES.CUSTOM) {
-            bodyParams.reasoning_effort = body.reasoning_effort;
-        } else if (body.reasoning_effort && source === CHAT_COMPLETION_SOURCES.OPENAI && OPENAI_REASONING_EFFORT_MODELS.includes(body.model)) {
-            bodyParams.reasoning_effort = OPENAI_FIXED_REASONING_EFFORT[body.model]
-                ?? OPENAI_REASONING_EFFORT_MAP[body.reasoning_effort]
-                ?? body.reasoning_effort;
+        if (source === CHAT_COMPLETION_SOURCES.CUSTOM) {
+            const effort = passthroughReasoningEffort(body.reasoning_effort);
+            if (effort) bodyParams.reasoning_effort = effort;
+        } else if (source === CHAT_COMPLETION_SOURCES.OPENAI && OPENAI_REASONING_EFFORT_MODELS.includes(body.model)) {
+            const fixed = OPENAI_FIXED_REASONING_EFFORT[body.model];
+            const effort = fixed ?? resolveOpenAIEffort(body.reasoning_effort, body.model);
+            if (effort) bodyParams.reasoning_effort = effort;
         }
 
         // Verbosity — OPENAI/CUSTOM only, gated by model regex.

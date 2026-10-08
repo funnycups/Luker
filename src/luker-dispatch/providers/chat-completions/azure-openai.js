@@ -17,16 +17,16 @@
 //     (name/strict/schema; strict defaults to true if not specified).
 //   - logprobs>0 (numeric) is translated to top_logprobs + boolean logprobs.
 //   - reasoning_effort is only set for models in OPENAI_REASONING_EFFORT_MODELS,
-//     honoring OPENAI_FIXED_REASONING_EFFORT and OPENAI_REASONING_EFFORT_MAP.
+//     honoring OPENAI_FIXED_REASONING_EFFORT and the canonical token mapping.
 
 import {
     AZURE_OPENAI_KEYS,
     OPENAI_FIXED_REASONING_EFFORT,
-    OPENAI_REASONING_EFFORT_MAP,
     OPENAI_REASONING_EFFORT_MODELS,
 } from '../../../constants.js';
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { resolveOpenAIEffort } from './reasoning-params.js';
 
 /**
  * Dispatch an Azure OpenAI chat completion request through the transport-agnostic
@@ -77,8 +77,9 @@ export async function dispatchAzureOpenAI(ctx) {
         }
 
         // Reasoning effort gating.
+        const azureFixed = OPENAI_FIXED_REASONING_EFFORT[body.model];
         apiRequestBody.reasoning_effort = OPENAI_REASONING_EFFORT_MODELS.includes(body.model)
-            ? OPENAI_FIXED_REASONING_EFFORT[body.model] ?? OPENAI_REASONING_EFFORT_MAP[body.reasoning_effort] ?? body.reasoning_effort
+            ? (azureFixed ?? resolveOpenAIEffort(body.reasoning_effort, body.model))
             : undefined;
 
         const url = new URL(`/openai/deployments/${azure_deployment_name}/chat/completions`, azure_base_url);

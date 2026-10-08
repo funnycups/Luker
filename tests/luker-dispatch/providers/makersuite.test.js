@@ -422,6 +422,75 @@ describe('dispatchMakerSuite', () => {
         expect(errs.length).toBeGreaterThan(0);
     });
 
+    describe('reasoning_effort → thinkingConfig mapping', () => {
+        function thinkingConfigFromCtx(ctx) {
+            const [, init] = ctx.fetch.mock.calls[0];
+            return JSON.parse(init.body).generationConfig.thinkingConfig;
+        }
+
+        test('gemini-2.5-flash + off → thinkingBudget === 0', async () => {
+            const ctx = fakeCtx({ body: { model: 'gemini-2.5-flash', reasoning_effort: 'off' } });
+            await dispatchMakerSuite(ctx);
+            expect(thinkingConfigFromCtx(ctx).thinkingBudget).toBe(0);
+        });
+
+        test('gemini-2.5-pro + off → thinkingBudget not set to 0 (cannot disable)', async () => {
+            const ctx = fakeCtx({ body: { model: 'gemini-2.5-pro', reasoning_effort: 'off' } });
+            await dispatchMakerSuite(ctx);
+            const cfg = thinkingConfigFromCtx(ctx);
+            expect(cfg.thinkingBudget).not.toBe(0);
+            expect('thinkingBudget' in cfg).toBe(false);
+        });
+
+        test('gemini-3-pro + off → thinkingLevel === low (Pro has no minimal support)', async () => {
+            const ctx = fakeCtx({ body: { model: 'gemini-3-pro', reasoning_effort: 'off' } });
+            await dispatchMakerSuite(ctx);
+            expect(thinkingConfigFromCtx(ctx).thinkingLevel).toBe('low');
+        });
+
+        test('gemini-3.1-pro + off → thinkingLevel === low', async () => {
+            const ctx = fakeCtx({ body: { model: 'gemini-3.1-pro', reasoning_effort: 'off' } });
+            await dispatchMakerSuite(ctx);
+            expect(thinkingConfigFromCtx(ctx).thinkingLevel).toBe('low');
+        });
+
+        test('path-prefixed gemini-3-pro + off → thinkingLevel === low (family match tolerates prefix)', async () => {
+            const ctx = fakeCtx({ body: { model: 'publishers/google/models/gemini-3-pro', reasoning_effort: 'off' } });
+            await dispatchMakerSuite(ctx);
+            expect(thinkingConfigFromCtx(ctx).thinkingLevel).toBe('low');
+        });
+
+        test('gemini-3.7-flash + off → thinkingLevel === low (no minimal support)', async () => {
+            const ctx = fakeCtx({ body: { model: 'gemini-3.7-flash', reasoning_effort: 'off' } });
+            await dispatchMakerSuite(ctx);
+            expect(thinkingConfigFromCtx(ctx).thinkingLevel).toBe('low');
+        });
+
+        test('gemini-2.5-flash-lite + off → thinkingBudget === 0', async () => {
+            const ctx = fakeCtx({ body: { model: 'gemini-2.5-flash-lite', reasoning_effort: 'off' } });
+            await dispatchMakerSuite(ctx);
+            expect(thinkingConfigFromCtx(ctx).thinkingBudget).toBe(0);
+        });
+
+        test('path-prefixed model id + off → thinkingBudget === 0 (family match tolerates prefix)', async () => {
+            const ctx = fakeCtx({ body: { model: 'publishers/google/models/gemini-2.5-flash', reasoning_effort: 'off' } });
+            await dispatchMakerSuite(ctx);
+            expect(thinkingConfigFromCtx(ctx).thinkingBudget).toBe(0);
+        });
+
+        test('gemini-2.5-flash + minimal → thinkingBudget === 0', async () => {
+            const ctx = fakeCtx({ body: { model: 'gemini-2.5-flash', reasoning_effort: 'minimal' } });
+            await dispatchMakerSuite(ctx);
+            expect(thinkingConfigFromCtx(ctx).thinkingBudget).toBe(0);
+        });
+
+        test('gemini-3-pro + xhigh → thinkingLevel === high', async () => {
+            const ctx = fakeCtx({ body: { model: 'gemini-3-pro', reasoning_effort: 'xhigh' } });
+            await dispatchMakerSuite(ctx);
+            expect(thinkingConfigFromCtx(ctx).thinkingLevel).toBe('high');
+        });
+    });
+
     test('VERTEXAI reverse-proxy branch: /v1/publishers/google/models URL, Authorization header, no key= param', async () => {
         // Vertex express/full auth modes read secrets via readSecret (NOT
         // ctx.secrets.read) inside getVertexAIAuth; those paths need the

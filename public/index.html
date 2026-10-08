@@ -2156,52 +2156,34 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="range-block" data-source="deepseek,aimlapi,openrouter,custom,claude,xai,makersuite,vertexai,pollinations,moonshot,mistralai,fireworks,cometapi,electronhub,chutes,azure_openai,nanogpt,zai,workers_ai,openai_responses">
+                                    <div class="range-block" id="openai_show_thoughts_block">
                                         <label for="openai_show_thoughts" class="checkbox_label widthFreeExpand">
                                             <input id="openai_show_thoughts" type="checkbox" />
-                                            <span data-i18n="Request model reasoning">Request model reasoning</span>
+                                            <span data-i18n="Show chain of thought">Show chain of thought</span>
                                         </label>
                                         <div class="toggle-description justifyLeft marginBot5">
-                                            <span data-i18n="Allows the model to return its thinking process.">
-                                                Allows the model to return its thinking process.
-                                            </span>
                                             <strong data-i18n="This setting affects visibility only.">
                                                 This setting affects visibility only.
                                             </strong>
                                         </div>
                                     </div>
-                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes,nanogpt,deepseek,openai_responses,fireworks">
-                                        <div class="flex-container oneline-dropdown" title="Constrains effort on reasoning for reasoning models.&#10;Reducing reasoning effort can result in faster responses and fewer tokens used on reasoning in a response." data-i18n="[title]Constrains effort on reasoning for reasoning models.">
+                                    <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" id="openai_reasoning_effort_block" data-source="openai,custom,claude,xai,makersuite,vertexai,aimlapi,openrouter,pollinations,perplexity,electronhub,azure_openai,chutes,nanogpt,deepseek,openai_responses,fireworks,moonshot,zai,siliconflow,workers_ai,minimax,mistralai,cohere,groq">
+                                        <div class="flex-container oneline-dropdown">
                                             <label for="openai_reasoning_effort">
                                                 <span data-i18n="Reasoning Effort">Reasoning Effort</span>
                                                 <a href="https://docs.sillytavern.app/usage/prompts/reasoning/#reasoning-effort" target="_blank" class="opacity50p fa-solid fa-circle-question"></a>
                                             </label>
                                             <select id="openai_reasoning_effort">
-                                                <option data-i18n="openai_reasoning_effort_auto" value="auto">Auto</option>
-                                                <option data-i18n="openai_reasoning_effort_minimum" value="min">Minimum</option>
-                                                <option data-i18n="openai_reasoning_effort_low" value="low">Low</option>
-                                                <option data-i18n="openai_reasoning_effort_medium" value="medium">Medium</option>
-                                                <option data-i18n="openai_reasoning_effort_high" value="high">High</option>
-                                                <option data-i18n="openai_reasoning_effort_maximum" value="max">Maximum</option>
+                                                <option value="auto" data-i18n="openai_reasoning_effort_auto">Auto</option>
+                                                <option value="off" data-i18n="openai_reasoning_effort_off">Off</option>
+                                                <option value="minimal" data-i18n="openai_reasoning_effort_minimum">Minimal</option>
+                                                <option value="low" data-i18n="openai_reasoning_effort_low">Low</option>
+                                                <option value="medium" data-i18n="openai_reasoning_effort_medium">Medium</option>
+                                                <option value="high" data-i18n="openai_reasoning_effort_high">High</option>
+                                                <option value="xhigh" data-i18n="openai_reasoning_effort_xhigh">Extra high</option>
+                                                <option value="max" data-i18n="openai_reasoning_effort_maximum">Max</option>
                                             </select>
-                                            <div class="toggle-description justifyLeft marginBot5" data-source="openai,custom,xai,aimlapi,openrouter,pollinations,perplexity,cometapi,electronhub,azure_openai,chutes" data-i18n="OpenAI-compatible effort levels vary by model. Minimum and maximum may use model-specific aliases. Auto does not send an effort level.">
-                                                OpenAI-compatible effort levels vary by model. Minimum and maximum may use model-specific aliases. Auto does not send an effort level.
-                                            </div>
-                                            <div class="toggle-description justifyLeft marginBot5" data-source="fireworks" data-i18n="Fireworks supports low, medium, high, and max as distinct effort levels. Minimum is aliased to low. Auto does not send an effort level.">
-                                                Fireworks supports low, medium, high, and max as distinct effort levels. Minimum is aliased to low. Auto does not send an effort level.
-                                            </div>
-                                            <div class="toggle-description justifyLeft marginBot5" data-source="claude" data-i18n="Selects an effort level on adaptive-thinking models. On older Claude models, it allocates a portion of the response length to thinking. Auto does not request thinking.">
-                                                Selects an effort level on adaptive-thinking models. On older Claude models, it allocates a portion of the response length to thinking. Auto does not request thinking.
-                                            </div>
-                                            <div class="toggle-description justifyLeft marginBot5" data-source="makersuite,vertexai">
-                                                <span data-i18n="Sets a dynamic reasoning depth level for thinking (Flash 3/Pro 3). High and low are supported by both, minimal and medium are Flash 3 only. Auto lets the model decide.">
-                                                    Sets a dynamic reasoning depth level for thinking (Flash 3/Pro 3). High and low are supported by both, minimal and medium are Flash 3 only. Auto lets the model decide.
-                                                </span>
-                                                <br>
-                                                <span data-i18n="Allocates a portion of the response length for thinking (Flash 2.5/Pro 2.5) (min: 0/128 tokens, low: 10%, medium: 25%, high: 50%, max: 24576/32768 tokens). Auto lets the model decide.">
-                                                    Allocates a portion of the response length for thinking (Flash 2.5/Pro 2.5) (min: 0/128 tokens, low: 10%, medium: 25%, high: 50%, max: 24576/32768 tokens). Auto lets the model decide.
-                                                </span>
-                                            </div>
+                                            <small id="openai_reasoning_effort_hint" class="toggle-description justifyLeft marginBot5"></small>
                                         </div>
                                     </div>
                                     <div class="flex-container flexFlowColumn wide100p textAlignCenter marginTop10" data-source="openai,custom,openrouter,claude">

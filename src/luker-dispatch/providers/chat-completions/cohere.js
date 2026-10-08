@@ -21,6 +21,7 @@ import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { convertCohereMessages, getPromptNames } from '../../../prompt-converters.js';
 import { normalizeCohereResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { normalizeReasoningToken } from './reasoning-params.js';
 
 const API_COHERE_V2 = 'https://api.cohere.ai/v2';
 
@@ -85,6 +86,13 @@ export async function dispatchCohere(ctx) {
                 type: 'json_schema',
                 schema: body.json_schema.value,
             };
+        }
+
+        const cohereToken = normalizeReasoningToken(body.reasoning_effort);
+        if (cohereToken === 'off') {
+            requestBody.thinking = { type: 'disabled' };
+        } else if (cohereToken !== 'auto') {
+            requestBody.thinking = { type: 'enabled' };
         }
 
         const fetchUrl = API_COHERE_V2 + '/chat';

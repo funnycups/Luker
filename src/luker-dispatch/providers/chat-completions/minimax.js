@@ -20,6 +20,7 @@ import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { MINIMAX_ENDPOINT } from '../../../constants.js';
 import { getPromptNames, postProcessPrompt, PROMPT_PROCESSING_TYPE } from '../../../prompt-converters.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { normalizeReasoningToken } from './reasoning-params.js';
 
 const API_MINIMAX = 'https://api.minimax.io/v1';
 const API_MINIMAX_CN = 'https://api.minimaxi.com/v1';
@@ -71,6 +72,12 @@ export async function dispatchMinimax(ctx) {
             'stop': body.stop,
             ...bodyParams,
         };
+
+        const minimaxToken = normalizeReasoningToken(body.reasoning_effort);
+        if (minimaxToken !== 'auto') {
+            requestBody.thinking = { type: minimaxToken === 'off' ? 'disabled' : 'enabled' };
+            if (minimaxToken !== 'off') requestBody.reasoning_effort = minimaxToken;
+        }
 
         const fetchUrl = apiUrl + '/chat/completions';
         ctx.inspection.attach(fetchUrl, apiKey, requestBody);
