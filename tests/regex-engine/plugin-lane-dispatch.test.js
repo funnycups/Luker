@@ -7,7 +7,7 @@
  *   - `applyPluginLaneRegex(messages, { applyRegex })`:
  *       - messages carrying the provenance marker pass through UNCOOKED;
  *       - unmarked `user`/`assistant` messages are cooked via
- *         `applyRegex(content, placement, { isPluginPrompt: true })` with
+ *         `applyRegex(content, placement, { isPluginInput: true })` with
  *         NO `depth` key at all (depth filtering disabled, matching an
  *         undepthed plugin message);
  *       - `system`/`tool` roles are never cooked;
@@ -19,7 +19,7 @@
 import { describe, test, expect, jest, beforeEach, beforeAll } from '@jest/globals';
 
 const applyRegexMock = jest.fn((s, _placement, params) =>
-    params && params.isPluginPrompt ? String(s).replace(/SYNTH/g, 'cooked') : String(s));
+    params && params.isPluginInput ? String(s).replace(/SYNTH/g, 'cooked') : String(s));
 
 const PLACEMENTS = { USER_INPUT: 1, AI_OUTPUT: 2 };
 
@@ -97,7 +97,7 @@ describe('applyPluginLaneRegex', () => {
         expect(Object.hasOwn(out[1], 'sourceFloorIndex')).toBe(false);
     });
 
-    test('unmarked user/assistant cooked with isPluginPrompt:true and NO depth param', () => {
+    test('unmarked user/assistant cooked with isPluginInput:true and NO depth param', () => {
         const messages = [
             { role: 'user', content: 'say SYNTH now' },
             { role: 'assistant', content: 'reply SYNTH ok' },
@@ -112,11 +112,11 @@ describe('applyPluginLaneRegex', () => {
         const [firstCall, secondCall] = applyRegexMock.mock.calls;
         expect(firstCall[0]).toBe('say SYNTH now');
         expect(firstCall[1]).toBe(PLACEMENTS.USER_INPUT);
-        expect(firstCall[2]).toEqual({ isPluginPrompt: true });
+        expect(firstCall[2]).toEqual({ isPluginInput: true });
         expect(Object.hasOwn(firstCall[2], 'depth')).toBe(false);
 
         expect(secondCall[1]).toBe(PLACEMENTS.AI_OUTPUT);
-        expect(secondCall[2]).toEqual({ isPluginPrompt: true });
+        expect(secondCall[2]).toEqual({ isPluginInput: true });
         expect(Object.hasOwn(secondCall[2], 'depth')).toBe(false);
 
         expect(Object.hasOwn(out[0], 'sourceFloorIndex')).toBe(false);
@@ -160,7 +160,7 @@ describe('applyPluginLaneRegex', () => {
     });
 
     test('injected applyRegex override wins over ctx.regex.applyRegex', () => {
-        const probe = jest.fn((s, _p, params) => (params && params.isPluginPrompt ? 'via-injection' : s));
+        const probe = jest.fn((s, _p, params) => (params && params.isPluginInput ? 'via-injection' : s));
         const out = mod.applyPluginLaneRegex(
             [{ role: 'user', content: 'SYNTH' }],
             { applyRegex: probe },

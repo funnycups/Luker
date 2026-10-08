@@ -1,17 +1,18 @@
 // #66 — each regex lane applies its scripts EXACTLY ONCE per outgoing
 // request, and never bleeds into the other lane.
 //
-// Regression lock for the lane-semantics refactor (Tasks 1–3): user
-// scripts scoped to the main pipeline (`promptOnly`) must cook main
-// generation payloads only; scripts scoped to plugins (`pluginOnly`)
-// must cook plugin-built payloads (memory-graph extraction here) only;
-// floor messages converted via `floorRecordToTaskMessage` carry an
-// internal provenance marker so the dispatch layer skips a second
-// application — and that marker must never reach the network.
+// Regression lock for the lane-semantics refactor: user scripts scoped to
+// the main pipeline (`promptOnly` alone) must cook main generation
+// payloads only; scripts scoped to the plugin channel's INPUT direction
+// (`pluginOnly` + `promptOnly`) must cook plugin-built payloads
+// (memory-graph extraction here) only; floor messages converted via
+// `floorRecordToTaskMessage` carry an internal provenance marker so the
+// dispatch layer skips a second application — and that marker must never
+// reach the network.
 //
 // Sentinel scheme: two user rules, `/SENTINEL-P/g` → 'P'
-// (`promptOnly`) and `/SENTINEL-D/g` → 'D' (`pluginOnly`), both
-// placed on user + AI text with no depth bounds. The card's greeting
+// (`promptOnly`) and `/SENTINEL-D/g` → 'D' (`pluginOnly` + `promptOnly`),
+// both placed on user + AI text with no depth bounds. The card's greeting
 // carries `SENTINEL-P SENTINEL-D` adjacently, and every scripted
 // reply repeats both marks spread through the sentence. So:
 //   - a main-generation payload must show `P SENTINEL-D`
@@ -83,13 +84,14 @@ test.beforeAll(async () => {
             maxDepth: null,
         },
         {
-            id: 'e2e-sentinel-plugin-lane',
-            scriptName: 'Sentinel plugin lane',
+            id: 'e2e-sentinel-plugin-input-lane',
+            scriptName: 'Sentinel plugin input lane',
             findRegex: '/SENTINEL-D/g',
             replaceString: 'D',
             placement: [1, 2],
             disabled: false,
             markdownOnly: false,
+            promptOnly: true,
             pluginOnly: true,
             minDepth: null,
             maxDepth: null,
@@ -188,23 +190,25 @@ test.describe('#66 — plugin lane applied exactly once, lanes never bleed', () 
         const extractionBlob = extractionBodies.flatMap(messageContents).join('\n');
 
         // Main lane: promptOnly rule cooked SENTINEL-P exactly once;
-        // pluginOnly rule stayed out of the main pipeline entirely.
+        // the dual-scope plugin-input rule stayed out of the main pipeline.
         expect(mainBlob, 'main payload shows P cooked next to untouched SENTINEL-D').toContain('P SENTINEL-D');
         expect(mainBlob, 'promptOnly script consumed every SENTINEL-P').not.toContain('SENTINEL-P');
-        expect(mainBlob, 'pluginOnly script must not touch main-generation payloads').toContain('SENTINEL-D');
+        expect(mainBlob, 'plugin-input script must not touch main-generation payloads').toContain('SENTINEL-D');
 
-        // Plugin lane: pluginOnly rule cooked SENTINEL-D exactly once;
-        // promptOnly rule stayed out of plugin-built payloads.
+        // Plugin input lane: dual-scope rule cooked SENTINEL-D exactly once;
+        // the promptOnly rule stayed out of plugin-built payloads.
         expect(extractionBlob, 'extraction payload shows SENTINEL-P next to cooked D').toContain('SENTINEL-P D');
-        expect(extractionBlob, 'pluginOnly script consumed every SENTINEL-D').not.toContain('SENTINEL-D');
+        expect(extractionBlob, 'plugin-input script consumed every SENTINEL-D').not.toContain('SENTINEL-D');
         expect(extractionBlob, 'promptOnly script must not touch extraction payloads').toContain('SENTINEL-P');
 
         // Neither lane ran twice: no doubled replacement artifacts in ANY
         // outgoing request's message content. Standalone tokens only —
         // words like "ADD" inside prompt boilerplate are not artifacts.
+        // The extraction prompt legitimately contains the date placeholder
+        // "YYYY-MM-DD", whose "DD" is not an artifact; strip it first.
         const ARTIFACT = /\b(PP|DD|PD|DP)\b/;
         for (const body of chatBodies) {
-            const blob = messageContents(body).join('\n');
+            const blob = messageContents(body).join('\n').replace(/YYYY-MM-DD/g, '');
             expect(blob, `no double-application artifacts in request: ${blob.slice(0, 200)}`).not.toMatch(ARTIFACT);
         }
 

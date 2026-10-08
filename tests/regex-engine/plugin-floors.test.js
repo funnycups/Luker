@@ -13,7 +13,7 @@
  *   - Filters (fromSeq/toSeq/fromDepth/toDepth/roles) narrow WHICH
  *     records come back; every returned record still carries ALL fields.
  *   - mesCooked goes through ctx.regex.applyRegex with
- *     { isPluginPrompt: true, depth } and role-derived placement;
+ *     { isPluginInput: true, depth } and role-derived placement;
  *     mesRaw stays untouched.
  *   - context.chat non-array → [].
  *   - floorRecordToTaskMessage(record) → { role, content: mesCooked,
@@ -78,7 +78,7 @@ describe('readPluginFloors', () => {
         expect(records[3].mesRaw).toBe('last turn');
     });
 
-    test('mesCooked runs through the isPluginPrompt lane with real depth; mesRaw stays raw', async () => {
+    test('mesCooked runs through the isPluginInput lane with real depth; mesRaw stays raw', async () => {
         const mod = await importModule(makeContext());
         const records = mod.readPluginFloors(globalThis.Luker.getContext(), {});
 
@@ -165,7 +165,7 @@ describe('cookPluginFloorText', () => {
         const mod = await importModule(makeContext());
         const out = mod.cookPluginFloorText({ mes: 'PLUGINONLY again', is_user: true }, 1);
         expect(out).toBe('[lane:1|d:1]PLUGINONLY again');
-        expect(applyRegexCalls.at(-1).params).toEqual({ isPluginPrompt: true, depth: 1 });
+        expect(applyRegexCalls.at(-1).params).toEqual({ isPluginInput: true, depth: 1 });
     });
 });
 

@@ -69,7 +69,7 @@ type DispatchEventData = {
     forceName2: boolean;                                     // 如有用,传给你自己的提示词流程
     isStreamingEnabled: boolean;                             // 用户当前是否启用了流式
     finalPrompt: unknown;                                    // 本可送给 LLM 的最终 prompt
-    generateData: unknown;                                   // 原始 generate-data 信封(等同 GENERATE_AFTER_DATA 载荷)
+    generateData: unknown;                                   // 原始 generate-data 载荷(等同 GENERATE_AFTER_DATA)
     takeoverHandle: MessageEditorHandle | null;              // 订阅方填入以声明接管
     abortSignal: AbortSignal;                                // 接管与正常路径都遵守此信号
 };

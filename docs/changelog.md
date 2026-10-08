@@ -44,6 +44,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Messages now render one unified collapsible thinking block, fed from the model's reasoning output or from think tags in the body.
 
+### Regex
+
+- **Alter Plugin Messages** now rewrites the assistant text a plugin request returns; with **Alter Outgoing Prompt** also ticked, it rewrites the text going into a plugin request. Tool call payloads are never rewritten.
+
 ### Fixes
 
 - Fixed LAN Sync status messages and other translated strings showing in English on Chinese locales.

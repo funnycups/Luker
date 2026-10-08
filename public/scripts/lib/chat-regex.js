@@ -9,10 +9,9 @@
  *   - `computeDepthsFromEnd` — shared depth-from-end computation, used
  *     by plugin-floors so plugins see the same depth numbering the main
  *     generation pipeline feeds to `applyRegex`.
- *   - `regexAgentPluginOutput` — response-side primitive: applies
- *     AI_OUTPUT-scoped, plugin-message regex scripts to agent-produced
- *     text re-entering an LLM context through a non-`role:'assistant'`
- *     channel (e.g. a sub-agent's output in a tool-result envelope).
+ *   - `regexAgentPluginOutput` — response-side primitive: applies the
+ *     plugin channel's OUTPUT-direction regex pass to the assistant
+ *     text a plugin request returns.
  *   - `__resetRegexApiCacheForTests` — test seam.
  *
  * Depth semantics match the main pipeline: `depth` is 0-based, counting
@@ -22,8 +21,12 @@
  * Generate().
  *
  * Plugin-channel semantics:
- *   The plugin channel applies pluginOnly rules plus the message's real
- *   chat depth; main-pipeline-only rules (promptOnly) never enter it.
+ *   The plugin channel is directional. Rules scoped to `pluginOnly` +
+ *   `promptOnly` cook text going INTO a plugin request (floors,
+ *   plugin-composed messages, world info). Rules scoped to `pluginOnly`
+ *   without `promptOnly` cook the assistant text a plugin request
+ *   RETURNS. Main-pipeline-only rules (promptOnly without pluginOnly)
+ *   never enter the channel.
  *
  * Regex engine access:
  *   We consume the regex primitives through `Luker.getContext().regex`
@@ -97,41 +100,34 @@ export function computeDepthsFromEnd(messages) {
 }
 
 /**
- * Apply AI_OUTPUT-scoped, plugin-message regex scripts to a piece of
- * agent-produced text before it re-enters an LLM's context via a
- * non-`role:'assistant'` channel (e.g. a sub-agent's `outputText`
- * bubbling back through a `tool_result` envelope to the main agent).
+ * Apply the plugin channel's OUTPUT-direction regex pass to
+ * agent-produced text. A rule participates when it is scoped to the
+ * plugin channel (`pluginOnly`) and NOT to the prompt direction
+ * (`promptOnly` absent) — the "Alter Plugin Messages" box without
+ * "Alter Outgoing Prompt".
  *
- * Distinct from the request-side lane (`lib/plugin-floors.js`):
- *   - Placement is fixed to AI_OUTPUT (this text is by definition an
- *     agent's own output; there is no user-input case).
- *   - Flag is `isPluginPrompt:true`, matching what
- *     `applyPluginLaneRegex` already sets when cooking assistant
- *     messages in plugin-built prompt arrays. This means a
- *     single user-authored rule scoped to AI_OUTPUT with the
- *     "plugin messages only" flag ticked will cover BOTH (a) an
- *     agent's own next-round view of its previous-round assistant turn
- *     AND (b) a sub-agent's output as seen by the parent through
- *     `await_subagents` — one rule, both channels.
- *   - `isPrompt` is deliberately NOT set: prompt-scoped rules already
- *     ran on the chat-derived inputs feeding the agent; this pass is
- *     specifically about the plugin-message ephemerality lane.
- *   - `depth` is `undefined`: `tool_result` envelopes don't sit at a
- *     stable chat-depth, and depth-based filtering (`minDepth` /
- *     `maxDepth`) is almost never authored on pluginOnly rules.
- *     Passing `undefined` disables the depth filter, matching how
- *     `applyPluginLaneRegex` treats an undepthed message.
+ * This is the response-side counterpart of the request-side lane
+ * (`lib/plugin-floors.js` / `applyPluginLaneRegex`): the request side
+ * cooks text going INTO a plugin request (`pluginOnly` + `promptOnly`),
+ * this cooks the assistant text a plugin request RETURNS. The two
+ * directions are disjoint, so one rule never fires twice on the same
+ * text.
+ *
+ * Placement is fixed to AI_OUTPUT (a response is by definition the
+ * agent's own output). `isPrompt` is deliberately NOT set:
+ * main-pipeline-only rules never enter the plugin channel. `depth` is
+ * `undefined` (responses don't sit at a stable chat depth).
  *
  * Returns raw text when the regex API isn't reachable (bare unit tests
  * without a Luker stub) so callers degrade gracefully.
  *
  * @param {string} text — raw agent output text
- * @returns {string} text after plugin-scoped AI_OUTPUT regex application
+ * @returns {string} text after the plugin output-direction regex pass
  */
 export function regexAgentPluginOutput(text) {
     const raw = String(text ?? '');
     if (!raw) return '';
     const api = getRegexApi();
     if (!api) return raw;
-    return api.applyRegex(raw, api.placement.AI_OUTPUT, { isPluginPrompt: true });
+    return api.applyRegex(raw, api.placement.AI_OUTPUT, { isPluginOutput: true });
 }

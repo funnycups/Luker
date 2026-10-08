@@ -76,7 +76,10 @@
 
         <div class="flex-container">
             <div class="flex1 wi-enter-footer-text flex-container flexFlowColumn flexNoGap alignitemsstart">
-                <small data-i18n="ext_regex_affects">Affects</small>
+                <span class="flex-container flexNoGap">
+                    <small data-i18n="ext_regex_affects">Affects</small>
+                    <a class="regex-scope-help-link note-link-span fa-solid fa-circle-question" href="#" role="button" data-i18n="[title]ext_regex_affects_help" title="How scope, direction, and placement combine"></a>
+                </span>
                 <div data-i18n="[title]ext_regex_user_input_desc" title="Messages sent by the user.">
                     <label class="checkbox flex-container">
                         <input type="checkbox" name="replace_position" value="1">
@@ -105,6 +108,12 @@
                     <label class="checkbox flex-container">
                         <input type="checkbox" name="replace_position" value="6">
                         <span data-i18n="Reasoning">Reasoning</span>
+                    </label>
+                </div>
+                <div data-i18n="[title]ext_regex_only_format_plugin_desc" title="Applies to the plugin channel. With 'Alter Outgoing Prompt', it rewrites text going into a plugin request (floor text, plugin-composed messages, world info). On its own, it rewrites the assistant text a plugin request returns. Tool call payloads are never changed.">
+                    <label class="checkbox flex-container">
+                        <input type="checkbox" name="only_format_plugin" />
+                        <span data-i18n="Alter Plugin Messages">Alter Plugin Messages</span>
                     </label>
                 </div>
                 <div class="flex-container wide100p marginTop5">
@@ -153,13 +162,9 @@
                     <input type="checkbox" name="only_format_display" />
                     <span data-i18n="Only Format Display">Alter Chat Display</span>
                 </label>
-                <label class="checkbox flex-container" data-i18n="[title]ext_regex_only_format_prompt_desc" title="Applies only to the main chat outgoing prompt. Not applied to plugin requests — those are governed by Alter Plugin Messages.">
+                <label class="checkbox flex-container" data-i18n="[title]ext_regex_only_format_prompt_desc" title="Applies only to the main chat outgoing prompt. Combined with 'Alter Plugin Messages', it selects the plugin channel's input direction instead.">
                     <input type="checkbox" name="only_format_prompt" />
                     <span data-i18n="Only Format Prompt (?)">Alter Outgoing Prompt</span>
-                </label>
-                <label class="checkbox flex-container" data-i18n="[title]ext_regex_only_format_plugin_desc" title="Applies to the plugin channel: floor text inside plugin requests, plugin-composed messages, and sub-agent output fed back through tools. Depth filters use each floor's real position in the chat.">
-                    <input type="checkbox" name="only_format_plugin" />
-                    <span data-i18n="Alter Plugin Messages">Alter Plugin Messages</span>
                 </label>
 
             </div>

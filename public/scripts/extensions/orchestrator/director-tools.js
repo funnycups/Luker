@@ -48,7 +48,6 @@ import {
     appendRound, appendToSection, ensureSection, setRoundStatus, setSectionStatus, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
-import { regexAgentPluginOutput } from '../../lib/chat-regex.js';
 import { createFirstChunkBarrier } from './dispatch-barrier.js';
 import { loadOpenNotesBlock } from './open-notes-injection.js';
 
@@ -1069,24 +1068,18 @@ export function createSubagentDispatcher({
                         : null;
                     const { roundAssistantText, roundToolCalls, roundReasoningText, roundReasoningBlocks, roundReasoningDetails } = await runOneRound(subMessages, panelCtx, baseOpts, subToolSchemas, onFirstChunk);
                     if (roundToolCalls.length === 0) {
-                        // Apply user-authored plugin-scoped AI_OUTPUT
-                        // regex to the sub-agent's output before it
-                        // crosses back to the parent through the
-                        // `await_subagents` tool_result envelope.
-                        // Without this pass the same rule that already
-                        // scrubs an agent's own next-round view (via
-                        // `applyPluginLaneRegex` on the
-                        // `role:'assistant'` history) would silently
-                        // miss the sub-agent → parent hand-off, because
-                        // that hand-off travels as a JSON-serialized
-                        // `role:'tool'` payload the plugin-regex lane
-                        // does not (and should not) reach into. The
-                        // run-panel section still shows the raw text —
-                        // `subMessages.push` below and the streamed
-                        // panel deltas both use `roundAssistantText`
-                        // unmodified — so authors keep transparent
-                        // visibility into what the model actually said.
-                        finalText = regexAgentPluginOutput(roundAssistantText);
+                        // The sub-agent's terminal text is already cooked:
+                        // `generateTask`/`generateTaskStream` apply the
+                        // plugin channel's OUTPUT-direction regex pass
+                        // (pluginOnly without promptOnly) to the returned
+                        // assistant text. A sub-agent's report therefore
+                        // reaches the parent through the
+                        // `await_subagents` tool_result envelope scrubbed
+                        // without a second pass here — that envelope is a
+                        // JSON-serialized `role:'tool'` payload the
+                        // plugin-regex lane does not reach into, so the
+                        // response-side pass is what covers it.
+                        finalText = roundAssistantText;
                         converged = true;
                         // The terminator round has no tool calls and no
                         // assistant push (the runtime contract says final

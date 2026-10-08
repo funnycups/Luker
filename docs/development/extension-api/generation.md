@@ -34,7 +34,7 @@ console.log(result.assistantText);
 ```ts
 context.generateTask({
     taskMessages: Array<{role, content, ...}>,   // required: system / user / assistant / tool turns
-    includeCharacterCard?: boolean = true,        // include character card in the envelope
+    includeCharacterCard?: boolean = true,        // include character card in the prompt structure
     worldInfoSource?: 'none' | 'task' | 'chat' | 'custom' = 'none',
     customWorldInfoMessages?: Array | null = null, // required when worldInfoSource is 'custom'
     runtimeWorldInfo?: object | null = null,      // pre-resolved snapshot; short-circuits resolution
@@ -59,6 +59,8 @@ context.generateTask({
     raw: any,                       // sender-specific raw response (for advanced inspection)
 }>
 ```
+
+`assistantText` is post-processed by the plugin channel's output-direction regex pass before `generateTask` resolves: rules scoped to **Alter Plugin Messages** without **Alter Outgoing Prompt** rewrite the returned text in place. Tool call payloads are never rewritten. See [Regex Rule Scope](/features/regex-scope).
 
 ### `worldInfoSource` modes
 
@@ -469,7 +471,7 @@ With `generateTask`, you pass the profile *name* (`apiPresetName`) and resolutio
 
 ### sendOpenAIRequest
 
-Direct LLM dispatcher. `generateTask` calls this internally for OpenAI-family requests after handling envelope assembly, world-info activation, and profile resolution.
+Direct LLM dispatcher. `generateTask` calls this internally for OpenAI-family requests after handling prompt assembly, world-info activation, and profile resolution.
 
 ```js
 import { sendOpenAIRequest } from '../../../openai.js';
@@ -496,7 +498,7 @@ The first argument `'quiet'` means this is a background request that won't appea
 
 ### buildPresetAwarePromptMessages
 
-Envelope assembly only — no dispatch. Useful when you need to **inspect** the assembled prompt without sending it (e.g., a "show me what would be sent" preview tool).
+Prompt assembly only — no dispatch. Useful when you need to **inspect** the assembled prompt without sending it (e.g., a "show me what would be sent" preview tool).
 
 ```js
 const messages = context.buildPresetAwarePromptMessages({
@@ -676,7 +678,7 @@ console.log(result.content);
 ```
 
 ::: tip generateTask vs Service classes
-`generateTask` covers profile resolution + envelope assembly + WI activation + family dispatch in a single call. Use a Service class only when you need explicit control over message construction (e.g., raw text-completion strings) or you want to bypass envelope/WI entirely.
+`generateTask` covers profile resolution + prompt assembly + WI activation + family dispatch in a single call. Use a Service class only when you need explicit control over message construction (e.g., raw text-completion strings) or you want to bypass prompt assembly/WI entirely.
 :::
 
 ## Response Helpers

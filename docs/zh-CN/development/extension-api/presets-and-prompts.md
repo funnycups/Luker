@@ -71,7 +71,7 @@ presets.resolve(
 所有方法均接受 `options.target`（`PresetRef`）和 `options.collection` 做跨预设读写；两者默认指向当前选中的预设。
 
 ::: warning 行为变更（2026-06-28）
-预设状态的读写 API（`get`、`getBatch`、`update`、`patch`、`delete`、`deleteAll`）在 HTTP 失败时不再抛出异常，改为返回 `{ok, ...}` envelope（与聊天状态一致）。如果你的插件原本写了 `try { await ctx.presets.state.get(...) } catch (e) { ... }`，请改用 `if (!result.ok) { ... }`。
+预设状态的读写 API（`get`、`getBatch`、`update`、`patch`、`delete`、`deleteAll`）在 HTTP 失败时不再抛出异常，改为返回 `{ok, ...}` 结果对象（与聊天状态一致）。如果你的插件原本写了 `try { await ctx.presets.state.get(...) } catch (e) { ... }`，请改用 `if (!result.ok) { ... }`。
 :::
 
 #### presets.state.get
@@ -334,9 +334,9 @@ const result = await sendOpenAIRequest('quiet', requestMessages, signal, {
 
 如果不需要角色卡和世界书，可以跳过步骤 1-2，直接传 messages 给 `sendOpenAIRequest`。`sendOpenAIRequest` 详见 [生成请求](/zh-CN/development/extension-api/generation)。
 
-## Prompt 信封检视
+## 提示词结构检视
 
-对于诊断 UI 和「预览将要发送的内容」类工具，插件可以读取已组装好的 prompt 信封和 layout，而不必真的发起请求。
+对于诊断 UI 和「预览将要发送的内容」类工具，插件可以读取已组装好的提示词结构和 layout，而不必真的发起请求。
 
 ### getActivePromptPresetEnvelope
 
@@ -378,7 +378,7 @@ getActivePromptLayout(options?: object): PromptLayoutEntry[]
 formatPromptPresetEnvelope(envelope?: object, options?: { label?: string }): string
 ```
 
-把信封格式化为 `[[LABEL]]\n<json>` 形式，便于嵌入另一段 prompt（例如委托给一个需要推理用户 prompt 配置的 meta-LLM）。未提供时默认使用当前信封。
+把提示词结构格式化为 `[[LABEL]]\n<json>` 形式，便于嵌入另一段 prompt（例如委托给一个需要推理用户 prompt 配置的 meta-LLM）。未提供时默认使用当前提示词结构。
 
 ```js
 const ctx = Luker.getContext();

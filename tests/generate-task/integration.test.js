@@ -30,6 +30,37 @@ describe('generateTask end-to-end', () => {
         expect(result.reasoning).toBeNull();
     });
 
+    test('applies the plugin output-direction regex to assistantText, never to toolCalls', async () => {
+        const applied = [];
+        const fakeOpenAI = async () => ({
+            choices: [{
+                message: {
+                    content: 'raw RESPONSE',
+                    tool_calls: [{ id: 'c1', type: 'function', function: { name: 'lookup', arguments: '{"q":"keep"}' } }],
+                },
+                finish_reason: 'tool_calls',
+            }],
+        });
+        const result = await generateTask({
+            taskMessages: [{ role: 'user', content: 'hi' }],
+            tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }],
+        }, {
+            _injected: baseInjected({
+                senders: { sendOpenAIRequest: fakeOpenAI },
+                regexOutputApplier: (text) => {
+                    applied.push(text);
+                    return String(text).replace('raw', 'cooked');
+                },
+            }),
+        });
+        // The output pass saw only the assistant text.
+        expect(applied).toEqual(['raw RESPONSE']);
+        expect(result.assistantText).toBe('cooked RESPONSE');
+        // tool call payload untouched.
+        expect(result.toolCalls[0].args).toEqual({ q: 'keep' });
+        expect(result.toolCalls[0].name).toBe('lookup');
+    });
+
     test('apiPresetName resolves apiSettingsOverride and reaches sender', async () => {
         let capturedOverride = null;
         let capturedPresetName = null;
@@ -304,6 +335,33 @@ describe('generateTaskStream — openai happy path', () => {
         expect(final.toolCalls).toEqual([]);
         expect(final.jsonData).toBeNull();
         expect(final.reasoning).toBeNull();
+    });
+
+    test('terminal result gets the output-direction regex pass; deltas stay raw', async () => {
+        const fakeStreamingOpenAI = async () => {
+            return async function* gen() {
+                yield { text: 'raw', toolCalls: [], state: { reasoning: '' } };
+                yield { text: 'raw done', toolCalls: [], state: { reasoning: '' } };
+            };
+        };
+        const { stream, result } = generateTaskStream({
+            taskMessages: [{ role: 'user', content: 'hi' }],
+        }, {
+            _injected: baseInjected({
+                senders: { sendOpenAIRequest: fakeStreamingOpenAI },
+                regexOutputApplier: (text) => String(text).replace('raw', 'cooked'),
+            }),
+        });
+
+        const collected = [];
+        for await (const chunk of stream) collected.push(chunk);
+        expect(collected).toEqual([
+            { type: 'text', delta: 'raw' },
+            { type: 'text', delta: ' done' },
+        ]);
+
+        const final = await result;
+        expect(final.assistantText).toBe('cooked done');
     });
 
     test('not consuming stream still resolves result with full content', async () => {

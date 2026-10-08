@@ -7,7 +7,7 @@
 | [聊天与状态](/zh-CN/development/extension-api/chat-and-state) | 聊天数据、统一消息 API、聊天持久化、聊天状态、楼层状态、角色状态、聊天生命周期、swipe API、扩展 prompt、媒体辅助函数 |
 | [角色卡](/zh-CN/development/extension-api/characters) | 角色卡、V2/旧版 Proxy 语义、标签、导入 / 导出、按角色的状态 |
 | [世界书](/zh-CN/development/extension-api/world-info) | 世界书 CRUD、激活扫描、角色辅助世界书 |
-| [预设与提示词](/zh-CN/development/extension-api/presets-and-prompts) | `context.presets.*`、`buildPresetAwarePromptMessages`、`resolveWorldInfoForMessages`、信封检视、reasoning 辅助函数、设置视图 |
+| [预设与提示词](/zh-CN/development/extension-api/presets-and-prompts) | `context.presets.*`、`buildPresetAwarePromptMessages`、`resolveWorldInfoForMessages`、提示词结构检视、reasoning 辅助函数、设置视图 |
 | [生成请求](/zh-CN/development/extension-api/generation) | `generateTask`、工具注册、`generateRaw` / `generateQuietPrompt`、Service 类、连接配置 |
 | [Slash 命令](/zh-CN/development/extension-api/slash-commands) | 注册和执行 slash 命令、命名 / 非命名参数、枚举 |
 | [宏与变量](/zh-CN/development/extension-api/macros-and-variables) | 宏注册、内置宏参考、`substituteParams`、本地与全局变量 |

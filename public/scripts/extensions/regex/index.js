@@ -10,7 +10,7 @@ import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { download, equalsIgnoreCaseAndAccents, escapeHtml, getFileText, getSortableDelay, isFalseBoolean, isTrueBoolean, regexFromString, setInfoBlock, uuidv4 } from '../../utils.js';
 import { allowPresetScripts, allowScopedScripts, disallowPresetScripts, disallowScopedScripts, getCurrentPresetAPI, getCurrentPresetName, getRegexScripts, getRuntimeRegexScripts, getScriptsByType, isPresetScriptsAllowed, isScopedScriptsAllowed, regex_placement, RegexProvider, REGEX_RUNTIME_SCRIPTS_CHANGED_EVENT, runRegexScript, saveScriptsByType, SCRIPT_TYPE_UNKNOWN, SCRIPT_TYPES, substitute_find_regex } from './engine.js';
 import { REGEX_OPEN_SCRIPT_EVENT, resetRegexScriptState } from './redos-reporter.js';
-import { t } from '../../i18n.js';
+import { getCurrentLocale, t } from '../../i18n.js';
 import { accountStorage } from '../../util/AccountStorage.js';
 import { getPresetManager } from '../../preset-manager.js';
 
@@ -25,6 +25,28 @@ const REGEX_SCRIPT_TYPE_LABELS = Object.freeze({
     [SCRIPT_TYPE_UNKNOWN]: 'runtime',
 });
 const PRESET_EMBEDDED_REGEX_SOURCE_PATH = 'luker.embedded_regex_scripts_source';
+
+const REGEX_SCOPE_DOC_BASE = 'https://luker.cups.moe';
+
+/**
+ * Doc URL for the "Affects" scope explainer, locale-aware. Chinese docs
+ * live under a locale prefix; the English site is served path-less.
+ */
+function getRegexScopeDocUrl() {
+    const locale = String(typeof getCurrentLocale === 'function' ? getCurrentLocale() : '').toLowerCase();
+    if (locale.startsWith('zh-cn')) {
+        return `${REGEX_SCOPE_DOC_BASE}/zh-CN/features/regex-scope.html`;
+    }
+    if (locale.startsWith('zh-tw') || locale.startsWith('zh-hk') || locale.startsWith('zh-mo')) {
+        return `${REGEX_SCOPE_DOC_BASE}/zh-TW/features/regex-scope.html`;
+    }
+    return `${REGEX_SCOPE_DOC_BASE}/features/regex-scope.html`;
+}
+
+$(document).on('click', '.regex-scope-help-link', function (event) {
+    event.preventDefault();
+    window.open(getRegexScopeDocUrl(), '_blank', 'noopener,noreferrer');
+});
 
 function buildRegexDragHelper(item) {
     const itemEl = item?.get?.(0) || item?.[0] || item;
@@ -1342,12 +1364,27 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
             .prop('checked', true);
     }
 
+    function syncPluginScopeUi() {
+        // The plugin channel and the display lane are mutually exclusive:
+        // a pluginOnly rule never alters chat display, so the display
+        // checkbox is disabled and cleared while pluginOnly is on.
+        const pluginChecked = Boolean(editorHtml.find('input[name="only_format_plugin"]').prop('checked'));
+        const $display = editorHtml.find('input[name="only_format_display"]');
+        $display.prop('disabled', pluginChecked);
+        if (pluginChecked) {
+            $display.prop('checked', false);
+        }
+    }
+
     editorHtml.find('input[name="only_format_plugin"]').on('click input change', function (event) {
         logEditorState('plugin_only_toggled', {
             eventType: event.type,
             inputChecked: Boolean($(this).prop('checked')),
         });
+        syncPluginScopeUi();
     });
+
+    syncPluginScopeUi();
 
     editorHtml.find('#regex_test_mode_toggle').on('click', function () {
         editorHtml.find('#regex_test_mode').toggleClass('displayNone');

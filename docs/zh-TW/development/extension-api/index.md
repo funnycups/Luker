@@ -7,7 +7,7 @@
 | [聊天與狀態](/zh-TW/development/extension-api/chat-and-state) | 聊天資料、統一訊息 API、聊天持久化、聊天狀態、樓層狀態、角色狀態、聊天生命週期、swipe API、擴充提示詞、媒體輔助函式 |
 | [角色卡](/zh-TW/development/extension-api/characters) | 角色卡、V2 / 傳統 Proxy 語義、標籤、匯入 / 匯出、角色狀態 |
 | [世界書](/zh-TW/development/extension-api/world-info) | 世界書 CRUD、啟動掃描、角色輔助世界書 |
-| [預設與提示詞](/zh-TW/development/extension-api/presets-and-prompts) | `context.presets.*`、`buildPresetAwarePromptMessages`、`resolveWorldInfoForMessages`、信封檢視、推理輔助函式、設定視圖 |
+| [預設與提示詞](/zh-TW/development/extension-api/presets-and-prompts) | `context.presets.*`、`buildPresetAwarePromptMessages`、`resolveWorldInfoForMessages`、提示詞結構檢視、推理輔助函式、設定視圖 |
 | [生成請求](/zh-TW/development/extension-api/generation) | `generateTask`、工具註冊、`generateRaw` / `generateQuietPrompt`、Service 類別、connection profile |
 | [斜線指令](/zh-TW/development/extension-api/slash-commands) | 註冊與執行斜線指令、具名 / 不具名引數、列舉 |
 | [巨集與變數](/zh-TW/development/extension-api/macros-and-variables) | 巨集註冊、內建巨集參考、`substituteParams`、本地與全域變數 |

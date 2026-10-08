@@ -34,7 +34,7 @@ console.log(result.assistantText);
 ```ts
 context.generateTask({
     taskMessages: Array<{role, content, ...}>,   // 必填:system / user / assistant / tool 消息
-    includeCharacterCard?: boolean = true,        // 是否在 envelope 中带上角色卡
+    includeCharacterCard?: boolean = true,        // 是否在提示词结构中带上角色卡
     worldInfoSource?: 'none' | 'task' | 'chat' | 'custom' = 'none',
     customWorldInfoMessages?: Array | null = null, // worldInfoSource 为 'custom' 时必填
     runtimeWorldInfo?: object | null = null,      // 已预解析的快照,会跳过激活流程
@@ -59,6 +59,8 @@ context.generateTask({
     raw: any,                       // 发送方原始响应(供高级排错用)
 }>
 ```
+
+`assistantText` 在 `generateTask` resolve 之前会经过插件通道的输出方向正则处理：勾选「仅对插件消息生效」而未勾选「仅格式提示词」的规则会就地改写返回的文本。工具调用内容从不被改写。详见[正则规则作用范围](/zh-CN/features/regex-scope)。
 
 ### `worldInfoSource` 模式
 
@@ -469,7 +471,7 @@ context.connectionProfiles.list(): ConnectionProfile[]
 
 ### sendOpenAIRequest
 
-底层 LLM dispatcher。`generateTask` 内部对 OpenAI 家族的请求会调用它，前提是 envelope 组装、世界书激活、profile 解析已经在外层完成。
+底层 LLM dispatcher。`generateTask` 内部对 OpenAI 家族的请求会调用它，前提是 提示词组装、世界书激活、profile 解析已经在外层完成。
 
 ```js
 import { sendOpenAIRequest } from '../../../openai.js';
@@ -496,7 +498,7 @@ const result = await sendOpenAIRequest('quiet', messages, signal, {
 
 ### buildPresetAwarePromptMessages
 
-只做 envelope 组装，不发请求。适合需要**预览**组装结果但不实际发送的场景（例如「展示将要发送的 prompt」工具）。
+只做 提示词组装，不发请求。适合需要**预览**组装结果但不实际发送的场景（例如「展示将要发送的 prompt」工具）。
 
 ```js
 const messages = context.buildPresetAwarePromptMessages({
@@ -676,7 +678,7 @@ console.log(result.content);
 ```
 
 ::: tip generateTask vs Service 类
-`generateTask` 一次调用涵盖 profile 解析 + envelope 组装 + WI 激活 + 家族分发。只有当你需要显式控制消息构建（例如裸 text-completion 字符串）或想完全绕开 envelope / WI 时才用 Service 类。
+`generateTask` 一次调用涵盖 profile 解析 + 提示词组装 + WI 激活 + 家族分发。只有当你需要显式控制消息构建（例如裸 text-completion 字符串）或想完全绕开提示词结构 / WI 时才用 Service 类。
 :::
 
 ## 响应辅助函数

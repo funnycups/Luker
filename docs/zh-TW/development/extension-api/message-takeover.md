@@ -69,7 +69,7 @@ type DispatchEventData = {
     forceName2: boolean;                                     // 如有需要,傳給你自己的提示詞流程
     isStreamingEnabled: boolean;                             // 使用者目前是否啟用串流
     finalPrompt: unknown;                                    // 本將送出給 LLM 的最終 prompt
-    generateData: unknown;                                   // 原始 generate-data 信封(等同 GENERATE_AFTER_DATA 載荷)
+    generateData: unknown;                                   // 原始 generate-data 載荷(等同 GENERATE_AFTER_DATA)
     takeoverHandle: MessageEditorHandle | null;              // 訂閱方填入以宣告接管
     abortSignal: AbortSignal;                                // 接管與正常路徑都遵守此訊號
 };

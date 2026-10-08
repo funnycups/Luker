@@ -5,6 +5,8 @@
  * resolveChatCompletionRequestProfile.
  */
 
+import { regexAgentPluginOutput } from './lib/chat-regex.js';
+
 function getDefaultResolver() {
     const ctx = typeof globalThis.Luker?.getContext === 'function'
         ? globalThis.Luker.getContext()
@@ -1069,7 +1071,16 @@ export async function generateTask({
     }
 
     // ── 8. Normalize response ──
-    return normalizeResponse({ requestApi: profile.requestApi, mode, raw });
+    const result = normalizeResponse({ requestApi: profile.requestApi, mode, raw });
+
+    // ── 9. Plugin output-direction regex pass ──
+    // Rules scoped to the plugin channel without the prompt direction
+    // (pluginOnly without promptOnly) cook the assistant text a plugin
+    // request returns. toolCalls payloads are never touched.
+    const regexOutputApplier = _injected?.regexOutputApplier || regexAgentPluginOutput;
+    result.assistantText = regexOutputApplier(result.assistantText);
+
+    return result;
 }
 
 /**
@@ -1203,6 +1214,10 @@ export function generateTaskStream({
             // ── 8. Normalize ──
             try {
                 const normalized = normalizeResponse({ requestApi: profile.requestApi, mode, raw });
+                // ── 9. Plugin output-direction regex pass ──
+                // Terminal text only; streamed deltas stay raw.
+                const regexOutputApplier = _injected?.regexOutputApplier || regexAgentPluginOutput;
+                normalized.assistantText = regexOutputApplier(normalized.assistantText);
                 resolveResult(normalized);
             } catch (e) {
                 rejectResult(e);

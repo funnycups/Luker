@@ -165,6 +165,7 @@ const zhCNSidebar = [
       { text: '钩子执行排序', link: '/zh-CN/features/hook-order' },
       { text: '世界书激活链路追踪', link: '/zh-CN/features/world-info-trace' },
       { text: '插件注册正则', link: '/zh-CN/features/regex-provider' },
+      { text: '正则规则作用范围', link: '/zh-CN/features/regex-scope' },
       {
         text: '技能',
         collapsed: false,
@@ -322,6 +323,7 @@ const zhTWSidebar = [
       { text: '鉤子執行排序', link: '/zh-TW/features/hook-order' },
       { text: '世界書啟動鏈路追蹤', link: '/zh-TW/features/world-info-trace' },
       { text: '外掛註冊正則', link: '/zh-TW/features/regex-provider' },
+      { text: '正則規則作用範圍', link: '/zh-TW/features/regex-scope' },
       {
         text: '技能',
         collapsed: false,
@@ -479,6 +481,7 @@ const enSidebar = [
       { text: 'Hook Order', link: '/features/hook-order' },
       { text: 'World Info Activation Trace', link: '/features/world-info-trace' },
       { text: 'Plugin-Registered Regex', link: '/features/regex-provider' },
+      { text: 'Regex Rule Scope', link: '/features/regex-scope' },
       {
         text: 'Skills',
         collapsed: false,

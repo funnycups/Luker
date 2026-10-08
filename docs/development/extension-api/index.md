@@ -7,7 +7,7 @@ This is the complete reference for the Luker Extension API, intended for plugin 
 | [Chat & State](/development/extension-api/chat-and-state) | Chat data, the unified Messages API, chat persistence, Chat State, Floor State, Character State, chat lifecycle, swipe API, extension prompts, media helpers |
 | [Characters](/development/extension-api/characters) | Character cards, V2/legacy Proxy semantics, tags, import / export, per-character state |
 | [World Info](/development/extension-api/world-info) | Lorebook CRUD, activation scanning, character auxiliary world books |
-| [Presets & Prompts](/development/extension-api/presets-and-prompts) | `context.presets.*`, `buildPresetAwarePromptMessages`, `resolveWorldInfoForMessages`, envelope inspection, reasoning helpers, settings views |
+| [Presets & Prompts](/development/extension-api/presets-and-prompts) | `context.presets.*`, `buildPresetAwarePromptMessages`, `resolveWorldInfoForMessages`, prompt structure inspection, reasoning helpers, settings views |
 | [Generation](/development/extension-api/generation) | `generateTask`, tool registration, `generateRaw` / `generateQuietPrompt`, service classes, connection profiles |
 | [Slash Commands](/development/extension-api/slash-commands) | Registering and executing slash commands, named/unnamed arguments, enums |
 | [Macros & Variables](/development/extension-api/macros-and-variables) | Macro registration, built-in macro reference, `substituteParams`, local & global variables |

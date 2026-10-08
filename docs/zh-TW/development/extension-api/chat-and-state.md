@@ -93,16 +93,18 @@ const result = await ctx.generateTask({ taskMessages });
 
 派發層的正則 pass 只處理 `role: 'user'` 或 `'assistant'` 且 content 為字串的訊息。工具流量（`tool_result` 等）一律不動。因此嵌入 tool JSON 的樓層文字保持 `readPluginFloors` 讀取時完成正則處理後的樣子——不會被二次套用，歷史經工具重放時也不會有重複處理的風險。
 
-回應方向同樣無需任何操作：子代理輸出經工具信封重新進入 LLM 上下文（例如父 agent 消費子代理的報告）時，核心會在送達前自動完成正則處理。外掛側程式碼永遠不需要自行套用正則。
+回應方向同樣無需任何操作：外掛請求回傳的助手正文由核心在 `generateTask` 內完成正則處理後才會 resolve，子代理輸出經工具結果重新進入 LLM 上下文時也走同一套處理。外掛側程式碼永遠不需要自行套用正則。
 
 ### 哪些正則規則在哪條通道生效
 
-規則的生效範圍在不同通道之間劃分得很乾淨：
+規則的生效範圍在不同通道之間劃分，且外掛通道帶方向：
 
-- `promptOnly` 規則絕不會出現在外掛請求中——它們只在主生成管線內生效
-- `pluginOnly` 規則**只**出現在外掛請求中——主管線看不到它們
+- `promptOnly` 規則作用於主生成管線的出站提示詞。再勾選 `pluginOnly` 會把規則移入外掛通道，並選擇其輸入方向。
+- `pluginOnly` 規則作用於外掛通道。與 `promptOnly` 同選時，改寫進入外掛請求的文字（樓層文字、外掛拼寫的訊息、世界資訊）；不同選時，改寫外掛請求回傳的助手正文。
+- 工具呼叫內容不會被上述任何處理改寫。
+- 標記均未勾選的規則對哪條通道均不生效——它改寫的是儲存的聊天歷史本身，在訊息編輯或儲存時套用。
 
-標記均未勾選的規則對哪條通道均不生效——它改寫的是儲存的聊天歷史本身，在訊息編輯或儲存時套用。
+面向使用者的說明見[正則規則作用範圍](/zh-TW/features/regex-scope)。
 
 ## 訊息 API
 
@@ -382,7 +384,7 @@ createFloorState(options: { namespace: string }): Promise<FloorStateInstance>
 
 在外掛或 CardApp 裡使用 `getContext().createFloorState({ namespace })`。每個實例綁定一個命名空間；若業務狀態分多塊，請建立多個實例。
 
-所有執行寫入的實例方法（`update`、`patch`、`reset`、`destroy({ purge: true })`）與讀取方法（`get`）皆回傳一個 envelope —— 它們永不拋出。檢查 `result.ok` 並依 `result.reason` 切換處理失敗模式，見[錯誤原因](#錯誤原因-1)。
+所有執行寫入的實例方法（`update`、`patch`、`reset`、`destroy({ purge: true })`）與讀取方法（`get`）皆回傳一個結果物件 —— 它們永不拋出。檢查 `result.ok` 並依 `result.reason` 切換處理失敗模式，見[錯誤原因](#錯誤原因-1)。
 
 ```js
 const ctx = SillyTavern.getContext();
@@ -503,7 +505,7 @@ context.buildObjectPatchOperationsAsync(
 - `instance.reset(commits): Promise<{ok: true} | {ok: false, reason, hint}>`——原子性整盤替換日誌為給定提交清單。用於匯入 / 重建 / 重置類工作流。每筆提交均會被校驗，任意一筆結構非法或 `floor` 越界，整批拒絕。
 - `instance.get(): Promise<{ok: true, state} | {ok: false, state: null, reason, hint}>`——讀取目前 materialized 狀態。按需對日誌做重放（以目前 swipe map 為準），不讀獨立的 data 命名空間。
 - `instance.ready(): Promise<void>`——所有飛行中寫入完成時解析。
-- `instance.destroy(options?): Promise<{ok: true} | {ok: false, reason, hint}>`——從註冊表移除實例。傳 `{ purge: true }` 時同時把該命名空間的狀態從磁碟抹除（用於永久重置 / 抹除場景）。不帶 `purge` 呼叫時，同步的註銷路徑也回傳 envelope 以保持一致。
+- `instance.destroy(options?): Promise<{ok: true} | {ok: false, reason, hint}>`——從註冊表移除實例。傳 `{ purge: true }` 時同時把該命名空間的狀態從磁碟抹除（用於永久重置 / 抹除場景）。不帶 `purge` 呼叫時，同步的註銷路徑也回傳結果物件以保持一致。
 
 ### 錯誤原因
 
@@ -564,7 +566,7 @@ context.resolveChatStateTarget(target?: { chatId?: string, characterId?: number 
 角色狀態是綁定到角色卡本身的持久化儲存，在該角色的所有聊天之間共享。與聊天狀態（僅在單個聊天內有效）不同，角色狀態適合儲存跨聊天的角色級別設定。
 
 ::: warning 行為變更（2026-06-28）
-角色狀態 API 在 HTTP 失敗時不再拋出例外，改為回傳 `{ok, state, reason, hint}` envelope（與聊天狀態一致）。如果你的外掛原本寫了 `try { await ctx.getCharacterState(...) } catch (e) { ... }`，請改用 `if (!result.ok) { ... }`。
+角色狀態 API 在 HTTP 失敗時不再拋出例外，改為回傳 `{ok, state, reason, hint}` 結果物件（與聊天狀態一致）。如果你的外掛原本寫了 `try { await ctx.getCharacterState(...) } catch (e) { ... }`，請改用 `if (!result.ok) { ... }`。
 :::
 
 ### getCharacterState

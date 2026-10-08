@@ -104,9 +104,10 @@ export function cookPluginFloorText(message, depth) {
     const api = getRegexApi();
     if (!api) return raw;
     const placement = message?.is_user ? api.placement.USER_INPUT : api.placement.AI_OUTPUT;
-    // Plugin lane: pluginOnly scripts apply here with the floor's real
-    // depth; promptOnly scripts stay scoped to the main pipeline.
-    return api.applyRegex(raw, placement, { isPluginPrompt: true, depth });
+    // Plugin lane, input direction: rules scoped to the plugin channel
+    // AND the prompt direction cook text going into a plugin request,
+    // with the floor's real depth.
+    return api.applyRegex(raw, placement, { isPluginInput: true, depth });
 }
 
 /**

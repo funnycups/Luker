@@ -71,7 +71,7 @@ Plugin runtime/session data bound to a preset. Preset state lives next to the pr
 All methods accept `options.target` (a `PresetRef`) and `options.collection` for cross-preset reads/writes; both default to the currently selected preset.
 
 ::: warning Behavior change (2026-06-28)
-Preset state read/write APIs (`get`, `getBatch`, `update`, `patch`, `delete`, `deleteAll`) no longer throw on HTTP failures. They now return a `{ok, ...}` envelope (matching the chat-state pattern). If your plugin previously wrote `try { await ctx.presets.state.get(...) } catch (e) { ... }`, switch to `if (!result.ok) { ... }`.
+Preset state read/write APIs (`get`, `getBatch`, `update`, `patch`, `delete`, `deleteAll`) no longer throw on HTTP failures. They now return a `{ok, ...}` result object (matching the chat-state pattern). If your plugin previously wrote `try { await ctx.presets.state.get(...) } catch (e) { ... }`, switch to `if (!result.ok) { ... }`.
 :::
 
 #### presets.state.get
@@ -334,9 +334,9 @@ const result = await sendOpenAIRequest('quiet', requestMessages, signal, {
 
 If you don't need character cards or world info, you can skip steps 1-2 and pass messages directly to `sendOpenAIRequest`. See [Generation](/development/extension-api/generation) for `sendOpenAIRequest` details.
 
-## Prompt Envelope Inspection
+## Prompt Structure Inspection
 
-For diagnostic UIs and "preview what would be sent" tooling, plugins can read the assembled prompt envelope and layout without dispatching a request.
+For diagnostic UIs and "preview what would be sent" tooling, plugins can read the assembled prompt structure and layout without dispatching a request.
 
 ### getActivePromptPresetEnvelope
 
@@ -378,7 +378,7 @@ Convenience accessor returning only the merged prompt layout. Each entry has `id
 formatPromptPresetEnvelope(envelope?: object, options?: { label?: string }): string
 ```
 
-Formats an envelope as `[[LABEL]]\n<json>` for embedding into another prompt (e.g., when delegating to a meta-LLM that needs to reason about the user's prompt config). Defaults to the current envelope when none is supplied.
+Formats a prompt structure as `[[LABEL]]\n<json>` for embedding into another prompt (e.g., when delegating to a meta-LLM that needs to reason about the user's prompt config). Defaults to the current prompt structure when none is supplied.
 
 ```js
 const ctx = Luker.getContext();

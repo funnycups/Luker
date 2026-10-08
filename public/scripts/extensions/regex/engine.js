@@ -820,9 +820,9 @@ function sanitizeRegexMacro(x) {
  * @param {regex_placement} placement The placement of the string
  * @param {RegexParams} params The parameters to use for the regex script
  * @returns {string} The regexed string
- * @typedef {{characterOverride?: string, isMarkdown?: boolean, isPrompt?: boolean, isPluginPrompt?: boolean, isEdit?: boolean, depth?: number }} RegexParams The parameters to use for the regex script
+ * @typedef {{characterOverride?: string, isMarkdown?: boolean, isPrompt?: boolean, isPluginInput?: boolean, isPluginOutput?: boolean, isEdit?: boolean, depth?: number }} RegexParams The parameters to use for the regex script
  */
-export function getRegexedString(rawString, placement, { characterOverride, isMarkdown, isPrompt, isPluginPrompt, isEdit, depth } = {}) {
+export function getRegexedString(rawString, placement, { characterOverride, isMarkdown, isPrompt, isPluginInput, isPluginOutput, isEdit, depth } = {}) {
     // WTF have you passed me?
     if (typeof rawString !== 'string') {
         console.warn('getRegexedString: rawString is not a string. Returning empty string.');
@@ -850,14 +850,16 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
         const matchesScopedTarget =
             // Script applies to Markdown and input is Markdown
             (script.markdownOnly && isMarkdown) ||
-            // Script applies to Generate and input is Generate
-            (script.promptOnly && isPrompt) ||
-            // Script applies to plugin-built messages
-            (script.pluginOnly && isPluginPrompt);
+            // Script applies to the main outgoing prompt and input is that prompt
+            (script.promptOnly && !script.pluginOnly && isPrompt) ||
+            // Plugin lane, input direction: promptOnly rules cook text going into a plugin request
+            (script.pluginOnly && script.promptOnly && isPluginInput) ||
+            // Plugin lane, output direction: rules without promptOnly cook the plugin response text
+            (script.pluginOnly && !script.promptOnly && isPluginOutput);
 
         if ((hasScopedTarget && matchesScopedTarget) ||
             // Script applies to the persisted chat content only when no scoped target is enabled.
-            (!hasScopedTarget && !isMarkdown && !isPrompt && !isPluginPrompt)) {
+            (!hasScopedTarget && !isMarkdown && !isPrompt && !isPluginInput && !isPluginOutput)) {
             if (isEdit && !script.runOnEdit) {
                 console.debug(`getRegexedString: Skipping script ${script.scriptName} because it does not run on edit`);
                 return;

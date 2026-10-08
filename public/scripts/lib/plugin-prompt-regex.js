@@ -4,7 +4,7 @@
  *
  * Role in the regex lane-semantics refactor:
  *   The per-text cooking primitive lives in
- *   `lib/plugin-floors.js:cookPluginFloorText` (`{ isPluginPrompt: true,
+ *   `lib/plugin-floors.js:cookPluginFloorText` (`{ isPluginInput: true,
  *   depth }`). This module is the DISPATCH-layer piece: it is the single
  *   point where a fully assembled prompt-message array (post
  *   `normalizePromptMessages`) gets its one and only plugin-lane regex
@@ -22,7 +22,7 @@
  *
  * Depth semantics:
  *   Unmarked `user`/`assistant` messages are cooked with
- *   `{ isPluginPrompt: true }` and NO `depth` key. The previous dispatch
+ *   `{ isPluginInput: true }` and NO `depth` key. The previous dispatch
  *   implementation derived depth from array position of plugin messages,
  *   which does not correspond to real chat depth; passing no depth
  *   disables minDepth/maxDepth filtering entirely (matching how the main
@@ -121,7 +121,7 @@ function rebuildWithoutProvenance(message) {
  *   - carries a finite numeric provenance marker → passed through
  *     UNCOOKED (it was already regexed upstream);
  *   - role `user`/`assistant` with string content →
- *     `content = applyRegex(content, placement, { isPluginPrompt: true })`
+ *     `content = applyRegex(content, placement, { isPluginInput: true })`
  *     (no `depth`: filtering by depth is disabled rather than guessed);
  *   - any other role (`system`, `tool`, ...) or non-string content →
  *     untouched.
@@ -169,6 +169,6 @@ export function applyPluginLaneRegex(messages, overrides = {}) {
         if (placement === null || typeof out.content !== 'string') {
             return out;
         }
-        return { ...out, content: cook(out.content, placement, { isPluginPrompt: true }) };
+        return { ...out, content: cook(out.content, placement, { isPluginInput: true }) };
     });
 }

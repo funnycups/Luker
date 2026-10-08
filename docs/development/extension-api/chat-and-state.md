@@ -93,16 +93,18 @@ As a result, each floor is cooked exactly once regardless of how many times the 
 
 The dispatch-layer regex pass only touches messages with `role: 'user'` or `'assistant'` and string content. Tool traffic (`tool_result` and friends) is never modified. Floor text embedded inside tool JSON therefore stays exactly as `readPluginFloors` cooked it at read time — no second application, and no risk of double-cooking when history is replayed through tools.
 
-No action is required on the response side either: sub-agent output that re-enters an LLM context through a tool envelope (e.g. a sub-agent's report consumed by the parent agent) is cooked automatically by core before delivery. Plugin-side code is never required to apply regex itself.
+No action is required on the response side either: the assistant text a plugin request returns is cooked by core inside `generateTask` before it resolves, and sub-agent output that re-enters an LLM context through a tool result is cooked the same way. Plugin-side code never needs to apply regex itself.
 
 ### Which regex rules apply where
 
-Rule scope is split cleanly between the lanes:
+Rule scope is split between the lanes, and the plugin lane is directional:
 
-- `promptOnly` rules never appear in plugin requests — they stay scoped to the main generation pipeline
-- `pluginOnly` rules appear *only* in plugin requests — they are invisible to the main pipeline
+- `promptOnly` rules apply to the main generation pipeline's outgoing prompt. Adding `pluginOnly` moves the rule into the plugin lane and selects its input direction.
+- `pluginOnly` rules apply to the plugin lane. With `promptOnly`, they rewrite text going into a plugin request (floor text, plugin-composed messages, world info). Without `promptOnly`, they rewrite the assistant text a plugin request returns.
+- Tool call payloads are never touched by any of these passes.
+- A rule with neither flag touches neither lane — it rewrites the stored chat history itself, and is applied when messages are edited or saved.
 
-A rule with neither flag touches neither lane — it rewrites the stored chat history itself, and is applied when messages are edited or saved.
+For the user-facing picture, see [Regex rule scope](/features/regex-scope).
 
 ## Messages API
 
@@ -382,7 +384,7 @@ createFloorState(options: { namespace: string }): Promise<FloorStateInstance>
 
 Use `getContext().createFloorState({ namespace })` from a plugin or CardApp. Each instance is bound to one namespace; create a separate instance per logical state slice.
 
-All instance methods that perform writes (`update`, `patch`, `reset`, `destroy({ purge: true })`) and reads (`get`) return an envelope — they never throw. Inspect `result.ok` and switch on `result.reason` for the failure modes listed in [Error reasons](#error-reasons-1).
+All instance methods that perform writes (`update`, `patch`, `reset`, `destroy({ purge: true })`) and reads (`get`) return a result object — they never throw. Inspect `result.ok` and switch on `result.reason` for the failure modes listed in [Error reasons](#error-reasons-1).
 
 ```js
 const ctx = SillyTavern.getContext();
@@ -505,7 +507,7 @@ The structural transitions are settled by core synchronously before the matching
 - `instance.reset(commits): Promise<{ok: true} | {ok: false, reason, hint}>` — atomically replace the log with a fresh commit list. Use for import / rebuild / reset workflows. Every commit is validated; the whole batch is rejected if any commit is malformed or its `floor` is out of chat range.
 - `instance.get(): Promise<{ok: true, state} | {ok: false, state: null, reason, hint}>` — read the current materialized state. Derived on demand by replaying the log against the current swipe map; never reads a separate data namespace.
 - `instance.ready(): Promise<void>` — resolves when no in-flight write is pending.
-- `instance.destroy(options?): Promise<{ok: true} | {ok: false, reason, hint}>` — detach the instance from the registry. Pass `{ purge: true }` to additionally delete this namespace's state from disk (use for permanent reset / wipe workflows). When called without `purge`, the synchronous detach still returns an envelope for consistency.
+- `instance.destroy(options?): Promise<{ok: true} | {ok: false, reason, hint}>` — detach the instance from the registry. Pass `{ purge: true }` to additionally delete this namespace's state from disk (use for permanent reset / wipe workflows). When called without `purge`, the synchronous detach still returns a result object for consistency.
 
 ### Error reasons
 
@@ -566,7 +568,7 @@ Use this when implementing storage layers that should follow the active chat by 
 Character state is persistent storage bound to the Character Card itself, shared across all chats for that character. Unlike chat state (which is scoped to a single chat), character state is suitable for storing cross-chat, character-level configuration.
 
 ::: warning Behavior change (2026-06-28)
-The character-state API stops throwing on HTTP failures and instead returns the `{ok, state, reason, hint}` envelope (matching chat-state). If your plugin had `try { await ctx.getCharacterState(...) } catch (e) { ... }` blocks, migrate them to `if (!result.ok) { ... }`.
+The character-state API stops throwing on HTTP failures and instead returns the `{ok, state, reason, hint}` result object (matching chat-state). If your plugin had `try { await ctx.getCharacterState(...) } catch (e) { ... }` blocks, migrate them to `if (!result.ok) { ... }`.
 :::
 
 ### getCharacterState

@@ -1556,7 +1556,7 @@ function normalizePromptMessages(messages) {
 // messages — not real chat depth — and had no way to skip messages whose
 // text was already regexed upstream (chat-floor conversions). The
 // dispatcher fixes both: unmarked user/assistant messages are cooked
-// once with { isPluginPrompt: true } and no depth, marked messages pass
+// once with { isPluginInput: true } and no depth, marked messages pass
 // through untouched, and the internal sourceFloorIndex marker is
 // stripped from every returned message.
 
@@ -1572,7 +1572,7 @@ function applyPluginRegexToRuntimeWorldInfo(runtimeWorldInfo = null) {
             return '';
         }
         return getRegexedString(text, regex_placement.WORLD_INFO, {
-            isPluginPrompt: true,
+            isPluginInput: true,
             ...options,
         });
     };
@@ -2453,7 +2453,7 @@ export function getContext() {
         // - `applyRegex(rawString, placement, params?)` — thin alias for
         //   `getRegexedString`. `placement` is a `regex_placement.*` value;
         //   `params` mirrors the engine signature ({ characterOverride,
-        //   isMarkdown, isPrompt, isPluginPrompt, isEdit, depth }).
+        //   isMarkdown, isPrompt, isPluginInput, isPluginOutput, isEdit, depth }).
         // - `placement` — the `regex_placement` enum (USER_INPUT / AI_OUTPUT
         //   / SLASH_COMMAND / WORLD_INFO / REASONING).
         //

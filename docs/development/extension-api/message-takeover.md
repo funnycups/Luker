@@ -70,7 +70,7 @@ type DispatchEventData = {
     forceName2: boolean;                                     // pass to your prompt if relevant
     isStreamingEnabled: boolean;                             // user has streaming ON for this session
     finalPrompt: unknown;                                    // the prompt that *would* have gone to the LLM
-    generateData: unknown;                                   // raw generate-data envelope (same as GENERATE_AFTER_DATA payload)
+    generateData: unknown;                                   // raw generate-data payload (same as GENERATE_AFTER_DATA)
     takeoverHandle: MessageEditorHandle | null;              // subscriber fills this to claim
     abortSignal: AbortSignal;                                // honored by both takeover and normal paths
 };

@@ -2,15 +2,17 @@
  * Lane-semantics matrix for getRegexedString.
  *
  * Contract:
- *   - `isPrompt` lane applies promptOnly scripts (main generation pipeline).
- *   - `isPluginPrompt` lane applies pluginOnly scripts (plugin-built LLM
- *     messages; the request-side entry point feeding chat text to
- *     plugin-driven LLM requests is lib/plugin-floors.js).
- *   - A dual-scope script (promptOnly AND pluginOnly) matches each lane,
- *     one pass per lane.
+ *   - `isPrompt` lane applies promptOnly scripts without pluginOnly
+ *     (main generation pipeline).
+ *   - `isPluginInput` lane applies dual-scope scripts (pluginOnly AND
+ *     promptOnly): text going INTO a plugin request.
+ *   - `isPluginOutput` lane applies pluginOnly scripts WITHOUT
+ *     promptOnly: the assistant text a plugin request returns.
+ *   - The plugin channel is directional, so a dual-scope script hits the
+ *     plugin input lane only — never the main lane, never the output lane.
  *   - Depth filtering only runs when a numeric depth is passed.
  *   - A script with no scope flags matches only the unscoped lane
- *     (!isMarkdown && !isPrompt && !isPluginPrompt).
+ *     (!isMarkdown && !isPrompt && !isPluginInput && !isPluginOutput).
  */
 
 import { describe, test, expect, beforeAll, jest } from '@jest/globals';
@@ -111,32 +113,39 @@ beforeAll(async () => {
 const PLACEMENT = 1;
 
 describe('getRegexedString lane semantics', () => {
-    test('isPrompt lane applies promptOnly but not pluginOnly', () => {
+    test('isPrompt lane applies promptOnly-only but not pluginOnly or dual-scope', () => {
         const out = getRegexedString('x MAINONLY y PLUGINONLY z DUAL w UNSCOPED', PLACEMENT, { isPrompt: true, depth: 9 });
-        expect(out).toBe('x main y PLUGINONLY z both w UNSCOPED');
+        expect(out).toBe('x main y PLUGINONLY z DUAL w UNSCOPED');
     });
 
-    test('isPluginPrompt lane applies pluginOnly but not promptOnly', () => {
-        const out = getRegexedString('x MAINONLY y PLUGINONLY z DUAL w UNSCOPED', PLACEMENT, { isPluginPrompt: true, depth: 9 });
-        expect(out).toBe('x MAINONLY y plugin z both w UNSCOPED');
+    test('isPluginInput lane applies dual-scope (pluginOnly+promptOnly) but not pluginOnly-only', () => {
+        const out = getRegexedString('x MAINONLY y PLUGINONLY z DUAL w UNSCOPED', PLACEMENT, { isPluginInput: true, depth: 9 });
+        expect(out).toBe('x MAINONLY y PLUGINONLY z both w UNSCOPED');
     });
 
-    test('dual-scope script hits once on each lane, asserted separately', () => {
-        expect(getRegexedString('DUAL', PLACEMENT, { isPrompt: true, depth: 0 })).toBe('both');
-        expect(getRegexedString('DUAL', PLACEMENT, { isPluginPrompt: true, depth: 0 })).toBe('both');
+    test('isPluginOutput lane applies pluginOnly-only but not dual-scope', () => {
+        const out = getRegexedString('x MAINONLY y PLUGINONLY z DUAL w UNSCOPED', PLACEMENT, { isPluginOutput: true, depth: 9 });
+        expect(out).toBe('x MAINONLY y plugin z DUAL w UNSCOPED');
     });
 
-    test('depth=undefined skips minDepth/maxDepth filtering (undepthed pluginOnly message still matches)', () => {
+    test('dual-scope script hits the plugin input lane only', () => {
+        expect(getRegexedString('DUAL', PLACEMENT, { isPrompt: true, depth: 0 })).toBe('DUAL');
+        expect(getRegexedString('DUAL', PLACEMENT, { isPluginInput: true, depth: 0 })).toBe('both');
+        expect(getRegexedString('DUAL', PLACEMENT, { isPluginOutput: true, depth: 0 })).toBe('DUAL');
+    });
+
+    test('depth=undefined skips minDepth/maxDepth filtering (undepthed plugin output message still matches)', () => {
         // pluginOnly script has minDepth:5; with numeric depth 0 it must NOT match...
-        expect(getRegexedString('PLUGINONLY', PLACEMENT, { isPluginPrompt: true, depth: 0 })).toBe('PLUGINONLY');
+        expect(getRegexedString('PLUGINONLY', PLACEMENT, { isPluginOutput: true, depth: 0 })).toBe('PLUGINONLY');
         // ...but with no depth the filter is skipped entirely.
-        expect(getRegexedString('PLUGINONLY', PLACEMENT, { isPluginPrompt: true })).toBe('plugin');
+        expect(getRegexedString('PLUGINONLY', PLACEMENT, { isPluginOutput: true })).toBe('plugin');
     });
 
     test('unscoped script only matches the default lane', () => {
         expect(getRegexedString('UNSCOPED', PLACEMENT, {})).toBe('raw');
         expect(getRegexedString('UNSCOPED', PLACEMENT, { isPrompt: true, depth: 0 })).toBe('UNSCOPED');
-        expect(getRegexedString('UNSCOPED', PLACEMENT, { isPluginPrompt: true, depth: 0 })).toBe('UNSCOPED');
+        expect(getRegexedString('UNSCOPED', PLACEMENT, { isPluginInput: true, depth: 0 })).toBe('UNSCOPED');
+        expect(getRegexedString('UNSCOPED', PLACEMENT, { isPluginOutput: true, depth: 0 })).toBe('UNSCOPED');
         expect(getRegexedString('UNSCOPED', PLACEMENT, { isMarkdown: true })).toBe('UNSCOPED');
     });
 });
