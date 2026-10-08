@@ -98,12 +98,6 @@ static int getStatusCode(void) {
   return __atomic_load_n(&g_status, __ATOMIC_ACQUIRE);
 }
 
-static unsigned long nowMs(void) {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (unsigned long)ts.tv_sec * 1000UL + (unsigned long)(ts.tv_nsec / 1000000);
-}
-
 static void logWrite(const char *fmt, ...);
 
 /* ArkWeb/chromium logs to the same process-level stdout/stderr we redirected
@@ -139,6 +133,29 @@ static int isFrameworkNoise(const char *s) {
   return 0;
 }
 
+/* ArkWeb/Chromium logs in its "[file.cc:123] message" shape. Matching the
+ * shape covers the whole family the prefix list above cannot enumerate
+ * (shared_image_util.cc, d_vsync_controller.cc, ...). Node and Luker output
+ * never takes this shape: "[card-app] ..." has no colon and
+ * "[2026-10-07T17:20:48.261Z] ..." has non-digits after its last colon. */
+static int isChromiumSourceLine(const char *s) {
+  if (s[0] != '[') return 0;
+  const char *end = strchr(s, ']');
+  if (!end) return 0;
+  const char *colon = NULL;
+  for (const char *p = s + 1; p < end; p++) {
+    if (*p == ':') colon = p;
+  }
+  if (!colon || colon + 1 >= end) return 0;
+  for (const char *p = colon + 1; p < end; p++) {
+    if (*p < '0' || *p > '9') return 0;
+  }
+  for (const char *p = s + 1; p < colon; p++) {
+    if (*p == '.') return 1;
+  }
+  return 0;
+}
+
 /* Drain the app's stdout/stderr (fd 1/2 are dup2'd onto a pipe) — FAST and
  * BOUNDED. This is the single most important invariant in the file.
  *
@@ -156,15 +173,16 @@ static int isFrameworkNoise(const char *s) {
  *   2. filters framework noise with cheap strncmp/strstr only;
  *   3. writes surviving lines to the boot log with a raw write() (one
  *      syscall per line, no formatting, no locks);
- *   4. hilog's at a hard rate limit with a fixed total budget.
+ *   4. hilog's only lines that are not Chromium "[file.cc:N]" logs. Those
+ *      are the high-rate source; what remains is node's own output, which
+ *      testers can only report through hilog, so it is printed public and
+ *      unthrottled.
  */
 static void *stdioReaderThread(void *p) {
   (void)p;
   char buf[8192];
   char line[480];
   size_t linelen = 0;
-  long hilogBudget = 400; /* total hilog lines we will ever emit */
-  unsigned long lastHilogMs = 0;
 
   for (;;) {
     ssize_t r = read(g_pipeOut, buf, sizeof(buf));
@@ -185,14 +203,9 @@ static void *stdioReaderThread(void *p) {
               ign = write(g_logFd, "\n", 1);
               (void)ign;
             }
-            if (hilogBudget > 0) {
-              unsigned long now = nowMs();
-              if (now - lastHilogMs >= 250) { /* max ~4 hilog IPCs per second */
-                lastHilogMs = now;
-                hilogBudget--;
-                (void)OH_LOG_Print(LOG_APP, LOG_ERROR, 0xE1EC,
-                                   "luker.embed", "[io] %.470s", line);
-              }
+            if (!isChromiumSourceLine(line)) {
+              (void)OH_LOG_Print(LOG_APP, LOG_ERROR, 0xE1EC,
+                                 "luker.embed", "[io] %{public}s", line);
             }
           }
         }
