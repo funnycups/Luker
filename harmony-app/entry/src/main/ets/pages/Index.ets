@@ -176,11 +176,6 @@ struct Index {
         Column({ space: 16 }) {
           Text('Luker').fontSize(24).fontWeight(FontWeight.Bold).fontColor('#cfd6e4')
           LoadingProgress().width(36).height(36).color('#4aa3ff')
-          Button(this.res($r('app.string.export_diagnostics').id))
-            .fontSize(12)
-            .backgroundColor('#23262c')
-            .fontColor('#cfd6e4')
-            .onClick(() => { this.doExport(); })
           Text(this.statusMessage)
             .fontSize(12)
             .fontColor('#8b93a7')
