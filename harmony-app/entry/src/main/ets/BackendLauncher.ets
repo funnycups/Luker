@@ -60,6 +60,17 @@ function resolveScriptPath(bundleCodeDir: string): string {
   return candidates[0];
 }
 
+/**
+ * Resolves the backend data dir without starting the backend, so the crash
+ * dialog can export the previous run's node logs before a new launch rotates
+ * them.
+ */
+export function prepareDataDir(context: common.Context): void {
+  if (BackendManager.dataDir === '') {
+    BackendManager.dataDir = pickDataDir(context);
+  }
+}
+
 export function buildEntryParams(context: common.Context): string {
   const dataDir: string = pickDataDir(context);
   BackendManager.dataDir = dataDir;

@@ -10,6 +10,7 @@ import { listPending, acknowledge, StoredReport } from '../crash/CrashReportStor
 import { buildCrashSummary, isArkWebCrashReason } from '../crash/CrashSummary';
 import { exportTo } from '../crash/DiagnosticsExporter';
 import { writeArkWebExit } from '../crash/CrashCapture';
+import { LastExit } from '../crash/LastExit';
 
 const TAG: string = 'luker.Index';
 const DOMAIN: number = 0xE1EC;
@@ -23,15 +24,19 @@ struct Index {
   @State serverReady: boolean = false;
   @State statusMessage: string = '';
   private exporting: boolean = false;
+  private crashDialogDone: boolean = false;
 
   aboutToAppear(): void {
     this.statusMessage = this.res($r('app.string.starting_engine').id, '0s');
+    let dialogShown: boolean = false;
     try {
-      this.checkPendingCrash();
+      dialogShown = this.checkPendingCrash();
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'checkPendingCrash failed: %{public}s', JSON.stringify(e));
     }
-    this.start();
+    if (!dialogShown) {
+      this.start();
+    }
   }
 
   private res(id: number, arg?: string): string {
@@ -59,17 +64,19 @@ struct Index {
     }
   }
 
-  private checkPendingCrash(): void {
+  /**
+   * Shows the crash dialog when the previous run ended abnormally or an
+   * unacknowledged report exists. Returns true when the dialog is shown; the
+   * backend start then waits for the dialog, so an export captures the crashed
+   * run's node logs before a new launch rotates them.
+   */
+  private checkPendingCrash(): boolean {
     const pending: StoredReport[] = listPending(this.crashFilesDir());
-    if (pending.length === 0) {
-      return;
+    if (pending.length === 0 && !LastExit.deferBackend) {
+      return false;
     }
-    let maxTime: number = 0;
     let summary: string = '';
     for (let i = 0; i < pending.length; i++) {
-      if (pending[i].time > maxTime) {
-        maxTime = pending[i].time;
-      }
       summary += buildCrashSummary(pending[i].body) + '\n\n';
     }
     if (summary.trim().length === 0) {
@@ -82,14 +89,27 @@ struct Index {
         { text: this.res($r('app.string.crash_dialog_close').id), color: '#8b93a7' },
         { text: this.res($r('app.string.export_diagnostics').id), color: '#4aa3ff' }
       ]
-    }).then((result: promptAction.ShowDialogSuccessResponse) => {
+    }).then(async (result: promptAction.ShowDialogSuccessResponse) => {
       if (result.index === 1) {
-        this.doExport();
+        await this.doExport();
       }
-      acknowledge(this.crashFilesDir(), maxTime);
+      this.finishCrashDialog();
     }).catch(() => {
-      acknowledge(this.crashFilesDir(), maxTime);
+      this.finishCrashDialog();
     });
+    return true;
+  }
+
+  private finishCrashDialog(): void {
+    if (this.crashDialogDone) {
+      return;
+    }
+    this.crashDialogDone = true;
+    // Acknowledge with the current time: a hiAppEvent report for the same
+    // crash that arrives later carries an earlier time and stays acknowledged.
+    acknowledge(this.crashFilesDir(), Date.now());
+    LastExit.deferBackend = false;
+    this.start();
   }
 
   async start(): Promise<void> {
