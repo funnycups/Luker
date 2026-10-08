@@ -21,6 +21,12 @@
  * Returns "ok" synchronously once the node thread is launched; on any
  * failure returns "err:<reason>" so ArkTS can fall back to the native
  * child process.
+ *
+ * Attribution: the in-process Node launcher here is derived from
+ * electerm-harmony's entry/src/main/cpp/node_ctl.c
+ * (https://github.com/electerm/electerm-harmony),
+ * Copyright (c) since 2017~ ZHAO Xudong <zxdong@gmail.com>, MIT licensed.
+ * The full license text is in harmony-app/THIRD_PARTY_NOTICES.md.
  */
 
 #include "napi/native_api.h"
@@ -58,7 +64,7 @@
 
 typedef struct {
   char dataDir[MAX_LINE];    /* writable app data dir (el2 filesDir) */
-  char script[MAX_LINE * 2]; /* path to resfile/electerm/index.js */
+  char script[MAX_LINE * 2]; /* path to resfile/luker/bootstrap.js */
   char node[MAX_LINE * 2];   /* optional parent-provided libnode.so path */
   char port[16];
   char secret[MAX_LINE]; /* SERVER_SECRET */
