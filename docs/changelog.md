@@ -35,7 +35,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### HarmonyOS App
 
-- Added a native HarmonyOS app that bundles the full Luker server and interface and runs standalone on the device, built from source and signed with your Huawei developer account. See the [HarmonyOS guide](/guide/harmonyos).
+- Added a native HarmonyOS app that bundles the full Luker server and interface and runs standalone on the device, built from source and signed with your Huawei developer account. See the [HarmonyOS guide](/guide/harmonyos). With **Background keep-alive on mobile** enabled, a generation keeps running when the app moves to the background through a system continuous task, with the elapsed time shown in the notification.
 
 ### Memory Graph
 

@@ -13,6 +13,8 @@
     { "name": "export_diagnostics", "value": "Export Diagnostics Bundle" },
     { "name": "export_share_title", "value": "Luker diagnostics" },
     { "name": "export_failed", "value": "Export failed: %s" },
-    { "name": "no_crash_report", "value": "No crash report" }
+    { "name": "no_crash_report", "value": "No crash report" },
+    { "name": "keepalive_notification_title", "value": "Luker is generating a reply" },
+    { "name": "keepalive_notification_text", "value": "Elapsed %s" }
   ]
 }

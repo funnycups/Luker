@@ -4,6 +4,7 @@ import AbilityConstant from '@ohos.app.ability.AbilityConstant';
 import { common, UIAbility } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BackendManager } from '../BackendManager';
+import { KeepAliveManager } from '../KeepAliveManager';
 import { launchInProcessEarly, prepareDataDir } from '../BackendLauncher';
 import { LastExit, recordLastExit } from '../crash/LastExit';
 
@@ -12,6 +13,7 @@ const DOMAIN: number = 0xE1EC;
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    KeepAliveManager.attach(this.context);
     let abnormalExit: boolean = false;
     try {
       abnormalExit = recordLastExit(this.context.filesDir, launchParam);
@@ -39,7 +41,16 @@ export default class EntryAbility extends UIAbility {
     });
   }
 
+  onForeground(): void {
+    KeepAliveManager.setInBackground(false);
+  }
+
+  onBackground(): void {
+    KeepAliveManager.setInBackground(true);
+  }
+
   onDestroy(): void {
+    KeepAliveManager.release();
     BackendManager.killBackend();
   }
 }

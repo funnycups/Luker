@@ -38,6 +38,7 @@ import {
     getActiveKeepAliveMode,
     getAvailableWebModes,
     getKeepAlivePlatform,
+    hasNativeKeepAliveBridge,
     initKeepAlive,
     isKeepAliveSupported,
     onKeepAliveStateChanged,
@@ -233,6 +234,7 @@ export const power_user = {
     immersive_mode_last_state: false,
     immersive_mode_keep_top_bar: false,
     luker_mobile_keep_alive_android_enabled: false,
+    luker_mobile_keep_alive_harmony_enabled: false,
     luker_mobile_keep_alive_web_audio_enabled: false,
     hotswap_enabled: true,
     timer_enabled: true,
@@ -498,55 +500,67 @@ function syncAndroidSystemBarsColor() {
 
 function syncMobileKeepAliveCheckbox() {
     const platform = getKeepAlivePlatform();
-    // Web audio mode reflects the setting, not the live active mode — the
-    // session is only built up during generations, but the checkbox should
-    // stay checked across idle gaps.
-    const checked = platform === 'android'
-        ? !!power_user.luker_mobile_keep_alive_android_enabled
-        : platform === 'web'
-            ? !!power_user.luker_mobile_keep_alive_web_audio_enabled || getActiveKeepAliveMode() === 'pip'
-            : false;
+    // Generation-scoped modes reflect the setting, not the live active mode —
+    // keep-alive is only held during generations, but the checkbox should stay
+    // checked across idle gaps.
+    let checked = false;
+    if (platform === 'android') {
+        checked = !!power_user.luker_mobile_keep_alive_android_enabled;
+    } else if (platform === 'harmony') {
+        checked = !!power_user.luker_mobile_keep_alive_harmony_enabled;
+    } else if (platform === 'web') {
+        checked = !!power_user.luker_mobile_keep_alive_web_audio_enabled || getActiveKeepAliveMode() === 'pip';
+    }
     $('#luker_mobile_keep_alive').prop('checked', checked);
 }
 
-// Audio keep-alive is event-driven: while the audio setting is enabled,
-// GENERATION_STARTED enters audio mode (full build of oscillator + <audio> +
-// MediaSession) and GENERATION_ENDED schedules exiting it after a grace
-// window. The grace covers chained generations (orchestrator multi-node runs,
-// agent tool loops) so audio doesn't tear down between one node's ENDED and
-// the next node's STARTED. Reference-counted because a single user action can
-// trigger nested quiet generations.
-const AUDIO_DEACTIVATE_GRACE_MS = 10000;
-let audioActivationCount = 0;
-let audioDeactivateTimer = null;
+// Web audio and HarmonyOS keep-alive are generation-scoped: while the setting
+// is enabled, GENERATION_STARTED enters the mode (web audio builds the
+// oscillator + <audio> + MediaSession; HarmonyOS marks the generation active so
+// the shell holds a continuous task once the app is in the background) and
+// GENERATION_ENDED schedules exiting it after a grace window. The grace covers
+// chained generations (orchestrator multi-node runs, agent tool loops) so the
+// mode doesn't tear down between one node's ENDED and the next node's STARTED.
+// Reference-counted because a single user action can trigger nested quiet
+// generations.
+const SCOPED_KEEP_ALIVE_DEACTIVATE_GRACE_MS = 10000;
+let scopedKeepAliveActivationCount = 0;
+let scopedKeepAliveDeactivateTimer = null;
 
-function isAudioKeepAliveSettingEnabled() {
-    return getKeepAlivePlatform() === 'web'
-        && !!power_user.luker_mobile_keep_alive_web_audio_enabled;
+/**
+ * @returns {'audio'|'harmony'|null} the generation-scoped mode enabled on this device
+ */
+function getScopedKeepAliveMode() {
+    const platform = getKeepAlivePlatform();
+    if (platform === 'web' && power_user.luker_mobile_keep_alive_web_audio_enabled) return 'audio';
+    if (platform === 'harmony' && power_user.luker_mobile_keep_alive_harmony_enabled) return 'harmony';
+    return null;
 }
 
-function audioActivationSync() {
-    if (!isAudioKeepAliveSettingEnabled()) return;
-    if (audioActivationCount > 0) {
-        if (audioDeactivateTimer) {
-            clearTimeout(audioDeactivateTimer);
-            audioDeactivateTimer = null;
+function scopedKeepAliveActivationSync() {
+    const mode = getScopedKeepAliveMode();
+    if (!mode) return;
+    if (scopedKeepAliveActivationCount > 0) {
+        if (scopedKeepAliveDeactivateTimer) {
+            clearTimeout(scopedKeepAliveDeactivateTimer);
+            scopedKeepAliveDeactivateTimer = null;
         }
-        if (getActiveKeepAliveMode() !== 'audio') {
-            setKeepAliveMode('audio').catch((error) => {
-                console.warn('[Luker] Failed to enter audio keep-alive', error);
+        if (getActiveKeepAliveMode() !== mode) {
+            setKeepAliveMode(mode).catch((error) => {
+                console.warn(`[Luker] Failed to enter ${mode} keep-alive`, error);
             });
         }
-    } else if (!audioDeactivateTimer) {
-        audioDeactivateTimer = setTimeout(() => {
-            audioDeactivateTimer = null;
-            if (audioActivationCount > 0) return;
-            if (getActiveKeepAliveMode() === 'audio') {
+    } else if (!scopedKeepAliveDeactivateTimer) {
+        scopedKeepAliveDeactivateTimer = setTimeout(() => {
+            scopedKeepAliveDeactivateTimer = null;
+            if (scopedKeepAliveActivationCount > 0) return;
+            const active = getActiveKeepAliveMode();
+            if (active === 'audio' || active === 'harmony') {
                 setKeepAliveMode('off').catch((error) => {
-                    console.warn('[Luker] Failed to exit audio keep-alive', error);
+                    console.warn(`[Luker] Failed to exit ${active} keep-alive`, error);
                 });
             }
-        }, AUDIO_DEACTIVATE_GRACE_MS);
+        }, SCOPED_KEEP_ALIVE_DEACTIVATE_GRACE_MS);
     }
 }
 
@@ -554,38 +568,30 @@ function audioActivationSync() {
 // previews) emit GENERATION_STARTED but never GENERATION_ENDED — see Generate()
 // in script.js where dryRun returns before finishGenerating. Counting them
 // would pin the counter above zero forever.
-function onAudioActivationStarted(_type, _params, dryRun) {
+function onScopedKeepAliveGenerationStarted(_type, _params, dryRun) {
     if (dryRun) return;
-    if (!isAudioKeepAliveSettingEnabled()) return;
-    audioActivationCount += 1;
-    audioActivationSync();
+    onScopedKeepAliveActivationStarted();
 }
 
-function onAudioActivationEnded() {
-    if (!isAudioKeepAliveSettingEnabled()) return;
-    audioActivationCount = Math.max(0, audioActivationCount - 1);
-    audioActivationSync();
+// Image generation shares the same counter so keep-alive covers any image
+// request in flight even when no LLM generation is active (e.g. wand button
+// image generation while reading a long reply).
+function onScopedKeepAliveActivationStarted() {
+    if (!getScopedKeepAliveMode()) return;
+    scopedKeepAliveActivationCount += 1;
+    scopedKeepAliveActivationSync();
 }
 
-// Image generation shares the same counter so the audio session covers any
-// image request in flight even when no LLM generation is active (e.g. wand
-// button image generation while reading a long reply).
-function onImageActivationStarted() {
-    if (!isAudioKeepAliveSettingEnabled()) return;
-    audioActivationCount += 1;
-    audioActivationSync();
+function onScopedKeepAliveActivationEnded() {
+    if (!getScopedKeepAliveMode()) return;
+    scopedKeepAliveActivationCount = Math.max(0, scopedKeepAliveActivationCount - 1);
+    scopedKeepAliveActivationSync();
 }
 
-function onImageActivationEnded() {
-    if (!isAudioKeepAliveSettingEnabled()) return;
-    audioActivationCount = Math.max(0, audioActivationCount - 1);
-    audioActivationSync();
-}
-
-function cancelAudioDeactivateTimer() {
-    if (audioDeactivateTimer) {
-        clearTimeout(audioDeactivateTimer);
-        audioDeactivateTimer = null;
+function cancelScopedKeepAliveDeactivateTimer() {
+    if (scopedKeepAliveDeactivateTimer) {
+        clearTimeout(scopedKeepAliveDeactivateTimer);
+        scopedKeepAliveDeactivateTimer = null;
     }
 }
 
@@ -597,18 +603,19 @@ function syncMobileKeepAliveUi() {
     // exists everywhere) and the GENERATION_STARTED listener would enter
     // audio mode on every generation — pausing the user's Spotify/YouTube
     // and showing a MediaSession card, with no UI to turn it off. Skip init
-    // entirely on non-mobile so the persisted flag is inert off-device.
-    if (!isMobile()) {
+    // entirely on non-mobile so the persisted flag is inert off-device. A
+    // native app shell bridge identifies the device regardless of the UA.
+    if (!isMobile() && !hasNativeKeepAliveBridge()) {
         $('#luker_mobile_keep_alive').closest('label.checkbox_label').hide();
         return;
     }
 
     if (!syncMobileKeepAliveUi._initialized) {
         initKeepAlive();
-        eventSource.on(event_types.GENERATION_STARTED, onAudioActivationStarted);
-        eventSource.on(event_types.GENERATION_ENDED, onAudioActivationEnded);
-        eventSource.on(event_types.IMAGE_GENERATION_STARTED, onImageActivationStarted);
-        eventSource.on(event_types.IMAGE_GENERATION_ENDED, onImageActivationEnded);
+        eventSource.on(event_types.GENERATION_STARTED, onScopedKeepAliveGenerationStarted);
+        eventSource.on(event_types.GENERATION_ENDED, onScopedKeepAliveActivationEnded);
+        eventSource.on(event_types.IMAGE_GENERATION_STARTED, onScopedKeepAliveActivationStarted);
+        eventSource.on(event_types.IMAGE_GENERATION_ENDED, onScopedKeepAliveActivationEnded);
         onKeepAliveStateChanged(() => {
             // Reflect whatever the module says is currently in effect — the user closing the
             // PiP window from the OS UI or autoplay being denied both land here.
@@ -673,15 +680,19 @@ async function chooseWebKeepAliveMode() {
 
 async function applyMobileKeepAliveFromUser(checked) {
     if (!checked) {
-        // Audio session may already be playing for an in-flight generation;
-        // shut it down explicitly along with the reference counter so a future
-        // STARTED with the setting off doesn't reactivate a stale count.
-        audioActivationCount = 0;
-        cancelAudioDeactivateTimer();
+        // A generation-scoped mode may already be held for an in-flight
+        // generation; shut it down explicitly along with the reference counter
+        // so a future STARTED with the setting off doesn't reactivate a stale
+        // count.
+        scopedKeepAliveActivationCount = 0;
+        cancelScopedKeepAliveDeactivateTimer();
         try { await setKeepAliveMode('off'); } catch (_) { /* noop */ }
         const platform = getKeepAlivePlatform();
         if (platform === 'android') {
             power_user.luker_mobile_keep_alive_android_enabled = false;
+            saveSettingsDebounced();
+        } else if (platform === 'harmony') {
+            power_user.luker_mobile_keep_alive_harmony_enabled = false;
             saveSettingsDebounced();
         } else if (platform === 'web') {
             power_user.luker_mobile_keep_alive_web_audio_enabled = false;
@@ -701,6 +712,14 @@ async function applyMobileKeepAliveFromUser(checked) {
             power_user.luker_mobile_keep_alive_android_enabled = false;
             saveSettingsDebounced();
         }
+        syncMobileKeepAliveCheckbox();
+        return;
+    }
+
+    if (getKeepAlivePlatform() === 'harmony') {
+        // Takes effect on the next GENERATION_STARTED, like web audio mode.
+        power_user.luker_mobile_keep_alive_harmony_enabled = true;
+        saveSettingsDebounced();
         syncMobileKeepAliveCheckbox();
         return;
     }

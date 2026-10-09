@@ -13,6 +13,8 @@
     { "name": "export_diagnostics", "value": "匯出診斷壓縮包" },
     { "name": "export_share_title", "value": "Luker 診斷包" },
     { "name": "export_failed", "value": "匯出失敗：%s" },
-    { "name": "no_crash_report", "value": "尚無崩潰報告" }
+    { "name": "no_crash_report", "value": "尚無崩潰報告" },
+    { "name": "keepalive_notification_title", "value": "Luker 正在生成回覆" },
+    { "name": "keepalive_notification_text", "value": "已用時 %s" }
   ]
 }

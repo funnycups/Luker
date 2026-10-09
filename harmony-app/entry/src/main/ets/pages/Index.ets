@@ -11,6 +11,7 @@ import { buildCrashSummary, isArkWebCrashReason } from '../crash/CrashSummary';
 import { exportTo } from '../crash/DiagnosticsExporter';
 import { writeArkWebExit } from '../crash/CrashCapture';
 import { LastExit } from '../crash/LastExit';
+import { KeepAliveManager, LukerHarmonyBridge } from '../KeepAliveManager';
 
 const TAG: string = 'luker.Index';
 const DOMAIN: number = 0xE1EC;
@@ -21,6 +22,7 @@ const BOOT_TIMEOUT_MS: number = 120_000;
 @Component
 struct Index {
   controller: webview.WebviewController = new webview.WebviewController();
+  private bridge: LukerHarmonyBridge = new LukerHarmonyBridge();
   @State serverReady: boolean = false;
   @State statusMessage: string = '';
   private exporting: boolean = false;
@@ -166,7 +168,19 @@ struct Index {
         .height('100%')
         .javaScriptAccess(true)
         .domStorageAccess(true)
+        .javaScriptProxy({
+          object: this.bridge,
+          name: 'LukerHarmony',
+          methodList: ['setGenerationActive'],
+          controller: this.controller
+        })
+        // A reload or renderer exit drops the page's generation state, so the
+        // native flag must not outlive it.
+        .onPageBegin(() => {
+          KeepAliveManager.setGenerationActive(false);
+        })
         .onRenderExited((event) => {
+          KeepAliveManager.setGenerationActive(false);
           if (event && isArkWebCrashReason(event.renderExitReason)) {
             writeArkWebExit(this.crashFilesDir(), event.renderExitReason);
           }

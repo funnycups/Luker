@@ -4,8 +4,8 @@
 const SILENT_VIDEO_URL = '/sounds/silent.mp4';
 const SILENT_AUDIO_URL = '/sounds/silent-keepalive.m4a';
 
-/** @typedef {'off'|'android'|'pip'|'audio'} KeepAliveMode */
-/** @typedef {'android'|'web'|'unsupported'} KeepAlivePlatform */
+/** @typedef {'off'|'android'|'harmony'|'pip'|'audio'} KeepAliveMode */
+/** @typedef {'android'|'harmony'|'web'|'unsupported'} KeepAlivePlatform */
 
 let platform = 'unsupported';
 /** @type {KeepAliveMode} */
@@ -36,6 +36,15 @@ function hasAndroidKeepAliveBridge() {
         && typeof window.LukerAndroid.setBackgroundKeepAliveEnabled === 'function';
 }
 
+// The HarmonyOS shell holds a dataTransfer continuous task only while the page
+// reports an in-flight generation and the app is in the background.
+function hasHarmonyKeepAliveBridge() {
+    return typeof window !== 'undefined'
+        && typeof window.LukerHarmony === 'object'
+        && window.LukerHarmony !== null
+        && typeof window.LukerHarmony.setGenerationActive === 'function';
+}
+
 function hasPipSupport() {
     return typeof document !== 'undefined'
         && 'pictureInPictureEnabled' in document
@@ -52,6 +61,7 @@ function hasAudioSupport() {
 
 function resolvePlatform() {
     if (hasAndroidKeepAliveBridge()) return 'android';
+    if (hasHarmonyKeepAliveBridge()) return 'harmony';
     if (hasPipSupport() || hasAudioSupport()) return 'web';
     return 'unsupported';
 }
@@ -262,6 +272,13 @@ export function getActiveKeepAliveMode() {
 }
 
 /**
+ * Whether the page runs inside a Luker app shell that provides native keep-alive.
+ */
+export function hasNativeKeepAliveBridge() {
+    return hasAndroidKeepAliveBridge() || hasHarmonyKeepAliveBridge();
+}
+
+/**
  * Whether the current device exposes any keep-alive mechanism we can drive.
  */
 export function isKeepAliveSupported() {
@@ -293,7 +310,7 @@ export function onKeepAliveStateChanged(callback) {
  * @returns {Promise<KeepAliveMode>} the final mode (may be 'off' if entry failed)
  */
 export async function setKeepAliveMode(desired) {
-    const target = desired === 'android' || desired === 'pip' || desired === 'audio' ? desired : 'off';
+    const target = desired === 'android' || desired === 'harmony' || desired === 'pip' || desired === 'audio' ? desired : 'off';
 
     // Switching away from the current mode: tear down first.
     if (activeMode === 'pip' && target !== 'pip') {
@@ -307,6 +324,13 @@ export async function setKeepAliveMode(desired) {
             window.LukerAndroid.setBackgroundKeepAliveEnabled(false);
         } catch (error) {
             console.warn('[Luker] Failed to disable Android background keep-alive', error);
+        }
+    }
+    if (activeMode === 'harmony' && target !== 'harmony') {
+        try {
+            window.LukerHarmony.setGenerationActive(false);
+        } catch (error) {
+            console.warn('[Luker] Failed to release HarmonyOS background keep-alive', error);
         }
     }
 
@@ -332,6 +356,22 @@ export async function setKeepAliveMode(desired) {
             return 'android';
         } catch (error) {
             console.warn('[Luker] Failed to enable Android background keep-alive', error);
+            activeMode = 'off';
+            return 'off';
+        }
+    }
+
+    if (target === 'harmony') {
+        if (platform !== 'harmony') {
+            activeMode = 'off';
+            return 'off';
+        }
+        try {
+            window.LukerHarmony.setGenerationActive(true);
+            activeMode = 'harmony';
+            return 'harmony';
+        } catch (error) {
+            console.warn('[Luker] Failed to hold HarmonyOS background keep-alive', error);
             activeMode = 'off';
             return 'off';
         }
