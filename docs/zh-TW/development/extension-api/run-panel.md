@@ -7,6 +7,9 @@
 共享層位於 `public/scripts/run-panel/`，在 Luker context 上暴露為 `runPanel`。倉庫內消費方：
 
 - 編排器 —— `public/scripts/extensions/orchestrator/run-panel/panel.js`
+- 搜尋工具 —— `public/scripts/extensions/search-tools/run-panel.js`
+
+![搜尋 Agent 在共享面板中的執行](/images/search-tools/run-panel.png)
 
 ## 快速上手
 

@@ -32,12 +32,11 @@ export function createSearchToolsSettingsUi(deps) {
         normalizeProvider,
         normalizeWhitespace,
         saveSettingsDebounced,
+        showRunPanel,
         syncSharedLorebookForCurrentChat,
         syncSharedLorebookForLoadedChat,
         world_info_position,
     } = deps;
-
-    let activeAgentRunInfoToast = null;
 
     // Toggle the depth/role input blocks based on the current position
     // select — these settings only apply when position === atDepth
@@ -138,8 +137,6 @@ export function createSearchToolsSettingsUi(deps) {
             <input id="search_tools_include_world_info_with_preset" type="checkbox" />
             ${escapeHtml(i18n('Include world info'))}
         </label>
-        <label for="search_tools_agent_max_rounds">${escapeHtml(i18n('Agent max rounds'))}</label>
-        <input id="search_tools_agent_max_rounds" class="text_pole" type="number" min="1" max="8" step="1" />
         <label for="search_tools_tool_call_retry_max">${escapeHtml(i18n('Tool call retry count'))}</label>
         <input id="search_tools_tool_call_retry_max" class="text_pole" type="number" min="0" max="5" step="1" />
         <label for="search_tools_lorebook_position">${escapeHtml(i18n('Injection position'))}</label>
@@ -166,16 +163,16 @@ export function createSearchToolsSettingsUi(deps) {
         </div>
         <label for="search_tools_lorebook_entry_order">${escapeHtml(i18n('Injection order'))}</label>
         <input id="search_tools_lorebook_entry_order" class="text_pole" type="number" min="0" max="20000" step="1" />
-        <label for="search_tools_agent_system_prompt">${escapeHtml(i18n('Search-stage agent system prompt'))}</label>
+        <label for="search_tools_agent_system_prompt">${escapeHtml(i18n('Agent system prompt'))}</label>
         <textarea id="search_tools_agent_system_prompt" class="text_pole" rows="12"></textarea>
-        <label for="search_tools_agent_final_stage_prompt">${escapeHtml(i18n('Final-stage agent system prompt'))}</label>
-        <textarea id="search_tools_agent_final_stage_prompt" class="text_pole" rows="12"></textarea>
         <div class="flex-container">
-            <div id="search_tools_reset_agent_prompt" class="menu_button menu_button_small">${escapeHtml(i18n('Reset search-stage agent prompt'))}</div>
-            <div id="search_tools_reset_agent_final_stage_prompt" class="menu_button menu_button_small">${escapeHtml(i18n('Reset final-stage agent prompt'))}</div>
+            <div id="search_tools_reset_agent_prompt" class="menu_button menu_button_small">${escapeHtml(i18n('Reset agent prompt'))}</div>
         </div>
         <div class="flex-container" style="margin-top: 8px;">
             <div id="search_tools_manage_entries" class="menu_button menu_button_small">${escapeHtml(i18n('Manage stored search entries'))}</div>
+        </div>
+        <div class="flex-container" style="margin-top: 8px;">
+            <div id="search_tools_show_run_panel" class="menu_button menu_button_small">${escapeHtml(i18n('Show search run panel'))}</div>
         </div>
         <div id="${STATUS_ID}" class="wide100p text_muted" style="margin-top: 8px;"></div>
     </div>
@@ -304,50 +301,6 @@ export function createSearchToolsSettingsUi(deps) {
             return;
         }
         element.text(String(text || ''));
-    }
-
-    function showAgentRunInfoToast(message, { stopLabel = '', onStop = null } = {}) {
-        if (typeof toastr === 'undefined') {
-            return;
-        }
-        if (activeAgentRunInfoToast) {
-            toastr.clear(activeAgentRunInfoToast);
-            activeAgentRunInfoToast = null;
-        }
-        activeAgentRunInfoToast = toastr.info(String(message || ''), '', {
-            timeOut: 0,
-            extendedTimeOut: 0,
-            tapToDismiss: false,
-            closeButton: true,
-            progressBar: false,
-        });
-        if (activeAgentRunInfoToast && typeof onStop === 'function') {
-            const toastBody = activeAgentRunInfoToast.find('.toast-message');
-            if (toastBody.length > 0) {
-                const button = jQuery('<button type="button" class="menu_button menu_button_small luker-toast-stop-button"></button>');
-                button.text(String(stopLabel || i18n('Stop')));
-                button.on('click', (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    button.prop('disabled', true);
-                    const toastElement = button.closest('.toast');
-                    clearAgentRunInfoToast();
-                    if (toastElement && toastElement.length > 0) {
-                        toastElement.remove();
-                    }
-                    onStop();
-                });
-                toastBody.append(button);
-            }
-        }
-    }
-
-    function clearAgentRunInfoToast() {
-        if (typeof toastr === 'undefined' || !activeAgentRunInfoToast) {
-            return;
-        }
-        toastr.clear(activeAgentRunInfoToast);
-        activeAgentRunInfoToast = null;
     }
 
     async function refreshUiStatusForCurrentChat() {
@@ -568,7 +521,6 @@ export function createSearchToolsSettingsUi(deps) {
         root.find('#search_tools_agent_api_preset_name').val(String(settings.agentApiPresetName || ''));
         root.find('#search_tools_agent_preset_name').val(String(settings.agentPresetName || ''));
         root.find('#search_tools_include_world_info_with_preset').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
-        root.find('#search_tools_agent_max_rounds').val(String(settings.agentMaxRounds));
         root.find('#search_tools_tool_call_retry_max').val(String(settings.toolCallRetryMax));
         root.find('#search_tools_lorebook_position').val(String(settings.lorebookPosition));
         root.find('#search_tools_lorebook_depth').val(String(settings.lorebookDepth));
@@ -576,7 +528,6 @@ export function createSearchToolsSettingsUi(deps) {
         root.find('#search_tools_lorebook_entry_order').val(String(settings.lorebookEntryOrder));
         updateLorebookPositionVisibility(root);
         root.find('#search_tools_agent_system_prompt').val(String(settings.agentSystemPrompt || DEFAULT_SETTINGS.agentSystemPrompt));
-        root.find('#search_tools_agent_final_stage_prompt').val(String(settings.agentFinalStagePrompt || DEFAULT_SETTINGS.agentFinalStagePrompt));
 
         root.off('.searchTools');
         root.on('input.searchTools', '#search_tools_enabled', function () {
@@ -646,11 +597,6 @@ export function createSearchToolsSettingsUi(deps) {
             settings.includeWorldInfoWithPreset = Boolean(jQuery(this).prop('checked'));
             saveSettingsDebounced();
         });
-        root.on('change.searchTools', '#search_tools_agent_max_rounds', function () {
-            settings.agentMaxRounds = clampInteger(jQuery(this).val(), 1, 8, DEFAULT_SETTINGS.agentMaxRounds);
-            jQuery(this).val(String(settings.agentMaxRounds));
-            saveSettingsDebounced();
-        });
         root.on('change.searchTools', '#search_tools_tool_call_retry_max', function () {
             settings.toolCallRetryMax = clampInteger(jQuery(this).val(), 0, 5, DEFAULT_SETTINGS.toolCallRetryMax);
             jQuery(this).val(String(settings.toolCallRetryMax));
@@ -685,34 +631,22 @@ export function createSearchToolsSettingsUi(deps) {
             settings.agentSystemPrompt = String(jQuery(this).val() || '').trim() || DEFAULT_SETTINGS.agentSystemPrompt;
             saveSettingsDebounced();
         });
-        root.on('change.searchTools input.searchTools', '#search_tools_agent_final_stage_prompt', function () {
-            settings.agentFinalStagePrompt = String(jQuery(this).val() || '').trim() || DEFAULT_SETTINGS.agentFinalStagePrompt;
-            saveSettingsDebounced();
-        });
         root.on('click.searchTools', '#search_tools_reset_agent_prompt', function () {
-            if (!window.confirm(i18n('Reset search-stage agent prompt to default? This will overwrite the current search-stage system prompt.'))) {
+            if (!window.confirm(i18n('Reset agent prompt to default? This will overwrite the current agent system prompt.'))) {
                 return;
             }
             settings.agentSystemPrompt = DEFAULT_SETTINGS.agentSystemPrompt;
             root.find('#search_tools_agent_system_prompt').val(settings.agentSystemPrompt);
             saveSettingsDebounced();
             if (typeof toastr !== 'undefined') {
-                toastr.success(i18n('Reset search-stage agent prompt'));
-            }
-        });
-        root.on('click.searchTools', '#search_tools_reset_agent_final_stage_prompt', function () {
-            if (!window.confirm(i18n('Reset final-stage agent prompt to default? This will overwrite the current final-stage system prompt.'))) {
-                return;
-            }
-            settings.agentFinalStagePrompt = DEFAULT_SETTINGS.agentFinalStagePrompt;
-            root.find('#search_tools_agent_final_stage_prompt').val(settings.agentFinalStagePrompt);
-            saveSettingsDebounced();
-            if (typeof toastr !== 'undefined') {
-                toastr.success(i18n('Reset final-stage agent prompt'));
+                toastr.success(i18n('Reset agent prompt'));
             }
         });
         root.on('click.searchTools', '#search_tools_manage_entries', function () {
             void openManageEntriesDialog();
+        });
+        root.on('click.searchTools', '#search_tools_show_run_panel', function () {
+            showRunPanel();
         });
     }
 
@@ -733,10 +667,8 @@ export function createSearchToolsSettingsUi(deps) {
 
     return {
         bindSettingsUi,
-        clearAgentRunInfoToast,
         ensureUi,
         refreshUiStatusForCurrentChat,
-        showAgentRunInfoToast,
         updateUiStatus,
     };
 }

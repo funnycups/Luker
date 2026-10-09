@@ -10,6 +10,7 @@
 
 ### 搜索工具
 
+- 将预请求搜索 Agent 改造为工具调用循环，模型停止调用工具时自动结束，新增读取搜索条目的工具，运行过程显示在运行面板中。
 - 新增 Tavily、Exa、Serper、SerpApi、Z.AI 搜索提供方，并将所有提供方统一经由 `/api/search/query` 端点调用，恢复上游原始 HTML 的 `/api/search/searxng` 端点。
 
 ### 请求检查器

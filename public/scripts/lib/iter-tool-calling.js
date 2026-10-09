@@ -178,6 +178,7 @@ export async function requestToolCallsWithRetry(context, settings, {
     abortSignal = null,
     includeAssistantText = false,
     allowNoToolCalls = false,
+    substituteMacros = false,
     onAssistantText = null,
     onToolCall = null,
     onControlCall = null,
@@ -226,17 +227,15 @@ export async function requestToolCallsWithRetry(context, settings, {
                 functionCallOptions: {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
-                // Iter studio popups (CPA / MG schema / Orch / CEA editor)
-                // are EDITING source text that still contains literal
-                // {{user}} / {{char}} / {{getvar::}} macros. The model
-                // must see those source templates verbatim so str_replace
-                // anchors land and the model doesn't "fix" template
-                // placeholders into rendered names. Runtime executors
-                // (orch nodes, MG extraction, preset use in chat) want
-                // macros expanded — they call requestToolCallWithRetry
-                // (singular) instead, which inherits generateTask's
-                // default true.
-                substituteMacros: false,
+                // Default false preserves the iter-studio behavior: CPA /
+                // MG schema / Orch / CEA editor popups are EDITING source
+                // text that still contains literal {{user}} / {{char}} /
+                // {{getvar::}} macros, and the model must see those
+                // templates verbatim so str_replace anchors land rather
+                // than "fixing" placeholders into rendered names. Callers
+                // reading resolved content (e.g. a runtime agent reading
+                // chat text) opt in by passing substituteMacros: true.
+                substituteMacros: Boolean(substituteMacros),
                 abortSignal: attemptSignal,
             };
             // Streaming path (when the caller's preset has stream_openai

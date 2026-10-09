@@ -2,11 +2,8 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
-import {
-    TOOL_PROTOCOL_STYLE,
-    validateParsedToolCalls,
-} from '../function-call-runtime.js';
 import { createSearchToolsSettingsUi } from './settings-ui.js';
+import { createSearchRunPanel } from './run-panel.js';
 import {
     buildLastUserAnchor,
     getPlayableMessageAt,
@@ -30,6 +27,11 @@ import {
     normalizeProviderSettings,
     normalizeSafeSearch,
 } from './providers.js';
+import {
+    appendStandardToolRoundMessages,
+    requestToolCallsWithRetry,
+    serializeToolResultContent,
+} from '/scripts/lib/iter-tool-calling.js';
 
 const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
@@ -68,7 +70,7 @@ const TOOL_NAMES = Object.freeze({
     AGENT_VISIT: 'luker_search_agent_visit',
     AGENT_UPSERT: 'luker_search_agent_upsert_lorebook_entry',
     AGENT_DELETE: 'luker_search_agent_delete_lorebook_entry',
-    AGENT_FINALIZE: 'luker_search_agent_finalize',
+    AGENT_GET: 'luker_search_agent_get_lorebook_entries',
 });
 const EXPORTED_TOOL_NAMES = Object.freeze({
     SEARCH: TOOL_NAMES.SEARCH,
@@ -232,7 +234,7 @@ const DEFAULT_AGENT_SYSTEM_PROMPT = [
     'You are a pre-request web research agent for roleplay generation.',
     'Your job is to decide whether any search-backed lorebook update is necessary before the main generation request continues.',
     'Your first decision is whether this turn actually needs any external research or search-backed lorebook mutation at all.',
-    'If the user is simply continuing an original scene, asking for pure creative writing, or the needed grounding is already covered by active world info, character info, or managed search entries, do not search and do not write new entries. Finalize immediately.',
+    'If the user is simply continuing an original scene, asking for pure creative writing, or the needed grounding is already covered by active world info, character info, or managed search entries, do not search and do not write new entries. Reply with plain text and no tool calls to end the run.',
     'You may finish immediately without searching if active world info, character information, and managed search entries already cover the need.',
     'Search-backed lorebook content must stay strictly faithful to the source text from managed search entries, search results, and visited pages.',
     'Every managed lorebook entry must read like an objective reference note, not like story direction, roleplay guidance, or character writing advice.',
@@ -247,23 +249,23 @@ const DEFAULT_AGENT_SYSTEM_PROMPT = [
     'Search and visit are optional. You may use existing managed search entries as your own database.',
     'If information is uncertain, highly time-sensitive, or search snippets are insufficient, prefer search plus visit before writing.',
     `Keep each response focused. Prefer 1 to 3 new ${TOOL_NAMES.AGENT_SEARCH} calls per response, avoid exceeding 4 unless absolutely necessary, and never spray many near-duplicate searches in one response.`,
-    `Call ${TOOL_NAMES.AGENT_FINALIZE} only when you are ready to end the run.`,
-    `If you call ${TOOL_NAMES.AGENT_SEARCH} or ${TOOL_NAMES.AGENT_VISIT}, do not call ${TOOL_NAMES.AGENT_FINALIZE} in that same response. Wait for tool results first.`,
+    `To update or delete an existing entry, first read it with ${TOOL_NAMES.AGENT_GET} when you need its exact current content, then call ${TOOL_NAMES.AGENT_UPSERT} or ${TOOL_NAMES.AGENT_DELETE} using the exact entry_id shown in the index. Never re-create an entry that already exists — update it by entry_id.`,
     'Only delete entries that are explicitly listed as deletable.',
     'Before any tool calls, output exactly one structured <thought>...</thought> block.',
     'Hard output format for <thought> (must follow exactly this order):',
     '<thought>',
-    '[1] Need gate: state whether there is a real external information gap for this turn. If not, say so explicitly and finalize.',
+    '[1] Need gate: state whether there is a real external information gap for this turn. If not, say so explicitly and stop.',
     '[2] Evidence gate: for every planned write, update, or deletion, name the exact supporting evidence already available from managed entries, search results, or visited pages. If evidence is missing, say no grounded write yet.',
     '[3] Contamination gate: explicitly check whether any planned content is being influenced by plot pressure, current scene momentum, expected next actions, roleplay preference, or your own invention. Remove anything contaminated.',
     '[4] Activation gate: for each planned entry, state constant vs non-constant and why. A non-constant entry is valid only if the latest user input clearly already contains or directly invokes that entry\'s trigger words; quote or name those trigger words explicitly.',
     '[5] Cleanup gate: check whether any existing creative-inspiration constant entry has already served one creation round and is now confirmed unnecessary; if so, delete it.',
-    '[6] Action: choose exactly what to do now: finalize, search, visit, upsert, delete, or a grounded combination allowed by the tool contract.',
+    '[6] Action: choose exactly what to do now: search, visit, read, upsert, delete, or a grounded combination allowed by the tool contract.',
     '</thought>',
     'If the thought block misses any required section above, treat your own response as invalid and regenerate fully.',
     'Use the thought block as a preflight check. If [1] says no real external gap, do not search and do not write.',
     `If fresh evidence is still needed, [6] should choose ${TOOL_NAMES.AGENT_SEARCH} or ${TOOL_NAMES.AGENT_VISIT} only. Do not commit to concrete lorebook writes before the evidence arrives.`,
     'After new search or visit results arrive, run the full gate sequence again from the updated evidence and only then decide concrete entry writes or deletions.',
+    'When you have gathered enough evidence and made every needed lorebook change, reply with plain text and emit no tool calls. That ends the run. There is no separate finalize step.',
     'For lorebook writes, provide only the needed persistent factual content, activation keywords, and whether it should always inject.',
     DEFAULT_LOREBOOK_CONTENT_TEMPLATE_GUIDANCE,
     'Use always-inject entries when the information must stay visible in context continuously without a trigger. This includes always-on rules, core worldbuilding, setting assumptions, power-system rules, social norms, and any entry created to provide creative inspiration, candidate suggestions, or temporary creative reference.',
@@ -275,54 +277,7 @@ const DEFAULT_AGENT_SYSTEM_PROMPT = [
     'Prefer concise declarative fact statements over narrative prose.',
     'When writing lorebook content, preserve source scope and uncertainty instead of upgrading it into stronger claims.',
     'Do not move or redesign lorebook layout. Runtime controls managed entry position/depth/role/order from current settings.',
-    'Outside the single <thought>...</thought> block and tool calls, do not output plain prose.',
-].join('\n');
-
-const DEFAULT_AGENT_FINAL_STAGE_PROMPT = [
-    'You are the final-stage web research agent for roleplay generation.',
-    'This stage exists to finish the pre-request search pass using only evidence already gathered earlier in this run.',
-    `Do not call ${TOOL_NAMES.AGENT_SEARCH} or ${TOOL_NAMES.AGENT_VISIT} in this stage.`,
-    'Use only managed search entries, previous search results, and visited page text already available in the conversation.',
-    'Your first decision is whether any grounded lorebook mutation is still needed at all. If not, finalize immediately.',
-    'Search-backed lorebook content must stay strictly faithful to the source text from managed search entries, search results, and visited pages.',
-    'Every managed lorebook entry must read like an objective reference note, not like story direction, roleplay guidance, or character writing advice.',
-    'Search tools are only for external reference grounding. They are not for inventing lore, repairing thin scene context with creativity, or turning the current plot into fake research-backed notes.',
-    'Treat search output as source material only. Any story-driven adaptation, reinterpretation, dramatization, or extrapolation is out of scope.',
-    'Do not infer or invent character emotions, cognition, motives, intentions, hidden thoughts, relationship shifts, future actions, or plot consequences unless the source explicitly states them.',
-    'Do not write instructions, recommendations, likely reactions, behavioral coaching, tone guidance, scene framing, or any text that tells the main model how to portray a character or continue the story.',
-    'If a source is ambiguous, keep wording neutral or do not write it.',
-    'Never create a managed entry whose content is original, speculative, scene-driven, or unrelated to the gathered search evidence.',
-    'Avoid duplicates. If information would repeat existing active world info, character card facts, or existing managed search entries, do not add it.',
-    'Only delete entries that are explicitly listed as deletable.',
-    'Delete any managed search entries that are no longer needed, outdated for the current chat branch, duplicated, or unsupported by the gathered evidence.',
-    'Do not preserve stale managed search entries just because they already exist.',
-    'Before any tool calls, output exactly one structured <thought>...</thought> block.',
-    'Hard output format for <thought> (must follow exactly this order):',
-    '<thought>',
-    '[1] Need gate: state whether any grounded lorebook mutation is still needed. If not, say so explicitly and finalize.',
-    '[2] Evidence gate: for every planned write, update, or deletion, name the exact supporting evidence already available from managed entries, search results, or visited pages. If evidence is missing, do not write.',
-    '[3] Contamination gate: explicitly check whether any planned content is being influenced by plot pressure, current scene momentum, expected next actions, roleplay preference, or your own invention. Remove anything contaminated.',
-    '[4] Activation gate: for each planned entry, state constant vs non-constant and why. A non-constant entry is valid only if the latest user input clearly already contains or directly invokes that entry\'s trigger words; quote or name those trigger words explicitly.',
-    '[5] Cleanup gate: check whether any existing creative-inspiration constant entry has already served one creation round and is now confirmed unnecessary; if so, delete it.',
-    '[6] Action: choose exactly what to do now: finalize, upsert, delete, or a grounded combination allowed by the tool contract.',
-    '</thought>',
-    'If the thought block misses any required section above, treat your own response as invalid and regenerate fully.',
-    'Use the thought block as a preflight check. If [1] says no grounded mutation is needed, finalize immediately.',
-    'No new evidence will arrive in this stage, so base writes, deletions, and finalization only on evidence already gathered.',
-    'For lorebook writes, provide only the needed persistent factual content, activation keywords, and whether it should always inject.',
-    DEFAULT_LOREBOOK_CONTENT_TEMPLATE_GUIDANCE,
-    'Use always-inject entries when the information must stay visible in context continuously without a trigger. This includes always-on rules, core worldbuilding, setting assumptions, power-system rules, social norms, and any entry created to provide creative inspiration, candidate suggestions, or temporary creative reference.',
-    'For creative-inspiration entries, always set constant / always_inject and include explicit top-level YAML markers `entry_usage: creative_inspiration_constant` and `retention: delete_if_unused_after_one_creation_round` inside the entry.',
-    'After one creation round, if the current chat branch confirms an inspiration constant entry is no longer needed, delete it instead of keeping it.',
-    'Set an entry non-constant only when the latest user input clearly already contains or directly invokes that entry\'s trigger words. That is the only valid reason to rely on keyword activation.',
-    'When using a non-constant entry, choose precise trigger words that match wording already present in the latest user input.',
-    'If the trigger words are not clearly present in the latest user input, do not create a non-constant entry merely because it might become relevant later.',
-    'Prefer concise declarative fact statements over narrative prose.',
-    'When writing lorebook content, preserve source scope and uncertainty instead of upgrading it into stronger claims.',
-    'Outside the single <thought>...</thought> block and tool calls, do not output plain prose.',
-    `If any lorebook change is still needed, do it now and also call ${TOOL_NAMES.AGENT_FINALIZE} in the same response.`,
-    `If no lorebook change is needed, call ${TOOL_NAMES.AGENT_FINALIZE} immediately.`,
-    `Always finish by calling ${TOOL_NAMES.AGENT_FINALIZE}.`,
+    'Outside the single <thought>...</thought> block and tool calls, do not output plain prose except for the final plain-text reply that ends the run.',
 ].join('\n');
 
 function buildDefaultProviderSettings() {
@@ -348,8 +303,6 @@ const DEFAULT_SETTINGS = Object.freeze({
     agentPresetName: '',
     includeWorldInfoWithPreset: true,
     agentSystemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
-    agentFinalStagePrompt: DEFAULT_AGENT_FINAL_STAGE_PROMPT,
-    agentMaxRounds: 3,
     toolCallRetryMax: 2,
     lorebookPosition: world_info_position.atDepth,
     lorebookDepth: 9999,
@@ -373,8 +326,22 @@ let latestSearchAgentSnapshot = null;
 let latestManagedEntries = [];
 let loadedChatStateKey = '';
 
+let searchRunPanel = null;
+
+function initSearchRunPanel() {
+    if (searchRunPanel) {
+        return;
+    }
+    searchRunPanel = createSearchRunPanel({ t: i18nFormat });
+    searchRunPanel.init();
+}
+
 function i18n(text) {
     return translate(String(text || ''));
+}
+
+function i18nFormat(text, ...values) {
+    return i18n(text).replace(/\$\{(\d+)\}/g, (_, index) => String(values[Number(index)] ?? ''));
 }
 
 /**
@@ -489,14 +456,6 @@ function ensureSettings() {
     settings.includeWorldInfoWithPreset = Boolean(settings.includeWorldInfoWithPreset ?? DEFAULT_SETTINGS.includeWorldInfoWithPreset);
     const normalizedAgentSystemPrompt = String(settings.agentSystemPrompt ?? DEFAULT_SETTINGS.agentSystemPrompt).trim();
     settings.agentSystemPrompt = normalizedAgentSystemPrompt || DEFAULT_SETTINGS.agentSystemPrompt;
-    const normalizedAgentFinalStagePrompt = String(settings.agentFinalStagePrompt ?? DEFAULT_SETTINGS.agentFinalStagePrompt).trim();
-    settings.agentFinalStagePrompt = normalizedAgentFinalStagePrompt || DEFAULT_SETTINGS.agentFinalStagePrompt;
-    settings.agentMaxRounds = clampInteger(
-        settings.agentMaxRounds ?? DEFAULT_SETTINGS.agentMaxRounds,
-        1,
-        8,
-        DEFAULT_SETTINGS.agentMaxRounds,
-    );
     settings.toolCallRetryMax = clampInteger(
         settings.toolCallRetryMax ?? DEFAULT_SETTINGS.toolCallRetryMax,
         0,
@@ -658,7 +617,12 @@ function abortActiveSearchAgentRun() {
     if (activeAgentAbortController && !activeAgentAbortController.signal.aborted) {
         activeAgentAbortController.abort();
     }
-    clearAgentRunInfoToast();
+    if (searchRunPanel) {
+        const run = searchRunPanel.store.getCurrentRun();
+        if (run && run.status === 'running') {
+            searchRunPanel.store.finishRun({ runId: run.runId, status: 'aborted' });
+        }
+    }
 }
 
 async function loadSearchToolsChatState(context, { force = false } = {}) {
@@ -994,7 +958,6 @@ function installGlobalApi() {
                 providerSettings: structuredClone(settings.providers || {}),
                 agentApiPresetName: String(settings.agentApiPresetName || ''),
                 agentPresetName: String(settings.agentPresetName || ''),
-                agentMaxRounds: Number(settings.agentMaxRounds || DEFAULT_SETTINGS.agentMaxRounds),
                 lorebookDepth: Number(settings.lorebookDepth || DEFAULT_SETTINGS.lorebookDepth),
                 lorebookRole: Number(settings.lorebookRole || DEFAULT_SETTINGS.lorebookRole),
                 lorebookEntryOrder: Number(settings.lorebookEntryOrder || DEFAULT_SETTINGS.lorebookEntryOrder),
@@ -1171,6 +1134,34 @@ async function buildSearchAgentRuntimeWorldInfo(settings, runtimeWorldInfo) {
     }));
 }
 
+async function resolveAgentRuntimeWorldInfo(context, settings, payload, runtimeWorldInfo) {
+    const includeWorldInfoWithPreset = settings?.includeWorldInfoWithPreset !== false;
+    const presetRuntimeWorldInfo = await buildSearchAgentRuntimeWorldInfo(settings, runtimeWorldInfo);
+    if (
+        includeWorldInfoWithPreset
+        && presetRuntimeWorldInfo === null
+        && Array.isArray(payload?.coreChat)
+        && payload.coreChat.length > 0
+        && typeof context?.resolveWorldInfoForMessages === 'function'
+    ) {
+        try {
+            const resolved = await context.resolveWorldInfoForMessages(payload.coreChat, {
+                type: 'quiet',
+                fallbackToCurrentChat: false,
+                postActivationHook: rewriteDepthWorldInfoToAfter,
+            });
+            return normalizeRuntimeWorldInfo(resolved);
+        } catch (error) {
+            if (isAbortError(error, payload?.signal || null)) {
+                throw error;
+            }
+            console.warn(`[${MODULE_NAME}] World info pre-resolution failed`, error);
+            return {};
+        }
+    }
+    return presetRuntimeWorldInfo === null ? {} : presetRuntimeWorldInfo;
+}
+
 function isAbortSignalLike(signal) {
     return Boolean(signal && typeof signal === 'object' && typeof signal.aborted === 'boolean');
 }
@@ -1238,182 +1229,6 @@ function linkAbortSignals(...signals) {
             }
         },
     };
-}
-
-async function requestToolCallsWithRetry(context, settings, {
-    systemPrompt = '',
-    userPrompt = '',
-    historyMessages = null,
-    worldInfoMessages = null,
-    runtimeWorldInfo = null,
-    forceWorldInfoResimulate = false,
-    worldInfoType = 'quiet',
-    apiPresetName = '',
-    promptPresetName = '',
-    tools = [],
-    allowedNames = null,
-    retriesOverride = null,
-    abortSignal = null,
-} = {}) {
-    if (!Array.isArray(tools) || tools.length === 0) {
-        throw new Error('Tools are required.');
-    }
-
-    const systemText = String(systemPrompt || '').trim() || 'Use tool calls only.';
-    const userText = String(userPrompt || '').trim() || 'Use tool calls only.';
-    const taskMessages = [
-        { role: 'system', content: systemText },
-        ...(Array.isArray(historyMessages) ? historyMessages.map(message => ({ ...message })) : []),
-        { role: 'user', content: userText },
-    ].filter(message => message && message.content !== undefined);
-
-    const customMessages = Array.isArray(worldInfoMessages) ? worldInfoMessages : null;
-    const includeWorldInfoWithPreset = settings?.includeWorldInfoWithPreset !== false;
-    let presetRuntimeWorldInfo = await buildSearchAgentRuntimeWorldInfo(settings, runtimeWorldInfo);
-    if (
-        includeWorldInfoWithPreset
-        && presetRuntimeWorldInfo === null
-        && customMessages
-        && customMessages.length > 0
-        && typeof context?.resolveWorldInfoForMessages === 'function'
-    ) {
-        // No effective WI snapshot yet — resolve from coreChat ourselves so we can apply
-        // the depth-to-after rewrite (generateTask has no postActivationHook seam).
-        try {
-            const resolved = await context.resolveWorldInfoForMessages(customMessages, {
-                type: String(worldInfoType || 'quiet'),
-                fallbackToCurrentChat: false,
-                postActivationHook: rewriteDepthWorldInfoToAfter,
-            });
-            presetRuntimeWorldInfo = normalizeRuntimeWorldInfo(resolved);
-        } catch (error) {
-            if (isAbortError(error, abortSignal)) {
-                throw error;
-            }
-            console.warn(`[${MODULE_NAME}] World info pre-resolution failed`, error);
-            presetRuntimeWorldInfo = {};
-        }
-    }
-    if (presetRuntimeWorldInfo === null) {
-        presetRuntimeWorldInfo = {};
-    }
-
-    const retriesSource = retriesOverride === null || retriesOverride === undefined
-        ? Number(settings?.toolCallRetryMax)
-        : Number(retriesOverride);
-    const retries = Math.max(0, Math.min(10, Math.floor(retriesSource || 0)));
-    let lastError = null;
-
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-        try {
-            throwIfAborted(abortSignal, 'Search agent aborted.');
-            const generateTaskOpts = {
-                taskMessages,
-                includeCharacterCard: true,
-                worldInfoSource: 'none',
-                customWorldInfoMessages: null,
-                runtimeWorldInfo: presetRuntimeWorldInfo,
-                forceWorldInfoResimulate,
-                worldInfoType,
-                apiPresetName: String(apiPresetName || '').trim(),
-                llmPresetName: String(promptPresetName || '').trim(),
-                tools,
-                toolChoice: 'auto',
-                functionCallMode: 'auto',
-                functionCallOptions: {
-                    protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
-                },
-                abortSignal: isAbortSignalLike(abortSignal) ? abortSignal : undefined,
-            };
-            const result = await context.generateTask(generateTaskOpts);
-            throwIfAborted(abortSignal, 'Search agent aborted.');
-            const rawCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-            const normalizedCalls = rawCalls.map(call => ({
-                name: String(call?.name || ''),
-                args: call?.args && typeof call.args === 'object' ? call.args : {},
-                raw: call?.raw || null,
-            }));
-            const filteredCalls = Array.isArray(allowedNames) && allowedNames.length > 0
-                ? normalizedCalls.filter(call => allowedNames.includes(call.name))
-                : normalizedCalls;
-            const validationError = validateParsedToolCalls(filteredCalls, tools);
-            if (validationError) {
-                throw new Error(validationError);
-            }
-            return {
-                toolCalls: filteredCalls,
-                assistantText: String(result?.assistantText || ''),
-            };
-        } catch (error) {
-            if (isAbortError(error, abortSignal)) {
-                throw error;
-            }
-            lastError = error;
-            if (attempt >= retries) {
-                throw error;
-            }
-            console.warn(`[${MODULE_NAME}] Multi tool call request failed. Retrying (${attempt + 1}/${retries})...`, error);
-        }
-    }
-
-    throw lastError || new Error('Multi tool call request failed.');
-}
-
-function makeRuntimeToolCallId() {
-    return `call_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function serializeToolResultContent(result) {
-    if (typeof result === 'string') {
-        return result;
-    }
-    if (result === null || result === undefined) {
-        return '';
-    }
-    try {
-        return JSON.stringify(result, null, 2);
-    } catch {
-        return String(result);
-    }
-}
-
-function appendStandardToolRoundMessages(targetMessages, executedCalls, assistantText = '') {
-    if (!Array.isArray(targetMessages) || !Array.isArray(executedCalls) || executedCalls.length === 0) {
-        return;
-    }
-
-    const toolCalls = executedCalls.map((call) => {
-        const id = String(call?.id || '').trim() || makeRuntimeToolCallId();
-        const name = String(call?.name || '').trim();
-        const args = call?.args && typeof call.args === 'object' ? call.args : {};
-        return {
-            id,
-            type: 'function',
-            function: {
-                name,
-                arguments: JSON.stringify(args),
-            },
-            _result: call?.result,
-        };
-    }).filter(call => call.function.name);
-
-    if (toolCalls.length === 0) {
-        return;
-    }
-
-    targetMessages.push({
-        role: 'assistant',
-        content: String(assistantText || ''),
-        tool_calls: toolCalls.map(({ _result, ...toolCall }) => toolCall),
-    });
-
-    for (const toolCall of toolCalls) {
-        targetMessages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: serializeToolResultContent(toolCall._result),
-        });
-    }
 }
 
 function sanitizeEntryId(value) {
@@ -1832,18 +1647,16 @@ function canReuseLatestSearchAgentSnapshot(chatKey, anchor) {
 }
 
 function buildSearchAgentStatusText(result, { reused = false } = {}) {
-    const summary = result?.summary ? ` ${result.summary}` : '';
     const mutationCount = Math.max(0, Number(result?.mutationCount || 0));
     const managedEntryCount = Math.max(0, Number(result?.managedEntryCount || 0));
     if (reused) {
         return mutationCount
-            ? i18n(`Search agent reused cached lorebook update (${mutationCount} changes, ${managedEntryCount} managed entries).${summary}`)
-            : i18n(`Search agent reused cached result with no lorebook changes (${managedEntryCount} managed entries).${summary}`);
+            ? i18n(`Search agent reused cached lorebook update (${mutationCount} changes, ${managedEntryCount} managed entries).`)
+            : i18n(`Search agent reused cached result with no lorebook changes (${managedEntryCount} managed entries).`);
     }
-
     return mutationCount
-        ? i18n(`Search agent updated lorebook (${mutationCount} changes, ${managedEntryCount} managed entries).${summary}`)
-        : i18n(`Search agent finished with no lorebook changes (${managedEntryCount} managed entries).${summary}`);
+        ? i18n(`Search agent updated lorebook (${mutationCount} changes, ${managedEntryCount} managed entries).`)
+        : i18n(`Search agent finished with no lorebook changes (${managedEntryCount} managed entries).`);
 }
 
 async function storeCompletedSearchAgentSnapshot(context, anchor, result) {
@@ -1863,7 +1676,6 @@ async function storeCompletedSearchAgentSnapshot(context, anchor, result) {
     const nextSnapshot = {
         anchorHash,
         updatedAt: new Date().toISOString(),
-        summary: normalizeWhitespace(result?.summary || ''),
         mutationCount: Math.max(0, Math.floor(Number(result?.mutationCount || 0))),
         managedEntryCount: managedEntries.length,
         bookName: normalizeWhitespace(result?.bookName || ''),
@@ -2031,35 +1843,51 @@ function buildManagedEntryCatalog(entries = []) {
         title: entry.title,
         keywords: entry.keywords,
         always_inject: entry.alwaysInject,
-        disabled: entry.disable,
-        preview: normalizePreviewText(entry.content, 800),
     })), null, 2);
 }
 
-function buildSearchAgentSystemPrompt(basePrompt, finalStagePrompt, { isFinalStage = false } = {}) {
-    const normalizedBasePrompt = String(basePrompt || DEFAULT_AGENT_SYSTEM_PROMPT).trim() || DEFAULT_AGENT_SYSTEM_PROMPT;
-    const normalizedFinalStagePrompt = String(finalStagePrompt || DEFAULT_AGENT_FINAL_STAGE_PROMPT).trim() || DEFAULT_AGENT_FINAL_STAGE_PROMPT;
-    return isFinalStage ? normalizedFinalStagePrompt : normalizedBasePrompt;
+// Read cap mirrors the shared `lorebook_get` DETAIL_LIMIT_MAX
+// (iteration-library/tools/_lorebook-helpers.js) so the agent's per-call
+// payload stays bounded the same way every other lorebook read tool is.
+const MANAGED_ENTRY_READ_LIMIT = 10;
+
+function getManagedEntriesByIds(data, entryIds = []) {
+    const requested = (Array.isArray(entryIds) ? entryIds : [])
+        .map(id => sanitizeEntryId(id))
+        .filter(Boolean)
+        .slice(0, MANAGED_ENTRY_READ_LIMIT);
+    const byId = new Map(listManagedEntries(data).map(entry => [entry.entryId, entry]));
+    const entries = [];
+    const missing_entry_ids = [];
+    for (const id of requested) {
+        const entry = byId.get(id);
+        if (entry) {
+            entries.push({
+                entry_id: entry.entryId,
+                title: entry.title,
+                keywords: entry.keywords,
+                always_inject: entry.alwaysInject,
+                content: entry.content,
+            });
+        } else {
+            missing_entry_ids.push(id);
+        }
+    }
+    return { entries, missing_entry_ids };
 }
 
-function buildSearchAgentUserPrompt(payload, {
-    roundIndex,
-    maxRounds,
-    bookName,
-    managedEntries,
-    isFinalStage = false,
-} = {}) {
+function buildAgentSystemPrompt(settings) {
+    const configured = String(settings?.agentSystemPrompt || '').trim();
+    return configured || DEFAULT_AGENT_SYSTEM_PROMPT;
+}
+
+function buildSearchAgentUserPrompt(payload, { bookName, managedEntries } = {}) {
     const recentChat = buildRecentChatText(payload?.coreChat || []);
     const lastUserMessage = Array.isArray(payload?.coreChat)
         ? [...payload.coreChat].reverse().find(message => message?.is_user)
         : null;
     const userText = normalizeMultilineText(lastUserMessage?.mes || '');
-    const allToolNames = Object.values(TOOL_NAMES).filter(name => name.startsWith('luker_search_agent_'));
-    const finalStageToolNames = [
-        TOOL_NAMES.AGENT_UPSERT,
-        TOOL_NAMES.AGENT_DELETE,
-        TOOL_NAMES.AGENT_FINALIZE,
-    ];
+    const toolNames = Object.values(TOOL_NAMES).filter(name => name.startsWith('luker_search_agent_'));
 
     return [
         '# Search Agent Task',
@@ -2067,13 +1895,12 @@ function buildSearchAgentUserPrompt(payload, {
         `Shared lorebook: ${bookName || '(not created yet)'}.`,
         '',
         'Decide whether persistent search-backed lorebook updates are needed before the main generation continues.',
-        'If there is no meaningful external-reference gap, or the information would repeat active world info / character info / existing managed search entries, call finalize immediately.',
+        'If there is no meaningful external-reference gap, or the information would repeat active world info / character info / existing managed search entries, reply with plain text and no tool calls to end the run.',
         'If this turn is just creative continuation, original scene writing, or a request that does not actually need external grounding, do not search and do not write a managed entry.',
         'You may use existing managed search entries as your own database without searching or visiting.',
-        isFinalStage
-            ? 'This is the mandatory finalization stage. No new searching or visiting is allowed.'
-            : 'Search and visit are optional. Visit is recommended when snippets are weak or the topic is time-sensitive.',
-        'Only delete entry_ids from the managed entry list below.',
+        'Search and visit are optional. Visit is recommended when snippets are weak or the topic is time-sensitive.',
+        'Only delete entry_ids from the managed entry index below.',
+        'To change an existing entry, read it first with the get tool when you need its exact content, then update it by its entry_id.',
         'Delete any managed search entries that are no longer needed, duplicated, outdated for this chat branch, or unsupported by the gathered evidence.',
         'Worldbook entries must be neutral fact records, not plot suggestions or character portrayal guidance.',
         'Do not tell the main model what anyone should feel, think, say, do, or become next.',
@@ -2098,7 +1925,7 @@ function buildSearchAgentUserPrompt(payload, {
         '## Mandatory preflight thought',
         '- Use exactly one <thought>...</thought> block before tool calls.',
         '- The thought block must contain sections [1] Need gate, [2] Evidence gate, [3] Contamination gate, [4] Activation gate, [5] Cleanup gate, [6] Action, in that exact order.',
-        '- If [1] finds no real external-reference need, finalize immediately.',
+        '- If [1] finds no real external-reference need, stop: reply with plain text and no tool calls.',
         '- If [2] cannot name grounded evidence for a planned write, do not upsert it.',
         '- If [3] finds plot-driven or invented material, remove it instead of polishing it.',
         '- In [4], any non-constant entry must explicitly name the trigger words already present in the latest user input.',
@@ -2110,20 +1937,16 @@ function buildSearchAgentUserPrompt(payload, {
         '## Recent chat',
         recentChat,
         '',
-        '## Managed search entries (deletable / updatable)',
+        '## Managed search entries (readable / updatable / deletable)',
         buildManagedEntryCatalog(managedEntries),
         '',
         '## Output contract',
-        `- Use only these function tools: ${(isFinalStage ? finalStageToolNames : allToolNames).join(', ')}`,
-        isFinalStage ? `- Do not call ${TOOL_NAMES.AGENT_SEARCH} or ${TOOL_NAMES.AGENT_VISIT} in this stage.` : null,
-        !isFinalStage ? `- If you call ${TOOL_NAMES.AGENT_SEARCH} or ${TOOL_NAMES.AGENT_VISIT}, do not call ${TOOL_NAMES.AGENT_FINALIZE} in the same response. Wait for the tool results first.` : null,
-        !isFinalStage ? `- Soft limit: prefer 1 to 3 new ${TOOL_NAMES.AGENT_SEARCH} calls in a single response. Avoid exceeding 4 unless absolutely necessary, and never batch many near-duplicate searches in one response.` : null,
-        !isFinalStage ? `- You may use ${TOOL_NAMES.AGENT_SEARCH}/${TOOL_NAMES.AGENT_VISIT} follow-ups across the run before you write or finalize.` : null,
-        isFinalStage ? `- If any lorebook mutation is still needed, do it in this response and also call ${TOOL_NAMES.AGENT_FINALIZE}.` : null,
-        isFinalStage ? `- If no mutation is needed, call ${TOOL_NAMES.AGENT_FINALIZE} immediately.` : null,
-        isFinalStage ? '- Before finalizing, delete any managed search entries that are unnecessary, duplicated, stale for the current chat branch, or not supported by the gathered evidence.' : null,
-        isFinalStage ? `- End with ${TOOL_NAMES.AGENT_FINALIZE}.` : `- Call ${TOOL_NAMES.AGENT_FINALIZE} only when you are done with this run.`,
-        '- Outside the single <thought>...</thought> block and tool calls, do not output plain prose.',
+        `- Use only these function tools: ${toolNames.join(', ')}`,
+        `- If you call ${TOOL_NAMES.AGENT_SEARCH} or ${TOOL_NAMES.AGENT_VISIT}, wait for their results before deciding concrete writes.`,
+        `- Soft limit: prefer 1 to 3 new ${TOOL_NAMES.AGENT_SEARCH} calls in a single response. Avoid exceeding 4 unless absolutely necessary, and never batch many near-duplicate searches in one response.`,
+        '- You may keep calling tools across rounds until you have enough evidence and have made every needed change.',
+        '- To end the run, reply with plain text and emit no tool calls. There is no finalize tool.',
+        '- Outside the single <thought>...</thought> block and tool calls, do not output plain prose except for the final plain-text reply.',
     ].filter(Boolean).join('\n');
 }
 
@@ -2211,13 +2034,17 @@ function buildAgentTools() {
         {
             type: 'function',
             function: {
-                name: TOOL_NAMES.AGENT_FINALIZE,
-                description: `Finish the current search-agent run. Rejected if called in the same response as ${TOOL_NAMES.AGENT_SEARCH} or ${TOOL_NAMES.AGENT_VISIT}.`,
+                name: TOOL_NAMES.AGENT_GET,
+                description: 'Read the full content of managed search lorebook entries by entry_id before deciding whether to update or delete them. Read-only.',
                 parameters: {
                     type: 'object',
                     properties: {
-                        summary: { type: 'string' },
+                        entry_ids: {
+                            type: 'array',
+                            items: { type: 'string' },
+                        },
                     },
+                    required: ['entry_ids'],
                     additionalProperties: false,
                 },
             },
@@ -2263,31 +2090,30 @@ async function flushLorebookChanges(context, payload, bookName, data) {
     return buildRuntimeWorldInfoFromPayload(payload);
 }
 
-async function runPreRequestSearchAgent(context, settings, payload) {
+async function runPreRequestSearchAgent(context, settings, payload, panel = null) {
     throwIfAborted(payload?.signal, 'Search agent aborted.');
     const apiPresetName = String(settings.agentApiPresetName || '').trim();
     const promptPresetName = String(settings.agentPresetName || '').trim();
     const tools = buildAgentTools();
-    const searchRoundCount = Math.max(1, Number(settings.agentMaxRounds) || DEFAULT_SETTINGS.agentMaxRounds);
-    const finalStageTools = tools.filter((tool) => {
-        const name = String(tool?.function?.name || '');
-        return name !== TOOL_NAMES.AGENT_SEARCH && name !== TOOL_NAMES.AGENT_VISIT;
-    });
     const allowedNames = tools.map(tool => tool?.function?.name).filter(Boolean);
-    const finalStageAllowedNames = finalStageTools.map(tool => tool?.function?.name).filter(Boolean);
     const toolHistoryMessages = [];
     let internalRuntimeWorldInfo = buildRuntimeWorldInfoFromPayload(payload);
     let mutationCount = 0;
-    let roundStoppedByFinalize = false;
-    let lastSummary = '';
     let lorebookBookName = '';
     let lorebookData = null;
 
-    for (let phaseIndex = 1; phaseIndex <= searchRoundCount + 1;) {
-        if (payload?.signal?.aborted) {
-            throw Object.assign(new Error('Search agent aborted.'), { name: 'AbortError' });
+    let round = 0;
+    while (true) {
+        throwIfAborted(payload?.signal, 'Search agent aborted.');
+
+        round += 1;
+        let roundId = null;
+        if (panel) {
+            roundId = panel.store.appendRound({
+                runId: panel.runId,
+                round: { id: `round-${round}`, label: i18nFormat('Round ${0}', round) },
+            });
         }
-        const isFinalStage = phaseIndex > searchRoundCount;
 
         if (!lorebookData && !lorebookBookName) {
             const lorebook = await ensureSharedLorebook(context, true);
@@ -2296,39 +2122,53 @@ async function runPreRequestSearchAgent(context, settings, payload) {
             lorebookData = lorebook.data && typeof lorebook.data === 'object' ? lorebook.data : null;
         }
         const managedEntries = listManagedEntries(lorebookData);
+        const systemPrompt = buildAgentSystemPrompt(settings);
+        const userPrompt = buildSearchAgentUserPrompt(payload, {
+            bookName: lorebookBookName,
+            managedEntries,
+        });
+        const taskMessages = [
+            { role: 'system', content: systemPrompt },
+            ...toolHistoryMessages,
+            { role: 'user', content: userPrompt },
+        ];
+        const runtimeWorldInfo = await resolveAgentRuntimeWorldInfo(context, settings, payload, internalRuntimeWorldInfo);
+        throwIfAborted(payload?.signal, 'Search agent aborted.');
+
         const response = await requestToolCallsWithRetry(context, settings, {
-            systemPrompt: buildSearchAgentSystemPrompt(settings.agentSystemPrompt, settings.agentFinalStagePrompt, { isFinalStage }),
-            userPrompt: buildSearchAgentUserPrompt(payload, {
-                roundIndex: phaseIndex,
-                maxRounds: searchRoundCount,
-                bookName: lorebookBookName,
-                managedEntries,
-                isFinalStage,
-            }),
-            historyMessages: toolHistoryMessages,
-            worldInfoMessages: Array.isArray(payload?.coreChat) ? payload.coreChat : [],
-            runtimeWorldInfo: internalRuntimeWorldInfo,
-            forceWorldInfoResimulate: false,
-            worldInfoType: 'quiet',
+            taskMessages,
+            runtimeWorldInfo,
             apiPresetName,
-            promptPresetName,
-            tools: isFinalStage ? finalStageTools : tools,
-            allowedNames: isFinalStage ? finalStageAllowedNames : allowedNames,
+            llmPresetName: promptPresetName,
+            tools,
+            allowedNames,
+            allowNoToolCalls: true,
+            includeAssistantText: true,
+            substituteMacros: true,
+            onUsage: panel ? (usage) => panel.store.addTokenUsage({ runId: panel.runId, usage }) : undefined,
             abortSignal: payload?.signal || null,
         });
         throwIfAborted(payload?.signal, 'Search agent aborted.');
-        const toolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
-        // Fresh source text is only visible to the model on the next round, so same-response finalization must be rejected.
-        const responseHasFreshSourceCalls = !isFinalStage && toolCalls.some((call) => {
-            const callName = String(call?.name || '').trim();
-            return callName === TOOL_NAMES.AGENT_SEARCH || callName === TOOL_NAMES.AGENT_VISIT;
-        });
+        const toolCalls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
+        if (panel && response.reasoning) {
+            panel.store.ensureSection({ runId: panel.runId, roundId, section: { id: 'reasoning', kind: 'reasoning', title: i18n('Reasoning') } });
+            panel.store.appendToSection({ runId: panel.runId, roundId, sectionId: 'reasoning', delta: response.reasoning });
+            panel.store.setSectionStatus({ runId: panel.runId, roundId, sectionId: 'reasoning', status: 'done' });
+        }
+        if (panel && response.assistantText) {
+            panel.store.ensureSection({ runId: panel.runId, roundId, section: { id: 'text', kind: 'text', title: i18n('Response') } });
+            panel.store.appendToSection({ runId: panel.runId, roundId, sectionId: 'text', delta: response.assistantText });
+            panel.store.setSectionStatus({ runId: panel.runId, roundId, sectionId: 'text', status: 'done' });
+        }
+        if (toolCalls.length === 0) {
+            if (panel) {
+                panel.store.setRoundStatus({ runId: panel.runId, roundId, status: 'done' });
+            }
+            break;
+        }
 
         const executedCalls = [];
         let lorebookDirty = false;
-        let shouldFinalize = false;
-        let hasSourceGatheringCalls = false;
-        let hasLorebookMutationCalls = false;
 
         for (const call of toolCalls) {
             throwIfAborted(payload?.signal, 'Search agent aborted.');
@@ -2336,8 +2176,13 @@ async function runPreRequestSearchAgent(context, settings, payload) {
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
             let result = null;
 
+            if (panel) {
+                const callSectionId = `tool-${call.id || callName}`;
+                panel.store.ensureSection({ runId: panel.runId, roundId, section: { id: callSectionId, kind: 'tool_call', title: i18nFormat('Tool: ${0}', callName), meta: { args } } });
+                panel.store.setSectionStatus({ runId: panel.runId, roundId, sectionId: callSectionId, status: 'done' });
+            }
+
             if (callName === TOOL_NAMES.AGENT_SEARCH) {
-                hasSourceGatheringCalls = true;
                 try {
                     result = await searchWeb(args, { abortSignal: payload?.signal || null });
                     throwIfAborted(payload?.signal, 'Search agent aborted.');
@@ -2348,7 +2193,6 @@ async function runPreRequestSearchAgent(context, settings, payload) {
                     result = buildRecoverableToolErrorResult(error, 'Search tool failed.');
                 }
             } else if (callName === TOOL_NAMES.AGENT_VISIT) {
-                hasSourceGatheringCalls = true;
                 try {
                     result = await visitWebPage(args, { abortSignal: payload?.signal || null });
                     throwIfAborted(payload?.signal, 'Search agent aborted.');
@@ -2358,8 +2202,9 @@ async function runPreRequestSearchAgent(context, settings, payload) {
                     }
                     result = buildRecoverableToolErrorResult(error, 'Visit tool failed.');
                 }
+            } else if (callName === TOOL_NAMES.AGENT_GET) {
+                result = getManagedEntriesByIds(lorebookData, args?.entry_ids || []);
             } else if (callName === TOOL_NAMES.AGENT_UPSERT) {
-                hasLorebookMutationCalls = true;
                 if (!lorebookData) {
                     const createdLorebook = await ensureSharedLorebook(context, true);
                     throwIfAborted(payload?.signal, 'Search agent aborted.');
@@ -2374,25 +2219,10 @@ async function runPreRequestSearchAgent(context, settings, payload) {
                     mutationCount += 1;
                 }
             } else if (callName === TOOL_NAMES.AGENT_DELETE) {
-                hasLorebookMutationCalls = true;
                 result = deleteManagedEntries(lorebookData, args?.entry_ids || []);
                 lorebookDirty = lorebookDirty || Boolean(result?.changed);
                 if (result?.changed) {
                     mutationCount += Number(result.deleted?.length || 0);
-                }
-            } else if (callName === TOOL_NAMES.AGENT_FINALIZE) {
-                if (responseHasFreshSourceCalls) {
-                    result = buildRecoverableToolErrorResult(
-                        new Error(`Cannot call ${TOOL_NAMES.AGENT_FINALIZE} in the same response as ${TOOL_NAMES.AGENT_SEARCH} or ${TOOL_NAMES.AGENT_VISIT}. Wait for those tool results first.`),
-                        'Finalize rejected.',
-                    );
-                } else {
-                    lastSummary = normalizeWhitespace(args?.summary || '');
-                    result = {
-                        done: true,
-                        summary: lastSummary,
-                    };
-                    shouldFinalize = true;
                 }
             }
 
@@ -2400,6 +2230,13 @@ async function runPreRequestSearchAgent(context, settings, payload) {
                 ...call,
                 result,
             });
+
+            if (panel) {
+                const resultSectionId = `tool-result-${call.id || callName}`;
+                panel.store.ensureSection({ runId: panel.runId, roundId, section: { id: resultSectionId, kind: 'tool_result', title: i18nFormat('Tool result: ${0}', callName), meta: { ok: result?.ok !== false } } });
+                panel.store.appendToSection({ runId: panel.runId, roundId, sectionId: resultSectionId, delta: serializeToolResultContent(result) });
+                panel.store.setSectionStatus({ runId: panel.runId, roundId, sectionId: resultSectionId, status: 'done' });
+            }
         }
 
         if (lorebookDirty && lorebookBookName && lorebookData) {
@@ -2410,16 +2247,9 @@ async function runPreRequestSearchAgent(context, settings, payload) {
 
         appendStandardToolRoundMessages(toolHistoryMessages, executedCalls, response.assistantText || '');
 
-        if (shouldFinalize) {
-            roundStoppedByFinalize = true;
-            break;
+        if (panel) {
+            panel.store.setRoundStatus({ runId: panel.runId, roundId, status: 'done' });
         }
-
-        if (!isFinalStage && hasSourceGatheringCalls && !hasLorebookMutationCalls) {
-            continue;
-        }
-
-        phaseIndex += 1;
     }
 
     const finalLorebook = lorebookData
@@ -2431,8 +2261,6 @@ async function runPreRequestSearchAgent(context, settings, payload) {
     latestManagedEntries = normalizedManagedEntries;
     return {
         mutationCount,
-        finalized: roundStoppedByFinalize,
-        summary: lastSummary,
         bookName: finalLorebook?.bookName || '',
         managedEntryCount: finalManagedEntries.length,
         managedEntries: normalizedManagedEntries,
@@ -2500,16 +2328,22 @@ async function maybeRunPreRequestSearchAgent(payload) {
         };
     });
 
+    if (searchRunPanel) {
+        const liveRun = searchRunPanel.store.getCurrentRun();
+        if (liveRun && liveRun.status === 'running') {
+            try {
+                searchRunPanel.store.finishRun({ runId: liveRun.runId, status: 'aborted' });
+            } catch (_) { /* best-effort */ }
+        }
+    }
+    const runId = searchRunPanel
+        ? searchRunPanel.store.startRun({ mode: 'search', chatKey, stopFn: () => resolveStopRequest?.() })
+        : null;
+
     updateUiStatus(i18n('Search agent running...'));
-    showAgentRunInfoToast(i18n('Search agent running...'), {
-        stopLabel: i18n('Stop'),
-        onStop: () => {
-            resolveStopRequest?.();
-        },
-    });
 
     try {
-        const agentTask = runPreRequestSearchAgent(context, settings, effectivePayload);
+        const agentTask = runPreRequestSearchAgent(context, settings, effectivePayload, runId ? { store: searchRunPanel.store, runId } : null);
         void agentTask.catch((error) => {
             if (!stopRequestedByUser) {
                 return;
@@ -2525,6 +2359,7 @@ async function maybeRunPreRequestSearchAgent(payload) {
         if (raced?.stopped) {
             syncMutableGenerationPayloadState(payload, effectivePayload);
             updateUiStatus(i18n('Search agent aborted.'));
+            searchRunPanel?.store.finishRun({ runId, status: 'aborted' });
             return;
         }
         syncMutableGenerationPayloadState(payload, effectivePayload);
@@ -2535,6 +2370,7 @@ async function maybeRunPreRequestSearchAgent(payload) {
         throwIfAborted(effectivePayload?.signal, 'Search agent aborted.');
         await storeCompletedSearchAgentSnapshot(context, anchor, result);
         updateUiStatus(buildSearchAgentStatusText(result));
+        searchRunPanel?.store.finishRun({ runId, status: 'committed' });
     } catch (error) {
         syncMutableGenerationPayloadState(payload, effectivePayload);
         if (runToken !== activeAgentRunToken) {
@@ -2542,6 +2378,7 @@ async function maybeRunPreRequestSearchAgent(payload) {
         }
         if (isAbortError(error, effectivePayload?.signal || null)) {
             updateUiStatus(i18n('Search agent aborted.'));
+            searchRunPanel?.store.finishRun({ runId, status: 'aborted' });
             return;
         }
         console.warn(`[${MODULE_NAME}] Pre-request search agent failed`, error);
@@ -2561,13 +2398,11 @@ async function maybeRunPreRequestSearchAgent(payload) {
         } else {
             updateUiStatus(i18n('Search agent failed. Check console for details.'));
         }
+        searchRunPanel?.store.finishRun({ runId, status: 'error', error: String(error?.message || error) });
     } finally {
         linkedAbort.cleanup();
         if (activeAgentAbortController === pluginAbortController) {
             activeAgentAbortController = null;
-        }
-        if (runToken === activeAgentRunToken) {
-            clearAgentRunInfoToast();
         }
     }
 }
@@ -2595,7 +2430,6 @@ function registerLocaleData() {
         'Agent API preset (Connection profile)': 'Agent API 预设',
         'Agent preset (params + prompt)': 'Agent 预设',
         'Include world info': '包含世界书信息',
-        'Agent max rounds': 'Agent 最大轮数',
         'Tool call retry count': '工具调用重试次数',
         'Injection position': '注入位置',
         'Before Character Definitions': '角色定义前',
@@ -2608,12 +2442,9 @@ function registerLocaleData() {
         'Injection depth': '注入深度',
         'Injection role': '注入角色',
         'Injection order': '注入顺序',
-        'Search-stage agent system prompt': '搜索阶段 Agent 系统提示词',
-        'Final-stage agent system prompt': '最终阶段 Agent 系统提示词',
-        'Reset search-stage agent prompt': '重置搜索阶段 Agent 提示词',
-        'Reset final-stage agent prompt': '重置最终阶段 Agent 提示词',
-        'Reset search-stage agent prompt to default? This will overwrite the current search-stage system prompt.': '确认重置搜索阶段 Agent 提示词为默认值？这会覆盖当前搜索阶段系统提示词。',
-        'Reset final-stage agent prompt to default? This will overwrite the current final-stage system prompt.': '确认重置最终阶段 Agent 提示词为默认值？这会覆盖当前最终阶段系统提示词。',
+        'Agent system prompt': 'Agent 系统提示词',
+        'Reset agent prompt': '重置 Agent 提示词',
+        'Reset agent prompt to default? This will overwrite the current agent system prompt.': '确认重置 Agent 提示词为默认值？这会覆盖当前 Agent 系统提示词。',
         'System': '系统',
         'User': '用户',
         'Assistant': '助手',
@@ -2691,6 +2522,13 @@ function registerLocaleData() {
         'Past week': '过去一周',
         'Past month': '过去一月',
         'Past year': '过去一年',
+        'Show search run panel': '显示搜索运行面板',
+        'Search': '搜索',
+        'Reasoning': '思考',
+        'Response': '响应',
+        'Tool: ${0}': '工具：${0}',
+        'Tool result: ${0}': '工具结果：${0}',
+        'Round ${0}': '第 ${0} 轮',
     });
 
     addLocaleData('zh-tw', {
@@ -2715,7 +2553,6 @@ function registerLocaleData() {
         'Agent API preset (Connection profile)': 'Agent API 預設',
         'Agent preset (params + prompt)': 'Agent 預設',
         'Include world info': '包含世界書資訊',
-        'Agent max rounds': 'Agent 最大輪數',
         'Tool call retry count': '工具呼叫重試次數',
         'Injection position': '注入位置',
         'Before Character Definitions': '角色定義前',
@@ -2728,12 +2565,9 @@ function registerLocaleData() {
         'Injection depth': '注入深度',
         'Injection role': '注入角色',
         'Injection order': '注入順序',
-        'Search-stage agent system prompt': '搜尋階段 Agent 系統提示詞',
-        'Final-stage agent system prompt': '最終階段 Agent 系統提示詞',
-        'Reset search-stage agent prompt': '重置搜尋階段 Agent 提示詞',
-        'Reset final-stage agent prompt': '重置最終階段 Agent 提示詞',
-        'Reset search-stage agent prompt to default? This will overwrite the current search-stage system prompt.': '確認重置搜尋階段 Agent 提示詞為預設值？這會覆蓋目前搜尋階段系統提示詞。',
-        'Reset final-stage agent prompt to default? This will overwrite the current final-stage system prompt.': '確認重置最終階段 Agent 提示詞為預設值？這會覆蓋目前最終階段系統提示詞。',
+        'Agent system prompt': 'Agent 系統提示詞',
+        'Reset agent prompt': '重置 Agent 提示詞',
+        'Reset agent prompt to default? This will overwrite the current agent system prompt.': '確認重置 Agent 提示詞為預設值？這會覆蓋目前 Agent 系統提示詞。',
         'System': '系統',
         'User': '使用者',
         'Assistant': '助手',
@@ -2811,14 +2645,19 @@ function registerLocaleData() {
         'Past week': '過去一週',
         'Past month': '過去一月',
         'Past year': '過去一年',
+        'Show search run panel': '顯示搜尋執行面板',
+        'Search': '搜尋',
+        'Reasoning': '思考',
+        'Response': '回應',
+        'Tool: ${0}': '工具：${0}',
+        'Tool result: ${0}': '工具結果：${0}',
+        'Round ${0}': '第 ${0} 輪',
     });
 }
 
 const {
-    clearAgentRunInfoToast,
     ensureUi,
     refreshUiStatusForCurrentChat,
-    showAgentRunInfoToast,
     updateUiStatus,
 } = createSearchToolsSettingsUi({
     DEFAULT_SETTINGS,
@@ -2853,6 +2692,7 @@ const {
     normalizeSafeSearch,
     normalizeWhitespace,
     saveSettingsDebounced,
+    showRunPanel: () => searchRunPanel?.open(),
     syncSharedLorebookForCurrentChat,
     syncSharedLorebookForLoadedChat,
     world_info_position,
@@ -2861,6 +2701,7 @@ const {
 jQuery(() => {
     ensureSettings();
     registerLocaleData();
+    initSearchRunPanel();
     installGlobalApi();
 
     const context = getContext();
@@ -2943,3 +2784,12 @@ jQuery(() => {
         });
     }
 });
+
+export {
+    buildAgentTools,
+    buildManagedEntryCatalog,
+    DEFAULT_SETTINGS,
+    getManagedEntriesByIds,
+    runPreRequestSearchAgent,
+    TOOL_NAMES,
+};

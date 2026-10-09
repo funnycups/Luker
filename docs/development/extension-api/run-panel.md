@@ -7,6 +7,9 @@ A reusable, in-memory run trace for any plugin that runs a multi-step LLM task. 
 The shared layer lives in `public/scripts/run-panel/` and is exposed as `runPanel` on the Luker context. In-tree consumers:
 
 - Orchestrator — `public/scripts/extensions/orchestrator/run-panel/panel.js`
+- Search Tools — `public/scripts/extensions/search-tools/run-panel.js`
+
+![Search agent run in the shared panel](/images/search-tools/run-panel.png)
 
 ## Quick start
 

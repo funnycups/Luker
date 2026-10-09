@@ -61,9 +61,12 @@ Before the creative LLM generates a response, an independent search Agent runs a
 
 - Enabled via the `preRequestEnabled` configuration option
 - The Agent uses independent LLM presets (`agentPresetName`) and API presets (`agentApiPresetName`), which can use different models from the creative LLM
-- Agent maximum execution rounds are controlled by `agentMaxRounds`
+- The Agent runs a tool-call loop: it keeps calling tools while it still needs to research or write, and stops as soon as it replies with plain text and no tool calls. There is no fixed round limit
+- The Agent can read back, update, and delete the entries it created, so it revises existing notes instead of duplicating them
 - Search results are automatically created as World Info entries that the creative LLM can directly read during generation
-- Supports stopping Agent execution via the Stop button on toast notifications
+- The run streams into the [Run Panel](/development/extension-api/run-panel), which opens automatically and shows each round, the tools called, and their results
+
+![Pre-request search agent run in the run panel](/images/search-tools/run-panel.png)
 
 ::: tip Choosing Between Modes
 **Tool Mode** is suitable for scenarios where the model needs to autonomously decide when to search during conversation — for example, when a user asks "What's in the news lately?" the model will automatically call the search tool to get information. Search behavior is autonomously triggered by the model based on conversation content.
@@ -77,7 +80,7 @@ All search plugin configuration lives under the "Search Tools" subsection of the
 
 ![Search Tools settings panel](/images/search-tools/search-tools-settings.png)
 
-The top toggles map to the modes above ("Expose tools to main model" = Tool Mode, "Run search agent before requests" = Pre-request Agent Mode); they can be enabled independently or together. Below them are engine selection, agent-only presets, and World Info entry injection parameters.
+The top toggles map to the modes above ("Expose tools to main model" = Tool Mode, "Run search agent before requests" = Pre-request Agent Mode); they can be enabled independently or together. Below them are engine selection, agent-only presets, and World Info entry injection parameters. The **Show search run panel** button reopens the last run.
 
 ## Supported Search Engines
 
@@ -178,7 +181,6 @@ The search plugin monitors message deletion and editing events, automatically ma
 | Safe Search | Safety filtering level for search results |
 | Agent API Preset | API connection preset for the pre-request Agent (empty uses main connection) |
 | Agent Preset | Preset for the pre-request Agent (empty uses main preset) |
-| Agent Max Rounds | Maximum search rounds for the pre-request Agent |
 
 ::: info Related Pages
 - [Character Card Editor Assistant](/features/card-editor/) — Editor assistant overview (shared capabilities and entry points)

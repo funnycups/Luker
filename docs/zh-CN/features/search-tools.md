@@ -61,9 +61,12 @@ AGENT: "预请求 Agent 模式" {
 
 - 通过 `preRequestEnabled` 配置项开启
 - Agent 使用独立的 LLM 预设（`agentPresetName`）和 API 预设（`agentApiPresetName`），可以与创作 LLM 使用不同的模型
-- Agent 最大执行轮次由 `agentMaxRounds` 控制
+- Agent 运行工具调用循环：只要仍需要检索或写入就持续调用工具，回复纯文本且不调用工具时即停止。没有固定轮次上限
+- Agent 可以回读、更新和删除自己创建的条目，因此会修改已有笔记而非重复创建
 - 搜索结果自动创建为世界书条目，创作 LLM 在生成时可以直接读取
-- 支持通过 toast 通知上的 Stop 按钮中止 Agent 执行
+- 运行过程流式显示在[运行面板](/zh-CN/development/extension-api/run-panel)中，该面板自动打开，显示每一轮、调用的工具及其结果
+
+![预请求搜索 Agent 在运行面板中的运行](/images/search-tools/run-panel.png)
 
 ::: tip 模式的选择
 **工具模式**适合需要模型在对话中自主决定何时搜索的场景——例如用户问「最近有什么新闻」时，模型会自动调用搜索工具获取信息。搜索行为由模型根据对话内容自主触发。
@@ -77,7 +80,7 @@ AGENT: "预请求 Agent 模式" {
 
 ![搜索工具设置面板](/images/search-tools/search-tools-settings.png)
 
-顶部开关分别对应上文的模式（「暴露工具给主模型」= 工具模式，「请求前运行搜索 Agent」= 预请求 Agent 模式），可以单独或同时启用。下方是引擎选择、Agent 专用预设、世界书条目注入参数等。
+顶部开关分别对应上文的模式（「暴露工具给主模型」= 工具模式，「请求前运行搜索 Agent」= 预请求 Agent 模式），可以单独或同时启用。下方是引擎选择、Agent 专用预设、世界书条目注入参数等。「显示搜索运行面板」按钮可重新打开上次运行。
 
 ## 支持的搜索引擎
 
@@ -178,7 +181,6 @@ if (api) {
 | 安全搜索 | 搜索结果的安全过滤级别 |
 | Agent API 预设 | 预请求 Agent 使用的 API 连接预设（空值使用主连接） |
 | Agent 预设 | 预请求 Agent 使用的预设（空值使用主预设） |
-| Agent 最大轮次 | 预请求 Agent 的最大搜索轮次 |
 
 ::: info 相关页面
 - [角色卡编辑助手](/zh-CN/features/card-editor/) — 编辑助手概览（公共能力与入口）

@@ -10,6 +10,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Search Tools
 
+- Reworked the pre-request search agent into a tool-call loop that ends when it stops calling tools, added a read tool for managed entries, and showed the run in the run panel.
 - Added Tavily, Exa, Serper, SerpApi, and Z.AI as search providers and routed every provider through a unified `/api/search/query` endpoint, restoring the upstream raw-HTML `/api/search/searxng` endpoint.
 
 ### Request Inspector
