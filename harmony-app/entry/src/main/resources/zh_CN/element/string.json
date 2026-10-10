@@ -15,6 +15,8 @@
     { "name": "export_failed", "value": "导出失败：%s" },
     { "name": "no_crash_report", "value": "暂无崩溃报告" },
     { "name": "keepalive_notification_title", "value": "Luker 正在生成回复" },
-    { "name": "keepalive_notification_text", "value": "已用时 %s" }
+    { "name": "keepalive_notification_text", "value": "已用时 %s" },
+    { "name": "download_saved", "value": "文件已保存" },
+    { "name": "download_failed", "value": "下载失败" }
   ]
 }

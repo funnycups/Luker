@@ -1,5 +1,6 @@
 import { webview } from '@kit.ArkWeb';
 import { common } from '@kit.AbilityKit';
+import { picker, fileIo } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import http from '@ohos.net.http';
 import { getBackendStatus } from 'libnode_ctl.so';
@@ -27,6 +28,7 @@ struct Index {
   @State statusMessage: string = '';
   private exporting: boolean = false;
   private crashDialogDone: boolean = false;
+  private saveTargets: Map<string, string> = new Map<string, string>();
 
   aboutToAppear(): void {
     this.statusMessage = this.res($r('app.string.starting_engine').id, '0s');
@@ -161,6 +163,85 @@ struct Index {
     return new Promise<void>((resolve) => setTimeout(() => resolve(), ms));
   }
 
+  /**
+   * Routes page-initiated downloads (the frontend saves backups and exports by
+   * clicking an `<a download>` on a blob/data URL) through the ArkWeb download
+   * delegate. Without it the download is silently dropped and no save dialog
+   * appears. The delegate must be set once the controller is attached to the
+   * Web component.
+   */
+  private setupDownloads(): void {
+    const delegate = new webview.WebDownloadDelegate();
+    const context = getContext(this) as common.UIAbilityContext;
+    delegate.onBeforeDownload((item: webview.WebDownloadItem) => {
+      const fileName: string = item.getSuggestedFileName() || 'luker-download';
+      // The download stays PENDING until start() is called, so it is safe to
+      // await the picker first.
+      this.pickSavePath(fileName).then((targetUri: string) => {
+        if (targetUri.length === 0) {
+          item.cancel();
+          return;
+        }
+        this.saveTargets.set(item.getGuid(), targetUri);
+        // Download into the app cache, then copy to the user-picked location:
+        // ArkWeb always may write its own sandbox, while the picked URI is
+        // written through the fd opened with the picker's grant.
+        item.start(`${context.cacheDir}/${fileName}`);
+      }).catch((e: object) => {
+        hilog.error(DOMAIN, TAG, 'download save path failed: %{public}s', JSON.stringify(e));
+        item.cancel();
+      });
+    });
+    delegate.onDownloadFinish((item: webview.WebDownloadItem) => {
+      const targetUri: string = this.saveTargets.get(item.getGuid()) ?? '';
+      this.saveTargets.delete(item.getGuid());
+      if (targetUri.length === 0) {
+        return;
+      }
+      this.copyToUserPath(item.getFullPath(), targetUri);
+    });
+    delegate.onDownloadFailed((item: webview.WebDownloadItem) => {
+      this.saveTargets.delete(item.getGuid());
+      hilog.error(DOMAIN, TAG, 'download failed: %{public}d', item.getLastErrorCode());
+      promptAction.showToast({ message: this.res($r('app.string.download_failed').id) });
+    });
+    try {
+      this.controller.setDownloadDelegate(delegate);
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'setDownloadDelegate failed: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  private async pickSavePath(fileName: string): Promise<string> {
+    const context = getContext(this) as common.UIAbilityContext;
+    const options = new picker.DocumentSaveOptions();
+    options.newFileNames = [fileName];
+    const result: Array<string> = await new picker.DocumentViewPicker(context).save(options);
+    if (result.length === 0 || !result[0]) {
+      return '';
+    }
+    return result[0];
+  }
+
+  private async copyToUserPath(sourcePath: string, targetUri: string): Promise<void> {
+    try {
+      const src = fileIo.openSync(sourcePath, fileIo.OpenMode.READ_ONLY);
+      const dst = fileIo.openSync(targetUri, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
+      await fileIo.copyFile(src.fd, dst.fd);
+      fileIo.closeSync(src);
+      fileIo.closeSync(dst);
+      try {
+        fileIo.unlinkSync(sourcePath);
+      } catch {
+        // best effort
+      }
+      promptAction.showToast({ message: this.res($r('app.string.download_saved').id) });
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'download copy failed: %{public}s', JSON.stringify(e));
+      promptAction.showToast({ message: this.res($r('app.string.download_failed').id) });
+    }
+  }
+
   build() {
     Stack() {
       Web({ src: $rawfile('loading.html'), controller: this.controller })
@@ -173,6 +254,9 @@ struct Index {
           name: 'LukerHarmony',
           methodList: ['setGenerationActive'],
           controller: this.controller
+        })
+        .onControllerAttached(() => {
+          this.setupDownloads();
         })
         // A reload or renderer exit drops the page's generation state, so the
         // native flag must not outlive it.
