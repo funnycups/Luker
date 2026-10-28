@@ -189,20 +189,30 @@ describe('dispatchXai', () => {
             expect(wireBody(ctx).reasoning_effort).toBe('low');
         });
 
-        test('high and xhigh collapse to high', async () => {
+        test('high and xhigh pass through', async () => {
             for (const effort of ['high', 'xhigh']) {
                 const ctx = fakeCtx({ body: { reasoning_effort: effort } });
                 await dispatchXai(ctx);
-                expect(wireBody(ctx).reasoning_effort).toBe('high');
+                expect(wireBody(ctx).reasoning_effort).toBe(effort);
             }
         });
 
-        test('minimal and medium collapse to low', async () => {
-            for (const effort of ['minimal', 'medium']) {
-                const ctx = fakeCtx({ body: { reasoning_effort: effort } });
-                await dispatchXai(ctx);
-                expect(wireBody(ctx).reasoning_effort).toBe('low');
-            }
+        test('medium passes through', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'medium' } });
+            await dispatchXai(ctx);
+            expect(wireBody(ctx).reasoning_effort).toBe('medium');
+        });
+
+        test('minimal falls back to low', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'minimal' } });
+            await dispatchXai(ctx);
+            expect(wireBody(ctx).reasoning_effort).toBe('low');
+        });
+
+        test('max falls back to xhigh', async () => {
+            const ctx = fakeCtx({ body: { reasoning_effort: 'max' } });
+            await dispatchXai(ctx);
+            expect(wireBody(ctx).reasoning_effort).toBe('xhigh');
         });
     });
 });

@@ -454,6 +454,12 @@ describe('dispatchMakerSuite', () => {
             expect(thinkingConfigFromCtx(ctx).thinkingLevel).toBe('low');
         });
 
+        test('gemini-3.1-pro + medium → thinkingLevel === medium', async () => {
+            const ctx = fakeCtx({ body: { model: 'gemini-3.1-pro', reasoning_effort: 'medium' } });
+            await dispatchMakerSuite(ctx);
+            expect(thinkingConfigFromCtx(ctx).thinkingLevel).toBe('medium');
+        });
+
         test('path-prefixed gemini-3-pro + off → thinkingLevel === low (family match tolerates prefix)', async () => {
             const ctx = fakeCtx({ body: { model: 'publishers/google/models/gemini-3-pro', reasoning_effort: 'off' } });
             await dispatchMakerSuite(ctx);

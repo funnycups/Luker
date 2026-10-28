@@ -390,11 +390,29 @@ describe('dispatchClaude', () => {
             expect(sent.thinking).toEqual({ type: 'disabled' });
         });
 
-        test('opus-5 max clamps effort to high with adaptive thinking', async () => {
+        test('opus-5 max sends max with adaptive thinking', async () => {
             const { sent } = await send({ model: 'claude-opus-5', reasoning_effort: 'max' });
             expect(sent.thinking?.type).not.toBe('disabled');
             expect(sent.thinking).toEqual({ type: 'adaptive' });
-            expect(sent.output_config?.effort).toBe('high');
+            expect(sent.output_config?.effort).toBe('max');
+        });
+
+        test('opus-5-5 max sends max', async () => {
+            const { sent } = await send({ model: 'claude-opus-5-5', reasoning_effort: 'max' });
+            expect(sent.thinking).toEqual({ type: 'adaptive' });
+            expect(sent.output_config?.effort).toBe('max');
+        });
+
+        test('opus-5-5 xhigh sends xhigh', async () => {
+            const { sent } = await send({ model: 'claude-opus-5-5', reasoning_effort: 'xhigh' });
+            expect(sent.thinking).toEqual({ type: 'adaptive' });
+            expect(sent.output_config?.effort).toBe('xhigh');
+        });
+
+        test('sonnet-5-5 max sends max', async () => {
+            const { sent } = await send({ model: 'claude-sonnet-5-5', reasoning_effort: 'max' });
+            expect(sent.thinking).toEqual({ type: 'adaptive' });
+            expect(sent.output_config?.effort).toBe('max');
         });
 
         test('opus-4-5 minimal uses extended thinking with 1024 budget', async () => {
@@ -440,10 +458,16 @@ describe('dispatchClaude', () => {
             expect(sent.thinking?.budget_tokens).toBeUndefined();
         });
 
-        test('haiku-5-5 max clamps adaptive effort to high', async () => {
+        test('haiku-5-5 max sends max', async () => {
             const { sent } = await send({ model: 'claude-haiku-5-5', reasoning_effort: 'max' });
             expect(sent.thinking).toEqual({ type: 'adaptive' });
-            expect(sent.output_config?.effort).toBe('high');
+            expect(sent.output_config?.effort).toBe('max');
+        });
+
+        test('haiku-5-5 xhigh sends xhigh', async () => {
+            const { sent } = await send({ model: 'claude-haiku-5-5', reasoning_effort: 'xhigh' });
+            expect(sent.thinking).toEqual({ type: 'adaptive' });
+            expect(sent.output_config?.effort).toBe('xhigh');
         });
 
         test('legacy min token maps to minimal on an extended-thinking model', async () => {

@@ -242,6 +242,10 @@ describe('calculateGoogleBudgetTokens', () => {
         test('max returns high', () => expect(mod.calculateGoogleBudgetTokens(8192, 'max', 'gemini-3.0-pro')).toBe('high'));
     });
 
+    describe('gemini-3.1 pro', () => {
+        test('medium returns medium', () => expect(mod.calculateGoogleBudgetTokens(8192, 'medium', 'gemini-3.1-pro')).toBe('medium'));
+    });
+
     describe('gemini-4', () => {
         test('auto returns null', () => expect(mod.calculateGoogleBudgetTokens(8192, 'auto', 'gemini-4-argon')).toBeNull());
 

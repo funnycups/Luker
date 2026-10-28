@@ -69,9 +69,10 @@ export async function dispatchXai(ctx) {
 
         const xaiToken = normalizeReasoningToken(body.reasoning_effort);
         if (xaiToken !== 'auto' && xaiToken !== 'off') {
-            // xAI only accepts 'high' or 'low'; every lower bucket collapses to
-            // 'low' and 'xhigh' collapses to 'high'.
-            bodyParams.reasoning_effort = xaiToken === 'high' || xaiToken === 'xhigh' ? 'high' : 'low';
+            // xAI accepts low/medium/high/xhigh; grok-4.5 treats xhigh as high.
+            // Minimal has no equivalent and max is represented by the highest level.
+            const xaiEffort = { minimal: 'low', max: 'xhigh' }[xaiToken] ?? xaiToken;
+            bodyParams.reasoning_effort = xaiEffort;
         }
 
         if (body.json_schema) {

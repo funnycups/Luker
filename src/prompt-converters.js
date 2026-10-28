@@ -1392,6 +1392,8 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
     }
 
     function getGemini3ProBudget() {
+        // Gemini 3.0 Pro only has low/high; 3.1+ adds medium.
+        const supportsMedium = /gemini-3\.[1-9]\d*-pro/.test(model);
         switch (reasoningEffort) {
             case REASONING_EFFORT.auto:
                 return null;
@@ -1401,7 +1403,7 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
             case REASONING_EFFORT.low:
                 return 'low';
             case REASONING_EFFORT.medium:
-                return 'low';
+                return supportsMedium ? 'medium' : 'low';
             case REASONING_EFFORT.high:
                 return 'high';
             case REASONING_EFFORT.max:
