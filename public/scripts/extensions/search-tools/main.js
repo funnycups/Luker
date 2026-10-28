@@ -1905,6 +1905,23 @@ function updatePayloadWorldInfoFromResolution(payload, resolution) {
     payload.worldInfoResolution = resolution;
 }
 
+async function commitSearchAgentEntries(context, anchor, lorebookData) {
+    const playableFloor = normalizeAnchorPlayableFloor(anchor?.playableFloor);
+    const entries = normalizeStoredManagedEntries(listManagedEntries(lorebookData));
+    // Keep the in-memory projection aligned with the live world book even if
+    // the floor-state write fails; the next sync should not treat entries
+    // that were already written as absent.
+    latestManagedEntries = entries;
+    if (!playableFloor) {
+        return null;
+    }
+    const commitResult = await commitManagedEntries(context, { playableFloor }, entries);
+    if (!commitResult?.ok) {
+        console.warn(`[search-tools] partial floor-state commit failed (reason=${commitResult?.reason}, hint=${commitResult?.hint})`);
+    }
+    return commitResult;
+}
+
 async function flushLorebookChanges(context, payload, bookName, data) {
     await context.saveWorldInfo(bookName, data, true, { refreshEditor: true });
     if (String(bookName || '').trim() === SHARED_LOREBOOK_NAME) {
@@ -1919,10 +1936,11 @@ async function flushLorebookChanges(context, payload, bookName, data) {
     return buildRuntimeWorldInfoFromPayload(payload);
 }
 
-async function runPreRequestSearchAgent(context, settings, payload, panel = null) {
+async function runPreRequestSearchAgent(context, settings, payload, panel = null, { anchor = null } = {}) {
     throwIfAborted(payload?.signal, 'Search agent aborted.');
     const apiPresetName = String(settings.agentApiPresetName || '').trim();
     const promptPresetName = String(settings.agentPresetName || '').trim();
+    const runAnchor = anchor || buildLastUserAnchor(context, payload?.coreChat);
     const tools = buildAgentTools();
     const allowedNames = tools.map(tool => tool?.function?.name).filter(Boolean);
     const toolHistoryMessages = [];
@@ -2072,6 +2090,8 @@ async function runPreRequestSearchAgent(context, settings, payload, panel = null
             throwIfAborted(payload?.signal, 'Search agent aborted.');
             internalRuntimeWorldInfo = await flushLorebookChanges(context, payload, lorebookBookName, lorebookData);
             throwIfAborted(payload?.signal, 'Search agent aborted.');
+            await commitSearchAgentEntries(context, runAnchor, lorebookData);
+            throwIfAborted(payload?.signal, 'Search agent aborted.');
         }
 
         appendStandardToolRoundMessages(toolHistoryMessages, executedCalls, response.assistantText || '');
@@ -2172,7 +2192,7 @@ async function maybeRunPreRequestSearchAgent(payload) {
     updateUiStatus(i18n('Search agent running...'));
 
     try {
-        const agentTask = runPreRequestSearchAgent(context, settings, effectivePayload, runId ? { store: searchRunPanel.store, runId } : null);
+        const agentTask = runPreRequestSearchAgent(context, settings, effectivePayload, runId ? { store: searchRunPanel.store, runId } : null, { anchor });
         void agentTask.catch((error) => {
             if (!stopRequestedByUser) {
                 return;
