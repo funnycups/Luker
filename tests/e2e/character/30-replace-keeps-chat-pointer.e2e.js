@@ -346,9 +346,9 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
                 await route.continue();
             });
             let refreshRequests = 0;
-            await page.route('**/api/characters/get', async route => {
+            await page.route('**/api/characters/fields*', async route => {
                 refreshRequests++;
-                if (refreshRequests === 2) {
+                if (refreshRequests === 1) {
                     await route.fulfill({
                         status: 200,
                         contentType: 'application/json',
@@ -364,7 +364,7 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
                 .toBeVisible({ timeout: 20_000 });
             await cancelReplaceChoicePopup(page);
             expect(droppedPointerWrites, 'the pointer persist write was actually dropped once').toBe(1);
-            expect(refreshRequests, 'the refresh sequence ran unshallow -> emit -> fallback').toBeGreaterThanOrEqual(2);
+            expect(refreshRequests, 'the post-replace refresh ran and failed once').toBeGreaterThanOrEqual(1);
 
             const afterReplace = await page.evaluate(() => {
                 const ctx = window.Luker.getContext();

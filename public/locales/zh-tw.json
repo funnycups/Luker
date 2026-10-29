@@ -6311,4 +6311,7 @@
     ,"Some templates could not be deleted": "部分模板刪除失敗"
     ,"Failed to export presets": "匯出預設失敗"
     ,"Failed to export World/Lorebooks": "匯出世界書失敗"
+    ,"Failed to load settings resources.": "載入設定資源失敗。"
+    ,"Skipped unreadable ${0}.": "${0} 無法讀取，已略過。"
+    ,"Failed to load World Info ${0}.": "載入世界書 ${0} 失敗。"
 }

@@ -118,7 +118,7 @@ test.describe('#22 — Duplicate character via UI — no cross-pollution', () =>
         await dismissAnyPopup(page);
         await openCharacterEditPanel(page);
         const dupDesc = page.locator('#description_textarea');
-        expect(dupDesc).toContain('wiry coastal cartographer'); // original
+        await expect(dupDesc).toHaveValue(/wiry coastal cartographer/); // original
         await expect(dupDesc).not.toHaveValue(MODIFIED_DESC);
 
         // ── Persistence ─────────────────────────────────────────────────

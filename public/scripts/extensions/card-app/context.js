@@ -27,6 +27,8 @@ const lukerSetVariable = __ctx.setVariable;
 const getContext = Luker.getContext;
 const extension_settings = __ctx.extensionSettings;
 const lukerGetCharacterState = __ctx.getCharacterState;
+const listPresetDocuments = __ctx.listPresetDocuments;
+const readPresetDocument = __ctx.readPresetDocument;
 const lukerSetCharacterState = __ctx.setCharacterState;
 const lukerUpdateCharacterState = __ctx.updateCharacterState;
 const lukerDeleteCharacterState = __ctx.deleteCharacterState;
@@ -89,6 +91,8 @@ export function buildContext(container, charId, config) {
     let renderer = null;
 
     const ctx = {
+        listPresetDocuments,
+        readPresetDocument,
         /** @type {HTMLElement} The CardApp container element */
         container,
 

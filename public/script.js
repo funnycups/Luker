@@ -131,6 +131,7 @@ import {
 import { openManageBoundPresetsDialog } from './scripts/character/manage-bound-presets-dialog.js';
 import { handlePostReplaceBindings } from './scripts/character/card-binding-preservation.js';
 import { handlePostReplaceWorldBook } from './scripts/character/post-replace-actions.js';
+import { invalidateCharacterResource, loadCharacterResource } from './scripts/character/resource-read.js';
 
 import {
     generateNovelWithStreaming,
@@ -211,6 +212,7 @@ import { downloadFromServer } from './scripts/luker-download.js';
 
 import { bootstrapExtensions, cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, primeExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from './scripts/extensions.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './scripts/state-errors.js';
+import { readStateEnvelope } from './scripts/state-resource.js';
 import {
     formatHttpErrorHint,
     formatTransportErrorHint,
@@ -352,6 +354,8 @@ import { setRequestCompressionConfig } from './scripts/request-compression.js';
 import { canJumpToSwipeForMessage, canOpenSwipePickerForMessage, initSwipePicker } from './scripts/swipe-picker.js';
 import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
 import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes, installLifecycleHooks } from './scripts/ws-delivery.js';
+import { loadSettingsEnvelope } from './scripts/settings-resource-read.js';
+import { listPresetDocuments, loadPresetResources, readPresetDocument } from './scripts/named-resource-read.js';
 
 installFrontendLogCapture();
 initAndroidDebugTrail();
@@ -485,11 +489,6 @@ export let name1 = default_user_name;
 export let name2 = systemUserName;
 /** @type {ChatMessage[]} */
 export let chat = [];
-const chatServerState = {
-    nextOlderIndex: 0,
-    totalMessages: 0,
-    hasMore: false,
-};
 let lukerRecoveryPollTimer = null;
 let lukerRecoveryPollBusy = false;
 let lukerRecoveryJobId = '';
@@ -634,12 +633,6 @@ function buildLukerGenerationRequestOptions(type, api = main_api) {
         job_id: generationId,
         persist_target: persistTarget,
     };
-}
-
-export function setChatServerState({ nextOlderIndex = 0, totalMessages = 0, hasMore = false } = {}) {
-    chatServerState.nextOlderIndex = Math.max(0, Number(nextOlderIndex) || 0);
-    chatServerState.totalMessages = Math.max(0, Number(totalMessages) || 0);
-    chatServerState.hasMore = Boolean(hasMore);
 }
 
 function getLukerPersistTargetForCurrentChat() {
@@ -2235,6 +2228,7 @@ async function firstLoadInit() {
     showLoader();
     const clientVersionPromise = getClientVersion();
     const bootstrapPromise = fetchBootstrapSnapshot();
+    const settingsPayloadPromise = loadSettingsEnvelope({ bootstrap: true });
     registerPromptManagerMigration();
     initDomHandlers();
     initStandaloneMode();
@@ -2264,7 +2258,18 @@ async function firstLoadInit() {
     initNovelAISettings();
     initSystemPrompts();
     console.debug('[init] calling getSettings...');
-    await getSettings({ bootstrap: true, payload: bootstrapSnapshot?.settings });
+    let settingsPayload;
+    try {
+        settingsPayload = await settingsPayloadPromise;
+    } catch (error) {
+        console.error('Failed to load settings resources', error);
+        if (isLoaderVisible()) {
+            await hideLoader();
+        }
+        toastr.error(t`Failed to load settings resources.`, t`Error`, { timeOut: 0, extendedTimeOut: 0, preventDuplicates: true });
+        throw error;
+    }
+    await getSettings({ bootstrap: true, payload: settingsPayload });
     console.debug('[init] getSettings done');
     performance.mark('[init] getSettings done');
     await checkOpenRouterAuth();
@@ -2837,19 +2842,7 @@ export function getEntitiesList({ doFilter = false, doSort = true } = {}) {
 export async function getOneCharacter(avatarUrl, { preserveChat = false } = {}) {
     let getData;
     try {
-        const response = await fetch('/api/characters/get', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({
-                avatar_url: avatarUrl,
-            }),
-        });
-
-        if (!response.ok) {
-            return;
-        }
-
-        getData = await response.json();
+        getData = await loadCharacterResource(avatarUrl);
     } catch (error) {
         // A dropped connection or unreadable body must not abort the caller:
         // every caller treats this as a best-effort in-place refresh, and a
@@ -3496,77 +3489,6 @@ export async function showMoreMessages(messagesToLoad = null) {
         messageId = getLastMessageId() + 1;
     }
 
-    if (messageId <= 0 && chatServerState.hasMore) {
-        const prevHeight = chatElement.prop('scrollHeight');
-        const isButtonInView = isElementInViewport($('#show_more_messages')[0]);
-        const startIndex = Math.max(0, chatServerState.nextOlderIndex - count);
-        const limit = Math.max(1, chatServerState.nextOlderIndex - startIndex);
-        const endpoint = selected_group ? '/api/chats/group/get-delta' : '/api/chats/get-delta';
-        const body = selected_group
-            ? { id: groups.find(x => x.id == selected_group)?.chat_id, from_index: startIndex, limit }
-            : {
-                ch_name: getCharacterName(characters[this_chid]),
-                file_name: characters[this_chid]?.chat,
-                avatar_url: characters[this_chid]?.avatar,
-                from_index: startIndex,
-                limit,
-            };
-
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify(body),
-            cache: 'no-cache',
-        });
-
-        if (response.ok) {
-            const delta = await response.json();
-            const olderMessages = Array.isArray(delta?.chat) ? delta.chat : [];
-            if (olderMessages.length > 0) {
-                chat.unshift(...olderMessages);
-                const olderMessageElements = olderMessages.map((olderMessage, offset) => addOneMessage(olderMessage, {
-                    scroll: false,
-                    forceId: offset,
-                    showSwipes: false,
-                    insert: false,
-                })[0]);
-
-                if (olderMessageElements.length) {
-                    if (showMoreButton[0]) {
-                        showMoreButton.after(olderMessageElements);
-                    } else {
-                        chatElement.prepend(olderMessageElements);
-                    }
-                }
-
-                updateViewMessageIds(0);
-                refreshSwipeButtons();
-                applyCharacterTagsToMessageDivs({ mesIds: lodash.range(0, olderMessages.length, 1) });
-                applyStylePins();
-
-                chatServerState.nextOlderIndex = Math.max(0, Number(delta?.from_index) || 0);
-                chatServerState.totalMessages = Math.max(chatServerState.totalMessages, Number(delta?.total_messages) || chat.length);
-                chatServerState.hasMore = Boolean(delta?.has_more);
-            } else {
-                chatServerState.hasMore = false;
-            }
-        } else {
-            console.warn('Could not load older messages from server delta endpoint.');
-        }
-
-        if (!chatServerState.hasMore && messageId === 0) {
-            $('#show_more_messages').remove();
-        }
-
-        if (isButtonInView) {
-            const newHeight = chatElement.prop('scrollHeight');
-            chatElement.scrollTop(newHeight - prevHeight);
-        }
-
-        await eventSource.emit(event_types.MORE_MESSAGES_LOADED);
-        return;
-    }
-
     console.debug('Inserting messages before', messageId, 'count', count, 'chat length', chat.length);
     const prevHeight = chatElement.prop('scrollHeight');
     const isButtonInView = isElementInViewport($('#show_more_messages')[0]);
@@ -3589,7 +3511,7 @@ export async function showMoreMessages(messagesToLoad = null) {
     messageId = firstId;
     refreshSwipeButtons();
 
-    if (messageId == 0 && !chatServerState.hasMore) {
+    if (messageId == 0) {
         $('#show_more_messages').remove();
     }
 
@@ -3607,7 +3529,7 @@ export async function printMessages() {
     let startIndex = 0;
     let count = power_user.chat_truncation || Number.MAX_SAFE_INTEGER;
 
-    if (chat.length > count || chatServerState.hasMore) {
+    if (chat.length > count) {
         startIndex = chat.length - count;
         startIndex = Math.max(0, startIndex);
         if (!$('#show_more_messages').length) {
@@ -12197,6 +12119,8 @@ export function resolveChatStateTarget(target = null) {
 
 const chatStateRequestCache = new Map();
 const presetStateRequestCache = new Map();
+const chatStateRequestGeneration = new Map();
+const presetStateRequestGeneration = new Map();
 let settingsGetCacheGeneration = 0;
 
 function normalizePresetStateApiId(apiId = '') {
@@ -12254,7 +12178,9 @@ function invalidatePresetStateRequestCache(target, namespaces = []) {
         .map((namespace) => String(namespace || '').trim().toLowerCase())
         .filter(Boolean))];
     for (const namespace of normalizedNamespaces) {
-        presetStateRequestCache.delete(getPresetStateRequestKey(target, namespace));
+        const key = getPresetStateRequestKey(target, namespace);
+        presetStateRequestCache.delete(key);
+        presetStateRequestGeneration.set(key, (presetStateRequestGeneration.get(key) || 0) + 1);
     }
 }
 
@@ -12297,7 +12223,9 @@ function invalidateChatStateRequestCache(target, namespaces = []) {
         .map((namespace) => String(namespace || '').trim().toLowerCase())
         .filter(Boolean))];
     for (const namespace of normalizedNamespaces) {
-        chatStateRequestCache.delete(getChatStateRequestKey(target, namespace));
+        const key = getChatStateRequestKey(target, namespace);
+        chatStateRequestCache.delete(key);
+        chatStateRequestGeneration.set(key, (chatStateRequestGeneration.get(key) || 0) + 1);
     }
 }
 
@@ -12309,7 +12237,7 @@ function isPlainObject(value) {
     return prototype === Object.prototype || prototype === null;
 }
 
-export { cloneAsJsonWire };
+export { cloneAsJsonWire, listPresetDocuments, readPresetDocument };
 
 function normalizeJsonObject(value) {
     const normalized = cloneAsJsonWire(value);
@@ -13078,29 +13006,31 @@ export async function getChatStateBatch(namespaces, options = {}) {
         ) };
     }
 
-    let response;
+    const generations = new Map(need.map((ns) => {
+        const requestKey = getChatStateRequestKey(target, ns);
+        return [requestKey, chatStateRequestGeneration.get(requestKey) || 0];
+    }));
+
+    let payloads;
     try {
-        response = await fetch('/api/chats/state/get-batch', {
-            method: 'POST',
-            cache: 'no-cache',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ ...target, namespaces: need }),
-        });
+        payloads = await Promise.all(need.map((namespace) => readStateEnvelope('/api/chats/state/get', {
+            is_group: target.is_group ? 'true' : 'false',
+            id: target.id,
+            avatar_url: target.avatar_url,
+            file_name: target.file_name,
+            namespace,
+        })));
     } catch (error) {
+        if (error?.status) {
+            return { ok: false, results: new Map(),
+                reason: STATE_ERROR_REASONS.HTTP_ERROR,
+                hint: formatHttpErrorHint(error.status, '', error.message) };
+        }
         console.warn('Chat state batch read failed (transport)', error);
         return { ok: false, results: new Map(),
             reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
             hint: formatTransportErrorHint(error?.message || error) };
     }
-    if (!response.ok) {
-        const bodyText = await response.text().catch(() => '');
-        return { ok: false, results: new Map(),
-            reason: STATE_ERROR_REASONS.HTTP_ERROR,
-            hint: formatHttpErrorHint(response.status, response.statusText, bodyText) };
-    }
-    const payload = await response.json().catch(() => null);
-    const data = (payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object')
-        ? payload.data : {};
 
     const results = new Map();
     for (const ns of cleaned) {
@@ -13108,9 +13038,13 @@ export async function getChatStateBatch(namespaces, options = {}) {
             results.set(ns, { ok: true, state: fromCache.get(ns) ?? null });
             continue;
         }
-        const raw = Object.prototype.hasOwnProperty.call(data, ns) ? data[ns] : null;
+        const index = need.indexOf(ns);
+        const payload = payloads[index];
+        const raw = payload && typeof payload === 'object' ? payload.data ?? null : null;
         const requestKey = getChatStateRequestKey(target, ns);
-        chatStateRequestCache.set(requestKey, raw);
+        if ((chatStateRequestGeneration.get(requestKey) || 0) === generations.get(requestKey)) {
+            chatStateRequestCache.set(requestKey, raw);
+        }
         results.set(ns, { ok: true, state: raw });
     }
     return { ok: true, results };
@@ -13407,29 +13341,29 @@ export async function getPresetStateBatch(namespaces, options = {}) {
         ) };
     }
 
-    let response;
+    const generations = new Map(need.map((ns) => {
+        const requestKey = getPresetStateRequestKey(target, ns);
+        return [requestKey, presetStateRequestGeneration.get(requestKey) || 0];
+    }));
+
+    let payloads;
     try {
-        response = await fetch('/api/presets/state/get-batch', {
-            method: 'POST',
-            cache: 'no-cache',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ apiId: target.apiId, name: target.name, namespaces: need }),
-        });
+        payloads = await Promise.all(need.map((namespace) => readStateEnvelope('/api/presets/state/get', {
+            apiId: target.apiId,
+            name: target.name,
+            namespace,
+        })));
     } catch (error) {
+        if (error?.status) {
+            return { ok: false, results: new Map(),
+                reason: STATE_ERROR_REASONS.HTTP_ERROR,
+                hint: formatHttpErrorHint(error.status, '', error.message) };
+        }
         console.warn('Preset state batch read failed (transport)', error);
         return { ok: false, results: new Map(),
             reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
             hint: formatTransportErrorHint(error?.message || error) };
     }
-    if (!response.ok) {
-        const bodyText = await response.text().catch(() => '');
-        return { ok: false, results: new Map(),
-            reason: STATE_ERROR_REASONS.HTTP_ERROR,
-            hint: formatHttpErrorHint(response.status, response.statusText, bodyText) };
-    }
-    const payload = await response.json().catch(() => null);
-    const data = (payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object')
-        ? payload.data : {};
 
     const results = new Map();
     for (const ns of cleaned) {
@@ -13437,9 +13371,13 @@ export async function getPresetStateBatch(namespaces, options = {}) {
             results.set(ns, { ok: true, state: fromCache.get(ns) ?? null });
             continue;
         }
-        const raw = Object.prototype.hasOwnProperty.call(data, ns) ? data[ns] : null;
+        const index = need.indexOf(ns);
+        const payload = payloads[index];
+        const raw = payload && typeof payload === 'object' ? payload.data ?? null : null;
         const requestKey = getPresetStateRequestKey(target, ns);
-        presetStateRequestCache.set(requestKey, raw);
+        if ((presetStateRequestGeneration.get(requestKey) || 0) === generations.get(requestKey)) {
+            presetStateRequestCache.set(requestKey, raw);
+        }
         results.set(ns, { ok: true, state: raw });
     }
     return { ok: true, results };
@@ -15232,9 +15170,6 @@ export async function getChat() {
             chat_metadata = {};
         }
         chat.forEach(ensureMessageMediaIsArray);
-        chatServerState.nextOlderIndex = 0;
-        chatServerState.totalMessages = chat.length;
-        chatServerState.hasMore = false;
 
         if (!chat_metadata.integrity) {
             chat_metadata.integrity = uuidv4();
@@ -15270,10 +15205,6 @@ async function getChatResult() {
         }
         // Make sure the chat appears on the server
         await saveChatConditional();
-    }
-    chatServerState.totalMessages = Math.max(chatServerState.totalMessages, chat.length);
-    if (!chatServerState.hasMore) {
-        chatServerState.nextOlderIndex = 0;
     }
 
     // Op-log scan first_mes BEFORE printMessages renders it. messageFormatting
@@ -15392,9 +15323,6 @@ export async function openCharacterChat(file_name) {
     characters[chidSnapshot].chat = file_name;
     beginChatTransition();
     chat_metadata = {};
-    chatServerState.nextOlderIndex = 0;
-    chatServerState.totalMessages = 0;
-    chatServerState.hasMore = false;
     await getChat();
     $('#selected_chat_pole').val(file_name);
     await updateRemoteChatName(chidSnapshot, file_name);
@@ -15826,7 +15754,7 @@ async function fetchBootstrapSnapshot() {
         const response = await fetch('/api/bootstrap', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({}),
+            body: JSON.stringify({ includeSettings: false }),
             cache: 'no-cache',
         });
 
@@ -15860,7 +15788,7 @@ async function warmPreloadFullSettings() {
 
     fullSettingsLoadPromise = (async () => {
         try {
-            const data = await fetchSettingsPayload('/api/settings/get', { silent: true });
+            const data = await loadPresetResources({ complete: true });
             hydrateFullSettingsPresetData(data);
             return true;
         } catch (error) {
@@ -15880,8 +15808,7 @@ export async function ensureFullSettingsLoaded() {
     if (fullSettingsLoaded) {
         return true;
     }
-
-    return await warmPreloadFullSettings();
+    return warmPreloadFullSettings();
 }
 
 export async function getSettings(options = {}) {
@@ -18252,7 +18179,134 @@ export async function updateCharacterData(charId, patch, { persist = true, immed
  * @param {number|string} charId
  * @returns {Promise<void>}
  */
-export async function persistCharacterData(charId) {
+function escapeCharacterPointer(value) {
+    return String(value).replaceAll('~', '~0').replaceAll('/', '~1');
+}
+
+function characterSourceData(character) {
+    try {
+        const parsed = JSON.parse(character?.json_data || '{}');
+        return parsed?.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+            ? parsed.data
+            : parsed;
+    } catch {
+        return {};
+    }
+}
+
+function characterDataPatchOperations(character, nextData = character?.data || {}) {
+    const sourceData = characterSourceData(character);
+    const currentExtensions = nextData.extensions ?? {};
+    const sourceExtensions = sourceData?.extensions ?? {};
+    if (!lodash.isEqual(currentExtensions, sourceExtensions)) {
+        return null;
+    }
+
+    const operations = [];
+    for (const [key, value] of Object.entries(nextData)) {
+        if (key === 'extensions') continue;
+        if (!lodash.isEqual(value, sourceData?.[key])) {
+            operations.push({
+                op: 'add',
+                path: `/data/${escapeCharacterPointer(key)}`,
+                value,
+            });
+        }
+    }
+    return operations;
+}
+
+function characterDataFromForm(character, formData) {
+    const current = character?.data && typeof character.data === 'object' ? character.data : {};
+    const sourceData = characterSourceData(character);
+    const next = { ...current };
+    const text = (name) => {
+        const value = formData.get(name);
+        return value === null ? undefined : String(value);
+    };
+    const setText = (field, name = field) => {
+        const value = text(name);
+        if (value !== undefined && !(value === '' && sourceData?.[field] === undefined)) {
+            next[field] = value;
+        }
+    };
+
+    setText('name', 'ch_name');
+    for (const field of ['description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions', 'creator', 'character_version']) {
+        setText(field);
+    }
+    const tags = text('tags');
+    if (tags !== undefined) {
+        next.tags = tags.split(',').map(tag => tag.trim()).filter(Boolean);
+    }
+
+    const extensions = { ...(current.extensions || {}) };
+    const talkativeness = text('talkativeness');
+    if (talkativeness !== undefined && Number(talkativeness) !== Number(extensions.talkativeness ?? 0.5)) {
+        extensions.talkativeness = Number(talkativeness);
+    }
+    const fav = text('fav');
+    if (fav !== undefined && (fav === 'true') !== (extensions.fav === true)) {
+        extensions.fav = fav === 'true';
+    }
+    const world = text('world');
+    if (world !== undefined && world !== String(extensions.world ?? '')) {
+        extensions.world = world;
+    }
+    const depthPrompt = text('depth_prompt_prompt');
+    const depth = text('depth_prompt_depth');
+    const role = text('depth_prompt_role');
+    const currentDepth = extensions.depth_prompt || {};
+    const nextDepth = {
+        ...currentDepth,
+        ...(depthPrompt !== undefined && depthPrompt !== String(currentDepth.prompt ?? '') ? { prompt: depthPrompt } : {}),
+        ...(depth !== undefined && Number(depth) !== Number(currentDepth.depth ?? 4) ? { depth: Number(depth) } : {}),
+        ...(role !== undefined && role !== String(currentDepth.role ?? 'system') ? { role } : {}),
+    };
+    if (!lodash.isEqual(nextDepth, currentDepth)) {
+        extensions.depth_prompt = nextDepth;
+    }
+    next.extensions = extensions;
+    return next;
+}
+
+export async function persistCharacterData(charId, { data: requestedData } = {}) {
+    const character = characters[charId];
+    if (!character) {
+        throw new Error(`persistCharacterData: no character at index ${charId}`);
+    }
+    const nextData = requestedData || character.data || {};
+    const operations = characterDataPatchOperations(character, nextData);
+    if (operations === null) {
+        return persistCharacterDataLegacy(charId);
+    }
+    if (operations.length === 0) {
+        return;
+    }
+
+    const response = await fetch('/api/characters/patch', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({
+            avatar_url: String(character.avatar || ''),
+            operations,
+        }),
+        cache: 'no-cache',
+    });
+    if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        throw new Error(`persistCharacterData: HTTP ${response.status}${detail ? ` ${detail}` : ''}`);
+    }
+    try {
+        const source = JSON.parse(character.json_data || '{}');
+        character.json_data = JSON.stringify(applyJsonPatch(source, operations).newDocument);
+    } catch (error) {
+        console.warn('persistCharacterData: could not update the local source snapshot', error);
+    }
+    await invalidateCharacterResource(character.avatar);
+}
+
+async function persistCharacterDataLegacy(charId) {
     const character = characters[charId];
     if (!character) {
         throw new Error(`persistCharacterData: no character at index ${charId}`);
@@ -18460,13 +18514,6 @@ export async function createOrEditCharacter(e) {
         }
     } else {
         try {
-            let url = '/api/characters/edit';
-
-            if (crop_data != undefined) {
-                url += `?crop=${encodeURIComponent(JSON.stringify(crop_data))}`;
-            }
-
-            formData.delete('alternate_greetings');
             const chid = $('.open_alternate_greetings').data('chid');
             if (characters[chid] && Array.isArray(characters[chid]?.data?.alternate_greetings)) {
                 for (const value of characters[chid].data.alternate_greetings) {
@@ -18474,21 +18521,43 @@ export async function createOrEditCharacter(e) {
                 }
             }
 
-            const editingExtensions = characters[this_chid]?.data?.extensions;
-            if (editingExtensions && typeof editingExtensions === 'object') {
-                formData.append('extensions', JSON.stringify(editingExtensions));
-            }
+            const nextData = characterDataFromForm(characters[this_chid], formData);
+            const canPatch = !(rawFile instanceof File && rawFile.size > 0)
+                && crop_data === undefined
+                && characterDataPatchOperations(characters[this_chid], nextData) !== null;
 
-            const fetchResult = await fetch(url, {
-                method: 'POST',
-                headers: headers,
-                body: formData,
-                cache: 'no-cache',
-            });
+            if (canPatch) {
+                await persistCharacterData(this_chid, { data: nextData });
+            } else {
+                let url = '/api/characters/edit';
 
-            if (!fetchResult.ok) {
-                const detail = await fetchResult.text().catch(() => '');
-                throw new Error(detail ? `${fetchResult.status} ${detail}` : `${fetchResult.status}`);
+                if (crop_data != undefined) {
+                    url += `?crop=${encodeURIComponent(JSON.stringify(crop_data))}`;
+                }
+
+                formData.delete('alternate_greetings');
+                if (characters[chid] && Array.isArray(characters[chid]?.data?.alternate_greetings)) {
+                    for (const value of characters[chid].data.alternate_greetings) {
+                        formData.append('alternate_greetings', value);
+                    }
+                }
+
+                const editingExtensions = characters[this_chid]?.data?.extensions;
+                if (editingExtensions && typeof editingExtensions === 'object') {
+                    formData.append('extensions', JSON.stringify(editingExtensions));
+                }
+
+                const fetchResult = await fetch(url, {
+                    method: 'POST',
+                    headers,
+                    body: formData,
+                    cache: 'no-cache',
+                });
+
+                if (!fetchResult.ok) {
+                    const detail = await fetchResult.text().catch(() => '');
+                    throw new Error(detail ? `${fetchResult.status} ${detail}` : `${fetchResult.status}`);
+                }
             }
 
             // Keep the live chat pointer across the refresh: the edit form

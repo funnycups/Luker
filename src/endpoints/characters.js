@@ -4,6 +4,7 @@ import { promises as fsPromises } from 'node:fs';
 import { Buffer } from 'node:buffer';
 
 import express from 'express';
+import bytes from 'bytes';
 import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import yaml from 'yaml';
@@ -24,11 +25,12 @@ import { getUserDirectories } from '../users.js';
 import { applyJsonPatch } from '../storage/repositories/json-patch.js';
 import { ByafParser } from '../byaf.js';
 import { CharXParser, persistCharXAssets } from '../charx.js';
-import cacheBuster from '../middleware/cacheBuster.js';
 import { extractCardAppFiles, packCardAppFiles, deleteCardAppFiles } from './card-app.js';
 import { deleteRecentChatIndexEntriesUnderDirectory, invalidateRecentChatIndex, refreshRecentChatIndexEntry } from './chats.js';
 import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
 import { getChatRepo, getWorldInfoRepo } from '../storage/index.js';
+import { createPrivateRepresentation, sendJsonResource, sendPrivateRepresentation, sendResourceReadError } from '../http-resource-cache.js';
+import { buildCharacterProjection, buildCharacterSourceView } from '../character-resource-view.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -172,10 +174,10 @@ export const diskCache = new DiskCache();
 function getCacheKey(inputFile) {
     if (fs.existsSync(inputFile)) {
         const stat = fs.statSync(inputFile);
-        return `${inputFile}-${stat.mtimeMs}`;
+        return `card-v2:${inputFile}-${stat.mtimeMs}`;
     }
 
-    return inputFile;
+    return `card-v2:${inputFile}`;
 }
 
 /**
@@ -184,7 +186,7 @@ function getCacheKey(inputFile) {
  * @param {string} inputFormat - 'png'
  * @returns {Promise<string | undefined>} - Character card data
  */
-async function readCharacterData(inputFile, inputFormat = 'png') {
+export async function readCharacterData(inputFile, inputFormat = 'png') {
     const cacheKey = getCacheKey(inputFile);
     if (memoryCache.has(cacheKey)) {
         return memoryCache.get(cacheKey);
@@ -223,11 +225,12 @@ async function readCharacterData(inputFile, inputFormat = 'png') {
  * @param {Crop|undefined} crop - Crop parameters
  * @returns {Promise<boolean>} - True if the operation was successful
  */
-async function writeCharacterData(inputFile, data, outputFile, request, crop = undefined, options = {}) {
+export async function writeCharacterData(inputFile, data, outputFile, request, crop = undefined, options = {}) {
     try {
         const {
             allowMissingInputFallback = true,
             requireExistingOutput = false,
+            normalize = true,
         } = options && typeof options === 'object' ? options : {};
 
         const outputImagePath = path.join(request.user.directories.characters, `${outputFile}.png`);
@@ -270,7 +273,9 @@ async function writeCharacterData(inputFile, data, outputFile, request, crop = u
         }
 
         const inputImage = await getInputImage();
-        data = normalizeCharacterCardForStorage(data, request.user.directories);
+        if (normalize) {
+            data = normalizeCharacterCardForStorage(data, request.user.directories);
+        }
 
         // Get the chunks
         const outputImage = write(inputImage, data);
@@ -280,14 +285,22 @@ async function writeCharacterData(inputFile, data, outputFile, request, crop = u
 
         writeFileAtomicSync(outputImagePath, outputImage);
 
-        // Refresh in-memory and disk caches with the newly written character payload.
+        // The PNG writer emits a canonical V3 chunk in addition to the V2
+        // chunk. Reads prefer ccv3, so the cache must store the same preferred
+        // string that a cold parse returns.
+        const preferredData = read(outputImage);
+        const handle = request?.user?.profile?.handle;
+        invalidateCharacterResourceView(handle, path.basename(outputImagePath));
+        if (!Buffer.isBuffer(inputFile)) {
+            invalidateCharacterResourceView(handle, path.basename(inputFile));
+        }
         const outputCacheKey = getCacheKey(outputImagePath);
         if (outputCacheKey) {
-            !isAndroid && memoryCache.set(outputCacheKey, data);
+            !isAndroid && memoryCache.set(outputCacheKey, preferredData);
             if (useDiskCache) {
                 try {
                     const cache = await diskCache.instance();
-                    await cache.setItem(outputCacheKey, data);
+                    await cache.setItem(outputCacheKey, preferredData);
                 } catch (error) {
                     console.warn('Error while writing output character payload to disk cache:', error);
                 }
@@ -1485,6 +1498,78 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
     }
 });
 
+router.post('/patch', validateAvatarUrlMiddleware, async function (request, response) {
+    if (!request.body?.avatar_url) {
+        return response.status(400).send('Error: invalid avatar.');
+    }
+    const operations = request.body.operations;
+    if (!Array.isArray(operations)) {
+        return response.status(400).send('Error: operations must be an array.');
+    }
+    for (const operation of operations) {
+        if (!operation || typeof operation !== 'object' || typeof operation.path !== 'string') {
+            return response.status(400).send('Error: invalid patch operation.');
+        }
+        const segments = operation.path.split('/');
+        const forbiddenSegment = segments.some(segment => segment === '__proto__' || segment === 'constructor' || segment === 'prototype');
+        if (!operation.path.startsWith('/data/')
+            || operation.path === '/data/extensions'
+            || operation.path.startsWith('/data/extensions/')
+            || forbiddenSegment) {
+            return response.status(400).send('Error: character patches may only target editable data fields.');
+        }
+    }
+
+    try {
+        const avatar = sanitize(String(request.body.avatar_url));
+        const avatarPath = path.join(request.user.directories.characters, avatar);
+        if (!avatar || path.dirname(avatarPath) !== request.user.directories.characters || !fs.existsSync(avatarPath)) {
+            return response.status(404).send('Error: character not found.');
+        }
+        const raw = await readCharacterData(avatarPath);
+        if (typeof raw !== 'string' || raw.length === 0) {
+            return response.status(404).send('Error: character data missing.');
+        }
+
+        const parsed = JSON.parse(raw);
+        const stored = parsed.spec === undefined
+            ? getStoredCharaCardV2(parsed, request.user.directories, false)
+            : parsed;
+        const next = applyJsonPatch(stored, operations);
+        const nextName = next?.data?.name;
+        if (typeof nextName !== 'string' || nextName.trim() === '' || nextName.trim() === '.') {
+            return response.status(400).send('Error: character name must not be empty.');
+        }
+        const targetFile = avatar.replace(/\.png$/i, '');
+        const writeOk = await writeCharacterData(
+            avatarPath,
+            JSON.stringify(next),
+            targetFile,
+            request,
+            undefined,
+            {
+                allowMissingInputFallback: false,
+                requireExistingOutput: true,
+                normalize: parsed.spec === undefined,
+            },
+        );
+        if (!writeOk) {
+            const cause = request.lastWriteCharacterDataError || 'unknown write error';
+            return response.status(500).send(`Failed to persist character data: ${cause}`);
+        }
+        return response.send({ ok: true });
+    } catch (error) {
+        if (error instanceof PatchTestFailedError || error instanceof PatchMissingParentError) {
+            return response.status(409).send({ error: error.message });
+        }
+        if (error instanceof UnsupportedPatchOpError) {
+            return response.status(400).send({ error: error.message });
+        }
+        console.error('An error occurred while patching character data.', error);
+        return response.status(500).send({ error: String(error?.message || error) });
+    }
+});
+
 router.post('/edit', validateAvatarUrlMiddleware, async function (request, response) {
     if (!request.body) {
         console.warn('Error: no response body detected');
@@ -1548,9 +1633,6 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
                 const cause = request.lastWriteCharacterDataError || 'unknown write error';
                 return response.status(500).send(`Failed to persist character data: ${cause}`);
             }
-
-            // Bust cache to reload the new avatar
-            cacheBuster.bust(request, response);
         }
 
         return response.sendStatus(200);
@@ -1590,8 +1672,6 @@ router.post('/edit-avatar', validateAvatarUrlMiddleware, async function (request
         // Remove uploaded temp file
         fs.unlinkSync(uploadPath);
 
-        // Reset images caches
-        cacheBuster.bust(request, response);
         invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
 
         return response.sendStatus(200);
@@ -2073,6 +2153,297 @@ router.post('/all', async function (request, response) {
     }
 });
 
+const characterResourceViewBudget = Math.max(0, Number(bytes.parse(memoryCacheCapacity)) || 0);
+const characterResourceViews = new Map();
+const characterResourceViewLoads = new Map();
+const characterResourceViewBytes = new Map();
+let characterResourceViewTotalBytes = 0;
+
+function characterResourceViewSize(entry) {
+    const fieldBytes = [...entry.view.values.values()]
+        .reduce((total, value) => total + Buffer.byteLength(value, 'utf8'), 0);
+    return Buffer.byteLength(entry.raw, 'utf8')
+        + fieldBytes
+        + Buffer.byteLength(JSON.stringify(entry.projection), 'utf8');
+}
+
+function rememberCharacterResourceView(key, entry) {
+    if (characterResourceViewBudget <= 0) {
+        return;
+    }
+    const size = characterResourceViewSize(entry);
+    if (size > characterResourceViewBudget) {
+        return;
+    }
+    const previous = characterResourceViewBytes.get(key);
+    if (previous !== undefined) {
+        characterResourceViewTotalBytes -= previous;
+        characterResourceViews.delete(key);
+    }
+    while (characterResourceViewTotalBytes + size > characterResourceViewBudget) {
+        const oldestKey = characterResourceViews.keys().next().value;
+        if (oldestKey === undefined) {
+            break;
+        }
+        dropCharacterResourceView(oldestKey);
+    }
+    characterResourceViews.set(key, entry);
+    characterResourceViewBytes.set(key, size);
+    characterResourceViewTotalBytes += size;
+}
+
+function dropCharacterResourceView(key) {
+    characterResourceViews.delete(key);
+    const size = characterResourceViewBytes.get(key);
+    if (size !== undefined) {
+        characterResourceViewTotalBytes -= size;
+        characterResourceViewBytes.delete(key);
+    }
+}
+
+function characterResourceCacheKey(handle, avatar) {
+    return `${handle}\0${avatar}`;
+}
+
+function invalidateCharacterResourceView(handle, avatar) {
+    if (handle && avatar) {
+        const key = characterResourceCacheKey(handle, avatar);
+        dropCharacterResourceView(key);
+        characterResourceViewLoads.delete(key);
+    }
+}
+
+function getQueryCharacterAvatar(request, response) {
+    const handle = String(request.user?.profile?.handle || '');
+    const requestedAccount = String(request.query?.account || '');
+    if (!handle || requestedAccount !== handle) {
+        sendResourceReadError(response, {
+            code: 'forbidden',
+            resource: 'characters',
+            detail: 'Resource account does not match the authenticated account.',
+            status: 403,
+        });
+        return null;
+    }
+
+    const avatar = sanitize(String(request.query?.avatar || request.query?.avatar_url || '').trim());
+    if (!avatar || avatar === '.' || avatar === '..' || forbiddenRegExp.test(avatar)) {
+        sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource: 'characters',
+            detail: 'Expected a character avatar file name.',
+            status: 400,
+        });
+        return null;
+    }
+
+    const charactersDirectory = request.user.directories.characters;
+    const imagePath = path.join(charactersDirectory, avatar);
+    if (path.dirname(imagePath) !== charactersDirectory) {
+        sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource: 'characters',
+            detail: 'Character avatar escapes its directory.',
+            status: 400,
+        });
+        return null;
+    }
+    return { handle, avatar, imagePath };
+}
+
+async function getCharacterResourceView(request, avatar, imagePath) {
+    const handle = request.user.profile.handle;
+    let raw;
+    try {
+        raw = await readCharacterData(imagePath);
+    } catch (error) {
+        const resourceError = new Error(error.message);
+        resourceError.code = error?.code === 'ENOENT' ? 'not_found' : 'invalid_resource';
+        throw resourceError;
+    }
+    if (raw === undefined) {
+        const error = new Error('Character card is missing.');
+        error.code = 'not_found';
+        throw error;
+    }
+
+    const key = characterResourceCacheKey(handle, avatar);
+    const { dateLastChat } = await calculateChatSize(handle, avatar.replace(/\.png$/i, ''));
+    const cached = characterResourceViews.get(key);
+    if (cached?.raw === raw && cached.dateLastChat === dateLastChat) {
+        return cached;
+    }
+    const pending = characterResourceViewLoads.get(key);
+    if (pending) {
+        return pending;
+    }
+
+    const loading = (async () => {
+        let view;
+        try {
+            view = buildCharacterSourceView({ raw, account: handle, avatar });
+        } catch (error) {
+            if (error.code === 'invalid_resource') {
+                const resourceError = new Error(error.message);
+                resourceError.code = 'invalid_resource';
+                throw resourceError;
+            }
+            throw error;
+        }
+
+        const character = await processCharacter(avatar, request.user.directories, {
+            shallow: false,
+            handle,
+        });
+        if (!character?.json_data) {
+            const error = new Error('Character card could not be normalized.');
+            error.code = 'invalid_resource';
+            throw error;
+        }
+
+        const projection = buildCharacterProjection({ raw, character });
+        const entry = { raw, view, projection, dateLastChat };
+        rememberCharacterResourceView(key, entry);
+        return entry;
+    })();
+
+    characterResourceViewLoads.set(key, loading);
+    try {
+        return await loading;
+    } finally {
+        if (characterResourceViewLoads.get(key) === loading) {
+            characterResourceViewLoads.delete(key);
+        }
+    }
+}
+
+router.get('/fields', async function (request, response) {
+    const target = getQueryCharacterAvatar(request, response);
+    if (!target) return;
+    try {
+        const entry = await getCharacterResourceView(request, target.avatar, target.imagePath);
+        const account = target.handle;
+        const fields = entry.view.fields.map((fieldPath) => ({
+            path: fieldPath,
+            etag: createPrivateRepresentation({
+                account,
+                resource: `character:${target.avatar}:field:${fieldPath}`,
+                text: entry.view.values.get(fieldPath),
+            }).etag,
+        }));
+        const projection = createPrivateRepresentation({
+            account,
+            resource: `character:${target.avatar}:projection`,
+            text: JSON.stringify(entry.projection),
+        });
+        return sendJsonResource(request, response, {
+            resource: `character:${target.avatar}:fields`,
+            value: {
+                rawLayout: entry.view.rawLayout,
+                fields,
+                projection: { etag: projection.etag },
+            },
+        });
+    } catch (error) {
+        if (error?.code === 'not_found') {
+            return sendResourceReadError(response, { code: 'not_found', resource: `character:${target.avatar}`, status: 404 });
+        }
+        if (error?.code === 'not_found') {
+            return sendResourceReadError(response, { code: 'not_found', resource: `character:${target.avatar}`, detail: error.message, status: 404 });
+        }
+        if (error?.code === 'invalid_resource') {
+            return sendResourceReadError(response, { code: 'invalid_resource', resource: `character:${target.avatar}`, detail: error.message, status: 422 });
+        }
+        console.error('Error reading character fields:', error);
+        return sendResourceReadError(response, { code: 'read_failed', resource: `character:${target.avatar}`, detail: error.message, status: 500 });
+    }
+});
+
+router.get('/field', async function (request, response) {
+    const target = getQueryCharacterAvatar(request, response);
+    if (!target) return;
+    const fieldPath = String(request.query?.path || '');
+    if (!fieldPath.startsWith('/') || fieldPath === '/') {
+        return sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource: `character:${target.avatar}:field`,
+            detail: 'Expected a field path, not a container path.',
+            status: 400,
+        });
+    }
+    try {
+        const entry = await getCharacterResourceView(request, target.avatar, target.imagePath);
+        if (!entry.view.values.has(fieldPath)) {
+            const isContainer = entry.view.fields.some(path => path.startsWith(`${fieldPath}/`));
+            return sendResourceReadError(response, {
+                code: isContainer ? 'invalid_args' : 'not_found',
+                resource: `character:${target.avatar}:field`,
+                detail: fieldPath,
+                status: isContainer ? 400 : 404,
+            });
+        }
+        const representation = createPrivateRepresentation({
+            account: target.handle,
+            resource: `character:${target.avatar}:field:${fieldPath}`,
+            text: entry.view.values.get(fieldPath),
+            contentType: 'application/json; charset=utf-8',
+        });
+        return sendPrivateRepresentation(request, response, representation);
+    } catch (error) {
+        if (error?.code === 'not_found') {
+            return sendResourceReadError(response, { code: 'not_found', resource: `character:${target.avatar}`, status: 404 });
+        }
+        if (error?.code === 'invalid_resource') {
+            return sendResourceReadError(response, { code: 'invalid_resource', resource: `character:${target.avatar}`, detail: error.message, status: 422 });
+        }
+        console.error('Error reading character field:', error);
+        return sendResourceReadError(response, { code: 'read_failed', resource: `character:${target.avatar}`, detail: error.message, status: 500 });
+    }
+});
+
+router.get('/projection', async function (request, response) {
+    const target = getQueryCharacterAvatar(request, response);
+    if (!target) return;
+    try {
+        const entry = await getCharacterResourceView(request, target.avatar, target.imagePath);
+        const representation = createPrivateRepresentation({
+            account: target.handle,
+            resource: `character:${target.avatar}:projection`,
+            text: JSON.stringify(entry.projection),
+        });
+        return sendPrivateRepresentation(request, response, representation);
+    } catch (error) {
+        if (error?.code === 'not_found') {
+            return sendResourceReadError(response, { code: 'not_found', resource: `character:${target.avatar}`, status: 404 });
+        }
+        if (error?.code === 'not_found') {
+            return sendResourceReadError(response, { code: 'not_found', resource: `character:${target.avatar}`, detail: error.message, status: 404 });
+        }
+        if (error?.code === 'invalid_resource') {
+            return sendResourceReadError(response, { code: 'invalid_resource', resource: `character:${target.avatar}`, detail: error.message, status: 422 });
+        }
+        console.error('Error reading character projection:', error);
+        return sendResourceReadError(response, { code: 'read_failed', resource: `character:${target.avatar}`, detail: error.message, status: 500 });
+    }
+});
+
+router.get('/all', async function (request, response) {
+    const handle = String(request.user?.profile?.handle || '');
+    if (!handle || String(request.query?.account || '') !== handle) {
+        return sendResourceReadError(response, { code: 'forbidden', resource: 'characters', status: 403 });
+    }
+    try {
+        const charactersSnapshot = await getCharactersSnapshot(request.user.directories, { handle });
+        return sendJsonResource(request, response, {
+            resource: 'characters:all',
+            value: charactersSnapshot,
+        });
+    } catch (error) {
+        console.error('Error reading character list:', error);
+        return sendResourceReadError(response, { code: 'read_failed', resource: 'characters:all', detail: error.message, status: 500 });
+    }
+});
+
 router.post('/get', validateAvatarUrlMiddleware, async function (request, response) {
     try {
         if (!request.body) return response.sendStatus(400);
@@ -2134,6 +2505,35 @@ router.post('/snapshot', validateAvatarUrlMiddleware, function (request, respons
     } catch (error) {
         console.error('Error creating character snapshot:', error);
         return response.status(500).send({ error: true });
+    }
+});
+
+router.get('/state/get', function (request, response) {
+    const target = getQueryCharacterAvatar(request, response);
+    if (!target) {
+        return;
+    }
+    const namespace = normalizeCharacterStateNamespace(request.query?.namespace);
+    if (!namespace) {
+        return sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource: `character-state:${target.avatar}:`,
+            detail: 'Expected a state namespace.',
+            status: 400,
+        });
+    }
+    const resource = `character-state:${target.avatar}:${namespace}`;
+    try {
+        const data = readCharacterStateSidecar(target.imagePath, namespace);
+        return sendJsonResource(request, response, { resource, value: { ok: true, data } });
+    } catch (error) {
+        console.error('Error reading character state sidecar:', error);
+        return sendResourceReadError(response, {
+            code: 'read_failed',
+            resource,
+            detail: 'Failed to read character state.',
+            status: 500,
+        });
     }
 });
 

@@ -1,6 +1,7 @@
 import { NotFoundError } from '../errors.js';
 import { assertSafeRepoNameShape } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
+import { toSqlJsonPath } from './json-field-path.js';
 
 // MysqlTransaction — mysql2/promise port of SqliteTransaction. Same handler
 // surface and per-kind methods so Repos remain engine-agnostic. Differences
@@ -260,6 +261,39 @@ export function registerSettingsHandler(tx) {
             if (!rows.length) return null;
             return coerceJson(rows[0].doc);
         },
+        async getResourceField(key, segments) {
+            const path = toSqlJsonPath(segments);
+            const [rows] = await conn.execute(
+                'SELECT JSON_TYPE(JSON_EXTRACT(doc, ?)) AS type, JSON_EXTRACT(doc, ?) AS value FROM settings WHERE handle=?',
+                [path, path, key.handle],
+            );
+            if (!rows.length || rows[0].type == null) return { exists: false };
+            const type = String(rows[0].type).toLowerCase();
+            let value = rows[0].value;
+            if (type === 'null') value = null;
+            else if (type === 'boolean') value = value === true || value === 1 || value === '1' || value === 'true';
+            else if (type === 'object' || type === 'array') {
+                value = typeof value === 'string' ? JSON.parse(value) : value;
+            } else if (type === 'string') {
+                value = typeof value === 'string' && value.startsWith('"') ? JSON.parse(value) : value;
+            } else if (type === 'integer' || type === 'double' || type === 'decimal') {
+                value = Number(value);
+            }
+            return { exists: true, value, type };
+        },
+        async getResourceFieldType(key, segments) {
+            const path = toSqlJsonPath(segments);
+            const [rows] = await conn.execute(
+                'SELECT JSON_TYPE(JSON_EXTRACT(doc, ?)) AS type FROM settings WHERE handle=?',
+                [path, key.handle],
+            );
+            if (!rows.length || rows[0].type == null) return { exists: false };
+            const raw = String(rows[0].type).toLowerCase();
+            const type = raw === 'boolean' ? 'boolean'
+                : (raw === 'integer' || raw === 'double' || raw === 'decimal' ? 'number'
+                    : (raw === 'string' ? 'string' : raw));
+            return { exists: true, type };
+        },
         async put(key, record) {
             await conn.execute(
                 `INSERT INTO settings (handle, doc, updated_at) VALUES (?, ?, ?) AS new
@@ -273,6 +307,8 @@ export function registerSettingsHandler(tx) {
         },
         list() { throw new Error('MysqlTransaction.list: settings is a singleton'); },
     });
+    tx.getResourceField = (key, segments) => tx._h('settings', 'getResourceField').getResourceField(key, segments);
+    tx.getResourceFieldType = (key, segments) => tx._h('settings', 'getResourceFieldType').getResourceFieldType(key, segments);
 }
 
 function presetKeyToParams(key) {
@@ -452,6 +488,14 @@ export function registerWorldInfoHandler(tx) {
             });
         },
     });
+
+    tx.listWorldNames = async (handle) => {
+        const [rows] = await conn.execute(
+            'SELECT name FROM worlds WHERE handle=? ORDER BY name ASC',
+            [handle],
+        );
+        return rows.map((row) => row.name);
+    };
 
     // Returns the canonical world name (no extension) — what WorldInfoRepo.get/save expect.
     tx.resolveWorldName = async (key) => resolveCanonical(key.handle, key.name);

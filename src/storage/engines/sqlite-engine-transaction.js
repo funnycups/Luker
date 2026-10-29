@@ -1,6 +1,7 @@
 import { NotFoundError } from '../errors.js';
 import { assertSafeRepoNameShape } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
+import { toSqlJsonPath } from './json-field-path.js';
 
 export class SqliteTransaction {
     constructor({ db, handle, directoriesByHandle }) {
@@ -219,6 +220,8 @@ export function registerSettingsHandler(tx) {
     const db = tx._db;
     const stmt = {
         get: db.prepare('SELECT doc FROM settings WHERE handle = ?'),
+        field: db.prepare('SELECT json_type(doc, ?) AS type, json_extract(doc, ?) AS value FROM settings WHERE handle = ?'),
+        fieldType: db.prepare('SELECT json_type(doc, ?) AS type FROM settings WHERE handle = ?'),
         upsert: db.prepare(`INSERT INTO settings (handle, doc, updated_at) VALUES (?, ?, ?)
                             ON CONFLICT(handle) DO UPDATE SET doc = excluded.doc, updated_at = excluded.updated_at`),
         del: db.prepare('DELETE FROM settings WHERE handle = ?'),
@@ -229,6 +232,33 @@ export function registerSettingsHandler(tx) {
             if (!row) return null;
             try { return JSON.parse(row.doc); } catch { return null; }
         },
+        getResourceField(key, segments) {
+            const path = toSqlJsonPath(segments);
+            const row = stmt.field.get(path, path, key.handle);
+            if (!row || row.type == null) return { exists: false };
+            let value = row.value;
+            if (row.type === 'null') value = null;
+            else if (row.type === 'true') value = true;
+            else if (row.type === 'false') value = false;
+            else if (row.type === 'object' || row.type === 'array') value = JSON.parse(value);
+            const type = row.type === 'true' || row.type === 'false'
+                ? 'boolean'
+                : (row.type === 'integer' || row.type === 'real'
+                    ? 'number'
+                    : (row.type === 'text' ? 'string' : row.type));
+            return { exists: true, value, type };
+        },
+        getResourceFieldType(key, segments) {
+            const path = toSqlJsonPath(segments);
+            const row = stmt.fieldType.get(path, key.handle);
+            if (!row || row.type == null) return { exists: false };
+            const type = row.type === 'true' || row.type === 'false'
+                ? 'boolean'
+                : (row.type === 'integer' || row.type === 'real'
+                    ? 'number'
+                    : (row.type === 'text' ? 'string' : row.type));
+            return { exists: true, type };
+        },
         put(key, record) {
             stmt.upsert.run(key.handle, JSON.stringify(record.doc), Date.now());
         },
@@ -238,6 +268,8 @@ export function registerSettingsHandler(tx) {
         },
         list() { throw new Error('SqliteTransaction.list: settings is a singleton'); },
     });
+    tx.getResourceField = (key, segments) => tx._h('settings', 'getResourceField').getResourceField(key, segments);
+    tx.getResourceFieldType = (key, segments) => tx._h('settings', 'getResourceFieldType').getResourceFieldType(key, segments);
 }
 
 function presetKeyToParams(key) {
@@ -391,6 +423,8 @@ export function registerWorldInfoHandler(tx) {
             });
         },
     });
+
+    tx.listWorldNames = (handle) => stmt.listNames.all(handle).map((row) => row.name);
 
     // Returns the canonical world name (no extension) — what WorldInfoRepo.get/save expect.
     tx.resolveWorldName = (key) => resolveCanonical(key.handle, key.name);

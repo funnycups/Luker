@@ -79,7 +79,6 @@ import {
     unshallowCharacter,
     chatElement,
     ensureMessageMediaIsArray,
-    setChatServerState,
     seedChatMetadataSnapshot,
     seedChatMessageSnapshot,
     getChatMetadataSnapshot,
@@ -235,11 +234,9 @@ async function loadGroupChat(chatId) {
         if (!Array.isArray(data)) {
             return [];
         }
-        setChatServerState({ nextOlderIndex: 0, totalMessages: Math.max(0, data.length - 1), hasMore: false });
         return data;
     }
 
-    setChatServerState({ nextOlderIndex: 0, totalMessages: 0, hasMore: false });
     return [];
 }
 

@@ -44,6 +44,19 @@ describe('applyJsonPatch', () => {
             { op: 'replace', path: '/c~0d', value: 8 },
         ])).toEqual({ 'a/b': 9, 'c~d': 8 });
     });
+    test('allows replacing an existing own property named prototype', () => {
+        expect(applyJsonPatch({ data: { prototype: 'old' } }, [
+            { op: 'replace', path: '/data/prototype', value: 'new' },
+        ])).toEqual({ data: { prototype: 'new' } });
+    });
+
+    test('rejects prototype-polluting path segments', () => {
+        expect(() => applyJsonPatch({ data: {} }, [
+            { op: 'add', path: '/data/__proto__/polluted', value: true },
+        ])).toThrow(/unsupported json patch op/);
+        expect({}.polluted).toBeUndefined();
+    });
+
     test('unsupported op throws', () => {
         expect(() => applyJsonPatch({}, [{ op: 'move', path: '/a', from: '/b' }]))
             .toThrow(/unsupported json patch op/);

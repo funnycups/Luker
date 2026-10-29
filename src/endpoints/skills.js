@@ -286,10 +286,10 @@ export function createSkillsRouter({ getRepository, getMemoryIndex }) {
         try {
             const repo = getRepository(req);
             const scope = parseScope(req.params.scope);
-            const entries = await repo.listFiles({ scope, name: req.params.name });
+            const entries = await repo.listFileStats({ scope, name: req.params.name });
             const files = entries.map(e => ({
-                path: e.path,
-                size: e.buffer ? e.buffer.length : 0,
+                path: e.relPath,
+                size: e.sizeBytes,
                 isBinary: Boolean(e.isBinary),
             }));
             files.sort((a, b) => {

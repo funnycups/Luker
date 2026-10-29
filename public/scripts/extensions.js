@@ -1,6 +1,6 @@
 import { Popper } from '../lib.js';
 
-import { eventSource, event_types, saveSettings, saveSettingsDebounced, getRequestHeaders, animation_duration, EXTENSIONS_CLIENT_VERSION, buildObjectPatchOperationsAsync, buildObjectPatchOperations, cloneAsJsonWire } from '../script.js';
+import { eventSource, event_types, saveSettings, saveSettingsDebounced, getRequestHeaders, animation_duration, EXTENSIONS_CLIENT_VERSION, buildObjectPatchOperationsAsync, buildObjectPatchOperations, cloneAsJsonWire, ensureFullSettingsLoaded } from '../script.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup } from './popup.js';
 import { renderTemplate, renderTemplateAsync } from './templates.js';
 import { delay, deleteValueByPath, equalsIgnoreCaseAndAccents, escapeHtml, isSubsetOf, sanitizeSelector, setValueByPath, versionCompare } from './utils.js';
@@ -11,6 +11,7 @@ import { debounce_timeout } from './constants.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { SimpleMutex } from './util/SimpleMutex.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './state-errors.js';
+import { readStateEnvelope } from './state-resource.js';
 import {
     formatHttpErrorHint,
     formatTransportErrorHint,
@@ -1843,6 +1844,9 @@ export async function bootstrapExtensions(options = null) {
             await autoUpdateExtensions(false);
         }
 
+        if (!await ensureFullSettingsLoaded()) {
+            throw new Error('Full settings resources could not be loaded.');
+        }
         await activateExtensions();
         await eventSource.emit(event_types.EXTENSION_SETTINGS_LOADED);
     })();
@@ -2238,28 +2242,23 @@ export async function getCharacterState(avatar, namespace) {
             reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
             hint: formatValidationArgsHint('namespace', 'is required') };
     }
-    let response;
     try {
-        response = await fetch('/api/characters/state/get', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ avatar_url: safeAvatar, namespace: safeNamespace }),
-            cache: 'no-cache',
+        const payload = await readStateEnvelope('/api/characters/state/get', {
+            avatar: safeAvatar,
+            namespace: safeNamespace,
         });
+        const state = payload && typeof payload === 'object' ? payload.data : null;
+        return { ok: true, state };
     } catch (error) {
+        if (error?.status) {
+            return { ok: false, state: null,
+                reason: STATE_ERROR_REASONS.HTTP_ERROR,
+                hint: formatHttpErrorHint(error.status, '', error.message) };
+        }
         return { ok: false, state: null,
             reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
             hint: formatTransportErrorHint(error?.message || error) };
     }
-    if (!response.ok) {
-        const bodyText = await response.text().catch(() => '');
-        return { ok: false, state: null,
-            reason: STATE_ERROR_REASONS.HTTP_ERROR,
-            hint: formatHttpErrorHint(response.status, response.statusText, bodyText) };
-    }
-    const payload = await response.json().catch(() => null);
-    const state = payload && typeof payload === 'object' ? payload.data : null;
-    return { ok: true, state };
 }
 
 /**
@@ -2385,35 +2384,29 @@ export async function getCharacterStateBatch(avatar, namespaces) {
         return { ok: true, results: new Map() };
     }
 
-    let response;
     try {
-        response = await fetch('/api/characters/state/get-batch', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ avatar_url: safeAvatar, namespaces: cleaned }),
-            cache: 'no-cache',
-        });
+        const payloads = await Promise.all(cleaned.map((namespace) =>
+            readStateEnvelope('/api/characters/state/get', {
+                avatar: safeAvatar,
+                namespace,
+            })));
+        const results = new Map();
+        for (let index = 0; index < cleaned.length; index += 1) {
+            const payload = payloads[index];
+            const state = payload && typeof payload === 'object' ? payload.data : null;
+            results.set(cleaned[index], { ok: true, state });
+        }
+        return { ok: true, results };
     } catch (error) {
+        if (error?.status) {
+            return { ok: false, results: new Map(),
+                reason: STATE_ERROR_REASONS.HTTP_ERROR,
+                hint: formatHttpErrorHint(error.status, '', error.message) };
+        }
         return { ok: false, results: new Map(),
             reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
             hint: formatTransportErrorHint(error?.message || error) };
     }
-    if (!response.ok) {
-        const bodyText = await response.text().catch(() => '');
-        return { ok: false, results: new Map(),
-            reason: STATE_ERROR_REASONS.HTTP_ERROR,
-            hint: formatHttpErrorHint(response.status, response.statusText, bodyText) };
-    }
-    const payload = await response.json().catch(() => null);
-    const data = (payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object')
-        ? payload.data : {};
-
-    const results = new Map();
-    for (const ns of cleaned) {
-        const raw = Object.prototype.hasOwnProperty.call(data, ns) ? data[ns] : null;
-        results.set(ns, { ok: true, state: raw });
-    }
-    return { ok: true, results };
 }
 
 /**

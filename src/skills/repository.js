@@ -71,6 +71,45 @@ export function createSkillRepository(dataRoot) {
         return out;
     }
 
+    /**
+     * Returns file metadata without reading whole file bodies. The editor
+     * needs sizes and binary flags for its tree, while the embed packer keeps
+     * using listFiles() because it needs buffers and hashes.
+     */
+    async function listFileStats({ scope, name }) {
+        assertSafeSkillName(name);
+        const skillDir = join(skillsRoot, encodeScopePath(scope), name);
+        const isDir = await fs.stat(skillDir).then(s => s.isDirectory()).catch(() => false);
+        if (!isDir) throw new Error(`skill not found: ${scopeLabel(scope)}:${name}`);
+        const out = [];
+        async function recurse(rel) {
+            const abs = rel ? join(skillDir, rel) : skillDir;
+            const entries = await fs.readdir(abs, { withFileTypes: true });
+            for (const entry of entries) {
+                const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+                if (entry.isDirectory()) {
+                    await recurse(relPath);
+                    continue;
+                }
+                if (!entry.isFile()) continue;
+                const stat = await fs.stat(join(abs, entry.name));
+                const handle = await fs.open(join(abs, entry.name), 'r');
+                let isBinary = false;
+                try {
+                    const sample = Buffer.alloc(Math.min(512, stat.size)); // cap-ok: binary detector sample window
+                    const { bytesRead } = await handle.read(sample, 0, sample.length, 0);
+                    isBinary = isBinaryBuffer(sample.subarray(0, bytesRead));
+                } finally {
+                    await handle.close();
+                }
+                out.push({ relPath, sizeBytes: stat.size, isBinary });
+            }
+        }
+        await recurse('');
+        out.sort((a, b) => a.relPath.localeCompare(b.relPath));
+        return out;
+    }
+
     async function readSkillEntry(scope, name) {
         const dir = join(skillsRoot, encodeScopePath(scope), name);
         const stat = await fs.stat(dir).catch(() => null);
@@ -635,6 +674,7 @@ export function createSkillRepository(dataRoot) {
         renameFile,
         readFile,
         listFiles,
+        listFileStats,
         search,
         deleteScope,
         renameScope,

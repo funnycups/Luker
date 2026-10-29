@@ -1,7 +1,6 @@
 // Endpoint parity coverage for the chat-related read paths affected by the
 // db-mode migration. The audit identified these as broken under db mode:
 //   - POST /api/characters/chats           (list chats per character)
-//   - POST /api/chats/get-delta            (paginated chat read)
 //   - POST /api/chats/rename               (existsSync gate)
 //   - POST /api/chats/delete               (existsSync gate)
 //   - POST /api/chats/export               (file read)
@@ -48,6 +47,17 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         if (harness) await harness.cleanup();
     });
 
+    test('removed chat delta endpoints are no longer routed', async () => {
+        await request(harness.app)
+            .post('/api/chats/get-delta')
+            .send({ avatar_url: 'Alice.png', file_name: 'main' })
+            .expect(404);
+        await request(harness.app)
+            .post('/api/chats/group/get-delta')
+            .send({ id: 'group-1' })
+            .expect(404);
+    });
+
     // --- /api/characters/chats ---
 
     test('REGRESSION: /api/characters/chats lists chats stored via ChatRepo (no fs scan)', async () => {
@@ -76,36 +86,6 @@ describe.each(ENDPOINT_HARNESSES)('chat read endpoints on $name', ({ mode }) => 
         expect(entry.chat_items).toBe(SAMPLE_MESSAGES.length);
         expect(entry.mes).toBe(SAMPLE_MESSAGES[SAMPLE_MESSAGES.length - 1].mes);
         expect(entry.chat_metadata?.lorebook).toBe('TestLore');
-    });
-
-    // --- /api/chats/get-delta ---
-
-    test('REGRESSION: /api/chats/get-delta returns the full chat body for a Repo-saved chat', async () => {
-        await getChatRepo().save(harness.handle, 'Alice', 'main', SAMPLE_HEADER, SAMPLE_MESSAGES, null);
-
-        const res = await request(harness.app)
-            .post('/api/chats/get-delta')
-            .send({ avatar_url: 'Alice.png', file_name: 'main', from_index: 0 })
-            .expect(200);
-        expect(Array.isArray(res.body.chat)).toBe(true);
-        expect(res.body.chat).toHaveLength(SAMPLE_MESSAGES.length);
-        expect(res.body.chat[0].mes).toBe(SAMPLE_MESSAGES[0].mes);
-    });
-
-    test('REGRESSION: /api/chats/get-delta from_index=N returns tail correctly', async () => {
-        const many = [
-            ...SAMPLE_MESSAGES,
-            { name: 'User', mes: 'msg #3' },
-            { name: 'Alice', mes: 'msg #4' },
-        ];
-        await getChatRepo().save(harness.handle, 'Alice', 'main', SAMPLE_HEADER, many, null);
-
-        const res = await request(harness.app)
-            .post('/api/chats/get-delta')
-            .send({ avatar_url: 'Alice.png', file_name: 'main', from_index: 2 })
-            .expect(200);
-        expect(res.body.chat).toHaveLength(2);
-        expect(res.body.chat[0].mes).toBe('msg #3');
     });
 
     // --- /api/chats/rename ---

@@ -64,25 +64,6 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         }
     });
 
-    test('REGRESSION: /api/chats/group/get-delta paginates Repo-saved group chat body', async () => {
-        const id = 'group-003';
-        const body = [
-            ...SAMPLE_MESSAGES,
-            { name: 'User', mes: 'msg 3' },
-            { name: 'Bot1', mes: 'msg 4' },
-        ];
-        await getChatRepo().save(harness.handle, '', id, SAMPLE_HEADER, body, null,
-            { isGroup: true, groupId: id });
-
-        const res = await request(harness.app)
-            .post('/api/chats/group/get-delta')
-            .send({ id, from_index: 2 })
-            .expect(200);
-        expect(Array.isArray(res.body.chat)).toBe(true);
-        expect(res.body.chat).toHaveLength(2);
-        expect(res.body.chat[0].mes).toBe('msg 3');
-    });
-
     test('REGRESSION: /api/chats/group/append appends to Repo group chat', async () => {
         const id = 'group-004';
         await getChatRepo().save(harness.handle, '', id, SAMPLE_HEADER, SAMPLE_MESSAGES, null,
@@ -178,11 +159,11 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         await harness.reopenEngine();
 
         const res = await request(harness.app)
-            .post('/api/chats/group/get-delta')
-            .send({ id, from_index: 0 })
+            .post('/api/chats/group/get')
+            .send({ id })
             .expect(200);
-        expect(Array.isArray(res.body.chat)).toBe(true);
-        expect(res.body.chat).toHaveLength(SAMPLE_MESSAGES.length);
+        expect(Array.isArray(res.body)).toBe(true);
+        expect(res.body.length).toBeGreaterThanOrEqual(SAMPLE_MESSAGES.length);
     });
 
     // --- .jsonl suffix tolerance (ids forwarded from list endpoints) ---

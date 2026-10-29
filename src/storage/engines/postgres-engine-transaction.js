@@ -274,6 +274,26 @@ export function registerSettingsHandler(tx) {
             if (!r.rows.length) return null;
             return coerceJson(r.rows[0].doc);
         },
+        async getResourceField(key, segments) {
+            const r = await client.query(
+                'SELECT jsonb_typeof(doc #> $2::text[]) AS type, doc #> $2::text[] AS value FROM settings WHERE handle=$1',
+                [key.handle, segments],
+            );
+            if (!r.rows.length || r.rows[0].type == null) return { exists: false };
+            return {
+                exists: true,
+                value: r.rows[0].value,
+                type: String(r.rows[0].type),
+            };
+        },
+        async getResourceFieldType(key, segments) {
+            const r = await client.query(
+                'SELECT jsonb_typeof(doc #> $2::text[]) AS type FROM settings WHERE handle=$1',
+                [key.handle, segments],
+            );
+            if (!r.rows.length || r.rows[0].type == null) return { exists: false };
+            return { exists: true, type: String(r.rows[0].type) };
+        },
         async put(key, record) {
             await client.query(
                 `INSERT INTO settings (handle, doc, updated_at) VALUES ($1, $2::jsonb, $3)
@@ -287,6 +307,8 @@ export function registerSettingsHandler(tx) {
         },
         list() { throw new Error('PgTransaction.list: settings is a singleton'); },
     });
+    tx.getResourceField = (key, segments) => tx._h('settings', 'getResourceField').getResourceField(key, segments);
+    tx.getResourceFieldType = (key, segments) => tx._h('settings', 'getResourceFieldType').getResourceFieldType(key, segments);
 }
 
 function presetKeyToParams(key) {
@@ -467,6 +489,14 @@ export function registerWorldInfoHandler(tx) {
             });
         },
     });
+
+    tx.listWorldNames = async (handle) => {
+        const r = await client.query(
+            'SELECT name FROM worlds WHERE handle=$1 ORDER BY name ASC',
+            [handle],
+        );
+        return r.rows.map((row) => row.name);
+    };
 
     // Returns the canonical world name (no extension) — what WorldInfoRepo.get/save expect.
     tx.resolveWorldName = async (key) => resolveCanonical(key.handle, key.name);

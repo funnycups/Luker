@@ -7,6 +7,7 @@ import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 
 import { getConfigValue, invalidateFirefoxCache, resolvePathWithinParent } from '../util.js';
+import { stripCharacterMetadata } from '../character-card-parser.js';
 import { getThumbnailResolution, isAnimatedWebP, isAnimatedApng, thumbnailDimensions as dimensions } from './image-metadata.js';
 import { ResizeStrategy } from '@jimp/plugin-resize';
 
@@ -255,11 +256,19 @@ publicRouter.get('/', async function (request, response) {
             return response.sendStatus(400);
         }
 
+        response.setHeader('Cache-Control', 'private, no-cache, max-age=1');
+        response.setHeader('Vary', 'Cookie');
+
         const serveOriginal = () => {
             const folder = getOriginalFolder(request.user.directories, type);
             const pathToOriginalFile = resolvePathWithinParent(folder, rawFile);
             if (!pathToOriginalFile) return response.sendStatus(403);
             if (!fs.existsSync(pathToOriginalFile)) return response.sendStatus(404);
+            if (type === 'avatar' && path.extname(pathToOriginalFile).toLowerCase() === '.png') {
+                const image = stripCharacterMetadata(fs.readFileSync(pathToOriginalFile));
+                response.setHeader('Content-Type', 'image/png');
+                return response.send(image);
+            }
             invalidateFirefoxCache(pathToOriginalFile, request, response);
             return response.sendFile(pathToOriginalFile);
         };

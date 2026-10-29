@@ -1,4 +1,4 @@
-import { chat, chat_metadata, eventSource, event_types, getRequestHeaders, this_chid, characters } from '../../../script.js';
+import { chat, chat_metadata, eventSource, event_types, this_chid, characters } from '../../../script.js';
 import { extension_settings } from '../../extensions.js';
 import { QuickReplyApi } from './api/QuickReplyApi.js';
 import { AutoExecuteHandler } from './src/AutoExecuteHandler.js';
@@ -11,6 +11,7 @@ import { ButtonUi } from './src/ui/ButtonUi.js';
 import { SettingsUi } from './src/ui/SettingsUi.js';
 import { debounceAsync } from '../../utils.js';
 import { selected_group } from '../../group-chats.js';
+import { loadNamedDocumentCollection } from '../../named-resource-read.js';
 export { debounceAsync };
 
 
@@ -53,14 +54,8 @@ export let quickReplyApi;
 
 
 const loadSets = async () => {
-    const response = await fetch('/api/settings/get', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({}),
-    });
-
-    if (response.ok) {
-        const setList = (await response.json()).quickReplyPresets ?? [];
+    const setList = await loadNamedDocumentCollection('quickReplies');
+    if (Array.isArray(setList)) {
         for (const set of setList) {
             if (set.version !== 2) {
                 // migrate old QR set

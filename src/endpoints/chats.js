@@ -28,6 +28,7 @@ import { applyPatch as applyJsonPatch } from '../../public/scripts/util/fast-jso
 import { getChatRepo, getGroupRepo, getStorageEngine } from '../storage/index.js';
 import { ConflictError, InvalidArgumentError, NotFoundError } from '../storage/errors.js';
 import { assertSafeRepoName, stripJsonlExt } from '../storage/name-validation.js';
+import { sendJsonResource, sendResourceReadError } from '../http-resource-cache.js';
 
 const isBackupEnabled = !!getConfigValue('backups.chat.enabled', true, 'boolean');
 const maxTotalChatBackups = Number(getConfigValue('backups.chat.maxTotalBackups', -1, 'number'));
@@ -2782,57 +2783,60 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
     }
 });
 
-router.post('/get-delta', validateAvatarUrlMiddleware, async function (request, response) {
+function chatStateTargetFromQuery(query) {
+    const isGroupValue = String(query?.is_group ?? '');
+    if (isGroupValue !== 'true' && isGroupValue !== 'false') {
+        return null;
+    }
+    return {
+        is_group: isGroupValue === 'true',
+        id: query?.id,
+        avatar_url: query?.avatar_url,
+        file_name: query?.file_name,
+        char_name: query?.char_name,
+    };
+}
+
+router.get('/state/get', async function (request, response) {
+    const target = chatStateTargetFromQuery(request.query);
+    const repoKey = target ? resolveChatStateRepoKey(request, target) : null;
+    const namespace = normalizeChatStateNamespace(request.query?.namespace);
+    const resource = `chat-state:${target?.is_group ? 'group' : 'chat'}:${target?.is_group ? target?.id : `${target?.avatar_url}:${target?.file_name}`}:${namespace}`;
+    if (!repoKey) {
+        return sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource,
+            detail: 'Expected a valid chat state target.',
+            status: 400,
+        });
+    }
+    if (!namespace) {
+        return sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource,
+            detail: 'Expected a state namespace.',
+            status: 400,
+        });
+    }
     try {
-        const dirName = String(request.body.avatar_url).replace('.png', '');
-        if (!request.body.file_name) {
-            return response.send({
-                chat: [],
-                chat_metadata: {},
-                from_index: 0,
-                next_index: 0,
-                total_messages: 0,
-                has_more: false,
-            });
-        }
-
-        const fromIndex = Number(request.body.from_index) || 0;
-        const limit = Number(request.body.limit) || 0;
-        const handle = request.user.profile.handle;
-        const chat = await getChatRepo().get(handle, dirName, stripJsonlExt(request.body.file_name));
-        if (chat == null) {
-            return response.send({
-                chat: [],
-                chat_metadata: {},
-                from_index: 0,
-                next_index: 0,
-                total_messages: 0,
-                has_more: false,
-            });
-        }
-
-        const body = Array.isArray(chat.body) ? chat.body : [];
-        const total = body.length;
-        const start = Math.max(0, Math.min(fromIndex, total));
-        const end = limit > 0 ? Math.min(start + limit, total) : total;
-        const slice = body.slice(start, end);
-        return response.send({
-            chat: slice,
-            chat_metadata: chat.header?.chat_metadata ?? {},
-            from_index: start,
-            next_index: end,
-            total_messages: total,
-            has_more: end < total,
+        const data = await getChatRepo().getState(
+            repoKey.handle,
+            repoKey.charDir,
+            repoKey.name,
+            namespace,
+            { isGroup: repoKey.isGroup, groupId: repoKey.groupId },
+        );
+        return sendJsonResource(request, response, {
+            resource,
+            value: { ok: true, data },
         });
     } catch (error) {
-        console.error(error);
-        return response.send({
-            chat: [],
-            chat_metadata: {},
-            from_index: 0,
-            next_index: 0,
-            total_messages: 0,
-            has_more: false,
+        console.error('Error reading chat state sidecar:', error);
+        return sendResourceReadError(response, {
+            code: 'read_failed',
+            resource,
+            detail: 'Failed to read chat state.',
+            status: 500,
         });
     }
 });
@@ -3366,40 +3370,6 @@ router.post('/group/get', async (request, response) => {
         },
     };
     return response.send([headerWithIntegrity, ...(chat.body ?? [])]);
-});
-
-router.post('/group/get-delta', async (request, response) => {
-    if (!request.body || !request.body.id) {
-        return response.sendStatus(400);
-    }
-
-    const id = stripJsonlExt(String(request.body.id));
-    const fromIndex = Number(request.body.from_index) || 0;
-    const limit = Number(request.body.limit) || 0;
-    const handle = request.user.profile.handle;
-    const chat = await getChatRepo().get(handle, '', id, { isGroup: true, groupId: id });
-    if (chat == null) {
-        return response.send({
-            chat: [],
-            chat_metadata: {},
-            from_index: 0,
-            next_index: 0,
-            total_messages: 0,
-            has_more: false,
-        });
-    }
-    const body = Array.isArray(chat.body) ? chat.body : [];
-    const total = body.length;
-    const start = Math.max(0, Math.min(fromIndex, total));
-    const end = limit > 0 ? Math.min(start + limit, total) : total;
-    return response.send({
-        chat: body.slice(start, end),
-        chat_metadata: chat.header?.chat_metadata ?? {},
-        from_index: start,
-        next_index: end,
-        total_messages: total,
-        has_more: end < total,
-    });
 });
 
 router.post('/group/info', async (request, response) => {

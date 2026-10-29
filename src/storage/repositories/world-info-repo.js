@@ -55,13 +55,10 @@ export class WorldInfoRepo {
     }
 
     // Convenience: just the canonical names, sorted. Used by buildSettingsResponse
-    // to populate `world_names` in the settings payload. Cheaper than list()
-    // because every engine handler already projects `name` into the listResources
-    // result, so this just narrows the projection.
+    // and the resource directory. Reads names without opening or parsing every book.
     async listNames(handle) {
-        const entries = await this.list(handle);
-        return entries
-            .map((entry) => entry?.key?.name)
+        const names = await this._engine.withTransaction(handle, (tx) => tx.listWorldNames(handle));
+        return names
             .filter((name) => typeof name === 'string' && name.length > 0)
             .sort((a, b) => a.localeCompare(b));
     }

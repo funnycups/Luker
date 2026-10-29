@@ -131,7 +131,6 @@ describe('isGatedPath', () => {
     test('does NOT match read-only paths', () => {
         const allowed = [
             '/api/chats/get',
-            '/api/chats/get-delta',
             '/api/chats/recent',
             '/api/chats/search',
             '/api/chats/export',

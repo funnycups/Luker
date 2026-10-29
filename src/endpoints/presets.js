@@ -8,6 +8,7 @@ import { PRESET_FOLDER_BY_API_ID } from '../storage/repositories/preset-repo.js'
 import { assertSafeRepoName } from '../storage/name-validation.js';
 
 import { getDefaultPresetFile, getDefaultPresets } from './content-manager.js';
+import { sendJsonResource, sendResourceReadError } from '../http-resource-cache.js';
 
 export const router = express.Router();
 
@@ -57,6 +58,84 @@ function mapStatePatchError(error, response) {
     return null;
 }
 
+router.get('/list', async function (request, response) {
+    const apiId = String(request.query?.apiId || '');
+    if (!isValidApiId(apiId)) {
+        return sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource: `preset-list:${apiId}`,
+            detail: 'Unknown preset API id.',
+            status: 400,
+        });
+    }
+    try {
+        const entries = await getPresetRepo().list(request.user.profile.handle, apiId);
+        const names = entries
+            .map(entry => entry?.key?.name)
+            .filter(name => typeof name === 'string' && name.length > 0)
+            .sort((a, b) => a.localeCompare(b));
+        return sendJsonResource(request, response, {
+            resource: `preset-list:${apiId}`,
+            value: { names },
+        });
+    } catch (error) {
+        console.error('Error reading preset directory:', error);
+        return sendResourceReadError(response, {
+            code: 'read_failed',
+            resource: `preset-list:${apiId}`,
+            detail: 'Failed to read the preset directory.',
+            status: 500,
+        });
+    }
+});
+
+router.get('/get', async function (request, response) {
+    const apiId = String(request.query?.apiId || '');
+    const name = String(request.query?.name || '');
+    if (!isValidApiId(apiId) || !name) {
+        return sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource: `preset:${apiId}:${name}`,
+            detail: 'Expected an API id and preset name.',
+            status: 400,
+        });
+    }
+    try {
+        const handle = request.user.profile.handle;
+        const repo = getPresetRepo();
+        const entries = await repo.list(handle, apiId);
+        if (!entries.some(entry => entry?.key?.name === name)) {
+            return sendResourceReadError(response, {
+                code: 'not_found',
+                resource: `preset:${apiId}:${name}`,
+                detail: 'Preset does not exist.',
+                status: 404,
+            });
+        }
+        const doc = await repo.get(handle, apiId, name);
+        if (doc == null) {
+            return sendResourceReadError(response, {
+                code: 'invalid_resource',
+                resource: `preset:${apiId}:${name}`,
+                detail: 'Preset document is not valid JSON.',
+                status: 422,
+            });
+        }
+        return sendJsonResource(request, response, {
+            resource: `preset:${apiId}:${name}`,
+            value: doc,
+        });
+    } catch (error) {
+        console.error('Error reading preset:', error);
+        return sendResourceReadError(response, {
+            code: 'read_failed',
+            resource: `preset:${apiId}:${name}`,
+            detail: 'Failed to read the preset.',
+            status: 500,
+        });
+    }
+});
+
 router.post('/save', async function (request, response) {
     const apiId = request.body?.apiId;
     if (!request.body?.preset) {
@@ -82,6 +161,44 @@ router.post('/save', async function (request, response) {
     } catch (error) {
         console.error('Error saving preset:', error);
         return response.sendStatus(500);
+    }
+});
+
+router.get('/state/get', async function (request, response) {
+    const apiId = String(request.query?.apiId || '');
+    const name = sanitize(String(request.query?.name || ''));
+    const namespace = normalizePresetStateNamespace(request.query?.namespace);
+    const resource = `preset-state:${apiId}:${name}:${namespace}`;
+    if (!isValidApiId(apiId) || !name) {
+        return sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource,
+            detail: 'Expected an API id and preset name.',
+            status: 400,
+        });
+    }
+    if (!namespace) {
+        return sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource,
+            detail: 'Expected a state namespace.',
+            status: 400,
+        });
+    }
+    try {
+        const data = await getPresetRepo().getState(request.user.profile.handle, apiId, name, namespace);
+        return sendJsonResource(request, response, {
+            resource,
+            value: { ok: true, data },
+        });
+    } catch (error) {
+        console.error('Error reading preset state sidecar:', error);
+        return sendResourceReadError(response, {
+            code: 'read_failed',
+            resource,
+            detail: 'Failed to read preset state.',
+            status: 500,
+        });
     }
 });
 

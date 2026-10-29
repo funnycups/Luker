@@ -17,6 +17,7 @@ import { buildStorageBackendCreds } from './admin-storage-backend.js';
 import { openLanSyncPanel } from './lan-sync.js';
 import { openStorageInspector, mountStorageInspector } from './storage-inspector.js';
 import { openBrowserStorageInspector } from './browser-storage-inspector.js';
+import { resetResourceReads } from './resource-read.js';
 
 /**
  * @type {import('../../src/users.js').UserViewModel} Logged in user
@@ -202,7 +203,11 @@ async function getCurrentUser() {
             throw new Error('Failed to get current user');
         }
 
-        currentUser = await response.json();
+        const nextUser = await response.json();
+        if (currentUser?.handle && currentUser.handle !== nextUser?.handle) {
+            resetResourceReads();
+        }
+        currentUser = nextUser;
         $('#admin_button').toggle(isAdmin());
         $('#server_logs_button').show();
     } catch (error) {
@@ -3556,6 +3561,7 @@ async function openAdminPanel() {
  * @returns {Promise<void>}
  */
 async function logout() {
+    resetResourceReads();
     await fetch('/api/users/logout', {
         method: 'POST',
         headers: getRequestHeaders({ omitContentType: true }),

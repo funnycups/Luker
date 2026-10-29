@@ -68,7 +68,7 @@ router.post('/something', async function (req, res) {
 
 ### Still on direct `fs.*` access
 
-- **Chats**: `/recent` (in-memory cached index — keeps parity with SqliteEngine's indexed scan), `/meta`, `/meta/patch`, `/get-delta`, `/export`, `/import`, `/search`, `/group/*` (all `/api/chats/group/*` group-chat handlers).
+- **Chats**: `/recent` (in-memory cached index — keeps parity with SqliteEngine's indexed scan), `/meta`, `/meta/patch`, `/export`, `/import`, `/search`, `/group/*` (all `/api/chats/group/*` group-chat handlers).
 - **Settings snapshot endpoints**: `/get-snapshots`, `/load-snapshot`, `/make-snapshot`, `/restore-snapshot` — covered by the engine-level snapshot API once they migrate.
 - **Presets**: `/restore` (reads from `getDefaultPresets`/`getDefaultPresetFile` content-manager, not user data).
 - **Secrets, user accounts, admin settings, announcements**: `src/endpoints/secrets.js`, `src/endpoints/users-private.js`, `src/endpoints/users-admin.js`, `src/admin-settings.js`, `src/announcements.js`. Secrets has ~20 external callers (`readSecret(directories, ...)` across `src/additional-headers.js`, `src/endpoints/{azure,novelai,translate,...}.js`, `src/users.js`); migrating to the handle-based API is a separate per-caller pass. User accounts / admin settings / announcements live in `node-persist` (`<dataRoot>/_storage/`), not user files, and would need a `NodePersistEngine` to share the Engine contract.

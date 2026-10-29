@@ -10,6 +10,8 @@ import { getFileNameValidationFunction } from '../middleware/validateFileName.js
 import { getSettingsRepo, getPresetRepo, getNamedDocRepo, getWorldInfoRepo } from '../storage/index.js';
 import { applyJsonPatch } from '../storage/repositories/json-patch.js';
 import { NotFoundError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
+import { buildSettingsFieldStructure, decodeResourcePointer } from '../../public/scripts/util/resource-fields.js';
+import { createPrivateRepresentation, sendJsonResource, sendPrivateRepresentation, sendResourceReadError } from '../http-resource-cache.js';
 
 const ENABLE_EXTENSIONS = !!getConfigValue('extensions.enabled', true, 'boolean');
 const ENABLE_EXTENSIONS_AUTO_UPDATE = !!getConfigValue('extensions.autoUpdate', true, 'boolean');
@@ -62,14 +64,32 @@ function retainSelectedPresetContents(fileContents, fileNames, selectedName) {
     return fileNames.map((name, index) => name === selectedName ? fileContents[index] : null);
 }
 
-// Engine-agnostic adapter: shape PresetRepo.listWithDocs() output to match
-// the legacy `{fileContents: string[], fileNames: string[]}` payload the
-// frontend expects (openai.js#hydrateOpenAIPresetData JSON.parses each
-// element). Keeping the strings means clients don't have to be re-taught.
-async function presetsFromRepo(handle, apiId) {
-    const entries = await getPresetRepo().listWithDocs(handle, apiId);
-    const fileContents = entries.map((e) => JSON.stringify(e.doc));
-    const fileNames = entries.map((e) => e.name);
+// Engine-agnostic adapter for the legacy `{fileContents: string[], fileNames:
+// string[]}` payload. Selected-only mode reads the directory and the selected
+// body instead of every body.
+async function presetsFromRepo(handle, apiId, { includeContents = true, selectedName = '' } = {}) {
+    const repo = getPresetRepo();
+    const entries = await repo.list(handle, apiId);
+    const fileNames = entries
+        .map((entry) => entry?.key?.name)
+        .filter((name) => typeof name === 'string' && name.length > 0)
+        .sort((a, b) => a.localeCompare(b));
+
+    if (includeContents) {
+        const docs = await repo.listWithDocs(handle, apiId);
+        return {
+            fileContents: docs.map((entry) => JSON.stringify(entry.doc)),
+            fileNames: docs.map((entry) => entry.name),
+        };
+    }
+
+    const fileContents = await Promise.all(fileNames.map(async (name) => {
+        if (name !== selectedName) {
+            return null;
+        }
+        const doc = await repo.get(handle, apiId, name);
+        return doc == null ? null : JSON.stringify(doc);
+    }));
     return { fileContents, fileNames };
 }
 
@@ -95,45 +115,44 @@ async function namedDocsFromRepo(handle, bucket) {
     });
 }
 
-export async function buildSettingsResponse(request, { includePresetContents = true, includeQuickReplyPresets = true } = {}) {
+async function loadOrInitializeSettings(request) {
     const handle = request.user.profile.handle;
     let parsedSettings = await getSettingsRepo().get(handle);
 
     if (parsedSettings == null) {
         // Fresh user (or fresh-db user whose data hasn't been migrated yet)
         // — seed the empty doc through the Repo so future /get + /patch
-        // calls work, and so we never bomb out the bootstrap with a 500.
-        // The legacy fs-mode path used `existsSync(settings.json)` and an
-        // empty object on miss; mirror that here.
+        // calls work. A present but unparseable legacy file is not a fresh
+        // user; it must surface instead of being replaced with {}.
         const pathToSettings = path.join(request.user.directories.root, 'settings.json');
         if (fs.existsSync(pathToSettings)) {
-            // One-shot import from the user's existing fs file (covers the
-            // fs→db migration case, where a switch from `storage.mode: fs`
-            // to `sqlite`/`mysql`/`postgres` happens without running the
-            // `storage:migrate` script first).
-            try {
-                parsedSettings = JSON.parse(fs.readFileSync(pathToSettings, 'utf8'));
-                await getSettingsRepo().save(handle, parsedSettings);
-            } catch (err) {
-                console.warn(`Failed to import legacy settings.json for ${handle}; using empty defaults.`, err?.message || err);
-                parsedSettings = {};
-                await getSettingsRepo().save(handle, parsedSettings);
-            }
+            parsedSettings = JSON.parse(fs.readFileSync(pathToSettings, 'utf8'));
+            await getSettingsRepo().save(handle, parsedSettings);
         } else {
             parsedSettings = {};
             await getSettingsRepo().save(handle, parsedSettings);
         }
     }
+    return parsedSettings;
+}
+
+export async function buildSettingsResponse(request, { includePresetContents = true, includeQuickReplyPresets = true } = {}) {
+    const handle = request.user.profile.handle;
+    const parsedSettings = await loadOrInitializeSettings(request);
     const settings = JSON.stringify(parsedSettings);
+    const selectedKoboldPreset = parsedSettings?.kai_settings?.preset_settings ?? parsedSettings?.preset_settings;
+    const selectedNovelPreset = parsedSettings?.preset_settings_novel;
+    const selectedOpenAIPreset = parsedSettings?.oai_settings?.preset_settings_openai ?? parsedSettings?.preset_settings_openai;
+    const selectedTextGenPreset = parsedSettings?.textgenerationwebui_settings?.preset;
 
     const { fileContents: novelai_settings, fileNames: novelai_setting_names }
-        = await presetsFromRepo(handle, 'novel');
+        = await presetsFromRepo(handle, 'novel', { includeContents: includePresetContents, selectedName: selectedNovelPreset });
     const { fileContents: openai_settings, fileNames: openai_setting_names }
-        = await presetsFromRepo(handle, 'openai');
+        = await presetsFromRepo(handle, 'openai', { includeContents: includePresetContents, selectedName: selectedOpenAIPreset });
     const { fileContents: textgenerationwebui_presets, fileNames: textgenerationwebui_preset_names }
-        = await presetsFromRepo(handle, 'textgenerationwebui');
+        = await presetsFromRepo(handle, 'textgenerationwebui', { includeContents: includePresetContents, selectedName: selectedTextGenPreset });
     const { fileContents: koboldai_settings, fileNames: koboldai_setting_names }
-        = await presetsFromRepo(handle, 'kobold');
+        = await presetsFromRepo(handle, 'kobold', { includeContents: includePresetContents, selectedName: selectedKoboldPreset });
 
     const world_names = await getWorldInfoRepo().listNames(handle);
 
@@ -165,11 +184,6 @@ export async function buildSettingsResponse(request, { includePresetContents = t
     const sysprompt = syspromptEntries.map(stampedName);
     const reasoning = reasoningEntries.map(stampedName);
 
-
-    const selectedKoboldPreset = parsedSettings?.kai_settings?.preset_settings ?? parsedSettings?.preset_settings;
-    const selectedNovelPreset = parsedSettings?.preset_settings_novel;
-    const selectedOpenAIPreset = parsedSettings?.oai_settings?.preset_settings_openai ?? parsedSettings?.preset_settings_openai;
-    const selectedTextGenPreset = parsedSettings?.textgenerationwebui_settings?.preset;
 
     return {
         settings,
@@ -278,6 +292,124 @@ function getLatestBackup(userDirectories, handle) {
 }
 
 export const router = express.Router();
+
+function settingsPointer(segments) {
+    return segments.map((segment) => `/${String(segment).replace(/~/g, '~0').replace(/\//g, '~1')}`).join('');
+}
+
+async function isSettingsLeafPath(handle, segments) {
+    if (segments.length === 0 || segments.length > 3) {
+        return false;
+    }
+    if (segments[0] !== 'extension_settings') {
+        return segments.length === 1;
+    }
+    if (segments.length === 1) {
+        const field = await getSettingsRepo().getFieldType(handle, '/extension_settings');
+        return !field.exists || field.type !== 'object';
+    }
+    if (segments.length === 2) {
+        const field = await getSettingsRepo().getFieldType(handle, settingsPointer(segments));
+        return !field.exists || field.type !== 'object';
+    }
+    const parent = await getSettingsRepo().getFieldType(handle, settingsPointer(segments.slice(0, 2)));
+    return !parent.exists || parent.type === 'object';
+}
+
+router.get('/fields', async function (request, response) {
+    try {
+        const account = request.user.profile.handle;
+        const document = await loadOrInitializeSettings(request);
+        const { containers, values } = buildSettingsFieldStructure(document);
+        const fields = [...values.keys()]
+            .sort((a, b) => a.localeCompare(b))
+            .map((path) => ({
+                path,
+                etag: createPrivateRepresentation({
+                    account,
+                    resource: `settings:field:${path}`,
+                    text: JSON.stringify(values.get(path)),
+                }).etag,
+            }));
+        return sendJsonResource(request, response, {
+            resource: 'settings:fields',
+            value: { containers, fields },
+        });
+    } catch (error) {
+        if (error instanceof SyntaxError) {
+            return sendResourceReadError(response, {
+                code: 'invalid_resource',
+                resource: 'settings',
+                detail: 'Settings document is not valid JSON.',
+                status: 422,
+            });
+        }
+        console.error('Error reading settings field directory:', error);
+        return sendResourceReadError(response, {
+            code: 'read_failed',
+            resource: 'settings',
+            detail: 'Failed to read the settings field directory.',
+            status: 500,
+        });
+    }
+});
+
+router.get('/field', async function (request, response) {
+    const pointer = String(request.query?.path ?? '');
+    let segments;
+    try {
+        segments = decodeResourcePointer(pointer);
+    } catch (error) {
+        return sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource: 'settings:field',
+            detail: error.message,
+            status: 400,
+        });
+    }
+    const handle = request.user.profile.handle;
+    try {
+        if (!await isSettingsLeafPath(handle, segments)) {
+            return sendResourceReadError(response, {
+                code: 'invalid_args',
+                resource: `settings:field:${pointer}`,
+                detail: 'Path is not a readable settings field.',
+                status: 400,
+            });
+        }
+        const field = await getSettingsRepo().getField(handle, pointer);
+        if (!field.exists) {
+            return sendResourceReadError(response, {
+                code: 'not_found',
+                resource: `settings:field:${pointer}`,
+                detail: 'Settings field does not exist.',
+                status: 404,
+            });
+        }
+        const representation = createPrivateRepresentation({
+            account: handle,
+            resource: `settings:field:${pointer}`,
+            text: JSON.stringify(field.value),
+        });
+        return sendPrivateRepresentation(request, response, representation);
+    } catch (error) {
+        if (error instanceof SyntaxError) {
+            return sendResourceReadError(response, {
+                code: 'invalid_resource',
+                resource: `settings:field:${pointer}`,
+                detail: 'Settings document is not valid JSON.',
+                status: 422,
+            });
+        }
+        console.error('Error reading settings field:', error);
+        return sendResourceReadError(response, {
+            code: 'read_failed',
+            resource: `settings:field:${pointer}`,
+            detail: 'Failed to read the settings field.',
+            status: 500,
+        });
+    }
+});
 
 router.post('/patch', async function (request, response) {
     try {

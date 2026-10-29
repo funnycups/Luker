@@ -1,6 +1,7 @@
 import { Fuse } from '../lib.js';
 
 import { saveSettings, substituteParams, getRequestHeaders, chat_metadata, this_chid, characters, saveCharacterDebounced, menu_type, eventSource, event_types, getExtensionPromptByName, saveMetadata, getCurrentChatId, extension_prompt_roles, create_save, name1, buildObjectPatchOperationsAsync, requestAsyncDiffForNextSettingsSave, getOneCharacter, select_selected_character } from '../script.js';
+import { readWorldInfoDocument } from './named-resource-read.js';
 import { areLookupNamesEqual, download, debounce, findCanonicalIndexInList, findCanonicalNameInList, initScrollHeight, resetScrollHeight, parseJsonFile, extractDataFromPng, getFileBuffer, getCharaFilename, escapeRegex, PAGINATION_TEMPLATE, navigation_option, waitUntilCondition, isTrueBoolean, setValueByPath, flashHighlight, select2ModifyOptions, getSelect2OptionId, dynamicSelect2DataViaAjax, highlightRegex, select2ChoiceClickSubscribe, isFalseBoolean, getSanitizedFilename, checkOverwriteExistingData, getStringHash, parseStringArray, cancelDebounce, findChar, onlyUnique, equalsIgnoreCaseAndAccents, uuidv4, normalizeArray, getUniqueName, logSlashCommandWarn, addLongPressEvent, escapeHtml, setInfoBlock, clearInfoBlock } from './utils.js';
 import { extension_settings, getContext, writeExtensionField } from './extensions.js';
 import { NOTE_MODULE_NAME, metadata_keys, shouldWIAddPrompt } from './authors-note.js';
@@ -3021,26 +3022,24 @@ export async function loadWorldInfoBatch(names) {
             pendingNames.map((name) => [name, getWorldInfoRequestGeneration(name)]),
         );
         const batchPromise = (async () => {
-            const response = await fetch('/api/worldinfo/get-batch', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({ names: pendingNames }),
-                cache: 'no-cache',
-            });
-
-            if (!response.ok) {
-                return new Map(pendingNames.map((name) => [name, null]));
-            }
-
-            const payload = await response.json();
             const batchResults = new Map();
-            for (const name of pendingNames) {
-                const data = isPlainObject(payload?.data?.[name]) ? payload.data[name] : null;
+            await Promise.all(pendingNames.map(async (name) => {
+                let data = null;
+                try {
+                    data = await readWorldInfoDocument(name);
+                } catch (error) {
+                    if (error?.code === 'http_error' && error.status === 404) {
+                        data = { entries: {} };
+                    } else {
+                        console.warn(`Failed to load World Info ${name}`, error);
+                        toastr.error(t`Failed to load World Info ${name}.`, t`Error`, { preventDuplicates: true });
+                    }
+                }
                 if (data && requestGenerationByName.get(name) === getWorldInfoRequestGeneration(name)) {
                     cacheWorldInfoData(name, data);
                 }
                 batchResults.set(name, data);
-            }
+            }));
             return batchResults;
         })();
 

@@ -10,14 +10,13 @@ import { resolvePathWithinParent } from '../util.js';
 
 export const router = express.Router();
 
-// CardApp files are user-editable hot content (Studio writes + runtime reload).
-// Browser or reverse-proxy caches (Cloudflare, nginx) routinely serve stale .js/.css
-// to subsequent fetches even after PUT, so opt every GET out of caching entirely.
+// CardApp files are user-editable hot content. Keep the existing URLs stable,
+// but make every GET revalidate so an edit is visible without clearing the
+// whole origin cache. The entry module still carries its activation URL.
 router.use((request, response, next) => {
     if (request.method === 'GET') {
-        response.setHeader('Cache-Control', 'no-store, must-revalidate');
-        response.setHeader('Pragma', 'no-cache');
-        response.setHeader('Expires', '0');
+        response.setHeader('Cache-Control', 'private, no-cache, max-age=1');
+        response.setHeader('Vary', 'Cookie');
     }
     next();
 });

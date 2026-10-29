@@ -1,11 +1,12 @@
 import _ from 'lodash';
 
-import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../errors.js';
+import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError, UnsafePatchPathError } from '../errors.js';
 
 export function applyJsonPatch(doc, ops) {
     const result = _.cloneDeep(doc);
     for (const op of ops) {
         const segs = op.path.split('/').slice(1).map(decode);
+        assertSafePath(result, segs, op.path);
         if (op.op === 'test') {
             if (!_.isEqual(getAt(result, segs), op.value)) {
                 throw new PatchTestFailedError(op.path);
@@ -21,6 +22,23 @@ export function applyJsonPatch(doc, ops) {
 }
 
 function decode(s) { return s.replace(/~1/g, '/').replace(/~0/g, '~'); }
+function assertSafePath(doc, segs, path) {
+    let current = doc;
+    for (const segment of segs) {
+        if (segment === '__proto__') {
+            throw new UnsafePatchPathError(path);
+        }
+        if ((segment === 'constructor' || segment === 'prototype')
+            && (current === null || typeof current !== 'object'
+                || !Object.prototype.hasOwnProperty.call(current, segment))) {
+            throw new UnsafePatchPathError(path);
+        }
+        if (current === null || typeof current !== 'object') {
+            return;
+        }
+        current = current[segment];
+    }
+}
 function getAt(o, segs) { return segs.reduce((c, s) => (c == null ? c : c[s]), o); }
 function setAt(o, segs, v, path) {
     const p = getAt(o, segs.slice(0, -1));

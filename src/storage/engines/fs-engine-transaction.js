@@ -10,6 +10,8 @@ import { PRESET_FOLDER_BY_API_ID } from '../repositories/preset-repo.js';
 import { BUCKET_TO_DIR } from '../repositories/named-doc-repo.js';
 import { assertSafeRepoNameShape } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
+import { invalidateCurrentJsonFile, readCurrentJsonFile } from './current-json-file.js';
+import { jsonTypeOf } from './json-value.js';
 
 export class FsTransaction {
     constructor({ directoriesByHandle }) {
@@ -312,19 +314,57 @@ function registerSettingsHandler(tx) {
             if (!fs.existsSync(fp)) return null;
             return JSON.parse(fs.readFileSync(fp, 'utf-8'));
         },
+        getResourceField(key, segments) {
+            const fp = filePath(key);
+            const doc = readCurrentJsonFile(fp);
+            if (doc == null) {
+                return { exists: false };
+            }
+            let current = doc;
+            let parentType;
+            for (const segment of segments) {
+                if (current === null || typeof current !== 'object' || Array.isArray(current)
+                    || !Object.prototype.hasOwnProperty.call(current, segment)) {
+                    return { exists: false };
+                }
+                parentType = jsonTypeOf(current);
+                current = current[segment];
+            }
+            return { exists: true, value: current, type: jsonTypeOf(current), parentType };
+        },
+        getResourceFieldType(key, segments) {
+            const fp = filePath(key);
+            const doc = readCurrentJsonFile(fp);
+            if (doc == null) {
+                return { exists: false };
+            }
+            let current = doc;
+            for (const segment of segments) {
+                if (current === null || typeof current !== 'object' || Array.isArray(current)
+                    || !Object.prototype.hasOwnProperty.call(current, segment)) {
+                    return { exists: false };
+                }
+                current = current[segment];
+            }
+            return { exists: true, type: jsonTypeOf(current) };
+        },
         put(key, record) {
             const fp = filePath(key);
             fs.mkdirSync(path.dirname(fp), { recursive: true });
             writeFileAtomic(fp, JSON.stringify(record.doc, null, 4));
+            invalidateCurrentJsonFile(fp);
         },
         delete(key) {
             const fp = filePath(key);
             if (!fs.existsSync(fp)) return false;
             fs.unlinkSync(fp);
+            invalidateCurrentJsonFile(fp);
             return true;
         },
         list() { throw new Error('settings is a singleton; list unsupported'); },
     });
+    tx.getResourceField = (key, segments) => tx._h('settings', 'getResourceField').getResourceField(key, segments);
+    tx.getResourceFieldType = (key, segments) => tx._h('settings', 'getResourceFieldType').getResourceFieldType(key, segments);
 }
 
 function registerPresetHandler(tx) {
@@ -514,6 +554,15 @@ function registerWorldInfoHandler(tx) {
             return out;
         },
     });
+
+    tx.listWorldNames = async (handle) => {
+        const dir = worldsDir(handle);
+        if (!fs.existsSync(dir)) return [];
+        return fs.readdirSync(dir)
+            .filter((entry) => path.extname(entry).toLowerCase() === '.json')
+            .map((entry) => path.parse(entry).name)
+            .sort((a, b) => a.localeCompare(b));
+    };
 
     tx.resolveWorldName = async (key) => {
         const filename = resolveCanonicalFilename(key);

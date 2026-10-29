@@ -117,6 +117,23 @@ export const read = (image) => {
 };
 
 /**
+ * Copies a PNG while dropping character-card text chunks. Used for display
+ * derivatives that must not carry the embedded card payload.
+ * @param {Buffer} image PNG image buffer
+ * @returns {Buffer} PNG buffer without chara/ccv3 metadata
+ */
+export const stripCharacterMetadata = (image) => {
+    const chunks = extract(image).filter((chunk) => {
+        if (chunk.name !== 'tEXt') {
+            return true;
+        }
+        const keyword = readTextChunkKeyword(chunk.data).toLowerCase();
+        return keyword !== 'chara' && keyword !== 'ccv3';
+    });
+    return Buffer.from(encode(chunks));
+};
+
+/**
  * Parses a card image and returns the character metadata.
  * @param {string} cardUrl Path to the card image
  * @param {string} format File format

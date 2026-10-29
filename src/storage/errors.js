@@ -44,6 +44,15 @@ export class UnsupportedPatchOpError extends Error {
     }
 }
 
+export class UnsafePatchPathError extends UnsupportedPatchOpError {
+    constructor(path) {
+        super('unsafe_path');
+        this.name = 'UnsafePatchPathError';
+        this.code = 'patch_unsafe_path';
+        this.path = path;
+    }
+}
+
 export class StorageReadOnlyError extends Error {
     constructor() {
         super('storage is read-only: a migration is in progress');

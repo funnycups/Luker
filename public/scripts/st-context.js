@@ -66,6 +66,8 @@ import {
     updateChatState,
     setVariable,
     getPresetState,
+    listPresetDocuments,
+    readPresetDocument,
     getPresetStateBatch,
     patchPresetState,
     updatePresetState,
@@ -2564,6 +2566,8 @@ export function getContext() {
         createFloorState,
         presets: {
             list: listPresetRefs,
+            listDocuments: listPresetDocuments,
+            readDocument: readPresetDocument,
             resolve: normalizePresetRef,
             resolveGlobalOnly: resolvePresetGlobalOnly,
             getSelected: getSelectedPresetRef,

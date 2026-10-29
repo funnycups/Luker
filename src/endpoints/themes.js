@@ -2,8 +2,10 @@ import express from 'express';
 import { InvalidArgumentError, NotFoundError } from '../storage/errors.js';
 import { getNamedDocRepo } from '../storage/index.js';
 import { assertSafeRepoName } from '../storage/name-validation.js';
+import { registerNamedDocReadRoutes } from './named-doc-routes.js';
 
 export const router = express.Router();
+registerNamedDocReadRoutes(router, 'themes');
 
 router.post('/save', async (request, response) => {
     if (!request.body || !request.body.name) return response.sendStatus(400);

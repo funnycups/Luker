@@ -8,6 +8,7 @@ import { normalizeLookupText } from '../util.js';
 import { getWorldInfoRepo } from '../storage/index.js';
 import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError, StorageReadOnlyError, InvalidArgumentError } from '../storage/errors.js';
 import { assertSafeRepoName } from '../storage/name-validation.js';
+import { sendJsonResource, sendResourceReadError } from '../http-resource-cache.js';
 
 /**
  * Coerces a corrupt `entries` array — `[null, null, ..., {uid:66,...}]`, a shape
@@ -204,6 +205,70 @@ export function resolveWorldInfoFilename(directory, worldInfoName) {
 }
 
 export const router = express.Router();
+
+router.get('/list', async (request, response) => {
+    try {
+        const names = await getWorldInfoRepo().listNames(request.user.profile.handle);
+        return sendJsonResource(request, response, {
+            resource: 'world-list',
+            value: { names },
+        });
+    } catch (error) {
+        console.error('Error reading World Info names:', error);
+        return sendResourceReadError(response, {
+            code: 'read_failed',
+            resource: 'world-list',
+            detail: 'Failed to read the World Info directory.',
+            status: 500,
+        });
+    }
+});
+
+router.get('/get', async (request, response) => {
+    const requested = String(request.query?.name || '').trim();
+    if (!requested) {
+        return sendResourceReadError(response, {
+            code: 'invalid_args',
+            resource: 'world',
+            detail: 'Expected a World Info name.',
+            status: 400,
+        });
+    }
+    const repo = getWorldInfoRepo();
+    const handle = request.user.profile.handle;
+    try {
+        const canonical = await repo.resolveName(handle, requested);
+        if (canonical == null) {
+            return sendResourceReadError(response, {
+                code: 'not_found',
+                resource: `world:${requested}`,
+                detail: 'World Info does not exist.',
+                status: 404,
+            });
+        }
+        const file = await getNormalizedWorldInfoFile(repo, handle, requested);
+        if (file == null) {
+            return sendResourceReadError(response, {
+                code: 'invalid_resource',
+                resource: `world:${canonical}`,
+                detail: 'World Info is not a valid JSON object.',
+                status: 422,
+            });
+        }
+        return sendJsonResource(request, response, {
+            resource: `world:${canonical}`,
+            value: file,
+        });
+    } catch (error) {
+        console.error('Error reading World Info:', error);
+        return sendResourceReadError(response, {
+            code: 'read_failed',
+            resource: `world:${requested}`,
+            detail: 'Failed to read World Info.',
+            status: 500,
+        });
+    }
+});
 
 router.post('/list', async (request, response) => {
     try {

@@ -6458,4 +6458,7 @@
     ,"Some templates could not be deleted": "部分模板删除失败"
     ,"Failed to export presets": "导出预设失败"
     ,"Failed to export World/Lorebooks": "导出世界书失败"
+    ,"Failed to load settings resources.": "加载设置资源失败。"
+    ,"Skipped unreadable ${0}.": "${0} 无法读取，已跳过。"
+    ,"Failed to load World Info ${0}.": "加载世界书 ${0} 失败。"
 }

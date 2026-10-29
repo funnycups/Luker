@@ -270,7 +270,6 @@ export const SCRIPT_EXPORT_NAMES = Object.freeze([
   "setCharacterId",
   "setCharacterName",
   "setCharacterSettingsOverrides",
-  "setChatServerState",
   "setEditedMessageId",
   "setExtensionPrompt",
   "setExternalAbortController",
