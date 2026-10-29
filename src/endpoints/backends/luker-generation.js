@@ -786,6 +786,53 @@ export async function completeGenerationJobFromPayload(request, job, payload, mo
     return await completeGenerationJobFromText(request, job, text, modelName);
 }
 
+/**
+ * Abort a running generation job from the request inspector.
+ *
+ * Differs from `cancelGenerationJobForRequest` in two ways that matter to the
+ * client:
+ *   - the job is marked `cancelled` (a user-initiated stop), not `failed`;
+ *   - a terminal `error` event with `code: 'aborted'` is appended BEFORE the
+ *     upstream AbortController fires. The WS delivery layer turns that code
+ *     into a real AbortError on the client, which is what blocks the HTTP
+ *     retry loop and the auto-continue / auto-swipe paths. Relying on the
+ *     dispatch's own AbortError is not enough: some dispatches swallow it and
+ *     return normally, and the generic error frame does not carry the abort
+ *     code.
+ *
+ * @param {object} job
+ * @param {string} [reason]
+ * @returns {boolean} true when the job was running and is now cancelled
+ */
+export function abortGenerationJobForInspector(job, reason = 'Aborted from request inspector') {
+    if (!job) return false;
+    if (!['running', 'queued'].includes(String(job.status || ''))) return false;
+
+    clearGenerationJobPersistenceTimer(job);
+    job.persistenceInFlight = false;
+    job.status = 'cancelled';
+    job.cancelledByUser = true;
+    job.error = String(reason || 'Aborted from request inspector');
+    job.updatedAt = Date.now();
+    job.finishedAt = Date.now();
+    job.persisted = false;
+
+    // Append the terminal frame before aborting so subscribers receive an
+    // explicit abort even when the dispatch catches the AbortError and
+    // returns without emitting one of its own.
+    appendGenerationEvent(job, {
+        kind: 'error',
+        data: { code: 'aborted', message: job.error },
+    });
+
+    if (job.abortController && !job.abortController.signal?.aborted) {
+        try { job.abortController.abort(job.error); } catch { /* already aborted */ }
+    }
+    job.abortController = null;
+    notifyJobStatus(job);
+    return true;
+}
+
 export function cancelGenerationJobForRequest(request, jobId, reason = 'Cancelled by user') {
     pruneGenerationJobs();
     const id = String(jobId || '').trim();

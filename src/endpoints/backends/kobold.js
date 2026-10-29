@@ -12,6 +12,7 @@ import {
     completeEmbeddingInspection,
     failEmbeddingInspection,
     extractEmbeddingMeta,
+    getInspectionAbortSignal,
 } from '../../request-inspector.js';
 
 export const router = express.Router();
@@ -153,6 +154,7 @@ router.post('/embed', async function (request, response) {
                 ...headers,
             },
             body: JSON.stringify(wireBody),
+            signal: getInspectionAbortSignal(request),
         });
 
         /** @type {any} */
@@ -172,6 +174,9 @@ router.post('/embed', async function (request, response) {
         });
         return response.json({ model, embeddings });
     } catch (error) {
+        if (getInspectionAbortSignal(request)?.aborted) {
+            return response.status(499).json({ error: 'aborted' });
+        }
         console.error('KoboldCpp embedding failed', error);
         failEmbeddingInspection(request, error?.message || String(error), 500);
         response.status(500).send('Internal server error');

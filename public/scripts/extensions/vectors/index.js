@@ -824,6 +824,10 @@ async function createKoboldCppEmbeddings(items, profile) {
         body: JSON.stringify({ items: items, server }),
     });
 
+    if (response.status === 499) {
+        throw new DOMException('Aborted from request inspector', 'AbortError');
+    }
+
     if (!response.ok) {
         throw new Error('Failed to get KoboldCpp embeddings');
     }

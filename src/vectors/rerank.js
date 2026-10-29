@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
 
 const DEFAULT_COHERE_URL = 'https://api.cohere.ai/v2';
 const DEFAULT_JINA_URL = 'https://api.jina.ai/v1';
@@ -79,6 +79,7 @@ async function rerankCohere(settings, query, documents, topK, directories, reque
             'Authorization': `Bearer ${key}`,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {
@@ -125,6 +126,7 @@ async function rerankJina(settings, query, documents, topK, directories, request
             'Authorization': `Bearer ${key}`,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {
@@ -183,6 +185,7 @@ async function rerankCustom(settings, query, documents, topK, directories, reque
         method: 'POST',
         headers: headers,
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {

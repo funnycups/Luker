@@ -6,6 +6,7 @@
 
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { t } from './i18n.js';
+import { getRequestHeaders } from '../script.js';
 import {
     normalizeWireTools,
     describeToolChoice,
@@ -278,7 +279,7 @@ function buildTableHtml(items) {
  <td title="${escapeHtml(item.model)}">${escapeHtml(modelShort)}</td>
  <td class="ri-info-cell">${buildInfoCell(item)}</td>
  <td class="ri-mono">${formatDuration(item.durationMs)}</td>
- <td>${statusIcon(item.status)}</td>
+ <td>${statusIcon(item.status)}${item.abortKind ? ` <button class="ri-abort-btn menu_button" data-id="${escapeHtml(item.id)}" data-job-id="${escapeHtml(item.generationJobId || '')}" data-abort-kind="${escapeHtml(item.abortKind)}" title="${escapeHtml(t`Abort Request`)}">${escapeHtml(t`Abort`)}</button>` : ''}</td>
  </tr>`;
     }
 
@@ -677,6 +678,11 @@ function buildChatDetailBody(detail) {
  </div>`;
 }
 
+function buildAbortButton(detail) {
+    if (!detail?.abortKind) return '';
+    return `<button class="ri-abort menu_button" data-id="${escapeHtml(detail.id)}" data-job-id="${escapeHtml(detail.generationJobId || '')}" data-abort-kind="${escapeHtml(detail.abortKind)}">${escapeHtml(t`Abort Request`)}</button>`;
+}
+
 function buildChatDetailHtml(detail) {
     const usage = detail.usage || {};
     const wireReasoningEffort = extractWireReasoningEffort(detail.wireRequest);
@@ -712,6 +718,7 @@ function buildChatDetailHtml(detail) {
  <div class="ri-detail">
  <div class="ri-detail-header">
  <button class="ri-back menu_button">\u2190 ${t`Back`}</button>
+ ${buildAbortButton(detail)}
  <button class="ri-export menu_button" data-id="${escapeHtml(detail.id)}">${t`Export JSON`}</button>
  <input type="text" class="ri-detail-search text_pole" placeholder="${t`Search in this request...`}" value="${escapeHtml(currentDetailSearch)}" />
  </div>
@@ -773,6 +780,7 @@ function buildImageDetailHtml(detail) {
  <div class="ri-detail">
  <div class="ri-detail-header">
  <button class="ri-back menu_button">\u2190 ${t`Back`}</button>
+ ${buildAbortButton(detail)}
  <button class="ri-export menu_button" data-id="${escapeHtml(detail.id)}">${t`Export JSON`}</button>
  </div>
 
@@ -941,6 +949,7 @@ function buildEmbeddingDetailHtml(detail) {
  <div class="ri-detail">
  <div class="ri-detail-header">
  <button class="ri-back menu_button">\u2190 ${t`Back`}</button>
+ ${buildAbortButton(detail)}
  <button class="ri-export menu_button" data-id="${escapeHtml(detail.id)}">${t`Export JSON`}</button>
  <input type="text" class="ri-detail-search text_pole" placeholder="${t`Search in this request...`}" value="${escapeHtml(currentDetailSearch)}" />
  </div>
@@ -988,6 +997,48 @@ function buildDetailHtml(detail) {
     return buildChatDetailHtml(detail);
 }
 
+async function readAbortError(res) {
+    let message = `HTTP ${res.status}`;
+    try {
+        const body = await res.json();
+        if (body?.error) message = String(body.error);
+    } catch { /* non-JSON error body */ }
+    return message;
+}
+
+async function abortInspectorRequest({ id, jobId, abortKind }) {
+    if (abortKind === 'job') {
+        const res = await fetch(`/api/generation/${encodeURIComponent(jobId)}/abort`, {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ source: 'inspector' }),
+        });
+        if (!res.ok) throw new Error(await readAbortError(res));
+        return;
+    }
+    if (abortKind === 'request') {
+        const res = await fetch(`/api/request-inspector/${encodeURIComponent(id)}/abort`, {
+            method: 'POST',
+            headers: getRequestHeaders(),
+        });
+        if (!res.ok) throw new Error(await readAbortError(res));
+        return;
+    }
+    throw new Error('not_abortable');
+}
+
+async function refreshInspectorView(content) {
+    if (cachedDetail?.id) {
+        const detail = await fetchDetail(cachedDetail.id);
+        cachedDetail = detail;
+        content.html(buildDetailHtml(detail));
+        bindLazyImagePreviews(content[0]);
+        return;
+    }
+    const items = await fetchList();
+    content.html(buildListHtml(items));
+}
+
 async function openInspectorPanel() {
     const items = await fetchList();
     const content = $('<div class="ri-container"></div>');
@@ -1014,6 +1065,26 @@ async function openInspectorPanel() {
         content.html(buildDetailHtml(detail));
         bindLazyImagePreviews(content[0]);
         content.closest('.popup-content').scrollTop(0);
+    });
+
+    content.on('click', '.ri-abort, .ri-abort-btn', async function (event) {
+        event.stopPropagation();
+        const $btn = $(this);
+        const id = String($btn.attr('data-id') || '');
+        const jobId = String($btn.attr('data-job-id') || '');
+        const abortKind = String($btn.attr('data-abort-kind') || '');
+        if (!abortKind) return;
+        $btn.prop('disabled', true);
+        try {
+            await abortInspectorRequest({ id, jobId, abortKind });
+            toastr.success(t`Request aborted.`, t`Request Inspector`);
+            await refreshInspectorView(content);
+        } catch (err) {
+            console.error(`[${MODULE_NAME}] Failed to abort request:`, err);
+            toastr.error(t`Failed to abort request.`, t`Request Inspector`);
+        } finally {
+            $btn.prop('disabled', false);
+        }
     });
 
     content.on('click', '.ri-back', async function () {

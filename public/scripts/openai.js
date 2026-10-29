@@ -4427,6 +4427,12 @@ async function attemptPlainTextFunctionCallRetry({
                 return { responseData: currentResponseData, inspection: currentInspection };
             }
         } catch (error) {
+            // An abort is terminal. Returning the previous response here
+            // would swallow a user stop (or a request-inspector abort) and
+            // let the caller persist a reply the user already cancelled.
+            if (error?.name === 'AbortError' || signal?.aborted) {
+                throw error;
+            }
             console.warn('[openai] Plain-text function-call retry request failed', error);
             return { responseData: currentResponseData, inspection: currentInspection };
         }
@@ -4672,6 +4678,12 @@ async function sendOpenAIRequest(type, messages, signal, {
                         }));
                         changed = true;
                     } catch (error) {
+                        // Abort is terminal even when the caller did not
+                        // require a tool call. Swallowing it here would let
+                        // the partial reply be treated as a successful turn.
+                        if (error?.name === 'AbortError' || signal?.aborted) {
+                            throw error;
+                        }
                         console.warn('[openai] Failed to parse plain-text function calls from streaming response', error);
                         if (requiresToolCall) {
                             throw error;

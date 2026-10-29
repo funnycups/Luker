@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
 import { OPENROUTER_HEADERS } from '../constants.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
 
 const SOURCES = {
     'togetherai': {
@@ -143,6 +143,7 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
             ...config.headers,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {

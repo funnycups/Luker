@@ -1,11 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import express from 'express';
+import supertest from 'supertest';
 import {
+    router as inspectorRouter,
     startInspection,
     completeInspection,
     completeInspectionFromStream,
     cleanupExpiredEntries,
     getBufferForHandle,
     resolveEffectiveApiKey,
+    startEmbeddingInspection,
+    startImageInspection,
+    completeEmbeddingInspection,
+    failEmbeddingInspection,
+    failInspection,
+    abortInspectionByJobId,
+    abortInspectionEntry,
+    getInspectionAbortSignal,
+    getAbortKind,
 } from '../src/request-inspector.js';
 
 // Each test gets a unique handle so the module-level ring buffer stays
@@ -678,6 +690,156 @@ describe('request-inspector: reasoning_details accumulation and dedup', () => {
                 details: [{ type: 'reasoning.text', text: 'dup' }],
             },
         ]);
+    });
+});
+
+describe('request-inspector: abort', () => {
+    test('startInspection records the generation job id', () => {
+        const req = newRequest();
+        req.lukerGenerationJob = { id: 'job-abc' };
+        startInspection(req);
+
+        const entry = getEntry(req);
+        expect(entry.generationJobId).toBe('job-abc');
+        expect(getAbortKind(entry)).toBe('job');
+    });
+
+    test('abortInspectionByJobId marks the running entry aborted and failInspection cannot overwrite it', () => {
+        const req = newRequest();
+        req.lukerGenerationJob = { id: 'job-abort-1' };
+        startInspection(req);
+
+        const aborted = abortInspectionByJobId(req.user.profile.handle, 'job-abort-1', 'inspector stop');
+        expect(aborted).toBeTruthy();
+        expect(aborted.status).toBe('aborted');
+        expect(aborted.error).toBe('inspector stop');
+
+        failInspection(req, 'The operation was aborted', 500);
+        expect(getEntry(req).status).toBe('aborted');
+    });
+
+    test('image entries record the generation job id and are job-abortable', () => {
+        const req = newRequest('sd');
+        req.lukerGenerationJob = { id: 'job-image-1' };
+        startImageInspection(req, { source: 'sd', prompt: 'a cat' });
+
+        const entry = getEntry(req);
+        expect(entry.generationJobId).toBe('job-image-1');
+        expect(getAbortKind(entry)).toBe('job');
+    });
+
+    test('embedding entries expose an abort signal and abortInspectionEntry aborts it', () => {
+        const req = newRequest('openai');
+        startEmbeddingInspection(req, {
+            source: 'openai',
+            model: 'text-embedding-3-small',
+            routeKind: 'query',
+            inputCount: 1,
+            inputCharTotal: 2,
+            inputTexts: [{ index: 0, text: 'hi' }],
+        });
+
+        const entry = getEntry(req);
+        const signal = getInspectionAbortSignal(req);
+        expect(signal).toBeTruthy();
+        expect(signal.aborted).toBe(false);
+        expect(getAbortKind(entry)).toBe('request');
+
+        const aborted = abortInspectionEntry(req.user.profile.handle, entry.id, 'inspector stop');
+        expect(aborted).toBeTruthy();
+        expect(aborted.status).toBe('aborted');
+        expect(signal.aborted).toBe(true);
+
+        failEmbeddingInspection(req, 'aborted', 500);
+        expect(getEntry(req).status).toBe('aborted');
+    });
+
+    test('completeEmbeddingInspection cannot overwrite an aborted entry', () => {
+        const req = newRequest('openai');
+        startEmbeddingInspection(req, {
+            source: 'openai',
+            model: 'text-embedding-3-small',
+            routeKind: 'query',
+            inputCount: 1,
+            inputCharTotal: 2,
+            inputTexts: [{ index: 0, text: 'hi' }],
+        });
+        const entry = getEntry(req);
+        abortInspectionEntry(req.user.profile.handle, entry.id, 'inspector stop');
+
+        completeEmbeddingInspection(req, { resultCount: 1, vectorDim: 3 });
+        expect(getEntry(req).status).toBe('aborted');
+    });
+
+    test('getAbortKind returns empty for terminal entries', () => {
+        const req = newRequest();
+        req.lukerGenerationJob = { id: 'job-terminal' };
+        startInspection(req);
+        const entry = getEntry(req);
+        entry.status = 'success';
+        expect(getAbortKind(entry)).toBe('');
+    });
+});
+
+describe('request-inspector: abort route', () => {
+    function makeApp(handle) {
+        const app = express();
+        app.use(express.json());
+        app.use((req, _res, next) => {
+            req.user = { profile: { handle }, directories: {} };
+            next();
+        });
+        app.use('/api/request-inspector', inspectorRouter);
+        return app;
+    }
+
+    test('aborts a running embedding entry through its own controller', async () => {
+        const req = newRequest('openai');
+        startEmbeddingInspection(req, {
+            source: 'openai',
+            model: 'text-embedding-3-small',
+            routeKind: 'query',
+            inputCount: 1,
+            inputCharTotal: 2,
+            inputTexts: [{ index: 0, text: 'hi' }],
+        });
+        const entry = getEntry(req);
+        const signal = getInspectionAbortSignal(req);
+
+        const app = makeApp(req.user.profile.handle);
+        const res = await supertest(app).post(`/api/request-inspector/${entry.id}/abort`).send();
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ aborted: true });
+        expect(entry.status).toBe('aborted');
+        expect(signal.aborted).toBe(true);
+    });
+
+    test('rejects job-backed entries with use_generation_abort', async () => {
+        const req = newRequest();
+        req.lukerGenerationJob = { id: 'job-route-1' };
+        startInspection(req);
+        const entry = getEntry(req);
+
+        const app = makeApp(req.user.profile.handle);
+        const res = await supertest(app).post(`/api/request-inspector/${entry.id}/abort`).send();
+
+        expect(res.status).toBe(409);
+        expect(res.body).toEqual({ aborted: false, error: 'use_generation_abort' });
+        expect(entry.status).toBe('running');
+    });
+
+    test('returns 409 for a terminal entry', async () => {
+        const req = newRequest();
+        startInspection(req);
+        const entry = getEntry(req);
+        entry.status = 'success';
+
+        const app = makeApp(req.user.profile.handle);
+        const res = await supertest(app).post(`/api/request-inspector/${entry.id}/abort`).send();
+
+        expect(res.status).toBe(409);
+        expect(res.body).toEqual({ aborted: false, error: 'not_running' });
     });
 });
 

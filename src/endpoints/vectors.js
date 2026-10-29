@@ -25,6 +25,7 @@ import {
     completeEmbeddingInspection,
     failEmbeddingInspection,
     extractEmbeddingMeta,
+    getInspectionAbortSignal,
 } from '../request-inspector.js';
 
 // Vector sources that never hit an upstream HTTP endpoint from the server:
@@ -420,6 +421,22 @@ async function regenerateCorruptedIndexErrorHandler(req, res, error) {
     return res.sendStatus(500);
 }
 
+/**
+ * Translate an inspector-driven abort into a 499 response. The client's
+ * `vectorFetch` maps 499 to an AbortError so callers see a user-style abort
+ * instead of a generic upstream failure. Returns true when the response was
+ * already sent.
+ *
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {boolean}
+ */
+function sendInspectionAbortIfNeeded(req, res) {
+    if (!getInspectionAbortSignal(req)?.aborted) return false;
+    res.status(499).json({ error: 'aborted' });
+    return true;
+}
+
 export const router = express.Router();
 
 router.post('/query', async (req, res) => {
@@ -460,6 +477,7 @@ router.post('/query', async (req, res) => {
         }
         return res.json(results);
     } catch (error) {
+        if (sendInspectionAbortIfNeeded(req, res)) return;
         if (isLocalInferenceUnavailable(error)) {
             return sendLocalInferenceUnavailable(res, error);
         }
@@ -543,6 +561,7 @@ router.post('/query-multi', async (req, res) => {
         }
         return res.json(results);
     } catch (error) {
+        if (sendInspectionAbortIfNeeded(req, res)) return;
         if (isLocalInferenceUnavailable(error)) {
             return sendLocalInferenceUnavailable(res, error);
         }
@@ -588,6 +607,7 @@ router.post('/rerank', async (req, res) => {
         });
         return res.json(results);
     } catch (error) {
+        if (sendInspectionAbortIfNeeded(req, res)) return;
         if (isLocalInferenceUnavailable(error)) {
             return sendLocalInferenceUnavailable(res, error);
         }
@@ -672,6 +692,7 @@ router.post('/insert', async (req, res) => {
         }
         return res.sendStatus(200);
     } catch (error) {
+        if (sendInspectionAbortIfNeeded(req, res)) return;
         if (isLocalInferenceUnavailable(error)) {
             return sendLocalInferenceUnavailable(res, error);
         }

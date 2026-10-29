@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
 import { getGoogleApiConfig } from '../endpoints/google.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
 
 /**
  * Gets the vector for the given text from Google AI Studio
@@ -29,6 +29,7 @@ export async function getMakerSuiteBatchVector(texts, model, request) {
         body: JSON.stringify(body),
         method: 'POST',
         headers: headers,
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {
@@ -68,6 +69,7 @@ export async function getVertexBatchVector(texts, model, request) {
         body: JSON.stringify(body),
         method: 'POST',
         headers: headers,
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {

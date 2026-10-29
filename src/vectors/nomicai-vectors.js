@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
 
 const SOURCES = {
     'nomicai': {
@@ -61,6 +61,7 @@ export async function getNomicAIBatchVector(texts, source, directories, sourceSe
             Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {

@@ -804,15 +804,17 @@ function renderLukerRecoveryPreview(text, status = 'running') {
         }
     }
 
-    const statusText = status === 'failed'
-        ? t`Generation failed on server`
-        : status === 'completed'
-            ? t`Generation completed on server`
-            : status === 'awaiting_ack'
-                ? t`Waiting for client save confirmation`
-                : status === 'persisting'
-                    ? t`Persisting generation on server`
-                    : t`Resuming server stream`;
+    const statusText = status === 'cancelled'
+        ? t`Generation cancelled on server`
+        : status === 'failed'
+            ? t`Generation failed on server`
+            : status === 'completed'
+                ? t`Generation completed on server`
+                : status === 'awaiting_ack'
+                    ? t`Waiting for client save confirmation`
+                    : status === 'persisting'
+                        ? t`Persisting generation on server`
+                        : t`Resuming server stream`;
     preview.find('.luker_preview_status').text(statusText);
     preview.find('.luker_preview_text').text(String(text || ''));
 }
@@ -886,7 +888,10 @@ function startLukerRecoverySseStream(chatIdSnapshot) {
             liveText = payload.text;
         }
         renderLukerRecoveryPreview(liveText, payload?.status || 'running');
-        if (payload?.status === 'failed') {
+        if (payload?.status === 'cancelled') {
+            stopLukerGenerationRecovery();
+            void reloadCurrentChat();
+        } else if (payload?.status === 'failed') {
             stopLukerGenerationRecovery();
         } else if (payload?.status === 'completed') {
             void finalizeLukerRecoveredGeneration(liveText);
@@ -953,6 +958,12 @@ function startLukerRecoveryPollFallback(chatIdSnapshot) {
 
             const statusData = await statusResponse.json();
             renderLukerRecoveryPreview(statusData?.text || '', statusData?.status || 'running');
+
+            if (statusData?.status === 'cancelled') {
+                stopLukerGenerationRecovery();
+                void reloadCurrentChat();
+                return;
+            }
 
             if (statusData?.status === 'failed') {
                 stopLukerGenerationRecovery();
@@ -2148,6 +2159,19 @@ async function firstLoadInit() {
         throw new Error('Initialization failed');
     }
 
+    // Server-initiated abort from the request inspector. Only the tab that
+    // owns the main generation should run the user-stop path; quiet requests
+    // (memory extraction, agenda planning, …) just propagate the AbortError
+    // to their caller. Comparing against the tracked generation id keeps a
+    // quiet-request abort from cancelling the main chat reply.
+    function handleServerAbort(requestId) {
+        const mainGenerationId = getLastLukerGenerationIdForApi();
+        if (!mainGenerationId || String(requestId) !== String(mainGenerationId)) {
+            return;
+        }
+        stopGeneration();
+    }
+
     // Boot the WebSocket delivery channel and install the fetch proxy that
     // tunnels long-running /generate requests through it. The proxy replaces
     // window.fetch so all subsequent generate calls stream chunks over WS.
@@ -2161,6 +2185,7 @@ async function firstLoadInit() {
         const delivery = createLukerDelivery();
         installFetchProxy(delivery, {
             getExtraHeaders: () => getRequestHeaders({ omitContentType: true }),
+            onServerAbort: handleServerAbort,
         });
         // Also patch every same-origin iframe's own fetch, current and future.
         // TavernHelper (JS-Slash-Runner) sandboxes user scripts inside a
@@ -2173,6 +2198,7 @@ async function firstLoadInit() {
         // `load` re-patch) and per-window idempotency guard.
         installFetchProxyForAllIframes(delivery, {
             getExtraHeaders: () => getRequestHeaders({ omitContentType: true }),
+            onServerAbort: handleServerAbort,
         });
         window.__lukerDelivery = delivery;
         await delivery.connect(async () => {
@@ -9841,6 +9867,15 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
         const isAbortedError = abortController?.signal?.aborted
             || exception?.name === 'AbortError'
             || /aborted/i.test(String(exception?.message || ''));
+        // A server-initiated abort (request inspector) arrives as an
+        // AbortError but the local controller was never aborted. Flip it so
+        // every downstream check (auto-continue, auto-swipe, retry helpers)
+        // sees the same state as a user stop. Quiet requests share the
+        // module-level controller with the main turn; aborting it from a
+        // background request would cancel the visible reply.
+        if (type !== 'quiet' && exception?.name === 'AbortError' && abortController && !abortController.signal.aborted) {
+            abortController.abort('Aborted by server');
+        }
         const errorMessage = typeof exception?.error?.message === 'string'
             ? exception.error.message
             : (typeof exception?.message === 'string'

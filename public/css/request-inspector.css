@@ -95,6 +95,33 @@
     to { transform: rotate(360deg); }
 }
 
+/* ---- Abort Request ---- */
+
+.ri-abort,
+.ri-abort-btn {
+    color: #f44336;
+    border-color: color-mix(in srgb, #f44336 45%, transparent);
+}
+
+.ri-abort-btn {
+    padding: 1px 6px;
+    font-size: 0.78em;
+    line-height: 1.4;
+    vertical-align: middle;
+}
+
+.ri-abort:hover,
+.ri-abort-btn:hover {
+    background: color-mix(in srgb, #f44336 18%, transparent);
+    border-color: #f44336;
+}
+
+.ri-abort:disabled,
+.ri-abort-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 /* ---- Detail View ---- */
 
 .ri-detail {

@@ -3154,9 +3154,14 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         // generate the image
         imagePath = await sendGenerationRequest(generationType, prompt, negativePromptPrefix, characterName, callback, initiator, abortController.signal);
     } catch (err) {
-        // Check if this was an intentional abort by user
-        if (abortController.signal.aborted) {
-            console.log('SD: Image generation aborted by user (generatePicture catch)');
+        // Check if this was an intentional abort by user or a server-side
+        // abort from the request inspector. Both must behave like a stop:
+        // no error toast, no retry.
+        if (abortController.signal.aborted || err?.name === 'AbortError') {
+            if (!abortController.signal.aborted) {
+                abortController.abort('Aborted by server');
+            }
+            console.log('SD: Image generation aborted (generatePicture catch)');
             return;
         }
 

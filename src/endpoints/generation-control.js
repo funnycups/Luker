@@ -3,7 +3,9 @@ import {
     getTaskByRequestId,
     failGenerationJob,
     getActiveGenerationJobsForRequest,
+    abortGenerationJobForInspector,
 } from './backends/luker-generation.js';
+import { abortInspectionByJobId } from '../request-inspector.js';
 
 /**
  * Router for out-of-band control over in-flight generation jobs. Mounted
@@ -34,6 +36,22 @@ generationControlRouter.post('/:request_id/abort', (req, res) => {
     if (!job) {
         return res.status(404).json({ error: 'not_found' });
     }
+
+    const source = String(req.body?.source || req.query?.source || '');
+    if (source === 'inspector') {
+        if (!['running', 'queued'].includes(String(job.status || ''))) {
+            return res.status(409).json({ aborted: false, error: 'not_running' });
+        }
+        // Mark the inspector entry first so the dispatch's own
+        // `inspection.fail(AbortError)` cannot overwrite the aborted state.
+        abortInspectionByJobId(ownerHandle, requestId, 'Aborted from request inspector');
+        const aborted = abortGenerationJobForInspector(job, 'Aborted from request inspector');
+        if (!aborted) {
+            return res.status(409).json({ aborted: false, error: 'not_running' });
+        }
+        return res.json({ aborted: true });
+    }
+
     if (job.abortController) {
         try { job.abortController.abort('client abort'); } catch { /* already aborted */ }
     }

@@ -101,6 +101,37 @@ describe('lukerDelivery client', () => {
         await expect(reader.read()).rejects.toThrow(/lost/);
     });
 
+    test('abort frame before head rejects headPromise with AbortError and fires onServerAbort', async () => {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery();
+        await delivery.connect(async () => 'tik');
+        const ws = MockWebSocket.instances[0];
+        const onServerAbort = jest.fn();
+        const { stream, headPromise } = delivery.subscribe('req-abort-pre', {}, { onServerAbort });
+        ws._receive({ type: 'error', request_id: 'req-abort-pre', seq: 1, code: 'aborted', message: 'inspector stop' });
+
+        await expect(headPromise).rejects.toMatchObject({ name: 'AbortError' });
+        expect(onServerAbort).toHaveBeenCalledWith('req-abort-pre', expect.objectContaining({ code: 'aborted' }));
+        const reader = stream.getReader();
+        await expect(reader.read()).rejects.toMatchObject({ name: 'AbortError' });
+    });
+
+    test('abort frame after head errors the stream with AbortError and fires onServerAbort', async () => {
+        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+        const delivery = createLukerDelivery();
+        await delivery.connect(async () => 'tik');
+        const ws = MockWebSocket.instances[0];
+        const onServerAbort = jest.fn();
+        const { stream, headPromise } = delivery.subscribe('req-abort-post', {}, { onServerAbort });
+        ws._receive({ type: 'head', request_id: 'req-abort-post', status: 200, headers: {} });
+        await headPromise;
+        ws._receive({ type: 'error', request_id: 'req-abort-post', seq: 2, code: 'aborted', message: 'inspector stop' });
+
+        const reader = stream.getReader();
+        await expect(reader.read()).rejects.toMatchObject({ name: 'AbortError' });
+        expect(onServerAbort).toHaveBeenCalledWith('req-abort-post', expect.objectContaining({ code: 'aborted' }));
+    });
+
     test('reconnect after WS close, resume outstanding subs', async () => {
         const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
         const delivery = createLukerDelivery({ reconnectBackoffMs: 5 });

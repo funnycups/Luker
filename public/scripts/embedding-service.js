@@ -86,6 +86,12 @@ async function vectorFetch(url, body, signal) {
             body: JSON.stringify(body),
             signal: fetchSignal,
         });
+        if (response.status === 499) {
+            // The request inspector aborted the upstream call. Surface the
+            // same AbortError shape a user-initiated cancel produces so
+            // callers stop instead of treating it as a retriable failure.
+            throw new DOMException('Aborted from request inspector', 'AbortError');
+        }
         if (!response.ok) {
             const text = await response.text().catch(() => response.statusText);
             let detail = text;

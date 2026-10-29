@@ -23,6 +23,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Request Inspector
 
+- Added an **Abort** button to running requests in the inspector, stopping the request on the server and on the client.
 - Fixed the Inspector showing the stored provider key instead of the key that actually went on the wire when a plugin overrode the auth header through custom include headers.
 - Added a **Tools** section to the request detail that lists the tools sent to the model, each expanding into a parameter table. Tool definitions no longer appear under **Other Params**.
 - Long tool parameter descriptions in the **Tools** section scroll inside a compact block instead of stretching the parameter table.

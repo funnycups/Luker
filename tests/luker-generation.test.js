@@ -20,6 +20,7 @@ import {
     getPersistChatKey,
     failGenerationJob,
     notifyJobTextProgress,
+    abortGenerationJobForInspector,
 } from '../src/endpoints/backends/luker-generation.js';
 
 let idCounter = 0;
@@ -578,6 +579,64 @@ describe('failGenerationJob', () => {
         job.abortController = { abort: () => {}, signal: { aborted: false } };
         failGenerationJob(job, 'nope');
         expect(job.abortController).toBeNull();
+    });
+});
+
+describe('abortGenerationJobForInspector', () => {
+    test('marks a running job cancelled and aborts its controller', () => {
+        const job = createGenerationJob(baseRequest(), { job_id: uniqueJobId('inspector-abort') });
+        const controller = new AbortController();
+        job.abortController = controller;
+        let reason = null;
+        controller.signal.addEventListener('abort', () => { reason = controller.signal.reason; });
+
+        const aborted = abortGenerationJobForInspector(job, 'inspector stop');
+
+        expect(aborted).toBe(true);
+        expect(job.status).toBe('cancelled');
+        expect(job.cancelledByUser).toBe(true);
+        expect(job.error).toBe('inspector stop');
+        expect(controller.signal.aborted).toBe(true);
+        expect(reason).toBe('inspector stop');
+        expect(job.abortController).toBeNull();
+    });
+
+    test('appends a terminal error event with code=aborted before aborting', () => {
+        const job = createGenerationJob(baseRequest(), { job_id: uniqueJobId('inspector-frame') });
+        const controller = new AbortController();
+        job.abortController = controller;
+
+        abortGenerationJobForInspector(job, 'inspector stop');
+
+        const terminal = job.events.at(-1);
+        expect(terminal.data).toMatchObject({
+            kind: 'error',
+            data: { code: 'aborted', message: 'inspector stop' },
+        });
+    });
+
+    test('notifies subscribers with a cancelled status', () => {
+        const jobId = uniqueJobId('inspector-status');
+        const job = createGenerationJob(baseRequest(), { job_id: jobId });
+        const received = [];
+        subscribeToJob(jobId, payload => received.push(payload));
+
+        abortGenerationJobForInspector(job, 'inspector stop');
+
+        const status = received.find(p => p.type === 'status');
+        expect(status?.status).toBe('cancelled');
+        expect(status?.error).toBe('inspector stop');
+    });
+
+    test('is a no-op for terminal jobs', () => {
+        const job = createGenerationJob(baseRequest(), { job_id: uniqueJobId('inspector-terminal') });
+        job.status = 'completed';
+        const controller = new AbortController();
+        job.abortController = controller;
+
+        expect(abortGenerationJobForInspector(job)).toBe(false);
+        expect(job.status).toBe('completed');
+        expect(controller.signal.aborted).toBe(false);
     });
 });
 

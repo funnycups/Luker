@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import { setAdditionalHeadersByType } from '../additional-headers.js';
 import { TEXTGEN_TYPES } from '../constants.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
 
 /**
  * Gets the vector for the given text from Ollama
@@ -50,6 +50,7 @@ export async function getOllamaBatchVector(texts, apiUrl, model, keep, directori
             ...headers,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {

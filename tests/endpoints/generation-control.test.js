@@ -6,6 +6,7 @@ import {
     getTaskByRequestId,
 } from '../../src/endpoints/backends/luker-generation.js';
 import { generationControlRouter } from '../../src/endpoints/generation-control.js';
+import { startInspection, findEntry } from '../../src/request-inspector.js';
 
 /**
  * Build a minimal Express app that mounts the generation-control router
@@ -86,6 +87,57 @@ describe('POST /api/generation/:request_id/abort', () => {
         expect(res.status).toBe(200);
         expect(controller.signal.aborted).toBe(true);
         expect(abortReason).toBe('client abort');
+    });
+});
+
+describe('POST /api/generation/:request_id/abort with source=inspector', () => {
+    function makeInspectorRequest(handle, job) {
+        const req = {
+            user: { profile: { handle }, directories: {} },
+            body: { model: 'test-model' },
+            lukerGenerationJob: job,
+        };
+        startInspection(req);
+        return req;
+    }
+
+    test('cancels the job and marks the inspector entry aborted', async () => {
+        const handle = 'inspector-abort-owner';
+        const req = makeRequestForOwner(handle);
+        const job = createGenerationJob(req, { job_id: 'inspector-abort-job-1', persist_target: null });
+        const controller = new AbortController();
+        job.abortController = controller;
+        const inspectorReq = makeInspectorRequest(handle, job);
+        const entry = findEntry(inspectorReq);
+        expect(entry?.generationJobId).toBe('inspector-abort-job-1');
+
+        const app = makeApp(handle);
+        const res = await request(app)
+            .post('/api/generation/inspector-abort-job-1/abort')
+            .send({ source: 'inspector' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ aborted: true });
+        expect(job.status).toBe('cancelled');
+        expect(job.cancelledByUser).toBe(true);
+        expect(controller.signal.aborted).toBe(true);
+        expect(entry.status).toBe('aborted');
+    });
+
+    test('returns 409 when the job already finished', async () => {
+        const handle = 'inspector-abort-finished';
+        const req = makeRequestForOwner(handle);
+        const job = createGenerationJob(req, { job_id: 'inspector-abort-job-2', persist_target: null });
+        job.status = 'completed';
+        makeInspectorRequest(handle, job);
+
+        const app = makeApp(handle);
+        const res = await request(app)
+            .post('/api/generation/inspector-abort-job-2/abort')
+            .send({ source: 'inspector' });
+
+        expect(res.status).toBe(409);
+        expect(res.body).toEqual({ aborted: false, error: 'not_running' });
     });
 });
 

@@ -244,6 +244,27 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             } else if (msg.type === 'error') {
                 disarmEntryTimer(entry);
                 detachAbortListener(entry);
+                // Explicit server-side abort (request inspector). This must
+                // be a real AbortError, not a plain Error: request-retry.js
+                // only short-circuits on `name === 'AbortError'` / `code ===
+                // 20`, and a generic error would be retried as a network
+                // failure. Pre-head, reject headPromise so withRetry never
+                // sees a retriable 5xx Response.
+                if (msg.code === 'aborted') {
+                    const abortErr = new DOMException(msg.message || 'Aborted', 'AbortError');
+                    if (!entry.headResolved) {
+                        entry.headResolved = true;
+                        entry.rejectHead(abortErr);
+                    }
+                    try { entry.controller.error(abortErr); } catch { /* ignore */ }
+                    pending.delete(msg.request_id);
+                    if (typeof entry.onServerAbort === 'function') {
+                        try { entry.onServerAbort(msg.request_id, msg); } catch (cbErr) {
+                            console.warn('[ws-delivery] onServerAbort callback threw:', cbErr?.message || cbErr);
+                        }
+                    }
+                    return;
+                }
                 // Structured error frame from dispatch (thrown Error path).
                 // If head hasn't resolved, surface as HTTP 502 with the
                 // error message as body so callers can do `await response.text()`
@@ -352,6 +373,11 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 ? Math.floor(Number(options.timeoutMs))
                 : 0,
             onTimeout: typeof options.onTimeout === 'function' ? options.onTimeout : null,
+            // Fired when the server terminates the request with an explicit
+            // abort frame (`code: 'aborted'`). The caller uses this to abort
+            // its own AbortController so retry / auto-continue paths see a
+            // user-style stop, not a retriable transport failure.
+            onServerAbort: typeof options.onServerAbort === 'function' ? options.onServerAbort : null,
             timeoutTimer: null,
             detachAbort: null,
         };
@@ -659,6 +685,12 @@ export function installFetchProxy(delivery, options = {}) {
             // upstream generation stops. Server endpoint is best-effort.
             signal: init?.signal,
             onAbort: () => sendAbortNotification(requestId),
+            // Server-initiated abort (request inspector). The callback lets
+            // the owning page abort its local generation controller so
+            // retry / auto-continue / auto-swipe paths see a user stop.
+            onServerAbort: typeof options.onServerAbort === 'function'
+                ? options.onServerAbort
+                : null,
         });
         console.info(`[ws-delivery] proxiedFetch subscribe request_id=${requestId} url=${String(url).split('?')[0]}`);
         // Wait for the dispatch to publish upstream {status, headers} via a

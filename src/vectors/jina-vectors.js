@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
 
 const DEFAULT_JINA_URL = 'https://api.jina.ai/v1';
 
@@ -77,6 +77,7 @@ export async function getJinaBatchVector(texts, isQuery, directories, model, opt
             Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify(requestBody),
+        signal: getInspectionAbortSignal(request),
     });
     if (!response.ok) {
         const text = await response.text();

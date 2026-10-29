@@ -3,7 +3,7 @@ import urlJoin from 'url-join';
 import { setAdditionalHeadersByType } from '../additional-headers.js';
 import { TEXTGEN_TYPES } from '../constants.js';
 import { trimV1 } from '../util.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
 
 /**
  * Gets the vector for the given text from LlamaCpp
@@ -43,6 +43,7 @@ export async function getLlamaCppBatchVector(texts, apiUrl, directories, sourceS
             ...headers,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {

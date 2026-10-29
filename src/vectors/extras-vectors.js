@@ -1,5 +1,5 @@
 import fetch from 'node-fetch';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
 
 /**
  * Gets the vector for the given text from SillyTavern-extras
@@ -62,6 +62,7 @@ async function getExtrasVectorImpl(text, apiUrl, apiKey, request = null) {
         method: 'POST',
         headers: headers,
         body: JSON.stringify(body),  // The backend accepts {string|string[]} for one or multiple text items, respectively.
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {

@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
-import { attachInspectionEndpoint } from '../request-inspector.js';
+import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
 
 const DEFAULT_COHERE_URL = 'https://api.cohere.ai/v2';
 
@@ -50,6 +50,7 @@ export async function getCohereBatchVector(texts, isQuery, directories, model, s
             Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify(body),
+        signal: getInspectionAbortSignal(request),
     });
 
     if (!response.ok) {

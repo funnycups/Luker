@@ -74,6 +74,12 @@ Beyond text generation, the Request Inspector also tracks image generation reque
 
 The Request Inspector also spans the vector subsystem, recording embedding, query, and rerank calls sent to every remote vector provider (OpenAI, Cohere, Jina, Ollama, VLLM, Voyage, and so on) and the KoboldCpp direct-embed bridge. Local-only inference sources that never leave the process are skipped so the ring buffer stays focused on actual upstream traffic.
 
+### Aborting In-Flight Requests
+
+Running requests in the inspector list show an **Abort** button. Aborting stops the upstream request, and the client treats it as a user stop: streaming ends, the send button unlocks, and automatic continuation, automatic swiping, and request retries are skipped.
+
+Chat, text, image, embedding, and rerank requests can all be aborted.
+
 ## Record Retention
 
 Request records live in memory, capped at 200 per user. Each user keeps only their most recent records; once the cap is reached, the oldest record is dropped to make room.
