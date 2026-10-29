@@ -225,7 +225,7 @@ function buildFormHtml(mode, initial = {}) {
                     <select class="text_pole" data-field="vertexai-auth-mode">
                         <option value="" ${!initial['vertexai-auth-mode'] ? 'selected' : ''}>${escapeHtml(t`Default (API Key)`)}</option>
                         <option value="express" ${initial['vertexai-auth-mode'] === 'express' ? 'selected' : ''}>${escapeHtml(t`Express`)}</option>
-                        <option value="service-account" ${initial['vertexai-auth-mode'] === 'service-account' ? 'selected' : ''}>${escapeHtml(t`Service Account`)}</option>
+                        <option value="full" ${initial['vertexai-auth-mode'] === 'full' || initial['vertexai-auth-mode'] === 'service-account' ? 'selected' : ''}>${escapeHtml(t`Service Account`)}</option>
                     </select>
                 </label>
                 <label class="marginTop5">

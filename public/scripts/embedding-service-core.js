@@ -74,7 +74,7 @@ export function buildRequestBodyFromEmbedProfile(profile) {
         const region = String(profile['vertexai-region'] || '').trim();
         if (region) body.vertexai_region = region;
         const authMode = String(profile['vertexai-auth-mode'] || '').trim();
-        if (authMode) body.vertexai_auth_mode = authMode;
+        if (authMode) body.vertexai_auth_mode = authMode === 'service-account' ? 'full' : authMode;
         const expressId = String(profile['vertexai-express-project-id'] || '').trim();
         if (expressId) body.vertexai_express_project_id = expressId;
     }

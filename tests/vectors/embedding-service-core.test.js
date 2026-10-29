@@ -253,13 +253,21 @@ describe('buildRequestBodyFromEmbedProfile — google sources', () => {
         const body = buildRequestBodyFromEmbedProfile({
             source: 'palm',
             'vertexai-region': 'us-central1',
-            'vertexai-auth-mode': 'service-account',
+            'vertexai-auth-mode': 'full',
             'vertexai-express-project-id': 'proj-1',
         });
         expect(body.api).toBe('makersuite');
         expect(body.vertexai_region).toBe('us-central1');
-        expect(body.vertexai_auth_mode).toBe('service-account');
+        expect(body.vertexai_auth_mode).toBe('full');
         expect(body.vertexai_express_project_id).toBe('proj-1');
+    });
+
+    test('legacy service-account auth mode is normalized to full', () => {
+        const body = buildRequestBodyFromEmbedProfile({
+            source: 'vertexai',
+            'vertexai-auth-mode': 'service-account',
+        });
+        expect(body.vertexai_auth_mode).toBe('full');
     });
 
     test('vertexai sets api=vertexai', () => {
