@@ -88,7 +88,16 @@ async function vectorFetch(url, body, signal) {
         });
         if (!response.ok) {
             const text = await response.text().catch(() => response.statusText);
-            const err = new Error(`Vector API ${response.status}: ${text}`);
+            let detail = text;
+            try {
+                const parsed = JSON.parse(text);
+                if (parsed && typeof parsed.error === 'string' && parsed.error) {
+                    detail = parsed.error;
+                }
+            } catch {
+                // Non-JSON error bodies are surfaced verbatim.
+            }
+            const err = new Error(`Vector API ${response.status}: ${detail}`);
             // @ts-ignore — annotate for callers that want to react to 4xx vs 5xx.
             err.status = response.status;
             throw err;
@@ -303,6 +312,48 @@ export const EmbeddingService = {
         await vectorFetch('/api/vector/purge', {
             collectionId: String(collectionId),
         }, signal);
+    },
+
+    /**
+     * List the models exposed by the profile's source.
+     * @param {object} args
+     * @param {string|object} args.profile Embedding or rerank profile
+     * @param {'embed'|'rerank'} [args.mode='embed'] Profile mode
+     * @param {AbortSignal} [args.signal]
+     * @returns {Promise<Array<{id: string, name?: string}>>}
+     */
+    async listModels({ profile, mode = 'embed', signal }) {
+        const resolved = resolveProfile(profile, mode === 'rerank' ? 'rerank' : 'embed');
+        if (!resolved) {
+            throw new Error('Profile not found');
+        }
+        const body = mode === 'rerank'
+            ? buildRequestBodyFromRerankProfile(resolved)
+            : buildRequestBodyFromEmbedProfile(resolved);
+        const response = await vectorFetch('/api/vector/models', {
+            ...body,
+            mode: mode === 'rerank' ? 'rerank' : 'embed',
+        }, signal);
+        return Array.isArray(response) ? response : [];
+    },
+
+    /**
+     * Run a single-text embedding request against the profile's source.
+     * @param {object} args
+     * @param {string|object} args.profile Embedding profile
+     * @param {AbortSignal} [args.signal]
+     * @returns {Promise<{dimensions: number, model: string}>}
+     */
+    async testEmbedding({ profile, signal }) {
+        const resolved = resolveProfile(profile, 'embed');
+        if (!resolved) {
+            throw new Error('Embedding profile not found');
+        }
+        const response = await vectorFetch('/api/vector/test', buildRequestBodyFromEmbedProfile(resolved), signal);
+        return {
+            dimensions: Number(response?.dimensions) || 0,
+            model: String(response?.model || ''),
+        };
     },
 
     /**

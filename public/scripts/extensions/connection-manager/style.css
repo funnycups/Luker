@@ -91,6 +91,11 @@
     margin-top: 6px;
 }
 
+#rm_api_block .embed-rerank-test-status {
+    flex: 1;
+    word-break: break-word;
+}
+
 /*
  * On Embed / Rerank tab, hide everything in #rm_api_block except the
  * connection-manager block itself (the only direct child with .wide100p).

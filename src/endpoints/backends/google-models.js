@@ -31,9 +31,11 @@ export class GoogleModelsResponseError extends Error {
  *
  * @param {string | URL} modelsUrl Google AI Studio models endpoint
  * @param {typeof fetch} [fetchImpl] Fetch implementation
- * @returns {Promise<object[]>} Models that support content generation
+ * @param {object} [options] Filter options
+ * @param {string[]} [options.supportedMethods] Generation methods a model must support
+ * @returns {Promise<object[]>} Models that support the requested generation methods
  */
-export async function fetchGoogleModels(modelsUrl, fetchImpl = fetch) {
+export async function fetchGoogleModels(modelsUrl, fetchImpl = fetch, { supportedMethods = ['generateContent'] } = {}) {
     const requestUrl = new URL(modelsUrl);
     requestUrl.searchParams.set('pageSize', String(GOOGLE_MODELS_PAGE_SIZE));
     requestUrl.searchParams.delete('pageToken');
@@ -85,7 +87,7 @@ export async function fetchGoogleModels(modelsUrl, fetchImpl = fetch) {
     }
 
     return models
-        .filter(model => model?.supportedGenerationMethods?.includes('generateContent'))
+        .filter(model => supportedMethods.some(method => model?.supportedGenerationMethods?.includes(method)))
         .map((model, index) => {
             if (typeof model.name !== 'string') {
                 throw new GoogleModelsResponseError(`Google AI Studio model at index ${index} has an invalid name.`);

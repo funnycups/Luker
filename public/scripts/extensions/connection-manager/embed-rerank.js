@@ -9,8 +9,9 @@
 // "applied" globally: consumer plugins (vectors, memory-graph) look them up by id
 // and hand them to the EmbeddingService.
 
-import { event_types, eventSource, saveSettingsDebounced } from '../../../script.js';
+import { event_types, eventSource, getRequestHeaders, saveSettingsDebounced } from '../../../script.js';
 import { extension_settings } from '../../extensions.js';
+import { EmbeddingService } from '../../embedding-service.js';
 import { Popup } from '../../popup.js';
 import { uuidv4, getUniqueName } from '../../utils.js';
 import { t } from '../../i18n.js';
@@ -144,6 +145,7 @@ function buildFormHtml(mode, initial = {}) {
     ).join('');
 
     const title = mode === EMBED_MODE ? t`Embedding Profile` : t`Rerank Profile`;
+    const datalistId = `embed-rerank-models-${escapeHtml(initial.id || 'new')}`;
     const lateChunking = String(initial['jina-late-chunking'] || '') === 'true';
     const ollamaKeep = String(initial['ollama-keep'] || '') === 'true';
 
@@ -161,7 +163,11 @@ function buildFormHtml(mode, initial = {}) {
             </label>
             <label class="marginTop5" data-row="model">
                 <span>${escapeHtml(t`Model`)}</span>
-                <input type="text" class="text_pole" data-field="model" value="${escapeHtml(initial.model || '')}" />
+                <div class="flex-container gap5">
+                    <input type="text" class="text_pole flex1" data-field="model" list="${datalistId}" value="${escapeHtml(initial.model || '')}" />
+                    <i class="menu_button fa-solid fa-rotate" data-action="fetch-models" title="${escapeHtml(t`Fetch model list`)}"></i>
+                </div>
+                <datalist id="${datalistId}"></datalist>
             </label>
             <label class="marginTop5" data-row="api-url">
                 <span data-i18n-url-required="${escapeHtml(t`Server URL (required)`)}" data-i18n-url-optional="${escapeHtml(t`URL Override (optional)`)}">${escapeHtml(t`URL Override (optional)`)}</span>
@@ -230,6 +236,13 @@ function buildFormHtml(mode, initial = {}) {
                     <span>${escapeHtml(t`Express Project ID`)}</span>
                     <input type="text" class="text_pole" data-field="vertexai-express-project-id" value="${escapeHtml(initial['vertexai-express-project-id'] || '')}" />
                 </label>
+            </div>
+            <div class="flex-container alignItemsCenter gap10 marginTop10">
+                <div class="menu_button" data-action="test-connection">
+                    <i class="fa-solid fa-plug"></i>
+                    <span>${escapeHtml(t`Test Connection`)}</span>
+                </div>
+                <span class="embed-rerank-test-status" data-role="test-status"></span>
             </div>
         </div>
     </div>`;
@@ -400,6 +413,139 @@ export function mountInlineProfileEditor(container, mode, profileId, opts = {}) 
     };
 
     $form.find('[data-field]').on('change', saveChanges);
+
+    const $datalist = $form.find('datalist');
+    const $fetchModelsButton = $form.find('[data-action="fetch-models"]');
+    const $testButton = $form.find('[data-action="test-connection"]');
+    const $testStatus = $form.find('[data-role="test-status"]');
+
+    const currentProfileSnapshot = () => ({ ...profile, ...readFormValues($form), mode });
+
+    const setTestStatus = (kind, text) => {
+        $testStatus.removeClass('success failure');
+        if (kind) $testStatus.addClass(kind);
+        $testStatus.text(text);
+    };
+
+    const renderModelOptions = (models) => {
+        $datalist.empty();
+        const seen = new Set();
+        for (const model of models) {
+            const id = String(model?.id || '').trim();
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            const option = document.createElement('option');
+            option.value = id;
+            if (model?.name && model.name !== id) option.label = String(model.name);
+            $datalist.append(option);
+        }
+    };
+
+    let fetchingModels = false;
+    const fetchModels = async () => {
+        if (fetchingModels) return;
+        fetchingModels = true;
+        $fetchModelsButton.addClass('fa-spin');
+        try {
+            const snapshot = currentProfileSnapshot();
+            const models = snapshot.source === 'webllm'
+                ? getWebLlmModels()
+                : await EmbeddingService.listModels({ profile: snapshot, mode });
+            renderModelOptions(models);
+            if (models.length === 0) {
+                toastr.info(t`The source returned no models.`);
+            }
+        } catch (error) {
+            toastr.error(String(error?.message || error), t`Failed to fetch models`);
+        } finally {
+            fetchingModels = false;
+            $fetchModelsButton.removeClass('fa-spin');
+        }
+    };
+
+    let testingConnection = false;
+    const testConnection = async () => {
+        if (testingConnection) return;
+        testingConnection = true;
+        setTestStatus('', t`Testing...`);
+        const started = performance.now();
+        try {
+            const snapshot = currentProfileSnapshot();
+            if (mode === RERANK_MODE) {
+                const results = await EmbeddingService.rerank({
+                    profile: snapshot,
+                    query: 'test query',
+                    documents: [{ text: 'A short test document.' }, { text: 'Another test document.' }],
+                    topK: 2,
+                });
+                const elapsed = Math.round(performance.now() - started);
+                setTestStatus('success', t`Connection OK — ${results.length} results in ${elapsed} ms`);
+            } else if (snapshot.source === 'webllm') {
+                const vector = await testWebLlmEmbedding(snapshot.model);
+                const elapsed = Math.round(performance.now() - started);
+                setTestStatus('success', t`Connection OK — ${vector.length} dimensions in ${elapsed} ms`);
+            } else if (snapshot.source === 'koboldcpp') {
+                const dimensions = await testKoboldCppEmbedding(snapshot['api-url']);
+                const elapsed = Math.round(performance.now() - started);
+                setTestStatus('success', t`Connection OK — ${dimensions} dimensions in ${elapsed} ms`);
+            } else {
+                const result = await EmbeddingService.testEmbedding({ profile: snapshot });
+                const elapsed = Math.round(performance.now() - started);
+                setTestStatus('success', t`Connection OK — ${result.dimensions} dimensions in ${elapsed} ms`);
+            }
+        } catch (error) {
+            setTestStatus('failure', String(error?.message || error));
+        } finally {
+            testingConnection = false;
+        }
+    };
+
+    $fetchModelsButton.on('click', fetchModels);
+    $testButton.on('click', testConnection);
+}
+
+function getWebLlmModels() {
+    if (typeof globalThis.Luker?.llm?.getEmbeddingModels !== 'function') {
+        throw new Error('WebLLM is not available.');
+    }
+    return globalThis.Luker.llm.getEmbeddingModels().map(model => ({
+        id: String(model?.id || ''),
+        name: String(model?.toString?.() || model?.id || ''),
+    }));
+}
+
+async function testWebLlmEmbedding(modelId) {
+    if (typeof globalThis.Luker?.llm?.getEngine !== 'function') {
+        throw new Error('WebLLM is not available.');
+    }
+    const engine = globalThis.Luker.llm.getEngine();
+    await engine.loadModel(modelId);
+    const vectors = await engine.generateEmbedding(['test']);
+    const vector = Array.isArray(vectors) ? vectors[0] : null;
+    if (!Array.isArray(vector) || vector.length === 0) {
+        throw new Error('WebLLM returned no embedding.');
+    }
+    return vector;
+}
+
+async function testKoboldCppEmbedding(server) {
+    if (!server) {
+        throw new Error('KoboldCpp server URL is required.');
+    }
+    const response = await fetch('/api/backends/kobold/embed', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ items: ['test'], server }),
+    });
+    if (!response.ok) {
+        throw new Error(`KoboldCpp embedding request failed (${response.status}).`);
+    }
+    const data = await response.json();
+    const vector = Array.isArray(data?.embeddings) ? data.embeddings[0] : null;
+    if (!Array.isArray(vector) || vector.length === 0) {
+        throw new Error('KoboldCpp returned no embedding.');
+    }
+    return vector.length;
 }
 
 function generateUniqueProfileName(baseName) {

@@ -5112,6 +5112,7 @@
     "Toggle all in group": "開關分組內全部",
     "Dissolve group": "解散分組",
     "Create group from selection": "從選中項建立分組",
+    "Create Group": "建立分組",
     "Create sub-group": "建立子分組",
     "Enter sub-group name:": "輸入子分組名稱：",
     "Sub-group name:": "子分組名稱：",
@@ -5207,6 +5208,13 @@
     ,"Rerank Profile": "重排序設定檔"
     ,"Embedding profiles are used by Vector Storage and Memory Graph for text embeddings. They are not active chat connections.": "嵌入設定檔供向量儲存、記憶圖等外掛運算文字嵌入，不會作為聊天連線生效。"
     ,"Rerank profiles are used to re-score candidates after vector retrieval. They are not active chat connections.": "重排序設定檔用於在向量檢索後對候選結果重新評分，不會作為聊天連線生效。"
+    ,"Fetch model list": "取得模型清單"
+    ,"Test Connection": "測試連線"
+    ,"Testing...": "測試中…"
+    ,"Connection OK — ${0} dimensions in ${1} ms": "連線正常，${0} 維，耗時 ${1} 毫秒"
+    ,"Connection OK — ${0} results in ${1} ms": "連線正常，${0} 筆結果，耗時 ${1} 毫秒"
+    ,"Failed to fetch models": "取得模型清單失敗"
+    ,"The source returned no models.": "此來源沒有回傳模型。"
     ,"Manage profiles in the Connection Profile panel (Embedding tab) under API Connections.": "請在 API 連線設定面板的「嵌入」分頁中管理設定檔。"
     ,"Create a new embedding profile": "新增嵌入設定檔"
     ,"Edit embedding profile": "編輯嵌入設定檔"

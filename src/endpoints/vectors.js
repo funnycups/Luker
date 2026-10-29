@@ -18,6 +18,7 @@ import { getLlamaCppVector, getLlamaCppBatchVector } from '../vectors/llamacpp-v
 import { getVllmVector, getVllmBatchVector } from '../vectors/vllm-vectors.js';
 import { getOllamaVector, getOllamaBatchVector } from '../vectors/ollama-vectors.js';
 import { rerank } from '../vectors/rerank.js';
+import { listModels } from '../vectors/model-list.js';
 import { getCommonCredentials, getSourceSettings } from '../vectors/source-settings.js';
 import {
     startEmbeddingInspection,
@@ -592,6 +593,53 @@ router.post('/rerank', async (req, res) => {
         }
         console.error('Rerank failed:', error);
         failEmbeddingInspection(req, error?.message || String(error), 500);
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+router.post('/models', async (req, res) => {
+    try {
+        const source = String(req.body.source || '').trim();
+        if (!source) {
+            return res.sendStatus(400);
+        }
+
+        const mode = req.body.mode === 'rerank' ? 'rerank' : 'embed';
+        const models = await listModels({ source, mode, request: req });
+        return res.json(models);
+    } catch (error) {
+        console.error('Vector model list failed:', error);
+        return res.status(500).json({ error: error.message });
+    }
+});
+
+router.post('/test', async (req, res) => {
+    try {
+        const source = String(req.body.source || '').trim();
+        if (!source) {
+            return res.sendStatus(400);
+        }
+
+        if (source === 'webllm' || source === 'koboldcpp') {
+            return res.status(400).json({ error: 'This source computes embeddings in the browser. Test it from the profile editor.' });
+        }
+
+        const sourceSettings = getSourceSettings(source, req);
+        const vector = await getVector(source, sourceSettings, 'test', false, req.user.directories, req);
+
+        if (!Array.isArray(vector) || vector.length === 0) {
+            throw new Error('The embedding endpoint returned no vector.');
+        }
+
+        return res.json({
+            dimensions: vector.length,
+            model: String(sourceSettings.model || ''),
+        });
+    } catch (error) {
+        if (isLocalInferenceUnavailable(error)) {
+            return sendLocalInferenceUnavailable(res, error);
+        }
+        console.error('Vector connection test failed:', error);
         return res.status(500).json({ error: error.message });
     }
 });
