@@ -1070,9 +1070,8 @@ export function createSubagentDispatcher({
                     if (roundToolCalls.length === 0) {
                         // The sub-agent's terminal text is already cooked:
                         // `generateTask`/`generateTaskStream` apply the
-                        // plugin channel's OUTPUT-direction regex pass
-                        // (pluginOnly) to the returned
-                        // assistant text. A sub-agent's report therefore
+                        // plugin reply regex pass (`pluginLanes: ['reply']`)
+                        // to the returned assistant text. A sub-agent's report therefore
                         // reaches the parent through the
                         // `await_subagents` tool_result envelope scrubbed
                         // without a second pass here — that envelope is a

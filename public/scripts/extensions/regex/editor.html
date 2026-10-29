@@ -110,11 +110,20 @@
                         <span data-i18n="Reasoning">Reasoning</span>
                     </label>
                 </div>
-                <div data-i18n="[title]ext_regex_only_format_plugin_desc" title="Applies to plugin messages: rewrites the text going into a plugin request (floor text, plugin-composed messages, world info) and the assistant text a plugin request returns.">
-                    <label class="checkbox flex-container">
-                        <input type="checkbox" name="only_format_plugin" />
-                        <span data-i18n="Plugin Messages">Plugin Messages</span>
-                    </label>
+                <div class="flex-container flexFlowColumn flexNoGap">
+                    <small data-i18n="Plugin Messages">Plugin Messages</small>
+                    <div data-i18n="[title]ext_regex_plugin_request_desc" title="Applies to the text going into a plugin request: chat floor text, plugin-composed messages, and world info entries. Select at least one message type above.">
+                        <label class="checkbox flex-container">
+                            <input type="checkbox" name="plugin_request" />
+                            <span data-i18n="Plugin Requests">Plugin Requests</span>
+                        </label>
+                    </div>
+                    <div data-i18n="[title]ext_regex_plugin_reply_desc" title="Applies to the assistant text a plugin request returns. Message types do not apply.">
+                        <label class="checkbox flex-container">
+                            <input type="checkbox" name="plugin_reply" />
+                            <span data-i18n="Plugin Replies">Plugin Replies</span>
+                        </label>
+                    </div>
                 </div>
                 <div class="flex-container wide100p marginTop5">
                     <div class="flex1 flex-container flexNoGap">

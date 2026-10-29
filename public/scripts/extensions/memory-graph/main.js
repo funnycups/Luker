@@ -4154,8 +4154,9 @@ function wrapChatMessageContentWithSeq(seq, cookedText) {
 /**
  * Convert a memory-graph batch item (from buildExtractBatchFromFrames or
  * queryBundle.recent_messages equivalent) into a role-alternating chat
- * completion message, with pluginOnly user regex scripts applied at
- * the real chat[] depth for parity with the main pipeline.
+ * completion message, with plugin request lane (`pluginLanes: ['request']`)
+ * user regex scripts applied at the real chat[] depth for parity with the
+ * main pipeline.
  *
  * @param {{seq?: number, is_user?: boolean, name?: string, mes?: string, source_index?: number}} item
  * @param {number|undefined} depth

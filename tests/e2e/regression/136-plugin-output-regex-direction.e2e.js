@@ -1,11 +1,11 @@
 // #136 — Plugin output-direction regex cooks the text a plugin request returns.
 //
-// A rule scoped to Plugin Messages (pluginOnly) rewrites the assistant
-// text a plugin request returns. Core applies that pass inside generateTask
-// before the terminal result resolves. The regression locks it on a real path:
-// a director sub-agent returns a sentinel as its terminal text, and the
-// pluginOnly rule must cook it before the text crosses back to the parent
-// through the await_subagents tool_result.
+// A rule scoped to Plugin Replies (`pluginLanes: ['reply']`) rewrites the
+// assistant text a plugin request returns. Core applies that pass inside
+// generateTask before the terminal result resolves. The regression locks it
+// on a real path: a director sub-agent returns a sentinel as its terminal
+// text, and the plugin reply rule must cook it before the text crosses back
+// to the parent through the await_subagents tool_result.
 //
 // Sentinel scheme: the sub-agent's reply carries `PLUGOUTSENTINEL`; the rule
 // rewrites it to `PLUGOUTCOOKED`. The parent's outgoing request carries the
@@ -54,7 +54,7 @@ test.beforeAll(async () => {
             placement: [1, 2],
             disabled: false,
             markdownOnly: false,
-            pluginOnly: true,
+            pluginLanes: ['reply'],
             minDepth: null,
             maxDepth: null,
         },

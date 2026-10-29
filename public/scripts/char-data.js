@@ -95,7 +95,7 @@
 * @property {boolean} disabled - Whether the script is disabled
 * @property {boolean} markdownOnly - Whether the script only applies to Markdown
 * @property {boolean} promptOnly - Whether the script only applies to prompts
-* @property {boolean} pluginOnly - Whether the script applies to the plugin channel: text going into a plugin request, and the assistant text a plugin request returns
+* @property {Array<'request' | 'reply'>} pluginLanes - Plugin application points: request for text going into a plugin request, reply for the assistant text a plugin request returns
 * @property {boolean} runOnEdit - Whether the script runs on edit
 * @property {number} substituteRegex - Whether the regex should be substituted
 * @property {number} minDepth - The minimum depth

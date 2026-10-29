@@ -61,7 +61,7 @@ context.generateTask({
 }>
 ```
 
-`assistantText` is post-processed before `generateTask` resolves: rules scoped to **Plugin Messages** rewrite the returned text in place. See [Regex Rule Scope](/features/regex-scope).
+`assistantText` is post-processed before `generateTask` resolves: rules with `pluginLanes: ['reply']` rewrite the returned text in place after normalization. See [Regex Rule Scope](/features/regex-scope).
 
 ### `worldInfoSource` modes
 

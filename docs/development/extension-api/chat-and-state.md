@@ -97,14 +97,22 @@ No action is required on the response side either: the assistant text a plugin r
 
 ### Which regex rules apply where
 
-The scope flags are independent, and each one selects one place a rule is applied:
+A rule selects message targets and ephemerality independently.
 
-- `promptOnly` rules apply to the main chat's outgoing prompt. `pluginOnly` does not add this pass.
-- `markdownOnly` rules apply to the chat display. `pluginOnly` does not add this pass.
-- `pluginOnly` rules apply to plugin requests, covering both the request and the reply: text going into a plugin request — floor text, plugin-composed messages, world info — and the assistant text a plugin request returns. The two are separate text streams, so a rule never fires twice on the same text.
-- A rule with no scope flag touches none of these — it rewrites the stored chat history itself, and is applied when messages are edited or saved.
+**Message targets**
 
-Several flags may be combined on one rule; each one adds only its own pass.
+- `placement` narrows which message types a rule processes. A rule with no placement runs only when it has the plugin reply lane.
+- `pluginLanes: ['request']` rules apply to text going into a plugin request — floor text, plugin-composed messages, world info — and need at least one `placement`.
+- `pluginLanes: ['reply']` rules apply to the assistant text a plugin request returns; `placement` does not gate this pass.
+- The two plugin lanes are separate text streams, so a rule never fires twice on the same text.
+
+**Ephemerality**
+
+- `promptOnly` rules apply to the main chat's outgoing prompt.
+- `markdownOnly` rules apply to the chat display.
+- A rule with at least one placement, neither ephemerality flag, and no plugin lanes rewrites the stored chat history itself when messages are edited or saved. A rule with only plugin lanes does not.
+
+Plugin lanes, `promptOnly`, and `markdownOnly` are independent; each selected option adds only its own pass.
 
 For the user-facing picture, see [Regex rule scope](/features/regex-scope).
 

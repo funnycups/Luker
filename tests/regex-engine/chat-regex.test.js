@@ -1,11 +1,11 @@
 /**
- * Unit tests for lib/chat-regex.js — the plugin channel's response-side
- * regex primitive.
+ * Unit tests for lib/chat-regex.js — the plugin reply lane's regex
+ * primitive.
  *
  * Contract under test:
- *   - `regexAgentPluginOutput(text)` applies the OUTPUT-direction plugin
- *     pass: AI_OUTPUT placement with `{ isPluginOutput: true }` (pluginOnly
- *     without promptOnly).
+ *   - `regexAgentPluginOutput(text)` applies the reply-lane pass:
+ *     AI_OUTPUT placement with `{ isPluginOutput: true }`
+ *     (`pluginLanes: ['reply']`).
  *   - Empty / nullish input short-circuits to '' without touching the API.
  *   - When no regex API is reachable, raw text is returned unchanged.
  */

@@ -176,7 +176,7 @@ function summarizeRegexScriptForLog(script) {
         replaceLength: String(script.replaceString || '').length,
         promptOnly: Boolean(script.promptOnly),
         markdownOnly: Boolean(script.markdownOnly),
-        pluginOnly: Boolean(script.pluginOnly),
+        pluginLanes: getPluginLanes(script),
         runOnEdit: Boolean(script.runOnEdit),
     };
 }
@@ -831,6 +831,46 @@ function sanitizeRegexMacro(x) {
         }) : x;
 }
 
+const PLUGIN_LANES = new Set(['request', 'reply']);
+
+/**
+ * Resolve the plugin application points for a script.
+ * Legacy persisted scripts used `pluginOnly` for both points.
+ * @param {object} script The regex script
+ * @returns {Array<'request' | 'reply'>} The selected plugin lanes
+ */
+export function getPluginLanes(script) {
+    if (Array.isArray(script?.pluginLanes)) {
+        return [...new Set(script.pluginLanes.filter(lane => PLUGIN_LANES.has(lane)))];
+    }
+    return script?.pluginOnly ? ['request', 'reply'] : [];
+}
+
+/**
+ * Remove the legacy plugin scope field from a script without mutating it.
+ * @param {object} script The regex script
+ * @returns {object} A copy without the legacy plugin scope field
+ */
+export function omitLegacyPluginScope(script) {
+    if (!script || typeof script !== 'object') {
+        return script;
+    }
+    const { pluginOnly: _legacyPluginOnly, ...rest } = script;
+    return rest;
+}
+
+/**
+ * Normalize a script record so it carries plugin lanes and no legacy field.
+ * @param {object} script The regex script
+ * @returns {object} A copy with `pluginLanes` and without the legacy field
+ */
+export function normalizePluginScriptRecord(script) {
+    if (!script || typeof script !== 'object') {
+        return script;
+    }
+    return { ...omitLegacyPluginScope(script), pluginLanes: getPluginLanes(script) };
+}
+
 /**
  * Parent function to fetch a regexed version of a raw string
  * @param {string} rawString The raw string to be regexed
@@ -858,23 +898,29 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
             return;
         }
 
-        const placementList = Array.isArray(script.placement) ? script.placement : null;
+        const pluginLanes = getPluginLanes(script);
+        const placementList = Array.isArray(script.placement)
+            ? script.placement
+            : pluginLanes.length > 0 ? [] : null;
         if (!placementList) {
             warnInvalidRegexPlacement(script, index);
             return;
         }
 
-        const hasScopedTarget = Boolean(script.markdownOnly || script.promptOnly || script.pluginOnly);
+        const hasScopedTarget = Boolean(script.markdownOnly || script.promptOnly || pluginLanes.length > 0);
         const matchesScopedTarget =
             // Script applies to Markdown and input is Markdown
             (script.markdownOnly && isMarkdown) ||
             // Script applies to the main outgoing prompt and input is that prompt
             (script.promptOnly && isPrompt) ||
-            // Plugin lane: pluginOnly rules cook both the text going into a
-            // plugin request and the assistant text a plugin request returns.
-            // The two directions are disjoint streams, so one rule never
-            // fires twice on the same text.
-            (script.pluginOnly && (isPluginInput || isPluginOutput));
+            // Plugin request lane: text going into a plugin request.
+            (pluginLanes.includes('request') && isPluginInput) ||
+            // Plugin reply lane: assistant text a plugin request returns.
+            (pluginLanes.includes('reply') && isPluginOutput);
+
+        // The reply is always assistant text. Placement describes message
+        // kinds within a stream, so it does not gate the reply lane.
+        const isReplyLane = isPluginOutput && pluginLanes.includes('reply');
 
         if ((hasScopedTarget && matchesScopedTarget) ||
             // Script applies to the persisted chat content only when no scoped target is enabled.
@@ -884,8 +930,9 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
                 return;
             }
 
-            // Check if the depth is within the min/max depth
-            if (typeof depth === 'number') {
+            // The reply pass has no depth; depth filtering applies to every
+            // other lane that reaches this branch.
+            if (typeof depth === 'number' && !isReplyLane) {
                 if (!isNaN(script.minDepth) && script.minDepth !== null && script.minDepth >= -1 && depth < script.minDepth) {
                     console.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is less than minDepth ${script.minDepth}`);
                     return;
@@ -897,7 +944,7 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
                 }
             }
 
-            if (placementList.includes(placement)) {
+            if (isReplyLane || placementList.includes(placement)) {
                 if (isRegexScriptPaused(script.id)) {
                     return;
                 }

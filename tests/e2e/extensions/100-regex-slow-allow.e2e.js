@@ -98,7 +98,8 @@ async function createGlobalRegexScript(page, { name, findRegex, replaceString, p
     };
     await setBox('input[name="only_format_display"]', false);
     await setBox('input[name="only_format_prompt"]', false);
-    await setBox('input[name="only_format_plugin"]', false);
+    await setBox('input[name="plugin_request"]', false);
+    await setBox('input[name="plugin_reply"]', false);
     await setBox('input[name="run_on_edit"]', false);
 
     await popup.locator('.popup-button-ok').first().click();

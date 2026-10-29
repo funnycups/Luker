@@ -108,7 +108,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Regex
 
 - Added a **Performance detection** switch to the regex settings, enabled by default.
-- **Plugin Messages** rewrites both the text going into a plugin request and the assistant text a plugin request returns. The scope options are independent switches and can be combined freely.
+- Plugin regex rules can target plugin requests and plugin replies separately.
 - Fixed the **Allow anyway** choice in the slow-regex warning not applying to the current message and being forgotten after toggling the script; the choice is now saved on the regex and applies immediately.
 - Fixed plugin-registered regex rules with a capture group and no trim strings aborting the entire regex pass.
 - Fixed a character with a bound chat-completion preset rendering the first message of a chat with the previous preset's regex rules.

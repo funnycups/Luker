@@ -61,7 +61,7 @@ context.generateTask({
 }>
 ```
 
-`assistantText` 在 `generateTask` resolve 之前會經過正則處理：勾選「插件訊息」的規則會就地改寫回傳的文字。詳見[正則規則作用範圍](/zh-TW/features/regex-scope)。
+`assistantText` 在 `generateTask` resolve 之前會經過正則處理：帶 `pluginLanes: ['reply']` 的規則會在正規化之後就地改寫回傳的文字。詳見[正則規則作用範圍](/zh-TW/features/regex-scope)。
 
 ### `worldInfoSource` 模式
 

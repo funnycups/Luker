@@ -13,7 +13,7 @@ import {
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
 import { applyEdits } from '../../../lib/edits/index.js';
 import { showConflictResolution } from '../../../lib/edits/conflict-ui.js';
-import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../../regex/engine.js';
+import { getScriptsByType, normalizePluginScriptRecord, omitLegacyPluginScope, saveScriptsByType, SCRIPT_TYPES } from '../../regex/engine.js';
 import {
     listCtxKeys,
     describeCtxPath,
@@ -78,6 +78,17 @@ const TOOL_NAMES = Object.freeze({
     DOCS_READ: 'read_luker_doc',
     CARDAPP_SET_ENABLED: 'cardapp_set_enabled',
 });
+
+function normalizeRegexScriptForTool(script) {
+    if (!script || typeof script !== 'object') {
+        return script;
+    }
+    return normalizePluginScriptRecord(script);
+}
+
+function normalizeRegexScriptsForTool(scripts) {
+    return Array.isArray(scripts) ? scripts.map(normalizeRegexScriptForTool) : scripts;
+}
 
 function buildTools() {
     return [
@@ -368,7 +379,7 @@ function buildTools() {
             type: 'function',
             function: {
                 name: TOOL_NAMES.REGEX_LIST_SCRIPTS,
-                description: 'List regex scripts at the requested scope. scope=\'character\' reads character.data.extensions.regex_scripts (card-level — travels with the character file). scope=\'global\' reads extension_settings.regex (user-level — active for every chat). scope=\'all\' (default) returns both as { character: [...], global: [...] }. Each script has id, scriptName, findRegex, replaceString, placement (number[]), trimStrings, plus boolean gates disabled/markdownOnly/promptOnly/pluginOnly/runOnEdit, and substituteRegex/minDepth/maxDepth.',
+                description: 'List regex scripts at the requested scope. scope=\'character\' reads character.data.extensions.regex_scripts (card-level — travels with the character file). scope=\'global\' reads extension_settings.regex (user-level — active for every chat). scope=\'all\' (default) returns both as { character: [...], global: [...] }. Each script has id, scriptName, findRegex, replaceString, placement (number[]), trimStrings, plus boolean gates disabled/markdownOnly/promptOnly/runOnEdit, pluginLanes (array of "request" and/or "reply"), and substituteRegex/minDepth/maxDepth.',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -382,7 +393,7 @@ function buildTools() {
             type: 'function',
             function: {
                 name: TOOL_NAMES.REGEX_CREATE_SCRIPT,
-                description: 'Create a new regex script. scope=\'character\' writes to character.data.extensions.regex_scripts (card-level, travels with the card); scope=\'global\' writes to extension_settings.regex (user-level, every chat). The id is auto-generated; any caller-supplied id is ignored. placement controls where the regex fires — the script does NOT run until at least one placement is set.',
+                description: 'Create a new regex script. scope=\'character\' writes to character.data.extensions.regex_scripts (card-level, travels with the card); scope=\'global\' writes to extension_settings.regex (user-level, every chat). The id is auto-generated; any caller-supplied id is ignored. placement controls where the regex fires — a script without placement is inactive unless it has a reply plugin lane.',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -391,11 +402,15 @@ function buildTools() {
                         findRegex: { type: 'string', description: 'JavaScript regex literal as a string, with delimiters and flags. Example: "/<thinking>[\\\\s\\\\S]*?<\\\\/thinking>/gi". Use the g flag to replace all matches.' },
                         replaceString: { type: 'string', description: 'Replacement template. Supports $0 (whole match), $1/$2 (numbered groups), $<name> (named groups), and {{match}} (alias for $0). Macros like {{user}}, {{char}}, {{getvar::x}} are evaluated on the result.' },
                         trimStrings: { type: 'array', items: { type: 'string' }, description: 'Strings to remove from each captured group before substitution. Useful for stripping markers like "Thought: " from the kept text.' },
-                        placement: { type: 'array', items: { type: 'number' }, description: 'Where this script applies (multi-select). 1=USER_INPUT (the user message after they hit send), 2=AI_OUTPUT (every assistant message), 3=SLASH_COMMAND (text returned by /commands), 5=WORLD_INFO (entry content right before injection), 6=REASONING (reasoning blocks). Empty array = the script is stored but inactive.' },
+                        placement: { type: 'array', items: { type: 'number' }, description: 'Where this script applies (multi-select). 1=USER_INPUT (the user message after they hit send), 2=AI_OUTPUT (every assistant message), 3=SLASH_COMMAND (text returned by /commands), 5=WORLD_INFO (entry content right before injection), 6=REASONING (reasoning blocks). Empty array = no placement targets; the script runs only when it has a reply plugin lane.' },
                         disabled: { type: 'boolean', description: 'Disabled scripts are skipped. Default false.' },
                         markdownOnly: { type: 'boolean', description: 'Apply only when rendering text to the chat UI (display-time). Use this to hide/clean things visually WITHOUT changing the stored message or what the AI sees on next prompt assembly. Default false.' },
                         promptOnly: { type: 'boolean', description: 'Apply only when assembling the prompt sent to the AI. Use this to clean up or strip noise BEFORE the AI sees previous messages, without altering the stored chat or what the user sees in the UI. Default false.' },
-                        pluginOnly: { type: 'boolean', description: 'Apply to plugin requests: the text going into a plugin-built request (e.g. memory-graph injections, custom prompt builders) and the assistant text such a request returns. Most authoring use cases leave this false.' },
+                        pluginLanes: {
+                            type: 'array',
+                            items: { type: 'string', enum: ['request', 'reply'] },
+                            description: 'Plugin application points. request covers text going into a plugin request and requires at least one placement; reply covers the assistant text a plugin request returns and does not use placement. Most authoring cases leave this empty.',
+                        },
                         runOnEdit: { type: 'boolean', description: 'Re-apply when the user edits a stored message. Off (default) means manual edits keep the original text. Turn on for cleanup-style scripts that should normalize edits too.' },
                         substituteRegex: { type: 'number', description: 'Macro substitution mode for findRegex itself. 0=NONE (regex used as-is), 1=RAW (substitute {{user}} etc. into the regex text raw), 2=ESCAPED (substitute then regex-escape special chars so the result is literal). Default 0.' },
                         minDepth: { type: 'number', description: 'Minimum chat depth for the script to fire (0=most recent message). Null/omit = no lower bound. Use to e.g. only run on older messages.' },
@@ -781,7 +796,7 @@ async function commitFileOpEdits(charId, cleanEdits, newLive) {
  * @param {boolean} [options.deferWriteOps=false] - If true, file-op tools return a pending_edit envelope (Edit + display metadata) for round-end batch processing instead of executing immediately.
  * @returns {Promise<object>} Tool result
  */
-async function executeTool(charId, toolName, args, options = {}) {
+export async function executeTool(charId, toolName, args, options = {}) {
     const { deferWriteOps = false } = options;
     try {
         switch (toolName) {
@@ -1158,15 +1173,15 @@ async function executeTool(charId, toolName, args, options = {}) {
                 if (scope === 'all') {
                     return {
                         ok: true,
-                        character: getScriptsByType(SCRIPT_TYPES.SCOPED),
-                        global: getScriptsByType(SCRIPT_TYPES.GLOBAL),
+                        character: normalizeRegexScriptsForTool(getScriptsByType(SCRIPT_TYPES.SCOPED)),
+                        global: normalizeRegexScriptsForTool(getScriptsByType(SCRIPT_TYPES.GLOBAL)),
                     };
                 }
                 if (scope === 'character') {
-                    return { ok: true, scope, scripts: getScriptsByType(SCRIPT_TYPES.SCOPED) };
+                    return { ok: true, scope, scripts: normalizeRegexScriptsForTool(getScriptsByType(SCRIPT_TYPES.SCOPED)) };
                 }
                 if (scope === 'global') {
-                    return { ok: true, scope, scripts: getScriptsByType(SCRIPT_TYPES.GLOBAL) };
+                    return { ok: true, scope, scripts: normalizeRegexScriptsForTool(getScriptsByType(SCRIPT_TYPES.GLOBAL)) };
                 }
                 return { ok: false, error: `Unknown scope "${scope}" — use 'character', 'global', or 'all'` };
             }
@@ -1179,7 +1194,7 @@ async function executeTool(charId, toolName, args, options = {}) {
                     return { ok: false, error: 'No active character — cannot write card-level regex' };
                 }
                 const scriptType = scope === 'character' ? SCRIPT_TYPES.SCOPED : SCRIPT_TYPES.GLOBAL;
-                const { scope: _scopeArg, id: _ignoredId, ...userFields } = args || {};
+                const { scope: _scopeArg, id: _ignoredId, ...userFields } = omitLegacyPluginScope(args || {});
                 const newScript = {
                     scriptName: '',
                     findRegex: '',
@@ -1189,7 +1204,7 @@ async function executeTool(charId, toolName, args, options = {}) {
                     disabled: false,
                     markdownOnly: false,
                     promptOnly: false,
-                    pluginOnly: false,
+                    pluginLanes: [],
                     runOnEdit: false,
                     substituteRegex: 0,
                     minDepth: null,
@@ -1200,7 +1215,7 @@ async function executeTool(charId, toolName, args, options = {}) {
                 const current = getScriptsByType(scriptType);
                 const next = [...current, newScript];
                 await saveScriptsByType(next, scriptType);
-                return { ok: true, script: newScript };
+                return { ok: true, script: normalizeRegexScriptForTool(newScript) };
             }
             case TOOL_NAMES.REGEX_UPDATE_SCRIPT: {
                 const scope = String(args?.scope || '').toLowerCase();
@@ -1216,12 +1231,13 @@ async function executeTool(charId, toolName, args, options = {}) {
                 const current = getScriptsByType(scriptType);
                 const idx = current.findIndex((s) => String(s?.id || '') === idStr);
                 if (idx < 0) return { ok: false, error: `Regex script "${idStr}" not found in ${scope} scope` };
-                const patch = (args?.patch && typeof args.patch === 'object') ? args.patch : {};
-                const updated = { ...current[idx], ...patch, id: idStr };
+                const rawPatch = (args?.patch && typeof args.patch === 'object') ? args.patch : {};
+                const patch = omitLegacyPluginScope(rawPatch);
+                const updated = { ...normalizePluginScriptRecord(current[idx]), ...patch, id: idStr };
                 const next = current.slice();
                 next[idx] = updated;
                 await saveScriptsByType(next, scriptType);
-                return { ok: true, script: updated };
+                return { ok: true, script: normalizeRegexScriptForTool(updated) };
             }
             case TOOL_NAMES.REGEX_DELETE_SCRIPT: {
                 const scope = String(args?.scope || '').toLowerCase();
@@ -1760,8 +1776,8 @@ exact slash command name, argument shape, or lukerContext property:
 
 Regex scripts are find/replace rules Luker applies at specific lifecycle points (user input, AI output, world-info injection, …). They are how you reshape text *between* layers — what the user types vs. what the AI sees, what the AI writes vs. what the chat stores vs. what the user reads. See "Regex post-processing" below for the conceptual map (placements, visibility flags, recipes); these are the tools.
 
-- **regex_list_scripts({scope?})** — List scripts at \`'character'\` (card-level, lives in \`character.data.extensions.regex_scripts\`), \`'global'\` (user-level, \`extension_settings.regex\`), or \`'all'\` (default — returns both). Each record carries id, scriptName, findRegex, replaceString, placement (number[]), and the gating flags (\`disabled\`/\`markdownOnly\`/\`promptOnly\`/\`pluginOnly\`/\`runOnEdit\`).
-- **regex_create_script({scope, ...})** — Create a script. id is auto-assigned. Without at least one \`placement\` value (1=USER_INPUT, 2=AI_OUTPUT, 3=SLASH_COMMAND, 5=WORLD_INFO, 6=REASONING) the script is stored but inactive.
+- **regex_list_scripts({scope?})** — List scripts at \`'character'\` (card-level, lives in \`character.data.extensions.regex_scripts\`), \`'global'\` (user-level, \`extension_settings.regex\`), or \`'all'\` (default — returns both). Each record carries id, scriptName, findRegex, replaceString, placement (number[]), \`pluginLanes\` (array of \`'request'\` and/or \`'reply'\`), and the gating flags (\`disabled\`/\`markdownOnly\`/\`promptOnly\`/\`runOnEdit\`).
+- **regex_create_script({scope, ...})** — Create a script. id is auto-assigned. Without at least one \`placement\` value (1=USER_INPUT, 2=AI_OUTPUT, 3=SLASH_COMMAND, 5=WORLD_INFO, 6=REASONING) the script is stored but inactive, unless it has the reply plugin lane.
 - **regex_update_script({scope, id, patch})** — Patch fields by id. The id is preserved; to move a script between scopes, delete and recreate.
 - **regex_delete_script({scope, id})** — Remove by id.
 
@@ -2287,7 +2303,7 @@ Pick by intent:
 - **Both — clean both views, keep raw on disk** → both flags true. Useful when the stored chat should remain pristine for export, but neither display nor prompt should show the marker.
 - **Permanent rewrite** → no flags. Modifies the stored message itself; both user and AI see the new text on every future read. Use sparingly — destructive on persistent chat, not reversible without backup.
 
-\`pluginOnly: true\` selects plugin requests: it rewrites both the text going into a plugin-built request (memory-graph injections, custom prompt builders) and the assistant text such a request returns. It is independent of the display and prompt flags. Most authoring use cases ignore it.
+\`pluginLanes\` selects plugin application points independently of the flags above. \`pluginLanes: ['request']\` rewrites text going into a plugin-built request (memory-graph injections, custom prompt builders) and needs at least one \`placement\`; \`pluginLanes: ['reply']\` rewrites the assistant text a plugin request returns and ignores \`placement\`. The two lanes can be combined. A script with only plugin lanes never rewrites the stored chat. Most authoring use cases leave \`pluginLanes\` empty.
 
 ### Other knobs that come up
 

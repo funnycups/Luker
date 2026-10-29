@@ -3,15 +3,15 @@
 //
 // Regression lock for the lane-semantics refactor: user scripts scoped to
 // the main pipeline (`promptOnly` alone) must cook main generation
-// payloads only; scripts scoped to the plugin channel (`pluginOnly`)
-// must cook plugin-built payloads
+// payloads only; scripts scoped to the plugin request lane
+// (`pluginLanes: ['request']`) must cook plugin-built payloads
 // (memory-graph extraction here) only; floor messages converted via
 // `floorRecordToTaskMessage` carry an internal provenance marker so the
 // dispatch layer skips a second application — and that marker must never
 // reach the network.
 //
 // Sentinel scheme: two user rules, `/SENTINEL-P/g` → 'P' (`promptOnly`)
-// and `/SENTINEL-D/g` → 'D' (`pluginOnly`),
+// and `/SENTINEL-D/g` → 'D' (`pluginLanes: ['request']`),
 // both placed on user + AI text with no depth bounds. The card's greeting
 // carries `SENTINEL-P SENTINEL-D` adjacently, and every scripted
 // reply repeats both marks spread through the sentence. So:
@@ -91,7 +91,7 @@ test.beforeAll(async () => {
             placement: [1, 2],
             disabled: false,
             markdownOnly: false,
-            pluginOnly: true,
+            pluginLanes: ['request'],
             minDepth: null,
             maxDepth: null,
         },
@@ -204,7 +204,7 @@ test.describe('#66 — plugin lane applied exactly once, lanes never bleed', () 
         expect(mainBlob, 'promptOnly script consumed every SENTINEL-P').not.toContain('SENTINEL-P');
         expect(mainBlob, 'plugin-lane script must not touch main-generation payloads').toContain('SENTINEL-D');
 
-        // Plugin lane: the pluginOnly rule cooked SENTINEL-D exactly once;
+        // Plugin lane: the request-lane rule cooked SENTINEL-D exactly once;
         // the promptOnly rule stayed out of plugin-built payloads.
         expect(extractionBlob, 'extraction payload shows SENTINEL-P next to cooked D').toContain('SENTINEL-P D');
         expect(extractionBlob, 'plugin-lane script consumed every SENTINEL-D').not.toContain('SENTINEL-D');

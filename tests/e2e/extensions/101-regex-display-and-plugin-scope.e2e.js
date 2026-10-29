@@ -1,18 +1,18 @@
-// Case #101 — Regex scope: "Alter Chat Display" and "Plugin Messages" are
-// independent channel switches and may be ticked together on one script.
+// Case #101 — Regex scope: "Alter Chat Display" and the plugin application
+// points are independent switches and may be ticked together on one script.
 //
 // Regression: the editor used to disable and clear "Alter Chat Display" while
-// "Plugin Messages" was ticked, so an existing rule that cleaned the
-// chat display could not be reused for plugin requests.
+// the plugin scope was ticked, so an existing rule that cleaned the chat
+// display could not be reused for plugin traffic.
 //
 // Real-UI version:
 //   - Open Extensions → Regex → "+ Global".
-//   - Tick "Plugin Messages" through a real click and assert "Alter Chat
-//     Display" stays enabled and checked.
+//   - Tick "Plugin Requests" and "Plugin Replies" through real clicks and
+//     assert "Alter Chat Display" stays enabled and checked.
 //   - Tick "Alter Outgoing Prompt" too, fill the script, save via the popup.
-//   - Assert all three scope flags persisted on the stored script.
+//   - Assert the stored script carries `pluginLanes` and no `pluginOnly`.
 //   - Send a real turn; assert the rendered bubble carries the substitution
-//     (the display lane is live for a rule that also carries the plugin flag).
+//     (the display lane is live for a rule that also carries plugin lanes).
 
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
@@ -23,6 +23,7 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
     openExtensionsDrawer,
+    openInlineDrawer,
 } from '../_lib/page.js';
 
 const REPLY = 'The lantern flame settles to a steady blue.';
@@ -42,19 +43,6 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function openRegexDrawer(page) {
-    const regexDrawer = page.locator('#regex_container .inline-drawer').first();
-    const regexContent = regexDrawer.locator('> .inline-drawer-content');
-    const hidden = await regexContent.evaluate(el => {
-        if (!el) return true;
-        return window.getComputedStyle(el).display === 'none';
-    }).catch(() => true);
-    if (hidden) {
-        await regexDrawer.locator('> .inline-drawer-toggle').first().click();
-        await regexContent.waitFor({ state: 'visible', timeout: 5000 });
-    }
-}
-
 test.describe('#101 — Regex display and plugin scope coexist', () => {
     test('ticking Plugin Messages keeps Alter Chat Display enabled, and both persist', async ({ page }) => {
         test.setTimeout(180_000);
@@ -66,7 +54,7 @@ test.describe('#101 — Regex display and plugin scope coexist', () => {
         }, { timeout: 10_000 }).catch(() => {});
 
         await openExtensionsDrawer(page);
-        await openRegexDrawer(page);
+        await openInlineDrawer(page, 'regex_container');
 
         await page.locator('#open_regex_editor').click();
         const popup = page.locator('.popup:visible').last();
@@ -86,16 +74,20 @@ test.describe('#101 — Regex display and plugin scope coexist', () => {
 
         const display = popup.locator('input[name="only_format_display"]');
         const prompt = popup.locator('input[name="only_format_prompt"]');
-        const plugin = popup.locator('input[name="only_format_plugin"]');
+        const request = popup.locator('input[name="plugin_request"]');
+        const reply = popup.locator('input[name="plugin_reply"]');
 
         // The editor seeds "Alter Chat Display" for a new script.
         await expect(display).toBeChecked();
 
-        // Real click on the plugin box. It must not disable or clear the
-        // display box.
-        await plugin.check();
-        await expect(display, 'Alter Chat Display must stay enabled while Plugin Messages is ticked').toBeEnabled();
-        await expect(display, 'Alter Chat Display must stay checked while Plugin Messages is ticked').toBeChecked();
+        // Real clicks on the plugin lanes. They must not disable or clear
+        // the display box.
+        await expect(request).toBeVisible({ timeout: 5000 });
+        await expect(reply).toBeVisible({ timeout: 5000 });
+        await request.check();
+        await reply.check();
+        await expect(display, 'Alter Chat Display must stay enabled while plugin lanes are ticked').toBeEnabled();
+        await expect(display, 'Alter Chat Display must stay checked while plugin lanes are ticked').toBeChecked();
 
         // The original user scenario: the rule also cleaned the outgoing prompt.
         await prompt.check();
@@ -109,13 +101,15 @@ test.describe('#101 — Regex display and plugin scope coexist', () => {
             return found ? {
                 markdownOnly: Boolean(found.markdownOnly),
                 promptOnly: Boolean(found.promptOnly),
-                pluginOnly: Boolean(found.pluginOnly),
+                pluginLanes: Array.isArray(found.pluginLanes) ? found.pluginLanes : null,
+                hasPluginOnly: Object.prototype.hasOwnProperty.call(found, 'pluginOnly'),
             } : null;
         });
         expect(saved, 'script should be persisted after save').toBeTruthy();
         expect(saved.markdownOnly).toBe(true);
         expect(saved.promptOnly).toBe(true);
-        expect(saved.pluginOnly).toBe(true);
+        expect(saved.pluginLanes).toEqual(['request', 'reply']);
+        expect(saved.hasPluginOnly).toBe(false);
 
         // Display lane is live: the rendered bubble carries the substitution.
         const { text } = await sendMessageAndAwaitReply(page, 'I trimmed the wick.');

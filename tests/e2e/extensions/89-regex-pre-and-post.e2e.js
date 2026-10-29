@@ -84,7 +84,8 @@ async function createGlobalRegexScript(page, { name, findRegex, replaceString, p
     };
     await setBox('input[name="only_format_display"]', !!ephemerality.markdownOnly);
     await setBox('input[name="only_format_prompt"]', !!ephemerality.promptOnly);
-    await setBox('input[name="only_format_plugin"]', !!ephemerality.pluginOnly);
+    await setBox('input[name="plugin_request"]', !!ephemerality.pluginOnly);
+    await setBox('input[name="plugin_reply"]', !!ephemerality.pluginOnly);
     await setBox('input[name="run_on_edit"]', !!ephemerality.runOnEdit);
     // Save via the popup OK button.
     await popup.locator('.popup-button-ok').first().click();

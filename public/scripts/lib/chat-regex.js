@@ -9,9 +9,9 @@
  *   - `computeDepthsFromEnd` — shared depth-from-end computation, used
  *     by plugin-floors so plugins see the same depth numbering the main
  *     generation pipeline feeds to `applyRegex`.
- *   - `regexAgentPluginOutput` — response-side primitive: applies the
- *     plugin channel's OUTPUT-direction regex pass to the assistant
- *     text a plugin request returns.
+ *   - `regexAgentPluginOutput` — reply-side primitive: applies the
+ *     plugin reply lane's regex pass to the assistant text a plugin
+ *     request returns.
  *   - `__resetRegexApiCacheForTests` — test seam.
  *
  * Depth semantics match the main pipeline: `depth` is 0-based, counting
@@ -20,12 +20,11 @@
  * `maxDepth: 4` do the same thing on the plugin lane that it does in
  * Generate().
  *
- * Plugin-channel semantics:
- *   `pluginOnly` is an independent channel. Such rules cook both the
- *   text going INTO a plugin request (floors, plugin-composed messages,
- *   world info) and the assistant text a plugin request RETURNS. The two
- *   directions are disjoint, so one rule never fires twice on the same
- *   text. Rules without `pluginOnly` never enter the channel.
+ * Plugin reply semantics:
+ *   `regexAgentPluginOutput` runs the reply lane: rules whose script has
+ *   `pluginLanes: ['reply']`. The reply is the assistant text a plugin
+ *   request RETURNS. Request-side rules (`pluginLanes: ['request']`) do
+ *   not enter this pass.
  *
  * Regex engine access:
  *   We consume the regex primitives through `Luker.getContext().regex`
@@ -99,21 +98,20 @@ export function computeDepthsFromEnd(messages) {
 }
 
 /**
- * Apply the plugin channel's OUTPUT-direction regex pass to
- * agent-produced text. A rule participates when it is scoped to the
- * plugin channel (`pluginOnly`) — the "Plugin Messages" box, with
- * or without "Alter Outgoing Prompt".
+ * Apply the plugin reply lane's regex pass to agent-produced text.
+ * A rule participates when its `pluginLanes` includes `reply` — the
+ * "Plugin Replies" box.
  *
- * This is the response-side counterpart of the request-side lane
+ * This is the reply-side counterpart of the request-side lane
  * (`lib/plugin-floors.js` / `applyPluginLaneRegex`): the request side
  * cooks text going INTO a plugin request, this cooks the assistant text
- * a plugin request RETURNS. The two directions are disjoint, so one rule
- * never fires twice on the same text.
+ * a plugin request RETURNS. The lanes are disjoint, so one rule never
+ * fires twice on the same text.
  *
- * Placement is fixed to AI_OUTPUT (a response is by definition the
- * agent's own output). `isPrompt` is deliberately NOT set: rules without
- * `pluginOnly` never enter the plugin channel. `depth` is `undefined`
- * (responses don't sit at a stable chat depth).
+ * Placement is fixed to AI_OUTPUT (a reply is by definition the agent's
+ * own output). `isPrompt` is deliberately NOT set: rules without the
+ * reply lane never enter this pass. `depth` is `undefined` (replies
+ * don't sit at a stable chat depth).
  *
  * Returns raw text when the regex API isn't reachable (bare unit tests
  * without a Luker stub) so callers degrade gracefully.

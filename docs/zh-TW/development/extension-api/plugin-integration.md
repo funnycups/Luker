@@ -67,17 +67,17 @@ handle.unregister();
 | `findRegex` | string | 是 | `/pattern/flags` 形式的匹配式 |
 | `replaceString` | string | 是 | 替換文字，`$1` 與 `$<name>` 引用捕獲組 |
 | `trimStrings` | string[] | 否 | 替換前從每個捕獲組移除的字串，預設為空清單 |
-| `placement` | number[] | 是 | 「影響條目」，`1` 是使用者輸入，`2` 是 AI 輸出 |
+| `placement` | number[] | 否 | 「影響條目」，`1` 是使用者輸入，`2` 是 AI 輸出。規則至少需要一個 placement，除非只使用外掛回覆 |
+| `pluginLanes` | string[] | 否 | 外掛應用點。`request` 處理進入外掛請求的文字，至少需要一個 `placement`；`reply` 處理外掛請求回傳的助手正文，不使用 `placement` |
 | `disabled` | boolean | 否 | 為 true 時略過該規則 |
 | `markdownOnly` | boolean | 否 | 「僅修改聊天顯示」，規則改寫聊天介面顯示的內容 |
 | `promptOnly` | boolean | 否 | 「僅修改系統提示詞」，規則改寫主聊天傳送給模型的提示詞 |
-| `pluginOnly` | boolean | 否 | 「插件訊息」，規則處理外掛請求的往來文字 |
 | `runOnEdit` | boolean | 否 | 編輯訊息時也執行 |
 | `substituteRegex` | number | 否 | `findRegex` 的巨集替換模式，`0` 表示不替換 |
 | `minDepth` | number \| null | 否 | 「最小深度」，只處理深度不小於該值的訊息，深度 0 是最新一則 |
 | `maxDepth` | number \| null | 否 | 「最大深度」，只處理深度不大於該值的訊息 |
 
-三個標記互相獨立，規則會套用到每個已開啟標記對應的文字；執行時腳本在全部持久化規則之後執行。
+`placement` 與 `pluginLanes` 選擇訊息目標，`markdownOnly` 與 `promptOnly` 選擇暫時性檢視。兩組互相獨立，規則可以組合使用，每個已選擇的選項僅增加自己對應的處理。執行時腳本在全部持久化規則之後執行。
 
 ## 搜尋工具 API
 

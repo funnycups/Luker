@@ -67,17 +67,17 @@ handle.unregister();
 | `findRegex` | string | Yes | Pattern in `/pattern/flags` form. |
 | `replaceString` | string | Yes | Replacement text. `$1` and `$<name>` reference capture groups. |
 | `trimStrings` | string[] | No | Strings removed from each captured group before substitution. Defaults to an empty list. |
-| `placement` | number[] | Yes | Where the rule applies. `1` is user input, `2` is AI output. |
+| `placement` | number[] | No | Where the rule applies. `1` is user input, `2` is AI output. A rule needs at least one placement unless it uses only the plugin reply lane. |
+| `pluginLanes` | string[] | No | Plugin application points. `request` covers text going into a plugin request and needs at least one `placement`; `reply` covers the assistant text a plugin request returns and ignores `placement`. |
 | `disabled` | boolean | No | Skips the rule when true. |
 | `markdownOnly` | boolean | No | Applies the rule to rendered chat text. |
 | `promptOnly` | boolean | No | Applies the rule to outgoing prompts. |
-| `pluginOnly` | boolean | No | Applies the rule to text sent to plugin requests and returned from them. |
 | `runOnEdit` | boolean | No | Runs the rule when a message is edited. |
 | `substituteRegex` | number | No | Macro substitution mode for `findRegex`. `0` disables substitution. |
 | `minDepth` | number \| null | No | Applies the rule only when the message depth is at least this value. Depth 0 is the newest message. |
 | `maxDepth` | number \| null | No | Applies the rule only when the message depth is at most this value. |
 
-The three scope flags are independent. A rule runs on every channel whose flag is set, and runtime scripts run after the persisted rules of every scope.
+`placement` and `pluginLanes` select message targets. `markdownOnly` and `promptOnly` select ephemeral views. The two groups are independent: a rule can combine them, and each selected option adds only its own pass. Runtime scripts run after the persisted rules of every scope.
 
 ## Search Tools API
 

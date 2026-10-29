@@ -1080,8 +1080,8 @@ export async function generateTask({
     const result = normalizeResponse({ requestApi: profile.requestApi, mode, raw });
 
     // ── 9. Plugin output-direction regex pass ──
-    // Rules scoped to the plugin channel (pluginOnly) cook the assistant
-    // text a plugin request returns. toolCalls payloads are never touched.
+    // Rules with the plugin reply lane (`pluginLanes: ['reply']`) cook the
+    // assistant text a plugin request returns. toolCalls payloads are never touched.
     const regexOutputApplier = _injected?.regexOutputApplier || regexAgentPluginOutput;
     result.assistantText = regexOutputApplier(result.assistantText);
 
