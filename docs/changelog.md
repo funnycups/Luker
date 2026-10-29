@@ -124,10 +124,12 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### World Info
 
 - The world-book picker now supports multi-select deletion.
+- The world-book picker now supports multi-select export as a zip.
 
 ### Presets
 
 - Preset and template pickers now support multi-select deletion.
+- Preset and template pickers now support multi-select export as a zip.
 - Improved performance when a preset is bound to a character card.
 
 ### Chat

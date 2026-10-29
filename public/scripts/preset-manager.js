@@ -60,6 +60,7 @@ import {
 import { showUndoToast } from './undo-toast.js';
 import { initActionableSingleSelect } from './select2-actionable-single.js';
 import { buildBulkDeleteConfirmBody } from './select2-multiselect.js';
+import { downloadTextFilesAsZip } from './zip-export.js';
 
 const presetManagers = {};
 const PRESET_LOREBOOK_BINDABLE_APIS = new Set(['kobold', 'novel', 'openai', 'textgenerationwebui']);
@@ -440,6 +441,15 @@ function registerPresetManagers() {
                     await primaryManager.deletePresetsInteractive(items.map((item) => item.text));
                 },
                 bulkDeleteButtonTitle: primaryManager.isAdvancedFormatting() ? t`Delete template` : t`Delete preset`,
+                onBulkExport: async (items) => {
+                    try {
+                        await primaryManager.exportPresetsAsZip(items.map((item) => item.text));
+                    } catch (error) {
+                        console.error('Failed to export presets', error);
+                        toastr.error(String(error?.message || error), t`Failed to export presets`);
+                    }
+                },
+                bulkExportButtonTitle: t`Export`,
                 selectAllTitle: t`Select all`,
                 selectedLabel: t`Selected`,
                 select2Options: {
@@ -1390,6 +1400,39 @@ class PresetManager {
 
         const index = preset_names[presetName];
         return index !== undefined ? structuredClone(presets[index]) : undefined;
+    }
+
+    /**
+     * Exports the named presets as a zip of JSON files.
+     * @param {string[]} names Preset names to export
+     * @returns {Promise<void>}
+     */
+    async exportPresetsAsZip(names) {
+        const uniqueNames = [...new Set((Array.isArray(names) ? names : [])
+            .map((name) => String(name || '').trim())
+            .filter(Boolean))];
+        const files = [];
+        const missing = [];
+
+        for (const name of uniqueNames) {
+            const preset = this.getStoredPreset(name);
+            if (!preset) {
+                missing.push(name);
+                continue;
+            }
+
+            files.push({
+                name: `${name}.json`,
+                content: JSON.stringify(preset, null, 4),
+            });
+        }
+
+        if (missing.length) {
+            throw new Error(`Preset data not found: ${missing.join(', ')}`);
+        }
+
+        const zipName = this.isAdvancedFormatting() ? 'templates.zip' : 'presets.zip';
+        await downloadTextFilesAsZip(files, zipName);
     }
 
     /**

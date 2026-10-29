@@ -6456,4 +6456,6 @@
     ,"Some World/Lorebooks could not be read and were not deleted": "部分世界书无法读取，未删除"
     ,"Some presets could not be deleted": "部分预设删除失败"
     ,"Some templates could not be deleted": "部分模板删除失败"
+    ,"Failed to export presets": "导出预设失败"
+    ,"Failed to export World/Lorebooks": "导出世界书失败"
 }

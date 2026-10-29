@@ -32,6 +32,7 @@ import { accountStorage } from './util/AccountStorage.js';
 import { getOrCreatePersonaDescriptor, setPersonaDescription, user_avatar } from './personas.js';
 import { initActionableSingleSelect, refreshOpenDropdown } from './select2-actionable-single.js';
 import { buildBulkDeleteConfirmBody } from './select2-multiselect.js';
+import { downloadTextFilesAsZip } from './zip-export.js';
 import { showUndoToast } from './undo-toast.js';
 
 function buildWorldInfoDragHelper(item) {
@@ -11490,6 +11491,41 @@ export function initWorldInfo() {
             await deleteWorldInfoWithUndo(worldNames);
         },
         bulkDeleteButtonTitle: t`Delete`,
+        onBulkExport: async (items) => {
+            const worldNames = Array.from(new Set(items.map((item) => resolveWorldInfoName(item.text)).filter(Boolean)));
+            if (!worldNames.length) {
+                return;
+            }
+
+            try {
+                const dataByName = await loadWorldInfoBatch(worldNames);
+                const files = [];
+                const missing = [];
+
+                for (const worldName of worldNames) {
+                    const worldData = dataByName.get(worldName);
+                    if (!worldData) {
+                        missing.push(worldName);
+                        continue;
+                    }
+
+                    files.push({
+                        name: `${worldName}.json`,
+                        content: JSON.stringify(worldData),
+                    });
+                }
+
+                if (missing.length) {
+                    throw new Error(`World/Lorebook data not found: ${missing.join(', ')}`);
+                }
+
+                await downloadTextFilesAsZip(files, 'worldbooks.zip');
+            } catch (error) {
+                console.error('Failed to export World/Lorebooks', error);
+                toastr.error(String(error?.message || error), t`Failed to export World/Lorebooks`);
+            }
+        },
+        bulkExportButtonTitle: t`Export`,
         selectAllTitle: t`Select all`,
         selectedLabel: t`Selected`,
     });

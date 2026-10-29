@@ -6,6 +6,7 @@
 // for reading the surviving option labels — never to invoke the feature.
 
 import { test, expect } from '@playwright/test';
+import AdmZip from 'adm-zip';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
@@ -132,6 +133,29 @@ test('bulk delete removes every ticked book and undo brings them all back', asyn
 
     await page.locator('.prompt-manager-toggle-undo-button').last().click();
     await expectEditorLabels(page, { contains: BOOKS });
+});
+
+test('bulk export downloads a zip with one JSON file per ticked book', async ({ page }, testInfo) => {
+    await openEditorDropdown(page);
+    await toggleRow(page, 'reef-conditions');
+    await toggleRow(page, 'reef-drifters');
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('.luker-bulk-delete-toolbar__export').click();
+    const download = await downloadPromise;
+
+    expect(download.suggestedFilename()).toBe('worldbooks.zip');
+
+    const downloadPath = testInfo.outputPath('worldbooks.zip');
+    await download.saveAs(downloadPath);
+
+    const zip = new AdmZip(downloadPath);
+    const entries = zip.getEntries().map((entry) => entry.entryName).sort();
+    expect(entries).toEqual(['reef-conditions.json', 'reef-drifters.json']);
+
+    const exported = JSON.parse(zip.readAsText('reef-conditions.json'));
+    expect(exported.entries).toBeTruthy();
+    expect(Object.keys(exported.entries).length).toBeGreaterThan(0);
 });
 
 test('select-all covers the search result set only', async ({ page }) => {

@@ -704,6 +704,27 @@ span.select2.select2-container .select2-selection__choice__remove:hover {
     outline: none;
 }
 
+.luker-bulk-delete-toolbar__export {
+    flex: 0 0 auto;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 45%, var(--SmartThemeBorderColor));
+    border-radius: 999px;
+    padding: 0.2rem 0.65rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: color-mix(in srgb, var(--SmartThemeQuoteColor) 85%, var(--SmartThemeBodyColor));
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent);
+    cursor: pointer;
+    transition: background-color var(--animation-duration-1x), color var(--animation-duration-1x), transform var(--animation-duration-1x);
+}
+
+.luker-bulk-delete-toolbar__export:hover,
+.luker-bulk-delete-toolbar__export:focus-visible {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 16%, var(--SmartThemeBlurTintColor));
+    color: var(--SmartThemeBodyColor);
+    transform: translateY(-1px);
+    outline: none;
+}
+
 /* Batch mode replaces per-row actions with the toolbar, so the row/group
    action buttons and the group toolbar step aside while it is active. */
 

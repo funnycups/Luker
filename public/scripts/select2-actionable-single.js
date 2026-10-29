@@ -431,6 +431,8 @@ function showPresetContextMenu(anchor, presetName, callbacks, selectElement, own
  * @param {object} [options.presetGroupCallbacks]
  * @param {((options: Array<{ ownerKey: string, value: string, text: string, element: HTMLOptionElement|null, selectElement: HTMLSelectElement }>) => Promise<void>|void)|null} [options.onBulkDelete]
  * @param {string} [options.bulkDeleteButtonTitle='Delete']
+ * @param {((options: Array<{ ownerKey: string, value: string, text: string, element: HTMLOptionElement|null, selectElement: HTMLSelectElement }>) => Promise<void>|void)|null} [options.onBulkExport]
+ * @param {string} [options.bulkExportButtonTitle='Export']
  * @param {string} [options.selectAllTitle='Select all']
  * @param {string} [options.selectedLabel='Selected']
  */
@@ -448,6 +450,8 @@ export function initActionableSingleSelect(select, {
     presetGroupCallbacks = null,
     onBulkDelete = null,
     bulkDeleteButtonTitle = 'Delete',
+    onBulkExport = null,
+    bulkExportButtonTitle = 'Export',
     selectAllTitle = 'Select all',
     selectedLabel = 'Selected',
 } = {}) {
@@ -480,6 +484,8 @@ export function initActionableSingleSelect(select, {
     // confirm, the delete, the undo, and its own refresh.
     const selection = createSelectionState();
     const bulkDeleteEnabled = typeof onBulkDelete === 'function';
+    const bulkExportEnabled = typeof onBulkExport === 'function';
+    const bulkActionsEnabled = bulkDeleteEnabled || bulkExportEnabled;
 
     const getDropdown = () => $select.data('select2')?.$dropdown;
 
@@ -516,6 +522,17 @@ export function initActionableSingleSelect(select, {
         return values;
     };
 
+    const getSelectedItems = () => selection.values().map((value) => {
+        const optionElement = Array.from(selectElement.options).find((option) => String(option.value) === value) || null;
+        return {
+            ownerKey,
+            value,
+            text: String(optionElement?.textContent || '').trim(),
+            element: optionElement,
+            selectElement,
+        };
+    }).filter((optionData) => canDelete(optionData));
+
     const applyBatchMode = (active) => {
         const $surface = getDropdownSurface();
         if ($surface?.length) {
@@ -542,7 +559,7 @@ export function initActionableSingleSelect(select, {
 
         $results.find('.luker-bulk-delete-toolbar').remove();
 
-        if (!bulkDeleteEnabled || selection.size() === 0) {
+        if (!bulkActionsEnabled || selection.size() === 0) {
             applyBatchMode(false);
             return;
         }
@@ -577,13 +594,24 @@ export function initActionableSingleSelect(select, {
             });
         const $count = $('<span class="luker-bulk-delete-toolbar__count"></span>')
             .text(`${selectedLabel}: ${selection.size()}`);
+        const $export = bulkExportEnabled
+            ? $('<button type="button" class="luker-bulk-delete-toolbar__export"></button>')
+                .attr('data-luker-action-owner', ownerKey)
+                .attr('title', bulkExportButtonTitle)
+                .attr('aria-label', bulkExportButtonTitle)
+                .text(bulkExportButtonTitle)
+            : null;
         const $delete = $('<button type="button" class="luker-bulk-delete-toolbar__delete"></button>')
             .attr('data-luker-action-owner', ownerKey)
             .attr('title', bulkDeleteButtonTitle)
             .attr('aria-label', bulkDeleteButtonTitle)
             .text(bulkDeleteButtonTitle);
 
-        $toolbar.append($selectAll, $count, $delete);
+        $toolbar.append($selectAll, $count);
+        if ($export) {
+            $toolbar.append($export);
+        }
+        $toolbar.append($delete);
         $results.prepend($toolbar);
         applyBatchMode(true);
     };
@@ -653,7 +681,7 @@ export function initActionableSingleSelect(select, {
                     .attr('data-preset-group-id', groupId)
                     .css('padding-left', depth > 0 ? ((depth + 1) * 20) + 'px' : '');
                 const label = $('<span class="luker-action-select2-option__label"></span>').text(optionData.text);
-                if (bulkDeleteEnabled && canDelete(optionData)) {
+                if (bulkActionsEnabled && canDelete(optionData)) {
                     row.append(buildRowCheckbox(optionData));
                 }
                 row.append(label);
@@ -688,7 +716,7 @@ export function initActionableSingleSelect(select, {
 
             const row = $('<div class="luker-action-select2-option"></div>');
             const label = $('<span class="luker-action-select2-option__label"></span>').text(optionData.text);
-            if (bulkDeleteEnabled && canDelete(optionData)) {
+            if (bulkActionsEnabled && canDelete(optionData)) {
                 row.append(buildRowCheckbox(optionData));
             }
             row.append(label);
@@ -957,16 +985,7 @@ export function initActionableSingleSelect(select, {
             event.preventDefault();
             event.stopPropagation();
 
-            const items = selection.values().map((value) => {
-                const optionElement = Array.from(selectElement.options).find((option) => String(option.value) === value) || null;
-                return {
-                    ownerKey,
-                    value,
-                    text: String(optionElement?.textContent || '').trim(),
-                    element: optionElement,
-                    selectElement,
-                };
-            }).filter((optionData) => canDelete(optionData));
+            const items = getSelectedItems();
 
             if (!items.length) {
                 return;
@@ -980,6 +999,34 @@ export function initActionableSingleSelect(select, {
                 await onBulkDelete(items);
             } catch (error) {
                 console.error('Actionable single select bulk delete handler failed', error);
+            }
+        });
+
+    // === Bulk export toolbar handler ===
+    $(document)
+        .off('click' + namespace + '.bulkExport')
+        .on('click' + namespace + '.bulkExport', '.luker-bulk-delete-toolbar__export', async function (event) {
+            if ($(this).attr('data-luker-action-owner') !== ownerKey || typeof onBulkExport !== 'function') {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const items = getSelectedItems();
+
+            if (!items.length) {
+                return;
+            }
+
+            if ($select.data('select2')) {
+                $select.select2('close');
+            }
+
+            try {
+                await onBulkExport(items);
+            } catch (error) {
+                console.error('Actionable single select bulk export handler failed', error);
             }
         });
 
