@@ -1184,6 +1184,8 @@ export function modelIdMatchesFamily(model, familyRegex) {
  *   https://api.example.com/api/v1    → https://api.example.com/api/v1
  *   https://qianfan.baidubce.com/v2/coding → https://qianfan.baidubce.com/v2/coding
  *
+ * @deprecated Use `normalizeProviderBaseUrl` from `./util/base-url.js`, which
+ * applies the documented base path for each provider.
  * @param {string} str Input URL string
  * @returns {string} Normalized base URL ending with /v1 (or similar versioned path)
  */

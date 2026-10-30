@@ -12,6 +12,7 @@ import fetch from 'node-fetch';
 import { SECRET_KEYS, readProviderSecret, readSecret } from '../endpoints/secrets.js';
 import { getCommonCredentials } from './source-settings.js';
 import { getConfigValue, trimV1 } from '../util.js';
+import { normalizeProviderBaseUrl } from '../util/base-url.js';
 import { setAdditionalHeadersByType } from '../additional-headers.js';
 import { OPENROUTER_HEADERS, TEXTGEN_TYPES } from '../constants.js';
 import { fetchGoogleModels } from '../endpoints/backends/google-models.js';
@@ -30,10 +31,6 @@ const DEFAULT_URLS = {
     siliconflowCn: 'https://api.siliconflow.cn/v1',
     makersuite: 'https://generativelanguage.googleapis.com',
 };
-
-function trimSlash(value) {
-    return String(value || '').replace(/\/+$/, '');
-}
 
 /**
  * @param {object} request Express request
@@ -81,7 +78,7 @@ function mapOpenAIStyle(data, { filter, map } = {}) {
 }
 
 async function listOpenAI(request, credentials, fetchImpl) {
-    const base = trimSlash(credentials.reverseProxy || DEFAULT_URLS.openai);
+    const base = normalizeProviderBaseUrl('openai', credentials.reverseProxy || DEFAULT_URLS.openai);
     const key = resolveKey(request, SECRET_KEYS.OPENAI, credentials);
     const data = await fetchJson(`${base}/models`, {
         headers: key ? { Authorization: `Bearer ${key}` } : {},
@@ -98,7 +95,7 @@ async function listOpenAI(request, credentials, fetchImpl) {
 }
 
 async function listCohere(request, credentials, mode, fetchImpl) {
-    const base = trimSlash(credentials.reverseProxy || DEFAULT_URLS.cohere);
+    const base = normalizeProviderBaseUrl('cohere', credentials.reverseProxy || DEFAULT_URLS.cohere);
     const key = resolveKey(request, SECRET_KEYS.COHERE, credentials);
     if (!key) {
         throw new Error('No Cohere API key found.');
@@ -115,7 +112,7 @@ async function listCohere(request, credentials, mode, fetchImpl) {
 }
 
 async function listJina(request, credentials, mode, fetchImpl) {
-    const base = trimSlash(credentials.reverseProxy || DEFAULT_URLS.jina);
+    const base = normalizeProviderBaseUrl('jina', credentials.reverseProxy || DEFAULT_URLS.jina);
     const key = resolveKey(request, SECRET_KEYS.JINA, credentials);
     const data = await fetchJson(`${base}/models`, {
         headers: key ? { Authorization: `Bearer ${key}` } : {},
@@ -134,7 +131,7 @@ async function listJina(request, credentials, mode, fetchImpl) {
 }
 
 async function listTogether(request, credentials, fetchImpl) {
-    const base = trimSlash(credentials.reverseProxy || DEFAULT_URLS.togetherai);
+    const base = normalizeProviderBaseUrl('togetherai', credentials.reverseProxy || DEFAULT_URLS.togetherai);
     const key = resolveKey(request, SECRET_KEYS.TOGETHERAI, credentials);
     const data = await fetchJson(`${base}/models`, {
         headers: key ? { Authorization: `Bearer ${key}` } : {},
@@ -147,7 +144,7 @@ async function listTogether(request, credentials, fetchImpl) {
 }
 
 async function listOpenRouter(request, credentials, fetchImpl) {
-    const base = trimSlash(credentials.reverseProxy || DEFAULT_URLS.openrouter);
+    const base = normalizeProviderBaseUrl('openrouter', credentials.reverseProxy || DEFAULT_URLS.openrouter);
     const key = resolveKey(request, SECRET_KEYS.OPENROUTER, credentials);
     const data = await fetchJson(`${base}/models?output_modalities=embeddings`, {
         headers: {
@@ -162,7 +159,7 @@ async function listOpenRouter(request, credentials, fetchImpl) {
 }
 
 async function listElectronHub(request, credentials, fetchImpl) {
-    const base = trimSlash(credentials.reverseProxy || DEFAULT_URLS.electronhub);
+    const base = normalizeProviderBaseUrl('electronhub', credentials.reverseProxy || DEFAULT_URLS.electronhub);
     const key = resolveKey(request, SECRET_KEYS.ELECTRONHUB, credentials);
     const data = await fetchJson(`${base}/models`, {
         headers: key ? { Authorization: `Bearer ${key}` } : {},
@@ -208,9 +205,9 @@ async function listSiliconFlow(request, credentials, fetchImpl) {
     if (!key) {
         throw new Error('No SiliconFlow API key found.');
     }
-    const base = credentials.reverseProxy
-        ? trimSlash(credentials.reverseProxy)
-        : (request.body.siliconflow_endpoint === 'cn' ? DEFAULT_URLS.siliconflowCn : DEFAULT_URLS.siliconflow);
+    const base = normalizeProviderBaseUrl('siliconflow', credentials.reverseProxy
+        ? credentials.reverseProxy
+        : (request.body.siliconflow_endpoint === 'cn' ? DEFAULT_URLS.siliconflowCn : DEFAULT_URLS.siliconflow));
     const data = await fetchJson(`${base}/models?type=text&sub_type=embedding`, {
         headers: { Authorization: `Bearer ${key}` },
         fetchImpl,
@@ -240,7 +237,7 @@ async function listWorkersAi(request, credentials, fetchImpl) {
 
 async function listMakerSuite(request, fetchImpl) {
     const apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || '';
-    const apiUrl = trimSlash(request.body.reverse_proxy || request.body.base_url || DEFAULT_URLS.makersuite);
+    const apiUrl = normalizeProviderBaseUrl('makersuite', request.body.reverse_proxy || request.body.base_url || DEFAULT_URLS.makersuite);
     const apiVersion = getConfigValue('gemini.apiVersion', 'v1beta');
     if (!apiKey && !request.body.base_url && !request.body.reverse_proxy) {
         throw new Error('Google AI Studio API key is missing.');
@@ -268,7 +265,7 @@ async function listVertexAi(request, fetchImpl) {
         modelsUrl = buildVertexModelsUrl({ region });
         headers['Authorization'] = auth.authHeader;
     } else {
-        const proxyUrl = trimSlash(request.body.reverse_proxy || request.body.base_url || '');
+        const proxyUrl = normalizeProviderBaseUrl('vertexai', request.body.reverse_proxy || request.body.base_url || '');
         modelsUrl = buildVertexModelsUrl({ region, origin: proxyUrl });
         headers['Authorization'] = auth.authHeader;
     }
@@ -278,7 +275,7 @@ async function listVertexAi(request, fetchImpl) {
 }
 
 async function listOllama(request, credentials, fetchImpl) {
-    const base = credentials.reverseProxy || String(request.body.apiUrl || '');
+    const base = normalizeProviderBaseUrl('ollama', credentials.reverseProxy || String(request.body.apiUrl || ''));
     if (!base) {
         throw new Error('Ollama server URL is required.');
     }
@@ -299,7 +296,7 @@ async function listOllama(request, credentials, fetchImpl) {
 }
 
 async function listOpenAICompatibleServer(request, credentials, type, fetchImpl) {
-    const base = credentials.reverseProxy || String(request.body.apiUrl || '');
+    const base = normalizeProviderBaseUrl(type, credentials.reverseProxy || String(request.body.apiUrl || ''));
     if (!base) {
         throw new Error('Server URL is required.');
     }

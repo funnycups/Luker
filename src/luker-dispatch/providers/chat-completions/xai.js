@@ -13,6 +13,7 @@ import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { convertXAIMessages, getPromptNames } from '../../../prompt-converters.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
+import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 
 const API_XAI = 'https://api.x.ai/v1';
 
@@ -42,7 +43,8 @@ export async function dispatchXai(ctx) {
 
     let apiUrl;
     try {
-        apiUrl = new URL(body.reverse_proxy || body.base_url || API_XAI).toString();
+        apiUrl = normalizeProviderBaseUrl('xai', body.reverse_proxy || body.base_url || API_XAI);
+        new URL(apiUrl);
     } catch (parseErr) {
         const err = new Error(`xAI upstream URL invalid: ${parseErr?.message || parseErr}`);
         ctx.inspection.fail(err, 400);

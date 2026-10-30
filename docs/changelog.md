@@ -47,6 +47,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - The connection-profile picker now supports multi-select deletion.
 - Added model list fetching and a connection test to embedding and rerank profiles.
 - Fixed embedding profiles rejecting Vertex AI service-account authentication as unsupported.
+- Chat-completion, embedding, and rerank connection profiles now normalize the entered URL against each provider's documented base URL.
 
 ### Storage & Sync
 

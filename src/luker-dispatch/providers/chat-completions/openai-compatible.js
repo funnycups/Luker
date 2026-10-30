@@ -43,9 +43,9 @@ import {
     getConfigValue,
     mergeObjectWithYaml,
     modelIdMatchesFamily,
-    normalizeOpenAIBaseUrl,
     uuidv4,
 } from '../../../util.js';
+import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 import {
     addAssistantPrefix,
     addOpenRouterSignatures,
@@ -235,7 +235,7 @@ function setJsonObjectFormat(bodyParams, messages, jsonSchema) {
 async function resolveOpenAI(ctx) {
     const body = ctx.body;
     const isTextCompletion = detectTextCompletion(body);
-    const apiUrl = normalizeOpenAIBaseUrl(body.reverse_proxy || body.base_url || API_OPENAI);
+    const apiUrl = normalizeProviderBaseUrl('openai', body.reverse_proxy || body.base_url || API_OPENAI);
     const apiKey = body.proxy_password || ctx.secrets.read(SECRET_KEYS.OPENAI) || '';
     const headers = {};
     /** @type {any} */
@@ -347,7 +347,7 @@ async function resolveOpenRouter(ctx) {
 async function resolveCustom(ctx) {
     const body = ctx.body;
     const isTextCompletion = detectTextCompletion(body);
-    const apiUrl = normalizeOpenAIBaseUrl(body.custom_url);
+    const apiUrl = normalizeProviderBaseUrl('custom', body.custom_url);
     const apiKey = ctx.secrets.read(SECRET_KEYS.CUSTOM);
     /** @type {any} */
     const headers = {};
@@ -592,7 +592,7 @@ function applyMoonshotReasoningParams(bodyParams, model, effort) {
 /** MOONSHOT — chat-completions.js:3185-3195 */
 async function resolveMoonshot(ctx) {
     const body = ctx.body;
-    const apiUrl = new URL(body.reverse_proxy || body.base_url || API_MOONSHOT).toString();
+    const apiUrl = normalizeProviderBaseUrl('moonshot', body.reverse_proxy || body.base_url || API_MOONSHOT);
     const apiKey = body.proxy_password || ctx.secrets.read(SECRET_KEYS.MOONSHOT) || '';
     const headers = {};
     /** @type {any} */
@@ -631,7 +631,7 @@ async function resolveCometapi(ctx) {
 async function resolveZai(ctx) {
     const body = ctx.body;
     const defaultApiUrl = body.zai_endpoint === ZAI_ENDPOINT.CODING ? API_ZAI_CODING : API_ZAI_COMMON;
-    const apiUrl = new URL(body.reverse_proxy || body.base_url || defaultApiUrl).toString();
+    const apiUrl = normalizeProviderBaseUrl('zai', body.reverse_proxy || body.base_url || defaultApiUrl);
     const apiKey = body.proxy_password || ctx.secrets.read(SECRET_KEYS.ZAI) || '';
     const headers = { 'Accept-Language': 'en-US,en' };
     /** @type {any} */

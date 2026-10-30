@@ -3,6 +3,7 @@ import urlJoin from 'url-join';
 import { setAdditionalHeadersByType } from '../additional-headers.js';
 import { TEXTGEN_TYPES } from '../constants.js';
 import { trimV1 } from '../util.js';
+import { normalizeProviderBaseUrl } from '../util/base-url.js';
 import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
 
 /**
@@ -23,7 +24,7 @@ export async function getVllmBatchVector(texts, apiUrl, model, directories, sour
         ? settings.secretId.trim()
         : null;
 
-    const baseUrl = reverseProxy || apiUrl;
+    const baseUrl = normalizeProviderBaseUrl('vllm', reverseProxy || apiUrl);
     const url = new URL(urlJoin(trimV1(baseUrl), '/v1/embeddings'));
 
     const headers = {};

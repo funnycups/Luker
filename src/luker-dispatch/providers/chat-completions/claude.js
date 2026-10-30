@@ -37,6 +37,7 @@ import {
     mergeObjectWithYaml,
     modelIdMatchesFamily,
 } from '../../../util.js';
+import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 
 const API_CLAUDE = 'https://api.anthropic.com/v1';
 
@@ -122,7 +123,8 @@ export async function dispatchClaude(ctx) {
 
     let apiUrl;
     try {
-        apiUrl = new URL(body.reverse_proxy || body.base_url || API_CLAUDE).toString();
+        apiUrl = normalizeProviderBaseUrl('claude', body.reverse_proxy || body.base_url || API_CLAUDE);
+        new URL(apiUrl);
     } catch (parseErr) {
         const err = new Error(`Claude upstream URL invalid: ${parseErr?.message || parseErr}`);
         ctx.inspection.fail(err, 400);

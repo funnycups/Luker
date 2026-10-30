@@ -15,8 +15,8 @@ import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import {
     excludeKeysByYaml,
     mergeObjectWithYaml,
-    normalizeOpenAIBaseUrl,
 } from '../../../util.js';
+import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { resolveOpenAIEffort } from './reasoning-params.js';
@@ -185,7 +185,7 @@ export async function dispatchOpenAIResponses(ctx) {
     ctx.inspection.start();
 
     try {
-        const apiUrl = normalizeOpenAIBaseUrl(body.responses_url || DEFAULT_RESPONSES_BASE_URL);
+        const apiUrl = normalizeProviderBaseUrl('openai_responses', body.responses_url || DEFAULT_RESPONSES_BASE_URL);
         const apiKey = ctx.secrets.read(SECRET_KEYS.OPENAI_RESPONSES);
 
         if (!apiKey && !body.responses_url) {

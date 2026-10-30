@@ -18,6 +18,7 @@ import {
     getPromptNames,
 } from '../../../prompt-converters.js';
 import { excludeKeysByYaml, mergeObjectWithYaml } from '../../../util.js';
+import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
@@ -50,7 +51,8 @@ export async function dispatchDeepSeek(ctx) {
 
     let apiUrl;
     try {
-        apiUrl = new URL(body.reverse_proxy || body.base_url || API_DEEPSEEK).toString();
+        apiUrl = normalizeProviderBaseUrl('deepseek', body.reverse_proxy || body.base_url || API_DEEPSEEK);
+        new URL(apiUrl);
     } catch (parseErr) {
         const err = new Error(`DeepSeek upstream URL invalid: ${parseErr?.message || parseErr}`);
         ctx.inspection.fail(err, 400);

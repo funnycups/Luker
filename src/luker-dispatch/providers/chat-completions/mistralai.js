@@ -14,6 +14,7 @@ import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { convertMistralMessages, getPromptNames } from '../../../prompt-converters.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
+import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 
 const API_MISTRAL = 'https://api.mistral.ai/v1';
 
@@ -43,7 +44,8 @@ export async function dispatchMistralAI(ctx) {
 
     let apiUrl;
     try {
-        apiUrl = new URL(body.reverse_proxy || body.base_url || API_MISTRAL).toString();
+        apiUrl = normalizeProviderBaseUrl('mistral', body.reverse_proxy || body.base_url || API_MISTRAL);
+        new URL(apiUrl);
     } catch (parseErr) {
         const err = new Error(`MistralAI upstream URL invalid: ${parseErr?.message || parseErr}`);
         ctx.inspection.fail(err, 400);

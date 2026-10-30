@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
 import { attachInspectionEndpoint, getInspectionAbortSignal } from '../request-inspector.js';
+import { normalizeProviderBaseUrl } from '../util/base-url.js';
 
 const DEFAULT_JINA_URL = 'https://api.jina.ai/v1';
 
@@ -32,7 +33,7 @@ export async function getJinaBatchVector(texts, isQuery, directories, model, opt
         throw new Error('No API key found');
     }
 
-    const baseUrl = (reverseProxy || DEFAULT_JINA_URL).replace(/\/+$/, '');
+    const baseUrl = normalizeProviderBaseUrl('jina', reverseProxy || DEFAULT_JINA_URL);
 
     const requestBody = {
         model: model,

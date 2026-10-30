@@ -51,6 +51,7 @@ import {
 import { normalizeGeminiResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
+import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 
 const API_MAKERSUITE = 'https://generativelanguage.googleapis.com';
 const API_VERTEX_AI = 'https://us-central1-aiplatform.googleapis.com';
@@ -110,7 +111,7 @@ export async function dispatchMakerSuite(ctx) {
 
     if (useVertexAi) {
         try {
-            apiUrl = new URL(body.reverse_proxy || body.base_url || API_VERTEX_AI);
+            apiUrl = new URL(normalizeProviderBaseUrl('vertexai', body.reverse_proxy || body.base_url || API_VERTEX_AI));
         } catch (parseErr) {
             const err = new Error(`${apiName} upstream URL invalid: ${parseErr?.message || parseErr}`);
             ctx.inspection.fail(err, 400);
@@ -131,7 +132,7 @@ export async function dispatchMakerSuite(ctx) {
         }
     } else {
         try {
-            apiUrl = new URL(body.reverse_proxy || body.base_url || API_MAKERSUITE);
+            apiUrl = new URL(normalizeProviderBaseUrl('makersuite', body.reverse_proxy || body.base_url || API_MAKERSUITE));
         } catch (parseErr) {
             const err = new Error(`${apiName} upstream URL invalid: ${parseErr?.message || parseErr}`);
             ctx.inspection.fail(err, 400);

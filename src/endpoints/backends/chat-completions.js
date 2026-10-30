@@ -15,10 +15,10 @@ import {
     flattenSchema,
     getConfigValue,
     mergeObjectWithYaml,
-    normalizeOpenAIBaseUrl,
     trimTrailingSlash,
     uuidv4,
 } from '../../util.js';
+import { normalizeProviderBaseUrl } from '../../util/base-url.js';
 import {
     getPromptNames,
     postProcessPrompt,
@@ -557,7 +557,7 @@ router.post('/status', async function (request, statusResponse) {
         let queryParams = {};
 
         if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI) {
-            apiUrl = normalizeOpenAIBaseUrl(request.body.reverse_proxy || request.body.base_url || API_OPENAI);
+            apiUrl = normalizeProviderBaseUrl('openai', request.body.reverse_proxy || request.body.base_url || API_OPENAI);
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.OPENAI) || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENROUTER) {
@@ -566,16 +566,16 @@ router.post('/status', async function (request, statusResponse) {
             // OpenRouter needs to pass the Referer and X-Title: https://openrouter.ai/docs#requests
             headers = { ...OPENROUTER_HEADERS };
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MISTRALAI) {
-            apiUrl = new URL(request.body.reverse_proxy || request.body.base_url || API_MISTRAL).toString();
+            apiUrl = normalizeProviderBaseUrl('mistral', request.body.reverse_proxy || request.body.base_url || API_MISTRAL);
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MISTRALAI) || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES) {
-            apiUrl = normalizeOpenAIBaseUrl(request.body.responses_url || 'https://api.openai.com/v1');
+            apiUrl = normalizeProviderBaseUrl('openai_responses', request.body.responses_url || 'https://api.openai.com/v1');
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.OPENAI_RESPONSES) || '';
             headers = {};
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM) {
-            apiUrl = normalizeOpenAIBaseUrl(request.body.custom_url);
+            apiUrl = normalizeProviderBaseUrl('custom', request.body.custom_url);
             apiKey = readProviderSecret(request, SECRET_KEYS.CUSTOM);
             headers = {};
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
@@ -597,12 +597,12 @@ router.post('/status', async function (request, statusResponse) {
             headers = {};
             queryParams = { detailed: true };
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.DEEPSEEK) {
-            apiUrl = new URL(request.body.reverse_proxy || request.body.base_url || API_DEEPSEEK.replace('/beta', '')).toString();
+            apiUrl = normalizeProviderBaseUrl('deepseek', request.body.reverse_proxy || request.body.base_url || API_DEEPSEEK.replace('/beta', ''));
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.DEEPSEEK) || '';
             headers = {};
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.XAI) {
-            apiUrl = new URL(request.body.reverse_proxy || request.body.base_url || API_XAI).toString();
+            apiUrl = normalizeProviderBaseUrl('xai', request.body.reverse_proxy || request.body.base_url || API_XAI);
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.XAI) || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.AIMLAPI) {
@@ -624,7 +624,7 @@ router.post('/status', async function (request, statusResponse) {
             headers = {};
             throw new Error('This provider is temporarily disabled.');
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MOONSHOT) {
-            apiUrl = new URL(request.body.reverse_proxy || request.body.base_url || API_MOONSHOT).toString();
+            apiUrl = normalizeProviderBaseUrl('moonshot', request.body.reverse_proxy || request.body.base_url || API_MOONSHOT);
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MOONSHOT) || '';
             headers = {};
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.FIREWORKS) {
@@ -684,7 +684,7 @@ router.post('/status', async function (request, statusResponse) {
                 return statusResponse.send({ error: true, data: { data: [] } });
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CLAUDE) {
-            apiUrl = new URL(request.body.reverse_proxy || request.body.base_url || API_CLAUDE).toString();
+            apiUrl = normalizeProviderBaseUrl('claude', request.body.reverse_proxy || request.body.base_url || API_CLAUDE);
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.CLAUDE) || '';
             headers = {};
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
@@ -739,7 +739,7 @@ router.post('/status', async function (request, statusResponse) {
                     modelsUrl = buildVertexModelsUrl({ region });
                     modelHeaders['Authorization'] = authHeader;
                 } else {
-                    const proxyUrl = trimTrailingSlash(request.body.reverse_proxy || request.body.base_url || '');
+                    const proxyUrl = normalizeProviderBaseUrl('vertexai', request.body.reverse_proxy || request.body.base_url || '');
                     modelsUrl = buildVertexModelsUrl({ region, origin: proxyUrl });
                     modelHeaders['Authorization'] = authHeader;
                 }
@@ -758,7 +758,7 @@ router.post('/status', async function (request, statusResponse) {
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MAKERSUITE) {
             apiKey = request.body.proxy_password || readProviderSecret(request, SECRET_KEYS.MAKERSUITE) || '';
-            apiUrl = trimTrailingSlash(request.body.reverse_proxy || request.body.base_url || API_MAKERSUITE);
+            apiUrl = normalizeProviderBaseUrl('makersuite', request.body.reverse_proxy || request.body.base_url || API_MAKERSUITE);
             const apiVersion = getConfigValue('gemini.apiVersion', 'v1beta');
             const modelsUrl = !apiKey && (request.body.base_url || request.body.reverse_proxy)
                 ? `${apiUrl}/${apiVersion}/models`
