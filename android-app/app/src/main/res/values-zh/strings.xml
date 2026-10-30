@@ -48,6 +48,11 @@
     <string name="endpoint_invalid_url">请输入有效的 http(s) 端点</string>
     <string name="endpoint_saved">已切换到端点：%1$s</string>
     <string name="endpoint_reset_default_done">已恢复默认本地端点</string>
+    <string name="endpoint_failure_title">无法加载端点</string>
+    <string name="endpoint_failure_message">无法连接到 %1$s。是否切换端点？</string>
+    <string name="endpoint_failure_switch">切换端点</string>
+    <string name="endpoint_failure_retry">重试</string>
+    <string name="endpoint_failure_cancel">取消</string>
     <string name="message_alert_channel_name">Luker 消息提醒</string>
     <string name="message_alert_channel_description">助手回复完成或出错时的提醒通知</string>
     <string name="message_progress_channel_name">Luker 消息进度</string>

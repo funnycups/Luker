@@ -9,6 +9,7 @@ final class ViewController: UIViewController {
         case startingRuntime
         case waitingForServer
         case failed(reason: String)
+        case navigationFailed(reason: String, url: URL?)
         case ready
     }
 
@@ -17,7 +18,11 @@ final class ViewController: UIViewController {
 
     private let runtime = LukerRuntimeManager.shared
     private let bridge = LukerBridge()
+    private let runtimeQueue = DispatchQueue(label: "com.luker.app.runtime-lifecycle")
     private var webView: WKWebView?
+    private var currentBootState: BootState = .startingRuntime
+    private var bootGeneration = 0
+    private var navigationFailureAlertShown = false
     private var downloadShareViewController: UIViewController?
     private var downloadDestinations: [ObjectIdentifier: URL] = [:]
     private var safeModeTripped = false
@@ -57,6 +62,8 @@ final class ViewController: UIViewController {
         return textView
     }()
 
+    private let failureButtonsStack = UIStackView()
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
@@ -93,6 +100,25 @@ final class ViewController: UIViewController {
         statusStack.addArrangedSubview(statusLabel)
         statusStack.addArrangedSubview(diagnosticsTextView)
         diagnosticsTextView.isHidden = true
+
+        failureButtonsStack.axis = .horizontal
+        failureButtonsStack.spacing = 16
+        failureButtonsStack.alignment = .center
+        let retryButton = UIButton(type: .system)
+        retryButton.setTitle(NSLocalizedString("retry", comment: ""), for: .normal)
+        retryButton.addTarget(self, action: #selector(retryFromFailure), for: .touchUpInside)
+        let endpointButton = UIButton(type: .system)
+        endpointButton.setTitle(NSLocalizedString("endpoint_settings", comment: ""), for: .normal)
+        endpointButton.addTarget(self, action: #selector(showEndpointSettings), for: .touchUpInside)
+        let diagnosticsButton = UIButton(type: .system)
+        diagnosticsButton.setTitle(NSLocalizedString("diagnostics_export_bundle_short", comment: ""), for: .normal)
+        diagnosticsButton.addTarget(self, action: #selector(shareDiagnostics), for: .touchUpInside)
+        failureButtonsStack.addArrangedSubview(retryButton)
+        failureButtonsStack.addArrangedSubview(endpointButton)
+        failureButtonsStack.addArrangedSubview(diagnosticsButton)
+        failureButtonsStack.isHidden = true
+        statusStack.addArrangedSubview(failureButtonsStack)
+
         view.addSubview(statusStack)
         NSLayoutConstraint.activate([
             statusStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
@@ -106,28 +132,40 @@ final class ViewController: UIViewController {
 
     // MARK: - Boot flow
 
-    private func startRuntime() {
+    private func startRuntime(armWatchdog: Bool = true) {
+        bootGeneration += 1
+        let generation = bootGeneration
+
         if !runtime.usesLocalRuntime {
             LukerDebugTrail.shared.append(
                 category: "native",
                 text: "custom endpoint mode url=\(runtime.serverURL.absoluteString)"
             )
-            setBootState(.waitingForServer)
-            waitForServer()
+            // A custom endpoint has no local service to wait for. Load it in the
+            // web view and let the navigation callbacks report an unreachable
+            // host through the failure page and alert.
+            setBootState(.ready)
             return
         }
 
-        let watchdog = LukerBootWatchdog.shared.detectAndArm(dataRoot: runtime.dataRootURL)
-        safeModeTripped = watchdog.tripped
+        if armWatchdog {
+            let watchdog = LukerBootWatchdog.shared.detectAndArm(dataRoot: runtime.dataRootURL)
+            safeModeTripped = watchdog.tripped
+        }
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        startLocalRuntimeAndWait(generation: generation)
+    }
+
+    private func startLocalRuntimeAndWait(generation: Int) {
+        runtimeQueue.async { [weak self] in
             let result = self?.runtime.startIfNeeded()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 guard let result else { return }
+                guard generation == self.bootGeneration else { return }
                 if result.ok {
                     self.setBootState(.waitingForServer)
-                    self.waitForServer()
+                    self.waitForServer(generation: generation)
                 } else {
                     self.setBootState(.failed(reason: result.error ?? NSLocalizedString("runtime_failure_reason_unknown_error", comment: "")))
                 }
@@ -135,35 +173,34 @@ final class ViewController: UIViewController {
         }
     }
 
-    private func waitForServer() {
+    private func waitForServer(generation: Int) {
         let deadline = Date().addingTimeInterval(Self.serverReadyTimeout)
         let startedAt = Date()
-        let localRuntime = runtime.usesLocalRuntime
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             while Date() < deadline {
                 guard let self else { return }
                 if self.runtime.isServerReady() {
-                    if localRuntime {
-                        LukerBootWatchdog.shared.markBootSucceeded()
-                    }
                     DispatchQueue.main.async { [weak self] in
-                        self?.setBootState(.ready)
-                        if self?.safeModeTripped == true {
-                            self?.showSafeModeBanner()
+                        guard let self, generation == self.bootGeneration else { return }
+                        LukerBootWatchdog.shared.markBootSucceeded()
+                        self.setBootState(.ready)
+                        if self.safeModeTripped {
+                            self.showSafeModeBanner()
                         }
                     }
                     return
                 }
                 // A local Node process that has already exited will never make
                 // the port ready; report it instead of waiting out the deadline.
-                if localRuntime, Date().timeIntervalSince(startedAt) > 2, !self.runtime.isNodeRunning {
+                if Date().timeIntervalSince(startedAt) > 2, !self.runtime.isNodeRunning {
                     let detail = self.runtime.collectDiagnostics()
                     LukerDebugTrail.shared.append(
                         category: "native",
                         text: "node exited before the server was ready\n\(detail)"
                     )
                     DispatchQueue.main.async { [weak self] in
-                        self?.setBootState(.failed(
+                        guard let self, generation == self.bootGeneration else { return }
+                        self.setBootState(.failed(
                             reason: NSLocalizedString("runtime_failure_reason_node_exited", comment: "")
                         ))
                     }
@@ -172,22 +209,29 @@ final class ViewController: UIViewController {
                 Thread.sleep(forTimeInterval: Self.serverReadyPollInterval)
             }
             DispatchQueue.main.async { [weak self] in
-                self?.setBootState(.failed(reason: NSLocalizedString("loading_failed_timeout", comment: "")))
+                guard let self, generation == self.bootGeneration else { return }
+                self.setBootState(.failed(reason: NSLocalizedString("loading_failed_timeout", comment: "")))
             }
         }
     }
 
     private func setBootState(_ state: BootState) {
+        currentBootState = state
         switch state {
         case .startingRuntime:
             spinner.startAnimating()
             statusLabel.text = NSLocalizedString("loading_runtime", comment: "")
             diagnosticsTextView.isHidden = true
-            navigationItem.rightBarButtonItems = nil
+            failureButtonsStack.isHidden = true
+            webView?.isHidden = true
+            statusStack.isHidden = false
         case .waitingForServer:
             spinner.startAnimating()
             statusLabel.text = NSLocalizedString("loading_webview", comment: "")
             diagnosticsTextView.isHidden = true
+            failureButtonsStack.isHidden = true
+            webView?.isHidden = true
+            statusStack.isHidden = false
         case .failed(let reason):
             spinner.stopAnimating()
             statusLabel.text = String(
@@ -196,24 +240,25 @@ final class ViewController: UIViewController {
             )
             diagnosticsTextView.text = runtime.collectDiagnostics()
             diagnosticsTextView.isHidden = false
-            navigationItem.rightBarButtonItems = [
-                UIBarButtonItem(
-                    title: NSLocalizedString("diagnostics_export_bundle_short", comment: ""),
-                    style: .plain,
-                    target: self,
-                    action: #selector(shareDiagnostics)
-                ),
-                UIBarButtonItem(
-                    title: NSLocalizedString("retry", comment: ""),
-                    style: .plain,
-                    target: self,
-                    action: #selector(retryBoot)
-                ),
-            ]
+            failureButtonsStack.isHidden = false
+            webView?.isHidden = true
+            statusStack.isHidden = false
+        case .navigationFailed(let reason, _):
+            spinner.stopAnimating()
+            statusLabel.text = String(
+                format: NSLocalizedString("navigation_failed_with_reason", comment: ""),
+                reason
+            )
+            diagnosticsTextView.text = runtime.collectDiagnostics()
+            diagnosticsTextView.isHidden = false
+            failureButtonsStack.isHidden = false
+            webView?.isHidden = true
+            statusStack.isHidden = false
         case .ready:
             spinner.stopAnimating()
             statusStack.isHidden = true
-            installWebView()
+            webView?.isHidden = false
+            loadCurrentEndpoint()
             showPendingCrashIfNeeded()
         }
     }
@@ -223,11 +268,41 @@ final class ViewController: UIViewController {
         startRuntime()
     }
 
+    @objc private func retryFromFailure() {
+        if case .navigationFailed = currentBootState {
+            loadCurrentEndpoint()
+        } else {
+            retryBoot()
+        }
+    }
+
+    @objc private func showEndpointSettings() {
+        presentEndpointSettings()
+    }
+
     @objc private func shareDiagnostics() {
         exportDiagnosticsBundle()
     }
 
     // MARK: - Web view
+
+    private func loadCurrentEndpoint() {
+        statusStack.isHidden = true
+        if let webView {
+            webView.isHidden = false
+            webView.load(URLRequest(url: runtime.serverURL))
+        } else {
+            installWebView()
+        }
+    }
+
+    func reloadWebView() {
+        if let webView {
+            webView.reload()
+        } else {
+            loadCurrentEndpoint()
+        }
+    }
 
     private func installWebView() {
         guard webView == nil else { return }
@@ -404,21 +479,8 @@ final class ViewController: UIViewController {
         ) { [weak self, weak alert] _ in
             let value = alert?.textFields?.first?.text ?? ""
             do {
-                let saved = try LukerEndpointConfig.shared.save(value)
-                if let saved {
-                    self?.showAlert(
-                        title: NSLocalizedString("endpoint_saved", comment: ""),
-                        message: String(
-                            format: NSLocalizedString("endpoint_restart_required", comment: ""),
-                            saved.absoluteString
-                        )
-                    )
-                } else {
-                    self?.showAlert(
-                        title: NSLocalizedString("endpoint_reset_default_done", comment: ""),
-                        message: NSLocalizedString("endpoint_restart_required_plain", comment: "")
-                    )
-                }
+                _ = try LukerEndpointConfig.shared.save(value)
+                self?.applyEndpointChange()
             } catch {
                 self?.showAlert(
                     title: NSLocalizedString("endpoint_invalid_url", comment: ""),
@@ -431,16 +493,89 @@ final class ViewController: UIViewController {
             style: .destructive
         ) { [weak self] _ in
             LukerEndpointConfig.shared.reset()
-            self?.showAlert(
-                title: NSLocalizedString("endpoint_reset_default_done", comment: ""),
-                message: NSLocalizedString("endpoint_restart_required_plain", comment: "")
-            )
+            self?.applyEndpointChange()
         })
         alert.addAction(UIAlertAction(
             title: NSLocalizedString("cancel", comment: ""),
             style: .cancel
         ))
         present(alert, animated: true)
+    }
+
+    func applyEndpointChange() {
+        let usesLocal = runtime.usesLocalRuntime
+        setBootState(usesLocal ? .startingRuntime : .waitingForServer)
+        if usesLocal {
+            // The watchdog covers cold boots. An in-app switch must not arm it,
+            // or a later relaunch within the window trips safe mode.
+            startRuntime(armWatchdog: false)
+            return
+        }
+        bootGeneration += 1
+        let generation = bootGeneration
+        runtimeQueue.async { [weak self] in
+            self?.runtime.stopIfNeeded()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.bootGeneration else { return }
+                self.loadCurrentEndpoint()
+            }
+        }
+    }
+
+    // MARK: - Navigation failure
+
+    /// WebKit's legacy `WebKitErrorFrameLoadInterruptedByPolicyChange`. A
+    /// navigation cancelled from `decidePolicyFor navigationResponse` reports
+    /// `WebKitErrorDomain` code 102 instead of `NSURLErrorCancelled`.
+    private static let webKitErrorDomain = "WebKitErrorDomain"
+    private static let frameLoadInterruptedByPolicyChange = 102
+
+    private func handleNavigationFailure(_ error: Error, url: URL?) {
+        let nsError = error as NSError
+        if nsError.code == NSURLErrorCancelled {
+            return
+        }
+        if nsError.domain == Self.webKitErrorDomain, nsError.code == Self.frameLoadInterruptedByPolicyChange {
+            return
+        }
+        // A provisional failure has no committed web view URL; the endpoint
+        // being loaded is the URL the alert and the failure page describe.
+        let failureURL = url ?? runtime.serverURL
+        setBootState(.navigationFailed(reason: error.localizedDescription, url: failureURL))
+        presentNavigationFailureAlert(url: failureURL)
+    }
+
+    private func presentNavigationFailureAlert(url: URL?) {
+        guard !runtime.usesLocalRuntime else { return }
+        guard !navigationFailureAlertShown else { return }
+        guard presentedViewController == nil else { return }
+        let alert = UIAlertController(
+            title: NSLocalizedString("endpoint_failure_title", comment: ""),
+            message: String(
+                format: NSLocalizedString("endpoint_failure_message", comment: ""),
+                url?.absoluteString ?? ""
+            ),
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(
+            title: NSLocalizedString("endpoint_failure_switch", comment: ""),
+            style: .default
+        ) { [weak self] _ in
+            self?.presentEndpointSettings()
+        })
+        alert.addAction(UIAlertAction(
+            title: NSLocalizedString("endpoint_failure_retry", comment: ""),
+            style: .default
+        ) { [weak self] _ in
+            self?.loadCurrentEndpoint()
+        })
+        alert.addAction(UIAlertAction(
+            title: NSLocalizedString("endpoint_failure_cancel", comment: ""),
+            style: .cancel
+        ))
+        present(alert, animated: true) { [weak self] in
+            self?.navigationFailureAlertShown = true
+        }
     }
 }
 
@@ -494,6 +629,15 @@ extension ViewController: WKNavigationDelegate {
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
     ) {
+        if navigationResponse.isForMainFrame,
+           let response = navigationResponse.response as? HTTPURLResponse,
+           response.statusCode == 404 || (500...599).contains(response.statusCode) {
+            decisionHandler(.cancel)
+            let url = navigationResponse.response.url
+            setBootState(.navigationFailed(reason: "HTTP \(response.statusCode)", url: url))
+            presentNavigationFailureAlert(url: url)
+            return
+        }
         if navigationResponse.canShowMIMEType {
             decisionHandler(.allow)
         } else {
@@ -538,8 +682,24 @@ extension ViewController: WKNavigationDelegate {
         present(alert, animated: true)
     }
 
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        navigationFailureAlertShown = false
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        navigationFailureAlertShown = false
         LukerDebugTrail.shared.append(category: "native", text: "navigation finished url=\(webView.url?.absoluteString ?? "<none>")")
+        if case .navigationFailed = currentBootState {
+            statusStack.isHidden = true
+            webView.isHidden = false
+            currentBootState = .ready
+            showPendingCrashIfNeeded()
+            if safeModeTripped {
+                showSafeModeBanner()
+            }
+        } else if case .waitingForServer = currentBootState {
+            currentBootState = .ready
+        }
         #if DEBUG
         LukerDebugSmoke.runCrashTestIfRequested()
         LukerDebugSmoke.runExceptionTestIfRequested()
@@ -549,6 +709,7 @@ extension ViewController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         LukerDebugTrail.shared.append(category: "native", text: "navigation failed url=\(webView.url?.absoluteString ?? "<none>") error=\(error)")
+        handleNavigationFailure(error, url: webView.url)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -556,6 +717,7 @@ extension ViewController: WKNavigationDelegate {
             category: "native",
             text: "provisional navigation failed url=\(webView.url?.absoluteString ?? "<none>") error=\(error)"
         )
+        handleNavigationFailure(error, url: webView.url)
     }
 }
 

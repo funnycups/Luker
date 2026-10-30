@@ -47,6 +47,7 @@ import {
     primePipKeepAlive,
     setKeepAliveMode,
 } from './luker-keep-alive.js';
+import { initAppEndpointControls } from './app-endpoint-controls.js';
 import {
     groups,
     resetSelectedGroup,
@@ -4562,6 +4563,8 @@ jQuery(() => {
         $(this).val(power_user.before_unload_guard_mode);
         saveSettingsDebounced();
     });
+
+    initAppEndpointControls();
 
     $('#reload_chat').on('click', async function () {
         const currentChatId = getCurrentChatId();

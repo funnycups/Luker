@@ -41,6 +41,11 @@
     { "name": "download_failed", "value": "下载失败" },
     { "name": "press_back_again_to_exit", "value": "再按一次返回键退出" },
     { "name": "endpoint_probe_failed", "value": "连接失败：%s" },
-    { "name": "endpoint_timeout", "value": "无法连接端点，请检查地址或打开端点设置" }
+    { "name": "endpoint_timeout", "value": "无法连接端点，请检查地址或打开端点设置" },
+    { "name": "endpoint_failure_title", "value": "无法加载端点" },
+    { "name": "endpoint_failure_message", "value": "无法连接到 %s。是否切换端点？" },
+    { "name": "endpoint_failure_switch", "value": "切换端点" },
+    { "name": "endpoint_failure_retry", "value": "重试" },
+    { "name": "endpoint_failure_cancel", "value": "取消" }
   ]
 }

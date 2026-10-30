@@ -5,6 +5,7 @@
 "loading_webview" = "Service is ready. Loading interface...";
 "loading_failed_with_reason" = "Failed to start the service: %@";
 "loading_failed_timeout" = "Service startup timed out: the local service did not become ready in time.";
+"navigation_failed_with_reason" = "Failed to load the page: %@";
 "runtime_failure_reason_node_exited" = "The Node process exited before the service became ready.";
 
 "runtime_start_error_node_exit_code" = "Node process exited with code %ld";
@@ -24,15 +25,18 @@
 "safe_mode_tripped_toast" = "The previous launch failed before the service became ready. All third-party extensions have been disabled for this launch — re-enable them one by one in Extensions to find the offender.";
 
 "endpoint_dialog_title" = "Configure Service Endpoint";
-"endpoint_dialog_message" = "The default endpoint uses the app's built-in local service. After saving a custom http(s):// endpoint, future launches will connect to that endpoint directly and will no longer start the local service automatically.";
+"endpoint_dialog_message" = "The default endpoint uses the app's built-in local service. Saving a custom http(s):// endpoint switches to it immediately and stops the local service; resetting to the default starts the local service again.";
 "endpoint_dialog_hint" = "http://192.168.1.20:8000";
 "endpoint_dialog_save" = "Save";
 "endpoint_dialog_reset" = "Reset to Default Endpoint";
 "endpoint_invalid_url" = "Please enter a valid http(s) endpoint";
-"endpoint_saved" = "Endpoint Updated";
-"endpoint_reset_default_done" = "Restored the default local endpoint";
-"endpoint_restart_required" = "Switched to endpoint: %@. Restart Luker to apply it.";
-"endpoint_restart_required_plain" = "Restart Luker to apply the endpoint change.";
+"endpoint_settings" = "Endpoint";
+
+"endpoint_failure_title" = "Unable to Load Endpoint";
+"endpoint_failure_message" = "Could not connect to %@. Switch endpoint?";
+"endpoint_failure_switch" = "Switch Endpoint";
+"endpoint_failure_retry" = "Retry";
+"endpoint_failure_cancel" = "Cancel";
 
 "keepalive_task_title" = "Luker";
 "keepalive_task_subtitle" = "Generating a reply";

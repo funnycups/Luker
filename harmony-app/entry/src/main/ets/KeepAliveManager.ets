@@ -254,6 +254,9 @@ function formatElapsed(ms: number): string {
  * Object exposed to the page as `window.LukerHarmony`.
  */
 export class LukerHarmonyBridge {
+  onOpenEndpointSettings: (() => void) | null = null;
+  onReloadWebView: (() => void) | null = null;
+
   setGenerationActive(active: boolean): void {
     KeepAliveManager.setGenerationActive(active === true);
   }
@@ -278,5 +281,13 @@ export class LukerHarmonyBridge {
     KeepAliveManager.getAbilityContext().startAbility(want).catch((err: BusinessError) => {
       hilog.error(DOMAIN, TAG, 'openExternalUrl failed: %{public}d %{public}s', err.code, err.message);
     });
+  }
+
+  openEndpointSettings(): void {
+    this.onOpenEndpointSettings?.();
+  }
+
+  reloadWebView(): void {
+    this.onReloadWebView?.();
   }
 }

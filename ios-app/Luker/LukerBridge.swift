@@ -7,6 +7,8 @@ import WebKit
 protocol LukerBridgePresenter: AnyObject {
     func presentEndpointSettings()
     func exportDiagnosticsBundle()
+    func reloadWebView()
+    func applyEndpointChange()
 }
 
 /// Installs `window.LukerIOS` and the console capture hook into the WebView.
@@ -74,10 +76,13 @@ final class LukerBridge: NSObject {
         case "setEndpoint":
             do {
                 let saved = try LukerEndpointConfig.shared.save(body["value"] as? String)
+                DispatchQueue.main.async { [weak self] in
+                    self?.presenter?.applyEndpointChange()
+                }
                 reply([
                     "ok": true,
                     "baseUrl": (saved?.absoluteString as Any?) ?? NSNull(),
-                    "restartRequired": true,
+                    "restartRequired": false,
                 ], nil)
             } catch {
                 reply([
@@ -88,6 +93,12 @@ final class LukerBridge: NSObject {
 
         case "openEndpointSettings":
             LukerDeepLinkRouter.shared.handle(URL(string: "luker://endpoint")!)
+            reply(nil, nil)
+
+        case "reloadWebView":
+            DispatchQueue.main.async { [weak self] in
+                self?.presenter?.reloadWebView()
+            }
             reply(nil, nil)
 
         case "pushDebugTrail":
@@ -137,6 +148,9 @@ final class LukerBridge: NSObject {
             },
             openEndpointSettings() {
                 post({ method: 'openEndpointSettings' });
+            },
+            reloadWebView() {
+                post({ method: 'reloadWebView' });
             },
             pushDebugTrail(category, text) {
                 post({

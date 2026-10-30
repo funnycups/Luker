@@ -19,6 +19,10 @@ import { FileSelectionPlan, MediaKind, planFileSelection } from '../FileSelectio
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AppConfig } from '../AppConfig';
 import { DEFAULT_LOCAL_BASE_URL, isLocalBaseUrl, normalizeCustomBaseUrl } from '../EndpointUrl';
+import {
+  shouldShowEndpointFailureForError,
+  shouldShowEndpointFailureForStatus,
+} from '../EndpointFailure';
 import { RuntimeNotification } from '../RuntimeNotification';
 import {
   ACTION_OPEN_ENDPOINT_SETTINGS,
@@ -58,9 +62,13 @@ struct Index {
   private controllerAttached: boolean = false;
   private pageShown: boolean = false;
   private pendingEndpointDialog: boolean = false;
+  private endpointFailureShown: boolean = false;
+  private pendingEndpointFailureUrl: string = '';
   private startToken: number = 0;
 
   aboutToAppear(): void {
+    this.bridge.onOpenEndpointSettings = () => this.requestEndpointDialog();
+    this.bridge.onReloadWebView = () => this.reloadWeb();
     if (AppConfig.warning().length > 0) {
       promptAction.showToast({ message: this.res($r('app.string.endpoint_config_failed').id) });
     }
@@ -296,6 +304,12 @@ struct Index {
     }
   }
 
+  private closeEndpointDialog(): void {
+    const controller: CustomDialogController | null = this.endpointDialogController;
+    this.endpointDialogController = null;
+    controller?.close();
+  }
+
   private openEndpointDialog(): void {
     if (this.endpointDialogController !== null) {
       return;
@@ -309,9 +323,16 @@ struct Index {
         usesCustom: this.customEndpoint,
         onSave: (url: string) => this.applyEndpoint(url),
         onReset: () => this.applyEndpoint(null),
+        onClose: () => this.closeEndpointDialog(),
         onClosed: () => {
-          if (this.endpointDialogToken === token) {
-            this.endpointDialogController = null;
+          if (this.endpointDialogToken !== token) {
+            return;
+          }
+          this.endpointDialogController = null;
+          const pendingUrl: string = this.pendingEndpointFailureUrl;
+          this.pendingEndpointFailureUrl = '';
+          if (pendingUrl.length > 0) {
+            this.maybeShowEndpointFailure(pendingUrl);
           }
         },
       }),
@@ -325,6 +346,42 @@ struct Index {
       hilog.error(DOMAIN, TAG, 'endpoint dialog open failed: %{public}s', JSON.stringify(e));
       promptAction.showToast({ message: this.res($r('app.string.endpoint_dialog_failed').id) });
     }
+  }
+
+  /**
+   * Offers endpoint recovery after a main-frame load failure. The dialog is
+   * shown once per navigation; a failure that arrives while the endpoint
+   * dialog is open is held until that dialog closes.
+   */
+  private maybeShowEndpointFailure(url: string): void {
+    if (!this.customEndpoint || this.endpointFailureShown) {
+      return;
+    }
+    if (this.endpointDialogController !== null) {
+      this.pendingEndpointFailureUrl = url;
+      return;
+    }
+    const dialog = promptAction.showDialog({
+      title: this.res($r('app.string.endpoint_failure_title').id),
+      message: this.res($r('app.string.endpoint_failure_message').id, url),
+      buttons: [
+        { text: this.res($r('app.string.endpoint_failure_cancel').id), color: '#8b93a7' },
+        { text: this.res($r('app.string.endpoint_failure_retry').id), color: '#4aa3ff' },
+        { text: this.res($r('app.string.endpoint_failure_switch').id), color: '#4aa3ff' },
+      ]
+    });
+    this.endpointFailureShown = true;
+    dialog.then((result: promptAction.ShowDialogSuccessResponse) => {
+      if (result.index === 1) {
+        this.reloadWeb();
+      } else if (result.index === 2) {
+        this.endpointFailureShown = false;
+        this.openEndpointDialog();
+      }
+    }).catch((e: BusinessError) => {
+      this.endpointFailureShown = false;
+      hilog.error(DOMAIN, TAG, 'endpoint failure dialog failed: %{public}d %{public}s', e.code, e.message);
+    });
   }
 
   private applyEndpoint(customBaseUrl: string | null): boolean {
@@ -349,6 +406,8 @@ struct Index {
     if (nextUrl === this.serverUrl && nextCustom === this.customEndpoint) {
       return true;
     }
+    this.endpointFailureShown = false;
+    this.pendingEndpointFailureUrl = '';
     this.closePopupDialog();
     KeepAliveManager.release();
     RuntimeNotification.setServerReady(false);
@@ -620,6 +679,8 @@ struct Index {
               'setImmersiveModeEnabled',
               'setOpenExternalLinksInBrowser',
               'openExternalUrl',
+              'openEndpointSettings',
+              'reloadWebView',
             ],
             controller: this.controller
           })
@@ -655,6 +716,27 @@ struct Index {
           .onPageBegin(() => {
             this.closePopupDialog();
             KeepAliveManager.setGenerationActive(false);
+            this.endpointFailureShown = false;
+            this.pendingEndpointFailureUrl = '';
+          })
+          .onErrorReceive((event) => {
+            if (!event || !event.request.isMainFrame()) {
+              return;
+            }
+            if (shouldShowEndpointFailureForError(
+              event.error.getErrorInfo(),
+              true,
+            )) {
+              this.maybeShowEndpointFailure(event.request.getRequestUrl());
+            }
+          })
+          .onHttpErrorReceive((event) => {
+            if (!event || !event.request.isMainFrame()) {
+              return;
+            }
+            if (shouldShowEndpointFailureForStatus(event.response.getResponseCode(), true)) {
+              this.maybeShowEndpointFailure(event.request.getRequestUrl());
+            }
           })
           .onRenderExited((event) => {
             this.closePopupDialog();
@@ -796,6 +878,7 @@ struct EndpointDialog {
   usesCustom: boolean = false;
   onSave?: (url: string) => boolean;
   onReset?: () => boolean;
+  onClose?: () => void;
   onClosed?: () => void;
   @State input: string = '';
   @State error: string = '';
@@ -822,13 +905,13 @@ struct EndpointDialog {
       if (this.onReset?.() === false) {
         return;
       }
-      this.controller?.close();
+      this.onClose?.();
       return;
     }
     if (this.onSave?.(normalized) === false) {
       return;
     }
-    this.controller?.close();
+    this.onClose?.();
   }
 
   private res(id: number, arg?: string): string {
@@ -873,7 +956,7 @@ struct EndpointDialog {
           .fontSize(13)
           .fontColor('#8b93a7')
           .backgroundColor(Color.Transparent)
-          .onClick(() => this.controller?.close())
+          .onClick(() => this.onClose?.())
         Button($r('app.string.endpoint_dialog_reset'))
           .fontSize(13)
           .fontColor('#cfd6e4')
@@ -882,7 +965,7 @@ struct EndpointDialog {
             if (this.onReset?.() === false) {
               return;
             }
-            this.controller?.close();
+            this.onClose?.();
           })
         Button($r('app.string.endpoint_dialog_save'))
           .fontSize(13)

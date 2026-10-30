@@ -44,7 +44,9 @@ import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -107,6 +109,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadingText: TextView
     private lateinit var fullscreenContainer: FrameLayout
     private var endpointDialog: AlertDialog? = null
+    private var endpointFailureDialog: AlertDialog? = null
+    private var endpointFailureDialogUrl: String? = null
+    private var endpointFailureDialogShown = false
+    private var pendingEndpointFailureUrl: String? = null
     private var httpAuthDialog: AlertDialog? = null
     private var popupDialog: Dialog? = null
     private var popupWebView: WebView? = null
@@ -496,11 +502,46 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                // A failure dialog belongs to the navigation that produced it.
+                // A new URL dismisses it; the same URL is the failing navigation
+                // itself, whose error callback arrives before this one.
+                val failureUrl = endpointFailureDialogUrl
+                if (failureUrl != null && url != failureUrl) {
+                    endpointFailureDialog?.dismiss()
+                }
+                endpointFailureDialogShown = false
                 // A navigation tears the CDP session down: the renderer that
                 // owned the tracing connection is replaced. Finalize the
                 // recording instead of leaving a dangling socket behind.
                 if (LukerCdpCapture.abortTrace()) {
                     notifyDebugCapture("onCaptureFailed", "trace", "The page navigated while recording.")
+                }
+            }
+
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                if (request == null || error == null) return
+                if (LukerEndpointFailureClassifier.shouldShowForNetworkError(
+                        error.errorCode,
+                        error.description?.toString(),
+                        request.isForMainFrame,
+                    )
+                ) {
+                    maybeShowEndpointFailure(request.url?.toString())
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: WebResourceResponse?,
+            ) {
+                if (request == null || errorResponse == null) return
+                if (LukerEndpointFailureClassifier.shouldShowForHttpStatus(
+                        errorResponse.statusCode,
+                        request.isForMainFrame,
+                    )
+                ) {
+                    maybeShowEndpointFailure(request.url?.toString())
                 }
             }
 
@@ -1126,6 +1167,20 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun setOpenExternalLinksInBrowser(enabled: Boolean) {
             LukerExternalLinkSettings.setOpenExternally(enabled)
+        }
+
+        @JavascriptInterface
+        fun openEndpointSettings() {
+            runOnUiThread { showEndpointDialog() }
+        }
+
+        @JavascriptInterface
+        fun reloadWebView() {
+            runOnUiThread {
+                if (this@MainActivity::webView.isInitialized) {
+                    webView.reload()
+                }
+            }
         }
     }
 
@@ -2621,6 +2676,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bootstrapConfiguredEndpoint() {
+        endpointFailureDialog?.dismiss()
+        endpointFailureDialog = null
+        endpointFailureDialogUrl = null
+        endpointFailureDialogShown = false
+        pendingEndpointFailureUrl = null
         val selection = LukerEndpointConfig.load(applicationContext)
         val bootstrapToken = bootstrapSequence.incrementAndGet()
         runtimeFailureDialogShown = false
@@ -2824,6 +2884,7 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.endpoint_saved, normalizedEndpoint),
                     Toast.LENGTH_SHORT,
                 ).show()
+                pendingEndpointFailureUrl = null
                 dialog.dismiss()
                 bootstrapConfiguredEndpoint()
             }
@@ -2834,6 +2895,7 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.endpoint_reset_default_done),
                     Toast.LENGTH_SHORT,
                 ).show()
+                pendingEndpointFailureUrl = null
                 dialog.dismiss()
                 bootstrapConfiguredEndpoint()
             }
@@ -2842,9 +2904,63 @@ class MainActivity : AppCompatActivity() {
             if (endpointDialog === dialog) {
                 endpointDialog = null
             }
+            val pendingFailureUrl = pendingEndpointFailureUrl
+            pendingEndpointFailureUrl = null
+            if (pendingFailureUrl != null && !isFinishing && !isDestroyed) {
+                window.decorView.post { maybeShowEndpointFailure(pendingFailureUrl) }
+            }
         }
 
         endpointDialog = dialog
+        dialog.show()
+    }
+
+    private fun maybeShowEndpointFailure(url: String?) {
+        val failedUrl = url?.trim().orEmpty()
+        if (failedUrl.isEmpty()) {
+            return
+        }
+        if (isFinishing || isDestroyed) {
+            return
+        }
+        if (LukerEndpointConfig.load(applicationContext).usesDefaultLocalRuntime) {
+            return
+        }
+        if (endpointDialog?.isShowing == true) {
+            pendingEndpointFailureUrl = failedUrl
+            return
+        }
+        if (endpointFailureDialog?.isShowing == true || endpointFailureDialogShown) {
+            return
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.endpoint_failure_title)
+            .setMessage(getString(R.string.endpoint_failure_message, failedUrl))
+            .setPositiveButton(R.string.endpoint_failure_switch) { _, _ ->
+                endpointFailureDialogShown = false
+                showEndpointDialog()
+            }
+            .setNeutralButton(R.string.endpoint_failure_retry) { _, _ ->
+                if (this::webView.isInitialized) {
+                    webView.reload()
+                }
+            }
+            .setNegativeButton(R.string.endpoint_failure_cancel, null)
+            .create()
+        // WebView reports a main-frame HTTP error before onPageStarted for the
+        // same navigation, so the onPageStarted reset cannot re-arm the dialog
+        // for a retry. Dismissing the dialog ends the navigation's failure
+        // report, which is what lets the next attempt show a dialog again.
+        dialog.setOnShowListener { endpointFailureDialogShown = true }
+        dialog.setOnDismissListener {
+            endpointFailureDialogShown = false
+            if (endpointFailureDialog === dialog) {
+                endpointFailureDialog = null
+                endpointFailureDialogUrl = null
+            }
+        }
+        endpointFailureDialog = dialog
+        endpointFailureDialogUrl = failedUrl
         dialog.show()
     }
 

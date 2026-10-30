@@ -41,6 +41,11 @@
     { "name": "download_failed", "value": "Download failed" },
     { "name": "press_back_again_to_exit", "value": "Press back again to exit" },
     { "name": "endpoint_probe_failed", "value": "Connection failed: %s" },
-    { "name": "endpoint_timeout", "value": "Cannot reach the endpoint. Check the address or open endpoint settings." }
+    { "name": "endpoint_timeout", "value": "Cannot reach the endpoint. Check the address or open endpoint settings." },
+    { "name": "endpoint_failure_title", "value": "Unable to Load Endpoint" },
+    { "name": "endpoint_failure_message", "value": "Could not connect to %s. Switch endpoint?" },
+    { "name": "endpoint_failure_switch", "value": "Switch Endpoint" },
+    { "name": "endpoint_failure_retry", "value": "Retry" },
+    { "name": "endpoint_failure_cancel", "value": "Cancel" }
   ]
 }

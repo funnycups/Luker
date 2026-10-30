@@ -5,6 +5,7 @@
 "loading_webview" = "服务已启动，正在载入界面…";
 "loading_failed_with_reason" = "服务启动失败：%@";
 "loading_failed_timeout" = "服务启动超时：本地服务未在预期时间内就绪。";
+"navigation_failed_with_reason" = "页面加载失败：%@";
 "runtime_failure_reason_node_exited" = "Node 进程在服务就绪前退出。";
 
 "runtime_start_error_node_exit_code" = "Node 进程退出，返回码 %ld";
@@ -24,15 +25,18 @@
 "safe_mode_tripped_toast" = "上次启动在服务就绪前已失败。本次启动已禁用所有第三方扩展——请到扩展页面逐个启用，定位问题扩展。";
 
 "endpoint_dialog_title" = "配置服务端点";
-"endpoint_dialog_message" = "默认端点使用应用内置本地服务。保存自定义 http(s):// 端点后，后续启动将直接连接该端点，不再自动启动本地服务。";
+"endpoint_dialog_message" = "默认端点使用应用内置本地服务。保存自定义 http(s):// 端点后立即切换并停止本地服务；重置默认端点会重新启动本地服务。";
 "endpoint_dialog_hint" = "http://192.168.1.20:8000";
 "endpoint_dialog_save" = "保存";
 "endpoint_dialog_reset" = "重置默认端点";
 "endpoint_invalid_url" = "请输入有效的 http(s) 端点";
-"endpoint_saved" = "端点已更新";
-"endpoint_reset_default_done" = "已恢复默认本地端点";
-"endpoint_restart_required" = "已切换到端点：%@。重启 Luker 后生效。";
-"endpoint_restart_required_plain" = "重启 Luker 后端点改动生效。";
+"endpoint_settings" = "端点";
+
+"endpoint_failure_title" = "无法加载端点";
+"endpoint_failure_message" = "无法连接到 %@。是否切换端点？";
+"endpoint_failure_switch" = "切换端点";
+"endpoint_failure_retry" = "重试";
+"endpoint_failure_cancel" = "取消";
 
 "keepalive_task_title" = "Luker";
 "keepalive_task_subtitle" = "正在生成回复";

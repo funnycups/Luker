@@ -48,6 +48,11 @@
     <string name="endpoint_invalid_url">Please enter a valid http(s) endpoint</string>
     <string name="endpoint_saved">Switched to endpoint: %1$s</string>
     <string name="endpoint_reset_default_done">Restored the default local endpoint</string>
+    <string name="endpoint_failure_title">Unable to Load Endpoint</string>
+    <string name="endpoint_failure_message">Could not connect to %1$s. Switch endpoint?</string>
+    <string name="endpoint_failure_switch">Switch Endpoint</string>
+    <string name="endpoint_failure_retry">Retry</string>
+    <string name="endpoint_failure_cancel">Cancel</string>
     <string name="message_alert_channel_name">Luker Message Alerts</string>
     <string name="message_alert_channel_description">Notifications when assistant replies finish or fail</string>
     <string name="message_progress_channel_name">Luker Message Progress</string>

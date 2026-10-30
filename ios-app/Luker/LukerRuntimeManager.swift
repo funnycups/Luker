@@ -157,6 +157,14 @@ final class LukerRuntimeManager {
         }
     }
 
+    func stopIfNeeded() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard started || luker_node_is_running() else { return }
+        luker_node_stop()
+        started = false
+    }
+
     // MARK: - Runtime installation
 
     /// Mirrors ServerPluginRuntime.prepare: the runtime root carries a

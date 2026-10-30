@@ -80,6 +80,9 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Client Apps
 
+- Added **Refresh** and **Endpoint** entries to the user settings drawer in the Android, iOS, and HarmonyOS apps.
+- Added a native recovery dialog when a custom endpoint fails to load, with endpoint switch, retry, and cancel actions.
+- The iOS app now applies endpoint changes immediately and starts or stops the local service for the selected endpoint.
 - Third-party links in the desktop, Android, and HarmonyOS apps now open in the system browser instead of replacing the Luker page, with an **Open external links in the system browser** toggle in user settings. Popups that request window features open as an in-app floating window, so third-party authorization flows keep working.
 - Fixed the crash report not appearing after the app exited abnormally.
 

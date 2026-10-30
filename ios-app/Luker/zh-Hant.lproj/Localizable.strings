@@ -5,6 +5,7 @@
 "loading_webview" = "服務已啟動，正在載入介面…";
 "loading_failed_with_reason" = "服務啟動失敗：%@";
 "loading_failed_timeout" = "服務啟動逾時：本地服務未在預期時間內就緒。";
+"navigation_failed_with_reason" = "頁面載入失敗：%@";
 "runtime_failure_reason_node_exited" = "Node 行程在服務就緒前退出。";
 
 "runtime_start_error_node_exit_code" = "Node 行程退出，返回碼 %ld";
@@ -24,15 +25,18 @@
 "safe_mode_tripped_toast" = "上次啟動在服務就緒前已失敗。本次啟動已停用所有第三方擴充功能——請到擴充功能頁面逐個啟用，定位問題擴充功能。";
 
 "endpoint_dialog_title" = "設定服務端點";
-"endpoint_dialog_message" = "預設端點使用應用程式內建的本地服務。儲存自訂的 http(s):// 端點後，後續啟動將直接連線到該端點，不再自動啟動本地服務。";
+"endpoint_dialog_message" = "預設端點使用應用程式內建的本地服務。儲存自訂的 http(s):// 端點後立即切換並停止本地服務；重設預設端點會重新啟動本地服務。";
 "endpoint_dialog_hint" = "http://192.168.1.20:8000";
 "endpoint_dialog_save" = "儲存";
 "endpoint_dialog_reset" = "重設預設端點";
 "endpoint_invalid_url" = "請輸入有效的 http(s) 端點";
-"endpoint_saved" = "端點已更新";
-"endpoint_reset_default_done" = "已恢復預設本地端點";
-"endpoint_restart_required" = "已切換到端點：%@。重新啟動 Luker 後生效。";
-"endpoint_restart_required_plain" = "重新啟動 Luker 後端點改動生效。";
+"endpoint_settings" = "端點";
+
+"endpoint_failure_title" = "無法載入端點";
+"endpoint_failure_message" = "無法連線到 %@。是否切換端點？";
+"endpoint_failure_switch" = "切換端點";
+"endpoint_failure_retry" = "重試";
+"endpoint_failure_cancel" = "取消";
 
 "keepalive_task_title" = "Luker";
 "keepalive_task_subtitle" = "正在生成回覆";
