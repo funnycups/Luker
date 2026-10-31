@@ -114,6 +114,8 @@ jest.unstable_mockModule('../../public/script.js', () => ({
     updateChatState: () => Promise.resolve(),
     setVariable: () => {},
     getPresetState: () => null,
+    listPresetDocuments: () => Promise.resolve([]),
+    readPresetDocument: () => Promise.resolve(null),
     getPresetStateBatch: () => ({}),
     patchPresetState: () => Promise.resolve(),
     updatePresetState: () => Promise.resolve(),
@@ -223,6 +225,7 @@ jest.unstable_mockModule('../../public/scripts/openai.js', () => ({
     hasUnsavedOpenAIPresetChanges: () => false,
     promptManager: {},
     applyPresetByName: () => Promise.resolve(),
+    syncSavedCharacterBoundPreset: () => Promise.resolve(false),
     maybeApplyCharacterBoundPreset: () => Promise.resolve(),
     // Names pulled by transitive imports of openai.js (instruct-mode, tools, etc.).
     parseExampleIntoIndividual: () => [],

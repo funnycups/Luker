@@ -134,7 +134,7 @@ import { addLocaleData, getCurrentLocale, t, translate } from './i18n.js';
 import { hideLoader, showLoader } from './loader.js';
 import { loader } from './action-loader.js';
 import { MacrosParser } from './macros.js';
-import { getChatCompletionModel, oai_settings, openai_settings, openai_setting_names, sendOpenAIRequest, proxies, ZAI_ENDPOINT, stripOpenAIConnectionFieldsFromPreset, saveOpenAIPreset, hasUnsavedOpenAIPresetChanges, promptManager, applyPresetByName } from './openai.js';
+import { getChatCompletionModel, oai_settings, openai_settings, openai_setting_names, sendOpenAIRequest, proxies, ZAI_ENDPOINT, stripOpenAIConnectionFieldsFromPreset, saveOpenAIPreset, hasUnsavedOpenAIPresetChanges, promptManager, applyPresetByName, syncSavedCharacterBoundPreset } from './openai.js';
 import { callGenericPopup, Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
 import { power_user, registerDebugFunction, performFuzzySearch } from './power-user.js';
 import { getPresetManager } from './preset-manager.js';
@@ -1120,7 +1120,22 @@ async function savePresetBody(target, body, options = {}) {
         // Layer 1 strips OpenAI connection fields, applies read-spread-overlay
         // to preserve sibling luker.* subkeys, and persists via writeExtensionField.
         // Errors bubble up per the no-fallback rule; the caller sees the throw.
+        const previousBody = safeClone(characterPresets.getCharacterBoundPreset(character, ref.name)?.preset || {}, {});
         await characterPresets.updateCharacterBoundPreset(character, ref.name, presetBody);
+        // Persisting the card slot does not touch the runtime option cache,
+        // oai_settings, or the rendered controls. Without this the saved body
+        // only appears after a reload.
+        const selectedRef = getSelectedPresetRef(ref.collection);
+        const isSelected = selectedRef?.origin?.kind === 'character'
+            && selectedRef.origin.avatar === ref.origin.avatar
+            && areLookupNamesEqual(selectedRef.name, ref.name);
+        if (isSelected) {
+            await syncSavedCharacterBoundPreset({
+                name: ref.name,
+                previousBody,
+                body: presetBody,
+            });
+        }
         const savedRef = { collection: ref.collection, name: ref.name, origin: ref.origin };
         return {
             ok: true,

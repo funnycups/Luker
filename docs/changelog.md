@@ -135,6 +135,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Preset and template pickers now support multi-select deletion.
 - Preset and template pickers now support multi-select export as a zip.
 - Improved performance when a preset is bound to a character card.
+- Fixed Completion Preset Assistant changes to a card-bound preset not reaching the active settings and the rendered controls.
 
 ### Chat
 

@@ -479,6 +479,62 @@ export function applyPresetBodyChangesToSettings(previousBody, nextBody) {
         }
     }
 }
+
+/**
+ * Push the current `oai_settings` values into the preset editor controls.
+ * Used after an external save applies a preset body to settings: the save
+ * path does not run the selector-change handler that normally performs this
+ * synchronization.
+ */
+function syncOpenAIPresetControlsFromSettings() {
+    for (const [presetKey, [selector, settingsKey, isCheckbox, isConnection]] of Object.entries(settingsToUpdate)) {
+        if (isConnection || isConnectionProfileOnlyPresetField(presetKey)) {
+            continue;
+        }
+        if (!selector || selector === '#NULL_SELECTOR') {
+            continue;
+        }
+        const value = oai_settings[settingsKey];
+        if (value === undefined) {
+            continue;
+        }
+        if (isCheckbox) {
+            $(selector).prop('checked', Boolean(value));
+        } else {
+            $(selector).val(value);
+        }
+    }
+}
+
+/**
+ * Bring the live runtime in line with the active card-bound preset after it
+ * was saved through the public preset API. Persisting the card slot alone
+ * leaves the runtime option cache, `oai_settings`, and the rendered controls
+ * on the previous body, so the edit only becomes visible after a reload.
+ *
+ * Callers invoke this only when the saved ref is the currently selected
+ * preset, which makes the name-based runtime-cache refresh unambiguous.
+ *
+ * @param {object} options
+ * @param {string} options.name Saved preset name.
+ * @param {object} options.previousBody Card body before the save.
+ * @param {object} options.body Card body after the save.
+ * @returns {Promise<boolean>} false when the name is empty
+ */
+export async function syncSavedCharacterBoundPreset({ name, previousBody, body }) {
+    const targetName = String(name || '').trim();
+    if (!targetName) {
+        return false;
+    }
+
+    refreshCharacterBoundPresetRuntimeBody(targetName, body);
+    applyPresetBodyChangesToSettings(previousBody, body);
+    syncOpenAIPresetControlsFromSettings();
+    await syncOpenAIPresetUiAfterApply();
+    saveSettingsDebounced(0, { directSave: true });
+    scheduleOpenAIPresetChangeNotifications(targetName);
+    return true;
+}
 let lastOpenAIPresetSelectValue = '';
 
 function scheduleOpenAIPresetChangeNotifications(presetName) {
