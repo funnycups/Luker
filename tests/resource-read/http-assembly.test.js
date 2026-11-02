@@ -132,6 +132,107 @@ test('assembles matching field values and preserves JSON types', async () => {
     }
 });
 
+function addFieldDirectory(app, count) {
+    app.get('/directory', (request, response) => response.json({
+        fields: Array.from({ length: count }, (_, index) => ({
+            path: `/field/${index}`,
+            etag: `W/"field-${index}"`,
+        })),
+    }));
+}
+
+test('assembles a large directory within the field request concurrency budget', async () => {
+    const app = express();
+    addFieldDirectory(app, 200);
+    let active = 0;
+    let peak = 0;
+    app.get('/field/:index', async (request, response) => {
+        active += 1;
+        peak = Math.max(peak, active);
+        try {
+            if (active > 5) return response.sendStatus(503);
+            await new Promise(resolve => setTimeout(resolve, 5));
+            response.set('ETag', `W/"field-${request.params.index}"`);
+            return response.json({ index: Number(request.params.index) });
+        } finally {
+            active -= 1;
+        }
+    });
+    const { server, baseURL } = await listen(app);
+    try {
+        const { values } = await assembleResourceFields({
+            directoryUrl: `${baseURL}/directory`,
+            fieldUrl: path => `${baseURL}${path}`,
+        });
+        expect(values.size).toBe(200);
+        for (let index = 0; index < 200; index += 1) {
+            expect(values.get(`/field/${index}`)).toEqual({ index });
+        }
+        expect(peak).toBeGreaterThan(1);
+        expect(peak).toBeLessThanOrEqual(5);
+    } finally {
+        await new Promise(resolve => server.close(resolve));
+    }
+});
+
+test('aborting a large assembly leaves queued fields unread', async () => {
+    const app = express();
+    addFieldDirectory(app, 200);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let started;
+    const firstField = new Promise(resolve => { started = resolve; });
+    app.get('/field/:index', async (request, response) => {
+        started();
+        await gate;
+        response.set('ETag', `W/"field-${request.params.index}"`).json(null);
+    });
+    const { server, baseURL } = await listen(app);
+    const controller = new AbortController();
+    const requested = [];
+    try {
+        const pending = assembleResourceFields({
+            directoryUrl: `${baseURL}/directory`,
+            fieldUrl: path => { requested.push(path); return `${baseURL}${path}`; },
+            signal: controller.signal,
+        });
+        await firstField;
+        controller.abort();
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        expect(requested).toHaveLength(5);
+    } finally {
+        release();
+        await new Promise(resolve => server.close(resolve));
+    }
+});
+
+test.each(['missing', 'changed'])('a %s field stops the remaining directory from being queued', async (failure) => {
+    const app = express();
+    addFieldDirectory(app, 200);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    app.get('/field/:index', async (request, response) => {
+        if (request.params.index === '0') {
+            if (failure === 'missing') return response.sendStatus(404);
+            return response.set('ETag', 'W/"changed"').json(null);
+        }
+        await gate;
+        return response.set('ETag', `W/"field-${request.params.index}"`).json(null);
+    });
+    const { server, baseURL } = await listen(app);
+    const requested = [];
+    try {
+        await expect(assembleResourceFields({
+            directoryUrl: `${baseURL}/directory`,
+            fieldUrl: path => { requested.push(path); return `${baseURL}${path}`; },
+        })).rejects.toMatchObject({ code: 'read_conflict', path: '/field/0' });
+    } finally {
+        release();
+        await new Promise(resolve => server.close(resolve));
+    }
+    expect(requested).toHaveLength(5);
+});
+
 test('preserves each subscriber when one caller cancels a shared request', async () => {
     let requests = 0;
     const app = express();

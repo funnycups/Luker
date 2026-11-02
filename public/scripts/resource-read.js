@@ -8,6 +8,7 @@
 
 const inFlight = new Map();
 const generations = new Map();
+const FIELD_READ_CONCURRENCY = 5;
 let bootstrapPromise = null;
 
 function resourceError(code, resource, detail, extra = {}) {
@@ -134,7 +135,7 @@ export async function readResourceJson(url, { signal } = {}) {
 }
 
 /**
- * Fetches the field directory, then all fields concurrently, verifying each
+ * Fetches the field directory, then fields with bounded concurrency, verifying each
  * field's validator against the directory before returning any values.
  */
 export async function assembleResourceFields({ directoryUrl, fieldUrl, signal }) {
@@ -145,7 +146,7 @@ export async function assembleResourceFields({ directoryUrl, fieldUrl, signal })
     }
 
     const values = new Map();
-    await Promise.all(fields.map(async (field) => {
+    const readField = async (field) => {
         if (typeof field?.path !== 'string' || typeof field?.etag !== 'string') {
             throw resourceError('invalid_resource', directoryUrl, 'Field directory entry is invalid.');
         }
@@ -175,7 +176,22 @@ export async function assembleResourceFields({ directoryUrl, fieldUrl, signal })
         } catch {
             throw resourceError('invalid_resource', url, 'Field body is not valid JSON.');
         }
-    }));
+    };
+
+    let nextField = 0;
+    let failed = false;
+    const readNextFields = async () => {
+        while (!failed && nextField < fields.length) {
+            try {
+                if (signal?.aborted) throw abortError();
+                await readField(fields[nextField++]);
+            } catch (error) {
+                failed = true;
+                throw error;
+            }
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(FIELD_READ_CONCURRENCY, fields.length) }, readNextFields));
 
     return { directory: directory.value, values };
 }
