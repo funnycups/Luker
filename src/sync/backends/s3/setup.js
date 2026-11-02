@@ -5,7 +5,7 @@ import { syncError } from '../../errors.js';
 import { s3SettingsSnapshot } from '../../state.js';
 import { syncService } from '../../sync-service.js';
 
-const INPUT_FIELDS = ['endpoint', 'region', 'bucket', 'prefix', 'forcePathStyle', 'accessKeyId', 'secretAccessKey', 'passphrase', 'label', 'categories'];
+const INPUT_FIELDS = ['endpoint', 'region', 'bucket', 'prefix', 'forcePathStyle', 'stripIfMatchQuotes', 'accessKeyId', 'secretAccessKey', 'passphrase', 'label', 'categories'];
 function fail(code) { throw syncError(code, code); }
 
 function settingsFor(input, previous) {
@@ -18,7 +18,7 @@ function settingsFor(input, previous) {
     }
     const normalized = normalizeS3Settings({ ...previous?.s3, ...fields });
     if (!normalized.accessKeyId || !normalized.secretAccessKey) fail('S3_SETTINGS_INVALID');
-    const settings = Object.fromEntries(['endpoint', 'region', 'bucket', 'prefix', 'forcePathStyle', 'accessKeyId', 'secretAccessKey'].map(field => [field, normalized[field]]));
+    const settings = Object.fromEntries(['endpoint', 'region', 'bucket', 'prefix', 'forcePathStyle', 'stripIfMatchQuotes', 'accessKeyId', 'secretAccessKey'].map(field => [field, normalized[field]]));
     if (previous) {
         const old = s3SettingsSnapshot(previous.s3);
         if (old.bucket !== settings.bucket || old.prefix !== settings.prefix) fail('S3_SETTINGS_INVALID');
@@ -64,7 +64,7 @@ export async function prepareS3Backend({ owner, input, previous, network }) {
                 },
                 // Cleanup must still remove this attempt's probe after removal.
                 delete: key => transport.delete(key),
-            });
+            }, { stripIfMatchQuotes: settings.stripIfMatchQuotes });
             await assertAlive();
             let keyinfo = await readKeyinfo(transport, settings);
             await assertAlive();

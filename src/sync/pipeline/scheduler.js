@@ -256,21 +256,31 @@ export function createScheduler({ makeBackend, makeIncomingBackend, listOwners, 
 
     // Reruns continue while they make progress. Two live-changed reruns in a
     // row with the same snapshot and the same skipped paths mean nothing
-    // outside sync is changing those paths, so another run would repeat.
+    // outside sync is changing those paths, so another run would repeat. Two
+    // remote-moved reruns in a row with the same remote head and ETag mean the
+    // provider keeps refusing the same conditional write.
     //
     // Conflicts count once per cycle that moved main past them: a synced
     // cycle, or a remote-moved one whose merge was applied before its push
     // lost the race. A live-changed or local-moved cycle leaves main where
     // it was, so the next cycle reports the same conflicts again; only a
     // final live-changed outcome counts.
-    async function settle(ctx, state, progress = { previous: null, conflicts: 0 }, allowYield = true) {
-        let { previous, conflicts } = progress;
+    async function settle(ctx, state, progress = { previous: null, remote: null, conflicts: 0 }, allowYield = true) {
+        let { previous, remote, conflicts } = progress;
         for (;;) {
             if (state.removing) throw syncError('UNKNOWN_BACKEND', `Sync backend ${ctx.backendId} is being removed`);
             const outcome = await runSyncCycle(ctx);
             if (outcome.status !== 'rerun') return { outcome, stalled: null, conflicts: conflicts + outcome.conflicts.length };
-            if (outcome.reason === 'remote-moved') conflicts += outcome.conflicts.length;
-            if (outcome.reason === 'live-changed') {
+            if (outcome.reason === 'remote-moved') {
+                conflicts += outcome.conflicts.length;
+                const current = { remoteHead: outcome.remoteHead, remoteEtag: outcome.remoteEtag ?? null };
+                if (remote && remote.remoteHead === current.remoteHead && remote.remoteEtag === current.remoteEtag) {
+                    throw syncError('SYNC_NO_PROGRESS', 'The remote head did not change across conditional-write retries');
+                }
+                remote = current;
+                previous = null;
+            } else if (outcome.reason === 'live-changed') {
+                remote = null;
                 const current = { localHead: outcome.localHead, skipped: [...outcome.reconcile.skipped].sort() };
                 if (previous && previous.localHead === current.localHead && isDeepStrictEqual(previous.skipped, current.skipped)) {
                     return { outcome, stalled: current.skipped, conflicts: conflicts + outcome.conflicts.length };
@@ -278,8 +288,9 @@ export function createScheduler({ makeBackend, makeIncomingBackend, listOwners, 
                 previous = current;
             } else {
                 previous = null;
+                remote = null;
             }
-            if (allowYield && controlled(state)) return { kind: 'yielded', progress: { previous, conflicts } };
+            if (allowYield && controlled(state)) return { kind: 'yielded', progress: { previous, remote, conflicts } };
             await new Promise(resolve => setImmediate(resolve));
         }
     }

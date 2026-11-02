@@ -16,6 +16,7 @@ export function syncSettingsError(code) {
         case 'S3_FORMAT_UNSUPPORTED': return t`This encryption format is not supported. Update Luker.`;
         case 'S3_SETTINGS_CHANGED': return t`The settings changed while saving. Open the form again.`;
         case 'CONDITIONAL_WRITES_UNSUPPORTED': return t`This provider does not support the conditional writes sync requires.`;
+        case 'S3_IF_MATCH_QUOTES_UNSUPPORTED': return t`This provider rejects a quoted ETag in If-Match. Turn on "Send ETag without quotes" for this backend and save again.`;
         case 'SYNC_PRIVATE_ADDRESS': return t`Outbound sync to private addresses is disabled for this account. Ask an administrator to enable it.`;
         case 'AUTH_FAILED': return t`S3 authentication failed. Check the credentials and bucket permissions.`;
         case 'BUCKET_NOT_FOUND': return t`The bucket could not be found. Check that it exists and that this backend uses the correct endpoint.`;
@@ -67,6 +68,7 @@ export async function openS3BackendForm({ mode, backendId, backend, categories, 
         field(name).val(backend?.s3?.[name[0].toLowerCase() + name.slice(1)] ?? (name === 'Region' ? 'us-east-1' : ''));
     }
     field('ForcePathStyle').prop('checked', backend?.s3?.forcePathStyle ?? true);
+    field('StripIfMatchQuotes').prop('checked', backend?.s3?.stripIfMatchQuotes ?? false);
     if (mode === 'edit') field('Bucket').add(field('Prefix')).prop('readOnly', true);
     renderSyncCategories(field('CategoryGrid'), categories, backend?.categories);
     const clear = () => field('AccessKeyId').add(field('SecretAccessKey')).add(field('Passphrase')).val('');
@@ -90,6 +92,7 @@ export async function openS3BackendForm({ mode, backendId, backend, categories, 
                 if (mode === 'add' || value || !['AccessKeyId', 'SecretAccessKey'].includes(name)) payload.s3[name[0].toLowerCase() + name.slice(1)] = value;
             }
             payload.s3.forcePathStyle = field('ForcePathStyle').prop('checked');
+            payload.s3.stripIfMatchQuotes = field('StripIfMatchQuotes').prop('checked');
             if (mode === 'add' || field('Passphrase').val()) payload.passphrase = String(field('Passphrase').val() || '');
         }
         const base = '/api/sync/v1/backends';

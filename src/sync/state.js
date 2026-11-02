@@ -287,7 +287,8 @@ function requireEntry(registry, backendId, kind) {
     return entry;
 }
 
-const S3_FIELDS = ['endpoint', 'region', 'bucket', 'prefix', 'forcePathStyle', 'accessKeyId', 'secretAccessKey', 'keyId', 'derivedKey'];
+const S3_FIELDS = ['endpoint', 'region', 'bucket', 'prefix', 'forcePathStyle', 'stripIfMatchQuotes', 'accessKeyId', 'secretAccessKey', 'keyId', 'derivedKey'];
+const OPTIONAL_S3_FIELDS = new Set(['stripIfMatchQuotes']);
 
 function invalidS3() {
     throw syncError('S3_SETTINGS_INVALID', 'S3_SETTINGS_INVALID');
@@ -301,7 +302,7 @@ export function s3SettingsSnapshot(s3) {
 
 function privateS3(s3) {
     if (!isPlainObject(s3) || Object.keys(s3).some(field => !S3_FIELDS.includes(field))
-        || S3_FIELDS.some(field => !Object.hasOwn(s3, field))
+        || S3_FIELDS.some(field => !OPTIONAL_S3_FIELDS.has(field) && !Object.hasOwn(s3, field))
         || typeof s3.keyId !== 'string' || typeof s3.derivedKey !== 'string') invalidS3();
     const normalized = s3SettingsSnapshot(s3);
     if (!normalized.accessKeyId || !normalized.secretAccessKey) invalidS3();
@@ -552,7 +553,8 @@ export function sanitizeRegistryForClient(registry) {
         if (s3) {
             shown.s3 = {
                 endpoint: s3.endpoint, region: s3.region, bucket: s3.bucket, prefix: s3.prefix,
-                forcePathStyle: s3.forcePathStyle, keyId: s3.keyId, hasCredentials: !!(s3.accessKeyId && s3.secretAccessKey),
+                forcePathStyle: s3.forcePathStyle, stripIfMatchQuotes: s3.stripIfMatchQuotes === true,
+                keyId: s3.keyId, hasCredentials: !!(s3.accessKeyId && s3.secretAccessKey),
             };
         }
         backends[id] = shown;

@@ -23,6 +23,7 @@ Open **User Settings → Account → Backup & Restore → Sync → Open Sync**, 
 | **Bucket** | The existing bucket name. |
 | **Prefix** | A namespace within that bucket, such as `seraphina/`, or leave blank to use the bucket root. |
 | **Use path-style requests** | Set according to the provider's addressing requirements. |
+| **Send ETag without quotes** | Turn on when the provider accepts conditional writes but rejects a quoted ETag in If-Match. |
 | **Access key ID**, **Secret access key** | The credential pair with access to this namespace. |
 | **Encryption passphrase** | A phrase to protect a new namespace, or the existing phrase when joining one. |
 
@@ -30,7 +31,7 @@ Leading and trailing slashes in **Prefix** are removed: `/seraphina/` and `serap
 
 ![Add S3 backend form with connection fields, categories and masked secrets](/images/sync/s3-form.png)
 
-Choose **Save**. Setup checks conditional-write compatibility with temporary objects. A service that ignores the required write conditions is unsupported. Authentication failures, a missing bucket and connection failures are reported separately; they do not establish that conditional writes are unsupported.
+Choose **Save**. Setup checks conditional-write compatibility with temporary objects. A service that ignores the required write conditions is unsupported. Setup also checks that the current ETag is accepted in If-Match; when a provider rejects only the quoted ETag, the error names **Send ETag without quotes**. Authentication failures, a missing bucket and connection failures are reported separately; they do not establish that conditional writes are unsupported.
 
 After setup, the backend appears under **Sync backends** and sync starts. Use the overview to [review activity and pending issues](./sync#activity-and-review).
 
@@ -56,7 +57,7 @@ Encryption of bucket contents does not protect endpoint credentials sent over HT
 
 Choose **Edit** on the backend row. Leave both credential fields and **Encryption passphrase** blank to retain the stored credentials and encryption key. To replace credentials, supply both fields; an incomplete replacement is rejected.
 
-Before saving changes to the endpoint, region, path-style option or credentials, Luker checks access to the existing remote encryption identity. An endpoint edit must still reach the same encrypted namespace. Supplying a passphrase verifies that namespace's phrase; it does not change the phrase protecting the data.
+Before saving changes to the endpoint, region, path-style option, ETag quote option or credentials, Luker checks access to the existing remote encryption identity. An endpoint edit must still reach the same encrypted namespace. Supplying a passphrase verifies that namespace's phrase; it does not change the phrase protecting the data.
 
 **Bucket** and **Prefix** are read-only. To use a different namespace, **Remove** the backend and use **Add S3 backend**. This creates a different local backend and sync history, not a migration of the old backend. **Remove** leaves the remote bucket data and other devices unchanged.
 
@@ -75,6 +76,7 @@ If the stored identity is missing or invalid, or the remote identity changed, fo
 | Bucket could not be found | Verify that it exists at the configured endpoint. |
 | Endpoint could not be reached | Restore network/provider availability and check the endpoint and region. |
 | Provider does not support conditional writes | Use a compatible storage service. |
+| Provider rejects a quoted ETag in If-Match | Turn on **Send ETag without quotes** and save again. |
 | Private-address connection is disabled | Ask an administrator to check the [private-address policy](/guide/configuration#sync-private-addresses). |
 | Encryption format is unsupported | Update Luker before syncing again. |
 | Sync data is missing or invalid | Restore the bucket's sync data from a valid copy before syncing again; see [recovery](./sync#undo-and-recovery). |

@@ -271,7 +271,7 @@ describe('registry v2', () => {
         const text = JSON.stringify(shown);
         for (const value of ['AKIAEXAMPLEACCESS', 'SECRETEXAMPLEVALUE', 'DERIVEDEXAMPLEVALUE']) expect(text).not.toContain(value);
         expect(shown.backends.s3a.s3).toEqual({
-            endpoint: 'https://s3.example', region: 'r1', bucket: 'b', prefix: 'p/', forcePathStyle: true, keyId: 'k1', hasCredentials: true,
+            endpoint: 'https://s3.example', region: 'r1', bucket: 'b', prefix: 'p/', forcePathStyle: true, stripIfMatchQuotes: false, keyId: 'k1', hasCredentials: true,
         });
     });
 

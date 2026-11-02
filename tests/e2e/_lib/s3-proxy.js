@@ -45,7 +45,7 @@ export async function startS3Proxy({ upstream, credentials, region }) {
             return entry.rule.match.attempt === undefined || entry.attempts === entry.rule.match.attempt;
         });
         if (fault) {
-            fault.used = true;
+            fault.used = !fault.rule.repeat;
             fault.abort = () => res.destroy();
             if (!fault.rule.hold) fault.reached.resolve(record);
         }
@@ -91,9 +91,17 @@ export async function startS3Proxy({ upstream, credentials, region }) {
         }
         const stripped = fault?.rule.stripHeaders ?? [];
         for (const name of stripped) delete headers[name];
+        const rewritten = [];
+        if (fault?.rule.rejectQuotedIfMatch && /^".*"$/.test(headers['if-match'] ?? '')) {
+            // A provider that parses only an unquoted ETag rejects the quoted
+            // value. Substitute a different well-formed ETag so the response
+            // and the status still come from real storage.
+            headers['if-match'] = `"${'0'.repeat(32)}"`;
+            rewritten.push('if-match');
+        }
         // Unmodified requests retain their signed Host/path exactly. A reverse
         // proxy may dial a different address without altering the signed wire.
-        if (stripped.length) {
+        if (stripped.length || rewritten.length) {
             delete headers.authorization;
             const parsed = new URL(req.url, 'http://proxy');
             const query = {};

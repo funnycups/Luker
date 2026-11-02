@@ -12,7 +12,7 @@ function check(body, fields) {
 }
 function inputOf(body, create) {
     check(body, ['label', 'categories', 's3', 'passphrase']);
-    if (body.s3 !== undefined) check(body.s3, ['endpoint', 'region', 'bucket', 'prefix', 'forcePathStyle', 'accessKeyId', 'secretAccessKey']);
+    if (body.s3 !== undefined) check(body.s3, ['endpoint', 'region', 'bucket', 'prefix', 'forcePathStyle', 'stripIfMatchQuotes', 'accessKeyId', 'secretAccessKey']);
     if (create && (typeof body.label !== 'string' || !Array.isArray(body.categories) || !body.categories.length || !body.s3)) invalid();
     return { ...body.s3, ...Object.fromEntries(['label', 'categories', 'passphrase'].filter(field => Object.hasOwn(body, field)).map(field => [field, body[field]])) };
 }

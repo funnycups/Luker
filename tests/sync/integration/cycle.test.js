@@ -42,7 +42,7 @@ describe('runSyncCycle against a directory remote', () => {
     test('both sides empty: nothing to do', async () => {
         const A = device();
         expect(await runSyncCycle(A.ctx)).toEqual({
-            status: 'synced', reason: null, mergeCase: 'none', localHead: null, remoteHead: null,
+            status: 'synced', reason: null, mergeCase: 'none', localHead: null, remoteHead: null, remoteEtag: null,
             pushed: false, conflicts: [], reconcile: null, recovered: null, seeded: null, notifyError: null,
         });
         expect(await head()).toBeNull();

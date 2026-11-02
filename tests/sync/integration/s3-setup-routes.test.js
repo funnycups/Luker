@@ -59,6 +59,7 @@ test('authenticated create persists sanitized 201 and starts a genuine backgroun
     for (const secret of [phrase, base.accessKeyId, base.secretAccessKey, previous.s3.derivedKey]) expect(JSON.stringify(created.body)).not.toContain(secret);
     expect(await d.call('POST', `/backends/${id}/s3`, { body: { label: 'Moved endpoint', s3: { endpoint: storage.endpoint } } })).toMatchObject({ status: 200, body: { backend: { label: 'Moved endpoint' } } });
     expect((await readRegistry({ userRoot: d.userRoot })).backends[id].s3.endpoint).toBe(storage.endpoint);
+    expect(await d.call('POST', `/backends/${id}/s3`, { body: { s3: { stripIfMatchQuotes: true } } })).toMatchObject({ status: 200, body: { backend: { s3: { stripIfMatchQuotes: true } } } });
     const current = (await readRegistry({ userRoot: d.userRoot })).backends[id];
     await patchS3BackendEntry({ userRoot: d.userRoot, backendId: id, expectedS3: current.s3, s3Patch: { derivedKey: randomBytes(32).toString('base64') } });
     expect(await d.call('POST', `/backends/${id}/unlock`, { body: { passphrase: 'wrong' } })).toMatchObject({ status: 422, body: { code: 'S3_WRONG_PASSPHRASE' } });

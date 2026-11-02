@@ -10,7 +10,7 @@ import { normalizeDeviceLabel } from '../../src/sync/device-label.js';
 let userRoot;
 const backendId = `s3-${'a'.repeat(32)}`;
 const settings = () => ({ endpoint: 'http://localhost:9000', region: 'us-east-1', bucket: 'registry', prefix: 'namespace',
-    forcePathStyle: true, accessKeyId: 'private-access', secretAccessKey: 'private-secret', keyId: 'a'.repeat(16), derivedKey: randomBytes(32).toString('base64') });
+    forcePathStyle: true, stripIfMatchQuotes: false, accessKeyId: 'private-access', secretAccessKey: 'private-secret', keyId: 'a'.repeat(16), derivedKey: randomBytes(32).toString('base64') });
 const create = s3 => createS3BackendEntry({ userRoot, backendId, label: 'Original', categories: ['worlds'], s3 });
 beforeEach(() => { userRoot = fs.mkdtempSync(path.join(os.tmpdir(), 's3-registry-')); });
 afterEach(() => fs.rmSync(userRoot, { recursive: true, force: true }));
@@ -25,6 +25,21 @@ test('private atomic entry is mode0600 and client output is allowlisted', async 
     for (const secret of [s3.accessKeyId, s3.secretAccessKey, s3.derivedKey, 'passphrase']) expect(JSON.stringify(shown)).not.toContain(secret);
     entry.s3.secretAccessKey = 'mutated-return';
     expect((await readRegistry({ userRoot })).backends[backendId].s3.secretAccessKey).toBe(s3.secretAccessKey);
+});
+
+test('the If-Match quote setting persists and is public without credentials', async () => {
+    const s3 = settings(); await create(s3);
+    const patched = await patchS3BackendEntry({ userRoot, backendId, expectedS3: s3, s3Patch: { stripIfMatchQuotes: true } });
+    expect(patched.s3.stripIfMatchQuotes).toBe(true);
+    expect(sanitizeRegistryForClient(await readRegistry({ userRoot })).backends[backendId].s3.stripIfMatchQuotes).toBe(true);
+});
+
+test('an entry saved before the If-Match quote setting keeps quoted ETags', async () => {
+    const legacy = settings();
+    delete legacy.stripIfMatchQuotes;
+    const entry = await create(legacy);
+    expect(entry.s3.stripIfMatchQuotes).toBe(false);
+    expect(sanitizeRegistryForClient(await readRegistry({ userRoot })).backends[backendId].s3.stripIfMatchQuotes).toBe(false);
 });
 
 test('prepared patch retains latest unrelated settings and sync outcome', async () => {
@@ -48,7 +63,7 @@ test.each([{}, { accessKeyId: '', secretAccessKey: '' }])('omitted or blank cred
 });
 
 test.each([{ accessKeyId: 'replacement' }, { secretAccessKey: 'replacement' }, { accessKeyId: '', secretAccessKey: 'replacement' },
-    { phrase: 'secret' }, { passphrase: 'secret' }, { unknown: 'secret' }, { bucket: 'other' }, { prefix: 'other' }])('invalid replacement leaves entry and ledger unchanged: %j', async s3Patch => {
+    { phrase: 'secret' }, { passphrase: 'secret' }, { unknown: 'secret' }, { bucket: 'other' }, { prefix: 'other' }, { stripIfMatchQuotes: 'yes' }])('invalid replacement leaves entry and ledger unchanged: %j', async s3Patch => {
     const s3 = settings(); await create(s3);
     const ledger = path.join(userRoot, '.sync', backendId, 's3-packs.json');
     fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.writeFileSync(ledger, 'fixture-owned-ledger');

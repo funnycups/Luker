@@ -11,12 +11,18 @@ function safeError(error) {
     const status = error?.$metadata?.httpStatusCode;
     const policy = ['SYNC_PRIVATE_ADDRESS', 'SYNC_DNS_ERROR', 'SYNC_AGENT_DESTROYED'];
     const code = policy.includes(error?.code) ? error.code
-        : status === 412 ? 'PRECONDITION_FAILED'
+        : status === 412 || status === 409 ? 'PRECONDITION_FAILED'
             : error?.name === 'NoSuchKey' && status === 404 ? 'S3_OBJECT_NOT_FOUND'
                 : error?.name === 'NoSuchBucket' ? 'BUCKET_NOT_FOUND'
                     : status === 401 || status === 403 ? 'AUTH_FAILED'
                         : status ? 'S3_PROVIDER_ERROR' : 'UNREACHABLE';
     return Object.assign(syncError(code, code), status ? { $metadata: { httpStatusCode: status } } : {});
+}
+
+/** Some S3-compatible services accept only an unquoted ETag in If-Match. */
+function ifMatchValue(settings, ifMatch) {
+    if (!settings.stripIfMatchQuotes || typeof ifMatch !== 'string') return ifMatch;
+    return /^".*"$/.test(ifMatch) ? ifMatch.slice(1, -1) : ifMatch;
 }
 
 /** A single-attempt SDK transport. Ownership ends at send settlement for PUT,
@@ -117,7 +123,7 @@ export function createS3Client({ owner, settings: input, network }) {
                 || (ifNoneMatch !== undefined && ifNoneMatch !== '*') || (ifMatch !== undefined && typeof ifMatch !== 'string')) {
                 throw syncError('S3_SETTINGS_INVALID', 'S3_SETTINGS_INVALID');
             }
-            const result = await send(new PutObjectCommand({ ...target(relativeKey), Body: body, ContentLength: contentLength, IfMatch: ifMatch, IfNoneMatch: ifNoneMatch }), body instanceof Readable ? body : undefined);
+            const result = await send(new PutObjectCommand({ ...target(relativeKey), Body: body, ContentLength: contentLength, IfMatch: ifMatchValue(settings, ifMatch), IfNoneMatch: ifNoneMatch }), body instanceof Readable ? body : undefined);
             if (!result.ETag) throw syncError('S3_PROVIDER_ERROR', 'S3 response has no ETag');
             return { etag: result.ETag };
         },
@@ -151,21 +157,44 @@ export function createS3Client({ owner, settings: input, network }) {
 }
 
 /** Attempt-owned keys make cleanup independent of concurrent setup attempts. */
-export async function probeConditionalWrites(transport) {
+export async function probeConditionalWrites(transport, { stripIfMatchQuotes = false } = {}) {
     const key = `.probe/${randomBytes(16).toString('hex')}`;
     const body = randomBytes(32);
     const options = { contentLength: body.length };
-    async function require412(condition) {
-        try { await transport.put(key, body, { ...options, ...condition }); } catch (error) {
-            if (error.$metadata?.httpStatusCode === 412) return;
+    const unsupported = () => syncError('CONDITIONAL_WRITES_UNSUPPORTED', 'S3 conditional writes are required');
+    async function putProbe(condition) {
+        try {
+            return await transport.put(key, body, { ...options, ...condition });
+        } catch (error) {
+            const status = error?.$metadata?.httpStatusCode;
+            if (status === 400 || status === 501) throw unsupported();
             throw error;
         }
-        throw syncError('CONDITIONAL_WRITES_UNSUPPORTED', 'S3 conditional writes are required');
+    }
+    async function requireRejected(condition) {
+        try { await putProbe(condition); } catch (error) {
+            if (error.code === 'CONDITIONAL_WRITES_UNSUPPORTED') throw error;
+            const status = error?.$metadata?.httpStatusCode;
+            if (status === 412 || status === 409) return;
+            throw error;
+        }
+        throw unsupported();
     }
     try {
-        await transport.put(key, body, { ...options, ifNoneMatch: '*' });
-        await require412({ ifNoneMatch: '*' });
-        await require412({ ifMatch: '"invalid-probe-etag"' });
+        const current = await putProbe({ ifNoneMatch: '*' });
+        await requireRejected({ ifNoneMatch: '*' });
+        await requireRejected({ ifMatch: '"00000000000000000000000000000000"' });
+        try { await putProbe({ ifMatch: current.etag }); } catch (error) {
+            if (error.code === 'CONDITIONAL_WRITES_UNSUPPORTED') throw error;
+            const status = error?.$metadata?.httpStatusCode;
+            if (status === 412 || status === 409) {
+                if (!stripIfMatchQuotes && /^".*"$/.test(current.etag)) {
+                    throw syncError('S3_IF_MATCH_QUOTES_UNSUPPORTED', 'S3 service requires an unquoted If-Match ETag');
+                }
+                throw unsupported();
+            }
+            throw error;
+        }
     } finally {
         try { await transport.delete(key); } catch { console.warn('S3 probe cleanup failed'); }
     }

@@ -306,6 +306,8 @@ function syncErrorCodeMessage(code, body = {}) {
             const cause = String((body.stage === 'offer' ? body.detail : body.detail || body.error) || '').trim();
             return cause ? t`Could not reach the other device (${cause}).` : t`Could not reach the other device.`;
         }
+        case 'SYNC_NO_PROGRESS':
+            return t`Sync stopped because the remote copy did not change across repeated attempts. Check the backend and try again.`;
         default:
             return code?.startsWith('S3_') ? syncSettingsError(code) : null;
     }

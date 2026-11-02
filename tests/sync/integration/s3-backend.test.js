@@ -90,6 +90,21 @@ test('shared scheduler publishes encrypted closure and incremental nonempty pack
     expect(puts).toHaveLength(2); for (const put of puts) expect(put.headers['if-none-match']).toBe('*');
     expect(fs.readdirSync(a.shadow.peerDir).filter(n => n.startsWith('.luker-staging-s3-'))).toEqual([]);
 });
+test('a quoted If-Match rejected against an unchanged head names the quote option and the option recovers', async () => {
+    const a = await device(); a.write('worlds/base.json', '{}');
+    expect(await a.run()).toMatchObject({ ok: true, outcome: { pushed: true } });
+    const suffix = `${a.entry.s3.prefix}/head`;
+    const fault = proxy.addFault({ match: { method: 'PUT', keySuffix: suffix }, rejectQuotedIfMatch: true, repeat: true });
+    try {
+        a.write('worlds/one.json', '{}');
+        expect(await a.run()).toMatchObject({ ok: false, code: 'S3_IF_MATCH_QUOTES_UNSUPPORTED' });
+        expect((await readRegistry({ userRoot: a.userRoot })).backends[a.id].lastSync.error.code).toBe('S3_IF_MATCH_QUOTES_UNSUPPORTED');
+        const current = (await readRegistry({ userRoot: a.userRoot })).backends[a.id];
+        a.entry = await patchS3BackendEntry({ userRoot: a.userRoot, backendId: a.id, expectedS3: current.s3, s3Patch: { stripIfMatchQuotes: true } });
+        expect(await a.run()).toMatchObject({ ok: true, outcome: { pushed: true } });
+    } finally { fault.cancel(); }
+});
+
 test('two immutable observations race genuine conditional head writes; loser leaves orphan and next cycle retains current packs', async () => {
     const a = await device(); a.write('worlds/base.json', '{}'); expect(await a.run()).toMatchObject({ ok: true });
     const b = await device(a.entry.s3); expect(await b.run()).toMatchObject({ ok: true });

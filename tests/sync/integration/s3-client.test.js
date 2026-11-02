@@ -70,6 +70,60 @@ test('concurrent probes use independent attempt keys and require real preconditi
     expect((await client.list('.probe/')).objects).toEqual([]);
 });
 
+test.each([false, true])('If-Match quotes follow the backend setting when strip=%s', async strip => {
+    const client = transport({ stripIfMatchQuotes: strip });
+    const key = `packs/${randomBytes(16).toString('hex')}`;
+    const bytes = randomBytes(64);
+    const created = await client.put(key, bytes, { contentLength: bytes.length, ifNoneMatch: '*' });
+    await client.put(key, bytes, { contentLength: bytes.length, ifMatch: created.etag });
+    const record = await proxy.waitForRequest({ method: 'PUT', keySuffix: key, attempt: 2 });
+    expect(record.headers['if-match']).toBe(strip ? created.etag.slice(1, -1) : created.etag);
+});
+
+test('setup detects a provider that accepts only a bare If-Match ETag', async () => {
+    const prefix = `quoted-${randomBytes(8).toString('hex')}`;
+    const client = transport({ prefix });
+    const fault = proxy.addFault({ match: { method: 'PUT', keyPrefix: prefix }, rejectQuotedIfMatch: true, repeat: true });
+    try {
+        await expect(probeConditionalWrites(client)).rejects.toMatchObject({ code: 'S3_IF_MATCH_QUOTES_UNSUPPORTED' });
+        const stripping = transport({ prefix, stripIfMatchQuotes: true });
+        await probeConditionalWrites(stripping, { stripIfMatchQuotes: true });
+        expect((await stripping.list('.probe/')).objects).toEqual([]);
+    } finally { fault.cancel(); }
+});
+
+test.each([400, 501])('setup reports unsupported conditional writes when the provider answers %s', async status => {
+    const fixture = await startHttpFixture((req, res) => {
+        req.resume();
+        req.on('end', () => {
+            res.writeHead(status, { 'content-type': 'application/xml' });
+            res.end('<Error><Code>NotImplemented</Code><Message>conditional writes</Message></Error>');
+        });
+    });
+    const client = createS3Client({ owner, settings: { ...settings, endpoint: fixture.url, prefix: '' } });
+    transports.push(client);
+    try {
+        await expect(probeConditionalWrites(client)).rejects.toMatchObject({ code: 'CONDITIONAL_WRITES_UNSUPPORTED' });
+    } finally { await fixture.close(); }
+});
+
+test('a 409 conditional request conflict is a retryable precondition failure', async () => {
+    const fixture = await startHttpFixture((req, res) => {
+        req.resume();
+        req.on('end', () => {
+            res.writeHead(409, { 'content-type': 'application/xml' });
+            res.end('<Error><Code>ConditionalRequestConflict</Code><Message>conflict</Message></Error>');
+        });
+    });
+    const client = createS3Client({ owner, settings: { ...settings, endpoint: fixture.url, prefix: '' } });
+    transports.push(client);
+    try {
+        await expect(client.put('head', Buffer.from('x'), { contentLength: 1, ifMatch: '"etag"' })).rejects.toMatchObject({
+            code: 'PRECONDITION_FAILED', $metadata: { httpStatusCode: 409 },
+        });
+    } finally { await fixture.close(); }
+});
+
 test.each(['if-match', 'if-none-match'])('stripping signed %s forwards to RustFS and rejects capability', async header => {
     const client = transport();
     const fault = proxy.addFault({ match: { method: 'PUT', attempt: header === 'if-match' ? 3 : 2, keySuffix: undefined }, once: true, stripHeaders: [header] });

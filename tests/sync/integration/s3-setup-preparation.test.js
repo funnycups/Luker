@@ -60,6 +60,16 @@ test('Add probes real conditional writes then initializes canonical keyinfo with
     expect(requests.find(r => r.relativeKey.endsWith('keyinfo.json') && r.method === 'PUT').headers['if-none-match']).toBe('*');
 });
 
+test('Add names the If-Match quote option when a provider rejects a quoted current ETag', async () => {
+    const o = owner(), submitted = input();
+    const fault = proxy.addFault({ match: { method: 'PUT', keyPrefix: submitted.prefix }, rejectQuotedIfMatch: true, repeat: true });
+    try {
+        await expect(prepareS3Backend({ owner: o, input: submitted })).rejects.toMatchObject({ code: 'S3_IF_MATCH_QUOTES_UNSUPPORTED' });
+        const result = await prepareS3Backend({ owner: o, input: { ...submitted, stripIfMatchQuotes: true } });
+        expect(result.s3.stripIfMatchQuotes).toBe(true);
+    } finally { fault.cancel(); }
+});
+
 test.each([true, false])('two actual missing GETs race one conditional initialization; same phrase=%s', async same => {
     const a = owner(), b = owner(), submitted = input();
     const match = { method: 'GET', keySuffix: `${submitted.prefix}/keyinfo.json` };

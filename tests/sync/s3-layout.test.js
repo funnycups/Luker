@@ -7,7 +7,7 @@ const rejects = (fn, code) => expect(fn).toThrow(expect.objectContaining({ code 
 
 describe('S3 namespace settings', () => {
     test('normalizes only outer prefix slashes and joins names once', () => {
-        expect(normalizeS3Settings(settings())).toEqual({ ...settings(), prefix: 'team/sync' });
+        expect(normalizeS3Settings(settings())).toEqual({ ...settings(), prefix: 'team/sync', stripIfMatchQuotes: false });
         for (const prefix of ['', '/', '///']) expect(normalizeS3Settings({ ...settings(), prefix }).prefix).toBe('');
         expect(objectKey({ prefix: '/team/sync/' }, 'head')).toBe('team/sync/head');
         expect(objectKey({ prefix: '' }, 'head')).toBe('head');
@@ -21,6 +21,8 @@ describe('S3 namespace settings', () => {
             for (const value of [null, 123, [], {}, true]) rejects(() => normalizeS3Settings({ ...settings(), [field]: value }), 'S3_SETTINGS_INVALID');
         }
         for (const value of [0, 1, 'true', null, {}]) rejects(() => normalizeS3Settings({ ...settings(), forcePathStyle: value }), 'S3_SETTINGS_INVALID');
+        for (const value of [0, 1, 'true', null, {}]) rejects(() => normalizeS3Settings({ ...settings(), stripIfMatchQuotes: value }), 'S3_SETTINGS_INVALID');
+        expect(normalizeS3Settings({ ...settings(), stripIfMatchQuotes: true }).stripIfMatchQuotes).toBe(true);
         for (const value of [[], ['unknown'], [1], Array(1), 'chats', null]) rejects(() => normalizeS3Settings({ ...settings(), categories: value }), 'S3_SETTINGS_INVALID');
         for (const prefix of ['a//b', 'a/./b', '..', 'a/../b', 'a\\b', 'a\u0000b', 'a\nb']) rejects(() => normalizeS3Settings({ ...settings(), prefix }), 'S3_SETTINGS_INVALID');
         for (const endpoint of ['ftp://example.com', 'https://user:pass@example.com', 'https://example.com/?a', 'https://example.com/#x', 'not a URL']) rejects(() => normalizeS3Settings({ ...settings(), endpoint }), 'S3_SETTINGS_INVALID');

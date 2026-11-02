@@ -135,6 +135,21 @@ describe('sync scheduler', () => {
         expect(d.read('characters/x.png')).toBe(userKept ? 'USER' : 'V2');
     });
 
+    test('a remote-moved rerun that never changes the remote head stops with no progress', async () => {
+        const d = await device();
+        d.write('characters/x.png', 'V1');
+        const s = scheduler({
+            makeBackend: (owner, id) => {
+                const backend = new DirectoryBackend({ id, remoteDir: remotes[id], userRoot: owner.userRoot });
+                backend.casHead = async () => ({ ok: false, reason: 'conflict' });
+                return backend;
+            },
+        });
+        const result = await s.trigger(ownerOf(d), 'r1', 'manual');
+        expect(result).toMatchObject({ ok: false, code: 'SYNC_NO_PROGRESS' });
+        expect((await readRegistry({ userRoot: d.userRoot })).backends.r1.lastSync.error.code).toBe('SYNC_NO_PROGRESS');
+    });
+
     test('a skip that never changes stops as stalled', async () => {
         const sqlite = CONTRACT_HARNESSES.find(h => h.name === 'SqliteEngine');
         const h = withNestedDirs(await sqlite.make());

@@ -152,7 +152,18 @@ export class S3Backend {
             await this.transport.put('head', bytes, { contentLength: bytes.length, ...(expected === null ? { ifNoneMatch: '*' } : { ifMatch: expected }) });
             return { ok: true };
         } catch (error) {
-            if (error.code === 'PRECONDITION_FAILED') return { ok: false, reason: 'conflict' };
+            if (error.code === 'PRECONDITION_FAILED') {
+                // A rejected condition with an unchanged head is not a race:
+                // the provider refused a write the current ETag allows.
+                const current = await this.#readObservation();
+                if (current.etag === expected) {
+                    if (expected !== null && !this.settings.stripIfMatchQuotes && /^".*"$/.test(expected)) {
+                        throw syncError('S3_IF_MATCH_QUOTES_UNSUPPORTED', 'S3 service requires an unquoted If-Match ETag');
+                    }
+                    throw syncError('CONDITIONAL_WRITES_UNSUPPORTED', 'S3 conditional writes are required');
+                }
+                return { ok: false, reason: 'conflict' };
+            }
             if (error.code !== 'UNREACHABLE') throw error;
             // Authenticate identity and context again, once; never resend a head PUT.
             const recovered = await this.#readObservation();

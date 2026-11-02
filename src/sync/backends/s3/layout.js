@@ -35,6 +35,7 @@ export function normalizeS3Settings(input) {
         if (Object.hasOwn(input, field) && typeof input[field] !== 'string') fail('S3_SETTINGS_INVALID');
     }
     if (typeof input.forcePathStyle !== 'boolean' || !input.region || !input.bucket) fail('S3_SETTINGS_INVALID');
+    if (Object.hasOwn(input, 'stripIfMatchQuotes') && typeof input.stripIfMatchQuotes !== 'boolean') fail('S3_SETTINGS_INVALID');
     if (Object.hasOwn(input, 'categories') && (!Array.isArray(input.categories) || !input.categories.length
         || Array.from(input.categories).some(category => typeof category !== 'string' || !CATEGORY_IDS.has(category)))) fail('S3_SETTINGS_INVALID');
     let endpoint;
@@ -45,7 +46,7 @@ export function normalizeS3Settings(input) {
     }
     if (!['https:', 'http:'].includes(endpoint.protocol) || endpoint.username || endpoint.password
         || input.endpoint.includes('?') || input.endpoint.includes('#')) fail('S3_SETTINGS_INVALID');
-    return { ...input, prefix: normalizePrefix(input.prefix) };
+    return { ...input, prefix: normalizePrefix(input.prefix), stripIfMatchQuotes: input.stripIfMatchQuotes === true };
 }
 
 /** Join a normalized namespace with a safe relative object path, without URL encoding. */

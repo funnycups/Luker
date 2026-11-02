@@ -133,14 +133,19 @@ async function step(steps, name, fn) {
 
 function expect412(error) {
     const status = error?.$metadata?.httpStatusCode;
-    if (status === 412 || error?.name === 'PreconditionFailed') return;
+    if (status === 412 || status === 409 || error?.name === 'PreconditionFailed') return;
     throw error;
+}
+
+function feasibilityIfMatch(config, value) {
+    if (!config.stripIfMatchQuotes || typeof value !== 'string') return value;
+    return /^".*"$/.test(value) ? value.slice(1, -1) : value;
 }
 
 /**
  * @typedef {{ endpoint: string, region: string, bucket: string, prefix?: string,
  *             accessKeyId: string, secretAccessKey: string, forcePathStyle?: boolean,
- *             createBucket?: boolean }} S3FeasibilityConfig
+ *             stripIfMatchQuotes?: boolean, createBucket?: boolean }} S3FeasibilityConfig
  * @typedef {{ name: string, ok: boolean, ms: number, detail?: string, error?: string }} FeasibilityStep
  * @typedef {{ env: { node: string, openssl: string, hasWasm: boolean, platform: string, arch: string },
  *             steps: FeasibilityStep[], ok: boolean }} FeasibilityReport
@@ -184,12 +189,20 @@ async function runS3Steps(steps, config) {
             throw new Error('conditional create overwrote an existing object');
         });
         await step(steps, 'put.ifMatch.wrong412', async () => {
-            try { await client.send(new sdk.PutObjectCommand({ Bucket, Key, Body: 'c', IfMatch: '"00000000000000000000000000000000"' })); } catch (e) { expect412(e); return '412'; }
+            try { await client.send(new sdk.PutObjectCommand({ Bucket, Key, Body: 'c', IfMatch: feasibilityIfMatch(config, '"00000000000000000000000000000000"') })); } catch (e) { expect412(e); return '412'; }
             throw new Error('If-Match with a wrong ETag was accepted');
         });
         await step(steps, 'put.ifMatch.right', async () => {
-            const out = await client.send(new sdk.PutObjectCommand({ Bucket, Key, Body: 'd', IfMatch: etag }));
-            etag = out.ETag;
+            try {
+                const out = await client.send(new sdk.PutObjectCommand({ Bucket, Key, Body: 'd', IfMatch: feasibilityIfMatch(config, etag) }));
+                etag = out.ETag;
+            } catch (error) {
+                const status = error?.$metadata?.httpStatusCode;
+                if (!config.stripIfMatchQuotes && (status === 412 || status === 409) && /^".*"$/.test(etag)) {
+                    throw new Error('If-Match with the current ETag was rejected; retry with LUKER_S3_STRIP_IF_MATCH_QUOTES=1');
+                }
+                throw error;
+            }
         });
         await step(steps, 'get', async () => {
             const out = await client.send(new sdk.GetObjectCommand({ Bucket, Key }));

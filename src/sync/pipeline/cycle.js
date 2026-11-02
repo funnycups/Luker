@@ -84,6 +84,7 @@ export const UNDO_TARGET_REF = 'refs/sync/backup-target';
  * @property {MergeCase} mergeCase
  * @property {string | null} localHead shadow main after the cycle
  * @property {string | null} remoteHead remote head as last seen; the pushed oid after a successful CAS
+ * @property {string | null} remoteEtag remote head ETag as last seen at the start of the cycle
  * @property {boolean} pushed
  * @property {ConflictEntry[]} conflicts seeding conflicts of newly enabled categories, then merge conflicts
  * @property {ReconcileReport | null} reconcile
@@ -453,6 +454,7 @@ export async function runSyncCycle(ctx) {
         mergeCase: plan.mergeCase,
         localHead,
         remoteHead,
+        remoteEtag: head?.etag ?? null,
         pushed: false,
         conflicts: [...seededConflicts, ...plan.conflicts],
         reconcile: null,
