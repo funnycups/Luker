@@ -72,7 +72,7 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
     });
 
     test('reconstructs a legacy character from field and projection resources', async () => {
-        const directoryResponse = await request(harness.app)
+        const directoryResponse = await request(harness.server)
             .get('/api/characters/fields')
             .query({ account: harness.handle, avatar: 'Alice.png' })
             .expect(200);
@@ -83,7 +83,7 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
 
         const values = new Map();
         for (const field of directory.fields) {
-            const fieldResponse = await request(harness.app)
+            const fieldResponse = await request(harness.server)
                 .get('/api/characters/field')
                 .query({ account: harness.handle, avatar: 'Alice.png', path: field.path })
                 .expect(200);
@@ -93,14 +93,14 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
         }
 
         const raw = assembleCharacterRaw(directory.rawLayout, values);
-        const legacyResponse = await request(harness.app)
+        const legacyResponse = await request(harness.server)
             .post('/api/characters/get')
             .send({ avatar_url: 'Alice.png' })
             .expect(200);
         assert.equal(raw, legacyResponse.body.json_data);
         assert.equal(raw, readCard(fs.readFileSync(path.join(harness.dirs.characters, 'Alice.png'))));
 
-        const projectionResponse = await request(harness.app)
+        const projectionResponse = await request(harness.server)
             .get('/api/characters/projection')
             .query({ account: harness.handle, avatar: 'Alice.png' })
             .expect(200);
@@ -111,20 +111,20 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
     test('reconstructs a V1 card from the same raw source contract', async () => {
         seedCard(harness.dirs.characters, 'Legacy', V1_CARD);
 
-        const directory = await request(harness.app)
+        const directory = await request(harness.server)
             .get('/api/characters/fields')
             .query({ account: harness.handle, avatar: 'Legacy.png' })
             .expect(200);
         const values = new Map();
         for (const field of directory.body.fields) {
-            const fieldResponse = await request(harness.app)
+            const fieldResponse = await request(harness.server)
                 .get('/api/characters/field')
                 .query({ account: harness.handle, avatar: 'Legacy.png', path: field.path })
                 .expect(200);
             values.set(field.path, fieldResponse.text);
         }
         const raw = assembleCharacterRaw(directory.body.rawLayout, values);
-        const legacy = await request(harness.app)
+        const legacy = await request(harness.server)
             .post('/api/characters/get')
             .send({ avatar_url: 'Legacy.png' })
             .expect(200);
@@ -134,13 +134,13 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
     });
 
     test('keeps unchanged field validators after an ordinary data edit', async () => {
-        const first = await request(harness.app)
+        const first = await request(harness.server)
             .get('/api/characters/fields')
             .query({ account: harness.handle, avatar: 'Alice.png' })
             .expect(200);
         const before = new Map(first.body.fields.map(field => [field.path, field.etag]));
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/patch')
             .send({
                 avatar_url: 'Alice.png',
@@ -148,7 +148,7 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
             })
             .expect(200);
 
-        const second = await request(harness.app)
+        const second = await request(harness.server)
             .get('/api/characters/fields')
             .query({ account: harness.handle, avatar: 'Alice.png' })
             .expect(200);
@@ -159,13 +159,13 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
     });
 
     test('distinguishes a missing card and an unreadable card', async () => {
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/characters/fields')
             .query({ account: harness.handle, avatar: 'Missing.png' })
             .expect(404);
 
         fs.writeFileSync(path.join(harness.dirs.characters, 'Broken.png'), 'not a png');
-        const broken = await request(harness.app)
+        const broken = await request(harness.server)
             .get('/api/characters/fields')
             .query({ account: harness.handle, avatar: 'Broken.png' })
             .expect(422);
@@ -173,12 +173,12 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
     });
 
     test('refreshes the projection when chat statistics change', async () => {
-        const first = await request(harness.app)
+        const first = await request(harness.server)
             .get('/api/characters/fields')
             .query({ account: harness.handle, avatar: 'Alice.png' })
             .expect(200);
         await getChatRepo().save(harness.handle, 'Alice', 'chat', {}, [], null);
-        const second = await request(harness.app)
+        const second = await request(harness.server)
             .get('/api/characters/fields')
             .query({ account: harness.handle, avatar: 'Alice.png' })
             .expect(200);
@@ -186,11 +186,11 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
     });
 
     test('returns 404 for an unknown field and 400 for an escaped container path', async () => {
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/characters/field')
             .query({ account: harness.handle, avatar: 'Alice.png', path: '/missing' })
             .expect(404);
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/characters/field')
             .query({ account: harness.handle, avatar: 'Alice.png', path: '/data' })
             .expect(400);

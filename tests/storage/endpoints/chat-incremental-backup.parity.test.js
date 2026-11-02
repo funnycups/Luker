@@ -59,7 +59,7 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
 
     test('REGRESSION: solo /append triggers chat backup', async () => {
         const fetched = await getChatRepo().get(harness.handle, 'Alice', 'c1');
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/append')
             .send({
                 avatar_url: 'Alice.png',
@@ -73,7 +73,7 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
 
     test('REGRESSION: solo /patch triggers chat backup', async () => {
         const fetched = await getChatRepo().get(harness.handle, 'Alice', 'c1');
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/patch')
             .send({
                 avatar_url: 'Alice.png',
@@ -87,7 +87,7 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
 
     test('REGRESSION: solo /meta/patch triggers chat backup', async () => {
         const fetched = await getChatRepo().get(harness.handle, 'Alice', 'c1');
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/meta/patch')
             .send({
                 avatar_url: 'Alice.png',
@@ -100,7 +100,7 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
     });
 
     test('REGRESSION: solo /state/patch triggers chat backup', async () => {
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/state/patch')
             .send({
                 avatar_url: 'Alice.png',
@@ -116,7 +116,7 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
         const gid = 'gappend';
         await getChatRepo().save(harness.handle, '', gid, HEADER, MESSAGES, null,
             { isGroup: true, groupId: gid });
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/group/append')
             .send({ id: gid, messages: [{ name: 'Bot', mes: 'group reply' }] });
         expect(res.status).toBe(200);
@@ -128,7 +128,7 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
         await getChatRepo().save(harness.handle, '', gid, HEADER, MESSAGES, null,
             { isGroup: true, groupId: gid });
         const fetched = await getChatRepo().get(harness.handle, '', gid, { isGroup: true, groupId: gid });
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/group/patch')
             .send({
                 id: gid,
@@ -144,7 +144,7 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
         await getChatRepo().save(harness.handle, '', gid, HEADER, MESSAGES, null,
             { isGroup: true, groupId: gid });
         const fetched = await getChatRepo().get(harness.handle, '', gid, { isGroup: true, groupId: gid });
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/group/meta/patch')
             .send({
                 id: gid,
@@ -159,7 +159,7 @@ describe.each(ENDPOINT_HARNESSES)('chat incremental backup on $name', ({ mode })
         const gid = 'gstate';
         await getChatRepo().save(harness.handle, '', gid, HEADER, MESSAGES, null,
             { isGroup: true, groupId: gid });
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/state/patch')
             .send({
                 is_group: true,

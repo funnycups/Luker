@@ -35,7 +35,7 @@ describe.each(ENDPOINT_HARNESSES)('GET /api/storage/health on $name', ({ mode })
     });
 
     test('returns 200 with kind, schemaVersion, and latencyMs when engine is healthy', async () => {
-        const res = await request(harness.app).get('/api/storage/health');
+        const res = await request(harness.server).get('/api/storage/health');
         expect(res.status).toBe(200);
         expect(res.body.ok).toBe(true);
         expect(res.body.kind).toBe(mode);
@@ -67,7 +67,7 @@ describe('GET /api/storage/health with broken engine', () => {
             throw Object.assign(new Error('synthetic transport failure'), { code: 'EBROKEN' });
         };
         try {
-            const res = await request(harness.app).get('/api/storage/health');
+            const res = await request(harness.server).get('/api/storage/health');
             expect(res.status).toBe(503);
             expect(res.body.ok).toBe(false);
             expect(res.body.kind).toBe('fs');

@@ -14,14 +14,14 @@ function collectText(res, cb) {
     res.on('error', cb);
 }
 
-async function initSession(app, body = {}) {
-    return await request(app)
+async function initSession(server, body = {}) {
+    return await request(server)
         .post('/api/users/restore-backup/uploads')
         .send({ handle: 'u', fileName: 'backup.zip', size: ZIP_BYTES.length, ...body });
 }
 
-async function putChunk(app, uploadId, offset, bytes) {
-    return await request(app)
+async function putChunk(server, uploadId, offset, bytes) {
+    return await request(server)
         .put(`/api/users/restore-backup/uploads/${uploadId}/chunks/${offset}`)
         .set('Content-Type', 'application/octet-stream')
         .send(bytes);
@@ -56,14 +56,14 @@ describe('restore upload session endpoints', () => {
     });
 
     test('init validates handle, extension and size', async () => {
-        expect((await initSession(harness.app, { handle: '' })).status).toBe(400);
-        expect((await initSession(harness.app, { fileName: 'backup.txt' })).status).toBe(400);
-        expect((await initSession(harness.app, { size: 0 })).status).toBe(400);
-        expect((await initSession(harness.app, { size: 1.5 })).status).toBe(400);
+        expect((await initSession(harness.server, { handle: '' })).status).toBe(400);
+        expect((await initSession(harness.server, { fileName: 'backup.txt' })).status).toBe(400);
+        expect((await initSession(harness.server, { size: 0 })).status).toBe(400);
+        expect((await initSession(harness.server, { size: 1.5 })).status).toBe(400);
     });
 
     test('init denies a non-admin uploading for another handle', async () => {
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/users/restore-backup/uploads')
             .set('x-test-nonadmin', '1')
             .send({ handle: 'someone-else', fileName: 'backup.zip', size: 10 });
@@ -71,14 +71,14 @@ describe('restore upload session endpoints', () => {
     });
 
     test('init returns an id and persists the declared size', async () => {
-        const res = await initSession(harness.app);
+        const res = await initSession(harness.server);
         expect(res.status).toBe(200);
         expect(res.body.uploadId).toMatch(/^[0-9a-f]{32}$/);
     });
 
     test('chunks must be application/octet-stream', async () => {
-        const { body } = await initSession(harness.app);
-        const res = await request(harness.app)
+        const { body } = await initSession(harness.server);
+        const res = await request(harness.server)
             .put(`/api/users/restore-backup/uploads/${body.uploadId}/chunks/0`)
             .set('Content-Type', 'application/json')
             .send({ nope: true });
@@ -86,30 +86,30 @@ describe('restore upload session endpoints', () => {
     });
 
     test('chunk offsets are bounds-checked', async () => {
-        const { body } = await initSession(harness.app);
-        expect((await putChunk(harness.app, body.uploadId, -1, Buffer.from('x'))).status).toBe(400);
-        const tooFar = await putChunk(harness.app, body.uploadId, ZIP_BYTES.length, Buffer.from('x'));
+        const { body } = await initSession(harness.server);
+        expect((await putChunk(harness.server, body.uploadId, -1, Buffer.from('x'))).status).toBe(400);
+        const tooFar = await putChunk(harness.server, body.uploadId, ZIP_BYTES.length, Buffer.from('x'));
         expect(tooFar.status).toBe(400);
     });
 
     test('chunk overrun is rejected', async () => {
-        const { body } = await initSession(harness.app, { size: 4 });
-        const res = await putChunk(harness.app, body.uploadId, 0, Buffer.from('12345'));
+        const { body } = await initSession(harness.server, { size: 4 });
+        const res = await putChunk(harness.server, body.uploadId, 0, Buffer.from('12345'));
         expect(res.status).toBe(400);
     });
 
     test('chunk retry at the same offset is idempotent', async () => {
-        const { body } = await initSession(harness.app);
-        const first = await putChunk(harness.app, body.uploadId, 0, ZIP_BYTES.subarray(0, 4));
-        const second = await putChunk(harness.app, body.uploadId, 0, ZIP_BYTES.subarray(0, 4));
+        const { body } = await initSession(harness.server);
+        const first = await putChunk(harness.server, body.uploadId, 0, ZIP_BYTES.subarray(0, 4));
+        const second = await putChunk(harness.server, body.uploadId, 0, ZIP_BYTES.subarray(0, 4));
         expect(first.status).toBe(200);
         expect(second.status).toBe(200);
     });
 
     test('finalize rejects an incomplete upload with the missing offset', async () => {
-        const { body } = await initSession(harness.app);
-        await putChunk(harness.app, body.uploadId, 0, ZIP_BYTES.subarray(0, 4));
-        const res = await request(harness.app)
+        const { body } = await initSession(harness.server);
+        await putChunk(harness.server, body.uploadId, 0, ZIP_BYTES.subarray(0, 4));
+        const res = await request(harness.server)
             .post(`/api/users/restore-backup/uploads/${body.uploadId}/finalize`)
             .send({});
         expect(res.status).toBe(400);
@@ -117,10 +117,10 @@ describe('restore upload session endpoints', () => {
     });
 
     test('finalize streams assemble progress then a result', async () => {
-        const { body } = await initSession(harness.app);
-        await putChunk(harness.app, body.uploadId, 0, ZIP_BYTES.subarray(0, 10));
-        await putChunk(harness.app, body.uploadId, 10, ZIP_BYTES.subarray(10));
-        const res = await request(harness.app)
+        const { body } = await initSession(harness.server);
+        await putChunk(harness.server, body.uploadId, 0, ZIP_BYTES.subarray(0, 10));
+        await putChunk(harness.server, body.uploadId, 10, ZIP_BYTES.subarray(10));
+        const res = await request(harness.server)
             .post(`/api/users/restore-backup/uploads/${body.uploadId}/finalize`)
             .set('Accept', 'application/x-ndjson')
             .buffer(true)
@@ -134,12 +134,12 @@ describe('restore upload session endpoints', () => {
     });
 
     test('finalize is idempotent on retry', async () => {
-        const { body } = await initSession(harness.app);
-        await putChunk(harness.app, body.uploadId, 0, ZIP_BYTES);
-        const first = await request(harness.app)
+        const { body } = await initSession(harness.server);
+        await putChunk(harness.server, body.uploadId, 0, ZIP_BYTES);
+        const first = await request(harness.server)
             .post(`/api/users/restore-backup/uploads/${body.uploadId}/finalize`)
             .send({});
-        const second = await request(harness.app)
+        const second = await request(harness.server)
             .post(`/api/users/restore-backup/uploads/${body.uploadId}/finalize`)
             .send({});
         expect(first.status).toBe(200);
@@ -148,22 +148,22 @@ describe('restore upload session endpoints', () => {
     });
 
     test('delete removes the session and later access 404s', async () => {
-        const { body } = await initSession(harness.app);
-        const del = await request(harness.app)
+        const { body } = await initSession(harness.server);
+        const del = await request(harness.server)
             .delete(`/api/users/restore-backup/uploads/${body.uploadId}`)
             .send({});
         expect(del.status).toBe(204);
-        const after = await putChunk(harness.app, body.uploadId, 0, Buffer.from('x'));
+        const after = await putChunk(harness.server, body.uploadId, 0, Buffer.from('x'));
         expect(after.status).toBe(404);
     });
 
     test('non-admin cannot touch another user session', async () => {
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/users/restore-backup/uploads')
             .send({ handle: 'other', fileName: 'backup.zip', size: 4 });
         expect(res.status).toBe(200); // admin requester may create for other
         const { uploadId } = res.body;
-        const chunk = await request(harness.app)
+        const chunk = await request(harness.server)
             .put(`/api/users/restore-backup/uploads/${uploadId}/chunks/0`)
             .set('x-test-nonadmin', '1')
             .set('Content-Type', 'application/octet-stream')

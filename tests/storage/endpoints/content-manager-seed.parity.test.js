@@ -81,6 +81,16 @@ describe.each(ENDPOINT_HARNESSES)('content-manager seedContentForUser on $name',
         expect(names).toContain('seed-openai');
     });
 
+    test('seeding a delimiter document preserves its independent legacy state owner', async () => {
+        const preset = { prompts: [{ name: 'seeded', content: 'COMPLETE_SEEDED_PRESET' }], temperature: 0.3 };
+        const state = { preserved: ['COMPLETE_ORPHAN_STATE'] };
+        await getPresetRepo().setState(harness.handle, 'openai', 'A', 'n', state);
+        fs.writeFileSync(path.join(srcDir, 'A.luker-state.n.json'), JSON.stringify(preset));
+        await seedContentForUser([{ type: 'openai_preset', filename: 'A.luker-state.n.json', folder: srcDir }], harness.dirs, ['openai_preset']);
+        expect(await getPresetRepo().listWithDocs(harness.handle, 'openai')).toContainEqual({ name: 'A.luker-state.n', doc: preset });
+        expect(await getPresetRepo().getState(harness.handle, 'openai', 'A', 'n')).toEqual(state);
+    });
+
     test('REGRESSION: force-reseed does not clobber a user-edited Repo doc', async () => {
         // The bug guarded here: contentLog gates the common case, but
         // forceCategories (e.g. /api/users/reset-step2) bypasses contentLog

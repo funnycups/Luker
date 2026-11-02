@@ -363,6 +363,40 @@ describe('snapshotLiveToShadow', () => {
         expect(fs.existsSync(path.join(paths.workdir, 'luker-storage.sqlite'))).toBe(false);
     });
 
+    test.each(['directory', 'intermediate', 'file'])('refuses a linked %s category root before snapshot publication', async kind => {
+        fs.writeFileSync(path.join(liveRoot, 'characters/safe.png'), 'SAFE');
+        const args = { userRoot, peerId: 'p', directories: fakeDirsAt(liveRoot), enabledCategoryIds: ['characters'] };
+        const before = await snapshotLiveToShadow(args);
+        const paths = await ensureShadowRepo({ userRoot, peerId: 'p' });
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-snapshot-outside-'));
+        try {
+            fs.writeFileSync(path.join(outside, 'private.png'), 'PRIVATE_OUTSIDE_BYTES');
+            if (kind === 'file') {
+                fs.symlinkSync(path.join(outside, 'private.png'), path.join(liveRoot, 'settings.json'));
+                args.enabledCategoryIds = ['settings'];
+            } else if (kind === 'intermediate') {
+                fs.mkdirSync(path.join(outside, 'characters'));
+                fs.writeFileSync(path.join(outside, 'characters/private.png'), 'PRIVATE_NESTED_BYTES');
+                fs.symlinkSync(outside, path.join(liveRoot, 'linked'));
+                args.directories.characters = path.join(liveRoot, 'linked/characters');
+            } else {
+                fs.unlinkSync(path.join(liveRoot, 'characters/safe.png'));
+                fs.rmdirSync(path.join(liveRoot, 'characters'));
+                fs.symlinkSync(outside, path.join(liveRoot, 'characters'));
+            }
+            const entries = fs.readdirSync(outside, { recursive: true }).sort();
+            await expect(snapshotLiveToShadow(args)).rejects.toMatchObject({ code: 'SYNC_UNSAFE_LIVE_PATH' });
+            expect(await git.resolveRef({ fs, gitdir: paths.gitDir, ref: 'HEAD' })).toBe(before.oid);
+            expect(await git.listFiles({ fs, dir: paths.workdir, gitdir: paths.gitDir, ref: before.oid })).toEqual(['characters/safe.png']);
+            expect(fs.readdirSync(outside, { recursive: true }).sort()).toEqual(entries);
+            expect(fs.readFileSync(path.join(outside, 'private.png'), 'utf8')).toBe('PRIVATE_OUTSIDE_BYTES');
+            const contents = Object.fromEntries(entries.filter(entry => fs.statSync(path.join(outside, entry)).isFile()).map(entry => [entry, fs.readFileSync(path.join(outside, entry), 'utf8')]));
+            expect(contents).toEqual(kind === 'intermediate'
+                ? { 'private.png': 'PRIVATE_OUTSIDE_BYTES', 'characters/private.png': 'PRIVATE_NESTED_BYTES' }
+                : { 'private.png': 'PRIVATE_OUTSIDE_BYTES' });
+        } finally { fs.rmSync(outside, { recursive: true }); }
+    });
+
     test('skips symlinks in the live tree', async () => {
         // Symlinks are not part of supported user data. The walker
         // warns and skips them; both the staged index AND the workdir must be

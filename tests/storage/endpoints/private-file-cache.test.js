@@ -39,7 +39,7 @@ describe.each(ENDPOINT_HARNESSES)('private file reads on $name', ({ mode }) => {
         const filePath = path.join(charDir, 'index.js');
         fs.writeFileSync(filePath, 'export const value = 1;\n');
 
-        const first = await request(harness.app)
+        const first = await request(harness.server)
             .get('/api/card-app/Alice/index.js')
             .expect(200);
         assert.equal(first.text, 'export const value = 1;\n');
@@ -48,13 +48,13 @@ describe.each(ENDPOINT_HARNESSES)('private file reads on $name', ({ mode }) => {
         assert.equal(first.headers.vary, 'Cookie');
         assert.ok(first.headers.etag);
 
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/card-app/Alice/index.js')
             .set('If-None-Match', first.headers.etag)
             .expect(304);
 
         fs.writeFileSync(filePath, 'export const value = 2;\n');
-        const changed = await request(harness.app)
+        const changed = await request(harness.server)
             .get('/api/card-app/Alice/index.js')
             .expect(200);
         assert.equal(changed.text, 'export const value = 2;\n');
@@ -68,7 +68,7 @@ describe.each(ENDPOINT_HARNESSES)('private file reads on $name', ({ mode }) => {
         fs.writeFileSync(path.join(skillDir, 'notes.txt'), 'hello');
         fs.writeFileSync(path.join(skillDir, 'asset.bin'), Buffer.from([0, 1, 2, 3]));
 
-        const listing = await request(harness.app)
+        const listing = await request(harness.server)
             .get('/api/skills/global/demo/files')
             .expect(200);
         assert.deepEqual(listing.body.files.map(file => file.path), ['SKILL.md', 'asset.bin', 'notes.txt']);

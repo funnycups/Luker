@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import git from 'isomorphic-git';
+import { atomicFs } from './pipeline/atomic-fs.js';
 
 /**
  * @typedef {Object} ConflictEntry
@@ -22,7 +23,7 @@ import git from 'isomorphic-git';
  */
 export async function attemptMerge({ dir, gitdir, ours, theirs, author }) {
     try {
-        const result = await git.merge({ fs, dir, gitdir, ours, theirs, author, abortOnConflict: false });
+        const result = await git.merge({ fs: atomicFs, dir, gitdir, ours, theirs, author, abortOnConflict: false });
         return { success: true, conflicts: [], mergeOid: result.oid };
     } catch (e) {
         if (e.code === 'MergeConflictError') {
@@ -69,17 +70,17 @@ export async function attemptMerge({ dir, gitdir, ours, theirs, author }) {
  * false and never touched files when it threw.
  */
 async function mergeIdenticalTreesNoAncestor({ dir, gitdir, ours, theirs, author }) {
-    const oursOid = await git.resolveRef({ fs, dir, gitdir, ref: ours });
-    const theirsOid = await git.resolveRef({ fs, dir, gitdir, ref: theirs });
-    const oursCommit = await git.readCommit({ fs, dir, gitdir, oid: oursOid });
+    const oursOid = await git.resolveRef({ fs: atomicFs, dir, gitdir, ref: ours });
+    const theirsOid = await git.resolveRef({ fs: atomicFs, dir, gitdir, ref: theirs });
+    const oursCommit = await git.readCommit({ fs: atomicFs, dir, gitdir, oid: oursOid });
     const mergeOid = await git.commit({
-        fs, dir, gitdir,
+        fs: atomicFs, dir, gitdir,
         message: `merge ${theirs} into ${ours} (identical trees, no common ancestor)`,
         author,
         parent: [oursOid, theirsOid],
         tree: oursCommit.commit.tree,
     });
-    await git.writeRef({ fs, dir, gitdir, ref: `refs/heads/${ours}`, value: mergeOid, force: true });
+    await git.writeRef({ fs: atomicFs, dir, gitdir, ref: `refs/heads/${ours}`, value: mergeOid, force: true });
     return mergeOid;
 }
 
@@ -94,8 +95,8 @@ async function mergeIdenticalTreesNoAncestor({ dir, gitdir, ours, theirs, author
  * (UI) handles both paths uniformly.
  */
 async function collectNoCommonAncestorConflicts({ dir, gitdir, ours, theirs }) {
-    const oursOid = await git.resolveRef({ fs, dir, gitdir, ref: ours });
-    const theirsOid = await git.resolveRef({ fs, dir, gitdir, ref: theirs });
+    const oursOid = await git.resolveRef({ fs: atomicFs, dir, gitdir, ref: ours });
+    const theirsOid = await git.resolveRef({ fs: atomicFs, dir, gitdir, ref: theirs });
     const oursFiles = await listFilesAtTree(dir, gitdir, oursOid);
     const theirsFiles = await listFilesAtTree(dir, gitdir, theirsOid);
     const all = new Set([...Object.keys(oursFiles), ...Object.keys(theirsFiles)]);
@@ -117,13 +118,13 @@ async function collectNoCommonAncestorConflicts({ dir, gitdir, ours, theirs }) {
 
 async function listFilesAtTree(dir, gitdir, commitOid) {
     const out = {};
-    const commit = await git.readCommit({ fs, dir, gitdir, oid: commitOid });
+    const commit = await git.readCommit({ fs: atomicFs, dir, gitdir, oid: commitOid });
     await walkTreeForFiles(dir, gitdir, commit.commit.tree, '', out);
     return out;
 }
 
 async function walkTreeForFiles(dir, gitdir, treeOid, prefix, out) {
-    const tree = await git.readTree({ fs, dir, gitdir, oid: treeOid });
+    const tree = await git.readTree({ fs: atomicFs, dir, gitdir, oid: treeOid });
     for (const entry of tree.tree) {
         const fp = prefix ? `${prefix}/${entry.path}` : entry.path;
         if (entry.type === 'tree') {
@@ -135,8 +136,8 @@ async function walkTreeForFiles(dir, gitdir, treeOid, prefix, out) {
 }
 
 async function collectConflicts({ dir, gitdir, ours, theirs, data }) {
-    const oursOid = await git.resolveRef({ fs, dir, gitdir, ref: ours });
-    const theirsOid = await git.resolveRef({ fs, dir, gitdir, ref: theirs });
+    const oursOid = await git.resolveRef({ fs: atomicFs, dir, gitdir, ref: ours });
+    const theirsOid = await git.resolveRef({ fs: atomicFs, dir, gitdir, ref: theirs });
 
     const out = [];
     for (const fp of data.bothModified ?? []) {
@@ -198,11 +199,11 @@ async function collectConflicts({ dir, gitdir, ours, theirs, data }) {
  * @returns {Promise<string>} new merge commit oid
  */
 export async function applyResolutions({ dir, gitdir, ours, theirs, author, picks }) {
-    const oursOid = await git.resolveRef({ fs, dir, gitdir, ref: ours });
-    const theirsOid = await git.resolveRef({ fs, dir, gitdir, ref: theirs });
+    const oursOid = await git.resolveRef({ fs: atomicFs, dir, gitdir, ref: ours });
+    const theirsOid = await git.resolveRef({ fs: atomicFs, dir, gitdir, ref: theirs });
 
-    const oursFiles = await git.listFiles({ fs, dir, gitdir, ref: oursOid });
-    const theirsFiles = await git.listFiles({ fs, dir, gitdir, ref: theirsOid });
+    const oursFiles = await git.listFiles({ fs: atomicFs, dir, gitdir, ref: oursOid });
+    const theirsFiles = await git.listFiles({ fs: atomicFs, dir, gitdir, ref: theirsOid });
     const allFiles = new Set([...oursFiles, ...theirsFiles]);
     const pickedPaths = new Set(Object.keys(picks));
 
@@ -233,25 +234,25 @@ export async function applyResolutions({ dir, gitdir, ours, theirs, author, pick
         const abs = path.join(dir, filepath);
         if (blob === null) {
             if (fs.existsSync(abs)) fs.unlinkSync(abs);
-            await git.remove({ fs, dir, gitdir, filepath });
+            await git.remove({ fs: atomicFs, dir, gitdir, filepath });
         } else {
             await writeAndStage(dir, gitdir, filepath, blob.blob);
         }
     }
 
     const mergeOid = await git.commit({
-        fs, dir, gitdir,
+        fs: atomicFs, dir, gitdir,
         message: `merge ${theirs} into ${ours} (manual resolution)`,
         author,
         parent: [oursOid, theirsOid],
     });
-    await git.writeRef({ fs, dir, gitdir, ref: `refs/heads/${ours}`, value: mergeOid, force: true });
+    await git.writeRef({ fs: atomicFs, dir, gitdir, ref: `refs/heads/${ours}`, value: mergeOid, force: true });
     return mergeOid;
 }
 
 async function blobIfPresent(dir, gitdir, ref, filepath) {
     try {
-        return await git.readBlob({ fs, dir, gitdir, oid: ref, filepath });
+        return await git.readBlob({ fs: atomicFs, dir, gitdir, oid: ref, filepath });
     } catch (e) {
         if (e.code === 'NotFoundError') return null;
         throw e;
@@ -262,5 +263,5 @@ async function writeAndStage(dir, gitdir, filepath, blobBytes) {
     const abs = path.join(dir, filepath);
     await fs.promises.mkdir(path.dirname(abs), { recursive: true });
     await fs.promises.writeFile(abs, Buffer.from(blobBytes));
-    await git.add({ fs, dir, gitdir, filepath });
+    await git.add({ fs: atomicFs, dir, gitdir, filepath });
 }

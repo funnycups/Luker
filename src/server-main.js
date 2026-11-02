@@ -155,7 +155,8 @@ import {
 // Routers
 import { router as usersPublicRouter } from './endpoints/users-public.js';
 import { router as syncRouter } from './endpoints/sync.js';
-import { syncInProgressMiddleware } from './sync/in-progress-gate.js';
+import { syncWriteGateMiddleware } from './sync/in-progress-gate.js';
+import { startSyncService } from './sync/sync-service.js';
 import { router as storageHealthRouter } from './endpoints/storage-health.js';
 import { createRendererCaptureRouter } from './endpoints/renderer-capture.js';
 import { init as statsInit, onExit as statsOnExit } from './endpoints/stats.js';
@@ -324,7 +325,7 @@ if (!cliArgs.disableCsrf) {
             // know the initiator's session-bound token.
             //
             // Limited to `/api/sync/v1/session/*` deliberately: the admin
-            // routes (`/peers`, `/pair/start`, `/pair/accept`, etc.) are
+            // routes (`/backends`, `/pair/start`, `/pair/accept`, etc.) are
             // browser-driven from the user's own page and remain CSRF-
             // gated.
             if (/^\/api\/sync\/v1\/session\//.test(req.path)) return true;
@@ -496,25 +497,18 @@ app.use('/api/storage', storageHealthRouter);
 
 // LAN-sync protocol. Mounted alongside the public router so peer-to-peer
 // session traffic (`/session/*`, bearer-token auth) is reachable without a
-// logged-in browser cookie. Basic auth still applies to `/health` via the
-// upstream middleware; the `isBasicAuthExemptRequest` patch lets the
-// `/session/*` paths through on their own token.
+// logged-in browser cookie. `isBasicAuthExemptRequest` lets `/health` and
+// the `/session/*` paths through basic auth; session routes check their
+// own token and offers their pairing credential.
 app.use('/api/sync/v1', syncRouter);
 
 // Everything below this line requires authentication
 app.use(requireLoginMiddleware);
 app.use(enforceUserQuotaMiddleware);
 
-// LAN-sync write-gate (spec §4.4). Returns HTTP 409 from user-initiated
-// save endpoints (`/api/chats/save`, `/api/settings/save`, etc.) while a
-// sync is mid-flight for the same user. Mounted AFTER the sync router
-// so /api/sync/v1/* is unaffected, and AFTER requireLoginMiddleware so
-// the middleware can read `request.user.profile.handle`.
-app.use(syncInProgressMiddleware());
-
 // Body parsing runs AFTER every access control above (Basic Auth, IP
 // whitelist, host validation, cookie session, CSRF, account login,
-// storage quota, the LAN sync write-gate) so an unauthorized request is
+// storage quota) so an unauthorized request is
 // rejected before a single body byte is buffered. Authenticated users
 // legitimately post large payloads (character imports, chat exports,
 // settings saves), so the generous limit applies only inside the trust
@@ -633,6 +627,15 @@ app.use(multer({
     limits: { fieldSize: 500 * 1024 * 1024 },
 }).single('avatar'));
 app.use(multerMonkeyPatch);
+
+// Sync write gate. Gated write requests hold a per-user reader slot; a sync
+// snapshot or reconcile takes the writer side and new writes wait until it
+// releases. Mounted after the sync router so /api/sync/v1/* is unaffected,
+// after requireLoginMiddleware so request.user is populated, and after the
+// multipart parser so an upload streams into the uploads directory before
+// its request takes a slot. Every router that writes synced data is mounted
+// below this line by setupPrivateEndpoints.
+app.use(syncWriteGateMiddleware());
 
 app.get('/version', async function (_, response) {
     const data = await getVersion();
@@ -797,6 +800,8 @@ async function preSetupTasks() {
  * @returns {Promise<void>}
  */
 async function postSetupTasks(result) {
+    startSyncService().catch(error => console.error('[sync] scheduler start failed', error));
+
     // Mount the WS delivery layer. Every /api/ws-delivery upgrade must
     // carry a single-use ticket via `Sec-WebSocket-Protocol:
     // luker-ws-ticket.<ticket>`. Tickets are minted on

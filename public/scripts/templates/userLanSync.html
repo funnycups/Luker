@@ -1,8 +1,10 @@
 <div class="userLanSync flex-container flexFlowColumn flexNoGap">
-    <h3 class="marginBot5" data-i18n="LAN Sync">LAN Sync</h3>
-    <div class="menu_button_note marginBot10" data-i18n="Sync two Luker devices on the same network. Only changed data crosses the wire; full re-uploads aren't needed.">
-        Sync two Luker devices on the same network. Only changed data crosses the wire; full re-uploads aren't needed.
+    <h3 class="marginBot5" data-i18n="Sync">Sync</h3>
+    <div class="menu_button_note marginBot10" data-i18n="Sync through LAN devices or encrypted S3 storage.">
+        Sync through LAN devices or encrypted S3 storage.
     </div>
+    <button type="button" class="syncAddS3Button menu_button" data-i18n="Add S3 backend">Add S3 backend</button>
+    <button type="button" class="syncReviewIssuesButton menu_button displayNone" data-i18n="Review sync issues" hidden>Review sync issues</button>
 
     <div class="lanSyncStatusBanner displayNone marginBot10"></div>
 
@@ -14,7 +16,7 @@
     <div class="lanSyncTabs flex-container flexGap10 marginBot10">
         <div class="lanSyncTab menu_button menu_button_icon lanSyncTabPeers" data-tab="peers">
             <i class="fa-fw fa-solid fa-list"></i>
-            <span data-i18n="My devices">My devices</span>
+            <span data-i18n="Sync backends">Sync backends</span>
         </div>
         <div class="lanSyncTab menu_button menu_button_icon lanSyncTabPairNew" data-tab="pair-new">
             <i class="fa-fw fa-solid fa-qrcode"></i>
@@ -27,11 +29,33 @@
     </div>
 
     <div class="lanSyncTabPanel lanSyncPanelPeers">
-        <h4 class="marginBot5" data-i18n="Paired devices">Paired devices</h4>
-        <div class="lanSyncPeersEmpty menu_button_note marginBot10" data-i18n="No paired devices yet. Use the tabs above to pair this device with another.">
-            No paired devices yet. Use the tabs above to pair this device with another.
+        <h4 class="marginBot5" data-i18n="Sync backends">Sync backends</h4>
+        <div class="lanSyncPeersEmpty menu_button_note marginBot10" data-i18n="No sync backends yet. Pair a LAN device or add S3 storage.">
+            No sync backends yet. Pair a LAN device or add S3 storage.
         </div>
         <div class="lanSyncPeersList flex-container flexFlowColumn flexGap10"></div>
+        <label><span data-i18n="This device's label">This device's label</span><input class="text_pole syncDeviceLabel" autocomplete="off" data-i18n="[placeholder]Use host or profile name" placeholder="Use host or profile name"></label>
+        <div class="syncDeviceLabelResolved menu_button_note" data-i18n="Device labels apply to future edits only. Leave blank to use the host or profile name.">Device labels apply to future edits only. Leave blank to use the host or profile name.</div>
+        <button type="button" class="syncSaveDeviceLabelButton menu_button" data-i18n="Save device label">Save device label</button>
+
+        <div class="lanSyncSchedule flex-container flexFlowColumn flexNoGap">
+            <hr class="sysHR marginTopBot10">
+            <h4 class="marginBot5" data-i18n="Sync schedule">Sync schedule</h4>
+            <label class="checkbox_label flexFlowColumn flexNoGap marginBot10">
+                <span data-i18n="Sync this long after the last edit, in seconds">Sync this long after the last edit, in seconds</span>
+                <input type="number" step="any" class="text_pole lanSyncIdleSeconds">
+            </label>
+            <label class="checkbox_label flexFlowColumn flexNoGap marginBot10">
+                <span data-i18n="Check other devices for changes every, in seconds">Check other devices for changes every, in seconds</span>
+                <input type="number" step="any" class="text_pole lanSyncPollSeconds">
+            </label>
+            <div class="backupActionRow flex-container flexGap10 marginBot10">
+                <div class="lanSyncSaveScheduleButton menu_button menu_button_icon">
+                    <i class="fa-fw fa-solid fa-floppy-disk"></i>
+                    <span data-i18n="Save schedule">Save schedule</span>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="lanSyncTabPanel lanSyncPanelPairNew displayNone">
@@ -80,8 +104,8 @@
                     <span data-i18n="Generate another">Generate another</span>
                 </div>
             </div>
-            <div class="menu_button_note" data-i18n="The other device must enter THIS device's credentials when pairing if you have basic auth enabled. They are sent over LAN only, never stored.">
-                The other device must enter THIS device's credentials when pairing if you have basic auth enabled. They are sent over LAN only, never stored.
+            <div class="menu_button_note" data-i18n="Basic-auth credentials entered on the other device are saved on its server after pairing for future syncs. Use Clear credentials on that device's backend row to remove them.">
+                Basic-auth credentials entered on the other device are saved on its server after pairing for future syncs. Use Clear credentials on that device's backend row to remove them.
             </div>
         </div>
     </div>
@@ -122,8 +146,8 @@
         <div class="lanSyncAcceptCategoryGrid flex-container flexGap10 flexWrap marginBot10"></div>
 
         <div class="lanSyncAcceptAuthFields">
-            <div class="menu_button_note marginBot5" data-i18n="If the other device has basic authentication enabled, enter the credentials it expects. Otherwise leave blank.">
-                If the other device has basic authentication enabled, enter the credentials it expects. Otherwise leave blank.
+            <div class="menu_button_note marginBot5" data-i18n="Enter basic-auth credentials only if the other device requires them. After pairing, they are saved on this server for future syncs. Use Clear credentials on the backend row to remove them.">
+                Enter basic-auth credentials only if the other device requires them. After pairing, they are saved on this server for future syncs. Use Clear credentials on the backend row to remove them.
             </div>
             <label class="checkbox_label flexFlowColumn flexNoGap marginBot10">
                 <span data-i18n="Basic auth username (optional)">Basic auth username (optional)</span>
@@ -139,25 +163,6 @@
             <div class="lanSyncAcceptButton menu_button menu_button_icon">
                 <i class="fa-fw fa-solid fa-link"></i>
                 <span data-i18n="Pair and sync">Pair and sync</span>
-            </div>
-        </div>
-    </div>
-
-    <div class="lanSyncConflictPanel displayNone">
-        <hr class="sysHR marginTopBot10">
-        <h4 class="marginBot5" data-i18n="Resolve conflicts">Resolve conflicts</h4>
-        <div class="menu_button_note marginBot10" data-i18n="The same file was edited on both devices. Pick which version to keep for each file. There's no line-by-line merge.">
-            The same file was edited on both devices. Pick which version to keep for each file. There's no line-by-line merge.
-        </div>
-        <div class="lanSyncConflictList flex-container flexFlowColumn flexGap10 marginBot10"></div>
-        <div class="backupActionRow flex-container flexGap10 marginBot10">
-            <div class="lanSyncApplyResolutionsButton menu_button menu_button_icon">
-                <i class="fa-fw fa-solid fa-check"></i>
-                <span data-i18n="Apply resolutions">Apply resolutions</span>
-            </div>
-            <div class="lanSyncCancelResolutionsButton menu_button menu_button_icon">
-                <i class="fa-fw fa-solid fa-xmark"></i>
-                <span data-i18n="Cancel">Cancel</span>
             </div>
         </div>
     </div>

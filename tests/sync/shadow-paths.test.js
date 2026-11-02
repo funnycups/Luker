@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import git from 'isomorphic-git';
-import { getShadowPaths, ensureShadowRepo } from '../../src/sync/shadow.js';
+import { getShadowPaths, ensureShadowRepo, snapshotLiveToShadow } from '../../src/sync/shadow.js';
 
 describe('shadow repo paths and init', () => {
     let userRoot;
@@ -49,5 +49,18 @@ describe('shadow repo paths and init', () => {
 
         const userName = await git.getConfig({ fs, dir: p.workdir, gitdir: p.gitDir, path: 'user.name' });
         expect(userName).toBe('SENTINEL');
+    });
+
+    test.each(['workdir', 'gitDir', '.sync'])('shadow initialization refuses a legacy %s symlink before writing', async name => {
+        const outside = path.join(userRoot, 'outside');
+        fs.mkdirSync(outside);
+        const paths = getShadowPaths({ userRoot, peerId: 'p' });
+        const target = name === '.sync' ? path.join(userRoot, '.sync') : paths[name];
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.symlinkSync(outside, target);
+        await expect(ensureShadowRepo({ userRoot, peerId: 'p' })).rejects.toMatchObject({ code: 'UNSAFE_WORKDIR_PATH' });
+        await expect(snapshotLiveToShadow({ userRoot, peerId: 'p', directories: { root: userRoot }, enabledCategoryIds: [], deviceLabel: 'Must not commit' })).rejects.toMatchObject({ code: 'UNSAFE_WORKDIR_PATH' });
+        expect(fs.readdirSync(outside)).toEqual([]);
+        expect(fs.existsSync(path.join(paths.gitDir, 'objects'))).toBe(false);
     });
 });

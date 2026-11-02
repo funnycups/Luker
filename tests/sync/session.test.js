@@ -1,11 +1,13 @@
-import { describe, test, expect } from '@jest/globals';
+import { describe, test, expect, jest } from '@jest/globals';
 import os from 'node:os';
 import {
     createSyncSession,
     consumeSyncSession,
     closeSyncSession,
+    closeSyncSessionsFor,
     createPairingCode,
     consumePairingCode,
+    restorePairingCode,
     SYNC_SESSION_TTL_MS,
     PAIR_CODE_TTL_MS,
 } from '../../src/sync/session.js';
@@ -46,6 +48,36 @@ describe('sync session tokens', () => {
     test('createSyncSession refuses payload missing userRoot', () => {
         expect(() => createSyncSession({ handle: 'alice', peerId: 'alice@phone' }))
             .toThrow(/userRoot/);
+    });
+
+    test('a session used within the TTL stays valid past its first expiry', () => {
+        const start = 1_000_000;
+        const clock = jest.spyOn(Date, 'now').mockReturnValue(start);
+        try {
+            const { token } = createSyncSession({ handle: 'u', peerId: 'u@aa', userRoot: '/tmp/u' });
+            clock.mockReturnValue(start + SYNC_SESSION_TTL_MS - 1);
+            expect(consumeSyncSession(token)).not.toBeNull();
+            clock.mockReturnValue(start + SYNC_SESSION_TTL_MS + 10);
+            expect(consumeSyncSession(token)).not.toBeNull();
+            clock.mockReturnValue(start + 3 * SYNC_SESSION_TTL_MS);
+            expect(consumeSyncSession(token)).toBeNull();
+        } finally {
+            clock.mockRestore();
+        }
+    });
+
+    test('closeSyncSessionsFor ends only the sessions of that backend', () => {
+        const mine = createSyncSession({ handle: 'u', peerId: 'u@aa', userRoot: '/tmp/u' }).token;
+        const other = createSyncSession({ handle: 'u', peerId: 'u@bb', userRoot: '/tmp/u' }).token;
+        closeSyncSessionsFor({ userRoot: '/tmp/u', peerId: 'u@aa' });
+        expect(consumeSyncSession(mine)).toBeNull();
+        expect(consumeSyncSession(other)).not.toBeNull();
+    });
+
+    test('closeSyncSessionsFor matches the resolved user root', () => {
+        const token = createSyncSession({ handle: 'u', peerId: 'u@cc', userRoot: '/tmp/u/' }).token;
+        closeSyncSessionsFor({ userRoot: '/tmp/x/../u', peerId: 'u@cc' });
+        expect(consumeSyncSession(token)).toBeNull();
     });
 });
 
@@ -94,5 +126,27 @@ describe('one-time pairing codes', () => {
 
     test('pairing codes live no longer than the documented link lifetime', () => {
         expect(PAIR_CODE_TTL_MS).toBe(10 * 60 * 1000);
+    });
+
+    test('a restored code is usable once more but only within its original lifetime', () => {
+        const start = 5_000_000;
+        const clock = jest.spyOn(Date, 'now').mockReturnValue(start);
+        try {
+            const binding = { handle: 'alice', peerId: 'alice@phone' };
+            const code = createPairingCode(binding);
+            const payload = consumePairingCode(code, binding);
+            restorePairingCode(code, payload);
+            expect(consumePairingCode(code, binding)).not.toBeNull();
+            expect(consumePairingCode(code, binding)).toBeNull();
+
+            const late = createPairingCode(binding);
+            const latePayload = consumePairingCode(late, binding);
+            clock.mockReturnValue(start + PAIR_CODE_TTL_MS - 1);
+            restorePairingCode(late, latePayload);
+            clock.mockReturnValue(start + PAIR_CODE_TTL_MS + 1);
+            expect(consumePairingCode(late, binding)).toBeNull();
+        } finally {
+            clock.mockRestore();
+        }
     });
 });

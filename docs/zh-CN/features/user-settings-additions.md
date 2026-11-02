@@ -36,10 +36,9 @@ Luker 保留了 SillyTavern 的**用户设置**面板原貌——熟悉的设置
 
   然后要么**下载备份 ZIP**，要么用**选择 ZIP** + **恢复备份**还原，并二选一恢复模式：**增量更新**写入备份中的文件、其余文件原样保留；**覆盖更新**则先清空所选类别再还原。如果 ZIP 来自另一套存储引擎的服务器，Luker 会识别出跨模式恢复，并要求你提供一个临时数据库连接，供它在恢复过程中中转。
 
-  同一个弹窗还提供：
+- **局域网迁移** —— 一次性迁移到全新设备：在旧设备上**创建迁移链接**，再到新设备上粘贴并点击**从链接迁移**。迁移链接有效期很短，且仅可使用一次。所选的恢复模式同样适用于从迁移链接导入。长期使用不同设备时，使用[同步](/zh-CN/improvements/sync)，通过[局域网配对](/zh-CN/improvements/lan-sync)或[加密 S3 存储](/zh-CN/improvements/s3-sync)交换数据。
 
-  - **打开局域网同步** —— 打开[局域网同步](/zh-CN/improvements/lan-sync)，它是面向长期并用两台设备的双向增量传输方式。
-  - **局域网迁移** —— 一次性迁移到全新设备：在旧设备上**创建迁移链接**，再到新设备上粘贴并点击**从链接迁移**。迁移链接有效期很短，且仅可使用一次。所选的恢复模式同样适用于从迁移链接导入。
+- **同步** —— 打开**用户设置 → 帐户 → 备份与恢复 → 同步 → 打开同步**。[同步概览](/zh-CN/improvements/sync)介绍自动同步、类别、待处理选择、聊天分支与撤销，局域网与 S3 指南说明配置方式。
 
 - **存储审查**与**浏览器存储** —— 从两个视角查看数据的实际位置。[存储审查](/zh-CN/features/storage-inspector)按类别拆解服务端数据目录，并配有配额条；敏感内容仅显示体积，且不提供任何删除操作。**浏览器存储**则检查当前浏览器的 `localStorage`、`sessionStorage`、IndexedDB 和 Cache Storage，并且可以删除单个键、对象仓库、数据库和缓存。
 
@@ -67,5 +66,5 @@ Luker 保留了 SillyTavern 的**用户设置**面板原貌——熟悉的设置
 - **离开页面确认** —— 关闭或刷新页面前给出提醒。**仅在有风险时**（默认）会在生成进行中、存在未提交的消息编辑、或输入框中仍有未发送文字时提醒；**从未**和**永远**则覆盖这一判断。
 
 ::: tip 相关页面
-[日志系统](/zh-CN/features/logging) · [请求检查器](/zh-CN/improvements/request-inspector) · [存储审查](/zh-CN/features/storage-inspector) · [局域网同步](/zh-CN/improvements/lan-sync) · [其他功能](/zh-CN/features/other-features)
+[日志系统](/zh-CN/features/logging) · [请求检查器](/zh-CN/improvements/request-inspector) · [存储审查](/zh-CN/features/storage-inspector) · [同步](/zh-CN/improvements/sync) · [局域网同步](/zh-CN/improvements/lan-sync) · [S3 同步](/zh-CN/improvements/s3-sync) · [其他功能](/zh-CN/features/other-features)
 :::

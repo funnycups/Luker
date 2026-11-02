@@ -446,7 +446,7 @@ export async function refreshRecentChatIndexEntry(request, filePath, overrides =
     const name = parsed.name;
     const info = await getChatRepo().getInfo(handle, charDir, name, {
         isGroup,
-        groupId: isGroup ? (descriptor.group || name) : undefined,
+        groupId: isGroup ? name : undefined,
     });
 
     if (!info) {
@@ -1371,34 +1371,6 @@ function getAllChatStateSidecarPaths(chatFilePath) {
         .map(entry => entry.name)
         .filter(fileName => fileName.startsWith(prefix) && fileName.endsWith(CHAT_STATE_FILE_SUFFIX))
         .map(fileName => path.join(parsed.dir, fileName));
-}
-
-/**
- * Renames all state sidecars from one chat base name to another.
- * @param {string} sourceChatFilePath Source chat file path.
- * @param {string} targetChatFilePath Target chat file path.
- */
-function renameAllChatStateSidecars(sourceChatFilePath, targetChatFilePath) {
-    const sourceParsed = path.parse(sourceChatFilePath);
-    const targetParsed = path.parse(targetChatFilePath);
-    const sourcePrefix = `${sourceParsed.name}${CHAT_STATE_FILE_PREFIX}`;
-    const targetPrefix = `${targetParsed.name}${CHAT_STATE_FILE_PREFIX}`;
-    const sourceFiles = getAllChatStateSidecarPaths(sourceChatFilePath);
-    if (sourceFiles.length === 0) {
-        return;
-    }
-
-    for (const sourceFilePath of sourceFiles) {
-        const sourceName = path.basename(sourceFilePath);
-        const namespaceWithSuffix = sourceName.slice(sourcePrefix.length);
-        const targetName = `${targetPrefix}${namespaceWithSuffix}`;
-        const targetFilePath = path.join(targetParsed.dir, targetName);
-        if (fs.existsSync(targetFilePath)) {
-            throw new Error(`Chat state sidecar rename collision: ${targetFilePath}`);
-        }
-        fs.copyFileSync(sourceFilePath, targetFilePath);
-        fs.unlinkSync(sourceFilePath);
-    }
 }
 
 /**
@@ -3042,14 +3014,14 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         // chats only the (charDir, name) pair matters.
         const repo = getChatRepo();
         const groupId = isGroup ? oldName : undefined;
-        const existing = await repo.get(handle, charDir, oldName, { isGroup, groupId });
-        if (existing == null) {
+        const existing = await repo.exists(handle, charDir, oldName, { isGroup, groupId });
+        if (!existing) {
             console.error(`/rename: chat not found in Repo: charDir=${charDir} name=${oldName} isGroup=${isGroup}`);
             return response.status(400).send({ error: true });
         }
         const newGroupId = isGroup ? newName : undefined;
-        const collision = await repo.get(handle, charDir, newName, { isGroup, groupId: newGroupId });
-        if (collision != null) {
+        const collision = await repo.exists(handle, charDir, newName, { isGroup, groupId: newGroupId });
+        if (collision) {
             console.error(`/rename: destination already exists: charDir=${charDir} name=${newName}`);
             return response.status(400).send({ error: true });
         }
@@ -3065,7 +3037,6 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
             }
             throw err;
         }
-        renameAllChatStateSidecars(pathToOriginalFile, pathToRenamedFile);
         await deleteRecentChatIndexEntry(request, pathToOriginalFile);
         await refreshRecentChatIndexEntry(request, pathToRenamedFile, {
             avatar: isGroup ? '' : String(request.body.avatar_url || ''),
@@ -3729,7 +3700,15 @@ router.post('/group/patch', async function (request, response) {
                 ...(docSeed.header.chat_metadata ?? {}),
                 ...chatMetadata,
             };
-            const patched = applyJsonPatch(docSeed, operations, true, false).newDocument;
+            // The group editor sends message-array-relative pointers, like the
+            // character editor. Keep accepting the older document-relative
+            // /body and /header pointers used by existing API clients.
+            const messagePatch = operations.every(operation => typeof operation?.path === 'string'
+                && (operation.path === '' || /^\/(?:0|[1-9]\d*|-)(?:\/|$)/.test(operation.path)));
+            const patched = messagePatch
+                ? { ...docSeed, body: applyJsonPatch(docSeed.body, buildIdempotentMessagePatchOperations(docSeed.body, operations), true, false).newDocument }
+                : applyJsonPatch(docSeed, operations, true, false).newDocument;
+            if (!Array.isArray(patched.body)) throw new Error('Message patch must produce an array root.');
             const saved = await repo.save(handle, '', id, patched.header, patched.body, existing.integrity,
                 { isGroup: true, groupId: id });
 

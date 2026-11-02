@@ -1,4 +1,72 @@
 {
+    "Group chat ${0} could not be loaded. Reload the page to retry.": "无法加载群聊 ${0}。请重新加载页面后重试。",
+    "Group chat ${0} could not be saved. Check the server connection and retry saving.": "无法保存群聊 ${0}。请检查服务器连接后重试保存。",
+    "Syncing: ${0}": "正在同步：${0}",
+    "Sync needs attention: ${0}": "同步需要处理：${0}",
+    "Sync status unavailable": "无法获得同步状态",
+    "Review sync issues": "检查同步问题",
+    "The bucket could not be found. Check that it exists and that this backend uses the correct endpoint.": "未找到存储桶。请确认存储桶存在且此后端使用正确的端点。",
+    "S3 sync data is missing or invalid. Restore the bucket's sync data before syncing again.": "S3 同步数据缺失或无效。请恢复存储桶中的同步数据后再次同步。",
+    "The S3 data changed during sync. Sync again to receive the latest version.": "同步期间 S3 数据已更改。请再次同步以接收最新版本。",
+    "The S3 provider rejected the request. Check its availability and bucket permissions.": "S3 服务商拒绝了请求。请检查服务状态及存储桶权限。",
+    "The local upload could not be read. Check local storage and sync again.": "无法读取本地上传数据。请检查本地存储后再次同步。",
+    "The S3 connection was closed. Sync again when the backend is available.": "S3 连接已关闭。请等待后端可用后再次同步。",
+    "S3 sync failed (${0}). Check the backend settings and provider availability before syncing again.": "S3 同步失败：${0}。请检查后端设置及服务状态后再次同步。",
+    "No sync backends yet. Pair a LAN device or add S3 storage.": "尚无同步后端。请配对局域网设备或添加 S3 存储。",
+    "Failed to open Sync": "无法打开同步面板",
+    "Sync": "同步",
+    "Open Sync": "打开同步",
+    "Sync through LAN devices or encrypted S3 storage.": "通过局域网设备或加密 S3 存储同步。",
+    "Sync backends": "同步后端",
+    "Add S3 backend": "添加 S3 后端",
+    "Edit sync backend": "编辑同步后端",
+    "Unlock S3 backend": "解锁 S3 后端",
+    "Unlock": "解锁",
+    "Backend label": "后端名称",
+    "S3 endpoint": "S3 端点",
+    "Region": "区域",
+    "Bucket": "存储桶",
+    "Prefix": "前缀",
+    "Use path-style requests": "使用路径样式请求",
+    "Access key ID": "访问密钥 ID",
+    "Secret access key": "秘密访问密钥",
+    "Encryption passphrase": "加密口令",
+    "Leave credentials and passphrase blank to keep the stored values. Bucket and prefix cannot be changed; remove and add the backend instead.": "凭据与口令留空即可保留已存储的值。存储桶与前缀不能更改；请移除后重新添加后端。",
+    "This device's label": "当前设备名称",
+    "Use host or profile name": "使用主机或个人资料名称",
+    "Device labels apply to future edits only. Leave blank to use the host or profile name.": "设备名称仅影响后续编辑。留空时使用主机或个人资料名称。",
+    "Save device label": "保存设备名称",
+    "Device label saved.": "已保存设备名称。",
+    "Name for future edits: ${0}": "后续编辑使用的名称：${0}",
+    "Enter a label for this backend.": "请输入后端名称。",
+    "The passphrase does not match this bucket and prefix.": "口令与当前存储桶及前缀不匹配。",
+    "This backend's key identity is invalid or changed. Remove it and add it again. Unlock cannot change its identity.": "此后端的密钥标识无效或已更改。请移除后重新添加。解锁不能更改其标识。",
+    "Unlock this backend with its passphrase.": "请使用口令解锁此后端。",
+    "Check the S3 endpoint, region, bucket, prefix and credentials.": "请检查 S3 端点、区域、存储桶、前缀及凭据。",
+    "The encryption metadata is invalid.": "加密元数据无效。",
+    "The encryption metadata is missing. Restore it before syncing.": "缺少加密元数据。请恢复后再同步。",
+    "This encryption format is not supported. Update Luker.": "不支持此加密格式。请更新 Luker。",
+    "The settings changed while saving. Open the form again.": "保存期间设置已更改。请重新打开表单。",
+    "This provider does not support the conditional writes sync requires.": "此服务商不支持同步所需的条件写入。",
+    "S3 authentication failed. Check the credentials and bucket permissions.": "S3 身份验证失败。请检查凭据及存储桶权限。",
+    "The bucket could not be found.": "未找到存储桶。",
+    "The S3 endpoint could not be reached.": "无法连接 S3 端点。",
+    "Enter a valid device label.": "请输入有效的设备名称。",
+    "Undo could not update the local files. The undo point was kept.": "撤销未能更新本地文件。已保留撤销记录。",
+    "Sync failed: ${0}": "同步失败：${0}",
+    "Remove ${0}? This removes its local sync configuration and history. The bucket and other devices are unaffected.": "移除 ${0}？此操作将删除其本地同步配置及历史，不影响存储桶和其他设备。",
+    "Pending records could not be read. This choice is unknown until the backend recovers.": "无法读取待处理记录。后端恢复前无法确定此选项的状态。",
+    "The other device cannot connect back to this device. Enable LAN listening and check the firewall, then use the same pairing link again.": "另一台设备无法回连当前设备。请启用局域网监听并检查防火墙，然后再次使用原配对链接。",
+    "Outbound sync to private addresses is disabled for this account. Ask an administrator to enable it.": "当前账户未获准连接私有地址进行同步。请联系管理员启用权限。",
+    "Some pending sync records could not be read.": "无法读取部分待处理同步记录。",
+    "Could not load sync categories. Check the connection and reopen Sync.": "无法加载同步类别。请检查连接并重新打开同步面板。",
+    "Invalid sync backend response.": "同步后端响应格式无效。",
+    "Could not load sync backends. Check the connection and reopen Sync.": "无法加载同步后端。请检查连接并重新打开同步面板。",
+    "Could not refresh sync backends. The last loaded configuration is still displayed.": "无法刷新同步后端。当前显示上次加载的配置。",
+    "Could not read sync status. Check the connection and retry.": "无法读取同步状态。请检查连接后重试。",
+    "Some notices could not be dismissed. Recover the affected backends and retry.": "部分通知无法关闭。请恢复相关后端后重试。",
+    "Pending records could not be read. This notice is unknown until the backend recovers.": "无法读取待处理记录。后端恢复前无法确定此通知的状态。",
+    "Could not read pending sync records for ${0}.": "无法读取 ${0} 的待处理同步记录。",
     "Favorite": "星标",
     "Tag": "标签",
     "Duplicate": "复制",
@@ -6248,7 +6316,7 @@
     ,"Pairing link": "配对链接"
     ,"Copy link": "复制链接"
     ,"Generate another": "重新生成"
-    ,"The other device must enter THIS device's credentials when pairing if you have basic auth enabled. They are sent over LAN only, never stored.": "如果你启用了基本认证，另一台设备在配对时需要输入此设备的凭据。凭据仅通过局域网发送，不会被存储。"
+    ,"Basic-auth credentials entered on the other device are saved on its server after pairing for future syncs. Use Clear credentials on that device's backend row to remove them.": "在另一台设备输入的基本认证凭据会在配对后保存在其服务器，用于后续同步。可在该设备的后端条目使用“清除凭据”移除。"
     ,"Paste the pairing link from the other device, or fill in the fields manually.": "粘贴另一台设备的配对链接，或手动填写各项字段。"
     ,"Special characters in your handle are normalized to underscores for pairing. Both devices must use the same handle.": "用户名中的特殊字符在配对时会被规范化为下划线。两台设备必须使用相同的用户名。"
     ,"This pairing link is for ${0}, but you're logged in as ${1}. Pair from the matching account, or use the same handle on both devices.": "此配对链接面向 ${0}，但您当前登录为 ${1}。请用匹配的账户配对，或在两台设备上使用同一用户名。"
@@ -6258,61 +6326,34 @@
     ,"Label for the other device": "另一台设备的标签"
     ,"e.g. Phone": "例如：手机"
     ,"Peer ID": "对端 ID"
-    ,"If the other device has basic authentication enabled, enter the credentials it expects. Otherwise leave blank.": "如果另一台设备启用了基本认证，请输入它要求的凭据。否则留空即可。"
+    ,"Enter basic-auth credentials only if the other device requires them. After pairing, they are saved on this server for future syncs. Use Clear credentials on the backend row to remove them.": "仅在另一台设备要求基本认证时输入凭据。配对后，凭据会保存在当前服务器，用于后续同步。可在后端条目使用“清除凭据”移除。"
     ,"Basic auth username (optional)": "基本认证用户名（可选）"
     ,"Basic auth password (optional)": "基本认证密码（可选）"
     ,"Pair and sync": "配对并同步"
-    ,"Resolve conflicts": "解决冲突"
-    ,"The same file was edited on both devices. Pick which version to keep for each file. There's no line-by-line merge.": "同一文件在两台设备上都被修改了。请为每个文件选择要保留的版本，不支持按行合并。"
-    ,"Apply resolutions": "应用解决方案"
-    ,"Type: ${conflict.kind}": "类型：${conflict.kind}"
-    ,"Local: deleted": "本地：已删除"
-    ,"Local version": "本地版本"
-    ,"Remote: deleted": "远端：已删除"
-    ,"Remote version": "远端版本"
     ,"Sync now": "立即同步"
     ,"Undo last sync": "撤销上次同步"
     ,"Forget": "忘记"
-    ,"Last sync: ${formatRelativeTime(peer.lastSyncAt)}": "上次同步：${formatRelativeTime(peer.lastSyncAt)}"
     ,"Never": "从未"
     ,"just now": "刚刚"
     ,"${minutes} min ago": "${minutes} 分钟前"
     ,"${hours} hr ago": "${hours} 小时前"
     ,"${days} day(s) ago": "${days} 天前"
-    ,"Syncing with ${payload.label || payload.remotePeerId}…": "正在与 ${payload.label || payload.remotePeerId} 同步……"
-    ,"Syncing with ${peer.label || peerId}…": "正在与 ${peer.label || peerId} 同步……"
-    ,"Synced with ${payload.label || payload.remotePeerId}.": "已与 ${payload.label || payload.remotePeerId} 同步。"
-    ,"Synced with ${peer.label || peerId}.": "已与 ${peer.label || peerId} 同步。"
-    ,"Sync complete.": "同步完成。"
-    ,"Applying resolutions…": "正在应用解决方案……"
     ,"Authentication to the other device failed. Check your credentials.": "向另一台设备认证失败。请检查凭据。"
     ,"Could not reach the other device. Check the base URL and that the device is online.": "无法连接到另一台设备。请检查基础 URL 和设备是否在线。"
     ,"Could not reach the other device (${0}). Check the base URL and that the device is online.": "无法连接到另一台设备（${0}）。请检查基础 URL 和设备是否在线。"
     ,"Could not reach the other device.": "无法连接到另一台设备。"
     ,"Could not reach the other device (${0}).": "无法连接到另一台设备（${0}）。"
-    ,"Peer state changed during sync. Retrying once…": "同步过程中对端状态发生变化。即将重试一次……"
-    ,"${body.conflicts.length} file(s) conflict. Pick a version for each below.": "有 ${body.conflicts.length} 个文件存在冲突。请在下方为每个文件选择版本。"
-    ,"Conflict resolution canceled. Re-run sync when you're ready.": "已取消冲突解决。准备好后再重新同步。"
-    ,"This peer was paired in an older version. Click Forget and pair again to record the base URL.": "此对端在旧版本中完成配对。请点击「忘记」后重新配对以记录基础 URL。"
     ,"Authentication to the other device failed. Forget and re-pair if its credentials changed.": "向另一台设备认证失败。如果其凭据已变更，请忘记并重新配对。"
-    ,"Enter the other device's base URL (e.g. http://192.168.1.42:8000)": "请输入另一台设备的基础 URL（例如 http://192.168.1.42:8000）"
-    ,"Peer's basic auth username (leave blank if disabled)": "对端的基本认证用户名（未启用则留空）"
-    ,"Peer's basic auth password": "对端的基本认证密码"
     ,"Continue": "继续"
     ,"Cancel": "取消"
-    ,"Undo the last sync with ${peer.label || peerId}? This rewinds THIS device only; the other device is unaffected.": "确定撤销与 ${peer.label || peerId} 的上次同步吗？这只会回退本设备，另一台设备不受影响。"
     ,"Undo": "撤销"
-    ,"Undo complete.": "撤销完成。"
-    ,"Reverted to the state before the last sync with ${peer.label || peerId}.": "已回退到与 ${peer.label || peerId} 上次同步之前的状态。"
     ,"Undo failed": "撤销失败"
     ,"Nothing to undo — no prior sync recorded.": "无可撤销项——未记录任何先前同步。"
-    ,"Forget ${peer.label || peerId}? Both the registry entry and the on-disk shadow repo will be deleted. The other device is unaffected.": "确定忘记 ${peer.label || peerId} 吗？注册表条目和磁盘上的影子仓库都将被删除。另一台设备不受影响。"
     ,"Forgotten.": "已忘记。"
     ,"Forget failed": "忘记失败"
     ,"Clear credentials": "清除凭据"
     ,"Credentials cleared.": "凭据已清除。"
     ,"Credentials saved for this peer. Use 'Clear credentials' on the peer card to remove them.": "已为此对端保存凭据。可在对端卡片上点击「清除凭据」移除。"
-    ,"Failed to clear credentials for ${peer.label || peerId}.": "清除 ${peer.label || peerId} 的凭据失败。"
     ,"Failed to generate pairing link": "生成配对链接失败"
     ,"Pairing link copied.": "配对链接已复制。"
     ,"Copy from the field above.": "请从上方字段中复制。"
@@ -6430,7 +6471,6 @@
     ,"Some files could not be deleted.": "部分文件未能删除。"
     ,"Media cleanup": "图片清理"
     ,"${0} day(s) ago": "${0} 天前"
-    ,"${0} file(s) conflict. Pick a version for each below.": "有 ${0} 个文件存在冲突。请在下方为每个文件选择版本。"
     ,"${0} hr ago": "${0} 小时前"
     ,"${0} min ago": "${0} 分钟前"
     ,"Failed to clear credentials for ${0}.": "清除 ${0} 的凭据失败。"
@@ -6438,14 +6478,60 @@
     ,"LAN Sync is unavailable. The server reported: ${0}.": "局域网同步不可用。服务器报告：${0}。"
     ,"Last sync: ${0}": "上次同步：${0}"
     ,"Migrate ALL user data to ${0}? A backup will be saved permanently under the data-root _storage-migrations directory. This may take several minutes for large installs and the server will reject writes until it finishes.": "确认将所有用户数据迁移到 ${0} 吗？备份会永久保存在数据根目录下的 _storage-migrations 目录中。大型部署可能需要数分钟，迁移期间服务器会拒绝写入。"
-    ,"Reverted to the state before the last sync with ${0}.": "已回退到与 ${0} 上次同步之前的状态。"
     ,"Synced with ${0}.": "已与 ${0} 同步。"
     ,"Syncing with ${0}…": "正在与 ${0} 同步……"
     ,"Tag ${0} not found.": "未找到标签 ${0}。"
-    ,"Type: ${0}": "类型：${0}"
-    ,"Undo the last sync with ${0}? This rewinds THIS device only; the other device is unaffected.": "确定撤销与 ${0} 的上次同步吗？这只会回退本设备，另一台设备不受影响。"
     ,"Could not save to config.yaml: ${0}": "写入 config.yaml 失败：${0}"
     ,"The other device could not apply the synced changes.": "另一台设备无法应用同步的更改。"
+    ,"Sync conflicts": "同步冲突"
+    ,"These files were changed on two devices before they synced. The version marked as in use is kept for now. Choose a version for each file.": "以下文件在同步前已在两台设备上修改。当前暂时保留标记为正在使用的版本，请为每个文件选择版本。"
+    ,"Version from ${0}": "来自 ${0} 的版本"
+    ,"In use": "正在使用"
+    ,"Current version": "当前版本"
+    ,"This file changed after the conflict was found. Choosing another version overwrites the current version.": "发现冲突后此文件又有修改，选择其他版本会覆盖当前版本。"
+    ,"Keep the current version": "保留当前版本"
+    ,"Use this version": "使用此版本"
+    ,"Binary file, ${0} bytes": "二进制文件，${0} 字节"
+    ,"Apply choices": "应用选择"
+    ,"Overwrite the current version of ${0}? The current version stays in the sync history.": "覆盖 ${0} 的当前版本？当前版本仍保留在同步历史中。"
+    ,"Choices applied.": "已应用选择。"
+    ,"Resolved on another device.": "已在其他设备上解决。"
+    ,"Some choices were already resolved on another device.": "部分选择已在其他设备上解决。"
+    ,"Could not apply the choices: ${0}": "无法应用选择：${0}"
+    ,"Choose a version for at least one file.": "请至少为一个文件选择版本。"
+    ,"Chat conflict branches": "聊天冲突分支"
+    ,"${0} was edited on two devices. The version from ${1} was saved as the branch chat ${2}.": "${0} 在两台设备上均有编辑，来自 ${1} 的版本已保存为分支聊天 ${2}。"
+    ,"Open branch": "打开分支"
+    ,"Open chat": "打开聊天"
+    ,"The branch chat could not be found.": "找不到该分支聊天。"
+    ,"The chat could not be found.": "找不到该聊天。"
+    ,"The group of this branch chat could not be found.": "找不到该分支聊天所属的群聊。"
+    ,"Files sync cannot update": "同步无法更新的文件"
+    ,"The other device's version of these files cannot be stored on this device, so the current version is kept.": "另一台设备上这些文件的版本无法保存到本设备，当前版本已保留。"
+    ,"Sync schedule": "同步计划"
+    ,"Sync this long after the last edit, in seconds": "最后一次编辑后等待多久同步，单位为秒"
+    ,"Check other devices for changes every, in seconds": "检查其他设备变更的间隔，单位为秒"
+    ,"Save schedule": "保存同步计划"
+    ,"Schedule saved.": "已保存同步计划。"
+    ,"Enter a positive number of seconds.": "请输入大于零的秒数。"
+    ,"Syncing now": "正在同步"
+    ,"Last sync failed: ${0}": "上次同步失败：${0}"
+    ,"Synced with ${0}. ${1} file(s) need a decision.": "已与 ${0} 同步，${1} 个文件需要选择版本。"
+    ,"Synced with ${0}. Some files kept the version on this device.": "已与 ${0} 同步，部分文件保留了本设备的版本。"
+    ,"Synced with ${0}. ${1} file(s) need a decision. Some files kept the version on this device.": "已与 ${0} 同步，${1} 个文件需要选择版本，部分文件保留了本设备的版本。"
+    ,"The peer's Luker version is too old. Upgrade it and sync again.": "对端设备的 Luker 版本过旧，请升级后重新同步。"
+    ,"The other device no longer knows this device. Forget it and pair again.": "另一台设备已不再识别本设备，请移除后重新配对。"
+    ,"This device does not know the other device's address yet. Sync once from the other device.": "本设备尚未获得另一台设备的地址，请先在另一台设备上同步一次。"
+    ,"This device was paired by an older Luker version. Forget it and pair again.": "该设备由旧版 Luker 配对，请移除后重新配对。"
+    ,"Paired with ${0}, but the first sync failed: ${1}": "已与 ${0} 配对，但首次同步失败：${1}"
+    ,"Undo the last sync with ${0}? Files that sync changed go back to their earlier versions on every device that syncs with this one. Files edited after it keep the newer edit.": "撤销与 ${0} 的上次同步？该次同步更改的文件会在所有与本设备同步的设备上恢复为之前的版本，此后编辑过的文件保留新内容。"
+    ,"Reverted the last sync with ${0}.": "已撤销与 ${0} 的上次同步。"
+    ,"Reverted the last sync with ${0}. These files were edited after it and were left as they are: ${1}": "已撤销与 ${0} 的上次同步。以下文件在同步后有过编辑，已保持原样：${1}"
+    ,"These choices could not be applied yet: ${0}": "以下选择暂未应用：${0}"
+    ,"${0} was deleted on ${1} but kept on ${2}, so it was restored.": "${0} 已在 ${1} 删除，但 ${2} 保留了它，因此已恢复。"
+    ,"${0} was deleted on one device but kept on ${1}, so it was restored.": "${0} 已在一台设备上删除，但 ${1} 保留了它，因此已恢复。"
+    ,"The group of this chat could not be found.": "找不到此聊天所属的群聊。"
+    ,"The group of this chat could not be opened.": "无法打开此聊天所属的群聊。"
     ,"Delete the selected World/Lorebooks?": "删除选中的世界书？"
     ,"World/Lorebooks deleted.": "已删除世界书。"
     ,"Delete the selected presets?": "删除选中的预设？"

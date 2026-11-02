@@ -127,6 +127,14 @@ router.get('/get', async function (request, response) {
         });
     } catch (error) {
         console.error('Error reading preset:', error);
+        if (error.code === 'PRESET_DOCUMENT_INVALID') {
+            return sendResourceReadError(response, {
+                code: 'invalid_resource',
+                resource: `preset:${apiId}:${name}`,
+                detail: error.message,
+                status: 422,
+            });
+        }
         return sendResourceReadError(response, {
             code: 'read_failed',
             resource: `preset:${apiId}:${name}`,

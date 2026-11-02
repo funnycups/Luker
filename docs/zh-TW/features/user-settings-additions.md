@@ -36,10 +36,9 @@ Luker 保留了 SillyTavern 的**使用者設定**面板原貌——熟悉的設
 
   然後要麼**下載備份 ZIP**，要麼用**選擇 ZIP** + **還原備份**還原，並二選一還原模式：**增量更新**寫入備份中的檔案、其餘檔案原樣保留；**覆蓋更新**則先清空所選類別再還原。如果 ZIP 來自另一套儲存引擎的伺服器，Luker 會辨識出跨模式還原，並要求你提供一個臨時資料庫連線，供它在還原過程中中轉。
 
-  同一個彈窗還提供：
+- **區域網遷移** —— 一次性遷移到全新裝置：在舊裝置上**建立遷移連結**，再到新裝置上貼上並點擊**從連結遷移**。遷移連結有效期很短，且僅可使用一次。所選的還原模式同樣適用於從遷移連結匯入。長期使用不同裝置時，使用[同步](/zh-TW/improvements/sync)，透過[區域網路配對](/zh-TW/improvements/lan-sync)或[加密 S3 儲存](/zh-TW/improvements/s3-sync)交換資料。
 
-  - **開啟區域網路同步** —— 開啟[區域網路同步](/zh-TW/improvements/lan-sync)，它是面向長期並用兩台裝置的雙向增量傳輸方式。
-  - **區域網路遷移** —— 一次性遷移到全新裝置：在舊裝置上**建立遷移連結**，再到新裝置上貼上並點擊**從連結遷移**。遷移連結有效期很短，且僅可使用一次。所選的還原模式同樣適用於從遷移連結匯入。
+- **同步** —— 開啟**使用者設定 → 帳號 → 備份與還原 → 同步 → 開啟同步**。[同步概覽](/zh-TW/improvements/sync)介紹自動同步、類別、待處理選擇、聊天分支與撤銷，區域網路與 S3 指南說明設定方式。
 
 - **儲存審查**與**瀏覽器儲存** —— 從兩個視角查看資料的實際位置。[儲存審查](/zh-TW/features/storage-inspector)依類別拆解伺服端資料目錄，並配有配額條；敏感內容僅顯示體積，且不提供任何刪除操作。**瀏覽器儲存**則檢查目前瀏覽器的 `localStorage`、`sessionStorage`、IndexedDB 與 Cache Storage，並且可以刪除單一鍵、物件倉庫、資料庫與快取。
 
@@ -67,5 +66,5 @@ Luker 保留了 SillyTavern 的**使用者設定**面板原貌——熟悉的設
 - **離開頁面確認** —— 關閉或重新整理頁面前給出提醒。**僅在有風險時**（預設）會在生成進行中、存在未提交的訊息編輯、或輸入框中仍有未送出文字時提醒；**從未**與**總是**則覆蓋這一判斷。
 
 ::: tip 相關頁面
-[日誌系統](/zh-TW/features/logging) · [請求檢查器](/zh-TW/improvements/request-inspector) · [儲存審查](/zh-TW/features/storage-inspector) · [區域網路同步](/zh-TW/improvements/lan-sync) · [其他功能](/zh-TW/features/other-features)
+[日誌系統](/zh-TW/features/logging) · [請求檢查器](/zh-TW/improvements/request-inspector) · [儲存審查](/zh-TW/features/storage-inspector) · [同步](/zh-TW/improvements/sync) · [區域網路同步](/zh-TW/improvements/lan-sync) · [S3 同步](/zh-TW/improvements/s3-sync) · [其他功能](/zh-TW/features/other-features)
 :::

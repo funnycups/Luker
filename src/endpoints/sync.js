@@ -2,40 +2,38 @@
  * LAN-sync HTTP router.
  *
  * Mounted at `/api/sync/v1/`. Bearer-token auth is enforced per-route via
- * `requireSyncToken` for every `/session/*` path. The `/health` route is
- * gated only by the surrounding basic-auth middleware so a peer can probe
- * reachability without a sync token.
+ * `requireSyncToken` for every `/session/*` path. The `/health` route
+ * reports the LAN protocol version and needs no credentials, so a peer can
+ * probe reachability and compatibility before pairing.
  *
  * See `src/middleware/basicAuth.js` for the matching bypass pattern
- * that lets `/session/*` requests skip basic auth (they carry their own
- * token instead).
+ * that lets `/health` and `/session/*` requests skip basic auth.
  */
-import fs from 'node:fs';
+import { atomicFs } from '../sync/pipeline/atomic-fs.js';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import express from 'express';
 import git from 'isomorphic-git';
-import storage from 'node-persist';
 
-import { readObjectForWire, writeObjectFromWireStream } from '../sync/objects.js';
-import { ensureShadowRepo, snapshotLiveToShadow, reconcileShadowToLive, assertSafePeerId } from '../sync/shadow.js';
-import { createSyncSession, closeSyncSession, consumeSyncSession, createPairingCode, consumePairingCode, PEER_SECRET_HEADER, PAIR_CODE_HEADER } from '../sync/session.js';
-import {
-    runPull,
-    syncQueueKey,
-    queueOnKey,
-    undoLastSync,
-} from '../sync/orchestrator.js';
-import { materializeUserDataIntoWorkdir, dematerializeWorkdirIntoUserData, buildSnapshotPlan } from '../sync/materialize.js';
-import { markSyncInProgress, clearSyncInProgress } from '../sync/in-progress-gate.js';
-import { readSyncState, recordPeer, recordPeerSecret, removePeerCompletely, clearPeerAuth } from '../sync/state.js';
+import { hasCompleteClosure, readObjectForWire, writeObjectFromWireStream } from '../sync/objects.js';
+import { getShadowPaths } from '../sync/shadow.js';
+import { syncError } from '../sync/errors.js';
+import { pausepoint, PAUSEPOINTS } from '../sync/pipeline/failpoints.js';
+import { createSyncSession, closeSyncSession, consumeSyncSession, createPairingCode, consumePairingCode, restorePairingCode, PEER_SECRET_HEADER, PAIR_CODE_HEADER } from '../sync/session.js';
+import { assertSafeBackendId, readRegistry, setLanSecret, setLanPeerBaseUrl, setLanPeerDeviceLabel, resolveDeviceLabel, upsertLanBackend } from '../sync/state.js';
 import { SYNC_CATEGORIES } from '../sync/categories.js';
-import { getStorageEngine } from '../storage/index.js';
 import { getRequestBaseUrl } from '../express-common.js';
 import { buildLanBaseUrlCandidates } from '../util.js';
-import { ENABLE_ACCOUNTS, resolveUserFromBasicAuth, getAllUserHandles, getUserDirectories, toKey } from '../users.js';
+import { LAN_PROTOCOL, pickCallbackBaseUrl, checkPairCallback } from '../sync/backends/lan/callback.js';
+import { describeFetchFailure, peerErrorCode } from '../sync/backends/lan/client.js';
+import { incomingRefFor } from '../sync/backends/lan/incoming.js';
+import { defaultUserStore, ownerFromUser, syncService } from '../sync/sync-service.js';
+import { guardedLanFetch } from '../sync/net-guard.js';
+import { createBackendsRouter, statusForSyncCode, syncResponse } from './sync-backends.js';
+import { createS3Router } from './sync-s3.js';
 
-export const router = express.Router();
 
 const TOKEN_HEADER_PATTERN = /^Bearer\s+([a-f0-9]{64})$/i;
 
@@ -52,50 +50,37 @@ const OID_PATTERN = /^[a-f0-9]{40}$/i;
 
 const ALLOWED_OBJECT_TYPES = ['blob', 'tree', 'commit', 'tag'];
 
+/** Oid a ref compare-and-swap uses for an absent ref. */
+const ZERO_OID = '0'.repeat(40);
+
+/**
+ * @param {string} gitdir
+ * @param {string} ref
+ * @returns {Promise<string | null>}
+ */
+async function resolveRefOrNull(gitdir, ref) {
+    try {
+        return await git.resolveRef({ fs: atomicFs, gitdir, ref });
+    } catch (error) {
+        if (error.code === 'NotFoundError') return null;
+        throw error;
+    }
+}
+
 function extractToken(request) {
     const header = String(request.get('Authorization') || '');
     const match = TOKEN_HEADER_PATTERN.exec(header);
     return match ? match[1].toLowerCase() : '';
 }
 
-/**
- * Reject unauthenticated callers before a route body parser runs.
- *
- * This router is mounted ahead of the login gate so the peer protocol can
- * carry its own sync token. The user-facing routes inside it authenticate
- * from the logged-in session, so their parsers must sit behind this guard:
- * otherwise their body size limits would double as the only defence on the
- * pre-login surface. Same 401 body the handlers return.
- */
+// User routes share a pre-parser guard; peer protocol routes above them
+// authenticate with their session token or bounded pairing offer instead.
 function requireSyncUser(request, response, next) {
     const user = request.user;
     if (!user?.profile?.handle || !user?.directories?.root) {
         return response.status(401).json({ error: 'Auth required' });
     }
     return next();
-}
-
-/**
- * Best-effort short label for a failed outbound fetch. `fetch` wraps the
- * real socket error in `error.cause`; for a hostname resolving to several
- * addresses it is an AggregateError whose `.errors` carry the per-address
- * codes. Surfacing the code lets the UI tell a wrong address or port
- * (`ECONNREFUSED`) apart from a firewall or route problem (`ETIMEDOUT`,
- * `ENETUNREACH`) instead of the generic `fetch failed`.
- * @param {unknown} error Error thrown by `fetch`
- * @returns {string} Short cause label
- */
-function describeFetchFailure(error) {
-    const cause = /** @type {{ code?: string, message?: string, errors?: Array<{ code?: string }> }} */ (/** @type {any} */ (error)?.cause);
-    const code = cause?.code
-        || (Array.isArray(cause?.errors) ? cause.errors.map(entry => entry?.code).find(Boolean) : '');
-    if (code) {
-        return String(code);
-    }
-    if (cause?.message) {
-        return String(cause.message);
-    }
-    return String(/** @type {any} */ (error)?.message || error || 'fetch failed');
 }
 
 function requireSyncToken(request, response, next) {
@@ -125,8 +110,10 @@ function requireSyncToken(request, response, next) {
  * rotate `globalThis.DATA_ROOT` per case, so a stale cache entry could
  * otherwise silently point a later test at the previous test's tmp dir.
  *
- * Idempotent: `ensureShadowRepo` is a no-op when the shadow already exists,
- * so we can safely call this on every request without bookkeeping.
+ * The backend must still be registered, not being removed, and its
+ * shadow must exist: the offer's local step creates the shadow before a
+ * session is issued, and a removed backend's shadow is never recreated.
+ * Otherwise this throws `PEER_FORGOTTEN`.
  *
  * @param {{ userRoot: string, peerId: string }} session
  * @returns {Promise<import('../sync/shadow.js').ShadowPaths>}
@@ -134,633 +121,18 @@ function requireSyncToken(request, response, next) {
 async function shadowFor(session) {
     const { userRoot, peerId } = session;
     if (!userRoot) throw new Error('Sync session missing userRoot');
-    return ensureShadowRepo({ userRoot, peerId });
+    if (syncService.isRemoving(userRoot, peerId)) throw syncError('PEER_FORGOTTEN', `No sync backend ${peerId}`);
+    const entry = (await readRegistry({ userRoot })).backends[peerId];
+    const paths = getShadowPaths({ userRoot, peerId });
+    if (entry?.kind !== 'lan' || !fs.existsSync(path.join(paths.gitDir, 'HEAD'))) {
+        throw syncError('PEER_FORGOTTEN', `No sync backend ${peerId}`);
+    }
+    return paths;
 }
 
-router.get('/health', (_request, response) => {
-    response.json({ ok: true });
-});
-
-/**
- * Return the per-session manifest the peer needs to start a pull:
- *   - `handle`, `peerId`, `expiresAt` — session-binding metadata copied
- *     from the token payload so the peer can sanity-check it's talking
- *     to the right user.
- *   - `headOid` — the shadow's current `refs/heads/main` oid (or
- *     `null` if no commit has landed yet). The pulling peer uses this
- *     as the entry point of `fetchMissingObjects`.
- *
- * `ensureShadowRepo` is idempotent; calling it here is what lets a peer
- * GET /session/manifest immediately after pairing without a separate
- * "create shadow" handshake.
- */
-router.get('/session/manifest', requireSyncToken, async (request, response) => {
-    const { handle, peerId, expiresAt } = request.syncSession;
-    try {
-        const shadow = await shadowFor(request.syncSession);
-        let headOid = null;
-        try {
-            headOid = await git.resolveRef({
-                fs,
-                dir: shadow.workdir,
-                gitdir: shadow.gitDir,
-                ref: 'main',
-            });
-        } catch (e) {
-            // `NotFoundError` is the documented isomorphic-git surface
-            // for a ref that has never been written. A brand-new shadow
-            // (e.g. the peer is about to receive its first pair-init
-            // snapshot) reports `headOid: null`; the puller's
-            // orchestrator already handles that as the "first pair"
-            // path. Any other error propagates to the 500 handler.
-            if (e.code !== 'NotFoundError') throw e;
-        }
-        response.json({ handle, peerId, expiresAt, headOid });
-    } catch (e) {
-        console.error('[sync] manifest failed', e);
-        response.status(500).json({ error: 'Internal error' });
-    }
-});
-
-/**
- * Stream a single git object back to the peer in wire format.
- *
- * Body: raw, unwrapped object bytes (`application/octet-stream`). Type and
- * canonical oid travel out-of-band in `X-Object-Type` / `X-Object-Oid` so
- * the receiver can route to `writeObjectFromWireStream` without re-parsing.
- *
- * `readObjectForWire` returns `NotFoundError` for missing oids, which we
- * map to 404. There is no size cap on object reads: the responder serves
- * whatever lives in its ODB and the peer's streaming receive handles
- * arbitrarily large bodies without buffering them in RAM.
- */
-router.get('/session/object/:oid', requireSyncToken, async (request, response) => {
-    const oid = String(request.params.oid).toLowerCase();
-    if (!OID_PATTERN.test(oid)) {
-        return response.status(400).json({ error: 'Invalid oid' });
-    }
-    try {
-        const shadow = await shadowFor(request.syncSession);
-        const obj = await readObjectForWire({ dir: shadow.workdir, gitdir: shadow.gitDir, oid });
-        response.set('Content-Type', 'application/octet-stream');
-        response.set('X-Object-Type', obj.type);
-        response.set('X-Object-Oid', obj.oid);
-        response.send(obj.body);
-    } catch (e) {
-        if (e.code === 'NotFoundError') return response.status(404).json({ error: 'Not found' });
-        console.error('[sync] object read failed', e);
-        response.status(500).json({ error: 'Internal error' });
-    }
-});
-
-/**
- * Accept a single git object from the peer and land it in the local shadow.
- *
- * Body: raw object bytes streamed directly off the request. No body parser
- * is mounted on this route — `writeObjectFromWireStream` pipes the request
- * into a tmp file under the shadow's gitdir, so the responder's heap never
- * grows by the body's full size even for gigabyte-scale objects. The peer
- * decides what to send; we decide what to keep, by verifying the resulting
- * oid against `X-Object-Oid` after `git.writeObject` has computed it from
- * the wrapped form (type prefix + length + NUL + body). A wrong oid (sender
- * bug, transport corruption, hostile peer) is caught and the tmp file
- * cleaned up before the object becomes reachable.
- *
- * `X-Object-Type` and `X-Object-Oid` headers carry the metadata; the type
- * is checked against `ALLOWED_OBJECT_TYPES` before we start the pipe so a
- * malformed header rejects with 400 without touching disk.
- */
-router.post(
-    '/session/object',
-    requireSyncToken,
-    async (request, response) => {
-        const oid = String(request.get('X-Object-Oid') || '').toLowerCase();
-        const type = String(request.get('X-Object-Type') || '').toLowerCase();
-        if (!OID_PATTERN.test(oid)) {
-            return response.status(400).json({ error: 'Missing/invalid X-Object-Oid' });
-        }
-        if (!ALLOWED_OBJECT_TYPES.includes(type)) {
-            return response.status(400).json({ error: 'Invalid X-Object-Type' });
-        }
-        try {
-            const shadow = await shadowFor(request.syncSession);
-            await writeObjectFromWireStream({
-                dir: shadow.workdir,
-                gitdir: shadow.gitDir,
-                oid,
-                type,
-                stream: request,
-            });
-            response.json({ oid });
-        } catch (e) {
-            console.error('[sync] object write failed', e);
-            response.status(500).json({ error: 'Internal error' });
-        }
-    },
-);
-
-/**
- * Compare-and-swap a ref. The receiver supplies the oid it believes the ref
- * currently points at; the handler only updates the ref if its actual oid
- * matches, otherwise it returns 409 with the current value so the caller can
- * re-fetch and retry.
- *
- * This is the synchronization gate for the push protocol (spec §5.3): two
- * concurrent peers racing to advance `refs/heads/main` cannot both win.
- * Absent CAS, a second push could silently overwrite the first.
- *
- * `force: true` is intentional and safe here: the CAS check above is the
- * concurrency gate, and `git.writeRef` without `force` would refuse to
- * update a fast-forward-incompatible ref — which is exactly what a sync
- * merge commit (two parents, neither an ancestor of the other) looks like.
- */
-router.post('/session/ref', requireSyncToken, express.json(), async (request, response) => {
-    const ref = String(request.body?.ref || '');
-    const expectedOid = String(request.body?.expectedOid || '').toLowerCase();
-    const newOid = String(request.body?.newOid || '').toLowerCase();
-    if (!ref.startsWith('refs/heads/')) {
-        return response.status(400).json({ error: 'Invalid ref' });
-    }
-    if (!OID_PATTERN.test(newOid)) {
-        return response.status(400).json({ error: 'Invalid newOid' });
-    }
-    try {
-        const shadow = await shadowFor(request.syncSession);
-        let currentOid = null;
-        try {
-            currentOid = await git.resolveRef({ fs, dir: shadow.workdir, gitdir: shadow.gitDir, ref });
-        } catch (e) {
-            // `NotFoundError` is the documented isomorphic-git surface for a
-            // ref that has never been written — treat as "currently absent",
-            // which compares equal to the all-zero expectedOid. Any other
-            // error (corruption, I/O) propagates to the 500 handler.
-            if (e.code !== 'NotFoundError') throw e;
-        }
-        const currentLower = (currentOid ?? '0'.repeat(40)).toLowerCase();
-        const expectedLower = expectedOid || '0'.repeat(40);
-        if (currentLower !== expectedLower) {
-            return response.status(409).json({ error: 'Ref changed', currentOid });
-        }
-        await git.writeRef({
-            fs,
-            dir: shadow.workdir,
-            gitdir: shadow.gitDir,
-            ref,
-            value: newOid,
-            force: true,
-        });
-
-        // Responder-side reconcile (spec §4.2: "On the responder ...
-        // does steps 1-4 ... and 10"): once the puller's push lands on
-        // refs/heads/main, materialize the merged tree into the
-        // workdir and write it back into live, so the responding user's
-        // data picks up the puller's edits without waiting for a manual
-        // pull from this side.
-        //
-        // Scoped to `refs/heads/main` so unit-test ref writes against
-        // other heads (the http-objects tests use `main` too but only
-        // for CAS exercising, never with real commits behind the oid)
-        // don't trigger a reconcile attempt that has nothing to do.
-        //
-        // `directories` is captured into the session payload at
-        // /session/offer time so the token-gated route can resolve it
-        // without going back through req.user (which is unavailable
-        // here — /session/* is in the basic-auth bypass list).
-        //
-        // Queued on the same (userRoot, peerId) key as `runPull` so that
-        // a `/session/ref` arriving while THIS side is mid-`runPull`
-        // for the same pairing waits for the local pull to finish
-        // instead of racing it (puller-responder race in code review
-        // Issue 2). The CAS-successful ref write above already
-        // committed the new HEAD into the shadow, so the queue wait
-        // only delays the live-materialization step, not the push
-        // acknowledgement — meaning the worst-case effect is "peer's
-        // edits land in our live tree a few seconds late", not data
-        // loss.
-        //
-        // Cross-peer races (peer P1 and peer P2 both pushing to this
-        // same user's live tree at the same time) are still possible:
-        // each (userRoot, peerId) pair has its own queue, so P1's and
-        // P2's reconciles can interleave. The spec §4.4 model assumes
-        // one peer sync at a time and `write-file-atomic` keeps
-        // per-file writes consistent; a per-userRoot live-write lock
-        // is more complexity than v1 needs.
-        if (ref === 'refs/heads/main') {
-            const { userRoot, peerId, categories, directories, handle } = request.syncSession;
-            if (directories && Array.isArray(categories)) {
-                try {
-                    await queueOnKey(syncQueueKey(userRoot, peerId), async () => {
-                        // The responder reconcile rewrites
-                        // this user's live tree (and may swap their
-                        // SQLite file), so user-initiated writes on
-                        // this side must be gated for the duration.
-                        // Marked inside the queue body so a queued
-                        // reconcile that hasn't started yet doesn't
-                        // pre-emptively 409 user writes — and cleared
-                        // in `finally` so a reconcile error doesn't
-                        // strand the user behind a permanent 409.
-                        markSyncInProgress(handle, peerId);
-                        try {
-                            await git.checkout({
-                                fs,
-                                dir: shadow.workdir,
-                                gitdir: shadow.gitDir,
-                                ref: 'main',
-                                force: true,
-                            });
-                            await reconcileShadowToLive({
-                                userRoot,
-                                peerId,
-                                directories,
-                                enabledCategoryIds: categories,
-                            });
-                            // SQL-engine mode (spec §6.3): project the
-                            // reconciled workdir back into the engine so
-                            // the storage layer reflects the puller's
-                            // edits. Shared with the puller-side
-                            // orchestrator so both ends use one gating
-                            // rule (no-op when engine.kind === 'fs').
-                            const engine = getStorageEngine();
-                            if (engine.kind !== 'fs') {
-                                await dematerializeWorkdirIntoUserData({
-                                    handle, directories, categories,
-                                    workdir: shadow.workdir, engine,
-                                });
-                            }
-                        } finally {
-                            clearSyncInProgress(handle, peerId);
-                        }
-                    });
-                } catch (e) {
-                    // The reconcile rewrites THIS side's live tree. If it
-                    // fails after the ref was advanced, this side would
-                    // advertise a HEAD its live tree never materialized:
-                    // every later sync would see `localMain === peerHead`
-                    // and no-op, so the responder would silently stay stale
-                    // while the puller keeps reporting success. Roll the
-                    // ref back to its pre-push value so the next sync
-                    // retries, and fail the request so the puller's UI
-                    // shows the real error instead of "Synced".
-                    try {
-                        if (currentOid) {
-                            await git.writeRef({
-                                fs,
-                                dir: shadow.workdir,
-                                gitdir: shadow.gitDir,
-                                ref,
-                                value: currentOid,
-                                force: true,
-                            });
-                            // Put the workdir back too, so it matches the
-                            // rolled-back HEAD instead of the tree the
-                            // failed reconcile checked out.
-                            await git.checkout({
-                                fs,
-                                dir: shadow.workdir,
-                                gitdir: shadow.gitDir,
-                                ref: 'main',
-                                force: true,
-                            });
-                        } else {
-                            await git.deleteRef({
-                                fs,
-                                dir: shadow.workdir,
-                                gitdir: shadow.gitDir,
-                                ref,
-                            });
-                        }
-                    } catch (rollbackError) {
-                        console.error('[sync] responder reconcile rollback failed', rollbackError);
-                    }
-                    console.error('[sync] responder reconcile failed', e);
-                    return response.status(500).json({
-                        error: 'The other device could not apply the synced changes.',
-                        code: 'RECONCILE_FAILED',
-                        detail: String(e?.message || e),
-                    });
-                }
-            }
-        }
-
-        response.json({ ref, oid: newOid });
-    } catch (e) {
-        console.error('[sync] ref write failed', e);
-        response.status(500).json({ error: 'Internal error' });
-    }
-});
-
-/**
- * Issue a sync-session token for the current authenticated user. The peer
- * uses the returned `token` (plus `url`, which points at this server's
- * `/session/manifest`) to drive the rest of the sync protocol; subsequent
- * `/session/*` routes accept the token via `Authorization: Bearer …` and
- * skip basic auth (see `src/middleware/basicAuth.js`).
- *
- * Auth model: `/session/offer` itself is NOT in the basic-auth bypass
- * pattern — it goes through the standard middleware so `req.user` is
- * populated. This is what binds the issued token to the authenticated
- * handle: a peer cannot mint a token for someone else's data root.
- *
- * Every storage engine (fs / sqlite / mysql / postgres) is supported:
- * the orchestrator routes SQL-engine data through the per-record
- * materializer before the file walk runs (spec §6.3), so there is no
- * "unsupported storage mode" branch here anymore.
- *
- * `userRoot` is captured into the session payload here so token-gated
- * routes can resolve the shadow repo purely from `request.syncSession`,
- * without going back through the per-handle directory cache.
- */
-router.post('/session/offer', express.json({ limit: '16kb' }), async (request, response) => {
-    const peerId = String(request.body?.peerId || '').trim();
-    const label = String(request.body?.label || '').trim();
-    const categories = Array.isArray(request.body?.categories)
-        ? request.body.categories.map(String)
-        : [];
-
-    if (!peerId) {
-        return response.status(400).json({ error: 'peerId required' });
-    }
-
-    let user = request.user;
-    let issuedSecret;
-    if (!user?.profile?.handle && ENABLE_ACCOUNTS) {
-        // Cross-server callers carry no session cookie. Prefer the pairing
-        // credential (one-time code on the first offer, durable secret on
-        // later offers; works on multi-user installs without per-user
-        // basic auth), then fall back to basic-auth credentials for
-        // legacy pairings that stored them. Single-user installs never
-        // reach here: `setUserDataMiddleware` synthesizes the default
-        // user for every request.
-        const resolved = await resolveUserFromPeerSecret(request, peerId);
-        if (resolved) {
-            user = resolved;
-            issuedSecret = resolved.issuedSecret;
-        }
-    }
-    if (!user?.profile?.handle && ENABLE_ACCOUNTS) {
-        user = await resolveUserFromBasicAuth(request);
-    }
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
-
-    const handle = user.profile.handle;
-
-    // Pairing requires the same sanitized handle on both
-    // devices. The peerId encodes the issuing user's sanitized handle as
-    // its prefix; the local user MUST share that prefix, otherwise we'd
-    // be silently overwriting one user's data with another's on the next
-    // sync. Returns 412 (Precondition Failed) so the UI can distinguish
-    // "wrong account" from auth (401) or bad payload (400) errors. The
-    // frontend duplicates this check pre-flight to avoid even minting an
-    // outbound request; this is the backstop for callers that bypass it.
-    const expectedHandle = sanitizeHandleForPeerId(handle);
-    const peerIdPrefix = peerId.split('@')[0];
-    if (expectedHandle !== peerIdPrefix) {
-        return response.status(412).json({
-            error: 'Handle mismatch',
-            code: 'HANDLE_MISMATCH',
-            expectedHandle,
-            gotHandle: peerIdPrefix,
-        });
-    }
-
-    const engine = getStorageEngine();
-
-    const { token, expiresAt } = createSyncSession({
-        handle,
-        peerId,
-        userRoot: user.directories.root,
-        directories: user.directories,
-        categories,
-    });
-
-    // Pair init — the responder's shadow MUST advance to a
-    // commit that reflects current live data BEFORE the peer pulls.
-    // Otherwise the peer fetches a stale (or absent) HEAD and never
-    // sees the live state the user just enabled for sync.
-    //
-    // Running here, on the user's authenticated offer call, scopes the
-    // file walk to a user-initiated event rather than firing on every
-    // unauthenticated GET /session/manifest from the peer. The same
-    // call site is also where the user's category selection is fresh,
-    // so the snapshot honors exactly the categories that were just
-    // toggled.
-    //
-    // SQL-engine mode (spec §6.3): the engine holds the bulk of the
-    // user's data, so the file walk has nothing meaningful to read out
-    // of the live root. Project the per-user records into the shadow
-    // workdir first via the engine-agnostic materializer, then snapshot
-    // via `buildSnapshotPlan`, which partitions the categories between
-    // the workdir (SQL-backed) and the live root (disk-backed). No-op
-    // when `engine.kind === 'fs'` — the live root already IS the on-disk
-    // shape the walk expects.
-    //
-    // `snapshotLiveToShadow` is idempotent (commits only when the tree
-    // actually differs), so a re-offer with no live edits is cheap.
-    try {
-        let workdir;
-        if (engine.kind !== 'fs') {
-            const shadow = await ensureShadowRepo({ userRoot: user.directories.root, peerId });
-            await materializeUserDataIntoWorkdir({
-                handle: user.profile.handle,
-                directories: user.directories,
-                categories,
-                workdir: shadow.workdir,
-                engine,
-            });
-            workdir = shadow.workdir;
-        }
-        const snapshotPlan = buildSnapshotPlan({
-            engine, directories: user.directories, categories, workdir,
-        });
-        await snapshotLiveToShadow({
-            userRoot: user.directories.root,
-            peerId,
-            ...snapshotPlan,
-        });
-    } catch (e) {
-        console.error('[sync] offer snapshot failed', e);
-        return response.status(500).json({ error: 'Snapshot failed' });
-    }
-
-    // The pairing-code handshake: the first offer from the accepting
-    // device consumed a one-time code, so hand back the durable secret
-    // that replaces it. `recordPeerSecret` persists it here without
-    // touching the label/categories the user chose at `/pair/start`; the
-    // accepting device stores the same value on its own peer entry. Both
-    // sides present it on every later offer.
-    if (issuedSecret) {
-        try {
-            await recordPeerSecret({ userRoot: user.directories.root, peerId, syncSecret: issuedSecret });
-        } catch (e) {
-            console.error('[sync] offer secret persistence failed', e);
-            return response.status(500).json({ error: 'Failed to persist pairing secret' });
-        }
-    }
-
-    const baseUrl = getRequestBaseUrl(request);
-    const url = `${baseUrl}/api/sync/v1/session/manifest`;
-    response.json({ token, expiresAt, url, peerId, label, syncSecret: issuedSecret });
-});
-
-/**
- * Invalidate the session token from the bearer header. The route is
- * token-gated so a third party cannot enumerate-and-revoke other peers'
- * sessions, and the bearer is what we're closing anyway.
- *
- * Returns `{ ok: true }` after `closeSyncSession` so the peer can confirm
- * the cleanup landed; subsequent requests with the same token will get
- * 401 from `requireSyncToken`.
- */
-router.post('/session/close', requireSyncToken, (request, response) => {
-    const token = extractToken(request);
-    closeSyncSession(token);
-    response.json({ ok: true });
-});
-
-/**
- * User-facing entry point for "Sync with peer".
- *
- * Drives the 10-step orchestrator (`runPull` in `src/sync/orchestrator.js`)
- * end-to-end: snapshot local data → fetch peer's missing objects →
- * merge → reconcile → push merged HEAD back to peer.
- *
- * Authentication is the standard basic-auth flow (`/pull` is NOT in the
- * `/session/*` bypass pattern in `src/middleware/basicAuth.js` — only
- * the responder-side routes the peer's sync session token speaks to are
- * exempt). The body's `offerToken` is the OTHER peer's session token,
- * obtained from their `/session/offer` and relayed by the user (e.g. as
- * part of a QR-code pairing flow).
- *
- * Every storage engine is supported here; the orchestrator routes
- * SQL-engine data through the per-record materializer (spec §6.3) so
- * there is no storage-mode gate at the boundary.
- *
- * Concurrency: a second `/pull` request for the same (userRoot, peerId)
- * does NOT 409 — it waits behind any in-flight sync on the
- * orchestrator's per-key FIFO queue. This matches users' mental model
- * of "click Sync, then click it again", and serializes correctly with
- * responder reconciles triggered by `/session/ref` posts from the peer.
- *
- * Error mapping:
- *   - `PEER_REF_CHANGED` → 409 with `retry: true` (peer's main moved
- *     between our manifest fetch and our ref push; caller should retry
- *     the whole pull rather than partially re-push)
- *   - `PEER_TIMEOUT` → 504 (peer's `/session/*` HTTP call exceeded
- *     `PEER_FETCH_TIMEOUT_MS`; usually a peer that walked off Wi-Fi
- *     mid-sync — caller can retry once the network is back)
- *   - anything else → 500 with the message echoed for diagnostics
- */
-router.post('/pull', requireSyncUser, express.json({ limit: '1mb' }), async (request, response) => {
-    const user = request.user;
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
-
-    const body = request.body ?? {};
-    const peerId = String(body.peerId || '').trim();
-    const peerLabel = String(body.peerLabel || '').trim();
-    const peerBaseUrl = String(body.peerBaseUrl || '').trim();
-    const offerToken = String(body.offerToken || '').trim();
-    const categories = Array.isArray(body.categories) ? body.categories.map(String) : null;
-    const resolutions = (body.resolutions && typeof body.resolutions === 'object')
-        ? body.resolutions
-        : undefined;
-
-    if (!peerId || !peerBaseUrl || !offerToken || !categories) {
-        return response.status(400).json({ error: 'Missing required fields' });
-    }
-
-    try {
-        const result = await runPull({
-            userRoot: user.directories.root,
-            handle: user.profile.handle,
-            directories: user.directories,
-            peerId,
-            peerLabel,
-            peerBaseUrl,
-            offerToken,
-            categories,
-            resolutions,
-        });
-        response.json(result);
-    } catch (e) {
-        if (e.code === 'PEER_REF_CHANGED') {
-            return response.status(409).json({ error: e.message, retry: true });
-        }
-        if (e.code === 'PEER_TIMEOUT') {
-            return response.status(504).json({ error: e.message });
-        }
-        console.error('[sync] pull failed', e);
-        response.status(500).json({ error: e.message });
-    }
-});
-
-/**
- * Rewind this user's shadow for a given peer to the most recent
- * `sync-backup-*` tag and reconcile that state back into live (spec
- * §4.6 — "Undo last sync"). Undo is strictly local: it touches THIS
- * user's data only; the peer is unaffected until the next sync.
- *
- * Authentication is the standard basic-auth flow, mirroring `/pull`
- * (`/undo` is NOT in the `/session/*` bypass — only the responder-side
- * routes the peer's sync session token speaks to are exempt).
- *
- * 404 vs 500 mapping: `NO_BACKUP_TAG` is the documented "nothing to
- * undo yet" state (a peer that has only ever done one sync, where the
- * pair-init pull doesn't plant a tag) — a 404 is the semantically
- * correct surface so the UI can render "no prior sync to undo" rather
- * than a generic server error.
- */
-router.post('/undo', requireSyncUser, express.json({ limit: '16kb' }), async (request, response) => {
-    const user = request.user;
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
-    const peerId = String(request.body?.peerId || '').trim();
-    if (!peerId) {
-        return response.status(400).json({ error: 'peerId required' });
-    }
-    try {
-        const result = await undoLastSync({
-            userRoot: user.directories.root,
-            handle: user.profile.handle,
-            peerId,
-            directories: user.directories,
-        });
-        response.json(result);
-    } catch (e) {
-        if (e.code === 'NO_BACKUP_TAG') {
-            return response.status(404).json({ error: e.message });
-        }
-        console.error('[sync] undo failed', e);
-        response.status(500).json({ error: e.message });
-    }
-});
-
-/**
- * Admin/registry endpoints for the LAN Sync UI.
- *
- * These are NOT part of the peer-to-peer sync protocol — they expose the
- * server-local sync registry (`<userRoot>/.sync/state.json`) to the user's
- * own browser so the panel can list paired peers, kick off new pairings,
- * and forget old ones. All require the standard basic-auth flow (so
- * `request.user` is populated); none accept the sync session bearer token,
- * which is exclusively for cross-peer object transfer.
- *
- * Why a `/pair/start` + `/pair/accept` split:
- *   - `/pair/start` runs on the device that's GENERATING the pairing
- *     handle. It allocates a new `peerId`, registers it locally as
- *     "expecting a peer", and returns the URL/QR payload the other
- *     device needs.
- *   - `/pair/accept` runs on the device that's CONSUMING the URL. It
- *     does the outbound `/session/offer` + `runPull` so the user only
- *     types the peer's basic-auth credentials once (in the accept
- *     form) — they never leave the user's own browser → server → peer
- *     hop. This is the only reason these endpoints exist as separate
- *     wrappers around the lower-level protocol routes.
- */
+function sendPeerForgotten(response) {
+    return response.status(404).json({ error: 'PEER_FORGOTTEN', code: 'PEER_FORGOTTEN' });
+}
 
 const PEER_ID_SUFFIX_BYTES = 4; // 8 hex chars
 
@@ -770,15 +142,17 @@ const PEER_ID_SUFFIX_BYTES = 4; // 8 hex chars
  *
  * Exported because both `generatePeerId` and the handle-mismatch gate
  * on `/session/offer` + `/pair/accept` need to compare against the same
- * sanitized form, and the same regex is duplicated client-side in
+ * sanitized form, and the same replacements are duplicated client-side in
  * `public/scripts/lan-sync.js` for the pre-flight check. Keep this
- * helper and the literal client-side regex in sync.
+ * helper and the client-side replacements in sync. A dot that starts the
+ * handle or is followed by another dot becomes `_`, so the peerId is a
+ * valid git ref component.
  *
  * @param {string} handle
  * @returns {string}
  */
 export function sanitizeHandleForPeerId(handle) {
-    return String(handle || 'peer').replace(/[^A-Za-z0-9._-]/g, '_');
+    return String(handle || 'peer').replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.(?=\.)/g, '_').replace(/^\./, '_');
 }
 
 function generatePeerId(handle) {
@@ -802,8 +176,8 @@ function secretsMatch(a, b) {
 }
 
 /**
- * Resolve the user a peer is offering to sync as, using the shared
- * pairing secret instead of a session cookie or basic-auth credentials.
+ * Resolve the user a LAN peer is offering to sync as from the pairing
+ * credential the offer carries.
  *
  * Two credentials exist, both scoped to one (handle, peerId) registry
  * entry:
@@ -811,606 +185,609 @@ function secretsMatch(a, b) {
  *   - The one-time pairing code (`X-Sync-Pair-Code`), minted by
  *     `/pair/start` and embedded in the pairing link. It is consumed on
  *     the first successful offer, so a leaked link dies shortly after
- *     pairing.
- *   - The durable peer secret (`X-Sync-Peer-Secret`), minted by the
- *     first offer and stored on both sides. Every later "Sync now"
- *     presents it.
+ *     pairing; that offer mints the durable secret.
+ *   - The durable peer secret (`X-Sync-Peer-Secret`), stored on both
+ *     sides and presented on every later offer.
  *
- * This is NOT an auth bypass: a request only resolves when the peerId
- * prefix matches an actual user's sanitized handle AND that user's
- * registry holds a peer entry for the exact peerId AND the presented
- * credential verifies against it. No entry, no credential, wrong
- * credential → `null` and the route returns 401 as before.
+ * Only users whose sanitized handle equals the peerId prefix and who hold
+ * a LAN backend with that exact id are candidates. No candidate handle →
+ * 412 `HANDLE_MISMATCH`; no candidate holding the backend → 404
+ * `PEER_FORGOTTEN`; no candidate accepting the credential → 401
+ * `PEER_AUTH_FAILED`.
  *
- * @param {import('express').Request} request
- * @param {string} peerId
- * @returns {Promise<{ profile: import('../users.js').User, directories: import('../users.js').UserDirectoryList, issuedSecret?: string } | null>}
+ * @param {{ userStore: typeof defaultUserStore, peerId: string, pairCode: string, presentedSecret: string }} args
+ * @returns {Promise<{ status: 200, user: { profile: object, directories: Record<string, string> }, issuedSecret?: string, consumedCode?: object } | { status: number, code: string, extra?: object }>}
  */
-async function resolveUserFromPeerSecret(request, peerId) {
-    const pairCode = String(request.get(PAIR_CODE_HEADER) || '').trim().toLowerCase();
-    const presentedSecret = String(request.get(PEER_SECRET_HEADER) || '').trim().toLowerCase();
-    if (!peerId || (!pairCode && !PEER_SECRET_PATTERN.test(presentedSecret))) return null;
-    const peerIdPrefix = peerId.split('@')[0];
-    const handles = await getAllUserHandles();
-    for (const handle of handles) {
-        if (sanitizeHandleForPeerId(handle) !== peerIdPrefix) continue;
-        const directories = getUserDirectories(handle);
-        const state = readSyncState({ userRoot: directories.root });
-        const peer = state.peers[peerId];
-        if (!peer) continue;
-        let authenticated = false;
-        let issuedSecret;
-        if (pairCode) {
-            // First offer: trade the one-time code for a durable secret.
-            // The secret is returned to the caller and persisted here so
-            // the peer can present it on every later offer.
-            const consumed = consumePairingCode(pairCode, { handle, peerId });
-            if (consumed) {
-                issuedSecret = crypto.randomBytes(32).toString('hex');
-                authenticated = true;
-            }
-        } else if (peer.syncSecret && secretsMatch(peer.syncSecret, presentedSecret)) {
-            authenticated = true;
-        }
-        if (!authenticated) continue;
-        const profile = await storage.getItem(toKey(handle));
-        if (!profile?.enabled) continue;
-        return { profile, directories, issuedSecret };
+async function resolveOfferUser({ userStore, peerId, pairCode, presentedSecret }) {
+    const prefix = peerId.split('@')[0];
+    const allHandles = await userStore.listHandles();
+    const handles = allHandles.filter(handle => sanitizeHandleForPeerId(handle) === prefix);
+    if (handles.length === 0) {
+        return { status: 412, code: 'HANDLE_MISMATCH', extra: { gotHandle: prefix, expectedHandle: allHandles.length === 1 ? sanitizeHandleForPeerId(allHandles[0]) : null } };
     }
-    return null;
+    let registered = false;
+    for (const handle of handles) {
+        const profile = await userStore.getProfile(handle);
+        if (!profile || profile.enabled === false) continue;
+        const directories = userStore.getDirectories(handle);
+        const entry = (await readRegistry({ userRoot: directories.root })).backends[peerId];
+        if (entry?.kind !== 'lan') continue;
+        registered = true;
+        if (pairCode) {
+            const consumedCode = consumePairingCode(pairCode, { handle, peerId });
+            if (consumedCode) {
+                return { status: 200, user: { profile, directories }, consumedCode, issuedSecret: crypto.randomBytes(32).toString('hex') };
+            }
+        } else if (entry.lan.syncSecret && secretsMatch(entry.lan.syncSecret, presentedSecret)) {
+            return { status: 200, user: { profile, directories } };
+        }
+    }
+    return registered ? { status: 401, code: 'PEER_AUTH_FAILED' } : { status: 404, code: 'PEER_FORGOTTEN' };
 }
 
 /**
- * List paired peers for the authenticated user. Returns the registry shape
- * from `readSyncState` so the UI can render rows verbatim — label,
- * categories, pairedAt, lastSyncAt, lastSyncedOid — with one transform:
- * the stored `peerAuth` blob is replaced by a boolean `hasStoredCredentials`
- * so the UI knows whether to show the "Clear credentials" button without
- * the password ever crossing the wire. State.json mode 0600 narrows local
- * exposure; never echoing the password in API responses closes the
- * cross-origin / shoulder-surf path on top of that.
+ * Build the sync router. `userStore` supplies the users, directories and
+ * storage engines the routes act on.
  *
- * Empty result is `{ peers: {} }` (never 404) so the UI can render an
- * empty-state without branching on HTTP status.
+ * @param {{ userStore?: typeof defaultUserStore }} [options]
+ * @returns {import('express').Router}
  */
-router.get('/peers', (request, response) => {
-    const user = request.user;
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
-    const state = readSyncState({ userRoot: user.directories.root });
-    const sanitized = {};
-    for (const [peerId, peer] of Object.entries(state.peers)) {
-        const { peerAuth, syncSecret: _syncSecret, ...rest } = peer;
-        sanitized[peerId] = {
-            ...rest,
-            hasStoredCredentials: Boolean(peerAuth && peerAuth.username && peerAuth.password),
-        };
-    }
-    response.json({ peers: sanitized });
-});
+export function createSyncRouter({ userStore = defaultUserStore, network } = {}) {
+    const router = express.Router();
 
-/**
- * Expose the server-side `SYNC_CATEGORIES` registry so the LAN Sync UI
- * can render category checkboxes without duplicating the list. Functions
- * (`paths[].from`) are stripped because they can't survive JSON, and the
- * UI doesn't need them — only the id/displayKey/descriptionKey/syncDefault
- * shape feeds the user's choices.
- *
- * Re-fetched on every panel open so adding a category server-side appears
- * immediately in the UI with no client rebuild.
- */
-router.get('/categories', (_request, response) => {
-    response.json({
-        categories: SYNC_CATEGORIES.map(cat => ({
-            id: cat.id,
-            displayKey: cat.displayKey,
-            descriptionKey: cat.descriptionKey,
-            conflictMode: cat.conflictMode,
-            syncDefault: cat.syncDefault,
-            warnings: cat.warnings ?? [],
-        })),
+    router.get('/health', (_request, response) => {
+        response.json({ ok: true, protocol: LAN_PROTOCOL });
     });
-});
 
-/**
- * Report whether LAN Sync can run on this server. Every storage engine is
- * supported (the orchestrator routes SQL-engine data through the per-record
- * materializer); the route is kept as a stable forward-compatible surface
- * so the UI can branch on `available: false` if a future blocker
- * (read-only mount, missing git binary, etc.) needs to be surfaced.
- *
- * Shape: `{ available: true }` when sync works; `{ available: false,
- * reason: '<code>', ... }` when blocked. No `false` branch is wired today.
- */
-router.get('/availability', (_request, response) => {
-    response.json({ available: true });
-});
+    /**
+     * Return the per-session manifest:
+     *   - `handle`, `peerId`, `expiresAt` — session-binding metadata copied
+     *     from the token payload so the peer can sanity-check it's talking
+     *     to the right user.
+     *   - `headOid` — the shadow's `refs/heads/main`, or `null` before the
+     *     first commit. The peer fetches from it.
+     *   - `incomingOid` — the newest commit the peer pushed here, the
+     *     shadow's `refs/incoming/<peerId>`, or `null`. The peer
+     *     compares against it when it moves that ref.
+     *
+     * The shadow already exists here: the offer's local step created it
+     * before issuing the session. A backend removed since then gets 404
+     * `PEER_FORGOTTEN`.
+     */
+    router.get('/session/manifest', requireSyncToken, async (request, response) => {
+        const { handle, peerId, expiresAt } = request.syncSession;
+        try {
+            const shadow = await shadowFor(request.syncSession);
+            const headOid = await resolveRefOrNull(shadow.gitDir, 'refs/heads/main');
+            const incomingOid = await resolveRefOrNull(shadow.gitDir, incomingRefFor(peerId));
+            response.json({ handle, peerId, expiresAt, headOid, incomingOid });
+        } catch (e) {
+            if (e.code === 'PEER_FORGOTTEN') return sendPeerForgotten(response);
+            console.error('[sync] manifest failed', e);
+            response.status(500).json({ error: 'Internal error' });
+        }
+    });
 
-/**
- * Forget a peer — removes the registry entry AND deletes the on-disk shadow
- * repo under `<userRoot>/.sync/<peerId>/`. Idempotent: 204 even when the peer
- * isn't registered (the absence is the desired state, calling it again is a
- * no-op).
- *
- * Returns 400 only when the supplied `:peerId` fails the safety pattern in
- * `assertSafePeerId` — we never want a malformed id to slip through into the
- * shadow path arithmetic.
- */
-router.delete('/peers/:peerId', async (request, response) => {
-    const user = request.user;
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
-    const peerId = String(request.params.peerId || '').trim();
-    try {
-        assertSafePeerId(peerId);
-    } catch (e) {
-        return response.status(400).json({ error: e.message });
-    }
-    try {
-        await removePeerCompletely({ userRoot: user.directories.root, peerId });
-        response.status(204).end();
-    } catch (e) {
-        console.error('[sync] forget peer failed', e);
-        response.status(500).json({ error: e.message });
-    }
-});
+    /**
+     * Stream a single git object back to the peer in wire format.
+     *
+     * Body: raw, unwrapped object bytes (`application/octet-stream`). Type and
+     * canonical oid travel out-of-band in `X-Object-Type` / `X-Object-Oid` so
+     * the receiver can route to `writeObjectFromWireStream` without re-parsing.
+     *
+     * `readObjectForWire` returns `NotFoundError` for missing oids, which we
+     * map to 404. There is no size cap on object reads: the responder serves
+     * whatever lives in its ODB and the peer's streaming receive handles
+     * arbitrarily large bodies without buffering them in RAM.
+     */
+    router.get('/session/object/:oid', requireSyncToken, async (request, response) => {
+        const oid = String(request.params.oid).toLowerCase();
+        if (!OID_PATTERN.test(oid)) {
+            return response.status(400).json({ error: 'Invalid oid' });
+        }
+        try {
+            const shadow = await shadowFor(request.syncSession);
+            const obj = await readObjectForWire({ dir: shadow.workdir, gitdir: shadow.gitDir, oid });
+            response.set('Content-Type', 'application/octet-stream');
+            response.set('X-Object-Type', obj.type);
+            response.set('X-Object-Oid', obj.oid);
+            response.send(obj.body);
+        } catch (e) {
+            if (e.code === 'PEER_FORGOTTEN') return sendPeerForgotten(response);
+            if (e.code === 'NotFoundError') return response.status(404).json({ error: 'Not found' });
+            console.error('[sync] object read failed', e);
+            response.status(500).json({ error: 'Internal error' });
+        }
+    });
 
-/**
- * Clear stored basic-auth credentials for a peer. The peer entry, shadow
- * repo, and other metadata are preserved — only the `peerAuth` blob is
- * dropped. After this returns, "Sync now" against the peer will run
- * without an Authorization header on the outbound `/session/offer` call;
- * in multi-user mode that 401s until the user re-pairs.
- *
- * Idempotent: 200 even when the peer doesn't exist or had no stored
- * credentials. The 400 branch is reserved for unsafe `:peerId` values
- * (same gate as `DELETE /peers/:peerId`).
- */
-router.delete('/peers/:peerId/auth', async (request, response) => {
-    const user = request.user;
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
-    const peerId = String(request.params.peerId || '').trim();
-    try {
-        assertSafePeerId(peerId);
-    } catch (e) {
-        return response.status(400).json({ error: e.message });
-    }
-    try {
-        await clearPeerAuth({ userRoot: user.directories.root, peerId });
+    /**
+     * Accept a single git object from the peer and land it in the local shadow.
+     *
+     * Body: raw object bytes streamed directly off the request. No body parser
+     * is mounted on this route — `writeObjectFromWireStream` pipes the request
+     * into a tmp file under the shadow's gitdir, so the responder's heap never
+     * grows by the body's full size even for gigabyte-scale objects. The peer
+     * decides what to send; we decide what to keep, by hashing the received
+     * bytes in their wrapped form (type prefix + length + NUL + body) and
+     * comparing against `X-Object-Oid` before `git.writeObject` runs. A wrong
+     * oid (sender bug, transport corruption, hostile peer) is rejected and the
+     * tmp file cleaned up without the object ever reaching the ODB.
+     *
+     * `X-Object-Type` and `X-Object-Oid` headers carry the metadata; the type
+     * is checked against `ALLOWED_OBJECT_TYPES` before we start the pipe so a
+     * malformed header rejects with 400 without touching disk.
+     */
+    router.post(
+        '/session/object',
+        requireSyncToken,
+        async (request, response) => {
+            const oid = String(request.get('X-Object-Oid') || '').toLowerCase();
+            const type = String(request.get('X-Object-Type') || '').toLowerCase();
+            if (!OID_PATTERN.test(oid)) {
+                return response.status(400).json({ error: 'Missing/invalid X-Object-Oid' });
+            }
+            if (!ALLOWED_OBJECT_TYPES.includes(type)) {
+                return response.status(400).json({ error: 'Invalid X-Object-Type' });
+            }
+            const { userRoot, peerId } = request.syncSession;
+            try {
+                const shadow = await shadowFor(request.syncSession);
+                // A removal queued on the shadow lock deletes the shadow, so
+                // each section that writes into it checks the backend again.
+                await writeObjectFromWireStream({
+                    dir: shadow.workdir,
+                    gitdir: shadow.gitDir,
+                    oid,
+                    type,
+                    stream: request,
+                    withLock: fn => syncService.withShadowLock(userRoot, peerId, async () => {
+                        await shadowFor(request.syncSession);
+                        return fn();
+                    }),
+                });
+                response.json({ oid });
+            } catch (e) {
+                if (e.code === 'PEER_FORGOTTEN') return sendPeerForgotten(response);
+                console.error('[sync] object write failed', e);
+                response.status(500).json({ error: 'Internal error' });
+            }
+        },
+    );
+
+    /**
+     * Compare-and-swap the session peer's incoming ref,
+     * `refs/incoming/<peerId>`, from `expectedOid` to `newOid`; an
+     * all-zero oid means the ref is absent. No other ref is accepted, and
+     * neither `main` nor live data is touched: the next incoming step
+     * merges the ref into both.
+     *
+     * The target's objects must all be present, since the incoming step
+     * reads the ref without checking: an incomplete closure gets 422
+     * `INCOMPLETE_OBJECTS`, and a target that is not a commit gets 422
+     * `NOT_A_COMMIT`. A mismatch gets 409 with the current oid. The
+     * closure check, the compare and the write run under the backend's
+     * shadow lock, so they are ordered against the incoming step, against
+     * removal and against each other.
+     */
+    router.post('/session/ref', requireSyncToken, express.json(), async (request, response) => {
+        const { userRoot, peerId } = request.syncSession;
+        const ref = String(request.body?.ref || '');
+        const expectedOid = String(request.body?.expectedOid || '').toLowerCase() || ZERO_OID;
+        const newOid = String(request.body?.newOid || '').toLowerCase();
+        try {
+            await shadowFor(request.syncSession);
+            if (ref !== incomingRefFor(peerId)) {
+                return response.status(400).json({ error: 'Invalid ref' });
+            }
+            if (!OID_PATTERN.test(newOid)) {
+                return response.status(400).json({ error: 'Invalid newOid' });
+            }
+            await pausepoint(PAUSEPOINTS.SESSION_REF_BEFORE_LOCK);
+            // A removal queued on the lock ahead of this section deletes the
+            // shadow, so the checks run again inside it.
+            const swap = await syncService.withShadowLock(userRoot, peerId, async () => {
+                const shadow = await shadowFor(request.syncSession);
+                if (!await hasCompleteClosure({ dir: shadow.workdir, gitdir: shadow.gitDir, oid: newOid })) {
+                    return { status: 422, body: { error: 'Objects of the target commit are missing', code: 'INCOMPLETE_OBJECTS' } };
+                }
+                const { type } = await git.readObject({ fs: atomicFs, gitdir: shadow.gitDir, oid: newOid, format: 'content' });
+                if (type !== 'commit') {
+                    return { status: 422, body: { error: 'The target is not a commit', code: 'NOT_A_COMMIT' } };
+                }
+                const currentOid = await resolveRefOrNull(shadow.gitDir, ref);
+                if ((currentOid ?? ZERO_OID) !== expectedOid) return { status: 409, body: { error: 'Ref changed', currentOid } };
+                // `force` because a merge commit need not descend from the
+                // previous value; the compare above is the gate.
+                await git.writeRef({ fs: atomicFs, gitdir: shadow.gitDir, ref, value: newOid, force: true });
+                return null;
+            });
+            if (swap) return response.status(swap.status).json(swap.body);
+            response.json({ ref, oid: newOid });
+        } catch (e) {
+            if (e.code === 'PEER_FORGOTTEN') return sendPeerForgotten(response);
+            console.error('[sync] ref write failed', e);
+            response.status(500).json({ error: 'Internal error' });
+        }
+    });
+
+    /**
+     * Ask this device to sync with the session peer after the peer moved
+     * the incoming ref. The run happens in the background; the response
+     * does not wait for it.
+     */
+    router.post('/session/notify', requireSyncToken, async (request, response) => {
+        const { owner, peerId } = request.syncSession;
+        try {
+            await shadowFor(request.syncSession);
+        } catch (e) {
+            if (e.code === 'PEER_FORGOTTEN') return sendPeerForgotten(response);
+            console.error('[sync] notify failed', e);
+            return response.status(500).json({ error: 'Internal error' });
+        }
+        syncService.trigger(owner, peerId, 'notify').catch(error => console.error('[sync] notified sync failed', error));
+        response.status(202).json({ ok: true });
+    });
+
+    /**
+     * Issue a sync-session token to a paired LAN device. The caller is
+     * another Luker server: it presents the one-time pairing code
+     * (`X-Sync-Pair-Code`) on its first offer and the durable peer secret
+     * (`X-Sync-Peer-Secret`) on every later one. Both bind to one
+     * registered LAN backend of one user; the offer body's categories are
+     * ignored, the backend's stored ones apply.
+     *
+     * Before the token is returned the incoming step runs: live data is
+     * snapshotted into the shadow's `main` and anything the peer pushed to
+     * `refs/incoming/<peerId>` is merged into live, so the peer reads a
+     * current head. That step waits only on this backend's shadow lock.
+     * A secret traded for a pairing code is stored only once the offer
+     * succeeds; a failed offer leaves the code usable for a retry.
+     *
+     * An authenticated offer also refreshes `peerBaseUrl` from its
+     * `callback`, limited to the address the request came from.
+     * `request.socket.remoteAddress` is used on purpose: forwarded headers
+     * are not trusted for this decision.
+     */
+    router.post('/session/offer', express.json({ limit: '16kb' }), async (request, response) => {
+        const peerId = String(request.body?.peerId || '').trim();
+        if (!peerId) return response.status(400).json({ error: 'peerId required' });
+        const protocol = Number(request.body?.protocol);
+        if (!Number.isFinite(protocol) || protocol < LAN_PROTOCOL) {
+            return response.status(426).json({ error: 'This Luker version is too old for the other device', code: 'PEER_PROTOCOL_OUTDATED' });
+        }
+        const pairCode = String(request.get(PAIR_CODE_HEADER) || '').trim().toLowerCase();
+        const presentedSecret = String(request.get(PEER_SECRET_HEADER) || '').trim().toLowerCase();
+        if (!pairCode && !PEER_SECRET_PATTERN.test(presentedSecret)) {
+            return response.status(401).json({ error: 'A pairing code or peer secret is required', code: 'PEER_AUTH_REQUIRED' });
+        }
+        // A pairing code consumed by this offer is put back unless the offer
+        // succeeds, so the peer can retry with it; while the offer runs no
+        // other offer can use it.
+        let consumedCode = null;
+        let succeeded = false;
+        const forgotten = () => sendPeerForgotten(response);
+        try {
+            const resolved = await resolveOfferUser({ userStore, peerId, pairCode, presentedSecret });
+            if (resolved.status !== 200) return response.status(resolved.status).json({ error: resolved.code, code: resolved.code, ...resolved.extra });
+            const { user, issuedSecret } = resolved;
+            consumedCode = resolved.consumedCode ?? null;
+            const userRoot = user.directories.root;
+            const owner = ownerFromUser(user, userStore);
+            syncService.rememberOwner(owner);
+            await pausepoint(PAUSEPOINTS.OFFER_BEFORE_ADMISSION, userRoot);
+            return await syncService.withIncomingOfferOperation(owner, peerId, async lease => {
+                await pausepoint(PAUSEPOINTS.OFFER_AFTER_ADMISSION, userRoot);
+                const picked = pickCallbackBaseUrl({ callback: request.body?.callback, remoteAddress: request.socket.remoteAddress });
+                const entry = (await readRegistry({ userRoot })).backends[peerId];
+                if (!entry?.lan) return forgotten();
+                if (consumedCode) await checkPairCallback({ owner, baseUrl: picked, network });
+                if (syncService.isRemoving(userRoot, peerId)) return forgotten();
+                const local = await syncService.runLocalStep(owner, peerId, lease);
+                if (!local.ok && local.code === 'UNKNOWN_BACKEND') return forgotten();
+                if (!local.ok) return response.status(500).json({ error: local.message, code: local.code });
+                await lease.withLocal(async () => {
+                    if (picked && entry.lan.peerBaseUrl !== picked) await setLanPeerBaseUrl({ userRoot, backendId: peerId, peerBaseUrl: picked });
+                    await setLanPeerDeviceLabel({ userRoot, backendId: peerId, peerDeviceLabel: request.body?.label });
+                    if (issuedSecret) await setLanSecret({ userRoot, backendId: peerId, syncSecret: issuedSecret });
+                });
+                // Removal closes the backend's sessions as it starts and deletes
+                // the registry entry before it ends. Registry reads queue behind
+                // writes, so an entry read here means the removal had not ended;
+                // `isRemoving` then tells whether it has begun. Nothing may await
+                // between the read and the issue.
+                const registry = await readRegistry({ userRoot });
+                if (!registry.backends[peerId]?.lan || syncService.isRemoving(userRoot, peerId)) return forgotten();
+                const deviceLabel = resolveDeviceLabel(registry, owner);
+                const { token, expiresAt } = createSyncSession({ handle: user.profile.handle, peerId, userRoot, directories: user.directories, owner });
+                succeeded = true;
+                return response.json({
+                    token, expiresAt, url: `${getRequestBaseUrl(request)}/api/sync/v1/session/manifest`, peerId,
+                    deviceLabel, protocol: LAN_PROTOCOL, syncSecret: issuedSecret,
+                });
+            });
+        } catch (error) {
+            if (error?.code === 'UNKNOWN_BACKEND' || error?.code === 'PEER_FORGOTTEN') return forgotten();
+            if (error?.code === 'SYNC_BACKEND_MAINTENANCE') return response.status(409).json({ error: error.message, code: error.code });
+            if (error?.code === 'SYNC_PRIVATE_ADDRESS') return response.status(403).json({ error: error.message, code: error.code });
+            if (error?.code === 'PEER_CALLBACK_UNREACHABLE') return response.status(502).json({ error: error.message, code: error.code });
+            console.error('[sync] offer failed', error);
+            return response.status(500).json({ error: String(error?.message || error), code: error?.code || 'SYNC_FAILED' });
+        } finally {
+            if (consumedCode && !succeeded) restorePairingCode(pairCode, consumedCode);
+        }
+    });
+
+    /**
+     * Invalidate the session token from the bearer header. The route is
+     * token-gated so a third party cannot enumerate-and-revoke other peers'
+     * sessions, and the bearer is what we're closing anyway.
+     *
+     * Returns `{ ok: true }` after `closeSyncSession` so the peer can confirm
+     * the cleanup landed; subsequent requests with the same token will get
+     * 401 from `requireSyncToken`.
+     */
+    router.post('/session/close', requireSyncToken, (request, response) => {
+        const token = extractToken(request);
+        closeSyncSession(token);
         response.json({ ok: true });
-    } catch (e) {
-        console.error('[sync] clearPeerAuth failed', e);
-        response.status(500).json({ error: e.message });
-    }
-});
+    });
 
-/**
- * Rename or re-tag a registered peer. Used by the UI's "Edit peer" inline
- * action; also covers "Update category selection" since `recordPeer` writes
- * the categories array alongside the label.
- *
- * `pairedAt` is preserved by `recordPeer` so re-labeling doesn't make a
- * long-paired peer look new.
- */
-router.post('/peers/:peerId/label', requireSyncUser, express.json({ limit: '4kb' }), async (request, response) => {
-    const user = request.user;
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
-    const peerId = String(request.params.peerId || '').trim();
-    try {
-        assertSafePeerId(peerId);
-    } catch (e) {
-        return response.status(400).json({ error: e.message });
-    }
-    const label = String(request.body?.label || '').trim();
-    const categories = Array.isArray(request.body?.categories)
-        ? request.body.categories.map(String)
-        : [];
-    if (!label) {
-        return response.status(400).json({ error: 'label required' });
-    }
-    try {
-        await recordPeer({ userRoot: user.directories.root, peerId, label, categories });
-        response.json({ ok: true });
-    } catch (e) {
-        console.error('[sync] relabel peer failed', e);
-        response.status(500).json({ error: e.message });
-    }
-});
+    /**
+     * Admin/registry endpoints for the LAN Sync UI.
+     *
+     * These are NOT part of the peer-to-peer sync protocol — they expose the
+     * server-local sync registry (`<userRoot>/.sync/state.json`) to the user's
+     * own browser so the panel can list and manage backends (see
+     * `./sync-backends.js`) and pair new devices. All require the standard basic-auth flow (so
+     * `request.user` is populated); none accept the sync session bearer token,
+     * which is exclusively for cross-peer object transfer.
+     *
+     * Why a `/pair/start` + `/pair/accept` split:
+     *   - `/pair/start` runs on the device that's GENERATING the pairing
+     *     handle. It allocates a new `peerId`, registers it locally as
+     *     "expecting a peer", and returns the URL/QR payload the other
+     *     device needs.
+     *   - `/pair/accept` runs on the device that's CONSUMING the URL. It
+     *     does the outbound `/session/offer` and the first sync so the user only
+     *     types the peer's basic-auth credentials once (in the accept
+     *     form) — they never leave the user's own browser → server → peer
+     *     hop. This is the only reason these endpoints exist as separate
+     *     wrappers around the lower-level protocol routes.
+     */
+    router.use(requireSyncUser);
+    router.use(createS3Router({ userStore, network }));
+    router.use(createBackendsRouter({ userStore }));
 
-/**
- * Generate a new pairing handle for THIS device to share with a not-yet-paired
- * peer. Allocates a fresh `peerId`, records it locally as "expecting a peer",
- * and returns the payload the UI turns into a QR / shareable URL.
- *
- * The returned `peerBaseUrl` is derived from the current request's host
- * header, so a user who pairs while on Wi-Fi gets a LAN URL, and one on
- * loopback gets `http://127.0.0.1:<port>` (mostly useful for tests).
- * `candidateBaseUrls` carries the same origin with each reachable interface
- * address substituted, so the UI can default the link to an address a peer
- * can actually reach instead of the loopback one. Empty when this server is
- * loopback-only.
- *
- * Returning the categories the user selected lets the OTHER device pre-fill
- * its accept form with the same selection — pairing implies shared scope.
- */
-router.post('/pair/start', requireSyncUser, express.json({ limit: '4kb' }), async (request, response) => {
-    const user = request.user;
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
-
-    const label = String(request.body?.label || '').trim() || 'Unnamed device';
-    const categories = Array.isArray(request.body?.categories)
-        ? request.body.categories.map(String)
-        : [];
-    if (!categories.length) {
-        return response.status(400).json({ error: 'categories required' });
-    }
-
-    const peerId = generatePeerId(user.profile.handle);
-    try {
-        await recordPeer({ userRoot: user.directories.root, peerId, label, categories });
-    } catch (e) {
-        console.error('[sync] pair/start record failed', e);
-        return response.status(500).json({ error: e.message });
-    }
-
-    // Mint the one-time pairing code that travels in the link. It is
-    // consumed by the accepting device's first `/session/offer`, which
-    // returns the durable peer secret both sides then use. The code
-    // expires with the link, so a leaked screenshot cannot mint a
-    // session later.
-    const pairCode = createPairingCode({ handle: user.profile.handle, peerId });
-
-    const peerBaseUrl = getRequestBaseUrl(request);
-    // The request host is the loopback address when the app was opened
-    // through it, which a peer cannot reach. When this server listens
-    // beyond loopback, hand the UI the reachable alternatives so it can
-    // default the link to one of them instead of the loopback address.
-    const candidateBaseUrls = buildLanBaseUrlCandidates(peerBaseUrl, globalThis.COMMAND_LINE_ARGS);
-    response.json({ peerId, label, peerBaseUrl, candidateBaseUrls, categories, pairCode });
-});
-
-/**
- * "Sync now" — re-run sync against an already-paired peer using the
- * `peerBaseUrl` stored in the registry. This is what the UI's per-peer
- * Sync button calls.
- *
- * The caller does NOT supply `peerBaseUrl` or `categories`; both come
- * from the recorded peer entry. Optional `peerAuth` (forwarded as basic
- * auth on the outbound `/session/offer` call) and `resolutions` (for
- * the conflict round-trip) match `/pair/accept`'s payload shape.
- *
- * Same `runPull` error mapping as `/pull`: `PEER_REF_CHANGED` → 409 with
- * `retry: true`, `PEER_TIMEOUT` → 504. A registered peer with no recorded
- * `peerBaseUrl` (legacy entry from earlier code) returns 412 with a
- * coded body so the UI can fall back to prompting the user once for the
- * URL.
- */
-// `resolutions` carries one entry per conflicting file, so this body
-// grows with the conflict set. Same payload shape and limit as /pull.
-router.post('/peers/:peerId/sync', requireSyncUser, express.json({ limit: '1mb' }), async (request, response) => {
-    const user = request.user;
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
-
-    const peerId = String(request.params.peerId || '').trim();
-    try {
-        assertSafePeerId(peerId);
-    } catch (e) {
-        return response.status(400).json({ error: e.message });
-    }
-
-    const state = readSyncState({ userRoot: user.directories.root });
-    const peer = state.peers[peerId];
-    if (!peer) {
-        return response.status(404).json({ error: 'Unknown peer' });
-    }
-    if (!peer.peerBaseUrl) {
-        return response.status(412).json({
-            error: 'No base URL recorded for this peer',
-            code: 'NO_BASE_URL',
+    /**
+     * Expose the server-side `SYNC_CATEGORIES` registry so the LAN Sync UI
+     * can render category checkboxes without duplicating the list. Functions
+     * (`paths[].from`) are stripped because they can't survive JSON, and the
+     * UI doesn't need them — only the id/displayKey/descriptionKey/syncDefault
+     * shape feeds the user's choices.
+     *
+     * Re-fetched on every panel open so adding a category server-side appears
+     * immediately in the UI with no client rebuild.
+     */
+    router.get('/categories', (_request, response) => {
+        response.json({
+            categories: SYNC_CATEGORIES.map(cat => ({
+                id: cat.id,
+                displayKey: cat.displayKey,
+                descriptionKey: cat.descriptionKey,
+                conflictMode: cat.conflictMode,
+                syncDefault: cat.syncDefault,
+                warnings: cat.warnings ?? [],
+            })),
         });
-    }
+    });
 
-    const body = request.body ?? {};
-    // Prefer the credentials the caller supplied this call (lets the
-    // UI override one-shot, e.g. for a one-time re-auth without storing
-    // anything). Fall back to whatever the registry persisted at pair
-    // time — this is the path that lets the UI's per-peer "Sync now"
-    // button work in multi-user mode without prompting again.
-    const peerAuth = (body.peerAuth && typeof body.peerAuth === 'object')
-        ? body.peerAuth
-        : (peer.peerAuth ?? null);
-    const resolutions = (body.resolutions && typeof body.resolutions === 'object') ? body.resolutions : undefined;
+    /**
+     * Report whether LAN Sync can run on this server. Every storage engine is
+     * supported (the sync pipeline routes SQL-engine data through the per-record
+     * materializer); the route is kept as a stable forward-compatible surface
+     * so the UI can branch on `available: false` if a future blocker
+     * (read-only mount, missing git binary, etc.) needs to be surfaced.
+     *
+     * Shape: `{ available: true }` when sync works; `{ available: false,
+     * reason: '<code>', ... }` when blocked. No `false` branch is wired today.
+     */
+    router.get('/availability', (_request, response) => {
+        response.json({ available: true });
+    });
 
-    // Mint a fresh session token at the peer via /session/offer. Prefer
-    // the stored pairing secret (works on multi-user installs without
-    // basic-auth credentials); basic-auth credentials, when stored or
-    // supplied, ride along for peers whose basic-auth middleware gates
-    // `/session/offer` itself.
-    const headers = { 'Content-Type': 'application/json' };
-    if (peer.syncSecret) {
-        headers[PEER_SECRET_HEADER] = peer.syncSecret;
-    }
-    if (peerAuth?.username && peerAuth?.password) {
-        const creds = Buffer.from(`${peerAuth.username}:${peerAuth.password}`, 'utf8').toString('base64');
-        headers['Authorization'] = `Basic ${creds}`;
-    }
+    /**
+     * Generate a new pairing handle for THIS device to share with a not-yet-paired
+     * peer. Allocates a fresh `peerId`, records it locally as "expecting a peer",
+     * and returns the payload the UI turns into a QR / shareable URL.
+     *
+     * The returned `peerBaseUrl` is derived from the current request's host
+     * header, so a user who pairs while on Wi-Fi gets a LAN URL, and one on
+     * loopback gets `http://127.0.0.1:<port>` (mostly useful for tests).
+     * `candidateBaseUrls` carries the same origin with each reachable interface
+     * address substituted, so the UI can default the link to an address a peer
+     * can actually reach instead of the loopback one. Empty when this server is
+     * loopback-only.
+     *
+     * Returning the categories the user selected lets the OTHER device pre-fill
+     * its accept form with the same selection — pairing implies shared scope.
+     */
+    router.post('/pair/start', express.json({ limit: '4kb' }), async (request, response) => {
+        const user = request.user;
+        if (!user?.profile?.handle || !user?.directories?.root) {
+            return response.status(401).json({ error: 'Auth required' });
+        }
 
-    // The peerId we send to A's /session/offer is the id A previously
-    // allocated for THIS pairing (via A's /pair/start, returned to us at
-    // /pair/accept time and stored on the peer entry). Reusing it ensures
-    // A's per-peer shadow under `/.sync/<peerId>/` is the SAME directory
-    // on every sync — otherwise each new sync session would create a
-    // fresh empty shadow on A's side and every commit would be a root,
-    // breaking the ancestry walk that gives us fast-forwards.
-    let offerResult;
-    try {
-        const offerResponse = await fetch(`${peer.peerBaseUrl.replace(/\/+$/, '')}/api/sync/v1/session/offer`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-                peerId,
-                label: user.profile.name || user.profile.handle,
-                categories: peer.categories || [],
-            }),
-        });
-        if (!offerResponse.ok) {
-            const text = await offerResponse.text();
-            let parsed;
-            try { parsed = JSON.parse(text); } catch { parsed = { error: text.slice(0, 256) }; }
-            return response.status(offerResponse.status).json({
-                error: parsed.error || `Peer returned ${offerResponse.status}`,
-                stage: 'offer',
+        const label = String(request.body?.label || '').trim() || 'Unnamed device';
+        const categories = Array.isArray(request.body?.categories)
+            ? request.body.categories.map(String)
+            : [];
+        if (!categories.length) {
+            return response.status(400).json({ error: 'categories required' });
+        }
+
+        syncService.rememberOwner(ownerFromUser(user, userStore));
+        const peerId = generatePeerId(user.profile.handle);
+        try {
+            await upsertLanBackend({ userRoot: user.directories.root, backendId: peerId, label, categories });
+        } catch (e) {
+            console.error('[sync] pair/start record failed', e);
+            return response.status(500).json({ error: e.message });
+        }
+
+        // Mint the one-time pairing code that travels in the link. It is
+        // consumed by the accepting device's first `/session/offer`, which
+        // returns the durable peer secret both sides then use. The code
+        // expires with the link, so a leaked screenshot cannot mint a
+        // session later.
+        const pairCode = createPairingCode({ handle: user.profile.handle, peerId });
+
+        const peerBaseUrl = getRequestBaseUrl(request);
+        // The request host is the loopback address when the app was opened
+        // through it, which a peer cannot reach. When this server listens
+        // beyond loopback, hand the UI the reachable alternatives so it can
+        // default the link to one of them instead of the loopback address.
+        const candidateBaseUrls = buildLanBaseUrlCandidates(peerBaseUrl, globalThis.COMMAND_LINE_ARGS);
+        response.json({ peerId, label, peerBaseUrl, candidateBaseUrls, categories, pairCode });
+    });
+
+    /**
+     * Consume a pairing link from the other device and run the first sync.
+     *
+     * Body: `peerBaseUrl` and `remotePeerId` come from the link and name the
+     * other device and the backend id it allocated; `label` and
+     * `categories` are this device's settings for the backend; `pairCode`
+     * is the one-time code from the link; `peerAuth` holds optional
+     * basic-auth credentials for the other device, stored for later syncs.
+     *
+     * Everything that can be checked locally is checked before any network
+     * call. Then the other device's health is read, so a device too old for
+     * this protocol is refused before it sees the pairing code. The offer
+     * trades the pairing code for the durable secret; only once it succeeds
+     * is the backend recorded, so a failed pairing stores no credentials.
+     * Failures of the offer keep the status the peer returned and carry
+     * `stage: 'offer'`. The answer is that of `POST /backends/:id/sync` for
+     * the first sync, plus `backendId` and `label`.
+     */
+    router.post('/pair/accept', express.json({ limit: '4kb' }), async (request, response) => {
+        const user = request.user;
+        if (!user?.profile?.handle || !user?.directories?.root) {
+            return response.status(401).json({ error: 'Auth required' });
+        }
+
+        const body = request.body ?? {};
+        const peerBaseUrl = String(body.peerBaseUrl || '').trim();
+        const remotePeerId = String(body.remotePeerId || '').trim();
+        const label = String(body.label || '').trim() || 'Unnamed device';
+        const categories = Array.isArray(body.categories) ? body.categories.map(String) : [];
+        const peerAuth = body.peerAuth && typeof body.peerAuth === 'object' ? body.peerAuth : null;
+        const pairCode = String(body.pairCode || '').trim().toLowerCase();
+
+        if (!peerBaseUrl || !remotePeerId) {
+            return response.status(400).json({ error: 'peerBaseUrl and remotePeerId required' });
+        }
+        if (!categories.length) {
+            return response.status(400).json({ error: 'categories required' });
+        }
+        try {
+            assertSafeBackendId(remotePeerId);
+        } catch (e) {
+            return response.status(400).json({ error: e.message, code: e.code });
+        }
+
+        // The other device minted `remotePeerId` from its own user's handle.
+        // Pairing two different users would merge one user's data into the
+        // other's, so the handles must match; two real accounts with the
+        // same handle on different servers are accepted by design.
+        const expectedHandle = sanitizeHandleForPeerId(user.profile.handle);
+        const remotePeerIdPrefix = remotePeerId.split('@')[0];
+        if (expectedHandle !== remotePeerIdPrefix) {
+            return response.status(412).json({
+                error: 'Handle mismatch',
+                code: 'HANDLE_MISMATCH',
+                expectedHandle,
+                gotHandle: remotePeerIdPrefix,
             });
         }
-        offerResult = await offerResponse.json();
-    } catch (e) {
-        console.error('[sync] sync-now offer failed', e);
-        return response.status(502).json({ error: e.message, detail: describeFetchFailure(e), stage: 'offer' });
-    }
 
-    const offerToken = String(offerResult?.token || '');
-    if (!offerToken) {
-        return response.status(502).json({ error: 'Peer returned no token', stage: 'offer' });
-    }
+        const owner = ownerFromUser(user, userStore);
+        syncService.rememberOwner(owner);
+        const fetchPeer = guardedLanFetch(owner, network);
+        const peerApi = `${peerBaseUrl.replace(/\/+$/, '')}/api/sync/v1`;
+        const basicAuth = peerAuth?.username && peerAuth?.password
+            ? { Authorization: `Basic ${Buffer.from(`${peerAuth.username}:${peerAuth.password}`, 'utf8').toString('base64')}` }
+            : {};
+        const offerFailure = (status, code, error, extra = {}) => response.status(status).json({ error, code, stage: 'offer', ...extra });
+        const outdated = () => offerFailure(426, 'PEER_PROTOCOL_OUTDATED', 'The Luker version of the other device is too old');
 
-    try {
-        const result = await runPull({
-            userRoot: user.directories.root,
-            handle: user.profile.handle,
-            directories: user.directories,
-            peerId,
-            peerLabel: peer.label || peerId,
-            peerBaseUrl: peer.peerBaseUrl,
-            offerToken,
-            categories: peer.categories || [],
-            resolutions,
-        });
-        response.json({ ...result, peerId, label: peer.label || peerId });
-    } catch (e) {
-        if (e.code === 'PEER_REF_CHANGED') {
-            return response.status(409).json({ error: e.message, retry: true, stage: 'pull' });
+        // A pairing link used again after a pairing that already succeeded
+        // has no live code left; the stored secret then authenticates
+        // instead.
+        let offerRequest;
+        const acceptanceIdentity = syncService.captureBackendIdentity(owner, remotePeerId);
+        let existingAcceptance;
+        try {
+            const registry = await readRegistry({ userRoot: owner.userRoot });
+            acceptanceIdentity.assertAlive();
+            existingAcceptance = Boolean(registry.backends[remotePeerId]);
+            const storedSecret = registry.backends[remotePeerId]?.lan?.syncSecret;
+            const credential = storedSecret ? { [PEER_SECRET_HEADER]: storedSecret } : (pairCode ? { [PAIR_CODE_HEADER]: pairCode } : {});
+            offerRequest = {
+                method: 'POST',
+                headers: { ...basicAuth, 'Content-Type': 'application/json', ...credential },
+                body: JSON.stringify({ peerId: remotePeerId, label: resolveDeviceLabel(registry, owner), protocol: LAN_PROTOCOL, callback: owner.selfCallback() }),
+            };
+        } catch (e) {
+            console.error('[sync] pair/accept could not prepare the offer', e);
+            return response.status(500).json({ error: String(e?.message || e), code: 'SYNC_FAILED' });
         }
-        if (e.code === 'PEER_TIMEOUT') {
-            return response.status(504).json({ error: e.message, stage: 'pull' });
+
+        let offer;
+        try {
+            const health = await fetchPeer(`${peerApi}/health`, { headers: basicAuth });
+            const healthBody = await health.json().catch(() => null);
+            if (!(Number(healthBody?.protocol) >= LAN_PROTOCOL)) return outdated();
+            const offerResponse = await fetchPeer(`${peerApi}/session/offer`, offerRequest);
+            const offerBody = await offerResponse.json().catch(() => undefined);
+            if (!offerResponse.ok) {
+                return offerFailure(offerResponse.status, peerErrorCode(offerResponse.status, offerBody), String(offerBody?.error || `Peer returned ${offerResponse.status}`));
+            }
+            if (offerBody === undefined || !(Number(offerBody?.protocol) >= LAN_PROTOCOL)) return outdated();
+            offer = offerBody;
+        } catch (e) {
+            if (e?.code === 'SYNC_PRIVATE_ADDRESS') return offerFailure(403, e.code, e.message);
+            return offerFailure(502, 'PEER_UNREACHABLE', 'The other device could not be reached', { detail: describeFetchFailure(e) });
         }
-        console.error('[sync] sync-now pull failed', e);
-        response.status(500).json({ error: e.message, code: e.code, stage: 'pull' });
-    }
-});
+        const offerToken = String(offer?.token || '');
+        if (!offerToken) return offerFailure(502, 'PEER_ERROR', 'The other device returned no session token');
 
-/**
- * Consume a pairing handle from the other device and run the first full sync.
- *
- * Inputs (body):
- *   - `peerBaseUrl`     — the OTHER device's base URL, from the QR
- *   - `remotePeerId`    — the peerId the OTHER device allocated for us
- *   - `label`           — what to call the OTHER device locally
- *   - `categories`      — what to sync on this first run (may differ from the
- *                          other device's; per-session selection
- *                          is supported)
- *   - `peerAuth`        — optional `{ username, password }` if the OTHER
- *                          device has basic-auth enabled. Forwarded as a
- *                          standard `Authorization: Basic` header on our
- *                          outbound `/session/offer` call. Persisted on
- *                          the peer entry (file mode 0600) so subsequent
- *                          `POST /peers/:peerId/sync` calls can re-use
- *                          them without re-prompting the user. The UI's
- *                          "Clear credentials" button hits
- *                          `DELETE /peers/:peerId/auth` to drop them.
- *
- * Flow:
- *   1. POST `peerBaseUrl + /api/sync/v1/session/offer` with our peerId +
- *      label + categories. Returns `{ token, expiresAt, url, peerId, label }`.
- *   2. `recordPeer` locally so the peer shows up in subsequent `GET /peers`.
- *   3. `runPull` with the returned token. Same response shape as
- *      `POST /pull` — either success or a conflict descriptor.
- *
- * Same `runPull` error mapping as `/pull`: `PEER_REF_CHANGED` → 409,
- * `PEER_TIMEOUT` → 504, anything else → 500. The `/session/offer` call's own
- * failures are reported with the same status the peer returned (401 for bad
- * peer credentials, 412 for unsupported storage mode, etc.) so the UI can
- * disambiguate "your credentials were wrong" from "the other device isn't
- * reachable".
- */
-// Accepts the same conflict-resolution map as /pull on the second accept,
-// so it shares that route's body limit.
-router.post('/pair/accept', requireSyncUser, express.json({ limit: '1mb' }), async (request, response) => {
-    const user = request.user;
-    if (!user?.profile?.handle || !user?.directories?.root) {
-        return response.status(401).json({ error: 'Auth required' });
-    }
+        // Close the pairing session before entering any local control queue.
+        await fetchPeer(`${peerApi}/session/close`, { method: 'POST', headers: { Authorization: `Bearer ${offerToken}` } })
+            .catch(error => console.warn('[sync] could not close the pairing session', describeFetchFailure(error)));
 
-    const body = request.body ?? {};
-    const peerBaseUrl = String(body.peerBaseUrl || '').trim();
-    const remotePeerId = String(body.remotePeerId || '').trim();
-    const label = String(body.label || '').trim() || 'Unnamed device';
-    const categories = Array.isArray(body.categories) ? body.categories.map(String) : [];
-    const peerAuth = body.peerAuth && typeof body.peerAuth === 'object' ? body.peerAuth : null;
-    // The one-time pairing code arrives through the pairing link. It is
-    // presented on the outbound `/session/offer`, which consumes it and
-    // returns the durable peer secret we persist below. Later
-    // "Sync now" calls read that stored secret instead.
-    const pairCode = String(body.pairCode || '').trim().toLowerCase();
-    // `resolutions` lets a second `/pair/accept` call (after the first
-    // surfaced conflicts) finalize the merge with the user's picks. The
-    // orchestrator's `runPullBody` runs `applyResolutions` instead of
-    // returning the conflict set when this is provided. Without this,
-    // the conflict-resolution Apply button on a fresh pair re-POSTs to
-    // `/pair/accept` and gets the same conflict back unchanged.
-    const resolutions = (body.resolutions && typeof body.resolutions === 'object') ? body.resolutions : undefined;
-
-    if (!peerBaseUrl || !remotePeerId) {
-        return response.status(400).json({ error: 'peerBaseUrl and remotePeerId required' });
-    }
-    if (!categories.length) {
-        return response.status(400).json({ error: 'categories required' });
-    }
-    try {
-        assertSafePeerId(remotePeerId);
-    } catch (e) {
-        return response.status(400).json({ error: e.message });
-    }
-
-    // Same-handle requirement, mirrored from `/session/offer`.
-    // The remote peerId was minted by the OTHER device using ITS handle
-    // (e.g. `alice@deadbeef` on a server where the user is `alice`).
-    // The accepting (local) user must ALSO be `alice` for the pairing
-    // to be safe — otherwise their data would be silently merged on the
-    // next sync. Same-handle pairings across two real `alice` accounts
-    // on different servers are accepted by design: it's the user's
-    // responsibility to verify identity. Run BEFORE the outbound fetch
-    // so a mismatched peer doesn't even hit the network.
-    const expectedHandle = sanitizeHandleForPeerId(user.profile.handle);
-    const remotePeerIdPrefix = remotePeerId.split('@')[0];
-    if (expectedHandle !== remotePeerIdPrefix) {
-        return response.status(412).json({
-            error: 'Handle mismatch',
-            code: 'HANDLE_MISMATCH',
-            expectedHandle,
-            gotHandle: remotePeerIdPrefix,
-        });
-    }
-
-    // Step 1: ask the OTHER device to mint a session token for us. On the
-    // first accept the one-time pairing code from the link does the
-    // authenticating; the offer response returns the durable secret,
-    // which is stored below. A conflict-resolution round-trip (second
-    // accept for the same peer) has no live code left — it presents the
-    // stored secret instead. Basic-auth credentials, when the user
-    // supplied them, ride along for peers whose basic-auth middleware
-    // gates `/session/offer` itself.
-    const storedSecret = readSyncState({ userRoot: user.directories.root }).peers[remotePeerId]?.syncSecret;
-    const headers = { 'Content-Type': 'application/json' };
-    if (pairCode && !storedSecret) {
-        headers[PAIR_CODE_HEADER] = pairCode;
-    } else if (storedSecret) {
-        headers[PEER_SECRET_HEADER] = storedSecret;
-    }
-    if (peerAuth?.username && peerAuth?.password) {
-        const creds = Buffer.from(`${peerAuth.username}:${peerAuth.password}`, 'utf8').toString('base64');
-        headers['Authorization'] = `Basic ${creds}`;
-    }
-
-    // We send `remotePeerId` (the id A allocated for THIS link in /pair/start
-    // and embedded in the QR/share URL) so A's per-peer shadow lives at a
-    // stable path. Generating a fresh id every sync would make A treat each
-    // sync as a brand-new peer and create a new empty shadow each time —
-    // every commit would be a root with no parent, no ancestry, no fast-
-    // forward path. Keep them in sync: same id, same shadow, same history.
-
-    let offerResult;
-    try {
-        const offerResponse = await fetch(`${peerBaseUrl.replace(/\/+$/, '')}/api/sync/v1/session/offer`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-                peerId: remotePeerId,
-                label: user.profile.name || user.profile.handle,
-                categories,
-            }),
-        });
-        if (!offerResponse.ok) {
-            const text = await offerResponse.text();
-            let body;
-            try { body = JSON.parse(text); } catch { body = { error: text.slice(0, 256) }; }
-            return response.status(offerResponse.status).json({
-                error: body.error || `Peer returned ${offerResponse.status}`,
-                stage: 'offer',
-            });
+        try {
+            acceptanceIdentity.assertAlive();
+            await syncService.withBackendMaintenance(owner, remotePeerId, (_registry, commit) => upsertLanBackend({
+                userRoot: owner.userRoot, backendId: remotePeerId, label, categories, peerBaseUrl, peerAuth,
+                syncSecret: offer.syncSecret, peerDeviceLabel: offer.deviceLabel, requireExisting: existingAcceptance,
+                assertAlive: () => { acceptanceIdentity.assertAlive(); commit.assertAlive(); },
+            }), { allowMissing: !existingAcceptance });
+        } catch (e) {
+            if (e?.code !== 'UNKNOWN_BACKEND') console.error('[sync] pair/accept could not record the backend', e);
+            return response.status(statusForSyncCode(e?.code)).json({ error: e.message, code: e?.code || 'SYNC_FAILED', stage: 'record' });
         }
-        offerResult = await offerResponse.json();
-    } catch (e) {
-        console.error('[sync] pair/accept offer failed', e);
-        return response.status(502).json({ error: e.message, detail: describeFetchFailure(e), stage: 'offer' });
-    }
 
-    const offerToken = String(offerResult?.token || '');
-    if (!offerToken) {
-        return response.status(502).json({ error: 'Peer returned no token', stage: 'offer' });
-    }
-
-    // The peer returned the durable secret that replaces the one-time
-    // code. Store it on the peer entry; every later "Sync now" presents
-    // it. `recordPeer` ignores malformed input, so a legacy peer that
-    // doesn't speak the handshake simply leaves the field unset.
-    const issuedSecret = String(offerResult?.syncSecret || '').trim().toLowerCase();
-
-    // Step 2: register the OTHER device locally so it appears in /peers.
-    try {
-        await recordPeer({
-            userRoot: user.directories.root,
-            peerId: remotePeerId,
-            label,
-            categories,
-            peerBaseUrl,
-            // Stored AFTER the outbound /session/offer succeeded so we
-            // never persist credentials for a pairing that failed auth
-            // upstream. `recordPeer` drops incomplete blobs (missing
-            // username or password) so a no-auth pair leaves the field
-            // unset, and a re-pair without re-supplying credentials
-            // keeps the previously-stored ones.
-            peerAuth,
-            // Same reasoning for the pairing secret: it only lands on
-            // disk once the peer accepted it.
-            syncSecret: issuedSecret || null,
-        });
-    } catch (e) {
-        console.error('[sync] pair/accept record failed', e);
-        return response.status(500).json({ error: e.message, stage: 'record' });
-    }
-
-    // Step 3: drive the first pull, same path as `POST /pull`.
-    try {
-        const result = await runPull({
-            userRoot: user.directories.root,
-            handle: user.profile.handle,
-            directories: user.directories,
-            peerId: remotePeerId,
-            peerLabel: label,
-            peerBaseUrl,
-            offerToken,
-            categories,
-            resolutions,
-        });
-        response.json({ ...result, peerId: remotePeerId, label });
-    } catch (e) {
-        if (e.code === 'PEER_REF_CHANGED') {
-            return response.status(409).json({ error: e.message, retry: true, stage: 'pull' });
+        try {
+            const { status, body: result } = await syncResponse(owner, remotePeerId, await syncService.trigger(owner, remotePeerId, 'manual'));
+            response.status(status).json({ ...result, backendId: remotePeerId, label });
+        } catch (e) {
+            const code = typeof e?.code === 'string' && e.code ? e.code : 'SYNC_FAILED';
+            const status = statusForSyncCode(code);
+            if (status === 500) console.error('[sync] pair/accept first sync failed', e);
+            response.status(status).json({ ok: false, code, error: String(e?.message || e), backendId: remotePeerId, label });
         }
-        if (e.code === 'PEER_TIMEOUT') {
-            return response.status(504).json({ error: e.message, stage: 'pull' });
-        }
-        console.error('[sync] pair/accept pull failed', e);
-        response.status(500).json({ error: e.message, code: e.code, stage: 'pull' });
-    }
-});
+    });
+
+    return router;
+}
+
+export const router = createSyncRouter();

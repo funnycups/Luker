@@ -7,6 +7,9 @@ import sanitize from 'sanitize-filename';
 const readdir = fs.promises.readdir;
 
 import { getAllUserHandles, getUserDirectories } from '../users.js';
+import { runGatedWrite } from '../sync/in-progress-gate.js';
+import { registerSyncHooks } from '../sync/pipeline/sync-hooks.js';
+import { mergeStatsDocuments } from '../sync/pipeline/stats-merge.js';
 import { getStatsRepo, getChatRepo } from '../storage/index.js';
 
 /**
@@ -17,6 +20,20 @@ const STATS = new Map();
  * @type {Map<string, number>} The timestamps for each user.
  */
 const TIMESTAMPS = new Map();
+
+/**
+ * @type {Map<string, Object>} The stats each user last saved or loaded, the
+ * base of a merge with a synced `stats.json`.
+ */
+const SAVED = new Map();
+
+/**
+ * @param {string} handle
+ * @returns {boolean} whether the in-memory stats changed since the last save
+ */
+function hasUnsavedStats(handle) {
+    return STATS.has(handle) && STATS.get(handle).timestamp > (TIMESTAMPS.get(handle) || 0);
+}
 
 /**
  * Collects and aggregates stats for all characters under a handle.
@@ -65,6 +82,7 @@ export async function recreateStats(handle, _chatsPath, charactersPath) {
     // saveStatsToFile does, and which needs node-persist initialized).
     await getStatsRepo().save(handle, stats);
     TIMESTAMPS.set(handle, stats.timestamp || Date.now());
+    SAVED.set(handle, structuredClone(stats));
 }
 
 /**
@@ -82,6 +100,7 @@ export async function init() {
                     await recreateStats(handle, directories.chats, directories.characters);
                 } else {
                     STATS.set(handle, stats);
+                    SAVED.set(handle, structuredClone(stats));
                 }
             } catch (err) {
                 console.error(`Failed to initialize stats for user ${handle}:`, err);
@@ -90,27 +109,76 @@ export async function init() {
     } catch (err) {
         console.error('Failed to initialize stats:', err);
     }
+    registerStatsSyncHooks();
+
     // Save stats every 5 minutes
     setInterval(saveStatsToFile, 5 * 60 * 1000);
 }
+
+/**
+ * Save the in-memory stats of one user when they changed since the last
+ * save. The check is repeated inside the gate, because a sync that held
+ * the gate meanwhile may have reloaded the stats from its `stats.json`.
+ *
+ * @param {{ handle: string, userRoot: string }} owner
+ * @param {{ dirty?: boolean }} [options] `dirty: false` when the save is part of a sync
+ */
+export async function flushStatsForHandle({ handle, userRoot }, { dirty = true } = {}) {
+    if (!hasUnsavedStats(handle)) return;
+    await runGatedWrite({ handle, userRoot }, async () => {
+        if (!hasUnsavedStats(handle)) return;
+        const stats = STATS.get(handle);
+        await getStatsRepo().save(handle, stats);
+        TIMESTAMPS.set(handle, Date.now());
+        SAVED.set(handle, structuredClone(stats));
+    }, { dirty });
+}
+
+/**
+ * Replace the in-memory stats of one user with the saved ones, so a
+ * pending save does not overwrite what a sync wrote. Stats updated since
+ * the last save are merged over the saved ones and stay unsaved, so the
+ * next flush saves the merge.
+ *
+ * @param {string} handle
+ */
+export async function reloadStatsForHandle(handle) {
+    const stats = await getStatsRepo().get(handle);
+    if (stats == null) return;
+    if (hasUnsavedStats(handle)) {
+        STATS.set(handle, mergeStatsDocuments(SAVED.get(handle), STATS.get(handle), stats));
+    } else {
+        STATS.set(handle, stats);
+        TIMESTAMPS.set(handle, Math.max(Date.now(), Number(stats.timestamp) || 0));
+    }
+    SAVED.set(handle, structuredClone(stats));
+}
+
+/**
+ * Save the in-memory stats before a sync snapshots them, and reload them
+ * after a sync changed `stats.json`.
+ *
+ * @returns {() => void} unregisters the hooks
+ */
+export function registerStatsSyncHooks() {
+    return registerSyncHooks({
+        beforeSnapshot: owner => flushStatsForHandle(owner, { dirty: false }),
+        afterReconcile: (owner, report) => (report.written.includes('stats.json') || report.deleted.includes('stats.json'))
+            ? reloadStatsForHandle(owner.handle)
+            : undefined,
+    });
+}
+
 /**
  * Saves the current state of charStats to a file, only if the data has changed since the last save.
  */
 async function saveStatsToFile() {
     const userHandles = await getAllUserHandles();
     for (const handle of userHandles) {
-        if (!STATS.has(handle)) {
-            continue;
-        }
-        const charStats = STATS.get(handle);
-        const lastSaveTimestamp = TIMESTAMPS.get(handle) || 0;
-        if (charStats.timestamp > lastSaveTimestamp) {
-            try {
-                await getStatsRepo().save(handle, charStats);
-                TIMESTAMPS.set(handle, Date.now());
-            } catch (error) {
-                console.error('Failed to save stats to file.', error);
-            }
+        try {
+            await flushStatsForHandle({ handle, userRoot: getUserDirectories(handle).root });
+        } catch (error) {
+            console.error('Failed to save stats to file.', error);
         }
     }
 }

@@ -51,7 +51,7 @@ The state system follows these principles:
 | --- | --- | --- |
 | Character State | Per-namespace files next to character cards (`<character>.state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the character |
 | Chat State | Per-namespace files next to chat files (`<chat>.luker-state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the chat |
-| Preset State | Per-namespace files next to preset files (`<preset>.luker-state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the preset |
+| Preset State | Filesystem namespace files or versioned records under `.luker-preset-records/`; separate records in database storage | Created on first namespace write; renamed/deleted with the preset |
 
 ```d2
 direction: right
@@ -80,6 +80,8 @@ PRESET: "Preset directory" {
   P_S1: "for_my_athena.luker-state.preset_assistant.json\nPreset assistant sessions"
 }
 ```
+
+The diagram shows ordinary filesystem examples. Legacy preset state can use `<preset>.luker-state.<namespace>.json`; names that cannot be represented unambiguously in that format use the reserved versioned layout under `.luker-preset-records/v1/`. Existing legacy paths retain their declared format meaning; an ambiguous old filename cannot establish the original writer's intent. Use the [preset state APIs](/development/extension-api/presets-and-prompts#presets-state) instead of constructing preset state paths.
 
 All state data is persisted to disk and will not be lost due to server restarts. State file cleanup is automatic — when the associated character, chat, or preset is deleted, the corresponding state file is automatically cleaned up.
 

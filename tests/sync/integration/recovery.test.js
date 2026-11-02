@@ -1,178 +1,76 @@
-/**
- * `/undo` rewinds the local replica to the most recent
- * `sync-backup-*` tag without touching the peer.
- *
- * Mirrors `full-flow.test.js`'s two-real-server pattern: A and B each
- * get their own `makeEndpointHarness`, their own data root, and stand
- * up on real `http.Server` listeners on random ports so the
- * orchestrator's `fetch()` between them is a real outbound HTTP call.
- * supertest still drives the user-facing routes (`/session/offer`,
- * `/pull`, `/undo`) against each app directly.
- *
- * Tag-timing note: `runPull` only plants a `sync-backup-<ISO>` tag
- * when `main` already exists (see `tagCurrentMainAsBackup` —
- * silently a no-op on the "first pair" case). So a peer that has
- * only ever done ONE sync has no recoverable tag and `/undo` MUST
- * surface 404 NO_BACKUP_TAG rather than silently restoring an empty
- * state. The "no prior sync" test below pins that contract.
- */
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import git from 'isomorphic-git';
 import fs from 'node:fs';
-import http from 'node:http';
 import path from 'node:path';
 
-import request from 'supertest';
+import { startLanDevice, pair } from '../_lib/lan-devices.js';
+import { until } from '../_lib/until.js';
+import { ensureShadowRepo } from '../../../src/sync/shadow.js';
+import { atomicFs } from '../../../src/sync/pipeline/atomic-fs.js';
+import { getGateState, _resetGateForTests } from '../../../src/sync/in-progress-gate.js';
 
-import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../../storage/harness/endpoint-harness.js';
-import { router as syncRouter } from '../../../src/endpoints/sync.js';
-
-const FS_HARNESSES = ENDPOINT_HARNESSES.filter(h => h.mode === 'fs');
-const PEER_ID = 'u@a1b2c3d4';
-
-/**
- * Wrap an Express app in a real `http.Server` on a random loopback
- * port. Same helper shape as `full-flow.test.js` — keeping it inline
- * rather than lifting to a shared util because both tests only need
- * this trivial wrapper and the integration suite is small.
- */
-function startListener(app) {
-    return new Promise(resolve => {
-        const server = http.createServer(app).listen(0, '127.0.0.1', () => {
-            const { port } = server.address();
-            resolve({
-                server,
-                baseUrl: `http://127.0.0.1:${port}`,
-                close: () => new Promise(done => server.close(done)),
-            });
-        });
-    });
-}
-
-describe.each(FS_HARNESSES)('undo last sync on $name', ({ mode }) => {
-    let A, B, aListener, bListener;
-
+describe('undo over the sync API', () => {
+    let A;
+    let B;
     beforeEach(async () => {
-        A = await makeEndpointHarness({
-            mode,
-            mount: app => app.use('/api/sync/v1', syncRouter),
-        });
-        B = await makeEndpointHarness({
-            mode,
-            mount: app => app.use('/api/sync/v1', syncRouter),
-        });
-        aListener = await startListener(A.app);
-        bListener = await startListener(B.app);
+        _resetGateForTests();
+        A = await startLanDevice();
+        B = await startLanDevice();
     });
-
     afterEach(async () => {
-        // Close listeners BEFORE harness cleanup so any still-draining
-        // connection doesn't touch the about-to-be-rm'd data root.
-        if (aListener) await aListener.close();
-        if (bListener) await bListener.close();
-        if (A) await A.cleanup();
-        if (B) await B.cleanup();
+        await A.close();
+        await B.close();
     });
 
-    test('post-sync, /undo restores prior live state and rewinds shadow ref', async () => {
-        // --- Pair: A has before.png, B starts empty. ---
-        // The first pull is the "pair init" path: B has no `main` yet,
-        // so `tagCurrentMainAsBackup` is a no-op and NO tag is planted
-        // on B's shadow. That's intentional — there is nothing on B to
-        // rewind to. The recoverable tag comes from the SECOND sync,
-        // which captures B's post-pair state before merging in A's
-        // newer commit.
-        fs.writeFileSync(
-            path.join(A.dirs.characters, 'before.png'),
-            Buffer.from('BEFORE'),
-        );
-
-        let offer = await request(A.app)
-            .post('/api/sync/v1/session/offer')
-            .send({ peerId: PEER_ID, label: 'A', categories: ['characters'] });
-        expect(offer.status).toBe(200);
-
-        let pull = await request(B.app)
-            .post('/api/sync/v1/pull')
-            .send({
-                peerId: PEER_ID,
-                peerLabel: 'A',
-                peerBaseUrl: aListener.baseUrl,
-                offerToken: offer.body.token,
-                categories: ['characters'],
-            });
-        expect(pull.status).toBe(200);
-        expect(pull.body.ok).toBe(true);
-        expect(fs.existsSync(path.join(B.dirs.characters, 'before.png'))).toBe(true);
-
-        // --- A adds after.png; second sync. This is the one whose tag
-        // we will rewind to. After this pull, B's shadow has a
-        // sync-backup-<ISO> tag anchored at the post-pair commit (just
-        // before.png) and a new main pointing at the post-second-sync
-        // commit (before.png + after.png).
-        fs.writeFileSync(
-            path.join(A.dirs.characters, 'after.png'),
-            Buffer.from('AFTER'),
-        );
-        offer = await request(A.app)
-            .post('/api/sync/v1/session/offer')
-            .send({ peerId: PEER_ID, label: 'A', categories: ['characters'] });
-        expect(offer.status).toBe(200);
-        pull = await request(B.app)
-            .post('/api/sync/v1/pull')
-            .send({
-                peerId: PEER_ID,
-                peerLabel: 'A',
-                peerBaseUrl: aListener.baseUrl,
-                offerToken: offer.body.token,
-                categories: ['characters'],
-            });
-        expect(pull.status).toBe(200);
-        expect(pull.body.ok).toBe(true);
-        expect(fs.existsSync(path.join(B.dirs.characters, 'after.png'))).toBe(true);
-
-        // --- B undoes the most recent sync. ---
-        // Should rewind to the pre-second-sync state: before.png
-        // present, after.png absent. Reconcile uses B's recorded
-        // categories from state.json, so undo scope matches the
-        // pairing's category subset (no accidental writes to chats/
-        // or worlds/).
-        const undo = await request(B.app)
-            .post('/api/sync/v1/undo')
-            .send({ peerId: PEER_ID });
-        expect(undo.status).toBe(200);
-        expect(undo.body.restoredTag).toMatch(/^sync-backup-/);
-        expect(undo.body.restoredOid).toMatch(/^[a-f0-9]{40}$/);
-
-        expect(fs.existsSync(path.join(B.dirs.characters, 'before.png'))).toBe(true);
-        expect(fs.existsSync(path.join(B.dirs.characters, 'after.png'))).toBe(false);
-
-        // A is unaffected — undo is strictly local. A.app never saw
-        // the /undo POST, so its live tree still has both files.
-        expect(fs.existsSync(path.join(A.dirs.characters, 'before.png'))).toBe(true);
-        expect(fs.existsSync(path.join(A.dirs.characters, 'after.png'))).toBe(true);
+    test('undo reverts what the last sync brought in on both devices and reports later edits', async () => {
+        A.write('worlds/a.json', 'A0');
+        A.write('worlds/b.json', 'B0');
+        const id = await pair(A, B);
+        A.write('worlds/a.json', 'A1');
+        A.write('worlds/b.json', 'B1');
+        await A.call('POST', `/backends/${id}/sync`);
+        await until(() => B.read('worlds/a.json') === 'A1');
+        expect((await B.call('POST', `/backends/${id}/sync`)).body.ok).toBe(true);
+        B.write('worlds/b.json', 'B-later');
+        const res = await B.call('POST', `/backends/${id}/undo`);
+        expect(res).toMatchObject({ status: 200, body: { ok: true, reverted: ['worlds/a.json'], keptEdited: ['worlds/b.json'] } });
+        expect([B.read('worlds/a.json'), B.read('worlds/b.json')]).toEqual(['A0', 'B-later']);
+        const { gitDir } = await ensureShadowRepo({ userRoot: B.userRoot, peerId: id });
+        const log = await git.log({ fs: atomicFs, gitdir: gitDir, ref: 'refs/heads/main' });
+        expect(log.some(entry => entry.commit.message.trim() === `undo sync ${res.body.restoredTag}`)).toBe(true);
+        await until(() => A.read('worlds/a.json') === 'A0' && A.read('worlds/b.json') === 'B-later');
+        expect(getGateState(B.userRoot)).toEqual({ readers: 0, writerHeld: false, waitingReaders: 0, waitingWriters: 0 });
     });
 
-    test('POST /undo returns 404 when no sync-backup tag exists', async () => {
-        // A peer that has never paired (no sync flow ever ran for this
-        // peerId) has a freshly-init'd shadow with no tags. The spec
-        // distinguishes "no recoverable prior state" from "server
-        // error" — surface it as 404 so the UI can render "no prior
-        // sync to undo" rather than a generic 500. Also exercises the
-        // first-pair tag-timing edge: even a peer that has done
-        // exactly one pair-init pull has no tag, because
-        // `tagCurrentMainAsBackup` only runs when `main` already
-        // exists at the start of the pull.
-        const r = await request(B.app)
-            .post('/api/sync/v1/undo')
-            .send({ peerId: 'never-paired' });
-        expect(r.status).toBe(404);
-        expect(r.body.error).toMatch(/No sync backup tag/i);
+    test('undo returns 404 when there is nothing to undo', async () => {
+        const id = await pair(A, B);
+        expect(await B.call('POST', `/backends/${id}/undo`)).toMatchObject({ status: 404, body: { code: 'NO_BACKUP_TAG' } });
     });
 
-    test('POST /undo returns 400 when peerId is missing', async () => {
-        const r = await request(B.app)
-            .post('/api/sync/v1/undo')
-            .send({});
-        expect(r.status).toBe(400);
+    test('uncommitted undo returns a failure and retains its undo point', async () => {
+        A.write('worlds/d/x.json', 'before');
+        const id = await pair(A, B);
+        fs.unlinkSync(path.join(A.userRoot, 'worlds/d/x.json'));
+        await A.call('POST', `/backends/${id}/sync`);
+        await until(() => !B.read('worlds/d/x.json'));
+        await B.call('POST', `/backends/${id}/sync`);
+        B.write('worlds/d', 'obstruction');
+        const res = await B.call('POST', `/backends/${id}/undo`);
+        expect(res).toMatchObject({ status: 409, body: { ok: false, committed: false, reverted: [], code: 'UNDO_NOT_COMMITTED' } });
+        expect((await B.call('POST', `/backends/${id}/undo`)).body.restoredTag).toBe(res.body.restoredTag);
+    });
+
+    test('locally committed undo reports an offline propagation failure', async () => {
+        A.write('worlds/a.json', 'before');
+        const id = await pair(A, B);
+        A.write('worlds/a.json', 'after');
+        await A.call('POST', `/backends/${id}/sync`);
+        await until(() => B.read('worlds/a.json') === 'after');
+        await B.call('POST', `/backends/${id}/sync`);
+        await A.close();
+        const res = await B.call('POST', `/backends/${id}/undo`);
+        expect(res.status).toBeGreaterThanOrEqual(400);
+        expect(res.body).toMatchObject({ ok: false, committed: true, propagation: { ok: false } });
+        expect(B.read('worlds/a.json')).toBe('before');
     });
 });

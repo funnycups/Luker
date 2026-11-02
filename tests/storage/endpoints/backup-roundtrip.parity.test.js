@@ -79,6 +79,8 @@ async function seedAllRepos(handle) {
     await getWorldInfoRepo().save(handle, 'w1', { entries: {} });
     await getNamedDocRepo().save(handle, 'themes', 't1', { accent: '#abc' });
     await getPresetRepo().save(handle, 'openai', 'p1', { temperature: 0.5 });
+    await getPresetRepo().save(handle, 'openai', 'A.luker-state.n', { prompts: [{ content: 'BACKUP_PRESET' }] });
+    await getPresetRepo().setState(handle, 'openai', 'A', 'n', { notes: ['BACKUP_ORPHAN'] });
     await getGroupRepo().save(handle, 'g1', { id: 'g1', name: 'Test', chats: [] });
     await getStatsRepo().save(handle, { totalChats: 7 });
 }
@@ -90,6 +92,8 @@ async function probeAllRepos(handle) {
         world: await getWorldInfoRepo().get(handle, 'w1'),
         theme: await getNamedDocRepo().get(handle, 'themes', 't1'),
         preset: await getPresetRepo().get(handle, 'openai', 'p1'),
+        delimiterPreset: await getPresetRepo().get(handle, 'openai', 'A.luker-state.n'),
+        orphanPresetState: await getPresetRepo().getState(handle, 'openai', 'A', 'n'),
         group: await getGroupRepo().get(handle, 'g1'),
         stats: await getStatsRepo().get(handle),
     };
@@ -112,7 +116,7 @@ function mountMulterShim(app, uploadsDir) {
 
 async function postBackup(harness, { handle = harness.handle, selection = ALL_SELECTION } = {}) {
     return await new Promise((resolve, reject) => {
-        request(harness.app)
+        request(harness.server)
             .post('/api/users/backup')
             .send({ handle, selection })
             .buffer(true)
@@ -178,6 +182,7 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
     beforeEach(async () => {
         harness = await makeEndpointHarness({
             mode,
+            handle: `backup-${randomBytes(6).toString('hex')}`,
             mount: (app, { dirs }) => {
                 const uploadsDir = path.join(dirs.root, 'bk-uploads');
                 mountMulterShim(app, uploadsDir);
@@ -228,6 +233,25 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         }
     });
 
+    test('backup restore preserves a delimiter document and its independent orphan state', async () => {
+        const preset = { prompts: [{ content: 'BACKUP_PRESET' }] };
+        const state = { notes: ['BACKUP_ORPHAN'] };
+        await getPresetRepo().save(harness.handle, 'openai', 'A.luker-state.n', preset);
+        await getPresetRepo().setState(harness.handle, 'openai', 'A', 'n', state);
+        const backup = await postBackup(harness);
+        expect(backup.status).toBe(200);
+        await getPresetRepo().delete(harness.handle, 'openai', 'A.luker-state.n');
+        await getPresetRepo().deleteState(harness.handle, 'openai', 'A', 'n');
+        expect(await getPresetRepo().listWithDocs(harness.handle, 'openai')).toEqual([]);
+        const uploadId = await uploadArchiveToSession(harness.server, backup.body, { handle: harness.handle });
+        const restored = await request(harness.server).post('/api/users/restore-backup').send({ uploadId, handle: harness.handle, mode: 'merge', selection: ALL_SELECTION });
+        expect(restored.status).toBe(200);
+        expect(await getPresetRepo().get(harness.handle, 'openai', 'A.luker-state.n')).toEqual(preset);
+        expect(await getPresetRepo().getState(harness.handle, 'openai', 'A', 'n')).toEqual(state);
+        expect(await getPresetRepo().listWithDocs(harness.handle, 'openai')).toEqual([{ name: 'A.luker-state.n', doc: preset }]);
+        expect(await getPresetRepo().get(harness.handle, 'openai', 'A')).toBeNull();
+    });
+
     test('REGRESSION: backup → wipe → restore round-trips every Repo', async () => {
         if (mode === 'fs') return; // fs path round-trips via the existing directory-tree extract
 
@@ -260,8 +284,8 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         // is gone.
         expect(wipedSettings?.user_name).not.toBe('roundtrip');
 
-        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-        const restoreRes = await request(harness.app)
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+        const restoreRes = await request(harness.server)
             .post('/api/users/restore-backup')
             .send({ uploadId, handle: harness.handle, mode: 'merge', selection: ALL_SELECTION });
         expect(restoreRes.status).toBe(200);
@@ -293,7 +317,7 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         });
         await getSettingsRepo().save(harness.handle, { username: 'fresh' });
 
-        const restoreRes = await request(harness.app)
+        const restoreRes = await request(harness.server)
             .post('/api/users/import/data-zip')
             .attach('avatar', zipPath)
             // Fail and close the HTTP socket before Jest's 15s test deadline
@@ -336,8 +360,8 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         });
         const zipBytes = fs.readFileSync(zipPath);
 
-        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-        const restoreRes = await request(harness.app)
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+        const restoreRes = await request(harness.server)
             .post('/api/users/restore-backup')
             .send({ uploadId, handle: harness.handle, mode: 'merge', selection: ALL_SELECTION });
         expect(restoreRes.status).toBe(400);
@@ -371,8 +395,8 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         });
         const zipBytes = fs.readFileSync(zipPath);
 
-        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-        const restoreRes = await request(harness.app)
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+        const restoreRes = await request(harness.server)
             .post('/api/users/restore-backup')
             .send({ uploadId, handle: harness.handle, mode: 'merge', selection: ALL_SELECTION });
         // Cross-mode delegation succeeds — the orchestrator built a transient
@@ -412,7 +436,7 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         });
         const zipBytes = fs.readFileSync(zipPath);
 
-        const importRes = await request(harness.app)
+        const importRes = await request(harness.server)
             .post('/api/users/import/data-zip')
             .field('mode', 'merge')
             .attach('avatar', zipBytes, 'backup.zip');

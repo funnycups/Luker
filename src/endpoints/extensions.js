@@ -10,6 +10,8 @@ import { CheckRepoActions, default as simpleGit } from 'simple-git';
 import { PUBLIC_DIRECTORIES } from '../constants.js';
 import { color, getConfigValue, isValidUrl } from '../util.js';
 import { createGitClient } from '../git/client.js';
+import { runGatedWrite } from '../sync/in-progress-gate.js';
+import { makeStagingPath, swapDirectoryInto, fingerprintDirectory, isStagingEntryName } from '../sync/staging.js';
 
 const gitBackend = getConfigValue('git.backend', 'auto');
 
@@ -552,6 +554,7 @@ router.use(extensionsEnabledFeatureGuard);
  * @returns {void}
  */
 router.post('/install', async (request, response) => {
+    let stagedClonePath = null;
     try {
         const { url, global, branch } = request.body;
 
@@ -591,11 +594,23 @@ router.post('/install', async (request, response) => {
         const extensionPath = path.join(basePath, extensionDirName);
         const folderName = path.basename(extensionPath);
 
-        if (fs.existsSync(extensionPath)) {
-            if (!shouldReplace) {
-                return response.status(409).send(`Directory already exists at ${extensionPath}`);
+        if (fs.existsSync(extensionPath) && !shouldReplace) {
+            return response.status(409).send(`Directory already exists at ${extensionPath}`);
+        }
+
+        // Per-user extensions are synced data: clone into a staging
+        // sibling without a write-gate slot, then swap the finished
+        // checkout into place under the gate. Global extensions are not synced.
+        const synced = !global;
+        let clonePath = extensionPath;
+        if (synced) {
+            stagedClonePath = await makeStagingPath(extensionPath, 'extension');
+            await fs.promises.rmdir(stagedClonePath);
+            clonePath = stagedClonePath;
+        } else {
+            if (fs.existsSync(extensionPath)) {
+                await fs.promises.rm(extensionPath, { recursive: true, force: true });
             }
-            await fs.promises.rm(extensionPath, { recursive: true, force: true });
         }
 
         const cloneOptions = { depth: 1 };
@@ -603,7 +618,7 @@ router.post('/install', async (request, response) => {
             cloneOptions.branch = branch;
         }
         try {
-            await git.clone(url, extensionPath, cloneOptions);
+            await git.clone(url, clonePath, cloneOptions);
             console.info(`Extension has been cloned to ${extensionPath} from ${url} at ${branch || '(default)'} branch`);
         } catch (error) {
             if (!isGitUnavailableError(error)) {
@@ -611,24 +626,36 @@ router.post('/install', async (request, response) => {
             }
             const resolvedCloneUrl = await cloneWithIsomorphicRetry({
                 url,
-                extensionPath,
+                extensionPath: clonePath,
                 branch,
             });
             console.info(`Extension has been cloned with isomorphic-git to ${extensionPath} from ${resolvedCloneUrl} at ${branch || '(default)'} branch`);
         }
 
+        let manifest;
         try {
-            const manifest = await getManifest(extensionPath);
+            manifest = await getManifest(clonePath);
             if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
                 throw new Error('Manifest is not a valid JSON object.');
             }
-            const { version, author, display_name } = manifest;
-            return response.send({ version, author, display_name, extensionPath, folderName });
         } catch (manifestError) {
-            await fs.promises.rm(extensionPath, { recursive: true, force: true });
+            await fs.promises.rm(clonePath, { recursive: true, force: true });
             throw manifestError;
         }
+
+        if (synced) {
+            const syncOwner = { handle: request.user.profile.handle, userRoot: request.user.directories.root };
+            await runGatedWrite(syncOwner, () => swapDirectoryInto(clonePath, extensionPath));
+        }
+        const { version, author, display_name } = manifest;
+        return response.send({ version, author, display_name, extensionPath, folderName });
     } catch (error) {
+        // A successful swap consumed the staged clone; on failure it is
+        // removed before responding so the client never sees it.
+        if (stagedClonePath) {
+            await fs.promises.rm(stagedClonePath, { recursive: true, force: true })
+                .catch(cleanupError => console.error('Failed to remove extension staging directory', stagedClonePath, cleanupError));
+        }
         console.error('Importing extension failed', error);
         return response.status(500).send('Internal Server Error. Check the server logs for more details.');
     }
@@ -646,6 +673,7 @@ router.post('/install', async (request, response) => {
  * @returns {void}
  */
 router.post('/update', async (request, response) => {
+    let stagedWorkPath = null;
     try {
         if (typeof request.body.extensionName !== 'string') {
             return response.status(400).send('Bad Request: A valid extensionName is required in the request body.');
@@ -670,8 +698,37 @@ router.post('/update', async (request, response) => {
             return response.status(404).send(`Directory does not exist at ${extensionPath}`);
         }
 
+        // Per-user extensions are synced data. The update runs on a copy in
+        // the staging area without a gate slot; the copy is swapped back
+        // under the gate only if the live directory did not change meanwhile.
+        const synced = !global;
+        const syncOwner = { handle: request.user.profile.handle, userRoot: request.user.directories.root };
+        let fingerprint = null;
+        let workPath = extensionPath;
+        if (synced) {
+            stagedWorkPath = await makeStagingPath(extensionPath, 'extension');
+            await fs.promises.rmdir(stagedWorkPath);
+            workPath = stagedWorkPath;
+            fingerprint = await runGatedWrite(syncOwner, async () => {
+                await fs.promises.cp(extensionPath, workPath, { recursive: true, verbatimSymlinks: true });
+                return fingerprintDirectory(extensionPath);
+            }, { dirty: false });
+        }
+        const commit = async () => {
+            if (!synced) return;
+            await runGatedWrite(syncOwner, async () => {
+                if (await fingerprintDirectory(extensionPath) !== fingerprint) {
+                    const changed = new Error('The extension directory changed during the update.');
+                    changed.code = 'EXTENSION_CHANGED_DURING_UPDATE';
+                    throw changed;
+                }
+                await swapDirectoryInto(workPath, extensionPath, { expectedFingerprint: fingerprint });
+            });
+        };
+
         if (forceUpdate) {
-            const result = await forceUpdateWithIsomorphic(extensionPath);
+            const result = await forceUpdateWithIsomorphic(workPath);
+            await commit();
             const shortCommitHash = result.currentCommitHash ? result.currentCommitHash.slice(0, 7) : '';
             console.info(`Extension has been force-updated with isomorphic-git at ${extensionPath}`);
             return response.send({
@@ -684,8 +741,8 @@ router.post('/update', async (request, response) => {
         }
 
         try {
-            const { isUpToDate, remoteUrl } = await checkIfRepoIsUpToDate(extensionPath);
-            const git = simpleGit({ baseDir: extensionPath, ...OPTIONS });
+            const { isUpToDate, remoteUrl } = await checkIfRepoIsUpToDate(workPath);
+            const git = simpleGit({ baseDir: workPath, ...OPTIONS });
             const isRepo = await git.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
             if (!isRepo) {
                 throw new Error(`Directory is not a Git repository at ${extensionPath}`);
@@ -699,6 +756,7 @@ router.post('/update', async (request, response) => {
             }
             const fullCommitHash = await git.revparse(['HEAD']);
             const shortCommitHash = fullCommitHash.slice(0, 7);
+            await commit();
 
             return response.send({ shortCommitHash, extensionPath, isUpToDate, remoteUrl });
         } catch (error) {
@@ -706,7 +764,8 @@ router.post('/update', async (request, response) => {
                 throw error;
             }
 
-            const result = await updateWithIsomorphic(extensionPath);
+            const result = await updateWithIsomorphic(workPath);
+            await commit();
             const shortCommitHash = result.currentCommitHash ? result.currentCommitHash.slice(0, 7) : '';
             if (!result.isUpToDate) {
                 console.info(`Extension has been updated with isomorphic-git at ${extensionPath}`);
@@ -722,6 +781,15 @@ router.post('/update', async (request, response) => {
             });
         }
     } catch (error) {
+        // A successful swap consumed the staged copy; on failure it is
+        // removed before responding so the client never sees it.
+        if (stagedWorkPath) {
+            await fs.promises.rm(stagedWorkPath, { recursive: true, force: true })
+                .catch(cleanupError => console.error('Failed to remove extension staging directory', stagedWorkPath, cleanupError));
+        }
+        if (error?.code === 'EXTENSION_CHANGED_DURING_UPDATE') {
+            return response.status(409).send('The extension changed while it was updating. Retry the update.');
+        }
         if (isExtensionUpdateConflictError(error)) {
             const reason = String(error?.message || 'Local changes or branch divergence detected.');
             return response.status(409).send(`Extension update conflict: ${reason} Reinstall or manually reset this extension, then retry.`);
@@ -1071,6 +1139,7 @@ router.get('/discover', function (request, response) {
     // Get all folders in local extensions folder
     const userExtensions = fs
         .readdirSync(path.join(request.user.directories.extensions))
+        .filter(f => !isStagingEntryName(f))
         .filter(f => fs.statSync(path.join(request.user.directories.extensions, f)).isDirectory())
         .filter(f => hasManifest(request.user.directories.extensions, f))
         .map(f => ({ type: 'local', name: `third-party/${f}` }));
@@ -1079,6 +1148,7 @@ router.get('/discover', function (request, response) {
     // In case of a conflict, the extension will be loaded from the user folder
     const globalExtensions = fs
         .readdirSync(PUBLIC_DIRECTORIES.globalExtensions)
+        .filter(f => !isStagingEntryName(f))
         .filter(f => fs.statSync(path.join(PUBLIC_DIRECTORIES.globalExtensions, f)).isDirectory())
         .filter(f => hasManifest(PUBLIC_DIRECTORIES.globalExtensions, f))
         .map(f => ({ type: 'global', name: `third-party/${f}` }))

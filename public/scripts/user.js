@@ -1493,8 +1493,8 @@ async function openBackupManager(handle, callback) {
         try {
             await openLanSyncPanel();
         } catch (error) {
-            console.error('Error opening LAN Sync panel:', error);
-            toastr.error(String(error.message || error), t`Failed to open LAN Sync`);
+            console.error('Error opening Sync panel:', error);
+            toastr.error(String(error.message || error), t`Failed to open Sync`);
         }
     });
 

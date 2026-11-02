@@ -11,9 +11,8 @@
 import { test, expect } from '@playwright/test';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
-import { openLanSyncPanel } from '../_lib/sync.js';
+import { openLanSyncPanel, selectCategories } from '../_lib/sync.js';
 
 let A;
 
@@ -26,7 +25,6 @@ test.beforeAll(async () => {
         // exiting the process on this test-only non-localhost bind.
         extraConfig: { listen: true, securityOverride: true },
     });
-    markOnboarded({ dataRoot: A.dataRoot });
 });
 
 test.afterAll(async () => {
@@ -42,12 +40,7 @@ test.describe('LAN Sync — pairing link address selector', () => {
         await openLanSyncPanel(page);
         await page.locator('.lanSyncTabPairNew').click();
         await page.locator('.lanSyncPairLabel').fill('B device');
-        await page.evaluate(() => {
-            document.querySelectorAll('.lanSyncCategoryGrid input[name="lanSyncCategory"]').forEach((el) => {
-                const input = /** @type {HTMLInputElement} */ (el);
-                input.checked = input.value === 'worlds';
-            });
-        });
+        await selectCategories(page.locator('.lanSyncCategoryGrid'), ['worlds']);
         await page.locator('.lanSyncGenerateLinkButton').click();
         await page.locator('.lanSyncPairNewResult').waitFor({ state: 'visible', timeout: 10_000 });
 

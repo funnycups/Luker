@@ -1181,7 +1181,14 @@ async function generateStreamCallback(args, value) {
  */
 async function migrateProxyToBaseUrl() {
     const settings = extension_settings.connectionManager;
+    if (settings._proxyToBaseUrlMigrated) {
+        return;
+    }
+    // The marker is synced with the settings, so it holds no per-device time.
     if (settings._proxyToBaseUrlMigratedAt) {
+        delete settings._proxyToBaseUrlMigratedAt;
+        settings._proxyToBaseUrlMigrated = true;
+        saveSettingsDebounced();
         return;
     }
 
@@ -1284,7 +1291,7 @@ async function migrateProxyToBaseUrl() {
         console.warn('[base-url migration] global oai_settings migration failed', err);
     }
 
-    settings._proxyToBaseUrlMigratedAt = Date.now();
+    settings._proxyToBaseUrlMigrated = true;
     saveSettingsDebounced();
 }
 

@@ -1,42 +1,40 @@
 /**
- * LAN Sync panel: pairing, peer list, sync trigger, conflict resolution.
+ * Sync panel: LAN pairing, LAN/S3 backend settings, sync and undo,
+ * device labels and the sync schedule.
  *
- * Reachable from User Settings → Account → Backup & Restore → LAN Sync.
+ * Reachable from User Settings → Account → Backup & Restore → Sync.
  * The panel itself is rendered into a `callGenericPopup` modal so it
  * lives alongside the existing User-Settings flows (Backup, Snapshots,
  * Admin) without competing for top-bar drawer space.
  *
  * Wire protocol details — none, that is the engine's concern. This
- * module only:
- *   - reads/writes the peer registry via the admin endpoints in
- *     `src/endpoints/sync.js` (`/peers`, `/pair/start`, `/pair/accept`),
- *   - drives sync action endpoints (`/pull`, `/undo`),
- *   - renders the conflict shape returned by `/pull` (`{ ok: false,
- *     conflicts: [{ filepath, kind, oursOid, theirsOid }, ...] }`) as
- *     a per-file pick-one-side card grid, and re-posts `/pull` with
- *     `{ resolutions: {...} }` when the user clicks Apply.
+ * module only drives the routes of `src/endpoints/sync-backends.js`
+ * (`/backends`, `/backends/:id/sync`, `/backends/:id/undo`, `/schedule`)
+ * and the pairing routes of `src/endpoints/sync.js`. Conflicts a sync
+ * leaves are decided in the sync popup of `sync-status.js`.
  *
- * SYNC_CATEGORIES is fetched lazily from `/api/sync/v1/categories` (NEW
- * — see `src/endpoints/sync.js`). The list isn't bundled into the
- * frontend so adding a category server-side automatically appears in the
- * UI on next panel open, with no rebuild.
+ * SYNC_CATEGORIES is fetched lazily from `/api/sync/v1/categories`. The
+ * list isn't bundled into the frontend so adding a category server-side
+ * automatically appears in the UI on next panel open, with no rebuild.
  */
-import { t } from './i18n.js';
+import { t, translate } from './i18n.js';
 import { callGenericPopup, POPUP_TYPE, POPUP_RESULT } from './popup.js';
+import { checkSyncStatusNow } from './sync-status.js';
+import { beginSyncActivity, syncActivityNeedsAttention } from './sync-activity.js';
+import { openS3BackendForm, syncSettingsError } from './sync-s3.js';
 import { renderTemplateAsync } from './templates.js';
 import { copyText } from './utils.js';
 import { getRequestHeaders } from '../script.js';
 
 const ENDPOINTS = {
-    peers: '/api/sync/v1/peers',
-    peer: (id) => `/api/sync/v1/peers/${encodeURIComponent(id)}`,
-    peerLabel: (id) => `/api/sync/v1/peers/${encodeURIComponent(id)}/label`,
-    peerSync: (id) => `/api/sync/v1/peers/${encodeURIComponent(id)}/sync`,
-    peerAuth: (id) => `/api/sync/v1/peers/${encodeURIComponent(id)}/auth`,
+    backends: '/api/sync/v1/backends',
+    backend: (id) => `/api/sync/v1/backends/${encodeURIComponent(id)}`,
+    backendSync: (id) => `/api/sync/v1/backends/${encodeURIComponent(id)}/sync`,
+    backendUndo: (id) => `/api/sync/v1/backends/${encodeURIComponent(id)}/undo`,
+    backendAuth: (id) => `/api/sync/v1/backends/${encodeURIComponent(id)}/auth`,
+    schedule: '/api/sync/v1/schedule',
     pairStart: '/api/sync/v1/pair/start',
     pairAccept: '/api/sync/v1/pair/accept',
-    pull: '/api/sync/v1/pull',
-    undo: '/api/sync/v1/undo',
     categories: '/api/sync/v1/categories',
     availability: '/api/sync/v1/availability',
 };
@@ -48,6 +46,8 @@ const ENDPOINTS = {
  */
 const PAIR_LINK_SCHEME = 'luker-sync';
 const PAIR_LINK_VERSION = 'v1';
+let openPanelPromise = null;
+const pendingBackendActions = new Set();
 
 function buildPairLink({ peerBaseUrl, peerId, label, categories, pairCode }) {
     const params = new URLSearchParams();
@@ -130,25 +130,29 @@ function renderGeneratedPairLink(template, state) {
  * already speaks displayKey/descriptionKey i18n keys; we render directly
  * against them rather than maintaining a parallel UI registry.
  */
-let cachedCategories = null;
-
 async function loadCategories() {
-    if (cachedCategories) return cachedCategories;
-    const res = await fetch(ENDPOINTS.categories, { headers: getRequestHeaders() });
-    if (!res.ok) {
-        cachedCategories = [];
-        return cachedCategories;
+    try {
+        const res = await fetch(ENDPOINTS.categories, { headers: getRequestHeaders() });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = await res.json();
+        if (!Array.isArray(body?.categories) || body.categories.some(category => typeof category?.id !== 'string' || typeof category.displayKey !== 'string')) throw new Error('Invalid category response');
+        return body.categories;
+    } catch {
+        throw new Error(t`Could not load sync categories. Check the connection and reopen Sync.`);
     }
-    const body = await res.json();
-    cachedCategories = Array.isArray(body?.categories) ? body.categories : [];
-    return cachedCategories;
 }
 
-async function loadPeers() {
-    const res = await fetch(ENDPOINTS.peers, { headers: getRequestHeaders() });
-    if (!res.ok) return {};
+/**
+ * The sync backends, which of them are syncing now, and the schedule.
+ *
+ * @returns {Promise<{ backends: Record<string, any>, running: Record<string, boolean>, schedule: { idleSeconds?: number, pollSeconds?: number } }>}
+ */
+async function loadBackends() {
+    const res = await fetch(ENDPOINTS.backends, { headers: getRequestHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const body = await res.json();
-    return body?.peers ?? {};
+    if (![body?.backends, body?.running, body?.schedule, body?.device].every(value => value !== null && typeof value === 'object' && !Array.isArray(value))) throw new Error(t`Invalid sync backend response.`);
+    return { backends: body.backends, running: body.running, schedule: body.schedule, device: body.device };
 }
 
 /**
@@ -254,12 +258,56 @@ function clearStatusBanner(template) {
     banner.text('');
 }
 
-function syncErrorCodeMessage(code) {
+/**
+ * Translated message for a sync failure code, or null when the code has
+ * none and the server's own message is shown.
+ *
+ * @param {string} code
+ * @param {any} body Error body of the route
+ * @returns {string | null}
+ */
+function syncErrorCodeMessage(code, body = {}) {
     switch (code) {
+        case 'UNDO_NOT_COMMITTED':
+        case 'PENDING_READ_FAILED':
+        case 'AUTH_FAILED':
+        case 'BUCKET_NOT_FOUND':
+        case 'UNREACHABLE':
+        case 'SYNC_DNS_ERROR':
+        case 'S3_LOCAL_KEY_ID_INVALID':
+        case 'S3_KEY_MISMATCH':
+        case 'S3_STORED_KEY_INVALID':
+        case 'S3_STORED_KEY_REJECTED':
+            return syncSettingsError(code);
         case 'RECONCILE_FAILED':
             return t`The other device could not apply the synced changes.`;
+        case 'PEER_PROTOCOL_OUTDATED':
+            return t`The peer's Luker version is too old. Upgrade it and sync again.`;
+        case 'PEER_CALLBACK_UNREACHABLE':
+            return t`The other device cannot connect back to this device. Enable LAN listening and check the firewall, then use the same pairing link again.`;
+        case 'SYNC_PRIVATE_ADDRESS':
+            return t`Outbound sync to private addresses is disabled for this account. Ask an administrator to enable it.`;
+        case 'PEER_FORGOTTEN':
+            return t`The other device no longer knows this device. Forget it and pair again.`;
+        case 'SYNC_BACKEND_MAINTENANCE':
+            return t`The other device is updating its sync settings. Sync again after it finishes.`;
+        case 'NO_BASE_URL':
+            return t`This device does not know the other device's address yet. Sync once from the other device.`;
+        case 'INVALID_BACKEND_ID':
+            return t`This device was paired by an older Luker version. Forget it and pair again.`;
+        case 'PEER_AUTH_FAILED':
+        case 'PEER_AUTH_REQUIRED':
+            return t`Authentication to the other device failed. Forget and re-pair if its credentials changed.`;
+        case 'HANDLE_MISMATCH':
+            return t`This pairing link is for ${String(body.gotHandle || '')}, but you're logged in as ${String(body.expectedHandle || '')}. Pair from the matching account, or use the same handle on both devices.`;
+        case 'PEER_UNREACHABLE': {
+            // A failed offer carries the network cause in `detail`; a failed
+            // run carries it as the message.
+            const cause = String((body.stage === 'offer' ? body.detail : body.detail || body.error) || '').trim();
+            return cause ? t`Could not reach the other device (${cause}).` : t`Could not reach the other device.`;
+        }
         default:
-            return null;
+            return code?.startsWith('S3_') ? syncSettingsError(code) : null;
     }
 }
 
@@ -272,16 +320,17 @@ function syncErrorCodeMessage(code) {
  * panel, and the toast makes failures the user has to act on visible even
  * when the panel is not the active surface.
  *
- * `message` is the already-translated user-facing string; `code` maps to a
- * translated message when one is known; `detail` is the raw server error
- * (message or stack) that goes to the log only. The log always carries the
- * raw detail — even when the toast shows a friendly message — so a retry
- * plus a debug-log export still names the real cause.
+ * `message` is the already-translated user-facing string; when absent,
+ * `code` maps to a translated message when one is known, else the raw
+ * `body.error` is shown. The log always carries the raw detail, so a
+ * retry plus a debug-log export still names the real cause.
  */
-function reportSyncError(template, { stage, status, code, message, detail } = {}) {
-    const translated = code ? syncErrorCodeMessage(code) : null;
-    const shown = translated || String(message || '').trim() || `HTTP ${status || 0}`;
-    const rawDetail = String(detail || message || '').trim();
+function reportSyncError(template, { stage, status, code, message, body = {}, kind } = {}) {
+    const shown = String(message || '').trim()
+        || (code ? syncFailureReason(code, body, kind) : null)
+        || String(body.error || '').trim()
+        || `HTTP ${status || 0}`;
+    const rawDetail = String(body.detail || body.error || '').trim();
     console.error(`[lan-sync] ${stage || 'sync'} failed`, {
         status,
         code,
@@ -289,6 +338,12 @@ function reportSyncError(template, { stage, status, code, message, detail } = {}
     });
     showStatusBanner(template, 'error', shown);
     toastr.error(shown, t`LAN Sync`);
+}
+
+/** The reason a failed sync shows, translated when its code is known. */
+function syncFailureReason(code, body, kind) {
+    return syncErrorCodeMessage(code, body) || (kind === 's3' ? syncSettingsError(code) : null)
+        || String(body?.error || '').trim() || String(code || '');
 }
 
 function switchTab(template, tabName) {
@@ -302,162 +357,184 @@ function kebabFromCamel(s) {
     return s.replace(/[A-Z]/g, (m, i) => (i === 0 ? m.toLowerCase() : '-' + m.toLowerCase()));
 }
 
-function renderPeersList(template, peers, handlers) {
+function actionButton(className, icon, label) {
+    const button = $('<div class="menu_button menu_button_icon"></div>').addClass(className);
+    button.append($('<i class="fa-fw fa-solid"></i>').addClass(icon));
+    button.append($('<span></span>').attr('data-i18n', label).text(translate(label)));
+    return button;
+}
+
+function renderPeersList(template, state, handlers) {
     const list = template.find('.lanSyncPeersList');
     const empty = template.find('.lanSyncPeersEmpty');
     list.empty();
-    const entries = Object.entries(peers);
+    const entries = Object.entries(state.backends);
     if (!entries.length) {
         empty.removeClass('displayNone');
         return;
     }
     empty.addClass('displayNone');
-    for (const [peerId, peer] of entries) {
+    for (const [backendId, backend] of entries) {
+        const lastSync = backend.lastSync ?? {};
         const row = $('<div class="lanSyncPeerRow flex-container flexFlowColumn flexGap10"></div>');
+        row.attr('data-backend-id', backendId).attr('data-kind', backend.kind);
         const title = $('<div class="lanSyncPeerTitle flex-container flexGap10"></div>');
-        const label = $('<div class="lanSyncPeerLabel"></div>').text(peer.label || peerId);
+        const label = $('<div class="lanSyncPeerLabel"></div>').text(backend.label || backendId);
         const meta = $('<div class="lanSyncPeerMeta menu_button_note"></div>')
-            .text(t`Last sync: ${formatRelativeTime(peer.lastSyncAt)}`);
-        title.append(label).append(meta);
+            .text(t`Last sync: ${formatRelativeTime(lastSync.at)}`);
+        if (state.running[backendId]) {
+            meta.append(document.createTextNode(' · '), $('<span class="lanSyncPeerRunning"></span>').text(t`Syncing now`));
+        }
+        title.append(label).append($('<span class="syncBackendKind menu_button_note"></span>').text(backend.kind === 's3' ? 'S3' : 'LAN')).append(meta);
+
+        const error = $('<div class="lanSyncPeerError menu_button_note"></div>');
+        if (backend.pendingError) {
+            error.text(t`Could not read pending sync records for ${backend.label || backendId}.`);
+        } else if (lastSync.error) {
+            error.text(t`Last sync failed: ${syncFailureReason(lastSync.error.code, { error: lastSync.error.message }, backend.kind)}`);
+        } else {
+            error.addClass('displayNone');
+        }
+
+        const stalled = $('<div class="lanSyncPeerStalled flex-container flexFlowColumn flexNoGap"></div>');
+        if (Array.isArray(lastSync.stalled) && lastSync.stalled.length) {
+            stalled.append($('<div class="menu_button_note"></div>').attr('data-i18n', 'Files sync cannot update').text(t`Files sync cannot update`));
+            for (const relPath of lastSync.stalled) {
+                stalled.append($('<div class="lanSyncPeerStalledPath"></div>').text(relPath));
+            }
+        } else {
+            stalled.addClass('displayNone');
+        }
 
         const actions = $('<div class="backupActionRow flex-container flexGap10"></div>');
-        const syncBtn = $(`<div class="menu_button menu_button_icon lanSyncPeerSyncButton"><i class="fa-fw fa-solid fa-rotate"></i><span data-i18n="Sync now">${t`Sync now`}</span></div>`);
-        const undoBtn = $(`<div class="menu_button menu_button_icon lanSyncPeerUndoButton"><i class="fa-fw fa-solid fa-arrow-rotate-left"></i><span data-i18n="Undo last sync">${t`Undo last sync`}</span></div>`);
-        const forgetBtn = $(`<div class="menu_button menu_button_icon lanSyncPeerForgetButton"><i class="fa-fw fa-solid fa-trash"></i><span data-i18n="Forget">${t`Forget`}</span></div>`);
-        actions.append(syncBtn).append(undoBtn).append(forgetBtn);
+        const pending = template.data('syncPendingActions')?.has(backendId) ?? false;
+        actions.toggleClass('disabled', pending).attr('aria-busy', String(pending));
+        const syncBtn = actionButton('lanSyncPeerSyncButton', 'fa-rotate', 'Sync now');
+        const undoBtn = actionButton('lanSyncPeerUndoButton', 'fa-arrow-rotate-left', 'Undo last sync');
+        const forgetBtn = actionButton('lanSyncPeerForgetButton', 'fa-trash', 'Remove');
+        const editBtn = actionButton('syncBackendEditButton', 'fa-pen', 'Edit');
+        actions.append(syncBtn, undoBtn, editBtn, forgetBtn);
+        editBtn.on('click', () => handlers.onEdit(backendId, backend));
+        if (backend.kind === 's3') {
+            const unlockBtn = actionButton('syncBackendUnlockButton', 'fa-key', 'Unlock');
+            unlockBtn.on('click', () => handlers.onUnlock(backendId, backend));
+            actions.append(unlockBtn);
+        }
 
         // "Clear credentials" only when the server reports stored ones —
-        // showing it otherwise would be a dead button (the DELETE route
-        // is idempotent but it'd still confuse the user). The flag is
-        // derived server-side in /peers from peerAuth presence; the
-        // password itself never leaves the disk via this route.
-        if (peer.hasStoredCredentials) {
-            const clearAuthBtn = $(`<div class="menu_button menu_button_icon lanSyncPeerClearAuthButton"><i class="fa-fw fa-solid fa-key"></i><span data-i18n="Clear credentials">${t`Clear credentials`}</span></div>`);
-            clearAuthBtn.on('click', () => handlers.onClearAuth(peerId, peer));
+        // showing it otherwise would be a dead button. The password itself
+        // never leaves the disk through the backend list.
+        if (backend.lan?.hasStoredCredentials) {
+            const clearAuthBtn = actionButton('lanSyncPeerClearAuthButton', 'fa-key', 'Clear credentials');
+            clearAuthBtn.on('click', () => handlers.onClearAuth(backendId, backend));
             actions.append(clearAuthBtn);
         }
 
-        syncBtn.on('click', () => handlers.onSync(peerId, peer));
-        undoBtn.on('click', () => handlers.onUndo(peerId, peer));
-        forgetBtn.on('click', () => handlers.onForget(peerId, peer));
+        syncBtn.on('click', () => handlers.onSync(backendId, backend));
+        undoBtn.on('click', () => handlers.onUndo(backendId, backend));
+        forgetBtn.on('click', () => handlers.onForget(backendId, backend));
 
-        row.append(title).append(actions);
+        row.append(title).append(error).append(stalled).append(actions);
         list.append(row);
     }
-}
-
-function renderConflictList(template, conflicts) {
-    const list = template.find('.lanSyncConflictList');
-    list.empty();
-    for (const conflict of conflicts) {
-        const row = $('<div class="lanSyncConflictRow flex-container flexFlowColumn flexGap10"></div>');
-        const title = $('<div class="lanSyncConflictTitle"></div>').text(conflict.filepath);
-        const kindLabel = $('<div class="menu_button_note"></div>').text(t`Type: ${conflict.kind}`);
-        const cards = $('<div class="flex-container flexGap10 lanSyncConflictCards"></div>');
-
-        const oursLabel = conflict.kind === 'deleteByUs'
-            ? t`Local: deleted`
-            : t`Local version`;
-        const theirsLabel = conflict.kind === 'deleteByTheirs'
-            ? t`Remote: deleted`
-            : t`Remote version`;
-
-        const ourCard = $(`<label class="checkbox_label lanSyncConflictCard"><input type="radio" name="conflict-${conflict.filepath}" value="ours" checked><span>${oursLabel}</span></label>`);
-        const theirCard = $(`<label class="checkbox_label lanSyncConflictCard"><input type="radio" name="conflict-${conflict.filepath}" value="theirs"><span>${theirsLabel}</span></label>`);
-        cards.append(ourCard).append(theirCard);
-
-        row.append(title).append(kindLabel).append(cards);
-        row.data('filepath', conflict.filepath);
-        list.append(row);
-    }
-}
-
-function collectResolutions(template) {
-    const resolutions = {};
-    template.find('.lanSyncConflictRow').each(function () {
-        const filepath = $(this).data('filepath');
-        const picked = $(this).find('input:checked').val();
-        if (filepath && picked) resolutions[filepath] = picked;
-    });
-    return resolutions;
 }
 
 /**
- * Drive a sync against an already-paired peer via the dedicated
- * `/peers/:peerId/sync` endpoint. The endpoint uses the `peerBaseUrl`
- * stored on the peer entry so the user never has to re-type the URL.
- *
- * Returns void; status / error is rendered into the panel's status
- * banner directly.
+ * Show the outcome of a sync the user started, from the answer of
+ * `POST /backends/:id/sync` or of `/pair/accept`. Returns true on success.
  */
-async function runSyncNow(template, peerId, peer) {
+function showSyncResult(template, label, response, body) {
+    if (!response.ok || !body.ok) return false;
+    // A run that merged nothing can still leave conflicts pending that another run recorded.
+    const undecided = Math.max(Number(body.conflicts) || 0, Number(body.pendingConflicts) || 0);
+    const stalled = Array.isArray(body.stalled) && body.stalled.length > 0;
+    if (undecided > 0 && stalled) {
+        showStatusBanner(template, 'warning', t`Synced with ${label}. ${undecided} file(s) need a decision. Some files kept the version on this device.`);
+    } else if (undecided > 0) {
+        showStatusBanner(template, 'warning', t`Synced with ${label}. ${undecided} file(s) need a decision.`);
+    } else if (stalled) {
+        showStatusBanner(template, 'warning', t`Synced with ${label}. Some files kept the version on this device.`);
+    } else {
+        showStatusBanner(template, 'success', t`Synced with ${label}.`);
+    }
+    checkSyncStatusNow({ showSeen: undecided > 0 });
+    return true;
+}
+
+/**
+ * Sync an already-paired device now. The status or error is rendered into
+ * the panel's status banner.
+ */
+async function runSyncNow(template, backendId, backend) {
+    const label = backend.label || backendId;
+    const complete = beginSyncActivity({ backendId, label });
+    let ok = false;
+    let needsAttention = false;
     clearStatusBanner(template);
-    showStatusBanner(template, 'info', t`Syncing with ${peer.label || peerId}…`);
+    showStatusBanner(template, 'info', t`Syncing with ${label}…`);
     try {
-        const res = await fetch(ENDPOINTS.peerSync(peerId), {
+        const res = await fetch(ENDPOINTS.backendSync(backendId), {
+            method: 'POST',
+            headers: getRequestHeaders(),
+        });
+        const body = await res.json();
+        ok = res.ok && body.ok === true && !body.lastSync?.error;
+        needsAttention = Number(body.pendingConflicts) > 0 || Number(body.conflicts) > 0 || Boolean(body.stalled?.length || body.lastSync?.stalled?.length);
+        if (showSyncResult(template, label, res, body)) return;
+        reportSyncError(template, { stage: 'sync', status: res.status, code: body.code, body, kind: backend.kind });
+    } catch (e) {
+        reportSyncError(template, { stage: 'sync', message: String(e.message || e), body: { detail: e.stack || String(e.message || e) } });
+    } finally {
+        complete({ ok, needsAttention });
+        // Success already requests an admitted status in showSyncResult.
+        // Failures must also supersede pre-settlement reads.
+        if (!ok) await checkSyncStatusNow();
+    }
+}
+
+function renderSchedule(template, schedule) {
+    template.find('.lanSyncIdleSeconds').val(schedule?.idleSeconds ?? '');
+    template.find('.lanSyncPollSeconds').val(schedule?.pollSeconds ?? '');
+}
+
+async function saveSchedule(template) {
+    const button = template.find('.lanSyncSaveScheduleButton');
+    if (button.hasClass('disabled')) return;
+    const idleSeconds = Number(template.find('.lanSyncIdleSeconds').val());
+    const pollSeconds = Number(template.find('.lanSyncPollSeconds').val());
+    const valid = v => Number.isFinite(v) && v > 0;
+    if (!valid(idleSeconds) || !valid(pollSeconds)) {
+        toastr.warning(t`Enter a positive number of seconds.`, t`LAN Sync`);
+        return;
+    }
+    button.addClass('disabled');
+    try {
+        const res = await fetch(ENDPOINTS.schedule, {
             method: 'POST',
             headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
-            body: JSON.stringify({}),
+            body: JSON.stringify({ idleSeconds, pollSeconds }),
         });
         const body = await res.json().catch(() => ({}));
-        if (res.status === 412 && body.code === 'NO_BASE_URL') {
-            showStatusBanner(template, 'warning', t`This peer was paired in an older version. Click Forget and pair again to record the base URL.`);
-            return;
-        }
-        if (res.status === 401 && body.stage === 'offer') {
-            reportSyncError(template, { stage: 'offer', status: 401, code: 'AUTH_FAILED', message: t`Authentication to the other device failed. Forget and re-pair if its credentials changed.`, detail: body.error });
-            return;
-        }
-        if (res.status === 502 && body.stage === 'offer') {
-            const cause = String(body.detail || '').trim();
-            const message = cause
-                ? t`Could not reach the other device (${cause}).`
-                : t`Could not reach the other device.`;
-            reportSyncError(template, { stage: 'offer', status: 502, code: 'UNREACHABLE', message, detail: body.detail || body.error });
-            return;
-        }
-        if (!res.ok && res.status !== 409) {
-            reportSyncError(template, { stage: 'pull', status: res.status, code: body.code, message: body.detail || body.error });
-            return;
-        }
-        // Conflict path: the server returns `{ ok: false, conflicts: [...] }`
-        // in body. Render the picker; on Apply we re-post to the same
-        // endpoint with `resolutions`.
-        if (body.ok === false && Array.isArray(body.conflicts) && body.conflicts.length) {
-            showStatusBanner(template, 'warning', t`${body.conflicts.length} file(s) conflict. Pick a version for each below.`);
-            renderConflictList(template, body.conflicts);
-            template.find('.lanSyncConflictPanel').removeClass('displayNone');
-            template.find('.lanSyncApplyResolutionsButton').off('click').on('click', async () => {
-                const resolutions = collectResolutions(template);
-                showStatusBanner(template, 'info', t`Applying resolutions…`);
-                const res2 = await fetch(ENDPOINTS.peerSync(peerId), {
-                    method: 'POST',
-                    headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ resolutions }),
-                });
-                const result = await res2.json().catch(() => ({}));
-                if (res2.ok && result.ok !== false) {
-                    template.find('.lanSyncConflictPanel').addClass('displayNone');
-                    showStatusBanner(template, 'success', t`Sync complete.`);
-                } else {
-                    reportSyncError(template, { stage: 'resolve', status: res2.status, code: result.code, message: result.detail || result.error });
-                }
-            });
-            return;
-        }
-        if (body.ok) {
-            showStatusBanner(template, 'success', t`Synced with ${peer.label || peerId}.`);
-            template.find('.lanSyncConflictPanel').addClass('displayNone');
-        }
+        if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+        renderSchedule(template, body.schedule);
+        toastr.success(t`Schedule saved.`, t`LAN Sync`);
     } catch (e) {
-        reportSyncError(template, { stage: 'sync', message: String(e.message || e), detail: e.stack || String(e.message || e) });
+        console.error('[lan-sync] schedule save failed', { detail: String(e.message || e) });
+        toastr.error(String(e.message || e), t`LAN Sync`);
+    } finally {
+        button.removeClass('disabled');
     }
 }
 
 /**
  * Public entry: open the LAN Sync panel.
  */
-export async function openLanSyncPanel() {
+export function openLanSyncPanel() {
+    if (!openPanelPromise) openPanelPromise = showLanSyncPanel().finally(() => { openPanelPromise = null; });
+    return openPanelPromise;
+}
+
+async function showLanSyncPanel() {
     const template = $(await renderTemplateAsync('userLanSync'));
 
     // Payload from the last `/pair/start`, kept so the address selector can
@@ -484,7 +561,10 @@ export async function openLanSyncPanel() {
     }
 
     const categories = await loadCategories();
-    const peers = await loadPeers();
+    let state;
+    try { state = await loadBackends(); } catch {
+        throw new Error(t`Could not load sync backends. Check the connection and reopen Sync.`);
+    }
 
     // Wire tabs.
     template.find('.lanSyncTab').on('click', function () {
@@ -495,77 +575,91 @@ export async function openLanSyncPanel() {
     });
 
     // Default tab.
-    switchTab(template, peers && Object.keys(peers).length ? 'Peers' : 'PairNew');
+    switchTab(template, Object.keys(state.backends).length ? 'Peers' : 'PairNew');
 
     renderCategoryGrid(template.find('.lanSyncCategoryGrid'), categories);
     renderCategoryGrid(template.find('.lanSyncAcceptCategoryGrid'), categories);
+    renderSchedule(template, state.schedule);
+    template.find('.lanSyncSaveScheduleButton').on('click', () => saveSchedule(template));
+    template.find('.syncDeviceLabel').val(state.device?.label || '');
+    template.find('.syncSaveDeviceLabelButton').on('click', async function () {
+        if ($(this).prop('disabled')) return;
+        $(this).prop('disabled', true);
+        try {
+            const response = await fetch('/api/sync/v1/device', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({ label: String(template.find('.syncDeviceLabel').val() || '') }) });
+            const body = await response.json();
+            if (!response.ok) throw new Error(syncSettingsError(body.code));
+            template.find('.syncDeviceLabel').val(body.device.label);
+            template.find('.syncDeviceLabelResolved').text(t`Name for future edits: ${body.device.resolvedLabel}`);
+            toastr.success(t`Device label saved.`, t`Sync`);
+        } catch (error) { showStatusBanner(template, 'error', String(error.message || error)); } finally { $(this).prop('disabled', false); }
+    });
 
     const handlers = {
-        async onSync(peerId, peer) {
-            // Fast path: peer entry has peerBaseUrl recorded from
-            // `/pair/accept` time. Call the dedicated sync-now endpoint
-            // which re-runs the offer + pull dance using the stored URL.
-            if (peer.peerBaseUrl) {
-                await runSyncNow(template, peerId, peer);
-                await refreshPeers(template, handlers);
-                return;
-            }
-            // Legacy entry without recorded URL — prompt the user once
-            // and let /pair/accept rebuild the registry entry with the
-            // URL filled in for next time.
-            const baseUrl = await callGenericPopup(
-                t`Enter the other device's base URL (e.g. http://192.168.1.42:8000)`,
-                POPUP_TYPE.INPUT, '',
-                { okButton: t`Sync now`, cancelButton: t`Cancel` },
-            );
-            if (!baseUrl || typeof baseUrl !== 'string') return;
-            const auth = await collectAuthIfNeeded(baseUrl);
-            await runPairAccept(template, {
-                peerBaseUrl: baseUrl.trim(),
-                remotePeerId: peerId,
-                label: peer.label || peerId,
-                categories: peer.categories || [],
-                peerAuth: auth,
-            });
+        async onEdit(backendId, backend) {
+            await openS3BackendForm({ mode: 'edit', backendId, backend, categories, onSaved: () => refreshPeers(template, handlers) });
+        },
+        async onUnlock(backendId, backend) {
+            await openS3BackendForm({ mode: 'unlock', backendId, backend, categories, onSaved: () => refreshPeers(template, handlers) });
+        },
+        async onSync(backendId, backend) {
+            await runSyncNow(template, backendId, backend);
             await refreshPeers(template, handlers);
         },
-        async onUndo(peerId, peer) {
+        async onUndo(backendId, backend) {
+            clearStatusBanner(template);
+            const label = backend.label || backendId;
             const confirm = await callGenericPopup(
-                t`Undo the last sync with ${peer.label || peerId}? This rewinds THIS device only; the other device is unaffected.`,
+                $('<div></div>').text(t`Undo the last sync with ${label}? Files that sync changed go back to their earlier versions on every device that syncs with this one. Files edited after it keep the newer edit.`),
                 POPUP_TYPE.CONFIRM, '',
                 { okButton: t`Undo`, cancelButton: t`Cancel` },
             );
             if (confirm !== POPUP_RESULT.AFFIRMATIVE) return;
+            showStatusBanner(template, 'info', t`Undo`);
             try {
-                const res = await fetch(ENDPOINTS.undo, {
+                const res = await fetch(ENDPOINTS.backendUndo(backendId), {
                     method: 'POST',
-                    headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ peerId }),
+                    headers: getRequestHeaders(),
                 });
-                if (res.status === 404) {
+                const body = await res.json().catch(() => ({}));
+                if (res.status === 404 && body.code === 'NO_BACKUP_TAG') {
                     toastr.info(t`Nothing to undo — no prior sync recorded.`, t`LAN Sync`);
                     return;
                 }
-                if (!res.ok) {
-                    const body = await res.json().catch(() => ({}));
-                    throw new Error(body.error || `HTTP ${res.status}`);
+                if (!res.ok || body.ok === false || body.committed === false || body.propagation?.ok === false) {
+                    const reason = syncFailureReason(body.code || body.propagation?.code, body, backend.kind);
+                    const diagnostic = body.reconcile ? ` ${JSON.stringify(body.reconcile)}` : '';
+                    throw new Error((reason || `HTTP ${res.status}`) + diagnostic);
                 }
-                toastr.success(t`Undo complete.`, t`LAN Sync`);
-                showStatusBanner(template, 'success', t`Reverted to the state before the last sync with ${peer.label || peerId}.`);
+                const keptEdited = Array.isArray(body.keptEdited) ? body.keptEdited : [];
+                if (keptEdited.length) {
+                    const message = t`Reverted the last sync with ${label}. These files were edited after it and were left as they are: ${keptEdited.join(', ')}`;
+                    showStatusBanner(template, 'warning', message);
+                    toastr.warning(message, t`LAN Sync`);
+                } else {
+                    const message = t`Reverted the last sync with ${label}.`;
+                    showStatusBanner(template, 'success', message);
+                    toastr.success(message, t`LAN Sync`);
+                }
+                checkSyncStatusNow();
+                await refreshPeers(template, handlers);
             } catch (e) {
                 console.error('[lan-sync] undo failed', { detail: String(e.message || e) });
+                showStatusBanner(template, 'error', String(e.message || e));
                 toastr.error(String(e.message || e), t`Undo failed`);
+                await checkSyncStatusNow();
+                await refreshPeers(template, handlers);
             }
         },
-        async onForget(peerId, peer) {
+        async onForget(backendId, backend) {
             const confirm = await callGenericPopup(
-                t`Forget ${peer.label || peerId}? Both the registry entry and the on-disk shadow repo will be deleted. The other device is unaffected.`,
+                $('<div></div>').text(t`Remove ${backend.label || backendId}? This removes its local sync configuration and history. The bucket and other devices are unaffected.`),
                 POPUP_TYPE.CONFIRM, '',
-                { okButton: t`Forget`, cancelButton: t`Cancel` },
+                { okButton: t`Remove`, cancelButton: t`Cancel` },
             );
             if (confirm !== POPUP_RESULT.AFFIRMATIVE) return;
             try {
-                const res = await fetch(ENDPOINTS.peer(peerId), {
+                const res = await fetch(ENDPOINTS.backend(backendId), {
                     method: 'DELETE',
                     headers: getRequestHeaders(),
                 });
@@ -580,15 +674,13 @@ export async function openLanSyncPanel() {
                 toastr.error(String(e.message || e), t`Forget failed`);
             }
         },
-        async onClearAuth(peerId, peer) {
+        async onClearAuth(backendId, backend) {
             // No confirm popup — the action is non-destructive (re-pair
             // can reinstate credentials) and the button only appears
-            // when credentials are actually stored, so a stray click
-            // can't hit nothing. After success we refresh the peer
-            // list, which makes the button vanish (server's
-            // hasStoredCredentials flag flips to false).
+            // when credentials are actually stored. After success the
+            // refreshed list no longer shows the button.
             try {
-                const res = await fetch(ENDPOINTS.peerAuth(peerId), {
+                const res = await fetch(ENDPOINTS.backendAuth(backendId), {
                     method: 'DELETE',
                     headers: getRequestHeaders(),
                 });
@@ -600,12 +692,72 @@ export async function openLanSyncPanel() {
                 await refreshPeers(template, handlers);
             } catch (e) {
                 console.error('[lan-sync] clear-auth failed', { detail: String(e.message || e) });
-                toastr.error(String(e.message || e), t`Failed to clear credentials for ${peer.label || peerId}.`);
+                toastr.error(String(e.message || e), t`Failed to clear credentials for ${backend.label || backendId}.`);
             }
         },
     };
 
-    renderPeersList(template, peers, handlers);
+    // Action admission outlives panel closure and disposable row nodes.
+    const pendingActions = pendingBackendActions;
+    template.data('syncPendingActions', pendingActions);
+    for (const [name, handler] of Object.entries(handlers)) {
+        handlers[name] = async (backendId, backend) => {
+            if (pendingActions.has(backendId)) return;
+            pendingActions.add(backendId);
+            const render = () => renderPeersList(template, template.data('syncBackendState') ?? state, handlers);
+            render();
+            try { await handler(backendId, backend); } finally {
+                pendingActions.delete(backendId);
+                render();
+                document.dispatchEvent(new CustomEvent('sync-backend-actions-updated'));
+            }
+        };
+    }
+    renderPeersList(template, state, handlers);
+    const updateReview = () => {
+        const hidden = !syncActivityNeedsAttention();
+        template.find('.syncReviewIssuesButton').prop('hidden', hidden).toggleClass('displayNone', hidden);
+    };
+    updateReview();
+    template.find('.syncReviewIssuesButton').on('click', () => checkSyncStatusNow({ showSeen: true }));
+    const onActions = () => refreshPeers(template, handlers);
+    template.find('.syncAddS3Button').on('click', () => openS3BackendForm({ mode: 'add', categories, onSaved: async () => {
+        switchTab(template, 'Peers');
+        await refreshPeers(template, handlers);
+    } }));
+    // Status is emitted only after sync-status's response-order barrier.
+    const onStatus = event => {
+        if (template.data('syncStatusReadFailed') && !template.data('syncBackendReadFailed')) clearStatusBanner(template);
+        template.data('syncStatusReadFailed', false);
+        template.data('syncPendingErrors', event.detail.errors ?? {});
+        const current = template.data('syncBackendState');
+        if (!current) return;
+        for (const [id, backend] of Object.entries(current.backends)) {
+            backend.pendingError = event.detail.errors?.[id] ?? null;
+            if (event.detail.backends?.[id]) backend.lastSync = event.detail.backends[id].lastSync;
+        }
+        current.running = Object.fromEntries(Object.entries(event.detail.backends ?? {}).map(([id, backend]) => [id, backend.running]));
+        renderPeersList(template, current, handlers);
+    };
+    const onStatusFailure = () => {
+        template.data('syncStatusReadFailed', true);
+        showStatusBanner(template, 'error', t`Could not read sync status. Check the connection and retry.`);
+    };
+    template.data('syncBackendState', state);
+    document.addEventListener('sync-status-updated', onStatus);
+    document.addEventListener('sync-status-read-failed', onStatusFailure);
+    document.addEventListener('sync-activity-updated', updateReview);
+    document.addEventListener('sync-backend-actions-updated', onActions);
+    let closed = false;
+    const poll = async () => {
+        if (closed) return;
+        if (document.visibilityState === 'visible') {
+            await refreshPeers(template, handlers);
+            await checkSyncStatusNow();
+        }
+        if (!closed) timer = setTimeout(poll, 5000);
+    };
+    let timer = setTimeout(poll, 5000);
 
     // ====== Pair new device tab ======
 
@@ -724,71 +876,87 @@ export async function openLanSyncPanel() {
             return;
         }
 
-        await runPairAccept(template, {
-            peerBaseUrl,
-            remotePeerId,
-            label,
-            categories,
-            pairCode: pairCode || null,
-            peerAuth: (username && password) ? { username, password } : null,
-        });
+        try {
+            await runPairAccept(template, {
+                peerBaseUrl,
+                remotePeerId,
+                label,
+                categories,
+                pairCode: pairCode || null,
+                peerAuth: (username && password) ? { username, password } : null,
+            });
+        } finally {
+            template.find('.lanSyncAcceptPassword, .lanSyncAcceptUsername, .lanSyncAcceptPairCode').val('');
+        }
         await refreshPeers(template, handlers);
     });
 
-    // ====== Conflict resolution ======
-
-    template.find('.lanSyncCancelResolutionsButton').on('click', function () {
-        template.find('.lanSyncConflictPanel').addClass('displayNone');
-        showStatusBanner(template, 'info', t`Conflict resolution canceled. Re-run sync when you're ready.`);
-    });
-
-    await callGenericPopup(template, POPUP_TYPE.TEXT, '', {
-        okButton: t`Close`,
-        wide: true,
-        large: true,
-        allowVerticalScrolling: true,
-    });
+    try {
+        await callGenericPopup(template, POPUP_TYPE.TEXT, '', {
+            okButton: t`Close`,
+            wide: true,
+            large: true,
+            allowVerticalScrolling: true,
+            onClosing: () => { template.find('input[type="password"], .lanSyncAcceptUsername, .lanSyncAcceptPairCode').val(''); return true; },
+        });
+    } finally {
+        closed = true;
+        clearTimeout(timer);
+        document.removeEventListener('sync-status-updated', onStatus);
+        document.removeEventListener('sync-status-read-failed', onStatusFailure);
+        document.removeEventListener('sync-activity-updated', updateReview);
+        document.removeEventListener('sync-backend-actions-updated', onActions);
+        template.find('input[type="password"], .lanSyncAcceptUsername, .lanSyncAcceptPairCode').val('');
+        template.find('*').off();
+    }
 }
 
 async function refreshPeers(template, handlers) {
-    const peers = await loadPeers();
-    renderPeersList(template, peers, handlers);
+    try {
+        const state = await loadBackends();
+        for (const [id, backend] of Object.entries(state.backends)) backend.pendingError = template.data('syncPendingErrors')?.[id] ?? null;
+        template.data('syncBackendState', state);
+        renderPeersList(template, state, handlers);
+        if (template.data('syncBackendReadFailed')) clearStatusBanner(template);
+        template.data('syncBackendReadFailed', false);
+    } catch (error) {
+        console.error('[sync] backend refresh failed', error);
+        template.data('syncBackendReadFailed', true);
+        showStatusBanner(template, 'error', t`Could not refresh sync backends. The last loaded configuration is still displayed.`);
+    }
 }
 
-async function collectAuthIfNeeded(/* baseUrl */) {
-    // The client can't probe the peer's auth state without a CORS-allowed
-    // endpoint, so we always offer the auth form. Empty strings mean "no
-    // auth needed"; the backend forwards them only if both fields are set.
-    const username = await callGenericPopup(
-        t`Peer's basic auth username (leave blank if disabled)`,
-        POPUP_TYPE.INPUT, '',
-        { okButton: t`Continue`, cancelButton: t`Cancel` },
-    );
-    if (username === null) return null;
-    if (!username) return null;
-    const password = await callGenericPopup(
-        t`Peer's basic auth password`,
-        POPUP_TYPE.INPUT, '',
-        { okButton: t`Continue`, cancelButton: t`Cancel` },
-    );
-    if (password === null || !password) return null;
-    return { username: String(username), password: String(password) };
+/**
+ * Message for a pairing that failed before it was saved, when it differs
+ * from the one for a failed sync of a paired device.
+ */
+function pairFailureMessage(body) {
+    if (body.code === 'PEER_AUTH_FAILED' || body.code === 'PEER_AUTH_REQUIRED') {
+        return t`Authentication to the other device failed. Check your credentials.`;
+    }
+    if (body.code === 'PEER_UNREACHABLE') {
+        const cause = String(body.detail || '').trim();
+        return cause
+            ? t`Could not reach the other device (${cause}). Check the base URL and that the device is online.`
+            : t`Could not reach the other device. Check the base URL and that the device is online.`;
+    }
+    return null;
 }
 
 async function runPairAccept(template, payload) {
     clearStatusBanner(template);
 
-    // Pre-flight handle check (spec §3.4). The server enforces the same
-    // gate on `/pair/accept`, but doing it here avoids even hitting the
-    // network when the user is clearly logged in as the wrong account
-    // (e.g. accepted a link minted for `alice` while logged in as `bob`).
-    // The regex MUST stay in sync with `sanitizeHandleForPeerId` in
+    // Pre-flight handle check. The server enforces the same gate on
+    // `/pair/accept`, but doing it here avoids even hitting the network
+    // when the user is clearly logged in as the wrong account (e.g.
+    // accepted a link minted for `alice` while logged in as `bob`).
+    // The replacements MUST stay in sync with `sanitizeHandleForPeerId` in
     // `src/endpoints/sync.js` — both sides need to agree on the
     // sanitized form to compare correctly.
     const peerIdPrefix = String(payload.remotePeerId || '').split('@')[0];
     const localHandle = await getCurrentHandleForSync();
     if (localHandle !== null) {
-        const expected = String(localHandle || 'peer').replace(/[^A-Za-z0-9._-]/g, '_');
+        const expected = String(localHandle || 'peer').replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.(?=\.)/g, '_').replace(/^\./, '_');
         if (expected !== peerIdPrefix) {
             showStatusBanner(template, 'error',
                 t`This pairing link is for ${peerIdPrefix}, but you're logged in as ${expected}. Pair from the matching account, or use the same handle on both devices.`);
@@ -796,7 +964,8 @@ async function runPairAccept(template, payload) {
         }
     }
 
-    showStatusBanner(template, 'info', t`Syncing with ${payload.label || payload.remotePeerId}…`);
+    const label = payload.label || payload.remotePeerId;
+    showStatusBanner(template, 'info', t`Syncing with ${label}…`);
     try {
         const res = await fetch(ENDPOINTS.pairAccept, {
             method: 'POST',
@@ -804,93 +973,31 @@ async function runPairAccept(template, payload) {
             body: JSON.stringify(payload),
         });
         const body = await res.json().catch(() => ({}));
-
-        if (res.status === 412 && body.code === 'HANDLE_MISMATCH') {
-            const got = String(body.gotHandle || '');
-            const expected = String(body.expectedHandle || '');
-            reportSyncError(template, { stage: 'offer', status: 412, code: 'HANDLE_MISMATCH', message: t`This pairing link is for ${got}, but you're logged in as ${expected}. Pair from the matching account, or use the same handle on both devices.` });
+        if (showSyncResult(template, body.label || label, res, body)) {
+            notifyCredentialsStored(payload);
             return;
         }
-        if (res.status === 401 && body.stage === 'offer') {
-            reportSyncError(template, { stage: 'offer', status: 401, code: 'AUTH_FAILED', message: t`Authentication to the other device failed. Check your credentials.`, detail: body.error });
+        // A `backendId` in a failed answer means the pairing was saved and
+        // only the first sync failed.
+        if (body.backendId) {
+            const message = t`Paired with ${body.label || label}, but the first sync failed: ${syncFailureReason(body.code, body)}`;
+            reportSyncError(template, { stage: 'first sync', status: res.status, code: body.code, message, body });
+            notifyCredentialsStored(payload);
             return;
         }
-        if (res.status === 502 && body.stage === 'offer') {
-            const cause = String(body.detail || '').trim();
-            const message = cause
-                ? t`Could not reach the other device (${cause}). Check the base URL and that the device is online.`
-                : t`Could not reach the other device. Check the base URL and that the device is online.`;
-            reportSyncError(template, { stage: 'offer', status: 502, code: 'UNREACHABLE', message, detail: body.detail || body.error });
-            return;
-        }
-        if (!res.ok && res.status !== 409) {
-            reportSyncError(template, { stage: 'pull', status: res.status, code: body.code, message: body.detail || body.error });
-            return;
-        }
-
-        // 409 = PEER_REF_CHANGED, surfaced with retry: true. The simplest
-        // recovery is to re-try the whole accept call, which mints a fresh
-        // session token and re-walks the peer's HEAD. Auto-retry once.
-        if (res.status === 409 && body.retry) {
-            showStatusBanner(template, 'warning', t`Peer state changed during sync. Retrying once…`);
-            const retry = await fetch(ENDPOINTS.pairAccept, {
-                method: 'POST',
-                headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            const retryBody = await retry.json().catch(() => ({}));
-            if (!retry.ok) {
-                reportSyncError(template, { stage: 'pull', status: retry.status, code: retryBody.code, message: retryBody.detail || retryBody.error });
-                return;
-            }
-            return handleSyncResult(template, payload, retryBody);
-        }
-
-        return handleSyncResult(template, payload, body);
+        reportSyncError(template, { stage: body.stage || 'pair', status: res.status, code: body.code, message: pairFailureMessage(body), body });
     } catch (e) {
-        reportSyncError(template, { stage: 'sync', message: String(e.message || e), detail: e.stack || String(e.message || e) });
-    }
-}
-
-function handleSyncResult(template, payload, body) {
-    if (body.ok === false && Array.isArray(body.conflicts) && body.conflicts.length) {
-        showStatusBanner(template, 'warning', t`${body.conflicts.length} file(s) conflict. Pick a version for each below.`);
-        renderConflictList(template, body.conflicts);
-        template.find('.lanSyncConflictPanel').removeClass('displayNone');
-        // Wire Apply now, with closures over payload + body.
-        template.find('.lanSyncApplyResolutionsButton').off('click').on('click', async () => {
-            const resolutions = collectResolutions(template);
-            showStatusBanner(template, 'info', t`Applying resolutions…`);
-            const res = await fetch(ENDPOINTS.pairAccept, {
-                method: 'POST',
-                headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ...payload, resolutions }),
-            });
-            const result = await res.json().catch(() => ({}));
-            if (res.ok && result.ok !== false) {
-                template.find('.lanSyncConflictPanel').addClass('displayNone');
-                showStatusBanner(template, 'success', t`Sync complete.`);
-                notifyCredentialsStored(payload);
-            } else {
-                reportSyncError(template, { stage: 'resolve', status: res.status, code: result.code, message: result.detail || result.error });
-            }
-        });
-        return;
-    }
-    if (body.ok) {
-        showStatusBanner(template, 'success', t`Synced with ${payload.label || payload.remotePeerId}.`);
-        template.find('.lanSyncConflictPanel').addClass('displayNone');
-        notifyCredentialsStored(payload);
+        reportSyncError(template, { stage: 'pair', message: String(e.message || e), body: { detail: e.stack || String(e.message || e) } });
     }
 }
 
 /**
- * Toast the "credentials saved" notice after a successful pair when the
- * user supplied basic-auth fields. The server persists them on the peer
- * entry (file mode 0600) so subsequent Sync now calls don't need them
- * supplied again; surfacing the "Clear credentials" affordance avoids
- * the trap where a user changes their other device's password and gets
- * silent 401s on every sync.
+ * Toast the "credentials saved" notice after a pairing that saved
+ * basic-auth fields. The server persists them on the backend entry
+ * (file mode 0600) so later syncs don't need them supplied again;
+ * surfacing the "Clear credentials" affordance avoids the trap where a
+ * user changes their other device's password and gets silent 401s on
+ * every sync.
  *
  * No-op when the pair was credential-less, so the notice doesn't fire
  * for a pure-loopback / single-user setup.

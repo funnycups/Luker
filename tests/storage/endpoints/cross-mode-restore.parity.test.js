@@ -324,8 +324,8 @@ describe.each(pairs())('cross-mode restore: $src → $dst', ({ src, dst, sameMod
         }
 
         try {
-            const uploadId = await uploadArchiveToSession(harness.app, sourceArtifact.zipBytes, { handle: harness.handle });
-            const res = await request(harness.app)
+            const uploadId = await uploadArchiveToSession(harness.server, sourceArtifact.zipBytes, { handle: harness.handle });
+            const res = await request(harness.server)
                 .post('/api/users/restore-backup')
                 .send({
                     uploadId,

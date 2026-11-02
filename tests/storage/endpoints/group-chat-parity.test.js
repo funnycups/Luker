@@ -33,7 +33,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
 
     test('REGRESSION: /api/chats/group/save creates a group chat via Repo', async () => {
         const id = 'group-001';
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/group/save')
             .send({ id, chat: SAMPLE_MESSAGES, is_group: true })
             .expect(200);
@@ -49,7 +49,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         await getChatRepo().save(harness.handle, '', id, SAMPLE_HEADER, SAMPLE_MESSAGES, null,
             { isGroup: true, groupId: id });
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/group/get')
             .send({ id })
             .expect(200);
@@ -69,7 +69,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         await getChatRepo().save(harness.handle, '', id, SAMPLE_HEADER, SAMPLE_MESSAGES, null,
             { isGroup: true, groupId: id });
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/group/append')
             .send({ id, messages: [{ name: 'User', mes: 'follow-up' }] })
             .expect(200);
@@ -85,7 +85,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
             { isGroup: true, groupId: id });
         const before = await getChatRepo().get(harness.handle, '', id, { isGroup: true, groupId: id });
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/group/patch')
             .send({
                 id,
@@ -98,13 +98,36 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         expect(chat.body[0].mes).toBe('edited');
     });
 
+    test('group DOM array patches preserve exact guards and companions', async () => {
+        const repo = getChatRepo(), id = 'group-dom-patch';
+        await repo.save(harness.handle, '', id, SAMPLE_HEADER, SAMPLE_MESSAGES, null, { isGroup: true, groupId: id });
+        const companion = { nodes: [{ id: 'spring', facts: ['north', 'birches'] }], edges: [], revision: 7 };
+        await repo.setState(harness.handle, '', id, 'memory_graph', companion, { isGroup: true, groupId: id });
+        const before = await repo.get(harness.handle, '', id, { isGroup: true, groupId: id });
+        const normalized = { ...SAMPLE_MESSAGES[1], extra: {}, swipes: ['hello'], swipe_id: 0,
+            swipe_info: [{ send_date: SAMPLE_MESSAGES[1].send_date, extra: {} }] };
+        const edited = { ...normalized, mes: 'DOM group edit', swipes: ['DOM group edit'] };
+        await request(harness.server).post('/api/chats/group/patch').send({ id, integrity: before.integrity,
+            chat_metadata: { note_prompt: 'retained metadata' },
+            operations: [{ op: 'test', path: '/1', value: SAMPLE_MESSAGES[1] }, { op: 'replace', path: '/1', value: edited }],
+        }).expect(200);
+        const after = await repo.get(harness.handle, '', id, { isGroup: true, groupId: id });
+        expect(after.body).toEqual([SAMPLE_MESSAGES[0], edited]);
+        expect(after.header.chat_metadata).toMatchObject({ is_group_chat: true, note_prompt: 'retained metadata' });
+        expect(await repo.getState(harness.handle, '', id, 'memory_graph', { isGroup: true, groupId: id })).toEqual(companion);
+        await request(harness.server).post('/api/chats/group/patch').send({ id, integrity: after.integrity,
+            operations: [{ op: 'test', path: '/1', value: { ...normalized, mes: 'different old text' } }, { op: 'replace', path: '/1', value: normalized }],
+        }).expect(409);
+        expect((await repo.get(harness.handle, '', id, { isGroup: true, groupId: id })).body).toEqual(after.body);
+    });
+
     test('REGRESSION: /api/chats/group/meta merges into Repo group chat_metadata', async () => {
         const id = 'group-006';
         await getChatRepo().save(harness.handle, '', id, SAMPLE_HEADER, SAMPLE_MESSAGES, null,
             { isGroup: true, groupId: id });
         const before = await getChatRepo().get(harness.handle, '', id, { isGroup: true, groupId: id });
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/group/meta')
             .send({
                 id,
@@ -124,7 +147,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
             { isGroup: true, groupId: id });
         const before = await getChatRepo().get(harness.handle, '', id, { isGroup: true, groupId: id });
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/group/meta/patch')
             .send({
                 id,
@@ -142,7 +165,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         await getChatRepo().save(harness.handle, '', id, SAMPLE_HEADER, SAMPLE_MESSAGES, null,
             { isGroup: true, groupId: id });
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/group/delete')
             .send({ id })
             .expect(200);
@@ -158,7 +181,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
 
         await harness.reopenEngine();
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/group/get')
             .send({ id })
             .expect(200);
@@ -169,7 +192,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
     // --- .jsonl suffix tolerance (ids forwarded from list endpoints) ---
 
     test('REGRESSION: /api/chats/group/save strips a .jsonl suffix from id', async () => {
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/group/save')
             .send({ id: 'group-sfx-save.jsonl', chat: SAMPLE_MESSAGES, is_group: true })
             .expect(200);
@@ -185,7 +208,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         await getChatRepo().save(harness.handle, '', id, SAMPLE_HEADER, SAMPLE_MESSAGES, null,
             { isGroup: true, groupId: id });
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/group/get')
             .send({ id: `${id}.jsonl` })
             .expect(200);
@@ -198,7 +221,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         await getChatRepo().save(harness.handle, '', id, SAMPLE_HEADER, SAMPLE_MESSAGES, null,
             { isGroup: true, groupId: id });
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/group/delete')
             .send({ id: `${id}.jsonl` })
             .expect(200);
@@ -211,7 +234,7 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         await getChatRepo().save(harness.handle, '', 'gseg-a', SAMPLE_HEADER, SAMPLE_MESSAGES, null,
             { isGroup: true, groupId: 'gseg-a' });
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/group/merge')
             .send({
                 id: 'parent-grp-sfx',

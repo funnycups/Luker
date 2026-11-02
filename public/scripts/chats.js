@@ -1345,6 +1345,7 @@ export async function deleteAttachment(attachment, source, callback, confirm = t
             break;
         case 'character':
             extension_settings.character_attachments[characters[this_chid]?.avatar] = extension_settings.character_attachments[characters[this_chid]?.avatar].filter((a) => a.url !== attachment.url);
+            saveSettingsDebounced();
             break;
     }
 

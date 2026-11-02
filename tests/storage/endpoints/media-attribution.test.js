@@ -46,7 +46,7 @@ describe('media attribution target normalization', () => {
 });
 
 function upload(harness, { filename, sha, attribution }) {
-    return request(harness.app)
+    return request(harness.server)
         .post('/api/images/upload')
         .send({
             image: IMAGE_BASE64,

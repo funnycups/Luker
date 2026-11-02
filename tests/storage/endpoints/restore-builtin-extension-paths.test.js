@@ -102,7 +102,7 @@ describe('restore path classifier: built-in extension paths', () => {
             ...extensionEntries('extensions/', 'legit'),
         });
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/users/import/data-zip')
             .field('mode', 'merge')
             .attach('avatar', zipPath);
@@ -132,8 +132,8 @@ describe('restore path classifier: built-in extension paths', () => {
             });
 
             const zipBytes = fs.readFileSync(zipPath);
-            const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-            const res = await request(harness.app)
+            const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+            const res = await request(harness.server)
                 .post('/api/users/restore-backup')
                 .send({
                     uploadId,

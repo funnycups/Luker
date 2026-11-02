@@ -1,5 +1,5 @@
 /**
- * Server-side handle-mismatch gate for LAN Sync (spec §3.4).
+ * Server-side handle-mismatch gate for LAN Sync.
  *
  * `/session/offer` and `/pair/accept` MUST reject any peerId whose
  * sanitized prefix differs from the local user's sanitized handle.
@@ -15,6 +15,9 @@
  * covered alongside the route tests: it's load-bearing for the
  * comparison and the frontend duplicates its regex literally, so a
  * change in either place should fail loudly here.
+ *
+ * The route cases run on `startLanDevice`, whose user store supplies its
+ * own user.
  */
 process.env.SILLYTAVERN_ENABLEUSERACCOUNTS = 'true';
 
@@ -22,78 +25,25 @@ import { describe, test, expect, beforeAll, beforeEach, afterAll, afterEach } fr
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import http from 'node:http';
-import { Buffer } from 'node:buffer';
 
-import express from 'express';
-import request from 'supertest';
 import storage from 'node-persist';
 
-/** @type {import('express').Router} */
-let syncRouter;
 let sanitizeHandleForPeerId;
+let assertSafeBackendId;
 let initStorage;
 let getPasswordHash;
 let getPasswordSalt;
 let initUserStorage;
 let toKey;
 let getUserDirectories;
+let startLanDevice;
+let upsertLanBackend;
 
 const TEST_DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-sync-handle-mismatch-'));
 const PREV_DATA_ROOT = globalThis.DATA_ROOT;
 
 const HANDLE = 'alice';
 const PASSWORD = 'hunter2';
-
-function basicHeader(username, password) {
-    const token = Buffer.from(`${username}:${password}`, 'utf8').toString('base64');
-    return `Basic ${token}`;
-}
-
-function buildApp() {
-    const app = express();
-    app.use(express.json());
-    // No req.user stub — the basic-auth shim must populate it. Mirrors
-    // the multi-user offer test's harness so the same routes that work
-    // for cross-server fetch also exercise the handle gate.
-    app.use('/api/sync/v1', syncRouter);
-    return app;
-}
-
-/**
- * Variant of buildApp for `/pair/accept`, which is browser→own-server
- * only and so does NOT carry the basic-auth shim. In production
- * `setUserDataMiddleware` populates `req.user` from the session cookie;
- * we stub that for the local handle so we can drive the route directly.
- *
- * @param {string} handle
- */
-function buildAppWithUser(handle) {
-    const app = express();
-    app.use(express.json());
-    app.use((req, _res, next) => {
-        req.user = {
-            profile: { handle, admin: false, enabled: true, name: handle, created: 0, password: '', salt: '' },
-            directories: getUserDirectories(handle),
-        };
-        next();
-    });
-    app.use('/api/sync/v1', syncRouter);
-    return app;
-}
-
-function startListener(app) {
-    return new Promise(resolve => {
-        const server = http.createServer(app).listen(0, '127.0.0.1', () => {
-            const { port } = server.address();
-            resolve({
-                server,
-                baseUrl: `http://127.0.0.1:${port}`,
-                close: () => new Promise(done => server.close(done)),
-            });
-        });
-    });
-}
 
 async function seedUser(handle, password) {
     const salt = getPasswordSalt();
@@ -123,7 +73,9 @@ describe('handle-mismatch gate', () => {
             mode: 'fs',
             directoriesByHandle: (h) => getUserDirectories(h),
         });
-        ({ router: syncRouter, sanitizeHandleForPeerId } = await import('../../src/endpoints/sync.js'));
+        ({ sanitizeHandleForPeerId } = await import('../../src/endpoints/sync.js'));
+        ({ assertSafeBackendId, upsertLanBackend } = await import('../../src/sync/state.js'));
+        ({ startLanDevice } = await import('./_lib/lan-devices.js'));
     });
 
     beforeEach(async () => {
@@ -170,40 +122,47 @@ describe('handle-mismatch gate', () => {
             expect(sanitizeHandleForPeerId(false)).toBe('peer');
         });
 
-        test('leaves leading/trailing dots intact', () => {
-            // Dots are in the safe set — peerId path safety is enforced
-            // separately by `assertSafePeerId`, which rejects standalone
-            // `.` and `..` segments. The handle sanitizer is just about
-            // the prefix half.
-            expect(sanitizeHandleForPeerId('.alice')).toBe('.alice');
+        test('never produces a leading dot or a dot run', () => {
+            expect(sanitizeHandleForPeerId('.alice')).toBe('_alice');
             expect(sanitizeHandleForPeerId('alice.')).toBe('alice.');
+            expect(sanitizeHandleForPeerId('a..b')).toBe('a_.b');
+            expect(sanitizeHandleForPeerId('...')).toBe('__.');
+        });
+
+        test('every generated peer id is a valid backend id', () => {
+            for (const handle of ['.alice', 'alice.', 'a..b', '...', '.', 'alice.lock', 'a@{b', 'a b/c', '']) {
+                expect(() => assertSafeBackendId(`${sanitizeHandleForPeerId(handle)}@0a1b2c3d`)).not.toThrow();
+            }
         });
     });
 
     describe('POST /session/offer', () => {
-        test('200 when peerId prefix matches the basic-auth user', async () => {
-            const app = buildApp();
-            const r = await request(app)
-                .post('/api/sync/v1/session/offer')
-                .set('Authorization', basicHeader(HANDLE, PASSWORD))
-                .send({ peerId: `${HANDLE}@deadbeef`, label: 'Phone', categories: [] });
+        const SECRET = 'e'.repeat(64);
+        let device;
+
+        async function deviceWithBackend(handle, backendId) {
+            device = await startLanDevice({ handle });
+            await upsertLanBackend({ userRoot: device.userRoot, backendId, label: 'Phone', categories: [], syncSecret: SECRET });
+            return device;
+        }
+
+        afterEach(async () => {
+            if (device) await device.close();
+            device = null;
+        });
+
+        test('200 when peerId prefix matches the local user', async () => {
+            const d = await deviceWithBackend(HANDLE, `${HANDLE}@deadbeef`);
+            const r = await d.offer({ peerId: `${HANDLE}@deadbeef`, label: 'Phone', protocol: 2 }, { secret: SECRET });
             expect(r.status).toBe(200);
             expect(r.body.token).toMatch(/^[a-f0-9]{64}$/);
         });
 
         test('412 HANDLE_MISMATCH when peerId prefix differs', async () => {
-            const app = buildApp();
-            const r = await request(app)
-                .post('/api/sync/v1/session/offer')
-                .set('Authorization', basicHeader(HANDLE, PASSWORD))
-                .send({ peerId: 'bob@deadbeef', label: 'Phone', categories: [] });
+            const d = await deviceWithBackend(HANDLE, `${HANDLE}@deadbeef`);
+            const r = await d.offer({ peerId: 'bob@deadbeef', label: 'Phone', protocol: 2 }, { secret: SECRET });
             expect(r.status).toBe(412);
-            expect(r.body).toEqual({
-                error: 'Handle mismatch',
-                code: 'HANDLE_MISMATCH',
-                expectedHandle: 'alice',
-                gotHandle: 'bob',
-            });
+            expect(r.body).toMatchObject({ code: 'HANDLE_MISMATCH', expectedHandle: 'alice', gotHandle: 'bob' });
         });
 
         test('412 when peerId is missing an @ suffix entirely', async () => {
@@ -211,141 +170,72 @@ describe('handle-mismatch gate', () => {
             // is no `@`. A peerId without a suffix still has to match
             // the local handle prefix — anything else is a bug or an
             // attacker probing the route.
-            const app = buildApp();
-            const r = await request(app)
-                .post('/api/sync/v1/session/offer')
-                .set('Authorization', basicHeader(HANDLE, PASSWORD))
-                .send({ peerId: 'mallory', label: 'X', categories: [] });
+            const d = await deviceWithBackend(HANDLE, `${HANDLE}@deadbeef`);
+            const r = await d.offer({ peerId: 'mallory', label: 'X', protocol: 2 }, { secret: SECRET });
             expect(r.status).toBe(412);
             expect(r.body.code).toBe('HANDLE_MISMATCH');
             expect(r.body.gotHandle).toBe('mallory');
         });
 
         test('uses the SANITIZED form on both sides of the comparison', async () => {
-            // Seed a handle containing a character the sanitizer rewrites
-            // ("/" becomes "_"). The mint side produced "alice_foo@..." in
+            // A handle containing a character the sanitizer rewrites
+            // ("/" becomes "_"). The mint side produced "Alice_Foo@..." in
             // the peerId; the gate must compare against the same
             // sanitized form, not the raw handle, or the legitimate peer
             // would be rejected as a mismatch.
-            //
-            // Note: users.js validates handles on REGISTRATION but we
-            // seed node-persist directly here, so we can hand the gate
-            // a profile.handle that the sanitizer actually has work to
-            // do on. That is the contract we care about: server-side
-            // gate uses the sanitized form.
-            const handle = 'Alice/Foo';
-            const password = 'pw';
-            await seedUser(handle, password);
-
-            const app = buildApp();
-            const r = await request(app)
-                .post('/api/sync/v1/session/offer')
-                .set('Authorization', basicHeader(handle, password))
-                .send({ peerId: 'Alice_Foo@deadbeef', label: 'X', categories: [] });
-            expect(r.status).toBe(200);
-            expect(r.body.token).toMatch(/^[a-f0-9]{64}$/);
+            const d = await deviceWithBackend('Alice/Foo', 'Alice_Foo@deadbeef');
+            const ok = await d.offer({ peerId: 'Alice_Foo@deadbeef', label: 'X', protocol: 2 }, { secret: SECRET });
+            expect(ok.status).toBe(200);
+            expect(ok.body.token).toMatch(/^[a-f0-9]{64}$/);
+            const raw = await d.offer({ peerId: 'Alice@deadbeef', label: 'X', protocol: 2 }, { secret: SECRET });
+            expect(raw.status).toBe(412);
+            expect(raw.body).toMatchObject({ code: 'HANDLE_MISMATCH', expectedHandle: 'Alice_Foo', gotHandle: 'Alice' });
         });
     });
 
     describe('POST /pair/accept', () => {
-        // Stand up a second app representing the OTHER device so the
-        // mismatch test can prove the gate fires WITHOUT reaching it.
-        // The peer's handle and password don't matter — the gate
-        // short-circuits before any outbound auth happens.
-        let peerListener;
-
-        beforeEach(async () => {
-            peerListener = await startListener(buildApp());
+        let devices = [];
+        const lanDevice = async options => {
+            const device = await startLanDevice(options);
+            devices.push(device);
+            return device;
+        };
+        const accept = (device, peerBaseUrl, remotePeerId) => device.call('POST', '/pair/accept', {
+            body: { peerBaseUrl, remotePeerId, label: 'Other', categories: ['characters'], pairCode: 'c'.repeat(64) },
         });
 
         afterEach(async () => {
-            if (peerListener) await peerListener.close();
+            for (const device of devices) await device.close();
+            devices = [];
         });
 
         test('past local gate when remotePeerId prefix matches the local accepting user', async () => {
-            // Same-handle pairing: alice's local device accepts a link
-            // whose peerId encodes "alice". The spec accepts this by
-            // design — the user verifies cross-server identity out of
-            // band. The load-bearing assertion here is that the LOCAL
-            // gate did NOT fire (we're driving against an unreachable
-            // peer so the call must surface 502 stage:'offer'; a 412
-            // would mean the local gate fired before the fetch).
-            const aliceMintedPeerId = `${HANDLE}@deadbeef`;
-            const app = buildAppWithUser(HANDLE);
-            const accept = await request(app)
-                .post('/api/sync/v1/pair/accept')
-                .send({
-                    peerBaseUrl: 'http://127.0.0.1:1',
-                    remotePeerId: aliceMintedPeerId,
-                    label: 'Other Alice',
-                    categories: ['characters'],
-                });
-            expect(accept.status).toBe(502);
-            expect(accept.body.stage).toBe('offer');
+            const local = await lanDevice({ handle: HANDLE });
+            const res = await accept(local, 'http://127.0.0.1:1', `${HANDLE}@deadbeef`);
+            expect(res.status).not.toBe(412);
+            expect(res.body).toMatchObject({ stage: 'offer', code: 'PEER_UNREACHABLE' });
         });
 
         test('412 HANDLE_MISMATCH when remotePeerId prefix differs from local handle', async () => {
-            const app = buildAppWithUser(HANDLE);
-            const accept = await request(app)
-                .post('/api/sync/v1/pair/accept')
-                .send({
-                    peerBaseUrl: peerListener.baseUrl,
-                    remotePeerId: 'bob@deadbeef',
-                    label: 'Bob',
-                    categories: ['characters'],
-                });
-            expect(accept.status).toBe(412);
-            expect(accept.body).toEqual({
-                error: 'Handle mismatch',
-                code: 'HANDLE_MISMATCH',
-                expectedHandle: 'alice',
-                gotHandle: 'bob',
-            });
+            const local = await lanDevice({ handle: HANDLE });
+            const res = await accept(local, 'http://127.0.0.1:1', 'bob@deadbeef');
+            expect(res).toEqual({ status: 412, body: { error: 'Handle mismatch', code: 'HANDLE_MISMATCH', expectedHandle: 'alice', gotHandle: 'bob' } });
         });
 
         test('412 fires BEFORE the outbound fetch (no peer network call)', async () => {
-            // Close the peer listener: if the gate didn't fire first,
-            // /pair/accept's outbound fetch would 502 (peer unreachable)
-            // and we'd see stage:'offer'. A clean 412 with no stage
-            // proves the gate short-circuited.
-            await peerListener.close();
-            peerListener = null;
-
-            const app = buildAppWithUser(HANDLE);
-            const accept = await request(app)
-                .post('/api/sync/v1/pair/accept')
-                .send({
-                    peerBaseUrl: 'http://127.0.0.1:1',
-                    remotePeerId: 'bob@deadbeef',
-                    label: 'Bob',
-                    categories: ['characters'],
-                });
-            expect(accept.status).toBe(412);
-            expect(accept.body.code).toBe('HANDLE_MISMATCH');
-            expect(accept.body.stage).toBeUndefined();
+            const local = await lanDevice({ handle: HANDLE });
+            const peer = await lanDevice({ handle: 'bob' });
+            const res = await accept(local, peer.baseUrl, 'bob@deadbeef');
+            expect(res.status).toBe(412);
+            expect(res.body.stage).toBeUndefined();
+            expect(peer.requests).toEqual([]);
         });
 
         test('uses sanitized form for comparison', async () => {
-            // Local user with "/" in handle accepts a link whose peerId
-            // already encodes the sanitized prefix. Should pass the
-            // local gate; we drive against an unreachable peer so the
-            // call surfaces 502 stage:'offer' — proves the local gate
-            // accepted the sanitized match.
-            const handle = 'Alice/Foo';
-            const password = 'pw';
-            await seedUser(handle, password);
-
-            const app = buildAppWithUser(handle);
-            const accept = await request(app)
-                .post('/api/sync/v1/pair/accept')
-                .send({
-                    peerBaseUrl: 'http://127.0.0.1:1',
-                    remotePeerId: 'Alice_Foo@deadbeef',
-                    label: 'Other',
-                    categories: ['characters'],
-                });
-            expect(accept.status).toBe(502);
-            expect(accept.body.stage).toBe('offer');
+            const local = await lanDevice({ handle: 'Alice/Foo' });
+            const res = await accept(local, 'http://127.0.0.1:1', 'Alice_Foo@deadbeef');
+            expect(res.status).not.toBe(412);
+            expect(res.body.stage).toBe('offer');
         });
     });
 });

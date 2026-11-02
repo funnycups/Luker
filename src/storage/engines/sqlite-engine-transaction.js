@@ -1,6 +1,8 @@
-import { NotFoundError } from '../errors.js';
+import { ConflictError, NotFoundError } from '../errors.js';
 import { assertSafeRepoNameShape } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
+import { chatHeaderWithIntegrity, chatLocation, parseChatDocument, parseChatJson } from './chat-record.js';
+import { registerSqlChatMove } from './chat-move.js';
 import { toSqlJsonPath } from './json-field-path.js';
 
 export class SqliteTransaction {
@@ -30,6 +32,9 @@ export class SqliteTransaction {
     async listResources(filter)  { return this._h(filter.kind, 'listResources').list(filter); }
 
     async putResourceIfMatch(key, expectedIntegrity, record) {
+        if (key.kind === 'chat' && expectedIntegrity === null) {
+            return { updated: this._h('chat', 'putResourceIfMatch').put(key, record, { ifAbsent: true }) };
+        }
         const existing = await this.getResource(key);
         if (expectedIntegrity === null) {
             if (existing !== null) return { updated: false };
@@ -70,6 +75,9 @@ export function registerChatHandler(tx) {
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                             ON CONFLICT(handle, char_dir, name, is_group, group_id) DO UPDATE SET
                                 doc = excluded.doc, updated_at = excluded.updated_at`),
+        insert: db.prepare(`INSERT INTO chats (handle, char_dir, name, is_group, group_id, doc, updated_at, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(handle, char_dir, name, is_group, group_id) DO NOTHING`),
         del: db.prepare('DELETE FROM chats WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=?'),
         listByUpdated: db.prepare(`SELECT char_dir, name, is_group, group_id, updated_at, created_at
                                    FROM chats WHERE handle=? ORDER BY updated_at DESC`),
@@ -83,6 +91,9 @@ export function registerChatHandler(tx) {
                                     VALUES (?, ?, ?, ?, ?, ?, ?)
                                     ON CONFLICT(handle, char_dir, name, is_group, group_id, namespace)
                                         DO UPDATE SET doc = excluded.doc`),
+        insertSidecar: db.prepare(`INSERT INTO chat_states (handle, char_dir, name, is_group, group_id, namespace, doc)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                                   ON CONFLICT(handle, char_dir, name, is_group, group_id, namespace) DO NOTHING`),
         delSidecar: db.prepare(`DELETE FROM chat_states
                                 WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=? AND namespace=?`),
         listSidecars: db.prepare(`SELECT namespace FROM chat_states
@@ -94,11 +105,7 @@ export function registerChatHandler(tx) {
             const p = chatKeyToParams(key);
             const row = stmt.get.get(p.handle, p.char_dir, p.name, p.is_group, p.group_id);
             if (!row) return null;
-            let parsed;
-            try { parsed = JSON.parse(row.doc); } catch { return null; }
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-            if (!parsed.header || typeof parsed.header !== 'object' || Array.isArray(parsed.header)) return null;
-            if (!Array.isArray(parsed.body)) return null;
+            const parsed = parseChatDocument(row.doc, key);
             return {
                 key,
                 header: parsed.header,
@@ -108,7 +115,7 @@ export function registerChatHandler(tx) {
                 createdAt: row.created_at,
             };
         },
-        put(key, record) {
+        put(key, record, { ifAbsent = false } = {}) {
             if (key.isGroup) {
                 assertSafeRepoNameShape(key.groupId ?? key.name, { field: 'chat.groupId' });
             } else {
@@ -116,19 +123,14 @@ export function registerChatHandler(tx) {
                 assertSafeRepoNameShape(key.name, { field: 'chat.name' });
             }
             const p = chatKeyToParams(key);
-            const headerWithIntegrity = {
-                ...record.header,
-                chat_metadata: {
-                    ...(record.header.chat_metadata ?? {}),
-                    integrity: record.integrity,
-                },
-            };
+            const headerWithIntegrity = chatHeaderWithIntegrity(record);
             const doc = JSON.stringify({ header: headerWithIntegrity, body: record.body });
             // Preserve existing created_at on upsert; only set fresh on first insert.
             const existing = stmt.get.get(p.handle, p.char_dir, p.name, p.is_group, p.group_id);
             const now = Date.now();
             const updatedAt = record.updatedAt ?? now;
             const createdAt = record.createdAt ?? existing?.created_at ?? now;
+            if (ifAbsent) return stmt.insert.run(p.handle, p.char_dir, p.name, p.is_group, p.group_id, doc, updatedAt, createdAt).changes > 0;
             stmt.upsert.run(p.handle, p.char_dir, p.name, p.is_group, p.group_id, doc, updatedAt, createdAt);
         },
         delete(key) {
@@ -182,14 +184,22 @@ export function registerChatHandler(tx) {
     });
 
     // Sidecar tx methods — direct on tx, matching FsTransaction surface.
-    tx.getChatState = (chatKey, namespace) => {
+    tx.hasChatResource = chatKey => {
         const p = chatKeyToParams(chatKey);
-        const row = stmt.getSidecar.get(p.handle, p.char_dir, p.name, p.is_group, p.group_id, namespace);
-        if (!row) return null;
-        try { return JSON.parse(row.doc); } catch { return null; }
+        return !!stmt.countMatchingParent.get(p.handle, p.char_dir, p.name, p.is_group, p.group_id);
     };
 
-    tx.putChatState = (chatKey, namespace, doc) => {
+    tx.getChatState = (chatKey, namespace, { required = false } = {}) => {
+        const p = chatKeyToParams(chatKey);
+        const row = stmt.getSidecar.get(p.handle, p.char_dir, p.name, p.is_group, p.group_id, namespace);
+        if (!row) {
+            if (required) throw new Error(`Cannot read enumerated chat state at ${chatLocation(chatKey, namespace)}: row is missing`);
+            return null;
+        }
+        return parseChatJson(row.doc, chatLocation(chatKey, namespace));
+    };
+
+    tx.putChatState = (chatKey, namespace, doc, { ifAbsent = false } = {}) => {
         const p = chatKeyToParams(chatKey);
         // Precheck parent exists so we raise a typed NotFoundError instead of
         // bubbling SQLite's raw "FOREIGN KEY constraint failed".
@@ -201,7 +211,8 @@ export function registerChatHandler(tx) {
                 name: chatKey.name,
             });
         }
-        stmt.upsertSidecar.run(p.handle, p.char_dir, p.name, p.is_group, p.group_id, namespace, JSON.stringify(doc));
+        const result = (ifAbsent ? stmt.insertSidecar : stmt.upsertSidecar).run(p.handle, p.char_dir, p.name, p.is_group, p.group_id, namespace, JSON.stringify(doc));
+        if (ifAbsent && result.changes === 0) throw new ConflictError('rename_target_exists', { ...chatKey, namespace });
     };
 
     tx.deleteChatState = (chatKey, namespace) => {
@@ -214,6 +225,16 @@ export function registerChatHandler(tx) {
         const p = chatKeyToParams(chatKey);
         return stmt.listSidecars.all(p.handle, p.char_dir, p.name, p.is_group, p.group_id).map((r) => r.namespace);
     };
+
+    const params = key => { const p = chatKeyToParams(key); return [p.handle, p.char_dir, p.name, p.is_group, p.group_id]; };
+    const moveStates = db.prepare('SELECT namespace, doc FROM chat_states WHERE handle=? AND char_dir=? AND name=? AND is_group=? AND group_id=?');
+    registerSqlChatMove(tx, {
+        readParent: key => stmt.get.get(...params(key)) ?? null,
+        readStates: key => moveStates.all(...params(key)),
+        insertParent: (key, row) => stmt.insert.run(...params(key), row.doc, row.updated_at, row.created_at).changes > 0,
+        insertState: (key, state) => stmt.insertSidecar.run(...params(key), state.namespace, state.doc).changes > 0,
+        deleteParent: key => stmt.del.run(...params(key)),
+    });
 }
 
 export function registerSettingsHandler(tx) {
@@ -350,6 +371,7 @@ export function registerPresetHandler(tx) {
         const p = presetKeyToParams(key);
         return stmt.listSidecars.all(p.handle, p.dir_key, p.name).map((r) => r.namespace);
     };
+    tx.listPresetStateRecords = ({ handle, dirKey }) => db.prepare('SELECT name, namespace FROM preset_states WHERE handle=? AND dir_key=? ORDER BY name, namespace').all(handle, dirKey);
 }
 
 export function registerWorldInfoHandler(tx) {

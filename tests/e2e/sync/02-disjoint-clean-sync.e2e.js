@@ -2,21 +2,22 @@
 // become visible after one sync round-trip.
 //
 // Tests the "Sync now" path against an already-paired peer (using the
-// stored peerBaseUrl, no re-prompt), plus the responder reconcile that
-// pushes B's edit back to A's live tree via /session/ref.
+// stored peerBaseUrl, no re-prompt): B pushes the merged commit to its
+// incoming ref on A and notifies A, whose own sync run then applies it
+// to A's live tree.
 
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
+    readUserFile,
+    waitForBackgroundSync,
     openLanSyncPanel,
     generatePairingLink,
     acceptPairingLink,
-    resolveAllConflictsAs,
     clickSyncNow,
 } from '../_lib/sync.js';
 
@@ -31,8 +32,6 @@ test.beforeAll(async () => {
         batchKey: 'sync',
         scenarioId: 'disjoint-B',
     });
-    markOnboarded({ dataRoot: A.dataRoot });
-    markOnboarded({ dataRoot: B.dataRoot });
 });
 
 test.afterAll(async () => {
@@ -51,9 +50,9 @@ test.describe('LAN Sync — disjoint edits clean sync', () => {
         await awaitMainUI(pageB, B.baseURL);
 
         // Pair so both sides share a sync history before the disjoint edits.
-        // The seed `data/` ships worlds files on both sides — the first pair
-        // has the no-common-ancestor case, resolve all to A's version so the
-        // post-pair state is well-defined (both sides match A's seed exactly).
+        // Both servers start from the same seed `data/`, so the first sync
+        // is clean and no conflict is pending before the edits.
+        const pairedSince = Date.now();
         await openLanSyncPanel(pageA);
         const link = await generatePairingLink(pageA, {
             label: 'B device',
@@ -64,10 +63,11 @@ test.describe('LAN Sync — disjoint edits clean sync', () => {
             categories: ['worlds'],
             localLabel: 'A device',
         });
-        if (acceptOutcome === 'warning') {
-            const finalOutcome = await resolveAllConflictsAs(pageB, 'theirs');
-            expect(finalOutcome).toBe('success');
-        }
+        expect(acceptOutcome).toBe('success');
+        // A syncs in the background on B's notify; edit only after both
+        // devices finished their runs.
+        await waitForBackgroundSync(pageA, { since: pairedSince });
+        await waitForBackgroundSync(pageB, { since: pairedSince });
 
         // Disjoint edits: A creates one file, B creates a different file.
         // These edits land directly on disk — the test is about the sync
@@ -81,39 +81,28 @@ test.describe('LAN Sync — disjoint edits clean sync', () => {
             JSON.stringify({ name: 'B-only-edit', side: 'B' }),
         );
 
-        // B clicks Sync now. The orchestrator:
-        //   1. Snapshots B's live → shadow (commits B-only-edit.json).
-        //   2. Fetches A's HEAD via /session/offer (which snapshots A's
-        //      live first → commits A-only-edit.json).
+        // B clicks Sync now. B's sync run:
+        //   1. Snapshots B's live tree (commits B-only-edit.json).
+        //   2. Reads A's head through /session/offer, which snapshots A's
+        //      live tree first (commits A-only-edit.json).
         //   3. Merges. The two new files are on disjoint paths, so this
-        //      auto-merges cleanly with no conflict.
-        //   4. Pushes the merged HEAD back to A via /session/ref, which
-        //      triggers A's responder reconcile.
+        //      merges cleanly with no conflict.
+        //   4. Pushes the merged commit to B's incoming ref on A through
+        //      /session/ref and notifies A, which runs its own sync and
+        //      applies the commit to A's live tree.
         const syncOutcome = await clickSyncNow(pageB, 'A device');
         expect(syncOutcome).toBe('success');
 
-        // Both new files now exist on B (puller reconcile) AND on A
-        // (responder reconcile triggered by /session/ref).
-        await expect.poll(
-            () => fs.existsSync(path.join(B.dataRoot, 'default-user', 'worlds', 'A-only-edit.json')),
-            { timeout: 10_000 },
-        ).toBe(true);
-        await expect.poll(
-            () => fs.existsSync(path.join(A.dataRoot, 'default-user', 'worlds', 'B-only-edit.json')),
-            { timeout: 10_000 },
-        ).toBe(true);
+        // A's file is on B as soon as B's run finished.
+        const onB = readUserFile(B, 'worlds/A-only-edit.json');
+        expect(onB).not.toBeNull();
+        expect(JSON.parse(onB).side).toBe('A');
 
-        // Content integrity on both sides.
-        const onB = JSON.parse(fs.readFileSync(
-            path.join(B.dataRoot, 'default-user', 'worlds', 'A-only-edit.json'),
-            'utf8',
-        ));
-        expect(onB.side).toBe('A');
-        const onA = JSON.parse(fs.readFileSync(
-            path.join(A.dataRoot, 'default-user', 'worlds', 'B-only-edit.json'),
-            'utf8',
-        ));
-        expect(onA.side).toBe('B');
+        // A applies B's push in the run the notify started.
+        await expect.poll(
+            () => readUserFile(A, 'worlds/B-only-edit.json'),
+            { timeout: 30_000 },
+        ).toBe(JSON.stringify({ name: 'B-only-edit', side: 'B' }));
 
         await ctxA.close();
         await ctxB.close();

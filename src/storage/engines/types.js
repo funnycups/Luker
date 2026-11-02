@@ -22,11 +22,24 @@
  * @typedef {Object} StorageTransaction
  * @property {(resource: ResourceKey) => Promise<ResourceRecord | null>} getResource
  *   Read a single resource by its key. Returns null if not found.
+ * @property {(resource: ResourceKey) => Promise<boolean>} hasChatResource
+ *   Structural chat occupancy independent of document readability.
+ * @property {(resource: ResourceKey, namespace: string, options?: {required?: boolean}) => Promise<any>} getChatState
+ *   Read JSON state; required enumerated records must remain present and readable.
+ * @property {(resource: ResourceKey, namespace: string, doc: any, options?: {ifAbsent?: boolean}) => Promise<void>} putChatState
+ *   Publish state without replacing occupied namespaces when ifAbsent is true.
  * @property {(resource: ResourceKey, record: ResourceRecord) => Promise<void>} putResource
  *   Write or replace a single resource. Caller must do OCC checks via getResource first if needed.
  * @property {(resource: ResourceKey, expectedIntegrity: string | null, record: ResourceRecord) => Promise<{updated: boolean}>} putResourceIfMatch
  *   Atomic OCC write: succeeds only if the stored integrity matches expectedIntegrity.
  *   expectedIntegrity=null means "must not currently exist".
+ *   Chat creation also requires empty owned state.
+ * @property {(source: ResourceKey) => Promise<object | null>} captureChatMove
+ *   Capture validated parent/state values and native representations in a transaction-private opaque token.
+ * @property {(destination: ResourceKey, token: object) => Promise<{updated: boolean}>} publishChatMove
+ *   Publish the captured native parent/state without encoding parsed values or replacing occupied entries.
+ * @property {(token: object) => Promise<void>} deleteChatMoveSource
+ *   Verify the captured parent and complete state inventory before deleting only the copied source.
  * @property {(resource: ResourceKey) => Promise<void>} deleteResource
  *   Delete a resource. Cascades any sub-records (sidecars in FsEngine; FK CASCADE in SqlEngine).
  * @property {(filter: ResourceListFilter) => Promise<ResourceRecord[]>} listResources

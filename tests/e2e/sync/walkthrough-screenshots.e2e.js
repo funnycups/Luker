@@ -1,298 +1,784 @@
-// LAN Sync walkthrough — drives every panel the user encounters during
-// the documented pair → sync → conflict → resolve flow, captures one
-// screenshot per step into docs/public/images/lan-sync/, and
-// asserts the banner text reads the way the user docs claim.
-//
-// Outcome model:
-//   - The screenshots are the artifact the docs embed. They MUST come
-//     from real DOM, not mock-ups — when the panel layout changes, the
-//     screenshots diverge from production and the next regen catches it.
-//   - The banner-text assertions cover the UX gap audited earlier:
-//     spec 01–11 prove "right button → right data lands", they do NOT
-//     prove "the banner says something a user can understand". This
-//     spec pins three load-bearing strings the docs reference:
-//     "Sync complete.", "Synced with <peer>.", and the conflict count
-//     phrasing. If the wording shifts, the docs go stale; failing here
-//     forces the update in the same change.
-//
-// Per feedback_e2e_real_user_flow: two real `startServer` instances,
-// real Playwright clicks, the exact same helpers spec 01-11 use. No
-// new test plumbing.
-
+// Genuine Sync walkthrough. Documentation images are opt-in; state assertions are not.
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-
 import { test, expect } from '@playwright/test';
+import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI } from '../_lib/page.js';
+import { startRustfsContainer } from '../_lib/s3-container.js';
+import { startS3Proxy } from '../_lib/s3-proxy.js';
+import { onboardS3Page, reloadS3Page, createReadyWorldBook, selectReadyWorldBook } from '../_lib/sync-s3.js';
+import { addWorldEntry } from '../_lib/ui-worldinfo.js';
+import { openCharacterList } from '../_lib/ui-character.js';
+import { editMessageViaUI, renameCurrentChatViaUI, closeAnyOpenTopSettingsDrawer } from '../_lib/page.js';
 import {
-    openLanSyncPanel,
-    generatePairingLink,
-    resolveAllConflictsAs,
-    clickSyncNow,
-    listConflictKinds,
-    applyConflictResolutions,
+    openLanSyncPanel, generatePairingLink, acceptPairingLink, selectCategories,
+    setSyncSchedule, setSyncDeviceLabel, waitForBackendSync, clickSyncNow,
+    closeAllPopups, waitForSyncPopup, syncPopup, closeSyncPopup, waitForStatusChecks,
+    listPopupConflicts, listPopupNotices, conflictChoiceShowing, chooseConflictVersion,
+    applyConflictChoices, openBranchFromNotice, dismissNotice, openChatByName,
+    fillS3Form, readUserFile,
 } from '../_lib/sync.js';
 
-// __dirname is .../tests/e2e/sync; three levels up to repo root.
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
-const SCREENSHOTS_DIR = path.join(REPO_ROOT, 'docs', 'public', 'images', 'lan-sync');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const IMAGES = path.join(ROOT, 'docs/public/images/sync');
+const UPDATE_IMAGES = process.env.LUKER_UPDATE_DOC_SCREENSHOTS === '1';
+const VIEWPORT = { width: 1440, height: 1400 };
+const CATEGORIES = ['characters', 'chats', 'worlds'];
+const AVATAR = 'default_Seraphina.png';
+const CHAT_DIR = 'chats/default_Seraphina';
+const LORE = 'worlds/Cascade Lore.json';
+const WORDS = {
+    base: 'The moonwell lies beyond the old cascade, where birches shelter the standing stones.',
+    desk: 'Follow the birches north; the moonwell lies beyond the standing stones.',
+    tablet: 'Stay beside the river until you hear the moonwell beneath the reeds.',
+    later: 'Wait beneath the silver birch; I will bring the moonwell lantern when the mist clears.',
+};
+const MANIFEST = {
+    pairing: ['01-panel-empty', '02-pair-new-form-filled', '03-pair-link-generated', '04-pair-existing-pasted',
+        '05-pair-success-banner', '06-backends-after-pair', '07-conflict-banner', '08-conflict-popup', '09-resolved-success'],
+    stale: ['conflict-stale', 'conflict-stale-confirm'],
+    storage: ['s3-form', 's3-second-device-passphrase', 'backend-list', 'sync-activity'],
+    characterFork: ['chat-fork-notice'],
+    groupFork: ['group-chat-fork-notice'],
+    characterRestore: ['chat-restored-notice'],
+    groupRestore: ['group-chat-restored-notice'],
+};
+const FILENAMES = Object.values(MANIFEST).flat();
+test.describe.configure({ mode: 'default', timeout: 300_000 });
 
-function screenshotPath(step) {
-    const safe = String(step).replace(/[^A-Za-z0-9_-]+/g, '-');
-    return path.join(SCREENSHOTS_DIR, `${safe}.png`);
-}
-
-/**
- * Crop the screenshot to the LAN Sync panel popup. Cropping to the
- * popup boundary keeps the doc images focused on the feature and
- * survives unrelated chrome changes (drawer width, background avatar
- * thumbnails) that would otherwise force a regen.
- *
- * Scrolls the banner into view first when one is present, because the
- * panel is long enough to scroll under its modal container; capturing
- * mid-form would crop the banner out of frame even though it's
- * technically in the DOM.
- *
- * DEFAULT: skips the actual `page.screenshot()` write. Regression runs
- * shouldn't rewrite in-tree docs images. The scroll/wait side effects
- * still run so the banner-text assertions below observe the same
- * post-scroll DOM state they did before. Opt-in to regenerate via
- * `LUKER_UPDATE_DOC_SCREENSHOTS=1`.
- */
-async function shootPanel(page, step) {
-    const panel = page.locator('.userLanSync').first();
-    await panel.waitFor({ state: 'visible', timeout: 5_000 });
-    const banner = panel.locator('.lanSyncStatusBanner').first();
-    if (await banner.isVisible().catch(() => false)) {
-        await banner.scrollIntoViewIfNeeded();
-    } else {
-        // No banner — scroll the panel header into view so steps that
-        // care about the tab strip (01, 02, 06, 08) frame cleanly.
-        await panel.evaluate((el) => { el.scrollIntoView({ block: 'start' }); });
-    }
-    if (!process.env.LUKER_UPDATE_DOC_SCREENSHOTS) return;
-    await page.screenshot({ path: screenshotPath(step), fullPage: false });
-}
-
-/**
- * Capture a single element instead of the whole panel viewport. Used for
- * steps whose subject is a sub-region that shares a viewport with the
- * surrounding panel — a viewport shot of two such steps (the conflict
- * banner and the conflict panel) would be byte-identical, because the
- * panel fits on one screen. Waits for visibility; writes only on regen.
- */
-async function shootElement(step, locator) {
-    await locator.waitFor({ state: 'visible', timeout: 5_000 });
-    if (!process.env.LUKER_UPDATE_DOC_SCREENSHOTS) return;
-    await locator.screenshot({ path: screenshotPath(step) });
-}
-
-let A, B;
-
-test.beforeAll(async () => {
-    // Only create the docs screenshots dir when a regen was requested.
-    // Regression runs skip the screenshot writes entirely (see shootPanel).
-    if (process.env.LUKER_UPDATE_DOC_SCREENSHOTS) {
-        fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
-    }
-
-    A = await startServer({
-        batchKey: 'sync',
-        scenarioId: 'walkthrough-A',
-        // Bind A's interfaces so the generated link defaults to a LAN
-        // address and step 03 shows the address selector populated, the
-        // way a real pairing looks. `securityOverride` keeps the startup
-        // security check from exiting on this test-only non-localhost bind.
-        extraConfig: { listen: true, securityOverride: true },
-    });
-    B = await startServer({
-        batchKey: 'sync',
-        scenarioId: 'walkthrough-B',
-    });
-    markOnboarded({ dataRoot: A.dataRoot });
-    markOnboarded({ dataRoot: B.dataRoot });
-
-    // Seed a shared world on both sides with identical content so the
-    // initial pair lands clean (no conflict) — gives us a "Sync complete."
-    // screenshot before the divergent edit forces the conflict screen.
-    const aWorlds = path.join(A.dataRoot, 'default-user', 'worlds');
-    const bWorlds = path.join(B.dataRoot, 'default-user', 'worlds');
-    fs.mkdirSync(aWorlds, { recursive: true });
-    fs.mkdirSync(bWorlds, { recursive: true });
-    const initial = JSON.stringify({ name: 'Cascade Lore', entries: {} });
-    fs.writeFileSync(path.join(aWorlds, 'Cascade Lore.json'), initial);
-    fs.writeFileSync(path.join(bWorlds, 'Cascade Lore.json'), initial);
+test.beforeAll(() => {
+    expect(new Set(FILENAMES).size, 'Documentation image filenames must be unique').toBe(FILENAMES.length);
 });
 
-test.afterAll(async () => {
-    await tearDownServer(A);
-    await tearDownServer(B);
-});
+const panel = page => page.locator('.userLanSync');
+const dialogFor = (page, content) => page.locator('dialog.popup[open]', { has: content });
+const backend = (page, label) => page.locator('.lanSyncPeerRow').filter({ has: page.locator('.lanSyncPeerLabel', { hasText: new RegExp(`^${RegExp.escape(label)}$`) }) });
+const conflict = page => syncPopup(page).locator(`.syncConflictRow[data-path=${JSON.stringify(LORE)}]`);
+const observe = promise => promise.then(value => ({ value }), error => ({ error }));
+async function observed(promise) {
+    const result = await promise;
+    if (result.error) throw result.error;
+    return result.value;
+}
+const statusChecks = page => page.evaluate(() => Number(document.body.dataset.syncStatusChecks || 0));
+async function status(page) {
+    const result = await page.evaluate(async () => {
+        const response = await fetch('/api/sync/v1/status');
+        if (!response.ok) throw new Error(`Sync status returned HTTP ${response.status}`);
+        return response.json();
+    });
+    expect(result.ok, 'Walkthrough decisions require a complete, readable pending-status response').toBe(true);
+    expect(result.errors, 'An unreadable backend cannot establish that pending decisions are absent').toEqual({});
+    return result;
+}
 
-test.describe('LAN Sync — walkthrough screenshots and banner UX', () => {
-    test('panel empty → pair → sync clean → trigger conflict → resolve, capturing the panel at each step', async ({ browser }) => {
-        test.setTimeout(180_000);
-
-        const ctxA = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-        const ctxB = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-        const pageA = await ctxA.newPage();
-        const pageB = await ctxB.newPage();
-
-        await awaitMainUI(pageA, A.baseURL);
-        await awaitMainUI(pageB, B.baseURL);
-
-        // --- Step 01: A opens the panel and lands on My devices. Peers
-        // list is empty, banner is hidden. This is what a user sees the
-        // first time they open the LAN Sync panel after a fresh install.
-        await openLanSyncPanel(pageA);
-        await pageA.locator('.lanSyncTabPeers').click();
-        const peersEmptyOnA = pageA.locator('.lanSyncPeersEmpty').first();
-        await expect(peersEmptyOnA).toBeVisible();
-        await shootPanel(pageA, '01-panel-empty');
-
-        // --- Step 02: A clicks "Pair new device", fills the label,
-        // selects categories. Captured before clicking Generate so the
-        // doc can call out the form fields by position.
-        await pageA.locator('.lanSyncTabPairNew').click();
-        await pageA.locator('.lanSyncPairLabel').fill('Phone');
-        await pageA.evaluate(() => {
-            document.querySelectorAll('.lanSyncCategoryGrid input[name="lanSyncCategory"]').forEach((el) => {
-                const input = /** @type {HTMLInputElement} */ (el);
-                input.checked = input.value === 'worlds' || input.value === 'chats' || input.value === 'characters';
+/** All ownership is local to a scenario, including startup and assertion failure exits. */
+async function journey(browser, testInfo, name, body) {
+    const servers = [], contexts = [], proxies = [], storage = [], jobs = [], holds = [];
+    const captured = [];
+    const frames = [];
+    const failures = [];
+    const scope = {
+        async device(label, { lan = false } = {}) {
+            const server = await startServer({ batchKey: 'sync', scenarioId: `docs-${name}-${label}-${randomBytes(4).toString('hex')}`,
+                extraConfig: lan ? { listen: true, securityOverride: true, whitelistMode: false } : null });
+            servers.push(server);
+            const context = await browser.newContext({ viewport: VIEWPORT, locale: 'en-US', timezoneId: 'UTC' });
+            contexts.push(context);
+            const page = await context.newPage();
+            await onboardS3Page(page, server.baseURL);
+            await reloadS3Page(page);
+            await openLanSyncPanel(page);
+            await setSyncSchedule(page, { idleSeconds: 3600, pollSeconds: 3600 });
+            await setSyncDeviceLabel(page, label);
+            await expect(page.locator('.syncDeviceLabel')).toHaveValue(label);
+            await leavePanels(page);
+            return { server, page, context, label };
+        },
+        async storage() {
+            const provider = await startRustfsContainer();
+            storage.push(provider);
+            const sdk = new S3Client({ endpoint: provider.endpoint, region: provider.region, forcePathStyle: true,
+                credentials: { accessKeyId: provider.accessKeyId, secretAccessKey: provider.secretAccessKey }, maxAttempts: 1 });
+            const bucket = `seraphina-${randomBytes(8).toString('hex')}`;
+            try { await sdk.send(new CreateBucketCommand({ Bucket: bucket })); } finally { sdk.destroy(); }
+            const proxy = await startS3Proxy({ upstream: provider.endpoint, region: provider.region,
+                credentials: { accessKeyId: provider.accessKeyId, secretAccessKey: provider.secretAccessKey } });
+            proxies.push(proxy);
+            return { proxy, options: { ...provider, endpoint: proxy.endpoint, bucket, prefix: 'seraphina/', label: 'Shared archive',
+                passphrase: 'Silver birches shelter the moonwell', forcePathStyle: true, categories: ['worlds'] } };
+        },
+        response(page, endpoint, timeout = 60_000) {
+            const waiting = page.waitForResponse(response => new URL(response.url()).pathname === endpoint, { timeout });
+            const job = observe(waiting);
+            jobs.push(job);
+            return job;
+        },
+        hold(proxy) {
+            const hold = proxy.addFault({ match: { method: 'GET', keySuffix: '/head' }, hold: 'before-forward' });
+            holds.push(hold);
+            return hold;
+        },
+        record(name, value) {
+            return testInfo.attach(name, { body: JSON.stringify(value, null, 2), contentType: 'application/json' });
+        },
+        async capture(id, page, target, assertions) {
+            await test.step(`${id}: required real state`, async () => {
+                await assertions();
+                await dismissToasts(page);
+                await expect(page.locator('dialog.popup[open][opening]')).toHaveCount(0);
+                await expect(target, `${id}: capture region must be visible`).toBeVisible();
+                await target.scrollIntoViewIfNeeded();
+                await expect(target, `${id}: the complete region and its actions must fit the native viewport`).toBeInViewport({ ratio: 1 });
             });
-        });
-        await shootPanel(pageA, '02-pair-new-form-filled');
 
-        // --- Step 03: link generated. The readonly link field is visible
-        // with Copy / Generate-another buttons. Doc references this image
-        // when describing the Quick Start "URL valid for 10 minutes" step.
-        const link = await generatePairingLink(pageA, {
-            label: 'Phone',
-            categories: ['worlds', 'chats', 'characters'],
-        });
-        expect(link).toMatch(/^luker-sync:/);
-        await shootPanel(pageA, '03-pair-link-generated');
+            expect(FILENAMES, `Unknown documentation capture ${id}`).toContain(id);
+            expect(captured, `Duplicate documentation capture ${id}`).not.toContain(id);
+            captured.push(id);
+            frames.push({ id, bounds: await target.boundingBox() });
 
-        // --- Step 04: B opens the panel, switches to "Pair with existing
-        // device", pastes the link. Captured BEFORE clicking Pair so the
-        // user can see what the populated form looks like.
-        await openLanSyncPanel(pageB);
-        await pageB.locator('.lanSyncTabPairExisting').click();
-        await pageB.locator('.lanSyncAcceptLink').fill(link);
-        await pageB.locator('.lanSyncAcceptLink').dispatchEvent('input');
-        await pageB.locator('.lanSyncAcceptLabel').fill('Laptop');
-        await pageB.evaluate(() => {
-            document.querySelectorAll('.lanSyncAcceptCategoryGrid input[name="lanSyncCategory"]').forEach((el) => {
-                const input = /** @type {HTMLInputElement} */ (el);
-                input.checked = input.value === 'worlds' || input.value === 'chats' || input.value === 'characters';
-            });
-        });
-        await shootPanel(pageB, '04-pair-existing-pasted');
+            if (!UPDATE_IMAGES) return;
 
-        // --- Step 05: Pair completes. With identical worlds seed and the
-        // attemptMerge identical-trees branch, pairOutcome should be
-        // 'success' (clean auto-merge). If it surfaces conflicts (seed
-        // drift), pick 'theirs' so the doc still gets a coherent
-        // success-banner screenshot. The banner-text assertion is the
-        // UX-validation gate: doc text claims "Synced with <peer>." —
-        // the assertion proves that exact wording lands.
-        await pageB.locator('.lanSyncAcceptButton').click();
-        let pairOutcome = await waitForTerminalBanner(pageB);
-        if (pairOutcome === 'warning') {
-            pairOutcome = await resolveAllConflictsAs(pageB, 'theirs');
+            fs.mkdirSync(IMAGES, { recursive: true });
+            await target.screenshot({ path: path.join(IMAGES, `${id}.png`) });
+        },
+    };
+    try {
+        await body(scope);
+        expect([...captured].sort(), `${name}: every named capture must be reached even with screenshots disabled`).toEqual([...MANIFEST[name]].sort());
+        await testInfo.attach('documentation-captures', { body: JSON.stringify({ updateImages: UPDATE_IMAGES, captured, viewport: VIEWPORT, frames }), contentType: 'application/json' });
+    } catch (error) {
+        failures.push(error);
+    } finally {
+        for (const hold of holds) hold.release();
+        // Release real storage before settling callers; their timeout remains bounded.
+        const settled = await Promise.all(jobs);
+        failures.push(...settled.flatMap(result => result.error ? [result.error] : []));
+        const closed = await Promise.allSettled(contexts.map(context => context.close()));
+        const stoppedProxies = await Promise.allSettled(proxies.map(proxy => proxy.close()));
+        const attached = await Promise.allSettled(servers.map((server, index) => testInfo.attach(`server-${index}.log`, { body: server.output, contentType: 'text/plain' })));
+        const stopped = await Promise.allSettled(servers.map(server => tearDownServer(server)));
+        const stoppedStorage = await Promise.allSettled(storage.map(provider => provider.stop()));
+        failures.push(...[...closed, ...stoppedProxies, ...attached, ...stopped, ...stoppedStorage].filter(result => result.status === 'rejected').map(result => result.reason));
+        const recorded = await Promise.allSettled([scope.record('resource-settlement', {
+            contexts: closed.map(result => result.status),
+            proxies: stoppedProxies.map(result => result.status),
+            servers: stopped.map((result, index) => ({ port: servers[index].port, execArgv: servers[index].execArgv, status: result.status })),
+            storage: stoppedStorage.map(result => result.status),
+            requests: settled.map(result => result.error ? 'rejected' : 'fulfilled'),
+            releasedHolds: holds.length,
+        })]);
+        failures.push(...recorded.filter(result => result.status === 'rejected').map(result => result.reason));
+    }
+    if (failures.length) throw new AggregateError(failures, `${name}: walkthrough or cleanup failed`, { cause: failures[0] });
+    return captured;
+}
+
+async function dismissToasts(page) {
+    const toasts = page.locator('#toast-container .toast:visible');
+    while (await toasts.count()) {
+        // Keep this notification's identity; the next toast becomes .first() on dismissal.
+        const toast = await toasts.first().elementHandle();
+        await toast.click();
+        await expect.poll(() => toast.evaluate(element => element.isConnected)).toBe(false);
+    }
+}
+
+async function leavePanels(page) {
+    const dialogs = page.locator('dialog.popup[open]');
+    while (await dialogs.count()) {
+        const id = await dialogs.last().getAttribute('data-id');
+        await dialogs.last().locator('.popup-button-ok').click();
+        await expect(page.locator(`dialog.popup[data-id="${id}"]`)).toHaveCount(0);
+    }
+    await closeAnyOpenTopSettingsDrawer(page);
+    await dismissToasts(page);
+}
+
+async function assertCategories(grid, categories) {
+    await expect(grid).toBeVisible();
+    expect(await grid.locator('input:checked').evaluateAll(inputs => inputs.map(input => input.value).sort())).toEqual([...categories].sort());
+}
+
+async function assertBackend(page, label, kind) {
+    const row = backend(page, label);
+    await expect(row).toHaveCount(1);
+    await expect(row).toHaveAttribute('data-kind', kind);
+    await expect(row.locator('.syncBackendKind')).toHaveText(kind.toUpperCase());
+    await expect(row.locator('.lanSyncPeerMeta')).toContainText('Last sync:');
+    await expect(row.locator('.lanSyncPeerMeta')).not.toContainText('Never');
+    for (const [selector, text] of [
+        ['.lanSyncPeerSyncButton', 'Sync now'], ['.lanSyncPeerUndoButton', 'Undo last sync'],
+        ['.syncBackendEditButton', 'Edit'], ['.lanSyncPeerForgetButton', 'Remove'],
+    ]) {
+        await expect(row.locator(selector)).toBeVisible();
+        await expect(row.locator(selector)).toHaveText(text);
+    }
+    await expect(row.locator('.backupActionRow')).not.toHaveClass(/disabled/);
+}
+
+async function createLore(device) {
+    await createReadyWorldBook(device.page, 'Cascade Lore');
+    await expect.poll(() => readUserFile(device.server, LORE), { timeout: 30_000 }).not.toBeNull();
+    await closeAnyOpenTopSettingsDrawer(device.page);
+}
+
+async function addLore(device, content) {
+    await selectReadyWorldBook(device.page, 'Cascade Lore');
+    await addWorldEntry(device.page, { key: 'moonwell', content });
+    await expect.poll(() => readUserFile(device.server, LORE), { timeout: 30_000 }).toContain(content);
+    await closeAnyOpenTopSettingsDrawer(device.page);
+}
+
+async function paired(a, b, categories = CATEGORIES) {
+    await openLanSyncPanel(a.page);
+    const link = await generatePairingLink(a.page, { label: 'Tablet', categories });
+    await openLanSyncPanel(b.page);
+    const since = Date.now();
+    expect(await acceptPairingLink(b.page, link, { categories, localLabel: 'Desk' })).toBe('success');
+    await settlePair(a, b, since);
+    await leavePanels(a.page);
+    await leavePanels(b.page);
+    await reloadS3Page(a.page);
+    await reloadS3Page(b.page);
+}
+
+async function settlePair(a, b, since) {
+    await waitForBackendSync(a.page, { label: 'Tablet', since });
+    await waitForBackendSync(b.page, { label: 'Desk', since });
+}
+
+async function divergentLore(a, b) {
+    await addLore(a, WORDS.desk);
+    await addLore(b, WORDS.tablet);
+    await openLanSyncPanel(b.page);
+    expect(await clickSyncNow(b.page, 'Desk')).toBe('warning');
+    await waitForSyncPopup(b.page);
+    expect(await listPopupConflicts(b.page)).toEqual([{ path: LORE, stale: false }]);
+}
+
+async function assertLoreCards(page, { stale = false } = {}) {
+    const row = conflict(page);
+    await expect(row.locator('.syncConflictPath')).toHaveText(LORE);
+    await expect(row.locator('.syncConflictCard[data-choice="current"] .syncConflictCardTitle')).toHaveText('Current version');
+    await expect(row.locator('.syncConflictCard[data-choice="current"] .syncConflictInUse')).toHaveCount(0);
+    await expect(row.locator('.syncConflictCard:not([data-choice="current"]) .syncConflictCardTitle')).toContainText(['Version from', 'Version from']);
+    expect((await row.locator('.syncConflictCard:not([data-choice="current"]) .syncConflictCardTitle').allTextContents()).map(title => title.replace(' In use', '')).sort()).toEqual(['Version from Desk', 'Version from Tablet']);
+    await expect(row.locator('.syncConflictInUse')).toHaveCount(1);
+    await expect(row.locator('.syncConflictCard[data-choice="ours"] .syncConflictPreview')).not.toBeEmpty();
+    await expect(row.locator('.syncConflictCard[data-choice="theirs"] .syncConflictPreview')).not.toBeEmpty();
+    await expect(row.locator('.syncConflictStale')).toHaveCount(stale ? 1 : 0);
+    await expect(syncPopup(page).locator('.syncConflictsApplyButton')).toBeVisible();
+    await expect(syncPopup(page).locator('.syncConflictsApplyButton')).toHaveText('Apply choices');
+}
+
+async function assertNoPendingAfterReload(device) {
+    await reloadS3Page(device.page);
+    await waitForStatusChecks(device.page, 1);
+    expect((await status(device.page)).conflicts).toEqual([]);
+    await expect(syncPopup(device.page)).toHaveCount(0);
+    await expect(device.page.locator('.syncConflictRow')).toHaveCount(0);
+}
+
+test('LAN pairing, pending lore and resolution images', async ({ browser }, testInfo) => {
+    await journey(browser, testInfo, 'pairing', async scope => {
+        const a = await scope.device('Desk', { lan: true });
+        const b = await scope.device('Tablet', { lan: true });
+        await createLore(a);
+        await openLanSyncPanel(a.page);
+        await a.page.locator('.lanSyncTabPeers').click();
+        await scope.capture('01-panel-empty', a.page, panel(a.page), async () => {
+            await expect(panel(a.page).locator('h3')).toHaveText('Sync');
+            await expect(a.page.locator('.lanSyncPanelPeers')).toBeVisible();
+            await expect(a.page.locator('.lanSyncPeersEmpty')).toHaveText('No sync backends yet. Pair a LAN device or add S3 storage.');
+            await expect(a.page.locator('.syncAddS3Button')).toBeVisible();
+            await expect(a.page.locator('.lanSyncSchedule')).toContainText('Sync schedule');
+            await expect(a.page.locator('.lanSyncIdleSeconds')).toBeVisible();
+            await expect(a.page.locator('.lanSyncPollSeconds')).toBeVisible();
+        });
+        await a.page.locator('.lanSyncTabPairNew').click();
+        await a.page.locator('.lanSyncPairLabel').fill('Tablet');
+        await selectCategories(a.page.locator('.lanSyncCategoryGrid'), CATEGORIES);
+        await scope.capture('02-pair-new-form-filled', a.page, panel(a.page), async () => {
+            await expect(a.page.locator('.lanSyncPairLabel'), '02-pair-new-form-filled must identify Tablet, not the old generic device').toHaveValue('Tablet');
+            await assertCategories(a.page.locator('.lanSyncCategoryGrid'), CATEGORIES);
+            await expect(a.page.locator('.lanSyncGenerateLinkButton')).toBeVisible();
+        });
+        const link = await generatePairingLink(a.page, { label: 'Tablet', categories: CATEGORIES });
+        const parsed = new URL(link);
+        await scope.capture('03-pair-link-generated', a.page, panel(a.page), async () => {
+            await expect(a.page.locator('.lanSyncGeneratedLink')).toHaveValue(link);
+            await expect(a.page.locator('.lanSyncPairNewResult > .menu_button_note').last()).toBeVisible();
+            await expect(a.page.locator('.lanSyncPairNewResult > .menu_button_note').last()).toHaveText('Basic-auth credentials entered on the other device are saved on its server after pairing for future syncs. Use Clear credentials on that device\'s backend row to remove them.');
+            await expect(a.page.locator('.lanSyncBaseUrlSelect')).toBeVisible();
+            const bases = await a.page.locator('.lanSyncBaseUrlSelect option').evaluateAll(options => options.map(option => option.value));
+            expect(bases.some(base => !['localhost', '127.0.0.1', '[::1]'].includes(new URL(base).hostname)), 'LAN-listening fixture must offer a non-loopback address').toBe(true);
+            expect(parsed.searchParams.get('base')).toBe(await a.page.locator('.lanSyncBaseUrlSelect').inputValue());
+            await expect(a.page.locator('.lanSyncBaseUrlWarning')).toBeHidden();
+            await expect(a.page.locator('.lanSyncCopyLinkButton')).toBeVisible();
+        });
+        await openLanSyncPanel(b.page);
+        await b.page.locator('.lanSyncTabPairExisting').click();
+        await b.page.locator('.lanSyncAcceptLink').fill(link);
+        await b.page.locator('.lanSyncAcceptLabel').fill('Desk');
+        await scope.capture('04-pair-existing-pasted', b.page, panel(b.page), async () => {
+            await expect(b.page.locator('.lanSyncAcceptAuthFields > .menu_button_note')).toBeVisible();
+            await expect(b.page.locator('.lanSyncAcceptAuthFields > .menu_button_note')).toHaveText('Enter basic-auth credentials only if the other device requires them. After pairing, they are saved on this server for future syncs. Use Clear credentials on the backend row to remove them.');
+            for (const [selector, value] of [['.lanSyncAcceptBaseUrl', parsed.searchParams.get('base')], ['.lanSyncAcceptPeerId', parsed.searchParams.get('peer')]]) {
+                await expect(b.page.locator(selector)).toBeVisible();
+                await expect(b.page.locator(selector)).toHaveValue(value);
+            }
+            await expect(b.page.locator('.lanSyncAcceptPairCode')).toHaveAttribute('type', 'hidden');
+            await expect(b.page.locator('.lanSyncAcceptPairCode')).toHaveValue(parsed.searchParams.get('code'));
+            await expect(b.page.locator('.lanSyncAcceptLabel')).toHaveValue('Desk');
+            await assertCategories(b.page.locator('.lanSyncAcceptCategoryGrid'), CATEGORIES);
+            await expect(b.page.locator('.lanSyncAcceptButton')).toBeVisible();
+        });
+        const since = Date.now();
+        const accepted = scope.response(b.page, '/api/sync/v1/pair/accept');
+        await b.page.locator('.lanSyncAcceptButton').click();
+        expect((await observed(accepted)).ok()).toBe(true);
+        await settlePair(a, b, since);
+        await scope.capture('05-pair-success-banner', b.page, panel(b.page), async () => {
+            await expect(b.page.locator('.lanSyncStatusBanner.success')).toHaveText('Synced with Desk.');
+            expect(readUserFile(b.server, LORE)).toBe(readUserFile(a.server, LORE));
+        });
+        await b.page.locator('.lanSyncTabPeers').click();
+        await scope.capture('06-backends-after-pair', b.page, panel(b.page), () => assertBackend(b.page, 'Desk', 'lan'));
+        await leavePanels(a.page);
+        await leavePanels(b.page);
+        await reloadS3Page(b.page);
+        await divergentLore(a, b);
+        // The popup owns the top layer; close it through its actual Close button for the banner.
+        await closeSyncPopup(b.page);
+        await scope.capture('07-conflict-banner', b.page, b.page.locator('.lanSyncStatusBanner'), async () => {
+            await expect(b.page.locator('.lanSyncStatusBanner.warning')).toHaveText('Synced with Desk. 1 file(s) need a decision.');
+            expect((await status(b.page)).conflicts.map(entry => entry.path)).toEqual([LORE]);
+        });
+        await b.page.locator('.syncReviewIssuesButton').click();
+        await waitForSyncPopup(b.page);
+        await scope.capture('08-conflict-popup', b.page, syncPopup(b.page), () => assertLoreCards(b.page));
+        await closeSyncPopup(b.page);
+        await reloadS3Page(b.page);
+        await waitForStatusChecks(b.page, 1);
+        await waitForSyncPopup(b.page);
+        expect(await listPopupConflicts(b.page)).toEqual([{ path: LORE, stale: false }]);
+        await chooseConflictVersion(b.page, LORE, await conflictChoiceShowing(b.page, LORE, WORDS.desk));
+        expect(await applyConflictChoices(b.page)).toBe('success');
+        for (const device of [a, b]) {
+            await expect.poll(() => readUserFile(device.server, LORE), { timeout: 60_000 }).toContain(WORDS.desk);
+            expect(readUserFile(device.server, LORE)).not.toContain(WORDS.tablet);
         }
-        expect(pairOutcome).toBe('success');
-        await expectBannerContains(pageB, /Sync complete\.|Synced with/i);
-        await shootPanel(pageB, '05-pair-success-banner');
-
-        // --- Step 06: B's My devices list now has A registered under
-        // 'Laptop' (the localLabel B picked above — that's B's own name
-        // for A in B's peer list). Each row exposes Sync now / Undo /
-        // Forget. This is the recurring state — every subsequent visit
-        // looks like this.
-        await pageB.locator('.lanSyncTabPeers').click();
-        const peerRowOnB = pageB.locator('.lanSyncPeerRow', { hasText: 'Laptop' }).first();
-        await expect(peerRowOnB).toBeVisible({ timeout: 5_000 });
-        await shootPanel(pageB, '06-my-devices-after-pair');
-
-        // --- Step 07: divergent edit on both sides so the next sync
-        // surfaces a real conflict. Modify the same file with different
-        // bodies — this is the "bothModified" path, the most
-        // user-visible conflict scenario.
-        fs.writeFileSync(
-            path.join(A.dataRoot, 'default-user', 'worlds', 'Cascade Lore.json'),
-            JSON.stringify({ name: 'Cascade Lore', entries: { '0': { content: 'on the phone, Asha rewrote the prologue' } } }),
-        );
-        fs.writeFileSync(
-            path.join(B.dataRoot, 'default-user', 'worlds', 'Cascade Lore.json'),
-            JSON.stringify({ name: 'Cascade Lore', entries: { '0': { content: 'on the laptop, the prologue stayed canonical' } } }),
-        );
-
-        const syncOutcome = await clickSyncNow(pageB, 'Laptop');
-        expect(syncOutcome).toBe('warning');
-        await expectBannerContains(pageB, /conflict/i);
-        await shootElement('07-conflict-banner', pageB.locator('.userLanSync .lanSyncStatusBanner').first());
-
-        // --- Step 08: the conflict resolution panel itself. One row,
-        // "worlds/Cascade Lore.json", kind = bothModified, two radio
-        // buttons (Local / Remote). Doc uses this for the "Each conflict
-        // has two cards" paragraph.
-        const conflictPanel = pageB.locator('.lanSyncConflictPanel').first();
-        await expect(conflictPanel).toBeVisible({ timeout: 5_000 });
-        const kinds = await listConflictKinds(pageB);
-        expect(kinds['worlds/Cascade Lore.json']).toBe('bothModified');
-        await shootElement('08-conflict-panel', conflictPanel);
-
-        // --- Step 09: user picks Local (ours wins). Apply lands and the
-        // banner returns to success with the doc-canonical "Sync complete."
-        // text. This is the screenshot the recovery section references
-        // when it says "If a sync overwrites something you wanted back,
-        // click Undo last sync" — the success state IS the prerequisite
-        // for being able to undo.
-        const resolveOutcome = await applyConflictResolutions(pageB, {
-            'worlds/Cascade Lore.json': 'ours',
+        await openLanSyncPanel(b.page);
+        expect(await clickSyncNow(b.page, 'Desk')).toBe('success');
+        await scope.capture('09-resolved-success', b.page, panel(b.page), async () => {
+            await expect(b.page.locator('.lanSyncStatusBanner.success')).toHaveText('Synced with Desk.');
+            expect((await status(b.page)).conflicts).toEqual([]);
         });
-        expect(resolveOutcome).toBe('success');
-        await expectBannerContains(pageB, /Sync complete\.|Synced with/i);
-        await shootPanel(pageB, '09-resolved-success');
-
-        await ctxA.close();
-        await ctxB.close();
+        await assertNoPendingAfterReload(b);
+        await assertNoPendingAfterReload(a);
     });
 });
 
-/**
- * Inline mirror of sync.js's waitForTerminalBannerState — kept private
- * to this test so the helper module's public surface doesn't grow a
- * new export just for this walkthrough. (sync.js's version isn't
- * exported.) Resolves to 'success' | 'warning' | 'error'.
- */
-async function waitForTerminalBanner(page, timeoutMs = 30_000) {
-    const handle = await page.waitForFunction(() => {
-        const el = document.querySelector('.lanSyncStatusBanner');
-        if (!el || el.classList.contains('displayNone')) return null;
-        for (const kind of ['success', 'warning', 'error']) {
-            if (el.classList.contains(kind)) return kind;
+test('Stale lore preview and cancelled then confirmed overwrite images', async ({ browser }, testInfo) => {
+    await journey(browser, testInfo, 'stale', async scope => {
+        const a = await scope.device('Desk');
+        const b = await scope.device('Tablet');
+        await createLore(a);
+        await paired(a, b, ['worlds']);
+        await divergentLore(a, b);
+        await leavePanels(b.page);
+        await selectReadyWorldBook(b.page, 'Cascade Lore');
+        const entry = b.page.locator('#world_popup_entries_list .world_entry[uid]');
+        await expect(entry).toHaveCount(1);
+        const content = entry.locator('textarea[name="content"]');
+        if (!await content.isVisible()) await entry.locator('.wi-entry-toggle').click();
+        await content.fill(WORDS.later);
+        await content.blur();
+        await expect.poll(() => readUserFile(b.server, LORE), { timeout: 30_000 }).toContain(WORDS.later);
+        await closeAnyOpenTopSettingsDrawer(b.page);
+        await openLanSyncPanel(b.page);
+        expect(await clickSyncNow(b.page, 'Desk')).toBe('warning');
+        await reloadS3Page(b.page);
+        await waitForSyncPopup(b.page);
+        await scope.capture('conflict-stale', b.page, syncPopup(b.page), async () => {
+            await assertLoreCards(b.page, { stale: true });
+            await expect(conflict(b.page).locator('.syncConflictStale')).toContainText('This file changed after the conflict was found.');
+            await expect(conflict(b.page).locator('.syncConflictCard[data-choice="current"] .syncConflictPreview')).toContainText(WORDS.later);
+        });
+        await chooseConflictVersion(b.page, LORE, await conflictChoiceShowing(b.page, LORE, WORDS.desk));
+        await syncPopup(b.page).locator('.syncConflictsApplyButton').click();
+        const confirm = b.page.locator('dialog.popup[open]', { hasText: 'Overwrite the current version', hasNot: syncPopup(b.page) });
+        await scope.capture('conflict-stale-confirm', b.page, confirm, async () => {
+            await expect(confirm).toContainText(`Overwrite the current version of ${LORE}?`);
+            await expect(confirm.locator('.popup-button-ok')).toHaveText('Overwrite');
+            await expect(confirm.locator('.popup-button-cancel')).toHaveText('Cancel');
+        });
+        const unchanged = readUserFile(b.server, LORE);
+        await confirm.locator('.popup-button-cancel').click();
+        await expect(confirm).toHaveCount(0);
+        expect(readUserFile(b.server, LORE)).toBe(unchanged);
+        expect(await listPopupConflicts(b.page)).toEqual([{ path: LORE, stale: true }]);
+        expect((await status(b.page)).conflicts.map(row => row.path)).toEqual([LORE]);
+        expect(await applyConflictChoices(b.page, { confirmOverwrite: true })).toBe('success');
+        for (const device of [a, b]) {
+            await expect.poll(() => readUserFile(device.server, LORE), { timeout: 60_000 }).toContain(WORDS.desk);
+            expect(readUserFile(device.server, LORE)).not.toContain(WORDS.later);
         }
-        return null;
-    }, null, { timeout: timeoutMs });
-    return /** @type {'success' | 'warning' | 'error'} */ (await handle.jsonValue());
+        await assertNoPendingAfterReload(b);
+    });
+});
+
+async function assertS3Form(page, options) {
+    await expect(page.locator('.userSyncS3 h3')).toHaveText('Add S3 backend');
+    for (const [field, value] of [['Label', options.label], ['Endpoint', options.endpoint], ['Bucket', options.bucket], ['Prefix', 'seraphina/']]) {
+        await expect(page.locator(`.syncS3${field}`)).toBeVisible();
+        await expect(page.locator(`.syncS3${field}`)).toHaveValue(value);
+    }
+    await expect(page.locator('.syncS3Region')).toHaveJSProperty('tagName', 'SELECT');
+    await expect(page.locator('.syncS3Region')).toHaveValue(options.region);
+    for (const [field, value] of [['AccessKeyId', options.accessKeyId], ['SecretAccessKey', options.secretAccessKey], ['Passphrase', options.passphrase]]) {
+        await expect(page.locator(`.syncS3${field}`)).toHaveAttribute('type', 'password');
+        await expect(page.locator(`.syncS3${field}`)).toHaveValue(value);
+        await expect(page.locator(`.syncS3${field}`)).toBeVisible();
+    }
+    await expect(page.locator('.syncS3PassphraseField')).toContainText('Encryption passphrase');
+    await assertCategories(page.locator('.syncS3CategoryGrid'), ['worlds']);
+    await expect(page.locator('.syncS3SaveButton')).toBeVisible();
 }
 
-/**
- * Assert the visible status banner text matches a regex. The doc text
- * references three banner phrases verbatim ("Sync complete.", "Synced
- * with <peer>.", "<n> file(s) conflict.") — pinning them with
- * assertions means the docs and the runtime can't silently diverge.
- */
-async function expectBannerContains(page, pattern) {
-    const banner = page.locator('.lanSyncStatusBanner').first();
-    await banner.waitFor({ state: 'visible', timeout: 5_000 });
-    const text = (await banner.innerText()).trim();
-    expect(text, `banner text "${text}" must match ${pattern}`).toMatch(pattern);
+async function submitS3(scope, page, { rejected = false } = {}) {
+    const response = scope.response(page, '/api/sync/v1/backends/s3');
+    await page.locator('.syncS3SaveButton').click();
+    const actual = await observed(response);
+    if (rejected) {
+        expect(actual.status()).toBe(422);
+        expect(await actual.json()).toMatchObject({ code: 'S3_WRONG_PASSPHRASE' });
+        await expect(page.locator('.userSyncS3')).toBeVisible();
+        await expect(page.locator('.syncS3Error')).toHaveText('The passphrase does not match this bucket and prefix.');
+        return;
+    }
+    expect(actual.ok()).toBe(true);
+    await expect(page.locator('.userSyncS3')).toHaveCount(0, { timeout: 60_000 });
+    await waitForBackendSync(page, { label: 'Shared archive' });
 }
+
+test('S3 setup, second-device pull, mixed backends and genuine active capsule images', async ({ browser }, testInfo) => {
+    await journey(browser, testInfo, 'storage', async scope => {
+        const { options, proxy } = await scope.storage();
+        const a = await scope.device('Desk');
+        const b = await scope.device('Tablet');
+        await createLore(a);
+        await addLore(a, WORDS.base);
+        await openLanSyncPanel(a.page);
+        await a.page.locator('.syncAddS3Button').click();
+        await fillS3Form(a.page, options);
+        await scope.capture('s3-form', a.page, dialogFor(a.page, a.page.locator('.userSyncS3')), () => assertS3Form(a.page, options));
+        await submitS3(scope, a.page);
+        await openLanSyncPanel(b.page);
+        await b.page.locator('.syncAddS3Button').click();
+        const wrong = { ...options, passphrase: 'The river lantern is not the moonwell key' };
+        await fillS3Form(b.page, wrong);
+        await scope.capture('s3-second-device-passphrase', b.page, dialogFor(b.page, b.page.locator('.userSyncS3')), () => assertS3Form(b.page, wrong));
+        await submitS3(scope, b.page, { rejected: true });
+        await b.page.locator('.syncS3Passphrase').fill(options.passphrase);
+        await submitS3(scope, b.page);
+        expect(readUserFile(b.server, LORE)).toContain(WORDS.base);
+        await leavePanels(b.page);
+        await reloadS3Page(b.page);
+        await selectReadyWorldBook(b.page, 'Cascade Lore');
+        const content = b.page.locator('#world_popup_entries_list textarea[name="content"]');
+        if (!await content.isVisible()) await b.page.locator('#world_popup_entries_list .wi-entry-toggle').click();
+        await expect(content).toHaveValue(WORDS.base);
+        await closeAnyOpenTopSettingsDrawer(b.page);
+        await leavePanels(a.page);
+        await paired(a, b, ['worlds']);
+        await openLanSyncPanel(a.page);
+        await scope.capture('backend-list', a.page, panel(a.page), async () => {
+            await assertBackend(a.page, 'Tablet', 'lan');
+            await assertBackend(a.page, 'Shared archive', 's3');
+            await expect(backend(a.page, 'Shared archive').locator('.syncBackendUnlockButton')).toHaveText('Unlock');
+            await expect(a.page.locator('.syncDeviceLabel')).toHaveValue('Desk');
+            await expect(a.page.locator('.lanSyncIdleSeconds')).toBeVisible();
+            await expect(a.page.locator('.lanSyncPollSeconds')).toBeVisible();
+        });
+        await leavePanels(a.page);
+        await selectSeraphina(a.page);
+        await editMessageViaUI(a.page, 0, WORDS.desk);
+        await renameChat(a.page, 'Forest Path');
+        await openLanSyncPanel(a.page);
+        const id = await backend(a.page, 'Shared archive').getAttribute('data-backend-id');
+        const held = scope.hold(proxy);
+        const response = scope.response(a.page, `/api/sync/v1/backends/${id}/sync`, 90_000);
+        await backend(a.page, 'Shared archive').locator('.lanSyncPeerSyncButton').click();
+        await expect.poll(() => proxy.requests.some(request => request.method === 'GET' && request.relativeKey === 'seraphina/head' && !request.responseDelivered && !request.closed), { timeout: 30_000, message: 'Active capsule must be backed by a genuinely held storage read' }).toBe(true);
+        await held.reached;
+        await leavePanels(a.page);
+        const composer = a.page.locator('#send_textarea');
+        await composer.fill('*I raise the lantern beneath the birches.* "Show me the way to the moonwell."');
+        await composer.focus();
+        await waitForStatusChecks(a.page, await statusChecks(a.page) + 1);
+        const pill = a.page.locator('#luker-sync-activity-pill');
+        await scope.capture('sync-activity', a.page, a.page.locator('#sheld'), async () => {
+            await expect(composer).toBeFocused();
+            await expect(composer).toHaveValue(/moonwell/);
+            await expect(panel(a.page)).toHaveCount(0);
+            await expect(pill).toHaveText('Syncing: Shared archive');
+            await expect(pill).toHaveAttribute('data-tone', 'running');
+            await expect(pill.getByRole('progressbar')).toBeVisible();
+            await expect(pill.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+            await expect(pill).not.toContainText(/\d+%|elapsed|phase/i);
+        });
+        await expect(composer).toBeFocused();
+        await pill.click();
+        await expect(panel(a.page)).toHaveCount(1);
+        await expect(backend(a.page, 'Shared archive').locator('.backupActionRow')).toHaveClass(/disabled/);
+        held.release();
+        expect((await observed(response)).ok()).toBe(true);
+        await waitForBackendSync(a.page, { label: 'Shared archive' });
+        await expect(pill).toBeHidden({ timeout: 15_000 });
+    });
+});
+
+async function selectSeraphina(page) {
+    await closeAllPopups(page);
+    await closeAnyOpenTopSettingsDrawer(page);
+    await openCharacterList(page);
+    const card = page.locator('#rm_print_characters_block .character_select').filter({ has: page.locator(`img[src*="file=${AVATAR}"]`) });
+    await expect(card, 'Bundled Seraphina avatar must be selected unambiguously').toHaveCount(1);
+    await card.click();
+    await page.waitForFunction(avatar => {
+        const context = window.Luker.getContext();
+        return context.characters[context.characterId]?.avatar === avatar && !context.groupId && context.chat.length > 0;
+    }, AVATAR);
+    await expect(page.locator('#character_name_pole')).toHaveValue('Seraphina');
+    await expect(page.locator('#chat .mes[mesid="0"] .mes_text')).not.toBeEmpty();
+    await closeAnyOpenTopSettingsDrawer(page);
+}
+
+async function renameChat(page, name) {
+    await renameCurrentChatViaUI(page, name);
+    // Renaming schedules a real reopening of Manage chat files after its save.
+    await expect(page.locator('#shadow_select_chat_popup')).toBeVisible();
+    await expect(page.locator('.select_chat_block_filename', { hasText: new RegExp(`^\\s*${RegExp.escape(name)}(\\.jsonl)?\\s*$`) })).toHaveCount(1);
+    await page.locator('#select_chat_cross').click();
+    await expect(page.locator('#shadow_select_chat_popup')).toBeHidden();
+}
+
+async function createCharacterChat(device) {
+    await selectSeraphina(device.page);
+    await editMessageViaUI(device.page, 0, WORDS.base);
+    await renameChat(device.page, 'Forest Path');
+    await expect.poll(() => readUserFile(device.server, `${CHAT_DIR}/Forest Path.jsonl`)).toContain(WORDS.base);
+}
+
+async function openGroup(device, id, chat = 'River Ford') {
+    await closeAllPopups(device.page);
+    await closeAnyOpenTopSettingsDrawer(device.page);
+    await openCharacterList(device.page);
+    const card = device.page.locator(`#rm_print_characters_block .group_select[data-grid="${id}"]`);
+    await expect(card).toHaveCount(1);
+    await card.click();
+    await device.page.waitForFunction(({ id, chat }) => {
+        const context = window.Luker.getContext();
+        return context.groupId === id && context.getCurrentChatId() === chat;
+    }, { id, chat });
+    await expect(device.page.locator('#rm_group_chat_name')).toHaveValue('Moonwell Watch');
+    await expect(device.page.locator('#chat .mes[mesid="0"] .mes_text')).not.toBeEmpty();
+    await closeAnyOpenTopSettingsDrawer(device.page);
+}
+
+async function createGroup(device, scope) {
+    await openCharacterList(device.page);
+    await device.page.locator('#rm_button_group_chats').click();
+    await device.page.locator('#rm_group_chat_name').fill('Moonwell Watch');
+    const member = device.page.locator('#rm_group_add_members .group_member').filter({ has: device.page.locator(`img[title="${AVATAR}"]`) });
+    await expect(member).toHaveCount(1);
+    await member.locator('[data-action="add"]').click();
+    await expect(device.page.locator('#rm_group_members .group_member')).toHaveCount(1);
+    const created = scope.response(device.page, '/api/groups/create');
+    await device.page.locator('#rm_group_submit').click();
+    const response = await observed(created);
+    expect(response.ok()).toBe(true);
+    const { id } = await response.json();
+    await expect(device.page.locator('.toast-success', { hasText: 'Group Created' })).toBeVisible();
+    await openCharacterList(device.page);
+    await device.page.locator(`#rm_print_characters_block .group_select[data-grid="${id}"]`).click();
+    await device.page.waitForFunction(id => {
+        const context = window.Luker.getContext();
+        return context.groupId === id && !!context.chatMetadata.integrity && context.chat.length > 0;
+    }, id);
+    await expect(device.page.locator('#chat .mes[mesid="0"] .mes_text')).not.toBeEmpty();
+    await closeAnyOpenTopSettingsDrawer(device.page);
+    // Start a real conversation through the composer's native no-generation command.
+    // Check its persisted transcript before preparing any shared sync history.
+    const firstTurn = '*I lift the lantern over the reeds.* "Will you guide me across the ford?"';
+    const initialChat = await device.page.evaluate(() => window.Luker.getContext().getCurrentChatId());
+    const greetingText = await device.page.evaluate(() => window.Luker.getContext().chat[0].mes);
+    await device.page.locator('#send_textarea').fill(`/send ${firstTurn}`);
+    await device.page.locator('#send_textarea').press('Enter');
+    await expect(device.page.locator('#chat .mes[mesid="1"] .mes_text')).toContainText('Will you guide me across the ford?');
+    await expect.poll(() => readUserFile(device.server, `group chats/${initialChat}.jsonl`), { timeout: 30_000, message: 'The group conversation must persist its actual typed RP turn before editing' }).toContain(JSON.stringify(firstTurn));
+    const persisted = readUserFile(device.server, `group chats/${initialChat}.jsonl`).trim().split('\n').map(line => JSON.parse(line));
+    await scope.record('group-baseline-persistence', {
+        groupId: id, chatId: initialChat, persisted,
+        visible: await device.page.evaluate(() => window.Luker.getContext().chat.map(message => ({ name: message.name, is_user: message.is_user, mes: message.mes }))),
+    });
+    expect(persisted[1], 'The fresh group must retain the displayed Seraphina greeting when its first RP turn is saved').toMatchObject({ name: 'Seraphina', is_user: false, mes: greetingText });
+    await editMessageViaUI(device.page, 0, WORDS.base);
+    await renameChat(device.page, 'River Ford');
+    await expect.poll(() => readUserFile(device.server, 'group chats/River Ford.jsonl')).toContain(WORDS.base);
+    return id;
+}
+
+async function deleteCharacterChat(device) {
+    await device.page.locator('#options_button').click();
+    await device.page.locator('#option_select_chat').click();
+    const row = device.page.locator('.select_chat_block_wrapper').filter({ has: device.page.locator('.select_chat_block_filename', { hasText: /^\s*Forest Path(\.jsonl)?\s*$/ }) });
+    await expect(row).toHaveCount(1);
+    await row.locator('.PastChat_cross').click();
+    const confirm = device.page.locator('dialog.popup[open]', { hasText: 'Delete the Chat File?' });
+    await confirm.locator('.popup-button-ok').click();
+    await expect.poll(() => readUserFile(device.server, `${CHAT_DIR}/Forest Path.jsonl`)).toBeNull();
+    // Reload closes the manager and forgets the deleted active chat before synchronization.
+    await reloadS3Page(device.page);
+}
+
+async function deleteGroup(device, id, scope) {
+    await openGroup(device, id);
+    await device.page.locator('#rightNavDrawerIcon').click();
+    await device.page.locator('#rm_group_delete').click();
+    const confirm = device.page.locator('dialog.popup[open]', { hasText: 'Delete the group?' });
+    const removed = scope.response(device.page, '/api/groups/delete');
+    await confirm.locator('.popup-button-ok').click();
+    expect((await observed(removed)).ok()).toBe(true);
+    await expect.poll(() => readUserFile(device.server, `groups/${id}.json`)).toBeNull();
+    expect(readUserFile(device.server, 'group chats/River Ford.jsonl')).toBeNull();
+    await reloadS3Page(device.page);
+}
+
+async function captureNotice(scope, device, image, notice, expectedText, openText) {
+    await scope.capture(image, device.page, syncPopup(device.page), async () => {
+        expect(await listPopupConflicts(device.page)).toEqual([]);
+        expect(await listPopupNotices(device.page)).toEqual([{ path: notice.path, text: expectedText }]);
+        await expect(syncPopup(device.page).locator('.syncNoticeOpenButton')).toHaveText(openText);
+        await expect(syncPopup(device.page).locator('.syncNoticeOpenButton')).not.toHaveClass(/disabled/);
+        await expect(syncPopup(device.page).locator('.syncNoticeDismissButton')).toHaveText('Dismiss');
+    });
+}
+
+async function prepareChatPair(scope, group) {
+    const a = await scope.device('Desk');
+    const b = await scope.device('Tablet');
+    // Establish the shared bundled-card ancestor before chat creation updates its bookkeeping.
+    await paired(a, b, ['characters', 'chats']);
+    let groupId;
+    if (group) groupId = await createGroup(a, scope);
+    else await createCharacterChat(a);
+    await openLanSyncPanel(a.page);
+    const since = Date.now();
+    expect(await clickSyncNow(a.page, 'Tablet')).toBe('success');
+    await settlePair(a, b, since);
+    for (const device of [a, b]) {
+        await leavePanels(device.page);
+        await reloadS3Page(device.page);
+    }
+    return { a, b, groupId };
+}
+
+async function forkJourney(browser, testInfo, { group, name, image }) {
+    return journey(browser, testInfo, name, async scope => {
+        const { a, b, groupId } = await prepareChatPair(scope, group);
+        for (const [device, words] of [[a, WORDS.desk], [b, WORDS.tablet]]) {
+            if (group) await openGroup(device, groupId);
+            else { await selectSeraphina(device.page); await openChatByName(device.page, 'Forest Path'); }
+            await editMessageViaUI(device.page, 0, words);
+            await expect.poll(() => readUserFile(device.server, group ? 'group chats/River Ford.jsonl' : `${CHAT_DIR}/Forest Path.jsonl`)).toContain(words);
+        }
+        await openLanSyncPanel(b.page);
+        expect(await clickSyncNow(b.page, 'Desk')).toBe('success');
+        await waitForSyncPopup(b.page);
+        const notices = (await status(b.page)).notices;
+        expect(notices).toHaveLength(1);
+        const [notice] = notices;
+        expect(notice.kind).toBe('fork');
+        expect(['Desk', 'Tablet']).toContain(notice.device);
+        const original = group ? 'River Ford' : 'Forest Path';
+        expect(notice.target.name).toMatch(new RegExp(`^${original} - Sync conflict ${notice.device} `));
+        const rel = group ? 'group chats/River Ford.jsonl' : `${CHAT_DIR}/Forest Path.jsonl`;
+        const keptWords = notice.device === 'Desk' ? WORDS.tablet : WORDS.desk;
+        const branchWords = notice.device === 'Desk' ? WORDS.desk : WORDS.tablet;
+        await captureNotice(scope, b, image, notice, `${rel} was edited on two devices. The version from ${notice.device} was saved as the branch chat ${notice.target.name}.`, 'Open branch');
+        const branchBytes = readUserFile(b.server, notice.path);
+        expect(branchBytes).toContain(branchWords);
+        expect(readUserFile(b.server, rel)).toContain(keptWords);
+        await expect.poll(() => readUserFile(a.server, notice.path), { timeout: 60_000 }).toBe(branchBytes);
+        if (group) expect(JSON.parse(readUserFile(b.server, `groups/${groupId}.json`)).chats).toContain(notice.target.name);
+        await openBranchFromNotice(b.page, notice.path, notice.target.name);
+        await expect(b.page.locator('.mes[mesid="0"] .mes_text')).toContainText(branchWords);
+        if (group) expect(await b.page.evaluate(() => window.Luker.getContext().groupId)).toBe(groupId);
+        await reloadS3Page(b.page);
+        await waitForSyncPopup(b.page);
+        await dismissNotice(b.page, notice.path);
+        expect((await status(b.page)).notices).toEqual([]);
+        expect(readUserFile(b.server, notice.path)).toBe(branchBytes);
+        if (group) expect(JSON.parse(readUserFile(b.server, `groups/${groupId}.json`)).chats).toContain(notice.target.name);
+        await reloadS3Page(b.page);
+        await waitForStatusChecks(b.page, 1);
+        await expect(syncPopup(b.page)).toHaveCount(0);
+        if (group) await openGroup(b, groupId, notice.target.name);
+        else { await selectSeraphina(b.page); await openChatByName(b.page, notice.target.name); }
+        await expect(b.page.locator('.mes[mesid="0"] .mes_text')).toContainText(branchWords);
+    });
+}
+
+async function restoredJourney(browser, testInfo, { group, name, image }) {
+    return journey(browser, testInfo, name, async scope => {
+        const { a, b, groupId } = await prepareChatPair(scope, group);
+        if (group) await openGroup(b, groupId);
+        else { await selectSeraphina(b.page); await openChatByName(b.page, 'Forest Path'); }
+        await editMessageViaUI(b.page, 0, WORDS.tablet);
+        const rel = group ? 'group chats/River Ford.jsonl' : `${CHAT_DIR}/Forest Path.jsonl`;
+        await expect.poll(() => readUserFile(b.server, rel)).toContain(WORDS.tablet);
+        if (group) await deleteGroup(a, groupId, scope);
+        else { await selectSeraphina(a.page); await deleteCharacterChat(a); }
+        await openLanSyncPanel(b.page);
+        expect(await clickSyncNow(b.page, 'Desk')).toBe('success');
+        await waitForSyncPopup(b.page);
+        const notices = (await status(b.page)).notices;
+        expect(notices).toHaveLength(1);
+        const [notice] = notices;
+        expect(notice).toMatchObject({ path: rel, kind: 'restored', device: 'Tablet', deletedBy: 'Desk' });
+        await captureNotice(scope, b, image, notice, `${group ? 'River Ford' : 'Forest Path'} was deleted on Desk but kept on Tablet, so it was restored.`, 'Open chat');
+        for (const device of [a, b]) {
+            await expect.poll(() => readUserFile(device.server, rel), { timeout: 60_000 }).toContain(WORDS.tablet);
+            if (group) {
+                const owner = JSON.parse(readUserFile(device.server, `groups/${groupId}.json`));
+                expect(owner.name).toBe('Moonwell Watch');
+                expect(owner.chats).toContain('River Ford');
+            }
+        }
+        await openBranchFromNotice(b.page, rel, notice.target.name);
+        await expect(b.page.locator('.mes[mesid="0"] .mes_text')).toContainText(WORDS.tablet);
+        if (group) expect(await b.page.evaluate(() => window.Luker.getContext().groupId)).toBe(groupId);
+    });
+}
+
+test('Character chat branch notice image opens the preserved RP version', async ({ browser }, testInfo) => {
+    expect(await forkJourney(browser, testInfo, { group: false, name: 'characterFork', image: 'chat-fork-notice' })).toEqual(MANIFEST.characterFork);
+});
+
+test('Group chat branch notice image opens its owning group', async ({ browser }, testInfo) => {
+    expect(await forkJourney(browser, testInfo, { group: true, name: 'groupFork', image: 'group-chat-fork-notice' })).toEqual(MANIFEST.groupFork);
+});
+
+test('Restored character chat notice image names keeping and deleting devices', async ({ browser }, testInfo) => {
+    expect(await restoredJourney(browser, testInfo, { group: false, name: 'characterRestore', image: 'chat-restored-notice' })).toEqual(MANIFEST.characterRestore);
+});
+
+test('Restored group chat notice image opens the restored owning group', async ({ browser }, testInfo) => {
+    expect(await restoredJourney(browser, testInfo, { group: true, name: 'groupRestore', image: 'group-chat-restored-notice' })).toEqual(MANIFEST.groupRestore);
+});

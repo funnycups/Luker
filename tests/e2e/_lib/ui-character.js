@@ -7,15 +7,20 @@
 // going against the audit's intent.
 
 /**
- * Open the right nav (character list) drawer if it's closed.
+ * Show the character list in the right nav drawer, opening the drawer if
+ * it's closed.
  */
-async function ensureRightDrawerOpen(page) {
+export async function openCharacterList(page) {
     const drawer = page.locator('#rightNavDrawerIcon');
     const closed = await drawer.evaluate(el => el.classList.contains('closedIcon')).catch(() => true);
     if (closed) {
         await drawer.click();
-        await page.locator('#rm_print_characters_block').waitFor({ state: 'visible', timeout: 10_000 });
     }
+    // The drawer reopens on the last panel; a group or character editor hides the list.
+    if (await page.locator('#rm_print_characters_block:visible').count() === 0) {
+        await page.locator('#rm_button_characters').click();
+    }
+    await page.locator('#rm_print_characters_block').waitFor({ state: 'visible', timeout: 10_000 });
 }
 
 /**
@@ -28,7 +33,7 @@ async function ensureRightDrawerOpen(page) {
 export async function importCharacterFile(page, { filePath, expectedName, timeoutMs = 30_000 } = {}) {
     if (!filePath) throw new Error('importCharacterFile: filePath required');
     if (!expectedName) throw new Error('importCharacterFile: expectedName required');
-    await ensureRightDrawerOpen(page);
+    await openCharacterList(page);
     // The visible button is #character_import_button (icon); clicking it
     // triggers the hidden file input #character_import_file. Drive the
     // input directly via setInputFiles — that's the documented Playwright
@@ -62,7 +67,7 @@ export async function importCharacterFile(page, { filePath, expectedName, timeou
  *     tags (comma-separated), creator, character_version.
  */
 export async function createBlankCharacter(page, fields = {}) {
-    await ensureRightDrawerOpen(page);
+    await openCharacterList(page);
     await page.locator('#rm_button_create').click();
     const nameInput = page.locator('#character_name_pole');
     await nameInput.waitFor({ state: 'visible', timeout: 10_000 });
@@ -153,17 +158,30 @@ export async function editSelectedCharacterFields(page, fields = {}) {
         post_history_instructions: '#post_history_instructions_textarea',
         tags: '#tags_input',
     };
+    // Selecting a character closes the right drawer on narrow layouts;
+    // reopening it shows the editor of the selected character.
+    const drawer = page.locator('#rightNavDrawerIcon');
+    if (await drawer.evaluate(el => el.classList.contains('closedIcon')).catch(() => true)) await drawer.click();
+    const locators = [];
     for (const [key, sel] of Object.entries(FIELD_MAP)) {
         if (fields[key] == null) continue;
         const loc = page.locator(sel).first();
-        if (await loc.isVisible({ timeout: 1000 }).catch(() => false)) {
-            await loc.fill(String(fields[key]));
-            // Many ST forms autosave on blur; trigger one for safety.
+        await loc.waitFor({ state: 'visible', timeout: 10_000 });
+        locators.push([loc, String(fields[key])]);
+    }
+    const saved = page.waitForResponse(response => response.url().endsWith('/api/characters/patch') && response.request().method() === 'POST', { timeout: 30_000 });
+    try {
+        for (const [loc, value] of locators) {
+            await loc.fill(value);
             await loc.blur();
         }
+    } catch (error) {
+        saved.catch(() => {});
+        throw error;
     }
-    // Wait for ST's autosave debounce to fire.
-    await page.waitForTimeout(800);
+    // The editor saves on a debounce after the last input.
+    const response = await saved;
+    if (!response.ok()) throw new Error(`editSelectedCharacterFields: save failed with HTTP ${response.status()}`);
 }
 
 /**

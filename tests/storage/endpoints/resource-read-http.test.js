@@ -38,7 +38,7 @@ describe('private resource representations', () => {
     });
 
     test('validates a representation before returning 304', async () => {
-        const first = await request(harness.app)
+        const first = await request(harness.server)
             .get('/resource')
             .query({ account: 'u' })
             .expect(200);
@@ -47,7 +47,7 @@ describe('private resource representations', () => {
         expect(first.headers.etag).toMatch(/^W\/"[a-f0-9]{64}"$/);
         expect(first.text).toBe('first body');
 
-        const unchanged = await request(harness.app)
+        const unchanged = await request(harness.server)
             .get('/resource')
             .query({ account: 'u' })
             .set('If-None-Match', first.headers.etag)
@@ -75,7 +75,7 @@ describe('private resource representations', () => {
     });
 
     test('rejects a representation for a different authenticated account', async () => {
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .get('/resource')
             .query({ account: 'other' })
             .expect(403);
@@ -84,7 +84,7 @@ describe('private resource representations', () => {
     });
 
     test('does not cache resource errors', async () => {
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .get('/failure')
             .expect(422);
 
@@ -96,7 +96,7 @@ describe('private resource representations', () => {
     });
 
     test('returns minimal authenticated bootstrap metadata without caching it', async () => {
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .get('/api/bootstrap/metadata')
             .expect(200);
 

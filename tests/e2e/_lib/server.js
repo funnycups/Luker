@@ -13,12 +13,14 @@
 // reserves a fresh port + a fresh APFS-cloned dataRoot.
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { execSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { reservePort } from './ports.js';
+import '../../../src/fetch-patch.js';
 
-const REPO_ROOT = resolve(import.meta.dirname, '../../..');
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const SEED_DATA = resolve(REPO_ROOT, 'data');
 // Seed from the committed default config, NOT the repo-root config.yaml.
 // The root file is gitignored and each developer's copy carries personal
@@ -233,7 +235,11 @@ function writeScenarioConfig(targetPath, extraConfig) {
  * @property {number} port
  * @property {string} dataRoot
  * @property {string} baseURL
- * @property {() => Promise<void>} restart
+ * @property {(options?: {extraEnv?: Record<string,string>, extraConfig?: Record<string,any>, jitless?: boolean}) => Promise<void>} restart
+ * @property {(signal?: string) => Promise<{signal: string|null, code: number|null}>} kill
+ * @property {(text: string) => Promise<void>} waitForStderr
+ * @property {string[]} execArgv Actual spawn arguments
+ * @property {string[]} outputEpochs Captured process output, including completed launches.
  * @property {() => Promise<void>} stop
  */
 
@@ -289,7 +295,14 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
     // sqlite backend (settings:default-user row is missing), so default
     // every spec to the filesystem backend. Specs that genuinely need
     // sqlite (e.g. the storage-migrate suite) override via extraConfig.
-    const effectiveConfig = { 'storage.mode': 'fs', ...(extraConfig || {}) };
+    let effectiveConfig = structuredClone({ 'storage.mode': 'fs', ...(extraConfig || {}) });
+    let launchEnv = { ...extraEnv };
+    let jitless = false;
+    let execArgv = [];
+    let stderr = '';
+    let output = '';
+    const outputEpochs = [];
+    const stderrWaiters = new Set();
 
     let scenarioConfigPath = '';
     if (Object.keys(effectiveConfig).length > 0) {
@@ -298,9 +311,12 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
     }
 
     let child = null;
-    const env = { ...process.env, ...extraEnv, NODE_ENV: 'production' };
 
     async function spawnOnce() {
+        writeScenarioConfig(scenarioConfigPath, effectiveConfig);
+        if (execArgv.length) outputEpochs.push(output);
+        output = '';
+        stderr = '';
         // `extraConfig.listen` also drives the CLI flag because the CLI value
         // wins over config.yaml. Specs that exercise LAN address detection
         // pass `{ listen: true }` so the server binds its interfaces; the
@@ -315,13 +331,15 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
             '--whitelist=127.0.0.1',
             '--disableCsrf=false',
         ];
+        if (jitless) argv.unshift('--jitless');
         if (scenarioConfigPath) argv.push(`--configPath=${scenarioConfigPath}`);
+        execArgv = [...argv];
         const runtime = process.env.LUKER_RUNTIME === 'bun'
             ? (process.env.LUKER_BUN_PATH || `${process.env.HOME}/.bun/bin/bun`)
             : 'node';
         child = spawn(runtime, argv, {
             cwd: REPO_ROOT,
-            env,
+            env: { ...process.env, ...launchEnv, NODE_ENV: 'production' },
             stdio: ['ignore', 'pipe', 'pipe'],
             detached: false,
         });
@@ -330,9 +348,12 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
         // waiting the full readiness timeout.
         let bindInUse = false;
         let earlyExit = null;
-        child.stdout.on('data', () => { /* swallow; verbose */ });
+        child.stdout.on('data', d => { output += String(d); });
         child.stderr.on('data', d => {
             const s = String(d);
+            output += s;
+            stderr += s;
+            for (const notify of stderrWaiters) notify();
             if (s.includes('listen port is already in use') || s.includes('EADDRINUSE')) {
                 bindInUse = true;
             }
@@ -373,21 +394,67 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
         child = null;
     }
 
-    async function restart() {
+    async function kill(signal = 'SIGKILL') {
+        if (!child) throw new Error('Server is not running');
+        const current = child;
+        const exited = new Promise(resolve => current.once('exit', (code, signal) => resolve({ signal, code })));
+        if (current.exitCode !== null || current.signalCode !== null) return { signal: current.signalCode, code: current.exitCode };
+        current.kill(signal);
+        const result = await exited;
+        if (child === current) child = null;
+        return result;
+    }
+
+    async function waitForStderr(text) {
+        if (stderr.includes(text)) return;
+        await new Promise((resolve, reject) => {
+            const check = () => {
+                if (!stderr.includes(text)) return;
+                clearTimeout(timeout);
+                stderrWaiters.delete(check);
+                resolve();
+            };
+            const timeout = setTimeout(() => { stderrWaiters.delete(check); reject(new Error(`Missing stderr: ${text}\n${stderr}`)); }, READY_TIMEOUT_MS);
+            stderrWaiters.add(check);
+        });
+    }
+
+    async function restart(options = {}) {
         await stop();
+        effectiveConfig = structuredClone({ ...effectiveConfig, ...(options.extraConfig || {}) });
+        launchEnv = { ...launchEnv, ...(options.extraEnv || {}) };
+        jitless = options.jitless ?? jitless;
         await spawnOnce();
     }
 
     await spawnOnce();
 
-    return {
+    const handle = {
         port,
         dataRoot,
         configPath: scenarioConfigPath || null,
         baseURL: `http://127.0.0.1:${port}`,
         restart,
+        kill,
+        waitForStderr,
+        get execArgv() { return [...execArgv]; },
+        get output() { return output; },
+        get outputEpochs() { return [...outputEpochs, output]; },
         stop,
     };
+    if (batchKey === 'sync' && process.env.LUKER_SYNC_ACCEPTANCE_JITLESS === '1') {
+        try {
+            const cache = resolve(dataRoot, '_webpack');
+            const bundles = readdirSync(cache).map(name => resolve(cache, name, 'output')).find(directory => existsSync(resolve(directory, 'lib.core.bundle.js')));
+            if (!bundles) throw new Error(`BLOCKED: no genuine warmup bundles in ${cache}`);
+            await restart({ jitless: true, extraEnv: { LUKER_FORCE_JITLESS: '1', LUKER_PREBUILT_BUNDLES_DIR: bundles } });
+            if (!execArgv.includes('--jitless')) throw new Error('BLOCKED: sync acceptance server was not launched with --jitless');
+        } catch (error) {
+            await stop();
+            throw error;
+        }
+    }
+    return handle;
 }
 
 /**

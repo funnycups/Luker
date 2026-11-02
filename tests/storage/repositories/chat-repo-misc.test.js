@@ -12,12 +12,16 @@ describe.each(CONTRACT_HARNESSES)('ChatRepo on $name — rename + listRecent', (
     test('rename moves the chat including state sidecars', async () => {
         await repo.save(h.handle, 'A', 'old', {}, [{ mes: 'x' }], null);
         await repo.setState(h.handle, 'A', 'old', 'ns', { v: 1 });
+        const original = await repo.get(h.handle, 'A', 'old');
 
         await repo.rename(h.handle, 'A', 'old', 'new');
 
         expect(await repo.get(h.handle, 'A', 'old')).toBeNull();
         const moved = await repo.get(h.handle, 'A', 'new');
-        expect(moved.body[0].mes).toBe('x');
+        expect(moved.header).toEqual(original.header);
+        expect(moved.body).toEqual(original.body);
+        expect(moved.integrity).toBe(original.integrity);
+        expect(moved.updatedAt).toBe(original.updatedAt);
         expect(await repo.getState(h.handle, 'A', 'new', 'ns')).toEqual({ v: 1 });
     });
 

@@ -88,8 +88,8 @@ describe.each(ENDPOINT_HARNESSES)('same-mode restore over read-only file on $nam
         const zipPath = path.join(harness.dataRoot, 'readonly-target.zip');
         await buildArchive(zipPath, { mode, handle: harness.handle });
 
-        const uploadId = await uploadArchiveToSession(harness.app, fs.readFileSync(zipPath), { handle: harness.handle });
-        const res = await request(harness.app)
+        const uploadId = await uploadArchiveToSession(harness.server, fs.readFileSync(zipPath), { handle: harness.handle });
+        const res = await request(harness.server)
             .post('/api/users/restore-backup')
             .send({ uploadId, handle: harness.handle, mode: 'merge', selection: EXTENSIONS_ONLY });
 

@@ -1,47 +1,63 @@
-// SQLite-mode LAN Sync e2e — per-record conflict on a single chat.
+// SQLite-mode LAN Sync e2e — the same chat edited on both devices.
 //
-// The orchestrator no longer ships a whole-DB blob in SQLite mode (the
-// `database` category was retired). Instead each side projects its rows
-// into a shadow workdir as files (chats → .jsonl, worlds → .json, ...),
-// commits that tree to the shadow git repo, and the receiver
-// dematerializes the merged tree back through the storage engine. This
-// test covers the SQLite leg of that path end-to-end: same chat path on
-// both sides with different bytes must surface as a single per-file
-// conflict at the file boundary, and applying A's side must land A's
-// chat body in B's SQLite DB through the real /api/chats/get route.
+// Each side projects its SQLite rows into a shadow workdir as files
+// (chats → .jsonl, worlds → .json, ...), commits that tree to the shadow
+// git repo, and dematerializes the merged tree back through the storage
+// engine. Same chat path on both sides with different bytes forks: the
+// merge keeps one version under the chat's name and writes the other as
+// a branch chat, which the sync popup announces with a notice. The
+// branch chat must then be listed by the real /api/characters/chats
+// route of B's SQLite engine.
 //
 // The companion in-process test at
 // `tests/sync/integration/sqlite-mode.test.js` pins the engine contract
-// (rows land under the responder's handle); this e2e proves the user-
-// visible flow — admin migration UI, conflict panel, chat fetch — all
-// honor the per-record path on a real Playwright browser pair.
+// (rows land under the device's handle); this e2e proves the user-
+// visible flow — admin migration UI, sync popup, chat list — on a real
+// Playwright browser pair.
+
+import os from 'node:os';
 
 import { test, expect } from '@playwright/test';
+import sanitize from 'sanitize-filename';
+
+import { normalizeDeviceLabel } from '../../../src/sync/device-label.js';
+import { SIDECAR_INFIX } from '../../../src/storage/engines/sidecar-naming.js';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI } from '../_lib/page.js';
+import { awaitMainUI, selectCharacterByName, openOptionsAndClick } from '../_lib/page.js';
 import { migrateViaAdminUI, fetchStorageStatus, closeAdminPanel } from '../_lib/storage-ui.js';
 import {
     openLanSyncPanel,
     generatePairingLink,
     acceptPairingLink,
-    resolveAllConflictsAs,
-    listConflictFilepaths,
-    listConflictKinds,
+    waitForSyncPopup,
+    listPopupNotices,
+    closeSyncPopup,
+    waitForBackgroundSync,
 } from '../_lib/sync.js';
 
 let A, B;
 
 const CARD_NAME = 'default_Seraphina';
 const CHAT_FILE = '2026-06-25 diverged conflict';
-const CHAT_REL_PATH = `chats/${CARD_NAME}/${CHAT_FILE}.jsonl`;
 
+// The label both servers give themselves: with no device label set, a
+// device uses its host name unless that is a localhost name.
+const DEVICE_LABEL = normalizeDeviceLabel(os.hostname());
+// The label part of a branch chat name, as `cleanNamePart` in
+// src/sync/pipeline/chat-fork.js builds it.
+const BRANCH_LABEL = sanitize(DEVICE_LABEL).replaceAll(SIDECAR_INFIX, ' ').trim();
+const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Chat file names of CARD_NAME through the real /api/characters/chats route. */
+async function listChatNames(page) {
+    const chats = await page.evaluate(async avatar => (await fetch('/api/characters/chats', { method: 'POST', headers: window.Luker.getContext().getRequestHeaders(), body: JSON.stringify({ avatar_url: avatar, simple: true }) })).json(), `${CARD_NAME}.png`);
+    return Object.values(chats).map(c => c.file_name.replace(/\.jsonl$/, ''));
+}
 // Distinct chat bodies on each side. Both sides write to the SAME
 // avatar_url + file_name pair, so after pairing the materializer
-// projects both into the same workdir path with divergent bytes — the
-// merge attempt falls back to MergeNotSupportedError and the file
-// surfaces as a single bothModified conflict.
+// projects both into the same workdir path with divergent bytes and the
+// merge forks the chat.
 const A_CHAT_BODY = [
     {
         name: 'Captain',
@@ -72,53 +88,54 @@ const B_CHAT_BODY = [
 ];
 
 /**
- * Save a chat at chats/<CARD_NAME>/<CHAT_FILE>.jsonl through the real
- * /api/chats/save endpoint as the page's session sees it. Returns the
- * integrity token the repo assigned.
- *
- * `force: true` skips integrity comparison — both sides write a fresh
- * file, neither side knows the other's integrity.
+ * Import an independently specified chat through the actual history form.
  */
 async function saveDivergedChat(page, body) {
-    return page.evaluate(async ({ cardName, fileName, body }) => {
-        const mod = await import('/script.js').catch(() => null);
-        const headers = (typeof mod?.getRequestHeaders === 'function')
-            ? mod.getRequestHeaders()
-            : { 'Content-Type': 'application/json' };
-        const header = {
-            user_name: 'Captain',
-            character_name: 'Seraphina',
-            create_date: '2026-06-25 12:00:00',
-            chat_metadata: {},
-        };
-        const res = await fetch('/api/chats/save', {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-                avatar_url: `${cardName}.png`,
-                file_name: fileName,
-                chat: [header, ...body],
-                force: true,
-            }),
-        });
-        if (!res.ok) throw new Error(`/api/chats/save failed: ${res.status} ${await res.text()}`);
-        return res.json();
-    }, { cardName: CARD_NAME, fileName: CHAT_FILE, body });
+    await selectCharacterByName(page, 'Seraphina');
+    const seedChat = await page.evaluate(() => window.Luker.getContext().getCurrentChatId());
+    await openOptionsAndClick(page, 'option_select_chat');
+    const imported = page.waitForResponse(response => new URL(response.url()).pathname === '/api/chats/import' && response.request().method() === 'POST');
+    const chooser = page.waitForEvent('filechooser');
+    await page.locator('#chat_import_button').click();
+    await (await chooser).setFiles({ name: `${CHAT_FILE}.jsonl`, mimeType: 'application/json', buffer: Buffer.from([
+        { user_name: 'Captain', character_name: 'Seraphina', create_date: '2026-06-25 12:00:00', chat_metadata: {} }, ...body,
+    ].map(value => JSON.stringify(value)).join('\n')) });
+    const response = await imported;
+    expect(response.ok()).toBe(true);
+    const result = await response.json();
+    expect(result.fileNames).toHaveLength(1);
+    const originalName = result.fileNames[0].replace(/\.jsonl$/, '');
+    const row = page.locator('.select_chat_block_wrapper').filter({ has: page.locator('.select_chat_block_filename', { hasText: originalName }) });
+    await row.locator('.renameChatButton').click();
+    const popup = page.locator('dialog.popup[open]').last();
+    await popup.locator('.popup-input').fill(CHAT_FILE);
+    const renamed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/chats/rename' && response.request().method() === 'POST');
+    await popup.locator('.popup-button-ok').click();
+    expect((await renamed).ok()).toBe(true);
+    await popup.waitFor({ state: 'detached' });
+    await expect(page.locator('.select_chat_block_filename', { hasText: CHAT_FILE })).toHaveCount(1);
+    // Opening the shipped chat saves device-local metadata. Remove that
+    // fixture through its history action, leaving only the intended divergence.
+    const seedRow = page.locator('.select_chat_block_wrapper').filter({ has: page.locator('.select_chat_block_filename', { hasText: seedChat }) });
+    await seedRow.locator('.PastChat_cross').click();
+    const confirm = page.locator('dialog.popup[open]').last();
+    const deleted = page.waitForResponse(response => new URL(response.url()).pathname === '/api/chats/delete' && response.request().method() === 'POST');
+    await confirm.locator('.popup-button-ok').click();
+    expect((await deleted).ok()).toBe(true);
+    await expect(page.locator('#select_chat_popup')).toBeVisible();
+    await expect(seedRow).toHaveCount(0);
+    await page.locator('#select_chat_cross').click();
 }
 
 /**
- * Read the chat at chats/<CARD_NAME>/<CHAT_FILE>.jsonl through the real
- * /api/chats/get endpoint. Returns the parsed message-array response.
+ * Read a chat of CARD_NAME through the real /api/chats/get endpoint.
+ * Returns the parsed message-array response.
  */
-async function fetchDivergedChat(page) {
+async function fetchChat(page, fileName) {
     return page.evaluate(async ({ cardName, fileName }) => {
-        const mod = await import('/script.js').catch(() => null);
-        const headers = (typeof mod?.getRequestHeaders === 'function')
-            ? mod.getRequestHeaders()
-            : { 'Content-Type': 'application/json' };
         const res = await fetch('/api/chats/get', {
             method: 'POST',
-            headers,
+            headers: window.Luker.getContext().getRequestHeaders(),
             body: JSON.stringify({
                 avatar_url: `${cardName}.png`,
                 file_name: fileName,
@@ -126,7 +143,7 @@ async function fetchDivergedChat(page) {
         });
         if (!res.ok) throw new Error(`/api/chats/get failed: ${res.status} ${await res.text()}`);
         return res.json();
-    }, { cardName: CARD_NAME, fileName: CHAT_FILE });
+    }, { cardName: CARD_NAME, fileName });
 }
 
 test.beforeAll(async () => {
@@ -138,8 +155,6 @@ test.beforeAll(async () => {
         batchKey: 'sync',
         scenarioId: 'sqlite-B',
     });
-    markOnboarded({ dataRoot: A.dataRoot });
-    markOnboarded({ dataRoot: B.dataRoot });
 });
 
 test.afterAll(async () => {
@@ -148,7 +163,7 @@ test.afterAll(async () => {
 });
 
 test.describe('LAN Sync — SQLite per-record chat conflict', () => {
-    test('same chat path with different bytes surfaces one per-file conflict; resolving theirs lands A\'s body in B\'s DB', async ({ browser }) => {
+    test('the same chat edited on both sqlite devices keeps both versions, the other one as a branch chat', async ({ browser }) => {
         const ctxA = await browser.newContext();
         const ctxB = await browser.newContext();
         const pageA = await ctxA.newPage();
@@ -177,19 +192,13 @@ test.describe('LAN Sync — SQLite per-record chat conflict', () => {
 
         // Sanity: each side reads back ITS OWN body before the sync —
         // proves the writes actually diverged at the record level.
-        const aPre = await fetchDivergedChat(pageA);
-        expect(Array.isArray(aPre)).toBe(true);
-        expect(aPre[1].mes).toBe(A_CHAT_BODY[0].mes);
-        expect(aPre[2].mes).toBe(A_CHAT_BODY[1].mes);
-
-        const bPre = await fetchDivergedChat(pageB);
-        expect(Array.isArray(bPre)).toBe(true);
-        expect(bPre[1].mes).toBe(B_CHAT_BODY[0].mes);
-        expect(bPre[2].mes).toBe(B_CHAT_BODY[1].mes);
+        expect((await fetchChat(pageA, CHAT_FILE))[1].mes).toBe(A_CHAT_BODY[0].mes);
+        expect((await fetchChat(pageB, CHAT_FILE))[1].mes).toBe(B_CHAT_BODY[0].mes);
 
         // Pair with the chats category enabled. Worlds is left off so
-        // the conflict list contains only the one chat — keeps the
+        // the popup holds only the one chat notice — keeps the
         // assertion below tight on the per-record contract.
+        const pairedSince = Date.now();
         await openLanSyncPanel(pageA);
         const link = await generatePairingLink(pageA, {
             label: 'B device',
@@ -197,43 +206,36 @@ test.describe('LAN Sync — SQLite per-record chat conflict', () => {
         });
 
         await openLanSyncPanel(pageB);
-        const acceptOutcome = await acceptPairingLink(pageB, link, {
+        // A chat conflict never needs a decision: it forks, so the pair
+        // answers success with no conflicts.
+        expect(await acceptPairingLink(pageB, link, {
             categories: ['chats'],
             localLabel: 'A device',
-        });
+        })).toBe('success');
 
-        // First pair, no common ancestor, divergent bytes on the same
-        // path: attemptMerge's MergeNotSupportedError fallback marks
-        // every divergent file as bothModified. The conflict panel
-        // must appear.
-        expect(acceptOutcome).toBe('warning');
+        // The branch chat is named after the device whose version it
+        // holds and the time of the newer commit. Both e2e servers run on
+        // one host, so either way the label is the host name.
+        expect(DEVICE_LABEL, 'a localhost host name makes the label fall back to the user name').not.toMatch(/^localhost(\.|$)/i);
+        await waitForSyncPopup(pageB);
+        const notices = await listPopupNotices(pageB);
+        expect(notices).toHaveLength(1);
+        const [notice] = notices;
+        const branchPattern = new RegExp(`^chats/${escapeRegex(CARD_NAME)}/(${escapeRegex(CHAT_FILE)} - Sync conflict ${escapeRegex(BRANCH_LABEL)} \\d{4}-\\d{2}-\\d{2} \\d{2}\\.\\d{2})\\.jsonl$`);
+        expect(notice.path).toMatch(branchPattern);
+        const branchName = branchPattern.exec(notice.path)[1];
+        await closeSyncPopup(pageB);
 
-        // The load-bearing assertion: ONE per-file conflict at the
-        // chat's POSIX rel path, kind=bothModified. If the engine had
-        // regressed to a whole-DB swap, the path would read
-        // `database/...` or similar instead of the per-record file.
-        const filepaths = await listConflictFilepaths(pageB);
-        expect(filepaths).toContain(CHAT_REL_PATH);
+        // B's SQLite engine lists both chats through the real route.
+        expect(await listChatNames(pageB)).toEqual(expect.arrayContaining([CHAT_FILE, branchName]));
 
-        const kinds = await listConflictKinds(pageB);
-        expect(kinds[CHAT_REL_PATH]).toBe('bothModified');
+        // One chat holds A's body and the other B's.
+        const bodies = [(await fetchChat(pageB, CHAT_FILE))[1].mes, (await fetchChat(pageB, branchName))[1].mes];
+        expect(bodies.sort()).toEqual([A_CHAT_BODY[0].mes, B_CHAT_BODY[0].mes].sort());
 
-        // Take A's version everywhere. Apply lands A's bytes in B's
-        // workdir, dematerialize writes them through the engine into
-        // B's SQLite DB under B's handle.
-        const resolveOutcome = await resolveAllConflictsAs(pageB, 'theirs');
-        expect(resolveOutcome).toBe('success');
-
-        // B's chat repo now reports A's chat content under B's own
-        // handle — the per-record sync's defining outcome. Read goes
-        // through the real /api/chats/get → ChatRepo.get →
-        // SqliteEngine.getResource path; if dematerialize had missed
-        // the chat or written to the wrong handle, this would return
-        // B's pre-sync body instead.
-        const bPost = await fetchDivergedChat(pageB);
-        expect(Array.isArray(bPost)).toBe(true);
-        expect(bPost[1].mes).toBe(A_CHAT_BODY[0].mes);
-        expect(bPost[2].mes).toBe(A_CHAT_BODY[1].mes);
+        // A gets the same two chats from its notify-driven run.
+        await waitForBackgroundSync(pageA, { since: pairedSince });
+        expect(await listChatNames(pageA)).toEqual(expect.arrayContaining([CHAT_FILE, branchName]));
 
         await ctxA.close();
         await ctxB.close();

@@ -95,6 +95,33 @@
 .configEditorTab .runtimeConfigPath {
     word-break: break-all;
 }
+.userLanSync .lanSyncPeerRow {
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    padding: 10px;
+}
+
+.userLanSync .lanSyncPeerTitle,
+.userLanSync .backupActionRow {
+    flex-wrap: wrap;
+}
+
+.userLanSync .lanSyncPeerLabel,
+.userLanSync .lanSyncPeerError,
+.userLanSync .lanSyncPeerStalledPath,
+.userSyncS3 .syncS3Error {
+    overflow-wrap: anywhere;
+}
+
+.userSyncS3 .syncS3Error,
+.userLanSync .lanSyncStatusBanner.error {
+    color: var(--warning);
+}
+
+.userLanSync .backupActionRow.disabled {
+    pointer-events: none;
+    opacity: 0.6;
+}
 
 .adminTabs {
     text-align: start;

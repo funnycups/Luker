@@ -63,7 +63,7 @@ describe.each(ENDPOINT_HARNESSES)('chat import endpoints on $name', ({ mode }) =
             filename: 'upload.jsonl',
             content: GROUP_JSONL,
         };
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/group/import')
             .send()
             .expect(200);
@@ -96,7 +96,7 @@ describe.each(ENDPOINT_HARNESSES)('chat import endpoints on $name', ({ mode }) =
             filename: 'upload.jsonl',
             content: HEADERLESS,
         };
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/group/import')
             .send()
             .expect(200);
@@ -127,7 +127,7 @@ describe.each(ENDPOINT_HARNESSES)('chat import endpoints on $name', ({ mode }) =
             filename: 'upload.jsonl',
             content: JSONL,
         };
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/import')
             .send({ avatar_url: `${avatarUrl}.png`, character_name: characterName, user_name: userName, file_type: 'jsonl' })
             .expect(200);
@@ -165,7 +165,7 @@ describe.each(ENDPOINT_HARNESSES)('chat import endpoints on $name', ({ mode }) =
             filename: 'upload.json',
             content: KOBOLD,
         };
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/import')
             .send({ avatar_url: `${avatarUrl}.png`, character_name: characterName, user_name: userName, file_type: 'json' })
             .expect(200);
@@ -195,7 +195,7 @@ describe.each(ENDPOINT_HARNESSES)('chat import endpoints on $name', ({ mode }) =
             filename: 'upload.json',
             content: OOBA,
         };
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/import')
             .send({ avatar_url: `${avatarUrl}.png`, character_name: characterName, user_name: userName, file_type: 'json' })
             .expect(200);
@@ -237,7 +237,7 @@ describe.each(ENDPOINT_HARNESSES)('chat import endpoints on $name', ({ mode }) =
             filename: 'upload.json',
             content: CAI,
         };
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/import')
             .send({ avatar_url: `${avatarUrl}.png`, character_name: characterName, user_name: userName, file_type: 'json' })
             .expect(200);
@@ -261,7 +261,7 @@ describe.each(ENDPOINT_HARNESSES)('chat import endpoints on $name', ({ mode }) =
             filename: 'upload.jsonl',
             content: JSONL,
         };
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/import')
             .send({ avatar_url: `${avatarUrl}.png`, character_name: 'Carol', user_name: 'User', file_type: 'jsonl' })
             .expect(200);

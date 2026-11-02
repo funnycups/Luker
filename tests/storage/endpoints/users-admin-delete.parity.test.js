@@ -162,7 +162,7 @@ describe.each(ENDPOINT_HARNESSES)('users-admin /delete on $name', ({ mode }) => 
         const beforeDelete = await getChatRepo().get(targetHandle, 'Alice', 'c1');
         expect(beforeDelete).not.toBeNull();
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/users/delete')
             .send({ handle: targetHandle, purge: true })
             .expect(204);
@@ -213,7 +213,7 @@ describe.each(ENDPOINT_HARNESSES)('users-admin /delete on $name', ({ mode }) => 
         fs.mkdirSync(harness.extraDirs[targetHandle].avatars, { recursive: true });
         fs.writeFileSync(survivorPath, 'pretend-png');
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/users/delete')
             .send({ handle: targetHandle, purge: false })
             .expect(204);
@@ -256,7 +256,7 @@ describe.each(ENDPOINT_HARNESSES)('users-admin /delete on $name', ({ mode }) => 
         // Sanity check the existing 400-on-self-delete path so the
         // regression test above can rely on the harness's issuer/target
         // separation working as documented.
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/users/delete')
             .send({ handle: ADMIN_HANDLE, purge: false })
             .expect(400);

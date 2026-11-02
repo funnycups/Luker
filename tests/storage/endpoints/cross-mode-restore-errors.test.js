@@ -50,8 +50,8 @@ describe('cross-mode restore error mapping (on fs server)', () => {
         await buildForeignDbSourceZip(zipPath, 'mysql', harness.handle);
         const zipBytes = fs.readFileSync(zipPath);
 
-        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-        const res = await request(harness.app)
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+        const res = await request(harness.server)
             .post('/api/users/restore-backup')
             .send({ uploadId, handle: harness.handle, mode: 'merge', selection: ALL_SELECTION });
         expect(res.status).toBe(400);
@@ -64,8 +64,8 @@ describe('cross-mode restore error mapping (on fs server)', () => {
         await buildForeignDbSourceZip(zipPath, 'mysql', harness.handle);
         const zipBytes = fs.readFileSync(zipPath);
 
-        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-        const res = await request(harness.app)
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+        const res = await request(harness.server)
             .post('/api/users/restore-backup')
             .send({
                 uploadId,
@@ -107,8 +107,8 @@ describe('cross-mode restore error mapping (on fs server)', () => {
         await acquireMigrationLock({ dataRoot: harness.dataRoot, holderId: otherHolder });
 
         try {
-            const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-            const res = await request(harness.app)
+            const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+            const res = await request(harness.server)
                 .post('/api/users/restore-backup')
                 .send({ uploadId, handle: harness.handle, mode: 'overwrite', selection: ALL_SELECTION });
             expect(res.status).toBe(409);

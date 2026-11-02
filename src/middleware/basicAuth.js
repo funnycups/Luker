@@ -19,20 +19,18 @@ const LAN_MIGRATION_TRANSFER_PATH_PATTERN = new RegExp(`^${LAN_MIGRATION_PATH_PR
 
 /**
  * LAN-sync session endpoints carry their own bearer token (issued by
- * `src/sync/session.js`) and must therefore bypass HTTP basic auth. The
- * sibling `/api/sync/v1/health` route is intentionally excluded from this
- * pattern — it is a reachability probe and stays gated by basic auth.
+ * `src/sync/session.js`) and therefore bypass HTTP basic auth. The
+ * `/api/sync/v1/health` probe reports only the protocol version and is
+ * open as well, so a peer can check compatibility before pairing.
  *
- * `/api/sync/v1/session/offer` is excluded by default: it is the route
- * that ISSUES tokens, so the browser-driven call goes through basic auth
- * (or the session cookie) to populate `request.user`. A cross-server
- * caller with no cookie can instead present the shared pairing secret in
- * `X-Sync-Peer-Secret`; that request is let through the middleware
- * because the route handler authenticates it against the peer registry
- * itself (wrong or absent secret still yields 401).
+ * `/api/sync/v1/session/offer` ISSUES tokens. It bypasses basic auth only
+ * when it carries the one-time pairing code (`X-Sync-Pair-Code`) or the
+ * shared peer secret (`X-Sync-Peer-Secret`); the route authenticates that
+ * credential against the peer registry itself.
  */
 const SYNC_SESSION_PATH_PATTERN = /^\/api\/sync\/v1\/session\//i;
 const SYNC_OFFER_PATH_PATTERN = /^\/api\/sync\/v1\/session\/offer\/?$/i;
+const SYNC_HEALTH_PATH_PATTERN = /^\/api\/sync\/v1\/health\/?$/i;
 const SYNC_PEER_CREDENTIAL_HEADERS = ['x-sync-peer-secret', 'x-sync-pair-code'];
 
 const basicAuthLimiter = new RateLimiterMemory({
@@ -51,24 +49,15 @@ export function isBasicAuthExemptRequest(request) {
         : String(request?.originalUrl || '').split('?')[0];
     const method = String(request?.method || '').toUpperCase();
 
+    if (method === 'GET' && SYNC_HEALTH_PATH_PATTERN.test(requestPath)) return true;
+
     // LAN-sync session endpoints carry their own bearer token, so they
     // bypass basic auth on both GET (manifest, object fetch) and POST
     // (object upload, ref update, close). Other HTTP methods on sync
-    // paths still fall through to the basic-auth gate below.
-    //
-    // `/session/offer` is the exception: it ISSUES tokens. A browser call
-    // goes through basic auth so the standard user middleware can
-    // populate `request.user`; a cross-server call presenting the shared
-    // pairing secret is let through in multi-user mode because the route
-    // handler authenticates it against the peer registry (wrong or
-    // absent secret → 401 at the route, which also falls back to
-    // basic-auth resolution). In single-user mode there is no registry
-    // to verify against — the middleware would be the only gate — so the
-    // secret does NOT bypass it there; the pair form's basic-auth fields
-    // remain the path for a basic-auth-gated single-user peer.
+    // paths still fall through to the basic-auth gate below. An offer
+    // passes only with a pairing credential, which the route verifies.
     if (SYNC_SESSION_PATH_PATTERN.test(requestPath)) {
         if (SYNC_OFFER_PATH_PATTERN.test(requestPath)) {
-            if (!ENABLE_ACCOUNTS) return false;
             const headers = request?.headers || {};
             return SYNC_PEER_CREDENTIAL_HEADERS.some(name => Boolean(headers[name]));
         }

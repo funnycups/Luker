@@ -1,21 +1,20 @@
 // A sync with a narrow category selection
 // (only `worlds`) does NOT propagate changes outside that category;
-// and "Undo last sync" rewinds the most recent sync on that side.
+// and "Undo last sync" reverts the most recent sync on both devices.
 
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
     generatePairingLink,
     acceptPairingLink,
-    resolveAllConflictsAs,
     clickSyncNow,
     clickUndoLastSync,
+    waitForBackgroundSync,
 } from '../_lib/sync.js';
 
 let A, B;
@@ -29,8 +28,6 @@ test.beforeAll(async () => {
         batchKey: 'sync',
         scenarioId: 'cat-undo-B',
     });
-    markOnboarded({ dataRoot: A.dataRoot });
-    markOnboarded({ dataRoot: B.dataRoot });
 });
 
 test.afterAll(async () => {
@@ -39,7 +36,7 @@ test.afterAll(async () => {
 });
 
 test.describe('LAN Sync — category toggle and undo', () => {
-    test('worlds-only pair: chats edits do NOT propagate; undo rewinds the last sync', async ({ browser }) => {
+    test('worlds-only pair: chats edits do NOT propagate; undo reverts the last sync on both devices', async ({ browser }) => {
         const ctxA = await browser.newContext();
         const ctxB = await browser.newContext();
         const pageA = await ctxA.newPage();
@@ -50,19 +47,21 @@ test.describe('LAN Sync — category toggle and undo', () => {
 
         // Pair selecting ONLY the worlds category. Any other category's
         // files must not move between sides even if they exist on both.
+        const pairedSince = Date.now();
         await openLanSyncPanel(pageA);
         const link = await generatePairingLink(pageA, {
             label: 'B device',
             categories: ['worlds'],
         });
         await openLanSyncPanel(pageB);
-        const pairOutcome = await acceptPairingLink(pageB, link, {
+        expect(await acceptPairingLink(pageB, link, {
             categories: ['worlds'],
             localLabel: 'A device',
-        });
-        if (pairOutcome === 'warning') {
-            await resolveAllConflictsAs(pageB, 'theirs');
-        }
+        })).toBe('success');
+        // A syncs in the background on B's notify; edits made during that
+        // run would race it.
+        await waitForBackgroundSync(pageA, { since: pairedSince });
+        await waitForBackgroundSync(pageB, { since: pairedSince });
 
         // A creates a file in BOTH categories: worlds (in scope) and
         // chats (out of scope).
@@ -111,9 +110,11 @@ test.describe('LAN Sync — category toggle and undo', () => {
             { timeout: 10_000 },
         ).toBe(false);
 
-        // A is unaffected by B's undo — by design
-        // undo is strictly local.
-        expect(fs.existsSync(path.join(A.dataRoot, 'default-user', 'worlds', 'will-cross.json'))).toBe(true);
+        // Undo is a forward commit that B pushes, so A loses the file too.
+        await expect.poll(
+            () => fs.existsSync(path.join(A.dataRoot, 'default-user', 'worlds', 'will-cross.json')),
+            { timeout: 30_000 },
+        ).toBe(false);
 
         await ctxA.close();
         await ctxB.close();

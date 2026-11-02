@@ -72,11 +72,11 @@ Split a chat at any turn, or merge two chats into one; branch history stays cons
 
 → [Chat Merge and Split Documentation](/features/chat-merge-split)
 
-### LAN Sync
+### Sync
 
-Pair two Luker instances on the same network and keep chats, cards, world info, and settings in step between them — nothing is pushed to a cloud.
+Synchronize selected chats, cards, world info and settings through paired LAN devices or an encrypted S3 storage hub. Manage automatic sync, pending version decisions, chat branches and recovery in the unified Sync panel.
 
-→ [LAN Sync Documentation](/improvements/lan-sync)
+→ [Sync overview](/improvements/sync) · [LAN setup](/improvements/lan-sync) · [S3 setup](/improvements/s3-sync)
 
 ### Standalone App
 

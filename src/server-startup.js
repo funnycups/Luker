@@ -60,6 +60,7 @@ import { createSkillsRouter } from './endpoints/skills.js';
 import { createSkillRepository } from './skills/repository.js';
 import { createMemoryIndex } from './skills/memory-index.js';
 import { ensureFreshInstallPopulate } from './skills/bundled.js';
+import { runGatedWrite } from './sync/in-progress-gate.js';
 import { wsTicketRouter } from './ws-ticket-router.js';
 import { generationControlRouter } from './endpoints/generation-control.js';
 
@@ -188,10 +189,11 @@ export function setupPrivateEndpoints(app) {
                 populatedUsers.add(handle);
                 const defaultRoot = app.get('lukerDefaultRoot');
                 if (defaultRoot && req.user?.directories?.root) {
-                    await ensureFreshInstallPopulate({
+                    const userRoot = req.user.directories.root;
+                    await runGatedWrite({ handle, userRoot }, () => ensureFreshInstallPopulate({
                         defaultRoot,
-                        userRoot: req.user.directories.root,
-                    });
+                        userRoot,
+                    }));
                 }
             }
         } catch (e) {

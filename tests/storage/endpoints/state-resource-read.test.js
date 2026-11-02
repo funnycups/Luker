@@ -45,31 +45,31 @@ describe.each(ENDPOINT_HARNESSES)('state resource GETs on $name', ({ mode }) => 
     });
 
     test('revalidates character state without changing its envelope', async () => {
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/state/set')
             .send({ avatar_url: 'Alice.png', namespace: 'example', data: { enabled: true } })
             .expect(200);
 
-        const first = await request(harness.app)
+        const first = await request(harness.server)
             .get('/api/characters/state/get')
             .query({ account: harness.handle, avatar: 'Alice.png', namespace: 'example' })
             .expect(200);
         assert.deepEqual(first.body, { ok: true, data: { enabled: true } });
         assert.match(first.headers.etag, /^W\//);
 
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/characters/state/get')
             .query({ account: harness.handle, avatar: 'Alice.png', namespace: 'example' })
             .set('If-None-Match', first.headers.etag)
             .expect(304);
 
-        const missing = await request(harness.app)
+        const missing = await request(harness.server)
             .get('/api/characters/state/get')
             .query({ account: harness.handle, avatar: 'Alice.png', namespace: 'absently_missing' })
             .expect(200);
         assert.deepEqual(missing.body, { ok: true, data: null });
 
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/characters/state/get')
             .query({ account: 'other', avatar: 'Alice.png', namespace: 'example' })
             .expect(403);
@@ -82,7 +82,7 @@ describe.each(ENDPOINT_HARNESSES)('state resource GETs on $name', ({ mode }) => 
         await repo.save(harness.handle, null, 'group-1', {}, [], null, { isGroup: true, groupId: 'group-1' });
         await repo.setState(harness.handle, null, 'group-1', 'example', { group: true }, { isGroup: true, groupId: 'group-1' });
 
-        const single = await request(harness.app)
+        const single = await request(harness.server)
             .get('/api/chats/state/get')
             .query({
                 account: harness.handle,
@@ -94,13 +94,13 @@ describe.each(ENDPOINT_HARNESSES)('state resource GETs on $name', ({ mode }) => 
             .expect(200);
         assert.deepEqual(single.body, { ok: true, data: { single: true } });
 
-        const group = await request(harness.app)
+        const group = await request(harness.server)
             .get('/api/chats/state/get')
             .query({ account: harness.handle, is_group: 'true', id: 'group-1', namespace: 'example' })
             .expect(200);
         assert.deepEqual(group.body, { ok: true, data: { group: true } });
 
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/chats/state/get')
             .query({ account: harness.handle, is_group: 'nope', id: 'group-1', namespace: 'example' })
             .expect(400);
@@ -111,19 +111,19 @@ describe.each(ENDPOINT_HARNESSES)('state resource GETs on $name', ({ mode }) => 
         await repo.save(harness.handle, 'openai', 'Alpha', { temperature: 0.5 });
         await repo.setState(harness.handle, 'openai', 'Alpha', 'example', { cursor: 4 });
 
-        const loaded = await request(harness.app)
+        const loaded = await request(harness.server)
             .get('/api/presets/state/get')
             .query({ account: harness.handle, apiId: 'openai', name: 'Alpha', namespace: 'example' })
             .expect(200);
         assert.deepEqual(loaded.body, { ok: true, data: { cursor: 4 } });
 
-        const absent = await request(harness.app)
+        const absent = await request(harness.server)
             .get('/api/presets/state/get')
             .query({ account: harness.handle, apiId: 'openai', name: 'Alpha', namespace: 'other' })
             .expect(200);
         assert.deepEqual(absent.body, { ok: true, data: null });
 
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/presets/state/get')
             .query({ account: harness.handle, apiId: 'bogus', name: 'Alpha', namespace: 'example' })
             .expect(400);

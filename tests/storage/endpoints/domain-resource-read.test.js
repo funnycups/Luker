@@ -35,26 +35,26 @@ describe.each(ENDPOINT_HARNESSES)('domain resource GETs on $name', ({ mode }) =>
         const doc = { temperature: 0.7, custom_marker: 'stored' };
         await getPresetRepo().save(harness.handle, 'openai', 'Alpha', doc);
 
-        const list = await request(harness.app)
+        const list = await request(harness.server)
             .get('/api/presets/list')
             .query({ account: harness.handle, apiId: 'openai' })
             .expect(200);
         expect(list.body).toEqual({ names: ['Alpha'] });
 
-        const first = await request(harness.app)
+        const first = await request(harness.server)
             .get('/api/presets/get')
             .query({ account: harness.handle, apiId: 'openai', name: 'Alpha' })
             .expect(200);
         expect(first.body).toEqual(doc);
         expect(first.headers.etag).toMatch(/^W\//);
 
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/presets/get')
             .query({ account: harness.handle, apiId: 'openai', name: 'Alpha' })
             .set('If-None-Match', first.headers.etag)
             .expect(304);
 
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/presets/get')
             .query({ account: harness.handle, apiId: 'openai', name: 'Missing' })
             .expect(404);
@@ -64,25 +64,25 @@ describe.each(ENDPOINT_HARNESSES)('domain resource GETs on $name', ({ mode }) =>
         const doc = { entries: { 0: { uid: 0, key: ['x'], content: 'lore' } } };
         await getWorldInfoRepo().save(harness.handle, 'Lore', doc);
 
-        const list = await request(harness.app)
+        const list = await request(harness.server)
             .get('/api/worldinfo/list')
             .query({ account: harness.handle })
             .expect(200);
         expect(list.body).toEqual({ names: ['Lore'] });
 
-        const first = await request(harness.app)
+        const first = await request(harness.server)
             .get('/api/worldinfo/get')
             .query({ account: harness.handle, name: 'Lore' })
             .expect(200);
         expect(first.body).toEqual(doc);
 
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/worldinfo/get')
             .query({ account: harness.handle, name: 'Lore' })
             .set('If-None-Match', first.headers.etag)
             .expect(304);
 
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/worldinfo/get')
             .query({ account: harness.handle, name: 'Missing' })
             .expect(404);
@@ -96,32 +96,32 @@ describe.each(ENDPOINT_HARNESSES)('domain resource GETs on $name', ({ mode }) =>
         const doc = { name: 'Sample', value: 1 };
         await getNamedDocRepo().save(harness.handle, bucket, 'Sample', doc);
 
-        const list = await request(harness.app)
+        const list = await request(harness.server)
             .get(`${route}/list`)
             .query({ account: harness.handle })
             .expect(200);
         expect(list.body).toEqual({ names: ['Sample'] });
 
-        const first = await request(harness.app)
+        const first = await request(harness.server)
             .get(`${route}/get`)
             .query({ account: harness.handle, name: 'Sample' })
             .expect(200);
         expect(first.body).toEqual(doc);
 
-        await request(harness.app)
+        await request(harness.server)
             .get(`${route}/get`)
             .query({ account: harness.handle, name: 'Sample' })
             .set('If-None-Match', first.headers.etag)
             .expect(304);
 
-        await request(harness.app)
+        await request(harness.server)
             .get(`${route}/get`)
             .query({ account: harness.handle, name: 'Missing' })
             .expect(404);
     });
 
     test('rejects a different account', async () => {
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .get('/api/themes/list')
             .query({ account: 'someone-else' })
             .expect(403);
@@ -134,7 +134,7 @@ describe.each(ENDPOINT_HARNESSES)('domain resource GETs on $name', ({ mode }) =>
         }
         fs.writeFileSync(path.join(harness.dirs.openAI_Settings, 'Corrupt.json'), '{not json');
 
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/presets/get')
             .query({ account: harness.handle, apiId: 'openai', name: 'Corrupt' })
             .expect(422)

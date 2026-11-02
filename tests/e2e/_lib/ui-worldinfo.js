@@ -6,6 +6,9 @@
 // bulk-edit popup via the bulk-edit button + apply, export/delete via
 // the dedicated icons.
 
+
+import { expect } from '@playwright/test';
+
 /**
  * Open the WI panel drawer (#WIDrawerIcon). Idempotent.
  */
@@ -49,6 +52,17 @@ export async function importWorldBook(page, { filePath, expectedName, timeoutMs 
             return Array.from(sel.options).some(o => o.textContent === wanted);
         }, expectedName, { timeout: timeoutMs });
     }
+}
+
+/** Import an independently specified document through the visible upload action. */
+export async function importWorldDocument(page, name, document) {
+    await openWorldInfoDrawer(page);
+    const chooser = page.waitForEvent('filechooser');
+    await page.locator('#world_import_button').click();
+    const imported = page.waitForResponse(response => new URL(response.url()).pathname === '/api/worldinfo/import' && response.request().method() === 'POST');
+    await (await chooser).setFiles({ name: `${name}.json`, mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(document)) });
+    if (!(await imported).ok()) throw new Error(`World import failed for ${name}`);
+    await expect(page.locator('#world_editor_select option', { hasText: name })).toHaveCount(1);
 }
 
 /**
@@ -99,21 +113,34 @@ export async function createWorldBook(page, name, { timeoutMs = 10_000 } = {}) {
  */
 export async function addWorldEntry(page, fields = {}) {
     await openWorldInfoDrawer(page);
+    // The hidden entry template also carries `.world_entry`, so the new
+    // entry is the rendered row whose uid was not listed before the click.
+    const rows = page.locator('#world_popup_entries_list .world_entry[uid]');
+    const before = await rows.evaluateAll(els => els.map(el => el.getAttribute('uid')));
     await page.locator('#world_popup_new').click();
-    // Wait for the new entry row to render — it's the last .world_entry.
-    const entryRow = page.locator('.world_entry').last();
+    await page.waitForFunction(known => [...document.querySelectorAll('#world_popup_entries_list .world_entry[uid]')].some(el => !known.includes(el.getAttribute('uid'))), before, { timeout: 5000 });
+    const uid = (await rows.evaluateAll(els => els.map(el => el.getAttribute('uid')))).find(id => !before.includes(id));
+    const entryRow = page.locator(`#world_popup_entries_list .world_entry[uid="${uid}"]`);
     await entryRow.waitFor({ state: 'visible', timeout: 5000 });
+    const contentArea = entryRow.locator('textarea[name="content"], .world_entry_form_content textarea').first();
+    if (!await contentArea.isVisible()) await entryRow.locator('.wi-entry-toggle').click();
+    await contentArea.waitFor({ state: 'visible', timeout: 5000 });
     if (fields.key) {
-        const keyInput = entryRow.locator('.keyprimary input, .keyprimary textarea, [name="key"]').first();
-        if (await keyInput.isVisible({ timeout: 500 }).catch(() => false)) {
-            // Some WI key inputs use a select2 widget; falling back to fill
-            // works for the plain input shape.
-            await keyInput.fill(Array.isArray(fields.key) ? fields.key.join(',') : String(fields.key));
-            await keyInput.blur();
+        const keys = Array.isArray(fields.key) ? fields.key.map(String) : [String(fields.key)];
+        // The keyword box is a select2 tag widget on desktop and a comma
+        // separated textarea on mobile. A comma turns typed text into a tag.
+        const tagInput = entryRow.locator('.keyprimary .select2-search__field').first();
+        if (await tagInput.isVisible()) {
+            await tagInput.click();
+            await tagInput.pressSequentially(`${keys.join(',')},`);
+            await expect(entryRow.locator('.keyprimary .select2-selection__choice')).toHaveCount(keys.length);
+        } else {
+            const keyText = entryRow.locator('.keyprimary textarea[name="key"]').first();
+            await keyText.fill(keys.join(','));
+            await keyText.blur();
         }
     }
     if (fields.content) {
-        const contentArea = entryRow.locator('textarea[name="content"], .world_entry_form_content textarea').first();
         await contentArea.fill(String(fields.content));
         await contentArea.blur();
     }

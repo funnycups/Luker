@@ -5,17 +5,15 @@
 // lets sqlite/mysql/postgres modes participate in per-file conflict
 // resolution.
 //
-// MySQL/Postgres are exercised by the LAN-sync e2e specs (task 10) under
-// testcontainers; the unit-test surface stays on the always-available fs +
-// sqlite engines and asserts the cross-engine contract there. The two SQL
-// engines share the same listResources/putResource shape, so a sqlite pass
-// is a strong signal the materializer's repo-driven path will hold across
-// the other two.
+// This file stays on the always-available fs + sqlite engines. MySQL and
+// Postgres are covered by materialize-cross-engine.test.js (round-trip
+// matrix) and materialize-records.test.js (per-record access).
 
-import { describe, test, expect } from '@jest/globals';
+import { describe, test, expect, jest } from '@jest/globals';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import git from 'isomorphic-git';
 
 import {
     makeTempFsEngineHarness,
@@ -30,6 +28,7 @@ import { StatsRepo } from '../../src/storage/repositories/stats-repo.js';
 import { WorldInfoRepo } from '../../src/storage/repositories/world-info-repo.js';
 import { recordsEqual } from '../../src/storage/migration/equality.js';
 import { buildSidecarFilename } from '../../src/storage/engines/sidecar-naming.js';
+import { writeTreeFromFiles } from '../../src/sync/pipeline/git-tree.js';
 
 import {
     materializeUserDataIntoWorkdir,
@@ -258,6 +257,30 @@ describe('buildSnapshotPlan', () => {
 });
 
 describe('materialize (sqlite — exact file layout)', () => {
+    test('materializes every SQL-backed category inside one engine transaction', async () => {
+        const src = await makeTempSqliteEngineHarness();
+        const workdir = mkTmpWorkdir();
+        const spy = jest.spyOn(src.engine, 'withTransaction');
+        try {
+            await seedPayload(src);
+            spy.mockClear();
+            await materializeUserDataIntoWorkdir({
+                handle: src.handle,
+                directories: src.dirs,
+                categories: SQL_OWNED_CATEGORIES,
+                workdir,
+                engine: src.engine,
+            });
+            expect(spy).toHaveBeenCalledTimes(1);
+            expect(fs.existsSync(path.join(workdir, 'settings.json'))).toBe(true);
+            expect(fs.existsSync(path.join(workdir, 'worlds'))).toBe(true);
+        } finally {
+            spy.mockRestore();
+            src.cleanup();
+            fs.rmSync(workdir, { recursive: true, force: true });
+        }
+    });
+
     test('materializes every SQL-owned kind into FS-engine-shaped paths', async () => {
         const src = await makeTempSqliteEngineHarness();
         const workdir = mkTmpWorkdir();
@@ -388,6 +411,57 @@ describe('materialize (sqlite — exact file layout)', () => {
         } finally {
             src.cleanup();
             fs.rmSync(workdir, { recursive: true, force: true });
+        }
+    });
+
+    test('keeps reference commit bytes of records whose value is unchanged', async () => {
+        const src = await makeTempSqliteEngineHarness();
+        const workdir = mkTmpWorkdir();
+        const gitdir = mkTmpWorkdir('luker-materialize-ref-');
+        const materialize = referenceOids => materializeUserDataIntoWorkdir({
+            handle: src.handle, directories: src.dirs, categories: ['worlds', 'chats'], workdir, engine: src.engine, gitdir, referenceOids,
+        });
+        const reverseKeys = value => (Array.isArray(value)
+            ? value.map(reverseKeys)
+            : value && typeof value === 'object'
+                ? Object.fromEntries(Object.entries(value).reverse().map(([k, v]) => [k, reverseKeys(v)]))
+                : value);
+        const worldPath = 'worlds/Lore.json';
+        const chatPath = 'chats/Alice/c1.jsonl';
+        const read = relPath => fs.readFileSync(path.join(workdir, ...relPath.split('/')));
+        try {
+            await seedPayload(src);
+            await git.init({ fs, gitdir, bare: true, defaultBranch: 'main' });
+            await materialize([]);
+            const ownWorld = read(worldPath);
+            const ownChat = read(chatPath);
+            const reorderedWorld = Buffer.from(JSON.stringify(reverseKeys(JSON.parse(ownWorld.toString())), null, 2));
+            const reorderedChat = Buffer.from(ownChat.toString().split('\n').filter(Boolean).map(line => JSON.stringify(reverseKeys(JSON.parse(line)))).join('\n') + '\n');
+            const commitOf = async (entries) => {
+                const files = new Map();
+                for (const [relPath, bytes] of entries) files.set(relPath, { oid: await git.writeBlob({ fs, gitdir, blob: bytes }), mode: '100644' });
+                const tree = await writeTreeFromFiles({ gitdir, files });
+                return git.commit({ fs, gitdir, message: 'ref', author: { name: 't', email: 't@t' }, tree, noUpdateBranch: true });
+            };
+            const unchanged = await commitOf([[worldPath, reorderedWorld], [chatPath, reorderedChat]]);
+            const changed = await commitOf([[worldPath, Buffer.from(JSON.stringify({ name: 'Lore', entries: {} }))]]);
+
+            await materialize([changed, unchanged]);
+            expect(read(worldPath)).toEqual(reorderedWorld);
+            expect(read(chatPath)).toEqual(reorderedChat);
+
+            await materialize([changed]);
+            expect(read(worldPath)).toEqual(ownWorld);
+            expect(read(chatPath)).toEqual(ownChat);
+
+            const own = await commitOf([[worldPath, ownWorld], [chatPath, ownChat]]);
+            await materialize([own, unchanged]);
+            expect(read(worldPath)).toEqual(ownWorld);
+            expect(read(chatPath)).toEqual(ownChat);
+        } finally {
+            src.cleanup();
+            fs.rmSync(workdir, { recursive: true, force: true });
+            fs.rmSync(gitdir, { recursive: true, force: true });
         }
     });
 
@@ -626,17 +700,12 @@ describe('dematerialize path-traversal defense', () => {
     // them while still landing a legitimate sibling — proving the guard
     // is targeted, not blanket-skipping.
 
-    test('charDir containing ".." segment is skipped while a legitimate sibling lands', async () => {
-        // `escape..pwn` — single segment containing `..`. Doesn't start
-        // with `.` so it bypasses the leading-dot rule; the `includes('..')`
-        // arm is what rejects it. Without that arm, a peer could push a
-        // tree like `chats/escape..pwn/` and the engine would acquire a
-        // record with that name unchecked.
+    test('embedded double dots in a chat directory remain representable', async () => {
+        // Embedded dots are accepted resource-name bytes, not traversal.
         const dst = await makeTempSqliteEngineHarness();
         const workdir = mkTmpWorkdir();
         try {
-            // Plant the unsafe shape: a charDir whose name embeds `..`,
-            // with one chat file inside.
+            // Preserve the accepted directory name alongside its sibling.
             const chatsAbs = path.join(workdir, 'chats');
             fs.mkdirSync(path.join(chatsAbs, 'escape..pwn'), { recursive: true });
             fs.writeFileSync(
@@ -665,26 +734,20 @@ describe('dematerialize path-traversal defense', () => {
             const alice = await dstChat.get(dst.handle, 'Alice', 'normal');
             expect(alice).not.toBeNull();
             expect(alice.body[0].mes).toBe('hi');
-            // Unsafe charDir did NOT land.
+            // Embedded dots are not traversal segments.
             const hostile = await dstChat.get(dst.handle, 'escape..pwn', 'hostile');
-            expect(hostile).toBeNull();
-            // Confirm via listAll that nothing else slipped in either —
-            // anything containing `..` in its charDir would be a guard
-            // failure regardless of the specific lookup we tried.
+            expect(hostile).not.toBeNull();
+            // Inventory must report the same accepted identity.
             const all = await dstChat.listAll(dst.handle);
-            for (const entry of all) {
-                expect(entry.key.charDir).not.toMatch(/\.\./);
-            }
+            expect(all.some(entry => entry.key.charDir === 'escape..pwn')).toBe(true);
         } finally {
             dst.cleanup();
             fs.rmSync(workdir, { recursive: true, force: true });
         }
     });
 
-    test('leading-dot filename is skipped while a legitimate sibling in the same charDir lands', async () => {
-        // `.hidden.jsonl` — single dot prefix. Covers the host-dotfile
-        // surfacing concern: a peer's tree could include `.DS_Store`,
-        // `.hidden`, etc.; none should become engine records.
+    test('accepted leading-dot chat names are preserved with ordinary siblings', async () => {
+        // A leading dot alone does not make an accepted chat name unsafe.
         const dst = await makeTempSqliteEngineHarness();
         const workdir = mkTmpWorkdir();
         try {
@@ -712,13 +775,9 @@ describe('dematerialize path-traversal defense', () => {
             const normal = await dstChat.get(dst.handle, 'Alice', 'normal');
             expect(normal).not.toBeNull();
             expect(normal.body[0].mes).toBe('hello');
-            // The `.hidden` chat must NOT have been acquired. The leading-dot
-            // filter also covers the `.hidden.jsonl` slice — `.slice(0, -6)`
-            // is `.hidden` which still starts with a dot, but the per-file
-            // gate uses isUnsafeEntryName(entry) which catches the raw
-            // filename before any slice happens.
+            // The accepted dot-leading chat remains independently readable.
             const hidden = await dstChat.get(dst.handle, 'Alice', '.hidden');
-            expect(hidden).toBeNull();
+            expect(hidden).not.toBeNull();
         } finally {
             dst.cleanup();
             fs.rmSync(workdir, { recursive: true, force: true });
@@ -773,7 +832,7 @@ describe('dematerialize path-traversal defense', () => {
         }
     });
 
-    test('leading-dot world filename is skipped while a legitimate sibling lands', async () => {
+    test('accepted leading-dot world names are preserved with ordinary siblings', async () => {
         // Same guard, exercised on the worlds walker so the protection
         // isn't accidentally only covering chats.
         const dst = await makeTempSqliteEngineHarness();
@@ -803,11 +862,9 @@ describe('dematerialize path-traversal defense', () => {
             expect(lore).not.toBeNull();
             expect(lore.name).toBe('Lore');
             const hidden = await dstWorld.get(dst.handle, '.hidden');
-            expect(hidden).toBeNull();
+            expect(hidden).not.toBeNull();
             const names = await dstWorld.listNames(dst.handle);
-            for (const n of names) {
-                expect(n.startsWith('.')).toBe(false);
-            }
+            expect(names).toContain('.hidden');
         } finally {
             dst.cleanup();
             fs.rmSync(workdir, { recursive: true, force: true });

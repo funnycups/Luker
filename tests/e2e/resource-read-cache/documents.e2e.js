@@ -1,10 +1,9 @@
 import { test, expect } from '@playwright/test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { awaitMainUI } from '../_lib/page.js';
-import { importWorldBook, openWorldInfoDrawer } from '../_lib/ui-worldinfo.js';
+import { awaitMainUI, openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
+import { importWorldDocument, selectWorldBook } from '../_lib/ui-worldinfo.js';
 
 let server;
 
@@ -27,11 +26,7 @@ test.afterAll(async () => {
 test('loads world books and quick replies through domain resources', async ({ page }) => {
     await awaitMainUI(page, server.baseURL);
     await page.waitForFunction(() => !!globalThis.quickReplyApi, { timeout: 30_000 });
-    await page.locator('dialog.popup[open] .popup-button-ok').first().click({ timeout: 2000 }).catch(() => {});
-
-    const fixtureDir = mkdtempSync(join(tmpdir(), 'luker-resource-doc-'));
-    const bookPath = join(fixtureDir, `${BOOK}.json`);
-    writeFileSync(bookPath, JSON.stringify({
+    await importWorldDocument(page, BOOK, {
         entries: {
             0: {
                 uid: 0,
@@ -45,21 +40,25 @@ test('loads world books and quick replies through domain resources', async ({ pa
                 position: 0,
             },
         },
-    }));
-    await importWorldBook(page, { filePath: bookPath, expectedName: BOOK });
-
-    await page.evaluate(async (setName) => {
-        const api = globalThis.quickReplyApi;
-        await api.createSet(setName, { disableSend: false, placeBeforeInput: false, injectInput: false });
-        api.createQuickReply(setName, 'Recite', {
-            icon: '',
-            showLabel: true,
-            message: 'The ledger is open.',
-            title: 'Recite the ledger',
-        });
-        await api.getSetByName(setName).save();
-        await api.settings.save();
-    }, QR_SET);
+    });
+    await openExtensionsDrawer(page);
+    await openInlineDrawer(page, 'qr--settings');
+    const chooser = page.waitForEvent('filechooser');
+    await page.locator('#qr--set-import').click();
+    const saved = page.waitForResponse(response =>
+        new URL(response.url()).pathname === '/api/quick-replies/save' && response.request().method() === 'POST');
+    await (await chooser).setFiles({
+        name: `${QR_SET}.json`,
+        mimeType: 'application/json',
+        buffer: Buffer.from(JSON.stringify({
+            version: 2, name: QR_SET, idIndex: 1,
+            disableSend: false, placeBeforeInput: false, injectInput: false,
+            qrList: [{ id: 1, label: 'Recite', icon: '', showLabel: true,
+                message: 'The ledger is open.', title: 'Recite the ledger' }],
+        })),
+    });
+    expect((await saved).ok()).toBe(true);
+    await expect(page.locator('#qr--set')).toHaveValue(QR_SET);
 
     const savedSet = JSON.parse(readFileSync(
         join(server.dataRoot, 'default-user', 'quickreplies', `${QR_SET}.json`), 'utf8'));
@@ -70,19 +69,21 @@ test('loads world books and quick replies through domain resources', async ({ pa
 
     await awaitMainUI(page, server.baseURL);
     await page.waitForFunction(() => !!globalThis.quickReplyApi, { timeout: 30_000 });
-    await openWorldInfoDrawer(page);
-
-    const loadedEntries = await page.evaluate(async (name) => {
-        const data = await window.Luker.getContext().loadWorldInfo(name);
-        return Object.values(data?.entries || {}).map(entry => entry?.content).filter(Boolean);
-    }, BOOK);
-    expect(loadedEntries).toContain(SENTINEL);
+    await selectWorldBook(page, BOOK);
+    const entry = page.locator('#world_popup_entries_list .world_entry[uid="0"]');
+    const content = entry.locator('textarea[name="content"]');
+    if (!await content.isVisible()) await entry.locator('.wi-entry-toggle').click();
+    await expect(content).toHaveValue(SENTINEL);
 
     const loadedSet = await page.evaluate((name) => {
         const set = globalThis.quickReplyApi.getSetByName(name);
         return set ? { name: set.name, replies: set.qrList.map(qr => qr.label) } : null;
     }, QR_SET);
     expect(loadedSet).toEqual({ name: QR_SET, replies: ['Recite'] });
+    await openExtensionsDrawer(page);
+    await openInlineDrawer(page, 'qr--settings');
+    await page.locator('#qr--set').selectOption(QR_SET);
+    await expect(page.locator('#qr--set-qrList .qr--set-itemLabel')).toHaveValue('Recite');
 
     expect(requests.some(url => url.includes('/api/settings/fields?'))).toBe(true);
     expect(requests.some(url => url.includes('/api/settings/field?'))).toBe(true);

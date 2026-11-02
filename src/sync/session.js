@@ -1,13 +1,14 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
 
 import { Cache } from '../util.js';
 
 /**
  * Token TTL for an active LAN-sync session.
  *
- * A token may be consumed multiple times within this window (one logical
- * sync does many object fetches), unlike the one-shot tokens in
- * `src/lan-migration.js`.
+ * A token may be consumed many times (one logical sync does many object
+ * fetches), unlike the one-shot tokens in `src/lan-migration.js`. Every
+ * use renews it, so a session expires only after this long without use.
  */
 export const SYNC_SESSION_TTL_MS = 10 * 60 * 1000;
 
@@ -61,8 +62,8 @@ function normalizeToken(token) {
  *
  * The returned token is a 32-byte hex string. `payload` is stored
  * verbatim (plus `createdAt`/`expiresAt`) and returned by every
- * subsequent `consumeSyncSession` call until the TTL expires or
- * `closeSyncSession` is invoked.
+ * subsequent `consumeSyncSession` call until it goes unused for the TTL
+ * or `closeSyncSession` is invoked.
  *
  * `userRoot` is captured at issue time so token-gated routes never
  * have to look up `getUserDirectories(handle)` again — they would
@@ -80,7 +81,7 @@ export function createSyncSession(payload) {
     }
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = Date.now() + SYNC_SESSION_TTL_MS;
-    SESSIONS.set(token, { ...payload, createdAt: Date.now(), expiresAt });
+    SESSIONS.set(token, { ...payload, userRoot: path.resolve(payload.userRoot), createdAt: Date.now(), expiresAt });
     return { token, expiresAt };
 }
 
@@ -88,8 +89,9 @@ export function createSyncSession(payload) {
  * Look up the payload bound to a session token.
  *
  * Unlike `consumeLanMigrationOffer`, this does NOT remove the token on
- * read — it stays valid for repeated use until the TTL expires or
- * `closeSyncSession` is called. Returns `null` on unknown or
+ * read — every hit renews it for another `SYNC_SESSION_TTL_MS`, so it
+ * stays valid until it goes unused that long or `closeSyncSession` is
+ * called. Returns `null` on unknown or
  * malformed tokens so callers can use a straightforward truthy check.
  *
  * @param {string} token
@@ -98,7 +100,10 @@ export function createSyncSession(payload) {
 export function consumeSyncSession(token) {
     const normalized = normalizeToken(token);
     if (!normalized) return null;
-    return SESSIONS.get(normalized) ?? null;
+    const payload = SESSIONS.get(normalized);
+    if (!payload) return null;
+    SESSIONS.set(normalized, payload);
+    return payload;
 }
 
 /**
@@ -110,6 +115,20 @@ export function consumeSyncSession(token) {
 export function closeSyncSession(token) {
     const normalized = normalizeToken(token);
     if (normalized) SESSIONS.remove(normalized);
+}
+
+/**
+ * Invalidate every session issued for one backend, identified by the
+ * user data root and the peer id it syncs with. Roots compare in resolved
+ * form, as `createSyncSession` stores them.
+ *
+ * @param {{ userRoot: string, peerId: string }} args
+ */
+export function closeSyncSessionsFor({ userRoot, peerId }) {
+    const root = path.resolve(userRoot);
+    for (const [token, entry] of SESSIONS.cache) {
+        if (entry.value?.userRoot === root && entry.value?.peerId === peerId) SESSIONS.remove(token);
+    }
 }
 
 /**
@@ -150,8 +169,28 @@ export function consumePairingCode(code, binding) {
     if (!normalized) return null;
     const payload = PAIRING_CODES.get(normalized);
     if (!payload) return null;
+    // A restored code is re-inserted with a fresh cache expiry; the
+    // creation time keeps it within the lifetime of its link.
+    if (Date.now() - payload.createdAt >= PAIR_CODE_TTL_MS) {
+        PAIRING_CODES.remove(normalized);
+        return null;
+    }
     if (!binding?.peerId || payload.peerId !== binding.peerId) return null;
     if (!binding?.handle || payload.handle !== binding.handle) return null;
     PAIRING_CODES.remove(normalized);
     return payload;
+}
+
+/**
+ * Put back a code `consumePairingCode` returned, for an offer that failed
+ * after consuming it. The code stays bound to the same handle and peerId
+ * and still expires when its link does.
+ *
+ * @param {string} code
+ * @param {{ handle: string, peerId: string, createdAt: number }} payload the value `consumePairingCode` returned
+ */
+export function restorePairingCode(code, payload) {
+    const normalized = normalizeToken(code);
+    if (!normalized || !payload) return;
+    PAIRING_CODES.set(normalized, payload);
 }

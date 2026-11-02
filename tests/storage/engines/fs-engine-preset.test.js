@@ -52,11 +52,11 @@ describe('FsEngine — preset handler', () => {
         expect(got).toEqual({ temperature: 0.5, top_p: 0.9 });
     });
 
-    test('get returns null when file holds a JSON array (not an object)', async () => {
+    test('get reports an unsupported present document shape without replacing its bytes', async () => {
         fs.mkdirSync(h.dirs.openAI_Settings, { recursive: true });
         fs.writeFileSync(path.join(h.dirs.openAI_Settings, 'mypreset.json'), '[1,2,3]');
-        const got = await h.engine.withTransaction(h.handle, (tx) => tx.getResource(presetKey()));
-        expect(got).toBeNull();
+        await expect(h.engine.withTransaction(h.handle, (tx) => tx.getResource(presetKey()))).rejects.toMatchObject({ code: 'PRESET_DOCUMENT_INVALID' });
+        expect(fs.readFileSync(path.join(h.dirs.openAI_Settings, 'mypreset.json'), 'utf8')).toBe('[1,2,3]');
     });
 
     test('delete cascades sidecars', async () => {

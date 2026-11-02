@@ -1,0 +1,75 @@
+.activity-pill-host {
+    position: fixed;
+    inset-block-start: calc(var(--topBarBlockSize, 30px) + 6px);
+    inset-inline-start: 50%;
+    transform: translateX(-50%);
+    z-index: 8900;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 6px;
+    width: max-content;
+    max-width: min(760px, calc(100vw - 16px));
+    pointer-events: none;
+}
+
+.activity-pill {
+    --activity-accent: #4dd6a1;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: min(400px, calc(100vw - 16px));
+    flex: 0 1 auto;
+    padding: 6px 12px 8px;
+    border: 1px solid color-mix(in srgb, var(--activity-accent) 60%, transparent);
+    border-radius: 16px;
+    background: var(--SmartThemeBlurTintColor, #14161e);
+    color: var(--SmartThemeBodyColor, #e8e8ee);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    font-family: var(--mainFontFamily, system-ui, sans-serif);
+    font-size: 11px;
+    line-height: 1.4;
+    font-weight: 600;
+    cursor: pointer;
+    pointer-events: auto;
+    overflow: hidden;
+}
+
+.activity-pill[data-tone="attention"] { --activity-accent: #e6b75b; }
+.activity-pill[data-tone="error"] { --activity-accent: #f27d91; }
+.activity-pill[data-tone="unknown"] { --activity-accent: #b5b7c9; }
+.activity-pill:hover { border-color: var(--activity-accent); }
+.activity-pill:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor, #5aa3ff); outline-offset: 2px; }
+.activity-pill-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.activity-pill-progress {
+    position: absolute;
+    inset-inline: 0;
+    inset-block-end: 0;
+    height: 3px;
+    background: color-mix(in srgb, var(--activity-accent) 20%, transparent);
+    overflow: hidden;
+}
+
+.activity-pill-progress::after {
+    content: '';
+    display: block;
+    width: 45%;
+    height: 100%;
+    background: var(--activity-accent);
+    animation: activity-pill-loading 1.6s ease-in-out infinite;
+}
+
+@keyframes activity-pill-loading {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(225%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .activity-pill-progress::after { animation: none; width: 70%; margin-inline: auto; }
+}
+
+.activity-pill-host[hidden], .activity-pill[hidden], .activity-pill-progress[hidden] { display: none; }

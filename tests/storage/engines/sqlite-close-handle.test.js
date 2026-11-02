@@ -1,7 +1,6 @@
 /**
  * SqliteEngine.closeHandle — covers the cache-invalidation contract that
- * the LAN-sync orchestrator (`src/sync/orchestrator.js`) depends on after
- * `reconcileShadowToLive` swaps the live DB file via `write-file-atomic`.
+ * any caller swapping the live DB file on disk depends on.
  *
  * The other sqlite-engine.test.js cases only exercise the no-DB-cached
  * branch (which falls through `if (db)` as a no-op); they would still pass
@@ -10,7 +9,7 @@
  *
  *   1. Lazy-open the cached connection by writing through the engine.
  *   2. Out-of-band swap the on-disk DB file with a different DB (mimicking
- *      the atomic rename `replaceSqliteFile` does during a sync reconcile).
+ *      an atomic rename over the live file).
  *   3. Read again — the cached handle still points at the unlinked inode,
  *      so SQLite returns the OLD content. This step asserts the staleness
  *      we're guarding against.

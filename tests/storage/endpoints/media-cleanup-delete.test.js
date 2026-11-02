@@ -32,7 +32,7 @@ describe.each(ENDPOINT_HARNESSES)('media delete on $name', ({ mode }) => {
         const sprite = writeFileAt(harness.dirs.root, '/characters/Ash/happy.png');
         const foreign = writeFileAt(harness.dirs.root, '/backups/keep.png');
 
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .post('/api/media/delete')
             .send({ paths: ['/user/images/Ash/pic.png', '/characters/Ash/happy.png', '/backups/keep.png', '/user/images/Ash/../Ash/pic.png'] })
             .expect(200);
@@ -45,7 +45,7 @@ describe.each(ENDPOINT_HARNESSES)('media delete on $name', ({ mode }) => {
     });
 
     test('skips traversal outside the root and non-strings', async () => {
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .post('/api/media/delete')
             .send({ paths: ['/user/images/../../config.yaml', 42, '/user/images/Ash/../../user/images/Ash/gone.png'] })
             .expect(200);
@@ -60,7 +60,7 @@ describe.each(ENDPOINT_HARNESSES)('media delete on $name', ({ mode }) => {
         fs.writeFileSync(target, 'x');
         // Remove before the request so the endpoint sees a missing file.
         fs.rmSync(target);
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .post('/api/media/delete')
             .send({ paths: ['/user/images/Ash/race.png'] })
             .expect(200);
@@ -69,6 +69,6 @@ describe.each(ENDPOINT_HARNESSES)('media delete on $name', ({ mode }) => {
     });
 
     test('rejects a missing paths array', async () => {
-        await request(harness.app).post('/api/media/delete').send({}).expect(400);
+        await request(harness.server).post('/api/media/delete').send({}).expect(400);
     });
 });

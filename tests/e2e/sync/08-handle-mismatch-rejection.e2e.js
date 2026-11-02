@@ -8,12 +8,13 @@
 import { test, expect } from '@playwright/test';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
+import { createUserViaAdminUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
     generatePairingLink,
     loginAs,
     expectHandleMismatchToast,
+    selectCategories,
 } from '../_lib/sync.js';
 
 const ALICE_PASSWORD = 'alice-pass-8';
@@ -21,37 +22,22 @@ const BOB_PASSWORD = 'bob-pass-8';
 
 let A, B;
 
-/**
- * Helper for the admin-side bootstrap: create one named user under the
- * default admin on a server. We do it through page.evaluate so the same
- * CSRF / session that the SPA uses also creates the account.
- */
+/** Configure the actual account through its authenticated admin form. */
 async function adminCreateUser(page, baseURL, { handle, name, password }) {
     await loginAs(page, baseURL, { handle: 'default-user', password: '' });
-    const res = await page.evaluate(async ({ handle, name, password }) => {
-        const csrfResp = await fetch('/csrf-token', { credentials: 'same-origin' });
-        const { token } = await csrfResp.json();
-        const resp = await fetch('/api/users/create', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-            body: JSON.stringify({ handle, name, password, admin: false }),
-        });
-        return { status: resp.status, body: (await resp.text()).slice(0, 400) };
-    }, { handle, name, password });
-    expect(res.status, `create ${handle}: ${res.status} ${res.body}`).toBe(200);
+    await createUserViaAdminUI(page, { handle, name, password });
 }
 
 test.beforeAll(async () => {
     A = await startServer({
         batchKey: 'sync',
         scenarioId: 'mismatch-A',
-        extraConfig: { enableUserAccounts: true },
+        extraConfig: { enableUserAccounts: true, 'sync.allowPrivateAddressesForUsers': true },
     });
     B = await startServer({
         batchKey: 'sync',
         scenarioId: 'mismatch-B',
-        extraConfig: { enableUserAccounts: true },
+        extraConfig: { enableUserAccounts: true, 'sync.allowPrivateAddressesForUsers': true },
     });
 });
 
@@ -76,8 +62,6 @@ test.describe('LAN Sync — handle-mismatch rejection', () => {
         });
         await adminCtxB.close();
 
-        markOnboarded({ dataRoot: A.dataRoot, handle: 'alice' });
-        markOnboarded({ dataRoot: B.dataRoot, handle: 'bob' });
 
         // ===== Path 1: UI pre-flight blocks the click =====
         const ctxA = await browser.newContext();
@@ -105,54 +89,38 @@ test.describe('LAN Sync — handle-mismatch rejection', () => {
         await pageB.locator('.lanSyncTabPairExisting').click();
         await pageB.locator('.lanSyncAcceptLink').fill(link);
         await pageB.locator('.lanSyncAcceptLink').dispatchEvent('input');
-        await pageB.evaluate(() => {
-            document.querySelectorAll('.lanSyncAcceptCategoryGrid input[name="lanSyncCategory"]').forEach((el) => {
-                el.checked = el.value === 'worlds';
-            });
-        });
+        await selectCategories(pageB.locator('.lanSyncAcceptCategoryGrid'), ['worlds']);
         await pageB.locator('.lanSyncAcceptButton').click();
         await expectHandleMismatchToast(pageB, { expectedHandle: 'bob', gotHandle: 'alice' });
 
         // Verify the pair did NOT register on A's side. Use A's own
-        // session (alice) to read /api/sync/v1/peers — bob's peerId
+        // session (alice) to read /api/sync/v1/backends — bob's peerId
         // prefix must not appear.
-        const peersA = await pageA.evaluate(async () => {
+        const backendsA = await pageA.evaluate(async () => {
             const csrfResp = await fetch('/csrf-token', { credentials: 'same-origin' });
             const { token } = await csrfResp.json();
-            const resp = await fetch('/api/sync/v1/peers', {
+            const resp = await fetch('/api/sync/v1/backends', {
                 method: 'GET',
                 credentials: 'same-origin',
                 headers: { 'X-CSRF-Token': token },
             });
             return resp.json();
         });
-        const peerIds = Object.keys(peersA.peers || {});
+        const peerIds = Object.keys(backendsA.backends || {});
         expect(peerIds.every(id => !id.startsWith('bob@')),
             `A's peers should not include any bob@ prefix; got: ${peerIds.join(', ')}`).toBe(true);
 
-        // ===== Path 2: bypass the UI; server gate fires =====
-        // Bob's session is already established on pageB. Issue a raw
-        // POST to /api/sync/v1/pair/accept with a forged peerId that
-        // names alice. The server's expectedHandle must be 'bob' (B's
-        // session) and gotHandle must be 'alice' (the peerId prefix).
-        const bypass = await pageB.evaluate(async ({ peerBaseUrl }) => {
-            const csrfResp = await fetch('/csrf-token', { credentials: 'same-origin' });
-            const { token } = await csrfResp.json();
-            const resp = await fetch('/api/sync/v1/pair/accept', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-                body: JSON.stringify({
-                    remotePeerId: 'alice@deadbeefdeadbeef',
-                    peerBaseUrl,
-                    label: 'A bypass',
-                    categories: ['worlds'],
-                    peerAuth: { username: 'alice', password: 'whatever' },
-                }),
-            });
-            const body = await resp.json().catch(() => ({}));
-            return { status: resp.status, body };
-        }, { peerBaseUrl: A.baseURL });
+        // Fault injection changes the real DOM-originated request after its
+        // client preflight, so the independent server gate must reject it.
+        await pageB.route('**/api/sync/v1/pair/accept', route => route.continue({ postData: JSON.stringify({ ...route.request().postDataJSON(), remotePeerId: 'alice@deadbeefdeadbeef' }) }));
+        const forged = new URL(link.replace('luker-sync://', 'http://'));
+        forged.searchParams.set('peer', 'bob@deadbeefdeadbeef');
+        await pageB.locator('.lanSyncAcceptLink').fill(`luker-sync://pair/v1?${forged.searchParams}`);
+        await pageB.locator('.lanSyncAcceptLink').dispatchEvent('input');
+        const rejected = pageB.waitForResponse(response => new URL(response.url()).pathname === '/api/sync/v1/pair/accept');
+        await pageB.locator('.lanSyncAcceptButton').click();
+        const actual = await rejected;
+        const bypass = { status: actual.status(), body: await actual.json() };
 
         expect(bypass.status).toBe(412);
         expect(bypass.body.code).toBe('HANDLE_MISMATCH');

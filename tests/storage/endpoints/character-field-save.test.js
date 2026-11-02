@@ -52,12 +52,12 @@ describe.each(ENDPOINT_HARNESSES)('character field save on $name', ({ mode }) =>
     });
 
     test('persists a data-only patch without altering extensions or unknown root fields', async () => {
-        const before = await request(harness.app)
+        const before = await request(harness.server)
             .post('/api/characters/get')
             .send({ avatar_url: 'Alice.png' })
             .expect(200);
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/patch')
             .send({
                 avatar_url: 'Alice.png',
@@ -65,7 +65,7 @@ describe.each(ENDPOINT_HARNESSES)('character field save on $name', ({ mode }) =>
             })
             .expect(200);
 
-        const after = await request(harness.app)
+        const after = await request(harness.server)
             .post('/api/characters/get')
             .send({ avatar_url: 'Alice.png' })
             .expect(200);
@@ -76,7 +76,7 @@ describe.each(ENDPOINT_HARNESSES)('character field save on $name', ({ mode }) =>
     });
 
     test('rejects extension and non-data paths', async () => {
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/patch')
             .send({
                 avatar_url: 'Alice.png',
@@ -84,7 +84,7 @@ describe.each(ENDPOINT_HARNESSES)('character field save on $name', ({ mode }) =>
             })
             .expect(400);
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/patch')
             .send({
                 avatar_url: 'Alice.png',
@@ -92,7 +92,7 @@ describe.each(ENDPOINT_HARNESSES)('character field save on $name', ({ mode }) =>
             })
             .expect(400);
 
-        const current = await request(harness.app)
+        const current = await request(harness.server)
             .post('/api/characters/get')
             .send({ avatar_url: 'Alice.png' })
             .expect(200);
@@ -100,7 +100,7 @@ describe.each(ENDPOINT_HARNESSES)('character field save on $name', ({ mode }) =>
     });
 
     test('rejects an empty name and prototype-path writes without touching the card', async () => {
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/patch')
             .send({
                 avatar_url: 'Alice.png',
@@ -108,7 +108,7 @@ describe.each(ENDPOINT_HARNESSES)('character field save on $name', ({ mode }) =>
             })
             .expect(400);
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/patch')
             .send({
                 avatar_url: 'Alice.png',
@@ -116,7 +116,7 @@ describe.each(ENDPOINT_HARNESSES)('character field save on $name', ({ mode }) =>
             })
             .expect(400);
 
-        const current = await request(harness.app)
+        const current = await request(harness.server)
             .post('/api/characters/get')
             .send({ avatar_url: 'Alice.png' })
             .expect(200);

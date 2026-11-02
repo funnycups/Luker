@@ -32,7 +32,7 @@ describe.each(ENDPOINT_HARNESSES)('/api/chats/get on $name', ({ mode }) => {
         await getChatRepo().save(harness.handle, 'Alice', 'c1', HEADER, MESSAGES, null);
 
         // Probe with file_name — must hit the engine, not short-circuit on directory existence.
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/get')
             .send({ avatar_url: 'Alice.png', file_name: 'c1' })
             .expect(200);
@@ -43,7 +43,7 @@ describe.each(ENDPOINT_HARNESSES)('/api/chats/get on $name', ({ mode }) => {
     });
 
     test('REGRESSION: probe without file_name returns new_chat:true when engine is empty', async () => {
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/get')
             .send({ avatar_url: 'NewChar.png' })
             .expect(200);
@@ -52,7 +52,7 @@ describe.each(ENDPOINT_HARNESSES)('/api/chats/get on $name', ({ mode }) => {
 
     test('REGRESSION: probe with unknown file_name returns new_chat:true', async () => {
         await getChatRepo().save(harness.handle, 'Alice', 'c1', HEADER, MESSAGES, null);
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/get')
             .send({ avatar_url: 'Alice.png', file_name: 'does-not-exist' })
             .expect(200);

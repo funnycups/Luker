@@ -83,7 +83,7 @@ describe('users-admin /import/global-extensions', () => {
         const zipPath = path.join(harness.dataRoot, 'extensions.zip');
         await buildExtensionsZip(zipPath);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/users/import/global-extensions')
             .attach('avatar', zipPath);
 

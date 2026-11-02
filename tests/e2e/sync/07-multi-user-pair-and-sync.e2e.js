@@ -13,17 +13,16 @@
 // both servers; both admins then create `alice` with the same password
 // so the cross-handle gate never fires.
 
-import { test, expect, request as pwRequest } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
+import { createUserViaAdminUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
     generatePairingLink,
     acceptPairingLink,
-    resolveAllConflictsAs,
     clickSyncNow,
     loginAs,
 } from '../_lib/sync.js';
@@ -52,59 +51,27 @@ const SEED_WORLD_BODY = {
 
 let A, B;
 
-/**
- * Bind an APIRequestContext to the bootstrap admin's session on a server
- * so we can call /api/users/create as the admin without driving the
- * admin-panel popup. Returns a `{ post, dispose }` shape matching the
- * persona helpers.
- */
-async function bootstrapAdminSession(baseURL) {
-    const ctx = await pwRequest.newContext({ baseURL });
-    const csrfRes = await ctx.get('/csrf-token');
-    expect(csrfRes.ok(), 'csrf-token request failed').toBe(true);
-    const { token } = await csrfRes.json();
-    const loginRes = await ctx.post('/api/users/login', {
-        data: { handle: 'default-user', password: '' },
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-    });
-    expect(loginRes.ok(), `admin login failed (${loginRes.status()})`).toBe(true);
-    return {
-        async post(url, body) {
-            return ctx.post(url, {
-                data: body ?? {},
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-            });
-        },
-        async dispose() { await ctx.dispose(); },
-    };
-}
-
-test.beforeAll(async () => {
+test.beforeAll(async ({ browser }) => {
     A = await startServer({
         batchKey: 'sync',
         scenarioId: 'multiuser-A',
-        extraConfig: { enableUserAccounts: true },
+        extraConfig: { enableUserAccounts: true, 'sync.allowPrivateAddressesForUsers': true },
     });
     B = await startServer({
         batchKey: 'sync',
         scenarioId: 'multiuser-B',
-        extraConfig: { enableUserAccounts: true },
+        extraConfig: { enableUserAccounts: true, 'sync.allowPrivateAddressesForUsers': true },
     });
 
     for (const server of [A, B]) {
-        const admin = await bootstrapAdminSession(server.baseURL);
+        const context = await browser.newContext();
         try {
-            const createRes = await admin.post('/api/users/create', {
-                handle: 'alice',
-                name: 'Alice of Bryn',
-                password: ALICE_PASSWORD,
-                admin: false,
-            });
-            expect(createRes.ok(), `create alice failed on ${server.baseURL} (${createRes.status()})`).toBe(true);
+            const page = await context.newPage();
+            await loginAs(page, server.baseURL, { handle: 'default-user', password: '' });
+            await createUserViaAdminUI(page, { handle: 'alice', name: 'Alice of Bryn', password: ALICE_PASSWORD });
         } finally {
-            await admin.dispose();
+            await context.close();
         }
-        markOnboarded({ dataRoot: server.dataRoot, handle: 'alice' });
     }
 
     // Seed A's alice with a distinctive world so we can assert it lands
@@ -156,18 +123,11 @@ test.describe('LAN Sync — multi-user pair and sync', () => {
             localLabel: 'A device',
         });
 
-        // Same dual outcome as spec 01: if alice's seed worlds dirs on A
-        // and B happen to share content (both got the same Eldoria seed
-        // from default/content), attemptMerge's identical-trees path
-        // gives 'success'; if any byte diverged it surfaces 'warning'
-        // and we pick A's side.
-        expect(['warning', 'success']).toContain(acceptOutcome);
-        if (acceptOutcome === 'warning') {
-            const resolved = await resolveAllConflictsAs(pageB, 'theirs');
-            expect(resolved).toBe('success');
-        }
+        // Alice's worlds on A and B come from the same default content, so
+        // they match byte for byte and the first sync merges cleanly.
+        expect(acceptOutcome).toBe('success');
 
-        // The reconcile step writes A's seeded world into B's live data
+        // The sync writes A's seeded world into B's live data
         // UNDER ALICE'S HANDLE — not default-user. If the multi-user
         // resolution had degenerated to "treat all callers as
         // default-user", the file would land in B's `default-user/worlds/`
@@ -184,22 +144,16 @@ test.describe('LAN Sync — multi-user pair and sync', () => {
         // No basic-auth credentials were stored (none were supplied), but
         // the durable pairing secret is on B's peer entry.
         const bState = JSON.parse(fs.readFileSync(path.join(B.dataRoot, 'alice', '.sync', 'state.json'), 'utf8'));
-        const peerEntry = Object.values(bState.peers).find(p => p.label === 'A device');
+        const peerEntry = Object.values(bState.backends).find(p => p.label === 'A device');
         expect(peerEntry).toBeTruthy();
-        expect(peerEntry.syncSecret).toMatch(/^[a-f0-9]{64}$/);
-        expect(peerEntry.peerAuth).toBeUndefined();
+        expect(peerEntry.lan.syncSecret).toMatch(/^[a-f0-9]{64}$/);
+        expect(peerEntry.lan.peerAuth).toBeNull();
 
         // Follow-up "Sync now" must succeed without any credential
-        // prompt — the stored secret authenticates the offer. The outcome
-        // 'success' (or 'warning' if the responder ever ships another
-        // byte under alice/worlds after first pair; we accept both like
-        // spec 01).
+        // prompt: with no basic-auth credentials stored, the secret alone
+        // authenticates the offer and the push.
         const syncAgain = await clickSyncNow(pageB, 'A device');
-        expect(['success', 'warning']).toContain(syncAgain);
-        if (syncAgain === 'warning') {
-            const resolveAgain = await resolveAllConflictsAs(pageB, 'theirs');
-            expect(resolveAgain).toBe('success');
-        }
+        expect(syncAgain).toBe('success');
 
         await ctxA.close();
         await ctxB.close();

@@ -19,6 +19,8 @@ describe('extensions discover', () => {
     let server;
     let baseUrl;
     let userExtensionsDir;
+    let globalExtensionsDir;
+    let originalGlobalExtensionsDir;
 
     beforeAll(async () => {
         userExtensionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-extensions-'));
@@ -30,6 +32,19 @@ describe('extensions discover', () => {
         // A leftover folder without a manifest (e.g. locked .git remnant after manual deletion)
         fs.mkdirSync(path.join(userExtensionsDir, 'Deleted-Husk'));
         fs.mkdirSync(path.join(userExtensionsDir, 'Deleted-Husk', '.git'));
+
+        // A half-finished install or update staged next to its target
+        fs.mkdirSync(path.join(userExtensionsDir, '.luker-staging-extension-0123'));
+        fs.writeFileSync(path.join(userExtensionsDir, '.luker-staging-extension-0123', 'manifest.json'), JSON.stringify({ display_name: 'Staged' }));
+
+        globalExtensionsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-global-extensions-'));
+        fs.mkdirSync(path.join(globalExtensionsDir, 'Global-Extension'));
+        fs.writeFileSync(path.join(globalExtensionsDir, 'Global-Extension', 'manifest.json'), JSON.stringify({ display_name: 'Global' }));
+        fs.mkdirSync(path.join(globalExtensionsDir, '.luker-staging-extension-4567'));
+        fs.writeFileSync(path.join(globalExtensionsDir, '.luker-staging-extension-4567', 'manifest.json'), JSON.stringify({ display_name: 'Staged' }));
+        const constants = await import('../src/constants.js');
+        originalGlobalExtensionsDir = constants.PUBLIC_DIRECTORIES.globalExtensions;
+        constants.setGlobalExtensionsDirectory(globalExtensionsDir);
 
         const { default: express } = await import('express');
         const { router } = await import('../src/endpoints/extensions.js');
@@ -50,6 +65,9 @@ describe('extensions discover', () => {
     afterAll(async () => {
         await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
         fs.rmSync(userExtensionsDir, { recursive: true, force: true });
+        const constants = await import('../src/constants.js');
+        constants.setGlobalExtensionsDirectory(originalGlobalExtensionsDir);
+        fs.rmSync(globalExtensionsDir, { recursive: true, force: true });
     });
 
     test('lists folders with a manifest and skips folders without one', async () => {
@@ -59,5 +77,12 @@ describe('extensions discover', () => {
         const names = extensions.map(x => x.name);
         expect(names).toContain('third-party/Valid-Extension');
         expect(names).not.toContain('third-party/Deleted-Husk');
+    });
+
+    test('skips staging directories of installs and updates in progress', async () => {
+        const response = await fetch(`${baseUrl}/discover`);
+        const names = (await response.json()).map(x => x.name);
+        expect(names).toContain('third-party/Global-Extension');
+        expect(names.filter(name => name.includes('.luker-staging-'))).toEqual([]);
     });
 });

@@ -1,4 +1,4 @@
-/* public/scripts/run-panel/panel.css — shared run panel, scoped under .luker-run-panel / .luker-run-panel-pill */
+/* Shared run panel, scoped under .luker-run-panel. */
 
 .luker-run-panel {
     --panel-bg: var(--SmartThemeBlurTintColor, rgba(20, 22, 30, 0.96));
@@ -271,31 +271,3 @@
     opacity: 0.6;
     font-size: 12px;
 }
-
-/* Floating "running" pill shown when panel is manually closed mid-run.
-   Sits just under the top bar (--topBarBlockSize), horizontally centered.
-   Occupies a small strip at the top of the chat area rather than the top
-   bar itself, so it never covers #top-bar buttons (left icons) or
-   #top-settings-holder buttons (User Settings / Advanced Formatting /
-   Extensions on the right). */
-.luker-run-panel-pill {
-    position: fixed;
-    top: calc(var(--topBarBlockSize, 30px) + 4px);
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 8900;
-    padding: 4px 10px;
-    background: var(--panel-running, #4dd6a1);
-    color: #001b14;
-    border: none;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-    max-width: calc(100vw - 16px);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-.luker-run-panel-pill[hidden] { display: none; }

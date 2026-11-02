@@ -9,13 +9,12 @@ import { test, expect } from '@playwright/test';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startPostgresContainer } from '../_lib/db-containers.js';
-import { markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI } from '../_lib/page.js';
+import { awaitMainUI, completeOnboarding } from '../_lib/page.js';
+import { importWorldDocument } from '../_lib/ui-worldinfo.js';
 import {
     openLanSyncPanel,
     generatePairingLink,
     acceptPairingLink,
-    resolveAllConflictsAs,
 } from '../_lib/sync.js';
 
 const A_DB = 'luker_test_sync_a';
@@ -62,8 +61,6 @@ test.beforeAll(async () => {
             'storage.postgres.url': pgContainer.urlFor(B_DB),
         },
     });
-    markOnboarded({ dataRoot: A.dataRoot });
-    markOnboarded({ dataRoot: B.dataRoot });
 });
 
 test.afterAll(async () => {
@@ -73,18 +70,7 @@ test.afterAll(async () => {
 });
 
 async function saveWorld(page, name, data) {
-    return page.evaluate(async ({ name, data }) => {
-        const csrfResp = await fetch('/csrf-token', { credentials: 'same-origin' });
-        const { token } = await csrfResp.json();
-        const res = await fetch('/api/worldinfo/edit', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-            body: JSON.stringify({ name, data }),
-        });
-        if (!res.ok) throw new Error(`/api/worldinfo/edit failed: ${res.status}`);
-        return res.json();
-    }, { name, data });
+    await importWorldDocument(page, name, data);
 }
 
 async function fetchWorld(page, name) {
@@ -112,7 +98,9 @@ test.describe('LAN Sync — postgres mode pair and sync', () => {
         const pageB = await ctxB.newPage();
 
         await awaitMainUI(pageA, A.baseURL);
+        await completeOnboarding(pageA);
         await awaitMainUI(pageB, B.baseURL);
+        await completeOnboarding(pageB);
 
         await saveWorld(pageA, SEED_WORLD, SEED_WORLD_DATA);
         const aPre = await fetchWorld(pageA, SEED_WORLD);
@@ -131,11 +119,7 @@ test.describe('LAN Sync — postgres mode pair and sync', () => {
             categories: ['worlds'],
             localLabel: 'A device',
         });
-        expect(['warning', 'success']).toContain(outcome);
-        if (outcome === 'warning') {
-            const resolved = await resolveAllConflictsAs(pageB, 'theirs');
-            expect(resolved).toBe('success');
-        }
+        expect(outcome).toBe('success');
 
         await expect.poll(async () => {
             const w = await fetchWorld(pageB, SEED_WORLD);

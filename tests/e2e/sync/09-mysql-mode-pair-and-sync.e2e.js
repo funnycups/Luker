@@ -3,8 +3,8 @@
 // The SQL engines are fully syncable via per-record
 // materialize/dematerialize: instead of shipping a whole-DB blob, each
 // side projects its rows into a shadow workdir as one file per record,
-// commits that, and the responder dematerializes the merged tree back
-// through the engine. The companion in-process test pins the engine
+// commits that, and each device dematerializes the merged tree back
+// through its engine. The companion in-process test pins the engine
 // contract; this e2e drives the full UI pair-and-sync loop against
 // real mysql:8 servers spun up via testcontainers so a regression that
 // only shows up in real mysql (driver quirks, transaction isolation,
@@ -19,13 +19,12 @@ import { test, expect } from '@playwright/test';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMysqlContainer } from '../_lib/db-containers.js';
-import { markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI } from '../_lib/page.js';
+import { awaitMainUI, completeOnboarding } from '../_lib/page.js';
+import { importWorldDocument } from '../_lib/ui-worldinfo.js';
 import {
     openLanSyncPanel,
     generatePairingLink,
     acceptPairingLink,
-    resolveAllConflictsAs,
 } from '../_lib/sync.js';
 
 const A_DB = 'luker_test_sync_a';
@@ -75,8 +74,6 @@ test.beforeAll(async () => {
             'storage.mysql.url': mysqlContainer.urlFor(B_DB),
         },
     });
-    markOnboarded({ dataRoot: A.dataRoot });
-    markOnboarded({ dataRoot: B.dataRoot });
 });
 
 test.afterAll(async () => {
@@ -90,18 +87,7 @@ test.afterAll(async () => {
  * WorldInfoRepo → engine.putResource. Returns the parsed response.
  */
 async function saveWorld(page, name, data) {
-    return page.evaluate(async ({ name, data }) => {
-        const csrfResp = await fetch('/csrf-token', { credentials: 'same-origin' });
-        const { token } = await csrfResp.json();
-        const res = await fetch('/api/worldinfo/edit', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-            body: JSON.stringify({ name, data }),
-        });
-        if (!res.ok) throw new Error(`/api/worldinfo/edit failed: ${res.status}`);
-        return res.json();
-    }, { name, data });
+    await importWorldDocument(page, name, data);
 }
 
 /**
@@ -134,7 +120,9 @@ test.describe('LAN Sync — mysql mode pair and sync', () => {
         const pageB = await ctxB.newPage();
 
         await awaitMainUI(pageA, A.baseURL);
+        await completeOnboarding(pageA);
         await awaitMainUI(pageB, B.baseURL);
+        await completeOnboarding(pageB);
 
         // Seed A's mysql with the marker world. After this returns,
         // the row lives in A's mysql DB under `default-user`; B's mysql
@@ -148,10 +136,9 @@ test.describe('LAN Sync — mysql mode pair and sync', () => {
         expect(bPre?.entries?.['0']).toBeUndefined();
 
         // Pair on the worlds category. Both sides project their worlds
-        // table into the shadow workdir as one .json per row; the merge
-        // either auto-succeeds (identical seed) or surfaces conflicts
-        // on the seed Eldoria.json. Marker.json is unique to A so it
-        // always lands clean.
+        // table into the shadow workdir as one .json per row. Both
+        // servers hold the same seed worlds and marker.json exists only on
+        // A, so the merge is clean.
         await openLanSyncPanel(pageA);
         const link = await generatePairingLink(pageA, {
             label: 'B device',
@@ -163,14 +150,10 @@ test.describe('LAN Sync — mysql mode pair and sync', () => {
             categories: ['worlds'],
             localLabel: 'A device',
         });
-        expect(['warning', 'success']).toContain(outcome);
-        if (outcome === 'warning') {
-            const resolved = await resolveAllConflictsAs(pageB, 'theirs');
-            expect(resolved).toBe('success');
-        }
+        expect(outcome).toBe('success');
 
         // The defining assertion: B's worldinfo API reports A's marker.
-        // The data path goes pair/accept → runPull → reconcile →
+        // The data path goes pair/accept → merge → reconcile →
         // dematerialize → WorldInfoRepo.save → MysqlEngine.putResource
         // → SELECT round-trip via /api/worldinfo/get. If any link in
         // that chain regressed under mysql, this returns the empty

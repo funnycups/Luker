@@ -67,6 +67,7 @@ import {
     regenerateGroup,
     group_generation_id,
     getGroupChat,
+    loadGroupChat,
     renameGroupMember,
     createNewGroupChat,
     editGroup,
@@ -212,7 +213,7 @@ import { downloadFromServer } from './scripts/luker-download.js';
 
 import { bootstrapExtensions, cancelDebouncedMetadataSave, doDailyExtensionUpdatesCheck, extension_settings, initExtensions, primeExtensionSettings, runGenerationInterceptors, saveMetadataDebounced } from './scripts/extensions.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './scripts/state-errors.js';
-import { readStateEnvelope } from './scripts/state-resource.js';
+import { invalidateStateResources, normalizeStateNamespace, readStateEnvelope } from './scripts/state-resource.js';
 import {
     formatHttpErrorHint,
     formatTransportErrorHint,
@@ -297,6 +298,7 @@ import { initDebugExportButton } from './scripts/debug-export.js';
 import { initDebugMenuCapture } from './scripts/debug-menu-capture.js';
 import { initAndroidDebugTrail } from './scripts/luker-android-debug-trail.js';
 import { currentUser, getConfigValidationMessage, isAdmin, setUserControls } from './scripts/user.js';
+import './scripts/sync-status.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup, callGenericPopup, fixToastrForDialogs } from './scripts/popup.js';
 import { renderTemplate, renderTemplateAsync } from './scripts/templates.js';
 import { initScrapers } from './scripts/scrapers.js';
@@ -2373,9 +2375,9 @@ async function firstLoadInit() {
             // so this is purely local cleanup so subsequent
             // getPresetStateBatch calls don't return stale rows for a name
             // that has just been deleted (or reused for a new preset).
-            eventSource.on(event_types.PRESET_DELETED, ({ apiId, name } = {}) => {
+            eventSource.on(event_types.PRESET_DELETED, async ({ apiId, name } = {}) => {
                 if (!apiId || !name) return;
-                invalidateAllPresetStateRequestCache({ apiId, name });
+                await invalidateAllPresetStateRequestCache({ apiId, name });
             });
         },
     ]);
@@ -3636,8 +3638,14 @@ export function cancelDebouncedChatSave() {
  * Visually removes all chat message elements.
  * @param {object} [options] Options
  * @param {boolean} [options.clearData=false] Optionally clear the chat array's contents.
+ * @param {function(): boolean} [options.isCurrent] Whether the originating chat entry still owns the clear.
  */
-export async function clearChat({ clearData = false } = {}) {
+export async function clearChat({ clearData = false, isCurrent = undefined } = {}) {
+    if (isCurrent) {
+        await saveItemizedPrompts(getCurrentChatId());
+        if (!isCurrent()) return;
+    }
+
     stopLukerGenerationRecovery();
     cancelDebouncedChatSave();
     cancelDebouncedMetadataSave();
@@ -3653,7 +3661,7 @@ export async function clearChat({ clearData = false } = {}) {
         $('.zoomed_avatar[forChar]').remove();
     } else { console.debug('saw no avatars'); }
 
-    await saveItemizedPrompts(getCurrentChatId());
+    if (!isCurrent) await saveItemizedPrompts(getCurrentChatId());
     itemizedPrompts.length = 0;
 
     if (clearData) chat.length = 0;
@@ -12165,36 +12173,45 @@ function getPresetStateTargetKey(target) {
 }
 
 function getPresetStateRequestKey(target, namespace) {
-    return `${getPresetStateTargetKey(target)}::${String(namespace || '').trim().toLowerCase()}`;
+    return `${getPresetStateTargetKey(target)}::${normalizeStateNamespace(namespace)}`;
 }
 
-function invalidatePresetStateRequestCache(target, namespaces = []) {
+async function invalidatePresetStateRequestCache(target, namespaces = []) {
     const targetKey = getPresetStateTargetKey(target);
     if (!targetKey) {
         return;
     }
 
     const normalizedNamespaces = [...new Set((Array.isArray(namespaces) ? namespaces : [namespaces])
-        .map((namespace) => String(namespace || '').trim().toLowerCase())
+        .map(normalizeStateNamespace)
         .filter(Boolean))];
     for (const namespace of normalizedNamespaces) {
         const key = getPresetStateRequestKey(target, namespace);
         presetStateRequestCache.delete(key);
         presetStateRequestGeneration.set(key, (presetStateRequestGeneration.get(key) || 0) + 1);
     }
+    await invalidateStateResources('/api/presets/state/get', {
+        apiId: normalizePresetStateApiId(target.collection || target.apiId || target.type),
+        name: target.name,
+    }, normalizedNamespaces);
 }
 
-function invalidateAllPresetStateRequestCache(target) {
+async function invalidateAllPresetStateRequestCache(target) {
     const targetKey = getPresetStateTargetKey(target);
     if (!targetKey) {
         return;
     }
 
-    for (const cacheKey of [...presetStateRequestCache.keys()]) {
+    for (const cacheKey of new Set([...presetStateRequestCache.keys(), ...presetStateRequestGeneration.keys()])) {
         if (cacheKey.startsWith(`${targetKey}::`)) {
             presetStateRequestCache.delete(cacheKey);
+            presetStateRequestGeneration.set(cacheKey, (presetStateRequestGeneration.get(cacheKey) || 0) + 1);
         }
     }
+    await invalidateStateResources('/api/presets/state/get', {
+        apiId: normalizePresetStateApiId(target.collection || target.apiId || target.type),
+        name: target.name,
+    });
 }
 
 function getChatStateTargetKey(target) {
@@ -12210,23 +12227,29 @@ function getChatStateTargetKey(target) {
 }
 
 function getChatStateRequestKey(target, namespace) {
-    return `${getChatStateTargetKey(target)}::${String(namespace || '').trim().toLowerCase()}`;
+    return `${getChatStateTargetKey(target)}::${normalizeStateNamespace(namespace)}`;
 }
 
-function invalidateChatStateRequestCache(target, namespaces = []) {
+async function invalidateChatStateRequestCache(target, namespaces = []) {
     const targetKey = getChatStateTargetKey(target);
     if (!targetKey) {
         return;
     }
 
     const normalizedNamespaces = [...new Set((Array.isArray(namespaces) ? namespaces : [namespaces])
-        .map((namespace) => String(namespace || '').trim().toLowerCase())
+        .map(normalizeStateNamespace)
         .filter(Boolean))];
     for (const namespace of normalizedNamespaces) {
         const key = getChatStateRequestKey(target, namespace);
         chatStateRequestCache.delete(key);
         chatStateRequestGeneration.set(key, (chatStateRequestGeneration.get(key) || 0) + 1);
     }
+    await invalidateStateResources('/api/chats/state/get', {
+        is_group: target.is_group ? 'true' : 'false',
+        id: target.id,
+        avatar_url: target.avatar_url,
+        file_name: target.file_name,
+    }, normalizedNamespaces);
 }
 
 function isPlainObject(value) {
@@ -12723,6 +12746,10 @@ function syncCurrentChatIntegrityFromMetadata(metadata = null) {
     if (!chat_metadata || typeof chat_metadata !== 'object') {
         return;
     }
+    // A late response cannot authorize a group cleared by a pending or failed load.
+    if (selected_group && !chat_metadata.integrity) {
+        return;
+    }
 
     const nextIntegrity = typeof metadata?.integrity === 'string'
         ? metadata.integrity.trim()
@@ -12749,27 +12776,33 @@ export function applyIntegrityFromWritePayloadToTarget(payload, target = null, m
         metadata.integrity = nextIntegrity;
     }
 
+    // Incremental acknowledgements rotate only the accepted target's cached token,
+    // not its unsent metadata fields or a missing initialization baseline.
+    if (target?.is_group) {
+        const snapshot = getChatMetadataSnapshot(target);
+        if (snapshot) rememberChatMetadataSnapshot(target, { ...snapshot, integrity: nextIntegrity });
+    }
+
     if (isActiveChatStateTarget(target)) {
         syncCurrentChatIntegrityFromMetadata({ integrity: nextIntegrity });
     }
 }
 
 /**
- * Refreshes the integrity slug on a snapshotted metadata object from the live
- * `chat_metadata.integrity` if the snapshot belongs to the currently active chat.
- *
- * Save tasks queue via runSerializedChatWrite, but their saveContext (including
- * metadataSnapshot.integrity) is captured synchronously at call time. If another
- * save runs first and advances the server integrity, the live `chat_metadata`
- * is updated but the queued task's snapshot is not — sending the snapshot's
- * stale integrity then triggers a 409. Calling this just before each fetch
- * pulls the freshest integrity into the snapshot so the request lines up with
- * whatever the server actually has now (without overriding any of the
- * snapshot's other fields).
+ * Refreshes a queued write's token without replacing its captured metadata.
+ * Group acknowledgements remain target-owned while live metadata is unloaded
+ * or another chat is active. Solo writes retain their active-live token source.
  */
 export function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
     if (!isPlainObject(metadata)) {
         return;
+    }
+    if (target?.is_group) {
+        const acknowledgedIntegrity = getChatMetadataSnapshot(target)?.integrity;
+        if (acknowledgedIntegrity) {
+            metadata.integrity = acknowledgedIntegrity;
+            return;
+        }
     }
     if (!isActiveChatStateTarget(target)) {
         return;
@@ -12780,6 +12813,9 @@ export function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
     const liveIntegrity = typeof chat_metadata.integrity === 'string'
         ? chat_metadata.integrity.trim()
         : '';
+    if (target?.is_group && !liveIntegrity) {
+        return;
+    }
     if (liveIntegrity) {
         metadata.integrity = liveIntegrity;
     } else {
@@ -12793,35 +12829,33 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget())
         return null;
     }
 
+    if (resolvedTarget.is_group) {
+        const payload = await loadGroupChat(resolvedTarget.id);
+        const hasHeader = Object.hasOwn(payload[0] ?? {}, 'chat_metadata');
+        return {
+            target: resolvedTarget,
+            metadata: isPlainObject(payload[0]?.chat_metadata) ? cloneAsJsonWire(payload[0].chat_metadata) : {},
+            // Snapshot guards use stored bytes, not rendering-time media migration.
+            messages: hasHeader ? payload.slice(1) : payload,
+        };
+    }
+
     try {
-        let response;
-
-        if (resolvedTarget.is_group) {
-            response = await fetch('/api/chats/group/get', {
-                method: 'POST',
-                cache: 'no-cache',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({
-                    id: resolvedTarget.id,
-                }),
-            });
-        } else {
-            const charName = String(resolvedTarget.char_name || getCharacterName(characters[this_chid]) || '').trim();
-            if (!charName) {
-                return null;
-            }
-
-            response = await fetch('/api/chats/get', {
-                method: 'POST',
-                cache: 'no-cache',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({
-                    ch_name: charName,
-                    file_name: resolvedTarget.file_name,
-                    avatar_url: resolvedTarget.avatar_url,
-                }),
-            });
+        const charName = String(resolvedTarget.char_name || getCharacterName(characters[this_chid]) || '').trim();
+        if (!charName) {
+            return null;
         }
+
+        const response = await fetch('/api/chats/get', {
+            method: 'POST',
+            cache: 'no-cache',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                ch_name: charName,
+                file_name: resolvedTarget.file_name,
+                avatar_url: resolvedTarget.avatar_url,
+            }),
+        });
 
         if (!response.ok) {
             return null;
@@ -13008,7 +13042,9 @@ export async function getChatStateBatch(namespaces, options = {}) {
 
     const generations = new Map(need.map((ns) => {
         const requestKey = getChatStateRequestKey(target, ns);
-        return [requestKey, chatStateRequestGeneration.get(requestKey) || 0];
+        const generation = chatStateRequestGeneration.get(requestKey) || 0;
+        chatStateRequestGeneration.set(requestKey, generation);
+        return [requestKey, generation];
     }));
 
     let payloads;
@@ -13048,21 +13084,6 @@ export async function getChatStateBatch(namespaces, options = {}) {
         results.set(ns, { ok: true, state: raw });
     }
     return { ok: true, results };
-}
-
-/**
- * Internal helper: reads raw chat state for namespaces during the envelope
- * migration window. Unwraps the future {ok, state} envelope and returns the
- * raw state object (or null). Used by producers that need the baseline state
- * to compute optimistic `test` operations.
- *
- * @param {string} namespace Chat state namespace.
- * @param {object} [options] Additional options forwarded to getChatState.
- * @returns {Promise<object|null>} Raw state object or null.
- */
-async function getChatStateRaw(namespace, options = {}) {
-    const result = await getChatState(namespace, options);
-    return result?.ok ? result.state : null;
 }
 
 /**
@@ -13116,7 +13137,7 @@ export async function patchChatState(namespace, operations, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active chat (chatId resolution failed)'));
         }
-        invalidateChatStateRequestCache(target, [stateNamespace]);
+        await invalidateChatStateRequestCache(target, [stateNamespace]);
         const sourceOperations = operations.filter(op => op && typeof op === 'object');
         const baseOperations = sourceOperations.filter(op => String(op.op || '').trim().toLowerCase() !== 'test');
         if (baseOperations.length === 0) {
@@ -13137,18 +13158,21 @@ export async function patchChatState(namespace, operations, options = {}) {
             });
         };
 
-        let currentState = await getChatStateRaw(stateNamespace, { target });
-        let response = await patchOnce(currentState);
+        let current = await getChatState(stateNamespace, { target });
+        if (!current.ok) return makeStateError(current.reason, current.hint);
+        let response = await patchOnce(current.state);
         let retries = 0;
 
         if (response.status === 409) {
             retries = 1;
-            currentState = await getChatStateRaw(stateNamespace, { target });
-            response = await patchOnce(currentState);
+            await invalidateChatStateRequestCache(target, [stateNamespace]);
+            current = await getChatState(stateNamespace, { target });
+            if (!current.ok) return makeStateError(current.reason, current.hint);
+            response = await patchOnce(current.state);
         }
 
         if (response.ok) {
-            invalidateChatStateRequestCache(target, [stateNamespace]);
+            await invalidateChatStateRequestCache(target, [stateNamespace]);
             return makeStateOk();
         }
 
@@ -13196,8 +13220,6 @@ export async function updateChatState(namespace, updater, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active chat (chatId resolution failed)'));
         }
-        invalidateChatStateRequestCache(target, [stateNamespace]);
-
         const maxOperations = Number.isInteger(options?.maxOperations) && options.maxOperations > 0
             ? Number(options.maxOperations)
             : 2000;
@@ -13207,8 +13229,10 @@ export async function updateChatState(namespace, updater, options = {}) {
 
         let lastFailure = null;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            const currentStateRaw = await getChatStateRaw(stateNamespace, { target });
-            const currentState = normalizeJsonObject(currentStateRaw);
+            await invalidateChatStateRequestCache(target, [stateNamespace]);
+            const current = await getChatState(stateNamespace, { target });
+            if (!current.ok) return makeStateError(current.reason, current.hint);
+            const currentState = normalizeJsonObject(current.state);
             let nextStateRaw;
             try {
                 nextStateRaw = await updater(cloneAsJsonWire(currentState), {
@@ -13237,7 +13261,6 @@ export async function updateChatState(namespace, updater, options = {}) {
 
             const patchResult = await patchChatState(stateNamespace, operations, { target });
             if (patchResult.ok) {
-                invalidateChatStateRequestCache(target, [stateNamespace]);
                 return makeStateOk({ state: nextState, updated: true });
             }
             lastFailure = patchResult;
@@ -13275,14 +13298,17 @@ export async function deleteChatState(namespace, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active chat (chatId resolution failed)'));
         }
-        invalidateChatStateRequestCache(target, [stateNamespace]);
+        await invalidateChatStateRequestCache(target, [stateNamespace]);
         const response = await fetch('/api/chats/state/delete', {
             method: 'POST',
             cache: 'no-cache',
             headers: getRequestHeaders(),
             body: JSON.stringify({ ...target, namespace: stateNamespace }),
         });
-        if (response.ok) return makeStateOk();
+        if (response.ok) {
+            await invalidateChatStateRequestCache(target, [stateNamespace]);
+            return makeStateOk();
+        }
         const bodyText = await response.text().catch(() => '');
         return makeStateError(
             STATE_ERROR_REASONS.HTTP_ERROR,
@@ -13343,7 +13369,9 @@ export async function getPresetStateBatch(namespaces, options = {}) {
 
     const generations = new Map(need.map((ns) => {
         const requestKey = getPresetStateRequestKey(target, ns);
-        return [requestKey, presetStateRequestGeneration.get(requestKey) || 0];
+        const generation = presetStateRequestGeneration.get(requestKey) || 0;
+        presetStateRequestGeneration.set(requestKey, generation);
+        return [requestKey, generation];
     }));
 
     let payloads;
@@ -13381,21 +13409,6 @@ export async function getPresetStateBatch(namespaces, options = {}) {
         results.set(ns, { ok: true, state: raw });
     }
     return { ok: true, results };
-}
-
-/**
- * Internal helper: reads raw preset state for a namespace during the envelope
- * migration window. Unwraps the future {ok, state} envelope and returns the
- * raw state object (or null). Used by producers that need the baseline state
- * to compute optimistic `test` operations.
- *
- * @param {string} namespace Preset state namespace.
- * @param {object} [options] Additional options forwarded to getPresetState.
- * @returns {Promise<object|null>} Raw state object or null.
- */
-async function getPresetStateRaw(namespace, options = {}) {
-    const result = await getPresetState(namespace, options);
-    return result?.ok ? result.state : null;
 }
 
 /**
@@ -13449,7 +13462,7 @@ export async function patchPresetState(namespace, operations, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active preset (apiId/name resolution failed)'));
         }
-        invalidatePresetStateRequestCache(target, [stateNamespace]);
+        await invalidatePresetStateRequestCache(target, [stateNamespace]);
         const sourceOperations = operations.filter(op => op && typeof op === 'object');
         const baseOperations = sourceOperations.filter(op => String(op.op || '').trim().toLowerCase() !== 'test');
         if (baseOperations.length === 0) {
@@ -13471,18 +13484,21 @@ export async function patchPresetState(namespace, operations, options = {}) {
             });
         };
 
-        let currentState = await getPresetStateRaw(stateNamespace, { target });
-        let response = await patchOnce(currentState);
+        let current = await getPresetState(stateNamespace, { target });
+        if (!current.ok) return makeStateError(current.reason, current.hint);
+        let response = await patchOnce(current.state);
         let retries = 0;
 
         if (response.status === 409) {
             retries = 1;
-            currentState = await getPresetStateRaw(stateNamespace, { target });
-            response = await patchOnce(currentState);
+            await invalidatePresetStateRequestCache(target, [stateNamespace]);
+            current = await getPresetState(stateNamespace, { target });
+            if (!current.ok) return makeStateError(current.reason, current.hint);
+            response = await patchOnce(current.state);
         }
 
         if (response.ok) {
-            invalidatePresetStateRequestCache(target, [stateNamespace]);
+            await invalidatePresetStateRequestCache(target, [stateNamespace]);
             return makeStateOk();
         }
 
@@ -13530,8 +13546,6 @@ export async function updatePresetState(namespace, updater, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active preset (apiId/name resolution failed)'));
         }
-        invalidatePresetStateRequestCache(target, [stateNamespace]);
-
         const maxOperations = Number.isInteger(options?.maxOperations) && options.maxOperations > 0
             ? Number(options.maxOperations)
             : 2000;
@@ -13541,8 +13555,10 @@ export async function updatePresetState(namespace, updater, options = {}) {
 
         let lastFailure = null;
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            const currentStateRaw = await getPresetStateRaw(stateNamespace, { target });
-            const currentState = normalizeJsonObject(currentStateRaw);
+            await invalidatePresetStateRequestCache(target, [stateNamespace]);
+            const current = await getPresetState(stateNamespace, { target });
+            if (!current.ok) return makeStateError(current.reason, current.hint);
+            const currentState = normalizeJsonObject(current.state);
             let nextStateRaw;
             try {
                 nextStateRaw = await updater(cloneAsJsonWire(currentState), {
@@ -13571,7 +13587,6 @@ export async function updatePresetState(namespace, updater, options = {}) {
 
             const patchResult = await patchPresetState(stateNamespace, operations, { target });
             if (patchResult.ok) {
-                invalidatePresetStateRequestCache(target, [stateNamespace]);
                 return makeStateOk({ state: nextState, updated: true });
             }
             lastFailure = patchResult;
@@ -13609,7 +13624,7 @@ export async function deletePresetState(namespace, options = {}) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 formatValidationTargetHint('no active preset (apiId/name resolution failed)'));
         }
-        invalidatePresetStateRequestCache(target, [stateNamespace]);
+        await invalidatePresetStateRequestCache(target, [stateNamespace]);
         const response = await fetch('/api/presets/state/delete', {
             method: 'POST',
             cache: 'no-cache',
@@ -13620,7 +13635,10 @@ export async function deletePresetState(namespace, options = {}) {
                 namespace: stateNamespace,
             }),
         });
-        if (response.ok) return makeStateOk();
+        if (response.ok) {
+            await invalidatePresetStateRequestCache(target, [stateNamespace]);
+            return makeStateOk();
+        }
         const bodyText = await response.text().catch(() => '');
         return makeStateError(
             STATE_ERROR_REASONS.HTTP_ERROR,
@@ -13647,7 +13665,7 @@ export async function deleteAllPresetState(target = null) {
             return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
                 'No active preset to resolve apiId/name from — select a preset before calling deleteAllPresetState.');
         }
-        invalidateAllPresetStateRequestCache(resolvedTarget);
+        await invalidateAllPresetStateRequestCache(resolvedTarget);
 
         const response = await fetch('/api/presets/state/delete-all', {
             method: 'POST',
@@ -13660,7 +13678,7 @@ export async function deleteAllPresetState(target = null) {
         });
 
         if (response.ok) {
-            invalidateAllPresetStateRequestCache(resolvedTarget);
+            await invalidateAllPresetStateRequestCache(resolvedTarget);
             return makeStateOk();
         }
         const bodyText = await response.text().catch(() => '');
@@ -13690,8 +13708,8 @@ export async function renamePresetStateTarget(sourceTarget = null, targetTarget 
         if (!source || !target || source.apiId !== target.apiId) {
             return false;
         }
-        invalidateAllPresetStateRequestCache(source);
-        invalidateAllPresetStateRequestCache(target);
+        await invalidateAllPresetStateRequestCache(source);
+        await invalidateAllPresetStateRequestCache(target);
 
         const response = await fetch('/api/presets/state/rename', {
             method: 'POST',
@@ -13705,8 +13723,8 @@ export async function renamePresetStateTarget(sourceTarget = null, targetTarget 
         });
 
         if (response.ok) {
-            invalidateAllPresetStateRequestCache(source);
-            invalidateAllPresetStateRequestCache(target);
+            await invalidateAllPresetStateRequestCache(source);
+            await invalidateAllPresetStateRequestCache(target);
         }
 
         return response.ok;
@@ -13714,10 +13732,6 @@ export async function renamePresetStateTarget(sourceTarget = null, targetTarget 
         console.warn('Preset state rename failed', error);
         return false;
     }
-}
-
-function applyIntegrityFromWritePayload(payload) {
-    applyIntegrityFromWritePayloadToTarget(payload, resolveChatStateTarget(), chat_metadata);
 }
 
 export function invalidateChatWriteSnapshot(target = resolveChatStateTarget()) {
@@ -13740,14 +13754,6 @@ async function readChatWriteConflictPayload(response) {
     } catch {
         return null;
     }
-}
-
-async function resolveChatWriteConflict(response, retryCount = 0, requestContext = null, target = null) {
-    // target is captured by the caller BEFORE the await, so a chat switch
-    // during the round-trip doesn't make us invalidate the wrong snapshot.
-    // Fall back to active target only if the caller didn't pass one.
-    const resolvedTarget = target ?? resolveChatStateTarget();
-    return await resolveChatWriteConflictForTarget(response, resolvedTarget, chat_metadata, retryCount, requestContext);
 }
 
 /**
@@ -14124,7 +14130,7 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
  * @param {ChatMessage[]} messages Messages to append.
  * @returns {Promise<boolean>} True on successful append.
  */
-async function appendChatMessagesInternal(messages, retryCount = 0) {
+async function appendChatMessagesInternal(messages, retryCount = 0, context = null) {
     if (!Array.isArray(messages) || messages.length === 0) {
         return true;
     }
@@ -14135,7 +14141,8 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
     // trips the guard in saveChatInternal instead of full-saving an empty body.
     // Without a resolvable save target there is nothing to overwrite, so drop
     // the write silently instead of raising a data-loss alert.
-    if (!chat_metadata?.integrity) {
+    const metadata = context?.metadataSnapshot ?? cloneAsJsonWire(chat_metadata);
+    if (!metadata?.integrity) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Append dropped: chat transition in progress.');
             return false;
@@ -14156,7 +14163,7 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
     /** @type {ReturnType<typeof resolveChatStateTarget> | null} */
     let target = null;
     try {
-        target = resolveChatStateTarget();
+        target = context?.target ?? resolveChatStateTarget();
         const generationIds = summarizeLukerGenerationIdsForMessages(messages);
 
         // Optimistic snapshot commit: set BEFORE the fetch to what BE state will
@@ -14167,19 +14174,20 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
         // those changes into snapshot without ever sending them to BE → drift.
         const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
         const previousMessages = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
+        // An unacknowledged group initialization needs the caller's complete
+        // save, not an append that would omit its displayed greeting.
+        if (target?.is_group && !Array.isArray(previousMessages)) {
+            return false;
+        }
         if (Array.isArray(previousMessages) && snapshotKey) {
             // rememberChatMessageSnapshot deep-clones internally, so spreading
             // raw references is safe here — they get frozen on `.set`.
             rememberChatMessageSnapshot(target, [...previousMessages, ...messages]);
         }
 
-        if (selected_group) {
-            const group = groups.find(x => x.id == selected_group);
-            const groupChatId = group?.chat_id;
-            if (!groupChatId) {
-                return false;
-            }
-
+        if (target?.is_group) {
+            const groupChatId = target.id;
+            refreshSnapshotIntegrityFromActiveLive(target, metadata);
             const response = await fetch('/api/chats/group/append', {
                 method: 'POST',
                 cache: 'no-cache',
@@ -14187,8 +14195,8 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 body: JSON.stringify({
                     id: groupChatId,
                     messages: messages,
-                    chat_metadata: { ...chat_metadata },
-                    integrity: chat_metadata?.integrity,
+                    chat_metadata: { ...metadata },
+                    integrity: metadata.integrity,
                     luker_generation_id: getLastLukerGenerationIdForApi(),
                 }),
             });
@@ -14214,21 +14222,21 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                     // from server truth to realign before the next write builds
                     // diffs against a snapshot BE can't match.
                     const refreshed = await refreshChatWriteSnapshotsFromServer(target);
-                    return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
+                    return Boolean(refreshed && lodash.isEqual(refreshed.messages, context.messagesSnapshot));
                 }
-                applyIntegrityFromWritePayload(payload);
+                applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
                 // Snapshot already committed optimistically before the fetch.
                 return true;
             }
-            // Any 409 surfaces via resolveChatWriteConflict (toast + event + snapshot
+            // Any 409 surfaces via resolveChatWriteConflictForTarget (toast + event + snapshot
             // invalidation + integrity refresh). Returning false lets the caller's
             // saveChatConditional fallback do a full /api/chats/save and restore
             // BE = FE (FE-wins).
-            await resolveChatWriteConflict(response, retryCount, {
+            await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
                 endpoint: 'chats/group/append',
                 opSummary: summarizeAppendedMessages(messages),
-                sentIntegrity: chat_metadata?.integrity,
-            }, target);
+                sentIntegrity: metadata.integrity,
+            });
             return false;
         }
 
@@ -14249,8 +14257,8 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 file_name: fileName,
                 messages: messages,
                 avatar_url: avatar,
-                chat_metadata: { ...chat_metadata },
-                integrity: chat_metadata?.integrity,
+                chat_metadata: { ...metadata },
+                integrity: metadata.integrity,
                 luker_generation_id: getLastLukerGenerationIdForApi(),
             }),
         });
@@ -14278,17 +14286,17 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
                 const refreshed = await refreshChatWriteSnapshotsFromServer(target);
                 return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
             }
-            applyIntegrityFromWritePayload(payload);
+            applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
             // Snapshot already committed optimistically before the fetch.
             return true;
         }
         // See group-branch comment: any 409 → toast/event/snapshot-invalidate via
-        // resolveChatWriteConflict, then return false to let caller full-save.
-        await resolveChatWriteConflict(response, retryCount, {
+        // resolveChatWriteConflictForTarget, then return false to let caller full-save.
+        await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
             endpoint: 'chats/append',
             opSummary: summarizeAppendedMessages(messages),
-            sentIntegrity: chat_metadata?.integrity,
-        }, target);
+            sentIntegrity: metadata.integrity,
+        });
         return false;
     } catch (error) {
         console.warn('Incremental chat append failed', error);
@@ -14305,7 +14313,9 @@ async function appendChatMessagesInternal(messages, retryCount = 0) {
 
 export async function appendChatMessages(messages, retryCount = 0) {
     const queuedMessages = cloneAsJsonWire(messages) ?? messages;
-    return await runSerializedChatWrite(() => appendChatMessagesInternal(queuedMessages, retryCount));
+    const context = selected_group ? buildActiveChatSaveContext() : null;
+    if (selected_group && !context) return false;
+    return await runSerializedChatWrite(() => appendChatMessagesInternal(queuedMessages, retryCount, context));
 }
 
 /**
@@ -14314,7 +14324,7 @@ export async function appendChatMessages(messages, retryCount = 0) {
  * @param {object[]|object} operations Patch operations (single op or op array).
  * @returns {Promise<boolean>} True on successful patch.
  */
-async function patchChatMessagesInternal(operations, retryCount = 0) {
+async function patchChatMessagesInternal(operations, retryCount = 0, context = null) {
     const normalizedOperations = Array.isArray(operations)
         ? operations
         : (operations && typeof operations === 'object' ? [operations] : []);
@@ -14327,7 +14337,8 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
     // saveChatInternal for full rationale). Same false-return semantics as
     // appendChatMessagesInternal: a write with no resolvable save target has
     // nothing to overwrite, so it is dropped silently.
-    if (!chat_metadata?.integrity) {
+    const metadata = context?.metadataSnapshot ?? cloneAsJsonWire(chat_metadata);
+    if (!metadata?.integrity) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Patch dropped: chat transition in progress.');
             return false;
@@ -14348,7 +14359,7 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
     /** @type {ReturnType<typeof resolveChatStateTarget> | null} */
     let target = null;
     try {
-        target = resolveChatStateTarget();
+        target = context?.target ?? resolveChatStateTarget();
         const snapshotKey = target ? getChatMessageSnapshotKey(target) : null;
         const previousMessages = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
         const guardedOperations = attachChatMessagePatchTests(previousMessages, normalizedOperations);
@@ -14375,13 +14386,9 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
             }
         }
 
-        if (selected_group) {
-            const group = groups.find(x => x.id == selected_group);
-            const groupChatId = group?.chat_id;
-            if (!groupChatId) {
-                return false;
-            }
-
+        if (target?.is_group) {
+            const groupChatId = target.id;
+            refreshSnapshotIntegrityFromActiveLive(target, metadata);
             const response = await fetch('/api/chats/group/patch', {
                 method: 'POST',
                 cache: 'no-cache',
@@ -14389,27 +14396,27 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
                 body: JSON.stringify({
                     id: groupChatId,
                     operations: guardedOperations,
-                    chat_metadata: { ...chat_metadata },
-                    integrity: chat_metadata?.integrity,
+                    chat_metadata: { ...metadata },
+                    integrity: metadata.integrity,
                     luker_generation_id: getLastLukerGenerationIdForApi(),
                 }),
             });
 
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
-                applyIntegrityFromWritePayload(payload);
+                applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
                 // Snapshot already committed optimistically before the fetch.
                 return true;
             }
-            // Any 409 surfaces via resolveChatWriteConflict; returning false lets
+            // Any 409 surfaces via resolveChatWriteConflictForTarget; returning false lets
             // the caller's saveChatConditional fallback do a full /api/chats/save.
             // No rebuild-and-retry: full save is bulletproof and avoids the
             // "diff itself was wrong" failure mode.
-            await resolveChatWriteConflict(response, retryCount, {
+            await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
                 endpoint: 'chats/group/patch',
                 opSummary: summarizeJsonPatchOperations(guardedOperations),
-                sentIntegrity: chat_metadata?.integrity,
-            }, target);
+                sentIntegrity: metadata.integrity,
+            });
             return false;
         }
 
@@ -14430,25 +14437,25 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
                 file_name: fileName,
                 operations: guardedOperations,
                 avatar_url: avatar,
-                chat_metadata: { ...chat_metadata },
-                integrity: chat_metadata?.integrity,
+                chat_metadata: { ...metadata },
+                integrity: metadata.integrity,
                 luker_generation_id: getLastLukerGenerationIdForApi(),
             }),
         });
 
         if (response.ok) {
             const payload = await response.json().catch(() => null);
-            applyIntegrityFromWritePayload(payload);
+            applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
             // Snapshot already committed optimistically before the fetch.
             return true;
         }
         // See group-branch comment: full-save fallback via the caller covers all
-        // 409 cases; resolveChatWriteConflict handles toast/event/snapshot.
-        await resolveChatWriteConflict(response, retryCount, {
+        // 409 cases; resolveChatWriteConflictForTarget handles toast/event/snapshot.
+        await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
             endpoint: 'chats/patch',
             opSummary: summarizeJsonPatchOperations(guardedOperations),
-            sentIntegrity: chat_metadata?.integrity,
-        }, target);
+            sentIntegrity: metadata.integrity,
+        });
         return false;
     } catch (error) {
         console.warn('Incremental chat patch failed', error);
@@ -14464,7 +14471,9 @@ async function patchChatMessagesInternal(operations, retryCount = 0) {
 
 export async function patchChatMessages(operations, retryCount = 0) {
     const queuedOperations = cloneAsJsonWire(operations) ?? operations;
-    return await runSerializedChatWrite(() => patchChatMessagesInternal(queuedOperations, retryCount));
+    const context = selected_group ? buildActiveChatSaveContext() : null;
+    if (selected_group && !context) return false;
+    return await runSerializedChatWrite(() => patchChatMessagesInternal(queuedOperations, retryCount, context));
 }
 
 function buildActiveChatSaveContext({ withMetadata = undefined, chatName = undefined, mesId = undefined, withMessages = true } = {}) {
@@ -14577,7 +14586,7 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
     // Data-loss guard: refuse to save when chat is not fully loaded (see
     // saveChatInternal for full rationale). A write with no resolvable save
     // target has nothing to overwrite, so it is dropped silently.
-    if (!chat_metadata?.integrity) {
+    if (!(context?.kind === 'group' ? context.metadataSnapshot?.integrity : chat_metadata?.integrity)) {
         if (isChatTransitionInProgress()) {
             console.debug('[ChatWrite] Metadata save dropped: chat transition in progress.');
             return false;
@@ -14705,9 +14714,24 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
     }
 }
 
+async function saveChatMetadataForContext(withMetadata, retryCount, context) {
+    if (context?.kind !== 'group') {
+        return await saveChatMetadataInternal(withMetadata, retryCount, context);
+    }
+    // A metadata-only acknowledgement cannot establish unsaved messages.
+    // An acknowledged empty message array is a valid existing conversation.
+    if (Array.isArray(getChatMessageSnapshot(context.target))) {
+        const saved = await saveChatMetadataInternal(withMetadata, retryCount, context);
+        if (saved) return true;
+    }
+    return await saveGroupChat(context.groupId, true, false, 0, { ...context, skipSerialization: true });
+}
+
 export async function saveChatMetadata(withMetadata = undefined, retryCount = 0) {
     const metadataPatch = cloneAsJsonWire(withMetadata) ?? withMetadata;
-    return await runSerializedChatWrite(() => saveChatMetadataInternal(metadataPatch, retryCount));
+    const context = selected_group ? buildActiveChatSaveContext({ withMetadata: metadataPatch }) : null;
+    if (selected_group && !context) return false;
+    return await runSerializedChatWrite(() => saveChatMetadataForContext(metadataPatch, retryCount, context));
 }
 
 /**
@@ -17630,7 +17654,9 @@ export async function saveMetadata(options = {}) {
     const withMetadata = (options && typeof options === 'object') ? options.withMetadata : undefined;
 
     try {
-        const saveContext = buildActiveChatSaveContext({ withMetadata, withMessages: false });
+        // Group metadata failures use the complete writer. Preserve its messages
+        // before an awaited request can outlive the active target.
+        const saveContext = buildActiveChatSaveContext({ withMetadata, withMessages: Boolean(selected_group) });
         if (!saveContext) {
             return;
         }
@@ -17639,13 +17665,9 @@ export async function saveMetadata(options = {}) {
             activeChatSaveContext = saveContext;
             isChatSaving = true;
 
-            const saved = await saveChatMetadataInternal(withMetadata, 0, saveContext);
-            if (!saved) {
-                if (saveContext.kind === 'group') {
-                    await saveGroupChat(saveContext.groupId, true, false, 0, { ...saveContext, skipSerialization: true });
-                } else {
-                    await saveChatInternal({ withMetadata, _context: saveContext });
-                }
+            const saved = await saveChatMetadataForContext(withMetadata, 0, saveContext);
+            if (!saved && saveContext.kind !== 'group') {
+                await saveChatInternal({ withMetadata, _context: saveContext });
             }
 
             finishActiveChatSaveContext(saveContext);
@@ -19443,7 +19465,7 @@ export async function renameGroupOrCharacterChat({ characterId, groupId, oldFile
             await reloadCurrentChat();
         }
 
-        const eventData = { avatarId: body.avatar_url, groupId, oldFileName: body.original_file, newFileName: body.renamed_file };
+        const eventData = { avatarId: body.avatar_url, groupId, oldFileName: body.original_file, newFileName: `${newFileName}.jsonl` };
         await eventSource.emit(event_types.CHAT_RENAMED, eventData);
     } catch {
         await delay(500);

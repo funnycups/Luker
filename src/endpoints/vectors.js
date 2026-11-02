@@ -27,6 +27,7 @@ import {
     extractEmbeddingMeta,
     getInspectionAbortSignal,
 } from '../request-inspector.js';
+import { runGatedWrite } from '../sync/in-progress-gate.js';
 
 // Vector sources that never hit an upstream HTTP endpoint from the server:
 //   - transformers  → local xenova/transformers pipeline (in-process inference)
@@ -235,7 +236,8 @@ async function getIndex(directories, collectionId, source, sourceSettings) {
     const store = new vectra.LocalIndex(pathToFile);
 
     if (!await store.isIndexCreated()) {
-        await store.createIndex();
+        // Creating an empty index writes synced data; only this step takes a gate slot.
+        await runGatedWrite({ userRoot: directories.root }, () => store.createIndex(), { dirty: false });
     }
 
     return store;
@@ -251,19 +253,18 @@ async function getIndex(directories, collectionId, source, sourceSettings) {
  * @param {import('express').Request} [request] - Inspector-carrying request
  */
 async function insertVectorItems(directories, collectionId, source, sourceSettings, items, request = null) {
-    const store = await getIndex(directories, collectionId, source, sourceSettings);
-
-    await store.beginUpdate();
-
+    // Embeddings are fetched first without a gate slot; the index update then
+    // runs under one slot and never waits on the network.
     const vectors = await getBatchVector(source, sourceSettings, items.map(x => x.text), false, directories, request);
-
-    for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        const vector = vectors[i];
-        await store.upsertItem({ vector: vector, metadata: { hash: item.hash, text: item.text, index: item.index, ...(item.metadata || {}) } });
-    }
-
-    await store.endUpdate();
+    await runGatedWrite({ userRoot: directories.root, handle: request?.user?.profile?.handle ?? null }, async () => {
+        const store = await getIndex(directories, collectionId, source, sourceSettings);
+        await store.beginUpdate();
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            await store.upsertItem({ vector: vectors[i], metadata: { hash: item.hash, text: item.text, index: item.index, ...(item.metadata || {}) } });
+        }
+        await store.endUpdate();
+    });
 
     // Return first vector dim so the router can surface `vectorDim` on the
     // inspector entry without a second pass over the vectors array.

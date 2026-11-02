@@ -1,6 +1,8 @@
-import { NotFoundError } from '../errors.js';
+import { ConflictError, NotFoundError } from '../errors.js';
 import { assertSafeRepoNameShape } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
+import { chatHeaderWithIntegrity, chatLocation, parseChatDocument, parseChatJson } from './chat-record.js';
+import { registerSqlChatMove } from './chat-move.js';
 
 // PgTransaction — pg-driver port of MysqlTransaction / SqliteTransaction.
 // Same handler surface and per-kind methods so Repos remain engine-agnostic.
@@ -53,6 +55,9 @@ export class PgTransaction {
     async listResources(filter)  { return this._h(filter.kind, 'listResources').list(filter); }
 
     async putResourceIfMatch(key, expectedIntegrity, record) {
+        if (key.kind === 'chat' && expectedIntegrity === null) {
+            return { updated: await this._h('chat', 'putResourceIfMatch').put(key, record, { ifAbsent: true }) };
+        }
         const existing = await this.getResource(key);
         if (expectedIntegrity === null) {
             if (existing !== null) return { updated: false };
@@ -101,10 +106,10 @@ function chatKeyToParams(key) {
 export function registerChatHandler(tx) {
     const client = tx._client;
 
-    async function readRow(p) {
+    async function readRow(p, { lock = false } = {}) {
         const r = await client.query(
-            `SELECT doc, integrity, updated_at, created_at
-             FROM chats WHERE handle=$1 AND char_dir=$2 AND name=$3 AND is_group=$4 AND group_id=$5`,
+            `SELECT doc::text AS doc, integrity, updated_at, created_at
+             FROM chats WHERE handle=$1 AND char_dir=$2 AND name=$3 AND is_group=$4 AND group_id=$5${lock ? ' FOR UPDATE' : ''}`,
             [p.handle, p.char_dir, p.name, p.is_group, p.group_id],
         );
         return r.rows[0] || null;
@@ -115,10 +120,7 @@ export function registerChatHandler(tx) {
             const p = chatKeyToParams(key);
             const row = await readRow(p);
             if (!row) return null;
-            const parsed = coerceJson(row.doc);
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-            if (!parsed.header || typeof parsed.header !== 'object' || Array.isArray(parsed.header)) return null;
-            if (!Array.isArray(parsed.body)) return null;
+            const parsed = parseChatDocument(row.doc, key);
             return {
                 key,
                 header: parsed.header,
@@ -128,7 +130,7 @@ export function registerChatHandler(tx) {
                 createdAt: row.created_at,
             };
         },
-        async put(key, record) {
+        async put(key, record, { ifAbsent = false } = {}) {
             if (key.isGroup) {
                 assertSafeRepoNameShape(key.groupId ?? key.name, { field: 'chat.groupId' });
             } else {
@@ -136,19 +138,19 @@ export function registerChatHandler(tx) {
                 assertSafeRepoNameShape(key.name, { field: 'chat.name' });
             }
             const p = chatKeyToParams(key);
-            const headerWithIntegrity = {
-                ...record.header,
-                chat_metadata: {
-                    ...(record.header.chat_metadata ?? {}),
-                    integrity: record.integrity,
-                },
-            };
+            const headerWithIntegrity = chatHeaderWithIntegrity(record);
             const doc = JSON.stringify({ header: headerWithIntegrity, body: record.body });
             // Preserve existing created_at on upsert; only set fresh on first insert.
             const existing = await readRow(p);
             const now = Date.now();
             const updatedAt = record.updatedAt ?? now;
             const createdAt = record.createdAt ?? existing?.created_at ?? now;
+            if (ifAbsent) {
+                const result = await client.query(`INSERT INTO chats (handle, char_dir, name, is_group, group_id, doc, updated_at, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+                    ON CONFLICT (handle, char_dir, name, is_group, group_id) DO NOTHING`, [p.handle, p.char_dir, p.name, p.is_group, p.group_id, doc, updatedAt, createdAt]);
+                return result.rowCount > 0;
+            }
             await client.query(
                 `INSERT INTO chats (handle, char_dir, name, is_group, group_id, doc, updated_at, created_at)
                  VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
@@ -208,19 +210,28 @@ export function registerChatHandler(tx) {
     });
 
     // Sidecar tx methods — direct on tx, matching MysqlTransaction surface.
-    tx.getChatState = async (chatKey, namespace) => {
+    tx.hasChatResource = async chatKey => {
+        const p = chatKeyToParams(chatKey);
+        const result = await client.query('SELECT 1 FROM chats WHERE handle=$1 AND char_dir=$2 AND name=$3 AND is_group=$4 AND group_id=$5', [p.handle, p.char_dir, p.name, p.is_group, p.group_id]);
+        return result.rows.length > 0;
+    };
+
+    tx.getChatState = async (chatKey, namespace, { required = false } = {}) => {
         const p = chatKeyToParams(chatKey);
         const r = await client.query(
-            `SELECT doc FROM chat_states
+            `SELECT doc::text AS doc FROM chat_states
              WHERE handle=$1 AND char_dir=$2 AND name=$3 AND is_group=$4 AND group_id=$5 AND namespace=$6`,
             [p.handle, p.char_dir, p.name, p.is_group, p.group_id, namespace],
         );
         const row = r.rows[0];
-        if (!row) return null;
-        return coerceJson(row.doc);
+        if (!row) {
+            if (required) throw new Error(`Cannot read enumerated chat state at ${chatLocation(chatKey, namespace)}: row is missing`);
+            return null;
+        }
+        return parseChatJson(row.doc, chatLocation(chatKey, namespace));
     };
 
-    tx.putChatState = async (chatKey, namespace, doc) => {
+    tx.putChatState = async (chatKey, namespace, doc, { ifAbsent = false } = {}) => {
         const p = chatKeyToParams(chatKey);
         // Precheck parent exists so we raise a typed NotFoundError instead of
         // bubbling Postgres's raw FK error (foreign_key_violation, SQLSTATE
@@ -235,6 +246,13 @@ export function registerChatHandler(tx) {
                 charDir: chatKey.charDir,
                 name: chatKey.name,
             });
+        }
+        if (ifAbsent) {
+            const result = await client.query(`INSERT INTO chat_states (handle, char_dir, name, is_group, group_id, namespace, doc)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+                ON CONFLICT (handle, char_dir, name, is_group, group_id, namespace) DO NOTHING`, [p.handle, p.char_dir, p.name, p.is_group, p.group_id, namespace, JSON.stringify(doc)]);
+            if (result.rowCount === 0) throw new ConflictError('rename_target_exists', { ...chatKey, namespace });
+            return;
         }
         await client.query(
             `INSERT INTO chat_states (handle, char_dir, name, is_group, group_id, namespace, doc)
@@ -264,6 +282,20 @@ export function registerChatHandler(tx) {
         );
         return r.rows.map((row) => row.namespace);
     };
+
+    const params = key => { const p = chatKeyToParams(key); return [p.handle, p.char_dir, p.name, p.is_group, p.group_id]; };
+    registerSqlChatMove(tx, {
+        readParent: key => readRow(chatKeyToParams(key), { lock: true }),
+        readStates: async key => (await client.query(`SELECT namespace, doc::text AS doc FROM chat_states
+            WHERE handle=$1 AND char_dir=$2 AND name=$3 AND is_group=$4 AND group_id=$5 FOR UPDATE`, params(key))).rows,
+        insertParent: async (key, row) => (await client.query(`INSERT INTO chats (handle, char_dir, name, is_group, group_id, doc, updated_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+            ON CONFLICT (handle, char_dir, name, is_group, group_id) DO NOTHING`, [...params(key), row.doc, row.updated_at, row.created_at])).rowCount > 0,
+        insertState: async (key, state) => (await client.query(`INSERT INTO chat_states (handle, char_dir, name, is_group, group_id, namespace, doc)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+            ON CONFLICT (handle, char_dir, name, is_group, group_id, namespace) DO NOTHING`, [...params(key), state.namespace, state.doc])).rowCount > 0,
+        deleteParent: key => client.query('DELETE FROM chats WHERE handle=$1 AND char_dir=$2 AND name=$3 AND is_group=$4 AND group_id=$5', params(key)),
+    });
 }
 
 export function registerSettingsHandler(tx) {
@@ -402,6 +434,10 @@ export function registerPresetHandler(tx) {
             [p.handle, p.dir_key, p.name],
         );
         return r.rows.map((row) => row.namespace);
+    };
+    tx.listPresetStateRecords = async ({ handle, dirKey }) => {
+        const result = await client.query('SELECT name, namespace FROM preset_states WHERE handle=$1 AND dir_key=$2 ORDER BY name, namespace', [handle, dirKey]);
+        return result.rows;
     };
 }
 

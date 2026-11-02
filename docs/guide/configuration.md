@@ -168,6 +168,19 @@ securityOverride: false
 - `disableCsrfProtection`: Disables CSRF protection (not recommended)
 - `securityOverride`: Security override switch (for debugging only)
 
+### Sync Private Addresses {#sync-private-addresses}
+
+```yaml
+sync:
+  allowPrivateAddressesForUsers: false
+```
+
+By default, non-admin accounts on multi-user installations cannot make outbound LAN or S3 sync connections to private, loopback or link-local destinations. Administrators and single-user mode with user accounts disabled are exempt.
+
+Setting `allowPrivateAddressesForUsers: true` permits those users to reach private destinations through sync. Enable it only for users who should have access to the server's private network. It does not enable LAN listening or replace firewall, whitelist or authentication settings.
+
+See [Sync](/improvements/sync), [LAN setup](/improvements/lan-sync) and [S3 setup](/improvements/s3-sync).
+
 ## Backup and Storage
 
 ```yaml

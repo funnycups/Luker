@@ -1,22 +1,25 @@
 // A deletes a file, B edits the same file.
-// Conflict UI shows the delete-vs-edit shape; user picks Local (B's
-// edit survives); the file remains on both sides.
+// The sync popup lists the file; B picks its own edit, which survives
+// on both sides.
 
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
     generatePairingLink,
     acceptPairingLink,
-    resolveAllConflictsAs,
     clickSyncNow,
-    listConflictKinds,
-    applyConflictResolutions,
+    waitForBackgroundSync,
+    waitForSyncPopup,
+    listPopupConflicts,
+    conflictChoiceShowing,
+    chooseConflictVersion,
+    applyConflictChoices,
+    readUserFile,
 } from '../_lib/sync.js';
 
 let A, B;
@@ -30,8 +33,6 @@ test.beforeAll(async () => {
         batchKey: 'sync',
         scenarioId: 'delvs-B',
     });
-    markOnboarded({ dataRoot: A.dataRoot });
-    markOnboarded({ dataRoot: B.dataRoot });
 
     // Pre-seed both sides with the same file so pairing puts it in the
     // shared history before A deletes / B edits it.
@@ -50,7 +51,7 @@ test.afterAll(async () => {
 });
 
 test.describe('LAN Sync — delete vs edit conflict', () => {
-    test('A deletes, B edits → conflict shape correct → B picks Local → file kept on both sides', async ({ browser }) => {
+    test('A deletes, B edits → sync popup → B picks its edit → file kept on both sides', async ({ browser }) => {
         const ctxA = await browser.newContext();
         const ctxB = await browser.newContext();
         const pageA = await ctxA.newPage();
@@ -60,19 +61,21 @@ test.describe('LAN Sync — delete vs edit conflict', () => {
         await awaitMainUI(pageB, B.baseURL);
 
         // Pair on the seed-identical state.
+        const pairedSince = Date.now();
         await openLanSyncPanel(pageA);
         const link = await generatePairingLink(pageA, {
             label: 'B device',
             categories: ['worlds'],
         });
         await openLanSyncPanel(pageB);
-        const pairOutcome = await acceptPairingLink(pageB, link, {
+        expect(await acceptPairingLink(pageB, link, {
             categories: ['worlds'],
             localLabel: 'A device',
-        });
-        if (pairOutcome === 'warning') {
-            await resolveAllConflictsAs(pageB, 'theirs');
-        }
+        })).toBe('success');
+        // A syncs in the background on B's notify; edits made during that
+        // run would race it.
+        await waitForBackgroundSync(pageA, { since: pairedSince });
+        await waitForBackgroundSync(pageB, { since: pairedSince });
 
         // A deletes the file.
         fs.unlinkSync(path.join(A.dataRoot, 'default-user', 'worlds', 'doomed.json'));
@@ -83,41 +86,19 @@ test.describe('LAN Sync — delete vs edit conflict', () => {
             JSON.stringify({ name: 'doomed', notes: 'B-saved-it' }),
         );
 
-        // B syncs. The conflict from B's perspective is:
-        //   - ours (B): file edited
-        //   - theirs (A): file deleted
-        // → kind = 'deleteByTheirs' (the other side deleted what we
-        // edited).
+        // B syncs: one side edited what the other deleted.
         const syncOutcome = await clickSyncNow(pageB, 'A device');
         expect(syncOutcome).toBe('warning');
 
-        const kinds = await listConflictKinds(pageB);
-        expect(kinds['worlds/doomed.json']).toBe('deleteByTheirs');
-
-        // B picks Local — keep B's edit, override A's delete.
-        const resolveOutcome = await applyConflictResolutions(pageB, {
-            'worlds/doomed.json': 'ours',
-        });
-        expect(resolveOutcome).toBe('success');
-
-        // B's live file holds B's edit.
-        const onB = JSON.parse(fs.readFileSync(
-            path.join(B.dataRoot, 'default-user', 'worlds', 'doomed.json'),
-            'utf8',
-        ));
-        expect(onB.notes).toBe('B-saved-it');
-
-        // A's live file gets restored to B's edit via the responder
-        // reconcile — A's delete was overridden by B's pick.
-        await expect.poll(
-            () => fs.existsSync(path.join(A.dataRoot, 'default-user', 'worlds', 'doomed.json')),
-            { timeout: 10_000 },
-        ).toBe(true);
-        const onA = JSON.parse(fs.readFileSync(
-            path.join(A.dataRoot, 'default-user', 'worlds', 'doomed.json'),
-            'utf8',
-        ));
-        expect(onA.notes).toBe('B-saved-it');
+        await waitForSyncPopup(pageB);
+        expect(await listPopupConflicts(pageB)).toEqual([{ path: 'worlds/doomed.json', stale: false }]);
+        // The merge decides which device is `ours`, so find B's version by its content.
+        const bChoice = await conflictChoiceShowing(pageB, 'worlds/doomed.json', 'B-saved-it');
+        await chooseConflictVersion(pageB, 'worlds/doomed.json', bChoice);
+        expect(await applyConflictChoices(pageB)).toBe('success');
+        expect(JSON.parse(readUserFile(B, 'worlds/doomed.json')).notes).toBe('B-saved-it');
+        // B pushes the resolution and A applies it from the notify-driven run.
+        await expect.poll(() => { try { return JSON.parse(readUserFile(A, 'worlds/doomed.json')).notes; } catch { return null; } }, { timeout: 30_000 }).toBe('B-saved-it');
 
         await ctxA.close();
         await ctxB.close();

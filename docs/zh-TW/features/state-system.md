@@ -51,7 +51,7 @@ Luker 同樣支援為預設附加狀態資料。預設狀態允許擴充功能�
 | --- | --- | --- |
 | 角色狀態 | 角色卡同目錄的命名空間檔案（`<角色名>.state.<namespace>.json`） | 首次命名空間寫入時建立；隨角色重新命名/刪除聯動 |
 | 聊天狀態 | 聊天同目錄的命名空間檔案（`<聊天名>.luker-state.<namespace>.json`） | 首次命名空間寫入時建立；隨聊天重新命名/刪除聯動 |
-| 預設狀態 | 預設同目錄的命名空間檔案（`<預設名>.luker-state.<namespace>.json`） | 首次命名空間寫入時建立；隨預設重新命名/刪除聯動 |
+| 預設狀態 | 檔案儲存使用命名空間檔案或 `.luker-preset-records/` 下的版本化記錄；資料庫儲存使用獨立記錄 | 首次命名空間寫入時建立；隨預設重新命名/刪除聯動 |
 
 ```d2
 direction: right
@@ -80,6 +80,8 @@ PRESET: "預設目錄" {
   P_S1: "for_my_athena.luker-state.preset_assistant.json\n預設助手工作階段"
 }
 ```
+
+圖中展示一般檔案儲存範例。舊格式的預設狀態可以使用 `<預設名>.luker-state.<namespace>.json`；無法透過該格式明確區分的名稱使用 `.luker-preset-records/v1/` 下保留的版本化目錄。舊路徑遵循既有格式定義，存在歧義的舊檔案名稱不能說明原始寫入意圖。透過[預設狀態 API](/zh-TW/development/extension-api/presets-and-prompts#presets-state)存取狀態，不要自行建構預設狀態路徑。
 
 所有狀態資料均會持久化到磁碟，不會因為服務重啟而遺失。狀態檔案的清理是自動的——當關聯的角色、聊天或預設被刪除時，對應的狀態檔案也會被自動清理。
 

@@ -30,16 +30,16 @@ describe.each(ENDPOINT_HARNESSES)('settings.js snapshot endpoints on $name', ({ 
     test('REGRESSION: /make-snapshot then /get-snapshots surfaces the snapshot of the live SettingsRepo doc', async () => {
         await getSettingsRepo().save(harness.handle, { user_name: 'pre-snapshot', custom: 'A' });
 
-        await request(harness.app).post('/api/settings/make-snapshot').send({}).expect(204);
+        await request(harness.server).post('/api/settings/make-snapshot').send({}).expect(204);
 
-        const listRes = await request(harness.app).post('/api/settings/get-snapshots').send({}).expect(200);
+        const listRes = await request(harness.server).post('/api/settings/get-snapshots').send({}).expect(200);
         expect(Array.isArray(listRes.body)).toBe(true);
         expect(listRes.body.length).toBeGreaterThanOrEqual(1);
 
         const snap = listRes.body[0];
         expect(snap.name).toMatch(/^settings_u_/);
 
-        const loadRes = await request(harness.app)
+        const loadRes = await request(harness.server)
             .post('/api/settings/load-snapshot')
             .send({ name: snap.name })
             .expect(200);
@@ -56,18 +56,18 @@ describe.each(ENDPOINT_HARNESSES)('settings.js snapshot endpoints on $name', ({ 
     test('REGRESSION: /restore-snapshot writes back into SettingsRepo (not just a stale fs file)', async () => {
         // Seed state #1 + snapshot.
         await getSettingsRepo().save(harness.handle, { user_name: 'snapshot-state', preset: 'A' });
-        await request(harness.app).post('/api/settings/make-snapshot').send({}).expect(204);
+        await request(harness.server).post('/api/settings/make-snapshot').send({}).expect(204);
 
         // Mutate to state #2.
         await getSettingsRepo().save(harness.handle, { user_name: 'after-snapshot', preset: 'B' });
 
         // List snapshots to find the one we created.
-        const listRes = await request(harness.app).post('/api/settings/get-snapshots').send({}).expect(200);
+        const listRes = await request(harness.server).post('/api/settings/get-snapshots').send({}).expect(200);
         const snap = listRes.body.find((s) => s.name.startsWith('settings_u_'));
         expect(snap).toBeDefined();
 
         // Restore — must roll the LIVE SettingsRepo (not a fs file) back to state #1.
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/settings/restore-snapshot')
             .send({ name: snap.name })
             .expect(204);
@@ -79,15 +79,15 @@ describe.each(ENDPOINT_HARNESSES)('settings.js snapshot endpoints on $name', ({ 
 
     test('REGRESSION: snapshots persist across engine restart (the user-repro shape)', async () => {
         await getSettingsRepo().save(harness.handle, { user_name: 'persisted', x: 7 });
-        await request(harness.app).post('/api/settings/make-snapshot').send({}).expect(204);
+        await request(harness.server).post('/api/settings/make-snapshot').send({}).expect(204);
 
         await harness.reopenEngine();
 
-        const listRes = await request(harness.app).post('/api/settings/get-snapshots').send({}).expect(200);
+        const listRes = await request(harness.server).post('/api/settings/get-snapshots').send({}).expect(200);
         const snap = listRes.body.find((s) => s.name.startsWith('settings_u_'));
         expect(snap).toBeDefined();
 
-        const loadRes = await request(harness.app)
+        const loadRes = await request(harness.server)
             .post('/api/settings/load-snapshot')
             .send({ name: snap.name })
             .expect(200);

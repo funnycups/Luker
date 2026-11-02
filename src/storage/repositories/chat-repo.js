@@ -17,6 +17,11 @@ export class ChatRepo {
         });
     }
 
+    async exists(handle, charDir, name, { isGroup = false, groupId } = {}) {
+        const key = this._key(handle, charDir, name, { isGroup, groupId });
+        return this._engine.withTransaction(handle, tx => tx.hasChatResource(key));
+    }
+
     async save(handle, charDir, name, header, messages, expectedIntegrity, { isGroup = false, groupId } = {}) {
         assertWritable();
         const key = this._key(handle, charDir, name, { isGroup, groupId });
@@ -170,29 +175,17 @@ export class ChatRepo {
     async rename(handle, charDir, oldName, newName, { isGroup = false, groupId } = {}) {
         assertWritable();
         const oldKey = this._key(handle, charDir, oldName, { isGroup, groupId });
-        const newKey = this._key(handle, charDir, newName, { isGroup, groupId });
+        const newKey = this._key(handle, charDir, newName, { isGroup, groupId: isGroup ? newName : groupId });
         await this._engine.withTransaction(handle, async (tx) => {
-            const existing = await tx.getResource(oldKey);
-            if (!existing) throw new NotFoundError('chat', { handle, charDir, name: oldName });
-            const conflict = await tx.getResource(newKey);
-            if (conflict) {
+            if (!await tx.hasChatResource(oldKey)) throw new NotFoundError('chat', { handle, charDir, name: oldName });
+            const snapshot = await tx.captureChatMove(oldKey);
+            if (!snapshot) throw new Error(`Unreadable occupied chat at ${handle}/${charDir}/${oldName}`);
+            if (await tx.hasChatResource(newKey) || (await tx.listChatStateNamespaces(newKey)).length > 0) {
                 throw new ConflictError('rename_target_exists', { handle, charDir, name: newName });
             }
-            const namespaces = await tx.listChatStateNamespaces(oldKey);
-            const states = {};
-            for (const ns of namespaces) states[ns] = await tx.getChatState(oldKey, ns);
-
-            await tx.putResource(newKey, {
-                header: existing.header,
-                body: existing.body,
-                integrity: existing.integrity,
-                updatedAt: existing.updatedAt,
-                createdAt: existing.createdAt,
-            });
-            for (const [ns, doc] of Object.entries(states)) {
-                await tx.putChatState(newKey, ns, doc);
-            }
-            await tx.deleteResource(oldKey);
+            const publication = await tx.publishChatMove(newKey, snapshot);
+            if (!publication.updated) throw new ConflictError('rename_target_exists', { handle, charDir, name: newName });
+            await tx.deleteChatMoveSource(snapshot);
         });
     }
 

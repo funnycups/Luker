@@ -22,7 +22,7 @@ import request from 'supertest';
 import AdmZip from 'adm-zip';
 
 import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../harness/endpoint-harness.js';
-import { router as charactersRouter } from '../../../src/endpoints/characters.js';
+import { router as charactersRouter, diskCache } from '../../../src/endpoints/characters.js';
 import { getChatRepo } from '../../../src/storage/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,6 +30,8 @@ const REPO_ROOT = path.resolve(path.dirname(__filename), '..', '..', '..');
 const DEFAULT_ICON_PATH = path.resolve(REPO_ROOT, 'default/content/default_Seraphina.png');
 
 const CHARACTER_NAME = 'Halden the Quill-Keeper';
+
+afterAll(() => diskCache.dispose());
 
 const MANIFEST = {
     formatVersion: 1,
@@ -106,7 +108,7 @@ describe.each(ENDPOINT_HARNESSES)('BYAF character import on $name', ({ mode }) =
             filename: 'halden.byaf',
             content: buildHaldenByaf(),
         };
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/characters/import')
             .send({ user_name: 'User', file_type: 'byaf' })
             .expect(200);

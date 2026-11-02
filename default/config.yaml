@@ -467,3 +467,8 @@ disableUpdateCheck: false
 # Grace period in milliseconds before a completed generation is persisted when
 # the client has not acknowledged it yet. Minimum 1000.
 generationAckGraceMs: 15000
+# -- OUTBOUND SYNC --
+sync:
+  # Permit non-admin users to connect sync backends to private addresses.
+  # Administrators and instances without user accounts are unrestricted.
+  allowPrivateAddressesForUsers: false

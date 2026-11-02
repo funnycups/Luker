@@ -52,7 +52,7 @@ test('revalidates unchanged settings fields after a real toggle', async ({ page 
     const reloadMarker = network.length;
     await reloadAndAwait(page, server.baseURL);
 
-    expect(await toggle.isChecked()).toBe(!initiallyChecked);
+    await expect(toggle).toBeChecked({ checked: !initiallyChecked });
     const reloadNetwork = network.slice(reloadMarker);
     expect(reloadNetwork.some(entry => entry.url.includes('/api/settings/fields?'))).toBe(true);
     const reloadFields = reloadNetwork.filter(entry => entry.url.includes('/api/settings/field?'));

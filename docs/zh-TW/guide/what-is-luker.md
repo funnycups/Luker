@@ -72,11 +72,11 @@ Luker 內建了多個面向角色扮演場景的專業工具——記憶圖、�
 
 → [聊天合併與拆分詳細文件](/zh-TW/features/chat-merge-split)
 
-### 區域網路同步
+### 同步
 
-把同一網路下的兩台 Luker 實例配對，聊天、角色卡、世界書、設定在兩者之間保持一致——不需要把任何東西推到雲端。
+透過配對的區域網路裝置或加密的 S3 儲存同步所選聊天、角色卡、世界書與設定。在統一的同步面板中管理自動同步、待處理版本選擇、聊天分支與還原。
 
-→ [區域網路同步詳細文件](/zh-TW/improvements/lan-sync)
+→ [同步概覽](/zh-TW/improvements/sync) · [區域網路配對](/zh-TW/improvements/lan-sync) · [S3 設定](/zh-TW/improvements/s3-sync)
 
 ### 獨立 App
 

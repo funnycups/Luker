@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { FsEngine } from '../../../src/storage/engines/fs-engine.js';
 
-describe('FsEngine chat handler — corrupt-doc tolerance', () => {
+describe('FsEngine chat handler — selected document validation', () => {
     let tmpDir, engine;
     const handle = 'u';
     let chatsDir;
@@ -31,7 +31,7 @@ describe('FsEngine chat handler — corrupt-doc tolerance', () => {
 
     const plant = (name, raw) => fs.writeFileSync(path.join(chatsDir, `${name}.jsonl`), raw);
 
-    test('get returns null for corrupt/non-conformant docs (no throw)', async () => {
+    test('get exposes corrupt/non-conformant documents without changing their bytes', async () => {
         plant('corrupt-header', '{not json\n');
         plant('corrupt-body', `${JSON.stringify({ chat_metadata: {} })}\n{not json\n`);
         plant('header-array', `${JSON.stringify([1, 2, 3])}\n`);
@@ -39,8 +39,9 @@ describe('FsEngine chat handler — corrupt-doc tolerance', () => {
         plant('empty-file', '');
 
         for (const name of ['corrupt-header', 'corrupt-body', 'header-array', 'header-string', 'empty-file']) {
-            const got = await engine.withTransaction(handle, async (tx) => tx.getResource(chatKey({ name })));
-            expect(got).toBeNull();
+            const original = fs.readFileSync(path.join(chatsDir, `${name}.jsonl`));
+            await expect(engine.withTransaction(handle, async tx => tx.getResource(chatKey({ name })))).rejects.toThrow(name);
+            expect(fs.readFileSync(path.join(chatsDir, `${name}.jsonl`))).toEqual(original);
         }
     });
 

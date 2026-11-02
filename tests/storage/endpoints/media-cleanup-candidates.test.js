@@ -50,7 +50,7 @@ describe.each(ENDPOINT_HARNESSES)('media deletion candidates on $name', ({ mode 
         writeImage(harness.dirs.root, '/user/images/Ash/indexed.png');
         await appendMediaAttribution({ profile: { handle: harness.handle }, directories: harness.dirs }, { char_dir: 'Ash', chat_name: 'main' }, '/user/images/Ash/indexed.png', 'Ash');
 
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .post('/api/media/deletion-candidates')
             .send({ scope: 'chat', char_dir: 'Ash', chat_name: 'main' })
             .expect(200);
@@ -66,7 +66,7 @@ describe.each(ENDPOINT_HARNESSES)('media deletion candidates on $name', ({ mode 
         ], null);
         writeImage(harness.dirs.root, '/user/images/Ash/body.png');
 
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .post('/api/media/deletion-candidates')
             .send({ scope: 'chat', char_dir: 'Ash', chat_name: 'main.jsonl' })
             .expect(200);
@@ -82,7 +82,7 @@ describe.each(ENDPOINT_HARNESSES)('media deletion candidates on $name', ({ mode 
         ], null, { isGroup: true, groupId });
         writeImage(harness.dirs.root, '/user/images/group-body.png');
 
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .post('/api/media/deletion-candidates')
             .send({ scope: 'chat', is_group: true, chat_name: groupId })
             .expect(200);
@@ -96,7 +96,7 @@ describe.each(ENDPOINT_HARNESSES)('media deletion candidates on $name', ({ mode 
             { name: 'Ash', mes: 'gone /user/images/Ash/gone.png and outside /user/files/x.png' },
         ], null);
 
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .post('/api/media/deletion-candidates')
             .send({ scope: 'chat', char_dir: 'Ash', chat_name: 'main' })
             .expect(200);
@@ -113,7 +113,7 @@ describe.each(ENDPOINT_HARNESSES)('media deletion candidates on $name', ({ mode 
         ], null);
         const body = writeImage(harness.dirs.root, '/user/images/Ash/body.png', 32);
 
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .post('/api/media/deletion-candidates')
             .send({ scope: 'character', avatar: 'ash.png' })
             .expect(200);
@@ -137,7 +137,7 @@ describe.each(ENDPOINT_HARNESSES)('media deletion candidates on $name', ({ mode 
         ], null);
         writeImage(harness.dirs.root, '/user/images/Ash/body.png');
 
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .post('/api/media/deletion-candidates')
             .send({ scope: 'character', avatar: 'ash.png' })
             .expect(200);
@@ -149,7 +149,7 @@ describe.each(ENDPOINT_HARNESSES)('media deletion candidates on $name', ({ mode 
 
     test('character scope without any owned assets returns empty groups', async () => {
         writeCard(harness.dirs.characters, 'ash.png', 'Ash');
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .post('/api/media/deletion-candidates')
             .send({ scope: 'character', avatar: 'ash.png' })
             .expect(200);
@@ -157,7 +157,7 @@ describe.each(ENDPOINT_HARNESSES)('media deletion candidates on $name', ({ mode 
     });
 
     test('rejects unsupported scopes and missing chat names', async () => {
-        await request(harness.app).post('/api/media/deletion-candidates').send({ scope: 'server' }).expect(400);
-        await request(harness.app).post('/api/media/deletion-candidates').send({ scope: 'chat', char_dir: 'Ash' }).expect(400);
+        await request(harness.server).post('/api/media/deletion-candidates').send({ scope: 'server' }).expect(400);
+        await request(harness.server).post('/api/media/deletion-candidates').send({ scope: 'chat', char_dir: 'Ash' }).expect(400);
     });
 });

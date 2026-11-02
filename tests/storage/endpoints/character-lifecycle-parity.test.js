@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import request from 'supertest';
 
 import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../harness/endpoint-harness.js';
-import { router as charactersRouter } from '../../../src/endpoints/characters.js';
+import { router as charactersRouter, diskCache } from '../../../src/endpoints/characters.js';
 import { router as chatsRouter } from '../../../src/endpoints/chats.js';
 import { getChatRepo } from '../../../src/storage/index.js';
 import { write as writeCardChunk } from '../../../src/character-card-parser.js';
@@ -47,6 +47,8 @@ function seedCharacterPng(charsDir, name, jsonData) {
 const HEADER = { user_name: 'tester', character_name: 'Alice', chat_metadata: {} };
 const MESSAGES = [{ name: 'User', mes: 'hi' }, { name: 'Alice', mes: 'hello' }];
 
+afterAll(() => diskCache.dispose());
+
 describe.each(ENDPOINT_HARNESSES)('character lifecycle on $name', ({ mode }) => {
     let harness;
 
@@ -69,7 +71,7 @@ describe.each(ENDPOINT_HARNESSES)('character lifecycle on $name', ({ mode }) => 
         await getChatRepo().save(harness.handle, 'Alice', 'main', HEADER, MESSAGES, null);
         await getChatRepo().save(harness.handle, 'Alice', 'second', HEADER, MESSAGES, null);
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/delete')
             .send({ avatar_url: 'Alice.png', delete_chats: true })
             .expect(200);
@@ -82,7 +84,7 @@ describe.each(ENDPOINT_HARNESSES)('character lifecycle on $name', ({ mode }) => 
         seedCharacterPng(harness.dirs.characters, 'Alice', { name: 'Alice' });
         await getChatRepo().save(harness.handle, 'Alice', 'main', HEADER, MESSAGES, null);
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/delete')
             .send({ avatar_url: 'Alice.png', delete_chats: false })
             .expect(200);
@@ -109,7 +111,7 @@ describe.each(ENDPOINT_HARNESSES)('character lifecycle on $name', ({ mode }) => 
         fs.mkdirSync(otherDir, { recursive: true });
         fs.writeFileSync(path.join(otherDir, 'keep.png'), 'other-bytes');
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/delete')
             .send({ avatar_url: 'Alice.png', delete_chats: false })
             .expect(200);
@@ -130,7 +132,7 @@ describe.each(ENDPOINT_HARNESSES)('character lifecycle on $name', ({ mode }) => 
         fs.mkdirSync(galleryDir, { recursive: true });
         fs.writeFileSync(path.join(galleryDir, 'portrait.png'), 'gallery-bytes');
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/delete')
             .send({ avatar_url: 'Alice.png', delete_chats: false, skip_asset_cascade: true })
             .expect(200);
@@ -156,7 +158,7 @@ describe.each(ENDPOINT_HARNESSES)('character lifecycle on $name', ({ mode }) => 
         fs.mkdirSync(sharedDir, { recursive: true });
         fs.writeFileSync(path.join(sharedDir, 'keep.png'), 'keep-bytes');
 
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/characters/delete')
             .send({ avatar_url: 'Alice.png', delete_chats: false })
             .expect(200);
@@ -169,7 +171,7 @@ describe.each(ENDPOINT_HARNESSES)('character lifecycle on $name', ({ mode }) => 
         seedCharacterPng(harness.dirs.characters, 'Alice', { name: 'Alice' });
         await getChatRepo().save(harness.handle, 'Alice', 'main', HEADER, MESSAGES, null);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/characters/chats')
             .send({ avatar_url: 'Alice.png', metadata: true })
             .expect(200);
@@ -185,7 +187,7 @@ describe.each(ENDPOINT_HARNESSES)('character lifecycle on $name', ({ mode }) => 
 
         await harness.reopenEngine();
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/characters/chats')
             .send({ avatar_url: 'Alice.png', simple: true })
             .expect(200);

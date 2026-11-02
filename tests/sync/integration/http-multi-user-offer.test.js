@@ -1,15 +1,11 @@
 /**
- * `/session/offer` basic-auth resolution in multi-user mode.
+ * `/session/offer` credential resolution in multi-user mode.
  *
- * Spec context: when `enableUserAccounts` is on, the production
- * `setUserDataMiddleware` only populates `req.user` from the session cookie.
  * A cross-server `fetch` from peer B's server to peer A's `/session/offer`
- * has no cookie — only the `Authorization: Basic` header the user typed into
- * the pair form. Without the shim, A returns 401 and the pair never starts.
- *
- * The router shim (`src/endpoints/sync.js`) falls back to
- * `resolveUserFromBasicAuth` when `req.user` is empty AND multi-user mode
- * is on. This file pins that contract end-to-end:
+ * carries no session cookie. The offer authenticates with the one-time
+ * pairing code or the durable peer secret, verified against the user's
+ * registered LAN backend; basic-auth credentials alone do not mint a
+ * session. This file pins that contract end-to-end:
  *
  *   - real `users.js` storage (seeded via `storage.setItem`)
  *   - real router, real session minter, real shadow snapshot
@@ -19,11 +15,6 @@
  * `SILLYTAVERN_ENABLEUSERACCOUNTS=true` is set at file-top because
  * `users.js` captures `ENABLE_ACCOUNTS` at module-load time; the dynamic
  * `await import` inside `beforeAll` then sees the env var.
- *
- * Single-user mode (the default `enableUserAccounts: false`) is covered by
- * `http-session-lifecycle.test.js`, which still goes green after the shim
- * lands — that verifies the shim short-circuits cleanly when `req.user` is
- * already populated by `setUserDataMiddleware`'s DEFAULT_USER synthesis.
  */
 process.env.SILLYTAVERN_ENABLEUSERACCOUNTS = 'true';
 
@@ -46,6 +37,8 @@ let initUserStorage;
 let toKey;
 let getUserDirectories;
 let isBasicAuthExemptRequest;
+let callbackDevice;
+const previousPrivatePolicy = process.env.LUKER_SYNC_ALLOW_PRIVATE_ADDRESSES_FOR_USERS;
 
 const TEST_DATA_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-sync-multi-user-'));
 const PREV_DATA_ROOT = globalThis.DATA_ROOT;
@@ -68,8 +61,9 @@ function buildApp() {
     return app;
 }
 
-describe('sync /session/offer multi-user basic-auth fallback', () => {
+describe('sync /session/offer in multi-user mode', () => {
     beforeAll(async () => {
+        process.env.LUKER_SYNC_ALLOW_PRIVATE_ADDRESSES_FOR_USERS = 'true';
         globalThis.DATA_ROOT = TEST_DATA_ROOT;
         const usersMod = await import('../../../src/users.js');
         const storageMod = await import('../../../src/storage/index.js');
@@ -82,6 +76,8 @@ describe('sync /session/offer multi-user basic-auth fallback', () => {
         });
         ({ router: syncRouter } = await import('../../../src/endpoints/sync.js'));
         ({ isBasicAuthExemptRequest } = await import('../../../src/middleware/basicAuth.js'));
+        const { startLanDevice } = await import('../_lib/lan-devices.js');
+        callbackDevice = await startLanDevice({ handle: HANDLE });
     });
 
     beforeEach(async () => {
@@ -103,62 +99,29 @@ describe('sync /session/offer multi-user basic-auth fallback', () => {
     });
 
     afterAll(async () => {
+        await callbackDevice.close();
+        if (previousPrivatePolicy === undefined) delete process.env.LUKER_SYNC_ALLOW_PRIVATE_ADDRESSES_FOR_USERS;
+        else process.env.LUKER_SYNC_ALLOW_PRIVATE_ADDRESSES_FOR_USERS = previousPrivatePolicy;
         await storage.clear();
         fs.rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
         globalThis.DATA_ROOT = PREV_DATA_ROOT;
     });
 
-    test('issues a token when only Basic credentials are present', async () => {
+    test('an offer with only basic credentials gets 401 PEER_AUTH_REQUIRED', async () => {
         const app = buildApp();
-        const r = await request(app)
+        for (const authorization of [basicHeader(HANDLE, PASSWORD), basicHeader(HANDLE, 'wrong-password'), basicHeader('nobody', PASSWORD)]) {
+            const r = await request(app)
+                .post('/api/sync/v1/session/offer')
+                .set('Authorization', authorization)
+                .send({ peerId: 'alice@phone', label: 'Phone', protocol: 2 });
+            expect(r.status).toBe(401);
+            expect(r.body.code).toBe('PEER_AUTH_REQUIRED');
+        }
+        const none = await request(app)
             .post('/api/sync/v1/session/offer')
-            .set('Authorization', basicHeader(HANDLE, PASSWORD))
-            .send({ peerId: 'alice@phone', label: 'Phone', categories: [] });
-
-        expect(r.status).toBe(200);
-        expect(r.body.token).toMatch(/^[a-f0-9]{64}$/);
-        expect(r.body.peerId).toBe('alice@phone');
-
-        // The token must bind to the basic-auth-resolved handle, not to
-        // some anonymous default. Reach back through the session cache via
-        // the manifest route to confirm the bound handle made it through.
-        const m = await request(app)
-            .get('/api/sync/v1/session/manifest')
-            .set('Authorization', `Bearer ${r.body.token}`);
-        expect(m.status).toBe(200);
-        expect(m.body.handle).toBe(HANDLE);
-    });
-
-    test('rejects with 401 when Basic credentials have the wrong password', async () => {
-        const app = buildApp();
-        const r = await request(app)
-            .post('/api/sync/v1/session/offer')
-            .set('Authorization', basicHeader(HANDLE, 'wrong-password'))
-            .send({ peerId: 'alice@phone', categories: [] });
-
-        expect(r.status).toBe(401);
-        expect(r.body.error).toBe('Auth required');
-    });
-
-    test('rejects with 401 when no Authorization header is present', async () => {
-        const app = buildApp();
-        const r = await request(app)
-            .post('/api/sync/v1/session/offer')
-            .send({ peerId: 'alice@phone', categories: [] });
-
-        expect(r.status).toBe(401);
-        expect(r.body.error).toBe('Auth required');
-    });
-
-    test('rejects with 401 when the handle is unknown', async () => {
-        const app = buildApp();
-        const r = await request(app)
-            .post('/api/sync/v1/session/offer')
-            .set('Authorization', basicHeader('nobody', PASSWORD))
-            .send({ peerId: 'alice@phone', categories: [] });
-
-        expect(r.status).toBe(401);
-        expect(r.body.error).toBe('Auth required');
+            .send({ peerId: 'alice@phone', protocol: 2 });
+        expect(none.status).toBe(401);
+        expect(none.body.code).toBe('PEER_AUTH_REQUIRED');
     });
 
     describe('pairing-code handshake', () => {
@@ -189,16 +152,16 @@ describe('sync /session/offer multi-user basic-auth fallback', () => {
 
         test('one-time pair code resolves the user and returns a durable secret', async () => {
             const { createPairingCode } = await import('../../../src/sync/session.js');
-            const { recordPeer } = await import('../../../src/sync/state.js');
+            const { upsertLanBackend } = await import('../../../src/sync/state.js');
             const dirs = getUserDirectories(HANDLE);
-            await recordPeer({ userRoot: dirs.root, peerId: PEER_ID, label: 'Phone', categories: [] });
+            await upsertLanBackend({ userRoot: dirs.root, backendId: PEER_ID, label: 'Phone', categories: [] });
             const code = createPairingCode({ handle: HANDLE, peerId: PEER_ID });
 
             const app = buildApp();
             const r = await request(app)
                 .post('/api/sync/v1/session/offer')
                 .set('X-Sync-Pair-Code', code)
-                .send({ peerId: PEER_ID, label: 'Phone', categories: [] });
+                .send({ peerId: PEER_ID, label: 'Phone', protocol: 2, callback: callbackDevice.userStore.selfCallback() });
 
             expect(r.status).toBe(200);
             expect(r.body.token).toMatch(/^[a-f0-9]{64}$/);
@@ -206,50 +169,50 @@ describe('sync /session/offer multi-user basic-auth fallback', () => {
 
             // The secret was persisted on the peer entry so later offers
             // can present it without the one-time code.
-            const { readSyncState } = await import('../../../src/sync/state.js');
-            expect(readSyncState({ userRoot: dirs.root }).peers[PEER_ID].syncSecret).toBe(r.body.syncSecret);
+            const { readRegistry } = await import('../../../src/sync/state.js');
+            expect((await readRegistry({ userRoot: dirs.root })).backends[PEER_ID].lan.syncSecret).toBe(r.body.syncSecret);
         });
 
         test('pair code is single-use — a replay gets 401', async () => {
             const { createPairingCode } = await import('../../../src/sync/session.js');
-            const { recordPeer } = await import('../../../src/sync/state.js');
+            const { upsertLanBackend } = await import('../../../src/sync/state.js');
             const dirs = getUserDirectories(HANDLE);
-            await recordPeer({ userRoot: dirs.root, peerId: PEER_ID, label: 'Phone', categories: [] });
+            await upsertLanBackend({ userRoot: dirs.root, backendId: PEER_ID, label: 'Phone', categories: [] });
             const code = createPairingCode({ handle: HANDLE, peerId: PEER_ID });
 
             const app = buildApp();
             const first = await request(app)
                 .post('/api/sync/v1/session/offer')
                 .set('X-Sync-Pair-Code', code)
-                .send({ peerId: PEER_ID, categories: [] });
+                .send({ peerId: PEER_ID, protocol: 2, callback: callbackDevice.userStore.selfCallback() });
             expect(first.status).toBe(200);
 
             const replay = await request(app)
                 .post('/api/sync/v1/session/offer')
                 .set('X-Sync-Pair-Code', code)
-                .send({ peerId: PEER_ID, categories: [] });
+                .send({ peerId: PEER_ID, protocol: 2, callback: callbackDevice.userStore.selfCallback() });
             expect(replay.status).toBe(401);
-            expect(replay.body.error).toBe('Auth required');
+            expect(replay.body.code).toBe('PEER_AUTH_FAILED');
         });
 
         test('durable secret authenticates every later offer', async () => {
             const { createPairingCode } = await import('../../../src/sync/session.js');
-            const { recordPeer } = await import('../../../src/sync/state.js');
+            const { upsertLanBackend } = await import('../../../src/sync/state.js');
             const dirs = getUserDirectories(HANDLE);
-            await recordPeer({ userRoot: dirs.root, peerId: PEER_ID, label: 'Phone', categories: [] });
+            await upsertLanBackend({ userRoot: dirs.root, backendId: PEER_ID, label: 'Phone', categories: [] });
             const code = createPairingCode({ handle: HANDLE, peerId: PEER_ID });
 
             const app = buildApp();
             const handshake = await request(app)
                 .post('/api/sync/v1/session/offer')
                 .set('X-Sync-Pair-Code', code)
-                .send({ peerId: PEER_ID, categories: [] });
+                .send({ peerId: PEER_ID, protocol: 2, callback: callbackDevice.userStore.selfCallback() });
             expect(handshake.status).toBe(200);
 
             const later = await request(app)
                 .post('/api/sync/v1/session/offer')
                 .set('X-Sync-Peer-Secret', handshake.body.syncSecret)
-                .send({ peerId: PEER_ID, categories: [] });
+                .send({ peerId: PEER_ID, protocol: 2, callback: callbackDevice.userStore.selfCallback() });
             expect(later.status).toBe(200);
             expect(later.body.token).toMatch(/^[a-f0-9]{64}$/);
             // A later offer does NOT mint a fresh secret.
@@ -258,43 +221,43 @@ describe('sync /session/offer multi-user basic-auth fallback', () => {
 
         test('wrong or missing credentials still get 401', async () => {
             const { createPairingCode } = await import('../../../src/sync/session.js');
-            const { recordPeer } = await import('../../../src/sync/state.js');
+            const { upsertLanBackend } = await import('../../../src/sync/state.js');
             const dirs = getUserDirectories(HANDLE);
-            await recordPeer({ userRoot: dirs.root, peerId: PEER_ID, label: 'Phone', categories: [] });
+            await upsertLanBackend({ userRoot: dirs.root, backendId: PEER_ID, label: 'Phone', categories: [] });
             const code = createPairingCode({ handle: HANDLE, peerId: PEER_ID });
 
             const app = buildApp();
             const handshake = await request(app)
                 .post('/api/sync/v1/session/offer')
                 .set('X-Sync-Pair-Code', code)
-                .send({ peerId: PEER_ID, categories: [] });
+                .send({ peerId: PEER_ID, protocol: 2, callback: callbackDevice.userStore.selfCallback() });
             expect(handshake.status).toBe(200);
 
             const wrongSecret = await request(app)
                 .post('/api/sync/v1/session/offer')
                 .set('X-Sync-Peer-Secret', 'a'.repeat(64))
-                .send({ peerId: PEER_ID, categories: [] });
+                .send({ peerId: PEER_ID, protocol: 2 });
             expect(wrongSecret.status).toBe(401);
 
             const none = await request(app)
                 .post('/api/sync/v1/session/offer')
-                .send({ peerId: PEER_ID, categories: [] });
+                .send({ peerId: PEER_ID, protocol: 2 });
             expect(none.status).toBe(401);
         });
 
         test('a pair code bound to another peerId cannot be replayed against this one', async () => {
             const { createPairingCode } = await import('../../../src/sync/session.js');
-            const { recordPeer } = await import('../../../src/sync/state.js');
+            const { upsertLanBackend } = await import('../../../src/sync/state.js');
             const dirs = getUserDirectories(HANDLE);
-            await recordPeer({ userRoot: dirs.root, peerId: PEER_ID, label: 'Phone', categories: [] });
-            await recordPeer({ userRoot: dirs.root, peerId: 'alice@tablet', label: 'Tablet', categories: [] });
+            await upsertLanBackend({ userRoot: dirs.root, backendId: PEER_ID, label: 'Phone', categories: [] });
+            await upsertLanBackend({ userRoot: dirs.root, backendId: 'alice@tablet', label: 'Tablet', categories: [] });
             const code = createPairingCode({ handle: HANDLE, peerId: 'alice@tablet' });
 
             const app = buildApp();
             const r = await request(app)
                 .post('/api/sync/v1/session/offer')
                 .set('X-Sync-Pair-Code', code)
-                .send({ peerId: PEER_ID, categories: [] });
+                .send({ peerId: PEER_ID, protocol: 2 });
             expect(r.status).toBe(401);
         });
     });

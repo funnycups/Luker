@@ -95,4 +95,17 @@ describe('reconcileShadowToLive', () => {
         // Old content is intact (write-file-atomic writes to .tmp then renames).
         expect(fs.readFileSync(path.join(liveRoot, 'characters', 'a.png'), 'utf8')).toBe('OLD_CONTENT');
     });
+
+    test('a linked category root is refused before the legacy mirror deletion sweep', async () => {
+        fs.writeFileSync(path.join(liveRoot, 'characters/a.png'), 'A');
+        await snapshotLiveToShadow({ userRoot, peerId: 'p', directories: dirsAt(liveRoot), enabledCategoryIds: ['characters'] });
+        fs.mkdirSync(path.join(liveRoot, 'outside'));
+        fs.writeFileSync(path.join(liveRoot, 'outside/private.png'), 'PRIVATE');
+        fs.unlinkSync(path.join(liveRoot, 'characters/a.png'));
+        fs.rmdirSync(path.join(liveRoot, 'characters'));
+        fs.symlinkSync(path.join(liveRoot, 'outside'), path.join(liveRoot, 'characters'));
+        await expect(reconcileShadowToLive({ userRoot, peerId: 'p', directories: dirsAt(liveRoot), enabledCategoryIds: ['characters'] })).rejects.toMatchObject({ code: 'SYNC_UNSAFE_LIVE_PATH' });
+        expect(fs.readdirSync(path.join(liveRoot, 'outside'))).toEqual(['private.png']);
+        expect(fs.readFileSync(path.join(liveRoot, 'outside/private.png'), 'utf8')).toBe('PRIVATE');
+    });
 });

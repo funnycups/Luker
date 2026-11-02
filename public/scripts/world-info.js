@@ -1904,8 +1904,9 @@ export function setWorldInfoSettings(settings, data) {
     }
 
     world_names.forEach((item, i) => {
-        $('#world_info').append(`<option value='${i}'${selected_world_info.includes(item) ? ' selected' : ''}>${item}</option>`);
-        $('#world_editor_select').append(`<option value='${i}'>${item}</option>`);
+        const selected = selected_world_info.includes(item);
+        $('#world_info').append(new Option(item, String(i), selected, selected));
+        $('#world_editor_select').append(new Option(item, String(i)));
     });
     _suppressLegacySelectSync = false;
 

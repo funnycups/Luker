@@ -125,8 +125,8 @@ describe.each(ENDPOINT_HARNESSES)('cross-mode endpoint wiring on $name', ({ mode
             await buildForeignDbSourceZip(zipPath, mode, harness.handle);
         }
         const zipBytes = fs.readFileSync(zipPath);
-        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-        const res = await request(harness.app)
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+        const res = await request(harness.server)
             .post('/api/users/restore-backup/probe')
             .send({ uploadId });
         expect(res.status).toBe(200);
@@ -141,8 +141,8 @@ describe.each(ENDPOINT_HARNESSES)('cross-mode endpoint wiring on $name', ({ mode
         const zipPath = path.join(harness.dataRoot, `probe-foreign-${randomBytes(4).toString('hex')}.zip`);
         await buildForeignDbSourceZip(zipPath, foreignKind, harness.handle);
         const zipBytes = fs.readFileSync(zipPath);
-        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-        const res = await request(harness.app)
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+        const res = await request(harness.server)
             .post('/api/users/restore-backup/probe')
             .send({ uploadId });
         expect(res.status).toBe(200);
@@ -164,8 +164,8 @@ describe.each(ENDPOINT_HARNESSES)('cross-mode endpoint wiring on $name', ({ mode
             arc.finalize();
         });
         const zipBytes = fs.readFileSync(zipPath);
-        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-        const res = await request(harness.app)
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+        const res = await request(harness.server)
             .post('/api/users/restore-backup/probe')
             .send({ uploadId });
         expect(res.status).toBe(200);
@@ -183,8 +183,8 @@ describe.each(ENDPOINT_HARNESSES)('cross-mode endpoint wiring on $name', ({ mode
         await buildSqliteSourceZip(zipPath, srcDir, harness.handle);
         const zipBytes = fs.readFileSync(zipPath);
 
-        const uploadId = await uploadArchiveToSession(harness.app, zipBytes, { handle: harness.handle });
-        const res = await request(harness.app)
+        const uploadId = await uploadArchiveToSession(harness.server, zipBytes, { handle: harness.handle });
+        const res = await request(harness.server)
             .post('/api/users/restore-backup')
             .send({ uploadId, handle: harness.handle, mode: 'overwrite', selection: ALL_SELECTION });
         expect(res.status).toBe(200);

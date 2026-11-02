@@ -12,6 +12,7 @@
 // return the saved preset in every mode.
 
 import request from 'supertest';
+import { router as presetsRouter } from '../../../src/endpoints/presets.js';
 
 import { ENDPOINT_HARNESSES, makeEndpointHarness } from '../harness/endpoint-harness.js';
 import { router as settingsRouter } from '../../../src/endpoints/settings.js';
@@ -36,6 +37,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
             mode,
             mount: (app) => {
                 app.use('/api/settings', settingsRouter);
+                app.use('/api/presets', presetsRouter);
             },
         });
         // Seed a minimal settings doc; /get throws if the settings handle is
@@ -48,9 +50,40 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
     });
 
     test('GET /api/settings/get returns 200 with the settings JSON', async () => {
-        const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+        const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
         const parsed = typeof res.body.settings === 'string' ? JSON.parse(res.body.settings) : res.body.settings;
         expect(parsed.user_name).toBe('tester');
+    });
+
+    test('accepted preset and orphan state endpoint writes remain distinct in settings and bootstrap', async () => {
+        const preset = { prompts: [{ name: 'endpoint', content: 'FULL_ENDPOINT_PRESET' }], temperature: 0.31 };
+        await request(harness.server).post('/api/presets/save').send({ apiId: 'openai', name: 'A.luker-state.n', preset }).expect(200);
+        await request(harness.server).post('/api/presets/state/patch').send({ apiId: 'openai', name: 'A', namespace: 'n', operations: [{ op: 'add', path: '/notes', value: ['FULL_ENDPOINT_STATE'] }] }).expect(200);
+        await getSettingsRepo().save(harness.handle, { user_name: 'tester', oai_settings: { preset_settings_openai: 'A.luker-state.n' } });
+        for (const route of ['get', 'bootstrap']) {
+            const response = await request(harness.server).post(`/api/settings/${route}`).send({}).expect(200);
+            expect(response.body.openai_setting_names).toEqual(['A.luker-state.n']);
+            expect(JSON.parse(response.body.openai_settings[0])).toEqual(preset);
+        }
+        const state = await request(harness.server).post('/api/presets/state/get').send({ apiId: 'openai', name: 'A', namespace: 'n' }).expect(200);
+        expect(state.body).toEqual({ ok: true, data: { notes: ['FULL_ENDPOINT_STATE'] } });
+        expect(await getPresetRepo().get(harness.handle, 'openai', 'A')).toBeNull();
+    });
+
+    test('preset deletion removes its own state while the absent-document guard preserves independent orphan state', async () => {
+        const legacy = { notes: ['COMPLETE_LEGACY_STATE'], nested: { retained: true } };
+        const own = { notes: ['COMPLETE_OWN_STATE'] };
+        const repo = getPresetRepo();
+        await repo.setState(harness.handle, 'openai', 'A', 'n', legacy);
+        await repo.setState(harness.handle, 'openai', 'A.luker-state.n', 'm', own);
+        await request(harness.server).post('/api/presets/delete').send({ apiId: 'openai', name: 'A.luker-state.n' }).expect(404);
+        expect(await repo.getState(harness.handle, 'openai', 'A', 'n')).toEqual(legacy);
+        expect(await repo.getState(harness.handle, 'openai', 'A.luker-state.n', 'm')).toEqual(own);
+        await request(harness.server).post('/api/presets/save').send({ apiId: 'openai', name: 'A.luker-state.n', preset: SAMPLE_PRESET }).expect(200);
+        await request(harness.server).post('/api/presets/delete').send({ apiId: 'openai', name: 'A.luker-state.n' }).expect(200);
+        expect(await repo.exists(harness.handle, 'openai', 'A.luker-state.n')).toBe(false);
+        expect(await repo.getState(harness.handle, 'openai', 'A.luker-state.n', 'm')).toBeNull();
+        expect(await repo.getState(harness.handle, 'openai', 'A', 'n')).toEqual(legacy);
     });
 
     // --- Preset families ---
@@ -71,7 +104,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
         test(`REGRESSION: ${c.apiId} preset saved via PresetRepo surfaces in /get (${c.namesField})`, async () => {
             await getPresetRepo().save(harness.handle, c.apiId, 'MyCustomPreset', SAMPLE_PRESET);
 
-            const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+            const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
             const names = res.body[c.namesField];
             const bodies = res.body[c.bodiesField];
             expect(names).toContain('MyCustomPreset');
@@ -99,7 +132,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
                 marker: 'user_saved_in_db_mode',
             });
 
-            const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+            const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
             const arr = res.body[c.field];
             expect(Array.isArray(arr)).toBe(true);
             const found = arr.find((e) => e && e.name === 'CustomDoc');
@@ -116,7 +149,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
             bg_color: '#cafe00',
         });
 
-        const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+        const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
         expect(Array.isArray(res.body.themes)).toBe(true);
         const found = res.body.themes.find((t) => t && t.name === 'CustomTheme');
         expect(found).toBeDefined();
@@ -129,7 +162,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
             offsetX: 42,
         });
 
-        const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+        const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
         expect(Array.isArray(res.body.movingUIPresets)).toBe(true);
         const found = res.body.movingUIPresets.find((p) => p && p.name === 'CustomUI');
         expect(found).toBeDefined();
@@ -142,7 +175,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
             quickReplies: [{ label: 'hi', message: 'hello' }],
         });
 
-        const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+        const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
         expect(Array.isArray(res.body.quickReplyPresets)).toBe(true);
         const found = res.body.quickReplyPresets.find((p) => p && p.name === 'CustomQR');
         expect(found).toBeDefined();
@@ -154,7 +187,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
     test('REGRESSION: world saved via WorldInfoRepo surfaces in /get (world_names)', async () => {
         await getWorldInfoRepo().save(harness.handle, 'MyLore', { entries: {} });
 
-        const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+        const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
         expect(Array.isArray(res.body.world_names)).toBe(true);
         expect(res.body.world_names).toContain('MyLore');
     });
@@ -166,7 +199,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
         await getNamedDocRepo().save(harness.handle, 'themes', 'BootTheme', { name: 'BootTheme', x: 1 });
         await getWorldInfoRepo().save(harness.handle, 'BootLore', { entries: {} });
 
-        const res = await request(harness.app).post('/api/settings/bootstrap').send({}).expect(200);
+        const res = await request(harness.server).post('/api/settings/bootstrap').send({}).expect(200);
         expect(res.body.openai_setting_names).toContain('BootPreset');
         expect(res.body.world_names).toContain('BootLore');
         expect(res.body.themes.find((t) => t?.name === 'BootTheme')).toBeDefined();
@@ -183,7 +216,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js endpoints on $name', ({ mode }) =
 
         await harness.reopenEngine();
 
-        const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+        const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
         expect(res.body.openai_setting_names).toContain('SurvivorPreset');
         expect(res.body.world_names).toContain('SurvivorLore');
         expect(res.body.themes.find((t) => t?.name === 'SurvivorTheme')).toBeDefined();
@@ -211,7 +244,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js fresh-storage handling on $name',
     });
 
     test('REGRESSION: missing settings doc + missing settings.json → 200 with empty defaults', async () => {
-        const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+        const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
         const parsed = typeof res.body.settings === 'string' ? JSON.parse(res.body.settings) : res.body.settings;
         expect(parsed).toEqual({});
     });
@@ -229,7 +262,7 @@ describe.each(ENDPOINT_HARNESSES)('settings.js fresh-storage handling on $name',
             'utf8',
         );
 
-        const res = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+        const res = await request(harness.server).post('/api/settings/get').send({}).expect(200);
         const parsed = typeof res.body.settings === 'string' ? JSON.parse(res.body.settings) : res.body.settings;
         expect(parsed.user_name).toBe('legacy-fs-user');
         expect(parsed.custom).toBe('imported');
@@ -241,10 +274,9 @@ describe.each(ENDPOINT_HARNESSES)('settings.js fresh-storage handling on $name',
             // (In fs mode this is a no-op assertion because settings.json IS
             // the engine storage.)
             fs.unlinkSync(path.join(harness.dirs.root, 'settings.json'));
-            const res2 = await request(harness.app).post('/api/settings/get').send({}).expect(200);
+            const res2 = await request(harness.server).post('/api/settings/get').send({}).expect(200);
             const parsed2 = typeof res2.body.settings === 'string' ? JSON.parse(res2.body.settings) : res2.body.settings;
             expect(parsed2.user_name).toBe('legacy-fs-user');
         }
     });
 });
-

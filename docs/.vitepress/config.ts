@@ -102,7 +102,9 @@ const zhCNSidebar = [
   items: [
   { text: '改进总览', link: '/zh-CN/improvements/overview' },
   { text: '增量同步', link: '/zh-CN/improvements/incremental-sync' },
+  { text: '同步', link: '/zh-CN/improvements/sync' },
   { text: '局域网同步', link: '/zh-CN/improvements/lan-sync' },
+  { text: 'S3 同步', link: '/zh-CN/improvements/s3-sync' },
   { text: '预设解耦', link: '/zh-CN/improvements/preset-decoupling' },
   { text: '角色卡绑定预设与人设', link: '/zh-CN/improvements/card-bound-presets' },
   { text: '函数调用运行时', link: '/zh-CN/improvements/function-call-runtime' },
@@ -265,7 +267,9 @@ const zhTWSidebar = [
     items: [
       { text: '改進總覽', link: '/zh-TW/improvements/overview' },
       { text: '增量同步', link: '/zh-TW/improvements/incremental-sync' },
+      { text: '同步', link: '/zh-TW/improvements/sync' },
       { text: '區域網路同步', link: '/zh-TW/improvements/lan-sync' },
+      { text: 'S3 同步', link: '/zh-TW/improvements/s3-sync' },
       { text: '預設解耦', link: '/zh-TW/improvements/preset-decoupling' },
       { text: '角色卡綁定預設與人設', link: '/zh-TW/improvements/card-bound-presets' },
       { text: '函數調用運行時', link: '/zh-TW/improvements/function-call-runtime' },
@@ -428,7 +432,9 @@ const enSidebar = [
     items: [
       { text: 'Overview', link: '/improvements/overview' },
       { text: 'Incremental Sync', link: '/improvements/incremental-sync' },
+      { text: 'Sync', link: '/improvements/sync' },
       { text: 'LAN Sync', link: '/improvements/lan-sync' },
+      { text: 'S3 Sync', link: '/improvements/s3-sync' },
       { text: 'Preset Decoupling', link: '/improvements/preset-decoupling' },
       { text: 'Card-Bound Presets & Personas', link: '/improvements/card-bound-presets' },
       { text: 'Function Call Runtime', link: '/improvements/function-call-runtime' },

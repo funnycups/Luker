@@ -1,0 +1,28 @@
+{
+    "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "keyId": "0102030405060708",
+    "nonce": "000102030405060708090a0b",
+    "context": { "bucket": "vector-bucket", "prefix": "team/sync" },
+    "verifierBase64": "TEtTUgEBAgMEBQYHCAABAgMEBQYHCAkKCwt3vX63xZFi4yK34NSQWBvmpO5SmR4tXE5W3crnhsyikZffZjkA3fY+1A==",
+    "verifierAad": "4c4b5352010102030405060708000102030405060708090a0b5b226c756b65722d73796e63222c312c227665726966696572222c22766563746f722d6275636b6574222c227465616d2f73796e63222c226b6579696e666f2e6a736f6e225d",
+    "vectors": [
+        {
+            "domain": "verifier",
+            "relativeKey": "keyinfo.json",
+            "plaintext": "Luker Sync key verifier v1",
+            "hex": "4c4b5352010102030405060708000102030405060708090a0b0b77bd7eb7c59162e322b7e0d490581be6a4ee52991e2d5c4e56ddcae786cca29197df663900ddf63ed4"
+        },
+        {
+            "domain": "head",
+            "relativeKey": "head",
+            "plaintext": "{\"v\":1,\"commit\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"packs\":[],\"compactedFrom\":[]}",
+            "hex": "4c4b5352010102030405060708000102030405060708090a0b3c20a039ffd4ee39ee2efae6d89d5a57a1b7e655911a3e1d590684e47c0861d36071cf9dcea073f915c51e8ce9e649598f3801ec3bb7c2bb5eb5063b68829685831efc218efd04027339da0f8cfb6b8c7ef8a60f54590835801b4569f8665a39abfaa6234ef905d87a"
+        },
+        {
+            "domain": "pack",
+            "relativeKey": "packs/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "plaintext": "PACK-vector",
+            "hex": "4c4b5352010102030405060708000102030405060708090a0b17439550e893a778f92ee567e452f4d9ec5b5d71a089b981827d15"
+        }
+    ]
+}

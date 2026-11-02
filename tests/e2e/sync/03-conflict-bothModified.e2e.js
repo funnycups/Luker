@@ -1,6 +1,6 @@
 // After pair, both sides edit the SAME file.
-// Sync surfaces a `bothModified` conflict; user picks ours; the
-// resolution lands on both sides.
+// Sync records a conflict and opens the sync popup; B picks its own
+// version; the resolution lands on both sides.
 //
 // This is the "make a difficult choice" path — by design
 // conflicts are always per-file with no line merge, so we MUST see a
@@ -11,16 +11,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
     generatePairingLink,
     acceptPairingLink,
-    resolveAllConflictsAs,
     clickSyncNow,
-    listConflictKinds,
-    applyConflictResolutions,
+    waitForBackgroundSync,
+    waitForSyncPopup,
+    listPopupConflicts,
+    conflictChoiceShowing,
+    chooseConflictVersion,
+    applyConflictChoices,
+    readUserFile,
 } from '../_lib/sync.js';
 
 let A, B;
@@ -34,8 +37,6 @@ test.beforeAll(async () => {
         batchKey: 'sync',
         scenarioId: 'bothmod-B',
     });
-    markOnboarded({ dataRoot: A.dataRoot });
-    markOnboarded({ dataRoot: B.dataRoot });
 
     // Seed a shared file with the SAME content on both sides BEFORE the
     // pair. After pairing it'll be in the shared history; subsequent
@@ -56,7 +57,7 @@ test.afterAll(async () => {
 });
 
 test.describe('LAN Sync — bothModified conflict', () => {
-    test('same file edited on both sides → conflict UI → user picks Local → ours wins on both sides', async ({ browser }) => {
+    test('same file edited on both sides → sync popup → B picks its own version → it wins on both sides', async ({ browser }) => {
         const ctxA = await browser.newContext();
         const ctxB = await browser.newContext();
         const pageA = await ctxA.newPage();
@@ -65,26 +66,23 @@ test.describe('LAN Sync — bothModified conflict', () => {
         await awaitMainUI(pageA, A.baseURL);
         await awaitMainUI(pageB, B.baseURL);
 
-        // Pair on the seed-identical state. With identical worlds trees
-        // and no common ancestor, attemptMerge's identical-trees branch
-        // auto-produces a merge commit (no conflict surfaces).
+        // Pair on the seed-identical state: identical worlds trees merge
+        // without a conflict.
+        const pairedSince = Date.now();
         await openLanSyncPanel(pageA);
         const link = await generatePairingLink(pageA, {
             label: 'B device',
             categories: ['worlds'],
         });
         await openLanSyncPanel(pageB);
-        const pairOutcome = await acceptPairingLink(pageB, link, {
+        expect(await acceptPairingLink(pageB, link, {
             categories: ['worlds'],
             localLabel: 'A device',
-        });
-        // Trees were identical → auto-merge path returns success.
-        // (If the seed had drifted, this would be 'warning' and we'd
-        // pick 'theirs' to align the bases. Document both as acceptable
-        // since the seed contents are outside this test's control.)
-        if (pairOutcome === 'warning') {
-            await resolveAllConflictsAs(pageB, 'theirs');
-        }
+        })).toBe('success');
+        // A syncs in the background on B's notify; edits made during that
+        // run would race it.
+        await waitForBackgroundSync(pageA, { since: pairedSince });
+        await waitForBackgroundSync(pageB, { since: pairedSince });
 
         // Now diverge: each side rewrites shared.json with a different note.
         // Use distinguishable note strings so the assertion can prove
@@ -98,46 +96,21 @@ test.describe('LAN Sync — bothModified conflict', () => {
             JSON.stringify({ name: 'shared', notes: 'B-edit-after-pair' }),
         );
 
-        // B clicks Sync now. Both sides have ONE shared commit (the
-        // post-pair merge) and each made one new commit after. The
-        // three-way merge finds the shared base, sees the same file
-        // edited on both sides → bothModified conflict.
+        // B clicks Sync now. Both sides share the post-pair commit and
+        // each made one new commit after it, so the merge finds the same
+        // file edited on both sides and records a conflict.
         const syncOutcome = await clickSyncNow(pageB, 'A device');
         expect(syncOutcome).toBe('warning');
 
-        // Inspect the conflict UI: exactly one bothModified conflict on
-        // shared.json. The UI's "Type:" annotation is the kind.
-        const kinds = await listConflictKinds(pageB);
-        expect(kinds['worlds/shared.json']).toBe('bothModified');
-
-        // Pick "Local" (ours) — B's edit wins.
-        const resolveOutcome = await applyConflictResolutions(pageB, {
-            'worlds/shared.json': 'ours',
-        });
-        expect(resolveOutcome).toBe('success');
-
-        // B's live file holds B's edit (preserved through reconcile).
-        const onB = JSON.parse(fs.readFileSync(
-            path.join(B.dataRoot, 'default-user', 'worlds', 'shared.json'),
-            'utf8',
-        ));
-        expect(onB.notes).toBe('B-edit-after-pair');
-
-        // Critical assertion for the responder reconcile: A's live file
-        // ALSO shows B's edit, because B's runPull pushed the resolved
-        // HEAD back to A via /session/ref, which triggers A's responder
-        // reconcile to materialize the merged tree into A's live data.
-        await expect.poll(
-            () => {
-                try {
-                    return JSON.parse(fs.readFileSync(
-                        path.join(A.dataRoot, 'default-user', 'worlds', 'shared.json'),
-                        'utf8',
-                    )).notes;
-                } catch { return null; }
-            },
-            { timeout: 10_000 },
-        ).toBe('B-edit-after-pair');
+        await waitForSyncPopup(pageB);
+        expect(await listPopupConflicts(pageB)).toEqual([{ path: 'worlds/shared.json', stale: false }]);
+        // The merge decides which device is `ours`, so find B's version by its content.
+        const bChoice = await conflictChoiceShowing(pageB, 'worlds/shared.json', 'B-edit-after-pair');
+        await chooseConflictVersion(pageB, 'worlds/shared.json', bChoice);
+        expect(await applyConflictChoices(pageB)).toBe('success');
+        expect(JSON.parse(readUserFile(B, 'worlds/shared.json')).notes).toBe('B-edit-after-pair');
+        // B pushes the resolution and A applies it from the notify-driven run.
+        await expect.poll(() => { try { return JSON.parse(readUserFile(A, 'worlds/shared.json')).notes; } catch { return null; } }, { timeout: 30_000 }).toBe('B-edit-after-pair');
 
         await ctxA.close();
         await ctxB.close();

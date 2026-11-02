@@ -14,13 +14,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import {
     openLanSyncPanel,
     generatePairingLink,
     acceptPairingLink,
-    resolveAllConflictsAs,
     listPeers,
 } from '../_lib/sync.js';
 
@@ -35,8 +33,6 @@ test.beforeAll(async () => {
         batchKey: 'sync',
         scenarioId: 'pair-B',
     });
-    markOnboarded({ dataRoot: A.dataRoot });
-    markOnboarded({ dataRoot: B.dataRoot });
 
     // Seed A with a world (lorebook). JSON files in `worlds/` go through
     // a straight read/write path with no schema validation that would
@@ -88,30 +84,19 @@ test.describe('LAN Sync — pair and first sync', () => {
             localLabel: 'A device',
         });
 
-        // Two valid terminal states:
-        //   - 'warning' — conflicts (the seed `data/` ships worlds on
-        //     both sides, no common ancestor, so every worlds file
-        //     surfaces as a conflict per `attemptMerge`'s
-        //     MergeNotSupportedError fallback).
-        //   - 'success' — clean sync (would happen only if B's seed
-        //     worlds dir was somehow empty; not the realistic case).
-        expect(['warning', 'success']).toContain(acceptOutcome);
+        // Both servers start from the same seed `data/`, so the seed worlds
+        // match byte for byte and merge cleanly. A file added on A only is
+        // never a conflict.
+        expect(acceptOutcome).toBe('success');
 
-        if (acceptOutcome === 'warning') {
-            // Pick A's version for every conflict — that's the "I want
-            // what A has" user intent for a fresh pair.
-            const finalOutcome = await resolveAllConflictsAs(pageB, 'theirs');
-            expect(finalOutcome).toBe('success');
-        }
-
-        // The reconcile step at the end of runPull writes the resolved
-        // tree to disk. Verify A's seeded file landed in B's live data.
+        // The first sync writes the merged tree into B's live data.
+        // Verify A's seeded file landed there.
         await expect.poll(
             () => fs.existsSync(path.join(B.dataRoot, 'default-user', 'worlds', 'A-paired-this.json')),
             { timeout: 10_000 },
         ).toBe(true);
 
-        // The file's content matches what A wrote — proves reconcile
+        // The file's content matches what A wrote — proves the write
         // didn't truncate or scramble the bytes.
         const onB = JSON.parse(fs.readFileSync(
             path.join(B.dataRoot, 'default-user', 'worlds', 'A-paired-this.json'),

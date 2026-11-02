@@ -1,9 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import git from 'isomorphic-git';
+import { atomicFs } from './pipeline/atomic-fs.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 
 import { SYNC_CATEGORIES, resolveCategoryPaths } from './categories.js';
+import { isChatPublicationArtifactPath, isStagingEntryName, recoverStagedSwaps } from './staging.js';
+import { readCommitFiles, readBlobBytes, blobOidOf, resolveTreePathUnder } from './pipeline/git-tree.js';
+import { failpoint, FAILPOINTS } from './pipeline/failpoints.js';
+import { assertSafeProjectionPath } from './materialize.js';
+import { authorForDevice } from './pipeline/commit-provenance.js';
+import { assertConfinedPath } from '../storage/path-confinement.js';
+import { assertDistinctFsDestinations } from './pipeline/path-identity.js';
+import { buildPresetIdentityView } from './preset-projection.js';
 
 export const PEER_ID_PATTERN = /^[A-Za-z0-9._@-]+$/;
 
@@ -71,15 +80,17 @@ export function getShadowPaths({ userRoot, peerId }) {
  */
 export async function ensureShadowRepo({ userRoot, peerId }) {
     const paths = getShadowPaths({ userRoot, peerId });
+    assertSafeProjectionPath(paths.workdir, path.resolve(userRoot));
+    assertSafeProjectionPath(paths.gitDir, path.resolve(userRoot));
     await fs.promises.mkdir(paths.workdir, { recursive: true });
     await fs.promises.mkdir(paths.gitDir, { recursive: true });
 
     // Detect existing repo via HEAD; a freshly mkdir'd dir won't have it.
     const headPath = path.join(paths.gitDir, 'HEAD');
     if (!fs.existsSync(headPath)) {
-        await git.init({ fs, dir: paths.workdir, gitdir: paths.gitDir, defaultBranch: 'main' });
-        await git.setConfig({ fs, dir: paths.workdir, gitdir: paths.gitDir, path: 'user.name', value: SHADOW_AUTHOR.name });
-        await git.setConfig({ fs, dir: paths.workdir, gitdir: paths.gitDir, path: 'user.email', value: SHADOW_AUTHOR.email });
+        await git.init({ fs: atomicFs, dir: paths.workdir, gitdir: paths.gitDir, defaultBranch: 'main' });
+        await git.setConfig({ fs: atomicFs, dir: paths.workdir, gitdir: paths.gitDir, path: 'user.name', value: SHADOW_AUTHOR.name });
+        await git.setConfig({ fs: atomicFs, dir: paths.workdir, gitdir: paths.gitDir, path: 'user.email', value: SHADOW_AUTHOR.email });
     }
     return paths;
 }
@@ -124,12 +135,17 @@ export async function ensureShadowRepo({ userRoot, peerId }) {
  * subset and hand the disk-backed subset over via `additionalSources` so one
  * snapshot unions both trees into the same commit.
  *
+ * Paths in HEAD that no enabled category of any source owns (sync metadata
+ * under `.luker-sync/`, categories this device does not sync) are kept with
+ * HEAD's content, so a snapshot never deletes data it does not manage.
+ *
  * @param {{
  *   userRoot: string,
  *   peerId: string,
  *   directories: import('../users.js').UserDirectoryList,
  *   enabledCategoryIds: string[],
  *   liveRoot?: string,
+ *   deviceLabel?: string,
  *   additionalSources?: Array<{
  *     directories: import('../users.js').UserDirectoryList,
  *     liveRoot?: string,
@@ -145,23 +161,49 @@ export async function snapshotLiveToShadow({
     enabledCategoryIds,
     liveRoot = directories.root,
     additionalSources = [],
+    deviceLabel,
 }) {
     const paths = await ensureShadowRepo({ userRoot, peerId });
+    const sources = [
+        { directories, liveRoot, enabledCategoryIds },
+        ...additionalSources.map(source => ({
+            directories: source.directories,
+            liveRoot: source.liveRoot ?? source.directories.root,
+            enabledCategoryIds: source.enabledCategoryIds,
+        })),
+    ];
+
+    const head = await resolveHeadOidOrNull(paths.workdir, paths.gitDir);
+    const headFiles = buildPresetIdentityView({ directories, files: await readCommitFiles({ gitdir: paths.gitDir, commitOid: head }) }).files;
+    for (const source of sources) {
+        const owned = ownedTargetsOf(source);
+        for (const category of SYNC_CATEGORIES.filter(category => source.enabledCategoryIds.includes(category.id))) {
+            for (const target of resolveCategoryPaths(category, source.directories)) assertConfinedPath({ boundary: source.liveRoot, absolutePath: target.absolutePath });
+        }
+        const destinations = [];
+        for (const rel of headFiles.keys()) {
+            if (!isOwnedPath(owned, rel) || rel.split('/').some(isStagingEntryName) || isChatPublicationArtifactPath(source.directories, rel)) continue;
+            const absolutePath = resolveTreePathUnder(source.liveRoot, rel);
+            try { assertConfinedPath({ boundary: source.liveRoot, absolutePath }); } catch (error) {
+                if (error.code === 'SYNC_UNSAFE_LIVE_PATH') continue;
+                throw error;
+            }
+            destinations.push({ treePath: rel, absolutePath, logicalIdentity: rel, kind: 'file' });
+        }
+        await assertDistinctFsDestinations({ boundary: source.liveRoot, destinations, operation: 'snapshot existing main' });
+    }
 
     // desired: relative POSIX path within the shadow workdir -> absolute source on disk.
     const desired = new Map();
-    await collectDesiredFromSource(desired, directories, enabledCategoryIds, liveRoot);
-    for (const source of additionalSources) {
-        await collectDesiredFromSource(
-            desired,
-            source.directories,
-            source.enabledCategoryIds,
-            source.liveRoot ?? source.directories.root,
-        );
+    for (const source of sources) {
+        await collectDesiredFromSource(desired, source.directories, source.enabledCategoryIds, source.liveRoot);
     }
-
-    await syncWorkdirToDesired(paths.workdir, desired);
-    return commitIfTreeChanged(paths.workdir, paths.gitDir);
+    const kept = await headFilesOutsideSources(paths.workdir, paths.gitDir, sources);
+    for (const rel of new Set([...desired.keys(), ...kept.keys()])) await unlinkWorkdirSymlinks(paths.workdir, rel);
+    await assertDistinctFsDestinations({ boundary: paths.workdir, destinations: [...new Set([...desired.keys(), ...kept.keys()])].map(rel => ({ treePath: rel, absolutePath: resolveTreePathUnder(paths.workdir, rel), logicalIdentity: rel, kind: 'file' })), operation: 'snapshot workdir' });
+    await syncWorkdirToDesired(paths.workdir, desired, kept);
+    await restoreKeptFiles(paths.workdir, paths.gitDir, kept);
+    return commitIfTreeChanged(paths.workdir, paths.gitDir, deviceLabel, directories);
 }
 
 /**
@@ -178,14 +220,97 @@ async function collectDesiredFromSource(desired, directories, enabledCategoryIds
     const targets = SYNC_CATEGORIES.filter(category => enabled.has(category.id));
     for (const category of targets) {
         for (const resolved of resolveCategoryPaths(category, directories)) {
+            assertConfinedPath({ boundary: liveRoot, absolutePath: resolved.absolutePath });
+            if (resolved.kind === 'directory') await recoverStagedSwaps(resolved.absolutePath);
             if (!fs.existsSync(resolved.absolutePath)) continue;
             if (resolved.kind === 'file') {
                 const rel = toPosixRel(liveRoot, resolved.absolutePath);
                 desired.set(rel, resolved.absolutePath);
             } else if (resolved.kind === 'directory') {
-                await walkLiveDir(resolved.absolutePath, liveRoot, desired);
+                await walkLiveDir(resolved.absolutePath, liveRoot, desired, directories);
             }
         }
+    }
+}
+
+/**
+ * Resolved category targets of one snapshot source, as POSIX paths
+ * relative to that source's liveRoot (the same basis as tree paths).
+ */
+function ownedTargetsOf({ directories, liveRoot, enabledCategoryIds }) {
+    const enabled = new Set(enabledCategoryIds);
+    return SYNC_CATEGORIES
+        .filter(category => enabled.has(category.id))
+        .flatMap(category => resolveCategoryPaths(category, directories)
+            .map(resolved => ({ kind: resolved.kind, rel: toPosixRel(liveRoot, resolved.absolutePath) })));
+}
+
+function isOwnedPath(owned, rel) {
+    return owned.some(target => (target.kind === 'file' ? rel === target.rel : rel.startsWith(`${target.rel}/`)));
+}
+
+/**
+ * HEAD paths no source owns, mapped to their blob oids. Symlink, submodule
+ * and unsafe entries are refused by `readCommitFiles` and never kept, so
+ * the next snapshot commit does not contain them.
+ *
+ * @returns {Promise<Map<string, string>>}
+ */
+async function headFilesOutsideSources(workdir, gitdir, sources) {
+    const kept = new Map();
+    const headOid = await resolveHeadOidOrNull(workdir, gitdir);
+    if (!headOid) return kept;
+    const owned = sources.flatMap(ownedTargetsOf);
+    for (const [rel, file] of await readCommitFiles({ gitdir, commitOid: headOid })) {
+        if (rel.split('/').some(isStagingEntryName) || sources.some(source => isChatPublicationArtifactPath(source.directories, rel))) continue;
+        if (!isOwnedPath(owned, rel)) kept.set(rel, file.oid);
+    }
+    return kept;
+}
+
+/**
+ * Write each kept HEAD blob into the workdir unless the workdir copy
+ * already has that content.
+ */
+async function restoreKeptFiles(workdir, gitdir, kept) {
+    for (const [rel, oid] of kept) {
+        // Throws for a path that would leave the workdir; readCommitFiles
+        // already drops unsafe tree paths, so this is a second line of defense.
+        const dst = resolveTreePathUnder(workdir, rel);
+        await unlinkWorkdirSymlinks(workdir, rel);
+        if (fs.existsSync(dst) && blobOidOf(await fs.promises.readFile(dst)) === oid) continue;
+        await fs.promises.mkdir(path.dirname(dst), { recursive: true });
+        await fs.promises.writeFile(dst, await readBlobBytes({ gitdir, oid }));
+    }
+}
+
+/**
+ * Remove the first symlink found along `rel` inside the workdir, so the
+ * write that follows creates real directories and files instead of
+ * following the link out of the workdir. The workdir is private to sync
+ * and a symlink in it is never data; checking out a tree with symlink
+ * entries can create one. Removing a symlink never touches its target.
+ *
+ * @param {string} workdir
+ * @param {string} rel POSIX path relative to `workdir`
+ */
+async function unlinkWorkdirSymlinks(workdir, rel) {
+    let current = workdir;
+    for (const segment of rel.split('/')) {
+        current = path.join(current, segment);
+        let stat;
+        try {
+            stat = await fs.promises.lstat(current);
+        } catch (error) {
+            if (error.code === 'ENOENT') return;
+            throw error;
+        }
+        if (stat.isSymbolicLink()) {
+            console.warn('[sync] removing symlink from the shadow workdir:', current);
+            await fs.promises.unlink(current);
+            return;
+        }
+        if (!stat.isDirectory()) return;
     }
 }
 
@@ -209,19 +334,23 @@ function toPosixRel(liveRoot, absolutePath) {
  * we `console.warn` so a misconfigured live tree is observable, and
  * we never follow them (which would risk chasing into arbitrary filesystem
  * locations).
+ * Staging entries (`.luker-staging-*`) hold half-prepared writes and are neither snapshotted nor deleted.
  *
  * @param {string} absDir
  * @param {string} liveRoot rel-path basis for entries written into `desired`
  * @param {Map<string, string>} desired
  */
-async function walkLiveDir(absDir, liveRoot, desired) {
+async function walkLiveDir(absDir, liveRoot, desired, directories) {
+    assertConfinedPath({ boundary: liveRoot, absolutePath: absDir });
     const entries = await fs.promises.readdir(absDir, { withFileTypes: true });
     for (const entry of entries) {
-        if (entry.name === '.git') continue;
+        if (entry.name === '.git' || isStagingEntryName(entry.name)) continue;
         const abs = path.join(absDir, entry.name);
         if (entry.isDirectory()) {
-            await walkLiveDir(abs, liveRoot, desired);
+            await walkLiveDir(abs, liveRoot, desired, directories);
         } else if (entry.isFile()) {
+            if (isChatPublicationArtifactPath(directories, toPosixRel(liveRoot, abs))) continue;
+            assertConfinedPath({ boundary: liveRoot, absolutePath: abs });
             desired.set(toPosixRel(liveRoot, abs), abs);
         } else if (entry.isSymbolicLink()) {
             console.warn('[sync] ignoring symlink at:', abs);
@@ -245,10 +374,11 @@ async function walkLiveDir(absDir, liveRoot, desired) {
  *
  * @param {string} workdir
  * @param {Map<string, string>} desired
+ * @param {Map<string, string>} kept HEAD paths outside every snapshot source; never pruned
  */
-async function syncWorkdirToDesired(workdir, desired) {
+async function syncWorkdirToDesired(workdir, desired, kept) {
     if (fs.existsSync(workdir)) {
-        await pruneWorkdir(workdir, '', desired);
+        await pruneWorkdir(workdir, '', desired, kept);
     }
     for (const [rel, src] of desired) {
         const dst = path.join(workdir, rel);
@@ -258,6 +388,7 @@ async function syncWorkdirToDesired(workdir, desired) {
         // for already-staged entries. Skip the syscall explicitly so the
         // semantics stay platform-portable.
         if (path.resolve(src) === path.resolve(dst)) continue;
+        await unlinkWorkdirSymlinks(workdir, rel);
         await fs.promises.mkdir(path.dirname(dst), { recursive: true });
         await fs.promises.copyFile(src, dst);
     }
@@ -270,8 +401,9 @@ async function syncWorkdirToDesired(workdir, desired) {
  * @param {string} dir
  * @param {string} prefix
  * @param {Map<string, string>} desired
+ * @param {Map<string, string>} kept HEAD paths outside every snapshot source; never pruned
  */
-async function pruneWorkdir(dir, prefix, desired) {
+async function pruneWorkdir(dir, prefix, desired, kept) {
     const entries = await fs.promises.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
         // Defensive: the shadow's .git is a sibling of workdir, not inside it,
@@ -280,11 +412,11 @@ async function pruneWorkdir(dir, prefix, desired) {
         const abs = path.join(dir, entry.name);
         const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
-            await pruneWorkdir(abs, rel, desired);
+            await pruneWorkdir(abs, rel, desired, kept);
             const remaining = await fs.promises.readdir(abs);
             if (remaining.length === 0) await fs.promises.rmdir(abs);
         } else if (entry.isFile()) {
-            if (!desired.has(rel)) {
+            if (!desired.has(rel) && !kept.has(rel)) {
                 await fs.promises.unlink(abs);
             }
         }
@@ -319,17 +451,18 @@ async function pruneWorkdir(dir, prefix, desired) {
  *
  * @param {string} workdir
  * @param {string} gitdir
+ * @param {string} [deviceLabel]
  * @returns {Promise<{ committed: boolean, oid: string | null }>}
  */
-async function commitIfTreeChanged(workdir, gitdir) {
+async function commitIfTreeChanged(workdir, gitdir, deviceLabel, directories) {
     const tracked = new Set();
-    await collectWorkdirFiles(workdir, '', tracked);
+    await collectWorkdirFiles(workdir, '', tracked, directories);
     for (const filepath of tracked) {
-        await git.add({ fs, dir: workdir, gitdir, filepath });
+        await git.add({ fs: atomicFs, dir: workdir, gitdir, filepath });
     }
-    for (const filepath of await git.listFiles({ fs, dir: workdir, gitdir })) {
+    for (const filepath of await git.listFiles({ fs: atomicFs, dir: workdir, gitdir })) {
         if (!tracked.has(filepath)) {
-            await git.remove({ fs, dir: workdir, gitdir, filepath });
+            await git.remove({ fs: atomicFs, dir: workdir, gitdir, filepath });
         }
     }
 
@@ -338,8 +471,12 @@ async function commitIfTreeChanged(workdir, gitdir) {
         return { committed: false, oid: previousHeadOid };
     }
 
-    const message = `local snapshot ${new Date(Date.now()).toISOString()}`;
-    const newOid = await git.commit({ fs, dir: workdir, gitdir, message, author: SHADOW_AUTHOR });
+    failpoint(FAILPOINTS.SNAPSHOT_BEFORE_COMMIT);
+    const now = new Date(Date.now());
+    const signature = { timestamp: Math.floor(now.getTime() / 1000), timezoneOffset: now.getTimezoneOffset() };
+    const message = `local snapshot ${now.toISOString()}`;
+    const newOid = await git.commit({ fs: atomicFs, dir: workdir, gitdir, message,
+        author: { ...authorForDevice(deviceLabel), ...signature }, committer: { ...SHADOW_AUTHOR, ...signature } });
     return { committed: true, oid: newOid };
 }
 
@@ -355,16 +492,17 @@ async function commitIfTreeChanged(workdir, gitdir) {
  * @param {string} prefix
  * @param {Set<string>} out
  */
-async function collectWorkdirFiles(dir, prefix, out) {
+async function collectWorkdirFiles(dir, prefix, out, directories) {
     if (!fs.existsSync(dir)) return;
     const entries = await fs.promises.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
-        if (entry.name === '.git') continue;
+        if (entry.name === '.git' || isStagingEntryName(entry.name)) continue;
         const abs = path.join(dir, entry.name);
         const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
-            await collectWorkdirFiles(abs, rel, out);
+            await collectWorkdirFiles(abs, rel, out, directories);
         } else if (entry.isFile()) {
+            if (isChatPublicationArtifactPath(directories, rel)) continue;
             out.add(rel);
         }
         // symlinks and other non-file entries skipped (see prune symmetry above).
@@ -389,7 +527,7 @@ async function collectWorkdirFiles(dir, prefix, out) {
 async function indexDiffersFromHeadTree(dir, gitdir) {
     let differs = false;
     await git.walk({
-        fs,
+        fs: atomicFs,
         dir,
         gitdir,
         trees: [git.TREE({ ref: 'HEAD' }), git.STAGE()],
@@ -424,7 +562,7 @@ async function indexDiffersFromHeadTree(dir, gitdir) {
  */
 async function resolveHeadOidOrNull(dir, gitdir) {
     try {
-        return await git.resolveRef({ fs, dir, gitdir, ref: 'HEAD' });
+        return await git.resolveRef({ fs: atomicFs, dir, gitdir, ref: 'HEAD' });
     } catch {
         return null;
     }
@@ -496,11 +634,13 @@ export async function reconcileShadowToLive({ userRoot, peerId, directories, ena
     const desired = new Map();
     for (const target of liveTargets) {
         const shadowTarget = path.join(paths.workdir, target.rel);
+        assertConfinedPath({ boundary: directories.root, absolutePath: path.join(directories.root, target.rel) });
+        assertConfinedPath({ boundary: paths.workdir, absolutePath: shadowTarget });
         if (!fs.existsSync(shadowTarget)) continue;
         if (target.kind === 'file') {
             desired.set(target.rel, shadowTarget);
         } else {
-            await walkShadowForDesired(shadowTarget, target.rel, desired);
+            await walkShadowForDesired(shadowTarget, target.rel, desired, directories);
         }
     }
 
@@ -519,7 +659,7 @@ export async function reconcileShadowToLive({ userRoot, peerId, directories, ena
                 deleted.push(target.rel);
             }
         } else {
-            await walkLiveForDeletions(liveTarget, target.rel, desired, deleted);
+            await walkLiveForDeletions(liveTarget, target.rel, desired, deleted, directories);
         }
     }
 
@@ -529,6 +669,7 @@ export async function reconcileShadowToLive({ userRoot, peerId, directories, ena
     const written = [];
     for (const [rel, src] of desired) {
         const dst = path.join(directories.root, rel);
+        assertConfinedPath({ boundary: directories.root, absolutePath: dst });
         await fs.promises.mkdir(path.dirname(dst), { recursive: true });
         const data = await fs.promises.readFile(src);
         writeFileAtomicSync(dst, data);
@@ -549,12 +690,12 @@ export async function reconcileShadowToLive({ userRoot, peerId, directories, ena
  * @param {string} prefix POSIX-relative path of `absDir` from `directories.root`
  * @param {Map<string, string>} desired
  */
-async function walkShadowForDesired(absDir, prefix, desired) {
+async function walkShadowForDesired(absDir, prefix, desired, directories) {
     const entries = await fs.promises.readdir(absDir, { withFileTypes: true });
     for (const entry of entries) {
         // Defensive: the shadow's .git is a sibling of workdir, not inside it,
         // but a stray .git in the workdir would taint the desired set.
-        if (entry.name === '.git') continue;
+        if (entry.name === '.git' || isStagingEntryName(entry.name)) continue;
         const abs = path.join(absDir, entry.name);
         // Mirror snapshot-side walkers (walkLiveDir / pruneWorkdir /
         // collectWorkdirFiles): ternary form prevents leading-slash rel paths
@@ -564,8 +705,9 @@ async function walkShadowForDesired(absDir, prefix, desired) {
         // silently produce '/foo.png' style entries in the returned arrays.
         const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
-            await walkShadowForDesired(abs, rel, desired);
+            await walkShadowForDesired(abs, rel, desired, directories);
         } else if (entry.isFile()) {
+            if (isChatPublicationArtifactPath(directories, rel)) continue;
             desired.set(rel, abs);
         }
         // symlinks and other non-file entries silently skipped — same stance
@@ -579,18 +721,19 @@ async function walkShadowForDesired(absDir, prefix, desired) {
  * empty. The category root directory itself is left alone even when fully
  * empty — apps that re-create it on next launch should not have to also
  * create it on next reconcile.
+ * Staging entries (`.luker-staging-*`) hold half-prepared writes and are neither snapshotted nor deleted.
  *
  * @param {string} absDir
  * @param {string} prefix POSIX-relative path of `absDir` from `directories.root`
  * @param {Map<string, string>} desired
  * @param {string[]} deleted
  */
-async function walkLiveForDeletions(absDir, prefix, desired, deleted) {
+async function walkLiveForDeletions(absDir, prefix, desired, deleted, directories) {
     const entries = await fs.promises.readdir(absDir, { withFileTypes: true });
     for (const entry of entries) {
         // card-apps and any other live directory may host
         // per-content git repos we must never touch.
-        if (entry.name === '.git') continue;
+        if (entry.name === '.git' || isStagingEntryName(entry.name)) continue;
         const abs = path.join(absDir, entry.name);
         // Mirror snapshot-side walkers (see walkShadowForDesired): ternary
         // form prevents leading-slash rel paths if this walker is ever entered
@@ -598,12 +741,13 @@ async function walkLiveForDeletions(absDir, prefix, desired, deleted) {
         // but defensive symmetry with the snapshot walkers).
         const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
-            await walkLiveForDeletions(abs, rel, desired, deleted);
+            await walkLiveForDeletions(abs, rel, desired, deleted, directories);
             const remaining = await fs.promises.readdir(abs);
             if (remaining.length === 0) {
                 await fs.promises.rmdir(abs);
             }
         } else if (entry.isFile()) {
+            if (isChatPublicationArtifactPath(directories, rel)) continue;
             if (!desired.has(rel)) {
                 await fs.promises.unlink(abs);
                 deleted.push(rel);

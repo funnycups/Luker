@@ -7,6 +7,7 @@
 
 import { PanelRenderer, DEFAULT_KIND_ICONS } from './render-incremental.js';
 import * as EV from './events.js';
+import { createActivityPill } from '../activity-pill.js';
 
 const DEFAULT_STYLESHEET_URL = '/scripts/run-panel/panel.css';
 const DEFAULT_EMPTY_STATE = 'No active run yet. Start a conversation to see orchestration progress here.';
@@ -37,7 +38,7 @@ export function createRunPanel(options = {}) {
 
     let mounted = false;
     let renderer = null;
-    let pillEl = null;
+    let pill = null;
     let unsubscribe = null;
     let pillTimer = null;
     let layoutMql = null;
@@ -97,13 +98,12 @@ export function createRunPanel(options = {}) {
         root.innerHTML = buildShellHtml();
         document.body.appendChild(root);
 
-        pillEl = document.createElement('button');
-        pillEl.id = pillId;
-        pillEl.className = 'luker-run-panel-pill';
-        pillEl.hidden = true;
-        pillEl.textContent = t('Click to reopen');
-        pillEl.addEventListener('click', open);
-        document.body.appendChild(pillEl);
+        pill = createActivityPill({
+            id: pillId,
+            className: 'luker-run-panel-pill',
+            onOpen: open,
+            onError: error => { console.error('[run-panel] could not reopen', error); toastr.error(String(error?.message || error)); },
+        });
 
         renderer = new PanelRenderer(root, rendererOptions);
 
@@ -131,26 +131,26 @@ export function createRunPanel(options = {}) {
     }
 
     function showPill() {
-        if (!pillEl) return;
-        pillEl.hidden = false;
+        if (!pill) return;
         if (pillTimer) clearInterval(pillTimer);
         const tick = () => {
             const r = store.getCurrentRun();
             if (!r || r.status !== 'running') { hidePill(); return; }
             const sec = ((performance.now() - r.startedAt) / 1000).toFixed(0);
-            pillEl.textContent = `● ${t('running')} · ${sec}s · ${t('Click to reopen')}`;
+            pill.update({ visible: true, text: `● ${t('running')} · ${sec}s · ${t('Click to reopen')}`, tone: 'running', loading: true });
         };
         tick();
         pillTimer = setInterval(tick, 1000);
     }
 
     function hidePill() {
-        if (pillEl) pillEl.hidden = true;
+        if (pill) pill.update({ visible: false, text: t('Click to reopen'), tone: 'running', loading: false });
         if (pillTimer) { clearInterval(pillTimer); pillTimer = null; }
     }
 
     function open() {
         mountOnce();
+        hidePill();
         const run = store.getCurrentRun();
         const body = document.getElementById(rootId)?.querySelector('.panel-body');
         if (body) {
@@ -198,7 +198,7 @@ export function createRunPanel(options = {}) {
         }
         if (renderer && typeof renderer.destroy === 'function') renderer.destroy();
         hidePill();
-        if (pillEl) { pillEl.remove(); pillEl = null; }
+        if (pill) { pill.destroy(); pill = null; }
         const root = document.getElementById(rootId);
         if (root) root.remove();
         const css = document.getElementById(cssId);

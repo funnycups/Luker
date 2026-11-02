@@ -59,6 +59,7 @@ test.beforeAll(async () => {
     ext.connectionManager = ext.connectionManager || { profiles: [], selectedProfile: null };
     // Clear the one-shot flag so the migration actually runs in this scratch
     // dataRoot (the repo's data/ already carries it).
+    delete ext.connectionManager._proxyToBaseUrlMigrated;
     delete ext.connectionManager._proxyToBaseUrlMigratedAt;
     ext.connectionManager.selectedProfile = null;
     ext.connectionManager.profiles = [{

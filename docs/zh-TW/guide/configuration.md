@@ -168,6 +168,19 @@ securityOverride: false
 - `disableCsrfProtection`：停用 CSRF 保護（不建議）
 - `securityOverride`：安全覆寫開關（僅用於除錯）
 
+### 同步私有位址 {#sync-private-addresses}
+
+```yaml
+sync:
+  allowPrivateAddressesForUsers: false
+```
+
+多使用者安裝預設禁止非管理員帳號向私有、環回或鏈路本地目標發起區域網路及 S3 同步連線。管理員與未啟用使用者帳號的單使用者模式不受限制。
+
+設定 `allowPrivateAddressesForUsers: true` 後，允許這些使用者透過同步存取私有目標。僅對需要存取伺服端私有網路的使用者啟用。該選項不會啟用區域網路監聽，也不能替代防火牆、白名單或驗證設定。
+
+參閱[同步概覽](/zh-TW/improvements/sync)、[區域網路配對](/zh-TW/improvements/lan-sync)與 [S3 設定](/zh-TW/improvements/s3-sync)。
+
 ## 備份與儲存
 
 ```yaml

@@ -20,19 +20,7 @@ describe('FS engine corruption recovery', () => {
     beforeEach(async () => { h = await makeFs(); });
     afterEach(() => h.cleanup());
 
-    test('chat with garbage JSON line in body returns null (corruption is masked, no throw)', async () => {
-        // Contract (ae48dcab6 "chat.get returns null on corrupt/non-conformant
-        // docs across all engines"): the chat handler parses the JSONL file
-        // line by line; any per-line parse failure collapses the whole
-        // record to `null` rather than throwing. Handler-side try/catch
-        // in fs-engine-transaction.js masks the SyntaxError so callers
-        // uniformly see "no chat" instead of an exception that varies by
-        // corruption type.
-        //
-        // Downstream ChatRepo.append/patch treats null the same as a
-        // deleted / never-existed record, which is the correct failure
-        // mode for a partially-corrupted file — the alternative (bubble
-        // SyntaxError) makes every read path defensive.
+    test('chat with garbage JSON line exposes the selected line without altering stored data', async () => {
         const repo = new ChatRepo({ engine: h.engine });
         await repo.save(
             h.handle, 'TestChar', 'chat1',
@@ -47,7 +35,9 @@ describe('FS engine corruption recovery', () => {
         lines.splice(1, 0, '{not valid json');
         fs.writeFileSync(fp, lines.join('\n') + '\n');
 
-        expect(await repo.get(h.handle, 'TestChar', 'chat1')).toBeNull();
+        const damaged = fs.readFileSync(fp);
+        await expect(repo.get(h.handle, 'TestChar', 'chat1')).rejects.toThrow(/chat1\.jsonl line 2: invalid JSON/);
+        expect(fs.readFileSync(fp)).toEqual(damaged);
     });
 
     test('settings.json containing literal "null" round-trips to JS null', async () => {
@@ -63,12 +53,7 @@ describe('FS engine corruption recovery', () => {
     });
 
     test('chat sidecar with array root is returned verbatim as an array', async () => {
-        // The chat sidecar handler is bare `JSON.parse` with the only guard
-        // being a try/catch that returns null on SyntaxError. A successfully
-        // parsed array is therefore returned as-is — this is the current
-        // contract, even though every legitimate caller treats sidecars as
-        // plain objects. If a future change adds an `isObjectLike` guard,
-        // this test flips to `expect(got).toBeNull()`.
+        // Valid JSON state values are returned without shape coercion.
         const repo = new ChatRepo({ engine: h.engine });
         await repo.save(
             h.handle, 'TestChar', 'chat1',

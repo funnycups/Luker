@@ -51,6 +51,16 @@ describe.each(CONTRACT_HARNESSES)('PresetRepo on $name — basic CRUD', ({ make 
         expect(result).toBe(false);
     });
 
+    test('delete on a missing preset still purges its accepted orphan state', async () => {
+        await repo.setState(h.handle, 'openai', 'orphan', 'n', { complete: ['ORPHAN_STATE'] });
+        await repo.setState(h.handle, 'openai', 'independent', 'n', { keep: ['INDEPENDENT_STATE'] });
+        expect(await repo.delete(h.handle, 'openai', 'orphan')).toBe(false);
+        expect(await repo.getState(h.handle, 'openai', 'orphan', 'n')).toBeNull();
+        expect(await repo.listStateNamespaces(h.handle, 'openai', 'orphan')).toEqual([]);
+        expect(await repo.getState(h.handle, 'openai', 'independent', 'n')).toEqual({ keep: ['INDEPENDENT_STATE'] });
+        expect(await repo.delete(h.handle, 'openai', 'orphan')).toBe(false);
+    });
+
     test('save/get routes per apiId mapping', async () => {
         await repo.save(h.handle, 'novel', 'nv', { n: 1 });
         await repo.save(h.handle, 'instruct', 'ins', { i: 1 });

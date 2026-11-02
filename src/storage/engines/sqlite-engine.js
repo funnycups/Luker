@@ -176,24 +176,17 @@ export class SqliteEngine {
      * calls for that handle go through `_dbFor`, which lazily reopens
      * against whatever DB file is on disk at that time.
      *
-     * Used by the LAN-sync orchestrator after `reconcileShadowToLive`
-     * swaps in a fresh `luker-storage.sqlite` via `write-file-atomic`'s
-     * rename: better-sqlite3's cached handle pins the OLD (now unlinked)
-     * inode and silently returns stale data, so we MUST drop it before
+     * After a caller swaps in a fresh `luker-storage.sqlite` by rename,
+     * better-sqlite3's cached handle pins the OLD (now unlinked)
+     * inode and silently returns stale data, so the caller MUST drop it before
      * the next read or write. Per-handle (rather than `close()`)
-     * preserves any other user's connection in the same process — the
-     * sync queue's mutex only covers the syncing user's pairing.
+     * preserves any other user's connection in the same process.
      *
-     * Concurrency caveat (spec §4.4): an app write that beats this drop
-     * to the cached connection — i.e. lands AFTER `reconcileShadowToLive`'s
-     * rename swap but BEFORE this `closeHandle` runs — would write to the
-     * old (unlinked) inode, then be lost. The spec envisions a
-     * SYNC_IN_PROGRESS gate that 409s save endpoints during sync to
-     * prevent this; that gate is NOT yet implemented (tracked for v1.1).
-     * In v1 the per-(userRoot, peerId) FIFO queue around `runPull`
-     * narrows the race window but does not close it for in-flight writes
-     * the queue cannot see. User-facing docs note "avoid editing during
-     * sync" as the v1 mitigation.
+     * Concurrency: a caller that swaps the DB file must hold
+     * the sync write gate's writer side across the swap and this call.
+     * Every endpoint that writes synced data waits for a reader slot while
+     * the writer is held, so no app write reaches the cached connection
+     * between the swap and `closeHandle` and lands on the old inode.
      *
      * Idempotent: a handle with no cached connection is a no-op. Safe to
      * call multiple times in sequence.

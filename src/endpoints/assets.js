@@ -10,6 +10,8 @@ import fetch from 'node-fetch';
 import { UNSAFE_EXTENSIONS } from '../constants.js';
 import { clientRelativePath, isValidUrl } from '../util.js';
 import { getHostFromUrl, isHostWhitelisted } from './content-manager.js';
+import { runGatedWrite } from '../sync/in-progress-gate.js';
+import { makeStagingPath, isStagingEntryName } from '../sync/staging.js';
 
 const VALID_CATEGORIES = ['bgm', 'ambient', 'blip', 'live2d', 'vrm', 'character', 'temp'];
 
@@ -64,6 +66,7 @@ function getFiles(dir, files = []) {
     const fileList = fs.readdirSync(dir, { withFileTypes: true });
     // Create the full path of the file/directory by concatenating the passed directory and file/directory name
     for (const file of fileList) {
+        if (isStagingEntryName(file.name)) continue;
         const name = path.join(dir, file.name);
         // Check if the current file/directory is a directory using fs.statSync
         if (file.isDirectory()) {
@@ -165,7 +168,7 @@ router.post('/get', async (request, response) => {
                 // Other assets (bgm/ambient/blip)
                 const files = fs.readdirSync(path.join(folderPath, folder))
                     .filter(filename => {
-                        return filename != '.placeholder';
+                        return filename != '.placeholder' && !isStagingEntryName(filename);
                     });
                 output[folder] = [];
                 for (const file of files) {
@@ -188,6 +191,19 @@ router.post('/get', async (request, response) => {
  * @returns {void}
  */
 router.post('/download', async (request, response) => {
+    let stagingDir = null;
+    // Staging is removed before every response, so a client that sees the
+    // response never sees the staging directory. A failed removal is logged
+    // and never blocks the response.
+    const removeStaging = async () => {
+        if (!stagingDir) return;
+        try {
+            await fs.promises.rm(stagingDir, { recursive: true, force: true });
+        } catch (cleanupError) {
+            console.error('Failed to remove asset staging directory', stagingDir, cleanupError);
+        }
+        stagingDir = null;
+    };
     try {
         if (!isValidUrl(request.body.url)) {
             console.warn('Asset download failed: Must be a valid URL');
@@ -220,40 +236,41 @@ router.post('/download', async (request, response) => {
         if (validation.error)
             return response.status(400).send(validation.message);
 
-        const temp_path = path.join(request.user.directories.assets, 'temp', request.body.filename);
+        // Download into a staging sibling of the destination, so the
+        // transfer holds no write-gate slot and a snapshot never sees a
+        // partial file.
         const file_path = path.join(request.user.directories.assets, category, request.body.filename);
+        stagingDir = await makeStagingPath(file_path, 'asset');
+        const tempPath = path.join(stagingDir, request.body.filename);
         console.info('Request received to download', url, 'to', file_path);
 
-        // Download to temp
         const res = await fetch(url);
         if (!res.ok || res.body === null) {
             throw new Error(`Unexpected response ${res.statusText}`);
         }
-        const destination = path.resolve(temp_path);
-        // Delete if previous download failed
-        if (fs.existsSync(temp_path)) {
-            await fs.promises.unlink(temp_path);
-        }
-        const fileStream = fs.createWriteStream(destination, { flags: 'wx' });
+        const fileStream = fs.createWriteStream(tempPath, { flags: 'wx' });
         // @ts-ignore
         await finished(res.body.pipe(fileStream));
 
         if (category === 'character') {
-            const fileContent = fs.readFileSync(temp_path);
-            const contentType = mime.lookup(temp_path) || 'application/octet-stream';
+            const fileContent = fs.readFileSync(tempPath);
+            const contentType = mime.lookup(tempPath) || 'application/octet-stream';
+            await removeStaging();
             response.setHeader('Content-Type', contentType);
             response.send(fileContent);
-            fs.unlinkSync(temp_path);
             return;
         }
 
-        // Move into asset place
-        console.info('Download finished, moving file from', temp_path, 'to', file_path);
-        fs.copyFileSync(temp_path, file_path);
-        fs.unlinkSync(temp_path);
+        console.info('Download finished, moving file from', tempPath, 'to', file_path);
+        const syncOwner = { handle: request.user.profile.handle, userRoot: request.user.directories.root };
+        await runGatedWrite(syncOwner, async () => {
+            fs.copyFileSync(tempPath, file_path);
+        });
+        await removeStaging();
         response.sendStatus(200);
     } catch (error) {
         console.error(error);
+        await removeStaging();
         response.sendStatus(500);
     }
 });

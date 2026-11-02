@@ -27,14 +27,13 @@ import { test, expect } from '@playwright/test';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMysqlContainer } from '../_lib/db-containers.js';
-import { markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI } from '../_lib/page.js';
+import { awaitMainUI, completeOnboarding } from '../_lib/page.js';
+import { importWorldDocument } from '../_lib/ui-worldinfo.js';
 import { migrateViaAdminUI, fetchStorageStatus, closeAdminPanel } from '../_lib/storage-ui.js';
 import {
     openLanSyncPanel,
     generatePairingLink,
     acceptPairingLink,
-    resolveAllConflictsAs,
 } from '../_lib/sync.js';
 
 const B_DB = 'luker_test_cross';
@@ -78,8 +77,6 @@ test.beforeAll(async () => {
             'storage.mysql.url': mysqlContainer.urlFor(B_DB),
         },
     });
-    markOnboarded({ dataRoot: A.dataRoot });
-    markOnboarded({ dataRoot: B.dataRoot });
 });
 
 test.afterAll(async () => {
@@ -93,23 +90,12 @@ test.afterAll(async () => {
  * server is running, the row lands in that engine through the repo.
  */
 async function saveWorld(page, name, data) {
-    return page.evaluate(async ({ name, data }) => {
-        const csrfResp = await fetch('/csrf-token', { credentials: 'same-origin' });
-        const { token } = await csrfResp.json();
-        const res = await fetch('/api/worldinfo/edit', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': token },
-            body: JSON.stringify({ name, data }),
-        });
-        if (!res.ok) throw new Error(`/api/worldinfo/edit failed: ${res.status}`);
-        return res.json();
-    }, { name, data });
+    await importWorldDocument(page, name, data);
 }
 
 /**
  * Read a world through /api/worldinfo/get so the assertion goes through
- * the responder's real engine — proves the row landed in mysql tables,
+ * B's real engine — proves the row landed in mysql tables,
  * not in a parallel cache the engine ignores.
  */
 async function fetchWorld(page, name) {
@@ -138,6 +124,7 @@ test.describe('LAN Sync — cross-engine pair and sync', () => {
 
         await awaitMainUI(pageA, A.baseURL);
         await awaitMainUI(pageB, B.baseURL);
+        await completeOnboarding(pageB);
 
         // Flip A from fs to sqlite through the admin UI. After this
         // returns, every storage call on A routes through SqliteEngine.
@@ -159,9 +146,9 @@ test.describe('LAN Sync — cross-engine pair and sync', () => {
 
         // Pair on the worlds category. A materializes its sqlite worlds
         // table into per-record JSON files in the shadow workdir; B
-        // does the same with its mysql worlds table. The merge surfaces
-        // either auto-clean (the unique marker.json always lands clean)
-        // or a per-record conflict on shared seed worlds.
+        // does the same with its mysql worlds table. Both servers hold the
+        // same seed worlds and marker.json exists only on A, so the merge
+        // is clean.
         await openLanSyncPanel(pageA);
         const link = await generatePairingLink(pageA, {
             label: 'B device',
@@ -173,11 +160,7 @@ test.describe('LAN Sync — cross-engine pair and sync', () => {
             categories: ['worlds'],
             localLabel: 'A device',
         });
-        expect(['warning', 'success']).toContain(outcome);
-        if (outcome === 'warning') {
-            const resolved = await resolveAllConflictsAs(pageB, 'theirs');
-            expect(resolved).toBe('success');
-        }
+        expect(outcome).toBe('success');
 
         // The defining assertion. Data path:
         //   A.SqliteEngine.getResource -> materialize -> workdir JSON

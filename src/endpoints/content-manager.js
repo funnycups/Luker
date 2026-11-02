@@ -204,56 +204,56 @@ function resolveContentSink(type, basename, directories, handle) {
             return {
                 kind: 'repo',
                 label: 'PresetRepo[kobold]',
-                exists: async () => (await getPresetRepo().get(handle, 'kobold', basename)) != null,
+                exists: async () => getPresetRepo().exists(handle, 'kobold', basename),
                 save: async (json, name) => getPresetRepo().save(handle, 'kobold', name, json),
             };
         case CONTENT_TYPES.OPENAI_PRESET:
             return {
                 kind: 'repo',
                 label: 'PresetRepo[openai]',
-                exists: async () => (await getPresetRepo().get(handle, 'openai', basename)) != null,
+                exists: async () => getPresetRepo().exists(handle, 'openai', basename),
                 save: async (json, name) => getPresetRepo().save(handle, 'openai', name, json),
             };
         case CONTENT_TYPES.NOVEL_PRESET:
             return {
                 kind: 'repo',
                 label: 'PresetRepo[novel]',
-                exists: async () => (await getPresetRepo().get(handle, 'novel', basename)) != null,
+                exists: async () => getPresetRepo().exists(handle, 'novel', basename),
                 save: async (json, name) => getPresetRepo().save(handle, 'novel', name, json),
             };
         case CONTENT_TYPES.TEXTGEN_PRESET:
             return {
                 kind: 'repo',
                 label: 'PresetRepo[textgenerationwebui]',
-                exists: async () => (await getPresetRepo().get(handle, 'textgenerationwebui', basename)) != null,
+                exists: async () => getPresetRepo().exists(handle, 'textgenerationwebui', basename),
                 save: async (json, name) => getPresetRepo().save(handle, 'textgenerationwebui', name, json),
             };
         case CONTENT_TYPES.INSTRUCT:
             return {
                 kind: 'repo',
                 label: 'PresetRepo[instruct]',
-                exists: async () => (await getPresetRepo().get(handle, 'instruct', basename)) != null,
+                exists: async () => getPresetRepo().exists(handle, 'instruct', basename),
                 save: async (json, name) => getPresetRepo().save(handle, 'instruct', name, json),
             };
         case CONTENT_TYPES.CONTEXT:
             return {
                 kind: 'repo',
                 label: 'PresetRepo[context]',
-                exists: async () => (await getPresetRepo().get(handle, 'context', basename)) != null,
+                exists: async () => getPresetRepo().exists(handle, 'context', basename),
                 save: async (json, name) => getPresetRepo().save(handle, 'context', name, json),
             };
         case CONTENT_TYPES.SYSPROMPT:
             return {
                 kind: 'repo',
                 label: 'PresetRepo[sysprompt]',
-                exists: async () => (await getPresetRepo().get(handle, 'sysprompt', basename)) != null,
+                exists: async () => getPresetRepo().exists(handle, 'sysprompt', basename),
                 save: async (json, name) => getPresetRepo().save(handle, 'sysprompt', name, json),
             };
         case CONTENT_TYPES.REASONING:
             return {
                 kind: 'repo',
                 label: 'PresetRepo[reasoning]',
-                exists: async () => (await getPresetRepo().get(handle, 'reasoning', basename)) != null,
+                exists: async () => getPresetRepo().exists(handle, 'reasoning', basename),
                 save: async (json, name) => getPresetRepo().save(handle, 'reasoning', name, json),
             };
         default: {

@@ -4,10 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { awaitMainUI } from '../_lib/page.js';
-import { importCharacterFile } from '../_lib/ui-character.js';
-import { clickCharacterCard, dismissAnyPopup, disableTagImportPopup, openCharacterEditPanel } from '../character/_helpers.js';
-import { markOnboarded } from '../_lib/fixtures.js';
+import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
+import { editSelectedCharacterFields, importCharacterFile } from '../_lib/ui-character.js';
 import { write as writePngCard, read as readPngCard } from '../../../src/character-card-parser.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
@@ -25,9 +23,6 @@ test.beforeAll(async () => {
         extraConfig: { 'storage.mode': 'fs' },
     });
 
-    markOnboarded({ dataRoot: server.dataRoot });
-    disableTagImportPopup({ dataRoot: server.dataRoot });
-
     tmpDir = mkdtempSync(join(tmpdir(), 'luker-resource-character-'));
     const seed = readFileSync(resolve(REPO_ROOT, 'default/content/default_Seraphina.png'));
     const payload = {
@@ -41,7 +36,7 @@ test.beforeAll(async () => {
             scenario: 'A quiet room.',
             first_mes: 'The ledger is open.',
             mes_example: '',
-            tags: ['fixture'],
+            tags: [],
             extensions: {
                 cache_fixture: {
                     enabled: true,
@@ -65,14 +60,15 @@ test.afterAll(async () => {
 
 test('loads a complete character from source fields and projection', async ({ page }) => {
     await awaitMainUI(page, server.baseURL);
-    await page.locator('dialog.popup[open] .popup-button-ok').first().click({ timeout: 2000 }).catch(() => {});
     await importCharacterFile(page, { filePath: pngPath, expectedName: NAME });
 
     const requests = [];
     page.on('request', request => requests.push(new URL(request.url())));
 
-    await dismissAnyPopup(page);
-    await clickCharacterCard(page, NAME);
+    const selecting = selectCharacterByName(page, NAME);
+    const lorePrompt = page.getByRole('dialog').filter({ hasText: 'This character has an embedded World/Lorebook.' });
+    await lorePrompt.getByRole('button', { name: 'No', exact: true }).click();
+    await selecting;
     await page.waitForFunction(() => {
         const context = window.Luker.getContext();
         return Boolean(context.characters[context.characterId]?.json_data);
@@ -94,8 +90,11 @@ test('loads a complete character from source fields and projection', async ({ pa
     expect(read.extension.history[399].text).toBe(`${SENTINEL}-399`);
     expect(read.rootUnknown).toEqual({ keep: true });
 
-    const avatar = readdirSync(join(server.dataRoot, 'default-user', 'characters'))
-        .find(file => file.endsWith('.png'));
+    const avatar = await page.evaluate(() => {
+        const context = window.Luker.getContext();
+        return context.characters[context.characterId].avatar;
+    });
+    expect(readdirSync(join(server.dataRoot, 'default-user', 'characters'))).toContain(avatar);
     expect(avatar).toBeTruthy();
     expect(read.jsonData).toBe(readPngCard(readFileSync(join(server.dataRoot, 'default-user', 'characters', avatar))));
 
@@ -105,18 +104,9 @@ test('loads a complete character from source fields and projection', async ({ pa
     expect(requests.some(url => url.pathname === '/api/characters/get')).toBe(false);
 
     await page.waitForFunction(() => window.Luker.getContext().chat.length > 0);
-    await dismissAnyPopup(page);
-    await openCharacterEditPanel(page);
-    await dismissAnyPopup(page);
-    await page.waitForFunction(() =>
-        document.querySelector('#description_textarea')?.value === 'A visitor from the cache ledger.');
     const patchResponse = page.waitForResponse(response =>
         response.url().includes('/api/characters/patch') && response.request().method() === 'POST');
-    const description = page.locator('#description_textarea');
-    await description.click();
-    await description.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
-    await description.pressSequentially('Edited through the cached field path.');
-    await page.evaluate(() => document.querySelector('#form_create').requestSubmit());
+    await editSelectedCharacterFields(page, { description: 'Edited through the cached field path.' });
     const patched = await patchResponse;
     expect(patched.status()).toBe(200);
     const patchBody = JSON.parse(patched.request().postData() || '{}');
@@ -131,8 +121,7 @@ test('loads a complete character from source fields and projection', async ({ pa
 
     await page.reload();
     await awaitMainUI(page, server.baseURL);
-    await dismissAnyPopup(page);
-    await clickCharacterCard(page, NAME);
+    await selectCharacterByName(page, NAME);
     await page.waitForFunction(() => {
         const context = window.Luker.getContext();
         return Boolean(context.characters[context.characterId]?.json_data);
@@ -142,18 +131,14 @@ test('loads a complete character from source fields and projection', async ({ pa
         return context.characters[context.characterId].data.extensions.cache_fixture.history[0].text;
     })).toBe(`${SENTINEL}-0`);
 
-    await page.evaluate(async () => {
-        const context = window.Luker.getContext();
-        const id = context.characterId;
-        await context.updateCharacterData(id, { description: 'Round trip A' }, { immediate: true });
-        await context.updateCharacterData(id, { description: 'Round trip B' }, { immediate: true });
-        await context.updateCharacterData(id, { description: 'Round trip A' }, { immediate: true });
-    });
+    for (const description of ['Round trip A', 'Round trip B', 'Round trip A']) {
+        await editSelectedCharacterFields(page, { description });
+        await expect(page.locator('#description_textarea')).toHaveValue(description);
+    }
 
     await page.reload();
     await awaitMainUI(page, server.baseURL);
-    await dismissAnyPopup(page);
-    await clickCharacterCard(page, NAME);
+    await selectCharacterByName(page, NAME);
     await page.waitForFunction(() => {
         const context = window.Luker.getContext();
         return Boolean(context.characters[context.characterId]?.json_data);

@@ -37,7 +37,7 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
     });
 
     test('lists leaves with validators that match field responses', async () => {
-        const directory = await request(harness.app)
+        const directory = await request(harness.server)
             .get('/api/settings/fields')
             .query({ account: harness.handle })
             .expect(200);
@@ -56,7 +56,7 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
             '/user_name',
         ]);
 
-        const field = await request(harness.app)
+        const field = await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: '/extension_settings/example/enabled' })
             .expect(200);
@@ -65,17 +65,17 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
     });
 
     test('revalidates unchanged fields and changes only the edited validator', async () => {
-        const before = await request(harness.app)
+        const before = await request(harness.server)
             .get('/api/settings/fields')
             .query({ account: harness.handle })
             .expect(200);
         const beforeEtags = Object.fromEntries(before.body.fields.map(field => [field.path, field.etag]));
 
-        const field = await request(harness.app)
+        const field = await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: '/extension_settings/example/history' })
             .expect(200);
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: '/extension_settings/example/history' })
             .set('If-None-Match', field.headers.etag)
@@ -89,7 +89,7 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
             },
         });
 
-        const after = await request(harness.app)
+        const after = await request(harness.server)
             .get('/api/settings/fields')
             .query({ account: harness.handle })
             .expect(200);
@@ -102,17 +102,17 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
     });
 
     test('rejects container and array-index paths while allowing array leaves', async () => {
-        const container = await request(harness.app)
+        const container = await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: '/extension_settings/example' })
             .expect(400);
         expect(container.body.code).toBe('invalid_args');
-        const index = await request(harness.app)
+        const index = await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: '/extension_settings/array-namespace/0' })
             .expect(400);
         expect(index.body.code).toBe('invalid_args');
-        const leaf = await request(harness.app)
+        const leaf = await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: '/extension_settings/array-namespace' })
             .expect(200);
@@ -120,15 +120,15 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
     });
 
     test('distinguishes missing and malformed paths', async () => {
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: '/extension_settings/example/absent' })
             .expect(404);
-        await request(harness.app)
+        await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: 'not-a-pointer' })
             .expect(400);
-        const mismatched = await request(harness.app)
+        const mismatched = await request(harness.server)
             .get('/api/settings/fields')
             .query({ account: 'other' })
             .expect(403);
@@ -140,7 +140,7 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
             return;
         }
         fs.writeFileSync(path.join(harness.dirs.root, 'settings.json'), '{not json');
-        const response = await request(harness.app)
+        const response = await request(harness.server)
             .get('/api/settings/fields')
             .query({ account: harness.handle })
             .expect(422);

@@ -89,10 +89,15 @@ describe('isBasicAuthExemptRequest', () => {
         })).toBe(true);
     });
 
-    test('does not exempt the sync /health endpoint or non-session sync paths', () => {
-        // /health is a reachability probe, intentionally still gated by basic auth.
+    test('exempts the sync /health probe but not other non-session sync paths', () => {
+        // /health reports only the protocol version so a peer can check
+        // compatibility before pairing.
         expect(isBasicAuthExemptRequest({
             method: 'GET',
+            path: '/api/sync/v1/health',
+        })).toBe(true);
+        expect(isBasicAuthExemptRequest({
+            method: 'POST',
             path: '/api/sync/v1/health',
         })).toBe(false);
         // Anything outside `/session/` is not exempt.
@@ -107,14 +112,11 @@ describe('isBasicAuthExemptRequest', () => {
         })).toBe(false);
     });
 
-    test('does not exempt /session/offer — it ISSUES tokens and must be basic-auth gated', () => {
+    test('does not exempt /session/offer without a pairing credential — it ISSUES tokens', () => {
         // The offer route is the bootstrap: the user authenticates with
         // their normal credentials, then receives a bearer token to use on
         // the rest of the /session/* routes. If the bypass swallowed it,
         // any unauthenticated client on the LAN could mint tokens.
-        // The pairing-credential exemption only applies in multi-user
-        // mode and is pinned in http-multi-user-offer.test.js, which sets
-        // SILLYTAVERN_ENABLEUSERACCOUNTS before importing the module.
         expect(isBasicAuthExemptRequest({
             method: 'POST',
             path: '/api/sync/v1/session/offer',
@@ -130,6 +132,20 @@ describe('isBasicAuthExemptRequest', () => {
             method: 'GET',
             path: '/api/sync/v1/session/offer',
         })).toBe(false);
+    });
+
+    test('exempts /session/offer carrying a pairing credential in single-user mode', () => {
+        // The route verifies the credential against the peer registry.
+        expect(isBasicAuthExemptRequest({
+            method: 'POST',
+            path: '/api/sync/v1/session/offer',
+            headers: { 'x-sync-peer-secret': 'a'.repeat(64) },
+        })).toBe(true);
+        expect(isBasicAuthExemptRequest({
+            method: 'POST',
+            path: '/api/sync/v1/session/offer',
+            headers: { 'x-sync-pair-code': 'b'.repeat(64) },
+        })).toBe(true);
     });
 });
 

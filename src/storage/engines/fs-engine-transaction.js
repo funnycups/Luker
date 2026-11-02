@@ -1,15 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import _ from 'lodash';
 import sanitizeFilename from 'sanitize-filename';
 import { sync as writeFileAtomic } from 'write-file-atomic';
 
-import { SIDECAR_INFIX, buildSidecarFilename, parseSidecarFilename } from './sidecar-naming.js';
+import { buildSidecarFilename, SIDECAR_INFIX, SIDECAR_EXT } from './sidecar-naming.js';
 import { PRESET_FOLDER_BY_API_ID } from '../repositories/preset-repo.js';
 import { BUCKET_TO_DIR } from '../repositories/named-doc-repo.js';
 import { assertSafeRepoNameShape } from '../name-validation.js';
 import { normalizeLookupText } from '../../util.js';
+import { encodePresetRecordRelativePath, presetRecordIdentity } from '../preset-paths.js';
+import { readPresetInventory, selectPresetEntry, readPresetEntry } from '../preset-inventory.js';
+import { assertConfinedPath } from '../path-confinement.js';
+import { assertDistinctFsDestinations } from '../path-identity.js';
+import { ConflictError } from '../errors.js';
+import { chatHeaderWithIntegrity, parseChatJson } from './chat-record.js';
+import { STAGING_PREFIX } from '../../sync/staging.js';
+import { failpoint, FAILPOINTS } from '../../sync/pipeline/failpoints.js';
 import { invalidateCurrentJsonFile, readCurrentJsonFile } from './current-json-file.js';
 import { jsonTypeOf } from './json-value.js';
 
@@ -49,6 +58,9 @@ export class FsTransaction {
     }
 
     async putResourceIfMatch(key, expectedIntegrity, record) {
+        if (key.kind === 'chat' && expectedIntegrity === null) {
+            return { updated: this._h('chat', 'putResourceIfMatch').put(key, record, { ifAbsent: true }) };
+        }
         const existing = await this.getResource(key);
         if (expectedIntegrity === null) {
             if (existing !== null) return { updated: false };
@@ -60,12 +72,28 @@ export class FsTransaction {
         return { updated: true };
     }
 
-    async getChatState(chatKey, namespace) {
-        return this._h(chatKey.kind, 'getChatState').getSidecar(chatKey, namespace);
+    async hasChatResource(chatKey) {
+        return this._h(chatKey.kind, 'hasChatResource').has(chatKey);
     }
 
-    async putChatState(chatKey, namespace, doc) {
-        return this._h(chatKey.kind, 'putChatState').putSidecar(chatKey, namespace, doc);
+    async captureChatMove(key) {
+        return this._h('chat', 'captureChatMove').captureMove(key);
+    }
+
+    async publishChatMove(key, snapshot) {
+        return this._h('chat', 'publishChatMove').publishMove(key, snapshot);
+    }
+
+    async deleteChatMoveSource(snapshot) {
+        return this._h('chat', 'deleteChatMoveSource').deleteMoveSource(snapshot);
+    }
+
+    async getChatState(chatKey, namespace, options) {
+        return this._h(chatKey.kind, 'getChatState').getSidecar(chatKey, namespace, options);
+    }
+
+    async putChatState(chatKey, namespace, doc, options) {
+        return this._h(chatKey.kind, 'putChatState').putSidecar(chatKey, namespace, doc, options);
     }
 
     async deleteChatState(chatKey, namespace) {
@@ -91,6 +119,10 @@ export class FsTransaction {
     async listPresetStateNamespaces(presetKey) {
         return this._h(presetKey.kind, 'listPresetStateNamespaces').listPresetSidecarNamespaces(presetKey);
     }
+
+    async listPresetStateRecords(filter) {
+        return this._h('preset', 'listPresetStateRecords').listPresetStateRecords(filter);
+    }
 }
 
 function registerChatHandler(tx) {
@@ -107,61 +139,186 @@ function registerChatHandler(tx) {
         return path.join(path.dirname(file), buildSidecarFilename(path.basename(file, '.jsonl'), ns));
     };
 
-    const listNamespaces = (key) => {
-        const dir = path.dirname(chatFilePath(key));
-        if (!fs.existsSync(dir)) return [];
-        const base = path.basename(chatFilePath(key), '.jsonl');
-        const out = [];
-        for (const entry of fs.readdirSync(dir)) {
-            const ns = parseSidecarFilename(entry, base);
-            if (ns !== null) out.push(ns);
+    const confinedParent = (key, file) => assertConfinedPath({ boundary: tx._directoriesByHandle(key.handle).root, absolutePath: path.dirname(file) });
+    const statEntry = (key, file) => {
+        confinedParent(key, file);
+        try { return fs.lstatSync(file); } catch (error) {
+            if (error.code === 'ENOENT') return null;
+            throw new Error(`Cannot inspect chat entry at ${file}: ${error.code}`);
         }
-        return out;
+    };
+    const readOwned = (key, file) => {
+        const entry = statEntry(key, file);
+        if (entry === null) return null;
+        if (!entry.isFile()) throw new Error(`Unsafe chat entry at ${file}: expected a regular file without symbolic links`);
+        let fd;
+        try {
+            fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+            const stat = fs.fstatSync(fd);
+            if (!stat.isFile()) throw new Error('nonregular entry');
+            const bytes = fs.readFileSync(fd);
+            return { raw: bytes.toString('utf8'), bytes, stat };
+        } catch (error) {
+            throw new Error(`Cannot read owned chat entry at ${file}: ${error.code ?? 'nonregular entry'}`);
+        } finally {
+            if (fd !== undefined) fs.closeSync(fd);
+        }
+    };
+    // Publish a complete owned file without replacing a late-arriving entry.
+    const createOnly = (key, file, content, updatedAt, { requireEmptyState = false } = {}) => {
+        confinedParent(key, file);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const temporary = path.join(path.dirname(file), `${STAGING_PREFIX}chat-create-${randomUUID()}`);
+        const fd = fs.openSync(temporary, 'wx');
+        try {
+            fs.writeFileSync(fd, content);
+            fs.fsyncSync(fd);
+            if (typeof updatedAt === 'number' && Number.isFinite(updatedAt)) fs.utimesSync(temporary, updatedAt / 1000, updatedAt / 1000);
+            failpoint(FAILPOINTS.CHAT_PUBLICATION_BEFORE_LINK);
+            // State writers and this publication are synchronous in the server.
+            // Keep the complete namespace check and parent link in one local epoch.
+            if (requireEmptyState && listNamespaces(key).length > 0) return false;
+            try { fs.linkSync(temporary, file); } catch (error) {
+                if (error.code === 'EEXIST') return false;
+                throw error;
+            }
+            return true;
+        } finally {
+            try { fs.closeSync(fd); } finally { fs.unlinkSync(temporary); }
+        }
     };
 
-    tx._handlers.set('chat', {
-        get(key) {
-            const filePath = chatFilePath(key);
-            if (!fs.existsSync(filePath)) return null;
-            const raw = fs.readFileSync(filePath, 'utf-8');
-            const lines = raw.split('\n').filter((l) => l.length > 0);
-            if (lines.length === 0) return null;
-            let header;
-            try { header = JSON.parse(lines[0]); } catch { return null; }
-            if (!header || typeof header !== 'object' || Array.isArray(header)) return null;
-            const body = [];
-            for (const line of lines.slice(1)) {
-                try { body.push(JSON.parse(line)); } catch { return null; }
+    const listNamespaces = (key) => {
+        const dir = path.dirname(chatFilePath(key));
+        confinedParent(key, path.join(dir, 'entry'));
+        let entries;
+        try { entries = fs.readdirSync(dir); } catch (error) {
+            if (error.code === 'ENOENT') return [];
+            throw new Error(`Cannot list chat state at ${dir}: ${error.code}`);
+        }
+        const out = new Set();
+        for (const entry of entries) {
+            // Separator offsets propose namespaces without requiring literal base,
+            // infix or suffix spelling. A selected directory entry owns a namespace;
+            // independent hard links must not introduce aliases of another entry.
+            for (let index = entry.indexOf('.'); index >= 0; index = entry.indexOf('.', index + 1)) {
+                if (index + SIDECAR_INFIX.length > entry.length - SIDECAR_EXT.length) break;
+                const namespace = entry.slice(index + SIDECAR_INFIX.length, -SIDECAR_EXT.length);
+                const candidatePath = sidecarPath(key, namespace);
+                let candidate;
+                try { candidate = fs.lstatSync(candidatePath); } catch (error) {
+                    // An unrepresentable proposed name cannot identify this entry.
+                    if (error.code === 'ENOENT' || error.code === 'ENAMETOOLONG') continue;
+                    throw new Error(`Cannot inspect chat state candidate at ${candidatePath}: ${error.code}`);
+                }
+                const actual = statEntry(key, path.join(dir, entry));
+                if (actual && candidate.dev === actual.dev && candidate.ino === actual.ino) {
+                    // Unsafe links remain inventoried for explicit read/occupancy
+                    // refusal. Regular entries use native paths, not inode deduplication.
+                    if (candidate.isSymbolicLink() || fs.realpathSync.native(candidatePath) === fs.realpathSync.native(path.join(dir, entry))) out.add(namespace);
+                }
             }
-            const integrity = header.chat_metadata?.integrity ?? '';
-            const stat = fs.statSync(filePath);
-            return {
+        }
+        return [...out];
+    };
+
+    const readParent = key => {
+        const filePath = chatFilePath(key);
+        const owned = readOwned(key, filePath);
+        if (owned === null) return null;
+        const { raw, stat } = owned;
+        const lines = raw.split('\n').filter((l) => l.length > 0);
+        if (lines.length === 0) throw new Error(`Unreadable chat document at ${filePath}: empty file`);
+        const header = parseChatJson(lines[0], `${filePath} line 1`);
+        if (!header || typeof header !== 'object' || Array.isArray(header)) throw new Error(`Unreadable chat header at ${filePath} line 1: expected an object`);
+        const body = [];
+        for (const [index, line] of lines.slice(1).entries()) body.push(parseChatJson(line, `${filePath} line ${index + 2}`));
+        return {
+            owned,
+            record: {
                 key,
                 header,
                 body,
-                integrity,
+                integrity: header.chat_metadata?.integrity ?? '',
                 updatedAt: Math.floor(stat.mtimeMs),
                 createdAt: Math.floor(stat.birthtimeMs || stat.ctimeMs),
-            };
+            },
+        };
+    };
+    const assertChatKey = key => {
+        if (key.isGroup) {
+            assertSafeRepoNameShape(key.groupId ?? key.name, { field: 'chat.groupId' });
+        } else {
+            assertSafeRepoNameShape(key.charDir, { field: 'chat.charDir' });
+            assertSafeRepoNameShape(key.name, { field: 'chat.name' });
+        }
+    };
+    const snapshots = new WeakMap();
+    const sameOwned = (a, b) => b !== null && ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'mode'].every(field => a.stat[field] === b.stat[field]) && a.bytes.equals(b.bytes);
+    const assertSourceUnchanged = snapshot => {
+        const changed = namespace => { throw new ConflictError('rename_source_changed', { ...snapshot.key, namespace }); };
+        if (!sameOwned(snapshot.owned, readOwned(snapshot.key, chatFilePath(snapshot.key)))) changed();
+        const namespaces = listNamespaces(snapshot.key).sort();
+        if (namespaces.length !== snapshot.states.length || namespaces.some((ns, index) => ns !== snapshot.states[index].namespace)) changed();
+        for (const state of snapshot.states) {
+            if (!sameOwned(state.owned, readOwned(snapshot.key, sidecarPath(snapshot.key, state.namespace)))) changed(state.namespace);
+        }
+    };
+
+    tx._handlers.set('chat', {
+        has(key) { return statEntry(key, chatFilePath(key)) !== null; },
+        get(key) { return readParent(key)?.record ?? null; },
+        captureMove(key) {
+            const selected = readParent(key);
+            if (selected === null) return null;
+            const states = listNamespaces(key).sort().map(namespace => {
+                const file = sidecarPath(key, namespace), owned = readOwned(key, file);
+                if (owned === null) throw new Error(`Cannot read enumerated chat state at ${file}: entry is missing`);
+                return { namespace, owned, value: parseChatJson(owned.raw, file) };
+            });
+            const token = Object.freeze({});
+            snapshots.set(token, { key: { ...key }, ...selected, states });
+            return token;
         },
-        put(key, record) {
-            if (key.isGroup) {
-                assertSafeRepoNameShape(key.groupId ?? key.name, { field: 'chat.groupId' });
-            } else {
-                assertSafeRepoNameShape(key.charDir, { field: 'chat.charDir' });
-                assertSafeRepoNameShape(key.name, { field: 'chat.name' });
+        async publishMove(key, token) {
+            const snapshot = snapshots.get(token);
+            assertChatKey(key);
+            assertSourceUnchanged(snapshot);
+            const destinations = [chatFilePath(key), ...snapshot.states.map(state => sidecarPath(key, state.namespace))];
+            try {
+                await assertDistinctFsDestinations({
+                    boundary: tx._directoriesByHandle(key.handle).root,
+                    destinations: destinations.map(absolutePath => ({ absolutePath, treePath: path.basename(absolutePath), logicalIdentity: absolutePath, kind: 'file' })),
+                    operation: 'rename chat',
+                });
+            } catch (error) {
+                if (error.code === 'SYNC_FS_ALIAS') throw new ConflictError('rename_target_exists', key);
+                throw error;
             }
+            assertSourceUnchanged(snapshot);
+            if (!createOnly(key, chatFilePath(key), snapshot.owned.bytes, snapshot.record.updatedAt, { requireEmptyState: true })) return { updated: false };
+            for (const state of snapshot.states) {
+                if (!createOnly(key, sidecarPath(key, state.namespace), state.owned.bytes, state.owned.stat.mtimeMs)) throw new ConflictError('rename_target_exists', { ...key, namespace: state.namespace });
+            }
+            return { updated: true };
+        },
+        deleteMoveSource(token) {
+            const snapshot = snapshots.get(token);
+            // Inspection and captured-path deletion share one synchronous local epoch.
+            assertSourceUnchanged(snapshot);
+            for (const state of snapshot.states) fs.unlinkSync(sidecarPath(snapshot.key, state.namespace));
+            fs.unlinkSync(chatFilePath(snapshot.key));
+            snapshots.delete(token);
+        },
+        put(key, record, { ifAbsent = false } = {}) {
+            assertChatKey(key);
             const filePath = chatFilePath(key);
+            confinedParent(key, filePath);
             fs.mkdirSync(path.dirname(filePath), { recursive: true });
-            const headerWithIntegrity = {
-                ...record.header,
-                chat_metadata: {
-                    ...(record.header.chat_metadata ?? {}),
-                    integrity: record.integrity,
-                },
-            };
+            const headerWithIntegrity = chatHeaderWithIntegrity(record);
             const lines = [JSON.stringify(headerWithIntegrity)];
             for (const msg of record.body) lines.push(JSON.stringify(msg));
+            if (ifAbsent) return createOnly(key, filePath, lines.join('\n') + '\n', record.updatedAt, { requireEmptyState: true });
             writeFileAtomic(filePath, lines.join('\n') + '\n');
             // Restore the caller-supplied updatedAt as the file mtime so a
             // migration-time saveRaw doesn't reset every chat's "last edited"
@@ -283,14 +440,21 @@ function registerChatHandler(tx) {
             if (typeof filter.limit === 'number') out.length = Math.min(out.length, filter.limit);
             return out;
         },
-        getSidecar(key, ns) {
+        getSidecar(key, ns, { required = false } = {}) {
             const sp = sidecarPath(key, ns);
-            if (!fs.existsSync(sp)) return null;
-            const raw = fs.readFileSync(sp, 'utf-8');
-            try { return JSON.parse(raw); } catch { return null; }
+            const owned = readOwned(key, sp);
+            if (owned === null) {
+                if (required) throw new Error(`Cannot read enumerated chat state at ${sp}: entry is missing`);
+                return null;
+            }
+            return parseChatJson(owned.raw, sp);
         },
-        putSidecar(key, ns, doc) {
+        putSidecar(key, ns, doc, { ifAbsent = false } = {}) {
             const sp = sidecarPath(key, ns);
+            if (ifAbsent) {
+                if (!createOnly(key, sp, JSON.stringify(doc))) throw new ConflictError('rename_target_exists', { ...key, namespace: ns });
+                return;
+            }
             fs.mkdirSync(path.dirname(sp), { recursive: true });
             writeFileAtomic(sp, JSON.stringify(doc));
         },
@@ -368,88 +532,63 @@ function registerSettingsHandler(tx) {
 }
 
 function registerPresetHandler(tx) {
-    const folderPath = (key) => tx._directoriesByHandle(key.handle)[key.dirKey];
-    const filePath = (key) => path.join(folderPath(key), `${key.name}.json`);
-    const sidecarPath = (key, ns) =>
-        path.join(folderPath(key), buildSidecarFilename(key.name, ns));
-
-    const listNs = (key) => {
-        const dir = folderPath(key);
-        if (!fs.existsSync(dir)) return [];
-        const out = [];
-        for (const entry of fs.readdirSync(dir)) {
-            const ns = parseSidecarFilename(entry, key.name);
-            if (ns !== null) out.push(ns);
-        }
-        return out;
+    const document = key => ({ kind: 'preset', dirKey: key.dirKey, name: key.name });
+    const state = (key, namespace) => ({ kind: 'preset-state', dirKey: key.dirKey, name: key.name, namespace });
+    const inventory = key => {
+        const dirs = tx._directoriesByHandle(key.handle);
+        return readPresetInventory({ folder: dirs[key.dirKey], dirKey: key.dirKey, boundary: dirs.root });
     };
-
+    const get = (key, record) => {
+        const entry = selectPresetEntry(inventory(key), record);
+        return entry ? readPresetEntry(entry).doc : null;
+    };
+    const put = async (key, record, doc) => {
+        const dirs = tx._directoriesByHandle(key.handle);
+        const current = inventory(key);
+        const owned = current.entries.get(presetRecordIdentity(record));
+        const absolutePath = owned?.absolutePath ?? path.join(dirs[key.dirKey], ...encodePresetRecordRelativePath(record).split('/'));
+        const destinations = [...current.entries.values()].map(entry => ({ treePath: entry.relativePath, absolutePath: entry.absolutePath, logicalIdentity: presetRecordIdentity(entry.record), kind: 'file' }));
+        destinations.push({ treePath: encodePresetRecordRelativePath(record), absolutePath, logicalIdentity: presetRecordIdentity(record), kind: 'file' });
+        await assertDistinctFsDestinations({ boundary: dirs.root, destinations, operation: 'save preset record' });
+        assertConfinedPath({ boundary: dirs.root, absolutePath });
+        fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+        writeFileAtomic(absolutePath, JSON.stringify(doc, null, 4));
+    };
+    const remove = entry => {
+        assertConfinedPath({ boundary: entry.boundary, absolutePath: entry.absolutePath });
+        fs.unlinkSync(entry.absolutePath);
+    };
+    const namespaces = key => [...inventory(key).entries.values()].filter(entry => entry.record.kind === 'preset-state' && entry.record.name === key.name).map(entry => entry.record.namespace).sort();
     tx._handlers.set('preset', {
-        get(key) {
-            const fp = filePath(key);
-            if (!fp || !fs.existsSync(fp)) return null;
-            const raw = fs.readFileSync(fp, 'utf-8');
-            if (!raw) return null;
-            try {
-                const parsed = JSON.parse(raw);
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-                return null;
-            } catch { return null; }
-        },
-        put(key, record) {
+        get: key => get(key, document(key)),
+        put(key, value) {
             assertSafeRepoNameShape(key.name, { field: 'preset.name' });
-            const fp = filePath(key);
-            fs.mkdirSync(path.dirname(fp), { recursive: true });
-            writeFileAtomic(fp, JSON.stringify(record.doc, null, 4));
+            return put(key, document(key), value.doc);
         },
         delete(key) {
-            const fp = filePath(key);
-            if (!fs.existsSync(fp)) return false;
-            for (const ns of listNs(key)) {
-                const sp = sidecarPath(key, ns);
-                if (fs.existsSync(sp)) fs.unlinkSync(sp);
-            }
-            fs.unlinkSync(fp);
+            const current = inventory(key);
+            const entry = selectPresetEntry(current, document(key));
+            if (!entry) return false;
+            for (const stateEntry of current.entries.values()) if (stateEntry.record.kind === 'preset-state' && stateEntry.record.name === key.name) remove(stateEntry);
+            remove(entry);
             return true;
         },
         list(filter) {
             const dirKey = PRESET_FOLDER_BY_API_ID[filter.apiId];
             if (!dirKey) throw new Error(`preset list: invalid apiId ${filter.apiId}`);
-            const dir = tx._directoriesByHandle(filter.handle)[dirKey];
-            if (!fs.existsSync(dir)) return [];
-            const out = [];
-            for (const entry of fs.readdirSync(dir)) {
-                if (!entry.endsWith('.json')) continue;
-                if (entry.includes(SIDECAR_INFIX)) continue;
-                const name = entry.slice(0, -'.json'.length);
-                out.push({ key: { kind: 'preset', handle: filter.handle, dirKey, name } });
-            }
-            return out;
+            return [...inventory({ ...filter, dirKey }).entries.values()].filter(entry => entry.record.kind === 'preset').map(entry => ({ key: { ...entry.record, handle: filter.handle } }));
         },
-        getPresetSidecar(key, ns) {
-            const sp = sidecarPath(key, ns);
-            if (!fs.existsSync(sp)) return null;
-            const raw = fs.readFileSync(sp, 'utf-8');
-            if (!raw) return null;
-            try {
-                const parsed = JSON.parse(raw);
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-                return null;
-            } catch { return null; }
-        },
-        putPresetSidecar(key, ns, doc) {
-            const sp = sidecarPath(key, ns);
-            fs.mkdirSync(path.dirname(sp), { recursive: true });
-            writeFileAtomic(sp, JSON.stringify(doc, null, 4));
-        },
-        deletePresetSidecar(key, ns) {
-            const sp = sidecarPath(key, ns);
-            if (!fs.existsSync(sp)) return false;
-            fs.unlinkSync(sp);
+        getPresetSidecar: (key, namespace) => get(key, state(key, namespace)),
+        putPresetSidecar: (key, namespace, doc) => put(key, state(key, namespace), doc),
+        deletePresetSidecar(key, namespace) {
+            const entry = selectPresetEntry(inventory(key), state(key, namespace));
+            if (!entry) return false;
+            remove(entry);
             return true;
         },
-        listPresetSidecarNamespaces(key) {
-            return listNs(key);
+        listPresetSidecarNamespaces: namespaces,
+        listPresetStateRecords(filter) {
+            return [...inventory(filter).entries.values()].filter(entry => entry.record.kind === 'preset-state').map(({ record }) => ({ name: record.name, namespace: record.namespace }));
         },
     });
 }

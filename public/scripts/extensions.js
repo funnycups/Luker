@@ -11,7 +11,7 @@ import { debounce_timeout } from './constants.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { SimpleMutex } from './util/SimpleMutex.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './state-errors.js';
-import { readStateEnvelope } from './state-resource.js';
+import { invalidateStateResources, readStateEnvelope } from './state-resource.js';
 import {
     formatHttpErrorHint,
     formatTransportErrorHint,
@@ -2289,6 +2289,9 @@ export async function setCharacterState(avatar, namespace, data) {
             body: JSON.stringify({ avatar_url: safeAvatar, namespace: safeNamespace, data }),
             cache: 'no-cache',
         });
+        if (response.ok) {
+            await invalidateStateResources('/api/characters/state/get', { avatar: safeAvatar }, [safeNamespace]);
+        }
     } catch (error) {
         return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
             formatTransportErrorHint(error?.message || error));
@@ -2339,6 +2342,9 @@ export async function patchCharacterState(avatar, namespace, operations) {
             body: JSON.stringify({ avatar_url: safeAvatar, namespace: safeNamespace, operations }),
             cache: 'no-cache',
         });
+        if (response.ok) {
+            await invalidateStateResources('/api/characters/state/get', { avatar: safeAvatar }, [safeNamespace]);
+        }
     } catch (error) {
         return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
             formatTransportErrorHint(error?.message || error));
@@ -2451,6 +2457,12 @@ export async function updateCharacterState(avatar, namespace, updater, options =
 
     let lastFailure = null;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            await invalidateStateResources('/api/characters/state/get', { avatar: safeAvatar }, [safeNamespace]);
+        } catch (error) {
+            return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
+                formatTransportErrorHint(error?.message || error));
+        }
         const readResult = await getCharacterState(safeAvatar, safeNamespace);
         if (!readResult.ok) {
             return { ok: false, reason: readResult.reason, hint: readResult.hint };
@@ -2520,6 +2532,9 @@ export async function deleteCharacterState(avatar, namespace) {
             body: JSON.stringify({ avatar_url: safeAvatar, namespace: safeNamespace }),
             cache: 'no-cache',
         });
+        if (response.ok) {
+            await invalidateStateResources('/api/characters/state/get', { avatar: safeAvatar }, [safeNamespace]);
+        }
     } catch (error) {
         return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
             formatTransportErrorHint(error?.message || error));

@@ -26,10 +26,8 @@
 //   5. The pre-auth cap does not leak into the private routers mounted
 //      under the same /api/users prefix: a 300 KB avatar still reaches
 //      /api/users/change-avatar after login.
-//   6. Conflict resolutions (one map entry per conflicting file) still
-//      fit the sync routes now that their per-route parsers are live:
-//      the payload is a resolutions map, not metadata, and grows with
-//      the conflict set like /pull's.
+//   6. Reviewed conflict decisions fit their current applying route.
+//   7. Sync user routes reject an absent account before parsing a body.
 
 import { test, expect } from '@playwright/test';
 import net from 'node:net';
@@ -58,8 +56,8 @@ test.afterAll(async () => {
     await tearDownServer(server);
 });
 
-async function mintCsrf() {
-    const res = await fetch(`${server.baseURL}/csrf-token`, {
+async function mintCsrf(handle = server) {
+    const res = await fetch(`${handle.baseURL}/csrf-token`, {
         headers: { Authorization: BASIC_AUTH_HEADER },
     });
     expect(res.status).toBe(200);
@@ -171,38 +169,51 @@ test.describe('#54 — body parsing must not run before access control', () => {
     });
 
     test('conflict resolutions fit the sync route that applies them', async () => {
-        // `resolutions` maps every conflicting file path to the picked
-        // side, so it scales with the conflict set rather than staying
-        // metadata-sized. A few hundred conflicts exceed 4 KB.
+        // Reviewed evidence grows with the pending set. Absent records give
+        // an unapplied result, proving the complete body reached the owner.
         const csrf = await mintCsrf();
-        const res = await fetch(`${server.baseURL}/api/sync/v1/peers/unknown-peer/sync`, {
+        const choices = conflictChoices(500);
+        const body = JSON.stringify(choices);
+        expect(Buffer.byteLength(body)).toBeGreaterThan(100 * 1024);
+        const res = await fetch(`${server.baseURL}/api/sync/v1/conflicts/resolve`, {
             method: 'POST',
             headers: authenticatedHeaders(csrf),
-            body: JSON.stringify({ resolutions: conflictResolutions(300) }),
+            body,
         });
-        // Unknown peer: parsed and rejected by the handler, not 413.
-        expect(res.status).toBe(404);
+        expect(res.status).toBe(200);
+        const result = await res.json();
+        expect(result.results).toEqual(choices.map(({ path }) => ({ path, backends: [], committedBackends: [], applied: false })));
     });
 
-    test('conflict resolutions fit the fresh-pair route that applies them', async () => {
-        const csrf = await mintCsrf();
-        const res = await fetch(`${server.baseURL}/api/sync/v1/pair/accept`, {
-            method: 'POST',
-            headers: authenticatedHeaders(csrf),
-            body: JSON.stringify({ resolutions: conflictResolutions(300) }),
+    test('sync user routes authenticate before parsing their bodies', async () => {
+        const accountServer = await startServer({
+            batchKey: 'server', scenarioId: 'sync-preauth-body-parse',
+            extraConfig: { listen: true, basicAuthMode: true, enableUserAccounts: true },
         });
-        // Missing required fields: parsed and rejected by the handler,
-        // not 413.
-        expect(res.status).toBe(400);
+        try {
+            const csrf = await mintCsrf(accountServer);
+            for (const route of ['pair/start', 'pair/accept', 'backends/s3', 'backends/unknown', 'backends/unknown/s3', 'backends/unknown/unlock', 'device', 'conflicts/resolve', 'notices/dismiss', 'schedule']) {
+                const res = await fetch(`${accountServer.baseURL}/api/sync/v1/${route}`, {
+                    method: 'POST', headers: authenticatedHeaders(csrf), body: '{',
+                });
+                expect(res.status, route).toBe(401);
+                expect(await res.json(), route).toEqual({ error: 'Auth required' });
+            }
+        } finally {
+            await tearDownServer(accountServer);
+        }
     });
 });
 
-/** One entry per conflicting file, shaped like the sync conflict map. */
-function conflictResolutions(count) {
-    /** @type {Record<string, string>} */
-    const resolutions = {};
-    for (let i = 0; i < count; i++) {
-        resolutions[`characters/spec-character/chats/2026-01-01@12h${String(i).padStart(2, '0')}m00s.jsonl`] = i % 2 ? 'ours' : 'theirs';
-    }
-    return resolutions;
+/** Current reviewed DTO for records absent from the fixture's registry. */
+function conflictChoices(count) {
+    return Array.from({ length: count }, (_, index) => ({
+        path: `worlds/body-parser-resource-${index}.json`,
+        choice: 'current',
+        review: {
+            backendId: 'displayed-backend', selectedOid: null,
+            recordVersions: { 'displayed-backend': 'a'.repeat(40) },
+            currentVersions: { 'displayed-backend': null },
+        },
+    }));
 }

@@ -36,10 +36,9 @@ The **Account** button in the top row opens a popup with the following Luker add
 
   Then either **Download Backup ZIP**, or restore one with **Select ZIP** and **Restore Backup** in one of two modes: **Incremental Update** writes the files from the backup and keeps everything else, while **Overwrite Update** clears the selected categories first and then restores. If the ZIP comes from a server running a different storage engine, Luker detects the cross-mode restore and requests a temporary database connection through which it stages the restore.
 
-  The same dialog also provides:
+- **LAN Migration** — a one-time transfer to a new device: **Create Migration Link** on the old device, then paste it into **Migrate from Link** on the new one. Migration links expire quickly and can be used only once. The selected restore mode also applies when importing from a migration link. For ongoing use across devices, use [Sync](/improvements/sync) through [LAN pairing](/improvements/lan-sync) or [encrypted S3 storage](/improvements/s3-sync).
 
-  - **Open LAN Sync** — opens [LAN Sync](/improvements/lan-sync), the two-way incremental transfer for devices used side by side on an ongoing basis.
-  - **LAN Migration** — a one-time transfer to a new device: **Create Migration Link** on the old device, then paste it into **Migrate from Link** on the new one. Migration links expire quickly and can be used only once. The selected restore mode also applies when importing from a migration link.
+- **Sync** — open **User Settings → Account → Backup & Restore → Sync → Open Sync**. The [Sync overview](/improvements/sync) covers automatic synchronization, categories, pending decisions, chat branches and Undo; the LAN and S3 guides above cover setup.
 
 - **Storage Inspector** and **Browser Storage** — two views of where your data resides. The [Storage Inspector](/features/storage-inspector) breaks down your server-side data directory by category with a quota bar, size-only entries for sensitive blobs and no delete actions; **Browser Storage** inspects this browser's `localStorage`, `sessionStorage`, IndexedDB and Cache Storage, and can delete individual keys, stores, databases and caches.
 
@@ -67,5 +66,5 @@ Two settings matter when generation leaves the foreground.
 - **Leave-page confirmation** — warns before you close or reload the page. **Only when risky** (the default) warns when a generation is running, a message edit is open, or you have unsent text in the input box; **Never** and **Always** override that judgement.
 
 ::: tip Related pages
-[Logging](/features/logging) · [Request Inspector](/improvements/request-inspector) · [Storage Inspector](/features/storage-inspector) · [LAN Sync](/improvements/lan-sync) · [Other Features](/features/other-features)
+[Logging](/features/logging) · [Request Inspector](/improvements/request-inspector) · [Storage Inspector](/features/storage-inspector) · [Sync](/improvements/sync) · [LAN Sync](/improvements/lan-sync) · [S3 Sync](/improvements/s3-sync) · [Other Features](/features/other-features)
 :::

@@ -41,7 +41,7 @@ describe.each(ENDPOINT_HARNESSES)('recent chat index on $name', ({ mode }) => {
         await getChatRepo().save(harness.handle, '', chatId, HEADER, MESSAGES, null,
             { isGroup: true, groupId: chatId });
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/recent')
             .send({ limit: 20 })
             .expect(200);
@@ -63,14 +63,14 @@ describe.each(ENDPOINT_HARNESSES)('recent chat index on $name', ({ mode }) => {
         // Prime the recent-chat index cache. refreshRecentChatIndexEntry is a
         // no-op until the cache exists; the first /recent call lazily builds
         // it via ensureRecentChatIndex.
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/recent')
             .send({ limit: 20 })
             .expect(200);
 
         // Trigger an /append (which fires refreshRecentChatIndexEntry).
         const fetched = await getChatRepo().get(harness.handle, charDir, name);
-        await request(harness.app)
+        await request(harness.server)
             .post('/api/chats/append')
             .send({
                 avatar_url: `${charDir}.png`,
@@ -80,7 +80,7 @@ describe.each(ENDPOINT_HARNESSES)('recent chat index on $name', ({ mode }) => {
             })
             .expect(200);
 
-        const res = await request(harness.app)
+        const res = await request(harness.server)
             .post('/api/chats/recent')
             .send({ limit: 20 })
             .expect(200);

@@ -38,7 +38,7 @@ module.exports = {
             },
         },
         {
-            files: ['src/**/*.mjs'],
+            files: ['src/**/*.mjs', 'scripts/**/*.mjs'],
             parserOptions: {
                 sourceType: 'module',
             },
