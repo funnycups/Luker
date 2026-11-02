@@ -8,7 +8,7 @@
 
 const inFlight = new Map();
 const generations = new Map();
-const FIELD_READ_CONCURRENCY = 5;
+const FIELD_READ_CONCURRENCY = 64;
 let bootstrapPromise = null;
 
 function resourceError(code, resource, detail, extra = {}) {
