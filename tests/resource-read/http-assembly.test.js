@@ -199,7 +199,7 @@ test('aborting a large assembly leaves queued fields unread', async () => {
         await firstField;
         controller.abort();
         await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-        expect(requested).toBeLessThanOrEqual(64);
+        expect(requested.length).toBeLessThanOrEqual(64);
     } finally {
         release();
         await new Promise(resolve => server.close(resolve));
@@ -230,7 +230,7 @@ test.each(['missing', 'changed'])('a %s field stops the remaining directory from
         release();
         await new Promise(resolve => server.close(resolve));
     }
-    expect(requested).toBeLessThanOrEqual(64);
+    expect(requested.length).toBeLessThanOrEqual(64);
 });
 
 test('preserves each subscriber when one caller cancels a shared request', async () => {
