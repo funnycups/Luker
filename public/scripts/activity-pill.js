@@ -25,11 +25,16 @@ export function createActivityPill({ id, className = '', onOpen, onError }) {
     element.hidden = true;
     const label = document.createElement('span');
     label.className = 'activity-pill-label';
+    // Secondary detail such as elapsed time; decorative, the label carries the meaning.
+    const meta = document.createElement('span');
+    meta.className = 'activity-pill-meta';
+    meta.setAttribute('aria-hidden', 'true');
+    meta.hidden = true;
     const progress = document.createElement('span');
     progress.className = 'activity-pill-progress';
     progress.setAttribute('role', 'progressbar');
     progress.hidden = true;
-    element.append(label, progress);
+    element.append(label, meta, progress);
     host.appendChild(element);
     owners.add(element);
 
@@ -46,10 +51,12 @@ export function createActivityPill({ id, className = '', onOpen, onError }) {
     }
     element.addEventListener('click', activate);
 
-    function update({ visible, text, tone, loading }) {
+    function update({ visible, text, tone, loading, detail = '' }) {
         if (destroyed) return;
         element.hidden = !visible;
         label.textContent = text;
+        meta.textContent = detail;
+        meta.hidden = !detail;
         element.title = text;
         element.setAttribute('aria-label', text);
         element.dataset.tone = tone;
