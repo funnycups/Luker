@@ -712,9 +712,12 @@ function registerWorldInfoHandler(tx) {
 function registerNamedDocHandler(tx) {
     const folderPath = (key) => tx._directoriesByHandle(key.handle)[BUCKET_TO_DIR[key.bucket]];
     const filePath = (key) => {
-        const sanitized = sanitizeFilename(String(key.name || '').trim());
-        if (!sanitized) throw new Error(`named-doc: invalid name ${key.name}`);
-        return path.join(folderPath(key), `${sanitized}.json`);
+        // Existing keys come from filenames; rewriting them can select a sibling.
+        const name = String(key.name || '');
+        if (!name || /[/\\\0]/.test(name)) throw new Error(`named-doc: invalid name ${key.name}`);
+        const fp = path.join(folderPath(key), `${name}.json`);
+        assertConfinedPath({ boundary: tx._directoriesByHandle(key.handle).root, absolutePath: fp });
+        return fp;
     };
 
     tx._handlers.set('named-doc', {
@@ -730,8 +733,8 @@ function registerNamedDocHandler(tx) {
             } catch { return null; }
         },
         put(key, record) {
-            assertSafeRepoNameShape(key.name, { field: 'named-doc.name' });
-            const fp = filePath(key);
+            const name = assertSafeRepoNameShape(key.name, { field: 'named-doc.name' });
+            const fp = filePath({ ...key, name });
             fs.mkdirSync(path.dirname(fp), { recursive: true });
             writeFileAtomic(fp, JSON.stringify(record.doc, null, 4));
         },

@@ -50,6 +50,51 @@ describe('FsEngine named-doc handler', () => {
         expect(missing).toBeNull();
     });
 
+    test.each(['themes', 'movingUI', 'quickReplies'])('reads exact legacy names listed in %s without trim collisions', async (bucket) => {
+        const dir = h.dirs[bucket === 'quickReplies' ? 'quickreplies' : bucket];
+        const names = [' Sample', 'Sample', 'Sample ', ' Sample ', '   '];
+        for (const name of names) {
+            fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify({ name }));
+        }
+        const listed = await h.engine.withTransaction(h.handle, tx =>
+            tx.listResources({ kind: 'named-doc', handle: h.handle, bucket }));
+        expect(listed.map(entry => entry.key.name)).toEqual(expect.arrayContaining(names));
+        expect(listed).toHaveLength(names.length);
+        for (const name of names) {
+            const doc = await h.engine.withTransaction(h.handle, tx =>
+                tx.getResource({ kind: 'named-doc', handle: h.handle, bucket, name }));
+            expect(doc).toEqual({ name });
+        }
+    });
+
+    test.each([' Sample', 'Sample ', ' Sample '])('deletes legacy name "%s" without removing its trimmed sibling', async (name) => {
+        fs.writeFileSync(path.join(h.dirs.themes, 'Sample.json'), '{"canonical":true}');
+        const legacyPath = path.join(h.dirs.themes, `${name}.json`);
+        fs.writeFileSync(legacyPath, '{}');
+        const removed = await h.engine.withTransaction(h.handle, tx =>
+            tx.deleteResource({ kind: 'named-doc', handle: h.handle, bucket: 'themes', name }));
+        expect(removed).toBe(true);
+        expect(fs.existsSync(legacyPath)).toBe(false);
+        expect(JSON.parse(fs.readFileSync(path.join(h.dirs.themes, 'Sample.json'), 'utf8'))).toEqual({ canonical: true });
+    });
+
+    test.each(['../Sample', '/Sample', 'nested/Sample', 'nested\\Sample', 'Sample\0'])('rejects unsafe read/delete name %j without aliasing a stored document', async (name) => {
+        fs.writeFileSync(path.join(h.dirs.themes, 'Sample.json'), '{}');
+        fs.writeFileSync(path.join(h.dirs.root, 'Sample.json'), '{}');
+        const key = { kind: 'named-doc', handle: h.handle, bucket: 'themes', name };
+        await expect(h.engine.withTransaction(h.handle, tx => tx.getResource(key))).rejects.toThrow();
+        await expect(h.engine.withTransaction(h.handle, tx => tx.deleteResource(key))).rejects.toThrow();
+        expect(fs.existsSync(path.join(h.dirs.themes, 'Sample.json'))).toBe(true);
+        expect(fs.existsSync(path.join(h.dirs.root, 'Sample.json'))).toBe(true);
+    });
+
+    test('put continues to normalize surrounding whitespace', async () => {
+        await h.engine.withTransaction(h.handle, tx =>
+            tx.putResource({ kind: 'named-doc', handle: h.handle, bucket: 'themes', name: ' Sample ' }, { doc: { saved: true } }));
+        expect(JSON.parse(fs.readFileSync(path.join(h.dirs.themes, 'Sample.json'), 'utf8'))).toEqual({ saved: true });
+        expect(fs.existsSync(path.join(h.dirs.themes, ' Sample .json'))).toBe(false);
+    });
+
     test('list returns names sorted ascending, scoped to bucket', async () => {
         await h.engine.withTransaction(h.handle, (tx) => {
             tx.putResource({ kind: 'named-doc', handle: h.handle, bucket: 'themes', name: 'Charlie' }, { doc: {} });
