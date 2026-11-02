@@ -2,8 +2,8 @@
  * Pure helpers for the settings field directory and field assembly.
  *
  * The directory is derived from one source object. Values are leaf JSON
- * values addressed by RFC 6901 pointers. Only `extension_settings` is
- * expanded into namespace containers; every other root property is a leaf.
+ * values addressed by RFC 6901 pointers. Every root property is a leaf,
+ * except `extension_settings`, whose immediate namespaces are each one leaf.
  */
 
 const EXTENSION_SETTINGS = 'extension_settings';
@@ -72,16 +72,7 @@ export function buildSettingsFieldStructure(document) {
 
     const extensions = document[EXTENSION_SETTINGS];
     for (const namespace of Object.keys(extensions)) {
-        const value = extensions[namespace];
-        const path = pointerFor([EXTENSION_SETTINGS, namespace]);
-        if (!isPlainObject(value)) {
-            values.set(path, value);
-            continue;
-        }
-        containers.push({ path, keys: Object.keys(value) });
-        for (const key of Object.keys(value)) {
-            values.set(pointerFor([EXTENSION_SETTINGS, namespace, key]), value[key]);
-        }
+        values.set(pointerFor([EXTENSION_SETTINGS, namespace]), extensions[namespace]);
     }
 
     return { containers, values };

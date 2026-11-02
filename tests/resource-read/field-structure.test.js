@@ -18,27 +18,34 @@ function extensionDocument() {
     }`);
 }
 
-test('builds namespace containers and leaves without inferring field importance', () => {
+test('builds one leaf per extension namespace', () => {
     const document = extensionDocument();
     const { containers, values } = buildSettingsFieldStructure(document);
 
     expect(containers).toEqual([
         { path: '', keys: ['user_name', 'extension_settings'] },
         { path: '/extension_settings', keys: ['example', 'primitive-namespace', 'array-namespace'] },
-        { path: '/extension_settings/example', keys: ['enabled', 'history', 'nullable', 'empty', 'a/b~c', '__proto__'] },
     ]);
     expect([...values.keys()]).toEqual([
         '/user_name',
-        '/extension_settings/example/enabled',
-        '/extension_settings/example/history',
-        '/extension_settings/example/nullable',
-        '/extension_settings/example/empty',
-        '/extension_settings/example/a~1b~0c',
-        '/extension_settings/example/__proto__',
+        '/extension_settings/example',
         '/extension_settings/primitive-namespace',
         '/extension_settings/array-namespace',
     ]);
-    expect(values.get('/extension_settings/example/empty')).toEqual({});
+    expect(JSON.stringify(values.get('/extension_settings/example')))
+        .toBe(JSON.stringify(document.extension_settings.example));
+});
+
+test('keeps an empty extension namespace as one leaf', () => {
+    const document = { extension_settings: { empty: {} } };
+    const { containers, values } = buildSettingsFieldStructure(document);
+
+    expect(containers).toEqual([
+        { path: '', keys: ['extension_settings'] },
+        { path: '/extension_settings', keys: ['empty'] },
+    ]);
+    expect([...values.keys()]).toEqual(['/extension_settings/empty']);
+    expect(values.get('/extension_settings/empty')).toEqual({});
 });
 
 test('assembles the original object, order and JSON types exactly', () => {

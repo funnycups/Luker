@@ -36,7 +36,7 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
         if (harness) await harness.cleanup();
     });
 
-    test('lists leaves with validators that match field responses', async () => {
+    test('lists one leaf per extension namespace with validators that match field responses', async () => {
         const directory = await request(harness.server)
             .get('/api/settings/fields')
             .query({ account: harness.handle })
@@ -45,26 +45,23 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
         expect(directory.body.containers).toEqual([
             { path: '', keys: ['user_name', 'extension_settings'] },
             { path: '/extension_settings', keys: ['example', 'array-namespace'] },
-            { path: '/extension_settings/example', keys: ['enabled', 'history', 'nullable'] },
         ]);
         const etags = Object.fromEntries(directory.body.fields.map(field => [field.path, field.etag]));
         expect(Object.keys(etags).sort()).toEqual([
             '/extension_settings/array-namespace',
-            '/extension_settings/example/enabled',
-            '/extension_settings/example/history',
-            '/extension_settings/example/nullable',
+            '/extension_settings/example',
             '/user_name',
         ]);
 
         const field = await request(harness.server)
             .get('/api/settings/field')
-            .query({ account: harness.handle, path: '/extension_settings/example/enabled' })
+            .query({ account: harness.handle, path: '/extension_settings/example' })
             .expect(200);
-        expect(field.body).toBe(true);
-        expect(field.headers.etag).toBe(etags['/extension_settings/example/enabled']);
+        expect(field.body).toEqual(DOCUMENT.extension_settings.example);
+        expect(field.headers.etag).toBe(etags['/extension_settings/example']);
     });
 
-    test('revalidates unchanged fields and changes only the edited validator', async () => {
+    test('revalidates unchanged plugin objects and changes only the edited plugin validator', async () => {
         const before = await request(harness.server)
             .get('/api/settings/fields')
             .query({ account: harness.handle })
@@ -73,11 +70,11 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
 
         const field = await request(harness.server)
             .get('/api/settings/field')
-            .query({ account: harness.handle, path: '/extension_settings/example/history' })
+            .query({ account: harness.handle, path: '/extension_settings/example' })
             .expect(200);
         await request(harness.server)
             .get('/api/settings/field')
-            .query({ account: harness.handle, path: '/extension_settings/example/history' })
+            .query({ account: harness.handle, path: '/extension_settings/example' })
             .set('If-None-Match', field.headers.etag)
             .expect(304);
 
@@ -95,35 +92,49 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
             .expect(200);
         const afterEtags = Object.fromEntries(after.body.fields.map(fieldEntry => [fieldEntry.path, fieldEntry.etag]));
 
-        expect(afterEtags['/extension_settings/example/enabled'])
-            .not.toBe(beforeEtags['/extension_settings/example/enabled']);
-        expect(afterEtags['/extension_settings/example/history'])
-            .toBe(beforeEtags['/extension_settings/example/history']);
+        expect(afterEtags['/extension_settings/example'])
+            .not.toBe(beforeEtags['/extension_settings/example']);
+        expect(afterEtags['/extension_settings/array-namespace'])
+            .toBe(beforeEtags['/extension_settings/array-namespace']);
     });
 
-    test('rejects container and array-index paths while allowing array leaves', async () => {
+    test('rejects container and nested paths while allowing whole namespace leaves', async () => {
         const container = await request(harness.server)
             .get('/api/settings/field')
-            .query({ account: harness.handle, path: '/extension_settings/example' })
+            .query({ account: harness.handle, path: '/extension_settings' })
             .expect(400);
         expect(container.body.code).toBe('invalid_args');
+        const nested = await request(harness.server)
+            .get('/api/settings/field')
+            .query({ account: harness.handle, path: '/extension_settings/example/enabled' })
+            .expect(400);
+        expect(nested.body.code).toBe('invalid_args');
         const index = await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: '/extension_settings/array-namespace/0' })
             .expect(400);
         expect(index.body.code).toBe('invalid_args');
-        const leaf = await request(harness.server)
+        const objectLeaf = await request(harness.server)
+            .get('/api/settings/field')
+            .query({ account: harness.handle, path: '/extension_settings/example' })
+            .expect(200);
+        expect(objectLeaf.body).toEqual(DOCUMENT.extension_settings.example);
+        const arrayLeaf = await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: '/extension_settings/array-namespace' })
             .expect(200);
-        expect(leaf.body).toEqual([1, 2]);
+        expect(arrayLeaf.body).toEqual([1, 2]);
     });
 
     test('distinguishes missing and malformed paths', async () => {
         await request(harness.server)
             .get('/api/settings/field')
-            .query({ account: harness.handle, path: '/extension_settings/example/absent' })
+            .query({ account: harness.handle, path: '/extension_settings/absent' })
             .expect(404);
+        await request(harness.server)
+            .get('/api/settings/field')
+            .query({ account: harness.handle, path: '/extension_settings/example/absent' })
+            .expect(400);
         await request(harness.server)
             .get('/api/settings/field')
             .query({ account: harness.handle, path: 'not-a-pointer' })

@@ -293,12 +293,8 @@ function getLatestBackup(userDirectories, handle) {
 
 export const router = express.Router();
 
-function settingsPointer(segments) {
-    return segments.map((segment) => `/${String(segment).replace(/~/g, '~0').replace(/\//g, '~1')}`).join('');
-}
-
 async function isSettingsLeafPath(handle, segments) {
-    if (segments.length === 0 || segments.length > 3) {
+    if (segments.length === 0 || segments.length > 2) {
         return false;
     }
     if (segments[0] !== 'extension_settings') {
@@ -308,12 +304,7 @@ async function isSettingsLeafPath(handle, segments) {
         const field = await getSettingsRepo().getFieldType(handle, '/extension_settings');
         return !field.exists || field.type !== 'object';
     }
-    if (segments.length === 2) {
-        const field = await getSettingsRepo().getFieldType(handle, settingsPointer(segments));
-        return !field.exists || field.type !== 'object';
-    }
-    const parent = await getSettingsRepo().getFieldType(handle, settingsPointer(segments.slice(0, 2)));
-    return !parent.exists || parent.type === 'object';
+    return true;
 }
 
 router.get('/fields', async function (request, response) {
