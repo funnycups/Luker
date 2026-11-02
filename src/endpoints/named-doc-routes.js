@@ -28,7 +28,7 @@ export function registerNamedDocReadRoutes(router, bucket) {
     });
 
     router.get('/get', async (request, response) => {
-        const name = String(request.query?.name || '').trim();
+        const name = String(request.query?.name || '');
         if (!name) {
             return sendResourceReadError(response, {
                 code: 'invalid_args',
