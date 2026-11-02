@@ -1,4 +1,12 @@
 /** Shared placement and activation ownership for compact activity buttons. */
+// Stroke icons per state, drawn in the pill's tone color.
+const ICONS = {
+    loading: '<path d="M20 11a8 8 0 0 0-14.9-3.5M4 4v4h4M4 13a8 8 0 0 0 14.9 3.5M20 20v-4h-4"/>',
+    attention: '<path d="M12 4 2.5 20h19zM12 10v4M12 17h.01"/>',
+    error: '<path d="M6 6l12 12M18 6 6 18"/>',
+    unknown: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/>',
+    done: '<path d="m5 12 5 5 9-10"/>',
+};
 let host = null;
 let stylesheet = null;
 const owners = new Set();
@@ -23,6 +31,10 @@ export function createActivityPill({ id, className = '', onOpen, onError }) {
     element.id = id;
     element.className = `activity-pill ${className}`.trim();
     element.hidden = true;
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('class', 'activity-pill-icon');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('aria-hidden', 'true');
     const label = document.createElement('span');
     label.className = 'activity-pill-label';
     // Secondary detail such as elapsed time; decorative, the label carries the meaning.
@@ -34,7 +46,7 @@ export function createActivityPill({ id, className = '', onOpen, onError }) {
     progress.className = 'activity-pill-progress';
     progress.setAttribute('role', 'progressbar');
     progress.hidden = true;
-    element.append(label, meta, progress);
+    element.append(icon, label, meta, progress);
     host.appendChild(element);
     owners.add(element);
 
@@ -60,6 +72,12 @@ export function createActivityPill({ id, className = '', onOpen, onError }) {
         element.title = text;
         element.setAttribute('aria-label', text);
         element.dataset.tone = tone;
+        const iconName = loading ? 'loading' : ICONS[tone] ? tone : 'done';
+        if (icon.dataset.name !== iconName) {
+            icon.dataset.name = iconName;
+            icon.innerHTML = ICONS[iconName];
+        }
+        icon.classList.toggle('activity-pill-spin', Boolean(loading));
         progress.hidden = !loading;
         progress.setAttribute('aria-label', text);
         updateHost();
