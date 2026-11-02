@@ -21,6 +21,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Added a byte budget to the request inspector and the captured server log buffers, evicting the oldest records once the budget is exceeded; the inspector budget is tunable via `requestInspector.byteBudgetBytes` in `config.yaml`.
 - Fixed a denial-of-service vulnerability that let unauthenticated clients make the server buffer and parse request bodies up to 500 MB before authentication and access control checks ran; request bodies are now parsed after every access check, and the pre-login account routes cap request bodies at 100 KB.
 
+### Performance
+
+- Settings, presets, characters, world books, and other stored data are now split into account-scoped resources with ETag revalidation, so unchanged data reuses the browser cache.
+
 ### Request Inspector
 
 - Added an **Abort** button to running requests in the inspector, stopping the request on the server and on the client.
