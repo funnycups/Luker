@@ -101,6 +101,24 @@ test('a ticked row renders as checked', async ({ page }) => {
     await expect(checked).toHaveCount(1);
 });
 
+test('clicking between two checkboxes ticks the row instead of switching books', async ({ page }) => {
+    await openEditorDropdown(page);
+    const selectedBefore = await page.evaluate(() => document.querySelector('#world_editor_select').value);
+
+    await toggleRow(page, 'reef-conditions');
+
+    // The click lands on the row's padding, a few pixels left of the
+    // checkbox's center: the near miss that used to select the book, close
+    // the dropdown and drop the batch selection.
+    const target = row(page, 'reef-drifters');
+    await target.click({ position: { x: 3, y: 3 } });
+
+    await expect(target.locator('.luker-action-select2-option__checkbox')).toBeChecked();
+    await expect(page.locator('.luker-bulk-delete-toolbar__count')).toContainText('2');
+    await expect(target).toBeVisible();
+    expect(await page.evaluate(() => document.querySelector('#world_editor_select').value)).toBe(selectedBefore);
+});
+
 test('unticking back to zero restores the normal rows', async ({ page }) => {
     await openEditorDropdown(page);
     await toggleRow(page, 'reef-conditions');

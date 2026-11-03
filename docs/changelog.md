@@ -183,6 +183,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed the update check never reporting an available update on Android and HarmonyOS.
 - Fixed state replay dropping full-replacement patches, which could lose stored extension data when a large change was saved.
 - Fixed the **Auth & Limits** admin tab rendering its fields centered and misaligned.
+- Fixed a click between two checkboxes in the multi-select pickers switching the active item.
 
 ## v2.8.0 (2026-10-01)
 

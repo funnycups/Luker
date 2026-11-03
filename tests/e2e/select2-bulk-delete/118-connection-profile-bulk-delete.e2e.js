@@ -152,6 +152,26 @@ test('select-all covers exactly the rows that offer a per-row delete', async ({ 
     await expect(toolbar.locator('.luker-bulk-delete-toolbar__count')).toContainText(`: ${checkboxes}`);
 });
 
+test('clicking between two checkboxes ticks the row instead of switching profiles', async ({ page }) => {
+    await awaitMainUI(page, server.baseURL);
+    await openProfileDropdown(page);
+
+    const selectedBefore = await page.evaluate(() => window.Luker.getContext().extensionSettings.connectionManager.selectedProfile);
+
+    await toggleRow(page, 'reef-watch');
+
+    // The click lands on the row's padding, a few pixels left of the
+    // checkbox's center: the near miss that used to select the profile,
+    // close the dropdown and drop the batch selection.
+    const target = profileRow(page, 'tide-relay');
+    await target.click({ position: { x: 3, y: 3 } });
+
+    await expect(target.locator('.luker-action-select2-option__checkbox')).toBeChecked();
+    await expect(page.locator('.luker-bulk-delete-toolbar__count')).toContainText('2');
+    await expect(target).toBeVisible();
+    expect(await page.evaluate(() => window.Luker.getContext().extensionSettings.connectionManager.selectedProfile)).toBe(selectedBefore);
+});
+
 test('deleting the active profile falls back to <None> and undo applies it again', async ({ page }) => {
     await awaitMainUI(page, server.baseURL);
     await recordLoadedEvents(page);
