@@ -193,7 +193,7 @@ export function getCurrentUserHandle() {
  * Get the current user.
  * @returns {Promise<void>}
  */
-async function getCurrentUser() {
+export async function getCurrentUser() {
     try {
         const response = await fetch('/api/users/me', {
             headers: getRequestHeaders(),
@@ -2074,6 +2074,120 @@ async function openLogsViewer() {
 }
 
 /**
+ * Posts to a user API endpoint and throws the server's error message on failure.
+ * @param {string} url Endpoint
+ * @param {object} [body] JSON body; omitted for body-less requests
+ * @returns {Promise<Response>} The successful response
+ */
+async function postUserApi(url, body) {
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: body === undefined ? getRequestHeaders({ omitContentType: true }) : getRequestHeaders(),
+        body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Unknown error');
+    }
+    return response;
+}
+
+/**
+ * Changes a user's password.
+ * @param {string} handle User handle
+ * @param {string} oldPassword Current password (not needed for admins)
+ * @param {string} newPassword New password; empty removes it
+ * @returns {Promise<void>}
+ */
+export async function requestChangePassword(handle, oldPassword, newPassword) {
+    await postUserApi('/api/users/change-password', { handle, newPassword, oldPassword });
+}
+
+/**
+ * Changes a user's display name.
+ * @param {string} handle User handle
+ * @param {string} name New display name
+ * @returns {Promise<void>}
+ */
+export async function requestChangeName(handle, name) {
+    await postUserApi('/api/users/change-name', { handle, name });
+}
+
+/**
+ * Changes a user's avatar.
+ * @param {string} handle User handle
+ * @param {string} avatar Base64 data URL, or empty to remove the custom avatar
+ * @returns {Promise<void>}
+ */
+export async function requestChangeAvatar(handle, avatar) {
+    await postUserApi('/api/users/change-avatar', { avatar, handle });
+}
+
+/**
+ * Resets a user's settings to factory defaults.
+ * @param {string} handle User handle
+ * @param {string} password Current password
+ * @returns {Promise<void>}
+ */
+export async function requestResetSettings(handle, password) {
+    await postUserApi('/api/users/reset-settings', { handle, password });
+}
+
+/**
+ * Starts a full account reset: the server prints a reset code to its console.
+ * @returns {Promise<void>}
+ */
+export async function requestResetCode() {
+    await postUserApi('/api/users/reset-step1');
+}
+
+/**
+ * Wipes all data of the current user.
+ * @param {string} password Current password
+ * @param {string} code Reset code from the server console
+ * @returns {Promise<void>}
+ */
+export async function requestResetEverything(password, code) {
+    await postUserApi('/api/users/reset-step2', { password, code });
+}
+
+/**
+ * Lists the settings snapshots.
+ * @returns {Promise<Snapshot[]>} Snapshots
+ */
+export async function fetchSnapshots() {
+    const response = await postUserApi('/api/settings/get-snapshots');
+    return response.json();
+}
+
+/**
+ * Reads the content of a settings snapshot.
+ * @param {string} name Snapshot name
+ * @returns {Promise<string>} Snapshot content
+ */
+export async function fetchSnapshotContent(name) {
+    const response = await postUserApi('/api/settings/load-snapshot', { name });
+    return response.text();
+}
+
+/**
+ * Records a snapshot of the current settings.
+ * @returns {Promise<void>}
+ */
+export async function requestMakeSnapshot() {
+    await postUserApi('/api/settings/make-snapshot');
+}
+
+/**
+ * Restores the settings from a snapshot.
+ * @param {string} name Snapshot name
+ * @returns {Promise<void>}
+ */
+export async function requestRestoreSnapshot(name) {
+    await postUserApi('/api/settings/restore-snapshot', { name });
+}
+
+/**
  * Shows a popup to change a user's password.
  * @param {string} handle User handle
  * @param {function} callback Success callback
@@ -2456,6 +2570,11 @@ async function resetEverything(callback) {
     }
 }
 
+/**
+ * Opens the old account popup.
+ * @deprecated Replaced by the Account window (openDataWindow({ tab: 'profile' })); kept until the old templates are removed.
+ */
+// eslint-disable-next-line no-unused-vars
 async function openUserProfile() {
     await getCurrentUser();
     const template = $(await renderTemplateAsync('userProfile'));
@@ -2559,7 +2678,7 @@ async function changeAvatar(handle, avatar) {
     }
 }
 
-async function openAdminPanel() {
+export async function openAdminPanel() {
     let currentAdminSettings = null;
     let runtimeConfigPath = '';
 
@@ -3617,7 +3736,7 @@ jQuery(() => {
         openAdminPanel();
     });
     $('#account_button').on('click', () => {
-        openUserProfile();
+        openDataWindow({ tab: 'profile' });
     });
     $('#server_logs_button').on('click', () => {
         openLogsViewer();

@@ -1,50 +1,8 @@
-// Data window: sync, backup, restore and migration in one floating window.
-import { createLukerProvider } from './data-window-provider.js';
+// Data pages of the Account window: sync, backup, restore and migration.
 import { t } from './i18n.js';
+import { LukerWindow, ic, esc } from './luker-window.js';
 
-const ICONS = {
-    sync: '<path d="M20 11a8 8 0 0 0-14.9-3.5M4 4v4h4M4 13a8 8 0 0 0 14.9 3.5M20 20v-4h-4"/>',
-    more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
-    undo: '<path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/>',
-    edit: '<path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4"/>',
-    trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
-    key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
-    plus: '<path d="M12 5v14M5 12h14"/>',
-    qr: '<path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2"/>',
-    link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
-    chev: '<path d="m9 6 6 6-6 6"/>',
-    back: '<path d="m15 6-6 6 6 6"/>',
-    copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
-    cloud: '<path d="M7 18a5 5 0 0 1-.6-10A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9z"/>',
-    lan: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
-    warn: '<path d="M12 4 2.5 20h19zM12 10v4M12 17h.01"/>',
-    x: '<path d="M6 6l12 12M18 6 6 18"/>',
-    check: '<path d="m5 12 5 5 9-10"/>',
-    eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
-    lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
-    download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
-    upload: '<path d="M12 20V9M7 14l5-5 5 5M5 4h14"/>',
-    restore: '<path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6M4 4v4.6h4.6"/><path d="M12 8v4l3 2"/>',
-    move: '<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
-    zip: '<path d="M6 3h9l4 4v14H6zM14 3v5h5M11 7h1M11 10h1M11 13h1M10.5 16h2v2h-2z"/>',
-    db: '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/>',
-    branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-11 7"/>',
-    chat: '<path d="M5 18 3 21V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2z"/>',
-    clock: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
-    gear: '<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/>',
-    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
-    moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
-    help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 0 1 4.9.7c0 1.6-2.4 2.1-2.4 3.6M12 17h.01"/>',
-};
-
-const tabs = () => [
-    { key: 'sync', label: t`Sync`, icon: 'sync' },
-    { key: 'backup', label: t`Backup`, icon: 'download' },
-    { key: 'restore', label: t`Restore`, icon: 'restore' },
-    { key: 'migrate', label: t`Migrate`, icon: 'move' },
-];
-
-const titles = () => ({
+export const dataTitles = () => ({
     list: t`Sync`,
     backup: t`Backup`,
     restore: t`Restore`,
@@ -62,7 +20,7 @@ const titles = () => ({
     migrateIn: t`Migrate into this device`,
 });
 
-const help = () => ({
+export const dataHelp = () => ({
     list: [t`Sync automatically exchanges data between this device and others. LAN devices connect directly; S3 relays through an encrypted bucket.`, t`Sync keeps running on the server even if you close the browser. Conflicting files keep a usable version until you choose.`],
     settings: [t`The device name appears in other devices' version history. Leave it blank to use the host name. Renaming only affects later edits; old records stay unchanged.`, t`Sync runs a short while after you stop editing. It also checks other devices for updates at the poll interval.`],
     add: [t`LAN: both devices must be able to reach each other. Generate a link on one and paste it on the other.`, t`S3: use the same bucket, prefix and passphrase on every device.`],
@@ -80,32 +38,11 @@ const help = () => ({
     migrateIn: [t`Generate a link on the old device and paste it here.`],
 });
 
-const THEMES = [
-    { key: 'mist', dark: false, a: '#f3f4f2', b: '#13a68b' },
-    { key: 'latte', dark: false, a: '#f3ece2', b: '#c0673b' },
-    { key: 'ocean', dark: true, a: '#1c2433', b: '#4fd1b9' },
-    { key: 'dusk', dark: true, a: '#2a2833', b: '#a594f9' },
-];
-const themeLabel = key => ({ mist: t`Mist`, latte: t`Latte`, ocean: t`Ocean`, dusk: t`Dusk` })[key];
-const THEME_KEY = 'luker.dataWindow.theme';
-
-function loadTheme() {
-    const saved = globalThis.localStorage?.getItem(THEME_KEY);
-    if (THEMES.some(tp => tp.key === saved)) return saved;
-    return globalThis.matchMedia?.('(prefers-color-scheme: light)').matches ? 'mist' : 'ocean';
-}
-
 const REGIONS = ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-northeast-1', 'ap-southeast-1', 'ap-east-1', 'ap-hongkong', 'ap-shanghai', 'ap-guangzhou', 'ap-beijing', 'oss-cn-hangzhou', 'oss-cn-shanghai', 'auto'];
 // Each stage is [name, progress text].
 const restoreStages = () => [[t`Upload`, t`Uploading…`], [t`Prepare`, t`Preparing…`], [t`Check`, t`Checking…`], [t`Restore`, t`Restoring…`]];
 const migrateStages = () => [[t`Download`, t`Downloading…`], [t`Prepare`, t`Preparing…`], [t`Restore`, t`Restoring…`]];
 const stateTag = () => ({ ok: ['is-ok', t`Synced`], running: ['is-ok', t`Syncing`], error: ['is-bad', t`Failed`], pending: ['', t`Waiting for the other device`], unknown: ['is-warn', t`Status unknown`] });
-
-const ic = (name, cls = '') => `<svg class="dw-ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
-
-function esc(value) {
-    return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' })[ch]);
-}
 
 function ago(ts) {
     if (!ts) return t`Never synced`;
@@ -134,22 +71,27 @@ const firstReachable = list => list.find(a => !isLoopback(a)) || list[0];
 
 // Survives closing and reopening the window, like the old per-backend action lock.
 const shared = { pending: new Set(), jobs: null, backupSel: null };
-
-class DataWindow {
-    constructor(root, provider, { tab, view, handle, onDone }) {
-        this.root = root;
+/**
+ * Sync, backup, restore and migration pages. The Account window extends this with its own pages.
+ */
+export class DataPages extends LukerWindow {
+    /**
+     * @param {HTMLElement} root Element the window renders into
+     * @param {object} provider Data source (see createLukerProvider)
+     * @param {object} options
+     * @param {string} options.tab Tab to show first
+     * @param {string} [options.handle] User whose data backup/restore/migration acts on
+     * @param {() => void} [options.onDone] Called after a successful restore or migration
+     */
+    constructor(root, provider, { tab, handle, onDone }) {
+        super(root, { tab });
         this.p = provider;
-        this.tab = tab;
         this.handle = handle;
         this.onDone = onDone;
-        this.stack = { sync: [{ view: 'list' }], backup: [{ view: 'backup' }], restore: [{ view: 'restore' }], migrate: [{ view: 'migrate' }], settings: [{ view: 'settings' }] };
-        if (view) this.stack[tab].push({ view });
+        Object.assign(this.stack, { sync: [{ view: 'list' }], backup: [{ view: 'backup' }], restore: [{ view: 'restore' }], migrate: [{ view: 'migrate' }], settings: [{ view: 'settings' }] });
         this.pending = shared.pending;
         this.menu = null;
         this.flash = null;
-        this.help = false;
-        this.themeMenu = false;
-        this.theme = loadTheme();
         this.choices = {};
         this.failedKeys = new Set();
         this.noticeBusy = new Set();
@@ -163,7 +105,6 @@ class DataWindow {
         };
         this.f = { device: { label: s.device.label }, schedule: { ...s.schedule }, ...shared.jobs };
 
-        this.root.addEventListener('click', e => this.onClick(e));
         this.root.addEventListener('input', e => this.onInput(e));
         this.root.addEventListener('change', e => this.onChange(e));
         this.root.addEventListener('dragover', e => this.onDrag(e, true));
@@ -171,14 +112,6 @@ class DataWindow {
         this.root.addEventListener('drop', e => this.onDrop(e));
         this.unsubscribe = this.p.subscribe(() => this.refreshLive());
         this.ticker = setInterval(() => this.tick(), 1000);
-        this.render();
-    }
-
-    /** Opens another request in the already-open window. */
-    navigate({ tab, view }) {
-        if (tab) this.tab = tab;
-        if (view && this.top.view !== view) this.stack[this.tab].push({ view });
-        this.render();
     }
 
     /** Name of the long-running job in progress, if any. */
@@ -206,82 +139,38 @@ class DataWindow {
         return this.p.snapshot();
     }
 
-    get top() {
-        const s = this.stack[this.tab];
-        return s[s.length - 1];
-    }
-
     get viewKey() {
         return this.top.view === 's3' && this.top.id ? 's3Edit' : this.top.view;
     }
 
     push(view, params = {}) {
-        this.stack[this.tab].push({ view, ...params });
         this.menu = null;
-        this.help = false;
-        this.render();
+        super.push(view, params);
     }
 
-    pop() {
-        const s = this.stack[this.tab];
-        if (s.length > 1) s.pop();
-        this.help = false;
-        this.render();
+    /** Whether backup/restore/migration act on a user other than the signed-in one. */
+    get isOtherUser() {
+        return !!this.handle && this.handle !== this.p.currentHandle();
     }
 
-    // ---------- shell ----------
-
-    render() {
-        const issues = this.snap.conflicts.length + this.snap.notices.length;
-        const tab = tp => `<button class="dw-tab" data-act="tab" data-tab="${tp.key}" role="tab" aria-selected="${tp.key === this.tab}">
-            ${ic(tp.icon)}<span>${tp.label}</span>${tp.key === 'sync' && issues ? `<span class="dw-tab-count">${issues}</span>` : ''}</button>`;
-        this.root.innerHTML = `
-            <header class="dw-titlebar">
-                <span class="dw-mark">${ic('db')}</span>
-                <span class="dw-title">${t`Data`}</span>
-                <span data-region="status"></span>
-                <span class="dw-sp"></span>
-                <button class="dw-ibtn${this.themeMenu ? ' on' : ''}" data-act="theme-menu" title="${t`Color scheme`}">${ic(THEMES.find(tp => tp.key === this.theme)?.dark ? 'moon' : 'sun')}</button>
-                <button class="dw-ibtn${this.help ? ' on' : ''}" data-act="help" title="${t`Help`}">${ic('help')}</button>
-                <button class="dw-ibtn is-close" data-act="close" title="${t`Close`}">${ic('x')}</button>
-            </header>
-            <div class="dw-shell">
-                <nav class="dw-rail" role="tablist">
-                    ${tabs().map(tab).join('')}
-                    <div class="dw-rail-foot">${tab({ key: 'settings', label: t`Device settings`, icon: 'gear' })}</div>
-                </nav>
-                <main class="dw-main"><div class="dw-body">${this.renderPage()}</div></main>
-            </div>
-            ${this.themeMenu ? `<div class="dw-themes" role="menu">${THEMES.map(tp => `
-                <button class="dw-theme" role="menuitemradio" aria-checked="${tp.key === this.theme}" data-act="theme" data-theme="${tp.key}">
-                    <span class="dw-swatch" style="--a:${tp.a};--b:${tp.b}"></span><span>${themeLabel(tp.key)}</span>${tp.key === this.theme ? ic('check') : ''}
-                </button>`).join('')}</div>` : ''}
-            ${this.help ? `<div class="dw-pop">${(help()[this.viewKey] || help().list).map(l => `<p>${esc(l)}</p>`).join('')}</div>` : ''}`;
-        this.renderStatus();
+    /** Conflicts and notices waiting for the user. */
+    get syncIssues() {
+        return this.snap.conflicts.length + this.snap.notices.length;
     }
 
-    renderPage() {
-        const deep = this.stack[this.tab].length > 1;
+    pageTitle() {
+        return dataTitles()[this.viewKey] || '';
+    }
+
+    helpLines() {
+        return dataHelp()[this.viewKey] || [];
+    }
+
+    headExtra() {
         const canAdd = this.top.view === 'list' && this.snap.available && this.snap.backends.length;
-        const other = this.handle && this.handle !== this.p.currentHandle() && ['backup', 'restore', 'migrate'].includes(this.tab);
-        const head = `<div class="dw-pagehead">
-            ${deep ? `<button class="dw-ibtn" data-act="back" title="${t`Back`}">${ic('back')}</button>` : ''}
-            <h2 class="dw-h2">${esc(titles()[this.viewKey])}</h2>
-            <span class="dw-sp"></span>
-            ${other ? `<span class="dw-pilltag is-warn">${esc(t`Acting on user ${this.handle}`)}</span>` : ''}
-            ${canAdd ? `<button class="dw-btn primary sm" data-act="push" data-view="add">${ic('plus')}${t`Add`}</button>` : ''}
-        </div>`;
-        return head + this.renderView();
-    }
-
-    rerender() {
-        const main = this.root.querySelector('.dw-main');
-        const body = this.root.querySelector('.dw-body');
-        if (!body) return;
-        const scroll = main.scrollTop;
-        body.innerHTML = this.renderPage();
-        body.style.animation = 'none';
-        main.scrollTop = scroll;
+        const other = this.isOtherUser && ['backup', 'restore', 'migrate'].includes(this.tab);
+        return `${other ? `<span class="dw-pilltag is-warn">${esc(t`Acting on user ${this.handle}`)}</span>` : ''}
+            ${canAdd ? `<button class="dw-btn primary sm" data-act="push" data-view="add">${ic('plus')}${t`Add`}</button>` : ''}`;
     }
 
     renderView() {
@@ -304,10 +193,6 @@ class DataWindow {
         return '';
     }
 
-    foot(html) {
-        return `<div class="dw-foot">${html}</div>`;
-    }
-
     statusInfo() {
         const { backends, conflicts, notices, available, statusError } = this.snap;
         if (!available) return { tone: 'error', text: t`Sync unavailable` };
@@ -323,15 +208,6 @@ class DataWindow {
         const synced = backends.filter(b => b.lastSync);
         if (!synced.length) return null;
         return { tone: 'ok', text: t`Synced · ${ago(Math.max(...synced.map(b => b.lastSync)))}` };
-    }
-
-    renderStatus() {
-        const el = this.root.querySelector('[data-region="status"]');
-        if (!el) return;
-        const s = this.statusInfo();
-        el.outerHTML = s
-            ? `<span class="dw-title-ctx" data-region="status" data-tone="${s.tone}" ${s.act ? `data-act="${s.act}" role="button"` : ''}><i class="dw-dot"></i><span>${esc(s.text)}</span></span>`
-            : '<span data-region="status"></span>';
     }
 
     tick() {
@@ -361,7 +237,7 @@ class DataWindow {
         }
         const tab = this.root.querySelector('.dw-tab[data-tab="sync"]');
         if (tab) {
-            const n = this.snap.conflicts.length + this.snap.notices.length;
+            const n = this.syncIssues;
             let count = tab.querySelector('.dw-tab-count');
             if (n && !count) {
                 tab.insertAdjacentHTML('beforeend', '<span class="dw-tab-count"></span>');
@@ -378,42 +254,6 @@ class DataWindow {
         if (name === 'cards') el.innerHTML = this.renderCards();
         if (name === 'top') el.innerHTML = this.renderTop();
         if (name === 'summary') el.innerHTML = this.renderSummary();
-    }
-
-    toast(text, error = false) {
-        this.root.querySelector('.dw-toast')?.remove();
-        const el = document.createElement('div');
-        el.className = `dw-toast${error ? ' error' : ''}`;
-        el.innerHTML = `${ic(error ? 'x' : 'check')}<span>${esc(text)}</span>`;
-        this.root.append(el);
-        setTimeout(() => el.remove(), 2800);
-    }
-
-    confirm({ title, text, ok = t`Proceed`, danger = false }) {
-        return new Promise(resolve => {
-            const el = document.createElement('div');
-            el.className = 'dw-modal';
-            el.innerHTML = `
-                <div class="dw-modal-card" role="alertdialog">
-                    <h4>${esc(title)}</h4>
-                    ${text ? `<p>${esc(text)}</p>` : ''}
-                    <div class="dw-actions">
-                        <button class="dw-btn" data-r="0">${t`Cancel`}</button>
-                        <button class="dw-btn ${danger ? 'danger solid' : 'primary'}" data-r="1">${esc(ok)}</button>
-                    </div>
-                </div>`;
-            this.modal = el;
-            el.addEventListener('click', e => {
-                e.stopPropagation();
-                const btn = e.target.closest('[data-r]');
-                if (!btn && e.target !== el) return;
-                el.remove();
-                this.modal = null;
-                resolve(btn?.dataset.r === '1');
-            });
-            this.root.append(el);
-            el.querySelector('[data-r="1"]').focus();
-        });
     }
 
     // ---------- category pickers ----------
@@ -636,10 +476,6 @@ class DataWindow {
             ${this.syncCats('pairExist', tp.cats)}
             ${tp.error ? `<div class="dw-err">${esc(tp.error)}</div>` : ''}
             ${this.foot(`<button class="dw-btn primary big${tp.busy ? ' busy' : ''}" data-act="pair-accept">${tp.busy ? `${ic('sync', 'dw-spin')}${t`Pairing…`}` : `${ic('link')}${t`Pair and sync`}`}</button>`)}`;
-    }
-
-    pw(model, value, placeholder = '') {
-        return `<span class="dw-pw"><input class="dw-inp" type="password" data-model="${model}" value="${esc(value)}" placeholder="${esc(placeholder)}" autocomplete="new-password"><button class="dw-eye" data-act="eye" type="button" title="${t`Show`}">${ic('eye')}</button></span>`;
     }
 
     viewS3() {
@@ -954,47 +790,31 @@ class DataWindow {
         this.rerender();
     }
 
-    async onClick(e) {
-        const el = e.target.closest('[data-act]');
-        const act = el?.dataset.act;
-        if (this.help && act !== 'help' && !e.target.closest('.dw-pop')) {
-            this.help = false;
-            this.root.querySelector('.dw-pop')?.remove();
-            this.root.querySelector('[data-act="help"]')?.classList.remove('on');
-        }
-        if (this.themeMenu && act !== 'theme-menu' && act !== 'theme' && !e.target.closest('.dw-themes')) {
-            this.themeMenu = false;
-            this.root.querySelector('.dw-themes')?.remove();
-            this.root.querySelector('[data-act="theme-menu"]')?.classList.remove('on');
-        }
+    get hasPopover() {
+        return super.hasPopover || !!this.menu;
+    }
+
+    closePopovers() {
+        this.menu = null;
+        super.closePopovers();
+    }
+
+    dismiss(e, act) {
+        super.dismiss(e, act);
         if (this.menu && act !== 'menu' && !e.target.closest('.dw-menu')) {
             this.menu = null;
             this.refreshRegion('cards');
         }
-        if (!el) return;
+    }
+
+    /**
+     * Handles the data pages' own controls.
+     * @param {string} act data-act of the control
+     * @param {HTMLElement} el The control
+     */
+    async onAction(act, el) {
         const id = el.dataset.id;
         switch (act) {
-            case 'close': return this.close?.();
-            case 'tab':
-                this.tab = el.dataset.tab;
-                this.help = false;
-                return this.render();
-            case 'back': return this.pop();
-            case 'push': return this.push(el.dataset.view);
-            case 'help':
-                this.help = !this.help;
-                this.themeMenu = false;
-                return this.render();
-            case 'theme-menu':
-                this.themeMenu = !this.themeMenu;
-                this.help = false;
-                return this.render();
-            case 'theme':
-                this.theme = el.dataset.theme;
-                this.themeMenu = false;
-                globalThis.localStorage?.setItem(THEME_KEY, this.theme);
-                this.onTheme?.(this.theme);
-                return this.render();
             case 'conflicts':
                 this.tab = 'sync';
                 if (this.top.view !== 'conflicts') this.push('conflicts');
@@ -1030,11 +850,6 @@ class DataWindow {
                 this.backupSel.clear();
                 ids.forEach(x => this.backupSel.add(x));
                 return this.rerender();
-            }
-            case 'eye': {
-                const input = el.previousElementSibling;
-                input.type = input.type === 'password' ? 'text' : 'password';
-                return;
             }
             case 'copy': return this.copy(el.dataset.text);
             case 'pair-gen': return this.pairGen();
@@ -1201,7 +1016,7 @@ class DataWindow {
         tp.error = null;
         this.rerender();
         try {
-            tp.result = await this.p.createPairLink({ label: tp.label.trim(), categories: [...t.cats] });
+            tp.result = await this.p.createPairLink({ label: tp.label.trim(), categories: [...tp.cats] });
             tp.addr = firstReachable(tp.result.addresses);
         } catch (err) {
             tp.error = err.message;
@@ -1231,7 +1046,7 @@ class DataWindow {
         tp.error = null;
         this.rerender();
         try {
-            const b = await this.p.acceptPair({ ...f, label: f.label.trim() || f.peerId, categories: [...t.cats] });
+            const b = await this.p.acceptPair({ ...f, label: f.label.trim() || f.peerId, categories: [...tp.cats] });
             this.stack.sync = [{ view: 'list' }];
             this.flash = { tone: 'success', text: f.user ? t`Paired and synced with "${b.label}". The other device's account is saved on this device and can be cleared from the device menu.` : t`Paired and synced with "${b.label}"` };
             this.render();
@@ -1306,7 +1121,7 @@ class DataWindow {
         tp.error = null;
         this.rerender();
         try {
-            await this.p.editLan(tp.id, { label: tp.label.trim(), categories: [...t.cats] });
+            await this.p.editLan(tp.id, { label: tp.label.trim(), categories: [...tp.cats] });
             this.pop();
             this.toast(t`Saved`);
         } catch (err) {
@@ -1472,115 +1287,19 @@ class DataWindow {
     }
 }
 
-function makeDraggable(win, root) {
-    root.addEventListener('pointerdown', event => {
-        const bar = event.target.closest('.dw-titlebar');
-        if (!bar || event.button !== 0 || event.target.closest('button, [data-act]') || globalThis.innerWidth <= 640) return;
-        event.preventDefault();
-        const rect = win.getBoundingClientRect();
-        const start = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top };
-        bar.classList.add('is-dragging');
-        bar.setPointerCapture?.(event.pointerId);
-        const move = e => {
-            const left = Math.min(Math.max(start.left + e.clientX - start.x, 120 - rect.width), globalThis.innerWidth - 120);
-            const top = Math.min(Math.max(start.top + e.clientY - start.y, 0), globalThis.innerHeight - 46);
-            Object.assign(win.style, { left: `${left}px`, top: `${top}px`, transform: 'none', animation: 'none' });
-        };
-        const end = () => {
-            bar.classList.remove('is-dragging');
-            bar.removeEventListener('pointermove', move);
-            bar.removeEventListener('pointerup', end);
-            bar.removeEventListener('pointercancel', end);
-        };
-        bar.addEventListener('pointermove', move);
-        bar.addEventListener('pointerup', end);
-        bar.addEventListener('pointercancel', end);
-    });
-}
-
-let openWindow = null;
 
 /**
- * Opens the Data window, or brings the open one to the requested page.
+ * Opens the Account window on a data page, or brings the open one to the requested page.
  * @param {object} [options]
- * @param {'sync'|'backup'|'restore'|'migrate'|'settings'} [options.tab] Tab to show first
+ * @param {string} [options.tab] Page to show first: 'sync', 'backup', 'restore', 'migrate', 'settings', or any Account page
  * @param {'conflicts'} [options.view] Sub-page to open inside the tab
  * @param {string} [options.handle] User whose data backup/restore/migration acts on (admin panel)
  * @param {() => void} [options.onDone] Called after a successful restore or migration
  * @param {object} [options.provider] Data source; defaults to the live Luker provider (pass createMockProvider() to preview)
  * @returns {Promise<void>} Resolves when the window closes
  */
-export function openDataWindow({ tab = 'sync', view, handle, onDone, provider } = {}) {
-    if (openWindow && (openWindow.handle !== handle || provider)) {
-        openWindow.ui.close();
-    }
-    if (openWindow) {
-        if (onDone) openWindow.ui.onDone = onDone;
-        openWindow.ui.navigate({ tab, view });
-        openWindow.win.focus();
-        return openWindow.closed;
-    }
-    // A modal <dialog> joins the top layer, so it sits above Luker popups it is opened from.
-    const layer = document.createElement('dialog');
-    layer.className = 'dw-layer';
-    const scrim = document.createElement('div');
-    scrim.className = 'dw-scrim';
-    const win = document.createElement('section');
-    win.className = 'dw-win';
-    win.setAttribute('role', 'dialog');
-    win.setAttribute('aria-label', t`Data`);
-    win.tabIndex = -1;
-    const root = document.createElement('div');
-    root.className = 'dw';
-    win.append(root);
-    layer.append(scrim, win);
-
-    let resolveClosed;
-    const closed = new Promise(resolve => resolveClosed = resolve);
-    const source = provider || createLukerProvider({ handle });
-    source.start?.();
-    const ui = new DataWindow(root, source, { tab, view, handle, onDone });
-    layer.dataset.theme = ui.theme;
-    ui.onTheme = theme => layer.dataset.theme = theme;
-    const onKey = e => {
-        if (e.key !== 'Escape') return;
-        e.stopPropagation();
-        if (ui.modal) return ui.modal.querySelector('[data-r="0"]')?.click();
-        if (ui.help || ui.menu || ui.themeMenu) {
-            ui.help = false;
-            ui.themeMenu = false;
-            ui.menu = null;
-            return ui.render();
-        }
-        requestClose();
-    };
-    // Long jobs keep running on the server; closing only hides their progress.
-    async function requestClose() {
-        const job = ui.busyJob;
-        if (job && !await ui.confirm({ title: t`${job}. Close the window anyway?`, text: t`The task keeps running on the server. Reopen the window to see its progress.`, ok: t`Close` })) return;
-        close();
-    }
-    function close() {
-        ui.destroy();
-        if (!provider) source.stop?.();
-        document.removeEventListener('keydown', onKey, true);
-        layer.remove();
-        openWindow = null;
-        resolveClosed();
-    }
-    ui.close = close;
-    root.addEventListener('click', e => {
-        if (e.target.closest('[data-act="close"]')) {
-            e.stopImmediatePropagation();
-            requestClose();
-        }
-    }, true);
-    layer.addEventListener('cancel', e => e.preventDefault());
-    document.addEventListener('keydown', onKey, true);
-    makeDraggable(win, root);
-    document.body.append(layer);
-    layer.showModal();
-    win.focus();
-    openWindow = { win, ui, closed, handle };
-    return closed;
+export async function openDataWindow(options = {}) {
+    // Loaded lazily: the Account window builds on DataPages from this module.
+    const { openAccountWindow } = await import('./account-window.js');
+    return openAccountWindow({ tab: 'sync', ...options });
 }
