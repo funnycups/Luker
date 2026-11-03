@@ -696,6 +696,7 @@ export function createSyncSource(state, emit) {
                     accessKeyId: form.accessKey,
                     secretAccessKey: form.secretKey,
                     forcePathStyle: Boolean(form.pathStyle),
+                    stripIfMatchQuotes: Boolean(form.stripQuotes),
                     passphrase: form.passphrase,
                 }, mode),
             };
@@ -716,6 +717,7 @@ export function createSyncSource(state, emit) {
                 bucket: s3.bucket || '',
                 prefix: s3.prefix || '',
                 pathStyle: s3.forcePathStyle ?? true,
+                stripQuotes: s3.stripIfMatchQuotes ?? false,
             };
         },
 

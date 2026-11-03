@@ -482,7 +482,7 @@ export class DataPages extends LukerWindow {
         const tp = this.top;
         const editing = !!tp.id;
         if (!tp.form) {
-            const base = editing ? this.p.getS3(tp.id) : { endpoint: '', region: '', bucket: '', prefix: '', pathStyle: false };
+            const base = editing ? this.p.getS3(tp.id) : { endpoint: '', region: '', bucket: '', prefix: '', pathStyle: false, stripQuotes: false };
             const b = editing ? this.snap.backends.find(x => x.id === tp.id) : null;
             tp.form = { label: b?.label || '', ...base, accessKey: '', secretKey: '', passphrase: '', cats: new Set(b?.categories || defaultSyncCats(this.snap.syncCategories)) };
         }
@@ -502,6 +502,7 @@ export class DataPages extends LukerWindow {
                     <label class="dw-field"><span>${t`Prefix`}</span><input class="dw-inp" data-model="top.form.prefix" value="${esc(f.prefix)}" placeholder="luker/" ${editing ? 'disabled' : ''}></label>
                 </div>
                 <button class="dw-toggle${f.pathStyle ? ' on' : ''}" data-act="toggle-path" type="button"><span class="dw-sw"></span>${t`Path-style requests (needed by MinIO, etc.)`}</button>
+                <button class="dw-toggle${f.stripQuotes ? ' on' : ''}" data-act="toggle-quotes" type="button"><span class="dw-sw"></span>${t`Send ETag without quotes`}</button>
             </div>
             <div class="dw-group">
                 <div class="dw-sec-title">${t`Credentials`}</div>
@@ -854,6 +855,10 @@ export class DataPages extends LukerWindow {
             case 'copy': return this.copy(el.dataset.text);
             case 'pair-gen': return this.pairGen();
             case 'pair-accept': return this.pairAccept();
+            case 'toggle-quotes':
+                this.top.form.stripQuotes = !this.top.form.stripQuotes;
+                el.classList.toggle('on', this.top.form.stripQuotes);
+                return;
             case 'toggle-path':
                 this.top.form.pathStyle = !this.top.form.pathStyle;
                 el.classList.toggle('on', this.top.form.pathStyle);
