@@ -21,52 +21,171 @@
     isolation: isolate;
 }
 
-.dw-layer[data-theme="dark"] {
-    color-scheme: dark;
-    --dw-surface: #141519;
-    --dw-surface-2: #191b20;
-    --dw-raised: #1f2127;
-    --dw-hover: rgba(255, 255, 255, 0.045);
-    --dw-active: rgba(255, 255, 255, 0.08);
-    --dw-border: rgba(255, 255, 255, 0.07);
-    --dw-border-strong: rgba(255, 255, 255, 0.13);
-    --dw-text: #e9eaed;
-    --dw-muted: #9da1ab;
-    --dw-faint: #676b74;
-    --dw-accent: #3fd0b4;
-    --dw-accent-soft: rgba(63, 208, 180, 0.14);
-    --dw-accent-text: #062a23;
-    --dw-amber: #f4b740;
-    --dw-amber-soft: rgba(244, 183, 64, 0.14);
-    --dw-danger: #ef7d6e;
-    --dw-danger-soft: rgba(239, 125, 110, 0.12);
-    --dw-blue: #6fb3f2;
-    --dw-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08);
-    --dw-scrim: rgba(4, 5, 7, 0.5);
-}
-
-.dw-layer[data-theme="light"] {
+/* Four palettes, picked from the title bar. */
+.dw-layer[data-theme="mist"] {
     color-scheme: light;
-    --dw-surface: #ffffff;
-    --dw-surface-2: #f6f7f9;
+    --dw-surface: #fcfcfb;
+    --dw-surface-2: #f3f4f2;
     --dw-raised: #ffffff;
-    --dw-hover: rgba(15, 20, 30, 0.04);
-    --dw-active: rgba(15, 20, 30, 0.07);
-    --dw-border: rgba(15, 20, 30, 0.08);
-    --dw-border-strong: rgba(15, 20, 30, 0.15);
-    --dw-text: #1b1d22;
-    --dw-muted: #5d626d;
-    --dw-faint: #9196a0;
-    --dw-accent: #12a58a;
-    --dw-accent-soft: rgba(18, 165, 138, 0.11);
+    --dw-hover: rgba(30, 40, 50, 0.045);
+    --dw-active: rgba(30, 40, 50, 0.08);
+    --dw-border: rgba(30, 40, 50, 0.09);
+    --dw-border-strong: rgba(30, 40, 50, 0.16);
+    --dw-text: #22262c;
+    --dw-muted: #5c636e;
+    --dw-faint: #8f959f;
+    --dw-accent: #13a68b;
+    --dw-accent-soft: rgba(19, 166, 139, 0.11);
     --dw-accent-text: #ffffff;
-    --dw-amber: #c98500;
+    --dw-amber: #c78300;
     --dw-amber-soft: rgba(214, 145, 0, 0.12);
     --dw-danger: #d4553f;
     --dw-danger-soft: rgba(212, 85, 63, 0.1);
     --dw-blue: #2f7fd0;
-    --dw-shadow: 0 30px 70px -24px rgba(20, 25, 40, 0.35), 0 0 0 1px rgba(15, 20, 30, 0.08);
-    --dw-scrim: rgba(10, 12, 16, 0.3);
+    --dw-shadow: 0 30px 70px -24px rgba(20, 25, 40, 0.32), 0 0 0 1px rgba(20, 25, 40, 0.08);
+    --dw-scrim: rgba(20, 24, 30, 0.28);
+}
+
+.dw-layer[data-theme="latte"] {
+    color-scheme: light;
+    --dw-surface: #fbf7f1;
+    --dw-surface-2: #f3ece2;
+    --dw-raised: #fffdf9;
+    --dw-hover: rgba(90, 60, 30, 0.05);
+    --dw-active: rgba(90, 60, 30, 0.09);
+    --dw-border: rgba(90, 60, 30, 0.1);
+    --dw-border-strong: rgba(90, 60, 30, 0.18);
+    --dw-text: #3a2f26;
+    --dw-muted: #75665a;
+    --dw-faint: #a39484;
+    --dw-accent: #c0673b;
+    --dw-accent-soft: rgba(192, 103, 59, 0.12);
+    --dw-accent-text: #ffffff;
+    --dw-amber: #b9800d;
+    --dw-amber-soft: rgba(185, 128, 13, 0.13);
+    --dw-danger: #c2463a;
+    --dw-danger-soft: rgba(194, 70, 58, 0.1);
+    --dw-blue: #4b7fa8;
+    --dw-shadow: 0 30px 70px -24px rgba(70, 45, 20, 0.32), 0 0 0 1px rgba(90, 60, 30, 0.09);
+    --dw-scrim: rgba(40, 28, 16, 0.28);
+}
+
+.dw-layer[data-theme="ocean"] {
+    color-scheme: dark;
+    --dw-surface: #1c2433;
+    --dw-surface-2: #212a3b;
+    --dw-raised: #283245;
+    --dw-hover: rgba(200, 220, 255, 0.05);
+    --dw-active: rgba(200, 220, 255, 0.09);
+    --dw-border: rgba(200, 220, 255, 0.08);
+    --dw-border-strong: rgba(200, 220, 255, 0.15);
+    --dw-text: #e7ecf4;
+    --dw-muted: #a3afc2;
+    --dw-faint: #717d92;
+    --dw-accent: #4fd1b9;
+    --dw-accent-soft: rgba(79, 209, 185, 0.15);
+    --dw-accent-text: #07261f;
+    --dw-amber: #f2bb4f;
+    --dw-amber-soft: rgba(242, 187, 79, 0.15);
+    --dw-danger: #f08a7c;
+    --dw-danger-soft: rgba(240, 138, 124, 0.13);
+    --dw-blue: #7cb8f4;
+    --dw-shadow: 0 30px 80px -20px rgba(5, 10, 20, 0.7), 0 0 0 1px rgba(200, 220, 255, 0.09);
+    --dw-scrim: rgba(8, 12, 20, 0.45);
+}
+
+.dw-layer[data-theme="dusk"] {
+    color-scheme: dark;
+    --dw-surface: #2a2833;
+    --dw-surface-2: #302e3a;
+    --dw-raised: #37343f;
+    --dw-hover: rgba(235, 225, 255, 0.05);
+    --dw-active: rgba(235, 225, 255, 0.09);
+    --dw-border: rgba(235, 225, 255, 0.08);
+    --dw-border-strong: rgba(235, 225, 255, 0.15);
+    --dw-text: #eeebf3;
+    --dw-muted: #b0aabd;
+    --dw-faint: #7f7a8c;
+    --dw-accent: #a594f9;
+    --dw-accent-soft: rgba(165, 148, 249, 0.16);
+    --dw-accent-text: #1c1440;
+    --dw-amber: #f0bf5a;
+    --dw-amber-soft: rgba(240, 191, 90, 0.15);
+    --dw-danger: #f38b8b;
+    --dw-danger-soft: rgba(243, 139, 139, 0.13);
+    --dw-blue: #86b7f2;
+    --dw-shadow: 0 30px 80px -20px rgba(10, 6, 20, 0.7), 0 0 0 1px rgba(235, 225, 255, 0.09);
+    --dw-scrim: rgba(14, 10, 22, 0.45);
+}
+
+/* Theme picker */
+.dw-themes {
+    position: absolute;
+    top: 50px;
+    right: 48px;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 200px;
+    padding: 6px;
+    border-radius: var(--dw-r);
+    background: var(--dw-raised);
+    box-shadow: var(--dw-shadow);
+    animation: dw-in-menu 140ms var(--dw-ease);
+}
+
+.dw-theme {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 40px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--dw-r-sm);
+    background: none;
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dw-theme:hover {
+    background: var(--dw-hover);
+}
+
+.dw-theme[aria-checked="true"] {
+    background: var(--dw-active);
+    font-weight: 600;
+}
+
+.dw-theme > span:nth-child(2) {
+    flex: 1;
+}
+
+.dw-theme > svg.dw-ic {
+    color: var(--dw-accent);
+}
+
+.dw-swatch {
+    position: relative;
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: var(--a);
+    box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.25);
+    overflow: hidden;
+}
+
+.dw-swatch::after {
+    content: '';
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--b);
 }
 
 /* Luker styles bare elements; reset everything inside the window. */
@@ -2013,5 +2132,83 @@ details[open] > summary .dw-chev {
 
     .dw-notice-act .dw-btn {
         flex: 1;
+    }
+}
+
+/* ---------- extra states ---------- */
+
+.dw-card-note {
+    grid-column: 2 / 4;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.dw-card-note.bad {
+    color: var(--dw-danger);
+}
+
+.dw-files {
+    display: block;
+    margin-top: 4px;
+    padding: 0;
+    background: none;
+    font-family: var(--dw-mono);
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
+}
+
+.dw-preview.is-empty {
+    font-family: var(--dw-font);
+    font-style: italic;
+    color: var(--dw-faint);
+}
+
+.dw-preview.is-image {
+    display: grid;
+    place-items: center;
+    max-height: 160px;
+    padding: 6px;
+}
+
+.dw-preview.is-image img {
+    max-width: 100%;
+    max-height: 148px;
+    border-radius: 4px;
+    object-fit: contain;
+}
+
+.dw-version-act {
+    font-size: 11.5px;
+    color: var(--dw-faint);
+}
+
+.dw-version.on .dw-version-act {
+    color: var(--dw-accent);
+    font-weight: 600;
+}
+
+.dw-version:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.dw-conflict.is-failed {
+    --tone: var(--dw-danger);
+    border-color: var(--dw-danger);
+}
+
+.dw-chip:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.dw-menu button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+@container (max-width: 600px) {
+    .dw-card-note {
+        grid-column: 1 / 4;
     }
 }
