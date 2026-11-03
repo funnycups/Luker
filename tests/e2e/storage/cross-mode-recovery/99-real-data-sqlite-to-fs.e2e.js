@@ -8,7 +8,7 @@
 //
 // This spec clones the developer's actual `~/Desktop/projects/open-source/
 // Luker/data` (or `LUKER_REAL_DATA_ROOT`), boots a sqlite server against
-// the clone, downloads a full backup ZIP via the Backup Manager UI, then
+// the clone, downloads a full backup ZIP via Account → Backup, then
 // boots a fresh fs server, restores the ZIP, and runs a per-category
 // fingerprint diff that asserts EVERY backed-up engine row + fs file
 // round-tripped exactly.
@@ -23,6 +23,7 @@ import path from 'node:path';
 import { startServer, tearDownServer } from '../../_lib/server.js';
 import { awaitMainUI } from '../../_lib/page.js';
 import { markOnboarded } from '../../_lib/fixtures.js';
+import { accountWindow, answerWindowConfirm, closeAccountWindow, openAccountTab, pageHead } from '../../_lib/account-window.js';
 import {
     cloneRealDataForSpec,
     realDataLooksPopulated,
@@ -87,9 +88,8 @@ test('cross-mode recovery: real sqlite data round-trips through fs restore with 
         markOnboarded({ dataRoot: sourceServer.dataRoot });
         await awaitMainUI(page, sourceServer.baseURL);
 
-        // Step 4: download a full backup ZIP via the Backup Manager UI.
-        // ALL categories selected — that's the default of every checkbox in
-        // the Backup Manager popup; we just keep them and click Download.
+        // Step 4: download a full backup ZIP via Account → Backup.
+        // We keep the page's default content selection and click Download.
         const backupZipPath = path.join(tempDir, 'real-backup.zip');
         await downloadBackupViaUI(page, backupZipPath);
         expect(existsSync(backupZipPath)).toBe(true);
@@ -110,8 +110,8 @@ test('cross-mode recovery: real sqlite data round-trips through fs restore with 
         markOnboarded({ dataRoot: destServer.dataRoot });
         await awaitMainUI(page, destServer.baseURL);
 
-        // Step 7: open Backup Manager, attach the ZIP, click Restore in
-        // OVERWRITE mode, accept the confirm popup.  Same flow as the
+        // Step 7: open Account → Restore, attach the ZIP, restore in
+        // Replace mode, accept the confirm.  Same flow as the
         // fabricated specs use, lifted here without dragging in the
         // mock-LLM and character-select scaffolding the parameterized
         // flow imposes.
@@ -194,75 +194,27 @@ async function waitForDestPopulated(dataRoot, expectedMinRows) {
 // LLM + character select + scratch-creds prompt path none of which apply
 // here (sqlite → fs needs no scratch creds; no LLM call happens).
 
-async function ensureUserSettingsDrawerOpen(page) {
-    const settingsDrawer = page.locator('#user-settings-button');
-    if (await settingsDrawer.count() === 0) return;
-    const drawerClosed = await page
-        .locator('#user-settings-button .drawer-icon.closedIcon').count().then(n => n > 0);
-    if (drawerClosed) {
-        await page.locator('#user-settings-button .drawer-toggle').click();
-        await page.waitForFunction(() => {
-            const el = document.getElementById('user-settings-block');
-            return el && !el.classList.contains('closedDrawer');
-        }, { timeout: 5_000 });
-    }
-}
-
-async function openBackupManagerViaUI(page) {
-    await ensureUserSettingsDrawerOpen(page);
-    const accountBtn = page.locator('#account_button');
-    await accountBtn.waitFor({ state: 'visible', timeout: 10_000 });
-    await accountBtn.click();
-    const backupBtn = page.locator('.userBackupButton').last();
-    await backupBtn.waitFor({ state: 'visible', timeout: 10_000 });
-    await backupBtn.click();
-    await page.locator('.userBackupManager').last().waitFor({ state: 'visible', timeout: 10_000 });
+async function openBackupManagerViaUI(page, tab) {
+    await openAccountTab(page, tab);
+    await expect(pageHead(page)).toHaveAttribute('data-view', tab);
 }
 
 async function downloadBackupViaUI(page, destPath) {
-    await openBackupManagerViaUI(page);
+    await openBackupManagerViaUI(page, 'backup');
     const [download] = await Promise.all([
         page.waitForEvent('download', { timeout: 120_000 }),
-        page.locator('.backupDownloadButton').last().click(),
+        accountWindow(page).locator('[data-act="backup-go"]').click(),
     ]);
     await download.saveAs(destPath);
-    await page.keyboard.press('Escape').catch(() => {});
-    await page.keyboard.press('Escape').catch(() => {});
+    await closeAccountWindow(page);
 }
 
 async function restoreBackupViaUI(page, zipPath) {
-    await openBackupManagerViaUI(page);
-    await page.locator('input[name="backupRestoreMode"][value="overwrite"]').last().click();
-    const fileInput = page.locator('.backupRestoreFileInput').last();
-    await fileInput.setInputFiles(zipPath);
-    const baseOpenCount = await openPopupCount(page);
-    await page.locator('.backupRestoreButton').last().click();
-    await resolveTopmostPopupAffirmative(page, baseOpenCount + 1);
-}
-
-async function openPopupCount(page) {
-    return await page.evaluate(async () => {
-        const mod = await import('/scripts/popup.js');
-        return (mod?.Popup?.util?.popups || []).filter(p => p?.dlg?.hasAttribute('open')).length;
-    });
-}
-
-async function resolveTopmostPopupAffirmative(page, expectedMinOpenCount) {
-    await page.waitForFunction(async (minOpen) => {
-        const mod = await import('/scripts/popup.js');
-        const open = (mod?.Popup?.util?.popups || []).filter(p => p?.dlg?.hasAttribute('open'));
-        return open.length >= minOpen;
-    }, expectedMinOpenCount, { timeout: 15_000 });
-    const beforeCount = await openPopupCount(page);
-    await page.evaluate(async () => {
-        const mod = await import('/scripts/popup.js');
-        const open = (mod?.Popup?.util?.popups || []).filter(p => p?.dlg?.hasAttribute('open'));
-        if (open.length === 0) throw new Error('no open popup');
-        await open[open.length - 1].complete(1);
-    });
-    await page.waitForFunction(async (expected) => {
-        const mod = await import('/scripts/popup.js');
-        const open = (mod?.Popup?.util?.popups || []).filter(p => p?.dlg?.hasAttribute('open'));
-        return open.length === expected;
-    }, beforeCount - 1, { timeout: 10_000 }).catch(() => {});
+    await openBackupManagerViaUI(page, 'restore');
+    const win = accountWindow(page);
+    await win.locator('[data-act="mode"][data-set="restore"][data-mode="replace"]').click();
+    await win.locator('input[data-role="file"]').setInputFiles(zipPath);
+    await win.locator('.dw-file').waitFor({ state: 'visible', timeout: 10_000 });
+    await win.locator('[data-act="restore-go"]').click();
+    await answerWindowConfirm(page);
 }

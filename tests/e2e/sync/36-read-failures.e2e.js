@@ -5,12 +5,21 @@ import git from 'isomorphic-git';
 import { s3Fixture, backendRow, registryOf, reloadS3Page, createReadyWorldBook, selectReadyWorldBook } from '../_lib/sync-s3.js';
 import { addWorldEntry } from '../_lib/ui-worldinfo.js';
 import { restoreChatCorpus, editCorpusChat, COMPANIONS } from '../_lib/s3-chat.js';
-import { addS3Backend, waitForBackendSync, closeAllPopups, openLanSyncPanel, clickSyncNow, waitForSyncPopup, syncPopup, chooseConflictVersion, waitForStatusChecks, userRootOf } from '../_lib/sync.js';
+import { addS3Backend, waitForBackendSync, closeAllPopups, openLanSyncPanel, clickSyncNow, waitForSyncPopup, chooseConflictVersion, waitForStatusChecks, userRootOf, openAddBackend, conflictRow, noticeRow } from '../_lib/sync.js';
+import { accountWindow, windowToast } from '../_lib/account-window.js';
 
 const fixture = s3Fixture(test);
 test.describe.configure({ timeout: 360_000 });
 const checks = page => page.evaluate(() => Number(document.body.dataset.syncStatusChecks || 0));
 const status = page => page.evaluate(async () => (await (await fetch('/api/sync/v1/status')).json()));
+// The window reads the backend list again after each status check (30 s poll).
+const REFRESH_TIMEOUT = 60_000;
+const listError = page => accountWindow(page).locator('.dw-banner.error', { hasText: 'refresh sync backends' });
+const chosenChips = page => accountWindow(page).locator('[data-act="cat"][data-set="pairNew"].on').evaluateAll(chips => chips.map(chip => chip.dataset.id));
+/** Wait until a backend list read of `page` fails the way `mode` injects. */
+const failedListRead = (page, mode) => (mode === 'network'
+    ? page.waitForEvent('requestfailed', { predicate: request => new URL(request.url()).pathname === '/api/sync/v1/backends', timeout: REFRESH_TIMEOUT })
+    : page.waitForResponse(response => new URL(response.url()).pathname === '/api/sync/v1/backends' && response.status() === 503, { timeout: REFRESH_TIMEOUT }));
 
 function failedRead(mode) {
     return async route => {
@@ -26,20 +35,27 @@ test('backend refresh failures retain populated rows and selections through reco
     const { page } = device;
     await addS3Backend(page, await fixture.options());
     await waitForBackendSync(page, { label: 'Cloud' });
-    await page.locator('.lanSyncTabPairNew').click();
-    await page.locator('.lanSyncPairLabel').fill('Retained form label');
-    await page.locator('.lanSyncCategoryGrid input[value="worlds"]').check();
-    const chosen = await page.locator('.lanSyncCategoryGrid input:checked').evaluateAll(inputs => inputs.map(input => input.value));
     for (const mode of ['http', 'network']) {
+        // A half-filled pairing form stays as typed while refreshes fail.
+        await openAddBackend(page, 'pairNew');
+        await accountWindow(page).locator('[data-model="top.label"]').fill('Retained form label');
+        const worlds = accountWindow(page).locator('[data-act="cat"][data-set="pairNew"][data-id="worlds"]');
+        if (!await worlds.evaluate(chip => chip.classList.contains('on'))) await worlds.click();
+        await expect(worlds).toHaveClass(/\bon\b/);
+        const chosen = await chosenChips(page);
         const fail = failedRead(mode);
         await page.route('**/api/sync/v1/backends', fail);
         try {
-            await expect(page.locator('.lanSyncStatusBanner.error')).toContainText('Could not refresh sync backends', { timeout: 20_000 });
+            await failedListRead(page, mode);
+            await expect(accountWindow(page).locator('[data-model="top.label"]')).toHaveValue('Retained form label');
+            expect(await chosenChips(page)).toEqual(chosen);
+            // The list keeps the backends it loaded and says it could not refresh them.
+            await openLanSyncPanel(page);
+            await expect(listError(page)).toBeVisible({ timeout: REFRESH_TIMEOUT });
             await expect(backendRow(page)).toHaveCount(1);
-            await expect(page.locator('.lanSyncPairLabel')).toHaveValue('Retained form label');
-            expect(await page.locator('.lanSyncCategoryGrid input:checked').evaluateAll(inputs => inputs.map(input => input.value))).toEqual(chosen);
         } finally { await page.unroute('**/api/sync/v1/backends', fail); }
-        await expect(page.locator('.lanSyncStatusBanner.error')).not.toBeVisible({ timeout: 20_000 });
+        await expect(listError(page)).toHaveCount(0, { timeout: REFRESH_TIMEOUT });
+        await expect(backendRow(page)).toHaveCount(1);
     }
 });
 
@@ -52,15 +68,13 @@ for (const mode of ['http', 'network']) test(`failed categories from ${mode} rec
     const fail = failedRead(mode);
     await page.route('**/api/sync/v1/categories', fail);
     try {
-        if (await page.locator('#user-settings-button .drawer-content').evaluate(node => node.classList.contains('closedDrawer'))) await page.locator('#user-settings-button .drawer-toggle').click();
-        await page.locator('#account_button').click();
-        await page.locator('.userBackupButton').click();
-        await page.locator('.backupLanSyncOpenButton').click();
-        await expect(page.locator('.toast-error', { hasText: 'Could not load sync categories' })).toBeVisible();
+        await openLanSyncPanel(page);
+        await expect(accountWindow(page).locator('.dw-empty')).toContainText('Could not load sync categories');
     } finally { await page.unroute('**/api/sync/v1/categories', fail); }
     await closeAllPopups(page);
     await openLanSyncPanel(page);
-    expect(await page.locator('.lanSyncCategoryGrid input').count()).toBeGreaterThan(0);
+    await openAddBackend(page, 'pairNew');
+    expect(await accountWindow(page).locator('[data-act="cat"]').count()).toBeGreaterThan(0);
 });
 
 test('failed status reads keep the open conflict unknown rather than resolved and restore its selected choice after recovery', async ({ browser }) => {
@@ -81,23 +95,26 @@ test('failed status reads keep the open conflict unknown rather than resolved an
     await openLanSyncPanel(b.page); expect(await clickSyncNow(b.page, 'Cloud')).toBe('warning');
     await waitForSyncPopup(b.page);
     const rel = 'worlds/Read Failure Grove.json';
-    const row = () => syncPopup(b.page).locator(`.syncConflictRow[data-path=${JSON.stringify(rel)}]`);
+    const row = () => conflictRow(b.page, rel);
+    const current = () => row().locator('.dw-version[data-v="current"]');
+    const titleStatus = accountWindow(b.page).locator('[data-region="status"]');
     await chooseConflictVersion(b.page, rel, 'current');
     for (const mode of ['http', 'network']) {
         const fail = failedRead(mode);
         await b.page.route('**/api/sync/v1/status', fail);
         try {
             await waitForStatusChecks(b.page, await checks(b.page) + 1);
-            await expect(row().locator('.syncConflictUnknownNote')).toBeVisible();
-            await expect(row().locator('.syncConflictResolvedNote')).toHaveCount(0);
-            await expect(row().locator('input[value="current"]')).toBeChecked();
-            await expect(row().locator('input[value="current"]')).toBeDisabled();
-            await expect(syncPopup(b.page).locator('.syncConflictsError')).toContainText('Could not read sync status');
+            // Unknown: every version is disabled; nothing reports it resolved.
+            for (const version of await row().locator('.dw-version').all()) await expect(version).toBeDisabled();
+            await expect(windowToast(b.page, 'already handled on another device')).toHaveCount(0);
+            await expect(current()).toHaveClass(/\bon\b/);
+            await expect(current()).toBeDisabled();
+            await expect(titleStatus).toContainText('Can\'t read sync status');
         } finally { await b.page.unroute('**/api/sync/v1/status', fail); }
         await waitForStatusChecks(b.page, await checks(b.page) + 1);
-        await expect(row().locator('input[value="current"]')).toBeEnabled();
-        await expect(row().locator('input[value="current"]')).toBeChecked();
-        await expect(b.page.locator('.lanSyncStatusBanner')).not.toContainText('Could not read sync status');
+        await expect(current()).toBeEnabled();
+        await expect(current()).toHaveClass(/\bon\b/);
+        await expect(titleStatus).not.toContainText('Can\'t read sync status');
     }
 });
 
@@ -138,22 +155,24 @@ test('partial grouped notice dismissal retains an unknown row until the unreadab
     const { oid } = await git.readBlob({ fs, gitdir, oid: head, filepath: '.luker-sync/notices.json' });
     const file = path.join(gitdir, 'objects', oid.slice(0, 2), oid.slice(2));
     const original = fs.readFileSync(file);
-    const row = () => syncPopup(b.page).locator(`.syncNoticeRow[data-path=${JSON.stringify(notice.path)}]`);
+    const row = () => noticeRow(b.page, notice.path);
+    const dismiss = () => row().locator('[data-act="notice-x"]');
     fs.writeFileSync(file, 'unreadable grouped notice object');
     try {
         const response = b.page.waitForResponse(response => response.url().endsWith('/notices/dismiss'));
-        await row().locator('.syncNoticeDismissButton').click();
+        await dismiss().click();
         const result = await (await response).json();
         expect(result).toMatchObject({ ok: false, errors: { [broken]: expect.any(Object) }, results: [{ applied: false, committedBackends: notice.backends.filter(id => id !== broken) }] });
         await expect(row()).toHaveCount(1);
-        await expect(row().locator('.syncNoticeUnknownNote')).toBeVisible();
+        // Unknown until the unreadable side recovers: it cannot be dismissed.
+        await expect(dismiss()).toBeDisabled();
         expect((await status(b.page)).notices).toEqual([]);
         expect(Object.keys(registryOf(b.server).backends)).toHaveLength(2);
     } finally { fs.writeFileSync(file, original); }
     await waitForStatusChecks(b.page, await checks(b.page) + 1);
-    await expect(row().locator('.syncNoticeUnknownNote')).toHaveCount(0);
+    await expect(dismiss()).toBeEnabled();
     const response = b.page.waitForResponse(response => response.url().endsWith('/notices/dismiss'));
-    await row().locator('.syncNoticeDismissButton').click();
+    await dismiss().click();
     expect(await (await response).json()).toMatchObject({ ok: true, results: [{ applied: true, committedBackends: [broken] }] });
     await expect(row()).toHaveCount(0);
 });

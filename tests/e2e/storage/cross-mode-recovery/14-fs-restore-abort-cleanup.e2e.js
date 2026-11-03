@@ -4,9 +4,10 @@
 // (transport-level failure) must not leak the chunked-upload session: the
 // server only deletes the session in its own finally block, so a request
 // that dies before the server sees it would leave a multi-GB archive on
-// disk until the 24h TTL sweep. This test drives the real Backup Manager
-// UI on a real fs server, downloads the fabricated seed as a backup ZIP,
-// aborts ONLY the restore POST via page.route, asserts the failure toast,
+// disk until the 24h TTL sweep. This test drives the real Account window
+// Backup / Restore pages on a real fs server, downloads the fabricated seed
+// as a backup ZIP, aborts ONLY the restore POST via page.route, asserts the
+// failure message,
 // and then asserts `_uploads/restore-sessions` is empty.
 
 import { test, expect } from '@playwright/test';
@@ -19,6 +20,7 @@ import { startMockLLM } from '../../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../../_lib/fixtures.js';
 import { awaitMainUI } from '../../_lib/page.js';
 import { openBackupManagerViaUI } from './_lib/recovery-flow.js';
+import { accountWindow, answerWindowConfirm } from '../../_lib/account-window.js';
 
 test('restore failure drops the server-side upload session', async ({ page }) => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), 'xmode-fs-restore-abort-'));
@@ -47,14 +49,14 @@ test('restore failure drops the server-side upload session', async ({ page }) =>
 
         await awaitMainUI(page, server.baseURL);
 
-        // Open the Backup Manager and download the fabricated default-user
-        // corpus as a backup ZIP through the real UI; the popup stays open
+        // Open Account → Backup and download the fabricated default-user
+        // corpus as a backup ZIP through the real UI; the window stays open
         // for the restore below.
-        await openBackupManagerViaUI(page);
+        await openBackupManagerViaUI(page, 'backup');
         const backupZipPath = path.join(tempDir, 'backup.zip');
         const [download] = await Promise.all([
             page.waitForEvent('download', { timeout: 30_000 }),
-            page.locator('.backupDownloadButton').last().click(),
+            accountWindow(page).locator('[data-act="backup-go"]').click(),
         ]);
         await download.saveAs(backupZipPath);
         expect(statSync(backupZipPath).size).toBeGreaterThan(1024);
@@ -72,21 +74,18 @@ test('restore failure drops the server-side upload session', async ({ page }) =>
         await page.route(isRestorePostPath, abortRestorePost);
 
         try {
-            await page.locator('input[name="backupRestoreMode"][value="overwrite"]').last().click();
-            await page.locator('.backupRestoreFileInput').last().setInputFiles(backupZipPath);
+            await openBackupManagerViaUI(page, 'restore');
+            const win = accountWindow(page);
+            await win.locator('[data-act="mode"][data-set="restore"][data-mode="replace"]').click();
+            await win.locator('input[data-role="file"]').setInputFiles(backupZipPath);
+            await win.locator('.dw-file').waitFor({ state: 'visible', timeout: 10_000 });
 
-            const openPopups = page.locator('dialog.popup[open]');
-            const baseCount = await openPopups.count();
-
-            await page.locator('.backupRestoreButton').last().click();
-            await expect(openPopups).toHaveCount(baseCount + 1, { timeout: 15_000 });
-            const confirmOk = openPopups.last().locator('.popup-button-ok');
-            await expect(confirmOk).toBeVisible({ timeout: 10_000 });
-            await confirmOk.click();
+            await win.locator('[data-act="restore-go"]').click();
+            await answerWindowConfirm(page);
 
             // The client uploads + assembles the archive, then the aborted
             // restore POST rejects with a network error.
-            await expect(page.locator('.toast-error', { hasText: 'Failed to restore backup' }).last())
+            await expect(win.locator('.dw-banner.error', { hasText: 'Failed to restore backup' }).last())
                 .toBeVisible({ timeout: 60_000 });
             expect(sessionCreates.length).toBeGreaterThanOrEqual(1);
 

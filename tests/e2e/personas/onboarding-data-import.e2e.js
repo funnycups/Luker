@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { openPersonaPanel } from '../_lib/ui-persona-preset.js';
+import { accountWindow, openAccountTab } from '../_lib/account-window.js';
 
 const PERSONA_NAME = 'Mira';
 const PERSONA_DESCRIPTION = 'A cartographer charting the northern coast.';
@@ -92,11 +93,9 @@ test.beforeAll(async ({ browser }) => {
         expect(expectedSecrets.api_key_custom).toEqual(expect.arrayContaining([expect.objectContaining({ value: API_KEY })]));
 
         await page.locator('#API-status-top').click();
-        await page.locator('#user-settings-button .drawer-toggle').click();
-        await page.locator('#account_button').click();
-        await page.locator('dialog[open] .userBackupButton').click();
+        await openAccountTab(page, 'backup');
         const download = page.waitForEvent('download');
-        await page.locator('dialog[open] .backupDownloadButton').click();
+        await accountWindow(page).locator('[data-act="backup-go"]').click();
         await (await download).saveAs(backupPath);
     } finally {
         await page.close();

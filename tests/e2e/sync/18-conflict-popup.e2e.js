@@ -1,12 +1,13 @@
-// The sync popup: a file conflict shows on both devices and one choice
-// converges them, a conflict whose file changed later is stale, a conflict
-// the other device resolves while the popup is open is marked as resolved,
+// The Sync issues page of the Account window: a file conflict shows on
+// both devices and one choice converges them, a conflict whose file changed
+// later is stale, a conflict the other device resolves while the page is
+// open is no longer offered,
 // a choice the other device already resolved gets its own notice while the
 // others apply, and labels and paths from the other device render as text.
 //
 // Two real servers. World entries are added through the World Info UI;
 // the hostile-name test writes its world file straight to disk as spec 02
-// does. Device labels are configured through the Sync panel before pairing.
+// does. Device labels are configured through Device settings before pairing.
 
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
@@ -22,6 +23,7 @@ import {
     openLanSyncPanel, generatePairingLink, acceptPairingLink, clickSyncNow, setSyncSchedule, closeAllPopups,
     waitForBackgroundSync, waitForSyncPopup, waitForStatusChecks, syncPopup, listPopupConflicts, conflictChoiceShowing,
     chooseConflictVersion, applyConflictChoices, closeSyncPopup, readUserFile, userRootOf, backendIdOf, shadowMain, setSyncDeviceLabel,
+    conflictRow, accountWindow,
 } from '../_lib/sync.js';
 
 const GLADE = 'worlds/Glade.json';
@@ -71,14 +73,18 @@ async function historyOf(server, rel) {
     }
     return texts;
 }
-/** The preview text of the `choice` card of `rel`, once it loaded. */
+/** The preview text of the `choice` version of `rel`, once it loaded. */
 async function previewOf(page, rel, choice) {
-    const preview = syncPopup(page).locator(`.syncConflictRow[data-path=${JSON.stringify(rel)}] .syncConflictCard[data-choice="${choice}"] .syncConflictText`);
+    const preview = conflictRow(page, rel).locator(`.dw-version[data-v="${choice}"] .dw-preview:not(.is-empty)`);
     await expect(preview).toHaveCount(1, { timeout: 30_000 });
     return preview.textContent();
 }
 const statusChecks = page => page.evaluate(() => Number(document.body.dataset.syncStatusChecks || 0));
-const conflictRow = (page, rel) => syncPopup(page).locator(`.syncConflictRow[data-path=${JSON.stringify(rel)}]`);
+/** Version buttons of a conflict; the window disables them while its records cannot be read. */
+const versionsOf = (page, rel) => conflictRow(page, rel).locator('.dw-version');
+/** Toast the Account window shows after Apply. */
+const toastOf = (page, text) => accountWindow(page).locator('.dw-toast', { hasText: text });
+const ALREADY_HANDLED = /files were already handled on another device/;
 const pendingPaths = page => page.evaluate(async () => (await (await fetch('/api/sync/v1/status')).json()).conflicts.map(c => c.path));
 
 // Narrow corruption fixture: replace only the pending metadata object's bytes,
@@ -163,10 +169,10 @@ async function editAfterConflict(pageB) {
     await waitForSyncPopup(pageB);
 }
 
-test.describe('LAN Sync — conflict popup', () => {
+test.describe('LAN Sync — Sync issues page', () => {
     test.describe.configure({ timeout: 240_000 });
 
-    test('a file conflict opens the popup on both devices and one resolution converges', async ({ browser }, testInfo) => {
+    test('a file conflict opens the Sync issues page on both devices and one resolution converges', async ({ browser }, testInfo) => {
         await start(testInfo);
         seedWorld(A, GLADE);
         const { pageA, pageB } = await conflictOnB(browser);
@@ -184,7 +190,7 @@ test.describe('LAN Sync — conflict popup', () => {
         }
     });
 
-    test('a delayed pre-apply status cannot reopen a resolved popup', async ({ browser }, testInfo) => {
+    test('a delayed pre-apply status cannot bring back a resolved conflict', async ({ browser }, testInfo) => {
         await start(testInfo);
         seedWorld(A, GLADE);
         seedWorld(A, FERN);
@@ -223,12 +229,12 @@ test.describe('LAN Sync — conflict popup', () => {
         const restore = await corruptPending(B);
         try {
             await waitForStatusChecks(pageB, await statusChecks(pageB) + 1);
-            await expect(conflictRow(pageB, GLADE).locator('.syncConflictResolvedNote')).toHaveCount(0);
-            await expect(conflictRow(pageB, GLADE).locator('.syncConflictUnknownNote')).toBeVisible();
-            for (const radio of await conflictRow(pageB, GLADE).locator('input').all()) await expect(radio).toBeDisabled();
+            // Still listed, but unknown: none of its versions can be chosen.
+            await expect(conflictRow(pageB, GLADE)).toHaveCount(1);
+            for (const version of await versionsOf(pageB, GLADE).all()) await expect(version).toBeDisabled();
         } finally { restore(); }
         await waitForStatusChecks(pageB, await statusChecks(pageB) + 1);
-        await expect(conflictRow(pageB, GLADE).locator('.syncConflictUnknownNote')).toHaveCount(0);
+        for (const version of await versionsOf(pageB, GLADE).all()) await expect(version).toBeEnabled();
         await chooseConflictVersion(pageB, GLADE, 'current');
         expect(await applyConflictChoices(pageB)).toBe('success');
     });
@@ -249,9 +255,9 @@ test.describe('LAN Sync — conflict popup', () => {
         });
         try {
             expect(await applyConflictChoices(pageB)).toBe('error');
-            await expect(conflictRow(pageB, GLADE).locator('.syncConflictResolvedNote')).toHaveCount(0);
-            await expect(conflictRow(pageB, GLADE).locator('.syncConflictUnknownNote')).toBeVisible();
-            await expect(pageB.locator('.toast-success', { hasText: 'Choices applied.' })).toHaveCount(0);
+            await expect(conflictRow(pageB, GLADE)).toHaveCount(1);
+            for (const version of await versionsOf(pageB, GLADE).all()) await expect(version).toBeDisabled();
+            await expect(toastOf(pageB, 'Applied')).toHaveCount(0);
         } finally { restore?.(); }
     });
 
@@ -293,7 +299,7 @@ test.describe('LAN Sync — conflict popup', () => {
             applying = false;
             await expect(conflictRow(pageB, GLADE)).toHaveCount(0);
             await expect.poll(() => pendingPaths(pageA), { timeout: 60_000 }).toEqual([FERN]);
-            // Keep the original popup open. Edits use independent real browser tabs.
+            // Keep the original window open. Edits use independent real browser tabs.
             const editorB = await contexts[1].newPage();
             await awaitMainUI(editorB, B.baseURL);
             await closeAllPopups(editorB);
@@ -312,13 +318,13 @@ test.describe('LAN Sync — conflict popup', () => {
             releaseStatus();
             await waitForStatusChecks(pageB, before + releasedReads);
             await expect(conflictRow(pageB, GLADE)).toBeVisible();
-            await expect(conflictRow(pageB, GLADE).locator('.syncConflictPreview').first()).toContainText('fresh conflict');
+            await expect(conflictRow(pageB, GLADE).locator('.dw-preview').first()).toContainText('fresh conflict');
             await closeSyncPopup(pageB);
             releaseRemaining();
             await pageB.unroute('**/api/sync/v1/status', holdStatus);
             // Keep this module instance: a seen record must remain suppressed
             // during ordinary polling, then a genuinely unseen record reopens
-            // the popup with the still-pending same-path record included.
+            // the Sync issues page with the still-pending same-path record included.
             await waitForStatusChecks(pageB, await statusChecks(pageB) + 1);
             await expect(syncPopup(pageB)).toHaveCount(0);
             for (const [page, side] of [[pageA, 'A'], [editorB, 'B']]) {
@@ -356,7 +362,7 @@ test.describe('LAN Sync — conflict popup', () => {
         release('conflict-choices-after-read');
         expect(await queued).toBe('success');
         expect(holdsOnly(B, 'from A', 'from B')).toBe(true);
-        await expect(pageB.locator('.toast-info', { hasText: 'Some choices were already resolved on another device.' })).toBeVisible();
+        await expect(toastOf(pageB, ALREADY_HANDLED)).toBeVisible();
     });
 
     test('a live edit before Apply is retained until refreshed previews receive overwrite confirmation', async ({ browser }, testInfo) => {
@@ -395,9 +401,9 @@ test.describe('LAN Sync — conflict popup', () => {
             expect(fileText(B, GLADE)).toBe(live);
             allowStatus = true; releaseStatus();
             expect(await applying).toBe('error');
-            await expect(conflictRow(pageB, GLADE).locator('.syncConflictStale')).toBeVisible();
+            await expect(conflictRow(pageB, GLADE)).toHaveAttribute('data-stale', 'true');
             expect(await previewOf(pageB, GLADE, 'current')).toBe(live);
-            await expect(conflictRow(pageB, GLADE).locator('input:checked')).toHaveCount(0);
+            await expect(conflictRow(pageB, GLADE).locator('.dw-version.on')).toHaveCount(0);
             await chooseConflictVersion(pageB, GLADE, choice);
             expect(await applyConflictChoices(pageB)).toBe('confirm-cancelled');
             expect(fileText(B, GLADE)).toBe(live);
@@ -417,7 +423,7 @@ test.describe('LAN Sync — conflict popup', () => {
         const { pageB } = await conflictOnB(browser);
         await editAfterConflict(pageB);
         expect(await listPopupConflicts(pageB)).toEqual([{ path: GLADE, stale: true }]);
-        await expect(syncPopup(pageB).locator('.syncConflictCard[data-choice="current"] .syncConflictPreview')).toContainText('later B');
+        await expect(conflictRow(pageB, GLADE).locator('.dw-version[data-v="current"] .dw-preview')).toContainText('later B');
         await chooseConflictVersion(pageB, GLADE, 'current');
         expect(await applyConflictChoices(pageB)).toBe('success');
         expect(readUserFile(B, GLADE)).toContain('later B');
@@ -439,7 +445,7 @@ test.describe('LAN Sync — conflict popup', () => {
         expect((await historyOf(B, GLADE)).some(text => text.includes('later B'))).toBe(true);
     });
 
-    test('a conflict the other device resolves while the popup is open is marked as resolved', async ({ browser }, testInfo) => {
+    test('a conflict the other device resolves while the page is open is no longer offered', async ({ browser }, testInfo) => {
         await start(testInfo);
         seedWorld(A, GLADE);
         seedWorld(A, FERN);
@@ -449,12 +455,12 @@ test.describe('LAN Sync — conflict popup', () => {
         await waitForSyncPopup(pageA);
         await chooseConflictVersion(pageA, GLADE, await conflictChoiceShowing(pageA, GLADE, 'from A'));
         expect(await applyConflictChoices(pageA)).toBe('success');
-        // A's choice reaches B's sync history while B's popup is open.
+        // A's choice reaches B's sync history while B's Sync issues page is open.
         await expect.poll(() => pendingPaths(pageB), { timeout: 60_000 }).toEqual([FERN]);
         await waitForStatusChecks(pageB, await statusChecks(pageB) + 1);
-        await expect(conflictRow(pageB, GLADE).locator('.syncConflictResolvedNote')).toHaveText('Resolved on another device.');
-        for (const radio of await conflictRow(pageB, GLADE).locator('input[type="radio"]').all()) await expect(radio).toBeDisabled();
-        await expect(conflictRow(pageB, FERN).locator('.syncConflictResolvedNote')).toHaveCount(0);
+        // The window drops a conflict resolved elsewhere, so it can no longer be chosen.
+        await expect(conflictRow(pageB, GLADE)).toHaveCount(0);
+        await expect(conflictRow(pageB, FERN)).toHaveCount(1);
         await chooseConflictVersion(pageB, FERN, await conflictChoiceShowing(pageB, FERN, 'from B'));
         expect(await applyConflictChoices(pageB)).toBe('success');
         expect(await pendingPaths(pageB)).toEqual([]);
@@ -486,8 +492,9 @@ test.describe('LAN Sync — conflict popup', () => {
         expect(await pendingPaths(pageB)).toEqual([FERN]);
         expect(await statusChecks(pageB)).toBe(checks);
         expect(await applyConflictChoices(pageB)).toBe('success');
-        await expect(pageB.locator('.toast-info', { hasText: 'Some choices were already resolved on another device.' })).toBeVisible();
-        await expect(pageB.locator('.toast-success', { hasText: 'Choices applied.' })).toBeVisible();
+        await expect(toastOf(pageB, ALREADY_HANDLED)).toBeVisible();
+        // The other choice applied: nothing is left to choose.
+        await expect(conflictRow(pageB, FERN)).toHaveCount(0);
         expect(await pendingPaths(pageB)).toEqual([]);
         expect(holdsOnly(B, 'from A', 'from B')).toBe(true);
         expect(readUserFile(B, FERN)).toContain('from B');
@@ -513,29 +520,31 @@ test.describe('LAN Sync — conflict popup', () => {
         expect(await applied).toBe('error');
         expect(await listPopupConflicts(pageB)).toEqual([{ path: FERN, stale: true }]);
         expect(await previewOf(pageB, FERN, 'current')).toBe(outside);
-        await expect(conflictRow(pageB, FERN).locator('input:checked')).toHaveCount(0);
-        await expect(syncPopup(pageB).locator('.syncConflictsError')).toHaveText(`These choices could not be applied yet: ${FERN}`);
+        await expect(conflictRow(pageB, FERN).locator('.dw-version.on')).toHaveCount(0);
+        const failed = syncPopup(pageB).locator('.dw-banner.error', { hasText: 'These choices could not be applied' });
+        await expect(failed).toBeVisible();
+        await expect(failed.locator('code')).toHaveText([FERN]);
         expect(readUserFile(B, FERN)).toBe(outside);
         expect(JSON.parse(readUserFile(B, GLADE))).toEqual(JSON.parse(gladeTheirs));
         expect(await pendingPaths(pageB)).toEqual([FERN]);
     });
 
-    test('a conflict that arrives while a choice applies opens the popup after it', async ({ browser }, testInfo) => {
+    test('a conflict that arrives while a choice applies shows on the Sync issues page after it', async ({ browser }, testInfo) => {
         await startPausable(testInfo, 'local-edit-before-reconcile');
         seedWorld(A, GLADE);
         seedWorld(A, FERN);
         const { pageA, pageB } = await conflictOnB(browser, ['Glade']);
         expect(await listPopupConflicts(pageB)).toEqual([{ path: GLADE, stale: false }]);
-        // B's Sync now also gave A the conflict; A's popup is closed so A can edit.
+        // B's Sync now also gave A the conflict; A's window is closed so A can edit.
         await expect.poll(() => pendingPaths(pageA), { timeout: 60_000 }).toEqual([GLADE]);
         await reloadAndAwait(pageA, A.baseURL);
         await closeSyncPopup(pageA);
         await selectWorldBook(pageA, 'Fern Hollow');
         await addWorldEntry(pageA, { key: 'fern', content: 'from A: the ferns uncurl at dawn.' });
         await expect.poll(() => fileText(A, FERN), { timeout: 30_000 }).toContain('from A');
-        // B's popup covers its World Info panel, so B's edit comes from outside Luker.
+        // B's window covers its World Info panel, so B's edit comes from outside Luker.
         fs.writeFileSync(path.join(userRootOf(B), ...FERN.split('/')), JSON.stringify({ entries: {}, note: 'from B: the ferns stay curled.' }));
-        // B's popup checks the status every 30 s; start right after a check
+        // B's page checks the status every 30 s; start right after a check
         // so the new conflict reaches B before the next one shows it.
         await waitForStatusChecks(pageB, await statusChecks(pageB) + 1);
         const checks = await statusChecks(pageB);
@@ -593,11 +602,11 @@ test.describe('LAN Sync — conflict popup', () => {
         await waitForSyncPopup(pageA);
         for (const page of [pageA, pageB]) {
             expect(await listPopupConflicts(page)).toEqual([{ path: world, stale: false }]);
-            await expect(syncPopup(page).locator('.syncConflictPath')).toHaveText(world);
+            await expect(syncPopup(page).locator('.dw-conflict-head b')).toHaveText(world);
             const bCard = await conflictChoiceShowing(page, world, 'edited on B');
             const aCard = await conflictChoiceShowing(page, world, 'edited on A');
-            await expect(syncPopup(page).locator(`.syncConflictCard[data-choice="${bCard}"] .syncConflictCardTitle`)).toHaveText(new RegExp(`^Version from ${RegExp.escape(label)}`));
-            await expect(syncPopup(page).locator(`.syncConflictCard[data-choice="${aCard}"] .syncConflictCardTitle`)).toHaveText(new RegExp(`^Version from ${RegExp.escape(HOST_LABEL)}`));
+            await expect(conflictRow(page, world).locator(`.dw-version[data-v="${bCard}"] .dw-version-head`)).toHaveText(new RegExp(`^Version from ${RegExp.escape(label)}`));
+            await expect(conflictRow(page, world).locator(`.dw-version[data-v="${aCard}"] .dw-version-head`)).toHaveText(new RegExp(`^Version from ${RegExp.escape(HOST_LABEL)}`));
             await expect(syncPopup(page).locator('img')).toHaveCount(0);
             expect(await page.evaluate(() => window.__syncXss)).toBeUndefined();
         }

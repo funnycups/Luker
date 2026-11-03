@@ -6,7 +6,7 @@
 // popup entirely through real DOM gestures:
 //
 //   1. Open Storage Inspector via #user-settings-button → #account_button
-//      → .userStorageInspectorButton.
+//      → Account window → Storage → Server storage.
 //   2. Verify L1 shows the stacked bar + at least the categories that our
 //      fixture populates.
 //   3. Drill Chats → default_Seraphina → first chat file.
@@ -23,6 +23,7 @@ import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
+import { openStorageInspectorPage } from '../_lib/account-window.js';
 import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { seedFixtureUser } from './_helpers.js';
 
@@ -47,30 +48,9 @@ test.describe('Storage Inspector · self drill-down', () => {
         await awaitMainUI(page, server.baseURL);
 
         // Open user-settings drawer, click Account (#account_button) to
-        // launch the User Profile popup, then the Storage Inspector button
-        // inside it.
-        const drawerClosed = await page.locator('#user-settings-button .drawer-icon.closedIcon').count().then(n => n > 0);
-        if (drawerClosed) {
-            await page.locator('#user-settings-button .drawer-toggle').click();
-            await page.waitForFunction(() => {
-                const el = document.getElementById('user-settings-block');
-                return el && !el.classList.contains('closedDrawer');
-            }, { timeout: 5_000 });
-        }
-        await page.locator('#account_button').click();
-        // User Profile popup is a callGenericPopup TEXT modal — wait for
-        // its Storage Inspector button to be visible.
-        const profilePopup = page.locator('dialog.popup[open]').last();
-        await profilePopup.locator('.userStorageInspectorButton').click();
-
-        // The Inspector popup is a NEW callGenericPopup mounted on top of
-        // the profile popup. Grab the top-most open dialog and scope from
-        // there for the rest of the drill.
-        const inspector = page.locator('dialog.popup[open]').last().locator('.storageInspectorContainer');
-        await inspector.waitFor({ state: 'visible', timeout: 10_000 });
-
-        // Wait for the L1 fetch to settle — loading skeleton disappears.
-        await inspector.locator('.storageInspectorLoading.displayNone').waitFor({ state: 'attached', timeout: 15_000 });
+        // open the Account window, then its Storage page (server storage).
+        // Resolves once the L1 fetch settled (loading skeleton hidden).
+        const inspector = await openStorageInspectorPage(page, 'server');
 
         // L1 · stacked bar has multiple segments; the entry list has all
         // the categories the fixture populated (chats + worlds + images +

@@ -9,6 +9,8 @@
 // vendor cache names) so doc screenshots read as user data instead of
 // scaffolding.
 
+import { openStorageInspectorPage } from '../_lib/account-window.js';
+
 /**
  * Seed a plausible fixture set into the page's origin storage.
  *
@@ -76,27 +78,9 @@ export async function wipeBrowserFixture(page) {
 }
 
 /**
- * Open the Browser Storage Inspector popup via real UI gestures.
- * Returns the Inspector container locator.
+ * Open the Browser Storage Inspector (Account → Storage → Browser Storage)
+ * via real UI gestures. Returns the Inspector container locator.
  */
 export async function openBrowserStorageInspector(page) {
-    const drawerClosed = await page.locator('#user-settings-button .drawer-icon.closedIcon').count().then(n => n > 0);
-    if (drawerClosed) {
-        await page.locator('#user-settings-button .drawer-toggle').click();
-        await page.waitForFunction(() => {
-            const el = document.getElementById('user-settings-block');
-            return el && !el.classList.contains('closedDrawer');
-        }, { timeout: 5_000 });
-    }
-    await page.locator('#account_button').click();
-    const profilePopup = page.locator('dialog.popup[open]').last();
-    await profilePopup.locator('.userBrowserStorageInspectorButton').click();
-    // Scope by container class so a later confirm popup on top of the
-    // inspector doesn't shift `.last()` off the inspector. Use `.first()`
-    // — there is only ever one inspector container mounted per test but
-    // being explicit makes the locator stable across popup stacking.
-    const inspector = page.locator('dialog.popup[open] .storageInspectorContainer').first();
-    await inspector.waitFor({ state: 'visible', timeout: 10_000 });
-    await inspector.locator('.storageInspectorLoading.displayNone').waitFor({ state: 'attached', timeout: 15_000 });
-    return inspector;
+    return openStorageInspectorPage(page, 'browser');
 }

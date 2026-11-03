@@ -1,5 +1,6 @@
-// LAN Sync e2e helpers — open the panel, drive pair/sync/forget flows,
-// extract pairing URLs from the readonly text field.
+// Sync e2e helpers — drive the Sync pages of the Account window
+// (public/scripts/data-window.js): pair, sync, undo, remove, S3 storage,
+// device settings and the Sync issues page that replaced the sync popup.
 //
 // Per `feedback_e2e_real_user_flow`: every action is a real click on a
 // real DOM element. Two real `startServer` instances stand up two
@@ -7,13 +8,13 @@
 // the helper drives the UI on whichever one the caller's `page` is on.
 //
 // Outcome model: every sync action resolves to one of three terminal
-// states the UI exposes on the status banner:
+// states the window shows in the result banner of the Sync page:
 //   - `success`  — the sync finished and wrote the merged files to disk
-//   - `warning`  — the sync recorded conflicts; the sync popup opens
+//   - `warning`  — the sync recorded conflicts or kept files it could not
+//                  update; they wait on the Sync issues page
 //   - `error`    — peer unreachable / auth fail / etc.
 // Helpers return the actual outcome so the caller can branch instead of
-// guessing. The interim `info` banner (`Syncing…`) is not a terminal
-// state and helpers wait past it.
+// guessing.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,6 +23,9 @@ import git from 'isomorphic-git';
 
 import { matchGatedRoute } from '../../../src/sync/in-progress-gate.js';
 import { completeOnboarding } from './page.js';
+import { accountWindow, answerWindowConfirm, closeAccountWindow, formError, openAccountTab, pageHead, windowConfirm, windowToast } from './account-window.js';
+
+export { accountWindow, pageHead } from './account-window.js';
 
 /**
  * Real `/login` form login for multi-user specs. Selects the named user
@@ -75,250 +79,316 @@ export async function loginAs(page, baseURL, { handle, password }) {
 }
 
 /**
- * Assert the LAN Sync status banner shows the handle-mismatch error
- * with BOTH the expected handle (the user's own) and the got handle
- * (the peerId prefix from the link). The exact English text comes from
- * `lan-sync.js` via the `t` tagged template and contains both names in
- * order: "This pairing link is for ${got}, but you're logged in as ${expected}."
+ * Assert the pairing form shows the handle-mismatch error with BOTH the
+ * expected handle (the user's own) and the got handle (the peerId prefix
+ * from the link).
  *
  * Locale-neutral: we look for the literal substrings of both handles in
- * the rendered banner text, which survives translation as long as the
- * translator preserves the two `${0}` / `${1}` placeholders verbatim.
+ * the rendered error text, which survives translation as long as the
+ * translator preserves the placeholders verbatim.
  */
 export async function expectHandleMismatchToast(page, { expectedHandle, gotHandle }) {
-    const banner = page.locator('.lanSyncStatusBanner.error').first();
-    await banner.waitFor({ state: 'visible', timeout: 10_000 });
-    const text = (await banner.innerText()).trim();
-    expect(text, 'banner must contain the link handle').toContain(gotHandle);
-    expect(text, 'banner must contain the local handle').toContain(expectedHandle);
+    const error = formError(page);
+    await error.waitFor({ state: 'visible', timeout: 10_000 });
+    const text = (await error.innerText()).trim();
+    expect(text, 'error must contain the link handle').toContain(gotHandle);
+    expect(text, 'error must contain the local handle').toContain(expectedHandle);
 }
 
 /**
- * Open Settings → Account → Backup & Restore → LAN Sync.
- *
- * Multi-step popup navigation: User Settings drawer → Account button →
- * Backup & Restore button → LAN Sync button. Each of the inner popups is
- * a `callGenericPopup` modal, so the locators target the actively-visible
- * dialog body.
- *
- * Drawer toggle is idempotent across runs: if a previous step left the
- * User Settings drawer open (e.g. closeAdminPanel only dismisses the
- * popup, not the drawer behind it), a click would TOGGLE it shut. We
- * check the drawer's `closedDrawer` class first and only click when it's
- * actually closed.
+ * Open User Settings → Account and show the Sync page with the list of
+ * sync backends. Reuses the open Account window and goes back to the list
+ * from any page under Sync.
  */
 export async function openLanSyncPanel(page) {
-    const drawerContent = page.locator('#user-settings-button .drawer-content');
-    const isClosed = await drawerContent.evaluate((el) => el.classList.contains('closedDrawer'));
-    if (isClosed) {
-        await page.locator('#user-settings-button .drawer-toggle').click();
-    }
-    await page.locator('#account_button').click();
-    await page.locator('.userBackupButton').first().click();
-    await page.locator('.backupLanSyncOpenButton').click();
-    await page.locator('.userLanSync').waitFor({ state: 'visible', timeout: 10_000 });
+    const fresh = await accountWindow(page).count() === 0;
+    const loaded = fresh ? page.waitForResponse(r => new URL(r.url()).pathname === '/api/sync/v1/backends' && r.request().method() === 'GET', { timeout: 30_000 }).catch(() => null) : null;
+    await openAccountTab(page, 'sync');
+    await expect(pageHead(page)).toHaveAttribute('data-view', 'list');
+    await loaded;
+}
+
+/** The card of a sync backend on the Sync page, by its label. */
+export const backendCard = (page, label) => accountWindow(page).locator('.dw-card[data-backend]')
+    .filter({ has: page.locator('.dw-card-name', { hasText: label }) });
+
+/** Result banner of the last sync action on the Sync page. */
+export const syncFlash = page => accountWindow(page).locator('[data-flash]');
+
+/** Remove the result banner of an earlier action so the next one is not mistaken for it. */
+async function clearFlash(page) {
+    const close = syncFlash(page).locator('[data-act="flash-x"]');
+    if (await close.count() > 0) await close.first().click();
+    await expect(syncFlash(page)).toHaveCount(0);
 }
 
 /**
- * Resolve to one of: 'success' | 'warning' | 'error'. The interim 'info'
- * state (which renders during the in-flight fetch) is not terminal and
- * is waited past — without this, helpers would resolve the moment
- * `Syncing…` shows up and try to assert against an unfinished sync.
- *
- * Polled rather than waited-on because waitForFunction's expression
- * cannot read jQuery-mediated class manipulations until they've
- * propagated to the DOM, which `showStatusBanner` does synchronously
- * but inside an async fetch chain — polling is the simpler primitive.
+ * Wait for the result of a sync action: the result banner of the Sync
+ * page ('success' | 'warning' | 'error') or the error of the form the
+ * action was started from ('error').
  */
-async function waitForTerminalBannerState(page, timeoutMs = 30_000) {
+async function waitForSyncOutcome(page, timeoutMs = 30_000) {
     const state = await page.waitForFunction(() => {
-        const el = document.querySelector('.lanSyncStatusBanner');
-        if (!el || el.classList.contains('displayNone')) return null;
-        for (const kind of ['success', 'warning', 'error']) {
-            if (el.classList.contains(kind)) return kind;
-        }
-        return null;  // still 'info' or transitioning — keep polling
+        const win = document.querySelector('dialog.dw-layer[open] .dw-win');
+        if (!win) return null;
+        if (win.querySelector('.dw-err')) return 'error';
+        return win.querySelector('[data-flash]')?.dataset.flash || null;
     }, null, { timeout: timeoutMs });
     return /** @type {'success' | 'warning' | 'error'} */ (await state.jsonValue());
 }
 
-/** Tick exactly `wanted` in a category grid, one click per box like a user. */
-export async function selectCategories(grid, wanted) {
-    const boxes = grid.locator('input[name="lanSyncCategory"]');
-    for (const box of await boxes.all()) {
-        if (wanted.includes(await box.inputValue())) await box.check();
-        else await box.uncheck();
-    }
+/** Open the menu of a backend card and click one of its entries (`data-act`). */
+export async function clickBackendMenu(page, label, act) {
+    await openLanSyncPanel(page);
+    const card = backendCard(page, label);
+    await card.locator('[data-act="menu"]').click();
+    await card.locator(`.dw-menu [data-act="${act}"]`).click();
 }
 
 /**
+ * Select exactly `wanted` in a sync content picker, one click per chip
+ * like a user. `scope` is a locator holding the picker (the Account
+ * window); `set` narrows it to one picker (pairNew, pairExist, s3, lanEdit).
+ */
+export async function selectCategories(scope, wanted, set) {
+    const selector = `[data-act="cat"]${set ? `[data-set="${set}"]` : ''}`;
+    await scope.locator(selector).first().waitFor({ state: 'visible', timeout: 10_000 });
+    const ids = await scope.locator(selector).evaluateAll(chips => chips.map(chip => chip.dataset.id));
+    for (const id of ids) {
+        const chip = scope.locator(`${selector}[data-id="${id}"]`);
+        const on = await chip.evaluate(el => el.classList.contains('on'));
+        if (on === wanted.includes(id)) continue;
+        await chip.click();
+        if (wanted.includes(id)) await expect(chip).toHaveClass(/\bon\b/);
+        else await expect(chip).not.toHaveClass(/\bon\b/);
+    }
+}
+
+/** Open Sync → Add → one of the add options (pairNew, pairExist, s3). */
+export async function openAddBackend(page, view) {
+    await openLanSyncPanel(page);
+    await accountWindow(page).locator('[data-act="push"][data-view="add"]').first().click();
+    await accountWindow(page).locator(`.dw-option[data-view="${view}"]`).click();
+    await expect(pageHead(page)).toHaveAttribute('data-view', view);
+}
+
+/** The readonly pairing link field shown after a link is generated. */
+export const pairingLinkField = page => accountWindow(page).locator('.dw-linkbox input[readonly]');
+
+/**
  * Generate a pairing link on `page` (which is on Device A). Returns the
- * `luker-sync://...` URL. `label` is what A will call B in its own peers
- * list once B accepts.
+ * `luker-sync://...` URL. `label` is what A will call B in its own sync
+ * list once B accepts. The window stays on the generated link.
  */
 export async function generatePairingLink(page, { label, categories }) {
-    await page.locator('.lanSyncTabPairNew').click();
-    await page.locator('.lanSyncPairLabel').fill(label);
-    await selectCategories(page.locator('.lanSyncCategoryGrid'), categories);
-    await page.locator('.lanSyncGenerateLinkButton').click();
-    await page.locator('.lanSyncPairNewResult').waitFor({ state: 'visible', timeout: 10_000 });
-    const link = await page.locator('.lanSyncGeneratedLink').inputValue();
+    await openAddBackend(page, 'pairNew');
+    await accountWindow(page).locator('[data-model="top.label"]').fill(label);
+    await selectCategories(accountWindow(page), categories, 'pairNew');
+    await accountWindow(page).locator('[data-act="pair-gen"]').click();
+    await pairingLinkField(page).waitFor({ state: 'visible', timeout: 10_000 });
+    const link = await pairingLinkField(page).inputValue();
     expect(link).toMatch(/^luker-sync:/);
     return link;
 }
 
 /**
- * Paste a pairing link into B's "Pair with existing device" tab and click
- * Pair and sync. Returns the terminal banner state ('success' | 'warning'
- * | 'error') so the caller can branch: 'warning' means conflicts are
- * waiting in the sync popup; 'success' means the sync landed cleanly.
+ * Fill the "Connect to another device" form with a pairing link without
+ * submitting it. Pasting the link fills the address, device ID, name and
+ * sync content; `localLabel` and `peerAuth` are typed into the manual
+ * section afterwards.
+ */
+export async function fillPairingForm(page, link, { categories, localLabel, peerAuth = null } = {}) {
+    await openAddBackend(page, 'pairExist');
+    const win = accountWindow(page);
+    await win.locator('[data-model="top.form.link"]').fill(link);
+    if (categories) await selectCategories(win, categories, 'pairExist');
+    if (localLabel || peerAuth?.username || peerAuth?.password) {
+        const more = win.locator('details:has(summary.dw-more)');
+        if (!await more.evaluate(el => el.open)) await more.locator('summary.dw-more').click();
+        if (localLabel) await win.locator('[data-model="top.form.label"]').fill(localLabel);
+        if (peerAuth?.username) await win.locator('[data-model="top.form.user"]').fill(peerAuth.username);
+        if (peerAuth?.password) await win.locator('[data-model="top.form.pass"]').fill(peerAuth.password);
+    }
+}
+
+/**
+ * Paste a pairing link into B's "Connect to another device" form and click
+ * Pair and sync. Returns 'success' | 'warning' | 'error' so the caller can
+ * branch: 'warning' means the first sync left conflicts or files it could
+ * not update (they wait on the Sync issues page); 'error' means the pairing
+ * or its first sync failed.
  *
- * The URL-paste handler in `lan-sync.js` is bound to `'input'`, which
- * `.fill` already fires on Playwright (`page.fill` triggers input AND
- * change). The explicit `dispatchEvent('input')` is a belt-and-suspenders
- * for browser engines where fill semantics are inconsistent.
+ * `localLabel` overrides the label taken from the link so the test can call
+ * the OTHER device whatever makes sense locally.
  *
- * `localLabel` overrides the auto-populated label so the test can call
- * the OTHER device whatever makes sense locally (typically the opposite
- * of what the URL contained, since the URL embeds the GENERATOR's idea
- * of what the receiver is called).
- *
- * `peerAuth` (optional `{ username, password }`) is typed into the basic-
- * auth fields on the Accept form for specs that pair across multi-user
- * Luker installs where /api routes are basic-auth-gated. Pass `null` (or
- * leave the field off) when the peer is a single-user / no-auth install.
+ * `peerAuth` (optional `{ username, password }`) is typed into the login
+ * fields of the form for specs that pair across multi-user Luker installs
+ * where /api routes are basic-auth-gated.
  */
 export async function acceptPairingLink(page, link, { categories, localLabel, peerAuth = null }) {
-    await page.locator('.lanSyncTabPairExisting').click();
-    await page.locator('.lanSyncAcceptLink').fill(link);
-    await page.locator('.lanSyncAcceptLink').dispatchEvent('input');
-    if (localLabel) {
-        await page.locator('.lanSyncAcceptLabel').fill(localLabel);
-    }
-    if (peerAuth?.username) {
-        await page.locator('.lanSyncAcceptUsername').fill(peerAuth.username);
-    }
-    if (peerAuth?.password) {
-        await page.locator('.lanSyncAcceptPassword').fill(peerAuth.password);
-    }
-    await selectCategories(page.locator('.lanSyncAcceptCategoryGrid'), categories);
-    await page.locator('.lanSyncAcceptButton').click();
-    return waitForTerminalBannerState(page);
+    await fillPairingForm(page, link, { categories, localLabel, peerAuth });
+    await accountWindow(page).locator('[data-act="pair-accept"]').click();
+    const outcome = await waitForSyncOutcome(page);
+    // A warning after pairing means it was saved but the first sync failed.
+    if (outcome !== 'success') return 'error';
+    const attention = await page.evaluate(async () => {
+        const status = await (await fetch('/api/sync/v1/status', { credentials: 'same-origin' })).json();
+        return (status.conflicts?.length ?? 0) > 0
+            || Object.values(status.backends ?? {}).some(backend => backend.lastSync?.stalled?.length);
+    });
+    return attention ? 'warning' : 'success';
 }
 
 /**
- * Click "Sync now" against the named peer in the My devices list.
- * Returns the terminal banner state — same shape as `acceptPairingLink`.
+ * Click "Sync now" on the card of the named backend. Returns the result
+ * banner state: 'success', 'warning' (conflicts or files not updated) or
+ * 'error'.
  */
 export async function clickSyncNow(page, peerLabel, timeoutMs = 30_000) {
-    await page.locator('.lanSyncTabPeers').click();
-    const row = page.locator('.lanSyncPeerRow', { hasText: peerLabel });
-    await row.locator('.lanSyncPeerSyncButton').click();
-    return waitForTerminalBannerState(page, timeoutMs);
+    await openLanSyncPanel(page);
+    await clearFlash(page);
+    await backendCard(page, peerLabel).locator('[data-act="sync-now"]').click();
+    return waitForSyncOutcome(page, timeoutMs);
 }
 
 /**
- * Click "Undo last sync" against the named peer and confirm the popup.
- * Returns the terminal banner state.
+ * Click "Undo last sync" in the menu of the named backend and confirm.
+ * Returns the result banner state.
  */
 export async function clickUndoLastSync(page, peerLabel) {
-    await page.locator('.lanSyncTabPeers').click();
-    const row = page.locator('.lanSyncPeerRow', { hasText: peerLabel });
-    await row.locator('.lanSyncPeerUndoButton').click();
-    // The confirm popup is a sibling `callGenericPopup`; its OK button has
-    // the standard `.popup-button-ok` class.
-    await page.locator('.popup-button-ok').last().click();
-    return waitForTerminalBannerState(page);
+    await openLanSyncPanel(page);
+    await clearFlash(page);
+    await clickBackendMenu(page, peerLabel, 'undo');
+    await answerWindowConfirm(page);
+    return waitForSyncOutcome(page);
 }
 
 /**
- * Click "Forget" against the named peer, confirm the popup, and wait for
- * the row to disappear from the My devices list.
+ * Click "Remove" in the menu of the named backend, confirm, and wait for
+ * its card to disappear from the Sync page.
  */
 export async function clickForgetPeer(page, peerLabel) {
-    await page.locator('.lanSyncTabPeers').click();
-    const row = page.locator('.lanSyncPeerRow', { hasText: peerLabel });
-    await row.locator('.lanSyncPeerForgetButton').click();
-    await page.locator('.popup-button-ok').last().click();
-    await row.waitFor({ state: 'detached', timeout: 10_000 });
+    await clickBackendMenu(page, peerLabel, 'remove');
+    await answerWindowConfirm(page);
+    await expect(backendCard(page, peerLabel)).toHaveCount(0, { timeout: 10_000 });
 }
 
 /**
- * Read the list of peers currently displayed in the My devices tab.
- * Returns an array of { label } objects — extend as more columns get
- * exposed.
+ * Read the backends listed on the Sync page. Returns an array of
+ * { label } objects — extend as more columns get exposed.
  */
 export async function listPeers(page) {
-    await page.locator('.lanSyncTabPeers').click();
-    return page.evaluate(() => {
-        const out = [];
-        document.querySelectorAll('.lanSyncPeerRow').forEach((row) => {
-            const label = row.querySelector('.lanSyncPeerLabel')?.textContent?.trim() || '';
-            if (label) out.push({ label });
-        });
-        return out;
-    });
+    await openLanSyncPanel(page);
+    return accountWindow(page).locator('.dw-card[data-backend] .dw-card-name')
+        .evaluateAll(names => names.map(name => ({ label: name.textContent.trim() })).filter(peer => peer.label));
 }
 
-/** Close every open popup, newest first (panel stacks: Account → Backup → LAN Sync). */
+/**
+ * Close the Account window and every Luker popup, newest first. The window
+ * can open again by itself when a status check finds sync issues, so this
+ * repeats until nothing is open.
+ */
 export async function closeAllPopups(page) {
-    const open = page.locator('dialog.popup[open]');
-    while (await open.count() > 0) {
-        const id = await open.last().getAttribute('data-id');
-        await page.keyboard.press('Escape');
-        // Status can legitimately open a new popup as the previous one
-        // closes. Assert removal of the actual dialog, not a racing count.
-        await expect(page.locator(`dialog.popup[data-id="${id}"]`), 'Escape must close the newest popup').toHaveCount(0, { timeout: 5_000 });
+    const popups = page.locator('dialog.popup[open]');
+    for (let round = 0; round < 20; round++) {
+        if (await popups.count() > 0) {
+            const id = await popups.last().getAttribute('data-id');
+            await page.keyboard.press('Escape');
+            // Assert removal of the actual dialog, not a racing count.
+            await expect(page.locator(`dialog.popup[data-id="${id}"]`), 'Escape must close the newest popup').toHaveCount(0, { timeout: 5_000 });
+            continue;
+        }
+        if (await accountWindow(page).count() > 0) {
+            await closeAccountWindow(page);
+            continue;
+        }
+        return;
     }
+    throw new Error('closeAllPopups: popups kept opening');
 }
 
+/** Open Account → Device settings. */
+async function openDeviceSettings(page) {
+    await openAccountTab(page, 'settings');
+    await expect(pageHead(page)).toHaveAttribute('data-view', 'settings');
+}
+
+/** Save the sync schedule on Account → Device settings. */
 export async function setSyncSchedule(page, { idleSeconds, pollSeconds }) {
-    await page.locator('.lanSyncTabPeers').click();
-    await page.locator('.lanSyncIdleSeconds').fill(String(idleSeconds));
-    await page.locator('.lanSyncPollSeconds').fill(String(pollSeconds));
-    await page.locator('.lanSyncSaveScheduleButton').click();
-    await page.locator('.toast-success', { hasText: 'Schedule saved.' }).first().waitFor({ state: 'visible', timeout: 10_000 });
+    await openDeviceSettings(page);
+    const win = accountWindow(page);
+    await win.locator('[data-model="schedule.idle"]').fill(String(idleSeconds));
+    await win.locator('[data-model="schedule.poll"]').fill(String(pollSeconds));
+    const saved = page.waitForResponse(r => r.url().endsWith('/api/sync/v1/schedule') && r.request().method() === 'POST');
+    await win.locator('[data-act="save-local"]').click();
+    expect((await saved).ok()).toBe(true);
+    await windowToast(page).first().waitFor({ state: 'visible', timeout: 10_000 });
 }
 
+/** Save the device name on Account → Device settings. */
 export async function setSyncDeviceLabel(page, label) {
-    await page.locator('.lanSyncTabPeers').click();
-    await page.locator('.syncDeviceLabel').fill(label);
+    await openDeviceSettings(page);
+    await accountWindow(page).locator('[data-model="device.label"]').fill(label);
     const saved = page.waitForResponse(r => r.url().endsWith('/api/sync/v1/device') && r.request().method() === 'POST');
-    await page.locator('.syncSaveDeviceLabelButton').click();
+    await accountWindow(page).locator('[data-act="save-local"]').click();
     expect((await saved).ok()).toBe(true);
 }
 
+/** Sync → Add → Use S3 storage, fill the form and save it. */
 export async function addS3Backend(page, options) {
-    await page.locator('.syncAddS3Button').click();
-    await fillS3Form(page, options);
+    await openAddBackend(page, 's3');
+    // The old form started with path-style requests on; keep that default.
+    await fillS3Form(page, { forcePathStyle: true, ...options });
     await saveS3Form(page);
 }
 
+const S3_FIELDS = { endpoint: 'endpoint', region: 'region', bucket: 'bucket', prefix: 'prefix', accessKeyId: 'accessKey', secretAccessKey: 'secretKey', passphrase: 'passphrase', label: 'label' };
+
+/** Fill the S3 storage form (add or edit) shown in the Account window. */
 export async function fillS3Form(page, options) {
-    for (const field of ['endpoint', 'bucket', 'prefix', 'accessKeyId', 'secretAccessKey', 'passphrase', 'label']) {
-        if (options[field] !== undefined) await page.locator(`.syncS3${field[0].toUpperCase()}${field.slice(1)}`).fill(options[field]);
+    const win = accountWindow(page);
+    for (const [option, model] of Object.entries(S3_FIELDS)) {
+        if (options[option] !== undefined) await win.locator(`[data-model="top.form.${model}"]`).fill(options[option]);
     }
-    if (options.region !== undefined) await page.locator('.syncS3Region').selectOption(options.region);
-    if (options.forcePathStyle !== undefined) await page.locator('.syncS3ForcePathStyle').setChecked(options.forcePathStyle);
-    if (options.categories) await selectCategories(page.locator('.syncS3CategoryGrid'), options.categories);
+    if (options.forcePathStyle !== undefined) {
+        const toggle = win.locator('[data-act="toggle-path"]');
+        const on = await toggle.evaluate(el => el.classList.contains('on'));
+        if (on !== options.forcePathStyle) await toggle.click();
+    }
+    if (options.categories) await selectCategories(win, options.categories, 's3');
 }
 
-async function saveS3Form(page) {
-    await page.locator('.syncS3SaveButton').click();
-    await expect(page.locator('.userSyncS3')).toHaveCount(0, { timeout: 60_000 });
+/** Save the S3 form and wait for the window to return to the Sync list. */
+export async function saveS3Form(page) {
+    await accountWindow(page).locator('[data-act="s3-save"]').click();
+    await expect(pageHead(page)).toHaveAttribute('data-view', 'list', { timeout: 60_000 });
 }
 
+/**
+ * Edit a backend from its card menu: the S3 form for S3 storage, the name
+ * and sync content for a LAN device.
+ */
 export async function editSyncBackend(page, label, patch) {
-    await page.locator('.lanSyncTabPeers').click();
-    await page.locator('.lanSyncPeerRow').filter({ has: page.locator('.lanSyncPeerLabel', { hasText: label }) }).locator('.syncBackendEditButton').click();
-    await fillS3Form(page, patch);
-    await saveS3Form(page);
+    await clickBackendMenu(page, label, 'edit');
+    await expect(pageHead(page)).toHaveAttribute('data-view', /^(s3|lanEdit)$/);
+    if (await pageHead(page).getAttribute('data-view') === 's3') {
+        await fillS3Form(page, patch);
+        await saveS3Form(page);
+        return;
+    }
+    const win = accountWindow(page);
+    if (patch.label !== undefined) await win.locator('[data-model="top.label"]').fill(patch.label);
+    if (patch.categories) await selectCategories(win, patch.categories, 'lanEdit');
+    await win.locator('[data-act="lan-save"]').click();
+    await expect(pageHead(page)).toHaveAttribute('data-view', 'list', { timeout: 60_000 });
 }
 
+/** Unlock an S3 backend from its card menu with the passphrase. */
 export async function unlockS3Backend(page, label, phrase) {
-    await page.locator('.lanSyncPeerRow', { hasText: label }).locator('.syncBackendUnlockButton').click();
-    await page.locator('.syncS3Passphrase').fill(phrase);
-    await saveS3Form(page);
+    await clickBackendMenu(page, label, 'unlock');
+    await accountWindow(page).locator('[data-model="top.form.pass"]').fill(phrase);
+    await accountWindow(page).locator('[data-act="unlock-save"]').click();
+    await expect(pageHead(page)).toHaveAttribute('data-view', 'list', { timeout: 60_000 });
 }
 
 export async function waitForBackendSync(page, { label, since = 0 }) {
@@ -347,101 +417,134 @@ export async function waitForBackgroundSync(page, { since = 0 } = {}) {
     }, since), { timeout: 60_000 }).toBe('settled');
 }
 
-export const syncPopup = page => page.locator('.syncConflictsPopup');
+/**
+ * The Sync issues page of the Account window (conflicts, notices and files
+ * not updated). It replaced the sync popup.
+ */
+export const syncPopup = page => accountWindow(page).locator('.dw-body', { has: page.locator('.dw-pagehead[data-view="conflicts"]') });
 
-export async function waitForSyncPopup(page, timeout = 60_000) {
+/**
+ * Wait until the Sync issues page shows by itself: on page load and after a
+ * status check that found new issues while the window was closed, the
+ * Account window opens on it.
+ */
+export async function waitForSyncIssuesPage(page, timeout = 60_000) {
     await syncPopup(page).waitFor({ state: 'visible', timeout });
     return syncPopup(page);
 }
 
-/** Wait until the page finished `count` status checks (a DOM counter the popup module keeps). */
+/**
+ * Wait for the Sync issues page. When the Account window is already open on
+ * another page, an open window lists new issues without moving the user, so
+ * this clicks the Resolve button (or the title status) the window shows for
+ * them, like a user would.
+ */
+export async function waitForSyncPopup(page, timeout = 60_000) {
+    await expect.poll(async () => {
+        if (await syncPopup(page).count() > 0) return true;
+        const resolve = accountWindow(page).locator('[data-act="conflicts"]');
+        if (await resolve.count() > 0) await resolve.first().click({ timeout: 2_000 }).catch(() => {});
+        return syncPopup(page).count().then(n => n > 0);
+    }, { timeout, intervals: [250, 500, 1000] }).toBe(true);
+    return syncPopup(page);
+}
+
+/** Wait until the page finished `count` status checks (a DOM counter the status module keeps). */
 export async function waitForStatusChecks(page, count = 1) {
     await page.waitForFunction(n => Number(document.body.dataset.syncStatusChecks || 0) >= n, count, { timeout: 60_000 });
 }
 
-const rowOf = (page, rel) => syncPopup(page).locator(`.syncConflictRow[data-path=${JSON.stringify(rel)}]`);
+/** The conflict of a file on the Sync issues page. */
+export const conflictRow = (page, rel) => syncPopup(page).locator(`.dw-conflict[data-path=${JSON.stringify(rel)}]`);
+
+/** The notice of a chat on the Sync issues page. */
+export const noticeRow = (page, rel) => syncPopup(page).locator(`.dw-notice[data-path=${JSON.stringify(rel)}]`);
 
 /**
  * The merge role (`ours` or `theirs`) of the device version whose preview
- * shows `text`. Both e2e servers share a host name, so the card titles do
- * not tell the devices apart.
+ * shows `text`. Both e2e servers share a host name, so the version titles
+ * do not tell the devices apart.
  */
 export async function conflictChoiceShowing(page, rel, text) {
-    const card = rowOf(page, rel).locator('.syncConflictCard:not([data-choice="current"])', { has: page.locator('.syncConflictPreview', { hasText: text }) });
+    const card = conflictRow(page, rel).locator('.dw-version:not([data-v="current"])', { has: page.locator('.dw-preview', { hasText: text }) });
     await expect(card).toHaveCount(1, { timeout: 30_000 });
-    return card.getAttribute('data-choice');
+    return card.getAttribute('data-v');
 }
 
 export async function chooseConflictVersion(page, rel, choice) {
-    await rowOf(page, rel).locator(`input[type="radio"][value="${choice}"]`).check();
+    const version = conflictRow(page, rel).locator(`.dw-version[data-v="${choice}"]`);
+    await version.click();
+    await expect(version).toHaveClass(/\bon\b/);
 }
 
 /**
- * Click Apply and answer the Overwrite confirm the popup opens for each
- * picked stale row, one after another. Resolves to 'success' (popup
- * closed), 'error' (popup shows an error) or 'confirm-cancelled'.
+ * Click Apply choices and answer the Overwrite confirm the window asks for
+ * each picked stale file, one after another. Resolves to 'success' (the
+ * choices were applied), 'error' (a choice failed or the apply request
+ * failed) or 'confirm-cancelled'.
  */
 export async function applyConflictChoices(page, { confirmOverwrite = false } = {}) {
-    // A new popup can open as soon as this one closes, so wait on this one by id.
-    const dialogId = await page.locator('dialog.popup[open]', { has: syncPopup(page) }).getAttribute('data-id');
-    await syncPopup(page).locator('.syncConflictsApplyButton').click();
-    const confirm = page.locator('dialog.popup[open]', { hasText: 'Overwrite the current version', hasNot: syncPopup(page) });
-    const settle = () => Promise.race([
-        page.locator(`dialog.popup[data-id="${dialogId}"]`).waitFor({ state: 'detached', timeout: 60_000 }).then(() => 'success'),
-        syncPopup(page).locator('.syncConflictsError').waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'error'),
-    ]);
-    const next = () => Promise.race([settle(), confirm.waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'confirm')]);
+    await syncPopup(page).locator('[data-act="apply"]').click();
+    const next = () => page.waitForFunction(() => {
+        const win = document.querySelector('dialog.dw-layer[open] .dw-win');
+        if (!win) return 'done';
+        if (win.querySelector('.dw-modal')) return 'confirm';
+        const onIssues = win.querySelector('.dw-pagehead[data-view="conflicts"]');
+        if (onIssues && win.querySelector('[data-act="apply"].busy')) return null;
+        return 'done';
+    }, null, { timeout: 60_000 }).then(handle => handle.jsonValue());
     let result = await next();
     while (result === 'confirm') {
+        await expect(windowConfirm(page)).toContainText('Overwrite');
         if (!confirmOverwrite) {
-            await confirm.locator('.popup-button-cancel').click();
+            await answerWindowConfirm(page, { confirm: false });
             return 'confirm-cancelled';
         }
-        // The next confirm opens as soon as this one is removed, so wait on this one by id.
-        const id = await confirm.getAttribute('data-id');
-        await confirm.locator('.popup-button-ok').click();
-        await page.locator(`dialog.popup[data-id="${id}"]`).waitFor({ state: 'detached', timeout: 10_000 });
+        await answerWindowConfirm(page);
         result = await next();
     }
-    return result;
+    const failed = await accountWindow(page).locator('.dw-conflict.is-failed, .dw-toast.error').count();
+    return failed > 0 ? 'error' : 'success';
 }
 
 /**
- * Pick `side` for every conflict in the popup and apply. `ours` and
- * `theirs` are the merge roles the cards are titled with by device label;
- * which device holds which role is decided by the merge, not by which
- * device runs the page.
+ * Pick `side` for every conflict on the Sync issues page and apply. `ours`
+ * and `theirs` are the merge roles the versions are titled with by device
+ * label; which device holds which role is decided by the merge, not by
+ * which device runs the page.
  */
 export async function resolveAllConflictsAs(page, side) {
     await waitForSyncPopup(page);
-    const paths = await syncPopup(page).locator('.syncConflictRow').evaluateAll(rows => rows.map(r => r.dataset.path));
-    expect(paths.length, 'the sync popup must list at least one conflict').toBeGreaterThan(0);
+    const paths = await syncPopup(page).locator('.dw-conflict').evaluateAll(rows => rows.map(r => r.dataset.path));
+    expect(paths.length, 'the Sync issues page must list at least one conflict').toBeGreaterThan(0);
     for (const rel of paths) await chooseConflictVersion(page, rel, side);
     return applyConflictChoices(page, { confirmOverwrite: true });
 }
 
 export async function listPopupConflicts(page) {
-    return syncPopup(page).locator('.syncConflictRow').evaluateAll(rows => rows.map(r => ({ path: r.dataset.path, stale: !!r.querySelector('.syncConflictStale') })));
+    return syncPopup(page).locator('.dw-conflict').evaluateAll(rows => rows.map(r => ({ path: r.dataset.path, stale: r.dataset.stale === 'true' })));
 }
 
 export async function listPopupNotices(page) {
-    return syncPopup(page).locator('.syncNoticeRow').evaluateAll(rows => rows.map(r => ({ path: r.dataset.path, text: r.querySelector('.syncNoticeText')?.textContent ?? '' })));
+    return syncPopup(page).locator('.dw-notice').evaluateAll(rows => rows.map(r => ({ path: r.dataset.path, text: r.querySelector('small')?.textContent ?? '' })));
 }
 
+/** Click the open button of a chat notice; the window closes and the chat opens. */
 export async function openBranchFromNotice(page, rel, branchName) {
-    await syncPopup(page).locator(`.syncNoticeRow[data-path=${JSON.stringify(rel)}] .syncNoticeOpenButton`).click();
+    await noticeRow(page, rel).locator('[data-act="notice-open"]').click();
     await page.waitForFunction(name => window.Luker.getContext().getCurrentChatId() === name, branchName, { timeout: 30_000 });
 }
 
 export async function dismissNotice(page, rel) {
-    const row = syncPopup(page).locator(`.syncNoticeRow[data-path=${JSON.stringify(rel)}]`);
-    await row.locator('.syncNoticeDismissButton').click();
+    const row = noticeRow(page, rel);
+    await row.locator('[data-act="notice-x"]').click();
     await row.waitFor({ state: 'detached', timeout: 30_000 });
 }
 
+/** Close the Account window that shows the Sync issues page. */
 export async function closeSyncPopup(page) {
-    await page.locator('dialog.popup[open]', { has: syncPopup(page) }).locator('.popup-button-ok').click();
-    await syncPopup(page).waitFor({ state: 'detached', timeout: 10_000 });
+    await syncPopup(page).waitFor({ state: 'visible', timeout: 10_000 });
+    await closeAccountWindow(page);
 }
 
 /** Open a chat of the selected character by file name through Manage chat files. */

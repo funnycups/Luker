@@ -7,6 +7,7 @@ import { expect } from '@playwright/test';
 import { write as writeCardToPng } from '../../../src/character-card-parser.js';
 import { awaitS3Page, reloadS3Page } from './sync-s3.js';
 import { closeAllPopups, openChatByName, waitForStatusChecks, userRootOf } from './sync.js';
+import { accountWindow, answerWindowConfirm, openAccountTab } from './account-window.js';
 import { registryOf } from './sync-s3.js';
 import { readCommitFiles, readBlobBytes } from '../../../src/sync/pipeline/git-tree.js';
 import { normalizeLog, computeTargetState, buildSwipeMapFromChat } from '../../../public/scripts/floor-state/core.js';
@@ -65,11 +66,15 @@ export async function restoreChatCorpus(device, testInfo, { companions = COMPANI
     await zip.finalize(); await completed;
     await closeAllPopups(device.page);
     const page = device.page;
-    if (await page.locator('#user-settings-button .drawer-content').evaluate(el => el.classList.contains('closedDrawer'))) await page.locator('#user-settings-button .drawer-toggle').click();
-    await page.locator('#account_button').click(); await page.locator('.userBackupButton').click();
-    await page.locator('.backupSelectNoneButton').click();
-    for (const category of ['characters', 'chats']) await page.locator(`input[name="backupCategory"][value="${category}"]`).check();
-    await page.locator('.backupRestoreFileInput').setInputFiles(file);
+    await openAccountTab(page, 'restore');
+    const win = accountWindow(page);
+    await win.locator('[data-act="bsel"][data-mode="none"]').click();
+    for (const category of ['characters', 'chats']) {
+        const chip = win.locator(`[data-act="bcat"][data-id="${category}"]`);
+        await chip.click();
+        await expect(chip).toHaveClass(/\bon\b/);
+    }
+    await win.locator('[data-role="file"]').setInputFiles(file);
     // Forward the genuine response unchanged and observe its streamed result
     // before the successful UI callback reloads the page and discards it.
     let body;
@@ -83,8 +88,8 @@ export async function restoreChatCorpus(device, testInfo, { companions = COMPANI
     const navigated = page.waitForEvent('load', { timeout: 60_000 });
     navigated.catch(() => {});
     try {
-        await page.locator('.backupRestoreButton').click();
-        await page.locator('dialog.popup[open]').last().locator('.popup-button-ok').click();
+        await win.locator('[data-act="restore-go"]').click();
+        await answerWindowConfirm(page);
         expect((await response).ok()).toBe(true);
         fs.writeFileSync(outputPath('restore-operation.ndjson'), body);
         const events = body.trim().split('\n').map(line => JSON.parse(line));

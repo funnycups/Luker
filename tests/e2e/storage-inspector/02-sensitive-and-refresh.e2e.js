@@ -13,6 +13,7 @@
 import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
+import { openStorageInspectorPage } from '../_lib/account-window.js';
 import { seedFixtureUser } from './_helpers.js';
 
 let server;
@@ -31,21 +32,7 @@ test.afterAll(async () => {
 
 async function openInspector(page) {
     await awaitMainUI(page, server.baseURL);
-    const drawerClosed = await page.locator('#user-settings-button .drawer-icon.closedIcon').count().then(n => n > 0);
-    if (drawerClosed) {
-        await page.locator('#user-settings-button .drawer-toggle').click();
-        await page.waitForFunction(() => {
-            const el = document.getElementById('user-settings-block');
-            return el && !el.classList.contains('closedDrawer');
-        }, { timeout: 5_000 });
-    }
-    await page.locator('#account_button').click();
-    const profilePopup = page.locator('dialog.popup[open]').last();
-    await profilePopup.locator('.userStorageInspectorButton').click();
-    const inspector = page.locator('dialog.popup[open]').last().locator('.storageInspectorContainer');
-    await inspector.waitFor({ state: 'visible', timeout: 10_000 });
-    await inspector.locator('.storageInspectorLoading.displayNone').waitFor({ state: 'attached', timeout: 15_000 });
-    return inspector;
+    return openStorageInspectorPage(page, 'server');
 }
 
 test.describe('Storage Inspector · sensitive & refresh', () => {

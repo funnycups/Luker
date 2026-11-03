@@ -16,7 +16,7 @@ import { addWorldEntry, createWorldBook, selectWorldBook, deleteSelectedWorldBoo
 import { writeCharacterPng } from '../groups/_helpers.js';
 import {
     openLanSyncPanel, generatePairingLink, acceptPairingLink, clickSyncNow, clickUndoLastSync, setSyncSchedule, closeAllPopups,
-    openChatByName, readUserFile, userRootOf, backendIdOf, shadowMain, waitForBackgroundSync,
+    openChatByName, readUserFile, userRootOf, backendIdOf, shadowMain, waitForBackgroundSync, syncFlash,
 } from '../_lib/sync.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../../..');
@@ -96,7 +96,7 @@ test.describe('LAN Sync — undo and change propagation', () => {
         expect(log.some(entry => entry.commit.message.startsWith('undo sync sync-backup-'))).toBe(true);
     });
 
-    test('undo with an offline peer reports an error instead of a success toast', async ({ browser }) => {
+    test('undo with an offline peer reports an error instead of a success message', async ({ browser }) => {
         const { pageA, pageB } = await pairedPages(browser);
         await createWorldBook(pageA, 'Starfall');
         const since = Date.now();
@@ -105,11 +105,9 @@ test.describe('LAN Sync — undo and change propagation', () => {
         await waitForBackgroundSync(pageB, { since });
         await tearDownServer(A);
         await openLanSyncPanel(pageB);
-        const row = pageB.locator('.lanSyncPeerRow', { hasText: 'A device' });
-        await row.locator('.lanSyncPeerUndoButton').click();
-        await pageB.locator('.popup-button-ok').last().click();
-        await expect(pageB.locator('.toast-error')).toBeVisible();
-        await expect(pageB.locator('.toast-success', { hasText: 'Reverted the last sync' })).toHaveCount(0);
+        expect(await clickUndoLastSync(pageB, 'A device')).toBe('error');
+        await expect(syncFlash(pageB)).toHaveAttribute('data-flash', 'error');
+        await expect(syncFlash(pageB).filter({ hasText: 'Undid the last sync' })).toHaveCount(0);
         expect(readUserFile(B, 'worlds/Starfall.json')).toBeNull();
     });
 
@@ -130,7 +128,7 @@ test.describe('LAN Sync — undo and change propagation', () => {
         const response = pageB.waitForResponse(r => r.url().endsWith('/undo'));
         expect(await clickUndoLastSync(pageB, 'A device')).toBe('warning');
         expect(await (await response).json()).toMatchObject({ ok: true, committed: true, reverted: [], keptEdited: ['worlds/Retained Grove.json'], propagation: { ok: true } });
-        await expect(pageB.locator('.toast-warning', { hasText: 'These files were edited after it' })).toContainText('worlds/Retained Grove.json');
+        await expect(syncFlash(pageB).filter({ hasText: 'were edited after the sync and kept their current version' })).toContainText('worlds/Retained Grove.json');
         expect(readUserFile(B, 'worlds/Retained Grove.json')).toBe(live);
         await expect.poll(() => readUserFile(A, 'worlds/Retained Grove.json'), { timeout: 60_000 }).toBe(live);
         const id = backendIdOf(B);

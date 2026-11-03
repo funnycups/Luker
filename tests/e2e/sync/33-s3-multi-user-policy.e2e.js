@@ -4,11 +4,12 @@ import path from 'node:path';
 import http from 'node:http';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { s3Fixture, awaitS3Page, createReadyWorldBook, reloadS3Page } from '../_lib/sync-s3.js';
-import { createUserViaAdminUI, openAdminPanel } from '../_lib/page.js';
+import { createUserViaAdminUI } from '../_lib/page.js';
+import { accountWindow, answerWindowConfirm, closeAccountWindow, formError, openAdminUser } from '../_lib/account-window.js';
 import { closeChatPopups as closeAllPopups } from '../_lib/s3-chat.js';
 import { startHttpFixture } from '../../sync/_lib/network-fixtures.js';
 import { loginAs, openLanSyncPanel, addS3Backend, fillS3Form, waitForBackendSync, setSyncSchedule,
-    generatePairingLink, acceptPairingLink, waitForBackgroundSync } from '../_lib/sync.js';
+    generatePairingLink, acceptPairingLink, waitForBackgroundSync, openAddBackend } from '../_lib/sync.js';
 
 const fixture = s3Fixture(test);
 test.use({ actionTimeout: 30_000 });
@@ -57,13 +58,16 @@ async function userPage(browser, device, handle) {
 }
 
 async function role(admin, handle, promoted) {
-    await closeAllPopups(admin.page); await openAdminPanel(admin.page);
-    const row = admin.page.locator('.userAccount').filter({ has: admin.page.locator('.userHandle', { hasText: new RegExp(`^${handle}$`) }) });
+    await closeAllPopups(admin.page); await openAdminUser(admin.page, handle);
+    const toggle = accountWindow(admin.page).locator('[data-act="adm-switch"][data-kind="admin"]');
     const response = admin.page.waitForResponse(value => new URL(value.url()).pathname === `/api/users/${promoted ? 'promote' : 'demote'}`);
-    await row.locator(promoted ? '.userPromoteButton' : '.userDemoteButton').click();
+    await toggle.click();
+    // Demoting asks first; promoting does not.
+    if (!promoted) await answerWindowConfirm(admin.page);
     expect((await response).ok()).toBe(true);
-    await expect(row.locator('.userRole')).toHaveText(promoted ? 'Admin' : 'User');
-    await closeAllPopups(admin.page);
+    if (promoted) await expect(toggle).toHaveClass(/\bon\b/);
+    else await expect(toggle).not.toHaveClass(/\bon\b/);
+    await closeAccountWindow(admin.page);
 }
 
 test('DOM-created nonadmin accounts keep distinct S3 prefixes and pending status isolated when the switch is enabled', async ({ browser }, testInfo) => {
@@ -123,14 +127,14 @@ test('default-off DOM policy rejects private S3 and LAN then revokes existing ow
         const link = new URL(await generatePairingLink(remote.page, { label: 'Alice owner', categories: ['worlds'] }));
         link.searchParams.set('base', lanProxy.url);
         const beforeS3 = proxy.requests.length, beforeLan = lanProxy.hits.length;
-        await alice.page.locator('.syncAddS3Button').click(); await fillS3Form(alice.page, { ...options, endpoint: proxy.endpoint, prefix: 'alice/', label: 'Private cloud' });
+        await openAddBackend(alice.page, 's3'); await fillS3Form(alice.page, { ...options, endpoint: proxy.endpoint, prefix: 'alice/', label: 'Private cloud' });
         const denied = alice.page.waitForResponse(response => new URL(response.url()).pathname === '/api/sync/v1/backends/s3' && response.request().method() === 'POST');
-        await alice.page.locator('.syncS3SaveButton').click();
+        await accountWindow(alice.page).locator('[data-act="s3-save"]').click();
         expect(await (await denied).json()).toMatchObject({ code: 'SYNC_PRIVATE_ADDRESS' });
-        await expect(alice.page.locator('.syncS3Error')).toContainText('private');
+        await expect(formError(alice.page)).toContainText('private');
         await closeAllPopups(alice.page); await openLanSyncPanel(alice.page);
         expect(await acceptPairingLink(alice.page, link.toString(), { categories: ['worlds'], localLabel: 'Private LAN' })).toBe('error');
-        await expect(alice.page.locator('.lanSyncStatusBanner.error')).toContainText('private');
+        await expect(formError(alice.page)).toContainText('private');
         expect(proxy.requests).toHaveLength(beforeS3); expect(lanProxy.hits).toHaveLength(beforeLan);
         expect((await readBackends(alice.page)).backends).toEqual({});
         // Default administrator is a positive control for the same real S3 endpoint.
@@ -152,7 +156,8 @@ test('default-off DOM policy rejects private S3 and LAN then revokes existing ow
             return Object.values(backends).length === 2 && !Object.values(running).some(Boolean)
                 && Object.values(backends).every(backend => backend.lastSync.error?.code === 'SYNC_PRIVATE_ADDRESS' && backend.lastSync.error.at >= revokedAt);
         }, { timeout: 60_000 }).toBe(true);
-        await expect(alice.page.locator('.lanSyncPeerError:visible')).toHaveCount(2);
+        await openLanSyncPanel(alice.page);
+        await expect(accountWindow(alice.page).locator('.dw-card[data-backend] .dw-card-note.bad')).toHaveCount(2);
         expect(manual).toEqual([]);
         expect(proxy.requests.filter(request => request.relativeKey.startsWith('alice/'))).toHaveLength(s3Hits);
         expect(lanProxy.hits).toHaveLength(lanHits);

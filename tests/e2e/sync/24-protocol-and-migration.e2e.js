@@ -14,6 +14,7 @@ import {
     setSyncSchedule, closeAllPopups, readUserFile, userRootOf, backendIdOf,
     shadowMain, waitForBackgroundSync, listPeers,
 } from '../_lib/sync.js';
+import { formError } from '../_lib/account-window.js';
 
 let A;
 let B;
@@ -75,7 +76,7 @@ test('pairing with a protocol 1 peer shows the upgrade message without registeri
         real.searchParams.set('base', `http://127.0.0.1:${stub.address().port}`);
         await openLanSyncPanel(pageB);
         expect(await acceptPairingLink(pageB, `luker-sync://pair/v1?${real.searchParams.toString()}`, { categories: ['worlds'], localLabel: 'Old device' })).toBe('error');
-        await expect(pageB.locator('.lanSyncStatusBanner.error')).toContainText('The peer\'s Luker version is too old. Upgrade it and sync again.');
+        await expect(formError(pageB)).toContainText('The peer\'s Luker version is too old. Upgrade it and sync again.');
         expect(await listPeers(pageB)).toEqual([]);
         expect(registryOf(B).backends).toEqual(before);
         expect(requests).toEqual(['/api/sync/v1/health']);

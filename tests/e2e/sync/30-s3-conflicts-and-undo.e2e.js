@@ -64,7 +64,7 @@ for (const resolution of ['current', 'theirs']) test(`stale S3 conflict ${resolu
     await reloadS3Page(b.page);
     await waitForSyncPopup(b.page);
     expect(await listPopupConflicts(b.page)).toEqual([{ path: REL, stale: true }]);
-    const current = syncPopup(b.page).locator('.syncConflictCard[data-choice="current"]');
+    const current = syncPopup(b.page).locator(`.dw-conflict[data-path=${JSON.stringify(REL)}] .dw-version[data-v="current"]`);
     await expect(current).toContainText('Later live moss edit');
     const selected = resolution === 'current' ? 'current' : await conflictChoiceShowing(b.page, REL, 'Desk guards the moonwell');
     await chooseConflictVersion(b.page, REL, selected);

@@ -12,7 +12,8 @@
 import { test, expect } from '@playwright/test';
 import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { awaitMainUI, openAdminPanel, createUserViaAdminUI } from '../_lib/page.js';
+import { awaitMainUI, createUserViaAdminUI } from '../_lib/page.js';
+import { accountWindow, closeAccountWindow, openAdminPage } from '../_lib/account-window.js';
 import { loginAs } from '../_lib/sync.js';
 import { takeDocScreenshot } from '../_lib/doc-screenshots.js';
 import { seedFixtureUser } from './_helpers.js';
@@ -32,10 +33,9 @@ test.beforeAll(async ({ browser }) => {
     const bootPage = await bootCtx.newPage();
     await awaitMainUI(bootPage, server.baseURL);
     await createUserViaAdminUI(bootPage, { handle: 'alice', name: 'Alice Merren', password: 'pw-alice' });
-    await bootPage.locator('dialog.popup[open] .popup-button-ok').last().click();
-    await bootPage.waitForFunction(() => !document.querySelector('dialog.popup[open]'), { timeout: 10_000 });
+    await closeAccountWindow(bootPage);
     await createUserViaAdminUI(bootPage, { handle: 'bob', name: 'Bob Casca', password: 'pw-bob' });
-    await bootPage.locator('dialog.popup[open] .popup-button-ok').last().click();
+    await closeAccountWindow(bootPage);
     await bootCtx.close();
 
     await seedFixtureUser(server.dataRoot, 'alice');
@@ -49,17 +49,14 @@ test.afterAll(async () => {
 test.describe('Storage Inspector · admin aggregate view', () => {
     test('aggregate L1 sums categories; L2 shows per-user rows; click redirects to that user', async ({ page }) => {
         await loginAs(page, server.baseURL, { handle: 'default-user', password: '' });
-        await openAdminPanel(page);
-        const popup = page.locator('dialog.popup[open]').last();
-        await popup.locator('button[data-target-tab="storageManagementTab"]').click();
-        const tab = popup.locator('.storageManagementTab');
-        await tab.waitFor({ state: 'visible', timeout: 10_000 });
-        const picker = tab.locator('.storageInspectorAdminUserPicker');
-        await picker.locator('.storageInspectorAdminUserRow[data-target="alice"]').waitFor({ state: 'visible', timeout: 10_000 });
+        await openAdminPage(page, 'adminStorage');
+        const win = accountWindow(page);
+        const picker = win.locator('[data-region="adm-storage"]');
+        await picker.locator('[data-act="adm-storage-open"][data-target="alice"]').waitFor({ state: 'visible', timeout: 10_000 });
 
         // Click the aggregate row.
-        await picker.locator('.storageInspectorAdminUserRow[data-target="__all__"]').click();
-        const inspector = tab.locator('.storageInspectorAdminInspectorContainer .storageInspectorContainer');
+        await picker.locator('[data-act="adm-storage-open"][data-target="__all__"]').click();
+        const inspector = win.locator('[data-region="adm-inspector"] .storageInspectorContainer');
         await inspector.waitFor({ state: 'visible', timeout: 10_000 });
         await inspector.locator('.storageInspectorLoading.displayNone').waitFor({ state: 'attached', timeout: 15_000 });
 

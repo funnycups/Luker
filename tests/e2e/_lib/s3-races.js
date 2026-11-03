@@ -4,7 +4,7 @@ import path from 'node:path';
 import { expect } from '@playwright/test';
 import { GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { registryOf, reloadS3Page } from './sync-s3.js';
-import { addS3Backend, waitForBackendSync, closeAllPopups, openLanSyncPanel, clickSyncNow, userRootOf, shadowMain } from './sync.js';
+import { addS3Backend, backendCard, waitForBackendSync, closeAllPopups, openLanSyncPanel, clickSyncNow, userRootOf, shadowMain } from './sync.js';
 import { decryptObject } from '../../../src/sync/backends/s3/crypto.js';
 import { decodeHead } from '../../../src/sync/backends/s3/layout.js';
 import { getShadowPaths } from '../../../src/sync/shadow.js';
@@ -36,8 +36,7 @@ export async function pair(fixture, browser, envA = {}, envB = {}) {
 export async function startManual(device) {
     await closeAllPopups(device.page);
     await openLanSyncPanel(device.page);
-    await device.page.locator('.lanSyncTabPeers').click();
-    await device.page.locator('.lanSyncPeerRow', { hasText: 'Cloud' }).locator('.lanSyncPeerSyncButton').click();
+    await backendCard(device.page, 'Cloud').locator('[data-act="sync-now"]').click();
 }
 
 export async function manual(device) {

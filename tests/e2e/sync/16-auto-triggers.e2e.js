@@ -2,7 +2,7 @@
 // change arrives on the next poll, and a Sync now on one device brings
 // its edits to the other through the notify.
 //
-// Two real servers; the schedules are set in the LAN Sync panel and the
+// Two real servers; the schedules are set in Account → Device settings and the
 // world books are created through the World Info UI.
 
 import { test, expect } from '@playwright/test';

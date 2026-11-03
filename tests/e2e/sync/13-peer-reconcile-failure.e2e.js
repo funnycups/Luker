@@ -8,7 +8,7 @@ import git from 'isomorphic-git';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { createWorldBook } from '../_lib/ui-worldinfo.js';
-import { openLanSyncPanel, generatePairingLink, acceptPairingLink, clickSyncNow, closeAllPopups, backendIdOf, readUserFile, shadowMain, userRootOf } from '../_lib/sync.js';
+import { openLanSyncPanel, generatePairingLink, acceptPairingLink, clickSyncNow, closeAllPopups, backendCard, backendIdOf, readUserFile, shadowMain, userRootOf } from '../_lib/sync.js';
 
 const WORLD = 'Ember Ward';
 const THROW_ENV = { LUKER_SYNC_THROWPOINT: 'reconcile-write', LUKER_SYNC_THROWPOINT_MATCH: `worlds/${WORLD}.json` };
@@ -64,7 +64,7 @@ test('a failed peer reconcile leaves main and live without the pushed file until
         expect(await mainHas(A, `worlds/${WORLD}.json`)).toBe(false);
         await closeAllPopups(pageA);
         await openLanSyncPanel(pageA);
-        await expect(pageA.locator('.lanSyncPeerRow .lanSyncPeerError')).toContainText('luker-sync-throwpoint');
+        await expect(backendCard(pageA, 'B device').locator('.dw-card-note.bad')).toContainText('luker-sync-throwpoint');
 
         await tearDownServer(A, { removeData: false });
         A = await startServer({ batchKey: 'sync', scenarioId: 'reconcile-fail-A', useExistingDataRoot: A.dataRoot });

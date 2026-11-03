@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { s3Fixture, registryOf, createReadyWorldBook, selectReadyWorldBook, reloadS3Page, awaitS3Page, backendRow } from '../_lib/sync-s3.js';
-import { addS3Backend, fillS3Form, editSyncBackend, waitForBackendSync, closeAllPopups, openLanSyncPanel, clickSyncNow, setSyncSchedule, userRootOf, shadowMain } from '../_lib/sync.js';
+import { s3Fixture, registryOf, createReadyWorldBook, selectReadyWorldBook, reloadS3Page, awaitS3Page, backendRow, backendError } from '../_lib/sync-s3.js';
+import { accountWindow, formError } from '../_lib/account-window.js';
+import { addS3Backend, fillS3Form, editSyncBackend, waitForBackendSync, closeAllPopups, openLanSyncPanel, clickSyncNow, setSyncSchedule, userRootOf, shadowMain, openAddBackend } from '../_lib/sync.js';
 import { addWorldEntry } from '../_lib/ui-worldinfo.js';
 import { hasCompleteClosure } from '../../../src/sync/objects.js';
 import { getShadowPaths } from '../../../src/sync/shadow.js';
@@ -25,16 +26,16 @@ async function journey(a, b, options, manualRequests, checkpointOutput, testInfo
     await openLanSyncPanel(a.page);
     await addS3Backend(a.page, options);
     await waitForBackendSync(a.page, { label: 'Cloud' });
-    await b.page.locator('.syncAddS3Button').click();
+    await openAddBackend(b.page, 's3');
     await fillS3Form(b.page, { ...options, passphrase: 'incorrect jitless phrase' });
     const rejected = b.page.waitForResponse(response => new URL(response.url()).pathname === '/api/sync/v1/backends/s3');
-    await b.page.locator('.syncS3SaveButton').click();
+    await accountWindow(b.page).locator('[data-act="s3-save"]').click();
     const wrong = await rejected;
     expect(wrong.status()).toBe(422);
     expect(await wrong.json()).toMatchObject({ code: 'S3_WRONG_PASSPHRASE' });
-    await expect(b.page.locator('.syncS3Error')).toBeVisible();
+    await expect(formError(b.page)).toBeVisible();
     expect(Object.keys(registryOf(b.server).backends)).toEqual([]);
-    await b.page.keyboard.press('Escape');
+    await openLanSyncPanel(b.page);
     await addS3Backend(b.page, options);
     await waitForBackendSync(b.page, { label: 'Cloud' });
     expect(bytesOf(b)).toEqual(original);
@@ -100,7 +101,8 @@ async function journey(a, b, options, manualRequests, checkpointOutput, testInfo
     }
     expect(await shadowMain(a.server, Object.keys(registryOf(a.server).backends)[0])).toBe(await shadowMain(b.server, Object.keys(registryOf(b.server).backends)[0]));
     await openLanSyncPanel(b.page);
-    await expect(backendRow(b.page).locator('.lanSyncPeerError')).toBeHidden();
+    await expect(backendRow(b.page)).toHaveCount(1);
+    await expect(backendError(b.page)).toBeHidden();
     await testInfo.attach('actual-jitless-evidence', { body: JSON.stringify({ argv: [a.server.execArgv, b.server.execArgv], original: digest(original), edited: digest(edited), restarted: digest(restarted), automatic: true }), contentType: 'application/json' });
 }
 
