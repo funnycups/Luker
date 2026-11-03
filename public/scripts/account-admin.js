@@ -1148,7 +1148,7 @@ export class AdminPages {
         })() : '';
         return `
             <div class="dw-list">
-                <div class="dw-setrow"><span>${t`Current Mode`}</span><span class="dw-setrow-val">${esc(modeLabel(s.currentMode))}</span></div>
+                <div class="dw-setrow"><span>${t`Current Mode`}</span><span class="dw-setrow-val" data-current-mode="${esc(s.currentMode)}">${esc(modeLabel(s.currentMode))}</span></div>
                 <div class="dw-setrow"><span>${t`Read-Only`}</span><span class="dw-setrow-val">${s.readOnly ? `<span class="dw-pilltag is-warn">${t`yes`}</span>` : t`no`}</span></div>
                 <div class="dw-setrow"><span>${t`Last Migration`}</span><span class="dw-setrow-val">${esc(s.lastMigration ? new Date(s.lastMigration).toLocaleString() : t`(none)`)}</span></div>
             </div>

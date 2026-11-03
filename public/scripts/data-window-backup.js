@@ -56,7 +56,7 @@ function engineLabel(kind) {
 }
 
 /**
- * Backup categories in the order of the old backup manager.
+ * Backup categories in display order.
  * @returns {Array<{ id: string, label: string, def: boolean, sensitive?: boolean, adminOnly?: boolean }>}
  */
 function buildCategories() {

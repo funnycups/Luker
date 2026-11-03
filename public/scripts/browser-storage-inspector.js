@@ -2,8 +2,6 @@
  * V2 Browser Storage Inspector · 浏览器侧 5 大存储 API 的 provider + mutator.
  * 与 V1 服务端 REST inspector 共享同一 UI 外观(见 storage-inspector.js).
  */
-import { callGenericPopup, POPUP_TYPE } from './popup.js';
-import { createStorageInspector } from './storage-inspector.js';
 import { t, translate } from './i18n.js';
 
 // 5 大 category 元数据 · 与 storage-inspector.js CATEGORY_META 保持一致.
@@ -460,24 +458,4 @@ export class BrowserMutator {
             db.close();
         }
     }
-}
-
-/**
- * Public entry point · User Profile 按钮点击时调用.
- * 打开 popup · 内嵌 UI shell + BrowserProvider + BrowserMutator.
- */
-export async function openBrowserStorageInspector() {
-    const container = document.createElement('div');
-    container.classList.add('storageInspectorContainerWrapper');
-    const inspector = createStorageInspector({
-        provider: new BrowserProvider(),
-        mutator: new BrowserMutator(),
-        container,
-    });
-    await inspector.init();
-    return callGenericPopup(container, POPUP_TYPE.DISPLAY, '', {
-        wide: true, wider: true, large: true,
-        allowVerticalScrolling: true,
-        okButton: t`Close`,
-    });
 }

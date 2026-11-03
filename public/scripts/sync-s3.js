@@ -1,7 +1,5 @@
 import { getRequestHeaders } from '../script.js';
-import { t, translate } from './i18n.js';
-import { Popup, POPUP_TYPE } from './popup.js';
-import { renderTemplateAsync } from './templates.js';
+import { t } from './i18n.js';
 
 export function syncSettingsError(code) {
     switch (code) {
@@ -37,15 +35,6 @@ export function syncSettingsError(code) {
         case 'UNDO_NOT_COMMITTED': return t`Undo could not update the local files. The undo point was kept.`;
         case 'PENDING_READ_FAILED': return t`Some pending sync records could not be read.`;
         default: return t`S3 sync failed (${code || 'SYNC_FAILED'}). Check the backend settings and provider availability before syncing again.`;
-    }
-}
-
-export function renderSyncCategories(container, categories, selected) {
-    container.empty();
-    for (const cat of categories) {
-        const input = $('<input type="checkbox" name="lanSyncCategory">').val(cat.id).prop('checked', selected ? selected.includes(cat.id) : cat.syncDefault === 'on');
-        const fallback = cat.id.split('-').map(w => w[0]?.toUpperCase() + w.slice(1)).join(' ');
-        container.append($('<label class="checkbox_label lanSyncCategoryItem"></label>').append(input, ' ', $('<span></span>').text(translate(fallback, cat.displayKey))));
     }
 }
 
@@ -96,76 +85,4 @@ export async function postBackendSettings(url, payload) {
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body.ok === false) throw Object.assign(new Error(syncSettingsError(body.code)), { code: body.code });
     return body;
-}
-
-/** Secrets are supplied only by the user; blank edit fields retain stored values. */
-export async function openS3BackendForm({ mode, backendId, backend, categories, onSaved }) {
-    const template = $(await renderTemplateAsync('userSyncS3'));
-    const lan = backend?.kind === 'lan';
-    const unlock = mode === 'unlock';
-    const field = name => template.find(`.syncS3${name}`);
-    template.find('h3').text(unlock ? t`Unlock S3 backend` : mode === 'add' ? t`Add S3 backend` : t`Edit sync backend`);
-    template.find('.syncS3ConnectionFields').toggleClass('displayNone', lan || unlock);
-    template.find('.syncS3CommonFields').toggleClass('displayNone', unlock);
-    template.find('.syncS3PassphraseField').toggleClass('displayNone', lan);
-    template.find('.syncS3RetentionNote').toggleClass('displayNone', mode !== 'edit' || lan);
-    field('Label').val(backend?.label || '');
-    const regions = ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'af-south-1', 'ap-east-1', 'ap-south-1', 'ap-south-2', 'ap-southeast-1', 'ap-southeast-2', 'ap-southeast-3', 'ap-southeast-4', 'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3', 'ca-central-1', 'ca-west-1', 'eu-central-1', 'eu-central-2', 'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-north-1', 'eu-south-1', 'eu-south-2', 'il-central-1', 'me-south-1', 'me-central-1', 'sa-east-1'];
-    if (backend?.s3?.region && !regions.includes(backend.s3.region)) regions.push(backend.s3.region);
-    for (const region of regions) field('Region').append($('<option></option>').val(region).text(region));
-    for (const name of ['Endpoint', 'Region', 'Bucket', 'Prefix']) {
-        field(name).val(backend?.s3?.[name[0].toLowerCase() + name.slice(1)] ?? (name === 'Region' ? 'us-east-1' : ''));
-    }
-    field('ForcePathStyle').prop('checked', backend?.s3?.forcePathStyle ?? true);
-    field('StripIfMatchQuotes').prop('checked', backend?.s3?.stripIfMatchQuotes ?? false);
-    if (mode === 'edit') field('Bucket').add(field('Prefix')).prop('readOnly', true);
-    renderSyncCategories(field('CategoryGrid'), categories, backend?.categories);
-    const clear = () => field('AccessKeyId').add(field('SecretAccessKey')).add(field('Passphrase')).val('');
-    const popup = new Popup(template, POPUP_TYPE.TEXT, '', { okButton: t`Cancel`, wide: true, allowVerticalScrolling: true, onClosing: () => { clear(); return true; } });
-    let saving = false;
-    let disposed = false;
-    let pendingSave = null;
-    field('SaveButton').on('click', async () => {
-        if (saving || disposed) return;
-        const label = String(field('Label').val() || '').trim();
-        const selected = field('CategoryGrid').find('input:checked').toArray().map(input => input.value);
-        if (!unlock && (!label || !selected.length)) {
-            field('Error').text(!label ? t`Enter a label for this backend.` : t`Select at least one category to sync.`).removeClass('displayNone');
-            return;
-        }
-        const payload = unlock ? { passphrase: String(field('Passphrase').val() || '') } : { label, categories: selected };
-        if (!lan && !unlock) {
-            const values = { forcePathStyle: field('ForcePathStyle').prop('checked'), stripIfMatchQuotes: field('StripIfMatchQuotes').prop('checked'), passphrase: String(field('Passphrase').val() || '') };
-            for (const name of ['Endpoint', 'Region', 'Bucket', 'Prefix', 'AccessKeyId', 'SecretAccessKey']) {
-                values[name[0].toLowerCase() + name.slice(1)] = String(field(name).val() || '');
-            }
-            Object.assign(payload, s3SettingsPayload(values, mode));
-        }
-        const url = backendSettingsUrl(mode, backendId, lan);
-        saving = true;
-        let settled;
-        pendingSave = new Promise(resolve => { settled = resolve; });
-        field('SaveButton').prop('disabled', true);
-        field('Error').addClass('displayNone').text('');
-        try {
-            const body = await postBackendSettings(url, payload);
-            clear();
-            if (!disposed) await popup.completeAffirmative();
-            await onSaved?.(body);
-        } catch (error) {
-            if (!disposed) field('Error').text(String(error.message || error)).removeClass('displayNone');
-        } finally {
-            saving = false;
-            field('SaveButton').prop('disabled', false);
-            settled();
-        }
-    });
-    try { await popup.show(); } finally {
-        disposed = true;
-        clear();
-        template.find('*').off();
-        // Closing disposes the UI immediately, but the caller owns backend
-        // admission until the already-submitted operation has settled.
-        await pendingSave;
-    }
 }

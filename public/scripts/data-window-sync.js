@@ -302,6 +302,7 @@ export function createSyncSource(state, emit) {
             }
             return {
                 id,
+                path: notice.path,
                 type: restored ? 'restored' : 'fork',
                 title: restored ? t`Restored chat ${name}` : t`Chat ${notice.chat || name} branched`,
                 detail,
@@ -442,7 +443,7 @@ export function createSyncSource(state, emit) {
 
     /**
      * Run an action that holds the backend's lock, shared with every other
-     * window and the old sync panel.
+     * window that shows the backend.
      * @template T
      * @param {string} id
      * @param {() => Promise<T>} action

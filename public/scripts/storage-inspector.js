@@ -374,26 +374,6 @@ class StorageInspector {
 }
 
 /**
- * Public entry point · 供 User Profile 按钮和 Admin panel tab 调.
- * @param {{kind:'self'} | {kind:'any', target:string}} dataSource
- */
-export async function openStorageInspector(dataSource) {
-    const container = document.createElement('div');
-    container.classList.add('storageInspectorContainerWrapper');
-    const inspector = new StorageInspector({
-        provider: new RestProvider(dataSource),
-        mutator: new ThrowingMutator(),
-        container,
-    });
-    await inspector.init();
-    return callGenericPopup(container, POPUP_TYPE.DISPLAY, '', {
-        wide: true, wider: true, large: true,
-        allowVerticalScrolling: true,
-        okButton: t`Close`,
-    });
-}
-
-/**
  * Mount Inspector 到已有 container(用于 Admin panel tab 内直接 embed).
  * @param {{kind:'self'} | {kind:'any', target:string}} dataSource
  * @param {HTMLElement} container

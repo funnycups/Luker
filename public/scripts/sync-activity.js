@@ -80,7 +80,3 @@ export function beginSyncActivity({ backendId, label }) {
         observer?.render();
     };
 }
-
-export function syncActivityNeedsAttention() {
-    return state.getView().attentionBackendIds.length > 0;
-}

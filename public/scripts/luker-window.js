@@ -259,7 +259,7 @@ export class LukerWindow {
 
     renderPage() {
         const deep = this.stack[this.tab].length > 1;
-        return `<div class="dw-pagehead">
+        return `<div class="dw-pagehead" data-view="${esc(this.top.view)}">
             ${deep ? `<button class="dw-ibtn" data-act="back" title="${t`Back`}">${ic('back')}</button>` : ''}
             <h2 class="dw-h2">${esc(this.pageTitle())}</h2>
             <span class="dw-sp"></span>

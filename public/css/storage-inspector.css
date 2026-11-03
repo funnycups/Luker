@@ -130,32 +130,6 @@
     100% { background-position: -200% 0; }
 }
 
-/* Admin user picker */
-.storageInspectorAdminUserPicker {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 200px;
-    overflow-y: auto;
-    border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 4px;
-    padding: 6px;
-    margin-bottom: 12px;
-}
-.storageInspectorAdminUserRow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-}
-.storageInspectorAdminUserRow:hover,
-.storageInspectorAdminUserRow.storageInspectorAdminUserRowActive {
-    background: var(--SmartThemeShadowColor);
-}
-.storageInspectorAdminUserAggregate { font-weight: 600; }
-
 /* Mobile 断点 */
 @media (max-width: 720px) {
     .storageInspectorEntry {

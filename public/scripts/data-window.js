@@ -334,7 +334,7 @@ export class DataPages extends LukerWindow {
             const f = this.flash;
             const icon = f.tone === 'error' ? 'x' : f.tone === 'warning' ? 'warn' : 'check';
             const files = f.files?.length ? `<code class="dw-files">${f.files.slice(0, 4).map(esc).join('<br>')}${f.files.length > 4 ? `<br>${t`and ${f.files.length} more`}` : ''}</code>` : '';
-            html += `<div class="dw-banner ${f.tone}">${ic(icon)}<span>${esc(f.text)}${files}</span>
+            html += `<div class="dw-banner ${f.tone}" data-flash="${f.tone}">${ic(icon)}<span>${esc(f.text)}${files}</span>
                 ${f.act ? `<button class="dw-btn sm" data-act="${f.act}">${esc(f.actLabel)}</button>` : ''}
                 <button class="dw-ibtn" data-act="flash-x" style="width:24px;height:24px">${ic('x')}</button></div>`;
         }
@@ -379,7 +379,7 @@ export class DataPages extends LukerWindow {
             ? `<div class="dw-stalled">${t`${b.stalled.length} files could not be updated; this device kept its current version`}${b.stalled.map(p => `<code>${esc(p)}</code>`).join('')}</div>`
             : '';
         return `
-            <div class="dw-card${locked ? ' locked' : ''}" data-state="${b.stalled?.length && b.state === 'ok' ? 'attention' : b.state}">
+            <div class="dw-card${locked ? ' locked' : ''}" data-backend="${esc(b.id)}" data-kind="${b.kind}" data-state="${b.stalled?.length && b.state === 'ok' ? 'attention' : b.state}">
                 <span class="dw-card-icon">${ic(b.kind === 's3' ? 'cloud' : 'lan')}</span>
                 <div class="dw-card-main">
                     <div class="dw-card-title"><span class="dw-card-name">${esc(b.label)}</span><span class="dw-kind">${b.kind === 's3' ? 'S3' : t`LAN`}</span></div>
@@ -564,7 +564,7 @@ export class DataPages extends LukerWindow {
             return `<span class="dw-preview">${esc(p.text)}</span>`;
         };
         const conflictHtml = conflicts.map(c => `
-            <div class="dw-conflict${this.failedKeys.has(c.key) ? ' is-failed' : ''}">
+            <div class="dw-conflict${this.failedKeys.has(c.key) ? ' is-failed' : ''}" data-path="${esc(c.path)}" data-stale="${c.stale}">
                 <div class="dw-conflict-head"><span class="dw-pilltag is-warn">${esc(c.kind)}</span><b title="${esc(c.path)}">${esc(c.path)}</b></div>
                 ${c.stale ? `<div class="dw-banner warning">${ic('clock')}<span>${t`This file was edited again after the conflict; choosing another version will overwrite those changes`}</span></div>` : ''}
                 <div class="dw-versions">${c.versions.map(v => `
@@ -578,7 +578,7 @@ export class DataPages extends LukerWindow {
         const noticeHtml = notices.map(n => {
             const busy = this.noticeBusy.has(n.id);
             return `
-            <div class="dw-notice">
+            <div class="dw-notice" data-path="${esc(n.path)}">
                 <span class="dw-card-icon">${ic(n.type === 'fork' ? 'branch' : 'chat')}</span>
                 <div style="min-width:0"><b>${esc(n.title)}</b><small>${esc(n.missingGroup ? t`The group this chat belongs to can't be found, so it can't be opened` : n.detail)}</small></div>
                 <div class="dw-notice-act">
@@ -1140,20 +1140,23 @@ export class DataPages extends LukerWindow {
         }
         this.applying = true;
         this.rerender();
+        // Shown after the page is rebuilt: going back to the list rebuilds the whole window.
+        let message = null;
         try {
             const picks = Object.fromEntries(this.snap.conflicts.filter(c => this.choices[c.key]).map(c => [c.key, { version: this.choices[c.key], review: c.review }]));
             const r = await this.p.applyConflicts(picks);
             this.failedKeys = new Set(r.failed.map(x => x.key));
             for (const k of [...r.applied, ...r.alreadyResolved.map(x => x.key)]) delete this.choices[k];
-            if (r.alreadyResolved.length) this.toast(t`${r.alreadyResolved.length} files were already handled on another device`);
-            else if (!r.failed.length) this.toast(t`Applied`);
+            if (r.alreadyResolved.length) message = [t`${r.alreadyResolved.length} files were already handled on another device`];
+            else if (!r.failed.length) message = [t`Applied`];
         } catch (err) {
-            this.toast(err.message, true);
+            message = [err.message, true];
         } finally {
             this.applying = false;
             const s = this.snap;
             if (s.conflicts.length || s.notices.length || s.backends.some(b => b.stalled?.length)) this.rerender();
             else this.pop();
+            if (message) this.toast(...message);
         }
     }
 
