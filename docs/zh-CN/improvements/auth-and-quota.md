@@ -1,106 +1,48 @@
 # 认证与配额
 
-Luker 内置了多用户认证和配额管理系统，适用于团队共享实例或公开部署的场景。管理员可以通过 OAuth 登录、存储配额和日志系统全面管控用户的访问和资源消耗。
+Luker 支持多用户认证、存储配额和日志，适合团队共享实例或对外部署。本页面向实例管理员，说明登录方式、配额和日志的作用与配置入口。
 
-## 认证系统
+## 认证方式
 
 ### 自助注册
 
-登录页面可以展示「创建账户」表单，供访客直接注册账户。该功能默认关闭，由管理员面板切换（保存在 `admin-settings.json` 的 `accountRegistration` 配置段中）：
+登录页可以显示「创建账户」表单，让访客自行注册。该功能默认关闭，在管理员面板中开启。
 
-```json
-{
-  "accountRegistration": {
-    "enabled": false
-  }
-}
-```
+通过自助注册创建的账户始终为普通用户，创建后立即可用，并继承默认存储配额。关闭注册后，注册入口不再接受任何请求，无法被绕过。
 
-通过此方式创建的账户始终为非管理员，创建后立即启用，并继承默认存储配额。功能关闭时，注册接口无论请求内容如何均会返回 HTTP 403，因此表单无法被绕过启用。
+### GitHub 登录
 
-### GitHub OAuth 登录
+用户点击 GitHub 登录后会被转到授权页面，授权完成后自动创建或关联本地账户。需要在 GitHub 创建 OAuth 应用，并把客户端 ID 与密钥填入管理员面板。
 
-Luker 支持通过 GitHub OAuth 进行用户认证。用户点击登录后，会被重定向到 GitHub 授权页面，授权完成后自动创建或关联本地用户账户。
+可以控制授权后是否自动创建账户。关闭自动创建时，只有已经存在的本地账户才能通过 GitHub 登录。
 
-配置方式：在前端管理员面板中配置 GitHub OAuth App 的凭据（存储在 `admin-settings.json` 的 `oauth` 配置段中）：
+### Discord 登录
 
-```json
-{
-  "oauth": {
-    "github": {
-      "enabled": true,
-      "clientId": "your-github-client-id",
-      "clientSecret": "your-github-client-secret",
-      "allowAutoCreate": false
-    }
-  }
-}
-```
+Discord 登录支持更细的访问控制：可以要求用户属于指定服务器，或拥有指定身份组。同样在管理员面板中填写客户端 ID 与密钥。
 
-### Discord OAuth 登录
+OAuth 的回调地址由 Luker 根据当前访问地址自动生成，不需要手动填写。
 
-Luker 同样支持 Discord OAuth 登录，并提供更细粒度的访问控制——可以校验用户是否为指定 Discord 服务器的成员，以及是否拥有特定身份组（Role）。
+不需要 OAuth 时，可以继续使用 SillyTavern 原有的用户名与密码登录。OAuth 凭据属于敏感信息，建议始终通过管理员面板配置，并限制服务器数据目录的访问权限。
 
-```json
-{
-  "oauth": {
-    "discord": {
-      "enabled": true,
-      "clientId": "your-discord-client-id",
-      "clientSecret": "your-discord-client-secret",
-      "allowAutoCreate": false,
-      "requireGuildMembership": false,
-      "allowedGuildIds": [],
-      "requiredRoleIds": []
-    }
-  }
-}
-```
+## 存储配额
 
-OAuth 回调地址由系统根据当前请求自动生成（格式为 `{protocol}://{host}/api/users/oauth/callback/{provider}`），无需手动配置。
+管理员可以为每个用户设置存储空间上限：
 
-::: tip
-如果不需要 OAuth 登录，无需配置 `oauth` 段。Luker 仍然支持 SillyTavern 原有的用户认证方式。OAuth 配置推荐在前端管理员面板中进行。
-:::
+- 配额按账户计算，覆盖该用户上传与保存的文件。
+- 达到上限后，新的写入会被拒绝，已有数据不受影响。
+- 管理员可以随时调整配额，调整后立即生效。
 
-## 用户配额管理
+配额与 Token 用量统计是两个独立系统。Token 用量由[请求检查器](/zh-CN/improvements/request-inspector)记录，不占用存储配额。
 
-### 存储配额（Storage Quota）
+## 日志
 
-管理员可以为每个用户设置存储空间配额，控制文件存储的资源消耗：
+服务端日志记录启动、请求、错误等运行信息，管理员可以在日志面板中查看，也可以导出用于排查问题。日志同时覆盖浏览器端和服务端，详见[日志系统](/zh-CN/features/logging)。
 
-- **配额上限** — 用户可使用的最大存储空间
+日志和请求记录可能包含 API 密钥等敏感内容，分享前应检查。
 
-::: tip Token 用量统计
-请求检查器追踪的 Token 用量是独立的统计功能，与存储配额管理是两个独立的系统。详见[请求检查器](/zh-CN/improvements/request-inspector)。
-:::
+## 相关页面
 
-当用户的存储使用量超过配额上限时，系统会阻止进一步的数据写入（返回 413 状态码）。管理员可以在前端管理面板中为用户设置和调整配额。
-
-## 日志系统
-
-Luker 实现了服务端日志捕获系统，供管理员远程查看服务器运行状态。
-
-Luker 的日志系统覆盖后端和前端，帮助管理员远程排查问题。详见[日志系统](/zh-CN/features/logging)。
-
-## 配置参考
-
-以下是 `admin-settings.json` 中与 OAuth 相关的配置项（通过管理员面板设置）：
-
-| 配置路径 | 类型 | 默认值 | 用途 |
-|---------|------|--------|------|
-| `accountRegistration.enabled` | boolean | `false` | 是否在登录页展示自助注册表单 |
-| `oauth.github.enabled` | boolean | `false` | 是否启用 GitHub OAuth |
-| `oauth.github.clientId` | string | — | GitHub OAuth 客户端 ID |
-| `oauth.github.clientSecret` | string | — | GitHub OAuth 客户端密钥 |
-| `oauth.github.allowAutoCreate` | boolean | `false` | 是否允许自动创建用户 |
-| `oauth.discord.enabled` | boolean | `false` | 是否启用 Discord OAuth |
-| `oauth.discord.clientId` | string | — | Discord OAuth 客户端 ID |
-| `oauth.discord.clientSecret` | string | — | Discord OAuth 客户端密钥 |
-| `oauth.discord.allowAutoCreate` | boolean | `false` | 是否允许自动创建用户 |
-| `oauth.discord.requireGuildMembership` | boolean | `false` | 是否要求服务器成员身份 |
-| `oauth.discord.allowedGuildIds` | string[] | `[]` | 允许的 Discord 服务器 ID 列表 |
-| `oauth.discord.requiredRoleIds` | string[] | `[]` | 要求的身份组 ID 列表 |
-
-> [!WARNING]
-> OAuth 密钥属于敏感信息。`admin-settings.json` 存储在服务器数据目录中，请确保该目录的访问权限受到保护。推荐通过管理员面板进行配置。
+- [鉴权与安全](/zh-CN/guide/authentication) —— 面向部署者的访问控制说明
+- [基础配置](/zh-CN/guide/configuration) —— 监听地址、HTTPS 与账户设置
+- [日志系统](/zh-CN/features/logging) —— 查看与导出日志
+- [请求检查器](/zh-CN/improvements/request-inspector) —— Token 用量记录

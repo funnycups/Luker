@@ -1,10 +1,10 @@
 # Incremental Sync
 
-Incremental Sync is Luker's fundamental improvement to SillyTavern's data transmission architecture, replacing full overwrites with incremental patches to dramatically reduce bandwidth consumption and eliminate concurrent write conflicts.
+Luker replaces full overwrites with incremental transmission, which lowers bandwidth use and prevents concurrent write conflicts.
 
 ## Problem Background
 
-SillyTavern's data saving uses a full-transmission model: any modification (even editing a single character in one message) serializes the entire chat history and sends it to the backend for overwrite. This causes several serious issues:
+SillyTavern's data saving uses a full-transmission model: any modification (even editing a single character in one message) serializes the entire chat history and sends it to the backend for overwrite. The result is:
 
 - **Bandwidth waste** — A chat history with hundreds of messages can be hundreds of MB (especially when some plugins store large amounts of data in chat metadata), and any operation requires transmitting the full data
 - **Write conflicts** — When multiple tabs or devices operate simultaneously, later writes overwrite earlier ones, causing data loss
@@ -61,7 +61,7 @@ After a write operation completes, the backend generates a new UUID, writes it t
 1. **Match** — Write executes normally, returns a new integrity UUID
 2. **Mismatch** — Returns `409 Conflict`, indicating the file has been modified by another source since the last operation
 
-This fundamentally prevents concurrent write conflicts — whether in multi-tab, multi-device, or multi-user scenarios.
+Concurrent write conflicts are therefore prevented across tabs, devices and users.
 
 ```d2
 shape: sequence_diagram
@@ -100,7 +100,7 @@ The metadata update endpoint's design references the concepts of [RFC 6902](http
 
 Beyond chat data, Luker's settings data (user preferences, extension configurations, preset parameters, etc.) also supports incremental patch saving. Settings changes are applied to the server-side settings file through deep merge, also with integrity hash conflict detection, preventing settings loss from concurrent modifications.
 
-This means modifying a single sampling parameter no longer requires transmitting the entire settings object — only the changed fields need to be sent.
+Changing one sampling parameter transmits only the changed fields, not the whole settings object.
 
 ## Debounce Mechanism
 

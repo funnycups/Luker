@@ -1,11 +1,11 @@
 # 從 SillyTavern 遷移
 
-Luker 是 SillyTavern 的下游分支，保持了完整的資料相容性。從 SillyTavern 遷移到 Luker 只需幾個簡單步驟，你的所有資料均可無縫使用。
+Luker 是 SillyTavern 的下游分支，保持了完整的資料相容性。遷移步驟簡單，現有資料可直接使用。
 
 ::: tip 在 Android 上從 Termux 遷移？
 本指南適用於 PC / Linux / Docker → Luker，以及 **Termux(SillyTavern) → Termux(Luker)**，兩端共用檔案系統，按下面步驟複製 `data/` 即可。
 
-只有 **Termux → Luker APK** 因為 Android 沙盒隔離需要走 `/sdcard` 中轉，請參考 [從 Termux 遷移到 Luker APK](/zh-TW/guide/migration-from-termux)。
+只有 **Termux → Luker APK** 因為 Android 沙盒隔離需要使用 `/sdcard` 中轉，請參考 [從 Termux 遷移到 Luker APK](/zh-TW/guide/migration-from-termux)。
 :::
 
 ## 遷移步驟
@@ -66,24 +66,24 @@ Luker 與 SillyTavern 的資料格式完全相容，以下資料類型均可直�
 | 聊天記錄（.jsonl） | ✅ 完全相容 | 增量同步端點向下相容 |
 | 世界書（World Info） | ✅ 完全相容 | 條目格式不變 |
 | 預設 | ✅ 完全相容 | Luker 會自動分離連線參數 |
-| 使用者人設（Persona） | ✅ 完全相容 | — |
+| 使用者人設（Persona） | ✅ 完全相容 | —— |
 | 擴充設定 | ✅ 完全相容 | 第三方擴充照常運作 |
-| 群聊 | ✅ 完全相容 | — |
+| 群聊 | ✅ 完全相容 | —— |
 | API 金鑰（secrets） | ✅ 完全相容 | `secrets.json` 格式不變 |
 
 ## Luker 新增的狀態檔案
 
 Luker 在執行過程中會在資料目錄中產生一些額外的**狀態檔案**，用於儲存 Luker 獨有功能的資料：
 
-- `.luker-state.<chat_id>.json` — 聊天狀態檔案，儲存增量同步的完整性校驗值等
-- 角色卡狀態檔案 — 儲存角色綁定預設、記憶圖資料、編輯助手工作階段等
-- 預設狀態檔案 — 儲存預設關聯的世界書等擴充狀態
+- `.luker-state.<chat_id>.json` —— 聊天狀態檔案，儲存增量同步的完整性校驗值等
+- 角色卡狀態檔案 —— 儲存角色綁定預設、記憶圖資料、編輯助手工作階段等
+- 預設狀態檔案 —— 儲存預設關聯的世界書等擴充狀態
 
-這些檔案**不會影響 SillyTavern 的原始資料**。如果你需要將資料遷回 SillyTavern，只需忽略這些狀態檔案即可。SillyTavern 不會讀取它們，也不會因為它們的存在而出錯。
+這些狀態檔案與 SillyTavern 的原始資料互不影響，遷回時忽略即可。
 
 ## 注意事項
 
-1. **Node.js 版本**：Luker 要求 Node.js >= 20。遷移前請確認你的 Node.js 版本。
+1. **Node.js 版本**：Luker 要求 Node.js >= 24。遷移前請確認你的 Node.js 版本。
 
 2. **第三方擴充**：SillyTavern 的第三方擴充在 Luker 中照常運作。Luker 使用相同的擴充載入機制，擴充目錄位於 `public/scripts/extensions/third-party/`。
 

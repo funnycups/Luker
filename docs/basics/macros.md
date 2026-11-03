@@ -4,7 +4,7 @@ Macros are <span v-pre>`{{name}}`</span> placeholders that get replaced with dyn
 
 ## Macros 2.0 / experimental engine
 
-The features on this page run on the chevrotain-based macro engine — the same one SillyTavern introduced as **Macros 2.0** (the "Experimental Macro Engine"). It's on by default in Luker. Toggle it under **User Settings → Chat/Message Handling → Experimental Macro Engine**.
+The features on this page require the **Macros 2.0** engine SillyTavern introduced, exposed as the experimental macro engine. It is enabled by default; toggle it under **User Settings → Chat/Message Handling → Experimental Macro Engine**.
 
 With the experimental engine **off**, macros still resolve but the following fall back to the legacy regex pipeline and stop working:
 
@@ -193,7 +193,7 @@ Inside the body:
 | <span v-pre>`{{loop_value}}`</span> | Whole value (objects auto-JSON-stringify) |
 | <span v-pre>`{{loop_value::field}}`</span> | Drill into the value, same dotted-path semantics as <span v-pre>`{{getvar}}`</span> |
 
-Nested <span v-pre>`{{each}}`</span> blocks naturally shadow `loop_key` / `loop_value` for the inner scope. Object iteration order is JavaScript native — insertion order for string keys, ascending for integer-like keys.
+Nested <span v-pre>`{{each}}`</span> blocks naturally shadow `loop_key` / `loop_value` for the inner scope. Objects iterate in key insertion order; numeric keys iterate in ascending order.
 
 Empty or non-iterable collections render to an empty string. There is no built-in iteration cap — a body that re-enters <span v-pre>`{{each}}`</span> on the same collection is your responsibility.
 
@@ -214,13 +214,13 @@ Free to contain {{macros}} and \{escapes\} — none of it runs.
 {{///}}
 ```
 
-Comments resolve to an empty string and consume their content verbatim. Useful for annotating prompt entries that the AI shouldn't see.
+Comments resolve to an empty string. Use them to annotate a prompt without the model reading the note.
 
 ## Variables
 
 Variables come in two scopes:
 
-- **Local** — keyed per chat, stored in `chat_metadata.variables`. Use for chat-specific state (HP, current quest, turn count).
+- **Local** — saved per chat in the current chat's state. Use for chat-specific state (HP, current quest, turn count).
 - **Global** — shared across all chats, stored in extension settings. Use for cross-chat counters or plugin config.
 
 ### Reading
@@ -279,9 +279,9 @@ A variable can hold any JSON-serializable value. When a variable's value is a JS
 
 Intermediate nodes are created on demand. A pure-numeric path segment creates an array index (e.g. <span v-pre>`{{setvar::log.0::An old man arrives}}`</span> writes to index 0 of `log`).
 
-Path lookups against non-JSON values fall back to a literal flat-key lookup, so a variable literally named `a.b` still works.
+Path lookups against non-JSON values use a literal key lookup instead, so a variable named `a.b` still resolves.
 
-This pairs naturally with <span v-pre>`{{each}}`</span>: an NPC roster, an inventory dict, or a quest journal can live in a single variable and be rendered into the prompt or a world book entry when the prompt is assembled.
+Structured values work with <span v-pre>`{{each}}`</span>: an NPC roster, an inventory list, or a quest journal can live in a single variable and be rendered into the prompt or a world book entry during prompt assembly.
 
 ```text
 {{each::npcs}}
@@ -330,8 +330,8 @@ Luker fixes this with **per-message variable extraction**. When a message (AI re
 
 1. Scans the text for <span v-pre>`{{setvar}}`</span>, <span v-pre>`{{addvar}}`</span>, <span v-pre>`{{incvar}}`</span>, <span v-pre>`{{decvar}}`</span>, <span v-pre>`{{deletevar}}`</span>.
 2. Resolves any nested display macros (<span v-pre>`{{user}}`</span>, <span v-pre>`{{getvar::other}}`</span>, <span v-pre>`{{time}}`</span>, …) against the current state.
-3. Applies the op to `chat_metadata.variables` immediately.
-4. Records a structured op on `message.extra.var_ops`.
+3. Applies the op to the current chat's variables immediately.
+4. Appends a variable-change record to the message.
 5. Strips the literal from the visible text.
 
 When you delete a message, switch swipes, regenerate, or edit, Luker **replays the surviving op log** so your variables stay consistent with the visible timeline.
@@ -583,35 +583,13 @@ The engine walks each text fragment once and resolves macros left to right.
 - **Side-effect macros** (<span v-pre>`{{setvar}}`</span>, <span v-pre>`{{addvar}}`</span>, <span v-pre>`{{incvar}}`</span>, <span v-pre>`{{decvar}}`</span>, <span v-pre>`{{deletevar}}`</span>) apply immediately, so a later macro in the same pass sees the new value.
 - **Per-message extraction** (see [Per-Message Variables](#per-message-variables)) happens **at message save time**, not at prompt-build time.
 - **Unknown macros** render as the raw <span v-pre>`{{...}}`</span> text (with nested arguments still resolved). No exception, no warning by default.
-- **Argument arity / type mismatches** with the default `strictArgs: true` log a runtime warning and emit the raw macro text; with `strictArgs: false` they emit a warning but the handler still runs.
+- **Argument count or type mismatches**: by default the engine logs a console warning and outputs the macro text unchanged. With the argument check disabled, it still logs a warning but runs the macro.
 - **Result normalization** — every handler return is normalized: `null` / `undefined` → `''`, `Date` → ISO string, arrays / objects → `JSON.stringify(...)`, everything else → `String(...)`. That's why <span v-pre>`{{loop_value}}`</span> on an object renders as JSON.
 - **Comment stripping** — orphan <span v-pre>`{{trim}}`</span> markers and stray `else` sentinels left behind by partial parses are cleaned up in a post-processing pass.
 
-## Custom & plugin-registered macros
+## Custom macros
 
-Extensions can register their own macros:
-
-```js
-const ctx = Luker.getContext();
-
-ctx.macros.register('myStatus', {
-    description: 'Returns the plugin status string.',
-    category: 'utility',
-    handler: () => 'My plugin is active.',
-});
-
-ctx.macros.register('greet', {
-    description: 'Greets a name.',
-    unnamedArgs: [
-        { name: 'name', type: 'string', description: 'Person to greet' },
-    ],
-    handler: (mctx) => `Hello, ${mctx.unnamedArgs[0]}!`,
-});
-```
-
-After registration both <span v-pre>`{{myStatus}}`</span> and <span v-pre>`{{greet::Bob}}`</span> are available everywhere a macro is, including world info, presets, and chat messages.
-
-The full registration surface — argument typing, aliases, scoped macros, lazy resolution, `dynamicMacros` for one-off injection — is in [Extension API › Macros & Variables](/development/extension-api/macros-and-variables).
+Installed extensions can register custom macros with the system. Once registered, these macros are available across world books, presets, and chat messages, and their usage appears in the macro browser. If you are developing an extension and need to register macros in code, see [Extension API › Macros & Variables](/development/extension-api/macros-and-variables).
 
 ## Discovery & debugging
 

@@ -1,92 +1,32 @@
-# Director mode
+# Director Mode
 
-Director is the only **takeover mode** in the orchestrator — the final message body for the turn is not authored by the main LLM at all. A team of agents inside the orchestrator produces it and commits it directly. The other modes (spec / single / agenda / loop) produce a compact "briefing" (capsule) that the main LLM still consumes to compose a reply; director skips that step and delivers the prose itself.
+Director is the orchestrator's takeover mode: the reply for this turn is written by a writing team inside the orchestrator instead of by the main model. It is built for high-quality long-form roleplay — scout the context, draft, have voice and continuity reviewers challenge the draft, then revise and submit.
 
-## How it differs from the other orchestrator modes
+## How it differs from the other modes
 
-| Dimension | spec / agenda / loop | director |
-|---|---|---|
-| Who authors the body | Main LLM (reads the capsule, then drafts the reply) | The main agent inside the orchestrator (authors directly) |
-| Agent output | Compact capsule text | Complete, sendable message body |
-| Main LLM this turn | Produces the final reply | **Not called at all** |
-| When to use | Want the main LLM to keep producing on its warm prompt cache | Want a multi-perspective writing team to **deliver finished prose** |
+| | Spec, Agenda, Loop | Director |
+| --- | --- | --- |
+| Who writes the reply | The main model, after reading the orchestration result | The main agent inside the orchestrator |
+| What the orchestrator produces | A compact orchestration result | A complete, sendable message |
+| The main model this turn | Generates the reply | Not used |
+| Best for | Letting the main model keep producing on its existing context | Letting a multi-perspective team deliver a finished draft |
 
-From the user's point of view, director provides the experience of "a whole team inside the AI is collaborating; all that is visible is their final RP reply". Drafting, critiquing, revising, and finalizing all unfold inside the reasoning fold, while the main chat window shows only the finished passage.
+The chat window shows only the final narrative; drafts, reviews and revisions are recorded in the Run Panel.
 
-## When this is the right pick
+## When to use it
 
-- **High-quality long-form RP** where character consistency, voice consistency, and continuity all matter at once and a single viewpoint cannot track them all.
-- **A "draft → critique → revise" discipline should be enforced by the flow**, rather than left to the main LLM's own judgment.
-- **Different viewpoints should run on different models / presets** — for example, planning on a fast, inexpensive model and critiquing on a strong one.
+- Long-form roleplay where character consistency, voice and continuity all matter.
+- You want draft → review → revision enforced by the pipeline.
+- Different stages use different models: a lower-cost model for planning, a stronger one for review.
 
-Not for:
+It is a poor fit for low-latency, everyday chat. A Director turn runs several rounds of tool calls and sub-agent dispatches, so it costs more than the other modes.
 
-- Cases where the main LLM only needs to behave more intelligently — use [loop](/features/orchestrator/loop) / [spec](/features/orchestrator/spec) / [agenda](/features/orchestrator/agenda) and let the main LLM consume the capsule.
-- Low latency turns — director runs several rounds of tool calls plus several sub-agent dispatches per turn; wall-clock cost is noticeable.
-
-## What it looks like running
-
-The screenshots below come from a real director turn. The main agent coordinated the default sub-agents (`chat_scout` / `voice_critic` / `continuity_critic`) and ran the full "scout → draft → critique → revise → finalize" flow end-to-end.
-
-### Dispatch the pre-draft scout
-
-After the turn opens, the main agent dispatches `chat_scout` to sweep recent chat. It returns `Item / Source / Why` summaries of load-bearing state. These appear in a named section inside the reasoning fold (anchor `### [<handleId>: chat_scout]`) where the main agent can read them while drafting.
-
-![Director dispatching chat_scout with scout entries](/images/orchestrator/director-takeover/director-real-scout-dispatch.png)
-
-### Draft, then critique in parallel
-
-The main agent uses the scout output to draft a passage of Chinese prose into the message body (`write_message`), then **in parallel** dispatches the post-draft critics:
-
-- `voice_critic`: humanity & voice — flags "data-person" prose (cold observation verbs / data vocabulary / reporting-style dialogue) and archetype mishandling (a scientist actually "analyzing" their love interest, an android "scanning" during intimacy, a taciturn character whose interior is treated as actually empty).
-- `continuity_critic`: hard contradictions only — flags lines where the draft asserts X and chat / memory / lorebook explicitly states NOT-X, plus knowledge-boundary violations (a character knowing something they were never told).
-
-Each critic gets its own named section in the reasoning fold; the sections grow side-by-side without interleaving at character level (each section's bytes stay contiguous thanks to the JavaScript single-threaded event loop).
-
-![voice_critic and continuity_critic running in parallel](/images/orchestrator/director-takeover/director-real-critic-loop.png)
-
-### Iterate, revise, and finalize
-
-The main agent reads the critics' feedback, patches the prose via `apply_message_patches` for any critique it agrees with, ignores the ones it judges off-base, and can spin up another round (a fresh critic, another re-read). When it judges the prose ready, it calls `finalize`. The handle reaches its final state, the message is saved, the UI unlocks, and the finished Chinese prose appears below the fold, ready to send.
-
-![After finalize: the fold collapses, the finished body shows below](/images/orchestrator/director-takeover/director-real-final-body.png)
-
-For the whole turn, the user sees only that final paragraph in the main chat; everything procedural stays in the fold, available on demand.
-
-## Default skills
-
-The default director profile ships paired with **bundled skills** that the agents read on demand. Skills are small Anthropic-compatible knowledge packs — each one carries a writing rule, a critic method, or a workflow contract that used to live inline in the system prompts. Moving them out of the prompts and into files accessible via `skill_read` keeps the prompts short and editable, lets the same rule be shared across agents without duplication, and lets a card or preset author distribute their own variants.
-
-The bundled skills group into families:
-
-| Family | Visible to | Examples |
-|---|---|---|
-| Shared (mode-level) | every default sub-agent | `director-anti-cliche-zh`, `director-character-voice-zh`, `director-no-meta-zh`, `director-output-discipline-zh`, `director-zh-style-baseline` |
-| Main-agent | main agent only | `director-turn-workflow-zh`, `director-dispatch-protocol-zh` |
-| Per-sub-agent method | the matching sub-agent only | `voice-critic-method-zh` (→ `voice_critic`), `event-summary-rules-zh` (→ `memory_curator`), `chat-scout-method-zh` (→ `chat_scout`), … |
-
-The mode-level skills are common writing rules every default agent shares. The main-agent skills carry the turn workflow and the dispatch protocol. Each per-sub-agent method skill holds the sub-agent's specific contract — e.g. `event-summary-rules-zh` is the full V10 event-summary writing discipline for `memory_curator`.
-
-The default profile pre-fills `skills.visible` accordingly: mode-level visible covers the shared skills, the main agent uses `["+", "director-turn-workflow-zh", "director-dispatch-protocol-zh"]` (inherit mode and add the main-agent skills), and each sub-agent uses `["+", "<its-method-skill>"]`. Thus, by default, every agent receives the correct stack with no manual binding.
-
-The first time the server starts, `data/<user>/skills/global/` populates from `default/skills/global/`. After that, the **Manage skills** button in the orchestrator panel (and the `import-bundled` API) is the only way to overwrite — there is no implicit auto-update on subsequent server starts.
-
-For the full picture of how skills plug into agents, see [Skills overview](/features/skills/) and [Orchestrator integration](/features/skills/orchestrator-integration). For authoring conventions, [Authoring skills](/features/skills/authoring).
-
-## Switching to director
-
-In the extension drawer's **multi-agent orchestration** panel, set **execution mode** to **Director (multi-agent)**. The spec / agenda / loop setting cards collapse and director's setting card appears.
-
-::: tip Most users should not write the main-agent system prompt by hand
-The default main-agent system prompt is **tightly coupled** to the default sub-agent ids — it is already tuned for the "scout first, draft, then critique, then iterate, then mutate" discipline. For customization, use the [AI Iteration Studio](/features/orchestrator/iteration-studio): describe the goal in natural language and let it patch the profile via tool calls.
-:::
-
-## Workflow outline
+## How a turn runs
 
 ```d2
 direction: down
 
-start: "A new turn arrives\n(the main LLM is NOT called this turn —\nthe orchestrator drafts the body itself)" {
+start: "A new turn arrives\nthe main model is not called" {
   shape: oval
   style.fill: "#e8f5e9"
 }
@@ -94,199 +34,134 @@ start: "A new turn arrives\n(the main LLM is NOT called this turn —\nthe orche
 loop: "Main agent at the writing desk" {
   style.fill: "#e1f5ff"
 
-  think: "Read the draft so far,\ndecide the next move" {
+  think: "Read the draft so far\nand pick the next move" {
     style.fill: "#fffde7"
   }
 
-  decide: "What does the\nmain agent need?" {
+  decide: "What is needed?" {
     shape: diamond
   }
 
-  consult: "Consult a specialist (default profile sub-agents)" {
+  consult: "Consult a sub-agent" {
     style.fill: "#fff3e0"
-    pre: "Pre-draft scouts\nintent_scout · chat_scout · memory_scout ·\nlorebook_scout · notes_pickup_scout ·\nepistemic_scout · canon_scout (on-demand)" {
+    pre: "Pre-draft scouting\nintent · recent chat · memory · world book ·\npending notes · what the character knows" {
       style.fill: "#fffde7"
     }
-    mid: "plot_brainstormer\nstructural sketch — dispatch several\nin parallel for diverse angles" {
+    mid: "Structural sketching\nplot drafts from different angles" {
       style.fill: "#fffde7"
     }
-    post: "Post-draft critics\nvoice_critic · continuity_critic" {
+    post: "Post-draft review\nvoice · continuity" {
       style.fill: "#fffde7"
     }
-    housekeeping: "Post-draft housekeeping\nmemory_curator — writes durable facts to the memory graph\nnotes_curator — the ONLY notes mutator\n(default: do nothing)" {
+    house: "Post-draft housekeeping\nwrite durable facts to memory · close resolved notes" {
       style.fill: "#fffde7"
     }
   }
 
-  research: "Look something up\nrecent chat · memory · lorebook ·\nweb · notes" {
+  research: "Look something up\nrecent chat · memory · world book · web · notes" {
     style.fill: "#fffde7"
   }
 
-  write: "Draft or revise the body\nextend the prose · patch problem lines ·\nreread the draft" {
+  write: "Draft or revise the body\nextend · patch problem lines · reread" {
     style.fill: "#fffde7"
   }
 
-  finalize: "Wrap up · finalize the body" {
+  finish: "Submit the body" {
     style.fill: "#c8e6c9"
   }
 
   think -> decide
   decide -> consult: "consult"
   decide -> research: "look up"
-  decide -> write: "draft"
-  decide -> finalize: "finalize"
-  consult -> think: "specialist returns"
-  research -> think: "next move"
-  write -> think: "next move"
+  decide -> write: "write"
+  decide -> finish: "submit"
+  consult -> think: "result returns"
+  research -> think: "continue"
+  write -> think: "continue"
 }
 
-out: "Finished message body posted to chat\n(no capsule — the prose IS the output)" {
+out: "Body posted to the chat" {
   shape: oval
   style.fill: "#f3e5f5"
 }
 
 start -> loop.think
-loop.finalize -> out
+loop.finish -> out
 ```
 
-1. **The main agent runs in a tool-calling loop.** It can call any of the tools available to it, until it calls `finalize`, reaches the round cap, or is aborted by the user.
+1. **Scout.** The main agent checks recent chat, Memory Graph, inactive world book entries, open notes and web sources as needed. It establishes what is happening, what each character knows, and which threads should advance this turn.
+2. **Draft.** It writes a first version of the message.
+3. **Review.** A voice reviewer checks whether dialogue fits each character's identity and register, and whether the prose reads like data or misreads the setting. A continuity reviewer checks conflicts with established facts in the chat, Memory Graph and world book, and catches characters acting on information they were never given.
+4. **Revise.** The main agent accepts useful criticism, ignores what does not hold, and can run another review round.
+5. **Submit.** The finished message enters the chat; the process stays in the fold.
 
-2. **Tool groups available to the main agent:**
-   - **Loop tools** (enabled per-profile) — same family as loop mode: `chat_*` / `lorebook_*` / `memory_*` / `note_*` (open/close) / `search_*`, for gathering context.
-   - **Collaboration tools** — `dispatch_subagent(subagentId, task)` starts a profile-configured sub-agent by id; `dispatch_inline_subagent(systemPrompt, task, ...)` starts an ad-hoc one-shot sub-agent; `await_subagents(handles)` blocks until the named sub-agents finish; `cancel_subagent(handle)` aborts an in-flight one.
-   - **Message-production tools** — `write_message(text, mode?)` writes into the message body (`mode='replace'` overwrites, `mode='append'` extends); `apply_message_patches(patches)` makes targeted context-replace edits; `get_draft()` reads back the current draft; `draft_search({ pattern, flags? })` runs a regex sweep over that draft and returns grep `-n` style hits (`lineno: line`) — preferable to reading `get_draft` output directly for systematic vocabulary checks, and available to every sub-agent (notably the critics); `finalize()` commits the turn and ends the loop.
-   - **[Custom tools](./custom-tools.md)** — any tool registered by another Luker extension, bridged from a SillyTavern function tool, or handwritten in the director profile. Sub-agents see the same custom-tool surface (filtered by per-sub-agent overrides where applicable).
+## The default team
 
-3. **Sub-agents are one-shot consultants.** At dispatch time each one gets the chat snapshot, the main agent's task brief, its own system prompt, the enabled loop tools, plus `get_draft()` and `draft_search()` so they can inspect what the main agent has written so far. They don't see each other's existence, don't see the main agent's reasoning, **cannot dispatch deeper sub-agents**, and **cannot finalize the turn** — they return text, and the main agent decides what to do with it. Direct draft editing (`write_message` / `apply_message_patches`) is gated by `tools.message.<verb>` for the main agent and sub-agents alike: the shipping default enables them on the main agent and leaves them off for sub-agents. Tick a sub-agent's **message** fieldset to let it edit the draft alongside the main agent (uncommon — most sub-agents work better as pure consultants); untick them on the main agent to turn it into a pure orchestrator whose sub-agents produce the message body.
+The bundled profile includes sub-agents tuned for roleplay:
 
-4. **The default profile ships with RP-tuned sub-agents:**
+- **Pre-draft scouting**: user intent, recent chat, Memory Graph, inactive world book entries, due notes, character knowledge boundaries, and public-IP canon checks.
+- **Structure**: plot sketches from different angles, which can run in parallel.
+- **Post-draft review**: voice and continuity.
+- **Post-draft housekeeping**: write durable facts to Memory Graph and close notes that were paid off.
 
-   | Sub-agent | Purpose | Concrete RP example |
-   |---|---|---|
-   | `intent_scout` | Cross-source pre-draft scout — joins the user's recent input (explicit asks, parenthetical / OOC asides, load-bearing implicit signals) against lorebook authoring-directive entries (style rules, pacing, character-writing conventions, content constraints, output spec). Surfaces what the user wants this turn AND what the lorebook demands of the writing. | "User aside: `(写慢些)` at chat[floor=72]. Lorebook entry `pov-rules`: 'narrate in second-person, never break the fourth wall'. Lin Wan-style entry: 'when angry, speaks in fragments before silence.'" |
-   | `chat_scout` | Pre-draft single-source scout — sweeps recent chat for load-bearing state. | Returns `Item / Source / Why` lines, e.g. "Lin Wan's anxiety / msg 42 / will steer dialogue back to family". |
-   | `memory_scout` | Pre-draft single-source scout that runs an LLM-grade recall pass via the memory-graph read-only API. Enumerates the visible candidate pool, finds named entities or topic matches via `memory_find_by_name` / `memory_keyword_search` (or `memory_vector_search` when an embedding profile is configured), drills rollups via `memory_expand_seeds` when warranted, then returns a cited short list with signal levels grounded in API signals (edge density, exposure, alwaysInject). Does NOT read chat or lorebook — those are other scouts' jobs. Does NOT mutate the graph. | "`evt_42` (Chapter 3 grandmother arc) is a hub — its children contain the romantic-confession beat the draft will recall. Demoted: `msg_18` (one-off mention, no follow-up)." |
-   | `lorebook_scout` | Pre-draft single-source scout — pulls additional lorebook entries beyond what's already injected. | "`Luoyan-MainCity` entry not yet in context; relevant — Lin Wan's grandmother is there." |
-   | `notes_pickup_scout` | Pre-draft scout — scans the OPEN notes block (foreshadowing, promises, chapter outlines the agent itself opened in earlier turns) and surfaces the ids whose trigger conditions are ripe for THIS beat. It does not analyze or draft; it only selects. | "`o_a3f2` (grandmother in Luoyang) is ripe — Lin Wan just mentioned the city. `o_b8c1` (sanctum oath) is not yet ripe." |
-   | `epistemic_scout` | Cross-source pre-draft scout — joins chat (what characters have been exposed to) against lorebook / memory (what could be known in-world), producing a per-character Knows / Doesn't-know / Omniscience-traps inventory. | "Lin Wan does NOT know the user is the besieging general's son — she's only met him twice and the rumour-bearer hasn't appeared yet." |
-   | `canon_scout` | On-demand external scout for fanfiction / public-IP canon facts, backed by the loop `search_search` / `search_visit` tools. Requires `search.search` / `search.visit` to be enabled in the profile; returns zero items otherwise. Skip for original-fiction sessions. | When the scene touches Naruto canon: "jōnin promotion is by recommendation, not exam — relevant if Lin Wan claims to be a candidate." |
-   | `plot_brainstormer` | Mid-stage brainstormer — one structural sketch per angle. Dispatch several in parallel with diverse angles for genuinely different choices. | Angle A "direct confrontation" / Angle B "silence becomes the beat" / Angle C "she pivots to Luoyang to dodge". |
-| `voice_critic` | Post-draft critic — humanity & voice. Catches "data-person" prose (cold observation verbs / data vocabulary / reporting-style dialogue at emotional moments) and archetype mishandling (cold-archetype characters written as actually cold instead of stylized-cold over a hot interior). Voice-register mismatches are a secondary dimension. | "Draft has Lin Wan 'observing the subject's micro-expression shifts with clinical detachment' — this is sensor prose, not living-being prose. Swap for a sensation she's actually feeling, even if her surface stays composed." |
-   | `continuity_critic` | Post-draft critic — hard contradictions only. Trusts the draft by default; flags only when chat / memory / lorebook explicitly stated the opposite of what the draft asserts. The one exception is knowledge-boundary violations: a character knowing something they were never told is always a flag. | "Draft has Lin Wan recognizing the family crest on the user's pendant — but chat shows the pendant has only ever been described as 'a silver disc' to her. Knowledge-boundary: she's never been told it's a crest, let alone whose." |
-   | `memory_curator` | Post-draft mutation sub-agent that updates the memory graph for facts that survive past the scene. Multi-round observe-act: queries schema, looks up existing entities via `memory_find_by_name` before creating, patches fields via `memory_node_edit`, manages relation edges via `memory_link_upsert` / `memory_link_delete`, and (Phase B) checks `memory_compaction_candidates` and runs `memory_compact_nodes` for hierarchical event rollups. event nodes are mandatory per dispatch (timeline continuity); character_sheet / location_state default to SKIP unless the change passes a 24-hour-in-world persistence test. | "Created node `evt_42` (Day 5 oath beat). Edited `n_eileen` to add `goal: 'pay the debt'`. Upserted `n_eileen → debt_owed_to → n_protag`. Compacted leaves `evt_18,19,20` into `rollup_l1_06`." |
-   | `notes_curator` | Post-draft housekeeping — the ONLY mutation point for the notes substrate this round. Closes notes the draft deployed; opens new ones rarely & only when the draft committed to a genuine plot-load-bearing obligation. **Default disposition: do nothing.** Notes pollution is worse than under-closure. | "Closing `o_a3f2` — the grandmother visit happened in this draft. No new opens; brainstormer suggested a future-Luoyang lead but the draft didn't commit to it." |
+Sub-agents start only when needed. The main agent decides who to dispatch from the current draft instead of running a fixed sequence.
 
-   The default main-agent system prompt is **tightly coupled** to these ids — it dispatches by id and writes task-brief templates for each. If you change the sub-agents, the main-agent prompt has to change to match.
+## Getting started
 
-   > **Notes anti-pollution principle**: The `notes_curator` defaults to **do nothing**. Notes is a plot-author thread store, not a turn diary — a polluted notes list costs the agent attention every subsequent round. Closing is safe; opening is expensive. This principle is baked into the default sub-agent prompts and the main agent's system prompt; if you author your own director profiles, preserve it.
-
-5. **The main agent's view of each sub-agent is just `id` + `description`** — the user-authored `systemPrompt` is **not** leaked into the main agent's prompt. The description is the only signal available when selecting a sub-agent, so the defaults follow a consistent shape (role / what it does NOT know / what to put in the task brief). The Studio's iteration system prompt teaches this convention to the AI editing profiles, so new sub-agents come out with descriptions the main agent can actually use.
+1. Set the execution mode to **Director (multi-agent)** in the extension drawer.
+2. Choose API connections and chat-completion presets for the main agent and sub-agents. The question-mark button beside a preset dropdown imports `agent-director` in a click. Main agent and sub-agents can differ, so scouting can use a lower-cost model and review a stronger one.
+3. Run the default system prompt for a couple of turns first. It already encodes scouting, drafting, review and revision; when you need changes, use [AI Iteration Studio](/features/orchestrator/iteration-studio).
+4. Chat normally and follow each sub-agent and the final message in the Run Panel.
 
 ## Configuration
 
-Open the editor for a profile inside the **multi-agent orchestration** panel (the director card appears once the mode is switched to **Director (multi-agent)**).
-
 ### Main agent
 
-- **API preset** — the connection profile the main agent's `generateTaskStream` calls run on.
-- **Prompt preset** — the Chat Completion preset the main agent uses (sampler, temperature, etc.); this is the one discussed in the next section, "Recommended preset settings".
-- **Main system prompt** — the default text is materialized into the field at profile creation. The runtime uses whatever is currently in the field — an empty field means an empty instruction (no hidden fallback). Edit freely; the **Reset to default** button rewrites the field back to the built-in default. Try the default for a couple of turns before deciding to override.
+- **API preset**: the connection the main agent uses.
+- **Prompt preset**: the chat-completion preset that shapes its context and sampling.
+- **System prompt**: its role, workflow and stopping condition. An empty field sends an empty instruction; there is no hidden fallback. **Reset to default** restores the bundled text.
 
 ### Sub-agents
 
-One row per sub-agent. Fields:
-
-- **Sub-agent ID** — unique within the profile. The main agent dispatches as `dispatch_subagent({ subagentId: "<this id>", task: "..." })`.
-- **Description** — surfaced to the main agent as part of the tool documentation; tells it what this sub-agent is good for and when to dispatch.
-- **System prompt** — the role / viewpoint this sub-agent embodies. e.g. "You're a voice critic. The main agent will hand you a draft of this turn — list any line that feels off-character."
-- **API preset** + **Prompt preset** — sub-agent-specific routing. Planning sub-agents can use a fast/cheap model, critics a strong one.
+Each sub-agent has a name, description, system prompt and its own API and prompt presets. The description tells the main agent when to dispatch it; the system prompt defines the perspective it reviews or scouts from.
 
 ### Limits
 
-- **Maximum tool-calling rounds** — hard cap on the main agent's loop.
-- **Maximum concurrent sub-agents** — caps in-flight `dispatch_subagent` calls.
-- **Maximum total sub-agent runs per turn** — caps cumulative sub-agent invocations.
+- Maximum tool-call rounds for the main agent.
+- Maximum sub-agents running at once.
+- Maximum sub-agent launches per turn.
 
-### Behavior on abort
+### Interruption
 
-- **Discard partial message on abort** OFF (default): user-initiated stop preserves the partial body and commits it; the fold gets a trailing `### [aborted]` marker.
-- **Discard partial message on abort** ON: the partial is discarded and the message slot reverts to its placeholder state.
+You can keep a partial message on interruption, or discard it and return to the state before generation.
 
-## Recommended preset settings
+## Preset advice
 
-The Chat Completion preset the main agent uses is **not the same preset you use in your main chat**. It drives the main agent's tool-calling loop, not the final reply. Items in that preset are only useful when they speak to "how the main agent should think" or "how the final prose should sound" — everything else only adds noise to the main agent's context.
+The main agent's chat-completion preset serves a tool-calling loop; it does not write the final reply. Turning off duplicated injections keeps its attention on the task.
 
-### Recommended OFF
+Turn off character card fields, persona, example dialogue and the preset's world book placeholder. The orchestrator already puts that material into the context the main agent sees.
 
-Turn these off — all for the same reason, **duplicate injection**: ST's main path already writes them into the chat context the main agent sees.
+Keep chat history, style instructions, jailbreak or loosening instructions, and anti-formula instructions. Chat history is the main agent's actual input; style and anti-formula guidance affect both drafting and review.
 
-- **Character card fields** (description / personality / scenario / first message / example messages)
-- **User persona**
-- **Example messages**
-- **Worldbook placeholders** (any explicit worldInfo splice nodes in the preset)
+## Single-agent iterative writing
 
-### Recommended ON
+If you already know the voice you want and do not need reviewers, Director can be reduced to one main agent that drafts, reads back, revises and submits. Describe that goal in AI Iteration Studio: remove the sub-agents, keep chat, Memory Graph and world book tools, and let the main agent decide when to stop.
 
-| Prompt item | Why on |
-|---|---|
-| **Chat history** | The injection slot through which the main agent's prompt actually reaches the LLM. Turn it off and the agent gets nothing. |
-| **Writing style instructions** | Read by the main agent when drafting via `write_message` and when briefing `voice_critic`. |
-| **Jailbreak / bypass instructions** | A mid-loop refusal stalls the whole scout → draft → critique chain before `finalize` can fire. |
-| **Anti-cliché instructions** | Same channel as writing style — main agent drafting and critic briefs read them. |
+This configuration has no review safeguard; the main agent's judgment is final. Run it for a couple of turns, confirm it stops reliably under your prompt, then save it as a new preset.
 
-## Advanced: using director as a single-agent iterative writer
+## Limits
 
-Director's default workflow is "main agent + multiple sub-agents", but a power-user variant is to degrade it into a **single-agent multi-round iterative writer** — no critics, just one main agent drafting, re-reading, revising, and finalizing on its own.
-
-**Fits when** the style is already known, critic perspectives are not needed, and a strong model should use the tool loop (read context, query the lorebook, draft, re-read, revise) to deliver a finished body directly. Conceptually it is "director's main agent run loop-style" — except the takeover semantics stay (no capsule; the prose itself is the output).
-
-**Use the [AI Iteration Studio](/features/orchestrator/iteration-studio).** Tell it something like *"convert this profile into a single-agent iterative writer: drop all sub-agents, simplify the main-agent prompt to draft → re-read → revise → finalize, keep `chat_*` / `memory_*` / `lorebook_*` tools"*. The Studio knows this variant and will patch the profile via tool calls — review the diff, approve, and save. This is the recommended path; the steps that follow are only for users who prefer to configure it manually.
-
-::: details Manual setup (skip if Studio handled it)
-
-1. Rewrite the main-agent system prompt to remove all dispatch-related discipline. Replace it with "draft, re-read, revise; when you think it's ready, call `finalize`."
-2. Remove all sub-agents from the profile (or remove every id from the main-agent prompt) — this way `dispatch_subagent` does not appear in the main agent's tool list. `dispatch_inline_subagent` may be kept or removed; keep it only if the main agent should be able to spin up an ad-hoc consultant in unusual cases.
-3. Leave at minimum these tools enabled for the main agent: `write_message` / `apply_message_patches` / `get_draft` / `draft_search` / `finalize`, plus whichever loop tools you want it to use (a typical bundle is `chat_*` + `memory_*` + `lorebook_*`).
-4. Consider lowering the "maximum tool-calling rounds" cap — the default 40 is high for a single agent.
-
-:::
-
-**Caveat**: no critics means the main agent's own judgment is final. Run it for a couple of turns first to see whether it reliably calls `finalize` under your prompt, then decide whether to save the config as a separate profile.
-
-## Limits and constraints
-
-- Triggers on `normal` / `regenerate` / `swipe` / `continue` generation types. `quiet` and `impersonate` do not.
-- Requires the active connection profile to be an OpenAI-family provider (Anthropic / OpenAI / Gemini / OpenRouter / …) — the underlying streaming API does not yet support kobold / textgen.
-- Capsule injection is automatically disabled for the turn when director is active (the two paths are conceptually mutually exclusive; the message body is the output).
-- **Sub-agents are depth-1**: they cannot dispatch deeper sub-agents. They share the main agent's enabled loop tools — whichever of chat / lorebook / memory / note (open/close) / search are on in the profile, sub-agents can call them independently of the main agent's loop. A sub-agent terminates naturally on the first round where it makes no tool call: that round's text is its return value to the main agent.
-- Director honors the orchestrator's existing **Use streaming transport** toggle: when ON, the main agent and sub-agents route through the streaming API; when OFF, plain non-streaming calls are used.
-- **The message bubble updates live as the main agent works.** Each `write_message` / `apply_message_patches` call repaints the bubble — the message visibly grows, is patched in place, and is rewritten. Granularity is per-tool-call, not per-token.
-- **Sub-agent output streams live into the reasoning fold.** Each dispatched sub-agent gets its own named section (anchor `### [<handleId>: <subagentId>]`). With streaming on, tokens land in the right section as they arrive — multiple sub-agents dispatched in parallel show as several sections growing side-by-side, in dispatch order, with no character-level interleaving (the per-section anchoring relies on JavaScript's single-threaded event loop to keep each producer's bytes contiguous). With streaming off, the section gets the sub-agent's terminal text in one shot. The section header carries `(running)` while the sub-agent works, cleared on completion (or replaced with `(error: ...)` on failure).
-- Main-agent commentary between tool calls also lands in the reasoning fold as `### [main-N]` paragraphs, so you can follow its reasoning across rounds.
-
-## Character card binding
-
-Director profiles support character-card overrides like spec / agenda / loop. With a character selected, open the orchestrator editor and the **Save to character override** / **Clear character override** buttons are shown. Once bound, this director configuration is exported with the card — card authors can ship a complete "main agent + sub-agents + limits" setup tuned for their character.
-
-::: info Same shape as spec / agenda / loop
-Director shares the same **Export profile** / **Import profile** buttons as the other modes. The export file is a self-contained JSON payload (`format: luker_orchestrator_profile_v3`) of the active scope (global or character override). Import refuses to load a file whose mode does not match the current execution mode — switch the mode first if you need to load a director profile.
-:::
+- Runs on ordinary replies, regenerate, swipe and continue; quiet generation and impersonate do not trigger it.
+- Requires a mainstream cloud connection; local Kobold and Text generation WebUI are not supported.
+- No orchestration result is injected during a Director turn; the message body is the output.
+- Sub-agents cannot dispatch further sub-agents. They share the query tools enabled for the main agent and stop when a round calls no tools, returning that round's text.
+- The main agent and sub-agents follow the orchestrator's streaming setting.
+- The message updates as the main agent writes or patches it; sub-agent output streams into the Run Panel.
 
 ## Related pages
 
-- [Orchestrator overview](/features/orchestrator/) — shared configuration / when it triggers / character card binding
-- [Skills overview](/features/skills/) — the knowledge-pack substrate that ships with director defaults
-- [Orchestrator integration](/features/skills/orchestrator-integration) — how `skills.visible` resolves per-agent
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — let AI write your main-agent / sub-agent system prompts (strongly recommended)
-- [Notes substrate](/features/orchestrator/notes) — the open/close-state thread store consumed by `notes_pickup_scout` and mutated by `notes_curator`
-- [Loop mode](/features/orchestrator/loop) — single agent in a tool loop, producing a capsule
-- [Spec mode](/features/orchestrator/spec) — default DAG, multiple agents per stage producing a capsule
-- [Agenda mode](/features/orchestrator/agenda) — Planner dynamically schedules Workers, producing a capsule
-- [Custom tools](/features/orchestrator/custom-tools) — extend the main agent and sub-agents with tools from extensions, SillyTavern bridges, or handwritten code
-
-## Presets
-
-This mode's configuration can be saved as a named preset and switched in
-the editor panel. See [Orchestration Presets](./presets.md) for the full
-workflow.
-
+- [Orchestration overview](/features/orchestrator/) — shared settings, triggers and card binding
+- [AI Iteration Studio](/features/orchestrator/iteration-studio) — change main-agent and sub-agent prompts in natural language
+- [Skills overview](/features/skills/) — knowledge packs used by the default Director profile
+- [Notes](/features/orchestrator/notes) — reading and writing open plot threads
+- [Loop mode](/features/orchestrator/loop) — one agent researches and produces an orchestration result

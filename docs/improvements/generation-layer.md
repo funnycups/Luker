@@ -2,6 +2,8 @@
 
 The Unified Generation Layer is a backend architecture improvement introduced by Luker that consolidates generation logic scattered across various API endpoints into a shared module, achieving unified wrapping for multiple backends.
 
+This page describes its internal structure for troubleshooting requests and integrating extensions. Everyday use does not require it.
+
 ## Problem Background
 
 In SillyTavern, different AI backends (OpenAI, Anthropic, Google, Kobold, etc.) each have independent code paths. Each backend endpoint file independently handles request construction, streaming response parsing, error handling, and other logic. This leads to the following issues:

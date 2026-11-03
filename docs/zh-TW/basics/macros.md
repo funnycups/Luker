@@ -1,12 +1,12 @@
 # 巨集
 
-巨集（Macro）是寫成 <code v-pre>{{name}}</code> 形式的占位符，在 prompt 組裝時被替換為動態內容。它們出現在預設、世界書、角色卡、聊天訊息、斜線指令、正則替換裡——任何會被拼裝進 prompt 的文字欄位均能用巨集。請求到達 AI 時，所有的巨集均已被替換成最終字串。
+巨集（Macro）是寫成 <code v-pre>{{name}}</code> 形式的占位符，在提示詞組裝時替換為動態內容。預設、世界書、角色卡、聊天訊息、斜線指令與正則替換中凡進入提示詞的文字欄位均可使用巨集。請求到達模型時，所有巨集都已替換為最終字串。
 
 ## Macros 2.0 / 實驗性巨集引擎
 
-本頁的特性跑在 chevrotain 實作的新巨集引擎上——也就是 SillyTavern 引入的 **Macros 2.0**。Luker 預設啟用它，可以在「**使用者設定 → 聊天／訊息處理 → 實驗性宏引擎**」切換。
+本頁描述的特性由 SillyTavern 引入的 **Macros 2.0** 巨集引擎提供。該引擎預設啟用，可在**使用者設定 → 聊天／訊息處理 → 實驗性巨集引擎**中切換。
 
-實驗性引擎**關掉**時，巨集仍然能用，但下面這些特性會退化到老的正則管線、不再可用：
+關閉實驗性引擎後，巨集仍可使用，下列特性退回舊的正則解析流程：
 
 | 特性 | 需要實驗性引擎 |
 |---|---|
@@ -37,7 +37,7 @@
 {{roll::3d6+4}}
 ```
 
-單個 `:` 作為兜底也認（<code v-pre>{{roll: 1d20}}</code>），但因為正文裡經常出現單冒號，**推薦用 `::`**。
+單個 `:` 也可識別（<code v-pre>{{roll: 1d20}}</code>），但因為正文中經常出現單冒號，**推薦使用 `::`**。
 
 逗號列表巨集（<code v-pre>{{random}}</code>、<code v-pre>{{pick}}</code>）兩種寫法均可：
 
@@ -90,7 +90,7 @@
 \{{not a macro}}
 ```
 
-反斜線在後處理階段被去掉，原始的 <code v-pre>{{...}}</code> 字串原樣到達 AI。這是在 prompt 裡**教模型巨集語法**而不讓範例真的被執行的官方寫法。
+反斜線在後處理階段被去掉，原始的 <code v-pre>{{...}}</code> 字串原樣到達模型。這是在提示詞中**教模型巨集語法**、又不讓範例真正執行的寫法。
 
 ### 老式標籤
 
@@ -116,7 +116,7 @@
 | <code v-pre>{{$name}}</code> | 讀**全域**變數 | 目前值 |
 | <code v-pre>{{.name = 5}}</code> | 賦值 | `''`（空字串） |
 | <code v-pre>{{.name += 1}}</code> | 加（數值加 / 字串拼接） | `''` |
-| <code v-pre>{{.name -= 1}}</code> | 減（僅數值；非數值會告警） | `''` |
+| <code v-pre>{{.name -= 1}}</code> | 減，僅適用於數值，非數值會告警 | `''` |
 | <code v-pre>{{.name++}}</code> | 自增 | `''` |
 | <code v-pre>{{.name--}}</code> | 自減 | `''` |
 | <code v-pre>{{.name ?? "default"}}</code> | 取值，**未定義**時取預設 | 值或預設 |
@@ -150,7 +150,7 @@
 
 ## 控制流
 
-### 條件 — <code v-pre>{{if}}</code> / <code v-pre>{{else}}</code>
+### 條件 —— <code v-pre>{{if}}</code> / <code v-pre>{{else}}</code>
 
 ```text
 {{if condition}}then-content{{/if}}
@@ -171,7 +171,7 @@ condition 可以是：
 只有命中的那個分支裡的巢狀巨集才會被解析。<code v-pre>{{if .casting}}{{.mana -= 10}}{{/if}}</code> 在 `.casting` 為 false 時不會扣魔。把 <code v-pre>{{if}}</code> 套在昂貴或有副作用的巨集外面是安全的。
 :::
 
-### 迭代 — <code v-pre>{{each}}</code>
+### 迭代 —— <code v-pre>{{each}}</code>
 
 ```text
 {{each::collection}}
@@ -193,11 +193,11 @@ body 裡：
 | <code v-pre>{{loop_value}}</code> | 目前值整體（物件會自動 JSON 字串化） |
 | <code v-pre>{{loop_value::field}}</code> | 用點號路徑深入值，語義同 <code v-pre>{{getvar}}</code> |
 
-巢狀 <code v-pre>{{each}}</code> 會自然遮蔽外層的 `loop_key` / `loop_value`。物件的迭代順序遵循 JavaScript 原生規則——字串 key 走插入順序，整數樣 key 走升序。
+巢狀 <code v-pre>{{each}}</code> 會自然遮蔽外層的 `loop_key` / `loop_value`。物件依鍵的插入順序迭代，數字鍵按升序。
 
 空集合或不可迭代值繪製為空字串。引擎**沒有**對迭代次數加保護——body 裡再次 <code v-pre>{{each}}</code> 自己負責防爆。
 
-### 註解 — <code v-pre>{{//}}</code>
+### 註解 —— <code v-pre>{{//}}</code>
 
 行內：
 
@@ -214,13 +214,13 @@ body 裡：
 {{///}}
 ```
 
-註解解析為空字串，內容原樣吃掉。給 prompt 裡要標註但不想讓 AI 看見的部分用。
+註解解析為空字串。用於在提示詞中留下說明，且不讓模型讀到。
 
 ## 變數
 
 變數分兩種作用域：
 
-- **區域**——按聊天獨立儲存，持久化在 `chat_metadata.variables` 裡。用來存聊天專屬狀態（HP、目前任務、回合數）。
+- **區域**——按聊天獨立儲存，記錄在當前聊天的狀態中。用來存聊天專屬狀態（HP、目前任務、回合數）。
 - **全域**——跨所有聊天共享，存在擴充設定裡。用來存跨 chat 計數器、外掛設定。
 
 ### 讀
@@ -229,8 +229,8 @@ body 裡：
 |---|---|---|
 | <code v-pre>{{getvar::name}}</code> | <code v-pre>{{.name}}</code> | 讀區域 |
 | <code v-pre>{{getglobalvar::name}}</code> | <code v-pre>{{$name}}</code> | 讀全域 |
-| <code v-pre>{{hasvar::name}}</code>（別名 `varexists`） | — | `"true"` / `"false"` |
-| <code v-pre>{{hasglobalvar::name}}</code>（別名 `globalvarexists`） | — | `"true"` / `"false"` |
+| <code v-pre>{{hasvar::name}}</code>（別名 `varexists`） | —— | `"true"` / `"false"` |
+| <code v-pre>{{hasglobalvar::name}}</code>（別名 `globalvarexists`） | —— | `"true"` / `"false"` |
 
 不存在的變數回傳空字串。
 
@@ -242,9 +242,9 @@ body 裡：
 | <code v-pre>{{addvar::name::value}}</code> | <code v-pre>{{.name += value}}</code> | 加（數值）/ 拼接（字串）/ push（JSON 陣列） |
 | <code v-pre>{{incvar::name}}</code> | <code v-pre>{{.name++}}</code> | +1 |
 | <code v-pre>{{decvar::name}}</code> | <code v-pre>{{.name--}}</code> | -1 |
-| <code v-pre>{{deletevar::name}}</code>（別名 `flushvar`） | — | 刪除 |
-| <code v-pre>{{pushvar::name::value}}</code> | — | 把 `value` 推入 `name` 中儲存的 JSON 陣列；缺失時自動建為 `[]`。支援點號路徑（如 `roster.alice.inv`）。 |
-| <code v-pre>{{popvar::name}}</code> | — | 從 `name` 的 JSON 陣列彈出最後一個元素；空或缺失時為無操作。支援點號路徑。 |
+| <code v-pre>{{deletevar::name}}</code>（別名 `flushvar`） | —— | 刪除 |
+| <code v-pre>{{pushvar::name::value}}</code> | —— | 把 `value` 推入 `name` 中儲存的 JSON 陣列；缺失時自動建為 `[]`。支援點號路徑（如 `roster.alice.inv`）。 |
+| <code v-pre>{{popvar::name}}</code> | —— | 從 `name` 的 JSON 陣列彈出最後一個元素；空或缺失時為無操作。支援點號路徑。 |
 
 全域對應的有 `setglobalvar` / `addglobalvar` / `incglobalvar` / `decglobalvar` / `deleteglobalvar`。
 
@@ -279,9 +279,9 @@ body 裡：
 
 中間節點按需自動建立。純數字路徑段產生陣列索引（例如 <code v-pre>{{setvar::log.0::一位老人到來}}</code> 寫入 `log` 的第 0 個元素）。
 
-對非 JSON 值用點號路徑時，會 fallback 到字面鍵查找——名字真的就是 `a.b` 的變數也能讀到。
+對非 JSON 值使用點號路徑時，引擎改為按字面鍵查找，名稱確實為 `a.b` 的變數同樣可以讀取。
 
-這套和 <code v-pre>{{each}}</code> 配合很自然：一個 NPC 名冊、一份背包字典、一本任務日誌均可以塞進單一變數，prompt 組裝時再繪製到 prompt 或世界書條目裡：
+結構化值與 <code v-pre>{{each}}</code> 配合使用：NPC 名冊、背包物品、任務日誌均可存入同一個變數，在提示詞組裝時渲染進提示詞或世界書條目：
 
 ```text
 {{each::npcs}}
@@ -324,14 +324,14 @@ SillyTavern 的按鍵尋址巨集族可以直接使用：
 
 ### 逐樓層變數 {#per-message-variables}
 
-原生 SillyTavern 裡，副作用巨集 <code v-pre>{{setvar::hp::50}}</code> 只在 *prompt 範本* 裡（預設、世界書、首樓）才會執行。AI 在回覆裡寫同樣的字面量什麼都不會發生，還會原樣顯示出來污染敘事。
+原生 SillyTavern 中，副作用巨集 <code v-pre>{{setvar::hp::50}}</code> 僅在 *提示詞範本* 中（預設、世界書、首樓）執行。AI 在回覆裡寫同樣的字面量什麼都不會發生，還會原樣顯示出來污染敘事。
 
 Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆、使用者訊息、swipe、續寫）儲存時，Luker 會：
 
 1. 掃描文字裡的 <code v-pre>{{setvar}}</code>、<code v-pre>{{addvar}}</code>、<code v-pre>{{incvar}}</code>、<code v-pre>{{decvar}}</code>、<code v-pre>{{deletevar}}</code>。
 2. 把裡面巢狀的展示巨集（<code v-pre>{{user}}</code>、<code v-pre>{{getvar::other}}</code>、<code v-pre>{{time}}</code>……）對目前狀態求值。
-3. 把 op 立刻 apply 到 `chat_metadata.variables`。
-4. 在 `message.extra.var_ops` 上追加一條結構化記錄。
+3. 把變更立刻套用到當前聊天的變數中。
+4. 在該訊息上追加一條變數變動記錄。
 5. 從可見文字裡把字面量刪掉。
 
 當你刪訊息、切 swipe、重新生成、編輯時，Luker 會**重播剩餘的 op log**，讓變數狀態跟可見的時間線保持一致。
@@ -375,7 +375,7 @@ Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆�
 | <code v-pre>{{greeting::N}}</code> | 第 N 條問候語——0 是主，1+ 是 alt greetings |
 | <code v-pre>{{mesExamples}}</code> | 對話範例，啟用 instruct 時自動按 instruct 格式化 |
 | <code v-pre>{{mesExamplesRaw}}</code> | 對話範例原文 |
-| <code v-pre>{{original}}</code> | 角色級 override 裡的原始 prompt 內容。**單次有效**——同一次替換裡第二次呼叫回傳 `""`。只在 `charPrompt` / `charInstruction` 內有意義。 |
+| <code v-pre>{{original}}</code> | 角色級覆寫中的原始提示詞內容。**單次有效**：同一次替換中第二次呼叫回傳 `""`。僅在 `charPrompt` / `charInstruction` 內有效。 |
 
 ### 聊天狀態
 
@@ -438,7 +438,7 @@ Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆�
 | 巨集 | 回傳 |
 |---|---|
 | <code v-pre>{{model}}</code> | 目前 model 識別字 |
-| <code v-pre>{{maxPrompt}}</code>（別名 `maxPromptTokens`） | prompt 上下文 token 上限 |
+| <code v-pre>{{maxPrompt}}</code>（別名 `maxPromptTokens`） | 提示詞上下文 token 上限 |
 | <code v-pre>{{maxContext}}</code>（別名 `maxContextTokens`） | 上下文 token 上限 |
 | <code v-pre>{{maxResponse}}</code>（別名 `maxResponseTokens`） | 回應 token 上限 |
 | <code v-pre>{{isMobile}}</code> | 行動裝置時 `"true"` |
@@ -466,7 +466,7 @@ Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆�
 
 ### Instruct 與系統提示詞
 
-下面這些只在對應的 instruct / sysprompt 開關打開時回傳內容。
+下列巨集僅在對應的指令範本或系統提示詞開關啟用時回傳內容。
 
 | 巨集 | 回傳 |
 |---|---|
@@ -489,8 +489,8 @@ Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆�
 
 | 巨集 | 來源 | 回傳 |
 |---|---|---|
-| <code v-pre>{{charPrefix}}</code> | Stable Diffusion | 正面圖像生成 prompt 前綴 |
-| <code v-pre>{{charNegativePrefix}}</code> | Stable Diffusion | 負面圖像生成 prompt 前綴 |
+| <code v-pre>{{charPrefix}}</code> | Stable Diffusion | 正面圖像生成提示詞前綴 |
+| <code v-pre>{{charNegativePrefix}}</code> | Stable Diffusion | 負面圖像生成提示詞前綴 |
 | <code v-pre>{{summary}}</code> | Summarize | 儲存的聊天摘要 |
 
 第三方擴充可以註冊更多巨集，巨集瀏覽器會標出每個巨集的來源。
@@ -499,7 +499,7 @@ Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆�
 
 旗標是放在開頭 <code v-pre>{{</code> 和巨集名之間的單字元，用來改變巨集的解析或求值行為。
 
-### `/` — 閉合標記
+### `/` —— 閉合標記
 
 標記一個標籤是範圍巨集的閉合半邊。和同名的開標籤配對，把兩者之間的內容作為巨集的**最後一個位置參數**傳入：
 
@@ -511,7 +511,7 @@ Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆�
 
 閉合標籤自身不接受參數。
 
-### `#` — 保留空白
+### `#` —— 保留空白
 
 **只對範圍巨集有效。** 預設情況下，引擎會先對 body 做自動整理（剝掉首尾空白，再把第一個非空行的共同前導縮排從所有行裡減掉）才交給 handler。加上 `#` 旗標會跳過這一步，body 原樣傳入：
 
@@ -526,7 +526,7 @@ Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆�
 
 加在非範圍巨集前面時，`#` 被接受但沒有任何效果。
 
-### `!` `?` `~` `>` — 預留未實作
+### `!` `?` `~` `>` —— 預留未實作
 
 | 旗標 | 預期含義 | 現狀 |
 |---|---|---|
@@ -539,9 +539,9 @@ Luker 用**逐樓層變數提取**解決這個問題。一條訊息（AI 回覆�
 
 旗標之間、旗標和巨集名之間均允許空白，多個可以組合：<code v-pre>{{ #each ::list}} … {{/each}}</code>。
 
-### `|` — 管道符（普通字元）
+### `|` —— 管道符（普通字元）
 
-::: tip 與 SillyTavern 行為差異的由來
+::: tip 與 SillyTavern 的差異
 原版 SillyTavern 將管道符解析為參數終止符，並支援 <code v-pre>{{macro|uppercase}}</code> 一類輸出修飾器。該實現在上游被暫時停用（issue #5618），Luker 遵循上游的詞法分析器，因此本節描述的行為與上游保持一致。
 :::
 
@@ -581,37 +581,15 @@ STscript 裡的 `|` 是指令管道符，那是指令解析器的特性，不是
 
 - **巢狀巨集**先解析，外層拿到的是已經求值完的字串參數。除非該巨集定義打開 `delayArgResolution`（目前只有 <code v-pre>{{if}}</code> 和 <code v-pre>{{each}}</code>）。
 - **副作用巨集**（<code v-pre>{{setvar}}</code>、<code v-pre>{{addvar}}</code>、<code v-pre>{{incvar}}</code>、<code v-pre>{{decvar}}</code>、<code v-pre>{{deletevar}}</code>）立即生效，同一 pass 裡後面的巨集能讀到新值。
-- **逐樓層提取**（見 [逐樓層變數](#per-message-variables)）發生在**訊息儲存時**，不是 prompt 組裝時。
-- **未知巨集**保留原始 <code v-pre>{{...}}</code>（巢狀參數仍然會展開）。不拋錯也不告警。
-- **參數數量 / 類型不符**：預設 `strictArgs: true` 時記一條 runtime warning 並保留原始巨集文字；`strictArgs: false` 時記 warning 但 handler 仍然跑。
+- **逐樓層提取**（見 [逐樓層變數](#per-message-variables)）發生在**訊息儲存時**，提示詞組裝時不提取。
+- **未知巨集**保留原始 <code v-pre>{{...}}</code>（巢狀參數仍會展開）。
+- **參數數量或類型不匹配**：該巨集不展開，按原樣輸出，主控台記錄一條警告；同一段文字中的其他巨集照常解析。
 - **結果規範化**——每個 handler 的回傳均會被規範化：`null` / `undefined` → `''`，`Date` → ISO 字串，陣列 / 物件 → `JSON.stringify(...)`，其他 → `String(...)`。這就是 <code v-pre>{{loop_value}}</code> 對一個物件會輸出 JSON 的原因。
 - **後處理清掃**——殘留的 <code v-pre>{{trim}}</code> 標記和零散的 `else` 哨兵字元會在後處理裡被清掉。
 
-## 自訂與外掛巨集
+## 自訂巨集
 
-擴充可以註冊自己的巨集：
-
-```js
-const ctx = Luker.getContext();
-
-ctx.macros.register('myStatus', {
-    description: '回傳外掛狀態字串。',
-    category: 'utility',
-    handler: () => 'My plugin is active.',
-});
-
-ctx.macros.register('greet', {
-    description: '問候。',
-    unnamedArgs: [
-        { name: 'name', type: 'string', description: '問候對象' },
-    ],
-    handler: (mctx) => `Hello, ${mctx.unnamedArgs[0]}!`,
-});
-```
-
-註冊之後 <code v-pre>{{myStatus}}</code> 和 <code v-pre>{{greet::Bob}}</code> 就能在所有支援巨集的位置使用，包括世界書、預設、聊天訊息。
-
-完整的註冊 API——參數類型、別名、範圍巨集、惰性解析、`dynamicMacros` 單次注入——在 [Extension API · 巨集與變數](/zh-TW/development/extension-api/macros-and-variables)。
+安裝的擴充功能可以向系統註冊自訂巨集。註冊後的巨集可以在世界書、預設和聊天訊息中直接使用，並能在巨集瀏覽器中查看其說明與範例。開發者若需編寫自訂巨集，請參閱 [Extension API · 巨集與變數](/zh-TW/development/extension-api/macros-and-variables)。
 
 ## 探索與除錯
 
@@ -622,9 +600,9 @@ ctx.macros.register('greet', {
 
 ## 巨集在哪些欄位裡生效
 
-凡是會被 prompt 管線吃進去的文字欄位：
+會進入提示詞的文字欄位：
 
-- 角色卡欄位（description、personality、scenario、first message、alt greetings、對話範例、@ Depth Note、character prompts）
+- 角色卡欄位（描述、性格、場景、首條訊息、備選開場白、對話範例、深度提示、角色提示詞）
 - 世界書條目正文、key、header
 - 預設裡的提示詞條目
 - 作者筆記
@@ -632,8 +610,6 @@ ctx.macros.register('greet', {
 - 斜線指令參數、Quick Reply 腳本
 - 正則擴充的替換內容
 - 巨集自己的參數（巢狀）
-
-那些只存字面文字、不會到 model 的欄位——比如連線設定裡的 API URL——**不會**解析巨集。拿不準時用 <code v-pre>{{date}}</code> 試一下：如果顯示成字面的 <code v-pre>{{date}}</code>，那個欄位就不跑巨集。
 
 ## 常見範式
 
@@ -680,7 +656,7 @@ ctx.macros.register('greet', {
 {{/if}}{{/each}}
 ```
 
-AI 用 <code v-pre>{{setvar::quests::…}}</code> 在回覆裡維護 `quests` 結構；上面那段寫在世界書裡，prompt 組裝時按目前狀態鋪開。
+AI 用 <code v-pre>{{setvar::quests::…}}</code> 在回覆裡維護 `quests` 結構；上面那段寫在世界書裡，提示詞組裝時依目前狀態展開。
 
 ### 根據 flag 切換的作者筆記
 
@@ -690,11 +666,11 @@ AI 用 <code v-pre>{{setvar::quests::…}}</code> 在回覆裡維護 `quests` �
 {{/if}}
 ```
 
-從 Quick Reply 或斜線指令切的全域 flag，成為一個可選的指令，只在需要時隨 prompt 一起發出去。
+從 Quick Reply 或斜線指令切換的全域旗標，成為一個按需啟用的指令，需要時隨提示詞一同傳送。
 
 ## 參考
 
 - [逐樓層變數](/zh-TW/features/variable-op-log) —— 樓層變數特性的完整說明。
 - [Extension API · 巨集與變數](/zh-TW/development/extension-api/macros-and-variables) —— 在外掛裡註冊自訂巨集。
-- [世界書基礎](/zh-TW/basics/world-info) —— 大部分 prompt 側巨集的歸宿。
-- [預設系統](/zh-TW/basics/presets) —— prompt 側巨集的另一處歸宿。
+- [世界書基礎](/zh-TW/basics/world-info) —— 大部分提示詞巨集的使用場景。
+- [預設系統](/zh-TW/basics/presets) —— 提示詞巨集的另一處使用場景。

@@ -6,7 +6,7 @@ Luker 以 Web 服務的形式執行，預設僅接受本機連線，同一網路
 
 - 電腦執行服務，手機或平板隨時使用
 - 家中多台裝置共享同一套角色卡與聊天記錄
-- 在 iPhone 或 iPad 上使用 Luker，iOS 沒有 app
+- 在 iPhone 或 iPad 上使用 Luker，可安裝自簽名應用或透過瀏覽器存取
 
 如果目標是在兩台 Luker 之間同步資料，請見[區域網路同步](/zh-TW/improvements/lan-sync)，那是另一項功能。
 
@@ -14,8 +14,8 @@ Luker 以 Web 服務的形式執行，預設僅接受本機連線，同一網路
 
 以下設定會阻止區域網路存取：
 
-- `listen: false` — Luker 僅綁定回環地址，其他裝置根本無法建立連線。
-- `whitelistMode: true` — Luker 拒絕所有不在 `whitelist` 列表中的地址。
+- `listen: false` —— Luker 僅綁定回環地址，其他裝置根本無法建立連線。
+- `whitelistMode: true` —— Luker 拒絕所有不在 `whitelist` 列表中的地址。
 
 在預設設定下，區域網路裝置要麼連線失敗，要麼在開啟監聽後收到 HTTP `403 Forbidden` 頁面，伺服器端主控台同時輸出 `Blocked connection from <ip>`。
 
@@ -121,19 +121,19 @@ ports:
 
 ## iOS
 
-iOS 沒有 app，iPhone 與 iPad 透過瀏覽器經網路存取。原因與設定步驟見 [iOS](/zh-TW/guide/ios)。
+iPhone 與 iPad 可安裝自簽名應用在本機執行，也可透過瀏覽器存取另一台裝置上的 Luker。兩種方式見 [iOS](/zh-TW/guide/ios)。
 
 ## 疑難排解
 
-- **出現 403 Forbidden 頁面** — 裝置地址不在白名單中，將其加入或放寬網段。
-- **連線逾時或被拒絕，且主控台沒有任何輸出** — 服務不可達。檢查 `listen` 是否為 `true`，以及主機防火牆是否允許該連接埠：
+- **出現 403 Forbidden 頁面** —— 裝置地址不在白名單中，將其加入或放寬網段。
+- **連線逾時或被拒絕，且主控台沒有任何輸出** —— 服務不可達。檢查 `listen` 是否為 `true`，以及主機防火牆是否允許該連接埠：
   - Windows：在防火牆中允許 Node.js，並將網路設定檔設為「私人」。
   - Linux：`sudo ufw allow 8000`
   - macOS：在「系統設定」中允許 Node 行程的傳入連線。
-- **只有主機能連線** — 另一台裝置使用的仍是 `localhost`，請改用主機的區域網路地址。
+- **只有主機能連線** —— 另一台裝置使用的仍是 `localhost`，請改用主機的區域網路地址。
 
 ## 相關頁面
 
-- [基礎設定](/zh-TW/guide/configuration) — 完整的設定項說明
-- [驗證與安全](/zh-TW/guide/authentication) — Basic Auth、帳號與白名單
-- [區域網路同步](/zh-TW/improvements/lan-sync) — 在兩台 Luker 之間同步資料
+- [基礎設定](/zh-TW/guide/configuration) —— 完整的設定項說明
+- [驗證與安全](/zh-TW/guide/authentication) —— Basic Auth、帳號與白名單
+- [區域網路同步](/zh-TW/improvements/lan-sync) —— 在兩台 Luker 之間同步資料

@@ -114,6 +114,6 @@ Linux 上 AppImage 会被就地替换，替换完成后提示重启应用。`.de
 
 ## 相关页面
 
-- [快速开始](/zh-CN/guide/getting-started) — 完整的安装指南
-- [基础配置](/zh-CN/guide/configuration) — 配置项说明
-- [存储后端](/zh-CN/guide/configuration#存储后端) — 服务端支持的存储后端
+- [快速开始](/zh-CN/guide/getting-started) —— 完整的安装指南
+- [基础配置](/zh-CN/guide/configuration) —— 配置项说明
+- [存储后端](/zh-CN/guide/configuration#存储后端) —— 服务端支持的存储后端

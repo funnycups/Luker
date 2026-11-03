@@ -40,6 +40,6 @@
 
 ## 相關頁面
 
-- [預設系統](/zh-TW/basics/presets) — 預設的基礎概念
-- [世界書基礎](/zh-TW/basics/world-info) — 世界書的基礎概念
-- [角色卡綁定預設與人設](/zh-TW/improvements/card-bound-presets) — 角色卡與預設的綁定
+- [預設系統](/zh-TW/basics/presets) —— 預設的基礎概念
+- [世界書基礎](/zh-TW/basics/world-info) —— 世界書的基礎概念
+- [角色卡綁定預設與人設](/zh-TW/improvements/card-bound-presets) —— 角色卡與預設的綁定

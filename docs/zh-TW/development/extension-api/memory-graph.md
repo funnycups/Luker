@@ -188,7 +188,7 @@ mg.offStoreCommit(callback);
 | 方法 | 回呼入參 | 用途 |
 | --- | --- | --- |
 | `onStoreCommit(cb)` | `{ chatKey: string }` | 在 session 寫入或召回回放提交落地之後觸發；回傳冪等的退訂函式。 |
-| `offStoreCommit(cb)` | — | `onStoreCommit` 的對稱移除；回傳 `boolean`。 |
+| `offStoreCommit(cb)` | —— | `onStoreCommit` 的對稱移除；回傳 `boolean`。 |
 | `onInjectionChanged(cb)` | [`InjectionState`](#injectionstate) | 主流召回流水線確定新的注入決策時觸發；回傳冪等的退訂函式。 |
 
 監聽器拋錯會被捕獲並日誌化；單個訂閱者失敗不會阻塞其他訂閱者。

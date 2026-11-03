@@ -4,14 +4,14 @@
 
 本指南涵蓋以下情境：
 
-- **反向代理** — 適用於執行 Luker 的機器擁有公網 IP 與網域的情境。
-- **隧道** — 適用於沒有公網 IP 的情境。
+- **反向代理** —— 適用於執行 Luker 的機器擁有公網 IP 與網域的情境。
+- **隧道** —— 適用於沒有公網 IP 的情境。
 
 ## 開始之前
 
 - **監聽網路。** 在 `config.yaml` 中設定 `listen: true`，讓 Luker 接受來自代理或隧道的連線。監聽設定見[區域網路存取](/zh-TW/guide/lan-access)。
 - **要求身分驗證。** 啟用基本認證或多使用者帳戶系統。暴露在公網且沒有身分驗證的 Luker 會被掃描並濫用。參見[驗證與安全](/zh-TW/guide/authentication)。
-- **確定外部如何存取。** 有公網 IP 與網域時走路徑 A，否則走路徑 B。
+- **確定外部如何存取。** 有公網 IP 與網域時使用路徑 A，否則使用路徑 B。
 
 ::: warning
 絕不把路由器連接埠直接轉發到 Luker。這會暴露未經 TLS 加密的原始 HTTP 服務，且 Luker 無法區分合法請求與攻擊請求。使用下面任一路徑。
@@ -21,7 +21,7 @@
 
 適用於執行 Luker 的機器透過公網 IP 與網域可從網際網路存取的情境。反向代理在 443 連接埠接收 HTTPS，並轉發到同一機器上 Luker 的明文 HTTP 連接埠。
 
-思路對任何網頁伺服器都相同：把每個路徑轉發到 Luker 的連接埠，原樣轉發原始請求標頭，並允許 WebSocket 升級。Luker 透過持久的 WebSocket 連線傳送生成請求，丟棄升級的代理會停用這條傳輸通道。
+任何網頁伺服器上的設定方式一致：把每個路徑轉發到 Luker 的連接埠，原樣轉發原始請求標頭，並允許 WebSocket 升級。Luker 透過持久的 WebSocket 連線傳送生成請求，丟棄升級的代理會停用這條傳輸方式。
 
 ### nginx
 
@@ -92,10 +92,10 @@ server {
 
 完成此事的工具不少，按願意投入的設定量選擇一個：
 
-- **Tailscale** — 私有 VPN。只有加入你的 tailnet 的裝置才能存取 Luker，完全不對外暴露，是個人裝置數量不多時最安全也最省事的選擇。
-- **Cloudflare Tunnel** — `cloudflared` 讓 Luker 取得一個由 Cloudflare 託管的網域下的主機名稱。適合已經在 Cloudflare 上管理網域的使用者。
-- **ngrok** — 一條命令即可取得臨時公網 URL。適合快速測試，免費版的 URL 每次執行都會變化。
-- **frp** — 自建中繼。需要一台有公網 IP 的獨立伺服器，但對中繼擁有完全控制。
+- **Tailscale** —— 私有 VPN。只有加入你的 tailnet 的裝置才能存取 Luker，完全不對外暴露，是個人裝置數量不多時最安全也最省事的選擇。
+- **Cloudflare Tunnel** —— `cloudflared` 讓 Luker 取得一個由 Cloudflare 託管的網域下的主機名稱。適合已經在 Cloudflare 上管理網域的使用者。
+- **ngrok** —— 一條命令即可取得臨時公網 URL。適合快速測試，免費版的 URL 每次執行都會變化。
+- **frp** —— 自建中繼。需要一台有公網 IP 的獨立伺服器，但對中繼擁有完全控制。
 
 每個工具都有自己的設定步驟，按其文件把隧道指向 Luker 的位址 `http://127.0.0.1:8000`，然後套用下面的 [Luker 設定](#luker-設定)。
 
@@ -157,8 +157,8 @@ Luker 會根據 `X-Forwarded-Proto` 與 `X-Forwarded-Host` 建構部分絕對 UR
 
 ## 相關頁面
 
-- [區域網路存取](/zh-TW/guide/lan-access) — 讓同一網路內的裝置存取 Luker
-- [驗證與安全](/zh-TW/guide/authentication) — 基本認證、帳戶與白名單
-- [基礎設定](/zh-TW/guide/configuration) — 完整設定參考
-- [WebSocket 代理](/zh-TW/improvements/ws-proxy) — 為什麼必須轉發 WebSocket 升級
-- [區域網路同步](/zh-TW/improvements/lan-sync) — 在兩套 Luker 之間同步資料
+- [區域網路存取](/zh-TW/guide/lan-access) —— 讓同一網路內的裝置存取 Luker
+- [驗證與安全](/zh-TW/guide/authentication) —— 基本認證、帳戶與白名單
+- [基礎設定](/zh-TW/guide/configuration) —— 完整設定參考
+- [WebSocket 代理](/zh-TW/improvements/ws-proxy) —— 為什麼必須轉發 WebSocket 升級
+- [區域網路同步](/zh-TW/improvements/lan-sync) —— 在兩套 Luker 之間同步資料

@@ -1,131 +1,95 @@
 # 改进总览
 
-Luker 对 SillyTavern 的改进不是简单的功能堆叠，而是从数据传输架构、预设系统、扩展能力等多个维度进行的系统性重构。这些改进相互配合，共同构成了一个更高效、更灵活的角色扮演平台。
+Luker 在 SillyTavern 的基础上改造了数据保存、预设组织、生成请求处理和扩展能力。本页说明这些改动解决了什么问题，以及它们给日常使用带来什么变化。具体配置步骤在各自页面中。
 
 ## 改进一览
 
-| 分类 | 改进项 | 简要描述 |
+| 分类 | 改进 | 解决的问题 |
 | --- | --- | --- |
-| 架构 | [预设解耦](/zh-CN/improvements/preset-decoupling) | 将连接参数与预设分离为独立实体 |
-| 架构 | [增量同步](/zh-CN/improvements/incremental-sync) | 基于增量 patch 的数据传输，替代全量覆盖 |
-| 架构 | [后端实时存储](/zh-CN/improvements/backend-storage) | 数据变更实时持久化，完整性校验防止并发冲突 |
-| 功能 | [函数调用运行时](/zh-CN/improvements/function-call-runtime) | 原生与纯文本两种模式的统一函数调用支持 |
-| 功能 | [角色卡绑定预设与人设](/zh-CN/improvements/card-bound-presets) | 角色卡可携带推荐预设和默认人设 |
-| 功能 | [请求检查器](/zh-CN/improvements/request-inspector) | 追踪生成请求的完整生命周期与 Token 用量 |
-| 功能 | [预设关联世界书](/zh-CN/improvements/preset-world-info) | 切换预设时自动激活对应的世界书 |
-| 功能 | [Skills](/zh-CN/features/skills/) | 兼容 Anthropic 的本地知识包，编排器 agent 按需读取 |
-| 基础设施 | [统一生成层](/zh-CN/improvements/generation-layer) | 多后端生成请求统一封装与 Token 计量 |
-| 基础设施 | [性能优化](/zh-CN/improvements/performance) | 并行加载、懒加载、延迟初始化等启动和运行时优化 |
-| 基础设施 | [WebSocket 代理](/zh-CN/improvements/ws-proxy) | 持久 WS 隧道传输，心跳保活与流偏移恢复 |
-| 基础设施 | [认证与配额](/zh-CN/improvements/auth-and-quota) | OAuth 登录、多用户认证与存储配额管理 |
-| 基础设施 | [其他改进](/zh-CN/improvements/other) | 连接管理器增强、提示词/预设分组、动态模型列表等 |
+| 架构 | [预设解耦](/zh-CN/improvements/preset-decoupling) | 切换预设不再连带更换 API 连接 |
+| 架构 | [增量同步](/zh-CN/improvements/incremental-sync) | 保存时只传输变化，减少流量与并发冲突 |
+| 架构 | [后端实时存储](/zh-CN/improvements/backend-storage) | 操作后立即落盘，浏览器崩溃不丢数据 |
+| 功能 | [函数调用运行时](/zh-CN/improvements/function-call-runtime) | 原生与纯文本模型都能调用工具 |
+| 功能 | [角色卡绑定预设与人设](/zh-CN/improvements/card-bound-presets) | 角色卡携带作者推荐的生成配置 |
+| 功能 | [请求检查器](/zh-CN/improvements/request-inspector) | 查看每次请求的输入、输出与 Token 用量 |
+| 功能 | [预设关联世界书](/zh-CN/improvements/preset-world-info) | 切换预设时自动激活对应世界书 |
+| 功能 | [Skills](/zh-CN/features/skills/) | 把长提示词拆成按需读取的知识包 |
+| 基础设施 | [统一生成层](/zh-CN/improvements/generation-layer) | 不同后端共享同一套请求处理 |
+| 基础设施 | [性能优化](/zh-CN/improvements/performance) | 更快的启动、加载与日常操作 |
+| 基础设施 | [WebSocket 代理](/zh-CN/improvements/ws-proxy) | 不稳定网络中保持生成不中断 |
+| 基础设施 | [认证与配额](/zh-CN/improvements/auth-and-quota) | 多人共享实例时的登录与容量管理 |
+| 基础设施 | [其他改进](/zh-CN/improvements/other) | 连接管理、分组、动态模型列表等 |
 
-独有功能模块（记忆图、编排器、角色编辑助手、搜索工具、CardApp 等）请参阅 [独有功能](/zh-CN/features/memory-graph) 分类。
+记忆图、多 Agent 编排、角色卡编辑助手、搜索插件和 CardApp 属于 Luker 的独有功能，见 [独有功能](/zh-CN/features/memory-graph)。
 
 ## 架构改进
 
 ### 预设解耦
 
-SillyTavern 中，API 连接参数（如模型名称、API 地址、代理设置）与预设（如温度、Top-P、提示词配置）耦合在同一个配置对象中。这意味着切换 API 提供商时，用户不得不重新配置生成参数；反过来，调整采样策略也可能意外影响连接设置。
+SillyTavern 把 API 连接参数和生成预设放在同一个配置对象里。切换模型或服务商时，采样参数和提示词设置会跟着改变；调整采样参数也可能意外影响连接。
 
-Luker 将两者拆分为独立实体：**连接配置**负责「连到哪里」，**预设**负责「怎么生成」。在代码层面，每个设置字段均通过 `isConnection` 标记进行分类，加载预设时自动跳过连接字段。两者可以自由组合——同一套预设可以搭配不同的 API 连接使用，反之亦然。
+Luker 把两者拆开：**连接配置**负责连到哪里，**预设**负责怎么生成。同一套预设可以搭配不同连接，同一个连接也可以搭配不同预设。角色卡绑定预设、API 连接配置等功能都建立在这个拆分之上。
 
-这一解耦也为角色卡绑定预设、连接管理器等下游功能奠定了基础。详见 [预设解耦](/zh-CN/improvements/preset-decoupling)。
+详见[预设解耦](/zh-CN/improvements/preset-decoupling)。
 
 ### 增量同步
 
-传统的前后端数据同步采用全量覆盖：修改时将完整对象发送到服务端。当对象体积增长（如包含大量消息的聊天记录），这种方式会产生显著的带宽浪费和写入冲突风险。
+传统保存会把完整对象发送到服务端。聊天越长，每次保存传输的数据越多，并发写入也越容易互相覆盖。
 
-Luker 新增了增量端点：
+Luker 只发送发生变化的部分：新消息追加、单条消息修补、元数据合并。服务端在写入后校验数据完整性，发现并发修改时拒绝覆盖。设置保存同样采用增量方式，并带冲突检测。
 
-- **`append`**：将新消息追加到 `.jsonl` 文件末尾，而非重写整个文件
-- **`patch`**：按消息索引修补指定行，只更新变更的消息
-- **`patch-metadata`**：使用深度合并更新聊天元数据，而非替换
-
-写入后，后端计算文件的 integrity hash 并返回给前端；后续请求携带该值进行校验，不匹配时返回 409 Conflict，从根本上防止并发写入冲突。设置数据同样支持增量 patch 保存，带冲突检测和序列化写入。详见 [增量同步](/zh-CN/improvements/incremental-sync)。
+详见[增量同步](/zh-CN/improvements/incremental-sync)。
 
 ### 后端实时存储
 
-SillyTavern 的部分数据依赖前端触发保存，存在「用户已操作但数据未落盘」的时间窗口。一旦进程异常退出，这些变更就会丢失。
+SillyTavern 的部分数据要等前端触发才保存，这之间存在「已经操作但还没落盘」的窗口。进程异常退出时，这段时间的修改会丢失。
 
-Luker 将存储逻辑下沉到后端：数据变更在到达服务端的同时即刻持久化到磁盘。前端不再承担「何时保存」的职责，从根本上消除了数据丢失的窗口期。
+Luker 把保存职责移到服务端：数据到达即持久化，前端不再决定什么时候保存。聊天写入按顺序执行，群聊等并发场景不会互相破坏；生成完成后会确认结果已经记录。还可以配置聊天文件的自动备份。
 
-此外，Luker 引入了以下机制保障数据安全：
-
-- **聊天状态文件**：`.luker-state.<chat_id>.json` 文件为每个聊天维护额外状态，生命周期与聊天文件绑定
-- **Generation Acknowledge**：AI 生成完成后通过专用端点确认，确保生成结果被正确记录
-- **序列化聊天写入**：防止并发写入导致数据损坏，特别针对群聊场景
-- **可配置备份策略**：支持聊天文件的自动备份
-
-详见 [后端实时存储](/zh-CN/improvements/backend-storage)。
+详见[后端实时存储](/zh-CN/improvements/backend-storage)。
 
 ## 功能增强
 
 ### 函数调用运行时
 
-Luker 内置了统一的函数调用（Function Calling）运行时，支持多种工作模式：
+不同模型对工具调用的支持不一致。有的原生支持结构化调用，有的只能在文本里写出调用意图。
 
-- **原生模式**：利用 API 提供商的原生工具调用能力（兼容 OpenAI、Claude、Gemini 等格式），由模型直接输出结构化调用指令，支持流式工具调用规范化
-- **纯文本模式**：通过提示词引导模型在普通文本中输出调用意图，再由运行时解析执行，支持多工具调用和可配置的错误重试
+Luker 提供统一的函数调用运行时：原生支持时使用模型自带的能力，不支持时用提示词引导并在本地解析。两种方式对插件和用户呈现相同的工具，连接配置中可以单独调整纯文本模式的开关与重试。
 
-这些模式覆盖了从高端商业 API 到本地小模型的全部场景。连接管理器中可按配置独立设置纯文本函数调用的开关和重试策略。详见 [函数调用运行时](/zh-CN/improvements/function-call-runtime)。
+详见[函数调用运行时](/zh-CN/improvements/function-call-runtime)。
 
 ### 角色卡绑定预设与人设
 
-角色卡的创作者往往最清楚角色在什么参数下表现最佳。Luker 允许角色卡携带**推荐预设**（已自动剥离连接字段）和**默认人设**。用户加载角色卡时，系统自动应用创作者推荐的配置并记录之前的预设；离开角色时自动恢复。预设选择器中，绑定预设以特殊徽章标识，与普通预设视觉区分。
+角色卡作者最清楚角色在什么参数下表现最好。Luker 允许角色卡携带推荐预设和默认人设；加载角色时自动应用，离开时恢复之前的配置。绑定预设会在选择器中标记，并随角色卡导出。
 
-绑定的预设与人设随标准角色卡的 PNG 或 JSON 导出一起保存，接收方导入后会恢复相同的绑定预设与人设。
+详见[角色卡绑定预设与人设](/zh-CN/improvements/card-bound-presets)。
 
 ### 请求检查器
 
-调试 AI 对话时，用户经常需要知道「到底发了什么给 API」。Luker 的请求检查器追踪 AI 生成请求从发起到完成的完整生命周期，记录 prompt token、completion token 和总用量。它支持流式响应的 Token 统计（从 SSE 事件中提取 usage 信息），也覆盖图像生成、向量嵌入和重排请求的追踪。请求检查器追踪的 Token 用量是独立的统计功能，与存储配额管理相互独立。详见 [请求检查器](/zh-CN/improvements/request-inspector)。
+想知道一次生成到底发送了什么、消耗了多少 Token，可以打开请求检查器。它记录请求的输入、输出、耗时和 Token 用量，覆盖流式回复、图像生成、向量嵌入和重排。Token 统计与存储配额彼此独立。
 
-### Skill
+详见[请求检查器](/zh-CN/improvements/request-inspector)。
 
-多 agent 编排器 profile 的系统提示词往往越来越长 —— 可复用的写作规则、评审方法、工作流契约，过去均内联在 `systemPrompt` 字段里，经常在多个子代理里重复拷贝。Luker 引入了 **Skill（skills）**：兼容 Anthropic 的本地知识包（`SKILL.md` + frontmatter + 可选子文件），agent 按需读取。Skill 按名字寻址（引用里不带作用域前缀），住在 `global` / `preset` / `character` 作用域下，派遣时按后者优先解析。
+### Skills
 
-编排器默认 director profile 自带出厂 Skill，覆盖共享写作规则、主代理工作流，以及子代理的方法 Skill。Skill 可以跟角色卡（PNG 元数据）或预设（嵌入载荷）一起分发，所以分发卡片也就分发了支撑它工作的写作规则。Skill 管理子面板覆盖安装、编辑、迁移作用域、嵌入导出；迭代工作台 AI 可以通过专用工具从长 `systemPrompt` 文本里抽出可复用规则到 Skill。概念模型见 [Skills 概览](/zh-CN/features/skills/)，格式见 [创作 Skill](/zh-CN/features/skills/authoring)。
+编排器里的系统提示词会随着规则增多而膨胀。Skills 把可复用的写作规则、评审方法和工作流拆成独立知识包，Agent 需要时按名称读取。
+
+Skill 可以随角色卡或预设一起分发，接收方不需要单独安装。Director 的默认配置已经使用该机制。概念见 [Skills 概览](/zh-CN/features/skills/)，写法见[创作 Skill](/zh-CN/features/skills/authoring)。
 
 ## 基础设施
 
 ### 统一生成层
 
-SillyTavern 中，不同 AI 后端（OpenAI、Anthropic、Google、Kobold 等）的生成请求走各自独立的代码路径，导致功能支持不一致。Luker 新增了统一生成层，将多后端的生成请求统一封装，共享 Token 计量、流式处理和错误处理逻辑。
+不同 AI 后端的请求路径原本各自实现，功能支持不一致。统一生成层把请求处理收敛到一处，让所有后端共享 Token 计量、流式处理、错误处理和生成确认。无论使用哪家服务，请求检查器和用量统计的行为一致。
 
-该模块为所有 AI 后端提供统一的处理管线，确保无论使用哪种 AI 服务，用户均能获得一致的功能体验（如请求检查、Token 统计、生成确认等）。详见 [统一生成层](/zh-CN/improvements/generation-layer)。
+详见[统一生成层](/zh-CN/improvements/generation-layer)。
 
 ### 认证与配额
 
-Luker 增加了 OAuth 登录支持（GitHub、Discord）和存储配额管理：
+多人共享实例时，管理员可以开启 GitHub 或 Discord 登录，为不同用户设置存储配额，并通过日志查看服务端活动。OAuth 在管理员面板中配置，不需要手写配置文件。
 
-- **OAuth 登录**：通过前端管理员面板配置（存储在 `admin-settings.json` 的 `oauth` 配置段中），支持授权码换取 access token、自动创建或关联本地用户账户
-- **存储配额**：管理员可为不同用户设置存储空间配额上限，系统在请求前自动检查额度
-- **日志系统**：详见 [日志系统](/zh-CN/features/logging)
-
-这使得 Luker 能够在多人共享部署的场景下安全运行。详见 [认证与配额](/zh-CN/improvements/auth-and-quota)。
+详见[认证与配额](/zh-CN/improvements/auth-and-quota)。
 
 ### 其他改进
 
-除上述核心改进外，Luker 还包含大量基础设施优化：
-
-- **连接管理器改进**：对 SillyTavern 已有的 Connection Profiles 进行增强，与预设解耦深度集成，支持独立的纯文本函数调用开关
-- **WebSocket 代理**：通过持久 WS 隧道传输生成请求，包含心跳保活和流偏移恢复
-- **HTTP 请求代理**：支持 SOCKS5/HTTP 代理转发出站请求
-- **预设分组 & 提示词分组**：预设选择器和提示词管理器支持可折叠的分组区段
-- **预设关联世界书**：切换预设时自动激活对应的世界书
-- **撤销 Toast 系统**：为破坏性操作提供撤销提示
-- **动态模型列表**：Claude 和 Vertex 模型列表动态加载
-- **扩展钩子排序**：允许用户自定义扩展的执行优先级
-- **角色状态 API**：扩展可在角色和预设上存储持久化状态数据
-- **启动性能优化**：并行化资源加载、预加载最近聊天快照、懒加载聊天索引
-- **移动端适配**：大量 Android WebView 和触摸交互修复
-
-详见 [其他改进](/zh-CN/improvements/other)。
-
-## 与 SillyTavern 的关系
-
-Luker 是 SillyTavern 的下游分支，而非独立项目。所有改进均以**不破坏上游兼容性**为前提进行设计：
-
-- **定期同步**：Luker 持续跟踪 SillyTavern 上游的更新，定期合并上游变更
-- **数据兼容**：Luker 的数据格式在 SillyTavern 的基础上进行扩展而非替换。新增的状态文件和配置项均有合理的默认值
-- **功能叠加**：Luker 的改进是在上游功能之上的增量叠加，而非破坏性重写。从 SillyTavern 迁移到 Luker 时，用户的现有数据可以无缝使用
+API 连接配置、WebSocket 代理、HTTP 代理、预设与提示词分组、撤销提示、动态模型列表、扩展钩子排序、角色与预设状态、启动性能等改动，汇总在[其他改进](/zh-CN/improvements/other)。

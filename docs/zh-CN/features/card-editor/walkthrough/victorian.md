@@ -1,168 +1,170 @@
-# 从零写一个 CardApp
+# 用 Studio 制作一张接入记忆图与多 Agent 编排的角色卡
 
-::: tip 这篇文档解决什么问题
-[CardApp Studio](/zh-CN/features/card-editor/studio) 的页面讲它有什么能力，这篇用一个真实题材演示**怎么让 Studio 从零联动起来**：自己设计记忆图 schema、自己设计 orchestrator loop 编排、写卡 + 写卡专用世界书、最后再做一个会随对话演进的 CardApp 可视化面板。
+本页用一张侦探角色卡演示 CardApp Studio 的完整开发流程：从一句题材描述开始，让 Studio 建立记忆图节点类型、配置多 Agent 编排、编写角色卡专用世界书，最后制作随案情更新的 CardApp 面板。
 
-读完你能看到 Studio 怎么把这几层堆叠在一张卡上 — 全程不用自己写代码，也不用手工去任何编辑器开关任何选项。
-:::
+四个子系统在同一张卡上分工：记忆图保存长期记忆，多 Agent 编排准备每次回复，世界书提供背景与规则，CardApp 显示状态。
 
-## 你会得到什么
+## 最终结果
 
-最终成品是一张名叫「维多利亚案宗」的侦探题材角色卡。<code v-pre>{{char}}</code> 是 1888 年伦敦的福尔摩斯式独立顾问，你扮演一位委托人（或苏格兰场来访的探长）递上案宗，跟他一起把案件查下去。
+成品是一张名为「维多利亚案宗」的侦探题材角色卡。<code v-pre>{{char}}</code> 是 1888 年伦敦的福尔摩斯式独立顾问，你扮演一位委托人（或苏格兰场来访的探长）提交案宗，与他一起调查案件。
 
-这张卡身上同时挂着：
+这张卡同时接入以下子系统：
 
-- **记忆图 schema 派生** — `suspect` / `clue` / `forensic_site` / `witness` 四类领域节点（不是默认 schema）。**这层是给 LLM 长期记忆用的**：AI 每聊一段就把对应实体抽出来归档，跨回合 recall 时图谱有现成切片可喂回 prompt。
-- **orchestrator loop 编排** — 每次 AI 回复均跑 `draft → critique → revise` 三阶段，critique 阶段强制审视"是否遗漏线索 / 嫌疑人陈述是否抵触 / 时代约束是否被违反"
-- **卡专用世界书** — 「维多利亚案宗·伦敦档案」，含维多利亚伦敦背景 + 侦探办案规矩 + **状态注入条目**（含 <code v-pre>{{getvar::case_*}}</code> 占位 + 教 AI 用 <code v-pre>{{setvar}}</code> 改写变量的指令），**不动你的全局世界书**
-- **「当前案宗」CardApp 面板** — 读 chat 变量呈现案件状态：案件名 / 当前阶段 / 嫌疑人 / 线索 / 取证地点。**变量由 AI 在 reply 中通过 setvar 推进**；CardApp 读 `ctx.getVariable` + `JSON.parse` 渲染。聊一句 → AI emit setvar → 面板下一帧就更新。
+- **记忆图** —— 为案件建立嫌疑人、线索、取证地点、证人四类节点。AI 在回复后提取案件信息，构建并连接不同的记忆节点；下一回合召回时，相关记录自动进入上下文。
+- **多 Agent 编排** —— 每次回复前由一组 agent 准备写作材料：整理最近对话的状态、规划这一回合要推进的内容、审查草稿是否遗漏线索、供述是否矛盾、时代细节是否出错，最后合成一段编排结果交给主模型。
+- **角色卡专用世界书** —— 收录维多利亚伦敦背景、侦探办案规矩和一个记录案件状态的条目。
+- **「当前案宗」CardApp 面板** —— 显示案件名、当前阶段、嫌疑人和线索，随案情推进更新。
 
-整个搭建过程只有 2 轮自然语言对话 — Studio 自己提案、自己写文件、自己绑字段、自己造世界书。
+整个搭建过程由自然语言描述驱动。Studio 提出方案、编写文件、创建世界书，并把各项内容关联到这张卡。
 
 ## 前置条件
 
-- 一个能跑的 Luker 实例
-- 已配通的 LLM API，推荐工具调用强的模型（Claude / GPT-5 等）。Studio 的工具流非常依赖模型敢于用工具
-- 角色卡编辑助手在扩展面板里有"模型请求 LLM 预设" / "模型请求 API 预设"两个选项，Studio 自己跑 AI 时用的就是这两个
+- 一个可用的 Luker 实例
+- 已配置完成的 LLM API，推荐使用 Claude、GPT-5 等支持工具调用的模型。Studio 依靠模型主动调用工具来修改角色卡，模型不具备该能力时无法工作
+- 在扩展面板中为角色卡编辑助手选择「模型请求 LLM 预设」与「模型请求 API 预设」，Studio 的 AI 调用由这两项指定
 
-## 1. 建一张空白卡 → 进 Studio
+## 1. 创建空白角色卡并进入 Studio
 
-打开右侧角色管理面板，点「新建角色」，起名「**维多利亚案宗**」 — 描述 / 第一条消息 / 世界书绑定全部留白，这些均让 Studio 来填。
+打开右侧角色管理面板，点击「新建角色」，名称填写「维多利亚案宗」，描述、第一条消息和世界书绑定全部留空，交给 Studio 填写。
 
-接下来打开「扩展」面板 → 拉到「角色卡编辑助手」一节展开 → 点 **「&lt;/&gt; CardApp Studio」**：
+接下来打开「扩展」面板 → 展开「角色卡编辑助手」→ 点击 **「&lt;/&gt; CardApp Studio」**：
 
 ![Studio 入口](/images/walkthrough/victorian/step-01-studio-entry.png)
 
-::: tip Studio 也能给没启用 CardApp 的卡用
-"角色卡编辑助手"针对没有 CardApp 的卡走[普通弹窗](/zh-CN/features/card-editor/popup)，含 CardApp 的卡走 Studio。但**这个 Studio 按钮可以主动把任何卡拉进 Studio**，工具集是完整版（记忆图 schema / orchestrator override / 正则脚本 / 世界书 / 卡字段全在），不像普通弹窗只够改字段和世界书条目。
+::: tip Studio 也适用于未启用 CardApp 的角色卡
+「角色卡编辑助手」对没有 CardApp 的角色卡使用[普通弹窗](/zh-CN/features/card-editor/popup)，包含 CardApp 的角色卡使用 Studio。Studio 按钮可以主动把任何卡引入 Studio，功能完整，涵盖记忆图节点类型、多 Agent 编排覆盖、正则脚本、世界书和角色卡内容；普通弹窗只支持修改角色卡内容和世界书条目。
 :::
 
-## 2. 一句题材需求 → Studio 自己提方案
+## 2. 描述题材，由 Studio 提出方案
 
-点 Studio 左栏输入框，描述题材就行，具体怎么落地让模型来想：
+点击 Studio 左栏输入框，描述想要的效果，具体实现交给模型：
 
 ```
-我要从零做一张维多利亚时代伦敦侦探题材的角色卡。这卡先天就需要：
+我要从零做一张维多利亚时代伦敦的侦探角色卡。
 
-1. 自定义记忆图 schema（按这题材该有的派生节点类型，比如嫌疑人/线索/取证地点/证人等），不要用默认 schema
-2. orchestrator loop 编排（draft → critique → revise），按你最佳实践的预设来配
-3. 一个绑定到这张卡的世界书（lore + 维多利亚伦敦背景 + 几条侦探办案规矩）
-4. 一个简洁的 CardApp，把"当前案宗"（嫌疑人 / 线索 / 取证地点）随对话演进可视化显示出来
+- 主角是 1888 年伦敦的独立顾问，我扮演委托人提交案宗，和他一起查案。
+- 希望 AI 记住案件里的嫌疑人、线索、取证地点和证人，聊到相关人物时能想起来。
+- 每次回复先起草，再检查线索有没有遗漏、嫌疑人的说法有没有矛盾、时代细节有没有出错，然后改写定稿。
+- 世界书收录维多利亚伦敦背景和侦探办案规矩。
+- 做一个「当前案宗」面板，显示案件名、阶段、嫌疑人和线索，随对话更新。
 
-请按你认为合适的顺序逐步落地。每一步先把你的方案告诉我让我看一下，我点头你再写。
+请按合适的顺序完成。每一步先把方案告诉我，我确认后再写。
 ```
 
 ![输入题材需求](/images/walkthrough/victorian/step-02-first-prompt.png)
 
-发出去后，Studio 不会埋头猛写 — 它先把整个方案铺开来给你看一遍。
+发送后，Studio 不会直接开始编写，而是先说明整体方案。
 
-## 3. Studio 提议记忆图 schema
+## 3. Studio 提议记忆图结构
 
-第一段它先讲数据层，把这题材该有什么节点类型推出来：Studio 主动给出四个派生类型（`suspect` / `clue` / `forensic_site` / `witness`），每个类型列出了相关的列（嫌疑人有 alibi / motive / suspicion_level、线索有 found_at / linked_suspects 等），并解释了为什么不加 `victim` / `theory`（避免 schema 膨胀，把推理留给 event 链承担）。
+Studio 先说明记忆部分：它会在记忆图里为这张卡增加嫌疑人、线索、取证地点、证人四类节点，并列出每类节点记录的字段，例如嫌疑人记录动机、不在场证明和可疑程度，线索记录发现地点和关联嫌疑人。
 
-::: tip "派生类型"是什么
-记忆图默认有 `event` 这个核心类型（时间线脊柱），除此之外可以**按卡的题材自定义节点类型**。侦探卡需要的"嫌疑人 / 线索"等概念，就是这种派生类型 — 让 AI 抽取记忆时按结构归档，不用全部塞进自由文本。详见 [记忆图](/zh-CN/features/memory-graph)。
+它也会说明这些节点如何连接：线索指向关联嫌疑人，取证地点指向在那里发现的线索。召回时，记忆图沿着这些关系找出与当前场景相关的记录。
+
+它还解释了为什么不单独记录受害者和推理结论：这两类信息数量少、变化快，放在案件简介和对话里更合适，单独建节点会让记忆结构臃肿。
+
+::: tip 记忆图的默认类型和自定义类型
+记忆图默认只有事件这一种核心类型，用来记录时间线。角色卡可以按题材增加自己的节点类型和字段，让 AI 在提取记忆时按固定结构归档。侦探卡需要的「嫌疑人」「线索」就属于这类自定义类型。详见 [记忆图](/zh-CN/features/memory-graph)。
 :::
 
-## 4. Studio 提议 orchestrator loop 编排
+## 4. Studio 提议多 Agent 编排
 
-接着是生成层：它推荐 `loop` 模式 — 在速度和质量之间取一个平衡。
+接下来是生成部分：它建议使用 Loop 模式。每次回复前，一个 agent 在同一会话里反复调用工具，读最近聊天、查世界书、查记忆图，判断信息是否足够；信息足够后，它写出一段编排结果，交给主模型写成正文。
 
-## 5. 同意后，Studio 一次性落地全部产物
+这种模式适合侦查题材：查案需要先确认现场、证人和时间线，再决定下一步，固定流程无法预先写死。代价是每次回复多一轮模型调用，换来更稳定的推理。
 
-回个"全部确认，按你这方案走，直接落地"，Studio 就开始批量发起工具调用：
+编排器还提供其他模式：Spec 用固定的阶段和节点组成流程，Agenda 由规划 agent 动态调度，Director 由主代理直接创作正文。记忆图和世界书在这些模式里同样可用。
 
-![Studio 落地全部产物的工具调用](/images/walkthrough/victorian/step-05-tool-calls.png)
+## 5. 确认后，Studio 一次完成全部内容
 
-一轮里它做完了：
+回复「全部确认，按此方案执行，直接写入」，Studio 开始批量修改：
 
-- **`character_update_memory_graph_schema`** — 把派生节点 schema 写进卡（只动这张卡，不污染全局）
-- **`character_update_orchestrator`** — 把 draft / critique / revise 的 loop 配置写进卡（同样 character-scoped）
-- **`worldinfo_create_chat_book`** + **`worldinfo_replace_entries`** — 创建卡专用世界书 + 一次性写入维多利亚伦敦背景 / 侦探办案规矩 / **状态注入条目**（含 <code v-pre>{{getvar::case_*}}</code> 占位 + 教 AI 用 <code v-pre>{{setvar}}</code> 改写变量的指令）/ 苏格兰场文化 / 白教堂区背景等条目
-- **`character_update_fields`** — 写 description / personality / first_mes / scenario / 把 `world` 字段绑定到刚建的世界书
+![Studio 写入全部内容](/images/walkthrough/victorian/step-05-tool-calls.png)
 
-每个工具调用均会**弹出审批 + 完整 diff**让你看清楚改了什么 — 一般可以放心点"批准"全过。
+一轮中它完成了：
 
-::: tip 状态注入条目是变量驱动 UI 的核心枢纽
-"状态注入"那条世界书条目里同时含 <code v-pre>{{getvar::case_*}}</code>（让 AI 在每次 prompt 装配时看见当前案件状态）和**教学用的 <code v-pre>{{setvar}}</code> 宏**（指引 AI 在它的 reply 里发 setvar 来推进案件）。详见[逐楼层变量](/zh-CN/features/variable-op-log)。
+- 在记忆图里增加嫌疑人、线索、取证地点、证人四类节点，仅对这张卡生效，不影响全局设置
+- 配置 Loop 编排，写入系统提示词和工具开关，同样只对这张卡生效
+- 创建角色卡专用世界书，写入维多利亚伦敦背景、侦探办案规矩、案件状态条目、苏格兰场文化和白教堂区背景
+- 编写角色描述、性格、开场白和场景，并把世界书关联到这张卡
+
+每项修改都会弹出对话框显示改动内容，确认后才会写入。可以逐条批准，也可以一次全部批准。
+
+::: tip 案件状态条目如何驱动面板
+世界书里有一个条目专门记录案件当前状态。条目中同时写着当前状态和更新规则：AI 每次生成前读到它，回复时按规则把新进展写回变量，CardApp 面板读取变量刷新显示。详见[逐楼层变量](/zh-CN/features/variable-op-log)。
 :::
 
-::: tip 正则脚本也能管
-Studio 也能写 / 改正则脚本（裁掉 thinking 标签、转换显示格式等），需要时让它做即可 — 这张测试卡里我们没用上，不需要也别强加。
+::: tip 正则脚本同样可以管理
+Studio 也能编写和修改正则脚本，例如移除思考标签或转换显示格式。
 :::
 
-## 6.（继续）给案宗做一个会动的可视化面板
+## 6. 制作案宗面板
 
-最后一步发一句：
+最后一步发送：
 
 ```
-继续。现在做最后一步——CardApp「当前案宗」可视化面板。
-读 chat 变量呈现案件状态：案件名 / 阶段 / 嫌疑人 / 线索 / 取证地点。
-布局照之前的草案，每条 AI 消息生成完毕后刷新一次。
-风格：维多利亚雾都氛围（暗色羊皮纸纸感、衬线字体、暗红/暗黄边）。
-样式 / 配色 / 取值细节你定。所有 cardapp 文件写入审批我都批准。
+继续。现在做最后一步：「当前案宗」面板。
+显示案件名、阶段、嫌疑人、线索和取证地点，每条回复生成后更新一次。
+风格用维多利亚雾都氛围：暗色羊皮纸、衬线字体、暗红和暗黄边框。
+样式、配色和取值细节你定。
 ```
 
-Studio 就把 CardApp 写出来了。它读的是 chat 变量（`case_name` / `case_phase` / `case_suspects` / `case_clues` / `case_sites`）。
+Studio 会写出面板，并接入案件状态。
 
-## 7. 端到端跑一次
+## 7. 端到端测试
 
-退出 Studio，正常发 RP 消息。我们丢一份伦敦白教堂的案宗给 <code v-pre>{{char}}</code>：
+退出 Studio，正常发送角色扮演消息。向 <code v-pre>{{char}}</code> 提交一份伦敦白教堂的案宗：
 
-> "侦探，白教堂有人深夜被害，死在自家阁楼上。死者是 35 岁的私塾教师莫妮卡·惠勒，丈夫亨利·惠勒报的案。我刚从苏格兰场调档过来，需要您一起把脉。"
+> "侦探，白教堂有人深夜被害，死在自家阁楼上。死者是 35 岁的私塾教师莫妮卡·惠勒，丈夫亨利·惠勒报的案。我刚从苏格兰场调档过来，请您接手。"
 
-### a. 聊天回复 — 卡设定全部生效
+### a. 聊天回复
 
 ![端到端聊天回复](/images/walkthrough/victorian/step-07a-chat-reply.png)
 
-回复体现了所有层的协同：推理有据（具体物证 → 推理 → 下一步取证方向）、维多利亚阶级氛围、技术约束（没有指纹比对、没有电话）、<code v-pre>{{char}}</code> 自带的"现场不破坏 + 证据链"办案规矩。这些是世界书条目 + character 字段 + orchestrator capsule 共同把控出来的。
+这条回复能看出两层约束在起作用：世界书条目规定了时代背景和办案规矩，编排结果给出了这一回合的推理方向。主模型负责把这些材料写成对话，不再自行决定查案的节奏。
 
-### b. 看 orchestrator 在背后做了什么
+### b. 查看编排过程
 
-打开聊天区旁的**运行面板**（窄屏下从底部抽屉拉起），就能看到这次 loop 跑了哪些步、调用了哪些工具、最终如何 finalize：
+打开聊天区旁的**运行面板**（窄屏下从底部抽屉拉起），其中列出这个 agent 每一轮的思考、调用的工具与返回结果：
 
-![Orchestrator 运行面板](/images/walkthrough/victorian/step-07b-stage-output.png)
+![多 Agent 编排运行面板](/images/walkthrough/victorian/step-07b-stage-output.png)
 
-如果 loop 出错（API 配置不对、超时等），这里会标红失败点，并自动 fallback 到无 loop 的直生成 — 端到端体验依然连续，你只是少了那一层 capsule。
+某一轮查错世界书、遗漏记忆或信息不足就提前结束时，可以在这里定位。编排失败时（API 配置错误、超时等），面板标出失败点，本轮改用普通生成。
 
-### c. 看记忆图在长期积累什么
+### c. 查看记忆图
 
-点扩展面板里 Memory 一节 →「查看图」，能看到当前对话攒到的图：
+在扩展面板中打开 Memory 一节 →「查看图」，其中列出当前对话积累的节点与关系：
 
 ![记忆图视图](/images/walkthrough/victorian/step-07c-memory-graph.png)
 
-节点是按之前设计的 schema 派生的（`suspect`、`clue`、`forensic_site`、`witness`、`event`），边记录关系。**但这是给 LLM 用的**——下次跨回合需要 recall 亨利·惠勒的相关上下文时，图谱会把存的切片自动喂进 prompt。
+图中有嫌疑人、线索、取证地点、证人和事件，连线表示它们之间的关系。回复生成后，记忆图会提取这一轮出现的案件信息；下一回合召回时，相关记录会自动进入上下文。下次聊到亨利·惠勒时，他的供述和关联线索会一起被找到。
 
-## 8. 看 CardApp 面板随聊天演进
+## 8. 面板随聊天更新
 
-继续聊。每发一句，AI 在 reply 里 emit <code v-pre>{{setvar::case_*::...}}</code> 等宏推进案件状态，CardApp 的「当前案宗」面板就会刷新：
+继续对话。AI 会在回复中更新案件状态，面板随之刷新：
 
-![CardApp 面板第二轮后：嫌疑人 / 线索 / 取证地点 逐条浮现](/images/walkthrough/victorian/step-06b-cardapp-turn2.png)
+![CardApp 面板第二轮后：嫌疑人、线索、取证地点逐条显示](/images/walkthrough/victorian/step-06b-cardapp-turn2.png)
 
-## 提示词小抄
+## 提示词要点
 
-跑过一轮你会发现，有效的 Studio prompt 的关键不是字数，而是**说清楚方向 + 把决定权放给 Studio**：
+有效的需求描述说明目标与期望效果，具体实现交给 Studio。
 
-1. **题材 + 风格说清楚就行，实现交给 Studio**
-   - ✓ "维多利亚伦敦侦探卡，需要记忆图 schema 派生 + loop 编排 + 卡专用世界书 + 可视化面板"
-   - ✗ "在 character.data.extensions.memory_graph.schema 里加一个 type=suspect 的对象，字段是 alibi、motive..."
+1. **说明题材与效果**
+   - 示例：「维多利亚伦敦侦探卡，需要记忆图的案件节点类型、多 Agent 编排、角色卡专用世界书和随对话更新的面板」。
+   - 结构细节由 Studio 提出，例如记忆类型应包含哪些字段。
 
-2. **对 schema / loop 这种结构性决策，让它先提案再落地**
-   - 它默认就这么做（系统提示词内置了这个习惯），你只要在它提案时盯一眼，有意见就直接说
-   - 觉得 schema 多了一类："witness 砍掉合并进 suspect" — Studio 会改
-   - 觉得 loop 想换 agenda 模式："换 agenda，让规划阶段决定优先查哪条线" — 它也会改
+2. **先审阅结构提案**
+   - Studio 先给出结构方案，确认后写入。
+   - 需要调整时直接说明，例如「证人与嫌疑人合并」，或「改由规划 Agent 决定先查哪条线索」。
 
-3. **同意后明确告诉它"不要再来确认"**
-   - 不然每个工具调用均来一遍可能很慢
-   - "按你这方案走，工具调用我都批准，直接落地"
-
-4. **不会的就让它解释**
-   - "为什么 victim 不放进 schema?" — 它会告诉你"这种少量的固定信息写在 first_mes 或世界书 entry 里更稳，放 schema 反而冗余"
+3. **让 Studio 解释取舍**
+   - 示例：「为什么受害人不单独记录？」
+   - Studio 会说明这类信息变化快，放在案件简介与世界书条目中更稳定。
 
 ## 下一步
 
-- [CardApp Studio](/zh-CN/features/card-editor/studio) — Studio 的能力清单、界面布局、工具集
-- [记忆图](/zh-CN/features/memory-graph) — 记忆图概念、默认 schema、派生类型机制
-- [Loop 模式](/zh-CN/features/orchestrator/loop) — Orchestrator loop 编排详解
-- [逐楼层变量](/zh-CN/features/variable-op-log) — 变量 op-log、变量驱动 UI 场景
-- [角色卡开发者指南](/zh-CN/development/card-developers) — `ctx` API 全集 + CardApp 创作约定
+- [CardApp Studio](/zh-CN/features/card-editor/studio) —— Studio 的能力、界面布局和操作方式
+- [记忆图](/zh-CN/features/memory-graph) —— 节点类型、提取与召回
+- [多 Agent 编排](/zh-CN/features/orchestrator/) —— 执行模式、运行面板和结果注入
+- [Loop 模式](/zh-CN/features/orchestrator/loop) —— 单 Agent 循环执行的编排方式
+- [逐楼层变量](/zh-CN/features/variable-op-log) —— 变量如何随对话更新

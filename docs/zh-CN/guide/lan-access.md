@@ -6,7 +6,7 @@ Luker 以 Web 服务的形式运行，默认仅接受本机连接，同一网络
 
 - 电脑运行服务，手机或平板随时使用
 - 家中多台设备共享同一套角色卡与聊天记录
-- 在 iPhone 或 iPad 上使用 Luker，iOS 没有 app
+- 在 iPhone 或 iPad 上使用 Luker，可安装自签名应用或通过浏览器访问
 
 如果目标是在两台 Luker 之间同步数据，请见[局域网同步](/zh-CN/improvements/lan-sync)，那是另一项功能。
 
@@ -14,8 +14,8 @@ Luker 以 Web 服务的形式运行，默认仅接受本机连接，同一网络
 
 以下设置会阻止局域网访问：
 
-- `listen: false` — Luker 仅绑定回环地址，其他设备根本无法建立连接。
-- `whitelistMode: true` — Luker 拒绝所有不在 `whitelist` 列表中的地址。
+- `listen: false` —— Luker 仅绑定回环地址，其他设备根本无法建立连接。
+- `whitelistMode: true` —— Luker 拒绝所有不在 `whitelist` 列表中的地址。
 
 在默认配置下，局域网设备要么连接失败，要么在开启监听后收到 HTTP `403 Forbidden` 页面，服务端控制台同时打印 `Blocked connection from <ip>`。
 
@@ -121,19 +121,19 @@ ports:
 
 ## iOS
 
-iOS 没有 app，iPhone 与 iPad 通过浏览器经网络访问。原因与设置步骤见 [iOS](/zh-CN/guide/ios)。
+iPhone 与 iPad 可安装自签名应用在本机运行，也可通过浏览器访问另一台设备上的 Luker。两种方式见 [iOS](/zh-CN/guide/ios)。
 
 ## 排查
 
-- **出现 403 Forbidden 页面** — 设备地址不在白名单中，将其加入或放宽网段。
-- **连接超时或被拒绝，且控制台没有任何输出** — 服务不可达。检查 `listen` 是否为 `true`，以及主机防火墙是否放行该端口：
+- **出现 403 Forbidden 页面** —— 设备地址不在白名单中，将其加入或放宽网段。
+- **连接超时或被拒绝，且控制台没有任何输出** —— 服务不可达。检查 `listen` 是否为 `true`，以及主机防火墙是否放行该端口：
   - Windows：在防火墙中放行 Node.js，并将网络配置文件设为「专用」。
   - Linux：`sudo ufw allow 8000`
   - macOS：在「系统设置」中允许 Node 进程的传入连接。
-- **只有主机能连接** — 另一台设备使用的仍是 `localhost`，请改用主机的局域网地址。
+- **只有主机能连接** —— 另一台设备使用的仍是 `localhost`，请改用主机的局域网地址。
 
 ## 相关页面
 
-- [基础配置](/zh-CN/guide/configuration) — 完整的配置项说明
-- [鉴权与安全](/zh-CN/guide/authentication) — Basic Auth、账户与白名单
-- [局域网同步](/zh-CN/improvements/lan-sync) — 在两台 Luker 之间同步数据
+- [基础配置](/zh-CN/guide/configuration) —— 完整的配置项说明
+- [鉴权与安全](/zh-CN/guide/authentication) —— Basic Auth、账户与白名单
+- [局域网同步](/zh-CN/improvements/lan-sync) —— 在两台 Luker 之间同步数据

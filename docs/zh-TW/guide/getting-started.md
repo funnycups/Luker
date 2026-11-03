@@ -6,15 +6,16 @@ Luker 可以執行在你自己的電腦或手機上。選擇適合你的方式�
 
 ## 獨立 App
 
-將完整的 Luker 服務與介面打包在單一 App 內，是一個獨立執行的應用。開啟即顯示完整介面，無需終端，也無需瀏覽器地址。
+將完整的 Luker 服務與介面打包在單一 App 內，是一個獨立執行的應用。開啟即顯示完整介面，不需要終端與瀏覽器位址。
 
 | 平台 | 取得方式 | 所需依賴 |
 | --- | --- | --- |
 | 桌面端（macOS、Windows、Linux） | [桌面端 App](/zh-TW/guide/desktop) | 無 |
 | Android | [Android App](/zh-TW/guide/android) | 無 |
+| iOS | [自簽名 IPA](/zh-TW/guide/ios) | 一台電腦，用於首次安裝 AltStore 或 SideStore |
 | HarmonyOS | [從原始碼建置](/zh-TW/guide/harmonyos) | Node.js >= 24.0、DevEco Studio |
 
-iPhone 與 iPad 沒有 App，請在 Safari 中使用 Luker，詳見 [iOS](/zh-TW/guide/ios)。
+iPhone 與 iPad 透過自簽名 IPA 安裝，不經過 App Store。
 
 ## Docker
 
@@ -145,13 +146,13 @@ http://localhost:8000
 Luker 完全相容 SillyTavern 的資料。如果你是 SillyTavern 使用者，可以直接將 `data` 目錄複製到 Luker 中使用。如果之後不想用 Luker 了，也可以隨時降級回 SillyTavern，資料不會被破壞。
 
 ::: warning 備份提醒
-雖然 Luker 相容 SillyTavern 資料，但在遷移前仍建議做好備份。
+雖然 Luker 相容 SillyTavern 資料，遷移前建議做好備份。
 :::
 
 詳細遷移指南請參閱 [從 SillyTavern 遷移](/zh-TW/guide/migration)。
 
 ## 下一步
 
-- [設定 API 連線](/zh-TW/basics/connections) — 連接你的 LLM 服務
-- [了解角色卡](/zh-TW/basics/character-cards) — 開始你的第一次角色扮演
-- [從 SillyTavern 遷移](/zh-TW/guide/migration) — 如果你是 SillyTavern 使用者
+- [設定 API 連線](/zh-TW/basics/connections) —— 連接你的 LLM 服務
+- [了解角色卡](/zh-TW/basics/character-cards) —— 開始你的第一次角色扮演
+- [從 SillyTavern 遷移](/zh-TW/guide/migration) —— 如果你是 SillyTavern 使用者

@@ -1,28 +1,24 @@
 # Hook Order
 
-Hook Order allows users to customize the execution priority of extensions. In SillyTavern's extension system, multiple extensions can register the same event hook (such as before message generation, after message generation, etc.). Hook Order lets you control the execution order of these hooks.
-
-This feature is provided as a built-in extension.
+Several extensions can register the same event hook, such as before or after message generation. Hook Order sets the order in which those extensions run.
 
 ## Why Ordering Is Needed
 
 ### Dependencies Between Extensions
 
-When multiple extensions listen to the same event simultaneously, their execution order can affect the final result. For example:
+When several extensions listen to the same event, their order determines the result. For example:
 
-- One extension translates user input while another handles content filtering — translation should execute before filtering
-- One extension modifies prompt formatting while another adds extra context — formatting should execute after context addition
-- [Memory Graph](/features/memory-graph) needs to complete memory retrieval before [Multi-Agent Orchestration](/features/orchestrator/)
-
-Without explicit execution order control, interactions between extensions may produce unpredictable results.
+- A translation extension processes user input while a filter checks the result: translation runs before filtering.
+- A prompt-formatting extension and a context extension both run: formatting runs after context is added.
+- [Memory Graph](/features/memory-graph) completes retrieval before [Multi-Agent Orchestration](/features/orchestrator/).
 
 ### Third-Party Extension Compatibility
 
-Hook Order supports ID recognition for third-party extensions, allowing you to include third-party extensions in the ordering management to ensure their execution order relative to built-in extensions meets expectations.
+Third-party extensions appear in the same list and can be ordered alongside built-in ones.
 
 ## Sorting Interface
 
-Hook Order is grouped by event type in the extensions panel; each extension has up/down buttons, and extensions higher in the list execute first:
+Hook Order is grouped by event type in the extensions panel. Each extension has up and down buttons, and extensions higher in the list run first:
 
 ![Hook order panel](/images/hook-order/hook-order-panel.png)
 
@@ -41,7 +37,7 @@ NEXT: "Move to next stage"
 EVT -> H1 -> H2 -> NEXT
 ```
 
-The diagram above is the `World Info post-scan` group from the panel — `memory-graph` runs before `search-tools`, so memory recall happens first and search results are written afterwards. This turn's memory recall doesn't see World Info entries that `search-tools` writes during the same turn; if you want the search results to participate in the same turn's recall, move `search-tools` above `memory-graph`.
+The diagram corresponds to the World Info post-scan event: Memory Graph runs before Search Tools, so recall happens first and search results are written afterwards. That turn's recall does not see World Info entries Search Tools writes in the same turn. To include them, move Search Tools above Memory Graph.
 
 ## Sorting Interface Elements
 

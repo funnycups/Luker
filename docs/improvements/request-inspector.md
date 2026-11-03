@@ -2,6 +2,8 @@
 
 The Request Inspector is one of Luker's core backend modules, used to track the complete lifecycle of each AI generation request from initiation to completion, and record detailed token usage data. It serves as the infrastructure for generation diagnostics.
 
+This page describes what it records and how it is structured, for diagnosing generation problems and tuning retention.
+
 ## Problem Background
 
 In SillyTavern, after an AI generation request is sent, the backend does not systematically record the request's token consumption. Users cannot know how many tokens each generation actually cost, and administrators cannot track resource usage in multi-user scenarios.

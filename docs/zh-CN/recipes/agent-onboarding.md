@@ -1,4 +1,4 @@
-# 多Agent上手：预设、记忆图、网络搜索
+# 多 Agent 入门：预设、记忆图、网络搜索
 
 ::: tip 这篇文档解决什么问题
 Luker 的[多 Agent 编排](/zh-CN/features/orchestrator/)、[记忆图](/zh-CN/features/memory-graph)、[搜索插件](/zh-CN/features/search-tools)各自独立可用，但要让它们协同形成一套完整流程——由 Agent 团队抽取记忆、检索同人设定、构思剧情走向、起草正文——需要按顺序完成一系列配置。
@@ -8,15 +8,15 @@ Luker 的[多 Agent 编排](/zh-CN/features/orchestrator/)、[记忆图](/zh-CN/
 
 ## 你会得到什么
 
-完成本文配置后，在主对话发送一条消息，**主 LLM 不会立刻开始写作**——Agent 团队会先执行一轮编排：
+完成本文配置后，在主对话发送一条消息，**主模型 不会立刻开始写作**——Agent 团队会先执行一轮编排：
 
-- **`memory_scout`** 扫描记忆图，检索与当前剧情相关的角色 / 事件 / 地点
-- **`canon_scout`**（必要时）联网检索当前题材的同人设定
-- **`plot_brainstormer`** 从多个不同角度并行起草剧情结构草图，由主 Agent 从中选择
+- **记忆侦察 Agent** 扫描记忆图，检索与当前剧情相关的角色 / 事件 / 地点
+- **设定考据 Agent**（必要时）联网检索当前题材的同人设定
+- **剧情构思 Agent** 从多个不同角度并行起草剧情结构草图，由主 Agent 从中选择
 - **主 Agent** 根据前序 Agent 的产出直接完成正文写作
-- **`memory_curator`** 在起草完成后将本回合新出现的事实写回记忆图
+- **记忆整理 Agent** 在起草完成后将本回合新出现的事实写回记忆图
 
-记忆图的**自动抽取 / 自动压缩**完全交由 Agent 处理，搜索引擎默认使用 DuckDuckGo——无需申请 API Key，无需配置 embedding，也不需要额外的 LLM 路由。
+记忆图的**自动抽取 / 自动压缩**完全交由 Agent 处理，搜索引擎默认使用 DuckDuckGo，不需要 API Key 与嵌入配置。
 
 ## 整体分工结构
 
@@ -27,29 +27,29 @@ start: "你发一条消息" { shape: oval }
 
 orch: "Director 主 Agent 接管" {
   style.fill: "#e1f5ff"
-  scouts: "起草前侦察\nmemory_scout · chat_scout ·\nlorebook_scout · canon_scout(必要时联网)"
-  brain: "中段头脑风暴\nplot_brainstormer\n按多角度并行出剧情草图"
+  scouts: "起草前侦察\n记忆侦察 Agent · 聊天侦察 Agent ·\n世界书侦察 Agent · 设定考据 Agent(必要时联网)"
+  brain: "中段头脑风暴\n剧情构思 Agent\n按多角度并行出剧情草图"
   draft: "主 Agent 起草正文"
-  curate: "起草后清理\nmemory_curator 把新事实写回记忆图"
+  curate: "起草后清理\n记忆整理 Agent 把新事实写回记忆图"
 }
 
-end: "正文直接显示在聊天里\n(主 LLM 本回合不参与)" { shape: oval }
+end: "正文直接显示在聊天里\n(主模型 本回合不参与)" { shape: oval }
 
 start -> orch.scouts -> orch.brain -> orch.draft -> orch.curate -> end
 ```
 
-记忆图自身的「自动抽取 / 自动压缩」不再触发——Agent 已经在执行同样的工作。搜索功能启用后，`canon_scout` 才能执行联网检索，否则它返回零结果。
+记忆图自身的「自动抽取 / 自动压缩」不再触发——Agent 已经在执行同样的工作。搜索功能启用后，设定考据 Agent 才能执行联网检索，否则它返回零结果。
 
 ## 你需要先有什么
 
 - 可正常运行的 Luker 实例，主对话能够正常生成回复
 - 一份可用的 [RP 预设](/zh-CN/basics/presets)，最好已经配置好文风、越狱、NSFW 指导
 
-## Step 1 — 选择起始预设
+## Step 1 —— 选择起始预设
 
 任何日常使用的 RP 预设均可。本步骤仅确认你有一份可用的写作预设作为起点——下一步将在此基础上派生 Director 所需的预设。
 
-## Step 2 — 配置预设助手，派生 Director 要用的预设
+## Step 2 —— 配置预设助手，派生 Director 要用的预设
 
 Luker 的插件调用 LLM 大致分为**不同类别**，需要的预设形态完全不同：一类是**插件产出 RP 内容**的（比如 Director 的 Agent 团队起草正文、评审子 Agent 复审等），需要带越狱 / 文风 / 反八股的完整 RP 预设；另一类是**插件的迭代 AI**（预设助手、记忆图配置工作台、CardApp Studio、Director 的迭代工作台等），它们通过工具调用修改配置或抽取结构化数据，不写故事——任何混入的 RP 指令均会干扰模型执行插件指令，所以这些位置需要一份**只保留越狱**的精简预设。
 
@@ -57,14 +57,14 @@ Director 这条流程同时涉及这些类别：
 
 | 路径 | 给谁用 | 预设形态 |
 |---|---|---|
-| **Agent 路径** —— 主 Agent + 子 Agent 起草正文 | 实际负责撰写内容的 Agent，产出直接进入聊天界面 | 一份调好可用于 tool calling 的 RP 预设：保留越狱 / 文风 / 反八股，移除与编排器冲突的占位符和硬格式约束 |
+| **Agent 路径** —— 主 Agent + 子 Agent 起草正文 | 实际负责撰写内容的 Agent，产出直接进入聊天界面 | 一份调好可用于工具调用的 RP 预设：保留越狱 / 文风 / 反八股，移除与编排器冲突的占位符和硬格式约束 |
 | **迭代工作台路径** —— 你与它对话调整编排时，工作台 AI 自身使用 | 一个通过工具修改 JSON 配置的编辑器，完全不创作正文 | 一份**只保留越狱**的精简预设——没有文风指导、没有 NSFW 写作规则、没有任何叙事元指令 |
 
 ::: tip 为什么不同路径不能共用一份预设
-RP 预设默认假设「主 LLM 独立完成整个回复」，将其放入 Agent 工具循环后会出现以下问题：
+RP 预设默认假设「主模型 独立完成整个回复」，将其放入 Agent 工具循环后会出现以下问题：
 
-- 与 Agent 的 system prompt 争夺注意力
-- 把「必须输出 schema」「强制思维链」这类格式约束强加进起草环节，破坏 tool calling
+- 与 Agent 的系统提示词 争夺注意力
+- 把「必须输出 schema」「强制思维链」这类格式约束强加进起草环节，破坏工具调用
 - 让占位符（角色卡描述、人设、世界书条目）被编排器主路径**重复注入**
 
 迭代工作台对此更为敏感——它完全不写故事，只通过工具调用修改 JSON 配置。任何混入的 RP 指令均会干扰模型执行插件指令。
@@ -98,7 +98,7 @@ Luker 内置的其他迭代 AI 入口（Director 的迭代工作台、记忆图�
 它默认会**派生一份新预设**（原名加 `-orchestrator` 后缀）——原预设保持不动。它会自动执行以下操作：
 
 - 关闭会与编排器主路径**重复注入**的占位符：角色卡描述 / 人设 / 示例对话 / 显式世界书拼接
-- 把会干扰 tool calling 的强格式约束（强制 schema、固定思维链头）从硬要求改写成弱引导
+- 把会干扰工具调用的强格式约束（强制 schema、固定思维链头）从硬要求改写成弱引导
 - 将仅在最终成稿中生效的指令（summary、风格收束等）条件化到「最终提交消息」阶段
 - **保留**聊天历史、文风指令、越狱 / 反八股指令——主 Agent 起草与评审子 Agent 均会读取
 
@@ -107,18 +107,18 @@ Luker 内置的其他迭代 AI 入口（Director 的迭代工作台、记忆图�
 ::: tip 可在同一会话中继续改造预设
 「编排器适配」只是助手的**编辑模式**之一。将工具栏的**编辑模式**切回默认的「**通用编辑**」并新建会话，同一个助手即成为通用预设编辑器，例如可以让它「添加一个反八股指导并补充反面示例」「把文风指导从浓墨重彩改为克制细腻」「合并几条意思重复的规则」。详见[预设助手](/zh-CN/features/preset-assistant)。
 
-「编排器适配」过程还会**主动扫描预设中可复用的文风 / 格式 / 写作纪律规则**，作为候选提案抽取为 Skills（原文照搬、绑定当前预设作用域、在原位置补充一行指针）。提案均可独立审阅——批准、拒绝或全部忽略，其余适配内容仍会正常生效。详见[把预设里的文风 / 输出格式抽成 Skills](/zh-CN/features/preset-assistant#把预设里的文风-输出格式抽成-skills-agent-编排预设模式)（单次小幅修改不会触发扫描）。
+「编排器适配」过程还会**主动扫描预设中可复用的文风 / 格式 / 写作纪律规则**，作为候选提案抽取为 Skills（原文照搬、绑定当前预设作用域、在原位置补充一行指针）。提案均可独立审阅——批准、拒绝或全部忽略，其余适配内容仍会正常生效。详见[把预设里的文风 / 输出格式抽成 Skills](/zh-CN/features/preset-assistant#在编排器适配模式下抽取-skills)（单次小幅修改不会触发扫描）。
 :::
 
-## Step 3 — 切换到 Director 模式并配置预设
+## Step 3 —— 切换到 Director 模式并配置预设
 
-打开扩展抽屉的**多智能体编排**面板：
+打开扩展抽屉的**多 Agent 编排**面板：
 
 1. **执行模式** 切换为 **导演模式（Director）**
-2. **API 预设（Connection profile）** + **提示词预设** 选择 Step 2b 派生的 `-orchestrator` 预设
+2. **API 预设**与**提示词预设**选择 Step 2b 派生的 `-orchestrator` 预设
 3. 找到 **AI 迭代工作台配置** 区域，将**迭代 AI 的 API 预设** + **迭代 AI 的提示词预设**设置为 Step 2a 导入的 **plugin-only** 预设
 
-## Step 4 — 将记忆图的抽取与召回交给 Agent
+## Step 4 —— 将记忆图的抽取与召回交给 Agent
 
 打开扩展抽屉的**记忆**面板：
 
@@ -137,7 +137,7 @@ Luker 内置的其他迭代 AI 入口（Director 的迭代工作台、记忆图�
 3. 工作台 AI 会通过工具调用修改你的编排配置，逐条审阅后保存
 :::
 
-## Step 5 — 选一个搜索引擎
+## Step 5 —— 选一个搜索引擎
 
 打开扩展抽屉的**搜索工具**面板，**搜索提供方**默认是 `DuckDuckGo（无需登录）`——保持默认即可。如需更换引擎，从下拉中选择其他提供方，例如自托管的 `SearXNG（自定义实例）` 或任一需要 API Key 的提供方。
 
@@ -149,11 +149,11 @@ Luker 内置的其他迭代 AI 入口（Director 的迭代工作台、记忆图�
 如果不使用 Director 也需要搜索能力，请参阅[搜索插件](/zh-CN/features/search-tools)的「工作模式」。
 :::
 
-## Step 6 — 想修改配置？打开迭代工作台 {#step-6}
+## Step 6 —— 想修改配置？打开迭代工作台 {#step-6}
 
-切换到 Director 后，在多智能体编排面板下方点击 **打开 AI 迭代工作台**——这是后续所有自定义的入口。
+切换到 Director 后，在多 Agent 编排面板下方点击 **打开 AI 迭代工作台**——这是后续所有自定义的入口。
 
-![AI 迭代工作台 — Director](/images/recipes/agent-onboarding/step-06-iter-studio-director.png)
+![AI 迭代工作台 —— Director](/images/recipes/agent-onboarding/step-06-iter-studio-director.png)
 
 工作台编辑的配置范围取决于打开它的时机：
 
@@ -161,7 +161,7 @@ Luker 内置的其他迭代 AI 入口（Director 的迭代工作台、记忆图�
 - **当前在一张角色卡聊天里** → 工作台编辑的是**这张卡的覆写**，仅对该卡生效，并随卡导出 / 导入
 
 ::: tip 在角色卡上调出的优秀编排可以手动晋升为全局
-如果为某张卡迭代出一套特别合用的 Director 配置，可以**手动晋升为全局**：在编排器面板导出该卡的配置，清空当前聊天回到无卡状态，再将这份配置导入全局。Schema 同理。
+如果为某张卡迭代出一套特别合用的 Director 配置，可以**手动晋升为全局**：在编排器面板导出该卡的配置，清空当前聊天回到无卡状态，再将这份配置导入全局。记忆图配置同理。
 :::
 
 ### 全局作用域：可使用的指令
@@ -179,13 +179,13 @@ Luker 内置的其他迭代 AI 入口（Director 的迭代工作台、记忆图�
 
 工作台会逐条展示 diff，审阅并保存即可。如果结果与预期不符，可随时重置回默认 Director 配置。
 
-## Step 7（可选）— 让 AI 迭代 Schema
+## 可选步骤 —— 让 AI 配置记忆图
 
-记忆图的 Schema 也能被 AI 迭代。打开**记忆**面板里的 **AI 配置记忆图**，跳转到 **记忆图配置工作台**。
+记忆图配置同样可以由 AI 修改。打开**记忆**面板中的 **AI 配置记忆图**，进入**记忆图配置工作台**。
 
 ![记忆图配置工作台](/images/recipes/agent-onboarding/step-07-schema-studio.png)
 
-与编排配置一样，Schema 也区分全局与角色卡作用域——卡上保存的 Schema 会随卡导出。可以在工作台里针对题材进行定制，例如：
+记忆图配置同样区分全局与角色卡作用域，角色卡上的配置随卡导出。可以在工作台中针对题材定制，例如：
 
 - 修仙题材：给角色加「修为境界」「灵脉」字段
 - 政治题材：新增「派系」节点类型，记录派系关系和敌对图
@@ -212,9 +212,9 @@ Luker 内置的其他迭代 AI 入口（Director 的迭代工作台、记忆图�
 
 ## 下一步
 
-- [多 Agent 编排概览](/zh-CN/features/orchestrator/) — 触发时机、capsule 注入、执行模式的全貌
-- [Director 模式](/zh-CN/features/orchestrator/director) — 默认子 Agent 的职责分工
-- [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) — 用自然语言调整你的配置
-- [记忆图](/zh-CN/features/memory-graph) — 节点类型、召回算法、Schema 自定义
-- [搜索插件](/zh-CN/features/search-tools) — 引擎差异与独立工作模式
-- [预设助手](/zh-CN/features/preset-assistant) — 「编排器适配」之外的会话模式
+- [多 Agent 编排概览](/zh-CN/features/orchestrator/) —— 触发时机、编排结果注入和执行模式
+- [Director 模式](/zh-CN/features/orchestrator/director) —— 默认子 Agent 的职责分工
+- [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) —— 用自然语言调整你的配置
+- [记忆图](/zh-CN/features/memory-graph) —— 节点类型、召回算法、配置自定义
+- [搜索插件](/zh-CN/features/search-tools) —— 引擎差异与独立工作模式
+- [预设助手](/zh-CN/features/preset-assistant) —— 「编排器适配」之外的会话模式

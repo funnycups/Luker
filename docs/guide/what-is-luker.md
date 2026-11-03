@@ -1,18 +1,18 @@
 # What is Luker
 
-Luker is a deeply refactored roleplay chat platform based on [SillyTavern](https://github.com/SillyTavern/SillyTavern). It retains SillyTavern's mature character card ecosystem and data format compatibility while introducing extensive innovations in data transfer architecture, extensibility, and built-in tooling to deliver a more efficient and powerful roleplay experience.
+Luker is a deeply refactored roleplay chat platform based on [SillyTavern](https://github.com/SillyTavern/SillyTavern). It keeps compatibility with SillyTavern's character cards, data formats and extensions, and adds Memory Graph, multi-agent orchestration, CardApp and other subsystems. This page explains who Luker is for and what each subsystem solves.
 
 Luker is fully compatible with SillyTavern data — character cards, world info, and presets can be used directly with zero migration cost. If you decide to stop using Luker, you can downgrade back to SillyTavern at any time without data loss.
 
 ## Why Luker
 
-SillyTavern is an excellent roleplay frontend with an active community and a rich character card ecosystem. Building on that foundation, Luker introduces systematic improvements in the following areas:
+SillyTavern is a roleplay frontend with an active community and a large character card ecosystem. Luker builds on it with systematic improvements in the following areas:
 
 ### More Efficient Data Transfer
 
 Most save operations in SillyTavern use full-payload transfers — a message edit, settings toggle, or world info change sends the complete data to the backend. For cloud-deployed users, this means significant bandwidth consumption.
 
-Luker introduces an incremental sync mechanism that uniformly uses patch endpoints compliant with the [RFC 6902](https://datatracker.ietf.org/doc/html/rfc6902) standard. Toggling a plugin setting that previously transferred 3 MB of data now takes less than 200 bytes. Save operations also support debounced triggering and conflict detection, fundamentally preventing data corruption caused by concurrent writes.
+Luker introduces incremental sync, sending only what changed. Save operations also support debounced triggering and conflict detection, so concurrent writes do not overwrite each other.
 
 ### Stronger Extensibility
 
@@ -26,13 +26,13 @@ Luker ships with several professional tools designed for roleplay scenarios — 
 
 ### Memory Graph
 
-A character memory system built on a knowledge graph. Events, characters, locations, and plotlines from roleplay sessions are distilled into typed nodes connected to each other. Before a reply is written, a recall pass finds the nodes most relevant to the current scene and injects them into the creative context — when the protagonist returns to a place they visited earlier, an early character who has long been off-stage is recalled. Recall methods include: **LLM Recall** (the default — the model selects relevant nodes from the store, with multi-round exploration) and **RAG Recall** (vector retrieval over an embedded store, with optional cross-encoder rerank and optional LLM query rewrite). Extraction runs on its own after a reply, either through the built-in pipeline or through an orchestrator sub-agent.
+A character memory system built on a knowledge graph. Events, characters, locations, and plotlines from roleplay sessions are distilled into typed nodes connected to each other. Before a reply is written, a recall pass finds the nodes most relevant to the current scene and injects them into the creative context — when the protagonist returns to a place they visited earlier, an early character who has long been off-stage is recalled. Recall methods include: **LLM Recall** (the default — the model selects relevant nodes from the store, with multi-round exploration) and **RAG Recall** (vector retrieval and reranking). Extraction runs on its own after a reply, either through the built-in pipeline or through an orchestrator sub-agent.
 
 → [Memory Graph Documentation](/features/memory-graph)
 
 ### Orchestrator
 
-Before the creative LLM generates a response, a team of agents plans the scene: one distills the recent context, another drafts what this turn should accomplish, a reviewer checks the plan, and the result is packaged into a short briefing for the writer. Execution modes are available: **Spec** (a fixed Stage → Node pipeline, the default), **Single Agent**, **Agenda** (a planner dispatches agents through tool calls), **Loop** (one agent runs an iterative tool loop until it finalizes), and **Director** (a main agent and a sub-agent team explore the context and draft the message body). All agent actions are retained as a runtime trace you can inspect. Orchestration configurations can be bound to character cards and imported/exported along with them.
+Before the creative LLM generates a response, a team of agents plans the scene: one distills the recent context, another drafts what this turn should accomplish, a reviewer checks the plan, and the result is packaged into a short briefing for the writer. Execution modes are available: **Spec** (a fixed stage sequence, the default), **Single Agent**, **Agenda** (a planner dispatches agents through tool calls), **Loop** (one agent runs an iterative tool loop until it finalizes), and **Director** (a main agent and a sub-agent team explore the context and draft the message body). All agent actions are recorded in the Run Panel, where you can expand them. Orchestration configurations can be bound to character cards and imported/exported along with them.
 
 → [Orchestrator Documentation](/features/orchestrator/)
 
@@ -44,19 +44,19 @@ Reusable knowledge packs that agents read on demand, instead of one giant system
 
 ### Character Card Editing Assistant (CEA / CardApp Studio)
 
-An AI-assisted character card editing tool with an integrated CodeMirror 6 code editor. It edits character cards, world info, and CardApp code through natural language conversation, committing real changes via structured tool calls, with diff-based approval — rejected changes never take effect. When you replace or update a card, it detects world info changes and offers to import the new book, keep the old one, or merge them with AI help. Regular cards use the popup editor; cards with an embedded CardApp open in the more capable Studio.
+An AI-assisted character card editing tool with an integrated code editor. It edits character cards, world info, and CardApp code through natural language conversation, committing real changes via structured tool calls, with side-by-side approval — rejected changes never take effect. When you replace or update a card, it detects world info changes and offers to import the new book, keep the old one, or merge them with AI help. Regular cards use the popup editor; cards with an embedded CardApp open in the more capable Studio.
 
 → [CEA Overview](/features/card-editor/)　·　[Popup](/features/card-editor/popup)　·　[CardApp Studio](/features/card-editor/studio)
 
 ### Preset Assistant
 
-An AI assistant for chat completion presets. It reads the current preset's real values, explains what each parameter does, edits prompt entries as well as sampling values, and compares against a reference preset — returning changes as diffs you approve. The same workflow covers presets whose downstream consumer is the orchestrator.
+An AI assistant for chat completion presets. It reads the current preset's real values, explains what each parameter does, edits prompt entries as well as sampling values, and compares against a reference preset — returning changes as comparisons you approve. The same workflow covers presets whose downstream consumer is the orchestrator.
 
 → [Preset Assistant Documentation](/features/preset-assistant)
 
 ### Search Tools
 
-Provides web search capabilities for AI through the provider configured in the Search Tools plugin. It works as a callable tool for the creative LLM, or as a pre-request agent that automatically searches before generation and writes results into world info.
+Provides web search capabilities for AI through the search service configured in the Search Tools plugin. It works as a callable tool for the creative LLM, or as a pre-request agent that automatically searches before generation and writes results into world info.
 
 → [Search Tools Documentation](/features/search-tools)
 
@@ -92,7 +92,7 @@ In SillyTavern, API presets and chat completion presets are switched together, s
 
 ### Nothing Lost to a Closed Tab
 
-Generation runs on the backend and streams to the UI, and saves happen on the backend as data changes reach the server. Reload the tab, close the laptop lid, or lose your Wi-Fi connection mid-reply: the generation keeps running on the server and reconnects to your UI when you return. Data changes are written with incremental patches rather than full overwrites, which also prevents concurrent writes from clobbering each other across tabs and devices.
+Generation runs on the backend and streams to the UI, and saves happen on the backend as data changes reach the server. Reload the tab, close the laptop lid, or lose your Wi-Fi connection mid-reply: the generation keeps running on the server and reconnects to your UI when you return.
 
 → [Backend Storage and Lifecycle](/improvements/backend-storage)
 

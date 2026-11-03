@@ -256,7 +256,7 @@ install(opts: {
 delete(scope: SkillScope, name: string): Promise<void>
 ```
 
-原子移除 Skill 目錄。參照該 Skill 的編排器 profile 仍保留 `skills.visible` 裡的舊名 —— 派遣時參照軟失敗。
+原子移除 Skill 目錄。參照該 Skill 的編排設定仍保留 `skills.visible` 裡的舊名，派遣時該參照不生效。
 
 ### `rename(scope, oldName, newName)`
 
@@ -307,6 +307,28 @@ listBundledManifest(): Promise<Array<{
   description: string,
 }>>
 ```
+
+## 編排器可見性策略
+
+編排設定用 `skills` 區塊控制每個 agent 能讀到哪些 Skill。模式級區塊位於設定根部，每個 agent 可以覆寫。
+
+| 模式 | 模式級區塊 | 每 agent 覆寫 |
+|---|---|---|
+| director | `skills` | `mainAgent.skills`、`subAgents[].skills` |
+| loop | `skills` | `loopAgent.skills` |
+| spec | `skills` | `nodes[].skills` |
+| agenda | `skills` | `planner.skills`、`workers[].skills` |
+| single | `skills` | `node.skills` |
+
+`visible` 與 `deny` 都是純名字列表，不帶作用域前綴。派遣時執行時按以下規則解析：
+
+- 沒有 `visible`，或為空：繼承模式級 `visible`。
+- `visible` 以 `"+"` 開頭：模式級列表加上其餘項。
+- 其他情況：agent 的列表替換模式級列表。
+- `deny` 取兩層並集，並且優先於 `visible`。
+- `visible` 裡的 `"*"` 表示所有已安裝 Skill。
+
+名字按 character > preset > global 的優先級在物理作用域間匹配。
 
 ## 傳輸
 

@@ -138,10 +138,10 @@ getCharacterEmbeddedWorld(charId: number | string): {
 ```
 
 唯讀地查詢某張卡的 V2/V3 內嵌 `data.character_book` 狀態：
-- `present` — 卡是否攜帶內嵌書。
-- `name` — 內嵌書的 `name` 欄位。
-- `entryCount` — 內嵌書包含的條目數。
-- `bound` — 卡是否已經繫結了一個真實的世界書檔案（即 `data.extensions.world` 解析得到一個已知的世界書）。`present && !bound` 表示內嵌書還沒透過 `importEmbeddedWorldInfo` 匯入。`present && bound` 表示內嵌書只是繫結世界的過期映象（匯出時留下的良性副產物），執行時應忽略。
+- `present` —— 卡是否攜帶內嵌書。
+- `name` —— 內嵌書的 `name` 欄位。
+- `entryCount` —— 內嵌書包含的條目數。
+- `bound` —— 卡是否已經繫結了一個真實的世界書檔案（即 `data.extensions.world` 解析得到一個已知的世界書）。`present && !bound` 表示內嵌書還沒透過 `importEmbeddedWorldInfo` 匯入。`present && bound` 表示內嵌書只是繫結世界的過期映象（匯出時留下的良性副產物），執行時應忽略。
 
 ### reloadWorldInfoEditor
 

@@ -6,10 +6,10 @@ Luker 重新設計了資料持久化架構，將資料變更的儲存職責從�
 
 在 SillyTavern 中，資料儲存由前端觸發：前端將完整的聊天資料序列化後傳送到後端覆蓋寫入。這種模式存在嚴重的資料安全隱患：
 
-- **瀏覽器當機** — 如果在儲存請求發出前瀏覽器當機，所有未儲存的修改均會遺失
-- **網路中斷** — 儲存請求可能因網路問題失敗，而前端可能不會重試
-- **生成中斷** — AI 生成過程中如果連線斷開，已生成的內容可能無法儲存
-- **競態條件** — 多個儲存請求並行時可能產生資料覆蓋
+- **瀏覽器當機** —— 如果在儲存請求發出前瀏覽器當機，所有未儲存的修改均會遺失
+- **網路中斷** —— 儲存請求可能因網路問題失敗，而前端可能不會重試
+- **生成中斷** —— AI 生成過程中如果連線斷開，已生成的內容可能無法儲存
+- **競態條件** —— 多個儲存請求並行時可能產生資料覆蓋
 
 Luker 透過後端即時儲存徹底解決了這些問題。
 
@@ -23,33 +23,12 @@ Luker 透過後端即時儲存徹底解決了這些問題。
 
 每個聊天檔案均有一個對應的狀態檔案，儲存在與聊天檔案相同的目錄中。狀態檔案記錄：
 
-- **integrity** — 當前檔案的 integrity UUID，用於[並行衝突偵測](/zh-TW/improvements/incremental-sync#integrity-hash-並行衝突偵測)
-- **updated_at** — 最後一次寫入的時間戳
+- **integrity** —— 當前檔案的 integrity UUID，用於[並行衝突偵測](/zh-TW/improvements/incremental-sync#integrity-hash-並行衝突偵測)
+- **updated_at** —— 最後一次寫入的時間戳
 
 狀態檔案與聊天檔案分離儲存，避免了在聊天檔案中頻繁更新 integrity 值導致的全檔案重寫。
 
-```d2
-direction: right
-
-DIR: "chats/<角色名>/"
-CHAT: "{chat}.jsonl" {
-  style.fill: "#e1f5ff"
-}
-STATE: "{chat}.luker-state.chat_sync.json" {
-  style.fill: "#fff3e0"
-}
-NS1: "{chat}.luker-state.memory_graph__meta.json"
-NS2: "{chat}.luker-state.luker_orchestrator__schema.json"
-
-DIR -> CHAT
-DIR -> STATE
-DIR -> NS1
-DIR -> NS2
-```
-
-- `{chat}.jsonl` — 聊天主檔案
-- `{chat}.luker-state.chat_sync.json` — integrity + updated_at（同步中繼資料）
-- `{chat}.luker-state.<namespace>.json` — 各外掛的命名空間狀態（每個外掛一份獨立狀態檔案）
+每個聊天包含一份訊息記錄，以及與之繫結的同步狀態和擴充狀態。這些資料放在一起，隨聊天一起移動、備份和還原。
 
 如果狀態檔案不存在（例如從舊版本遷移的聊天），系統會自動回退處理，並在首次寫入時自動建立狀態檔案。
 
@@ -76,7 +55,7 @@ FE -> FE: "更新本地 integrity 狀態"
 BE."即使前端在收到 ack 後當機,資料已落盤"
 ```
 
-這意味著即使前端在收到生成結果後立即當機，資料也不會遺失——因為後端已經在回傳回應之前完成了持久化。前端收到確認後更新本地的 integrity 狀態，保持與伺服器端的同步。
+後端在回傳回應之前完成持久化，因此前端在收到結果後立即當機也不會遺失資料。前端收到確認後更新本地的 integrity 狀態。
 
 ::: tip 與傳統模式的對比
 在 SillyTavern 中，AI 生成的結果先到達前端，由前端決定何時儲存。如果前端在儲存前當機，生成的內容就會遺失。Luker 的 Generation Acknowledge 將儲存時機提前到了後端回應之前，從根本上消除了這個窗口期。
@@ -86,7 +65,7 @@ BE."即使前端在收到 ack 後當機,資料已落盤"
 
 為了防止並行寫入導致檔案損壞，Luker 在前端（透過 `runSerializedChatWrite`）對聊天寫入任務做串行化，同時由後端對每次寫入執行 integrity 校驗。
 
-當多個寫入操作短時間內同時觸發時（例如使用者快速編輯多條訊息，或生成完成與手動編輯同時發生），流程為：
+多個寫入操作在短時間內同時觸發時，例如快速編輯多條訊息，或生成完成與手動編輯同時發生，流程為：
 
 1. 前端將寫入任務按到達順序排隊
 2. 按順序逐一呼叫增量端點執行寫入
@@ -101,11 +80,11 @@ BE."即使前端在收到 ack 後當機,資料已落盤"
 
 - 增量同步負責「傳什麼」— 只傳輸變更的資料
 - 後端即時儲存負責「怎麼存」— 確保資料安全持久化
-- 聊天狀態檔案是兩者的橋樑 — 透過 integrity UUID 協調前後端狀態
+- 聊天狀態檔案是兩者的橋樑 —— 透過 integrity UUID 協調前後端狀態
 
 兩者共同構成了 Luker 的資料安全基礎設施。
 
 ## 相關頁面
 
-- [增量同步](/zh-TW/improvements/incremental-sync) — 後端即時儲存的前端配合機制
-- [改進總覽](/zh-TW/improvements/overview) — 所有技術改進的概述
+- [增量同步](/zh-TW/improvements/incremental-sync) —— 後端即時儲存的前端配合機制
+- [改進總覽](/zh-TW/improvements/overview) —— 所有技術改進的概述

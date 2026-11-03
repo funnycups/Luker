@@ -1,12 +1,12 @@
 # 宏
 
-宏（Macro）是写成 <code v-pre>{{name}}</code> 形式的占位符，在 prompt 组装时被替换为动态内容。它们出现在预设、世界书、角色卡、聊天消息、斜杠命令、正则替换里——任何会被拼装进 prompt 的文本字段均能用宏。请求到达 AI 时，所有的宏均已被替换成最终字符串。
+宏（Macro）是写成 <code v-pre>{{name}}</code> 形式的占位符，在提示词组装时替换为动态内容。预设、世界书、角色卡、聊天消息、斜杠命令与正则替换中凡进入提示词的文本字段均可使用宏。请求到达模型时，所有宏都已替换为最终字符串。
 
 ## Macros 2.0 / 实验性宏引擎
 
-本页的特性跑在 chevrotain 实现的新宏引擎上——也就是 SillyTavern 引入的 **Macros 2.0**。Luker 预设启用它，可以在「**用户设置 → 聊天/消息处理 → 实验性宏引擎**」切换。
+本页描述的特性由 SillyTavern 引入的 **Macros 2.0** 宏引擎提供。该引擎默认启用，可在**用户设置 → 聊天/消息处理 → 实验性宏引擎**中切换。
 
-实验性引擎**关掉**时，宏仍然能用，但下面这些特性会退化到老的正则管线、不再可用：
+关闭实验性引擎后，宏仍可使用，下列特性退回到旧的正则解析流程：
 
 | 特性 | 需要实验性引擎 |
 |---|---|
@@ -37,7 +37,7 @@
 {{roll::3d6+4}}
 ```
 
-单个 `:` 作为兜底也认（<code v-pre>{{roll: 1d20}}</code>），但因为正文里经常出现单冒号，**推荐用 `::`**。
+单个 `:` 也可识别（<code v-pre>{{roll: 1d20}}</code>），但因为正文中经常出现单冒号，**推荐使用 `::`**。
 
 逗号列表宏（<code v-pre>{{random}}</code>、<code v-pre>{{pick}}</code>）两种写法均可：
 
@@ -90,7 +90,7 @@
 \{{not a macro}}
 ```
 
-反斜杠在后处理阶段被去掉，原始的 <code v-pre>{{...}}</code> 字符串原样到达 AI。这是在 prompt 里**教模型宏语法**而不让示例真的被执行的官方写法。
+反斜杠在后处理阶段被去掉，原始的 <code v-pre>{{...}}</code> 字符串原样到达模型。这是在提示词中**教模型宏语法**、又不让示例真正执行的写法。
 
 ### 老式标签
 
@@ -116,7 +116,7 @@
 | <code v-pre>{{$name}}</code> | 读**全局**变量 | 当前值 |
 | <code v-pre>{{.name = 5}}</code> | 赋值 | `''`（空字符串） |
 | <code v-pre>{{.name += 1}}</code> | 加（数值加 / 字符串拼接） | `''` |
-| <code v-pre>{{.name -= 1}}</code> | 减（仅数值；非数值会告警） | `''` |
+| <code v-pre>{{.name -= 1}}</code> | 减，仅适用于数值，非数值会告警 | `''` |
 | <code v-pre>{{.name++}}</code> | 自增 | `''` |
 | <code v-pre>{{.name--}}</code> | 自减 | `''` |
 | <code v-pre>{{.name ?? "default"}}</code> | 取值，**未定义**时取预设 | 值或预设 |
@@ -150,7 +150,7 @@
 
 ## 控制流
 
-### 条件 — <code v-pre>{{if}}</code> / <code v-pre>{{else}}</code>
+### 条件 —— <code v-pre>{{if}}</code> / <code v-pre>{{else}}</code>
 
 ```text
 {{if condition}}then-content{{/if}}
@@ -171,7 +171,7 @@ condition 可以是：
 只有命中的那个分支里的嵌套宏才会被解析。<code v-pre>{{if .casting}}{{.mana -= 10}}{{/if}}</code> 在 `.casting` 为 false 时不会扣魔。把 <code v-pre>{{if}}</code> 套在昂贵或有副作用的宏外面是安全的。
 :::
 
-### 迭代 — <code v-pre>{{each}}</code>
+### 迭代 —— <code v-pre>{{each}}</code>
 
 ```text
 {{each::collection}}
@@ -193,11 +193,11 @@ body 里：
 | <code v-pre>{{loop_value}}</code> | 当前值整体（对象会自动 JSON 字符串化） |
 | <code v-pre>{{loop_value::field}}</code> | 用点号路径深入值，语义同 <code v-pre>{{getvar}}</code> |
 
-嵌套 <code v-pre>{{each}}</code> 会自然屏蔽外层的 `loop_key` / `loop_value`。对象的迭代顺序遵循 JavaScript 原生规则——字符串 key 走插入顺序，整数样 key 走升序。
+嵌套 <code v-pre>{{each}}</code> 会自然屏蔽外层的 `loop_key` / `loop_value`。对象按键的插入顺序迭代，数字键按升序。
 
 空集合或不可迭代值渲染为空字符串。引擎**没有**对迭代次数加保护——body 里再次 <code v-pre>{{each}}</code> 自己负责防爆。
 
-### 注解 — <code v-pre>{{//}}</code>
+### 注解 —— <code v-pre>{{//}}</code>
 
 行内：
 
@@ -214,13 +214,13 @@ body 里：
 {{///}}
 ```
 
-注解解析为空字符串，内容原样吃掉。给 prompt 里要标注但不想让 AI 看见的部分用。
+注解解析为空字符串。用于在提示词中留下说明，且不让模型读到。
 
 ## 变量
 
 变量分两种作用域：
 
-- **局部**——按聊天独立保存，持久化在 `chat_metadata.variables` 里。用来存聊天专属状态（HP、当前任务、回合数）。
+- **局部**——按聊天独立保存，记录在当前聊天的状态中。用来存聊天专属状态（HP、当前任务、回合数）。
 - **全局**——跨所有聊天共享，存在扩展设置里。用来存跨 chat 计数器、插件设置。
 
 ### 读
@@ -229,8 +229,8 @@ body 里：
 |---|---|---|
 | <code v-pre>{{getvar::name}}</code> | <code v-pre>{{.name}}</code> | 读局部 |
 | <code v-pre>{{getglobalvar::name}}</code> | <code v-pre>{{$name}}</code> | 读全局 |
-| <code v-pre>{{hasvar::name}}</code>（别名 `varexists`） | — | `"true"` / `"false"` |
-| <code v-pre>{{hasglobalvar::name}}</code>（别名 `globalvarexists`） | — | `"true"` / `"false"` |
+| <code v-pre>{{hasvar::name}}</code>（别名 `varexists`） | —— | `"true"` / `"false"` |
+| <code v-pre>{{hasglobalvar::name}}</code>（别名 `globalvarexists`） | —— | `"true"` / `"false"` |
 
 不存在的变量返回空字符串。
 
@@ -242,9 +242,9 @@ body 里：
 | <code v-pre>{{addvar::name::value}}</code> | <code v-pre>{{.name += value}}</code> | 加（数值）/ 拼接（字符串）/ push（JSON 数组） |
 | <code v-pre>{{incvar::name}}</code> | <code v-pre>{{.name++}}</code> | +1 |
 | <code v-pre>{{decvar::name}}</code> | <code v-pre>{{.name--}}</code> | -1 |
-| <code v-pre>{{deletevar::name}}</code>（别名 `flushvar`） | — | 删除 |
-| <code v-pre>{{pushvar::name::value}}</code> | — | 把 `value` 推入 `name` 中存储的 JSON 数组；缺失时自动建为 `[]`。支持点号路径（如 `roster.alice.inv`）。 |
-| <code v-pre>{{popvar::name}}</code> | — | 从 `name` 的 JSON 数组弹出最后一个元素；空或缺失时为无操作。支持点号路径。 |
+| <code v-pre>{{deletevar::name}}</code>（别名 `flushvar`） | —— | 删除 |
+| <code v-pre>{{pushvar::name::value}}</code> | —— | 把 `value` 推入 `name` 中存储的 JSON 数组；缺失时自动建为 `[]`。支持点号路径（如 `roster.alice.inv`）。 |
+| <code v-pre>{{popvar::name}}</code> | —— | 从 `name` 的 JSON 数组弹出最后一个元素；空或缺失时为无操作。支持点号路径。 |
 
 全局对应的有 `setglobalvar` / `addglobalvar` / `incglobalvar` / `decglobalvar` / `deleteglobalvar`。
 
@@ -279,9 +279,9 @@ body 里：
 
 中间节点按需自动创建。纯数字路径段产生数组下标（例如 <code v-pre>{{setvar::log.0::一位老人到来}}</code> 写入 `log` 的第 0 个元素）。
 
-对非 JSON 值用点号路径时，会 fallback 到字面键查找——名字真的就是 `a.b` 的变量也能读到。
+对非 JSON 值使用点号路径时，引擎改为按字面键查找，名称确实为 `a.b` 的变量同样可以读取。
 
-这套和 <code v-pre>{{each}}</code> 配合很自然：一个 NPC 名册、一份背包字典、一本任务日志均可以塞进单一变量，prompt 组装时再渲染到 prompt 或世界书条目里：
+结构化值与 <code v-pre>{{each}}</code> 配合使用：NPC 名册、背包物品、任务日志均可存入同一个变量，在提示词组装时渲染进提示词或世界书条目：
 
 ```text
 {{each::npcs}}
@@ -291,7 +291,7 @@ body 里：
 
 ### 单键读写 —— <code v-pre>{{getvarkey}}</code> / <code v-pre>{{setvarkey}}</code>
 
-::: tip 实现来源说明
+::: tip 两套寻址方式
 本节的按键寻址宏族来自 SillyTavern 原版；[点号路径](#结构化值的点号路径)则是 Luker 的扩展，单个宏即可访问任意深度。为兼容面向原版 SillyTavern 编写的内容，两种写法均可用。
 :::
 
@@ -324,14 +324,14 @@ SillyTavern 的按键寻址宏族可以直接使用：
 
 ### 逐楼层变量 {#per-message-variables}
 
-原生 SillyTavern 里，副作用宏 <code v-pre>{{setvar::hp::50}}</code> 只在 *prompt 范本* 里（预设、世界书、首楼）才会运行。AI 在回复里写同样的字面量什么都不会发生，还会原样显示出来污染叙事。
+原生 SillyTavern 里，副作用宏 <code v-pre>{{setvar::hp::50}}</code> 只在 *提示词模板* 里（预设、世界书、首楼）才会运行。AI 在回复里写同样的字面量什么都不会发生，还会原样显示出来污染叙事。
 
 Luker 用**逐楼层变量提取**解决这个问题。一条消息（AI 回复、用户消息、swipe、续写）保存时，Luker 会：
 
 1. 扫描文本里的 <code v-pre>{{setvar}}</code>、<code v-pre>{{addvar}}</code>、<code v-pre>{{incvar}}</code>、<code v-pre>{{decvar}}</code>、<code v-pre>{{deletevar}}</code>。
 2. 把里面嵌套的展示宏（<code v-pre>{{user}}</code>、<code v-pre>{{getvar::other}}</code>、<code v-pre>{{time}}</code>……）对当前状态求值。
-3. 把 op 立刻 apply 到 `chat_metadata.variables`。
-4. 在 `message.extra.var_ops` 上追加一条结构化记录。
+3. 把变更立刻应用到当前聊天的变量中。
+4. 在该消息上追加一条变量变动记录。
 5. 从可见文本里把字面量删掉。
 
 当你删消息、切 swipe、重新生成、编辑时，Luker 会**重播剩余的 op log**，让变量状态跟可见的时间线保持一致。
@@ -375,7 +375,7 @@ Luker 用**逐楼层变量提取**解决这个问题。一条消息（AI 回复�
 | <code v-pre>{{greeting::N}}</code> | 第 N 条问候语——0 是主，1+ 是 alt greetings |
 | <code v-pre>{{mesExamples}}</code> | 对话示例，启用 instruct 时自动按 instruct 格式化 |
 | <code v-pre>{{mesExamplesRaw}}</code> | 对话示例原文 |
-| <code v-pre>{{original}}</code> | 角色级 override 里的原始 prompt 内容。**单次有效**——同一次替换里第二次调用返回 `""`。只在 `charPrompt` / `charInstruction` 内有意义。 |
+| <code v-pre>{{original}}</code> | 角色级覆盖中的原始提示词内容。**单次有效**：同一次替换中第二次调用返回 `""`。仅在 `charPrompt` / `charInstruction` 内有效。 |
 
 ### 聊天状态
 
@@ -438,7 +438,7 @@ Luker 用**逐楼层变量提取**解决这个问题。一条消息（AI 回复�
 | 宏 | 返回 |
 |---|---|
 | <code v-pre>{{model}}</code> | 当前 model 识别字 |
-| <code v-pre>{{maxPrompt}}</code>（别名 `maxPromptTokens`） | prompt 上下文 token 上限 |
+| <code v-pre>{{maxPrompt}}</code>（别名 `maxPromptTokens`） | 提示词上下文 token 上限 |
 | <code v-pre>{{maxContext}}</code>（别名 `maxContextTokens`） | 上下文 token 上限 |
 | <code v-pre>{{maxResponse}}</code>（别名 `maxResponseTokens`） | 响应 token 上限 |
 | <code v-pre>{{isMobile}}</code> | 行动设备时 `"true"` |
@@ -466,7 +466,7 @@ Luker 用**逐楼层变量提取**解决这个问题。一条消息（AI 回复�
 
 ### Instruct 与系统提示词
 
-下面这些只在对应的 instruct / sysprompt 开关打开时返回内容。
+下列宏仅在对应的指令模板或系统提示词开关启用时返回内容。
 
 | 宏 | 返回 |
 |---|---|
@@ -489,8 +489,8 @@ Luker 用**逐楼层变量提取**解决这个问题。一条消息（AI 回复�
 
 | 宏 | 来源 | 返回 |
 |---|---|---|
-| <code v-pre>{{charPrefix}}</code> | Stable Diffusion | 正面图像生成 prompt 前缀 |
-| <code v-pre>{{charNegativePrefix}}</code> | Stable Diffusion | 负面图像生成 prompt 前缀 |
+| <code v-pre>{{charPrefix}}</code> | Stable Diffusion | 正面图像生成提示词前缀 |
+| <code v-pre>{{charNegativePrefix}}</code> | Stable Diffusion | 负面图像生成提示词前缀 |
 | <code v-pre>{{summary}}</code> | Summarize | 保存的聊天摘要 |
 
 第三方扩展可以注册更多宏，宏浏览器会标出每个宏的来源。
@@ -499,7 +499,7 @@ Luker 用**逐楼层变量提取**解决这个问题。一条消息（AI 回复�
 
 标志位是放在开头 <code v-pre>{{</code> 和宏名之间的单字符，用来改变宏的解析或求值行为。
 
-### `/` — 闭合标记
+### `/` —— 闭合标记
 
 标记一个标签是范围宏的闭合半边。和同名的开标签配对，把两者之间的内容作为宏的**最后一个位置参数**传入：
 
@@ -511,7 +511,7 @@ Luker 用**逐楼层变量提取**解决这个问题。一条消息（AI 回复�
 
 闭合标签自身不接受参数。
 
-### `#` — 保留空白
+### `#` —— 保留空白
 
 **只对范围宏有效。** 默认情况下，引擎会先对 body 做自动整理（剥掉首尾空白，再把第一个非空行的公共前导缩进从所有行里减掉）才交给 handler。加上 `#` 标志会跳过这一步，body 原样传入：
 
@@ -526,7 +526,7 @@ Luker 用**逐楼层变量提取**解决这个问题。一条消息（AI 回复�
 
 加在非范围宏前面时，`#` 被接受但没有任何效果。
 
-### `!` `?` `~` `>` — 预留未实现
+### `!` `?` `~` `>` —— 预留未实现
 
 | 标志位 | 预期含义 | 现状 |
 |---|---|---|
@@ -539,9 +539,9 @@ Luker 用**逐楼层变量提取**解决这个问题。一条消息（AI 回复�
 
 标志位之间、标志位和宏名之间均允许空白，多个可以组合：<code v-pre>{{ #each ::list}} … {{/each}}</code>。
 
-### `|` — 管道符（普通字符）
+### `|` —— 管道符（普通字符）
 
-::: tip 与 SillyTavern 行为差异的由来
+::: tip 与 SillyTavern 的差异
 原版 SillyTavern 将管道符解析为参数终止符，并支持 <code v-pre>{{macro|uppercase}}</code> 一类输出修饰器。该实现在上游被暂时禁用（issue #5618），Luker 遵循上游的词法分析器，因此本节描述的行为与上游保持一致。
 :::
 
@@ -581,59 +581,35 @@ STscript 里的 `|` 是命令管道符，那是命令解析器的特性，不是
 
 - **嵌套宏**先解析，外层拿到的是已经求值完的字符串参数。除非该宏定义打开 `delayArgResolution`（当前只有 <code v-pre>{{if}}</code> 和 <code v-pre>{{each}}</code>）。
 - **副作用宏**（<code v-pre>{{setvar}}</code>、<code v-pre>{{addvar}}</code>、<code v-pre>{{incvar}}</code>、<code v-pre>{{decvar}}</code>、<code v-pre>{{deletevar}}</code>）立即生效，同一 pass 里后面的宏能读到新值。
-- **逐楼层提取**（见 [逐楼层变量](#per-message-variables)）发生在**消息保存时**，不是 prompt 组装时。
-- **未知宏**保留原始 <code v-pre>{{...}}</code>（嵌套参数仍然会展开）。不抛错也不告警。
-- **参数数量 / 类型不符**：预设 `strictArgs: true` 时记一条 runtime warning 并保留原始宏文本；`strictArgs: false` 时记 warning 但 handler 仍然跑。
+- **逐楼层提取**（见 [逐楼层变量](#per-message-variables)）发生在**消息保存时**，不是 提示词组装时。
+- **未知宏**保留原始 <code v-pre>{{...}}</code>（嵌套参数仍会展开）。
+- **参数数量或类型不匹配**：该宏不展开，按原样输出，控制台记录一条警告；同一段文本中的其他宏照常解析。
 - **结果规范化**——每个 handler 的返回均会被规范化：`null` / `undefined` → `''`，`Date` → ISO 字符串，数组 / 对象 → `JSON.stringify(...)`，其他 → `String(...)`。这就是 <code v-pre>{{loop_value}}</code> 对一个对象会输出 JSON 的原因。
 - **后处理清扫**——残留的 <code v-pre>{{trim}}</code> 标记和零散的 `else` 哨兵字符会在后处理里被清掉。
 
-## 自定义与插件宏
+## 自定义宏
 
-扩展可以注册自己的宏：
-
-```js
-const ctx = Luker.getContext();
-
-ctx.macros.register('myStatus', {
-    description: '返回插件状态字符串。',
-    category: 'utility',
-    handler: () => 'My plugin is active.',
-});
-
-ctx.macros.register('greet', {
-    description: '问候。',
-    unnamedArgs: [
-        { name: 'name', type: 'string', description: '问候对象' },
-    ],
-    handler: (mctx) => `Hello, ${mctx.unnamedArgs[0]}!`,
-});
-```
-
-注册之后 <code v-pre>{{myStatus}}</code> 和 <code v-pre>{{greet::Bob}}</code> 就能在所有支持宏的位置使用，包括世界书、预设、聊天消息。
-
-完整的注册 API——参数类型、别名、范围宏、惰性解析、`dynamicMacros` 单次注入——在 [Extension API · 宏与变量](/zh-CN/development/extension-api/macros-and-variables)。
+安装的插件可以向系统注册自定义宏。注册后的宏可以在世界书、预设和聊天消息中直接使用，并能在宏浏览器中查看其说明与示例。开发者若需编写自定义宏，请参阅 [扩展 API · 宏与变量](/zh-CN/development/extension-api/macros-and-variables)。
 
 ## 探索与调试
 
-- 在任何解析宏的字段里输入 <code v-pre>{{</code> 会触发自动补全。任何位置按 **Ctrl+Space** 也能召出来。
+- 在解析宏的字段中输入 <code v-pre>{{</code> 会触发自动补全，按 **Ctrl+Space** 可随时打开。
 - 在 **设置 → 自动补全设置 → 在所有宏字段中显示** 里把全局补全打开。
-- 运行 `/? macros`（或 `/? macro` / `/? 4`）打开 **宏浏览器**——一个可搜索的弹窗，列出所有注册的宏、分类、别名、参数、返回类型、示例、来源（核心 / 扩展 / 第三方）。
+- 运行 `/? macros`（或 `/? macro` / `/? 4`）打开 **宏浏览器**：一个可搜索的弹窗，列出已注册的宏、分类、别名、参数、返回类型、示例与来源。
 - 运行 `/reroll-pick` 重置当前 chat 里所有 <code v-pre>{{pick}}</code> 的结果。可传一个种子（`/reroll-pick mySeed`）以重现。
 
 ## 宏在哪些字段里生效
 
-凡是会被 prompt 管线吃进去的文本字段：
+会进入提示词的文本字段：
 
-- 角色卡字段（description、personality、scenario、first message、alt greetings、对话示例、@ Depth Note、character prompts）
+- 角色卡字段（描述、性格、场景、首条消息、备选开场白、对话示例、深度提示、角色提示词）
 - 世界书条目正文、key、header
-- 预设里的提示词条目
+- 预设中的提示词条目
 - 作者笔记
 - 聊天消息（用户和 AI），带逐楼层变量提取
-- 斜杠命令参数、Quick Reply 脚本
-- 正则扩展的替换内容
-- 宏自己的参数（嵌套）
-
-那些只存字面文本、不会到 model 的字段——比如连接设置里的 API URL——**不会**解析宏。拿不准时用 <code v-pre>{{date}}</code> 试一下：如果显示成字面的 <code v-pre>{{date}}</code>，那个字段就不跑宏。
+- 斜杠命令参数与 Quick Reply 脚本
+- 正则扩展的替换文本
+- 宏自身的参数（嵌套）
 
 ## 常见范式
 
@@ -680,7 +656,7 @@ ctx.macros.register('greet', {
 {{/if}}{{/each}}
 ```
 
-AI 用 <code v-pre>{{setvar::quests::…}}</code> 在回复里维护 `quests` 结构；上面那段写在世界书里，prompt 组装时按当前状态铺开。
+AI 用 <code v-pre>{{setvar::quests::…}}</code> 在回复里维护 `quests` 结构；上面那段写在世界书里，提示词组装时按当前状态铺开。
 
 ### 根据 flag 切换的作者笔记
 
@@ -690,11 +666,11 @@ AI 用 <code v-pre>{{setvar::quests::…}}</code> 在回复里维护 `quests` �
 {{/if}}
 ```
 
-从 Quick Reply 或斜杠命令切的全局 flag，成为一个可选的命令，只在需要时随 prompt 一起发出去。
+从 Quick Reply 或斜杠命令切换的全局标志，成为一个按需启用的命令，需要时随提示词一同发送。
 
 ## 参考
 
 - [逐楼层变量](/zh-CN/features/variable-op-log) —— 楼层变量特性的完整说明。
 - [Extension API · 宏与变量](/zh-CN/development/extension-api/macros-and-variables) —— 在插件里注册自定义宏。
-- [世界书基础](/zh-CN/basics/world-info) —— 大部分 prompt 侧宏的归宿。
-- [预设系统](/zh-CN/basics/presets) —— prompt 侧宏的另一处归宿。
+- [世界书基础](/zh-CN/basics/world-info) —— 大部分提示词宏的使用场景。
+- [预设系统](/zh-CN/basics/presets) —— 提示词宏的另一处使用场景。

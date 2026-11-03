@@ -3,7 +3,7 @@
 For regular character cards without a CardApp, "Open Editor" opens an AI conversation panel as a popup. You can describe the changes you want in natural language, the AI executes them via tool calls, and every step is gated by your diff approval.
 
 ::: tip Cards with CardApp use Studio
-For character cards that embed a CardApp under `data.extensions.card_app`, "Open Editor" automatically launches the more capable [CardApp Studio](/features/card-editor/studio) instead of the popup described here.
+For character cards that embed a CardApp, "Open Editor" automatically launches the more capable [CardApp Studio](/features/card-editor/studio) instead of the popup described here.
 :::
 
 ## Popup Layout

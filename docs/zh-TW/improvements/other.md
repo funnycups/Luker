@@ -2,9 +2,9 @@
 
 除了前面介紹的主要架構改進外，Luker 還在連線管理、網路代理、UI 互動、擴充系統、效能最佳化等多個方面進行了增強。
 
-## 連線管理器改進
+## API 連線設定改進
 
-Luker 對 SillyTavern 已有的 Connection Profiles 功能進行了增強，使其與[預設解耦](/zh-TW/improvements/preset-decoupling)體系配合工作。改進後的連線管理器將連線配置與聊天補全預設完全分離——連線配置僅管理「連到哪裡」（API 位址、金鑰、代理等），不再包含生成參數。
+Luker 對 SillyTavern 已有的連線設定功能進行了增強，使其與[預設解耦](/zh-TW/improvements/preset-decoupling)體系配合工作。改進後的API 連線設定將連線配置與聊天補全預設完全分離——連線配置僅管理「連到哪裡」（API 位址、金鑰、代理等），不再包含生成參數。
 
 啟動時自動執行遷移，清理舊配置中殘留的預設欄位和正則欄位。新增了 plain-text Function Calling 的開關和重試配置，可按連線配置獨立設定。支援透過斜線命令 `/profile` 快速切換配置。
 
@@ -44,9 +44,9 @@ Luker 新增了 Hook Order 擴充，允許使用者自訂擴充的鉤子執行�
 
 Luker 為擴充提供了角色級別的持久化狀態儲存能力：
 
-- `getCharacterState(avatar, namespace)` — 取得指定角色在指定命名空間下的狀態資料
-- `setCharacterState(avatar, namespace, data)` — 設定角色狀態資料
-- `registerExtensionApi(name, api)` — 註冊命名 API，供其他擴充查詢和呼叫
+- `getCharacterState(avatar, namespace)` —— 取得指定角色在指定命名空間下的狀態資料
+- `setCharacterState(avatar, namespace, data)` —— 設定角色狀態資料
+- `registerExtensionApi(name, api)` —— 註冊命名 API，供其他擴充查詢和呼叫
 
 這些 API 透過全域上下文物件暴露，支援擴充間的鬆耦合通訊。預設同樣支援狀態儲存，帶生命週期鉤子。
 

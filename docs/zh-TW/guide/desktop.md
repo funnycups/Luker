@@ -114,6 +114,6 @@ Linux 上 AppImage 會被就地替換，替換完成後提示重啟應用程式�
 
 ## 相關頁面
 
-- [快速開始](/zh-TW/guide/getting-started) — 完整的安裝指南
-- [基礎設定](/zh-TW/guide/configuration) — 設定項說明
-- [儲存後端](/zh-TW/guide/configuration#儲存後端) — 伺服器支援的儲存後端
+- [快速開始](/zh-TW/guide/getting-started) —— 完整的安裝指南
+- [基礎設定](/zh-TW/guide/configuration) —— 設定項說明
+- [儲存後端](/zh-TW/guide/configuration#儲存後端) —— 伺服器支援的儲存後端

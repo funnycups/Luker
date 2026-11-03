@@ -1,31 +1,34 @@
 # Regex Rule Scope
 
-A regex rule can be applied in several places. The regex editor splits the choice into two groups, and options from either group can be combined freely on one rule.
+A regex rule can run in several places. The regex editor splits the choice into two groups, and options from either group combine on one rule.
 
 ## Affects
 
-**Affects** decides which content a rule processes.
+| Option | Effect |
+|---|---|
+| **User Input**, **AI Output**, **Slash Commands**, **World Info**, **Reasoning** | The rule processes only messages of the ticked kinds. With none ticked, the rule is stored but does not run. |
+| **Plugin Requests** | The rule processes text going into a plugin request: chat floor text, plugin-composed messages, world info entries. Requires at least one message kind ticked under Affects. |
+| **Plugin Replies** | The rule processes the assistant text a plugin request returns. Message kinds do not apply. |
+| **Min Depth**, **Max Depth** | Limit the messages a rule processes by their position in the chat. |
 
-- **User Input**, **AI Output**, **Slash Commands**, **World Info**, and **Reasoning** narrow a rule to messages of that kind. A rule applies only to messages whose role matches a ticked placement. With none ticked, the rule is stored; a rule with **Plugin Replies** ticked runs.
-- **Plugin Requests** makes a rule process the text going into a plugin request — chat floor text, plugin-composed messages, and world info entries. It needs at least one message type ticked under **Affects**.
-- **Plugin Replies** makes a rule process the assistant text a plugin request returns. It does not use message types.
-- **Min Depth** and **Max Depth** filter the messages a rule processes by their position in the chat.
+A rule with **Plugin Replies** ticked runs even when no message kind is ticked.
 
-## Other Options → Ephemerality
+## Ephemerality
 
-**Ephemerality** decides whether a rule acts on a single view instead of rewriting the chat file.
+| Options | Effect |
+|---|---|
+| **Alter Chat Display** | Rewrites what the chat UI shows. The chat file is untouched. |
+| **Alter Outgoing Prompt** | Rewrites the prompt sent to the model. The chat file is untouched. |
+| Neither, with **Plugin Requests** and **Plugin Replies** unticked | Rewrites the chat file when messages are edited or saved. |
 
-- **Alter Chat Display** — the rule rewrites what the Chat UI shows.
-- **Alter Outgoing Prompt** — the rule rewrites the prompt the main chat sends.
-- With neither ticked, and neither **Plugin Requests** nor **Plugin Replies** ticked, the rule rewrites the chat file itself when messages are edited or saved.
-- **Plugin Requests** and **Plugin Replies** are independent of Ephemerality. Ticking an Ephemerality option does not turn either off.
+**Plugin Requests** and **Plugin Replies** ignore Ephemerality; ticking an Ephemerality option does not disable them.
 
 ## Notes
 
-- A rule rewrites the stored chat only when no scope target is ticked. Ticking **Plugin Requests** or **Plugin Replies** keeps the rule off the stored chat. Message types filter which messages a rule processes when it runs on stored messages.
-- To clear custom CoT tags from stored message text, leave the Ephemerality options unticked and leave **Plugin Requests** and **Plugin Replies** unticked: the rule rewrites the stored messages once, and the chat display and the prompt read the cleaned text. Message types narrow the affected messages.
-- Ticking both **Alter Chat Display** and **Alter Outgoing Prompt** for custom CoT tags only adds overhead.
-- To keep custom CoT tags in a collapsible section instead of deleting the text, use **Advanced Formatting** → **Reasoning Formatting**.
+- A rule rewrites the stored chat only when it has no scope target. Ticking **Plugin Requests** or **Plugin Replies** keeps it off the stored chat. Message kinds narrow which stored messages it touches.
+- To clear custom CoT tags, leave Ephemerality, **Plugin Requests**, and **Plugin Replies** unticked. The rule rewrites the stored message once; the chat display and the prompt both read the cleaned text. Message kinds narrow the affected messages.
+- Ticking both **Alter Chat Display** and **Alter Outgoing Prompt** for CoT tags adds a second pass with no extra effect.
+- To keep CoT tags as a collapsible block instead of deleting them, use **Advanced Formatting** → **Reasoning Formatting**.
 
 ## Related Pages
 

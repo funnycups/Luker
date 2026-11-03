@@ -1,85 +1,62 @@
 # Spec 模式
 
-Spec 是編排器的預設模式，也是其他模式的「基準」。它把工作流拆成一串 **階段（Stage）**，每個階段裡若干 **節點（Node）** 串行或並行跑；階段間嚴格串行，前一階段所有節點均收工後才進入下一階段。每個節點 = 一次 LLM 呼叫 + 一段 prompt 模板。最後一個階段產出「作業說明」注入主模型，前面所有階段均是為它做準備。
+Spec 是編排器的預設模式：把準備工作拆成固定順序的階段，每個階段包含一個或多個節點，最後合成一份編排結果交給主模型。流程可預期、容易重複使用，是長期角色扮演的穩妥起點。
 
-::: tip 你已經在用了
-啟用編排器時預設就是 Spec，而且自帶一套能跑的工作流（distiller、規劃、約束、審查、合成器...）。這份文件的目標是：**改預設工作流、寫新工作流、理解為什麼預設這樣設計**。
-:::
+## 工作方式
 
-::: warning 多數情況下不該手撸
-手撸 stage / node 之前先看一眼 [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio)——一句話描述需求，AI 給方案，逐條審。手撸只在工作台搞不定的極致定製場景才用。
-:::
-
-## 概念速覽
-
-到這一節，幾個術語開始派上用場。簡短定義：
-
-- **Stage 階段** — 工作流的橫向切片。階段間嚴格串行，Stage 2 必須等 Stage 1 跑完才能開始。
-- **Node 節點** — 階段內的執行單位。**一個節點 = 一次 LLM 呼叫 + 一段 prompt 模板**。
-- **DAG** — 有向無環圖。說人話就是「有先後順序、不會繞回去的流程圖」。
-
-每個階段有一個執行方式：
-
-- **串行** — 階段內的節點一個接一個跑
-- **並行** — 節點用 `Promise.all` 同時跑
-
-每個節點要麼是 **worker**（幹活），要麼是 **review**（審查上一階段的輸出）。
-
-## 預設編排流程
-
-Spec 是一條固定流水線。預設 profile 自帶一組 stage 與 worker —— `distiller` 讀懂場景，接著 `lorebook_reader` + `anti_data_guard` 平行鎖定硬約束，然後 `planner` + `recall_relevance` 平行規劃下一拍，`critic` 評審（並可把上一階段打回重做），最後 `synthesizer` 產出 capsule。
+工作流依階段執行，階段之間嚴格串行，前一階段全部完成後才進入下一階段。階段內的節點可以串行，也可以並行。
 
 ```d2
 direction: right
 
-start: "新一回合開始" {
+start: "新回合開始" {
   shape: oval
   style.fill: "#e8f5e9"
 }
 
-s1: "Stage 1 · distill(serial)" {
+s1: "提煉（串行）" {
   style.fill: "#e1f5ff"
-  distiller: "distiller\n讀懂本回合\n場景狀態" {
+  distiller: "整理場景狀態\n與使用者意圖" {
     style.fill: "#fffde7"
   }
 }
 
-s2: "Stage 2 · grounding(parallel)" {
+s2: "依據（並行）" {
   style.fill: "#e1f5ff"
-  lorebook_reader: "lorebook_reader\n鎖定當前世界書\n硬約束" {
+  lorebook: "讀取生效的\n世界書設定" {
     style.fill: "#fffde7"
   }
-  anti_data_guard: "anti_data_guard\n攔截播報體 /\n觀察體文筆" {
+  guard: "攔截報告式、\n旁白式行文" {
     style.fill: "#fffde7"
   }
 }
 
-s3: "Stage 3 · reason(parallel)" {
+s3: "規劃（並行）" {
   style.fill: "#e1f5ff"
-  planner: "planner\n規劃下一拍" {
+  planner: "規劃下一拍" {
     style.fill: "#fffde7"
   }
-  recall_relevance: "recall_relevance\n召回相關\n記憶線索" {
+  recall: "補充相關記憶" {
     style.fill: "#fffde7"
   }
 }
 
-s4: "Stage 4 · review(serial)" {
+s4: "審查（串行）" {
   style.fill: "#e1f5ff"
-  critic: "critic\n審查\n上一階段" {
+  critic: "審查上一階段的產出" {
     shape: diamond
     style.fill: "#fff3e0"
   }
 }
 
-s5: "Stage 5 · finalize(serial)" {
+s5: "合成（串行）" {
   style.fill: "#e1f5ff"
-  synthesizer: "synthesizer\n產出編排\n指引 capsule" {
+  synth: "寫出編排結果" {
     style.fill: "#c8e6c9"
   }
 }
 
-out: "capsule 注入\n下一句主回覆" {
+out: "注入主模型的提示詞" {
   shape: oval
   style.fill: "#f3e5f5"
 }
@@ -89,113 +66,82 @@ s1 -> s2
 s2 -> s3
 s3 -> s4
 s4 -> s5: "通過"
-s4 -> s3: "打回重跑(帶反饋)" {
+s4 -> s3: "退回並附上意見" {
   style.stroke-dash: 3
 }
 s5 -> out
 ```
 
-預設 agent 在編排裡各自負責什麼：
+每個節點是一次 LLM 呼叫和一段提示詞範本。節點分兩類：
 
-| Agent | 作用 | 簡單範例（RP 場景） |
-|---|---|---|
-| `distiller` | 緊湊、有據可查的場景狀態快照（使用者意圖、當前張力、可能的走向）；下游所有 worker 均讀它。 | 返回「林晚自第 12 樓以來第一次問起洛陽；她在判斷要不要把家族故事講給你聽」。 |
-| `lorebook_reader` | 從啟動的世界書裡挑出**這一回合**必須遵守的硬約束（文風禁令、敘事邊界、角色 / 禁忌規則、連續性錨點），寫成可執行的寫作指令。 | 返回「世界書：洛陽本季被圍，林晚不可能輕鬆離開；不得打破圍城緊張感」。 |
-| `anti_data_guard` | 攔截播報體、觀察體、指標體、天氣預報體的扁平敘述；違規一律標 BLOCKER 並給出具體改寫指令。 | 抓到「林晚焦慮值：7/10」—— BLOCKER，改寫指令：「把焦慮寫進攥緊的指節裡，不要給數字」。 |
-| `planner` | 提下一拍進程，講清因果，保留角色獨立性與世界自洽，不預設讓世界圍著使用者轉。 | 節拍：「林晚躲閃 → 使用者追問 → 她漏出一個細節 → 主回覆就停在那個細節」。 |
-| `recall_relevance` | 在已召回的記憶線索裡挑出本回合真正該用的那些，按即時相關性排序；不無中生有。 | 「第 18 樓外祖母線索：高相關；第 3 樓天氣記錄：跳過」。 |
-| `critic`（review 節點） | 按一整套審查口徑（連續性、OOC、世界書合規、anti-data、世界自洽 ……）審上一個 worker stage，**通過**或**點名上游某個 worker 重跑**。只下判定，不下筆改寫。 | 「grounding 通過；reason 退回 —— `planner` 讓林晚走出被圍的洛陽，與世界書衝突。重跑 `planner`：她還在城裡。」 |
-| `synthesizer`（finalize 節點） | 把通過的 worker 輸出和 critic 的反饋合成成最終注入下一回合主回覆的那段編排指引 capsule。 | capsule：「林晚對洛陽話題焦慮；會躲閃，但會漏出一個家族細節。讓她留在被圍的城裡。不要用資料體敘述。」 |
+- **工作節點**：完成一項具體任務，例如整理場景、讀取世界書、規劃下一拍。
+- **審查節點**：檢查上一階段的結果，通過後進入下一階段，或指出問題並要求重新執行。
 
-## 手撸：Spec 工作流編輯器
+最後一個階段把前面的產出合成編排結果，注入主模型的提示詞。
 
-工作台搞不定的極致定製場景，直接動 stage / node。從編排器面板打開：**打開編排編輯器**。
+## 預設流程
 
-![Spec 編輯器](/images/orchestrator/orch-spec-editor.png)
+出廠設定自帶一條可用的流程：
 
-左邊面板是工作流（階段及其節點）。右邊面板是 Agent 預設庫。每個節點引用一個預設，預設攜帶系統提示、使用者提示模板、可選的 API/Chat Completion 預設覆寫、執行旗標。
+1. **理解場景**：整理使用者意圖、目前張力和可能的發展方向，供後續節點共用。
+2. **確定限制**：並行讀取已啟用的世界書條目，提取本回合必須遵守的設定與文風禁令；同時檢查草稿是否出現資料化、報告腔的敘述。
+3. **規劃與召回**：並行規劃下一拍的情節，並從記憶圖中挑選本回合相關的內容。
+4. **審查**：檢查規劃是否與既有事實衝突、是否偏離角色、是否違反世界規則。發現問題時，把對應節點退回重做。
+5. **合成**：把通過的產出整理成一份簡短的編排結果。
 
-### 模板變數
+預設流程涵蓋大多數角色扮演場景。需要不同結構時，用 [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) 描述目標，讓 AI 修改並逐項確認。
 
-使用者提示模板支援以下佔位符：
+## 編輯器
 
-| 變數 | 含義 |
-|---|---|
-| <span v-pre>`{{recent_chat}}`</span> | 最近的聊天訊息 |
-| <span v-pre>`{{last_user}}`</span> | 最後一條使用者訊息 |
-| <span v-pre>`{{previous_outputs}}`</span> | 前序階段的輸出 |
-| <span v-pre>`{{distiller}}`</span> | 蒸餾器節點的輸出 |
-| <span v-pre>`{{previous_orchestration}}`</span> | 上一回合的編排結果。**運行時自動注入，模板裡一般不用寫。** |
+從編排器面板開啟 **編排編輯器**。左側是階段與節點，右側是 Agent 預設庫。每個節點參照一個預設，預設包含系統提示詞、使用者提示詞範本，以及可選的 API 連線與聊天補全預設。
+
+節點可以個別設定模型。常見做法是讓整理與規劃使用便宜模型，合成與審查使用更強的模型。
 
 ### 審查節點
 
-審查節點檢查上一個工作階段的輸出，透過專用工具呼叫與運行時互動：
+審查節點只檢查直接相鄰的前一個工作階段。它可以：
 
-| 工具 | 作用 |
-|---|---|
-| `luker_orch_review_approve` | 工作合格，推進到下一階段 |
-| `luker_orch_request_rerun` | 一個或多個節點需要重做，附帶修改建議 |
+- **通過**：進入下一階段。
+- **要求重做**：指出需要修改的節點和理由，執行時重新執行這些節點，然後再次審查。
 
-約束：
+重做次數由審查重跑上限控制，預設 2 次；設為 0 時審查節點只能通過或失敗，不能觸發重做。
 
-- 審查節點只能審 **直接相鄰的前一個工作階段** 的節點
-- 重跑作用於具體節點 ID，不是整個階段
-- 重跑次數受 **審查重跑最大輪數** 控制（預設 2）。設為 0 時，審查節點只能「通過或失敗」，不能重跑
-- 重跑後審查節點重新跑，形成「執行 → 審查 → 重跑 → 再審查」的循環，直到通過或達到上限
-- 審查節點必須輸出審查反饋
+## 常見場景
 
-## 常見場景配方
+| 需求 | 做法 |
+| --- | --- |
+| 回覆前先規劃情節 | 在工作台描述「分兩階段：先規劃下一步，再寫編排結果」 |
+| 避免角色出戲 | 保留預設的資料化敘述檢查，或在描述中要求增加一個攔截元評論與報告腔的節點 |
+| 同一流程跨角色卡使用 | 套用到全域，不繫結角色卡 |
+| 不同角色卡使用不同流程 | 選取角色卡後開啟工作台，套用到角色卡 |
+| 速度慢或成本高 | 改用更小的模型，減少節點，或切換到[單 Agent 模式](/zh-TW/features/orchestrator/single) |
+| 反覆除錯同一流程 | 工作台的工作階段會儲存，關閉後可以繼續 |
+| 更換裝置 | 匯出設定，再在目標裝置匯入 |
 
-| 我想要 | 這樣做 |
-|---|---|
-| AI 回覆前先想清楚情節再寫 | [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio)描述裡加「分兩階段：先規劃下一步，再寫文」 |
-| AI 不要輕易出戲 | 啟用 Anti-Data Guard;[AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio)描述裡要求「加一個硬擋 meta 評論的 Constraint Agent」 |
-| 同一個工作流跨卡通用 | 套用到全域，不要綁卡 |
-| 不同卡用不同工作流 | 在角色卡選中狀態打開工作台，**套用到角色卡** |
-| 太慢 / 太貴 | 見[概覽 → Step 2](/zh-TW/features/orchestrator/#step-2)；或切到 [單 Agent 模式](/zh-TW/features/orchestrator/single) 只跑一個節點 |
-| 想反覆除錯同一個工作流 | 工作台的 session 會話——它會持久化 |
-| 換電腦用 | 見[概覽 → 匯入匯出](/zh-TW/features/orchestrator/#匯入匯出) |
-| 全部重置 | 編排編輯器有 **重置全域** 按鈕 |
+## 執行面板
 
-## 看一次 Spec 跑
+執行面板依階段展示執行過程。展開卡片可以查看每個節點的思考、輸出和工具呼叫。
 
-[運行面板](/zh-TW/features/orchestrator/#step-4) 會即時顯示 Spec 運行。stage 以卡片展示，展開就能看到該 worker 的思考、流式輸出和工具呼叫。Spec 模式可以重點關注：
+重點關注：
 
-- **節點執行次數** —— 整條 DAG 裡所有 worker 跑過的總次數。
-- **REVIEW 重跑次數** —— 審查節點驅動的重跑（預設上限 2 次，可在設定參考裡調到 0 關閉或 20 上限）。某 stage 觸發重跑時，對應 worker 會在面板裡出現兩次。
-- **各 stage 輸出形態** —— 由節點的 prompt 模板決定。比如 distiller 通常輸出一段 `summary` + 一段 `xml_guidance`（帶 `<story_state>` / `<location>` / `<key_items>` 之類的標籤），後續 stage 可以解析它取結構化欄位。
-- **capsule** —— **最後一個** stage 的輸出會打包注入主模型的上下文，前面所有 stage 均在為它做準備。
+- 哪些節點執行了多次，表示審查曾退回。
+- 每個階段的輸出是否符合預期。
+- 最終的編排結果是否包含本回合真正需要的資訊。
 
-面板頂部的**匯出**按鈕把整次 run 下載為 JSON（便於回報問題）。
+面板頂部的匯出按鈕可以把整次執行儲存為 JSON，便於回報問題。
 
-## Spec 設定參考
+## 設定
 
-<details>
-<summary>Spec 專屬設定</summary>
-
-| 設定 | 說明 |
-|---|---|
-| 節點迭代最大輪數 | 單節點的迭代上限 |
-| 審查重跑最大輪數 | 0 停用審查驅動的重跑 |
-| Anti-Data Guard | 預設 Spec 工作流裡的一個內建節點，屏蔽資料化 / 報告腔的散文（諸如 觀察 / 分析 / 評估 / 監測 / observation / analyze / metric / probability 這種把 RP 寫成觀察日誌或參數表的詞）。硬編碼約 18 個詞的詞典。不想要的話直接把這個節點從工作流裡刪掉。 |
-| 節點 API 預設 | 節點級覆寫；留空 = 全域 |
-| 節點 Chat Completion 預設 | 節點級覆寫；留空 = 全域 |
-
-每個節點可以用不同的 API 和 Chat Completion 預設，所以你可以讓蒸餾器走便宜模型、合成器走高品質模型。
-
-</details>
+- **節點迭代最大輪數**：單一節點內部的最大迭代次數。
+- **審查重跑最大輪數**：預設 2；設為 0 時關閉重做。
+- **節點 API 與聊天補全預設**：留空時使用全域編排預設。
+- **資料化敘述檢查**：預設流程內建的節點，攔截把角色扮演寫成觀察日誌或參數表的文風。不需要時可以從工作流中刪除。
 
 ## 相關頁面
 
-- [編排器概覽](/zh-TW/features/orchestrator/) — 通用設定 / 觸發時機 / 角色卡綁定
-- [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) — AI 幫你改預設 Spec 流程（推薦）
-- [單 Agent 模式](/zh-TW/features/orchestrator/single) — 退化的 Spec，只跑一個節點
-- [Agenda 模式](/zh-TW/features/orchestrator/agenda) — Planner 動態調度版本
-- [Loop 模式](/zh-TW/features/orchestrator/loop) — 單 Agent 工具循環
-- [角色卡編輯器](/zh-TW/features/card-editor/) — 與迭代工作台共用 diff 引擎
-- [自訂工具](/zh-TW/features/orchestrator/custom-tools) — Spec Agent 可以呼叫的擴充 / SillyTavern 橋接 / 手寫工具
-
-## 預設
-
-本模式的設定可以儲存為命名預設，並在編輯面板中切換。完整工作流程請見
-[編排預設](./presets.md)。
+- [多 Agent 編排概覽](/zh-TW/features/orchestrator/) —— 通用設定、觸發時機與角色卡繫結
+- [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) —— 用自然語言修改流程
+- [單 Agent 模式](/zh-TW/features/orchestrator/single) —— 只執行一個節點的精簡流程
+- [Agenda 模式](/zh-TW/features/orchestrator/agenda) —— 由規劃 Agent 動態決定執行哪些節點
+- [Loop 模式](/zh-TW/features/orchestrator/loop) —— 單 Agent 工具循環
+- [自訂工具](/zh-TW/features/orchestrator/custom-tools) —— 給節點增加內建之外的能力

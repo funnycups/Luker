@@ -83,7 +83,7 @@ These files **do not affect SillyTavern's original data**. If you need to migrat
 
 ## Notes
 
-1. **Node.js Version**: Luker requires Node.js >= 20. Verify your Node.js version before migrating.
+1. **Node.js Version**: Luker requires Node.js >= 24. Verify your Node.js version before migrating.
 
 2. **Third-Party Extensions**: SillyTavern's third-party extensions work normally in Luker. Luker uses the same extension loading mechanism, with extensions located in `public/scripts/extensions/third-party/`.
 

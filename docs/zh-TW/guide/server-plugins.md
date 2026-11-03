@@ -88,5 +88,5 @@ curl http://localhost:8000/api/plugins/hello-world/hello
 
 ## 相關頁面
 
-- [伺服端外掛開發](/zh-TW/development/server-plugin) — 為 Luker 建置伺服端外掛
-- [基礎配置](/zh-TW/guide/configuration) — 配置參考
+- [伺服端外掛開發](/zh-TW/development/server-plugin) —— 為 Luker 建置伺服端外掛
+- [基礎配置](/zh-TW/guide/configuration) —— 配置參考

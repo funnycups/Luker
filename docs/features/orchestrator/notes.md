@@ -1,55 +1,55 @@
-# Notes — Agent Plot Thread Tracker
+# Notes
 
-Notes is the orchestrator's per-chat store for **what the agent (as plot author) wants to make happen later**. Foreshadowing planted, promises made by characters, chapter outlines written ahead, mystery-genre solutions drafted before the investigation — anything that captures an obligation the agent has committed to honoring in a future turn.
+Notes let an agent record plot threads it intends to pay off later: foreshadowing already planted, promises a character made, a pre-written chapter outline, or the solution to a mystery fixed before the investigation reaches it. Each note belongs to the current chat.
 
-It is deliberately distinct from **memory-graph**:
+## How notes differ from Memory Graph
 
-| Subsystem | Answers | Author |
-|---|---|---|
-| memory-graph | "What has already happened" — objective record of scenes, character states, locations | Auto-extracted; user can curate |
-| **notes** | **"What does the agent (as author) want to happen next"** — planted but not yet triggered | **Agent itself, via tools during the loop** |
+| | Memory Graph | Notes |
+| --- | --- | --- |
+| Answers | What has already happened: objective records of characters, places and events | What the agent wants to happen next: planted but unresolved threads |
+| Written by | Automatic extraction; the user can also clean it up | The agent, during a run |
+| Used for | Recalling established facts | Remembering future promises and foreshadowing |
 
-You (the player) can view, close, edit, and hard-delete notes through the **Notes panel** — but you are not the primary author. If you want to inject plot direction, use lorebook entries or memory-graph always-injected nodes; notes is for the agent's own bookkeeping.
+## Who maintains them
 
-## Tools the agent uses
+The agent opens and closes notes while it works. You can view, edit, close or permanently delete them in the Notes panel, but the agent is the primary author.
 
-| Tool | Behavior |
-|---|---|
-| `note_open(text)` | Open a new note. Returns its id. The note shows up in the agent's "## Open Notes" system block every subsequent run, until closed. |
-| `note_close(id, reason?)` | Close a note by id with an optional one-line reason. The note disappears from the prompt block; the closure stays in the archive (visible in the panel). |
+To add your own plot direction, use a world book entry or a persistent Memory Graph node. Notes are the agent's own working ledger, not a player-facing prompt.
 
-Open notes are always visible in the agent's system prompt — there is no auto-LRU, no token budget, no auto-expiry. **The agent is responsible for its own note hygiene**: if it opens 80 stale notes and never closes them, it pays the prompt-budget cost itself. The orchestrator does not bail it out.
+## Keeping notes clean
 
-## Anti-pollution principle
+A note is a real commitment, not a turn diary. Open notes stay in the agent's context, and a list polluted with trivia distracts it from the story.
 
-Notes is for **genuine commitments**, not a turn diary. A polluted notes list (entries that were never real obligations, or stale entries that should have been closed) drags every subsequent round. The director mode default sub-agents enforce this:
-
-- `notes_pickup_scout` runs pre-draft and picks only the **ripe** open notes for this turn's beat
-- `notes_curator` runs post-draft, defaults to **do nothing**, closes only on explicit textual evidence in the draft, and opens new notes only when the draft itself committed to a future-payoff obligation
-
-If you write your own director sub-agents or operate in loop mode without a curator, the same discipline applies — close more aggressively than you open.
+Open sparingly and close readily. Director's default flow selects the notes due this turn before drafting, and after drafting closes only those with clear textual evidence; with no evidence it changes nothing.
 
 ## The Notes panel
 
-The Notes panel lives in the orchestrator extension's panel, scoped to the current chat. It shows the following tabs:
+The panel sits in the Orchestrator extension and is scoped to the current chat. It has two tabs:
 
-- **Open notes** — currently active threads. Each row has Close / Edit / Delete actions.
-- **Closed notes** — the archive. Closure reasons are shown beneath each row.
-
-Per-row actions:
+- **Open**: active threads, each with close, edit and delete actions.
+- **Closed**: the archive, with the reason each note was closed.
 
 | Action | Effect |
-|---|---|
-| Close this note | Same as the agent's `note_close` — a closure-reason prompt appears; submitting moves the note to Closed. |
-| Edit note | Inline text edit. Status and id are preserved. Useful for typo / clarity fixes. |
-| Delete note (permanent) | Hard delete from storage. Two-step confirm. **Not** the same as Close — Delete erases the entry; Close keeps it for the record. |
+| --- | --- |
+| Close | Enter a reason; the note moves to Closed. |
+| Edit | Change the text; status and identifier stay the same. |
+| Delete permanently | Remove the note from storage after a confirmation. Unlike closing, it leaves no record. |
 
-The panel updates live as agents open / close notes via tools, and your panel actions update agents' next-turn prompts the same way.
+The panel refreshes when the agent opens or closes a note, and your edits change what the agent sees on its next turn.
 
 ## Common questions
 
-**Q: Should I manually open notes in the panel to give the agent plot hints?**
-No. Notes is the agent's instrument. If you want to seed plot direction, use a lorebook entry or a memory-graph always-injected node — those are designed as user-side authoring surfaces.
+### Can I open a note to give the agent a plot hint
 
-**Q: Are notes shared across chats?**
-No — each chat has its own notes store. Switching chats shows that chat's own open / closed lists.
+Not recommended. Use a world book entry or a persistent Memory Graph node for plot direction. Notes are for the agent's own bookkeeping.
+
+### Are notes shared across chats
+
+No. Each chat has its own notes, and switching chats shows that chat's list.
+
+## Related pages
+
+- [Orchestration overview](/features/orchestrator/) — which modes can use notes
+- [Director mode](/features/orchestrator/director) — how the default flow picks and closes notes
+- [Memory Graph](/features/memory-graph) — records of what has already happened
+- [World Info basics](/basics/world-info) — player-side setting and plot direction

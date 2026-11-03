@@ -21,7 +21,7 @@ Never forward a router port straight to Luker. That exposes the raw HTTP server 
 
 Use this when the machine running Luker is reachable from the internet through a public IP and a domain name. The reverse proxy accepts HTTPS on port 443 and forwards to Luker's plain-HTTP port on the same machine.
 
-The idea is the same for any web server: forward every path to Luker's port, pass the original request headers through, and allow the WebSocket upgrade. Luker routes generation requests through a persistent WebSocket connection, so a proxy that drops the upgrade disables that transport.
+Any web server is configured the same way: forward every path to Luker's port, pass the original request headers through, and allow the WebSocket upgrade. Luker routes generation requests through a persistent WebSocket connection, so a proxy that drops the upgrade disables that transport.
 
 ### nginx
 

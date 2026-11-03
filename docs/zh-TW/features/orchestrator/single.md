@@ -1,67 +1,46 @@
 # 單 Agent 模式
 
-單 Agent 是編排器最輕的執行模式——只有一個節點跑一次 LLM，產出一段 capsule 注入主模型。本質是個只剩一個節點的退化 Spec，但因為沒有多節點協作，擴展抽屜裡直接給你簡化欄位，完全不用走編排編輯器。
+單 Agent 是編排器最輕的模式：只執行一個節點，呼叫一次模型，產出一段引導文字注入主模型。它像一個只剩單一節點的 Spec，適合只需要一句提醒、一段摘要或一條風格限制的回合。
 
-::: tip 這個模式給誰用
-不需要多 agent 協作、不需要工具循環、只想要「一段簡單的引導文字」注入主模型的場景。比如：一段 OOC 提醒、一段世界書摘要、一句風格約束。如果你在想「我要是能讓主模型回覆前先讀一下 XXX 就好了」，這個模式可能正合適。
-:::
+## 什麼時候用
 
-## 切到單 Agent
+- 主對話只需要一段 OOC 提醒、一段世界書摘要或一句寫作限制。
+- 想使用編排結果的注入，但不想承擔多 Agent 的延遲和成本。
+- 除錯新的引導提示詞：先用單 Agent 驗證注入位置與效果，再升級到更複雜的模式。
+- 預算有限，只需要一次額外呼叫。
 
-擴展抽屜裡把執行模式選成 **單 Agent**。Spec / Agenda / Loop 的編輯器入口收起，擴展抽屜裡多出簡化欄位——**System Prompt** 和 **User Prompt 模板**。
+需要 Agent 主動查世界書、檢索記憶或做多步研究時，用 [Loop 模式](/zh-TW/features/orchestrator/loop)。需要固定多階段流程時，用 [Spec 模式](/zh-TW/features/orchestrator/spec)。需要動態決定下一步時，用 [Agenda 模式](/zh-TW/features/orchestrator/agenda)。
 
-直接在這兩個欄位裡寫 prompt 即可，不需要打開編排編輯器。
+## 開始使用
 
-## 模板變數
+在擴充功能抽屜把執行模式選為 **單 Agent**。其他模式的編輯器入口會收起，出現兩個欄位：
 
-User Prompt 模板支援以下佔位符，和 Spec 模式一致：
+- **System Prompt**：Agent 的角色與任務。
+- **User Prompt 範本**：本輪提供給 Agent 的輸入。
 
-| 變數 | 含義 |
-|---|---|
-| <span v-pre>`{{recent_chat}}`</span> | 最近的聊天訊息 |
-| <span v-pre>`{{last_user}}`</span> | 最後一條使用者訊息 |
-| <span v-pre>`{{previous_orchestration}}`</span> | 上一回合的編排結果。**運行時自動注入，模板裡一般不用寫。** |
-
-## 適用場景
-
-- **簡單 capsule** — 主對話只需要一段 OOC 提醒、一段 lorebook 摘要、一句約束指令
-- **想用 capsule 注入，但不想付多 agent 延遲** — 只跑一次 LLM，延遲最低
-- **新提示詞除錯** — 先單 agent 跑通基礎 prompt，驗證 capsule 注入位置 / 角色 / 深度均符合預期，再升級到多 agent
-- **預算敏感** — 一次 LLM 呼叫比 Spec 預設工作流的 5–10 次便宜得多
-
-## 不適用場景
-
-- 需要 agent 讀世界書、查記憶、做調研 → 用 [Loop 模式](/zh-TW/features/orchestrator/loop)
-- 需要多步規劃、審查、合成 → 用 [Spec 模式](/zh-TW/features/orchestrator/spec)
-- 需要根據中間結果決定下一步 → 用 [Agenda 模式](/zh-TW/features/orchestrator/agenda)
-
-## AI 幫你寫 prompt
-
-不會寫 prompt?[AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio)在單 Agent 模式下也能用——切到單 Agent 後打開工作台，描述你想要 agent 幹什麼，它會幫你產生 system / user prompt。
+直接填寫這兩個欄位即可，不需要開啟編排編輯器。執行時 Agent 的產出會作為編排結果注入主模型。
 
 ## 與 Spec 的關係
 
-單 Agent 模式底層是只有一個節點的 Spec profile。這意味著：
-
-- 切到單 Agent → 只有一個節點 + 簡化 UI，不打開編排編輯器
-- 切回 Spec → 看到的就是這一個節點，可以繼續手撸加節點
-
-兩者之間切換不會丟設定（System Prompt + User Prompt 在 Spec 模式下是節點 0 的設定）。
+單 Agent 在底層是只有一個節點的 Spec。切回 Spec 時，看到的就是這個節點，可以繼續新增階段和節點。兩個模式之間切換不會遺失提示詞。
 
 ## 與其他模式對比
 
-| 維度 | 單 Agent | Spec | Agenda | Loop |
-|---|---|---|---|---|
-| LLM 呼叫次數 | 1 | 5–10 | 視 Planner 調度 | 視 agent 決定（預設 ≤ 20 輪） |
-| 設定成本 | 簡化欄位 | 畫 DAG + 多 prompt | Planner prompt + worker pool | 一段 system prompt + 工具開關 |
-| 工具呼叫 | ❌ | ❌ | ✅ Planner | ✅ agent 自由呼叫 |
-| 流程可變 | ❌ | 拓撲固定 | Planner 決定 | agent 自己決定 |
-| 角色卡覆寫 | ✅ | ✅ | ✅ | ✅ |
-| 適合場景 | 簡單 capsule | 流程明確 / stage 固定 | 複雜任務需要調度 | 速度與效果平衡 / 探索性研究 |
+| | 單 Agent | Spec | Agenda | Loop |
+| --- | --- | --- | --- | --- |
+| 模型呼叫 | 一次 | 多次，依階段 | 由規劃 Agent 決定 | 由 Agent 決定 |
+| 設定方式 | 兩個提示詞欄位 | 階段與節點編輯器 | 規劃 Agent 與工作 Agent 池 | 系統提示詞與工具開關 |
+| 工具呼叫 | 無 | 無 | 規劃 Agent 使用 | Agent 自由使用 |
+| 流程 | 固定單步 | 固定階段 | 動態調度 | Agent 自主決定 |
+| 適合 | 簡單引導 | 可預期的多階段準備 | 需要動態調度 | 需要邊查邊想 |
+
+## 用 AI 編寫提示詞
+
+[AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) 在單 Agent 模式下同樣可用。描述希望 Agent 完成的任務，工作台會產生系統提示詞與使用者提示詞，並逐項確認。
 
 ## 相關頁面
 
-- [編排器概覽](/zh-TW/features/orchestrator/) — 通用設定 / 觸發時機 / 角色卡綁定
-- [Spec 模式](/zh-TW/features/orchestrator/spec) — 多節點 DAG 版本
-- [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) — AI 幫你寫 prompt
-- [Loop 模式](/zh-TW/features/orchestrator/loop) — 想讓 agent 呼叫工具就用這個
+- [多 Agent 編排概覽](/zh-TW/features/orchestrator/) —— 通用設定、觸發時機與角色卡繫結
+- [Spec 模式](/zh-TW/features/orchestrator/spec) —— 多階段流程
+- [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) —— 用自然語言編寫提示詞
+- [Loop 模式](/zh-TW/features/orchestrator/loop) —— 讓 Agent 呼叫工具

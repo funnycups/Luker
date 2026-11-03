@@ -1,53 +1,51 @@
 # 逐楼层变量
 
-Luker 在 SillyTavern 原生变量系统之上引入了**逐楼层变量**：AI 回复里写的变量赋值会被自动提取、结构化、随消息一起保存，并在聊天历史发生变化时被确定性地重放——删除消息、切换 swipe、重新生成回复后，你的变量自动落到正确状态。
+角色扮演里的状态常常写在 AI 回复中：体力降到 40、拿到一把匕首、某位 NPC 离队。逐楼层变量让这些变量赋值真正生效，并与聊天历史保持一致：删除消息、切换 swipe、重新生成后，变量会回到当前时间线应有的状态。
 
-## 为什么需要这个
+## 解决什么问题
 
-原生 SillyTavern 里，副作用宏 <code v-pre>{{setvar::hp::50}}</code> 只在它出现在 *prompt 模板* 里（预设、世界书、首楼）时才会被执行。如果 AI 在回复里写了同样的字面量，什么都不会发生——它就是一段普通文本。更糟的是字面量会原样显示给用户，污染叙事。
+在原生 SillyTavern 中，<code v-pre>{{setvar::hp::50}}</code> 只有在预设、世界书或首楼等提示词模板里才会执行。AI 在回复里写同样的内容，不会改变任何变量，还会把这一段字面量显示给用户，打断叙事。
 
-Luker 的解法：在保存 AI / 用户消息时把副作用宏从文本里提取出来，作为结构化操作挂在那条消息上，需要时重放。字面量从可见文本里消失，操作作为数据被保留。
-
-## 工作原理
+Luker 在保存消息时把这类赋值提取出来，作为该条消息的一部分保存，并从可见文本中移除。变量立即更新；消息删除或切换 swipe 时，Luker 按仍存在的赋值重新计算。
 
 ```d2
 direction: down
 
-AI: "AI 回复 / 用户消息保存"
-EXTRACT: "扫描 mes 提取副作用宏\nsetvar / addvar / incvar / decvar / deletevar / pushvar / popvar" {
+AI: "回复写入聊天"
+EXTRACT: "从消息中提取赋值宏\nsetvar / addvar / incvar / decvar / deletevar / pushvar / popvar" {
   style.fill: "#e1f5ff"
 }
-EVAL: "嵌套展示型宏求值\n{{user}} / {{getvar}} / {{time}} ..."
-APPLY: "前向 apply 到\nchat_metadata.variables"
-LOG: "结构化记录追加到\nmessage.extra.var_ops"
-CLEAN: "字面量从 mes 里删除"
-DISPLAY: "聊天界面看到的是\n干净叙事"
+EVAL: "解析嵌套的展示宏"
+APPLY: "写入当前变量"
+LOG: "在消息上记录本次变量操作"
+CLEAN: "从可见文本中移出赋值"
+DISPLAY: "聊天界面显示纯叙事"
 
 AI -> EXTRACT -> EVAL -> APPLY -> LOG -> CLEAN -> DISPLAY
 
 REPLAY: "聊天结构变化" {
   shape: diamond
 }
-DEL: "MESSAGE_DELETED"
-SWIPE: "MESSAGE_SWIPED"
-SWIPED: "MESSAGE_SWIPE_DELETED"
-CHANGED: "CHAT_CHANGED"
-EDIT: "MESSAGE_EDITED"
-REBUILD: "从存活 op 重放\n仅动 op 日志里出现的 key" {
+DEL: "删除消息"
+SWIPE: "切换 swipe"
+SWIPED: "删除 swipe"
+EDIT: "编辑消息"
+CHANGED: "切换聊天"
+REBUILD: "按仍有效的赋值重新计算" {
   style.fill: "#fff3e0"
 }
 
 DEL -> REPLAY
 SWIPE -> REPLAY
 SWIPED -> REPLAY
-CHANGED -> REPLAY
 EDIT -> REPLAY
+CHANGED -> REPLAY
 REPLAY -> REBUILD
 ```
 
-### 提取
+## 支持的写法
 
-消息保存时（AI 回复、续写、重新生成、swipe、用户消息），Luker 扫描 `mes` 寻找下面这些副作用宏：
+以下赋值会从消息中提取：
 
 - <code v-pre>{{setvar::name::value}}</code>
 - <code v-pre>{{addvar::name::value}}</code>
@@ -57,153 +55,70 @@ REPLAY -> REBUILD
 - <code v-pre>{{pushvar::name::value}}</code>
 - <code v-pre>{{popvar::name}}</code>
 
-每一种被识别的 op 均接受点号路径名（<code v-pre>{{setvar::roster.alice.hp::50}}</code>）——见下文的 [结构化对象工作流](#structured-objects)。
+变量名支持点号路径，例如 <code v-pre>{{setvar::roster.alice.hp::50}}</code>。同一条消息中的赋值按出现顺序执行，后面的赋值可以读取前面的结果。
 
-按出现顺序逐个处理：
+值里嵌套的展示宏会先按当前状态求值，例如 <code v-pre>{{setvar::greeting::{{user}}}}</code> 会写入当前用户名称。
 
-1. value 里嵌套的**展示型**宏（<code v-pre>{{user}}</code>、<code v-pre>{{getvar::other_key}}</code>、<code v-pre>{{time}}</code> 等）针对当前状态求值。
-2. op 立即前向 apply 到 `chat_metadata.variables`，这样同一条消息里后续的 op 能读到结果。
-3. 结构化记录追加到 `message.extra.var_ops`。
-4. 字面量从 `mes` 里删掉。
+## 编辑和查看
 
-聊天界面看到的就是干净叙事；变量是最新的；操作历史可查询。
-
-::: info 顺序求值
-同一条消息里两个相互依赖的 op 会按预期工作：
-
-```
-{{setvar::a::1}} {{setvar::b::{{getvar::a}}}}
-```
-
-提取完成后：`a = 1`，`b = 1`。每个宏均先完整求值再 apply，再处理下一个。
-:::
-
-::: info JSON 形态的 value
-value 末尾是字面 `}` 的情形（典型 `{"x":1}` / `[1,2]` 类负载）会让宏末尾出现连续三个 `}`——一个是 JSON 闭合，两个是宏 close。扫描器把任意末尾连续 `}` 里**最后一对** `}}` 当作宏 close，所以 <span v-pre>`{{setvar::config::{"x":1}}}`</span> 不需要转义就能正确解析。
-
-副作用：宏紧跟字面 `}` 写在叙事里（例如 <span v-pre>`... {{macro}}}`</span>）会把那个 `}` 吞进 value。这种场景请在中间加空格（<span v-pre>`{{macro}} }`</span>）保持分离。
-:::
-
-### 结构性变化时重放
-
-聊天结构变化时，Luker 重建变量缓存的相关部分：
-
-| 事件 | 动作 |
-|------|------|
-| `MESSAGE_DELETED` | 从存活 op 重放；只有出现在存活日志里的 key 会被改动 |
-| `MESSAGE_SWIPED` | 重放（活跃 swipe 的 `extra.var_ops` 此时已就位） |
-| `MESSAGE_SWIPE_DELETED` | 重放 |
-| `CHAT_CHANGED` | 针对刚加载的 chat 重放 |
-| `MESSAGE_EDITED` | 重放（**不**重新提取——编辑叙事不会触发 setvar） |
-
-重放是刻意保守的：只动那些出现在存活 op 日志里的 key。其他来源写的变量——世界书副作用、slash 命令、Quick Reply、第三方扩展、老 chat 遗留——一律不动。
-
-### Swipe 生命周期
-
-`var_ops` 挂在 `message.extra` 上，SillyTavern 已经通过 `swipe_info[i].extra` 自动镜像到每个 swipe。切换 swipe 时正确的 op 自动跟过来。
-
-新 swipe 开始生成时，`clearMessageData` 会丢掉前一个 swipe 的 `var_ops`（Luker 把它加进了白名单），这样提取从干净状态开始。
-
-### 续写
-
-续写会把新 token 追加到现有 `mes` 后面。因为之前的提取已经把字面量从 `mes` 里删干净了，下一次提取只会看到新增部分，把新 op 追加到同一个 `var_ops` 数组末尾。不需要时间戳、偏移量、标志位。
-
-## 操作面板
-
-任何带有 op 日志的消息按钮排上会出现一个小烧瓶图标：
-
-![楼层消息上的小烧瓶图标](/images/variable-op-log/var-ops-flask-button.png)
-
-点开能：
+带有变量操作的消息会出现一个烧瓶图标。点开后可以：
 
 - 查看这条消息记录的所有操作
-- 编辑某个操作的 `op` / `key` / `value`
-- 删除某个操作
+- 修改操作类型、变量名或值
+- 删除某条操作
 - 新增操作
 
-![Variable operations 面板](/images/variable-op-log/var-ops-panel.png)
+保存后，变量会按修改后的记录重新计算。手动调整变量时优先用这个面板：改动落在具体消息上，之后的删除与 swipe 会正确处理。
 
-保存时该消息的 op 数组被你的编辑替换、缓存重建、聊天落盘。**手动调整变量推荐这条路**——它把改动落在时间线上一个具体的消息上，未来的结构性变化（删除、swipe）能正确保留意图。
+## 删除、编辑与 swipe
 
-## 与其他变量来源的共存
+Luker 只回放当前聊天中存在的变量操作。删除一条消息时，这条消息写过的变量会回退到之前的状态；切换 swipe 时，变量跟随当前 swipe 的记录；编辑消息正文不会重新提取赋值，需要修改时请用烧瓶面板。
+
+重放只影响变量操作记录中出现的顶层变量名。世界书、斜杠命令、Quick Reply 和第三方扩展写入的变量不会被覆盖。
+
+## 与其他变量来源共存
 
 | 来源 | 行为 |
-|------|------|
-| 世界书 <code v-pre>{{setvar}}</code> | 走 SillyTavern 原生流程，prompt 组装时执行；缓存里这个 key 每轮均会被 WI 的值覆盖。如果想让 WI 充当「初始化」而不是「每轮覆盖」，把这类条目放在高 depth / prompt 最前。 |
-| 预设 <code v-pre>{{setvar}}</code> | 同世界书。 |
-| Slash 命令 `/setvar` | 直接写 `chat_metadata.variables`。下次重放扫到同名 key（即存活的 AI op 提到了这个 key）时会被覆盖。 |
-| Quick Reply 脚本 | 同 slash 命令。给 QR 管理的变量起一个 AI op 不会碰的名字。 |
-| <code v-pre>{{setglobalvar}}</code> 系列 | 不被提取。全局变量在 chat-local op 日志的范围之外，按原生语义工作。 |
+| --- | --- |
+| 世界书 <code v-pre>{{setvar}}</code> | 在提示词组装时执行，每轮都会覆盖同名变量。适合初始化或按当前情境重算的值。 |
+| 预设 <code v-pre>{{setvar}}</code> | 与世界书相同。 |
+| 斜杠命令 `/setvar` | 直接写入聊天变量。如果之后的消息操作也写了同一个变量，重放时会以消息记录为准。 |
+| Quick Reply | 同斜杠命令。给 Quick Reply 管理的变量起一个 AI 不会使用的名字。 |
+| <code v-pre>{{setglobalvar}}</code> 系列 | 不参与逐楼层提取。全局变量跨聊天共享，按原生语义工作。 |
 
-## 角色卡作者建议
+## 给角色卡作者的建议
 
-如果一个变量打算让 **AI 在 RP 过程中拥有并修改**，就只让它通过 AI 写的 <code v-pre>{{setvar}}</code> 来变化，不要从世界书或 QR 里再写。
+- 希望 AI 在剧情中修改的变量，只让 AI 通过回复里的赋值来改，不要再从世界书或 Quick Reply 重复写入。
+- 只在聊天开始时初始化一次的变量，写在首楼或备选开场白里。
+- 每轮都要按当前情境重算的变量，放在世界书里，让提示词组装时覆盖。
+- 需要随剧情推进的面板数据，建模成聊天变量：开场白初始化，世界书条目指导 AI 更新，CardApp 读取并渲染。
 
-如果一个变量打算 **chat 开始时初始化一次**，把它写在角色卡的首楼或 alt greeting 里——它们也会被提取到 `chat[0].extra.var_ops`。
+## 结构化变量
 
-如果一个变量打算 **每轮 prompt 组装时按当前情境重算**（比如根据当前位置算天气），就放世界书；缓存被覆盖是预期行为。
-
-## 何时使用变量驱动 UI
-
-当某些字段需要随对话推进而变化、并被某种 UI 消费（CardApp 面板、世界书条目、自定义渲染器等）时，把它们建模成 chat 变量。生产端途径：
-
-1. `first_mes` / alt greetings 里 setvar 兜底初始值
-2. 世界书条目里指引 AI 在 reply 中用 setvar 改写
-3. AI 在 reply 中 emit setvar 直接更新
-
-消费端通过 `getvar` 读取，UI 在每次 `chat_metadata` 变化时重新渲染。
-
-这种模式适合"叙事 header"类数据——例如当前章节阶段、任务进度、地点状态、案件名等需要随情节推进而变化的字段。
-
-## 存储结构
-
-```jsonc
-chat[i] = {
-    "mes": "...剥离了副作用宏的叙事...",
-    "extra": {
-        "var_ops": [
-            { "op": "setvar", "key": "hp", "value": "50" },
-            { "op": "setvar", "key": "roster", "path": "alice.hp", "value": "50" },
-            { "op": "incvar", "key": "turn" }
-        ]
-    },
-    "swipe_info": [
-        { "extra": { "var_ops": [...] } },
-        { "extra": { "var_ops": [...] } }
-    ]
-}
-```
-
-`chat_metadata.variables` 仍是 SillyTavern 原生缓存，是 <code v-pre>{{getvar}}</code> 的真源。op 日志是我们拥有的那部分值的 *来源*；缓存是所有来源合并后的运行时视图。
-
-当 op 带有 `path` 时，`op.key` 仍然是顶层变量名——`path` 是那个变量 JSON 值内部的子选择器。op 日志把回滚单位保持在顶层 key。详见下文 [结构化对象工作流](#structured-objects)。
-
-## 结构化对象工作流 {#structured-objects}
-
-带路径的 op 让一个变量装得下完整的结构化载荷——NPC 名册、物品字典、任务日志——AI 在对话过程中逐叶修改。不必每轮重写整盘（重写会丢掉 op 日志的粒度，让 swipe 看起来像整状态重写），AI 每次只发出一条 op：
+一个变量可以保存完整的结构化数据：NPC 名册、队伍物品、任务日志、关系表。AI 每次只改其中一项，不必重写整个结构。
 
 ```text
-{{setvar::roster.alice.hp::50}}              <!-- Alice 登场 -->
-{{setvar::roster.alice.mood::cautious}}      <!-- 描述她的状态 -->
-{{pushvar::roster.alice.inventory::dagger}}  <!-- 给她一把匕首 -->
-{{setvar::roster.alice.hp::40}}              <!-- 她受了伤 -->
-{{deletevar::roster.bob}}                    <!-- Bob 离队 -->
+{{setvar::roster.alice.hp::50}}
+{{setvar::roster.alice.mood::cautious}}
+{{pushvar::roster.alice.inventory::dagger}}
+{{setvar::roster.alice.hp::40}}
+{{deletevar::roster.bob}}
 ```
 
-`op.key` 永远是顶层变量名（上例里是 `roster`），所以 tracked-keys／重放／swipe 还原逻辑把整个结构当成一个单位。删掉某个写过某片叶子的消息时，结构会从存活的 op 重建，那片叶子自然回退——`roster` 整体跟存活时间线保持一致。
+删除消息或切换 swipe 时，整个结构按聊天中存在的操作重建，改动落在对应的叶子上。
 
-任何由 AI 跨轮维护的结构化集合均推荐这条路：NPC 名册、队伍物品、任务日志、关系图、地点状态等。逐叶粒度给删除／swipe／分支提供了最小的回滚单元，也能配合 <code v-pre>{{each::roster}}…{{/each}}</code> 直接从顶层 key 下挂的 JSON 对象渲染出来。
+渲染时用 <code v-pre>{{each}}</code> 遍历：
 
-## 渲染结构化变量 — `{{each}}` 与 `loop_value`
+```text
+{{each::roster}}
+- {{loop_key}}: {{loop_value::hp}} HP
+{{/each}}
+```
 
-聊天变量本身能装任意 JSON 可序列化的值，所以一个结构化的集合（NPC 名册、任务日志、物品表）可以装在单个变量里，按需要渲染进 prompt 或世界书条目。
+<code v-pre>{{loop_key}}</code> 是当前键，<code v-pre>{{loop_value}}</code> 是完整值，<code v-pre>{{loop_value::field}}</code> 读取其中的字段。集合也可以直接写成内联数组或嵌套宏。
 
-- **路径访问** — <code v-pre>{{getvar::npcs.alice.hp}}</code> 解析存在 `npcs` 里的 JSON 并按路径下钻。中间键缺失 / 解析失败 / 头段不可迭代 → 空字符串。如果头段不是 JSON，会回退到字面 flat-key 查找，所以名为 `a.b` 的变量也能用。
-- **遍历** — <code v-pre>{{each::npcs}}{{loop_key}}: {{loop_value::hp}}{{/each}}</code> 遍历集合（对象 → 键/值，数组 → 字符串索引/元素）。each 体内可用：
-  - <code v-pre>{{loop_key}}</code> — 当前键（数组下标转字符串）
-  - <code v-pre>{{loop_value}}</code> — 当前完整值（对象会自动 JSON.stringify）
-  - <code v-pre>{{loop_value::path}}</code> — 按路径下钻，语义与 <code v-pre>{{getvar}}</code> 一致
+## 相关页面
 
-  嵌套 <code v-pre>{{each}}</code> 时内层会自然 shadow 外层。集合参数也接受内联 JSON 数组字面量（<code v-pre>{{each::["sword"，"shield"]}}</code>）和嵌套宏（<code v-pre>{{each::{{getvar::roster}}}}</code>），不必非得先把数据写进命名变量。
-
-这就让"一个变量装 JSON 对象 → 一个世界书条目渲染它"成为完整的模式：AI 用 <code v-pre>{{setvar::npcs::...}}</code> 维护结构，条目内容用 <code v-pre>{{each::npcs}}…{{/each}}</code> 把结构铺到 prompt 里。
+- [宏](/zh-CN/basics/macros) —— 变量宏的完整语法
+- [世界书基础](/zh-CN/basics/world-info) —— 用条目指导 AI 更新变量
+- [CardApp](/zh-CN/features/cardapp) —— 读取变量并渲染界面

@@ -308,6 +308,28 @@ listBundledManifest(): Promise<Array<{
 }>>
 ```
 
+## Orchestrator visibility policy
+
+An orchestrator profile carries a `skills` block. The mode-level block sits at the profile root; each agent can override it.
+
+| Mode | Mode-level block | Per-agent override |
+|---|---|---|
+| director | `skills` | `mainAgent.skills`, `subAgents[].skills` |
+| loop | `skills` | `loopAgent.skills` |
+| spec | `skills` | `nodes[].skills` |
+| agenda | `skills` | `planner.skills`, `workers[].skills` |
+| single | `skills` | `node.skills` |
+
+`visible` and `deny` are name lists without scope prefixes. At dispatch, the runtime resolves them:
+
+- No `visible`, or an empty list: the agent inherits the mode-level `visible`.
+- `visible` starts with `"+"`: the mode-level list plus the remaining entries.
+- Otherwise: the agent's list replaces the mode-level list.
+- `deny` is the union of both levels and takes precedence over `visible`.
+- `"*"` in `visible` means every installed skill.
+
+Names are matched across physical scopes with the usual precedence: character > preset > global.
+
 ## Transport
 
 These functions support cross-host skill distribution via character cards and presets.

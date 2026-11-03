@@ -207,7 +207,7 @@ await ctx.updateCharacterData(ctx.characterId, { description: '新的描述。' 
 await ctx.updateCharacterData(ctx.characterId, { 'extensions.world': 'my_book' });
 ```
 
-跟現有的 `saveCharacterDebounced` / 表單路徑互補 — 彈窗打開時仍走表單（那時表單是 source of truth）。`updateCharacterData` 是面向 AI 工具、slash command、以及其他可能在編輯器關閉時執行的程式化呼叫方的資料驅動替代路徑。
+跟現有的 `saveCharacterDebounced` / 表單路徑互補 —— 彈窗打開時仍走表單（那時表單是 source of truth）。`updateCharacterData` 是面向 AI 工具、slash command、以及其他可能在編輯器關閉時執行的程式化呼叫方的資料驅動替代路徑。
 
 寫入 in-memory 後會觸發 [`event_types.CHARACTER_FIELDS_UPDATED`](#character_fields_updated-event)，攜帶 `{ charId, keys }`，讓 view（開啟的彈窗、CardApp UI）從權威 data sync。
 
@@ -222,7 +222,7 @@ await ctx.updateCharacterData(ctx.characterId, { 'extensions.world': 'my_book' }
 persistCharacterData(charId: number | string): Promise<void>
 ```
 
-把某張卡當前的 in-memory `data` 序列化成 `/api/characters/edit` 期望的 multipart shape 後以 POST 請求落盤。表單**不參與** — 只看 `characters[charId]`。伺服器會把 payload 與磁碟上現有的 JSON 深合併，這對表單層欄位是正確行為（保留了表單從未觸及的未知擴充資料）。
+把某張卡當前的 in-memory `data` 序列化成 `/api/characters/edit` 期望的 multipart shape 後以 POST 請求落盤。表單**不參與** —— 只看 `characters[charId]`。伺服器會把 payload 與磁碟上現有的 JSON 深合併，這對表單層欄位是正確行為（保留了表單從未觸及的未知擴充資料）。
 
 HTTP 失敗時擲出例外。擴充資料**不會**走這條路徑——它有自己的 `/api/characters/merge-attributes` 路徑，採用替換語義（[`writeExtensionField`](#writeextensionfield)）。
 
@@ -234,7 +234,7 @@ HTTP 失敗時擲出例外。擴充資料**不會**走這條路徑——它有�
 persistCharacterDataDebounced(charId: number | string): void
 ```
 
-在標準 save-edit 超時上排程一次防抖的 `persistCharacterData(charId)` 呼叫（按 character 各自排程 — 同時寫不同的卡不會被合併成單次錯誤目標的儲存）。視窗內的後續呼叫會被合併。
+在標準 save-edit 超時上排程一次防抖的 `persistCharacterData(charId)` 呼叫（按 character 各自排程 —— 同時寫不同的卡不會被合併成單次錯誤目標的儲存）。視窗內的後續呼叫會被合併。
 
 ### `character_fields_updated` event
 

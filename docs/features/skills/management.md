@@ -8,15 +8,15 @@ Open the Extensions drawer → **Multi-Agent Orchestration** section → click *
 
 ## Subpanel overview
 
-The skill manager has tabs along the top:
+The skill manager has several tabs along the top:
 
-- **Installed** — what you have under `data/<user>/skills/<scope>/`. Filter by scope (Global / Preset / Character) or show **All**.
-- **Browse bundled** — the skills shipped under `default/skills/global/`, with each row showing whether your local copy matches, differs, or is missing.
+- **Installed** — the skills you have locally. Filter by scope (Global / Preset / Character) or show **All**.
+- **Browse bundled** — the skills Luker ships, with each row showing whether your local copy matches, differs, or is missing.
 - **Import** — entry points for installing from a file, from a URL, or by extracting from a character card / preset.
 
 ![Skill manager subpanel, Installed tab](/images/skills/manager-installed-tab.png)
 
-## Installed tab
+## Installed
 
 Each row shows:
 
@@ -40,9 +40,9 @@ Row actions (right side):
 
 Toggle **Multi-select** at the top to get a checkbox per row. With ≥1 row checked, the toolbar gains a **Pack selected into preset…** action — see [Embed export](#embed-export-into-presets-and-cards) below.
 
-## Browse bundled tab
+## Browse bundled
 
-The bundled tab compares your local copy of each shipped skill against what ships in `default/skills/global/`. Each row shows one of the following states:
+Browse bundled compares your local copy of each shipped skill with the bundled version. Each row shows one of the following states:
 
 | Badge | Meaning |
 |---|---|
@@ -52,13 +52,13 @@ The bundled tab compares your local copy of each shipped skill against what ship
 
 ![Browse bundled, mixed states](/images/skills/manager-bundled-tab.png)
 
-The **Import all bundled** button at the top of the tab is the convenience equivalent of clicking **Install** on every "not installed" or "differs" row — it **overwrites** all bundled skills with the shipped versions.
+The **Import all bundled** button at the top is equivalent to choosing **Install** on every "not installed" or "differs" row: it overwrites all bundled skills with the shipped versions.
 
 ::: warning Overwrite is destructive
 Import all bundled doesn't merge — it overwrites. If you've edited `event-summary-rules-zh` locally, importing the bundled version replaces your edits. The button label spells out how many same-named skills will be overwritten before you click.
 :::
 
-## Import tab
+## Import
 
 Entry points:
 
@@ -76,7 +76,7 @@ The URL importer is intentionally narrow — it fetches one Markdown file. Anyth
 
 ### Import bundled
 
-The same action as **Import all bundled** in the Browse bundled tab. Listed here for discoverability.
+The same action as **Import all bundled** under Browse bundled, listed here for convenience.
 
 ### Extract from character card / preset
 
@@ -98,12 +98,12 @@ Clicking **Edit** on a skill row opens an in-popup editor:
 - Right pane: Markdown editor with YAML-aware frontmatter highlighting.
 - Top bar: file path, dirty indicator, **Save** (writes through `.staging/` and atomic-commits), **Add file** (creates a new sub-file at a path you specify).
 
-Writes go through the same `.staging/` discipline as install: the new content is validated (path safety, size limits, frontmatter parse), and only on full validation does the staging file atomically replace the original. Failed writes leave the original untouched.
+Writes use the same staging step as installation: the new content is validated for path safety, size limits and frontmatter parsing, and only a fully valid write replaces the original file.
 
 `SKILL.md` is special — it can be edited but not deleted from the editor (it is the required entry point). The skill itself can be deleted from the row action.
 
-::: tip Prefer not to edit manually?
-The [AI Iteration Studio](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio) can write and modify skills for you — describe the change in a sentence and the Studio drafts it through the same install path. Useful when a new skill is needed, or an existing one needs a rewrite, without writing the Markdown by hand.
+::: tip Edit skills with AI
+The [AI Iteration Studio](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio) writes and modifies skills: describe the change, and the Studio drafts it through the same install path.
 :::
 
 ## Embed export — into presets and cards
@@ -138,11 +138,11 @@ Typical migrations:
 
 ## Stale references
 
-When you rename or delete a skill that an orchestrator profile references, the profile's `skills.visible` list keeps the old name. The runtime can't find it, so the agent quietly doesn't see it (no error, no blocked dispatch).
+When you rename or delete a skill that an orchestration profile references, the reference keeps the old name. The runtime cannot find it, so the agent does not see the skill, without an error or a blocked dispatch.
 
 In the orchestrator config editor, stale references are greyed out and show the tooltip **"skill not installed."** A couple of clicks fix it — either rename in the profile, or re-add the skill.
 
-This soft-fail discipline is deliberate. It means a missing skill never blocks an agent dispatch, and adding/removing skills doesn't require simultaneous profile edits.
+A missing skill does not block an agent dispatch, and adding or removing skills requires no matching profile edit.
 
 ## Related
 

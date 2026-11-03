@@ -28,28 +28,7 @@ Each chat file has a corresponding state file stored in the same directory as th
 
 The state file is stored separately from the chat file, avoiding full-file rewrites caused by frequently updating the integrity value within the chat file.
 
-```d2
-direction: right
-
-DIR: "chats/<character>/"
-CHAT: "{chat}.jsonl" {
-  style.fill: "#e1f5ff"
-}
-STATE: "{chat}.luker-state.chat_sync.json" {
-  style.fill: "#fff3e0"
-}
-NS1: "{chat}.luker-state.memory_graph__meta.json"
-NS2: "{chat}.luker-state.luker_orchestrator__schema.json"
-
-DIR -> CHAT
-DIR -> STATE
-DIR -> NS1
-DIR -> NS2
-```
-
-- `{chat}.jsonl` — Chat main file
-- `{chat}.luker-state.chat_sync.json` — integrity + updated_at (sync metadata)
-- `{chat}.luker-state.<namespace>.json` — Per-plugin namespace state (one independent state file per plugin)
+Each chat has a message record plus sync metadata and per-plugin namespace state. They are stored together and move, back up and restore with the chat.
 
 If the state file doesn't exist (e.g., chats migrated from older versions), the system automatically falls back and creates the state file on the first write.
 

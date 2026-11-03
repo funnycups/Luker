@@ -1,56 +1,18 @@
 # Agenda Mode
 
-Agenda replaces Spec's static DAG with a **Planner agent**. The Planner maintains a todo list, dispatches other agents via tool calls, reads their outputs, and decides who to send next — at its core, an agent loop.
+Agenda organises the flow around a planning agent. The planner keeps a todo list, decides from intermediate results which agents to call, how often and when to stop, and a finishing agent combines the result into an orchestration result.
 
-When to reach for Agenda over Spec:
+## When to use it
 
-- The flow needs to decide who runs based on intermediate findings. For example, "first scan the user's message for OOC tendencies; only spin up the Constraint Agent if there are any" — that conditional shape is awkward in Spec's fixed DAG.
-- You want flexible multi-agent coordination instead of a fixed stage → node topology.
-- You want the [Function Call Runtime](/improvements/function-call-runtime) machinery to let the Planner organize dispatch itself.
+Agenda fits these cases:
 
-::: tip Agenda is not a Spec replacement
-Spec wins on predictability, prompt-cache friendliness, and debug ergonomics. The fixed DAG is enough for the vast majority of RP scenarios; Agenda is for cases that genuinely need dynamic dispatch.
-:::
+- Some steps run only when a condition holds, such as starting a constraint check only when user input crosses a boundary.
+- The next agent depends on the previous output, so the full flow cannot be drawn in advance.
+- One planning agent should coordinate several worker agents.
 
-::: warning Most of the time, don't hand-edit
-Before you hand-write a Planner prompt, check the [AI Iteration Studio](/features/orchestrator/iteration-studio) — describe what you want in one sentence, the AI returns a Planner + agent pool proposal, you approve change-by-change.
-:::
+The difference is who selects the agents: a stage table in Spec, the planning agent in Agenda.
 
-## Agenda editor
-
-Switch to Agenda mode, then click **Open Orchestration Editor** in the orchestrator panel.
-
-![Agenda editor](/images/orchestrator/orch-agenda-editor.png)
-
-The left column configures the **Planner Prompt** (API preset, prompt preset, system prompt, planner prompt template). The right column lists the available **Agenda Agents** — the Planner picks from this pool via tool calls.
-
-### Planner
-
-The Planner is Agenda's core. It does several things:
-
-1. Reads recent chat + user message
-2. Maintains a todo list (what to do next)
-3. Dispatches agents from the Agenda pool to do tasks
-4. Collects agent outputs
-5. Decides the next step from collected output, or stops when satisfied — the last agent's output becomes the capsule injected into the main model.
-
-### Agenda Agents
-
-Each Agenda Agent is similar to a Spec Node: own System Prompt, User Prompt Template, optional API / Chat Completion preset overrides. The difference: an Agent isn't bolted to a stage. **When and how often it's invoked — or whether it's invoked at all — is the Planner's call.**
-
-### Runtime bounds
-
-Agenda is dynamic dispatch, so runaway is easy. Guards:
-
-- **Planner Max Rounds** — how many scheduling rounds the Planner gets
-- **Max Concurrent Agents** — concurrency cap on parallel agent runs (passed to `Promise.all`)
-- **Max Total Executions** — total number of agent invocations across the whole run
-
-Hitting any one forces the run to wrap up.
-
-## Default orchestration flow
-
-Agenda hands the wheel to a Planner agent that schedules a pool of workers per turn. The default profile ships the Planner plus a worker pool — `distiller`, `lorebook_reader`, `planner`, `critic`, and `finalizer`. The Planner picks workers from the pool, reads their results back, and replans as needed; once the board is resolved, `finalizer` produces the capsule.
+## How it works
 
 ```d2
 direction: down
@@ -63,35 +25,35 @@ start: "A new turn arrives" {
 loop: "Planner-driven dispatch" {
   style.fill: "#e1f5ff"
 
-  driver: "Planner\nreads what's done · updates the todo board ·\ndispatches workers · decides when to wrap up" {
+  driver: "Planner\nread completed work · update the todo list ·\ndispatch workers · decide when to wrap up" {
     style.fill: "#fffde7"
   }
 
-  pool: "Default worker pool — Planner picks per todo" {
+  pool: "Worker pool" {
     style.fill: "#fff3e0"
-    distiller: "distiller\ncompact state read" {
+    a: "Scene summary" {
       style.fill: "#fffde7"
     }
-    lorebook_reader: "lorebook_reader\nactive lorebook constraints" {
+    b: "World book constraints" {
       style.fill: "#fffde7"
     }
-    planner: "planner\nnext-step progression" {
+    c: "Plot planning" {
       style.fill: "#fffde7"
     }
-    critic: "critic\naudit assigned material" {
+    d: "Review" {
       style.fill: "#fffde7"
     }
   }
 
-  driver -> pool: "dispatch one or more (parallel)"
-  pool -> driver: "results back · replan if needed"
+  driver -> pool: "dispatch one or more (in parallel)"
+  pool -> driver: "results return; replan if needed"
 }
 
-finalizer: "finalizer\nread the resolved board · write the guidance capsule" {
+finalizer: "Finishing agent writes the result" {
   style.fill: "#c8e6c9"
 }
 
-out: "Capsule injected into the next reply" {
+out: "Injected into the main prompt" {
   shape: oval
   style.fill: "#f3e5f5"
 }
@@ -101,76 +63,85 @@ loop.driver -> finalizer: "wrap up"
 finalizer -> out
 ```
 
-The default agents at a glance:
+1. The planner reads the recent chat and the user message.
+2. It keeps a todo list of completed and pending work.
+3. It selects one or more agents from the worker pool and assigns tasks.
+4. It reads their results, updates the list, and decides whether to continue.
+5. At the end, a designated finishing agent combines the results into an orchestration result for the main model.
 
-| Agent | Purpose | Concrete RP example |
-|---|---|---|
-| `Planner` *(loop driver, not a worker)* | Reads the chat and user message, maintains the todo board (`add` / `set_status` / `drop`), picks workers from the pool to dispatch, reads their results, and decides whether to keep planning or hand off to `finalizer`. | Dispatches `distiller` + `lorebook_reader` in parallel; reads their output and decides the scene also needs `planner` + `critic`; hands off to `finalizer`. |
-| `distiller` | Compact, evidence-grounded scene-state read (user intent, active tensions, immediate direction); written for the Planner and downstream agents, not for the player-facing reply. | "Lin Wan probing user's stance on the Luoyang topic; will change subject completely if user redirects." |
-| `lorebook_reader` | Extracts only the lorebook / world-info constraints that materially matter this turn — phrased as practical writing / behaviour constraints, not lorebook summary. | "Luoyan is besieged — Lin Wan cannot have left. Style: archaic register; she'd say '不知怎的' not 'somehow'." |
-| `planner` | Scene-progression analyst — proposes what next-step beats or decision points matter, with causality preserved and the world not bent around the user. | Beats: "user presses → she deflects → he tries a different angle → she lets one Luoyang detail slip → reply ends there". |
-| `critic` | Audits the material the Planner hands it (continuity breaks, OOC drift, missing hard constraints, anti-data, implausible causality); returns the audit, never rewrites the guidance itself. | "Plan has Lin Wan saying 'no big deal' — modern register, OOC for this character. Rest is OK." |
-| `finalizer` *(Final Agent — runs once at the end)* | Reads the resolved todo state and the selected prior runs and merges them into one concise orchestration guidance text. That text becomes the capsule injected into the next reply. | Capsule: "Lin Wan: deflect → press → slip-of-tongue about her aunt in Luoyang. Archaic diction. She's still inside besieged Luoyan." |
+Workers are not bound to fixed stages: the planner decides whether, how often and in what order they run.
 
-## AI Iteration Studio
+## The default flow
 
-Like Spec, Agenda is supported by the AI Iteration Studio — describe Planner behaviour and agent pool composition in natural language, let the AI assemble it. See [AI Iteration Studio](/features/orchestrator/iteration-studio). Quick Build is available in Agenda too.
+The bundled profile includes a planner and a worker pool:
 
-## Conversion to/from Spec
+- **Scene summary**: user intent, current tension and likely directions.
+- **World book constraints**: the entries that actually matter this turn and the style rules they impose.
+- **Plot planning**: the next beat and decision points, preserving causality and character independence.
+- **Review**: continuity, character drift, missing constraints and implausible causation.
+- **Finishing**: combine the accepted output into a short orchestration brief.
 
-The orchestration editor has **Copy Spec Agents to Agenda** / **Copy Agenda Agents to Spec** buttons that move the agent pool across modes (best-effort). **Caveats**:
+The planner can dispatch several workers in parallel and replan from their results. It decides when to stop; the finishing agent runs once.
 
-- Spec → Agenda loses stage topology. You'll need to author a new Planner Prompt to describe the dispatch logic.
-- Agenda → Spec can't fully capture the Planner's dynamic dispatch. You'll need to manually decide stage boundaries.
+## Getting started
 
-## Function Call Runtime dependency
+1. Set the execution mode to **Agenda** in the extension drawer.
+2. Open the orchestration editor and review the planner's system prompt and task template.
+3. Inspect the worker pool and adjust each agent's role, prompt and model.
+4. Set limits for planner rounds, concurrency and total worker calls.
+5. Chat normally and follow the planning process and worker output in the Run Panel.
 
-Agenda's Planner dispatch is implemented via OpenAI tool calls and depends on Luker's [Function Call Runtime](/improvements/function-call-runtime). That means:
+To change the flow, describe the goal in [AI Iteration Studio](/features/orchestrator/iteration-studio) and let it revise the planner or the pool.
 
-- The Planner's connection profile must support function calling (OpenAI / Claude / Gemini all do)
-- Tool-call retry on failure is handled by Function Call Runtime (see that page for details)
+## Editor
 
-## Watching an Agenda run
+The left side configures the planner: API connection, chat-completion preset, system prompt and task template. The right side is the worker pool; each worker has its own system prompt, user prompt template and optional model overrides.
 
-The [Run Panel](/features/orchestrator/#step-4) shows Agenda runs live. Planner rounds are cards; dispatched workers are sub-cards under the round, expandable to see its full reasoning and output. Agenda-specific things to look for:
+The planner dispatches workers through tool calls, so its connection must support function calling. OpenAI, Claude and Gemini support it.
 
-- **Planner output** — the `todo_ops` list (`set_status` / `add` / `set_goal` and friends), expanded inline. When the Planner sends to the wrong agent, skips a step, or falls into a loop, cross-reference these ops with the worker outputs to find the root cause.
-- **Worker dispatches** — every worker the Planner runs in a round appears under that round's card. Expand to inspect inputs and outputs.
-- **Final Agent output** — the run's last worker (default `finalizer`) produces the capsule actually injected into the main model. The configuration reference shows how to swap it for a different agent id.
-- **Event density** — Agenda runs produce a busy event log because Planner rounds and dispatches are recorded; expect a busier panel than Spec.
+## Limits
 
-Use **Export** at the top of the panel to download the run as JSON (handy for bug reports).
+Agenda provides three run limits:
 
-## Agenda configuration reference
+- maximum planner rounds;
+- maximum workers running at once;
+- maximum total worker calls in one run.
 
-<details>
-<summary>Agenda-specific settings</summary>
+Reaching any limit ends the run.
 
-| Setting | Description |
-|---|---|
-| Planner Max Rounds | Cap on Planner scheduling rounds |
-| Max Concurrent Agents | Concurrency cap on parallel agent runs |
-| Max Total Executions | Total agent invocations across the whole run |
-| Planner API Preset | Connection profile used by the Planner |
-| Planner Chat Completion Preset | Prompt preset used by the Planner |
-| Planner System Prompt | The Planner's system instruction |
-| Planner Prompt Template | The Planner's user prompt template |
-| Final Agent | Whose output becomes the capsule when the run wraps up |
-| Agenda agent pool | Per-agent presets / prompts (each can override API and Chat Completion preset independently) |
+## Converting to and from Spec
 
-</details>
+The editor can copy the agent pool to the other mode. Only agents move; scheduling logic does not:
 
-## Related
+- Spec to Agenda loses the stage order, so the planner prompt must describe the dispatch rules again.
+- Agenda to Spec cannot map dynamic dispatch onto fixed stages; decide the stage layout by hand.
 
-- [Orchestrator overview](/features/orchestrator/) — common configuration / triggers / character card binding
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — let AI write the Planner + agent pool (recommended)
-- [Spec mode](/features/orchestrator/spec) — the default DAG mode
+## Run Panel
+
+The Run Panel groups output by planner round. Each round is a card, and the workers dispatched in that round appear as sub-cards with their reasoning, input and output.
+
+Watch for:
+
+- the planner dispatching the wrong worker or skipping a required step;
+- repeated dispatch on the same task without reaching an end;
+- a final result that omits something this turn needs.
+
+The export button at the top saves the whole run as JSON for reporting a problem.
+
+## Settings
+
+- **Maximum planner rounds**: how many scheduling rounds the planner may run.
+- **Maximum concurrent agents**: workers running at once.
+- **Maximum total calls**: all worker calls in one run.
+- **Planner API and prompt presets**: the connection and chat-completion preset it uses.
+- **Planner system prompt and task template**: define how it works.
+- **Finishing agent**: which agent produces the orchestration result.
+- **Worker pool**: each agent's prompt, model and role.
+
+## Related pages
+
+- [Orchestration overview](/features/orchestrator/) — shared settings, triggers and card binding
+- [AI Iteration Studio](/features/orchestrator/iteration-studio) — revise the planner and pool in natural language
+- [Spec mode](/features/orchestrator/spec) — the default fixed-stage mode
 - [Loop mode](/features/orchestrator/loop) — single-agent tool loop
-- [Function Call Runtime](/improvements/function-call-runtime) — the framework Planner dispatch relies on
-- [Custom tools](/features/orchestrator/custom-tools) — extension / SillyTavern-bridged / handwritten tools that Agenda Workers can call
-
-## Presets
-
-This mode's configuration can be saved as a named preset and switched in
-the editor panel. See [Orchestration Presets](./presets.md) for the full
-workflow.
+- [Custom tools](/features/orchestrator/custom-tools) — add capabilities beyond the built-in set

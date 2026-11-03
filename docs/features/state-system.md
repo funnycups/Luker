@@ -1,117 +1,44 @@
 # State System
 
-Luker introduces a state system that allows character cards, chats, and presets to carry persistent state data. Extensions and CardApps can use this system to store and read custom data without modifying the character card or chat history itself.
+Character cards, chats and presets can carry custom state. A CardApp uses it for affinity, quest progress and inventory; an extension uses it for per-chat data. Neither has to rewrite the card or the chat history.
 
-## Character State
-
-Each character can have independent state data, isolated by namespace. Different extensions or CardApps use their own namespaces without interfering with each other.
-
-For example, a memory extension can store memory summaries for a character in the character state, while a CardApp can store game progress on the same character — both operate independently through different namespaces.
-
-### How It Works
-
-- **Read state**: Retrieve state data for a character under a specific namespace using the character identifier and namespace
-- **Write state**: Save data to a specified namespace for a specified character
-- **Auto-persistence**: State data is automatically saved to disk and survives server restarts
-
-The lifecycle of character state is bound to the character itself — when a character is deleted, its associated state data is also cleaned up.
-
-## Chat State
-
-Each chat has its own state, isolated by namespace. Luker stores chat state in per-namespace files alongside the chat file, following the pattern `<chatFileBase>.luker-state.<namespace>.json`.
-
-### State File Characteristics
-
-- One file per namespace, alongside the chat file (not a single global state file)
-- One chat can have multiple state files (one per namespace), created lazily on first write
-- Lifecycle is bound to the chat file: when a chat is renamed, bound state files are renamed accordingly; when a chat is deleted, bound state files are deleted as well
-- Supports incremental updates — no need to rewrite the complete data
-
-### Stored Content
-
-Chat state can store various auxiliary information related to the chat, such as:
-
-- Confirmation status of generation tasks
-- Custom data saved by extensions for that chat
-- Other metadata not suitable for writing directly into chat history
-
-::: tip
-Chat state is automatically managed by Luker — you typically don't need to edit it manually. If you're migrating data from SillyTavern, these files will be created automatically on first use.
-:::
-
-## Preset State
-
-Luker also supports attaching state data to presets. Preset state allows extensions to store configuration or runtime information on specific presets. When users switch presets, the associated state data switches accordingly.
-
-## Persistence and Lifecycle
-
-The state system follows these principles:
-
-| State Type | Storage Location | Lifecycle |
-| --- | --- | --- |
-| Character State | Per-namespace files next to character cards (`<character>.state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the character |
-| Chat State | Per-namespace files next to chat files (`<chat>.luker-state.<namespace>.json`) | Created on first namespace write; renamed/deleted with the chat |
-| Preset State | Filesystem namespace files or versioned records under `.luker-preset-records/`; separate records in database storage | Created on first namespace write; renamed/deleted with the preset |
+State is isolated by namespace, so each extension or CardApp reads and writes its own data. State is created on first write, follows its owner when that object is renamed or deleted, and survives a server restart.
 
 ```d2
 direction: right
 
-CHAR: "Character directory" {
-  CHAR_MAIN: "Seraphina.png\nCharacter card main file" {
+OBJ: "Character card, chat or preset" {
+  MAIN: "The object's own data" {
     style.fill: "#e1f5ff"
   }
-  CHAR_S1: "Seraphina.state.memory_graph.json\nMemory graph state"
-  CHAR_S2: "Seraphina.state.cardapp_studio.json\nStudio sessions"
+  NS1: "Namespace A\nstate of one extension"
+  NS2: "Namespace B\nstate of one CardApp"
 }
 
-CHAT: "Chat directory" {
-  CHAT_MAIN: "Seraphina-2026.jsonl\nChat main file" {
-    style.fill: "#e1f5ff"
-  }
-  CHAT_S1: "Seraphina-2026.luker-state.chat_sync.json\nintegrity / updated_at"
-  CHAT_S2: "Seraphina-2026.luker-state.luker_orchestrator__schema.json\nOrchestrator state"
-  CHAT_S3: "Seraphina-2026.luker-state.memory_graph__meta.json\nMemory graph metadata"
-}
+READ: "Each extension touches only its namespace"
+LIFE: "Renaming or deleting the object\nmoves or removes the state with it"
 
-PRESET: "Preset directory" {
-  P_MAIN: "for_my_athena.json\nPreset main file" {
-    style.fill: "#e1f5ff"
-  }
-  P_S1: "for_my_athena.luker-state.preset_assistant.json\nPreset assistant sessions"
-}
+OBJ -> READ
+OBJ -> LIFE
 ```
 
-The diagram shows ordinary filesystem examples. Legacy preset state can use `<preset>.luker-state.<namespace>.json`; names that cannot be represented unambiguously in that format use the reserved versioned layout under `.luker-preset-records/v1/`. Existing legacy paths retain their declared format meaning; an ambiguous old filename cannot establish the original writer's intent. Use the [preset state APIs](/development/extension-api/presets-and-prompts#presets-state) instead of constructing preset state paths.
+## The three kinds
 
-All state data is persisted to disk and will not be lost due to server restarts. State file cleanup is automatic — when the associated character, chat, or preset is deleted, the corresponding state file is automatically cleaned up.
+| Kind | Attached to | Typical use |
+| --- | --- | --- |
+| Character state | A character card | Memory summaries, game progress |
+| Chat state | A chat | Generation acknowledgements, per-chat extension data |
+| Preset state | A preset | Preset-level configuration or runtime data |
 
-## Use Cases
+Luker manages the storage layout for preset state. Do not move or edit state files by hand; they can fall out of step with the current format.
 
-### CardApp State Tracking
+## Floor state
 
-CardApp is the most typical user of the state system. In-card applications can save game progress, user preferences, interaction history, and other data through the state system. For example, an RPG-type CardApp can save character level, equipment, quest progress, and other information in the character state.
+Plain chat state is overwritten as a whole. Floor state records which floor and swipe each write belongs to. When messages are deleted or edited, or a swipe is switched, Luker replays the commits that still apply so plugin state follows the active branch instead of an old timeline.
 
-See [CardApp](/features/cardapp) for details.
+## Related pages
 
-### Extension Data Storage
-
-Third-party extensions can use the state system to store custom data for each character or chat without managing file I/O themselves. This simplifies extension development and ensures correct lifecycle management of data.
-
-See [Extension API — Chat & State](/development/extension-api/chat-and-state) for details.
-
-### Memory System
-
-[Memory Graph](/features/memory-graph) and other memory-type extensions can use character state to store memory summaries and index data, enabling per-character isolated memory management.
-
-## Floor State (chat state with rewind)
-
-Plain chat state is overwrite-only — when a user swipes, deletes a message, or switches chats, plugins must reload the namespace and reconcile their data manually. Floor State is a thin layer on top of chat state that handles this for you: writes are logged at the chat tail (floor index + swipe id) and replayed automatically when the chat structure changes, so plugin state stays consistent with the active swipe path without manual bookkeeping.
-
-See [Extension API — Floor State](/development/extension-api/chat-and-state#floor-state) for the API surface, examples, and conventions.
-
-## Related Pages
-
-- [CardApp](/features/cardapp) — In-card application system
-- [Extension API](/development/extension-api/) — Extension development interface
-- [Floor State](/development/extension-api/chat-and-state#floor-state) — Developer reference for chat state with automatic rewind
-- [Incremental Sync](/improvements/incremental-sync) — Incremental save mechanism for chat data
+- [CardApp](/features/cardapp) — in-card application system
+- [Extension API](/development/extension-api/) — extension development interface
+- [Floor state](/development/extension-api/chat-and-state#floor-state) — developer reference for chat state with automatic rewind
+- [Incremental sync](/improvements/incremental-sync) — incremental saving for chat data

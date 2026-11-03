@@ -8,13 +8,13 @@ This doc starts from an empty configuration and guides you through preset → Di
 
 ## What you get
 
-After you finish this doc, when you send a message in the main chat, **the main LLM does not begin writing immediately** — an agent team executes first:
+After you finish this doc, when you send a message in the main chat, **the main model does not begin writing immediately** — an agent team executes first:
 
-- **`memory_scout`** scans the memory graph and retrieves the characters / events / locations relevant to the current beat
-- **`canon_scout`** (when needed) retrieves fandom canon from the web
-- **`plot_brainstormer`** drafts several structural sketches from different angles in parallel; the main agent selects one
+- **memory scout** scans the memory graph and retrieves the characters / events / locations relevant to the current beat
+- **canon scout** (when needed) retrieves fandom canon from the web
+- **plot brainstormer** drafts several structural sketches from different angles in parallel; the main agent selects one
 - **Main agent** uses the scouts' output to write the final body directly
-- **`memory_curator`** writes new facts back to the memory graph after the draft is complete
+- **memory curator** writes new facts back to the memory graph after the draft is complete
 
 The memory graph's **Auto extraction / Auto compression** are entirely delegated to the agents, and the search provider defaults to DuckDuckGo — no API key, no embeddings, and no additional LLM routing are required.
 
@@ -27,18 +27,18 @@ start: "You send a message" { shape: oval }
 
 orch: "Director main agent takes over" {
   style.fill: "#e1f5ff"
-  scouts: "Pre-draft scouts\nmemory_scout · chat_scout ·\nlorebook_scout · canon_scout (web, when relevant)"
-  brain: "Mid-stage brainstorming\nplot_brainstormer\nstructural sketches across angles"
+  scouts: "Pre-draft scouts\nmemory scout · chat scout ·\nlorebook scout · canon scout (web, when relevant)"
+  brain: "Mid-stage brainstorming\nplot brainstormer\nstructural sketches across angles"
   draft: "Main agent drafts the body"
-  curate: "Post-draft housekeeping\nmemory_curator writes new facts back"
+  curate: "Post-draft housekeeping\nmemory curator writes new facts back"
 }
 
-end: "Body appears directly in the chat\n(main LLM not called this turn)" { shape: oval }
+end: "Body appears directly in the chat\n(main model not called this turn)" { shape: oval }
 
 start -> orch.scouts -> orch.brain -> orch.draft -> orch.curate -> end
 ```
 
-The memory graph's own "Auto extraction / Auto compression" no longer triggers — the agent performs the same work. Once a search provider is enabled, `canon_scout` can perform web searches; otherwise it returns zero results.
+The memory graph's own "Auto extraction / Auto compression" no longer triggers — the agent performs the same work. Once a search provider is enabled, canon scout can perform web searches; otherwise it returns zero results.
 
 ## What you need first
 
@@ -107,7 +107,7 @@ Review its diff and approve each entry.
 ::: tip Refine the preset further in the same session
 Adapt for orchestrator is one of the assistant's **Editing modes**. Switch the toolbar's **Editing mode** back to the default **General editing**, start a new session, and the same assistant becomes a general-purpose preset editor — for example: "add an anti-cliché directive backed by a few negative examples", "tone the prose-style guidance down from purple to restrained close-detail", or "merge these three rules that express the same requirement". See [Preset Assistant](/features/preset-assistant) for the full details.
 
-The Adapt-for-orchestrator pass also **proactively scans your preset entries for reusable style / format / writing-discipline rules** and proposes lifting them into shareable skills (verbatim, at this preset's scope, with a pointer left in the original entry). Proposals are reviewed independently — approve, reject, or ignore one and the rest of the adaptation still applies. See [Authoring skills from preset content](/features/preset-assistant#authoring-skills-from-preset-content-agent-orchestration-mode) for the rationale and the safeguards (one-off tweaks never trigger the scan).
+The Adapt-for-orchestrator pass also **proactively scans your preset entries for reusable style / format / writing-discipline rules** and proposes lifting them into shareable skills (verbatim, at this preset's scope, with a pointer left in the original entry). Proposals are reviewed independently — approve, reject, or ignore one and the rest of the adaptation still applies. See [Authoring skills from preset content](/features/preset-assistant#extracting-skills-in-adapt-for-orchestrator-mode) for the rationale and the safeguards (one-off tweaks never trigger the scan).
 :::
 
 ## Step 3 — Switch to Director mode and configure the presets
@@ -115,8 +115,8 @@ The Adapt-for-orchestrator pass also **proactively scans your preset entries for
 Open the **Orchestrator** panel in the Extensions drawer:
 
 1. Set **Execution mode** to **Director**
-2. Set the **API preset (Connection profile)** + **Prompt preset** to the `-orchestrator` preset from Step 2b
-3. Find the **AI Iteration Studio configuration** section and set its **Iteration AI API preset (Connection profile)** + **Iteration AI prompt preset (params + prompt)** to the **plugin-only** preset already imported in Step 2a
+2. Set the **API preset** and **Prompt preset** to the `-orchestrator` preset from Step 2b
+3. Find the **AI Iteration Studio configuration** section and set its **Iteration AI API preset** and **Iteration AI prompt preset** to the **plugin-only** preset already imported in Step 2a
 
 ## Step 4 — Delegate memory extraction and recall to the agents
 
@@ -161,7 +161,7 @@ Which configuration the studio edits depends on when you open it:
 - **A character chat is open** → the studio edits **this card's override** — only this card is affected, and the override travels with the card on export / import
 
 ::: tip A successful per-card profile can be promoted to global
-If you iterate a Director profile that works particularly well for a specific card, you can **promote it manually**: export that card's profile from the Orchestrator panel, clear the current chat to return to a no-card state, then import that profile to global. The same applies to schemas.
+If you iterate a Director profile that works particularly well for a specific card, you can **promote it manually**: export that card's profile from the Orchestrator panel, clear the current chat to return to a no-card state, then import that profile to global. The same applies to Memory Graph configuration.
 :::
 
 ### Global scope — example instructions
@@ -179,13 +179,13 @@ If you iterate a Director profile that works particularly well for a specific ca
 
 The studio presents the diff entry by entry — review, approve, and save. If the result does not match your intent, reset to the default Director config.
 
-## Step 7 (optional) — Let AI iterate your schema
+## Optional step — Let AI configure Memory Graph
 
-The memory graph schema can also be iterated by AI. In the **Memory** panel, click **AI Configure Memory Graph** to open the **Memory Graph Configuration Studio**.
+Memory Graph configuration can also be changed by AI. In the **Memory** panel, click **AI Configure Memory Graph** to open the **Memory Graph Configuration Studio**.
 
 ![Memory Graph Configuration Studio](/images/recipes/agent-onboarding/step-07-schema-studio.png)
 
-Like orchestration configurations, schemas have both global and per-card scope — per-card schemas travel with the card on export. Use the studio to tailor the schema for a genre, for example:
+Memory Graph configuration has global and per-card scope; per-card settings travel with the card on export. Use the studio to tailor it for a genre, for example:
 
 - Xianxia / cultivation: add `cultivation_realm`, `spirit_meridian` fields to characters
 - Political intrigue: add a `faction` node type, tracking alliances and enmities
@@ -212,9 +212,9 @@ Not satisfied with the result? That reasoning fold is the full agent execution l
 
 ## Where to go next
 
-- [Multi-Agent Orchestrator overview](/features/orchestrator/) — triggering, capsule injection, the execution modes
+- [Multi-Agent Orchestrator overview](/features/orchestrator/) — triggering, result injection, the execution modes
 - [Director mode](/features/orchestrator/director) — the default sub-agents and their roles
 - [AI Iteration Studio](/features/orchestrator/iteration-studio) — natural-language tuning of your config
-- [Memory Graph](/features/memory-graph) — node types, recall algorithms, schema customization
+- [Memory Graph](/features/memory-graph) — node types, recall algorithms, configuration
 - [Search Tools](/features/search-tools) — engine differences + the standalone working modes
 - [Preset Assistant](/features/preset-assistant) — the other session modes beyond "Adapt for orchestrator"

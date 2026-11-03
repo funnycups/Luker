@@ -100,7 +100,7 @@ Preset decoupling is a prerequisite for [Card-Bound Presets](/improvements/card-
 Without preset decoupling, card-bound presets would be impossible: opening a Character Card could replace the user's API address and keys, which is clearly unacceptable.
 
 ::: info Preset File Compatibility
-Preset decoupling does not change the storage format of preset files. Connection fields are still saved in the preset JSON; they are simply selectively skipped during loading. This means existing preset files require no migration and can be fully loaded when needed (e.g., through the Connection Manager).
+Preset decoupling does not change the storage format of preset files. Connection fields are still saved in the preset JSON; they are simply selectively skipped during loading. Existing preset files need no migration and can be fully loaded when needed.
 :::
 
 ## Related Pages

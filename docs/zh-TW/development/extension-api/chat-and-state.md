@@ -775,7 +775,7 @@ closeCurrentChat(): Promise<boolean>
 doNewChat(options?: { deleteCurrentChat?: boolean }): Promise<void>
 ```
 
-為當前角色建立一個全新的聊天。當 `deleteCurrentChat: true` 時會刪除之前活躍的聊天檔案 — 謹慎使用，這是破壞性操作。
+為當前角色建立一個全新的聊天。當 `deleteCurrentChat: true` 時會刪除之前活躍的聊天檔案 —— 謹慎使用，這是破壞性操作。
 
 ### getPastCharacterChats
 
@@ -789,7 +789,7 @@ getPastCharacterChats(characterId?: number): Promise<Array<{
 }>>
 ```
 
-列出某個角色已有的全部聊天。`characterId` 省略時預設為當前角色（`this_chid`）。`file_id` 欄位是應用層 chat 識別符 — 把它傳回 `openCharacterChat` / `deleteCharacterChat` / `renameChat`（這些函式期望不帶 `.jsonl` 後綴的名字）。
+列出某個角色已有的全部聊天。`characterId` 省略時預設為當前角色（`this_chid`）。`file_id` 欄位是應用層 chat 識別符 —— 把它傳回 `openCharacterChat` / `deleteCharacterChat` / `renameChat`（這些函式期望不帶 `.jsonl` 後綴的名字）。
 
 ### deleteCharacterChat
 

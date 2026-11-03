@@ -2,6 +2,8 @@
 
 Luker has a built-in unified Function Calling runtime that enables AI characters to perform structured operations — searching information, managing memory, manipulating state — rather than just generating text. Regardless of whether the underlying model natively supports tool calls, Luker provides a consistent calling experience.
 
+This page describes the runtime's internal mechanism for extension developers and for diagnosing tool-call problems.
+
 ## Unified Function Calling Framework
 
 The Function Call Runtime provides a unified framework for managing tool registration, invocation, and result handling. The core design goals are:

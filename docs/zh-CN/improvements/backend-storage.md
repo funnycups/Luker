@@ -6,10 +6,10 @@ Luker 重新设计了数据持久化架构，将数据变更的保存职责从�
 
 在 SillyTavern 中，数据保存由前端触发：前端将完整的聊天数据序列化后发送到后端覆盖写入。这种模式存在严重的数据安全隐患：
 
-- **浏览器崩溃** — 如果在保存请求发出前浏览器崩溃，所有未保存的修改均会丢失
-- **网络中断** — 保存请求可能因网络问题失败，而前端可能不会重试
-- **生成中断** — AI 生成过程中如果连接断开，已生成的内容可能无法保存
-- **竞态条件** — 多个保存请求并发时可能产生数据覆盖
+- **浏览器崩溃** —— 如果在保存请求发出前浏览器崩溃，所有未保存的修改均会丢失
+- **网络中断** —— 保存请求可能因网络问题失败，而前端可能不会重试
+- **生成中断** —— AI 生成过程中如果连接断开，已生成的内容可能无法保存
+- **竞态条件** —— 多个保存请求并发时可能产生数据覆盖
 
 Luker 通过后端实时存储彻底解决了这些问题。
 
@@ -23,33 +23,16 @@ Luker 通过后端实时存储彻底解决了这些问题。
 
 每个聊天文件均有一个对应的状态文件，存储在与聊天文件相同的目录中。状态文件记录：
 
-- **integrity** — 当前文件的 integrity UUID，用于[并发冲突检测](/zh-CN/improvements/incremental-sync#integrity-hash-并发冲突检测)
-- **updated_at** — 最后一次写入的时间戳
+- **integrity** —— 当前文件的 integrity UUID，用于[并发冲突检测](/zh-CN/improvements/incremental-sync#integrity-hash-并发冲突检测)
+- **updated_at** —— 最后一次写入的时间戳
 
 状态文件与聊天文件分离存储，避免了在聊天文件中频繁更新 integrity 值导致的全文件重写。
 
-```d2
-direction: right
+每个聊天包含一份消息记录，以及与之绑定的同步状态和扩展状态。这些数据放在一起，随聊天一起移动、备份和恢复。
 
-DIR: "chats/<角色名>/"
-CHAT: "{chat}.jsonl" {
-  style.fill: "#e1f5ff"
-}
-STATE: "{chat}.luker-state.chat_sync.json" {
-  style.fill: "#fff3e0"
-}
-NS1: "{chat}.luker-state.memory_graph__meta.json"
-NS2: "{chat}.luker-state.luker_orchestrator__schema.json"
-
-DIR -> CHAT
-DIR -> STATE
-DIR -> NS1
-DIR -> NS2
-```
-
-- `{chat}.jsonl` — 聊天主文件
-- `{chat}.luker-state.chat_sync.json` — integrity + updated_at（同步元数据）
-- `{chat}.luker-state.<namespace>.json` — 各插件的命名空间状态（每个插件一份独立状态文件）
+- `{chat}.jsonl` —— 聊天主文件
+- `{chat}.luker-state.chat_sync.json` —— integrity + updated_at（同步元数据）
+- `{chat}.luker-state.<namespace>.json` —— 各插件的命名空间状态（每个插件一份独立状态文件）
 
 如果状态文件不存在（例如从旧版本迁移的聊天），系统会自动回退处理，并在首次写入时自动创建状态文件。
 
@@ -76,7 +59,7 @@ FE -> FE: "更新本地 integrity 状态"
 BE."即使前端在收到 ack 后崩溃,数据已落盘"
 ```
 
-这意味着即使前端在收到生成结果后立即崩溃，数据也不会丢失——因为后端已经在返回响应之前完成了持久化。前端收到确认后更新本地的 integrity 状态，保持与服务端的同步。
+后端在返回响应之前完成持久化，因此前端在收到结果后立即崩溃也不会丢失数据。前端收到确认后更新本地的 integrity 状态。
 
 ::: tip 与传统模式的对比
 在 SillyTavern 中，AI 生成的结果先到达前端，由前端决定何时保存。如果前端在保存前崩溃，生成的内容就会丢失。Luker 的 Generation Acknowledge 将保存时机提前到了后端响应之前，从根本上消除了这个窗口期。
@@ -86,7 +69,7 @@ BE."即使前端在收到 ack 后崩溃,数据已落盘"
 
 为了防止并发写入导致文件损坏，Luker 在前端（通过 `runSerializedChatWrite`）对聊天写入任务做串行化，同时由后端对每次写入执行 integrity 校验。
 
-当多个写入操作短时间内同时触发时（例如用户快速编辑多条消息，或者生成完成与用户编辑同时发生），流程为：
+多个写入操作在短时间内同时触发时，例如快速编辑多条消息，或生成完成与用户编辑同时发生，流程为：
 
 1. 前端将写入任务按到达顺序排队
 2. 按顺序逐个调用增量端点执行写入
@@ -101,11 +84,11 @@ BE."即使前端在收到 ack 后崩溃,数据已落盘"
 
 - 增量同步负责「传什么」— 只传输变更的数据
 - 后端实时存储负责「怎么存」— 确保数据安全持久化
-- 聊天状态文件是两者的桥梁 — 通过 integrity UUID 协调前后端状态
+- 聊天状态文件是两者的桥梁 —— 通过 integrity UUID 协调前后端状态
 
 两者共同构成了 Luker 的数据安全基础设施。
 
 ## 相关页面
 
-- [增量同步](/zh-CN/improvements/incremental-sync) — 后端实时存储的前端配合机制
-- [改进总览](/zh-CN/improvements/overview) — 所有技术改进的概述
+- [增量同步](/zh-CN/improvements/incremental-sync) —— 后端实时存储的前端配合机制
+- [改进总览](/zh-CN/improvements/overview) —— 所有技术改进的概述

@@ -56,7 +56,7 @@ requestProxy:
 ```
 
 - `url`：代理服务器地址，支持 `http://`、`https://`、`socks://`、`socks4://`、`socks4a://`、`socks5://`、`socks5h://` 和 `pac+*://` 协议
-- `bypass`：不走代理的地址列表
+- `bypass`：不经过代理的地址列表
 
 ### CORS 代理
 
@@ -153,7 +153,7 @@ whitelistDockerHosts: true
 
 - 启用 `basicAuthMode` 并配置 `basicAuthUser` —— 详见 [鉴权](/zh-CN/guide/authentication)
 - 启用多用户模式（`enableUserAccounts: true`），**并且**通过 `node recover.js default-user <密码>` 给所有 admin 用户设置密码 —— 详见 [鉴权 › 密码重置](/zh-CN/guide/authentication#密码重置)。两步缺一不可：只开多用户但 admin 没密码仍会被拦下，只设密码但没开多用户同样会被拦下。
-- 设置 `securityOverride: true`（仅用于调试，**严禁**用于公网部署）
+- 设置 `securityOverride: true`，仅用于调试，**严禁**用于公网部署
 :::
 
 ### 会话与 CSRF
@@ -177,7 +177,7 @@ sync:
 
 多用户安装默认禁止非管理员帐户向私有、环回或链路本地目标发起局域网及 S3 同步连接。管理员与未启用用户帐户的单用户模式不受限制。
 
-设置 `allowPrivateAddressesForUsers: true` 后，允许这些用户通过同步访问私有目标。仅对需要访问服务端私有网络的用户启用。该选项不会启用局域网监听，也不能替代防火墙、白名单或认证设置。
+设置 `allowPrivateAddressesForUsers: true` 后，允许这些用户通过同步访问私有目标。仅对需要访问服务端私有网络的用户启用。局域网监听由其他设置控制，访问控制仍需防火墙、白名单或认证。
 
 参阅[同步概览](/zh-CN/improvements/sync)、[局域网配对](/zh-CN/improvements/lan-sync)与 [S3 配置](/zh-CN/improvements/s3-sync)。
 
@@ -216,12 +216,12 @@ Luker 支持多种用户数据持久化后端，由 `mode` 选择；只有匹配
 
 - `fs`（默认）：每条聊天/预设/世界书等均为 `<dataRoot>/<handle>/` 下的一个文件。最适合单用户安装，也是最方便手动查看的后端。
 - `sqlite`：每个用户一个独立的 `luker-storage.sqlite` 文件，位于 `<dataRoot>/<handle>/`。适合希望使用单文件事务存储、又不想运行独立数据库服务的安装。
-- `mysql`：所有用户共享一个 MySQL 8.0+ 数据库，以 `handle` 列区分。适合已经在跑 MySQL 的多用户部署。
+- `mysql`：所有用户共享一个 MySQL 8.0+ 数据库。适合已经运行 MySQL 的多用户部署。
 - `postgres`：所有用户共享一个 PostgreSQL 14+ 数据库，结构与 MySQL 相同，使用 PostgreSQL。
 
-切换后端前需先运行迁移工具。管理面板的「存储后端」标签页提供 `fs ↔ sqlite` 的可视化迁移流程，并在 `<dataRoot>/_storage-migrations/` 留下永久备份。切换到/离开 `mysql` 或 `postgres` 时，可在 `config.yaml` 修改 `storage.mode` 后重启服务器；迁移工具目前只在 `fs` 与 `sqlite` 之间路由，因此把已有安装迁到 MySQL 或 PostgreSQL 需要要么从空数据库开始，要么经 SQLite 中转。
+切换后端前需先运行迁移工具。在管理面板的「存储后端」标签页选择目标后端，Luker 会迁移全部用户数据，完成后切换存储引擎并把 `mode` 写入 `config.yaml`。迁移期间数据只读；某个用户迁移失败时，其快照保留在 `<dataRoot>/_storage-migrations/`，重新执行即可接着迁移。
 
-无图形界面时，可用 `node scripts/storage-migrate.js --from fs --to sqlite`（以及反向方向）跑同样的迁移流程。
+命令行脚本支持任意来源与目标组合，需按引擎提供连接串，例如 `node scripts/storage-migrate.js --from fs --to mysql --mysql-url <url>`。
 
 桌面版仅支持 `fs`、`mysql`、`postgres` 后端。
 

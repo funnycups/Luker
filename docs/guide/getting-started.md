@@ -12,9 +12,10 @@ Run the complete Luker server and interface inside a single app. Opening it show
 | --- | --- | --- |
 | Desktop (macOS, Windows, Linux) | [Desktop App](/guide/desktop) | None |
 | Android | [Android App](/guide/android) | None |
+| iOS | [Self-signed IPA](/guide/ios) | A computer for the first AltStore or SideStore install |
 | HarmonyOS | [Build from source](/guide/harmonyos) | Node.js >= 24.0, DevEco Studio |
 
-iPhone and iPad have no app; use Luker in Safari. See [iOS](/guide/ios).
+iPhone and iPad install Luker as a self-signed app, outside the App Store.
 
 ## Docker
 

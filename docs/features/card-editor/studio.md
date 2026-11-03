@@ -1,6 +1,6 @@
 # CardApp Studio
 
-CardApp Studio is the editor assistant's full development environment, designed for character cards that embed a [CardApp](/features/cardapp). It provides a CodeMirror 6-based editor, live preview, AI-assisted development, and Git version control — making it the recommended workbench for building and debugging CardApps.
+CardApp Studio is the editor assistant's full development environment, designed for character cards that embed a [CardApp](/features/cardapp). It provides a code editor, live preview, AI-assisted development, and version history, making it the recommended workbench for building and debugging CardApps.
 
 ::: tip First time using Studio?
 See [Build a CardApp from scratch](/features/card-editor/walkthrough/) for a full working loop demonstrated end-to-end on a sample card, including a prompting cheatsheet. This page is the capability reference for Studio; the walkthrough is the hands-on path.
@@ -19,9 +19,9 @@ Studio uses a three-panel layout that overlays Luker's main UI:
 
 ![Studio overview: AI chat on the left, live preview in the middle, code editor on the right](/images/cardapp-studio/studio-overview.png)
 
-- **Left panel** — AI conversation; describe needs in natural language and the AI edits files via tool calls
-- **Center area** — Live chat interface / CardApp preview; verify changes as you make them
-- **Right panel** — CodeMirror 6 code editor + file tree management
+- **Left panel** — AI conversation; describe what you need in natural language, and the AI edits the files
+- **Center area** — live chat interface and CardApp preview, where each change can be checked
+- **Right panel** — code editor and file list
 
 ### Left: AI Chat and Sessions
 
@@ -45,15 +45,15 @@ The screenshot above shows the demo character "Abyss Walker"'s CardApp at runtim
 
 The right panel combines three sections:
 
-![Right panel: CodeMirror editor, file list, Git history](/images/cardapp-studio/studio-code-editor.png)
+![Right panel: code editor, file list, version history](/images/cardapp-studio/studio-code-editor.png)
 
-- Top — **Code editor** (CodeMirror 6) with automatic syntax highlighting per file type (HTML / JS / CSS / JSON, etc.); save / reload buttons in the upper right
+- Top — **Code editor** with automatic syntax highlighting per file type (HTML / JS / CSS / JSON, etc.); save and reload buttons in the upper right
 - Middle — **File list** with all CardApp files and their sizes; click to switch the editing target
-- Bottom — **Modification history** — Git commit list, each row showing short commit hash, message, time, and a rollback button
+- Bottom — **Modification history** — version list, each row showing a version identifier, message, time, and a rollback button
 
 ## Supported Operations
 
-The AI in Studio has a richer toolset than the popup. Tools fall into the following groups:
+The AI in Studio has more capabilities than the popup, in the following groups:
 
 **CardApp file operations:**
 - List all files
@@ -62,64 +62,64 @@ The AI in Studio has a richer toolset than the popup. Tools fall into the follow
 - Patch files (find and replace)
 - Delete files
 - Rename / move files
-- Toggle the CardApp on/off (`extensions.card_app.enabled`)
+- Enable or disable the CardApp
 
 **Character card field operations:**
 - Read all editable fields
 - Update one or more fields
 
 **World Info operations:**
-- List visible books with their scope (`character` / `chat` / `global`)
+- List visible world books with their scope: character, chat, or global
 - Get / create / update / delete / replace entries inside a book
-- List, replace, and create-and-bind chat-bound world books (`chat_metadata.world_info`)
+- List, replace, and create world books bound to the current chat
 
-**Regex script operations** — list / create / update / delete card-level (`character.data.extensions.regex_scripts`) or global (`extension_settings.regex`) scripts. Studio AI is the only place a card-level regex script gets created in this workflow.
+**Regex script operations** — list, create, update, and delete character-level or global regex scripts. Studio AI is the only place a card-level regex script gets created in this workflow.
 
 **Per-character orchestrator override** — read, replace, or clear the orchestrator override stored on the active card. Always character-scoped; never touches the global orchestrator settings.
 
-**Per-character memory-graph override** — read the effective memory-graph config (schema + advanced settings, with scope tags), replace the node-type schema, or patch advanced settings. Always character-scoped.
+**Per-character memory-graph override** — read the effective memory-graph configuration, replace node types, or adjust advanced settings. Always character-scoped.
 
-**Discovery / docs** — `slashcmd_list` + `slashcmd_help` for slash commands, `luker_context_list_keys` + `luker_context_describe` for the runtime API surface, and `list_luker_docs` + `read_luker_doc` to read the same Markdown docs as this site. The Studio AI uses these to verify exact names and signatures before generating code, instead of guessing.
+**Lookup** — Studio can look up slash commands, the runtime interface, and the documentation on this site to verify names and usage before generating code.
 
 ::: tip CardApp authoring convention
-By Luker's CardApp authoring convention, all AI-visible content should live in World Info books bound via `extensions.world`, not in the character card's `system_prompt` / `post_history_instructions` fields. Studio AI follows this convention by default. See the [Card Developer Guide](/development/card-developers) for details.
+By Luker's CardApp authoring convention, all AI-visible content belongs in the bound world book, not in the character card's main prompt. Studio AI follows this convention by default. See the [Card Developer Guide](/development/card-developers) for details.
 :::
 
 ## Code Editor Details
 
-Capabilities of the CodeMirror 6 editor on the right:
+Capabilities of the code editor on the right:
 
 - **Syntax highlighting** — Auto-detected from file extension (HTML / JS / CSS / JSON, etc.)
 - **Multi-file switching** — Tab-style management of open files
 - **New file** / **Save** / **Reload**
-- **AI and your edits coexist** — Direct edits you make are also captured in Git version control
+- **Manual edits are recorded too** — your direct edits enter version history as well
 
 ## File Change Approval
 
-Every AI change to files requires approval, with the same diff experience as the popup: full file diff, line-by-line side-by-side view, individual / batch approval. Approved changes hit the disk; the rest are discarded.
+Every AI change to a file requires approval. As in the popup, the interface shows the full changes with a line-by-line comparison, and you can approve them individually or in a batch. Approved changes hit the disk; the rest are discarded.
 
 ## Session Management
 
 - Multiple development sessions; create / switch / delete
-- Each character retains up to **20** sessions (vs. 24 for the popup)
-- Session content is persisted in character state and survives closing Studio
+- Each character keeps up to **20** sessions
+- Sessions are stored in character state and survive closing Studio
 
-## Version History (Git) {#version-history-git}
+## Version History {#version-history-git}
 
-Studio uses Git to record file version history automatically:
+Studio records file version history automatically:
 
-- Every approved batch of changes becomes a commit
-- View diffs of historical versions
+- Every approved batch of changes creates a version record
+- View the changes in historical versions
 - Roll back to any historical version
-- The Git history is exported with the character card data, so the recipient sees the full development history
+- Version history is exported with the character card data, so the recipient sees the full development history
 
-::: info SillyTavern data compatibility
-The Studio Git repository is stored in Luker's extension data area; it doesn't pollute the V2 character card standard fields. When importing back into SillyTavern, only the version history is lost — the CardApp itself still runs.
+::: info Where the data lives
+Version records are stored in Luker's extension data and are not written into the card's standard fields. A CardApp depends on Luker's runtime, so it does not run after export to SillyTavern.
 :::
 
 ## Search Tools Integration
 
-Studio integrates the [Search Tools](/features/search-tools) capability — the AI can search the web during development (for API docs, design references, etc.) and apply results directly in the coding context. No extra setup is needed; if the search plugin is available, Studio uses it.
+Studio integrates [Search Tools](/features/search-tools), so the AI can look things up online during development and use the results when generating code. It works whenever the search plugin is available.
 
 ## Related Pages
 

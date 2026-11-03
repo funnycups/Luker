@@ -5,10 +5,12 @@ Each orchestration mode (spec / agenda / loop / director) keeps its own **preset
 - **Global** — presets stored in extension settings, available to every chat.
 - **Character card** — presets stored on the character card itself, travelling with the card when it is exported.
 
-A preset captures everything inside the mode's orchestration panel — system prompts, tool flags, sub-agents, planner config, loop budgets, capsule injection. It does **not** capture prompt presets or API presets; those are referenced by name from inside the preset and resolved at runtime.
+A preset captures everything inside the mode's orchestration panel — system prompts, tool flags, sub-agents, planner config, run limits, orchestration-result injection. Prompt presets and API connections are referenced by name and resolved at runtime.
+
+This page covers the preset bar, the two scopes, and how presets reference each other.
 
 ::: tip Why per-mode libraries
-A spec preset and a director preset have nothing in common structurally, so they live in separate libraries. Switching execution modes reveals that mode's library, leaving the others untouched.
+Each mode has its own preset structure, so each keeps its own library. Switching execution modes shows that mode's library.
 :::
 
 ## The preset bar
@@ -22,7 +24,7 @@ It exposes the standard set of operations:
 - **Dropdown** — list of presets in the current `(mode, scope)` library. Selecting a preset reloads the editor with that preset's contents.
 - **New** — seeds a fresh preset from the factory defaults for the active mode.
 - **Duplicate** — clones the current active preset under a new name; the clone becomes active.
-- **Rename** — changes the name; the underlying id is preserved, so anything pinning to the preset by id keeps working.
+- **Rename** — changes the name; configurations that reference the preset keep working.
 - **Delete** — removes the preset. If the deleted preset was active, the next preset in the list becomes active. If the library empties, `Default` is automatically re-seeded from the factory data.
 - **Import / Export** — uses the standard portable JSON format. Importing prompts for a name and adds to the current library; exporting writes the active preset to disk.
 
@@ -39,10 +41,10 @@ When a character is loaded, the dropdown splits into **Character** and **Global*
 
 Switching groups writes the card's active slot immediately and persists with the card, so the choice travels with the card on export/import.
 
-If the card has no preset library of its own yet, the Character group is empty. Saving an edit while a card preset is selected creates the card library transparently — no separate "initialize card library" step.
+If the card has no preset library of its own yet, the Character group is empty. Saving an edit while a card preset is selected creates the card library.
 
 ::: info Cards ship their library on export
-Exporting a character card includes the card's preset library, so importing the card on another machine brings its presets with it. Other people who load the card pick up a complete, runnable orchestration setup without any extra files to import.
+Exporting a character card includes the card's preset library, so importing the card on another machine brings its presets with it.
 :::
 
 ## How presets interact with prompt and API presets
@@ -51,13 +53,13 @@ An orchestration preset is an independent layer in a generation. The others are 
 
 | Concept | What it controls | Where it lives |
 |---|---|---|
-| Orchestration preset | Sub-agents, tools, planner, loop budgets, system prompts, capsule injection | Extension settings or on the character card |
-| Prompt preset (chat completion preset) | Token budget, samplers, prompt order, jailbreak | SillyTavern presets |
-| API preset (Connection profile) | Endpoint, model, API key | Connection Manager |
+| Orchestration preset | Sub-agents, tools, planning agent, Loop budgets, system prompts, result injection | Extension settings or on the character card |
+| Prompt preset | Token budget, samplers, prompt order, jailbreak | SillyTavern presets |
+| API preset | Endpoint, model, API key | API connection |
 
-An orchestration preset references a prompt preset and an API preset **by name** — for example, a director preset might pin its `voice_critic` sub-agent to `Sonnet · slow critique` and route everything else through `Haiku · fast`. Switching the active orchestration preset does not switch the underlying prompt preset; switching the prompt preset does not affect orchestration.
+An orchestration preset references a prompt preset and an API connection **by name** — for example, a Director preset might pin its review sub-agent to a strong prompt preset and route the rest through a fast one. Switching the active orchestration preset changes only the orchestration layer; the prompt preset and connection profile stay put.
 
-The practical consequence: a preset named `审讯节奏` and one named `重叙事密度` can share the same prompt preset and connection profile and differ only in their orchestration shape — different sub-agents, different planner instructions, different injection depth. You move between them from the preset bar without touching anything in the Connection Manager or the SillyTavern preset dropdown.
+A preset named `审讯节奏` and one named `重叙事密度` can share the same prompt preset and connection profile and differ only in their orchestration shape — different sub-agents, different planning-agent instructions, different injection depth. You move between them from the preset bar without touching the API connection or the SillyTavern preset dropdown.
 
 ## Agent prompt-preset resolution reads the character card first
 
@@ -67,7 +69,7 @@ When an orchestration preset pins an agent to a prompt preset by name (`Sonnet �
 2. Your local chat completion preset library.
 3. The global runtime fallback pinned by orchestrator settings when neither of the above matches.
 
-The card-first ordering matters when a card ships with its own recommended presets: the orchestration profile and the presets it references travel together, and the recipient does not need to import matching presets separately. If the recipient has a same-named local preset, the card copy still wins for that character, so a card author's tuned prompt shape is not shadowed by whatever the recipient happened to name their local preset.
+The card-first ordering matters when a card ships with its own recommended presets: the orchestration profile and the presets it references travel together, and the recipient does not need to import matching presets separately. If the recipient has a same-named local preset, the card copy wins for that character.
 
 The **Card-bound** `<optgroup>` at the top of each agent's preset picker in the orchestrator drawer surfaces the same set of card-embedded presets when a character is loaded, so you can see and pick from the card set from the same UI you use for local presets.
 
@@ -81,28 +83,28 @@ If any references are un-embedded, a summary popup opens listing them and offeri
 - **Save names only** — persist the orchestration profile as-is, leaving the presets un-embedded. Recipients without matching local presets will fall back to the runtime default for those agents.
 - **Cancel** — abort the commit.
 
-Editing an agent's preset reference in the panel does not trigger the popup — the choice belongs to the commit step, not the edit step.
+The popup appears at commit time only.
 
 See [Card-Bound Presets & Personas](/improvements/card-bound-presets) for how card slots are managed, edited, and stripped of connection fields.
 
 ## The `Default` preset
 
-`Default` is a seed entry, not a protected entry. You can rename it, edit it freely, or delete it — there is no asterisk on the name and nothing in the system treats it as sacred.
+`Default` is an ordinary preset: rename it, edit it, or delete it.
 
-The only special behaviour: if you delete every preset in a library, `Default` is automatically re-seeded from the factory data the next time the library is read. This means you cannot leave a mode in an unrunnable state by deleting too aggressively, and it means the factory data is always one delete-everything away if you want to start over.
+If you delete every preset in a library, `Default` is re-seeded from the factory data the next time the library is read. Delete everything to get the factory configuration back.
 
 ## Recipes
 
-A few common workflows the preset bar enables:
+A few common workflows:
 
 - **Multiple presets for one card** — a fast-and-cheap preset for casual scenes and a slower, denser preset for set-piece moments. Save them under the card scope, flip between them from the dropdown.
 - **Promote a card preset to global** — export the card's active preset, switch the bar to global scope, import the JSON. The global library now has the same preset available to every chat.
 - **Try a preset without committing** — duplicate the active preset, edit the duplicate, and roll back by selecting the original from the dropdown if the experiment doesn't pan out.
-- **Hand off a tuned orchestration with the card** — finish iterating on the card scope, make sure the card's preset is the selected one in the dropdown, and export the card. The recipient gets the orchestration shape you tuned without any side configuration.
+- **Hand off a tuned orchestration with the card** — finish iterating on the card scope, make sure the card's preset is the selected one in the dropdown, and export the card. Importing the card gives the same orchestration.
 
 ## Related
 
-- [Spec mode](/features/orchestrator/spec) — default DAG workflow; each spec preset is one DAG.
+- [Spec mode](/features/orchestrator/spec) — fixed stages; each Spec preset is one stage and node layout.
 - [Agenda mode](/features/orchestrator/agenda) — planner-driven; each agenda preset is one planner + worker bundle.
 - [Loop mode](/features/orchestrator/loop) — single-agent loop; each loop preset is one agent profile.
 - [Director mode](/features/orchestrator/director) — takeover mode; each director preset is one main-agent + sub-agent team.

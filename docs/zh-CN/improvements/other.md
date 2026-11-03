@@ -2,11 +2,11 @@
 
 除了前面介绍的主要架构改进外，Luker 还在连接管理、网络代理、UI 交互、扩展系统、性能优化等多个方面进行了增强。
 
-## 连接管理器改进
+## API 连接配置改进
 
-Luker 对 SillyTavern 已有的 Connection Profiles 功能进行了增强，使其与[预设解耦](/zh-CN/improvements/preset-decoupling)体系配合工作。改进后的连接管理器将连接配置与聊天补全预设完全分离——连接配置仅管理「连到哪里」（API 地址、密钥、代理等），不再包含生成参数。
+Luker 对 SillyTavern 已有的连接配置功能进行了增强，使其与[预设解耦](/zh-CN/improvements/preset-decoupling)体系配合工作。改进后的API 连接配置将连接配置与聊天补全预设完全分离——连接配置仅管理「连到哪里」（API 地址、密钥、代理等），不再包含生成参数。
 
-启动时自动执行迁移，清理旧配置中残留的预设字段和正则字段。新增了 plain-text Function Calling 的开关和重试配置，可按连接配置独立设置。支持通过斜杠命令 `/profile` 快速切换配置。
+启动时自动执行迁移，清理旧配置中残留的预设字段和正则字段。新增了纯文本函数调用的开关和重试配置，可按连接配置独立设置。支持通过斜杠命令 `/profile` 快速切换配置。
 
 
 ## 提示词分组
@@ -44,9 +44,9 @@ Luker 新增了 Hook Order 扩展，允许用户自定义扩展的钩子执行�
 
 Luker 为扩展提供了角色级别的持久化状态存储能力：
 
-- `getCharacterState(avatar, namespace)` — 获取指定角色在指定命名空间下的状态数据
-- `setCharacterState(avatar, namespace, data)` — 设置角色状态数据
-- `registerExtensionApi(name, api)` — 注册命名 API，供其他扩展查找和调用
+- `getCharacterState(avatar, namespace)` —— 获取指定角色在指定命名空间下的状态数据
+- `setCharacterState(avatar, namespace, data)` —— 设置角色状态数据
+- `registerExtensionApi(name, api)` —— 注册命名 API，供其他扩展查找和调用
 
 这些 API 通过全局上下文对象暴露，支持扩展间的松耦合通信。预设同样支持状态存储，带生命周期钩子。
 

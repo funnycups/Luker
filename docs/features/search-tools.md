@@ -60,7 +60,7 @@ Search functionality is registered as a callable tool for the creative LLM in th
 Before the creative LLM generates a response, an independent search Agent runs automatically. The Agent analyzes the current conversation content, determines whether a search is needed, and writes search results into World Info entries.
 
 - Enabled via the `preRequestEnabled` configuration option
-- The Agent uses independent LLM presets (`agentPresetName`) and API presets (`agentApiPresetName`), which can use different models from the creative LLM
+- The pre-request agent can use its own prompt preset and API connection, separate from the creative model
 - The Agent runs a tool-call loop: it keeps calling tools while it still needs to research or write, and stops as soon as it replies with plain text and no tool calls. There is no fixed round limit
 - The Agent can read back, update, and delete the entries it created, so it revises existing notes instead of duplicating them
 - Search results are automatically created as World Info entries that the creative LLM can directly read during generation
@@ -108,47 +108,11 @@ In Pre-request Agent Mode, search results are automatically created as World Inf
 | `lorebookEntryOrder` | Sort weight of entries |
 | `lorebookPosition` | Injection position of entries |
 
-Search result entries can be set to `constant` (always active) or activated through keyword matching, depending on the Agent's judgment and configuration.
+Search result entries can be always active, or activated through keyword matching, depending on the Agent's judgment and configuration.
 
-## Global API
+## Use from other plugins
 
-The search plugin provides a global API for integration by other plugins. For example, the [Character Card Editor Assistant](/features/card-editor/)'s [popup](/features/card-editor/popup) and [CardApp Studio](/features/card-editor/studio) both integrate the search capability, enabling web searches for reference materials during card / CardApp editing.
-
-### Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `toolNames` | `Object` | Tool name constants object, containing `SEARCH` and `VISIT` |
-
-### Methods
-
-| Method | Return Value | Description |
-|--------|-------------|-------------|
-| `getToolDefs()` | `Array` | Returns the search tool definition array, including tool names, parameter schemas, etc. |
-| `isToolName(name)` | `boolean` | Determines whether a given name is a tool name registered by the search plugin |
-| `invoke(call, options)` | `Promise` | Invokes a search tool; `call` contains the tool name and parameters |
-| `search(args)` | `Promise` | Directly executes a search and returns results |
-| `visit(args)` | `Promise` | Directly visits a specified web page and returns page content |
-| `getSettings()` | `Object` | Returns a snapshot of current search plugin settings |
-
-### Usage Example
-
-```javascript
-const api = Luker.searchTools;
-if (api) {
-  // Check if it's a search tool
-  api.isToolName('luker_web_search'); // true
-
-  // Get tool definitions
-  const defs = api.getToolDefs();
-
-  // Directly call search
-  const results = await api.search({ query: '...', maxResults: 5 });
-
-  // Visit a web page
-  const page = await api.visit({ url: 'https://...', maxChars: 10000 });
-}
-```
+Search is also available to plugins such as the Character Editor Assistant, which can look things up online while editing. The developer interface is documented in the [Extension API](/development/extension-api/).
 
 ## Result Reuse
 
@@ -181,7 +145,7 @@ The plugin keeps the shared lorebook aligned with the stored search results as t
 | Page Extract Characters | Maximum text length extracted when visiting web pages |
 | Safe Search | Safety filtering level for search results |
 | Agent API Preset | API connection preset for the pre-request Agent (empty uses main connection) |
-| Agent Preset | Preset for the pre-request Agent (empty uses main preset) |
+| Agent Preset | Preset for the pre-request Agent (empty uses main preset). The question-mark button beside the dropdown explains the expected preset type |
 
 ::: info Related Pages
 - [Character Card Editor Assistant](/features/card-editor/) — Editor assistant overview (shared capabilities and entry points)

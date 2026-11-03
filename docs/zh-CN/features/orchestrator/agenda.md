@@ -1,175 +1,147 @@
 # Agenda 模式
 
-Agenda 用一个 **Planner Agent** 替换 Spec 的静态 DAG。Planner 维护 todo 列表，通过工具调用动态调度其他 Agent，读它们的输出，决定下一步派谁去——本质是一个 Agent loop。
+Agenda 用规划 Agent 组织流程。规划 Agent 维护待办清单，按中间结果决定调用哪些 Agent、调用几次以及何时结束，最后由收尾 Agent 合成编排结果。
 
-什么时候用 Agenda 而不是 Spec:
+## 什么时候用
 
-- 流程要根据中间结果决定下一步派谁。比如"先看看用户输入有没有破规倾向，有的话才启动 Constraint Agent"——这种"有条件触发"在 Spec 的固定 DAG 里很别扭。
-- 你想要更灵活的多 Agent 协作，而不是固定的 stage → node 拓扑。
-- 用[Function Call Runtime](/zh-CN/improvements/function-call-runtime)的能力让 Planner 自己组织调度。
+Agenda 适用于以下情况：
 
-::: tip Agenda 不是 Spec 的替代
-Spec 的可预期性、prompt 缓存友好度、debug 友好度均比 Agenda 强。绝大多数 RP 场景固定 DAG 已经够用，Agenda 是给确实需要动态调度的场景准备的。
-:::
+- 某些步骤只在条件满足时运行，例如先判断用户输入是否越界，越界才启动约束检查。
+- 下一步调用哪个 Agent 取决于上一步的输出，无法提前画出完整流程。
+- 需要由一个规划 Agent 统一协调多个工作 Agent。
 
-::: warning 多数情况下不该手改
-手搓 Planner prompt 之前先看一眼 [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio)——一句话描述需求，AI 给你一份 Planner + Agent 池的方案，逐条审。
-:::
+两种模式的差别在于由谁选择 Agent：Spec 由阶段表决定，Agenda 由规划 Agent 决定。
 
-## Agenda 编辑器
-
-切到 Agenda 模式后，从编排器面板点 **打开编排编辑器**。
-
-![Agenda 编辑器](/images/orchestrator/orch-agenda-editor.png)
-
-左边是 **Planner Prompt** 配置区（API 预设、提示词预设、System Prompt、Planner Prompt 模板）；右边是可用的 Agenda Agents 列表——Planner 通过工具调用从这个池子里挑 Agent 派任务。
-
-### Planner
-
-Planner 是 Agenda 的核心，它做几件事：
-
-1. 读最近聊天 + 用户消息
-2. 维护一个 todo 列表（下一步该做什么）
-3. 调度 Agenda Agent 池里的 Agent 去做任务
-4. 收集 Agent 输出
-5. 根据收集到的内容决定下一步，或者认为足够了就停下，把最后一个 Agent 输出当 capsule 注入主模型
-
-### Agenda Agents
-
-每个 Agenda Agent 类似 Spec 的 Node：有自己的 System Prompt、User Prompt Template、可选的 API / Chat Completion 预设覆写。区别在于 Agent 不绑死在某个 stage，**何时被调用、被调用几次、是否被调用，均由 Planner 决定**。
-
-### 运行时上限
-
-Agenda 是动态调度，失控容易，所以设有几道闸：
-
-- **Planner 最大轮数** — Planner 调度的轮数上限
-- **最大并发 Agent 数** — 同时跑的 Agent 数量上限（`Promise.all` 的并发度）
-- **总执行次数上限** — 整次跑里所有 Agent 调用次数总和
-
-到任一上限就强制收尾。
-
-## 默认编排流程
-
-Agenda 把节奏交给 Planner Agent 来定，Planner 从 worker 池里挑人派活。默认 profile 自带 Planner 与 worker 池（`distiller`、`lorebook_reader`、`planner`、`critic`、`finalizer`）；Planner 派出 worker、读回结果、必要时重新规划，看板搞定后由 `finalizer` 产出 capsule。
+## 工作方式
 
 ```d2
 direction: down
 
-start: "新一回合开始" {
+start: "新回合开始" {
   shape: oval
   style.fill: "#e8f5e9"
 }
 
-loop: "Planner 主导的动态调度" {
+loop: "规划 Agent 调度" {
   style.fill: "#e1f5ff"
 
-  driver: "Planner\n看一眼已完成的工作 · 更新 todo 看板 ·\n派 worker 处理任务 · 判断何时收尾" {
+  driver: "规划 Agent\n读取已完成的工作 · 更新待办清单 ·\n派遣工作 Agent · 决定何时收尾" {
     style.fill: "#fffde7"
   }
 
-  pool: "默认 worker 池 —— Planner 按 todo 挑人派" {
+  pool: "工作 Agent 池" {
     style.fill: "#fff3e0"
-    distiller: "distiller\n紧凑的状态读取" {
+    a: "场景整理" {
       style.fill: "#fffde7"
     }
-    lorebook_reader: "lorebook_reader\n当前世界书硬约束" {
+    b: "世界书约束" {
       style.fill: "#fffde7"
     }
-    planner: "planner\n下一拍进程规划" {
+    c: "情节规划" {
       style.fill: "#fffde7"
     }
-    critic: "critic\n审计指定材料" {
+    d: "审查" {
       style.fill: "#fffde7"
     }
   }
 
-  driver -> pool: "并行派一个或多个"
-  pool -> driver: "结果回收 · 必要时重新规划"
+  driver -> pool: "派遣一个或多个（可并行）"
+  pool -> driver: "返回结果 · 必要时重新规划"
 }
 
-finalizer: "finalizer\n读完最终的看板 · 产出编排指引 capsule" {
+finalizer: "收尾 Agent 写出编排结果" {
   style.fill: "#c8e6c9"
 }
 
-out: "capsule 注入下一句主回复" {
+out: "注入主模型的提示词" {
   shape: oval
   style.fill: "#f3e5f5"
 }
 
 start -> loop.driver
-loop.driver -> finalizer: "收尾"
+loop.driver -> finalizer: "结束"
 finalizer -> out
 ```
 
-默认 agent 在编排里各自负责什么：
+1. 规划 Agent 读取最近聊天和用户消息。
+2. 它维护一份待办清单，记录已完成和待处理的事项。
+3. 它从工作 Agent 池中选择一个或多个 Agent，分配任务。
+4. 它读取返回结果，更新清单，决定继续派遣还是结束。
+5. 结束时，由指定的收尾 Agent 把结果合成编排结果，注入主模型。
 
-| Agent | 作用 | 简单示例（RP 场景） |
-|---|---|---|
-| `Planner`（循环驾驶员，非 worker） | 读聊天和用户消息，维护 todo 看板（`add` / `set_status` / `drop`），从下面的 worker 池里挑人派活，读回结果，决定是继续规划还是交给 `finalizer`。 | 并行派 `distiller` + `lorebook_reader`；读完输出，判断还需要 `planner` 与 `critic`；交给 `finalizer`。 |
-| `distiller` | 紧凑、有据可查的场景状态读取（用户意图、当前张力、即时方向）；写给 Planner 与下游 agent 看，不直接面向玩家。 | 「林晚在试探用户对洛阳话题的态度；如果用户绕开，她会彻底换话题。」 |
-| `lorebook_reader` | 只挑出本回合**真的有影响**的世界书 / world-info 约束，写成可执行的写作 / 行为约束，不抄世界书原文。 | 「洛阳被围 —— 林晚不可能离开。文风：别用现代词，她会说『不知怎的』而非『somehow』。」 |
-| `planner` | 场景进程分析师 —— 提下一拍该走哪些 beat / 决策点，保留因果、不让世界围着用户转。 | 节拍：「用户追问 → 她躲闪 → 换个角度再问 → 她漏出一个洛阳细节 → 回复停在那」。 |
-| `critic` | 审 Planner 派过来的材料（连续性断裂、OOC 漂移、缺失硬约束、anti-data、不合理的因果），给审计结论；不亲自改写指引。 | 「这个计划里林晚说『没什么大不了』—— 现代腔调，这角色 OOC。其它通过。」 |
-| `finalizer`（Final Agent —— 整个流程的最后一站，只跑一次） | 读完最终的 todo 状态和选定的历次 run，合成一段简洁、可直接拿来起稿下一回合的编排指引文本 —— 就是最后注入主回复的那段 capsule。 | capsule：「林晚：躲闪 → 被追问 → 漏出一个洛阳姑姑的细节。用词保持古朴；她还在被围的洛阳城内。」 |
+工作 Agent 不绑定在固定阶段上：是否调用、调用几次、以什么顺序调用，都由规划 Agent 决定。
 
-## AI 迭代工作台
+## 默认流程
 
-和 Spec 一样，Agenda 也有 AI 迭代工作台支持——自然语言描述 Planner 行为 / Agent 池构成，AI 帮你搭。详见 [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio)。Quick Build 也适用 Agenda。
+出厂配置自带一个规划 Agent 和一组工作 Agent：
 
-## 与 Spec 的互转
+- **场景整理**：提取用户意图、当前张力和可能的发展方向。
+- **世界书约束**：从已激活的条目中选出本回合真正有影响的设定与文风要求。
+- **情节规划**：规划下一拍的节拍和决策点，保持因果与角色独立性。
+- **审查**：检查连续性、角色偏离、缺失约束和不符合世界规则的因果。
+- **收尾**：把审查通过的产出合成一段简短的编排指引。
 
-编排编辑器里有 **复制 Spec Agents 到 Agenda** / **复制 Agenda Agents 到 Spec** 按钮可以快速搬运 Agent 池（尽力而为）。**注意**:
+规划 Agent 可以并行派遣多个工作 Agent，也可以根据结果重新规划。它决定何时停止，收尾 Agent 只执行一次。
 
-- Spec → Agenda 时，stage 拓扑信息丢失，需要你重新写 Planner Prompt 描述调度逻辑
-- Agenda → Spec 时，Planner 的动态调度无法完整映射到固定 DAG，需要你手动决定 stage 划分
+## 开始使用
 
-## Function Call Runtime 依赖
+1. 在扩展抽屉把执行模式设为 **Agenda**。
+2. 打开编排编辑器，检查规划 Agent 的系统提示词与任务模板。
+3. 查看工作 Agent 池，按需调整每个 Agent 的职责、提示词和模型。
+4. 设置规划轮数、并发数和总调用次数上限。
+5. 正常聊天，在运行面板查看规划过程和每个工作 Agent 的输出。
 
-Agenda 模式的 Planner 调度通过 OpenAI 工具调用实现，依赖 Luker 的 [Function Call Runtime](/zh-CN/improvements/function-call-runtime)框架。这意味着：
+需要改流程时，优先用 [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) 描述目标，让 AI 修改规划逻辑或 Agent 池。
 
-- Planner 用的连接配置必须支持 function calling（OpenAI / Claude / Gemini 均支持）
-- 工具调用失败时的重试由 Function Call Runtime 处理（详见对应文档）
+## 编辑器
 
-## 看一次 Agenda 跑
+左侧是规划 Agent 的配置：API 连接、聊天补全预设、系统提示词和任务模板。右侧是工作 Agent 池，每个 Agent 有自己的系统提示词、用户提示词模板和可选的模型覆写。
 
-[运行面板](/zh-CN/features/orchestrator/#step-4) 会实时显示 Agenda 运行。Planner 轮次是卡片，该轮派发的 worker 是它下面的子卡片，展开就能看到完整推理和输出。Agenda 模式可以重点关注：
+规划 Agent 通过工具调用派遣工作 Agent，因此所用连接需要支持函数调用。OpenAI、Claude 与 Gemini 均支持。
 
-- **Planner 输出** —— `todo_ops` 列表（`set_status` / `add` / `set_goal` 等），就地展开。Planner 派错 agent、漏步、死循环时，对照这些 ops 与 worker 输出找根因。
-- **worker 派发** —— 该轮 Planner 调起来的每个 worker 均在这一轮的卡片下。展开能看到入参与输出。
-- **Final Agent 输出** —— run 末尾的最后一个 worker（默认是 `finalizer`）产出注入主模型的 capsule。配置参考里能换成其他 agent id。
-- **事件密度** —— Agenda 一次 run 的事件记录较密（Planner 轮次与派发均会留下记录），所以面板比 Spec 看起来更密。
+## 运行上限
 
-面板顶部的**导出**按钮把整次 run 下载为 JSON（便于回报问题）。
+Agenda 提供三项运行上限：
 
-## Agenda 配置参考
+- 规划 Agent 的最大轮数。
+- 同时运行的工作 Agent 数量。
+- 单次运行中所有工作 Agent 的调用总数。
 
-<details>
-<summary>Agenda 专属配置</summary>
+达到任一上限时强制结束。
 
-| 设置 | 说明 |
-|---|---|
-| Planner 最大轮数 | Planner 调度的轮数上限 |
-| 最大并发 Agent 数 | 同时跑的 Agent 数量上限 |
-| 总执行次数上限 | 整次跑里所有 Agent 调用次数总和 |
-| Planner API 预设 | Planner 节点用的 Connection profile |
-| Planner Chat Completion 预设 | Planner 节点用的提示词预设 |
-| Planner System Prompt | Planner 的 system 指令 |
-| Planner Prompt 模板 | Planner 的 user prompt 模板 |
-| Final Agent | 收尾时把哪个 Agent 的输出当 capsule |
-| Agenda Agent 池 | 各 Agent 的预设 / prompt（可独立覆写 API 与 Chat Completion 预设） |
+## 与 Spec 互转
 
-</details>
+编辑器提供把 Agent 池复制到另一模式的按钮。转换只迁移 Agent，不迁移调度逻辑：
+
+- 从 Spec 转到 Agenda，阶段顺序会丢失，需要在规划 Agent 的提示词里重新描述调度规则。
+- 从 Agenda 转到 Spec，动态派遣无法完整映射为固定阶段，需要手动决定阶段划分。
+
+## 运行面板
+
+运行面板按规划轮次展示。每一轮是一张卡片，本轮派遣的工作 Agent 显示为子卡片，展开可以查看推理、输入和输出。
+
+重点关注：
+
+- 规划 Agent 是否派错了 Agent，或漏掉必要步骤。
+- 是否在同一件事上反复派遣，迟迟不结束。
+- 收尾 Agent 的产出是否包含本回合真正需要的信息。
+
+面板顶部的导出按钮可以把整次运行保存为 JSON，便于反馈问题。
+
+## 配置
+
+- **规划最大轮数**：规划 Agent 的调度轮数上限。
+- **最大并发 Agent 数**：同时运行的工作 Agent 数量。
+- **总执行次数上限**：单次运行中所有工作 Agent 的调用总数。
+- **规划 API 与提示词预设**：规划 Agent 使用的连接与聊天补全预设。下拉框旁的问号按钮可以一键导入内置预设。
+- **规划系统提示词与任务模板**：定义它的工作方式。
+- **收尾 Agent**：结束时由哪个 Agent 产出编排结果。
+- **工作 Agent 池**：每个 Agent 的提示词、模型和职责。
 
 ## 相关页面
 
-- [编排器概览](/zh-CN/features/orchestrator/) — 通用配置 / 触发时机 / 角色卡绑定
-- [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) — AI 帮你写 Planner + Agent 池（推荐）
-- [Spec 模式](/zh-CN/features/orchestrator/spec) — 默认的 DAG 模式
-- [Loop 模式](/zh-CN/features/orchestrator/loop) — 单 Agent 工具循环
-- [Function Call Runtime](/zh-CN/improvements/function-call-runtime) — Planner 调度依赖此框架
-- [自定义工具](/zh-CN/features/orchestrator/custom-tools) — Agenda Worker 可以调用的扩展 / SillyTavern 桥接 / 手写工具
-
-## 预设
-
-本模式的配置可以保存为命名预设，并在编辑面板中切换。完整工作流见
-[编排预设](./presets.md)。
+- [多 Agent 编排概览](/zh-CN/features/orchestrator/) —— 通用配置、触发时机与角色卡绑定
+- [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) —— 用自然语言修改规划逻辑与 Agent 池
+- [Spec 模式](/zh-CN/features/orchestrator/spec) —— 固定阶段的默认模式
+- [Loop 模式](/zh-CN/features/orchestrator/loop) —— 单 Agent 工具循环
+- [自定义工具](/zh-CN/features/orchestrator/custom-tools) —— 给工作 Agent 增加内置之外的能力

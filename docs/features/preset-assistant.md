@@ -1,120 +1,65 @@
 # Completion Preset Assistant
 
-The Completion Preset Assistant is a Luker-exclusive AI-assisted preset management extension. Chat Completion API presets contain numerous parameters (such as temperature, top_p, frequency_penalty, etc.), and different models respond to these parameters with significant variation. The Completion Preset Assistant helps users understand parameter meanings, compare preset differences, and provides adjustment suggestions through conversational AI interaction.
-
-This extension includes an AI conversation engine, parameter parser, and preset modification suggestion system, paired with a standalone dialog UI component for a complete interactive experience.
-
-## Use Cases
-
-### Understanding Complex Preset Parameters
-
-Chat Completion API parameters are numerous, and different API backends (OpenAI, Claude, Gemini, etc.) support different parameter sets. The Completion Preset Assistant can explain each parameter's function, value range, and impact on generation results in natural language, lowering the learning barrier for preset adjustment.
-
-### Comparing Preset Differences
-
-When you have multiple presets, the Completion Preset Assistant supports preset difference comparison. It displays parameter differences between two presets in grouped format, including grouped display of prompt differences, helping you quickly identify key distinctions between different presets.
-
-### Getting Parameter Adjustment Suggestions
-
-Based on your usage goals (such as more creative responses, more stable output, longer generated content, etc.), the Completion Preset Assistant can provide specific parameter adjustment suggestions and supports one-click application of suggested modifications.
-
-## How It Works
-
-### Conversational Interaction
-
-The Completion Preset Assistant is a dialog with the conversation history on the left, the assistant's draft diffs on the right, and a natural-language input at the bottom:
+The Completion Preset Assistant edits Chat Completion presets through conversation. It reads the preset you have open, explains parameters, compares presets, and applies changes you approve. Its own AI calls use your current connection, so there is nothing extra to configure.
 
 ![Completion Preset Assistant overview](/images/preset-assistant/cpa-overview.png)
 
-The top of the dialog shows the current target preset, API preset, prompt preset, and a hint about the lodash syntax for preset paths. The middle "Reference preset" lets you compare against another preset and renders the diff as a draft.
+## Opening it
 
-You can ask questions in natural language, for example:
+Go to **Extensions** → **Completion Preset Assistant** → **Open Assistant**. **Create New Preset** starts from a blank preset instead.
+
+The top bar shows the target preset, the API preset and prompt preset used for the assistant's calls, and a path hint for preset fields. The iteration AI preset dropdown has a question-mark button that explains the expected preset type and imports a bundled one in a click. **Reference preset:** compares the target against another preset and renders the difference as a draft.
+
+Ask in natural language:
 
 - "What's the difference between temperature and top_p?"
 - "I want more creative responses — which parameters should I adjust?"
-- "Help me compare the current preset with the default preset"
+- "Compare the current preset with the default preset"
 
-The assistant answers based on the current preset's actual parameter values, rather than speaking in generalities.
+The assistant answers from the preset's actual values.
 
-### Parameter Parsing and Modification
+## What it changes
 
-The assistant has built-in comprehensive parameter parsing capabilities:
+- Generation parameters such as temperature, top_p, and penalties.
+- Prompt entries: wording, order, and structure.
 
-- Read all parameters and their values from the current preset
-- Understand relationships between parameters (e.g., the interaction effect of temperature and top_p)
-- Generate specific parameter modification suggestions
-- Apply suggested modifications directly to the current preset
+Changes arrive as diff cards. Approve or reject each card; approved changes apply to the target preset.
 
-### Prompt Entry Modification
+## Editing modes
 
-The Completion Preset Assistant can not only adjust generation parameters but also directly modify prompt entries in the preset. The assistant can edit, add, or adjust the content and structure of prompt entries, helping you optimize system prompt wording, ordering, and organization. This makes preset tuning no longer limited to numerical parameters, but covers the full range of preset configuration.
+**Editing mode:** decides how the assistant reads your request.
 
-### Session Modes
+- **General editing** — edits the preset as asked. Default.
+- **Adapt for orchestrator** — for presets used by an orchestrator main agent. It rewrites hard format constraints that break tool calls (forced reasoning chains, output structure) into softer guidance, scopes final-output-only instructions to the commit stage, and disables placeholders the orchestrator main flow already injects (character card, persona, world info). Chat history, jailbreak, writing-style, NSFW, and RP voice entries stay enabled.
+- **Jailbreak-only** — for presets used by tool-style LLM calls, such as the memory curator or other plugins. It keeps jailbreak instructions and disables entries that shape narrative prose (style, voice, output format, narrative meta-rules). The entries stay in the preset, so you can re-enable them.
 
-The toolbar's "Session mode" tells the assistant how to interpret the editing intent for the current preset, matching typical preset uses:
+Mode is fixed when the session starts. Switching it opens a confirmation and starts a new session; the old session stays in history.
 
-- **General editing**: The assistant acts as a generic preset editor, adjusting entries directly per your request without special bias. Default mode.
-- **Agent orchestration preset**: For presets whose downstream consumer is the main agent of a multi-agent orchestrator. The assistant identifies hard format constraints that interfere with tool-calling (forced chains of thought, output schemas, etc.) and rewrites them into soft cognitive hints rather than deleting them; conditions final-product-only directives (summaries and the like) on "the final committed message" stage; and disables placeholders that duplicate the orchestrator's own injection (character card, user persona, worldbook splice entries) while keeping chat history, jailbreak/bypass, and writing-style entries enabled. NSFW permissions, jailbreaks, and RP voice rules are preserved.
-- **Jailbreak-only**: For presets whose downstream consumer is a tool-style LLM caller (memory graph curator, the preset assistant itself, other LLM-driven plugins). The assistant identifies and preserves jailbreak/uncensoring directives, and disables everything shaping narrative RP output (writing style, voice rules, output schemas, narrative meta-rules) from the prompt order — the underlying entries stay intact so you can revert.
+In **Adapt for orchestrator** and **Jailbreak-only** modes, the assistant suggests deriving a new preset (`-orchestrator` / `-jailbreak` suffix) and edits that copy. The original stays untouched. Ask for the original if you want it edited in place.
 
-Mode is fixed at session creation. Switching mode from the toolbar prompts for confirmation and starts a new session; the old session stays in history.
+## Extracting skills in Adapt for orchestrator mode
 
-In "Agent orchestration preset" and "Jailbreak-only" modes, the assistant defaults to suggesting that you **derive a new preset** (e.g., appending `-orchestrator` / `-jailbreak` to the original name); once you confirm, edits operate on the derived preset and the original stays untouched. Tell the assistant if you'd rather edit the original directly.
+While adapting a preset, the assistant also looks for writing and output-format rules that every orchestrator sub-agent should read. Each candidate becomes a proposal:
 
-After deriving an `-orchestrator` preset, the assistant offers a **Bundle skills with this preset** link in the toolbar. The link opens the orchestrator's [skill manager](/features/skills/management) with multi-select pre-enabled — pick the writing rules, critic methods, or other skills you want to ship alongside the preset, then **Pack selected into preset…** writes them into the preset's `extensions.luker.embedded_skills_source` field. Anyone importing the derived preset later sees the standard embed-extraction dialog and the skills materialize into their `preset` scope automatically. This is the recommended path for distributing an orchestrator preset together with the skills that make it work — the preset stays self-contained.
+1. Create the skill at this preset's scope, with the text copied verbatim.
+2. Remove that text from the source prompt entry.
+3. Leave a one-line pointer such as `See skill <skill-name>` so the entry still points at the rule.
 
-### Authoring skills from preset content (Agent orchestration mode)
+Proposals arrive as diff cards alongside the rest of the adaptation. Approve or reject each one.
 
-In Agent orchestration mode the assistant doesn't just rewrite process-coercion entries — it also **sweeps the preset for reusable writing or output-format rules** that would be more useful as skills (so the orchestrator's sub-agents can read them, not just the main agent). It surfaces what it finds as additional extraction proposals in the same round, independently approvable.
+The sweep is skipped when you ask for a focused tweak ("tighten this sentence", "raise temperature to 1.1", "fix this typo"), when you say not to touch skills, and for candidates you already rejected in the session.
 
-![CPA popup with Editing mode set to "Adapt for orchestrator"](/images/skills/cpa-orch-04-orchestrator-mode-selected.png)
+You can also name an extraction yourself, reuse an installed skill, or inspect, rename, move, and delete one. Attaching a skill to a sub-agent's visible list happens in the [orchestrator iteration studio](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio).
 
-Just kick off an adapt request as you would normally:
+After deriving an `-orchestrator` preset, the toolbar offers **Bundle skills with this preset**. It opens the [skill manager](/features/skills/management) with multi-select on; pick the skills, then **Pack selected into preset…**. Anyone who imports the preset later gets the standard extraction dialog, and the skills land in their `preset` scope.
 
-> Adapt this preset for an orchestrator main agent.
-
-Alongside the usual coercion/format rewrites, the assistant proposes per-candidate:
-
-1. Create the skill verbatim (no paraphrasing or compression) at this preset's scope, so the skill rides with the preset when you later **Bundle skills with this preset** and someone else imports it.
-2. Remove the slice from the source prompt entry.
-3. Splice in a one-line pointer like `参考 skill <skill-name>` at the same anchor so the entry still acknowledges the rule's existence — the orchestrator agent reads the pointer and pulls the full skill on demand.
-
-Extractions land as diff cards under the existing per-edit Approve / Reject review — you can take some, leave others, or reject them all and the rest of the adapt still applies.
-
-![CPA round showing the Create skill tool chip after the AI commits the skill](/images/skills/cpa-orch-07-after-llm-round.png)
-
-When the sweep is suppressed:
-
-- You asked for a focused tweak (`tighten this sentence`, `raise temperature to 1.1`, `fix this typo`) — the assistant does just the tweak.
-- You said `no skills, just adapt the preset` — respected for the rest of the session.
-- You already rejected a candidate in an earlier round — it doesn't get re-proposed.
-
-::: warning Upgrading from a pre-skills Luker version?
-If you've customized the **Mode addition — orchestrator-optimize** textarea under the assistant settings panel's *Iteration System Prompts (advanced)* section, your custom content still wins over the new defaults — including the new disposition that tells the assistant to extract reusable rules to skills. Click **Reset to default** under that textarea to pick up the skill-aware version. (Untouched defaults pick it up automatically on next page load.)
+::: tip Customized mode prompts
+If you edited **Mode addition — orchestrator-optimize** under *Iteration System Prompts (advanced)*, your text overrides the default. Click **Reset to default** to restore the bundled version.
 :::
 
-You can also call out a specific extraction yourself (`pull the anti-cliché block out of the NSFW entry into a skill — keep it verbatim`), look up what's already installed (`I have a NSFW anti-cliché skill somewhere — let's reuse it instead of authoring a new one`), inspect a skill, rename it, move it between scopes, or delete one. Binding the skill to a specific orchestrator sub-agent's `visible` list still lives in the [orchestrator iteration studio](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio) — author it here, attach it there.
+## Related features
 
-::: tip Why this lives in the preset assistant
-Style and output-format rules tend to live in preset entries because that's where the preset author originally wrote them. Pulling them into skills means (a) other agents in the orchestrator can read them, (b) you can edit the rule in one place and every agent that references it sees the update, and (c) the rule survives a preset rewrite that would otherwise lose its prose. The assistant only does this when you ask — small one-off entry tweaks remain just entry tweaks.
-:::
-
-### Integration with Connection Manager
-
-The Completion Preset Assistant uses the current connection configuration for AI calls. This means it provides assistance through your already-configured API backend, requiring no additional API configuration.
-
-## Architecture Overview
-
-| Component | Description |
-|-----------|-------------|
-| `main.js` | Core logic, including AI conversation engine, parameter parsing, preset modification suggestions |
-| `dialog-ui.js` | Dialog UI construction component |
-| `index.js` | Extension entry point |
-| `style.css` | Interface styles |
-
-## Related Features
-
-- [Preset Decoupling](/improvements/preset-decoupling) — The Completion Preset Assistant uses the current connection configuration for AI calls
-- [Multi-Agent Orchestration](/features/orchestrator/) — Nodes in the Orchestrator also reference LLM presets
-- [Skills](/features/skills/) — bundle writing rules and critic methods alongside an `-orchestrator` preset via the **Bundle skills with this preset** link
-- [Authoring skills](/features/skills/authoring) — the same `SKILL.md` conventions the assistant follows when it drafts a skill from preset content
+- [Preset Decoupling](/improvements/preset-decoupling) — how connection settings and presets are separated
+- [Multi-Agent Orchestration](/features/orchestrator/) — orchestrator nodes also reference LLM presets
+- [Skills](/features/skills/) — bundle writing rules and critic methods alongside an `-orchestrator` preset
+- [Authoring skills](/features/skills/authoring) — the `SKILL.md` conventions the assistant follows when drafting a skill from preset content

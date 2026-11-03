@@ -15,9 +15,9 @@ Regardless of mode, the editor assistant provides these core capabilities:
 
 - **AI tool-call driven** — Describe what you want in natural language; the AI commits real changes to fields/files via structured tool calls
 - **Diff approval** — Every change is shown as a diff first; approve or reject one at a time or in batches; rejected changes never take effect
-- **Line-by-line side-by-side view** — Field-level diffs can be expanded to a full line-by-line side-by-side view
+- **Line-by-line side-by-side view** — Field-level differences can be expanded to a full line-by-line side-by-side view
 - **Session persistence** — Multiple edit sessions are saved independently; reopening picks up where you left off, including pending diffs
-- **Modification history & rollback** — Approved changes are recorded in history and can be rolled back to any version (Studio uses Git for file-level history)
+- **Modification history & rollback** — Approved changes are recorded in history and can be rolled back to any version
 
 ## Entry Point and Mode Switching
 
@@ -32,6 +32,8 @@ Both modes share the same set of settings on the extensions panel:
 - **World Info sync popup** — Whether to enable the World Info sync popup after replacing/updating a character card (only triggered by the popup mode; see [Popup Mode](/features/card-editor/popup#world-info-sync))
 - **Model request LLM preset** — Prompt preset used by the editor assistant (leave empty to use the current preset)
 - **Model request API preset** — API connection used by the editor assistant (leave empty to use the current connection)
+
+Both preset dropdowns have a question-mark button that explains the expected preset type and imports a bundled one in a click.
 - **Tool call retry count** — Number of retries when the AI returns an invalid tool call
 
 ## Modification History

@@ -1,157 +1,105 @@
 # Skills
 
-**Skill** 是一个紧凑、自包含的知识包，agent 可以按需读取。把每条写作规则、每条口吻约定、每份反八股清单全塞进一份巨型系统提示词里是常见痛点；Skill 让你把它们拆成命名的包，由 agent 在真正需要的时候去拉。
+Skill 是 Agent 按需读取的知识包。把每条写作规则、口吻约定和反八股清单都塞进一份超长系统提示词，会让提示词难以维护，也会在多个 Agent 之间重复拷贝。Skill 把这些规则拆成命名的小包，Agent 只在真正需要时读取。
 
-Luker 的 Skill 格式与 [Anthropic Claude Skills](https://www.anthropic.com/news/skills) 兼容 —— 同样的 `SKILL.md` + frontmatter + 可选子文件结构。
+Luker 的 Skill 格式与 Anthropic Claude Skills 兼容：一份 `SKILL.md` 加可选的子文件。编排器默认的 Director 配置就建立在 Skill 之上：主代理只保留很薄的身份提示词，具体写作规则放在 Skill 里，按名称读取。
 
-编排器自带的默认 director profile 就是建立在 Skill 之上的：一段极薄的主代理身份提示词 + 出厂 Skill，agent 按名字读取。你也可以把自己的 profile 调成同样的样子。
-
-## 为什么有这玩意
-
-多 agent 编排里最常见的痛点之一是「这个 prompt 两千多行，我不敢动它」。所有可复用的规则 —— 反八股清单、角色口吻约定、回合工作流、事件摘要格式 —— 过去均内联在 `systemPrompt` 字段里，经常在多个子代理里重复拷贝。
-
-Skill 把这整块拆开。agent 的身份留在 `systemPrompt`（「你是口吻评审，这是你的职责」）；可复用规则放进 Skill 文件里。agent 在真正需要时通过 `skill_read` 读取，规则的编辑、版本管理、分发均跟消费它的 prompt 解耦。
-
-## Skill 的结构
+## 结构
 
 一个 Skill 是一个目录：
 
-```
-director-anti-cliche-zh/
-├── SKILL.md          # 必需 —— frontmatter + 正文
-├── references/       # 可选 —— 辅助清单、更长的参考资料
-├── examples/         # 可选 —— 真实示例
-└── assets/           # 可选 —— 二进制附件
-```
-
-`SKILL.md` 是唯一必需的文件。它带着 Anthropic 标准的 YAML frontmatter：
-
-```markdown
----
-name: director-anti-cliche-zh
-description: 叙事写作的反八股模式。
-license: MIT
-metadata:
-  author: Luker Team
-  version: 1.0.0
-  tags: [writing-rules, zh, director]
----
-
-# director-anti-cliche-zh
-
-本 Skill 记录了默认 director profile 主动防范的八股模式……
+```text
+my-skill/
+├── SKILL.md          # 必需：frontmatter 与正文
+├── references/       # 可选：较长的参考资料
+├── examples/         # 可选：真实示例
+└── assets/           # 可选：附件
 ```
 
-- `name` 和 `description` 是必需的。
-- `license` 和 `metadata.*` 是可选的，遵循 Anthropic 标准。Luker 不引入私有命名空间。
-- 正文就是「契约」—— agent 读取这个 Skill 时，正文就是它消费的内容。要写得直接、命令式；把「什么时候用」「怎么用」「优先使用哪些工具」等指导均放进正文。
-
-完整的写作手册见 [创作 Skill](/zh-CN/features/skills/authoring)。
+`SKILL.md` 以 YAML frontmatter 开头，`name` 和 `description` 必需。正文是 Agent 实际读到的内容，应当写成直接、可执行的规则，而不是百科条目。
 
 ## 作用域
 
-Skill 物理上存放在 `data/<user>/skills/<scope>/`。Luker 有以下作用域：
+Skill 可以放在三个作用域：
 
-| 作用域 | 存放位置 | 何时生效 | 用途 |
-|---|---|---|---|
-| `global` | `data/<user>/skills/global/<name>/` | 始终可见 | 通用写作规则、反八股清单、共享方法文档 |
-| `preset` | `data/<user>/skills/preset/<api>/<preset>/<name>/` | 仅在选中该预设时 | 跟某个 Chat Completion 预设强绑的规则（如为 Claude 4 derive 的编排器预设） |
-| `character` | `data/<user>/skills/character/<file>/<name>/` | 仅在加载该角色卡时 | 角色卡专属设定、口吻约定、世界内俚语 |
+| 作用域 | 何时生效 | 用途 |
+| --- | --- | --- |
+| 全局 | 始终可见 | 通用写作规则、反八股清单、共享方法 |
+| 预设 | 选中该聊天补全预设时 | 与某份预设强绑的规则 |
+| 角色卡 | 加载该角色卡时 | 角色专属设定、口吻约定、世界内用语 |
 
-当 agent 按名字查找 Skill 时，运行时遍历各作用域，应用**后者优先**的优先级：`character` 覆盖 `preset`，`preset` 覆盖 `global`。所以一个名为 `voice-rules` 的 `character` 作用域 Skill 会在该卡加载期间悄悄接管同名的 `global` 版本，切换卡片后再退回。
+同名 Skill 按角色卡、预设、全局的顺序覆盖。引用只写名称，不写作用域，所以把 Skill 在作用域之间移动不会破坏引用。
 
-重要：编排器 profile 里写 `skills.visible: ["voice-rules"]` 时，它**只按名字**引用 —— 没有作用域前缀。把 Skill 在作用域之间挪动永远不会破坏引用。
-
-### 预设 / 角色卡作用域的 Skill 会随它们一起导出
-
-`preset` 和 `character` 作用域不只是你自己存放 Skill 的目录——它们打包导出时，Skill 也跟着走：
-
-- **预设**作用域的 Skill 会写进预设的 JSON。导出预设、发给别人、对方导入——他们也得到你的 Skill。
-- **角色**作用域的 Skill 会写进角色卡 PNG 的 metadata。导出 PNG、分享卡片，你的 Skill 跟着卡走。
-
-所以如果你写的写作纪律 Skill 依赖某个预设的提示词结构，或者某条嗓音规则只对一张卡有意义，按这个作用域写就够——分享是顺带的事，不用单独处理。详见 [把 Skill 打包进预设 / 卡片](/zh-CN/features/skills/management#embed-export-into-presets-and-cards)。
-
-## agent 如何看到 Skill
-
-编排器 profile 在两个层级带着 `skills` 策略：
-
-- **模式级** —— 适用于该模式下每个 agent（主代理 + 子代理）的默认值。
-- **每 agent 覆写** —— 每个 agent 可以钉自己的 `visible` / `deny` 列表。开头的 `"+"` 表示继承模式默认值再追加。
-
-运行时在派遣时把策略与物理库存对账，给 agent 交付一份过滤后的清单。由此：
-
-1. **一份精简目录被自动注入到 agent 的系统提示词**—— `<available_skills>` 块逐行列出每个可见 Skill 的名称和描述。agent 不需要花一轮 `skill_list` 工具调用就知道有什么可用。
-2. **函数工具 —— `skill_list`、`skill_read`、`skill_search` —— 提供给 agent**。它们被限制在可见集内；agent 拿不到策略之外的 Skill。`skill_read` 是主力 —— agent 需要正文时就调用它。它还接一个 `path` 参数，所以带子文件（`references/`、`examples/` 等）的 Skill 可以选择性地按路径读：`skill_read({ name: "my-skill", path: "references/checklist.md" })`。skill 作者在 SKILL.md 里写明哪些子文件值得拉、什么时候拉 —— 见 [创作 Skill](/zh-CN/features/skills/authoring#何时使用子文件)。
-
-策略解析的完整规则见 [编排器集成](/zh-CN/features/skills/orchestrator-integration)。
-
-## 分层概览
+预设与角色卡作用域的 Skill 会随预设或角色卡一起导出，接收方无需单独安装。
 
 ```d2
 direction: down
 
-user: "用户安装 / 自创" {
-  style.fill: "#e1f5ff"
-  fs: "data/<user>/skills/\n  global / preset / character" { style.fill: "#fffde7" }
-}
-
-bundled: "Luker 出厂自带" {
+bundled: "Luker 自带的 Skill" {
   style.fill: "#fff3e0"
-  pop: "default/skills/global/*\n（首次安装时落到 global 作用域）" { style.fill: "#fffde7" }
+  pop: "首次安装时进入全局作用域" {
+    style.fill: "#fffde7"
+  }
 }
 
-orch: "编排器 profile" {
+user: "本地安装的 Skill" {
+  style.fill: "#e1f5ff"
+  fs: "全局 / 预设 / 角色卡" {
+    style.fill: "#fffde7"
+  }
+}
+
+profile: "编排配置" {
   style.fill: "#e8f5e9"
-  mode: "mode.skills.visible / deny" { style.fill: "#fffde7" }
-  agent: "agent.skills.visible（+ 继承）" { style.fill: "#fffde7" }
+  mode: "模式级可见范围" {
+    style.fill: "#fffde7"
+  }
+  agent: "Agent 级可见范围" {
+    style.fill: "#fffde7"
+  }
 }
 
-runtime: "派遣时解析器" {
+runtime: "派发时解析" {
   style.fill: "#fce4ec"
-  walk: "遍历各作用域\n（后者优先）" { style.fill: "#fffde7" }
-  policy: "应用 visible / deny" { style.fill: "#fffde7" }
-  catalog: "<available_skills> 目录\n注入到系统提示词" { style.fill: "#fffde7" }
+  walk: "按作用域优先级合并" {
+    style.fill: "#fffde7"
+  }
+  policy: "应用可见与禁用规则" {
+    style.fill: "#fffde7"
+  }
+  catalog: "生成 Skill 目录\n注入 Agent 上下文" {
+    style.fill: "#fffde7"
+  }
 }
 
-agent: "运行中的 agent" {
+agent: "运行中的 Agent" {
   style.fill: "#f3e5f5"
-  tools: "skill_list / skill_read / skill_search" { style.fill: "#fffde7" }
+  tools: "按名称读取 Skill 正文" {
+    style.fill: "#fffde7"
+  }
 }
 
-bundled.pop -> user.fs: "首次安装出厂导入\n（之后只能通过按钮）"
+bundled.pop -> user.fs: "导入"
 user.fs -> runtime.walk
-orch.mode -> runtime.policy
-orch.agent -> runtime.policy
+profile.mode -> runtime.policy
+profile.agent -> runtime.policy
 runtime.walk -> runtime.policy
 runtime.policy -> runtime.catalog
 runtime.catalog -> agent.tools
 ```
 
-## 读 vs 写
+## Agent 如何看到 Skill
 
-agent 只能通过函数工具**读取**Skill，无法修改。这是有意为之 —— Skill 是用户管理的底层素材，只有用户（或者代表用户工作的 AI 助手，比如 [迭代工作台](/zh-CN/features/orchestrator/iteration-studio) 的 Skill 工具）才能改 Skill 内容。
+编排器可以限制每个 Agent 能看到哪些 Skill。运行时把可见 Skill 的名称和描述作为一份简短目录注入 Agent 的上下文，Agent 需要正文时再按名称读取。它只能读取可见范围内的 Skill，无法越过限制。
 
-面向用户的写入入口：
-
-- **编排器配置里的 Skill 管理子面板** —— 安装、编辑、改名、迁移作用域、删除。
-- **内嵌 Skill 编辑器** —— 文件树 + Markdown 编辑器，编辑 SKILL.md 和子文件。
-- **导入 / 导出** —— 把一个或多个 Skill 打包进角色卡或预设；导入时从内嵌载荷里抽出 Skill。详见 [Skill 管理](/zh-CN/features/skills/management)。
-- **迭代工作台工具** —— 让迭代工作台的 AI「把这条写作规则抽成一个 Skill」时，它通过一组专门的工具完成抽取，并把 agent 的 `systemPrompt` 同步改写。
+Director 的默认配置已经为不同 Agent 绑定好各自的 Skill。其他模式默认让 Agent 看到全部已安装 Skill，可以在编排编辑器里收紧。
 
 ## 出厂 Skill
 
-全新的 Luker 安装会把 `data/<user>/skills/global/` 填入出厂默认 Skill，全部由 director profile 原先的内联 prompt 拆解而来。它们分为以下类别：
+Luker 自带一组用于角色扮演的 Skill，覆盖反八股、角色口吻、输出纪律、事件摘要等规则。首次启动时它们会安装到全局作用域；之后可以在 Skill 管理面板浏览、导入或覆盖。
 
-- **共享类**—— `director-anti-cliche-zh`、`director-character-voice-zh`、`director-no-meta-zh`、`director-output-discipline-zh`、`director-zh-style-baseline`。所有默认 director 子代理均可见。
-- **主代理类**—— `director-turn-workflow-zh`、`director-dispatch-protocol-zh`。仅主代理可见。
-- **子代理专属**—— 子代理各自一份方法/契约 Skill（如 `voice-critic-method-zh`、`event-summary-rules-zh`、`chat-scout-method-zh`）。
+## 下一步
 
-这些出厂 Skill 从原 director 默认值**逐字搬出** —— 没有改写、没有压缩 —— 所以基于 Skill 的新版 director profile 跟未拆分前同强度。详见 [Director 模式 → 默认 Skill](/zh-CN/features/orchestrator/director#默认 Skill)。
-
-## 下一步去哪
-
-- **想写自己的 Skill？** → [创作 Skill](/zh-CN/features/skills/authoring)
-- **想安装、分享或迁移 Skill？** → [Skill 管理](/zh-CN/features/skills/management)
-- **想把某个 Skill 挂到具体 agent？** → [编排器集成](/zh-CN/features/skills/orchestrator-integration)
-- **在写扩展？** → [Skill 扩展 API](/zh-CN/development/extension-api/skills)
-- **想看它实际跑起来？** → [Director 模式](/zh-CN/features/orchestrator/director)
+- [创作 Skill](/zh-CN/features/skills/authoring) —— 目录结构、frontmatter 与正文写法
+- [管理 Skill](/zh-CN/features/skills/management) —— 安装、导入、编辑与打包
+- [编排器集成](/zh-CN/features/skills/orchestrator-integration) —— 让指定 Agent 看到指定 Skill

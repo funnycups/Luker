@@ -1,106 +1,48 @@
-# 認證與配額
+# 驗證與配額
 
-Luker 內建了多使用者認證和配額管理系統，適用於團隊共享實例或公開部署的場景。管理員可以透過 OAuth 登入、儲存配額和日誌系統全面管控使用者的存取和資源消耗。
+Luker 支援多使用者驗證、儲存配額和日誌，適合團隊共享執行個體或對外部署。本頁面向執行個體管理員，說明登入方式、配額和日誌的作用與設定入口。
 
-## 認證系統
+## 驗證方式
 
 ### 自助註冊
 
-登入頁面可以展示「建立帳號」表單，讓訪客直接註冊帳號。此功能預設關閉，由管理員面板切換（儲存在 `admin-settings.json` 的 `accountRegistration` 配置段中）：
+登入頁可以顯示「建立帳戶」表單，讓訪客自行註冊。該功能預設關閉，在管理員面板中開啟。
 
-```json
-{
-  "accountRegistration": {
-    "enabled": false
-  }
-}
-```
+透過自助註冊建立的帳戶始終為一般使用者，建立後立即可用，並繼承預設儲存配額。關閉註冊後，註冊入口不再接受任何請求，無法被繞過。
 
-透過此方式建立的帳號始終為非管理員，建立後立即啟用，並繼承預設儲存配額。功能關閉時，註冊介面無論請求內容如何均會回傳 HTTP 403，因此表單無法被繞過啟用。
+### GitHub 登入
 
-### GitHub OAuth 登入
+使用者點擊 GitHub 登入後會被導向授權頁面，授權完成後自動建立或關聯本機帳戶。需要在 GitHub 建立 OAuth 應用程式，並把用戶端 ID 與密鑰填入管理員面板。
 
-Luker 支援透過 GitHub OAuth 進行使用者認證。使用者點擊登入後，會被重新導向到 GitHub 授權頁面，授權完成後自動建立或關聯本地使用者帳戶。
+可以控制授權後是否自動建立帳戶。關閉自動建立時，只有既有的本機帳戶才能透過 GitHub 登入。
 
-配置方式：在前端管理員面板中配置 GitHub OAuth App 的憑證（儲存在 `admin-settings.json` 的 `oauth` 配置段中）：
+### Discord 登入
 
-```json
-{
-  "oauth": {
-    "github": {
-      "enabled": true,
-      "clientId": "your-github-client-id",
-      "clientSecret": "your-github-client-secret",
-      "allowAutoCreate": false
-    }
-  }
-}
-```
+Discord 登入支援更細的存取控制：可以要求使用者屬於指定伺服器，或擁有指定身分組。同樣在管理員面板中填寫用戶端 ID 與密鑰。
 
-### Discord OAuth 登入
+OAuth 的回呼位址由 Luker 依目前存取位址自動產生，不需要手動填寫。
 
-Luker 同樣支援 Discord OAuth 登入，並提供更細粒度的存取控制——可以校驗使用者是否為指定 Discord 伺服器的成員，以及是否擁有特定身分組（Role）。
+不需要 OAuth 時，可以繼續使用 SillyTavern 原有的使用者名稱與密碼登入。OAuth 憑證屬於敏感資訊，建議始終透過管理員面板設定，並限制伺服器資料目錄的存取權限。
 
-```json
-{
-  "oauth": {
-    "discord": {
-      "enabled": true,
-      "clientId": "your-discord-client-id",
-      "clientSecret": "your-discord-client-secret",
-      "allowAutoCreate": false,
-      "requireGuildMembership": false,
-      "allowedGuildIds": [],
-      "requiredRoleIds": []
-    }
-  }
-}
-```
+## 儲存配額
 
-OAuth 回呼位址由系統根據當前請求自動產生（格式為 `{protocol}://{host}/api/users/oauth/callback/{provider}`），無需手動配置。
+管理員可以為每個使用者設定儲存空間上限：
 
-::: tip
-如果不需要 OAuth 登入，無需配置 `oauth` 段。Luker 仍然支援 SillyTavern 原有的使用者認證方式。OAuth 配置建議在前端管理員面板中進行。
-:::
+- 配額依帳戶計算，涵蓋該使用者上傳與儲存的檔案。
+- 達到上限後，新的寫入會被拒絕，既有資料不受影響。
+- 管理員可以隨時調整配額，調整後立即生效。
 
-## 使用者配額管理
+配額與 Token 用量統計是兩個獨立系統。Token 用量由[請求檢查器](/zh-TW/improvements/request-inspector)記錄，不佔用儲存配額。
 
-### 儲存配額（Storage Quota）
+## 日誌
 
-管理員可以為每個使用者設定儲存空間配額，控制檔案儲存的資源消耗：
+伺服器日誌記錄啟動、請求、錯誤等執行資訊，管理員可以在日誌面板中查看，也可以匯出用於排查問題。日誌同時涵蓋瀏覽器端與伺服器端，詳見[日誌系統](/zh-TW/features/logging)。
 
-- **配額上限** — 使用者可使用的最大儲存空間
+日誌和請求記錄可能包含 API 密鑰等敏感內容，分享前應檢查。
 
-::: tip Token 用量統計
-請求檢查器追蹤的 Token 用量是獨立的統計功能，與儲存配額管理是兩個獨立的系統。詳見[請求檢查器](/zh-TW/improvements/request-inspector)。
-:::
+## 相關頁面
 
-當使用者的儲存使用量超過配額上限時，系統會阻止進一步的資料寫入（回傳 413 狀態碼）。管理員可以在前端管理面板中為使用者設定和調整配額。
-
-## 日誌系統
-
-Luker 實現了伺服端日誌擷取系統，供管理員遠端查看伺服器運行狀態。
-
-Luker 的日誌系統涵蓋後端和前端，幫助管理員遠端排查問題。詳見[日誌系統](/zh-TW/features/logging)。
-
-## 配置參考
-
-以下是 `admin-settings.json` 中與 OAuth 相關的配置項（透過管理員面板設定）：
-
-| 配置路徑 | 類型 | 預設值 | 用途 |
-|---------|------|--------|------|
-| `accountRegistration.enabled` | boolean | `false` | 是否在登入頁展示自助註冊表單 |
-| `oauth.github.enabled` | boolean | `false` | 是否啟用 GitHub OAuth |
-| `oauth.github.clientId` | string | — | GitHub OAuth 用戶端 ID |
-| `oauth.github.clientSecret` | string | — | GitHub OAuth 用戶端密鑰 |
-| `oauth.github.allowAutoCreate` | boolean | `false` | 是否允許自動建立使用者 |
-| `oauth.discord.enabled` | boolean | `false` | 是否啟用 Discord OAuth |
-| `oauth.discord.clientId` | string | — | Discord OAuth 用戶端 ID |
-| `oauth.discord.clientSecret` | string | — | Discord OAuth 用戶端密鑰 |
-| `oauth.discord.allowAutoCreate` | boolean | `false` | 是否允許自動建立使用者 |
-| `oauth.discord.requireGuildMembership` | boolean | `false` | 是否要求伺服器成員身分 |
-| `oauth.discord.allowedGuildIds` | string[] | `[]` | 允許的 Discord 伺服器 ID 列表 |
-| `oauth.discord.requiredRoleIds` | string[] | `[]` | 要求的身分組 ID 列表 |
-
-> [!WARNING]
-> OAuth 密鑰屬於敏感資訊。`admin-settings.json` 儲存在伺服器資料目錄中，請確保該目錄的存取權限受到保護。建議透過管理員面板進行配置。
+- [驗證與安全](/zh-TW/guide/authentication) —— 面向部署者的存取控制說明
+- [基礎設定](/zh-TW/guide/configuration) —— 監聽位址、HTTPS 與帳戶設定
+- [日誌系統](/zh-TW/features/logging) —— 查看與匯出日誌
+- [請求檢查器](/zh-TW/improvements/request-inspector) —— Token 用量記錄

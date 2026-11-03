@@ -83,7 +83,7 @@ Luker 基于 SillyTavern 构建，但在 API 层面有以下主要差异：
 
 ## 相关页面
 
-- [前端插件开发](/zh-CN/development/frontend-plugin) — 插件结构、事件系统、UI 集成
-- [角色卡开发](/zh-CN/development/card-developers) — 角色卡扩展字段和 CardApp
-- [增量同步](/zh-CN/improvements/incremental-sync) — 增量保存的技术细节
-- [预设解耦](/zh-CN/improvements/preset-decoupling) — 预设与 API 选择的解耦机制
+- [前端插件开发](/zh-CN/development/frontend-plugin) —— 插件结构、事件系统、UI 集成
+- [角色卡开发](/zh-CN/development/card-developers) —— 角色卡扩展字段和 CardApp
+- [增量同步](/zh-CN/improvements/incremental-sync) —— 增量保存的技术细节
+- [预设解耦](/zh-CN/improvements/preset-decoupling) —— 预设与 API 选择的解耦机制

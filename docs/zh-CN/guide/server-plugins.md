@@ -88,5 +88,5 @@ curl http://localhost:8000/api/plugins/hello-world/hello
 
 ## 相关页面
 
-- [服务端插件开发](/zh-CN/development/server-plugin) — 为 Luker 构建服务端插件
-- [基础配置](/zh-CN/guide/configuration) — 配置参考
+- [服务端插件开发](/zh-CN/development/server-plugin) —— 为 Luker 构建服务端插件
+- [基础配置](/zh-CN/guide/configuration) —— 配置参考

@@ -1,14 +1,10 @@
 # 從零寫一個 CardApp
 
-這一節用具體題材演示**怎麼讓 CardApp Studio 從零聯動起來** —— 全程不用自己寫程式碼，用自然語言指揮 Studio 設計 schema、loop、世界書、CardApp 面板。
+CardApp Studio 根據一段自然語言描述構建完整角色卡：你說明想要的效果，Studio 逐項提案，確認後寫入。兩個示例都產出一張可直接對話的角色卡，涵蓋記憶圖、多 Agent 編排、角色卡專用世界書，以及隨對話更新的面板。
 
-兩個示例按題材和複雜度挑一個看：
-
-| 示例 | 題材 | 涵蓋能力 | 適合 |
+| 示例 | 題材 | 建立什麼 | 適合 |
 | --- | --- | --- | --- |
-| [異世界生存日誌](/zh-TW/features/card-editor/walkthrough/isekai) | 西式低魔異世界生存 RP | 頂部狀態列（Day / Stamina / Hunger / Mood）+ 世界書 + 場景插畫（可選） | 想最快看到 CardApp 跑起來 |
-| [維多利亞案宗](/zh-TW/features/card-editor/walkthrough/victorian) | 1888 倫敦福爾摩斯式偵探卡 | 記憶圖派生 schema + orchestrator loop（draft → critique → revise）+ 卡專用世界書 + 變數驅動 CardApp 面板 | 想看 schema / loop / 變數驅動 UI 全棧協同 |
+| [異世界生存日誌](/zh-TW/features/card-editor/walkthrough/isekai) | 西式低魔異世界生存 RP | 記錄日期、體力、飢餓與心情的頂部狀態列，附帶世界書和可選場景插畫 | 快速完成一個 CardApp |
+| [維多利亞案宗](/zh-TW/features/card-editor/walkthrough/victorian) | 1888 倫敦偵探卡 | 記憶圖節點類型、多 Agent 編排、角色卡專用世界書、由案件狀態條目驅動的面板 | 了解記憶圖與編排如何配合 |
 
-兩個示例的總章程一致 —— Studio 提案 / 你點頭 / Studio 落地，每個工具呼叫均有 diff 讓你審。差別在於涵蓋的能力層次不同。
-
-剛接觸 Studio 沒建過卡，從[異世界生存日誌](/zh-TW/features/card-editor/walkthrough/isekai)開始；想看完整能力疊在一張卡上，看[維多利亞案宗](/zh-TW/features/card-editor/walkthrough/victorian)。
+兩個示例採用相同流程：Studio 提案、你確認、Studio 寫入，每項修改都會顯示改動內容。維多利亞案宗還會用到記憶圖與多 Agent 編排。

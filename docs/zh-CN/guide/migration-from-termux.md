@@ -1,6 +1,6 @@
 # 从 Termux 原版酒馆迁移到 Luker APK
 
-如果你之前在 Termux 里跑原版 SillyTavern，想换用 Luker 的 Android APK，这篇指南说明如何把原有数据搬到 APK 中。Luker 与 SillyTavern 数据格式完全兼容，APK 在首次启动时会弹出导入向导，正常情况下不需要碰 `Android/data` 私有目录。
+如果你之前在 Termux 中运行原版 SillyTavern，想换用 Luker 的 Android APK，这篇指南说明如何把原有数据迁移到 APK 中。Luker 与 SillyTavern 数据格式完全兼容，APK 在首次启动时会弹出导入向导，正常情况下无需访问 `Android/data` 私有目录。
 
 迁移完成后，你的角色卡、聊天记录、世界书、预设、用户人设、扩展设置均会照常加载。
 
@@ -14,13 +14,13 @@
 
 ### 1. 在 Termux 里把数据打成 ZIP
 
-如果 Termux 里没有 `zip` 命令，先装一下：
+如果 Termux 中没有 `zip` 命令，先安装：
 
 ```bash
 pkg install zip
 ```
 
-第一次跑还需要给 Termux 开存储权限，这样它才能写到共享存储：
+首次使用还需要为 Termux 开启存储权限，以便写入共享存储：
 
 ```bash
 termux-setup-storage
@@ -54,14 +54,14 @@ cp ~/SillyTavern/config.yaml ~/storage/shared/Download/sillytavern-config.yaml
 ```
 
 ::: tip ZIP 内部前缀宽容
-Luker 的导入逻辑会自动识别 ZIP 里 `characters/`、`chats/`、`worlds/` 这类子目录，不管它前面套着 `data/default-user/...`、`default-user/...`、还是直接 `characters/...`，均能正确落到对应位置。
+Luker 的导入逻辑会自动识别 ZIP 里 `characters/`、`chats/`、`worlds/` 这类子目录，不管它前面套着 `data/default-user/...`、`default-user/...`、还是直接 `characters/...`，均能正确放入对应位置。
 :::
 
 ### 2. 安装 Luker APK 并触发首次启动向导
 
 从 [GitHub Releases](https://github.com/funnycups/Luker/releases/latest) 下载安装最新 APK。
 
-**首次打开** Luker 会弹出标题为 **「欢迎来到 Luker！」** 的引导窗口。窗口顶部可以选界面语言（Language，默认英文，建议先切到「简体中文」，下面的按钮就会变中文），中间是一块 **「从 SillyTavern 迁移」**，列出并排按钮：
+**首次打开** Luker 会弹出标题为 **「欢迎来到 Luker！」** 的引导窗口。窗口顶部用于选择界面语言，默认英文；切换到「简体中文」后，下方按钮随之显示中文。中间是 **「从 SillyTavern 迁移」** 区域，列出并排按钮：
 
 | 按钮 | 用途 | 选什么文件 |
 | --- | --- | --- |
@@ -69,7 +69,7 @@ Luker 的导入逻辑会自动识别 ZIP 里 `characters/`、`chats/`、`worlds/
 | **「导入 config.yaml」** | 把原 SillyTavern 的服务端配置带过来 | `sillytavern-config.yaml`（可选） |
 | **「导入全局扩展 ZIP」** | 全局第三方扩展 | `sillytavern-extensions.zip`（可选） |
 
-按需点对应按钮、在系统文件选择器里挑文件，等每个导入提示完成即可。按钮顺序无所谓，互相独立。
+按需点击对应按钮，在系统文件选择器中选择文件，等待每个导入提示完成即可。按钮顺序不限，互相独立。
 
 ### 3. 完成引导后进入 Luker
 
@@ -77,30 +77,30 @@ Luker 的导入逻辑会自动识别 ZIP 里 `characters/`、`chats/`、`worlds/
 
 ## 错过了首次启动向导怎么办
 
-如果你已经关掉了引导窗口（或者 Luker 已经用了一段时间想再次导入），可以从用户管理面板再走一次相同的导入：
+如果你已经关闭引导窗口，或者 Luker 已经使用了一段时间、需要再次导入，可以从用户管理面板重新执行相同的导入流程：
 
 1. 打开「用户设置」→ 点「账户」
 2. 在用户卡片上找 **「备份与恢复」** 按钮
 3. 在面板里点 **「全选」**，把所有数据类别均包含进来（也可以只勾你想恢复的类别）
 4. 点 **「选择 ZIP」**，选中迁移 ZIP 文件
-5. 选恢复模式 —— **「增量更新」**（按文件路径覆盖，不删别的）或 **「覆盖更新」**（先清掉所选类别再恢复）
+5. 选择恢复模式：**「增量更新」** 按文件路径覆盖，**「覆盖更新」** 先清空所选类别再恢复
 6. 点 **「恢复备份」**
 
 「备份与恢复」面板里也包含同样的「局域网迁移」、「下载备份 ZIP」等功能，详见下文。
 
 ## 局域网迁移（双方均已是 Luker 时）
 
-如果你的源端已经是 Luker（另一台 Luker APK、或者 Termux 里跑的服务端 Luker），目标端也是 Luker APK，可以走更轻松的局域网迁移，完全不用打 ZIP：
+如果你的源端已经是 Luker（另一台 Luker APK，或 Termux 中运行的服务端 Luker），目标端也是 Luker APK，可以使用更简便的局域网迁移，无需创建 ZIP：
 
 1. 源端「备份与恢复」面板里点 **「创建迁移链接」**，生成一次性链接
 2. 目标端把链接粘进 **「从链接迁移」** 框，点导入
 3. 同局域网内自动传输 + 恢复
 
-链接是一次性的、很快过期。SillyTavern 原版没有这个 UI，所以从原版 SillyTavern 来的迁移走不通——先按上面的 ZIP 流程到 Luker，之后的迁移就能用「局域网迁移」了。
+链接是一次性的，并且很快过期。SillyTavern 原版没有这个 UI，因此从原版 SillyTavern 无法直接使用局域网迁移：请先按上述 ZIP 流程迁移到 Luker，之后的迁移即可使用「局域网迁移」。
 
-## 兜底：手动复制到应用专属目录
+## 备选方案：手动复制到应用专属目录
 
-只有以下情况才需要走这条路径：
+仅在以下情况下需要采用此方案：
 
 - 上面的 ZIP 流程出问题（导入报错、文件管理器无法选到 ZIP）
 - 你需要保留 Luker 导入逻辑识别不了的额外文件
@@ -142,7 +142,7 @@ cp -r ~/SillyTavern/public/scripts/extensions/third-party \
 
 迁移后 `luker-data/` 下应该看到：
 
-- `default-user/`（或其他用户名子目录，多用户模式下每个用户一个）
+- `default-user/`，多用户模式下每个用户一个子目录
 - 默认用户内部包含 `characters/`、`chats/`、`worlds/`、`OpenAI Settings/`、`User Settings/`、`secrets.json` 等
 
 如果有第三方扩展，把 `third-party/` 目录里的内容搬到：
@@ -152,7 +152,7 @@ cp -r ~/SillyTavern/public/scripts/extensions/third-party \
 ```
 
 ::: warning 不要覆盖 `_runtime-persist`
-Luker APK 自己在 `luker-data/` 下维护一个 `_runtime-persist/` 目录，存放运行时持久化产物。**不要覆盖也不要删除它**，从原版 SillyTavern 也不会带来这个目录。
+Luker APK 自己在 `luker-data/` 下维护一个 `_runtime-persist/` 目录，存放运行时持久化产物。**不要覆盖或删除该目录**。
 :::
 
 ### 5. 重启 Luker，验证数据
@@ -197,7 +197,7 @@ Android 11 及以上版本对 `Android/data/` 目录加了访问限制，不同�
 
 **「恢复备份」报错说归档不匹配选定的恢复类别**
 
-ZIP 内部完全找不到 `characters/`、`chats/`、`worlds/` 这类子目录。检查一下打 ZIP 时的工作目录——`zip -r ... default-user` 是正确的；从 `~/SillyTavern` 直接 `zip -r ... data` 也行；但从 `~/` 直接 `zip -r ... SillyTavern` 把外面的源码全包进去就会失败。
+ZIP 内部完全找不到 `characters/`、`chats/`、`worlds/` 这类子目录。检查打包 ZIP 时的工作目录——`zip -r ... default-user` 是正确的；从 `~/SillyTavern` 直接 `zip -r ... data` 也行；但从 `~/` 直接 `zip -r ... SillyTavern` 把外面的源码全包进去就会失败。
 
 **重启 Luker 后角色卡列表是空的（手动复制流程）**
 
@@ -205,7 +205,7 @@ ZIP 内部完全找不到 `characters/`、`chats/`、`worlds/` 这类子目录�
 
 **Luker 启动后白屏 / 报错（手动复制流程）**
 
-可能是 `_runtime-persist/` 被覆盖或破坏。可以尝试：① 删除 `_runtime-persist/` 让 Luker 自动重建；② 仍有问题时进入「应用信息 → 存储 → 清除数据」并重新走一遍迁移流程。
+可能是 `_runtime-persist/` 被覆盖或损坏。可以尝试：① 删除 `_runtime-persist/`，让 Luker 自动重建；② 如果问题仍然存在，进入「应用信息 → 存储 → 清除数据」并重新执行迁移流程。
 
 **第三方扩展未加载**
 
@@ -219,6 +219,6 @@ ZIP 内部完全找不到 `characters/`、`chats/`、`worlds/` 这类子目录�
 
 ## 相关页面
 
-- [Android App](/zh-CN/guide/android) — APK 版本介绍
-- [快速开始](/zh-CN/guide/getting-started) — Luker 安装总览
-- [从 SillyTavern 迁移](/zh-CN/guide/migration) — 服务端版本迁移指南
+- [Android App](/zh-CN/guide/android) —— APK 版本介绍
+- [快速开始](/zh-CN/guide/getting-started) —— Luker 安装总览
+- [从 SillyTavern 迁移](/zh-CN/guide/migration) —— 服务端版本迁移指南

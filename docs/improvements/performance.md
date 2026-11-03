@@ -1,6 +1,6 @@
 # Performance Optimization
 
-Luker has made multiple performance optimizations on top of SillyTavern, significantly improving startup speed, page loading experience, and daily usage fluidity. These optimizations are transparent to users — you don't need to configure anything, Luker automatically applies all optimizations.
+Luker improves startup speed, page loading and daily responsiveness on top of SillyTavern. These optimizations are on by default and need no configuration.
 
 ## Parallelized Resource Loading
 
@@ -8,7 +8,7 @@ Luker converts multiple resource loading tasks during the startup phase to paral
 
 ## Preloading Recent Chat Snapshots
 
-When you open Luker, the system prioritizes loading snapshot information for your most recently used chats. This means your most frequently used chats can appear in the list faster, without waiting for all chat data to finish loading.
+When you open Luker, the system prioritizes loading snapshot information for your most recently used chats. Your most frequently used chats therefore appear in the list sooner, without waiting for all chat data to load.
 
 At the same time, Luker indexes metadata for recent chats (such as last message time, message count, etc.), making chat list sorting and display faster.
 
@@ -44,7 +44,7 @@ Luker improves the data layer's caching strategy, promptly invalidating expired 
 
 ### Incremental Data Sync
 
-Through the [Incremental Sync](/improvements/incremental-sync) mechanism, Luker only sends the changed portions when saving chat data, rather than transmitting the complete chat history. This not only reduces network transfer volume but also lowers the server's disk write pressure.
+Through the [Incremental Sync](/improvements/incremental-sync) mechanism, Luker only sends the changed portions when saving chat data, rather than transmitting the complete chat history. Network transfer volume and disk write pressure both drop.
 
 ::: tip
 These optimizations take effect automatically during daily use. If you migrate from SillyTavern to Luker, you should noticeably feel the improvement in startup and operation speed, especially with larger amounts of data.

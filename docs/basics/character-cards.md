@@ -42,7 +42,7 @@ The first message the character sends in a new chat. This message sets the openi
 Character cards can have multiple first messages (Alternate Greetings), providing different opening lines. When starting a new chat, users can swipe between these different greetings to choose their preferred starting scenario.
 
 ::: tip
-The first message has a significant impact on conversation quality. It's not just an opening line — it also sets the benchmark for the AI's response style and length.
+The first message sets the opening content and the benchmark for later reply style and length.
 :::
 
 ### Example Dialogue
@@ -76,19 +76,19 @@ Exported character cards include all core field data. If the character card has 
 
 ### Replacing a Character Card
 
-Use **Replace / Update** in the character management menu to swap a card for a newer version while keeping chats, assets, and group memberships. Card content comes from the new file, but local bindings — bound chat completion presets, dedicated personas, orchestration config, Memory Graph schema, and CardApp enablement — are kept from the replaced card. When the new card ships its own version of a binding, Luker asks which one to keep.
+Use **Replace / Update** in the character management menu to swap a card for a newer version while keeping chats, assets, and group memberships. Card content comes from the new file, but local bindings — bound chat completion presets, dedicated personas, orchestration config, Memory Graph configuration, and CardApp enablement — are kept from the replaced card. When the new card ships its own version of a binding, Luker asks which one to keep.
 
 After the card is replaced, if a world-book decision is available, a dialog asks what to do: choose **Import new book** to save the new card's embedded world book as a standalone file and bind it, or **Keep old book** to re-bind the previously bound book. If the Character Editor Assistant is enabled, a third choice — **Merge in editor** — opens an AI-assisted diff between the previous and the new book.
 
 ## Luker's Character Card Extensions
 
-Building on the standard V2 format, Luker adds several practical extensions to character cards. This extension data is stored in the `data.extensions.luker` field and doesn't affect compatibility with other tools.
+Building on the standard V2 format, Luker adds several practical extensions to character cards. This extension data travels with the card and doesn't affect compatibility with other tools.
 
 ### Card-Bound Presets and Personas
 
 Character cards can bind one or more dedicated **chat completion presets** and one or more **user personas**. When you open a chat with this character, Luker adds the card's presets as a Card-bound group in the preset selector and applies the card's default; user personas the card recommends are surfaced the same way.
 
-This solves a common pain point: card creators no longer need to ask users to manually import specific presets, nor do they need to put user personas in world info. Card-bound presets are runtime-only — they don't appear in your global preset list and don't overwrite same-named local presets.
+This solves a common problem: card creators no longer need to ask users to manually import specific presets, nor do they need to put user personas in world info. Card-bound presets are runtime-only — they don't appear in your global preset list and don't overwrite same-named local presets.
 
 See [Preset System](/basics/presets) and [Card-Bound Presets and Personas](/improvements/card-bound-presets) for details.
 
@@ -98,9 +98,9 @@ Character cards can carry dedicated multi-agent orchestration configurations. Th
 
 Card creators can design custom orchestration workflows for specific characters and export them along with the character card. Users can use these orchestration configs immediately after importing the card.
 
-### Memory Graph Schema Override
+### Memory Graph Configuration Override
 
-If you use Luker's Memory Graph plugin, character cards can override the default Memory Graph schema (node types and structure definitions). This allows card creators to customize how memories are stored and recalled for specific characters.
+Character cards can override the default Memory Graph configuration: its node types and field definitions. Card creators use this to customize how memories are stored and recalled for a specific character.
 
 ## Next Steps
 

@@ -37,15 +37,15 @@ Under **Sync schedule**, set **Sync this long after the last edit, in seconds** 
 
 Sync continues with the browser closed while the Luker server is running. Closing an app that stops its server also stops synchronization. An offline device or unavailable storage service is tried again at a later normal trigger; timing depends on connectivity and whether the servers are running.
 
-The visible browser tab separately checks this Luker server's status on load and periodically, normally every 30 seconds and every 5 seconds during activity. These local status checks update the interface; they do not poll the remote backend or start a sync.
+The visible browser tab checks this Luker server's status on load and periodically. These checks update the interface; they do not poll the remote backend or start a sync.
 
 ### Activity and review
 
-The status capsule names the active backend and shows an indeterminate loading strip. Activate it to open **Sync**. It retracts after a successful sync with no outstanding issue; failures, unknown status and unresolved items keep an entry available for action. Sync activity shares placement with other running activity.
+The sync indicator names the active backend and shows an indeterminate loading strip. Choose it to open **Sync**. It retracts after a successful sync with no outstanding issue; failures, unknown status and unresolved items keep an entry available for action.
 
-![Sync activity capsule naming Shared archive above the conversation and composer](/images/sync/sync-activity.png)
+![Sync activity indicator naming Shared archive above the conversation and composer](/images/sync/sync-activity.png)
 
-The capsule reports activity without a percentage or elapsed-time estimate. Status observation alone does not open the Sync panel. Use **Review sync issues** in that panel to reopen pending decisions and notices. The separate automatic conflict reminder still opens for pending items on page load and for newly found items during use.
+The indicator reports activity without a percentage or elapsed-time estimate. Status observation alone does not open the Sync panel. Use **Review sync issues** in that panel to reopen pending decisions and notices. The separate automatic conflict reminder still opens for pending items on page load and for newly found items during use.
 
 ## Pending decisions
 

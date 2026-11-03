@@ -1,255 +1,44 @@
 # 编排器集成
 
-本页介绍 Skill 如何挂载到编排器 profile，以及每个 agent 在派遣时如何看到正确的 Skill 集合。
+编排器里的每个 Agent 都有一份 Skill 列表，决定它运行时能读到哪些知识包。
 
-整体而言，编排器 profile 带有 `skills` 策略：**模式级**（默认值）与 **agent 级覆写**，运行时在派遣前与物理库存对账。agent 只看到它解析后的可见集；其余被过滤掉。
+## 编辑 Agent 的 Skill
 
-## 策略形状
+在编排编辑器里，每个 Agent 的设置卡都有 **Skill** 一行：
 
-编排器 profile JSON 里，两个 `skills` 块跟 `systemPrompt` 等现有字段并列：
+- **继承标记**：沿用该模式的默认列表。
+- **具名条目**：这个 Agent 额外可见的 Skill。点条目可以移除，点 **添加** 从已安装的 Skill 里选择。
+- **禁用列表**：明确不让这个 Agent 看到的 Skill，优先级高于可见列表。
 
-```jsonc
-{
-  "mode": "director",
+面板顶部的 **Skill** 行是模式级默认值，作用于该模式下的所有 Agent。编辑单个 Agent 只改它自己的覆写。
 
-  // 模式级默认 —— 应用于该模式下每个 agent。
-  "skills": {
-    "visible": ["director-anti-cliche-zh", "director-character-voice-zh"],
-    "deny": []
-  },
+切换执行模式时，Skill 行按该模式的配置重新显示。每种模式各自保存一份策略。
 
-  "mainAgent": {
-    "systemPrompt": "你是 director 的主代理……",
-    // 每 agent 覆写。开头的 "+" 表示继承模式默认值。
-    "skills": {
-      "visible": ["+", "director-turn-workflow-zh", "director-dispatch-protocol-zh"]
-    }
-  },
+## 列表如何合并
 
-  "subAgents": [
-    {
-      "id": "voice_critic",
-      "systemPrompt": "你是口吻评审……",
-      "skills": {
-        "visible": ["+", "voice-critic-method-zh"]
-      }
-    }
-    // …更多子代理
-  ]
-}
-```
+- Agent 没有设置列表：继承模式默认值。
+- Agent 的列表以继承标记开头：保留模式默认值，再追加自己的条目。
+- Agent 的列表不以继承标记开头：完全替换模式默认值。
+- 禁用列表在两层之间取并集，禁用的名称优先。
 
-`visible` 与 `deny` 均为**只有名字**的列表 —— 没有作用域前缀。解析器遍历物理作用域，按名字匹配（后者优先：character > preset > global）。
+## Agent 看到什么
 
-## 解析规则
+运行时把可见 Skill 的名称与描述作为一份简短目录注入 Agent 的上下文。Agent 需要正文时按名称读取，也可以在一份 Skill 内搜索。它只能访问可见范围内的 Skill。
 
-派遣 agent 时，运行时从模式 + agent 两个块算出有效的 `visible` 与 `deny`：
+## Skill 缺失
 
-### 规则 1 —— agent 没有 `visible`（或为空）
+Skill 按名称引用。改名、删除或尚未安装时，运行时在派遣阶段跳过它，Agent 看不到这个 Skill，但派遣不会失败。编辑器里对应条目会变灰并提示未安装。
 
-有效 visible = 模式 visible。agent 原样继承模式默认值。
+角色卡或预设带来的 Skill 没有装齐时，编排仍可运行；补装后引用自动恢复。
 
-```jsonc
-"mainAgent": {
-  "skills": { "visible": [] }  // 或省略
-}
-// 有效: ["director-anti-cliche-zh", "director-character-voice-zh"]
-```
+## 用 AI 编辑
 
-### 规则 2 —— agent 的 `visible` 以 `"+"` 开头
+[AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) 可以按自然语言修改绑定关系。描述要让哪个 Agent 看到哪些 Skill，工作台会提交待审改动。
 
-有效 visible = 模式 visible ∪ agent visible 的其余项。`"+"` 是显式的「继承再追加」。
+## 相关页面
 
-```jsonc
-"mainAgent": {
-  "skills": { "visible": ["+", "director-turn-workflow-zh"] }
-}
-// 有效: ["director-anti-cliche-zh", "director-character-voice-zh",
-//        "director-turn-workflow-zh"]
-```
-
-### 规则 3 —— agent 的 `visible` 不以 `"+"` 开头
-
-有效 visible = agent visible。模式默认值被完全替换。
-
-```jsonc
-"specializedSubAgent": {
-  "skills": { "visible": ["only-this-one"] }
-}
-// 有效: ["only-this-one"]
-```
-
-这对需要从模式级写作规则里隔离出去的 agent 有用 —— 例如，只产出结构化数据的 agent 不应该看到文字评审类 Skill。
-
-### deny 永远是并集
-
-`deny` 跨模式 + agent 两层取并集（永不被替换），并且**永远胜过** `visible`。某个 Skill 名字只要出现在任一 deny 列表里，即使也在某个 visible 列表里，仍然被过滤掉。
-
-```jsonc
-"mode": "director",
-"skills": { "deny": ["director-anti-cliche-zh"] },
-"mainAgent": {
-  "skills": { "visible": ["+", "director-anti-cliche-zh"] }
-}
-// 有效 visible: [] (deny 胜出)
-```
-
-### 通配符
-
-`visible` 接受 `"*"`，意为「所有已安装 Skill」。早期阶段，希望 agent 无需列名即可看到所有已安装 Skill 时很有用：
-
-```jsonc
-"mainAgent": {
-  "skills": { "visible": ["*"], "deny": ["scripts-experimental"] }
-}
-```
-
-通配符与 `"+"` 和 `deny` 的组合方式符合预期。
-
-## agent 实际看到什么
-
-策略解析完之后，运行时在派遣时交给 agent 以下内容：
-
-### 1. 自动注入的目录
-
-一份精简的 `<available_skills>` 块追加到 agent 的系统消息里：
-
-```
-<available_skills>
-- director-anti-cliche-zh: 叙事写作的反八股模式。
-- director-character-voice-zh: 共享的角色口吻规则，所有默认子代理可见。
-- director-turn-workflow-zh: director 主代理的 7 步回合工作流。
-- ...
-</available_skills>
-
-（用 skill_read 查看具体内容；用 skill_search 在一个 Skill 内 grep。）
-```
-
-只是目录 —— 名字 + 描述。agent 不用花一轮 `skill_list` 工具调用就知道有什么可用。
-
-默认 director profile 的约 18 项合计约 150–300 token，开销很低。
-
-### 2. 函数工具
-
-被限制在可见集内，这是 agent 唯一能拿到 Skill 内容的方式：
-
-| 工具 | 签名 | 返回 |
-|---|---|---|
-| `skill_list({ query? })` | 可选子串过滤 | `[{ name, description, tags }]` |
-| `skill_read({ name, path?, offset?, limit? })` | `path` 缺省 SKILL.md；`offset`/`limit` 是行号 | `{ content, totalLines, truncated }` |
-| `skill_search({ name, query, path?, limit?, contextLines? })` | 在单个 Skill 的文件内做子串搜索 | `{ hits: [{ path, lineStart, lineEnd, snippet }] }` |
-
-agent 真正需要正文时才会调用 `skill_read`。`skill_search` 适用于 Skill 体积较大、只有某一段相关的场景。
-
-运行时硬上限：`skill_read` 响应不超过 50 KB。截断时 agent 用 `offset` 继续读。这保证即使 Skill 携带大块参考文件，上下文成本也是有界的。
-
-## 一个 director 真实例子
-
-出厂的默认 director profile 示范了这些范式：
-
-```jsonc
-{
-  "mode": "director",
-
-  "skills": {
-    "visible": [
-      "director-anti-cliche-zh",
-      "director-character-voice-zh",
-      "director-no-meta-zh",
-      "director-output-discipline-zh",
-      "director-zh-style-baseline"
-    ]
-  },
-
-  "mainAgent": {
-    "systemPrompt": "<极薄的主代理身份>",
-    "skills": {
-      "visible": ["+", "director-turn-workflow-zh", "director-dispatch-protocol-zh"]
-    }
-  },
-
-  "subAgents": [
-    {
-      "id": "voice_critic",
-      "skills": { "visible": ["+", "voice-critic-method-zh"] }
-    },
-    {
-      "id": "memory_curator",
-      "skills": { "visible": ["+", "event-summary-rules-zh"] }
-    },
-    {
-      "id": "plot_brainstormer",
-      "skills": { "visible": ["+", "plot-brainstormer-method-zh"] }
-    }
-    // …还有 14 个子代理，形状一致
-  ]
-}
-```
-
-读这份策略：
-
-- **每个 agent 均拿到 5 条共享写作规则** —— 通过模式级 visible。
-- **主代理额外拿到** 回合工作流 + 派遣协议 —— 它特有的职责。
-- **每个子代理额外拿到自己的方法 Skill** —— `voice_critic` 读 `voice-critic-method-zh`，`memory_curator` 读 `event-summary-rules-zh`，依此类推。
-
-没有任何一个 agent 的 `skills.visible` 重复模式级条目。`"+"` 前缀让 per-agent 覆写均很短 —— 只列出这个 agent 特有的部分，而不是整摞栈。
-
-## 各模式行为
-
-每种编排器模式在略微不同的位置注入目录，但策略解析是一致的：
-
-| 模式 | 目录注入位置 | 每 agent 覆写位置 |
-|---|---|---|
-| **director** | 主代理系统消息 + 派遣时每个子代理的系统消息 | `mainAgent.skills` + 每个 `subAgents[].skills` |
-| **loop** | 唯一的 loop agent 的系统消息 | `loopAgent.skills` |
-| **spec** | 执行时每个节点的系统消息 | 每个 `nodes[].skills`（按节点） |
-| **agenda** | Planner + 每个被派遣 worker 的系统消息 | `planner.skills` + `workers[].skills` |
-| **single** | 该单一节点的系统消息 | `node.skills` |
-
-所有模式下，没有显式 `skills.skills` 字段的 agent 均通过上文规则 1 继承模式级默认值。
-
-::: info 审查节点跳过目录注入
-spec 模式的审查节点（review nodes）的目录注入是有意跳过的 —— 审查是结构化的判断任务而不是内容生成任务，给它的 prompt 加 `<available_skills>` 只是噪音。审查节点仍然可以显式调 `skill_list` 或 `skill_read` 看到 Skill，但自动注入的目录被省略。
-:::
-
-## 失效引用
-
-`skills.visible` 是名字列表 —— 每个 Skill 在派遣时才校验物理存在。
-
-- **缺失的 Skill**（改名 / 删除 / 未安装）：静默过滤掉。agent 看不到；没有错误。
-- **在编辑器 UI 里**：该条目变灰，带 tooltip 「该 Skill 未安装」。
-
-这种「软失败」行为是有意的。意味着：
-
-- 导入一张跳过了内嵌 Skill 的角色卡不会造成任何破坏 —— 这些引用只是悬空。
-- 删除一个 Skill 不需要清理引用它的 profile。
-- 重命名一个 Skill 只需一步——引用会失效，但派遣仍可正常工作，直到你选择修复。
-
-## 编辑策略
-
-在编排器面板里，每个 agent 的设置卡显示一行 **Skill**：
-
-![带 + 继承标记的 Skill chip](/images/skills/rp-demo-11-director-chip-added.png)
-
-- **`+`** chip —— 显式的「继承模式默认值」标记（`visible` 以 `"+"` 开头时出现）。
-- 每个具名 Skill 一个 chip。点击移除；点击 **添加……** 从已安装的库存中选择。
-- **禁用** 行 —— 同样的 chip，独立列表。
-
-面板顶部的模式级 **Skill** 行也一样。编辑它更新 `mode.skills`；编辑某个 agent 的行更新该 agent 的覆写。
-
-要让 AI 帮你编辑，[迭代工作台](/zh-CN/features/orchestrator/iteration-studio) 自带 Skill 绑定工具（`skill_bind_to_agent`、`skill_unbind_from_agent`、`skill_set_mode_defaults`）—— 用自然语言描述需求，AI 通过工具调用 patch 你的策略。
-
-## 模式切换会失效
-
-编排器从一种模式切到另一种（例如 director → loop）时，运行时把缓存的解析结果作废。下一次派遣按新模式的策略重新构建目录。UI 也按新模式的 profile 重新渲染 **Skill** 行，所以编辑永远反映当前激活的模式。
-
-意味着 `director.mainAgent.skills` 块切到 loop 模式后不会跟过去。每种模式自己一份策略。许多用户在多种模式之间保持类似形状（同样的共享 Skill、同样的 per-agent 专属），但编辑是按模式独立的。
-
-## 相关
-
-- [Skills 概览](/zh-CN/features/skills/) —— 什么是 Skill、作用域
-- [创作 Skill](/zh-CN/features/skills/authoring) —— 写自己的
-- [Skill 管理](/zh-CN/features/skills/management) —— 安装 / 迁移 / 删除
-- [Director 模式](/zh-CN/features/orchestrator/director) —— 出厂自带完整 Skill 集成的典型多 agent profile
-- [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) —— 用自然语言 AI 编辑 patch 策略
-- [Skill 扩展 API](/zh-CN/development/extension-api/skills) —— 从扩展编程式编辑策略
+- [Skills 概览](/zh-CN/features/skills/) —— 什么是 Skill、作用域与可见性
+- [创作 Skill](/zh-CN/features/skills/authoring) —— 写自己的 Skill
+- [Skill 管理](/zh-CN/features/skills/management) —— 安装、迁移、删除
+- [Director 模式](/zh-CN/features/orchestrator/director) —— 出厂自带完整 Skill 集成的多 Agent 配置
+- [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) —— 用自然语言修改策略

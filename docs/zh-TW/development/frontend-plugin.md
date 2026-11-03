@@ -141,15 +141,15 @@ const context = Luker.getContext();
 
 上下文物件包含以下主要類別的 API：
 
-- **聊天資料** — `context.chat`、`context.characters`、`context.groups` 等
-- **訊息操作** — `addMessages()`、`updateMessages()`、`deleteMessages()`、`getMessage()`、`getMessageCount()`
-- **聊天持久化** — `saveChatMetadata()` 等（底層的 `appendChatMessages()`、`patchChatMessages()` 已棄用，請使用訊息 API）
-- **聊天狀態** — `getChatState()`、`updateChatState()` 等
-- **預設** — `context.presets.list()`、`context.presets.resolve()` 等
-- **提示詞/世界書組裝** — `buildPresetAwarePromptMessages()`、`simulateWorldInfoActivation()` 等
-- **事件系統** — `context.eventSource`、`context.eventTypes`
-- **角色狀態** — `getCharacterState()`、`setCharacterState()`
-- **擴充功能間通訊** — `registerExtensionApi()`
+- **聊天資料** —— `context.chat`、`context.characters`、`context.groups` 等
+- **訊息操作** —— `addMessages()`、`updateMessages()`、`deleteMessages()`、`getMessage()`、`getMessageCount()`
+- **聊天持久化** —— `saveChatMetadata()` 等（底層的 `appendChatMessages()`、`patchChatMessages()` 已棄用，請使用訊息 API）
+- **聊天狀態** —— `getChatState()`、`updateChatState()` 等
+- **預設** —— `context.presets.list()`、`context.presets.resolve()` 等
+- **提示詞/世界書組裝** —— `buildPresetAwarePromptMessages()`、`simulateWorldInfoActivation()` 等
+- **事件系統** —— `context.eventSource`、`context.eventTypes`
+- **角色狀態** —— `getCharacterState()`、`setCharacterState()`
+- **擴充功能間通訊** —— `registerExtensionApi()`
 
 完整的 API 列表請參閱 [擴充 API 參考](/zh-TW/development/extension-api/)。
 
@@ -181,7 +181,7 @@ Luker 的事件監聽器按以下優先順序**串行**執行（每個監聽器�
 
 1. **顯式外掛排序**（`pluginOrder`）— 透過 `eventSource.setOrderConfig()` 或內建的 Hook Order 擴充功能設定
 2. **監聽器優先順序**（`priority`）— `eventSource.on()` 的第三個參數，數字越大越先執行
-3. **註冊順序** — 先註冊的先執行
+3. **註冊順序** —— 先註冊的先執行
 
 ### 聊天生命週期事件
 
@@ -190,7 +190,7 @@ Luker 的事件監聽器按以下優先順序**串行**執行（每個監聽器�
 | `CHAT_CHANGED` | 聊天切換完成 | `(chatId)` |
 | `CHAT_CREATED` | 新聊天建立 | `(chatId)` |
 | `GROUP_CHAT_CREATED` | 群組聊天建立 | `(chatId)` |
-| `CHAT_BRANCH_CREATED` | 聊天分支或檢查點建立 | `(payload)` — 見下文 |
+| `CHAT_BRANCH_CREATED` | 聊天分支或檢查點建立 | `(payload)` —— 見下文 |
 
 ### 訊息事件
 
@@ -490,7 +490,7 @@ Luker 內建了前端日誌管理器，會攔截 `console` 輸出和 `fetch` 請
 
 ## 相關頁面
 
-- [後端外掛開發](/zh-TW/development/server-plugin) — 伺服端外掛開發指南（檔案系統、API 代理、憑證儲存）
-- [擴充 API 參考](/zh-TW/development/extension-api/) — 完整的 API 列表和詳細參數說明
-- [角色卡開發](/zh-TW/development/card-developers) — 角色卡擴充欄位和 CardApp 開發
-- [貢獻指南](/zh-TW/development/contributing) — 如何向 Luker 提交程式碼
+- [後端外掛開發](/zh-TW/development/server-plugin) —— 伺服端外掛開發指南（檔案系統、API 代理、憑證儲存）
+- [擴充 API 參考](/zh-TW/development/extension-api/) —— 完整的 API 列表和詳細參數說明
+- [角色卡開發](/zh-TW/development/card-developers) —— 角色卡擴充欄位和 CardApp 開發
+- [貢獻指南](/zh-TW/development/contributing) —— 如何向 Luker 提交程式碼

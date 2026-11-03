@@ -1,6 +1,6 @@
 # Preset System
 
-Presets control how the AI generates responses — from which prompts to use and how to organize the context, to generation parameters like temperature and sampling strategies. Understanding the preset system is key to fine-tuning AI response quality.
+A preset controls how the AI generates a response: which prompts are used, how the context is organized, and generation parameters such as temperature and sampling strategy.
 
 ## What is a Preset
 
@@ -11,13 +11,11 @@ A preset is a saved set of configurations containing two major categories of inf
 
 You can create multiple presets and quickly switch between them for different use cases. For example, one preset for serious narrative writing and another for casual everyday conversation.
 
-## Luker's Preset Decoupling
-
-This is one of Luker's most important improvements over SillyTavern.
+## Preset Decoupling
 
 ### The Problem
 
-In SillyTavern, "API connection settings" and "chat completion presets" are **coupled** together. Switching presets also changes the API address, key, model selection, and other connection parameters. This means if you want to switch prompt sets while keeping the same API, or switch APIs while keeping the same prompts, it's quite inconvenient.
+In SillyTavern, "API connection settings" and "chat completion presets" are **coupled**. Switching presets also changes the API address, key, model selection and other connection parameters. Changing the prompts while keeping the same API, or the other way round, takes manual work.
 
 ### Luker's Approach
 
@@ -117,7 +115,7 @@ See [Preset-Associated World Info](/improvements/preset-world-info) for details.
 
 ## Preset Completion Assistant
 
-Luker includes a built-in AI-powered **Preset Completion Assistant**. It not only helps you understand what each preset parameter means and provides tuning suggestions, but can also directly modify prompt entries in your preset — for example, optimizing system prompt wording or adjusting prompt structure and content. You can describe your needs through conversation, and it will generate modification suggestions displayed as diffs for you to approve item by item.
+Luker includes a built-in AI-powered **Preset Completion Assistant**. It explains each preset parameter and suggests tuning changes, and can modify prompt entries directly, for example by rewording or restructuring the system prompt. Describe what you need in conversation; the proposed changes appear as diffs for approval.
 
 See [Preset Completion Assistant](/features/preset-assistant) for details.
 

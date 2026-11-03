@@ -1,67 +1,46 @@
 # Single Agent Mode
 
-Single Agent is the orchestrator's lightest execution mode — one node, one LLM call, producing one capsule that gets injected into the main model. Under the hood it's a degenerate Spec with exactly one node, but because there's no multi-node coordination, the extension drawer gives you simplified fields and you skip the orchestration editor entirely.
+Single Agent is the orchestrator's lightest mode: one node, one model call, one piece of guidance injected into the main model. It is a Spec reduced to a single node, useful when a turn needs only a reminder, a summary or a style constraint.
 
-::: tip Who is this for
-Workloads that don't need multi-agent collaboration, don't need a tool loop, and only want "a single short briefing" injected into the main model. Examples: a brief OOC reminder, a short lorebook summary, a one-line style constraint. If you're thinking "I wish I could just have the main model read X before replying," this mode probably fits.
-:::
+## When to use it
 
-## Switch to Single Agent
+- The main chat needs one OOC reminder, a world book summary or a single writing constraint.
+- You want orchestration-result injection without the latency and cost of multiple agents.
+- You are testing a new guidance prompt and want to verify injection position and effect before building a larger flow.
+- The budget allows only one extra call.
 
-In the extension drawer, set the execution mode to **Single Agent**. Spec / Agenda / Loop editor entries hide, and the drawer reveals simplified fields — **System Prompt** and **User Prompt template**.
+Use [Loop mode](/features/orchestrator/loop) when an agent must read world books, search memory or research. Use [Spec mode](/features/orchestrator/spec) for a fixed multi-stage flow, and [Agenda mode](/features/orchestrator/agenda) when the next step depends on the previous result.
 
-Write your prompt directly in those fields. No orchestration editor needed.
+## Getting started
 
-## Template variables
+Set the execution mode to **Single Agent** in the extension drawer. The other modes' editor entries collapse and two fields appear:
 
-The User Prompt template supports the same placeholders as Spec mode:
+- **System Prompt**: the agent's role and task.
+- **User Prompt template**: the input for this turn.
 
-| Variable | Meaning |
-|---|---|
-| <span v-pre>`{{recent_chat}}`</span> | Recent chat messages |
-| <span v-pre>`{{last_user}}`</span> | The most recent user message |
-| <span v-pre>`{{previous_orchestration}}`</span> | Previous turn's orchestration result. **Auto-prepended at runtime — you typically don't reference it.** |
-
-## When to use
-
-- **Simple capsule** — a brief OOC reminder, a lorebook summary, a one-line constraint
-- **You want capsule injection without multi-agent latency** — one LLM call, lowest latency
-- **Prototyping a new prompt** — get the basics working as Single Agent, validate that injection position / role / depth match expectations, then graduate to multi-agent
-- **Budget-sensitive runs** — one LLM call is far cheaper than the 5–10 the default Spec workflow makes
-
-## When not to use
-
-- The agent needs to read the lorebook, query memory, or do research → use [Loop mode](/features/orchestrator/loop)
-- You need multi-step planning, review, synthesis → use [Spec mode](/features/orchestrator/spec)
-- The next step depends on intermediate findings → use [Agenda mode](/features/orchestrator/agenda)
-
-## Let AI write the prompt
-
-Don't want to write the prompt yourself? The [AI Iteration Studio](/features/orchestrator/iteration-studio) works in Single Agent mode too — switch to Single Agent, open the Studio, describe what you want the agent to do, and it'll generate the system / user prompt for you.
+Fill in the two fields; no orchestration editor is needed. The agent's output is injected into the main model as the orchestration result.
 
 ## Relationship to Spec
 
-Under the hood, Single Agent mode is a Spec profile with exactly one node. That means:
+Single Agent is a Spec with one node. Switching back to Spec shows that same node, and you can add stages and nodes from there. Switching between the two keeps the prompts.
 
-- Switching to Single Agent → just one node + simplified UI; the orchestration editor isn't opened.
-- Switching back to Spec → you'll see that single node and can keep adding more by hand.
+## Comparison
 
-Switching between the two modes preserves the configuration (System Prompt + User Prompt are node 0 in Spec mode).
+| | Single Agent | Spec | Agenda | Loop |
+| --- | --- | --- | --- | --- |
+| Model calls | One | Several, by stage | Decided by the planner | Decided by the agent |
+| Configuration | Two prompt fields | Stage and node editor | Planner and worker pool | System prompt and tool toggles |
+| Tool calls | None | None | Used by the planner | Used freely by the agent |
+| Flow | Fixed single step | Fixed stages | Dynamic dispatch | Agent decides |
+| Best for | Simple guidance | Predictable multi-stage preparation | Dynamic scheduling | Research before writing |
 
-## Comparison with other modes
+## Writing prompts with AI
 
-| Dimension | Single Agent | Spec | Agenda | Loop |
-|---|---|---|---|---|
-| LLM calls | 1 | 5–10 | Planner-decided | Agent-decided (default ≤ 20 rounds) |
-| Setup cost | Simplified fields | Author DAG + per-node prompts | Planner prompt + worker pool | One system prompt + tool toggles |
-| Tool calling | ❌ | ❌ | ✅ Planner | ✅ Agent free-call |
-| Variable flow | ❌ | Hard-wired topology | Planner schedules | Agent picks next step |
-| Card override | ✅ | ✅ | ✅ | ✅ |
-| Best for | Simple capsule | Predictable pipelines | Complex tasks needing scheduling | Speed/quality balance + exploratory research |
+[AI Iteration Studio](/features/orchestrator/iteration-studio) works in Single Agent mode. Describe the task, and it drafts the system and user prompts for you to confirm.
 
-## Related
+## Related pages
 
-- [Orchestrator overview](/features/orchestrator/) — common configuration / triggers / character card binding
-- [Spec mode](/features/orchestrator/spec) — multi-node DAG version
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — let AI write the prompt for you
-- [Loop mode](/features/orchestrator/loop) — when you want the agent to call tools
+- [Orchestration overview](/features/orchestrator/) — shared settings, triggers and card binding
+- [Spec mode](/features/orchestrator/spec) — multi-stage flow
+- [AI Iteration Studio](/features/orchestrator/iteration-studio) — write prompts in natural language
+- [Loop mode](/features/orchestrator/loop) — let an agent call tools

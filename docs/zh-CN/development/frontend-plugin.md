@@ -141,15 +141,15 @@ const context = Luker.getContext();
 
 上下文对象包含以下主要类别的 API：
 
-- **聊天数据** — `context.chat`、`context.characters`、`context.groups` 等
-- **消息操作** — `addMessages()`、`updateMessages()`、`deleteMessages()`、`getMessage()`、`getMessageCount()`
-- **聊天持久化** — `saveChatMetadata()` 等（底层的 `appendChatMessages()`、`patchChatMessages()` 已弃用，请使用消息 API）
-- **聊天状态** — `getChatState()`、`updateChatState()` 等
-- **预设** — `context.presets.list()`、`context.presets.resolve()` 等
-- **提示词/世界书组装** — `buildPresetAwarePromptMessages()`、`simulateWorldInfoActivation()` 等
-- **事件系统** — `context.eventSource`、`context.eventTypes`
-- **角色状态** — `getCharacterState()`、`setCharacterState()`
-- **扩展间通信** — `registerExtensionApi()`
+- **聊天数据** —— `context.chat`、`context.characters`、`context.groups` 等
+- **消息操作** —— `addMessages()`、`updateMessages()`、`deleteMessages()`、`getMessage()`、`getMessageCount()`
+- **聊天持久化** —— `saveChatMetadata()` 等（底层的 `appendChatMessages()`、`patchChatMessages()` 已弃用，请使用消息 API）
+- **聊天状态** —— `getChatState()`、`updateChatState()` 等
+- **预设** —— `context.presets.list()`、`context.presets.resolve()` 等
+- **提示词/世界书组装** —— `buildPresetAwarePromptMessages()`、`simulateWorldInfoActivation()` 等
+- **事件系统** —— `context.eventSource`、`context.eventTypes`
+- **角色状态** —— `getCharacterState()`、`setCharacterState()`
+- **扩展间通信** —— `registerExtensionApi()`
 
 完整的 API 列表请参阅 [扩展 API 参考](/zh-CN/development/extension-api/)。
 
@@ -181,7 +181,7 @@ Luker 的事件监听器按以下优先级顺序**串行**执行（每个监听�
 
 1. **显式插件排序**（`pluginOrder`）— 通过 `eventSource.setOrderConfig()` 或内置的 Hook Order 扩展配置
 2. **监听器优先级**（`priority`）— `eventSource.on()` 的第三个参数，数字越大越先执行
-3. **注册顺序** — 先注册的先执行
+3. **注册顺序** —— 先注册的先执行
 
 ### 聊天生命周期事件
 
@@ -190,7 +190,7 @@ Luker 的事件监听器按以下优先级顺序**串行**执行（每个监听�
 | `CHAT_CHANGED` | 聊天切换完成 | `(chatId)` |
 | `CHAT_CREATED` | 新聊天创建 | `(chatId)` |
 | `GROUP_CHAT_CREATED` | 群组聊天创建 | `(chatId)` |
-| `CHAT_BRANCH_CREATED` | 聊天分支或检查点创建 | `(payload)` — 见下文 |
+| `CHAT_BRANCH_CREATED` | 聊天分支或检查点创建 | `(payload)` —— 见下文 |
 
 ### 消息事件
 
@@ -484,7 +484,7 @@ Luker 内置了前端日志管理器，会拦截 `console` 输出和 `fetch` 请
 
 ## 相关页面
 
-- [后端插件开发](/zh-CN/development/server-plugin) — 服务端插件开发指南（文件系统、API 代理、凭证存储）
-- [Extension API 参考](/zh-CN/development/extension-api/) — 完整的 API 列表和详细参数说明
-- [角色卡开发](/zh-CN/development/card-developers) — 角色卡扩展字段和 CardApp 开发
-- [贡献指南](/zh-CN/development/contributing) — 如何向 Luker 提交代码
+- [后端插件开发](/zh-CN/development/server-plugin) —— 服务端插件开发指南（文件系统、API 代理、凭证存储）
+- [Extension API 参考](/zh-CN/development/extension-api/) —— 完整的 API 列表和详细参数说明
+- [角色卡开发](/zh-CN/development/card-developers) —— 角色卡扩展字段和 CardApp 开发
+- [贡献指南](/zh-CN/development/contributing) —— 如何向 Luker 提交代码

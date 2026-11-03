@@ -1,49 +1,45 @@
-# 從零寫一個 CardApp
+# 實戰：異世界生存日誌
 
-::: tip 這篇文件解決什麼問題
-[CardApp Studio](/zh-TW/features/card-editor/studio) 的頁面講它有什麼能力，這篇用一個完整角色卡演示**怎麼用人話指揮它幹活**。
+本頁用一張完整的生存題材角色卡，演示如何用一段需求讓 [CardApp Studio](/zh-TW/features/card-editor/studio) 生成介面、世界書與開場白，再透過幾輪追問調整細節。全程只需描述效果。
 
-讀完你能從零做出一張能跑、有 RP 沉浸感的 CardApp，過程中不用自己寫一行 JavaScript。
-:::
+## 最終結果
 
-## 你會得到什麼
-
-最終成品是一張名叫「異世界生存日誌」的單人沉浸式 RP 角色卡。第一條訊息發出去，你會看到這樣：
+最終成品是一張名為「異世界生存日誌」的單人沉浸式角色扮演角色卡。發送第一條訊息後，介面如下：
 
 ![成品截圖](/images/walkthrough/isekai/step-08-end-to-end.png)
 
-- 頂部 4 格狀態列：天數 / 體力 / 飽食度 / 心情
+- 頂部狀態列顯示天數 / 體力 / 飽食度 / 心情
 - 主角穿越到陌生森林的西式低魔異世界，AI 擔任環境與敘事者
-- 一個繫結的世界書，內含狀態注入條目 + 世界觀錨點 + 幾個 NPC 設定
-- 沉浸式按鈕命名（停筆 / 改寫 / 舊冊 / 新章 / 合卷），覆蓋必備 UX
+- 一本隨卡繫結的世界書，包含狀態記錄、世界觀約定和幾個 NPC 設定
+- 沉浸式按鈕命名（停筆 / 改寫 / 舊冊 / 新章 / 合卷），覆蓋常用的對話操作
 
-整個過程你只需要用中文描述需求 — **AI 會處理程式碼、Git 提交、世界書條目、變數初始化、欄位繫結**。
+整個過程只需要用中文描述需求，**AI 會處理介面、世界書條目、狀態變數和開場白，並把各項內容關聯到角色卡**。
 
 ## 前置條件
 
-- 一個能跑的 Luker / SillyTavern 執行個體
-- 已配通的 LLM API，推薦有工具呼叫能力的模型（Claude / GPT-5 等）
-- （進階段需要）已配通 Stable Diffusion / ComfyUI 後端
+- 一個可用的 Luker 執行個體
+- 已設定完成的 LLM API，推薦使用 Claude、GPT-5 等支援工具呼叫的模型
+- （進階步驟需要）已設定完成的 Stable Diffusion / ComfyUI 後端
 
-## 1. 建立空白角色卡 → 進入 Studio
+## 1. 建立空白角色卡並進入 Studio
 
-開啟右側角色管理面板，點「新建角色」，起個名字（本文用「異世界生存日誌」）。**不需要填任何欄位** — 描述 / 第一條訊息 / 世界書繫結全部交給 Studio AI。
+開啟右側角色管理面板，點擊「新建角色」並填寫名稱（本文使用「異世界生存日誌」）。描述、第一條訊息與世界書繫結由 Studio AI 生成。
 
-接下來開啟「擴充功能」面板 → 展開「角色卡編輯助手」→ 點 **「&lt;/&gt; CardApp Studio」**:
+接下來開啟「擴充功能」面板 → 展開「角色卡編輯助手」→ 點擊 **「&lt;/&gt; CardApp Studio」**：
 
 ![Studio 入口位置](/images/walkthrough/isekai/step-01-studio-entry.png)
 
-Studio 是覆蓋在主介面上的三欄佈局：左 AI 對話 / 中即時預覽 / 右程式碼編輯器。新角色卡 CardApp 還沒啟用，Studio 看到這個狀態會主動問你要不要開 — 別擔心。
+Studio 是覆蓋在主介面上的三欄佈局：左側 AI 對話、中間即時預覽、右側程式碼編輯器。新角色卡的 CardApp 尚未啟用，Studio 偵測到該狀態後會主動詢問是否啟用。
 
-![Studio 初始空狀態](/images/walkthrough/isekai/step-02-studio-empty.png)
+![Studio 初始空白狀態](/images/walkthrough/isekai/step-02-studio-empty.png)
 
-::: tip 不用讀程式碼也能跟下去
-右側程式碼編輯器會隨著 AI 的工作重新整理，但本文不要求你看裡面的程式碼。只需要看 **左欄的對話** 和 **中間的預覽** — 這就是 vibe 編碼該有的樣子。
+::: tip 閱讀重點
+右側程式碼編輯器會隨 AI 的工作重新整理。閱讀本頁時關注**左欄對話**與**中間預覽**即可。
 :::
 
-## 2. 一發 prompt 把骨架 + 世界書 + 開場白全做了
+## 2. 一段需求完成骨架、世界書與開場白
 
-點左側輸入框，**完整複製**下面這段：
+點擊左側輸入框，**完整複製**以下內容：
 
 ```
 我想做一個輕小說風味的西式異世界冒險角色卡,主角穿越到陌生森林獨自求生,
@@ -56,81 +52,64 @@ AI 擔任環境和敘事者(第三人稱視角描寫主角看到 / 感受到什�
 - 下面是輸入框和傳送按鈕
 - 必須的快捷按鈕(停止生成、切換聊天、新存檔、關閉聊天)放底部
 
-狀態變數都用 isj_ 字首(isj_day / isj_hp / isj_food / isj_mood)。
-風格請配合"輕小說西式異世界"的氛圍,具體配色 / 字型 / 排版你來定。
+狀態變數都用 isj_ 前綴(isj_day / isj_hp / isj_food / isj_mood)。
+風格請配合"輕小說西式異世界"的氛圍,具體配色 / 字體 / 排版你來定。
 ```
 
-![輸入第一輪 prompt](/images/walkthrough/isekai/step-03-first-prompt.png)
+![輸入第一輪需求](/images/walkthrough/isekai/step-03-first-prompt.png)
 
-傳送後，Studio AI 不會埋頭猛寫，而是會先：
+發送後，Studio 不會直接開始編寫，而是先查看這張卡的現狀，再說明打算怎麼做。新卡還沒有啟用 CardApp，它會先詢問是否啟用（回覆「好」即可）。
 
-1. 調 `list_files` / `character_get_fields` 看現狀
-2. 發現 CardApp 沒啟用，**先問你要不要開**（回個「好」即可）
-3. 把方案講一遍讓你過一眼
+確認後，它一次完成以下工作：
 
-確認後，它會一併完成下面這些事 — 一次性，不用你分輪發 prompt:
+- 啟用這張卡的 CardApp
+- 編寫介面程式碼，包括狀態列、訊息區、輸入區和常用操作按鈕
+- 建立配套世界書，寫入狀態記錄和世界觀約定
+- 編寫開場白，並初始化狀態變數
+- 把世界書關聯到這張卡
 
-- 啟用 CardApp toggle(`cardapp_set_enabled`)
-- 寫 `index.js` / `style.css`（狀態列 / 訊息區 / 輸入區 / 必備 UX 按鈕）
-- 配套綁一本世界書，建狀態注入條目 + 世界觀錨點
-- 改寫 `first_mes`（主角穿越的開場白，帶 setvar 初始化變數）
-- 把 `world` 欄位繫結到新建的世界書
+每項修改都會彈出對話框顯示改動內容，確認後才會寫入。
 
-每個工具呼叫均會**彈出審批**讓你看 diff — 一般可以放心點「批准」一併通過。
+![AI 工作過程：修改與確認](/images/walkthrough/isekai/step-04-first-round-work.png)
 
-![AI 工作過程：工具呼叫 + diff 審批](/images/walkthrough/isekai/step-04-first-round-work.png)
-
-::: tip "AI 內容放世界書，不動 system_prompt"
-你會注意到 AI 沒碰 `system_prompt` — 這是 [Luker 的 CardApp 創作約定](/zh-TW/development/card-developers#cardapp-內容存放約定)：角色卡的 `system_prompt` 會蓋掉聊天補全預設原本設計好的 system 部分，把卡片內容塞進世界書 entry 才能跟預設和平共存。Studio AI 預設遵守。
+::: tip AI 內容放入世界書，不修改主提示詞
+AI 不會修改角色卡的主提示詞，這是 [Luker 的 CardApp 創作約定](/zh-TW/development/card-developers)：角色卡的主提示詞會覆蓋聊天補全預設原本設計的系統部分，把卡片內容放入世界書條目才能與預設共存。Studio AI 預設遵守該約定。
 :::
 
-::: tip 看到 AI 在世界書條目裡寫 <code v-pre>\{{...}}</code> 別奇怪
-AI 在 entry 裡教模型怎麼用 `setvar` / `addvar` 等 macros — 這些教學示範必須**反斜線跳脫**(<code v-pre>\{{...}}</code>)，否則它們會在每次 prompt build 時被引擎執行，汙染你的變數。Studio AI 自動會處理這層 escape。
-:::
+AI 全部完成後，Studio 中間預覽區自動重新載入，顯示生成的 CardApp：
 
-AI 全部完成後，Studio 中間預覽區會自動重新載入，你能看到一張能跑的 CardApp:
+![首次執行效果](/images/walkthrough/isekai/step-05-first-round-running.png)
 
-![第一輪跑起來的樣子](/images/walkthrough/isekai/step-05-first-round-running.png)
+## 3. 不滿意時繼續追問 AI
 
-## 3. 不滿意就追問 AI
+完成一輪後，你可能想更換配色、調整按鈕順序、修改 AI 描述的氛圍，或補充某個 NPC 的設定；這些均可在左欄繼續追問，Studio AI 會結合上下文繼續修改：
 
-跑過一輪你可能發現配色想換一種、按鈕順序想調一下、AI 描述的氛圍跟你想的不一樣、某個 NPC 的設定想再豐滿一點 — 這些均直接在左欄追問就行，Studio AI 會順著上下文繼續改：
+措辭不準確時補充說明即可，AI 會繼續修改。
 
-::: tip 均可大大方方追問
-- "底部按鈕順序換成 寄出 / 改寫 / 舊冊 / 新章 / 合卷"
-- "狀態列的字號能不能調大一點"
-- "NPC 那條 keyed entry 加點暗示玩家可以送什麼禮物"
-- "開場白結尾那段太冷，換個更明亮一點的畫面"
+## 4. 端到端測試
 
-不用糾結 prompt 的措辭，把訴求說清楚 AI 就能改。如果改完不對，繼續追問。
-:::
+發送一條角色扮演輸入（內容不限），觀察頂部狀態列的數值隨劇情變化。
 
-## 4. 端到端跑一次
+到這裡，你已經透過多輪自然語言對話，得到了一張：
 
-試著發一條 RP 輸入（隨便說點什麼）:
-
-![完整對話 + 狀態變化](/images/walkthrough/isekai/step-08-end-to-end.png)
-
-到這裡，你已經透過 1-2 輪自然語言對話，得到了一張：
-
-- ✓ 自帶前端 UI（狀態列 + 必備 UX 按鈕）
+- ✓ 自帶前端介面（狀態列和常用操作按鈕）
 - ✓ 自帶世界觀和 NPC 設定（繫結的世界書）
-- ✓ 自帶初始化邏輯的開場白
-- ✓ 跑起來有沉浸感的 RP 角色卡
+- ✓ 開場白會初始化狀態
+- ✓ 具備沉浸感的角色扮演角色卡
 
-整個過程你**沒看過一行程式碼**，也沒有手動開過 CardApp toggle、沒有手動建過世界書條目。
+上述內容由 Studio 生成並寫入，CardApp 在確認後啟用。
 
 ## 5.（進階）接入影像生成
 
 ::: warning 前置：SD/ComfyUI 後端
-本節需要先配通 SillyTavern 自帶的 [影像生成擴充功能](https://docs.sillytavern.app/extensions/stable-diffusion/) 的後端（本地 Stable Diffusion / ComfyUI / 遠端 API 任選）。後端不通時，這一節直接跳過。
+本節需要先設定 SillyTavern 自帶的 [影像生成擴充功能](https://docs.sillytavern.app/extensions/stable-diffusion/) 後端（本地 Stable Diffusion、ComfyUI 或遠端 API 均可）。後端不可用時跳過本節。
 :::
 
 ```
 我想要每次 AI 描述新場景時 CardApp 自動配圖。玩家純對話 / 內心戲不畫。
 另外底部加一個「畫下所見」按鈕,可以手動讓最近一條 AI 訊息的場景重畫。
 
-對沒配置畫圖後端的使用者:靜默跳過 / 隱藏按鈕就行,別彈錯誤,
+對沒配置畫圖後端的用戶:靜默跳過或隱藏按鈕,不要彈出錯誤,
 不要影響 CardApp 其他功能。
 ```
 
@@ -138,35 +117,34 @@ AI 全部完成後，Studio 中間預覽區會自動重新載入，你能看到�
 
 ![「畫下所見」按鈕觸發](/images/walkthrough/isekai/step-10-redraw-button.png)
 
-## 提示詞實踐小抄
+## 提示詞實踐要點
 
-跑過一輪你會發現，有效的 Studio prompt 不需要長 — 關鍵是把"方向"說清楚。下面幾條經驗：
+有效的 Studio 需求描述不需要很長，說明目標即可。以下為幾條要點：
 
-1. **描述外觀和行為，不描述實作**
-   - ✓ "頂部狀態列 4 格，天數 / 體力 / 飽食度 / 心情"
-   - ✗ "用 ctx.registerRenderer 註冊一個監聽 GENERATION_ENDED 的 renderer"
+1. **描述外觀與行為**
+   - 示例：「頂部狀態列 4 格，顯示天數、體力、飽食度與心情」
+   - 實作方式交給 Studio 決定，例如何時重新渲染狀態列
 
-2. **把"約束"和"自由度"分開寫清楚**
-   - "用 isj_ 字首"是約束（方向）
-   - "具體配色 / 字型 / 排版你來定"是自由度（交給 AI）
-   - AI 把自由度發揮到具體內容（NPC 名字、配色、按鈕命名），把約束當不可逾越的紅線 — 這是它最擅長的工作模式
+2. **區分約束與自由度**
+   - 必須固定的內容寫成約束，例如變數使用 `isj_` 前綴。
+   - 其餘內容交由 Studio 決定，例如配色、字型與版面。
 
-3. **AI 跑出來跟你想的不一樣，不是 bug**
-   - 這是工作循環的一部分。看到偏差，精準描述給 AI 聽："我想要 X（具體說出來），你給的偏向 Y（指出哪裡偏了），改一下"
-   - 不要回頭自己改檔案，也不要重寫整個 prompt
+3. **說明與預期的偏差**
+   - 指出期望結果與目前結果，例如「狀態列應有四項，目前只有兩項，請補齊」。
+   - 在原需求上追加說明即可。
 
-4. **看 diff 再批准**
-   - 每個工具呼叫均會彈出審批，真出問題時就能攔住
-   - 但一般信任預設 — Studio 系統提示詞已經把 [Required UX](/zh-TW/features/cardapp#必備-ux)、[op-log 用法](/zh-TW/features/variable-op-log)、[世界書繫結](/zh-TW/development/card-developers#cardapp-內容存放約定)、巨集 escape 這些均內建了
+4. **批准前查看改動**
+   - 每項修改都會彈出確認，可以逐項檢查。
+   - Studio 會處理常用操作、變數記錄、世界書關聯與跳脫。
 
-5. **不會的就讓它解釋**
-   - "為什麼這裡要用 <code v-pre>\{{...}}</code> 而不是 <code v-pre>{{...}}</code>?"
-   - 它會用人話講給你聽，順帶幫你把這塊的來龍去脈理清楚
+5. **讓 Studio 解釋機制**
+   - 例如「狀態變數在哪一步寫入？」「這個世界書條目什麼時候觸發？」
+   - Studio 可以讀取專案檔案與文件，回答與目前角色卡相關的問題。
 
 ## 下一步
 
-- [CardApp 概覽](/zh-TW/features/cardapp) — CardApp 的核心概念
-- [角色卡開發者指南](/zh-TW/development/card-developers) — `ctx` API 全集 + 創作約定
-- [變數 op-log](/zh-TW/features/variable-op-log) — <code v-pre>{{setvar}}</code> 等巨集的執行機制
-- [State System](/zh-TW/features/state-system) — Floor State / 觸發器 / 全域變數
-- [Studio 能力清單](/zh-TW/features/card-editor/studio) — 編輯器、Git、AI 工具一覽
+- [CardApp 概覽](/zh-TW/features/cardapp) —— CardApp 的核心概念
+- [角色卡開發者指南](/zh-TW/development/card-developers) —— CardApp 的完整介面和創作約定
+- [變數記錄](/zh-TW/features/variable-op-log) —— 變數如何隨對話更新
+- [狀態系統](/zh-TW/features/state-system) —— 樓層狀態、觸發器和全域變數
+- [Studio 能力清單](/zh-TW/features/card-editor/studio) —— 編輯器、版本記錄和 AI 操作一覽

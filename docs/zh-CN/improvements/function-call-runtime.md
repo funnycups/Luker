@@ -2,13 +2,15 @@
 
 Luker 内置了统一的函数调用（Function Calling）运行时，让 AI 角色能够执行结构化的操作——搜索信息、管理记忆、操作状态——而不仅仅是生成文本。无论底层模型是否原生支持 tool call，Luker 均提供一致的调用体验。
 
+本页说明运行时的内部机制，供扩展开发者与排查工具调用问题时参考。
+
 ## 统一的函数调用框架
 
 函数调用运行时提供了一个统一的框架来管理工具的注册、调用和结果处理。核心设计目标是：
 
-- **模型无关** — 同一套工具定义可以在不同的 LLM 提供商之间无缝切换
-- **协议透明** — 上层工具不需要关心底层使用的是原生 tool call 还是文本协议
-- **流式兼容** — 支持流式响应中的工具调用解析和规范化
+- **模型无关** —— 同一套工具定义可以在不同的 LLM 提供商之间无缝切换
+- **协议透明** —— 上层工具不需要关心底层使用的是原生 tool call 还是文本协议
+- **流式兼容** —— 支持流式响应中的工具调用解析和规范化
 
 ```d2
 direction: down
@@ -98,7 +100,7 @@ TEXT.T_EXEC -> INJECT
 
 错误信息包含工具名称、失败原因等结构化数据，帮助模型做出合理的后续决策。
 
-## Connection Manager 中的独立开关
+## API 连接配置中的独立开关
 
 函数调用功能可以在连接级别独立启用或禁用。不同的连接配置可以有不同的函数调用设置，例如：
 
@@ -113,7 +115,7 @@ TEXT.T_EXEC -> INJECT
 搜索插件注册了全局工具：网页搜索（支持 DuckDuckGo、SearXNG、Brave Search、Tavily、Exa、Serper、SerpApi 和 Z.AI）和网页访问。其他模块（编辑助手、编排器、预设助手）在各自的独立上下文中使用工具调用机制，不通过全局工具注册表。
 
 ::: info 扩展工具
-第三方扩展可以通过 `context.registerFunctionTool()` 注册自定义工具（由核心的 `ToolManager` 提供）。工具定义遵循统一的 schema 格式，注册后自动适配原生模式和纯文本模式。详见[扩展 API — 工具注册](/zh-CN/development/extension-api/generation#工具注册)文档。
+第三方扩展可以通过 `context.registerFunctionTool()` 注册自定义工具（由核心的 `ToolManager` 提供）。工具定义遵循统一的 schema 格式，注册后自动适配原生模式和纯文本模式。详见[扩展 API —— 工具注册](/zh-CN/development/extension-api/generation#工具注册)文档。
 :::
 
 ## 底层实现
@@ -130,10 +132,10 @@ TEXT.T_EXEC -> INJECT
 
 **纯文本模式**的流程多了一层：`function-call-runtime.js` 将工具描述注入 System Prompt → 模型输出文本格式的工具调用 → `function-call-runtime.js` 解析文本 → `ToolManager` 执行并注入结果。
 
-需要自行发送带工具调用的 LLM 请求的插件，直接使用 `sendOpenAIRequest` 并传入 `tools` 和 `toolChoice` 参数——这与全局工具注册表是分开的。详见[扩展 API — 发送 LLM 请求](/zh-CN/development/extension-api/generation#发送-llm-请求)文档。
+需要自行发送带工具调用的 LLM 请求的插件，直接使用 `sendOpenAIRequest` 并传入 `tools` 和 `toolChoice` 参数——这与全局工具注册表是分开的。详见[扩展 API —— 发送 LLM 请求](/zh-CN/development/extension-api/generation#发送-llm-请求)文档。
 
 ## 相关页面
 
-- [改进总览](/zh-CN/improvements/overview) — 所有技术改进的概述
-- [预设解耦](/zh-CN/improvements/preset-decoupling) — 函数调用开关与连接配置的关系
-- [扩展 API](/zh-CN/development/extension-api/) — 插件开发指南，包含工具注册和 LLM 请求 API
+- [改进总览](/zh-CN/improvements/overview) —— 所有技术改进的概述
+- [预设解耦](/zh-CN/improvements/preset-decoupling) —— 函数调用开关与连接配置的关系
+- [扩展 API](/zh-CN/development/extension-api/) —— 插件开发指南，包含工具注册和 LLM 请求 API

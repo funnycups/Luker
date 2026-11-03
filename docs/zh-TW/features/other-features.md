@@ -1,43 +1,36 @@
 # 其他功能
 
-本頁列出 Luker 中其他使用者可見的獨有功能。這些功能雖然規模較小，但在日常使用中能顯著提升體驗。
+## 世界書啟用鏈路追蹤
 
-## 世界書啟動鏈路追蹤
-
-Luker 會記錄世界書條目從匹配到注入的完整鏈路，幫助你除錯複雜的世界書設定。詳見[世界書啟動鏈路追蹤](/zh-TW/features/world-info-trace)。
+記錄世界書條目從匹配到注入的鏈路，用來除錯複雜的世界書設定。詳見[世界書啟用鏈路追蹤](/zh-TW/features/world-info-trace)。
 
 ## 角色卡綁定人設
 
-Luker 允許角色卡攜帶推薦人設，並隨角色卡一起匯出。開啟角色卡時，若尚未選擇人設，Luker 會自動切換到推薦人設；若目前人設與卡上推薦的人設不一致，會由你決定是否切換。詳見[角色卡綁定預設與人設](/zh-TW/improvements/card-bound-presets)。
+角色卡可以攜帶推薦人設並隨卡匯出。開啟角色卡時，還沒選人設就切到推薦人設；目前人設與推薦不一致時，先問你是否切換。詳見[角色卡綁定預設與人設](/zh-TW/improvements/card-bound-presets)。
 
 ## 聊天工具面板
 
-聊天工具面板（Current Chat Tools Panel）是一個非阻塞式的工具面板，在聊天介面中提供快速存取當前聊天相關工具的入口。面板不會遮擋聊天內容，你可以在對話過程中隨時使用工具功能。
+聊天介面裡的工具面板，放著目前聊天的常用工具，對話時隨時可用。
 
 ## 彈窗更新器
 
-彈窗更新器（Popup Updater）提供應用程式內的更新流程。當有新版本可用時，會以彈窗形式引導你完成更新操作。更新器具備 Docker 環境感知能力，會根據你的部署方式（Docker 或本機安裝）提供對應的更新指引。
+有新版本時，透過彈窗完成更新流程。它識別 Docker 部署，給出對應的更新步驟。
 
 ## 圖像生成增強
 
-Luker 對圖像生成的增強是 ComfyUI WebSocket 連線支援——使用 WebSocket 與 ComfyUI 通訊，取代頻繁的 HTTP 輪詢端點，提升生成效率和即時性，支援智慧回退和斷線重連重試。
+透過 WebSocket 連線 ComfyUI，替代 HTTP 輪詢；連線中斷後自動重連。
 
 ## 外掛註冊正則
 
-外掛可以動態註冊正則表達式規則到正則處理系統中。詳見[外掛註冊正則](/zh-TW/features/regex-provider)。
+外掛可以把正則規則註冊進正則處理流程。詳見[外掛註冊正則](/zh-TW/features/regex-provider)。
 
 ## 引導設定匯入
 
-引導設定匯入（Onboarding Config Import）最佳化了首次使用的引導流程。在初始設定階段，你可以直接匯入已有的設定檔，包括：
-
-- 完整的應用程式設定
-- 擴充功能設定
-
-這對於從其他實例遷移或在新裝置上快速恢復工作環境特別有用，避免了從零開始設定的繁瑣過程。
+首次設定時可以匯入已有的應用設定和擴充功能設定，用於從其他實例遷移，或在新裝置上恢復環境。
 
 ## 相關功能
 
-- [使用者設定新增功能](/zh-TW/features/user-settings-additions) — 使用者設定裡 Luker 獨有的控制項，外加備份、遷移與儲存工具
-- [搜尋外掛](/zh-TW/features/search-tools) — AI 聯網搜尋能力
-- [角色卡編輯助手](/zh-TW/features/card-editor/) — 增強的角色卡編輯體驗
-- [記憶圖](/zh-TW/features/memory-graph) — 基於知識圖譜的記憶系統
+- [使用者設定新增功能](/zh-TW/features/user-settings-additions) —— 使用者設定裡 Luker 獨有的控制項，外加備份、遷移與儲存工具
+- [搜尋外掛](/zh-TW/features/search-tools) —— AI 聯網搜尋能力
+- [角色卡編輯助手](/zh-TW/features/card-editor/) —— 增強的角色卡編輯體驗
+- [記憶圖](/zh-TW/features/memory-graph) —— 基於知識圖譜的記憶系統

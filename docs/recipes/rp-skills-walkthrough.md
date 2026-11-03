@@ -1,8 +1,8 @@
 # Shaping RP output with skills
 
-Skills are knowledge packs your agents read on demand. The director hands each dispatched sub-agent (`intent_scout`, `voice_critic`, `plot_brainstormer`, ...) a short list of "skills you're allowed to consult" plus a few tools to pull a skill's content when relevant. That's the whole mechanism.
+Skills are knowledge packs your agents read on demand. The Director hands each dispatched sub-agent a short list of the Skills it may consult, plus tools to pull a Skill's content when relevant. That's the whole mechanism.
 
-The hard part is writing a skill that actually changes how the agents write. Luker ships a bundled set as a starting point — `director-character-voice-zh`, for example, is the rule that every character (including cold archetypes like androids and three-no types) must be written as a living being first; it bans observation/analysis verbs at emotional moments and prose like *"she noted that his pupils dilated"*. It's already pinned in the default director profile, so all dispatched sub-agents see it.
+The hard part is writing a skill that actually changes how the agents write. Luker ships a bundled set as a starting point. One of the voice rules states that every character, including cold archetypes such as androids and three-no types, must be written as a living being first; it bans observation and analysis at emotional moments, such as *"she noted that his pupils dilated"*. The rule is already part of the default Director configuration, so every dispatched sub-agent sees it.
 
 When the bundled set doesn't cover a discipline you care about, you add your own: let the AI Iteration Studio write one for you (recommended), or write it by hand.
 
@@ -22,7 +22,7 @@ Hit **Send**. The Studio drafts the SKILL.md, installs it, and (because you ment
 
 ![Studio after the install round](/images/skills/iter-studio-05-after-llm-round.png)
 
-The next time you send any RP message, the relevant sub-agents (in this case `voice_critic`) see the new rule in their visible list and consult it during the run.
+The next time you send a roleplay message, the relevant sub-agent, in this case the voice reviewer, sees the new rule in its visible list and consults it during the run.
 
 To refine the skill (add a rule, loosen a constraint, rename), keep talking in the same session. Changes still go through approval — nothing lands until you accept it.
 

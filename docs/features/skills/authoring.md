@@ -1,188 +1,126 @@
-# Authoring skills
+# Authoring Skills
 
-A skill is a directory with one required file (`SKILL.md`) and optional sub-folders. Authoring a skill means picking a name, writing frontmatter, and writing a body the agent can read. That's it.
+A Skill is a directory: a required `SKILL.md` plus optional sub-folders. Authoring one means naming it, writing frontmatter, and writing a body an agent can read.
 
-This page covers the conventions Luker (and Anthropic) expect, the choices you face along the way, and walks through bundled skills as worked examples.
+This page covers the directory conventions, frontmatter fields, body structure, and when to split material into sub-files.
 
-## Ways to write a skill
+## Where to start
 
-You don't have to type a SKILL.md by hand. Most users start one of these ways:
+You do not have to write everything by hand:
 
-| Route | Where | Good for |
-|---|---|---|
-| **Have the LLM write it** | [AI Iteration Studio](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio) | Just tell the Studio what you want in a sentence; it drafts the SKILL.md, installs it, optionally attaches it to an agent. Recommended starting point. |
-| **Write it by hand** | [Skill management panel → Create new](/features/skills/management#tab-1-installed) | You already know exactly which sections you want and want full control over wording. |
-
-![Inline skill editor with file tree + body pane](/images/skills/rp-demo-8.5-editor-body-pasted.png)
-
-See the [recipe](/recipes/rp-skills-walkthrough) for an end-to-end walkthrough.
+- **Let AI draft it**: describe the result in [AI Iteration Studio](/features/orchestrator/iteration-studio#writing-skills-with-ai). It drafts `SKILL.md`, installs it, and attaches it to the right agents when you ask.
+- **Write it yourself**: create it in the [Skill management panel](/features/skills/management) when you want full control over wording and structure.
 
 ## Directory layout
 
-```
+```text
 my-skill-name/
-├── SKILL.md          # required — frontmatter + Markdown body
-├── references/       # optional — supplementary checklists, longer specs
-├── examples/         # optional — worked examples the agent can pull
-├── assets/           # optional — binary attachments (images, PDFs)
-└── scripts/          # optional — present for forward-compat; v1 is no-op
+├── SKILL.md          # required: frontmatter and body
+├── references/       # optional: checklists, longer specifications
+├── examples/         # optional: real examples the agent can read
+├── assets/           # optional: images, PDFs and other attachments
+└── scripts/          # optional: reserved, not executed
 ```
 
-Only `SKILL.md` is required. The other folders are conventions — Luker doesn't enforce them, but they match Anthropic's layout, so a skill stays portable.
+Only `SKILL.md` is required. The other folders are conventions shared with Anthropic's layout, which keeps Skills portable.
 
-::: info Sub-folders use the same `skill_read` tool
-Agents don't get separate tools per sub-folder. They use `skill_read({ name, path })` with the relative path: `skill_read({ name: "my-skill", path: "references/checklist.md" })`. Sub-folders are purely organizational.
-:::
+## Frontmatter
 
-## Frontmatter — the Anthropic standard
-
-`SKILL.md` opens with YAML frontmatter:
+`SKILL.md` starts with YAML frontmatter:
 
 ```markdown
 ---
 name: my-skill-name
-description: A one-sentence summary the agent reads in the catalog.
+description: One-line summary the agent sees in the catalog.
 license: MIT
 metadata:
-  author: Your Name
+  author: Your name
   version: 1.0.0
   tags: [writing-rules, en]
 ---
 
 # my-skill-name
 
-Body starts here.
+The body starts here.
 ```
 
 | Field | Required | Constraint | Notes |
-|---|---|---|---|
-| `name` | yes | lowercase ASCII letters, digits, `-`, `_`; ≤128 chars | Must match the directory name. The orchestrator references this from `skills.visible`. |
-| `description` | yes | one sentence | Shown in the auto-injected `<available_skills>` catalog. Write it for the **agent**, not the user — explain when this skill is relevant. |
-| `license` | no | any string (free-form) | Anthropic-standard. Use if you're sharing outside your own setup. |
-| `metadata.author` | no | string | Anthropic-standard. |
-| `metadata.version` | no | semver-ish string | Anthropic-standard. Bump when you change semantics. |
-| `metadata.tags` | no | array of strings | Searchable hint. |
+| --- | --- | --- | --- |
+| `name` | Yes | Lowercase letters, digits, `-`, `_` | Must match the directory name. |
+| `description` | Yes | One sentence | Shown in the catalog the agent sees. Write it for the agent: explain when the Skill is relevant. |
+| `license` | No | Any string | Use when sharing. |
+| `metadata.author` | No | String | Author information. |
+| `metadata.version` | No | Version string | Update on semantic changes. |
+| `metadata.tags` | No | Array of strings | Aids search. |
 
-## Authoring the body
+## Body
 
-The body is the contract. When an agent calls `skill_read({ name })`, the body is what it sees (plus the frontmatter as a small JSON-ish header). Treat the body as a directive document, not a reference encyclopedia.
+The body is what the agent reads. Write direct, actionable rules rather than encyclopedia prose. A useful structure:
 
-A pattern that works well — borrowed from the bundled skills — has these sections:
+1. **What this Skill does**: one paragraph so the agent can confirm it picked the right one.
+2. **Core rules**: numbered lists, tables or checklists. Concrete and executable; the agent follows them literally.
+3. **Examples**: pair wrong and right versions so the standard is visible.
+4. **When to read sub-files**: if you bundle reference material, say which file to read and when.
 
-1. **What this skill is for** — one paragraph the agent reads to confirm it picked the right skill.
-2. **Core rules / method** — the actual contract. Numbered lists, tables, checklists. Be specific and concrete; the agent will follow the wording.
-3. **Examples or worked failures** — show what success and failure look like. The bundled `director-anti-cliche-zh` uses `✗ wrong` / `✓ right` line pairs.
-4. **When to read which sub-file** — if you ship `references/`, tell the agent when each sub-file is worth reading.
+### Tone
 
-### Tone — write for the agent
+A Skill is written for an LLM, not for a human operations manual.
 
-Skills are read by an LLM, not by a human ops manual reader. Implications:
+- Use commands, not descriptions. "Avoid X" works better than "X is often considered inappropriate."
+- Skip meta-explanation. "This is a great Skill that will help you…" wastes context; the agent has already chosen to read it, so tell it what to do.
 
-- **Be directive, not descriptive.** "Avoid X" beats "X is generally considered undesirable." The bundled skills are written in this voice.
-- **Avoid meta-justification.** A skill body that opens with "This is a great skill that will help you because…" is wasted tokens. The agent already decided to read it; tell it what to do.
+### Length
 
-### Length and limits
+Put the most important material first. The agent may only receive the beginning of the body, and later material may never enter its context.
 
-Hard limits (server-enforced):
-
-| Limit | Value |
-|---|---|
-| `SKILL.md` size | 512 KB |
-| Single file in skill | 4 MB |
-| Total skill size | 16 MB |
-| File count per skill | 100 |
-
-Most bundled skills are 2–8 KB of Markdown. If your skill is approaching 100 KB, consider splitting it: put a 5–15 KB directive body in `SKILL.md` and move long checklists into `references/<topic>.md`. The agent can selectively `skill_read({ name, path: "references/..." })` only when relevant — cheaper context, faster reads.
-
-### Reading budget
-
-`skill_read` enforces a hard ceiling of 50 KB per response. Larger files come back with `truncated: true`; the agent calls `skill_read` again with `offset` to continue. Author your skill body so the most-important content is up top — the agent that reads only the first 50 KB still gets the contract.
+Keep the body to the size needed to state the rules. As rules grow, move extended checklists, long examples and reference material into sub-files instead of letting `SKILL.md` grow without limit.
 
 ## When to use sub-files
 
-Sub-files (`references/`, `examples/`, `assets/`) earn their keep when:
+- **Consulted only occasionally**: base rules every agent needs stay in `SKILL.md`; situational reference goes in `references/`.
+- **Long content**: full examples and long checklists belong in `examples/` or `references/`.
+- **Binary attachments**: images, fonts and PDFs go in `assets/`.
 
-- **They're consulted only sometimes.** A general checklist that's needed every dispatch belongs in `SKILL.md`. A specialized fallback consulted in 5% of cases belongs in `references/`.
-- **They're long.** A 30 KB worked example pollutes the SKILL.md read; put it in `examples/`.
-- **They're binary.** Images, fonts, PDFs go in `assets/`. (Binary files in skills work but the agent can't read them through `skill_read`. Use them as URL-linked assets if the deployment surfaces them.)
-
-In `SKILL.md`, point the agent at the sub-files explicitly:
+Point to sub-files explicitly and say when to read them:
 
 ```markdown
-## When to read additional files
+## When to read extra files
 
-- `references/cliche-deep-list.md` — extended list of banned phrasings beyond the
-  top-20 in this file. Read when the draft repeatedly trips a pattern that's not
-  named here.
-- `examples/before-after.md` — paired examples of "data-person prose" vs
-  rewritten human prose. Read once at the start of the session for calibration.
+- `references/cliche-deep-list.md`: a longer list of banned phrasing than this file.
+  Read it when the draft keeps hitting patterns not listed here.
+- `examples/before-after.md`: paired examples of data-like and human prose.
+  Read it once at the start of a session to calibrate.
 ```
 
-## Worked example 1: `director-anti-cliche-zh`
+## Example: anti-formula rules
 
-This bundled skill is a single ~3 KB SKILL.md with no sub-files. It enforces anti-cliché writing rules across the entire default director profile.
+A single-file writing-rules Skill can be organized by rule family: data-like description, contract vocabulary, elevated summary language, and AI-invented labels, each with concrete examples. When the total rule set is small, everything fits in `SKILL.md`.
 
-The frontmatter:
+These Skills are usually visible globally or at mode level, so every agent on the team follows the same writing standard.
 
-```yaml
----
-name: director-anti-cliche-zh
-description: Anti-cliche patterns for narrative writing — banned phrasings, AI-自造 labels, contract-vocab, sublimation cliches.
-metadata:
-  author: Luker Team
-  version: 1.0.0
----
-```
+## Example: event-summary rules
 
-The body follows a "rule families" structure: each major cliché family (data-person prose, contract vocabulary, sublimation clichés, AI-coined labels) gets its own heading with concrete bilingual examples. There are no sub-files — the entire contract is small enough to live in `SKILL.md`.
+An event-summary Skill serves the agent that maintains memory. The body first states what a summary is for, such as "an index, not a replay," then gives the writing steps and anti-repetition rules, with wrong/right pairs that make the distinctions visible.
 
-This skill is mode-level visible: every default director sub-agent (main agent, voice critic, continuity critic, plot brainstormer, …) sees it. It anchors the team's writing standard.
+Attach this kind of Skill only to the agent that needs it, not to the whole team.
 
-## Worked example 2: `event-summary-rules-zh`
+## Choosing a scope
 
-This bundled skill is a denser ~12 KB SKILL.md, also with no sub-files. It's the writing contract for the `memory_curator` sub-agent — the V10 event-summary discipline.
+- **Global**: shared rules you want in every chat.
+- **Preset**: rules that only make sense with one chat-completion preset; exported with it.
+- **Character**: character-specific setting or voice; exported with the card.
 
-The frontmatter:
+Scope can be changed later. References use the name only, so they survive the move.
 
-```yaml
----
-name: event-summary-rules-zh
-description: Event summary writing rules (V10) for memory_curator — 7-step process, gate loop, anti-paraphrase discipline.
-metadata:
-  author: Luker Team
-  version: 1.0.0
----
-```
+## Validation and security
 
-The body opens by establishing a mental model ("index, not replay"), then defines a 7-step writing process with a gate loop, then enumerates the anti-paraphrase rules in detail. Crucially, it includes worked examples for every rule — both ✗ wrong and ✓ right side by side — because the discipline is subtle and an LLM with only abstract rules consistently violates them.
+On install or save, Luker checks that frontmatter parses, the name matches the directory, every path stays inside the Skill directory, and size limits are respected. A failed check rolls back, leaving no half-installed Skill.
 
-This skill is per-sub-agent: only `memory_curator` has it in its `skills.visible` list (via `"+"` inheritance from the mode-level defaults). The voice critic doesn't need it; the continuity critic doesn't need it; only the curator does, and only when it's actively writing a summary.
+`scripts/` is recognized but not executed. The interface marks a Skill that carries scripts.
 
-## Picking the right scope
+## Related pages
 
-When you create a new skill, you pick a scope. Heuristics:
-
-- **`global`** — Default for personal use. Universal rules you'd want on every chat.
-- **`preset`** — Use when the skill only makes sense paired with a specific Chat Completion preset (a model-tuned prompt convention, a sampler-dependent style rule). The skill rides with the preset on export.
-- **`character`** — Use when the skill encodes card-specific lore or voice rules. The skill rides with the character card on export (PNG metadata).
-
-You can change scope later — the skill manager subpanel has a **Move to…** action that does an atomic move. References in orchestrator profiles (which use **name only**, no scope prefix) stay stable across the move.
-
-## Validation and safety
-
-The server validates a skill at install / write time:
-
-- Frontmatter must parse as YAML.
-- `name` must match the directory name.
-- File paths inside the skill must not escape the skill directory (no `..`, no absolute paths).
-- Size limits (above) are enforced fail-fast.
-- `scripts/` is parsed but never executed — present for forward-compat. The UI shows a risk badge when a skill ships scripts.
-
-If validation fails, the install or write rolls back atomically (writes go through a `.staging/` directory and only commit after validation passes).
-
-## Related
-
-- [Skills overview](/features/skills/) — what a skill is, the scopes
-- [Skill management](/features/skills/management) — install, import, export, scope migration
-- [Orchestrator integration](/features/skills/orchestrator-integration) — wire skills to a profile
-- [Skills extension API](/development/extension-api/skills) — programmatic `context.skills.*`
+- [Skills overview](/features/skills/) — what Skills are, scopes and visibility
+- [Managing Skills](/features/skills/management) — install, import, export, move scopes
+- [Orchestrator integration](/features/skills/orchestrator-integration) — attach a Skill to specific agents
+- [Skill extension API](/development/extension-api/skills) — developer interface

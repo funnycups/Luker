@@ -33,9 +33,9 @@ new Popup(content: string | HTMLElement | JQuery, type: POPUP_TYPE, inputValue?:
 |------|------|------|
 | `await popup.show()` | `Promise<string \| number \| boolean \| null>` | 加入 + 顯示。以結果值解析 |
 | `await popup.complete(result)` | `Promise<void>` | 程式化關閉。`onClosing` 取消時回傳 `undefined` |
-| `popup.completeAffirmative()` | — | OK 的捷徑 |
-| `popup.completeNegative()` | — | Cancel 的捷徑 |
-| `popup.completeCancelled()` | — | Esc 的捷徑 |
+| `popup.completeAffirmative()` | —— | OK 的捷徑 |
+| `popup.completeNegative()` | —— | Cancel 的捷徑 |
+| `popup.completeCancelled()` | —— | Esc 的捷徑 |
 
 `popup.value` 在 INPUT 類型下持有輸入字串；`popup.cropData` 在 CROP 類型下持有資料 URL。
 

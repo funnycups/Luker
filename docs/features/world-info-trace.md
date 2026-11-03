@@ -1,35 +1,22 @@
 # World Info Activation Trace
 
-World Info Activation Trace is a debugging feature introduced by Luker that helps you understand why a World Info entry was activated (or not activated).
+The activation trace records a World Info entry from match to injection, so you can see why an entry fired — or why it did not.
 
-## Problem It Solves
+## What it records
 
-When World Info configurations become complex (many entries, multiple keyword layers, different scan depths), users often encounter these confusions:
+- **Trigger keyword** — the keyword or keyword combination that fired the entry.
+- **Match location** — the message where the keyword matched.
+- **Scan depth** — the scan depth in effect.
+- **Activation method** — keyword match, constant, probability, and so on.
+- **Injection position** — where the entry landed in the prompt.
 
-- Why wasn't a certain entry activated?
-- Which keyword triggered this entry?
-- In which message was the keyword matched?
-- Is the scan depth setting reasonable?
+## Viewing it
 
-Activation trace records the complete process from matching to injection for each entry, making these questions clear at a glance.
-
-## Trace Information
-
-For each activated World Info entry, the trace record includes:
-
-- **Trigger keyword**: Which keyword (or keyword combination) triggered the activation
-- **Match location**: In which message the keyword was matched
-- **Scan depth**: The current scan depth setting
-- **Activation method**: Keyword match, constant (always active), probability activation, etc.
-- **Injection position**: Where the entry was ultimately injected in the prompt
-
-## Usage
-
-In the World Info editor, entries have a fa-route icon button at their top-right; clicking it shows the most recent scan's activation trace for that entry:
+In the World Info editor, each entry has a trace icon at its top right. Click it to see how that entry was handled in its latest scan:
 
 ![World Info activation trace popup](/images/world-info-trace/wi-trace-popup.png)
 
-The popup top shows the entry's scope, last activation time, and reason; below it, recent scans are listed in reverse chronological order — activated scans are marked red, non-activated ones grey. This makes it immediately clear which keyword in which message triggered the entry, and whether the scan depth is sufficient — so you can refine the keywords or scan depth accordingly.
+The top of the popup shows the entry's scope, last activation time, and reason. Below it, recent scans are listed newest first; activated scans are red, inactive ones grey. Use it to adjust keywords or scan depth.
 
 ## Related Pages
 

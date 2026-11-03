@@ -6,10 +6,10 @@
 
 在 SillyTavern 中，Chat Completion 预设（即 OpenAI / Claude 等 API 的预设）包含了本质不同的各类配置：
 
-- **生成参数** — 提示词模板（System Prompt、Jailbreak 等）、采样参数（Temperature、Top-P 等）、上下文长度等
-- **连接字段** — API 地址、API Key、模型名称、Chat Completion Source 等
+- **生成参数** —— 提示词模板（System Prompt、Jailbreak 等）、采样参数（Temperature、Top-P 等）、上下文长度等
+- **连接字段** —— API 地址、API Key、模型名称、Chat Completion Source 等
 
-这些配置被打包在同一个预设对象中。当用户切换预设时，连接字段也会随之改变——这意味着切换一个提示词模板可能会把你的 API 地址从 Claude 切到 OpenAI，或者覆盖你精心配置的自定义 API 端点。
+这些配置被打包在同一个预设对象中。当用户切换预设时，连接字段也会随之改变——切换提示词模板可能把 API 地址从 Claude 换成 OpenAI，或覆盖自定义端点。
 
 这种联动在实际使用中造成了大量困扰：
 
@@ -21,8 +21,8 @@
 
 Luker 将预设中的每个字段标记为「连接字段」或「生成参数字段」两类：
 
-- **连接字段** — API 来源、自定义 URL、模型名称、反向代理地址、代理密码等
-- **生成参数字段** — Temperature、Top-P、最大 Token 数等
+- **连接字段** —— API 来源、自定义 URL、模型名称、反向代理地址、代理密码等
+- **生成参数字段** —— Temperature、Top-P、最大 Token 数等
 
 ```d2
 direction: right
@@ -68,7 +68,7 @@ LK: "Luker：解耦" {
 当用户切换预设时，加载逻辑会遍历预设中的每个字段，自动跳过所有连接字段。这确保了切换预设只会改变生成参数，而不会触碰当前的 API 连接配置。
 
 ::: tip 何时包含连接字段
-只有在 Connection Manager 中显式切换连接配置时，连接字段才会被应用。普通的预设切换、角色卡绑定预设加载等场景均不会包含连接字段。
+只有在 API 连接配置中显式切换配置时，连接字段才会被应用。普通的预设切换、角色卡绑定预设加载等场景均不会包含连接字段。
 :::
 
 ## 受影响的模块
@@ -87,7 +87,7 @@ LK: "Luker：解耦" {
 - 预设保存时保留连接字段（确保预设文件完整），但加载时按分类过滤
 - 支持[角色卡绑定预设](/zh-CN/improvements/card-bound-presets)的特殊选项渲染
 
-### Connection Manager
+### API 连接配置
 
 - 连接配置独立于预设管理，拥有自己的保存和切换逻辑
 - 切换连接时只应用连接字段，不影响当前的生成参数
@@ -100,10 +100,10 @@ LK: "Luker：解耦" {
 如果没有预设解耦，角色卡绑定预设将无法实现：打开一张角色卡就可能把用户的 API 地址和密钥替换掉，这显然是不可接受的。
 
 ::: info 预设文件兼容性
-预设解耦不改变预设文件的存储格式。连接字段仍然保存在预设 JSON 中，只是在加载时被选择性跳过。这意味着现有的预设文件无需迁移，也可以在需要时（如通过 Connection Manager）完整加载。
+预设解耦不改变预设文件的存储格式。连接字段仍然保存在预设 JSON 中，只是在加载时被选择性跳过。现有预设文件无需迁移，也可以在需要时完整加载。
 :::
 
 ## 相关页面
 
-- [角色卡绑定预设与人设](/zh-CN/improvements/card-bound-presets) — 依赖预设解耦的上层功能
-- [改进总览](/zh-CN/improvements/overview) — 所有技术改进的概述
+- [角色卡绑定预设与人设](/zh-CN/improvements/card-bound-presets) —— 依赖预设解耦的上层功能
+- [改进总览](/zh-CN/improvements/overview) —— 所有技术改进的概述

@@ -60,9 +60,9 @@ AGENT: "預請求 Agent 模式" {
 在創作 LLM 生成回覆之前，自動執行一個獨立的搜尋 Agent。Agent 會分析當前對話內容，判斷是否需要搜尋，並將搜尋結果寫入世界書條目。
 
 - 透過 `preRequestEnabled` 設定項開啟
-- Agent 使用獨立的 LLM 預設（`agentPresetName`）和 API 預設（`agentApiPresetName`），可以與創作 LLM 使用不同的模型
-- Agent 執行工具呼叫循環：只要仍需要檢索或寫入就持續呼叫工具，回覆純文字且不呼叫工具時即停止。沒有固定輪次上限
-- Agent 可以回讀、更新和刪除自己建立的條目，因此會修改既有筆記而非重複建立
+- 預請求 Agent 可以使用獨立的提示詞預設與 API 連線，與創作模型分開
+- Agent 執行工具呼叫循環：只要需要檢索或寫入就持續呼叫工具，回覆純文字且不呼叫工具時即停止。沒有固定輪次上限
+- Agent 可以回讀、更新和刪除自己建立的條目，因此會更新既有筆記，避免重複建立
 - 搜尋結果自動建立為世界書條目，創作 LLM 在生成時可以直接讀取
 - 執行過程串流顯示在[執行面板](/zh-TW/development/extension-api/run-panel)中，該面板自動開啟，顯示每一輪、呼叫的工具及其結果
 
@@ -80,7 +80,7 @@ AGENT: "預請求 Agent 模式" {
 
 ![搜尋工具設定面板](/images/search-tools/search-tools-settings.png)
 
-頂部開關分別對應上文的模式（「暴露工具給主模型」= 工具模式，「請求前執行搜尋 Agent」= 預請求 Agent 模式），可以單獨或同時啟用。下方是引擎選擇、Agent 專用預設、世界書條目注入參數等。「顯示搜尋執行面板」按鈕可重新開啟上次執行。
+頂部開關分別對應上文的模式：**暴露工具給主模型** 是工具模式，**請求前執行搜尋 Agent** 是預請求 Agent 模式，兩者可以單獨或同時啟用。下方是引擎選擇、Agent 專用預設、世界書條目注入參數等。「顯示搜尋執行面板」按鈕可重新開啟上次執行。
 
 ## 支援的搜尋引擎
 
@@ -108,47 +108,11 @@ AGENT: "預請求 Agent 模式" {
 | `lorebookEntryOrder` | 條目的排序權重 |
 | `lorebookPosition` | 條目的注入位置 |
 
-搜尋結果條目可以設定為 `constant`（常駐啟用）或透過關鍵詞匹配啟用，具體取決於 Agent 的判斷和設定。
+搜尋結果條目可以設為常駐啟用，或透過關鍵詞匹配啟用，具體取決於 Agent 的判斷與設定。
 
-## 全域 API
+## 供其他外掛使用
 
-搜尋外掛透過全域 API 供其他外掛整合使用。例如[角色卡編輯助手](/zh-TW/features/card-editor/)的[普通彈窗](/zh-TW/features/card-editor/popup)和 [CardApp Studio](/zh-TW/features/card-editor/studio) 均已整合搜尋能力，可以在編輯過程中聯網搜尋資料輔助角色卡 / CardApp 編輯。
-
-### 屬性
-
-| 屬性 | 類型 | 說明 |
-|------|------|------|
-| `toolNames` | `Object` | 工具名常數物件，包含 `SEARCH` 和 `VISIT` |
-
-### 方法
-
-| 方法 | 回傳值 | 說明 |
-|------|--------|------|
-| `getToolDefs()` | `Array` | 回傳搜尋工具的定義陣列，包含工具名、參數 schema 等資訊 |
-| `isToolName(name)` | `boolean` | 判斷給定名稱是否為搜尋外掛註冊的工具名 |
-| `invoke(call, options)` | `Promise` | 呼叫搜尋工具，`call` 包含工具名和參數 |
-| `search(args)` | `Promise` | 直接執行搜尋，回傳搜尋結果 |
-| `visit(args)` | `Promise` | 直接存取指定網頁，回傳頁面內容 |
-| `getSettings()` | `Object` | 回傳當前搜尋外掛的設定快照 |
-
-### 使用範例
-
-```javascript
-const api = Luker.searchTools;
-if (api) {
-  // 檢查是否為搜尋工具
-  api.isToolName('luker_web_search'); // true
-
-  // 取得工具定義
-  const defs = api.getToolDefs();
-
-  // 直接呼叫搜尋
-  const results = await api.search({ query: '...', maxResults: 5 });
-
-  // 存取網頁
-  const page = await api.visit({ url: 'https://...', maxChars: 10000 });
-}
-```
+搜尋能力也供角色卡編輯助手等外掛呼叫，用於在編輯過程中聯網查資料。開發者介面見[擴充 API](/zh-TW/development/extension-api/)。
 
 ## 結果複用
 
@@ -166,9 +130,9 @@ if (api) {
 
 聊天結構變化時，外掛會保持共享世界書與已儲存的搜尋結果一致：
 
-- **刪除訊息** — 被刪除訊息所在輪次及其之後的搜尋結果隨之丟棄
-- **切換 swipe** — 被切換輪次的搜尋結果隨之丟棄
-- **編輯訊息** — 已儲存的結果保持不變。編輯某次搜尋所依據的那一輪，會讓下一次生成重新搜尋，而不是沿用上一次的結果
+- **刪除訊息** —— 被刪除訊息所在輪次及其之後的搜尋結果隨之丟棄
+- **切換 swipe** —— 被切換輪次的搜尋結果隨之丟棄
+- **編輯訊息** —— 已儲存的結果保持不變。編輯某次搜尋所依據的那一輪，會讓下一次生成重新搜尋，而不是沿用上一次的結果
 
 ## 設定參考
 
@@ -181,11 +145,11 @@ if (api) {
 | 頁面擷取字元數 | 存取網頁時擷取的最大文字長度 |
 | 安全搜尋 | 搜尋結果的安全過濾級別 |
 | Agent API 預設 | 預請求 Agent 使用的 API 連線預設（空值使用主連線） |
-| Agent 預設 | 預請求 Agent 使用的預設（空值使用主預設） |
+| Agent 預設 | 預請求 Agent 使用的預設（空值使用主預設）。下拉框旁的問號按鈕說明該槽位需要的預設類型 |
 
 ::: info 相關頁面
-- [角色卡編輯助手](/zh-TW/features/card-editor/) — 編輯助手概覽（公共能力與入口）
-- [普通彈窗模式](/zh-TW/features/card-editor/popup) — 彈窗中的聯網搜尋
-- [CardApp Studio](/zh-TW/features/card-editor/studio) — Studio 中的聯網搜尋能力
-- [CardApp](/zh-TW/features/cardapp) — 角色卡應用化概念
+- [角色卡編輯助手](/zh-TW/features/card-editor/) —— 編輯助手概覽（公共能力與入口）
+- [普通彈窗模式](/zh-TW/features/card-editor/popup) —— 彈窗中的聯網搜尋
+- [CardApp Studio](/zh-TW/features/card-editor/studio) —— Studio 中的聯網搜尋能力
+- [CardApp](/zh-TW/features/cardapp) —— 角色卡應用化概念
 :::

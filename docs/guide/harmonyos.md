@@ -4,7 +4,7 @@ description: Luker provides a HarmonyOS app that runs the complete Luker server 
 
 # HarmonyOS App
 
-> **Why must I build it myself?** HarmonyOS's developer tools can only be downloaded after signing in with a Huawei account, and their license forbids redistribution. That rules out building the app on any public CI service, so there is no ready-to-install HAP to download — you build it from source. The same tools are required to sign and install the app on your device. Luker would ship a prebuilt HAP if the HarmonyOS ecosystem allowed it.
+> **Why must I build it myself?** HarmonyOS's developer tools can only be downloaded after signing in with a Huawei account, and their license forbids redistribution. That rules out building the app on any public CI service, so no ready-to-install HAP is available; you build it from source. The same tools are required to sign and install the app on your device. Luker would ship a prebuilt HAP if the HarmonyOS ecosystem allowed it.
 
 Luker provides a HarmonyOS app that runs the complete Luker server and interface directly on your device, without a cloud server or terminal tools.
 

@@ -6,15 +6,16 @@ Luker 可以运行在你自己的电脑或手机上。选择适合你的方式�
 
 ## 独立 App
 
-将完整的 Luker 服务与界面打包在单个 App 内，是一个独立运行的应用。打开即显示完整界面，无需终端，也无需浏览器地址。
+将完整的 Luker 服务与界面打包在单个 App 内，是一个独立运行的应用。打开即显示完整界面，不需要终端与浏览器地址。
 
 | 平台 | 获取方式 | 所需依赖 |
 | --- | --- | --- |
 | 桌面端（macOS、Windows、Linux） | [桌面端 App](/zh-CN/guide/desktop) | 无 |
 | Android | [Android App](/zh-CN/guide/android) | 无 |
+| iOS | [自签名 IPA](/zh-CN/guide/ios) | 一台电脑，用于首次安装 AltStore 或 SideStore |
 | HarmonyOS | [从源码构建](/zh-CN/guide/harmonyos) | Node.js >= 24.0、DevEco Studio |
 
-iPhone 与 iPad 没有 App，请在 Safari 中使用 Luker，详见 [iOS](/zh-CN/guide/ios)。
+iPhone 与 iPad 通过自签名 IPA 安装，不经过 App Store。
 
 ## Docker
 
@@ -152,6 +153,6 @@ Luker 完全兼容 SillyTavern 的数据。如果你是 SillyTavern 用户，可
 
 ## 下一步
 
-- [配置 API 连接](/zh-CN/basics/connections) — 连接你的 LLM 服务
-- [了解角色卡](/zh-CN/basics/character-cards) — 开始你的第一次角色扮演
-- [从 SillyTavern 迁移](/zh-CN/guide/migration) — 如果你是 SillyTavern 用户
+- [配置 API 连接](/zh-CN/basics/connections) —— 连接你的 LLM 服务
+- [了解角色卡](/zh-CN/basics/character-cards) —— 开始你的第一次角色扮演
+- [从 SillyTavern 迁移](/zh-CN/guide/migration) —— 如果你是 SillyTavern 用户

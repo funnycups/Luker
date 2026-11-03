@@ -4,14 +4,14 @@
 
 本指南覆盖以下场景：
 
-- **反向代理** — 适用于运行 Luker 的机器拥有公网 IP 和域名的场景。
-- **隧道** — 适用于没有公网 IP 的场景。
+- **反向代理** —— 适用于运行 Luker 的机器拥有公网 IP 和域名的场景。
+- **隧道** —— 适用于没有公网 IP 的场景。
 
 ## 开始之前
 
 - **监听网络。** 在 `config.yaml` 中设置 `listen: true`，让 Luker 接受来自代理或隧道的连接。监听设置见[局域网访问](/zh-CN/guide/lan-access)。
 - **要求身份验证。** 启用基本认证或多用户账户系统。暴露在公网且没有身份验证的 Luker 会被扫描并滥用。参见[鉴权与安全](/zh-CN/guide/authentication)。
-- **确定外部如何访问。** 有公网 IP 和域名时走路径 A，否则走路径 B。
+- **确定外部如何访问。** 有公网 IP 和域名时使用路径 A，否则使用路径 B。
 
 ::: warning
 绝不把路由器端口直接转发到 Luker。这会暴露未经 TLS 加密的原始 HTTP 服务，且 Luker 无法区分合法请求与攻击请求。使用下面任一路径。
@@ -21,7 +21,7 @@
 
 适用于运行 Luker 的机器通过公网 IP 和域名可从互联网访问的场景。反向代理在 443 端口接收 HTTPS，并转发到同一机器上 Luker 的明文 HTTP 端口。
 
-思路对任何 Web 服务器都相同：把每个路径转发到 Luker 的端口，透传原始请求头，并允许 WebSocket 升级。Luker 通过持久的 WebSocket 连接发送生成请求，丢弃升级的代理会禁用这条传输通道。
+任何 Web 服务器上的配置方式一致：把每个路径转发到 Luker 的端口，透传原始请求头，并允许 WebSocket 升级。Luker 通过持久的 WebSocket 连接发送生成请求，丢弃升级的代理会禁用这条传输方式。
 
 ### nginx
 
@@ -92,10 +92,10 @@ server {
 
 完成此事的工具不少，按愿意投入的配置量选择一个：
 
-- **Tailscale** — 私有 VPN。只有加入你的 tailnet 的设备才能访问 Luker，完全不对外暴露，是个人设备数量不多时最安全也最省事的选择。
-- **Cloudflare Tunnel** — `cloudflared` 让 Luker 获得一个由 Cloudflare 托管的域名下的主机名。适合已经在 Cloudflare 上管理域名的用户。
-- **ngrok** — 一条命令即可获得临时公网 URL。适合快速测试，免费版的 URL 每次运行都会变化。
-- **frp** — 自建中继。需要一台有公网 IP 的独立服务器，但对中继拥有完全控制。
+- **Tailscale** —— 私有 VPN。只有加入你的 tailnet 的设备才能访问 Luker，完全不对外暴露，是个人设备数量不多时最安全也最省事的选择。
+- **Cloudflare Tunnel** —— `cloudflared` 让 Luker 获得一个由 Cloudflare 托管的域名下的主机名。适合已经在 Cloudflare 上管理域名的用户。
+- **ngrok** —— 一条命令即可获得临时公网 URL。适合快速测试，免费版的 URL 每次运行都会变化。
+- **frp** —— 自建中继。需要一台有公网 IP 的独立服务器，但对中继拥有完全控制。
 
 每个工具都有自己的配置步骤，按其文档把隧道指向 Luker 的地址 `http://127.0.0.1:8000`，然后应用下面的 [Luker 设置](#luker-设置)。
 
@@ -157,8 +157,8 @@ Luker 会根据 `X-Forwarded-Proto` 和 `X-Forwarded-Host` 构造部分绝对 UR
 
 ## 相关页面
 
-- [局域网访问](/zh-CN/guide/lan-access) — 让同一网络内的设备访问 Luker
-- [鉴权与安全](/zh-CN/guide/authentication) — 基本认证、账户与白名单
-- [基础配置](/zh-CN/guide/configuration) — 完整配置参考
-- [WebSocket 代理](/zh-CN/improvements/ws-proxy) — 为什么必须透传 WebSocket 升级
-- [局域网同步](/zh-CN/improvements/lan-sync) — 在两套 Luker 之间同步数据
+- [局域网访问](/zh-CN/guide/lan-access) —— 让同一网络内的设备访问 Luker
+- [鉴权与安全](/zh-CN/guide/authentication) —— 基本认证、账户与白名单
+- [基础配置](/zh-CN/guide/configuration) —— 完整配置参考
+- [WebSocket 代理](/zh-CN/improvements/ws-proxy) —— 为什么必须透传 WebSocket 升级
+- [局域网同步](/zh-CN/improvements/lan-sync) —— 在两套 Luker 之间同步数据

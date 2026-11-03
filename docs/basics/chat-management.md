@@ -58,7 +58,7 @@ If the AI's response was cut off (e.g., hitting the token limit), you can use th
 
 ## Branching
 
-Branching allows you to create a new conversation path from any point in the dialogue. Imagine: at message #10, you want to try a different choice — you can create a branch from message #10, explore a different path in the new branch, while keeping the original conversation intact.
+Branching creates a new conversation path from any point in the dialogue. Imagine: at message #10, you want to try a different choice — you can create a branch from message #10, explore a different path in the new branch, while keeping the original conversation intact.
 
 This is very useful for exploring different plot directions.
 
@@ -90,7 +90,7 @@ Luker has made significant improvements to how chat data is saved.
 
 ### The Problem
 
-In SillyTavern, a message send, message edit, or even just swiping through responses transfers the **entire chat file** between frontend and backend. For long conversations, this means transferring large amounts of data — wasteful in bandwidth and error-prone.
+In SillyTavern, a message send, message edit, or even just swiping through responses transfers the **entire chat file** between frontend and backend. Long conversations therefore transfer large amounts of data, which costs bandwidth and raises the chance of errors.
 
 ### Luker's Improvement
 
@@ -103,7 +103,7 @@ Luker uses **incremental patch endpoints** to save chat data. An operation only 
 Additionally, Luker's backend **persists chat data in real time**, avoiding the message loss issues that can occur in SillyTavern where the frontend is responsible for triggering saves.
 
 ::: tip
-Incremental sync is transparent to users — you don't need to do anything extra. For cloud-deployed users, this improvement significantly reduces bandwidth consumption.
+Incremental sync needs no extra steps. Cloud deployments see lower bandwidth usage as a result.
 :::
 
 ## Offline and Disconnection

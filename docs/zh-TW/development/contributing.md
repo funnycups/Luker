@@ -29,7 +29,7 @@ node server.js
 
 ## 分支策略
 
-- **`release`** — 穩定分支，始終保持可發布狀態。所有 PR 應以 `release` 為目標分支
+- **`release`** —— 穩定分支，始終保持可發布狀態。所有 PR 應以 `release` 為目標分支
 - 功能開發請從 `release` 建立特性分支
 
 ```bash
@@ -197,6 +197,6 @@ Luker/
 
 ## 相關頁面
 
-- [前端外掛開發](/zh-TW/development/frontend-plugin) — 第三方外掛開發入門
-- [擴充 API 參考](/zh-TW/development/extension-api/) — 完整的 API 文件
-- [角色卡開發](/zh-TW/development/card-developers) — 角色卡擴充功能
+- [前端外掛開發](/zh-TW/development/frontend-plugin) —— 第三方外掛開發入門
+- [擴充 API 參考](/zh-TW/development/extension-api/) —— 完整的 API 文件
+- [角色卡開發](/zh-TW/development/card-developers) —— 角色卡擴充功能

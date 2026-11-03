@@ -6,7 +6,7 @@ Typical reasons to do this:
 
 - Keep Luker running on a computer and use it from a phone or tablet.
 - Reach one Luker install from several devices on a home network.
-- Use Luker on iPhone or iPad, which have no app.
+- Use Luker on iPhone or iPad through a self-signed app or a browser.
 
 If your goal is to sync data between two Luker installs instead, see [LAN Sync](/improvements/lan-sync). That is a separate feature.
 
@@ -121,7 +121,7 @@ A LAN is not automatically trusted, especially on shared or public Wi-Fi. Before
 
 ## iOS
 
-There is no iOS app, so iPhone and iPad use the browser over the network. See [iOS](/guide/ios) for the reason and the setup steps.
+iPhone and iPad can install Luker as a self-signed app and run it locally, or use the browser to reach Luker on another device. See [iOS](/guide/ios) for both paths.
 
 ## Troubleshooting
 

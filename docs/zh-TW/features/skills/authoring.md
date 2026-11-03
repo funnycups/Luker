@@ -1,52 +1,42 @@
 # 創作 Skill
 
-一個 Skill 是一個目錄：一份必需檔案（`SKILL.md`）+ 可選子資料夾。創作一個 Skill 就是給它取名字、寫 frontmatter、寫一段 agent 能讀的正文。僅此而已。
+一個 Skill 是一個目錄：一份必需的 `SKILL.md`，加上可選的子資料夾。創作 Skill 就是給它命名、寫 frontmatter、寫一段 Agent 能讀的正文。
 
-本頁講 Luker（與 Anthropic）期望的約定，沿途要做的選擇，以及拿出廠 Skill 逐一拆解的真實例子。
+本頁說明目錄約定、frontmatter 欄位、正文寫法，以及什麼時候該拆子檔案。
 
-## 創作 skill 的方式
+## 從哪裡開始
 
-你不一定要手敲 SKILL.md。大多數使用者從下面這些路之一開始：
+不必手敲全部內容。常見做法：
 
-| 路徑 | 在哪 | 適合 |
-|---|---|---|
-| **讓 LLM 替你寫** | [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio#用工作台編寫-skill) | 在工作台裡用一句話告訴它你想要什麼；它起草 SKILL.md、安裝好，順便（如果你交代了）掛到對應位置。推薦先用這條。 |
-| **自己手寫** | [Skill 管理面板 → 新建](/zh-TW/features/skills/management#tab-1-installed-已安裝) | 你已經清楚知道想要哪些段落、想自己定措辭、想完全控制文字。 |
+- **讓 AI 起草**：在 [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio#用工作台編寫-skill) 裡描述想要的效果，它會起草 `SKILL.md`、安裝好，並在你要求時掛到對應 Agent。
+- **自己寫**：在 [Skill 管理面板](/zh-TW/features/skills/management) 新增，完全控制措辭與結構。
 
-![內嵌 Skill 編輯器 — 檔案樹 + 正文區](/images/skills/rp-demo-8.5-editor-body-pasted.png)
+## 目錄配置
 
-詳見 [《用 skills 調教 RP 輸出》](/zh-TW/recipes/rp-skills-walkthrough)。
-
-## 目錄佈局
-
-```
+```text
 my-skill-name/
-├── SKILL.md          # 必需 —— frontmatter + Markdown 正文
-├── references/       # 可選 —— 輔助清單、更長的規範
-├── examples/         # 可選 —— agent 可拉取的真實範例
-├── assets/           # 可選 —— 二進位附件（圖片、PDF）
-└── scripts/          # 可選 —— 前向相容預留，v1 不會執行
+├── SKILL.md          # 必需：frontmatter 與正文
+├── references/       # 選用：輔助清單、較長規格
+├── examples/         # 選用：Agent 可以讀取的真實範例
+├── assets/           # 選用：圖片、PDF 等附件
+└── scripts/          # 選用：預留，目前不會執行
 ```
 
-只有 `SKILL.md` 是必需的。其它資料夾是約定 —— Luker 不強制，但和 Anthropic 佈局一致，Skill 保持可移植。
+只有 `SKILL.md` 是必需的。其他資料夾是組織約定，與 Anthropic 的配置一致，方便分享與遷移。
 
-::: info 子資料夾共用同一個 `skill_read` 工具
-agent 不會按子資料夾得到不同的工具。它們用 `skill_read({ name, path })` 加相對路徑：`skill_read({ name: "my-skill", path: "references/checklist.md" })`。子資料夾純粹是組織手段。
-:::
-
-## Frontmatter —— Anthropic 標準
+## Frontmatter
 
 `SKILL.md` 以 YAML frontmatter 開頭：
 
 ```markdown
 ---
 name: my-skill-name
-description: 一句話摘要，agent 會在目錄裡看到。
+description: 一句話摘要，Agent 會在目錄裡看到。
 license: MIT
 metadata:
   author: 你的名字
   version: 1.0.0
-  tags: [writing-rules, en]
+  tags: [writing-rules, zh]
 ---
 
 # my-skill-name
@@ -54,134 +44,83 @@ metadata:
 正文從這裡開始。
 ```
 
-| 欄位 | 必需 | 約束 | 備註 |
-|---|---|---|---|
-| `name` | 是 | 小寫 ASCII 字母、數字、`-`、`_`；不超過 128 字元 | 必須與目錄名一致。編排器 `skills.visible` 參照這個欄位。 |
-| `description` | 是 | 一句話 | 顯示在自動注入的 `<available_skills>` 目錄裡。寫給 **agent** 看，不是給使用者看 —— 解釋這個 Skill 什麼時候相關。 |
-| `license` | 否 | 任意字串（自由格式） | Anthropic 標準。準備分享出去時再用。 |
-| `metadata.author` | 否 | 字串 | Anthropic 標準。 |
-| `metadata.version` | 否 | semver 風格的字串 | Anthropic 標準。語意變更時記得 bump。 |
-| `metadata.tags` | 否 | 字串陣列 | 可搜尋提示。 |
+| 欄位 | 必需 | 限制 | 說明 |
+| --- | --- | --- | --- |
+| `name` | 是 | 小寫字母、數字、`-`、`_` | 必須與目錄名稱一致。 |
+| `description` | 是 | 一句話 | 顯示在 Agent 看到的目錄裡。寫給 Agent 看，說明這個 Skill 什麼時候相關。 |
+| `license` | 否 | 任意字串 | 準備分享時填寫。 |
+| `metadata.author` | 否 | 字串 | 作者資訊。 |
+| `metadata.version` | 否 | 版本字串 | 語意變更時更新。 |
+| `metadata.tags` | 否 | 字串陣列 | 便於搜尋。 |
 
-## 撰寫正文
+## 正文
 
-正文就是契約。agent 呼叫 `skill_read({ name })` 時，正文是它看到的內容（再加 frontmatter 的一小段 JSON 風格頭部）。把正文當作命令式文件來寫，不要當百科參考。
+正文是 Agent 實際讀到的內容。寫成直接、可執行的規則，不要寫成百科條目。一個有效的結構：
 
-借鑒出廠 Skill 的寫法，一個有效的範式有以下段落：
+1. **這個 Skill 做什麼**：一段話，讓 Agent 確認自己選對了。
+2. **核心規則**：編號清單、表格或檢查清單。具體、可執行，Agent 會照字面執行。
+3. **範例**：用「錯誤 / 正確」的對照讓標準可見。
+4. **何時讀取子檔案**：如果打包了參考資料，明確說明什麼情況下讀哪一份。
 
-1. **這個 Skill 幹什麼** —— 一段話，讓 agent 讀完就能確認選對了。
-2. **核心規則 / 方法** —— 真正的契約。用編號清單、表格、清單。具體、可執行；agent 會照著字面意思跟隨。
-3. **範例或失敗案例** —— 讓成功與失敗長什麼樣具體可見。出廠的 `director-anti-cliche-zh` 用 `✗ 錯` / `✓ 對` 的成對行展示。
-4. **何時該讀哪份子檔案** —— 如果你打包了 `references/`，告訴 agent 哪個子檔案值得讀。
+### 語氣
 
-### 語氣 —— 寫給 agent 看
+Skill 寫給 LLM 看，不寫給人類維運手冊的讀者看。
 
-Skill 是給 LLM 看的，不是給人類維運手冊的讀者看的。推論：
+- 用命令式，不用描述式。「避免 X」比「X 通常被認為不太合適」更有效。
+- 不寫元解釋。「這是一個很棒的 Skill，將幫助你……」是浪費上下文；Agent 已經決定讀了，直接告訴它該做什麼。
 
-- **要命令式，不要描述式。** 「避免 X」比「X 通常被認為不太合適」更有效。出廠 Skill 就是這種語氣。
-- **不要元解釋。** 一段以「這是一個很棒的 Skill，將幫助你……」開頭的正文是浪費 token。agent 已經決定讀它了，直接告訴它該幹什麼。
+### 長度
 
-### 長度與限額
+把最重要的內容放在最前面。Agent 讀取時可能只拿到正文的開頭部分，後面的內容未必進入上下文。
 
-伺服器強制的硬上限：
-
-| 限額 | 數值 |
-|---|---|
-| `SKILL.md` 大小 | 512 KB |
-| 單檔案大小 | 4 MB |
-| 單個 Skill 總大小 | 16 MB |
-| 每個 Skill 檔案數 | 100 |
-
-大多數出廠 Skill 在 2–8 KB Markdown 之間。如果你的 Skill 逼近 100 KB，考慮拆分：在 `SKILL.md` 放 5–15 KB 的命令式正文，把長清單挪到 `references/<topic>.md`。agent 僅在相關時才選擇性地 `skill_read({ name, path: "references/..." })` —— 更便宜的上下文、更快的讀取。
-
-### 讀取預算
-
-`skill_read` 強制每次響應不超過 50 KB。超過的檔案返回時 `truncated: true`；agent 再用 `offset` 繼續呼叫。把正文寫成「最重要的內容放最前面」 —— 即使 agent 只讀了前 50 KB，也能拿到契約。
+正文保持在能說清規則的規模。規則變長時，把擴充清單、長範例和參考資料移到子檔案，而不是讓 `SKILL.md` 無限成長。
 
 ## 何時使用子檔案
 
-子檔案（`references/`、`examples/`、`assets/`）能配得上自己的名號的場景：
+- **只是偶爾查閱**：每次都需要的基本規則放在 `SKILL.md`，特定場景才查的資料放在 `references/`。
+- **內容很長**：完整範例、長清單放在 `examples/` 或 `references/`。
+- **二進位附件**：圖片、字型、PDF 放在 `assets/`。
 
-- **它們只是偶爾被查閱。** 每次派遣均需要的通用清單屬於 `SKILL.md`；5% 場景下才查的專門後備資料屬於 `references/`。
-- **它們很長。** 一份 30 KB 的真實範例會汙染 SKILL.md 的讀取；放進 `examples/`。
-- **它們是二進位。** 圖片、字型、PDF 放 `assets/`。（Skill 裡的二進位檔案能存得下，但 agent 沒法透過 `skill_read` 讀出來。如果部署面暴露了 URL，可以作為附件 URL 使用。）
-
-在 `SKILL.md` 裡，把 agent 顯式指向子檔案：
+在 `SKILL.md` 裡明確指向子檔案，並說明讀取時機：
 
 ```markdown
 ## 何時讀取額外檔案
 
-- `references/cliche-deep-list.md` —— 比本檔案 top-20 更長的禁用措辭延伸清單。
-  草稿反覆踩到這裡沒列出的模式時再讀。
-- `examples/before-after.md` —— 「資料人式文字」與「重寫為活人文字」的
-  對照例。會話開始時讀一遍校準。
+- `references/cliche-deep-list.md`：比本檔案更長的禁用措辭清單。
+  草稿反覆踩到未列出的模式時再讀。
+- `examples/before-after.md`：資料化文字與活人文字的對照例。
+  工作階段開始時讀一遍校準。
 ```
 
-## 真實例子 1：`director-anti-cliche-zh`
+## 範例：反制式規則
 
-這個出廠 Skill 是單檔案、約 3 KB 的 SKILL.md，沒有子檔案。它在整個預設 director profile 內強制反八股寫作規則。
+一個單檔案的寫作規則 Skill 可以依「規則家族」組織：資料化描寫、契約詞彙、昇華式總結、AI 自造標籤各佔一節，每節給出具體例子。規則總量不大時，全部放進 `SKILL.md` 即可。
 
-frontmatter：
+這類 Skill 通常設為全域或模式層級可見，讓團隊裡的每個 Agent 都遵循同一套寫作標準。
 
-```yaml
----
-name: director-anti-cliche-zh
-description: 敘事寫作的反八股模式 —— 禁用措辭、AI 自造標籤、契約詞彙、昇華八股。
-metadata:
-  author: Luker Team
-  version: 1.0.0
----
-```
+## 範例：事件摘要規則
 
-正文遵循「規則家族」結構：每一族主要的八股（資料人式文字、契約詞彙、昇華八股、AI 自造標籤）各得一個標題，並給出具體的雙語範例。沒有子檔案 —— 整套契約小到能塞進 `SKILL.md`。
+事件摘要 Skill 面向負責整理記憶的 Agent。正文先說明摘要的定位，例如「它是索引，不是回放」，再給出寫作步驟和反覆述規則，並用「錯誤 / 正確」的對照說明細微差別。
 
-這個 Skill 是模式級可見：每個預設 director 子代理（主代理、口吻評審、連貫性評審、劇情頭腦風暴員……）均看得到。它錨定了團隊的寫作標準。
+這類 Skill 只掛給真正需要它的 Agent，不必讓所有 Agent 都讀取。
 
-## 真實例子 2：`event-summary-rules-zh`
+## 選擇作用域
 
-這個出廠 Skill 是更密的 ~12 KB 的 SKILL.md，同樣沒有子檔案。它是 `memory_curator` 子代理的寫作契約 —— V10 事件摘要紀律。
+- **全域**：每次聊天都想用的通用規則。
+- **預設**：只在搭配某份聊天補全預設時有意義，隨預設匯出。
+- **角色卡**：角色專屬設定或口吻規則，隨角色卡匯出。
 
-frontmatter：
+作用域可以隨時遷移，引用依名稱解析，遷移後無需改動。
 
-```yaml
----
-name: event-summary-rules-zh
-description: 給 memory_curator 用的事件摘要寫作規則（V10）—— 7 步流程、閘門循環、反複述紀律。
-metadata:
-  author: Luker Team
-  version: 1.0.0
----
-```
+## 驗證與安全
 
-正文先確立心智模型（「索引，不是回放」），然後定義帶閘門循環的 7 步寫作流程，再詳細列出反複述規則。關鍵是每條規則均附了真實範例 —— `✗ 錯` 與 `✓ 對` 並列 —— 因為這種紀律細微，只給抽象規則的 LLM 會一致地違反。
+安裝或儲存時，Luker 會檢查 frontmatter 能否解析、名稱是否與目錄一致、檔案路徑是否留在 Skill 目錄內，以及大小是否超過限制。驗證失敗會回滾，不會留下半個 Skill。
 
-這個 Skill 是按子代理一對一：只有 `memory_curator` 在它的 `skills.visible` 裡有這一條（透過 `"+"` 繼承模式級預設值）。口吻評審不需要、連貫性評審不需要；只有 curator 需要，並且只在它真的在寫摘要時才需要。
+`scripts/` 會被辨識但不會執行。介面會在 Skill 攜帶指令碼時顯示風險標記。
 
-## 選合適的作用域
+## 相關頁面
 
-新建 Skill 時要選一個作用域。經驗法則：
-
-- **`global`** —— 個人使用的預設值。每次聊天均想用的通用規則。
-- **`preset`** —— 該 Skill 僅在搭配特定 Chat Completion 預設時才有意義（一種模型特調的提示約定、依賴取樣器的文風規則）。匯出時跟著預設走。
-- **`character`** —— 該 Skill 編碼了角色卡專屬設定或口吻規則。匯出時跟著角色卡走（PNG 元資料）。
-
-作用域可以隨時改 —— Skill 管理子面板的**遷移到……**會做原子級 move。編排器 profile 裡的參照（僅按名字）在遷移後仍然有效。
-
-## 校驗與安全
-
-伺服器在安裝 / 寫入時校驗 Skill：
-
-- frontmatter 必須能解析為 YAML。
-- `name` 必須與目錄名一致。
-- Skill 內部的檔案路徑不得逃出 Skill 目錄（不能 `..`，不能絕對路徑）。
-- 大小限額（見上）快速失敗強制。
-- `scripts/` 會被解析但**永不執行** —— 前向相容預留。UI 在 Skill 攜帶 scripts 時顯示風險標記。
-
-如果校驗失敗，安裝或寫入原子回滾（寫入走 `.staging/` 目錄，校驗通過後才提交）。
-
-## 相關
-
-- [Skills 概覽](/zh-TW/features/skills/) —— 什麼是 Skill、作用域
-- [Skill 管理](/zh-TW/features/skills/management) —— 安裝、匯入、匯出、遷移作用域
-- [編排器整合](/zh-TW/features/skills/orchestrator-integration) —— 把 Skill 掛到 profile 上
-- [Skill 擴充套件 API](/zh-TW/development/extension-api/skills) —— 程式設計式 `context.skills.*`
+- [Skills 概覽](/zh-TW/features/skills/) —— 什麼是 Skill、作用域與可見性
+- [Skill 管理](/zh-TW/features/skills/management) —— 安裝、匯入、匯出、遷移
+- [編排器整合](/zh-TW/features/skills/orchestrator-integration) —— 把 Skill 掛到指定 Agent
+- [Skill 擴充 API](/zh-TW/development/extension-api/skills) —— 開發者介面

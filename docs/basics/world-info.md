@@ -62,7 +62,7 @@ You can set an activation probability (0–100%) for an entry. Even if a keyword
 
 ### Recursive Scanning
 
-When an entry is activated, its content is also included in the keyword scan range. This means if Entry A's content contains Entry B's keywords, Entry B will also be activated. This chain activation can build complex knowledge association networks.
+When an entry is activated, its content is also included in the keyword scan range. If Entry A's content contains Entry B's keywords, Entry B is activated as well. This chain activation can build complex knowledge association networks.
 
 ```d2
 direction: right
@@ -109,7 +109,7 @@ Luker's search plugin can automatically search the web during the pre-request ph
 
 ### Memory Graph Auto-Created Entries
 
-Luker's [Memory Graph](/features/memory-graph) plugin uses [World Info Projection](/features/memory-graph#world-info-projection) to automatically project Memory Graph nodes as World Info entries. These entries are automatically created and managed by the Memory Graph — no manual maintenance required — allowing long-term memories to participate in prompt construction through the World Info activation mechanism.
+[Memory Graph](/features/memory-graph) turns memory nodes into World Info entries. It creates and manages those entries itself, and they take part in prompt construction through the World Info activation mechanism.
 
 ### Preset-Associated World Info
 

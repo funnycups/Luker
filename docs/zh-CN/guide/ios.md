@@ -57,8 +57,8 @@ Luker 会启动本地服务器并打开界面。首次启动需要一点时间�
 也可以不安装应用，直接在浏览器中使用 Luker。在一台电脑上运行 Luker，然后在 Safari 中打开：
 
 1. 在电脑上开启网络访问：
-   - 同一网络内 — 见[局域网访问](/zh-CN/guide/lan-access)。
-   - 从网络之外 — 见[远程访问](/zh-CN/guide/remote-access)。
+   - 同一网络内 —— 见[局域网访问](/zh-CN/guide/lan-access)。
+   - 从网络之外 —— 见[远程访问](/zh-CN/guide/remote-access)。
 2. 在 iPhone 或 iPad 上打开 Safari，输入主机地址。局域网内形如 `http://192.168.1.23:8000`；经代理或隧道访问时，输入你的域名。
 3. 若启用了鉴权，需先登录。
 
@@ -75,8 +75,8 @@ Luker 可以作为主屏幕图标安装，打开时在自己的窗口中运行�
 
 ## 相关页面
 
-- [局域网访问](/zh-CN/guide/lan-access) — 让同一网络内的设备访问 Luker
-- [远程访问](/zh-CN/guide/remote-access) — 从网络之外访问 Luker
-- [Android App](/zh-CN/guide/android) — Android 平台的应用
-- [HarmonyOS App](/zh-CN/guide/harmonyos) — HarmonyOS 平台的应用
-- [桌面端 App](/zh-CN/guide/desktop) — 桌面平台的应用
+- [局域网访问](/zh-CN/guide/lan-access) —— 让同一网络内的设备访问 Luker
+- [远程访问](/zh-CN/guide/remote-access) —— 从网络之外访问 Luker
+- [Android App](/zh-CN/guide/android) —— Android 平台的应用
+- [HarmonyOS App](/zh-CN/guide/harmonyos) —— HarmonyOS 平台的应用
+- [桌面端 App](/zh-CN/guide/desktop) —— 桌面平台的应用

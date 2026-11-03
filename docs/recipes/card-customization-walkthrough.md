@@ -1,12 +1,8 @@
 # Building a card-specific orchestration
 
-This walkthrough is organized around the following actions:
+This walkthrough turns a card with strict output-format requirements into a dedicated orchestration: generate a workflow from one sentence, use a simulation to find AI clichés and improve the prompts and Skills, then have the Studio write a format-checking tool.
 
-1. **Generate a dedicated multi-agent orchestration for one character card in a single sentence.** No prompt engineering, no manual sub-agent plumbing — the AI Iteration Studio does the work for us.
-2. **Run a simulation, annotate the LLM clichés in the output, and let the Studio improve the orchestration prompts and Skills accordingly.** The targets here are the patterns Chinese-RP readers call **八股** ("eight-leg essay" — formulaic boilerplate). The most common family is **numeral + classifier counting**: narration that lapses into a stage-direction tally.
-3. **Have the Studio write a custom tool for this card** that verifies whether the card's required output format is fully present.
-
-The example uses a community card with strict output-format requirements and a busy variable system. The card itself does not matter — the method applies to any **card that has format constraints or a domain-specific setting** the global default does not cover.
+No prompt engineering or sub-agent plumbing is needed. The example uses a community card with strict formatting and a busy variable system; the method applies to any card with format constraints or a specific setting.
 
 ---
 
@@ -86,7 +82,7 @@ Once done, click **Submit & continue**. The Studio passes the annotation to the 
 
 ![Studio's root-cause diagnosis](/images/recipes-card-customization/08-improvement-thread.png)
 
-In this iteration the Studio grouped the annotation under one umbrella — **classifier-counting cliché** (slicing lived sensation, motion, time, and body into countable "number + classifier" units). Rather than editing right away, it first confirmed with the user: is this rule absolute, or are exceptions warranted? Once the user confirmed "no exceptions", the Studio inspected which SKILL the `voice_critic` sub-agent actually loads at runtime (`voice-critic-method-zh` — not the most name-matchy alternative), wrote the rule into the very file voice_critic genuinely reads, pinned the offending phrase as a counter-example, and added an explicit "this is an independent ban; a literal match is a finding regardless of whether the context is warm, poetic, physically realistic, or colloquial." Only then will the next simulation's voice_critic actually surface these violations.
+In this iteration the Studio grouped the annotation under one umbrella — **classifier-counting cliché** (slicing lived sensation, motion, time, and body into countable "number + classifier" units). Rather than editing right away, it first confirmed with the user: is this rule absolute, or are exceptions warranted? Once the user confirmed "no exceptions", the Studio inspected which Skill the review sub-agent actually loads at runtime, rather than the closest name match, wrote the rule into the file that sub-agent genuinely reads, pinned the offending phrase as a counter-example, and added an explicit "this is an independent ban; a literal match is a finding regardless of whether the context is warm, poetic, physically realistic, or colloquial." Only then will the next simulation's review sub-agent surface these violations.
 
 ::: warning
 The Studio does not add literal "don't say X" lines to the main agent's prompt — that is whack-a-mole. It looks for the underlying cause that allowed the cliché to slip through (a sub-agent whose review pass was too coarse, a SKILL missing a ban clause) and fixes the source.
@@ -117,14 +113,14 @@ For requirements like this, we do not need to write any code ourselves or hand-e
 
 The Studio decides how to fulfill the requirement on its own. This is a format check that code can verify exactly (literal string match), which makes it a fit for a **custom tool**. The party that needs to be checked, and reminded to amend, is the main agent that drafts the reply, so the tool belongs to the main agent and must be invoked at its finalization step. Based on that read, the Studio produces a coherent change set:
 
-1. **Inspects the runtime ctx surface** with `luker_ctx_describe` (and reads the relevant docs via `luker_docs_read`) so it knows the exact shape of the data the tool will touch — no guessing.
-2. **Drafts the tool body and dry-runs it** with `luker_orch_dry_run_custom_tool` against sample args so any runtime exception surfaces before you are asked to approve anything.
-3. **Authors the validated tool** via `luker_orch_set_custom_tool`. The tool is `read` mode (no side effects), and its body is a small piece of JavaScript that reads the in-flight draft snapshot and scans the trailing tags. The mode-appropriate enable flag is flipped on automatically, so the main agent sees the tool on the next turn.
-4. **Patches the main agent's system prompt** via `luker_orch_patch_director_main_agent_system_prompt` (or the loop / agenda equivalent) to add a rule: the final step before producing the reply must call this tool, and if any tag is reported missing, amend in place before finalizing.
+1. **Checks the runtime interface.** It confirms the available runtime interface and data structures, reading the documentation when needed, rather than guessing.
+2. **Drafts the tool body and runs it with sample arguments** in a sandbox, so any runtime exception surfaces before you are asked to approve anything.
+3. **Writes the validated tool.** It creates a review card for a read-only tool whose body reads the in-flight draft and checks the trailing tags. The corresponding enable flag is turned on automatically, so the main agent sees the tool on the next turn.
+4. **Updates the main agent's system prompt** with a rule: the final step before producing the reply calls this tool, and missing tags are filled in before finalizing.
 
 Decisions the user would otherwise have to spell out — which mechanism best fits, who should call it, what else needs to be updated in sync — the Studio makes on its own from a natural-language request. We do not have to phrase the ask in technical terms.
 
-Edits still go through a review card on the ProposalBus — green for additions, red for removals. **Because a custom tool runs JavaScript in your browser, the proposal card carries a safety banner** — expand "View body" to inspect the tool code, confirm that it is a read-only scan with no side effects, then approve. Reject any card whose body you can't read.
+Edits still go through a review card, green for additions and red for removals. **Because a custom tool runs JavaScript in your browser, the proposal card carries a safety banner** — expand the tool body to inspect the code, confirm that it is a read-only check with no side effects, then approve. Reject any card whose body you can't read.
 
 ![New tool's code review + security confirmation](/images/recipes-card-customization/12-tool-review.png)
 
@@ -136,9 +132,9 @@ We run one more simulation to confirm that the main agent actually calls it as i
 
 > One more simulation to verify.
 
-![Simulation trace showing validate_output_skeleton being invoked](/images/recipes-card-customization/14-tool-invoked.png)
+![Simulation trace showing the tool being invoked](/images/recipes-card-customization/14-tool-invoked.png)
 
-The trace shows a `validate_output_skeleton` row — the main agent runs the tool right after writing to the draft tail, receives the verdict, and decides whether it needs to patch in any missing tag.
+The trace shows the tool call: the main agent runs it right after writing to the draft tail, receives the verdict, and decides whether it needs to patch in any missing tag.
 
 ---
 

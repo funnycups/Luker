@@ -57,8 +57,8 @@ Luker 會啟動本機伺服器並開啟介面。首次啟動需要一點時間�
 也可以不安裝應用程式，直接在瀏覽器中使用 Luker。在一台電腦上執行 Luker，然後在 Safari 中開啟：
 
 1. 在電腦上開啟網路存取：
-   - 同一網路內 — 見[區域網路存取](/zh-TW/guide/lan-access)。
-   - 從網路之外 — 見[遠端存取](/zh-TW/guide/remote-access)。
+   - 同一網路內 —— 見[區域網路存取](/zh-TW/guide/lan-access)。
+   - 從網路之外 —— 見[遠端存取](/zh-TW/guide/remote-access)。
 2. 在 iPhone 或 iPad 上開啟 Safari，輸入主機地址。區域網路內形如 `http://192.168.1.23:8000`；經代理或隧道存取時，輸入你的網域。
 3. 若啟用了身分驗證，需先登入。
 
@@ -75,8 +75,8 @@ Luker 可以作為主畫面圖示安裝，開啟時在自己的視窗中執行�
 
 ## 相關頁面
 
-- [區域網路存取](/zh-TW/guide/lan-access) — 讓同一網路內的裝置存取 Luker
-- [遠端存取](/zh-TW/guide/remote-access) — 從網路之外存取 Luker
-- [Android App](/zh-TW/guide/android) — Android 平台的應用程式
-- [HarmonyOS App](/zh-TW/guide/harmonyos) — HarmonyOS 平台的應用程式
-- [桌面端 App](/zh-TW/guide/desktop) — 桌面平台的應用程式
+- [區域網路存取](/zh-TW/guide/lan-access) —— 讓同一網路內的裝置存取 Luker
+- [遠端存取](/zh-TW/guide/remote-access) —— 從網路之外存取 Luker
+- [Android App](/zh-TW/guide/android) —— Android 平台的應用程式
+- [HarmonyOS App](/zh-TW/guide/harmonyos) —— HarmonyOS 平台的應用程式
+- [桌面端 App](/zh-TW/guide/desktop) —— 桌面平台的應用程式

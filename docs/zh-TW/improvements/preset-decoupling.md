@@ -6,10 +6,10 @@
 
 在 SillyTavern 中，Chat Completion 預設（即 OpenAI / Claude 等 API 的預設）包含了本質不同的各類配置：
 
-- **生成參數** — 提示詞範本（System Prompt、Jailbreak 等）、取樣參數（Temperature、Top-P 等）、上下文長度等
-- **連線欄位** — API 位址、API Key、模型名稱、Chat Completion Source 等
+- **生成參數** —— 提示詞範本（System Prompt、Jailbreak 等）、取樣參數（Temperature、Top-P 等）、上下文長度等
+- **連線欄位** —— API 位址、API Key、模型名稱、Chat Completion Source 等
 
-這些配置被打包在同一個預設物件中。當使用者切換預設時，連線欄位也會隨之改變——這意味著切換一個提示詞範本可能會把你的 API 位址從 Claude 切到 OpenAI，或者覆蓋你精心配置的自訂 API 端點。
+這些配置被打包在同一個預設物件中。當使用者切換預設時，連線欄位也會隨之改變——切換提示詞範本可能把 API 位址從 Claude 換成 OpenAI，或覆蓋自訂端點。
 
 這種連動在實際使用中造成了大量困擾：
 
@@ -21,8 +21,8 @@
 
 Luker 將預設中的每個欄位標記為「連線欄位」或「生成參數欄位」兩類：
 
-- **連線欄位** — API 來源、自訂 URL、模型名稱、反向代理位址、代理密碼等
-- **生成參數欄位** — Temperature、Top-P、最大 Token 數等
+- **連線欄位** —— API 來源、自訂 URL、模型名稱、反向代理位址、代理密碼等
+- **生成參數欄位** —— Temperature、Top-P、最大 Token 數等
 
 ```d2
 direction: right
@@ -68,7 +68,7 @@ LK: "Luker：解耦" {
 當使用者切換預設時，載入邏輯會遍歷預設中的每個欄位，自動跳過所有連線欄位。這確保了切換預設只會改變生成參數，而不會觸碰當前的 API 連線配置。
 
 ::: tip 何時包含連線欄位
-只有在 Connection Manager 中顯式切換連線配置時，連線欄位才會被套用。普通的預設切換、角色卡綁定預設載入等場景均不會包含連線欄位。
+只有在 API 連線設定中顯式切換設定時，連線欄位才會被套用。普通的預設切換、角色卡綁定預設載入等場景均不會包含連線欄位。
 :::
 
 ## 受影響的模組
@@ -87,7 +87,7 @@ LK: "Luker：解耦" {
 - 預設儲存時保留連線欄位（確保預設檔案完整），但載入時按分類過濾
 - 支援[角色卡綁定預設](/zh-TW/improvements/card-bound-presets)的特殊選項渲染
 
-### Connection Manager
+### API 連線設定
 
 - 連線配置獨立於預設管理，擁有自己的儲存和切換邏輯
 - 切換連線時只套用連線欄位，不影響當前的生成參數
@@ -100,10 +100,10 @@ LK: "Luker：解耦" {
 如果沒有預設解耦，角色卡綁定預設將無法實現：打開一張角色卡就可能把使用者的 API 位址和密鑰替換掉，這顯然是不可接受的。
 
 ::: info 預設檔案相容性
-預設解耦不改變預設檔案的儲存格式。連線欄位仍然儲存在預設 JSON 中，只是在載入時被選擇性跳過。這意味著現有的預設檔案無需遷移，也可以在需要時（如透過 Connection Manager）完整載入。
+預設解耦不改變預設檔案的儲存格式。連線欄位仍然儲存在預設 JSON 中，只是在載入時被選擇性跳過。現有預設檔案無需遷移，也可以在需要時完整載入。
 :::
 
 ## 相關頁面
 
-- [角色卡綁定預設與人設](/zh-TW/improvements/card-bound-presets) — 依賴預設解耦的上層功能
-- [改進總覽](/zh-TW/improvements/overview) — 所有技術改進的概述
+- [角色卡綁定預設與人設](/zh-TW/improvements/card-bound-presets) —— 依賴預設解耦的上層功能
+- [改進總覽](/zh-TW/improvements/overview) —— 所有技術改進的概述

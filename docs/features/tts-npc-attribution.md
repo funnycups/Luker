@@ -43,7 +43,7 @@ NPC names can be added two ways:
 
 ![Adding a speaker name in the voice map popup](/images/tts-npc-attribution/05-voice-map-add.png)
 
-NPC rows (tagged rows that are not chat participants) can be removed with the ✕ button at the end of the row. Changes apply when the popup closes with **Done**.
+Rows with an NPC tag can be removed with the ✕ button at the end of the row. Changes apply when the popup closes with **Done**.
 
 Whole-message narration benefits too: from the second playback on, each line uses its own speaker's voice. The first playback of a fresh message may still use the author's voice — the background pass may not have finished yet.
 

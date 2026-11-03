@@ -2,13 +2,15 @@
 
 Luker 內建了統一的函數呼叫（Function Calling）執行時，讓 AI 角色能夠執行結構化的操作——搜尋資訊、管理記憶、操作狀態——而不僅僅是生成文字。無論底層模型是否原生支援 tool call，Luker 均提供一致的呼叫體驗。
 
+本頁說明執行環境的內部機制，供擴充開發者與排查工具呼叫問題時參考。
+
 ## 統一的函數呼叫框架
 
 函數呼叫執行時提供了一個統一的框架來管理工具的註冊、呼叫和結果處理。核心設計目標是：
 
-- **模型無關** — 同一套工具定義可以在不同的 LLM 提供商之間無縫切換
-- **協議透明** — 上層工具不需要關心底層使用的是原生 tool call 還是文字協議
-- **串流相容** — 支援串流回應中的工具呼叫解析和規範化
+- **模型無關** —— 同一套工具定義可以在不同的 LLM 提供商之間無縫切換
+- **協議透明** —— 上層工具不需要關心底層使用的是原生 tool call 還是文字協議
+- **串流相容** —— 支援串流回應中的工具呼叫解析和規範化
 
 ```d2
 direction: down
@@ -98,7 +100,7 @@ TEXT.T_EXEC -> INJECT
 
 錯誤資訊包含工具名稱、失敗原因等結構化資料，幫助模型做出合理的後續決策。
 
-## Connection Manager 中的獨立開關
+## API 連線設定中的獨立開關
 
 函數呼叫功能可以在連線級別獨立啟用或停用。不同的連線配置可以有不同的函數呼叫設定，例如：
 
@@ -113,7 +115,7 @@ TEXT.T_EXEC -> INJECT
 搜尋外掛註冊了全域工具：網頁搜尋（支援 DuckDuckGo、SearXNG、Brave Search、Tavily、Exa、Serper、SerpApi 和 Z.AI）和網頁存取。其他模組（編輯助手、編排器、預設助手）在各自的獨立上下文中使用工具呼叫機制，不透過全域工具註冊表。
 
 ::: info 擴充工具
-第三方擴充可以透過 `context.registerFunctionTool()` 註冊自訂工具（由核心的 `ToolManager` 提供）。工具定義遵循統一的 schema 格式，註冊後自動適配原生模式和純文字模式。詳見[擴充 API — 工具註冊](/zh-TW/development/extension-api/generation#工具註冊)文件。
+第三方擴充可以透過 `context.registerFunctionTool()` 註冊自訂工具（由核心的 `ToolManager` 提供）。工具定義遵循統一的 schema 格式，註冊後自動適配原生模式和純文字模式。詳見[擴充 API —— 工具註冊](/zh-TW/development/extension-api/generation#工具註冊)文件。
 :::
 
 ## 底層實作
@@ -130,10 +132,10 @@ TEXT.T_EXEC -> INJECT
 
 **純文字模式**的流程多了一層：`function-call-runtime.js` 將工具描述注入 System Prompt → 模型輸出文字格式的工具呼叫 → `function-call-runtime.js` 解析文字 → `ToolManager` 執行並注入結果。
 
-需要自行發送帶工具呼叫的 LLM 請求的外掛，直接使用 `sendOpenAIRequest` 並傳入 `tools` 和 `toolChoice` 參數——這與全域工具註冊表是分開的。詳見[擴充 API — 發送 LLM 請求](/zh-TW/development/extension-api/generation#發送-llm-請求)文件。
+需要自行發送帶工具呼叫的 LLM 請求的外掛，直接使用 `sendOpenAIRequest` 並傳入 `tools` 和 `toolChoice` 參數——這與全域工具註冊表是分開的。詳見[擴充 API —— 發送 LLM 請求](/zh-TW/development/extension-api/generation#發送-llm-請求)文件。
 
 ## 相關頁面
 
-- [改進總覽](/zh-TW/improvements/overview) — 所有技術改進的概述
-- [預設解耦](/zh-TW/improvements/preset-decoupling) — 函數呼叫開關與連線配置的關係
-- [擴充 API](/zh-TW/development/extension-api/) — 外掛開發指南，包含工具註冊和 LLM 請求 API
+- [改進總覽](/zh-TW/improvements/overview) —— 所有技術改進的概述
+- [預設解耦](/zh-TW/improvements/preset-decoupling) —— 函數呼叫開關與連線配置的關係
+- [擴充 API](/zh-TW/development/extension-api/) —— 外掛開發指南，包含工具註冊和 LLM 請求 API

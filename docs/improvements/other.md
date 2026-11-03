@@ -4,7 +4,7 @@ Beyond the major architecture improvements introduced earlier, Luker has also ma
 
 ## Connection Manager Improvements
 
-Luker enhances SillyTavern's existing Connection Profiles feature to work with the [Preset Decoupling](/improvements/preset-decoupling) system. The improved connection manager completely separates connection configurations from chat completion presets — connection configurations only manage "where to connect" (API address, keys, proxy, etc.) and no longer contain generation parameters.
+Luker enhances SillyTavern's existing connection-profile feature to work with the [Preset Decoupling](/improvements/preset-decoupling) system. The improved connection manager completely separates connection configurations from chat completion presets — connection configurations only manage "where to connect" (API address, keys, proxy, etc.) and no longer contain generation parameters.
 
 Automatic migration is performed on startup, cleaning up residual preset fields and regex fields from old configurations. New additions include plain-text Function Calling toggles and retry configuration, which can be set independently per connection profile. Quick profile switching is supported via the `/profile` slash command.
 
