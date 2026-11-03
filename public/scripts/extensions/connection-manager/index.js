@@ -1349,7 +1349,7 @@ export async function init() {
     renderConnectionProfiles(profiles);
     initActionableSingleSelect(profiles, {
         searchInputPlaceholder: t`Search...`,
-        deleteButtonTitle: t`Delete connection profile`,
+        deleteButtonTitle: t`Delete a connection profile`,
         canDelete: ({ value }) => Boolean(value),
         onDelete: async ({ value }) => {
             const deletedSelected = extension_settings.connectionManager.selectedProfile === value;
@@ -1389,7 +1389,7 @@ export async function init() {
             };
             await deleteConnectionProfilesWithUndo(ids, refreshProfileUi);
         },
-        bulkDeleteButtonTitle: t`Delete connection profile`,
+        bulkDeleteButtonTitle: t`Delete a connection profile`,
         selectAllTitle: t`Select all`,
         selectedLabel: t`Selected`,
     });

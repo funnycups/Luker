@@ -49,6 +49,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed OpenRouter streamed reasoning details accumulating as one fragment per delta instead of merging into complete entries.
 - Fixed plain-text function calling stripping unparsed function_calls from the reply text.
 - The connection-profile picker now supports multi-select deletion.
+- Fixed the connection-profile picker's delete controls missing Chinese translations.
 - Added model list fetching and a connection test to embedding and rerank profiles.
 - Fixed embedding profiles rejecting Vertex AI service-account authentication as unsupported.
 - Chat-completion, embedding, and rerank connection profiles now normalize the entered URL against each provider's documented base URL.
