@@ -1,0 +1,264 @@
+/* Account window: user management pages (account-admin.js).
+ * Shell and shared controls live in luker-window.css. */
+
+/* ---------- user list ---------- */
+
+.dw-adm-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.dw-adm-bar > .dw-inp {
+    flex: 1 1 200px;
+    width: auto;
+}
+
+.dw-chip .dw-count {
+    margin-left: 2px;
+}
+
+.dw-chip.on .dw-count {
+    color: inherit;
+    opacity: 0.75;
+}
+
+.dw-avatar.sm {
+    width: 36px;
+    height: 36px;
+}
+
+.dw-layer .dw-adm-user {
+    width: 100%;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dw-adm-user:hover {
+    background: var(--dw-hover);
+}
+
+.dw-card[data-state="off"] {
+    --tone: var(--dw-border-strong);
+}
+
+.dw-card-meta .dw-pilltag {
+    flex: none;
+}
+
+svg.dw-ic.dw-adm-chev {
+    color: var(--dw-faint);
+}
+
+.dw-toggle.busy,
+.dw-ibtn.busy {
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+.dw-ibtn.dw-adm-danger:hover {
+    color: var(--dw-danger);
+}
+
+.dw-radio[disabled] {
+    opacity: 0.55;
+    cursor: default;
+    pointer-events: none;
+}
+
+/* ---------- rows inside lists (storage, overview) ---------- */
+
+.dw-layer .dw-adm-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 10px 12px;
+    border: 0;
+    border-top: 1px solid var(--dw-border);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dw-adm-row:first-child {
+    border-top: 0;
+}
+
+.dw-adm-row:hover {
+    background: var(--dw-hover);
+}
+
+.dw-adm-row > .dw-card-icon {
+    width: 30px;
+    height: 30px;
+}
+
+.dw-adm-row-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.dw-adm-size {
+    flex: none;
+    font-size: 12.5px;
+    color: var(--dw-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.dw-card-meta .bad {
+    color: var(--dw-danger);
+}
+
+.dw-adm-meter {
+    height: 4px;
+    margin-top: 6px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--dw-surface-2);
+    box-shadow: inset 0 0 0 1px var(--dw-border);
+}
+
+.dw-adm-meter > i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--dw-accent);
+}
+
+.dw-adm-meter.bad > i {
+    background: var(--dw-danger);
+}
+
+/* ---------- overview tiles ---------- */
+
+.dw-adm-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 10px;
+}
+
+.dw-adm-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 12px 14px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+    background: var(--dw-surface-2);
+}
+
+.dw-adm-tile b {
+    font-size: 17px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+}
+
+.dw-adm-tile span {
+    font-size: 12px;
+    color: var(--dw-muted);
+}
+
+.dw-adm-tile.bad b {
+    color: var(--dw-danger);
+}
+
+/* ---------- forms ---------- */
+
+.dw-layer textarea.dw-inp {
+    height: auto;
+    min-height: 64px;
+    padding: 8px 10px;
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.dw-layer textarea.dw-adm-code {
+    min-height: 360px;
+    white-space: pre;
+    overflow: auto;
+    tab-size: 2;
+}
+
+.dw-setrow-val.mono {
+    font-family: var(--dw-mono);
+    font-size: 11.5px;
+}
+
+.dw-group > .dw-setrow.dw-adm-inline {
+    padding: 0;
+    border-top: 0;
+}
+
+.dw-adm-preview {
+    min-height: 60px;
+    padding: 12px 14px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+    background: var(--dw-surface-2);
+    font-size: 13px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.dw-adm-preview > :first-child {
+    margin-top: 0;
+}
+
+.dw-adm-preview > :last-child {
+    margin-bottom: 0;
+}
+
+/* ---------- plugins, security, migration ---------- */
+
+.dw-adm-remote {
+    grid-column: 2 / 4;
+    font-family: var(--dw-mono);
+    font-size: 11.5px;
+    color: var(--dw-faint);
+    overflow-wrap: anywhere;
+}
+
+.dw-adm-secrow .dw-chips {
+    justify-content: flex-end;
+}
+
+.dw-setrow.dw-adm-migrow {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.dw-adm-migrow > code {
+    grid-column: 1 / -1;
+    font-family: var(--dw-mono);
+    font-size: 11.5px;
+    color: var(--dw-faint);
+    overflow-wrap: anywhere;
+}
+
+@container (max-width: 600px) {
+    .dw-adm-tiles {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .dw-adm-remote {
+        grid-column: 1 / 4;
+    }
+
+    .dw-adm-secrow .dw-chips {
+        justify-content: flex-start;
+    }
+
+    .dw-setrow.dw-adm-migrow {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .dw-layer .dw-adm-row {
+        padding: 12px;
+    }
+}

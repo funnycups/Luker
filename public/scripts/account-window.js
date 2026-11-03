@@ -7,6 +7,7 @@ import { POPUP_TYPE, callGenericPopup } from './popup.js';
 import { ensureImageFormatSupported, getBase64Async, humanFileSize } from './utils.js';
 import { mountStorageInspector, createStorageInspector } from './storage-inspector.js';
 import { BrowserProvider, BrowserMutator } from './browser-storage-inspector.js';
+import { AdminPages } from './account-admin.js';
 import {
     accountsEnabled,
     currentUser,
@@ -14,7 +15,6 @@ import {
     fetchSnapshots,
     getCurrentUser,
     isAdmin,
-    openAdminPanel,
     requestChangeAvatar,
     requestChangeName,
     requestChangePassword,
@@ -31,7 +31,6 @@ const accountTitles = () => ({
     password: t`Change Password`,
     snapshots: t`Settings snapshots`,
     storage: t`Storage`,
-    users: t`User management`,
     reset: t`Reset`,
     resetSettings: t`Reset Settings`,
     resetAll: t`Reset Everything`,
@@ -46,7 +45,6 @@ const accountHelp = () => ({
     password: [t`Leave the new password blank to remove the password.`],
     snapshots: [t`A snapshot records your settings only, not characters or chats.`, t`Restoring a snapshot replaces the current settings and reloads the page.`],
     storage: [t`Server storage shows how much space your data takes on the server.`, t`Browser storage shows what this browser keeps for Luker. Deleting items here only affects this browser.`],
-    users: [t`Create, disable and manage user accounts in the admin panel.`],
     reset: [t`Reset Settings only restores settings to factory defaults. Reset Everything deletes all your data.`],
     resetSettings: [t`Don't forget to save a snapshot of your settings before proceeding.`],
     resetAll: [t`Account reset code has been posted to the server console.`, t`Make sure you have a backup before proceeding.`],
@@ -66,15 +64,17 @@ class AccountWindow extends DataPages {
      * @param {string} [options.view] Sub-page to open inside the tab
      * @param {string} [options.handle] User whose data backup/restore/migration acts on
      * @param {() => void} [options.onDone] Called after a successful restore or migration
+     * @param {object[]} [options.usersStack] User-management pages to show again
      */
-    constructor(root, provider, { tab, view, handle, onDone }) {
+    constructor(root, provider, { tab, view, handle, onDone, usersStack }) {
         super(root, provider, { tab, handle, onDone });
         this.otherUser = this.isOtherUser;
+        this.admin = new AdminPages(this, { reopen: reopenUsers });
         Object.assign(this.stack, {
             profile: [{ view: 'profile' }],
             snapshots: [{ view: 'snapshots' }],
             storage: [{ view: 'storage' }],
-            users: [{ view: 'users' }],
+            users: usersStack?.length ? usersStack : [{ view: 'users' }],
             reset: [{ view: 'reset' }],
         });
         this.snaps = { list: null, loading: false, error: null, busy: false, open: new Set(), content: new Map() };
@@ -136,19 +136,36 @@ class AccountWindow extends DataPages {
         return ACCOUNT_VIEWS.has(this.top.view);
     }
 
+    /** Whether the page belongs to user management (account-admin.js). */
+    get isAdminView() {
+        return this.admin.owns(this.top.view);
+    }
+
+    get busyJob() {
+        return super.busyJob || this.admin?.busyJob || null;
+    }
+
+    destroy() {
+        super.destroy();
+        this.admin.destroy();
+    }
+
     statusInfo() {
         return this.otherUser ? null : super.statusInfo();
     }
 
     pageTitle() {
+        if (this.isAdminView) return this.admin.title();
         return this.isAccountView ? accountTitles()[this.top.view] : super.pageTitle();
     }
 
     helpLines() {
+        if (this.isAdminView) return this.admin.help();
         return this.isAccountView ? accountHelp()[this.top.view] || [] : super.helpLines();
     }
 
     headExtra() {
+        if (this.isAdminView) return this.admin.headExtra();
         if (this.top.view === 'snapshots') {
             return `<button class="dw-btn primary sm${this.snaps.busy ? ' busy' : ''}" data-act="snap-make">${this.snaps.busy ? ic('sync', 'dw-spin') : ic('camera')}${t`Make a Snapshot`}</button>`;
         }
@@ -162,17 +179,18 @@ class AccountWindow extends DataPages {
             case 'password': return this.viewPassword();
             case 'snapshots': return this.viewSnapshots();
             case 'storage': return this.viewStorage();
-            case 'users': return this.viewUsers();
             case 'reset': return this.viewReset();
             case 'resetSettings': return this.viewResetSettings();
             case 'resetAll': return this.viewResetAll();
         }
+        if (this.isAdminView) return this.admin.render();
         return super.renderView();
     }
 
     afterRender() {
         const slot = this.root.querySelector('[data-region="storage"]');
         if (slot) this.mountInspector(slot);
+        if (this.isAdminView) this.admin.afterRender();
     }
 
     errorLine() {
@@ -290,7 +308,13 @@ class AccountWindow extends DataPages {
         }
     }
 
+    onInput(e) {
+        super.onInput(e);
+        if (this.isAdminView) this.admin.onInput(e);
+    }
+
     onChange(e) {
+        if (this.admin.onChange(e)) return;
         const el = e.target;
         if (el.dataset.role === 'avatar') {
             const file = el.files?.[0];
@@ -449,13 +473,6 @@ class AccountWindow extends DataPages {
         slot.replaceChildren(entry.el);
     }
 
-    // ---------- user management ----------
-
-    viewUsers() {
-        return `<div class="dw-empty"><span class="dw-card-icon">${ic('users')}</span><b>${t`User management`}</b>
-            <button class="dw-btn primary" data-act="admin-panel">${ic('shield')}${t`Open admin panel`}</button></div>`;
-    }
-
     // ---------- reset ----------
 
     viewReset() {
@@ -542,6 +559,7 @@ class AccountWindow extends DataPages {
     // ---------- actions ----------
 
     async onAction(act, el, e) {
+        if (act.startsWith('adm-')) return this.admin.onAction(act, el);
         switch (act) {
             case 'rename-save': return this.renameSave();
             case 'password-save': return this.passwordSave();
@@ -556,7 +574,6 @@ class AccountWindow extends DataPages {
             case 'storage-kind':
                 this.storageKind = el.dataset.kind;
                 return this.rerender();
-            case 'admin-panel': return openAdminPanel();
             case 'reset-code': return this.sendResetCode(this.top);
             case 'reset-settings-go': return this.resetSettingsGo();
             case 'reset-all-go': return this.resetAllGo();
@@ -568,6 +585,15 @@ class AccountWindow extends DataPages {
 let openWindow = null;
 
 /**
+ * Shows user management again after another user's data window closed, unless an Account window is already open.
+ * @param {object[]} usersStack User-management pages to restore
+ */
+function reopenUsers(usersStack) {
+    if (openWindow || !isAdmin()) return;
+    openAccountWindow({ tab: 'users', usersStack });
+}
+
+/**
  * Opens the Account window, or brings the open one to the requested page.
  * @param {object} [options]
  * @param {string} [options.tab] Page to show first: profile, sync, backup, restore, migrate, settings, snapshots, storage, users or reset
@@ -575,9 +601,10 @@ let openWindow = null;
  * @param {string} [options.handle] User whose data backup/restore/migration acts on (admin panel); another user's handle limits the window to those pages
  * @param {() => void} [options.onDone] Called after a successful restore or migration; reloads the page by default
  * @param {object} [options.provider] Data source; defaults to the live Luker provider
+ * @param {object[]} [options.usersStack] User-management pages to show (internal)
  * @returns {Promise<void>} Resolves when the window closes
  */
-export function openAccountWindow({ tab = 'profile', view, handle, onDone, provider } = {}) {
+export function openAccountWindow({ tab = 'profile', view, handle, onDone, provider, usersStack } = {}) {
     if (openWindow && (openWindow.handle !== handle || provider)) {
         openWindow.close();
     }
@@ -592,7 +619,7 @@ export function openAccountWindow({ tab = 'profile', view, handle, onDone, provi
     const done = onDone ?? (provider ? undefined : () => location.reload());
     const mounted = mountLukerWindow({
         label: t`Account`,
-        create: root => new AccountWindow(root, source, { tab, view, handle, onDone: done }),
+        create: root => new AccountWindow(root, source, { tab, view, handle, onDone: done, usersStack }),
         onClosed: () => {
             if (!provider) source.stop?.();
             openWindow = null;

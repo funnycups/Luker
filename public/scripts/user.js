@@ -2087,7 +2087,9 @@ async function postUserApi(url, body) {
     });
     if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || 'Unknown error');
+        const error = new Error(data?.error || data?.message || 'Unknown error');
+        error.data = data;
+        throw error;
     }
     return response;
 }
@@ -2185,6 +2187,227 @@ export async function requestMakeSnapshot() {
  */
 export async function requestRestoreSnapshot(name) {
     await postUserApi('/api/settings/restore-snapshot', { name });
+}
+
+// ---------- admin requests (throw on failure) ----------
+
+/**
+ * Lists all users.
+ * @returns {Promise<import('../../src/users.js').UserViewModel[]>} Users
+ */
+export async function fetchUsers() {
+    const response = await postUserApi('/api/users/get');
+    return response.json();
+}
+
+/**
+ * Reads the admin overview: server info, totals, per-user storage and security checks.
+ * @returns {Promise<any>} Overview
+ */
+export async function fetchAdminOverview() {
+    const response = await postUserApi('/api/users/overview');
+    return response.json();
+}
+
+/**
+ * Reads the global admin settings (default quota, registration, OAuth).
+ * @returns {Promise<any>} Settings
+ */
+export async function fetchAdminSettings() {
+    const response = await postUserApi('/api/users/settings/get');
+    return response.json();
+}
+
+/**
+ * Saves the global admin settings.
+ * @param {any} payload Settings
+ * @returns {Promise<any>} Saved settings
+ */
+export async function requestSaveAdminSettings(payload) {
+    const response = await postUserApi('/api/users/settings/save', payload);
+    return response.json();
+}
+
+/**
+ * Reads config.yaml.
+ * @returns {Promise<{path: string, content: string}>} Config file
+ */
+export async function fetchRuntimeConfig() {
+    const response = await postUserApi('/api/users/config/get');
+    return response.json();
+}
+
+/**
+ * Saves config.yaml; validation errors come back localized.
+ * @param {string} content File content
+ * @returns {Promise<{ok: boolean, hotReloadApplied: boolean, restartRecommended: boolean}>} Save result
+ */
+export async function requestSaveRuntimeConfig(content) {
+    try {
+        const response = await postUserApi('/api/users/config/save', { content });
+        return response.json();
+    } catch (error) {
+        const localized = localizeConfigValidationCodes(error.data?.codes);
+        if (localized) error.message = localized;
+        throw error;
+    }
+}
+
+/**
+ * Lists the installed server plugins.
+ * @returns {Promise<{ok: boolean, enabled: boolean, pluginsPath: string, plugins: Array<any>}>} Plugins
+ */
+export async function fetchServerPlugins() {
+    const response = await postUserApi('/api/users/plugins/list');
+    return response.json();
+}
+
+/**
+ * Installs a server plugin from a git repository.
+ * @param {string} repoUrl Repository URL
+ * @returns {Promise<{ok: boolean, enabled: boolean, restartRecommended: boolean, plugin: any}>} Result
+ */
+export async function requestInstallServerPlugin(repoUrl) {
+    const response = await postUserApi('/api/users/plugins/install', { repoUrl });
+    return response.json();
+}
+
+/**
+ * Updates a server plugin from its git remote.
+ * @param {string} directory Plugin directory
+ * @returns {Promise<{ok: boolean, restartRecommended: boolean, plugin: any}>} Result
+ */
+export async function requestUpdateServerPlugin(directory) {
+    const response = await postUserApi('/api/users/plugins/update', { directory });
+    return response.json();
+}
+
+/**
+ * Removes a server plugin.
+ * @param {string} directory Plugin directory
+ * @returns {Promise<{ok: boolean, restartRecommended: boolean, plugin: any}>} Result
+ */
+export async function requestRemoveServerPlugin(directory) {
+    const response = await postUserApi('/api/users/plugins/delete', { directory });
+    return response.json();
+}
+
+/**
+ * Installs the npm dependencies of a server plugin.
+ * @param {string} directory Plugin directory
+ * @returns {Promise<{ok: boolean, installed: boolean, manager: string, plugin: any}>} Result
+ */
+export async function requestInstallPluginDependencies(directory) {
+    const response = await postUserApi('/api/users/plugins/install-dependencies', { directory });
+    return response.json();
+}
+
+/**
+ * Sets a user's storage quota.
+ * @param {string} handle User handle
+ * @param {number|null} quotaBytes Quota in bytes; null uses the default
+ * @returns {Promise<void>}
+ */
+export async function requestSetUserQuota(handle, quotaBytes) {
+    await postUserApi('/api/users/set-quota', { handle, storageQuotaBytes: quotaBytes });
+}
+
+/**
+ * Enables or disables a user account.
+ * @param {string} handle User handle
+ * @param {boolean} enabled Whether the account can sign in
+ * @returns {Promise<void>}
+ */
+export async function requestSetUserEnabled(handle, enabled) {
+    await postUserApi(enabled ? '/api/users/enable' : '/api/users/disable', { handle });
+}
+
+/**
+ * Promotes a user to admin or demotes an admin to a regular user.
+ * @param {string} handle User handle
+ * @param {boolean} admin Whether the user becomes an admin
+ * @returns {Promise<void>}
+ */
+export async function requestSetUserAdmin(handle, admin) {
+    await postUserApi(admin ? '/api/users/promote' : '/api/users/demote', { handle });
+}
+
+/**
+ * Creates a user.
+ * @param {{handle: string, name: string, password: string}} user New user
+ * @returns {Promise<{handle: string}>} The created handle
+ */
+export async function requestCreateUser(user) {
+    const response = await postUserApi('/api/users/create', user);
+    return response.json();
+}
+
+/**
+ * Deletes a user.
+ * @param {string} handle User handle
+ * @param {boolean} purge Also delete the user's data folder
+ * @returns {Promise<void>}
+ */
+export async function requestDeleteUser(handle, purge) {
+    await postUserApi('/api/users/delete', { handle, purge });
+}
+
+/**
+ * Turns a display name into a valid handle.
+ * @param {string} text Display name
+ * @returns {Promise<string>} Handle
+ */
+export async function requestSlugify(text) {
+    const response = await postUserApi('/api/users/slugify', { text });
+    return response.text();
+}
+
+/**
+ * Lists all announcements.
+ * @returns {Promise<Array<{id: string, level: string, title: string, body: string, createdAt: number}>>} Announcements
+ */
+export async function fetchAnnouncementsAdmin() {
+    const response = await postUserApi('/api/users/announcements/list', {});
+    const data = await response.json();
+    return Array.isArray(data?.items) ? data.items : [];
+}
+
+/**
+ * Creates, updates or deletes an announcement.
+ * @param {'create'|'update'|'delete'} op Operation
+ * @param {object} payload Announcement fields (with id for update/delete)
+ * @returns {Promise<void>}
+ */
+export async function requestAnnouncement(op, payload) {
+    await postUserApi(`/api/users/announcements/${op}`, payload);
+}
+
+/**
+ * Reads the storage backend status, including a running migration's progress.
+ * @returns {Promise<any>} Status
+ */
+export async function fetchStorageBackendStatus() {
+    const response = await postUserApi('/api/users/storage/status', {});
+    return response.json();
+}
+
+/**
+ * Migrates all user data to another storage backend.
+ * @param {string} targetMode fs, sqlite, mysql or postgres
+ * @param {object} [dbCreds] Connection overrides from buildStorageBackendCreds()
+ * @returns {Promise<{ok: boolean, status: number, data: any}>} The server's report, also when it failed
+ */
+export async function triggerStorageBackendMigration(targetMode, dbCreds = {}) {
+    const body = { targetMode };
+    if (targetMode === 'mysql' && dbCreds.mysql) body.mysql = dbCreds.mysql;
+    if (targetMode === 'postgres' && dbCreds.postgres) body.postgres = dbCreds.postgres;
+    const response = await fetch('/api/users/storage/migrate', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, data };
 }
 
 /**
@@ -3119,30 +3342,6 @@ export async function openAdminPanel() {
             });
             list.append(row);
         }
-    }
-
-    async function fetchStorageBackendStatus() {
-        const response = await fetch('/api/users/storage/status', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-        });
-        if (!response.ok) {
-            throw new Error(`status ${response.status}`);
-        }
-        return response.json();
-    }
-
-    async function triggerStorageBackendMigration(targetMode, dbCreds = {}) {
-        const body = { targetMode };
-        if (targetMode === 'mysql' && dbCreds.mysql) body.mysql = dbCreds.mysql;
-        if (targetMode === 'postgres' && dbCreds.postgres) body.postgres = dbCreds.postgres;
-        const response = await fetch('/api/users/storage/migrate', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify(body),
-        });
-        const data = await response.json().catch(() => ({}));
-        return { ok: response.ok, status: response.status, data };
     }
 
     function collectStorageBackendDbCreds(template, targetMode) {
