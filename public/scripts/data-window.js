@@ -1492,7 +1492,8 @@ export function openDataWindow({ tab = 'sync', view, handle, onDone, provider } 
         openWindow.win.focus();
         return openWindow.closed;
     }
-    const layer = document.createElement('div');
+    // A modal <dialog> joins the top layer, so it sits above Luker popups it is opened from.
+    const layer = document.createElement('dialog');
     layer.className = 'dw-layer';
     const scrim = document.createElement('div');
     scrim.className = 'dw-scrim';
@@ -1543,9 +1544,11 @@ export function openDataWindow({ tab = 'sync', view, handle, onDone, provider } 
             requestClose();
         }
     }, true);
+    layer.addEventListener('cancel', e => e.preventDefault());
     document.addEventListener('keydown', onKey, true);
     makeDraggable(win, root);
     document.body.append(layer);
+    layer.showModal();
     win.focus();
     openWindow = { win, ui, closed };
     return closed;

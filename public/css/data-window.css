@@ -12,6 +12,15 @@
 
     position: fixed;
     inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    overflow: hidden;
     z-index: 10050;
     font-family: var(--dw-font);
     font-size: 13px;
@@ -19,6 +28,10 @@
     color: var(--dw-text);
     -webkit-font-smoothing: antialiased;
     isolation: isolate;
+}
+
+dialog.dw-layer::backdrop {
+    background: transparent;
 }
 
 /* Four palettes, picked from the title bar. */
