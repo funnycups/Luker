@@ -15,6 +15,7 @@ import { uploadFileInChunks, finalizeRestoreUpload, abortRestoreUpload, RestoreU
 import { formatAnnouncementBody } from './announcements.js';
 import { buildStorageBackendCreds } from './admin-storage-backend.js';
 import { openLanSyncPanel } from './lan-sync.js';
+import { openDataWindow } from './data-window.js';
 import { openStorageInspector, mountStorageInspector } from './storage-inspector.js';
 import { openBrowserStorageInspector } from './browser-storage-inspector.js';
 import { resetResourceReads } from './resource-read.js';
@@ -2481,6 +2482,7 @@ async function openUserProfile() {
         await openBackupManager(currentUser.handle, () => location.reload());
         $(this).removeClass('disabled');
     });
+    template.find('.userDataWindowButton').on('click', () => openDataWindow());
     template.find('.userResetSettingsButton').on('click', () => resetSettings(currentUser.handle, () => location.reload()));
     template.find('.userResetAllButton').on('click', () => resetEverything(() => location.reload()));
     template.find('.userAvatarChange').on('click', () => template.find('.avatarUpload').trigger('click'));
