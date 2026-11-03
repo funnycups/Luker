@@ -12,8 +12,8 @@ export function initializeSyncActivity() {
         id: 'luker-sync-activity-pill',
         className: 'sync-activity-pill',
         onOpen: async () => {
-            const { openLanSyncPanel } = await import('./lan-sync.js');
-            await openLanSyncPanel();
+            const { openDataWindow } = await import('./data-window.js');
+            await openDataWindow({ tab: 'sync' });
         },
         onError: error => {
             console.error('[sync] could not open Sync', error);

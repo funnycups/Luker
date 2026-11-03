@@ -14,7 +14,6 @@ import { downloadFromServer } from './luker-download.js';
 import { uploadFileInChunks, finalizeRestoreUpload, abortRestoreUpload, RestoreUploadError } from './luker-chunked-upload.js';
 import { formatAnnouncementBody } from './announcements.js';
 import { buildStorageBackendCreds } from './admin-storage-backend.js';
-import { openLanSyncPanel } from './lan-sync.js';
 import { openDataWindow } from './data-window.js';
 import { openStorageInspector, mountStorageInspector } from './storage-inspector.js';
 import { openBrowserStorageInspector } from './browser-storage-inspector.js';
@@ -28,7 +27,7 @@ export let accountsEnabled = false;
 
 // Extend the session every 10 minutes
 const SESSION_EXTEND_INTERVAL = 10 * 60 * 1000;
-const BACKUP_CATEGORY_KEYS = Object.freeze([
+export const BACKUP_CATEGORY_KEYS = Object.freeze([
     'settings',
     'secrets',
     'characters',
@@ -40,7 +39,7 @@ const BACKUP_CATEGORY_KEYS = Object.freeze([
     'globalExtensions',
     'vectors',
 ]);
-const BACKUP_DEFAULT_SELECTION = Object.freeze({
+export const BACKUP_DEFAULT_SELECTION = Object.freeze({
     settings: true,
     secrets: true,
     characters: true,
@@ -673,10 +672,32 @@ async function createUser(form, callback) {
     }
 }
 
-function clientBackupTimestamp() {
+export function clientBackupTimestamp() {
     const d = new Date();
     const pad2 = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
+}
+
+/**
+ * Streams a user's backup ZIP from the server into a download.
+ * @param {string} handle Handle of the user to backup
+ * @param {Record<string, boolean>} selection Backup category selection
+ * @param {object} [options]
+ * @param {(progress: { loaded: number, total: number }) => void} [options.onProgress] Download progress; total is 0 when unknown
+ * @returns {Promise<{ fileName: string, size: number }>} Saved file name and byte count (0 when the Android bridge saves it)
+ */
+export async function downloadUserBackup(handle, selection, { onProgress = null } = {}) {
+    const fileName = `${handle}-${clientBackupTimestamp()}.zip`;
+    const result = await downloadFromServer({
+        url: '/api/users/backup',
+        fileName,
+        mimeType: 'application/zip',
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ handle, selection }),
+        onProgress,
+    });
+    return { fileName, size: Number(result?.size || 0) };
 }
 
 /**
@@ -709,15 +730,7 @@ async function backupUserData(handle, callback, selection = BACKUP_DEFAULT_SELEC
             toastr.warning('The backup will not include secrets due to a server configuration.', 'Secrets Not Included');
         }
 
-        const fileName = `${handle}-${clientBackupTimestamp()}.zip`;
-        await downloadFromServer({
-            url: '/api/users/backup',
-            fileName,
-            mimeType: 'application/zip',
-            method: 'POST',
-            headers: getRequestHeaders(),
-            body: JSON.stringify({ handle, selection }),
-        });
+        await downloadUserBackup(handle, selection);
         callback?.();
     } catch (error) {
         console.error('Error backing up user data:', error);
@@ -787,7 +800,7 @@ function formatRestorePhaseMessage(event, archiveLabel) {
     }
 }
 
-async function restoreUserData(uploadId, handle, selection, mode, callback, { onPhaseProgress = null, scratchCreds = null } = {}) {
+export async function restoreUserData(uploadId, handle, selection, mode, callback, { onPhaseProgress = null, scratchCreds = null } = {}) {
     const payload = { uploadId, handle, mode, selection };
     if (scratchCreds?.mysqlUrl) payload.scratchMysqlUrl = scratchCreds.mysqlUrl;
     if (scratchCreds?.postgresUrl) payload.scratchPostgresUrl = scratchCreds.postgresUrl;
@@ -852,7 +865,7 @@ async function restoreUserData(uploadId, handle, selection, mode, callback, { on
  * Returns `{ engineKind, schemaVersion, sourceHandle, crossModeRequired,
  * scratchCredsNeeded }` from POST /api/users/restore-backup/probe.
  */
-async function probeBackupArchive(uploadId) {
+export async function probeBackupArchive(uploadId) {
     const response = await fetch('/api/users/restore-backup/probe', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -974,7 +987,7 @@ function createRestoreProgressStream(onPhaseProgress) {
     };
 }
 
-async function createLanMigrationLink(handle, selection) {
+export async function createLanMigrationLink(handle, selection) {
     const response = await fetch('/api/users/lan-migration/offer', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -989,7 +1002,7 @@ async function createLanMigrationLink(handle, selection) {
     return response.json();
 }
 
-function isLocalOnlyHostName(hostname) {
+export function isLocalOnlyHostName(hostname) {
     const normalized = String(hostname || '').trim().toLowerCase();
     return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1' || normalized === '[::1]';
 }
@@ -1032,7 +1045,7 @@ async function getShareableLanMigrationLink(link) {
     }
 }
 
-async function importLanMigrationLink(handle, url, selection, mode, callback, { onPhaseProgress = null } = {}) {
+export async function importLanMigrationLink(handle, url, selection, mode, callback, { onPhaseProgress = null } = {}) {
     const response = await fetch('/api/users/lan-migration/import', {
         method: 'POST',
         headers: { ...getRequestHeaders(), 'Accept': 'application/x-ndjson, application/json' },
@@ -1078,7 +1091,7 @@ async function importLanMigrationLink(handle, url, selection, mode, callback, { 
     return data;
 }
 
-function buildRestoreDiagnosticReport({ handle, file, mode, selection, result }) {
+export function buildRestoreDiagnosticReport({ handle, file, mode, selection, result }) {
     return {
         timestamp: new Date().toISOString(),
         handle: String(handle || ''),
@@ -1174,7 +1187,12 @@ async function showRestoreDiagnosticReport(report) {
     });
 }
 
-async function openBackupManager(handle, callback) {
+/**
+ * Old backup manager popup. No longer opened: the Data window replaced it.
+ * Kept until the old manager and its template are removed together.
+ * @deprecated Use openDataWindow({ tab: 'backup' }) instead
+ */
+export async function openBackupManager(handle, callback) {
     const template = $(await renderTemplateAsync('userBackupManager'));
     const canManageGlobalExtensions = isAdmin();
     const activeCategoryKeys = BACKUP_CATEGORY_KEYS.filter((key) => canManageGlobalExtensions || key !== 'globalExtensions');
@@ -1186,7 +1204,6 @@ async function openBackupManager(handle, callback) {
     const checkboxes = template.find('input[name="backupCategory"]');
     const summaryText = template.find('.backupCategorySummary');
     const globalExtensionsItem = template.find('.backupCategoryGlobalExtensions');
-    const lanSyncOpenButton = template.find('.backupLanSyncOpenButton');
     const lanCreateLinkButton = template.find('.backupLanCreateLinkButton');
     const lanCopyLinkButton = template.find('.backupLanCopyLinkButton');
     const lanGeneratedLink = template.find('.backupLanGeneratedLink');
@@ -1485,18 +1502,6 @@ async function openBackupManager(handle, callback) {
         const file = this instanceof HTMLInputElement ? this.files?.[0] : null;
         selectedFileText.text(file ? t`${file.name} (${humanFileSize(file.size)})` : t`No ZIP selected.`);
         updateRestoreState();
-    });
-
-    lanSyncOpenButton.on('click', async function () {
-        if ($(this).hasClass('disabled')) {
-            return;
-        }
-        try {
-            await openLanSyncPanel();
-        } catch (error) {
-            console.error('Error opening Sync panel:', error);
-            toastr.error(String(error.message || error), t`Failed to open Sync`);
-        }
     });
 
     lanCreateLinkButton.on('click', async function () {
@@ -2473,16 +2478,7 @@ async function openUserProfile() {
         template.find('.hasPassword').toggle(currentUser.password);
         template.find('.noPassword').toggle(!currentUser.password);
     }));
-    template.find('.userBackupButton').on('click', async function () {
-        if ($(this).hasClass('disabled')) {
-            return;
-        }
-
-        $(this).addClass('disabled');
-        await openBackupManager(currentUser.handle, () => location.reload());
-        $(this).removeClass('disabled');
-    });
-    template.find('.userDataWindowButton').on('click', () => openDataWindow());
+    template.find('.userBackupButton').on('click', () => openDataWindow({ tab: 'backup', onDone: () => location.reload() }));
     template.find('.userResetSettingsButton').on('click', () => resetSettings(currentUser.handle, () => location.reload()));
     template.find('.userResetAllButton').on('click', () => resetEverything(() => location.reload()));
     template.find('.userAvatarChange').on('click', () => template.find('.avatarUpload').trigger('click'));
@@ -3320,15 +3316,7 @@ async function openAdminPanel() {
             userBlock.find('.userDelete').on('click', () => deleteUser(user.handle, renderUsers));
             userBlock.find('.userChangeNameButton').on('click', async () => changeName(user.handle, user.name, renderUsers));
             userBlock.find('.userQuotaButton').on('click', async () => promptAndSetQuota(user));
-            userBlock.find('.userBackupButton').on('click', async function () {
-                if ($(this).hasClass('disabled')) {
-                    return;
-                }
-
-                $(this).addClass('disabled');
-                await openBackupManager(user.handle, renderUsers);
-                $(this).removeClass('disabled');
-            });
+            userBlock.find('.userBackupButton').on('click', () => openDataWindow({ tab: 'backup', handle: user.handle, onDone: renderUsers }));
             userBlock.find('.userAvatarChange').on('click', () => userBlock.find('.avatarUpload').trigger('click'));
             userBlock.find('.avatarUpload').on('change', async function () {
                 if (!(this instanceof HTMLInputElement)) {

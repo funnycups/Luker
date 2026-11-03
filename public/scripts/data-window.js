@@ -1,5 +1,6 @@
 // Data window: sync, backup, restore and migration in one floating window.
-import { createMockProvider } from './data-window-mock.js';
+import { createLukerProvider } from './data-window-provider.js';
+import { t } from './i18n.js';
 
 const ICONS = {
     sync: '<path d="M20 11a8 8 0 0 0-14.9-3.5M4 4v4h4M4 13a8 8 0 0 0 14.9 3.5M20 20v-4h-4"/>',
@@ -36,67 +37,69 @@ const ICONS = {
     help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 0 1 4.9.7c0 1.6-2.4 2.1-2.4 3.6M12 17h.01"/>',
 };
 
-const TABS = [
-    { key: 'sync', label: '同步', icon: 'sync' },
-    { key: 'backup', label: '备份', icon: 'download' },
-    { key: 'restore', label: '恢复', icon: 'restore' },
-    { key: 'migrate', label: '迁移', icon: 'move' },
+const tabs = () => [
+    { key: 'sync', label: t`Sync`, icon: 'sync' },
+    { key: 'backup', label: t`Backup`, icon: 'download' },
+    { key: 'restore', label: t`Restore`, icon: 'restore' },
+    { key: 'migrate', label: t`Migrate`, icon: 'move' },
 ];
 
-const TITLES = {
-    list: '同步',
-    backup: '备份',
-    restore: '恢复',
-    migrate: '迁移',
-    settings: '本机设置',
-    add: '添加同步对象',
-    pairNew: '让另一台设备连过来',
-    pairExist: '连接到另一台设备',
-    s3: '添加 S3 存储',
-    s3Edit: '编辑 S3 存储',
-    unlock: '解锁 S3 存储',
-    lanEdit: '编辑设备',
-    conflicts: '同步问题',
-    migrateOut: '迁出这台的数据',
-    migrateIn: '迁入数据到这台',
-};
+const titles = () => ({
+    list: t`Sync`,
+    backup: t`Backup`,
+    restore: t`Restore`,
+    migrate: t`Migrate`,
+    settings: t`Device settings`,
+    add: t`Add sync backend`,
+    pairNew: t`Let another device connect`,
+    pairExist: t`Connect to another device`,
+    s3: t`Add S3 storage`,
+    s3Edit: t`Edit S3 storage`,
+    unlock: t`Unlock S3 storage`,
+    lanEdit: t`Edit device`,
+    conflicts: t`Sync issues`,
+    migrateOut: t`Migrate out of this device`,
+    migrateIn: t`Migrate into this device`,
+});
 
-const HELP = {
-    list: ['同步会在这台和其他设备之间自动交换数据。局域网设备直接互连；S3 通过加密的存储桶中转。', '只要服务端在运行，关掉浏览器也会继续同步。冲突的文件会先保留可用版本，等你来选。'],
-    settings: ['本机名称会出现在其他设备的版本记录里，留空就用主机名。改名只影响之后的修改，旧记录不变。', '编辑停下后等一段时间再同步；另外按检查间隔定期去其他设备看看有没有更新。'],
-    add: ['局域网：两台设备要能互相访问。在一台上生成链接，到另一台粘贴。', 'S3：多台设备填同一个存储桶、前缀和加密口令即可。'],
-    pairNew: ['链接只能用一次，里面带着对方的名字和要同步的内容。换地址不会换链接，点「重新生成」才会作废旧链接。', '对方要能用这里选的地址访问到本机。对方连过来时填的登录账号，会保存在对方的服务器上。'],
-    pairExist: ['粘贴链接后，地址、设备 ID 和同步内容会自动填好。两台设备要用同一个用户登录，用户名里的特殊字符会变成下划线。', '对方开了登录密码才需要填账号；配对后保存在本机，可以随时在设备菜单里清除。'],
-    s3: ['同一个桶、前缀、加密口令的设备会互相同步。', '桶和前缀保存后不能改。'],
-    s3Edit: ['密钥和口令留空表示保留原来的值；桶和前缀保存后不能改。'],
-    unlock: ['服务端重启后需要重新输入加密口令，才能继续读写这个存储桶。'],
-    lanEdit: ['只改本机这一侧的名字和同步内容。'],
-    conflicts: ['两台设备改了同一个文件、又合并不了时，会在这里等你选用哪个版本。', '选的不是「当前版本」时，会覆盖掉冲突之后的修改；被覆盖的版本仍留在同步历史里。'],
-    backup: ['把选中的数据打包成一个 ZIP 下载到本地。', 'API 密钥默认不打包。备份、恢复、迁移共用同一组内容选择。'],
-    restore: ['增量恢复：写入备份里的文件，同路径的文件会被替换，其他不动。', '覆盖恢复：先清空所选内容，再写入备份。', '上传之外的阶段不能中途取消。', '备份来自另一种数据库时，会要求填一个临时数据库连接用于中转。'],
-    migrate: ['一次性把数据搬到另一台设备。多台设备长期使用，请用「同步」。'],
-    migrateOut: ['链接很快失效，而且只能用一次。'],
-    migrateIn: ['在旧设备上生成链接，粘贴到这里。'],
-};
+const help = () => ({
+    list: [t`Sync automatically exchanges data between this device and others. LAN devices connect directly; S3 relays through an encrypted bucket.`, t`Sync keeps running on the server even if you close the browser. Conflicting files keep a usable version until you choose.`],
+    settings: [t`The device name appears in other devices' version history. Leave it blank to use the host name. Renaming only affects later edits; old records stay unchanged.`, t`Sync runs a short while after you stop editing. It also checks other devices for updates at the poll interval.`],
+    add: [t`LAN: both devices must be able to reach each other. Generate a link on one and paste it on the other.`, t`S3: use the same bucket, prefix and passphrase on every device.`],
+    pairNew: [t`A link works only once and carries the other device's name and what to sync. Changing the address keeps the same link; click "Regenerate" to void the old one.`, t`The other device must be able to reach this one at the selected address. The login account it enters when connecting is saved on its server.`],
+    pairExist: [t`After you paste the link, the address, device ID and sync content are filled in automatically. Both devices must sign in as the same user; special characters in a username become underscores.`, t`The account is only needed if the other device has a login password. It is saved on this device after pairing and can be cleared from the device menu at any time.`],
+    s3: [t`Devices with the same bucket, prefix and passphrase sync with each other.`, t`The bucket and prefix cannot be changed after saving.`],
+    s3Edit: [t`Leave the keys and passphrase blank to keep the current values. The bucket and prefix cannot be changed after saving.`],
+    unlock: [t`After a server restart, enter the passphrase again to keep reading and writing this bucket.`],
+    lanEdit: [t`Only changes the name and sync content on this device's side.`],
+    conflicts: [t`When two devices edit the same file and it cannot be merged, it waits here for you to pick a version.`, t`Choosing anything other than "Current version" overwrites changes made after the conflict; the overwritten version stays in sync history.`],
+    backup: [t`Packs the selected data into a ZIP and downloads it.`, t`API keys are not included by default. Backup, restore and migrate share the same content selection.`],
+    restore: [t`Incremental: writes the files in the backup, replacing files at the same path and leaving everything else alone.`, t`Replace: clears the selected content first, then writes the backup.`, t`Stages after the upload cannot be cancelled.`, t`If the backup comes from a different type of database, you will be asked for a temporary database connection to relay through.`],
+    migrate: [t`Moves data to another device in one go. For long-term use across several devices, use "Sync".`],
+    migrateOut: [t`The link expires quickly and works only once.`],
+    migrateIn: [t`Generate a link on the old device and paste it here.`],
+});
 
 const THEMES = [
-    { key: 'mist', label: '晨雾', dark: false, a: '#f3f4f2', b: '#13a68b' },
-    { key: 'latte', label: '奶茶', dark: false, a: '#f3ece2', b: '#c0673b' },
-    { key: 'ocean', label: '深海', dark: true, a: '#1c2433', b: '#4fd1b9' },
-    { key: 'dusk', label: '暮紫', dark: true, a: '#2a2833', b: '#a594f9' },
+    { key: 'mist', dark: false, a: '#f3f4f2', b: '#13a68b' },
+    { key: 'latte', dark: false, a: '#f3ece2', b: '#c0673b' },
+    { key: 'ocean', dark: true, a: '#1c2433', b: '#4fd1b9' },
+    { key: 'dusk', dark: true, a: '#2a2833', b: '#a594f9' },
 ];
+const themeLabel = key => ({ mist: t`Mist`, latte: t`Latte`, ocean: t`Ocean`, dusk: t`Dusk` })[key];
 const THEME_KEY = 'luker.dataWindow.theme';
 
 function loadTheme() {
     const saved = globalThis.localStorage?.getItem(THEME_KEY);
-    if (THEMES.some(t => t.key === saved)) return saved;
+    if (THEMES.some(tp => tp.key === saved)) return saved;
     return globalThis.matchMedia?.('(prefers-color-scheme: light)').matches ? 'mist' : 'ocean';
 }
 
 const REGIONS = ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-northeast-1', 'ap-southeast-1', 'ap-east-1', 'ap-hongkong', 'ap-shanghai', 'ap-guangzhou', 'ap-beijing', 'oss-cn-hangzhou', 'oss-cn-shanghai', 'auto'];
-const RESTORE_STAGES = ['上传', '整理', '检查', '恢复'];
-const MIGRATE_STAGES = ['下载', '整理', '恢复'];
-const STATE_TAG = { ok: ['is-ok', '已同步'], running: ['is-ok', '同步中'], error: ['is-bad', '失败'], pending: ['', '等待对方连接'], unknown: ['is-warn', '状态未知'] };
+// Each stage is [name, progress text].
+const restoreStages = () => [[t`Upload`, t`Uploading…`], [t`Prepare`, t`Preparing…`], [t`Check`, t`Checking…`], [t`Restore`, t`Restoring…`]];
+const migrateStages = () => [[t`Download`, t`Downloading…`], [t`Prepare`, t`Preparing…`], [t`Restore`, t`Restoring…`]];
+const stateTag = () => ({ ok: ['is-ok', t`Synced`], running: ['is-ok', t`Syncing`], error: ['is-bad', t`Failed`], pending: ['', t`Waiting for the other device`], unknown: ['is-warn', t`Status unknown`] });
 
 const ic = (name, cls = '') => `<svg class="dw-ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
 
@@ -105,12 +108,12 @@ function esc(value) {
 }
 
 function ago(ts) {
-    if (!ts) return '从未同步';
+    if (!ts) return t`Never synced`;
     const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-    if (s < 60) return '刚刚';
-    if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-    if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-    return `${Math.floor(s / 86400)} 天前`;
+    if (s < 60) return t`Just now`;
+    if (s < 3600) return t`${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return t`${Math.floor(s / 3600)} hr ago`;
+    return t`${Math.floor(s / 86400)} d ago`;
 }
 
 function clock(ms) {
@@ -130,7 +133,7 @@ const isLoopback = url => /\/\/(127\.\d+\.\d+\.\d+|localhost|\[::1\]|::1)(:|\/|$
 const firstReachable = list => list.find(a => !isLoopback(a)) || list[0];
 
 // Survives closing and reopening the window, like the old per-backend action lock.
-const shared = { pending: new Set(), jobs: null, backupSel: null, provider: null };
+const shared = { pending: new Set(), jobs: null, backupSel: null };
 
 class DataWindow {
     constructor(root, provider, { tab, view, handle, onDone }) {
@@ -181,17 +184,17 @@ class DataWindow {
     /** Name of the long-running job in progress, if any. */
     get busyJob() {
         const { backup, restore, migrate } = this.f;
-        if (backup.running) return '正在下载备份';
-        if (restore.running) return '正在恢复';
-        if (migrate.running) return '正在迁移';
-        if (this.applying) return '正在应用冲突选择';
+        if (backup.running) return t`Downloading backup`;
+        if (restore.running) return t`Restoring`;
+        if (migrate.running) return t`Migrating`;
+        if (this.applying) return t`Applying conflict choices`;
         return null;
     }
 
     /** Disabled attribute for a main button while another heavy job runs. */
     lockAttr(own) {
         const job = this.busyJob;
-        return job && !own ? `disabled title="${job}，请等它完成"` : '';
+        return job && !own ? `disabled title="${esc(t`${job}. Please wait for it to finish.`)}"` : '';
     }
 
     destroy() {
@@ -230,30 +233,30 @@ class DataWindow {
 
     render() {
         const issues = this.snap.conflicts.length + this.snap.notices.length;
-        const tab = t => `<button class="dw-tab" data-act="tab" data-tab="${t.key}" role="tab" aria-selected="${t.key === this.tab}">
-            ${ic(t.icon)}<span>${t.label}</span>${t.key === 'sync' && issues ? `<span class="dw-tab-count">${issues}</span>` : ''}</button>`;
+        const tab = tp => `<button class="dw-tab" data-act="tab" data-tab="${tp.key}" role="tab" aria-selected="${tp.key === this.tab}">
+            ${ic(tp.icon)}<span>${tp.label}</span>${tp.key === 'sync' && issues ? `<span class="dw-tab-count">${issues}</span>` : ''}</button>`;
         this.root.innerHTML = `
             <header class="dw-titlebar">
                 <span class="dw-mark">${ic('db')}</span>
-                <span class="dw-title">数据</span>
+                <span class="dw-title">${t`Data`}</span>
                 <span data-region="status"></span>
                 <span class="dw-sp"></span>
-                <button class="dw-ibtn${this.themeMenu ? ' on' : ''}" data-act="theme-menu" title="配色">${ic(THEMES.find(t => t.key === this.theme)?.dark ? 'moon' : 'sun')}</button>
-                <button class="dw-ibtn${this.help ? ' on' : ''}" data-act="help" title="说明">${ic('help')}</button>
-                <button class="dw-ibtn is-close" data-act="close" title="关闭">${ic('x')}</button>
+                <button class="dw-ibtn${this.themeMenu ? ' on' : ''}" data-act="theme-menu" title="${t`Color scheme`}">${ic(THEMES.find(tp => tp.key === this.theme)?.dark ? 'moon' : 'sun')}</button>
+                <button class="dw-ibtn${this.help ? ' on' : ''}" data-act="help" title="${t`Help`}">${ic('help')}</button>
+                <button class="dw-ibtn is-close" data-act="close" title="${t`Close`}">${ic('x')}</button>
             </header>
             <div class="dw-shell">
                 <nav class="dw-rail" role="tablist">
-                    ${TABS.map(tab).join('')}
-                    <div class="dw-rail-foot">${tab({ key: 'settings', label: '本机设置', icon: 'gear' })}</div>
+                    ${tabs().map(tab).join('')}
+                    <div class="dw-rail-foot">${tab({ key: 'settings', label: t`Device settings`, icon: 'gear' })}</div>
                 </nav>
                 <main class="dw-main"><div class="dw-body">${this.renderPage()}</div></main>
             </div>
-            ${this.themeMenu ? `<div class="dw-themes" role="menu">${THEMES.map(t => `
-                <button class="dw-theme" role="menuitemradio" aria-checked="${t.key === this.theme}" data-act="theme" data-theme="${t.key}">
-                    <span class="dw-swatch" style="--a:${t.a};--b:${t.b}"></span><span>${t.label}</span>${t.key === this.theme ? ic('check') : ''}
+            ${this.themeMenu ? `<div class="dw-themes" role="menu">${THEMES.map(tp => `
+                <button class="dw-theme" role="menuitemradio" aria-checked="${tp.key === this.theme}" data-act="theme" data-theme="${tp.key}">
+                    <span class="dw-swatch" style="--a:${tp.a};--b:${tp.b}"></span><span>${themeLabel(tp.key)}</span>${tp.key === this.theme ? ic('check') : ''}
                 </button>`).join('')}</div>` : ''}
-            ${this.help ? `<div class="dw-pop">${(HELP[this.viewKey] || HELP.list).map(l => `<p>${esc(l)}</p>`).join('')}</div>` : ''}`;
+            ${this.help ? `<div class="dw-pop">${(help()[this.viewKey] || help().list).map(l => `<p>${esc(l)}</p>`).join('')}</div>` : ''}`;
         this.renderStatus();
     }
 
@@ -262,11 +265,11 @@ class DataWindow {
         const canAdd = this.top.view === 'list' && this.snap.available && this.snap.backends.length;
         const other = this.handle && this.handle !== this.p.currentHandle() && ['backup', 'restore', 'migrate'].includes(this.tab);
         const head = `<div class="dw-pagehead">
-            ${deep ? `<button class="dw-ibtn" data-act="back" title="返回">${ic('back')}</button>` : ''}
-            <h2 class="dw-h2">${esc(TITLES[this.viewKey])}</h2>
+            ${deep ? `<button class="dw-ibtn" data-act="back" title="${t`Back`}">${ic('back')}</button>` : ''}
+            <h2 class="dw-h2">${esc(titles()[this.viewKey])}</h2>
             <span class="dw-sp"></span>
-            ${other ? `<span class="dw-pilltag is-warn">正在操作用户 ${esc(this.handle)}</span>` : ''}
-            ${canAdd ? `<button class="dw-btn primary sm" data-act="push" data-view="add">${ic('plus')}添加</button>` : ''}
+            ${other ? `<span class="dw-pilltag is-warn">${esc(t`Acting on user ${this.handle}`)}</span>` : ''}
+            ${canAdd ? `<button class="dw-btn primary sm" data-act="push" data-view="add">${ic('plus')}${t`Add`}</button>` : ''}
         </div>`;
         return head + this.renderView();
     }
@@ -307,19 +310,19 @@ class DataWindow {
 
     statusInfo() {
         const { backends, conflicts, notices, available, statusError } = this.snap;
-        if (!available) return { tone: 'error', text: '同步不可用' };
-        if (statusError) return { tone: 'error', text: '读不到同步状态' };
+        if (!available) return { tone: 'error', text: t`Sync unavailable` };
+        if (statusError) return { tone: 'error', text: t`Can't read sync status` };
         const running = backends.find(b => b.state === 'running');
-        if (running) return { tone: 'running', text: `正在同步 ${running.label} · ${clock(Date.now() - running.startedAt)}` };
-        if (conflicts.length) return { tone: 'attention', text: `${conflicts.length} 个冲突待处理`, act: 'conflicts' };
-        if (notices.length) return { tone: 'attention', text: `${notices.length} 条同步通知`, act: 'conflicts' };
+        if (running) return { tone: 'running', text: t`Syncing ${running.label} · ${clock(Date.now() - running.startedAt)}` };
+        if (conflicts.length) return { tone: 'attention', text: t`${conflicts.length} conflicts to resolve`, act: 'conflicts' };
+        if (notices.length) return { tone: 'attention', text: t`${notices.length} sync notices`, act: 'conflicts' };
         const failed = backends.find(b => b.state === 'error');
-        if (failed) return { tone: 'error', text: `${failed.label} 同步失败` };
+        if (failed) return { tone: 'error', text: t`${failed.label} sync failed` };
         const stalled = backends.filter(b => b.stalled?.length);
-        if (stalled.length) return { tone: 'attention', text: `${stalled.reduce((n, b) => n + b.stalled.length, 0)} 个文件没能更新`, act: 'conflicts' };
+        if (stalled.length) return { tone: 'attention', text: t`${stalled.reduce((n, b) => n + b.stalled.length, 0)} files could not be updated`, act: 'conflicts' };
         const synced = backends.filter(b => b.lastSync);
         if (!synced.length) return null;
-        return { tone: 'ok', text: `已同步 · ${ago(Math.max(...synced.map(b => b.lastSync)))}` };
+        return { tone: 'ok', text: t`Synced · ${ago(Math.max(...synced.map(b => b.lastSync)))}` };
     }
 
     renderStatus() {
@@ -342,6 +345,13 @@ class DataWindow {
 
     refreshLive() {
         const v = this.top.view;
+        // Settings load after the window opens; fill the form until the user edits it.
+        if (!this.settingsTouched) {
+            const s = this.snap;
+            this.f.device = { label: s.device.label };
+            this.f.schedule = { ...s.schedule };
+            if (v === 'settings') this.rerender();
+        }
         if (v === 'list') {
             this.refreshRegion('top');
             this.refreshRegion('cards');
@@ -379,7 +389,7 @@ class DataWindow {
         setTimeout(() => el.remove(), 2800);
     }
 
-    confirm({ title, text, ok = '确定', danger = false }) {
+    confirm({ title, text, ok = t`Proceed`, danger = false }) {
         return new Promise(resolve => {
             const el = document.createElement('div');
             el.className = 'dw-modal';
@@ -388,7 +398,7 @@ class DataWindow {
                     <h4>${esc(title)}</h4>
                     ${text ? `<p>${esc(text)}</p>` : ''}
                     <div class="dw-actions">
-                        <button class="dw-btn" data-r="0">取消</button>
+                        <button class="dw-btn" data-r="0">${t`Cancel`}</button>
                         <button class="dw-btn ${danger ? 'danger solid' : 'primary'}" data-r="1">${esc(ok)}</button>
                     </div>
                 </div>`;
@@ -410,34 +420,34 @@ class DataWindow {
 
     syncCats(key, set) {
         return `<section class="dw-sec">
-            <div class="dw-sec-title">同步内容<span class="dw-sp"></span><span class="dw-count">已选 ${set.size} / ${allSyncCats(this.snap.syncCategories).length}</span></div>
+            <div class="dw-sec-title">${t`Sync content`}<span class="dw-sp"></span><span class="dw-count">${t`Selected ${set.size} / ${allSyncCats(this.snap.syncCategories).length}`}</span></div>
             <div class="dw-cats">${this.snap.syncCategories.map(([group, items], gi) => `
                 <div class="dw-cat-g">
-                    <button data-act="cat-group" data-set="${key}" data-g="${gi}" title="全选 / 全不选">${esc(group)}</button>
+                    <button data-act="cat-group" data-set="${key}" data-g="${gi}" title="${t`Select all / none`}">${esc(group)}</button>
                     <div class="dw-chips">${items.map(([id, label, opt]) => `
-                        <button class="dw-chip${set.has(id) ? ' on' : ''}${opt ? ' opt' : ''}" data-act="cat" data-set="${key}" data-id="${id}" ${opt ? 'title="默认不同步"' : ''}>${opt ? ic('lock') : ''}${esc(label)}</button>`).join('')}
+                        <button class="dw-chip${set.has(id) ? ' on' : ''}${opt ? ' opt' : ''}" data-act="cat" data-set="${key}" data-id="${id}" ${opt ? `title="${t`Not synced by default`}"` : ''}>${opt ? ic('lock') : ''}${esc(label)}</button>`).join('')}
                     </div>
                 </div>`).join('')}
             </div>
         </section>`;
     }
 
-    backupCats(title = '内容') {
+    backupCats(title = t`Content`) {
         const { backupCategories, isAdmin, caps } = this.snap;
         const cats = backupCategories.filter(c => !c.adminOnly || isAdmin);
         const n = cats.filter(c => this.backupSel.has(c.id)).length;
         const off = c => c.id === 'secrets' && !caps.allowSecrets;
         return `<section class="dw-sec">
             <div class="dw-sec-title">${title}<span class="dw-count">${n} / ${cats.length}</span><span class="dw-sp"></span>
-                <button class="dw-link" data-act="bsel" data-mode="all">全选</button>
-                <button class="dw-link" data-act="bsel" data-mode="def">默认</button>
-                <button class="dw-link" data-act="bsel" data-mode="none">清空</button>
+                <button class="dw-link" data-act="bsel" data-mode="all">${t`Select all`}</button>
+                <button class="dw-link" data-act="bsel" data-mode="def">${t`Default`}</button>
+                <button class="dw-link" data-act="bsel" data-mode="none">${t`Clear`}</button>
             </div>
             <div class="dw-cats"><div class="dw-chips">${cats.map(c => `
-                <button class="dw-chip${this.backupSel.has(c.id) ? ' on' : ''}${c.sensitive || c.adminOnly ? ' opt' : ''}" data-act="bcat" data-id="${c.id}" ${off(c) ? 'disabled title="服务器不允许导出 API 密钥"' : ''}>${c.sensitive ? ic('lock') : ''}${esc(c.label)}</button>`).join('')}
+                <button class="dw-chip${this.backupSel.has(c.id) ? ' on' : ''}${c.sensitive || c.adminOnly ? ' opt' : ''}" data-act="bcat" data-id="${c.id}" ${off(c) ? `disabled title="${t`The server does not allow exporting API keys`}"` : ''}>${c.sensitive ? ic('lock') : ''}${esc(c.label)}</button>`).join('')}
             </div></div>
         </section>
-        ${this.backupSel.has('secrets') && caps.allowSecrets ? `<div class="dw-banner warning">${ic('key')}<span>会包含 API 密钥，请妥善保管文件</span></div>` : ''}`;
+        ${this.backupSel.has('secrets') && caps.allowSecrets ? `<div class="dw-banner warning">${ic('key')}<span>${t`API keys will be included. Keep the file safe.`}</span></div>` : ''}`;
     }
 
     catSet(key) {
@@ -448,8 +458,8 @@ class DataWindow {
 
     viewList() {
         if (!this.snap.available) {
-            return `<div class="dw-empty"><span class="dw-card-icon" style="--tone:var(--dw-danger)">${ic('warn')}</span><b>同步不可用</b>
-                <div>${esc(this.snap.unavailableReason || '服务器没有开启同步功能')}</div></div>`;
+            return `<div class="dw-empty"><span class="dw-card-icon" style="--tone:var(--dw-danger)">${ic('warn')}</span><b>${t`Sync unavailable`}</b>
+                <div>${esc(this.snap.unavailableReason || t`Sync is not enabled on the server`)}</div></div>`;
         }
         return `
             <div data-region="summary" style="display:contents">${this.renderSummary()}</div>
@@ -461,27 +471,29 @@ class DataWindow {
         const { backends } = this.snap;
         if (!backends.length) return '';
         const n = fn => backends.filter(fn).length;
-        const parts = [`<span><b>${backends.length}</b> 个同步对象</span>`];
-        if (n(b => b.state === 'error')) parts.push(`<span class="bad"><b>${n(b => b.state === 'error')}</b> 个失败</span>`);
-        if (n(b => b.stalled?.length)) parts.push(`<span class="warn"><b>${n(b => b.stalled?.length)}</b> 个有文件没能更新</span>`);
-        if (n(b => b.state === 'pending')) parts.push(`<span><b>${n(b => b.state === 'pending')}</b> 个等待连接</span>`);
-        parts.push(`<span>本机 <b>${esc(this.snap.device.label || this.snap.device.placeholder)}</b></span>`);
+        const parts = [`<span><b>${backends.length}</b> ${t`sync backends`}</span>`];
+        if (n(b => b.state === 'error')) parts.push(`<span class="bad"><b>${n(b => b.state === 'error')}</b> ${t`backends failed`}</span>`);
+        if (n(b => b.stalled?.length)) parts.push(`<span class="warn"><b>${n(b => b.stalled?.length)}</b> ${t`with files not updated`}</span>`);
+        if (n(b => b.state === 'pending')) parts.push(`<span><b>${n(b => b.state === 'pending')}</b> ${t`waiting to connect`}</span>`);
+        parts.push(`<span>${t`This device`} <b>${esc(this.snap.device.label || this.snap.device.placeholder)}</b></span>`);
         return `<div class="dw-summary">${parts.join('')}</div>`;
     }
 
     renderTop() {
         const { conflicts, notices, statusError, listError } = this.snap;
         let html = '';
-        if (statusError) html += `<div class="dw-banner error">${ic('x')}<span>读不到同步状态，请检查连接，恢复后会自动更新</span></div>`;
-        if (listError) html += `<div class="dw-banner error">${ic('x')}<span>刷新同步对象失败，下面是上次读到的内容</span></div>`;
+        if (statusError) html += `<div class="dw-banner error">${ic('x')}<span>${t`Can't read sync status. Check the connection; it will update automatically once restored.`}</span></div>`;
+        if (listError) html += `<div class="dw-banner error">${ic('x')}<span>${t`Couldn't refresh sync backends. Showing what was loaded last time.`}</span></div>`;
         if (conflicts.length || notices.length) {
-            const text = conflicts.length ? `${conflicts.length} 个文件需要你选版本${notices.length ? `，另有 ${notices.length} 条通知` : ''}` : `${notices.length} 条同步通知`;
-            html += `<div class="dw-banner warning">${ic('warn')}<span>${text}</span><button class="dw-btn sm" data-act="conflicts">去处理</button></div>`;
+            const text = conflicts.length
+                ? (notices.length ? t`${conflicts.length} files need you to choose a version, plus ${notices.length} notices` : t`${conflicts.length} files need you to choose a version`)
+                : t`${notices.length} sync notices`;
+            html += `<div class="dw-banner warning">${ic('warn')}<span>${text}</span><button class="dw-btn sm" data-act="conflicts">${t`Resolve`}</button></div>`;
         }
         if (this.flash) {
             const f = this.flash;
             const icon = f.tone === 'error' ? 'x' : f.tone === 'warning' ? 'warn' : 'check';
-            const files = f.files?.length ? `<code class="dw-files">${f.files.slice(0, 4).map(esc).join('<br>')}${f.files.length > 4 ? `<br>等 ${f.files.length} 个` : ''}</code>` : '';
+            const files = f.files?.length ? `<code class="dw-files">${f.files.slice(0, 4).map(esc).join('<br>')}${f.files.length > 4 ? `<br>${t`and ${f.files.length} more`}` : ''}</code>` : '';
             html += `<div class="dw-banner ${f.tone}">${ic(icon)}<span>${esc(f.text)}${files}</span>
                 ${f.act ? `<button class="dw-btn sm" data-act="${f.act}">${esc(f.actLabel)}</button>` : ''}
                 <button class="dw-ibtn" data-act="flash-x" style="width:24px;height:24px">${ic('x')}</button></div>`;
@@ -492,50 +504,50 @@ class DataWindow {
     renderCards() {
         const { backends } = this.snap;
         if (!backends.length) {
-            return `<div class="dw-empty"><span class="dw-card-icon">${ic('sync')}</span><b>还没有同步对象</b>
-                <button class="dw-btn primary" data-act="push" data-view="add">${ic('plus')}添加</button></div>`;
+            return `<div class="dw-empty"><span class="dw-card-icon">${ic('sync')}</span><b>${t`No sync backends yet`}</b>
+                <button class="dw-btn primary" data-act="push" data-view="add">${ic('plus')}${t`Add`}</button></div>`;
         }
         return backends.map(b => this.renderCard(b)).join('');
     }
 
     renderCard(b) {
-        const [tagCls, tagText] = STATE_TAG[b.state] || ['', ''];
+        const [tagCls, tagText] = stateTag()[b.state] || ['', ''];
         const detail = {
-            running: `上次 ${ago(b.lastSync)}`,
+            running: t`Last: ${ago(b.lastSync)}`,
             ok: ago(b.lastSync),
             error: ago(b.lastSync),
-            pending: '对方还没用配对链接连过来',
-            unknown: '待处理记录读取失败，暂时无法判断',
+            pending: t`The other device hasn't connected with the pairing link yet`,
+            unknown: t`Pending records could not be read, so the status can't be determined yet`,
         }[b.state] || ago(b.lastSync);
         const running = b.state === 'running';
         let main = '';
-        if (running) main = `<button class="dw-btn" disabled>${ic('sync', 'dw-spin')}同步中</button>`;
-        else if (b.state !== 'pending') main = `<button class="dw-btn" data-act="sync-now" data-id="${b.id}">${ic('sync')}${b.state === 'error' ? '重试' : '立即同步'}</button>`;
-        const locked = this.pending.has(b.id);
+        if (running) main = `<button class="dw-btn" disabled>${ic('sync', 'dw-spin')}${t`Syncing`}</button>`;
+        else if (b.state !== 'pending') main = `<button class="dw-btn" data-act="sync-now" data-id="${b.id}">${ic('sync')}${b.state === 'error' ? t`Retry` : t`Sync now`}</button>`;
+        const locked = this.isLocked(b.id);
         const menu = this.menu === b.id ? `
             <div class="dw-menu" role="menu">
                 ${b.state === 'pending' ? '' : `
-                ${b.canUndo ? `<button data-act="undo" data-id="${b.id}">${ic('undo')}撤销上次同步</button>` : ''}
-                <button data-act="edit" data-id="${b.id}" ${running ? 'disabled' : ''}>${ic('edit')}编辑</button>
-                ${b.kind === 's3' ? `<button data-act="unlock" data-id="${b.id}" ${running ? 'disabled' : ''}>${ic('key')}解锁</button>` : ''}
-                ${b.kind === 'lan' && b.hasStoredCredentials ? `<button data-act="clear-auth" data-id="${b.id}">${ic('key')}清除保存的账号</button>` : ''}
+                ${b.canUndo ? `<button data-act="undo" data-id="${b.id}">${ic('undo')}${t`Undo last sync`}</button>` : ''}
+                <button data-act="edit" data-id="${b.id}" ${running || locked ? 'disabled' : ''}>${ic('edit')}${t`Edit`}</button>
+                ${b.kind === 's3' ? `<button data-act="unlock" data-id="${b.id}" ${running || locked ? 'disabled' : ''}>${ic('key')}${t`Unlock`}</button>` : ''}
+                ${b.kind === 'lan' && b.hasStoredCredentials ? `<button data-act="clear-auth" data-id="${b.id}">${ic('key')}${t`Clear saved account`}</button>` : ''}
                 <hr>`}
-                <button class="danger" data-act="remove" data-id="${b.id}">${ic('trash')}${b.state === 'pending' ? '取消配对' : '移除'}</button>
+                <button class="danger" data-act="remove" data-id="${b.id}">${ic('trash')}${b.state === 'pending' ? t`Cancel pairing` : t`Remove`}</button>
             </div>` : '';
         const error = b.state === 'error' && b.error ? `<div class="dw-card-note bad">${esc(b.error)}</div>` : '';
         const stalled = b.stalled?.length
-            ? `<div class="dw-stalled">${b.stalled.length} 个文件没能更新，本机保留了当前版本${b.stalled.map(p => `<code>${esc(p)}</code>`).join('')}</div>`
+            ? `<div class="dw-stalled">${t`${b.stalled.length} files could not be updated; this device kept its current version`}${b.stalled.map(p => `<code>${esc(p)}</code>`).join('')}</div>`
             : '';
         return `
             <div class="dw-card${locked ? ' locked' : ''}" data-state="${b.stalled?.length && b.state === 'ok' ? 'attention' : b.state}">
                 <span class="dw-card-icon">${ic(b.kind === 's3' ? 'cloud' : 'lan')}</span>
                 <div class="dw-card-main">
-                    <div class="dw-card-title"><span class="dw-card-name">${esc(b.label)}</span><span class="dw-kind">${b.kind === 's3' ? 'S3' : '局域网'}</span></div>
+                    <div class="dw-card-title"><span class="dw-card-name">${esc(b.label)}</span><span class="dw-kind">${b.kind === 's3' ? 'S3' : t`LAN`}</span></div>
                     <div class="dw-card-meta"><span class="dw-pilltag ${tagCls}">${tagText}</span><span>${esc(detail)}</span></div>
                 </div>
                 <div class="dw-card-act">
                     ${main}
-                    <button class="dw-ibtn" data-act="menu" data-id="${b.id}" title="更多">${ic('more')}</button>
+                    <button class="dw-ibtn" data-act="menu" data-id="${b.id}" title="${t`More`}">${ic('more')}</button>
                     ${menu}
                 </div>
                 ${error}${stalled}
@@ -545,14 +557,14 @@ class DataWindow {
     viewSettings() {
         return `
             <div class="dw-list">
-                <div class="dw-setrow"><span>本机名称</span>
+                <div class="dw-setrow"><span>${t`Device name`}</span>
                     <input class="dw-inp" data-model="device.label" value="${esc(this.f.device.label)}" placeholder="${esc(this.snap.device.placeholder)}"></div>
-                <div class="dw-setrow"><span>编辑停下后多久同步</span>
-                    <span class="dw-num"><input class="dw-inp num" type="number" min="1" data-model="schedule.idle" value="${this.f.schedule.idle}"><span class="dw-unit">秒</span></span></div>
-                <div class="dw-setrow"><span>多久检查一次其他设备</span>
-                    <span class="dw-num"><input class="dw-inp num" type="number" min="1" data-model="schedule.poll" value="${this.f.schedule.poll}"><span class="dw-unit">秒</span></span></div>
+                <div class="dw-setrow"><span>${t`Sync after editing stops`}</span>
+                    <span class="dw-num"><input class="dw-inp num" type="number" min="1" data-model="schedule.idle" value="${this.f.schedule.idle}"><span class="dw-unit">${t`sec`}</span></span></div>
+                <div class="dw-setrow"><span>${t`Check other devices every`}</span>
+                    <span class="dw-num"><input class="dw-inp num" type="number" min="1" data-model="schedule.poll" value="${this.f.schedule.poll}"><span class="dw-unit">${t`sec`}</span></span></div>
             </div>
-            ${this.foot('<button class="dw-btn primary big" data-act="save-local">保存</button>')}`;
+            ${this.foot(`<button class="dw-btn primary big" data-act="save-local">${t`Save`}</button>`)}`;
     }
 
     // ---------- sync: add / pair / s3 ----------
@@ -563,138 +575,138 @@ class DataWindow {
     }
 
     viewAdd() {
-        return `<div class="dw-sec-title">局域网</div>
+        return `<div class="dw-sec-title">${t`LAN`}</div>
             <div class="dw-options">
-                ${this.option('pairNew', 'qr', '让另一台设备连过来')}
-                ${this.option('pairExist', 'link', '连接到另一台设备')}
+                ${this.option('pairNew', 'qr', t`Let another device connect`)}
+                ${this.option('pairExist', 'link', t`Connect to another device`)}
             </div>
-            <div class="dw-sec-title" style="margin-top:4px">云存储</div>
-            <div class="dw-options">${this.option('s3', 'cloud', '使用 S3 存储', 'blue')}</div>`;
+            <div class="dw-sec-title" style="margin-top:4px">${t`Cloud storage`}</div>
+            <div class="dw-options">${this.option('s3', 'cloud', t`Use S3 storage`, 'blue')}</div>`;
     }
 
     viewPairNew() {
-        const t = this.top;
-        t.cats ??= defaultSyncCats(this.snap.syncCategories);
-        t.label ??= '';
-        if (t.result) {
-            const link = t.result.link(t.addr);
+        const tp = this.top;
+        tp.cats ??= defaultSyncCats(this.snap.syncCategories);
+        tp.label ??= '';
+        if (tp.result) {
+            const link = tp.result.link(tp.addr);
             return `
-                <div class="dw-step"><i>${ic('check')}</i>链接已生成，「${esc(t.label)}」已加到同步列表，等待对方连接</div>
-                <div class="dw-step"><i>2</i>在「${esc(t.label)}」上打开「连接到另一台设备」，粘贴这条链接</div>
-                ${t.result.addresses.length > 1 ? `
-                    <label class="dw-field"><span>对方通过哪个地址访问本机</span>
-                        <select class="dw-inp" data-act-change="pair-addr">${t.result.addresses.map(a => `<option value="${esc(a)}" ${a === t.addr ? 'selected' : ''}>${esc(a)}${isLoopback(a) ? '（仅本机）' : ''}</option>`).join('')}</select>
+                <div class="dw-step"><i>${ic('check')}</i>${t`Link generated. "${esc(tp.label)}" was added to the sync list and is waiting for the other device to connect`}</div>
+                <div class="dw-step"><i>2</i>${t`On "${esc(tp.label)}", open "Connect to another device" and paste this link`}</div>
+                ${tp.result.addresses.length > 1 ? `
+                    <label class="dw-field"><span>${t`Address the other device uses to reach this one`}</span>
+                        <select class="dw-inp" data-act-change="pair-addr">${tp.result.addresses.map(a => `<option value="${esc(a)}" ${a === tp.addr ? 'selected' : ''}>${esc(a)}${isLoopback(a) ? t`(this device only)` : ''}</option>`).join('')}</select>
                     </label>` : ''}
-                ${isLoopback(t.addr) ? `<div class="dw-banner warning">${ic('warn')}<span>这个地址只有本机能访问，其他设备连不上</span></div>` : ''}
+                ${isLoopback(tp.addr) ? `<div class="dw-banner warning">${ic('warn')}<span>${t`Only this device can reach this address; other devices can't connect`}</span></div>` : ''}
                 <div class="dw-linkbox">
                     <input class="dw-inp mono" readonly value="${esc(link)}">
-                    <button class="dw-btn primary" data-act="copy" data-text="${esc(link)}">${ic('copy')}复制</button>
-                    <button class="dw-btn icon" data-act="pair-gen" title="换一条新链接（旧的作废）">${ic('sync')}</button>
+                    <button class="dw-btn primary" data-act="copy" data-text="${esc(link)}">${ic('copy')}${t`Copy`}</button>
+                    <button class="dw-btn icon" data-act="pair-gen" title="${t`Generate a new link (the old one stops working)`}">${ic('sync')}</button>
                 </div>
-                ${this.foot('<button class="dw-btn big" data-act="done-pair">完成</button>')}`;
+                ${this.foot(`<button class="dw-btn big" data-act="done-pair">${t`Done`}</button>`)}`;
         }
         return `
-            <label class="dw-field"><span>对方设备名称</span><input class="dw-inp" data-model="top.label" value="${esc(t.label)}" placeholder="例如：手机、笔记本"></label>
-            ${this.syncCats('pairNew', t.cats)}
-            ${t.error ? `<div class="dw-err">${esc(t.error)}</div>` : ''}
-            ${this.foot(`<button class="dw-btn primary big${t.busy ? ' busy' : ''}" data-act="pair-gen">${t.busy ? ic('sync', 'dw-spin') : ic('qr')}生成配对链接</button>`)}`;
+            <label class="dw-field"><span>${t`Other device name`}</span><input class="dw-inp" data-model="top.label" value="${esc(tp.label)}" placeholder="${t`e.g. Phone, Laptop`}"></label>
+            ${this.syncCats('pairNew', tp.cats)}
+            ${tp.error ? `<div class="dw-err">${esc(tp.error)}</div>` : ''}
+            ${this.foot(`<button class="dw-btn primary big${tp.busy ? ' busy' : ''}" data-act="pair-gen">${tp.busy ? ic('sync', 'dw-spin') : ic('qr')}${t`Generate pairing link`}</button>`)}`;
     }
 
     viewPairExist() {
-        const t = this.top;
-        t.cats ??= defaultSyncCats(this.snap.syncCategories);
-        t.form ??= { link: '', url: '', peerId: '', code: '', handle: '', label: '', user: '', pass: '' };
-        const f = t.form;
+        const tp = this.top;
+        tp.cats ??= defaultSyncCats(this.snap.syncCategories);
+        tp.form ??= { link: '', url: '', peerId: '', code: '', handle: '', label: '', user: '', pass: '' };
+        const f = tp.form;
         return `
-            <label class="dw-field"><span>配对链接</span><input class="dw-inp mono" data-model="top.form.link" data-act-input="parse-link" value="${esc(f.link)}" placeholder="粘贴另一台设备生成的链接"></label>
-            <details ${t.manual ? 'open' : ''}>
-                <summary class="dw-more">${ic('chev', 'dw-chev')}手动填写 / 对方设置了登录密码</summary>
+            <label class="dw-field"><span>${t`Pairing link`}</span><input class="dw-inp mono" data-model="top.form.link" data-act-input="parse-link" value="${esc(f.link)}" placeholder="${t`Paste the link generated on the other device`}"></label>
+            <details ${tp.manual ? 'open' : ''}>
+                <summary class="dw-more">${ic('chev', 'dw-chev')}${t`Enter manually / the other device has a login password`}</summary>
                 <div class="dw-more-body">
                     <div class="dw-grid2">
-                        <label class="dw-field"><span>对方地址</span><input class="dw-inp" data-model="top.form.url" value="${esc(f.url)}" placeholder="http://192.168.1.42:8000"></label>
-                        <label class="dw-field"><span>对方设备 ID</span><input class="dw-inp" data-model="top.form.peerId" value="${esc(f.peerId)}"></label>
+                        <label class="dw-field"><span>${t`Other device address`}</span><input class="dw-inp" data-model="top.form.url" value="${esc(f.url)}" placeholder="http://192.168.1.42:8000"></label>
+                        <label class="dw-field"><span>${t`Other device ID`}</span><input class="dw-inp" data-model="top.form.peerId" value="${esc(f.peerId)}"></label>
                     </div>
-                    <label class="dw-field"><span>对方设备名称</span><input class="dw-inp" data-model="top.form.label" value="${esc(f.label)}" placeholder="留空就用设备 ID"></label>
+                    <label class="dw-field"><span>${t`Other device name`}</span><input class="dw-inp" data-model="top.form.label" value="${esc(f.label)}" placeholder="${t`Leave blank to use the device ID`}"></label>
                     <div class="dw-grid2">
-                        <label class="dw-field"><span>对方的登录账号</span><input class="dw-inp" data-model="top.form.user" data-focus="user" value="${esc(f.user)}" autocomplete="off"></label>
-                        <label class="dw-field"><span>密码</span>${this.pw('top.form.pass', f.pass)}</label>
+                        <label class="dw-field"><span>${t`Login account on the other device`}</span><input class="dw-inp" data-model="top.form.user" data-focus="user" value="${esc(f.user)}" autocomplete="off"></label>
+                        <label class="dw-field"><span>${t`Password`}</span>${this.pw('top.form.pass', f.pass)}</label>
                     </div>
                 </div>
             </details>
-            ${this.syncCats('pairExist', t.cats)}
-            ${t.error ? `<div class="dw-err">${esc(t.error)}</div>` : ''}
-            ${this.foot(`<button class="dw-btn primary big${t.busy ? ' busy' : ''}" data-act="pair-accept">${t.busy ? `${ic('sync', 'dw-spin')}正在配对…` : `${ic('link')}配对并同步`}</button>`)}`;
+            ${this.syncCats('pairExist', tp.cats)}
+            ${tp.error ? `<div class="dw-err">${esc(tp.error)}</div>` : ''}
+            ${this.foot(`<button class="dw-btn primary big${tp.busy ? ' busy' : ''}" data-act="pair-accept">${tp.busy ? `${ic('sync', 'dw-spin')}${t`Pairing…`}` : `${ic('link')}${t`Pair and sync`}`}</button>`)}`;
     }
 
     pw(model, value, placeholder = '') {
-        return `<span class="dw-pw"><input class="dw-inp" type="password" data-model="${model}" value="${esc(value)}" placeholder="${esc(placeholder)}" autocomplete="new-password"><button class="dw-eye" data-act="eye" type="button" title="显示">${ic('eye')}</button></span>`;
+        return `<span class="dw-pw"><input class="dw-inp" type="password" data-model="${model}" value="${esc(value)}" placeholder="${esc(placeholder)}" autocomplete="new-password"><button class="dw-eye" data-act="eye" type="button" title="${t`Show`}">${ic('eye')}</button></span>`;
     }
 
     viewS3() {
-        const t = this.top;
-        const editing = !!t.id;
-        if (!t.form) {
-            const base = editing ? this.p.getS3(t.id) : { endpoint: '', region: '', bucket: '', prefix: '', pathStyle: false };
-            const b = editing ? this.snap.backends.find(x => x.id === t.id) : null;
-            t.form = { label: b?.label || '', ...base, accessKey: '', secretKey: '', passphrase: '', cats: new Set(b?.categories || defaultSyncCats(this.snap.syncCategories)) };
+        const tp = this.top;
+        const editing = !!tp.id;
+        if (!tp.form) {
+            const base = editing ? this.p.getS3(tp.id) : { endpoint: '', region: '', bucket: '', prefix: '', pathStyle: false };
+            const b = editing ? this.snap.backends.find(x => x.id === tp.id) : null;
+            tp.form = { label: b?.label || '', ...base, accessKey: '', secretKey: '', passphrase: '', cats: new Set(b?.categories || defaultSyncCats(this.snap.syncCategories)) };
         }
-        const f = t.form;
-        const keep = editing ? '留空则保留原值' : '';
+        const f = tp.form;
+        const keep = editing ? t`Leave blank to keep the current value` : '';
         return `
-            <label class="dw-field"><span>名称</span><input class="dw-inp" data-model="top.form.label" value="${esc(f.label)}" placeholder="例如：共享归档"></label>
+            <label class="dw-field"><span>${t`Name`}</span><input class="dw-inp" data-model="top.form.label" value="${esc(f.label)}" placeholder="${t`e.g. Shared archive`}"></label>
             <div class="dw-group">
-                <div class="dw-sec-title">存储位置<span class="dw-sp"></span><span class="dw-lockhint">${ic('lock')}桶和前缀保存后不能改</span></div>
+                <div class="dw-sec-title">${t`Storage location`}<span class="dw-sp"></span><span class="dw-lockhint">${ic('lock')}${t`Bucket and prefix cannot be changed after saving`}</span></div>
                 <div class="dw-grid-ep">
                     <label class="dw-field"><span>Endpoint</span><input class="dw-inp" data-model="top.form.endpoint" value="${esc(f.endpoint)}" placeholder="https://s3.example.com"></label>
-                    <label class="dw-field"><span>区域</span><input class="dw-inp" data-model="top.form.region" value="${esc(f.region)}" placeholder="us-east-1" list="dw-regions"></label>
+                    <label class="dw-field"><span>${t`S3 region`}</span><input class="dw-inp" data-model="top.form.region" value="${esc(f.region)}" placeholder="us-east-1" list="dw-regions"></label>
                     <datalist id="dw-regions">${REGIONS.map(r => `<option value="${r}">`).join('')}</datalist>
                 </div>
                 <div class="dw-grid2">
-                    <label class="dw-field"><span>桶</span><input class="dw-inp" data-model="top.form.bucket" value="${esc(f.bucket)}" ${editing ? 'disabled' : ''}></label>
-                    <label class="dw-field"><span>前缀</span><input class="dw-inp" data-model="top.form.prefix" value="${esc(f.prefix)}" placeholder="luker/" ${editing ? 'disabled' : ''}></label>
+                    <label class="dw-field"><span>${t`Bucket name`}</span><input class="dw-inp" data-model="top.form.bucket" value="${esc(f.bucket)}" ${editing ? 'disabled' : ''}></label>
+                    <label class="dw-field"><span>${t`Prefix`}</span><input class="dw-inp" data-model="top.form.prefix" value="${esc(f.prefix)}" placeholder="luker/" ${editing ? 'disabled' : ''}></label>
                 </div>
-                <button class="dw-toggle${f.pathStyle ? ' on' : ''}" data-act="toggle-path" type="button"><span class="dw-sw"></span>路径风格请求（MinIO 等需要）</button>
+                <button class="dw-toggle${f.pathStyle ? ' on' : ''}" data-act="toggle-path" type="button"><span class="dw-sw"></span>${t`Path-style requests (needed by MinIO, etc.)`}</button>
             </div>
             <div class="dw-group">
-                <div class="dw-sec-title">访问凭据</div>
+                <div class="dw-sec-title">${t`Credentials`}</div>
                 <div class="dw-grid2">
                     <label class="dw-field"><span>Access Key ID</span>${this.pw('top.form.accessKey', f.accessKey, keep)}</label>
                     <label class="dw-field"><span>Secret Access Key</span>${this.pw('top.form.secretKey', f.secretKey, keep)}</label>
                 </div>
-                <label class="dw-field"><span>加密口令</span>${this.pw('top.form.passphrase', f.passphrase, editing ? keep : '其他设备要用同一个口令')}</label>
+                <label class="dw-field"><span>${t`Encryption passphrase`}</span>${this.pw('top.form.passphrase', f.passphrase, editing ? keep : t`Other devices must use the same passphrase`)}</label>
             </div>
             ${this.syncCats('s3', f.cats)}
-            ${t.error ? `<div class="dw-err">${esc(t.error)}</div>` : ''}
-            ${this.foot(`<button class="dw-btn big" data-act="back">取消</button>
-                <button class="dw-btn primary big${t.busy ? ' busy' : ''}" data-act="s3-save">${t.busy ? `${ic('sync', 'dw-spin')}正在连接…` : `${ic('check')}保存`}</button>`)}`;
+            ${tp.error ? `<div class="dw-err">${esc(tp.error)}</div>` : ''}
+            ${this.foot(`<button class="dw-btn big" data-act="back">${t`Cancel`}</button>
+                <button class="dw-btn primary big${tp.busy ? ' busy' : ''}" data-act="s3-save">${tp.busy ? `${ic('sync', 'dw-spin')}${t`Connecting…`}` : `${ic('check')}${t`Save`}`}</button>`)}`;
     }
 
     viewUnlock() {
-        const t = this.top;
-        const b = this.snap.backends.find(x => x.id === t.id);
-        t.form ??= { pass: '' };
+        const tp = this.top;
+        const b = this.snap.backends.find(x => x.id === tp.id);
+        tp.form ??= { pass: '' };
         return `
             <div class="dw-card" data-state="${b?.state || 'ok'}" style="grid-template-columns:auto minmax(0,1fr)">
                 <span class="dw-card-icon">${ic('cloud')}</span>
                 <div class="dw-card-main"><div class="dw-card-title"><span class="dw-card-name">${esc(b?.label)}</span><span class="dw-kind">S3</span></div></div>
             </div>
-            <label class="dw-field"><span>加密口令</span>${this.pw('top.form.pass', t.form.pass)}</label>
-            ${t.error ? `<div class="dw-err">${esc(t.error)}</div>` : ''}
-            ${this.foot(`<button class="dw-btn big" data-act="back">取消</button>
-                <button class="dw-btn primary big${t.busy ? ' busy' : ''}" data-act="unlock-save">${t.busy ? ic('sync', 'dw-spin') : ic('key')}解锁</button>`)}`;
+            <label class="dw-field"><span>${t`Encryption passphrase`}</span>${this.pw('top.form.pass', tp.form.pass)}</label>
+            ${tp.error ? `<div class="dw-err">${esc(tp.error)}</div>` : ''}
+            ${this.foot(`<button class="dw-btn big" data-act="back">${t`Cancel`}</button>
+                <button class="dw-btn primary big${tp.busy ? ' busy' : ''}" data-act="unlock-save">${tp.busy ? ic('sync', 'dw-spin') : ic('key')}${t`Unlock`}</button>`)}`;
     }
 
     viewLanEdit() {
-        const t = this.top;
-        const b = this.snap.backends.find(x => x.id === t.id);
-        t.label ??= b?.label || '';
-        t.cats ??= new Set(b?.categories || defaultSyncCats(this.snap.syncCategories));
+        const tp = this.top;
+        const b = this.snap.backends.find(x => x.id === tp.id);
+        tp.label ??= b?.label || '';
+        tp.cats ??= new Set(b?.categories || defaultSyncCats(this.snap.syncCategories));
         return `
-            <label class="dw-field"><span>名称</span><input class="dw-inp" data-model="top.label" value="${esc(t.label)}"></label>
-            ${this.syncCats('lanEdit', t.cats)}
-            ${t.error ? `<div class="dw-err">${esc(t.error)}</div>` : ''}
-            ${this.foot(`<button class="dw-btn big" data-act="back">取消</button>
-                <button class="dw-btn primary big${t.busy ? ' busy' : ''}" data-act="lan-save">${t.busy ? ic('sync', 'dw-spin') : ic('check')}保存</button>`)}`;
+            <label class="dw-field"><span>${t`Name`}</span><input class="dw-inp" data-model="top.label" value="${esc(tp.label)}"></label>
+            ${this.syncCats('lanEdit', tp.cats)}
+            ${tp.error ? `<div class="dw-err">${esc(tp.error)}</div>` : ''}
+            ${this.foot(`<button class="dw-btn big" data-act="back">${t`Cancel`}</button>
+                <button class="dw-btn primary big${tp.busy ? ' busy' : ''}" data-act="lan-save">${tp.busy ? ic('sync', 'dw-spin') : ic('check')}${t`Save`}</button>`)}`;
     }
 
     // ---------- sync: conflicts ----------
@@ -703,26 +715,27 @@ class DataWindow {
         const { conflicts, notices, backends } = this.snap;
         const stalled = [...new Set(backends.flatMap(b => b.stalled || []))];
         if (!conflicts.length && !notices.length && !stalled.length) {
-            return `<div class="dw-empty"><span class="dw-card-icon">${ic('check')}</span><b>没有待处理的同步问题</b><button class="dw-btn" data-act="back">返回</button></div>`;
+            return `<div class="dw-empty"><span class="dw-card-icon">${ic('check')}</span><b>${t`No sync issues to handle`}</b><button class="dw-btn" data-act="back">${t`Back`}</button></div>`;
         }
         const chosen = Object.keys(this.choices).filter(k => conflicts.some(c => c.key === k)).length;
         const failed = conflicts.filter(c => this.failedKeys.has(c.key));
         const preview = p => {
-            if (!p || p.kind === 'deleted') return '<span class="dw-preview is-empty">这个版本里文件已被删除</span>';
+            if (p?.kind === 'loading') return `<span class="dw-preview is-empty">${t`Reading…`}</span>`;
+            if (!p || p.kind === 'deleted') return `<span class="dw-preview is-empty">${t`The file is deleted in this version`}</span>`;
             if (p.kind === 'image') return `<span class="dw-preview is-image"><img src="${esc(p.url)}" alt=""></span>`;
-            if (p.kind === 'binary') return `<span class="dw-preview is-empty">二进制文件 ${size(p.bytes)}</span>`;
-            if (p.kind === 'error') return `<span class="dw-preview is-empty">读取失败：${esc(p.message)}</span>`;
+            if (p.kind === 'binary') return `<span class="dw-preview is-empty">${t`Binary file ${size(p.bytes)}`}</span>`;
+            if (p.kind === 'error') return `<span class="dw-preview is-empty">${t`Failed to read: ${esc(p.message)}`}</span>`;
             return `<span class="dw-preview">${esc(p.text)}</span>`;
         };
         const conflictHtml = conflicts.map(c => `
             <div class="dw-conflict${this.failedKeys.has(c.key) ? ' is-failed' : ''}">
                 <div class="dw-conflict-head"><span class="dw-pilltag is-warn">${esc(c.kind)}</span><b title="${esc(c.path)}">${esc(c.path)}</b></div>
-                ${c.stale ? `<div class="dw-banner warning">${ic('clock')}<span>冲突之后这个文件又改过，选其他版本会覆盖这些修改</span></div>` : ''}
+                ${c.stale ? `<div class="dw-banner warning">${ic('clock')}<span>${t`This file was edited again after the conflict; choosing another version will overwrite those changes`}</span></div>` : ''}
                 <div class="dw-versions">${c.versions.map(v => `
                     <button class="dw-version${this.choices[c.key] === v.id ? ' on' : ''}" data-act="choose" data-key="${c.key}" data-v="${v.id}" ${c.unknown ? 'disabled' : ''}>
-                        <span class="dw-version-head"><span class="dw-ring"></span><span>${v.current ? '当前版本' : `来自 ${esc(v.from)} 的版本`}</span>${v.inUse ? '<span class="dw-pilltag is-ok">正在使用</span>' : ''}</span>
+                        <span class="dw-version-head"><span class="dw-ring"></span><span>${v.current ? t`Current version` : t`Version from ${esc(v.from)}`}</span>${v.inUse ? `<span class="dw-pilltag is-ok">${t`In use`}</span>` : ''}</span>
                         ${preview(v.preview)}
-                        <span class="dw-version-act">${v.current ? '保留当前版本' : '使用此版本'}</span>
+                        <span class="dw-version-act">${v.current ? t`Keep current version` : t`Use this version`}</span>
                     </button>`).join('')}
                 </div>
             </div>`).join('');
@@ -731,20 +744,20 @@ class DataWindow {
             return `
             <div class="dw-notice">
                 <span class="dw-card-icon">${ic(n.type === 'fork' ? 'branch' : 'chat')}</span>
-                <div style="min-width:0"><b>${esc(n.title)}</b><small>${esc(n.missingGroup ? '找不到这个聊天所在的群，无法打开' : n.detail)}</small></div>
+                <div style="min-width:0"><b>${esc(n.title)}</b><small>${esc(n.missingGroup ? t`The group this chat belongs to can't be found, so it can't be opened` : n.detail)}</small></div>
                 <div class="dw-notice-act">
                     <button class="dw-btn sm" data-act="notice-open" data-id="${n.id}" ${n.missingGroup || busy ? 'disabled' : ''}>${esc(n.action)}</button>
-                    <button class="dw-btn sm ghost" data-act="notice-x" data-id="${n.id}" ${busy ? 'disabled' : ''}>关闭</button>
+                    <button class="dw-btn sm ghost" data-act="notice-x" data-id="${n.id}" ${busy || n.unknown ? 'disabled' : ''}>${t`Close`}</button>
                 </div>
             </div>`;
         }).join('');
         return `
-            ${failed.length ? `<div class="dw-banner error">${ic('x')}<span>这些选择暂时没能应用，请再试一次${failed.map(c => `<code class="dw-files">${esc(c.path)}</code>`).join('')}</span></div>` : ''}
-            ${conflicts.length ? `<section class="dw-sec"><div class="dw-sec-title">选择要保留的版本<span class="dw-sp"></span><span class="dw-count">已选 ${chosen} / ${conflicts.length}</span></div><div class="dw-cards">${conflictHtml}</div></section>` : ''}
-            ${notices.length ? `<section class="dw-sec"><div class="dw-sec-title">通知</div><div class="dw-cards">${noticeHtml}</div></section>` : ''}
-            ${stalled.length ? `<section class="dw-sec"><div class="dw-sec-title">没能更新的文件</div>
-                <div class="dw-stalled">对方的版本存不到本机，已保留本机当前版本${stalled.map(p => `<code>${esc(p)}</code>`).join('')}</div></section>` : ''}
-            ${conflicts.length ? this.foot(`<button class="dw-btn primary big${this.applying ? ' busy' : ''}" data-act="apply" ${chosen ? '' : 'disabled title="先给至少一个文件选版本"'}>${this.applying ? ic('sync', 'dw-spin') : ic('check')}应用选择</button>`) : ''}`;
+            ${failed.length ? `<div class="dw-banner error">${ic('x')}<span>${t`These choices could not be applied. Try again.`}${failed.map(c => `<code class="dw-files">${esc(c.path)}</code>`).join('')}</span></div>` : ''}
+            ${conflicts.length ? `<section class="dw-sec"><div class="dw-sec-title">${t`Choose the version to keep`}<span class="dw-sp"></span><span class="dw-count">${t`Selected ${chosen} / ${conflicts.length}`}</span></div><div class="dw-cards">${conflictHtml}</div></section>` : ''}
+            ${notices.length ? `<section class="dw-sec"><div class="dw-sec-title">${t`Notices`}</div><div class="dw-cards">${noticeHtml}</div></section>` : ''}
+            ${stalled.length ? `<section class="dw-sec"><div class="dw-sec-title">${t`Files not updated`}</div>
+                <div class="dw-stalled">${t`The other device's version could not be stored here; this device kept its current version`}${stalled.map(p => `<code>${esc(p)}</code>`).join('')}</div></section>` : ''}
+            ${conflicts.length ? this.foot(`<button class="dw-btn primary big${this.applying ? ' busy' : ''}" data-act="apply" ${chosen ? '' : `disabled title="${t`Choose a version for at least one file first`}"`}>${this.applying ? ic('sync', 'dw-spin') : ic('check')}${t`Apply choices`}</button>`) : ''}`;
     }
 
     viewBackup() {
@@ -752,93 +765,95 @@ class DataWindow {
         let status = '';
         if (b.running) {
             status = `<div class="dw-progress">
-                <div class="dw-progress-line">${ic('sync', 'dw-spin')}<span>${b.stage === 'pack' ? '正在打包…' : '正在下载…'}</span><span class="dw-sp"></span><span>${b.stage === 'download' ? `${b.percent}%` : ''}</span></div>
+                <div class="dw-progress-line">${ic('sync', 'dw-spin')}<span>${b.stage === 'pack' ? t`Packing…` : t`Downloading…`}</span><span class="dw-sp"></span><span>${b.stage === 'download' ? `${b.percent}%` : b.loaded ? size(b.loaded) : ''}</span></div>
                 ${b.stage === 'download' ? `<div class="dw-stages"><div class="dw-stage now" style="--p:${b.percent}%"></div></div>` : '<div class="dw-bar"></div>'}
             </div>`;
         } else if (b.done) {
-            status = `<div class="dw-banner">${ic('check')}<span>已下载 ${esc(b.done.fileName)}（${size(b.done.size)}）</span></div>`;
+            status = `<div class="dw-banner">${ic('check')}<span>${t`Downloaded ${esc(b.done.fileName)} (${size(b.done.size)})`}</span></div>`;
         }
         const blocked = !this.snap.caps.allowFullBackup;
         return `
-            ${blocked ? `<div class="dw-banner error">${ic('lock')}<span>服务器关闭了备份下载</span></div>` : ''}
-            ${this.backupCats('要备份的内容')}
+            ${blocked ? `<div class="dw-banner error">${ic('lock')}<span>${t`The server has disabled backup downloads`}</span></div>` : ''}
+            ${this.backupCats(t`Content to back up`)}
             ${status}
-            ${this.foot(`<button class="dw-btn primary big${b.running ? ' busy' : ''}" data-act="backup-go" ${this.backupSel.size && !blocked ? this.lockAttr(b.running) : 'disabled'}>${ic('download')}下载备份</button>`)}`;
+            ${this.foot(`<button class="dw-btn primary big${b.running ? ' busy' : ''}" data-act="backup-go" ${this.backupSel.size && !blocked ? this.lockAttr(b.running) : 'disabled'}>${ic('download')}${t`Download backup`}</button>`)}`;
     }
 
     viewRestore() {
         const r = this.f.restore;
         const file = r.file
-            ? `<div class="dw-file"><span class="dw-card-icon">${ic('zip')}</span><div style="min-width:0"><b>${esc(r.file.name)}</b><small>${size(r.file.size)}${r.uploaded ? ' · 已上传' : ''}</small></div>
-                ${r.running ? '' : `<button class="dw-ibtn" data-act="file-x" title="移除">${ic('x')}</button>`}</div>`
-            : `<div class="dw-drop" data-act="pick" role="button"><span class="dw-card-icon">${ic('upload')}</span><div>选择备份 ZIP，或拖到这里</div></div>`;
+            ? `<div class="dw-file"><span class="dw-card-icon">${ic('zip')}</span><div style="min-width:0"><b>${esc(r.file.name)}</b><small>${size(r.file.size)}${r.uploaded ? ` · ${t`Uploaded`}` : ''}</small></div>
+                ${r.running ? '' : `<button class="dw-ibtn" data-act="file-x" title="${t`Remove`}">${ic('x')}</button>`}</div>`
+            : `<div class="dw-drop" data-act="pick" role="button"><span class="dw-card-icon">${ic('upload')}</span><div>${t`Choose a backup ZIP, or drop it here`}</div></div>`;
         const pg = r.needsDb?.kind === 'postgres';
         const db = r.needsDb ? `
             <div class="dw-group">
-                <div class="dw-sec-title">${ic('db')}临时 ${pg ? 'PostgreSQL' : 'MySQL'} 连接<span class="dw-sp"></span><span class="dw-pilltag">${esc(r.needsDb.source)} → ${esc(r.needsDb.target)}</span></div>
+                <div class="dw-sec-title">${ic('db')}${t`Temporary ${pg ? 'PostgreSQL' : 'MySQL'} connection`}<span class="dw-sp"></span><span class="dw-pilltag">${esc(r.needsDb.source)} → ${esc(r.needsDb.target)}</span></div>
                 <div class="dw-grid-ep">
-                    <label class="dw-field"><span>地址</span><input class="dw-inp" data-model="restore.db.host" value="${esc(r.db.host)}" placeholder="127.0.0.1"></label>
-                    <label class="dw-field"><span>端口</span><input class="dw-inp" data-model="restore.db.port" value="${esc(r.db.port)}" placeholder="${pg ? '5432' : '3306'}"></label>
+                    <label class="dw-field"><span>${t`Host`}</span><input class="dw-inp" data-model="restore.db.host" value="${esc(r.db.host)}" placeholder="127.0.0.1"></label>
+                    <label class="dw-field"><span>${t`Port`}</span><input class="dw-inp" data-model="restore.db.port" value="${esc(r.db.port)}" placeholder="${pg ? '5432' : '3306'}"></label>
                 </div>
                 <div class="dw-grid2">
-                    <label class="dw-field"><span>用户名</span><input class="dw-inp" data-model="restore.db.user" value="${esc(r.db.user)}" placeholder="${pg ? 'postgres' : 'root'}" autocomplete="off"></label>
-                    <label class="dw-field"><span>密码</span>${this.pw('restore.db.pass', r.db.pass)}</label>
+                    <label class="dw-field"><span>${t`Username`}</span><input class="dw-inp" data-model="restore.db.user" value="${esc(r.db.user)}" placeholder="${pg ? 'postgres' : 'root'}" autocomplete="off"></label>
+                    <label class="dw-field"><span>${t`Password`}</span>${this.pw('restore.db.pass', r.db.pass)}</label>
                 </div>
-                <label class="dw-field"><span>数据库名</span><input class="dw-inp" data-model="restore.db.name" value="${esc(r.db.name)}" placeholder="${pg ? 'postgres' : 'mysql'}"></label>
+                <label class="dw-field"><span>${t`Database name`}</span><input class="dw-inp" data-model="restore.db.name" value="${esc(r.db.name)}" placeholder="${pg ? 'postgres' : 'mysql'}"></label>
             </div>` : '';
-        const label = r.needsDb ? '继续恢复' : r.mode === 'replace' ? '覆盖并恢复' : '开始恢复';
+        const label = r.needsDb ? t`Continue restore` : r.mode === 'replace' ? t`Replace and restore` : t`Start restore`;
         return `
             ${file}
             <input type="file" accept=".zip,application/zip" data-role="file" hidden>
             ${this.modeRadios('restore', r.mode)}
-            ${this.backupCats('要恢复的内容')}
+            ${this.backupCats(t`Content to restore`)}
             ${db}
-            ${this.renderRun(r, RESTORE_STAGES, '恢复完成')}
+            ${this.renderRun(r, restoreStages(), t`Restore complete`)}
             ${r.done ? '' : this.foot(`<button class="dw-btn ${r.mode === 'replace' ? 'danger solid' : 'primary'} big${r.running ? ' busy' : ''}" data-act="restore-go" ${r.file && this.backupSel.size ? this.lockAttr(r.running) : 'disabled'}>${ic('restore')}${label}</button>`)}`;
     }
 
     modeRadios(set, mode) {
-        return `<section class="dw-sec"><div class="dw-sec-title">恢复方式</div>
+        return `<section class="dw-sec"><div class="dw-sec-title">${t`Restore mode`}</div>
             <div class="dw-radios">
-                <button class="dw-radio${mode === 'merge' ? ' on' : ''}" data-act="mode" data-set="${set}" data-mode="merge"><span class="dw-ring"></span><span>增量恢复</span></button>
-                <button class="dw-radio danger${mode === 'replace' ? ' on' : ''}" data-act="mode" data-set="${set}" data-mode="replace"><span class="dw-ring"></span><span>覆盖恢复</span></button>
+                <button class="dw-radio${mode === 'merge' ? ' on' : ''}" data-act="mode" data-set="${set}" data-mode="merge"><span class="dw-ring"></span><span>${t`Incremental`}</span></button>
+                <button class="dw-radio danger${mode === 'replace' ? ' on' : ''}" data-act="mode" data-set="${set}" data-mode="replace"><span class="dw-ring"></span><span>${t`Replace`}</span></button>
             </div></section>`;
     }
 
     renderRun(run, stages, doneText) {
         if (run.interrupted) {
-            return `<div class="dw-banner error">${ic('x')}<span>上传在 ${run.interrupted.percent}% 中断</span>
-                <button class="dw-btn sm" data-act="upload-resume">从断点继续</button><button class="dw-btn sm ghost" data-act="upload-cancel">放弃</button></div>`;
+            return `<div class="dw-banner error">${ic('x')}<span>${t`Upload interrupted at ${run.interrupted.percent}%`}</span>
+                <button class="dw-btn sm" data-act="upload-resume">${t`Resume upload`}</button><button class="dw-btn sm ghost" data-act="upload-cancel">${t`Give up`}</button></div>`;
         }
         if (run.error) return `<div class="dw-banner error">${ic('x')}<span>${esc(run.error)}</span></div>`;
         if (run.done) {
             const d = run.done;
-            const parts = [`恢复了 ${d.restored} 个文件`];
-            if (d.skipped) parts.push(`跳过 ${d.skipped} 个`);
-            if (d.rejected) parts.push(`拒绝 ${d.rejected} 个`);
-            const warn = d.skipped || d.rejected;
-            return `<div class="dw-banner${warn ? ' warning' : ''}">${ic(warn ? 'warn' : 'check')}<span>${doneText}：${parts.join('，')}${d.crossEngine ? `（${esc(d.crossEngine)}）` : ''}</span>
-                    <button class="dw-btn sm" data-act="reload">刷新页面</button></div>
-                ${d.samples?.length ? `<details class="dw-fold"><summary>${ic('chev', 'dw-chev')}查看跳过的文件</summary>
+            const parts = [t`Restored ${d.restored} files`];
+            if (d.skipped) parts.push(t`${d.skipped} skipped`);
+            if (d.rejected) parts.push(t`${d.rejected} rejected`);
+            if (d.failed) parts.push(t`${d.failed} failed to write`);
+            const warn = d.skipped || d.rejected || d.failed;
+            const sep = t`, `;
+            return `<div class="dw-banner${warn ? ' warning' : ''}">${ic(warn ? 'warn' : 'check')}<span>${t`${doneText}: ${parts.join(sep)}`}${d.crossEngine ? t` (${esc(d.crossEngine)})` : ''}</span>
+                    <button class="dw-btn sm" data-act="reload">${t`Reload page`}</button></div>
+                ${d.samples?.length ? `<details class="dw-fold"><summary>${ic('chev', 'dw-chev')}${t`View skipped files`}</summary>
                     <div class="dw-stalled" style="margin:0 12px 12px">${d.samples.map(x => `<code>${esc(x)}</code>`).join('')}</div></details>` : ''}`;
         }
         if (!run.running) return '';
         return `<div class="dw-progress">
-            <div class="dw-progress-line">${ic('sync', 'dw-spin')}<span>${run.note ? esc(run.note) : `正在${stages[run.stage] || stages[0]}…`}</span><span class="dw-sp"></span><span>${run.stage === 0 ? `${run.percent}%` : ''}</span></div>
-            <div class="dw-stages">${stages.map((s, i) => `<div class="dw-stage${i < run.stage ? ' done' : i === run.stage ? (i === 0 ? ' now' : ' now indet') : ''}" style="--p:${i === run.stage && i === 0 ? run.percent : 0}%">${s}</div>`).join('')}</div>
+            <div class="dw-progress-line">${ic('sync', 'dw-spin')}<span>${run.note ? esc(run.note) : (stages[run.stage] || stages[0])[1]}</span><span class="dw-sp"></span><span>${run.stage === 0 && run.percent ? `${run.percent}%` : ''}</span></div>
+            <div class="dw-stages">${stages.map((s, i) => `<div class="dw-stage${i < run.stage ? ' done' : i === run.stage ? (i === 0 ? ' now' : ' now indet') : ''}" style="--p:${i === run.stage && i === 0 ? run.percent : 0}%">${s[0]}</div>`).join('')}</div>
         </div>`;
     }
 
     viewMigrate() {
         return `<div class="dw-options">
-            ${this.option('migrateOut', 'upload', '迁出这台的数据')}
-            ${this.option('migrateIn', 'download', '迁入数据到这台', 'blue')}
+            ${this.option('migrateOut', 'upload', t`Migrate out of this device`)}
+            ${this.option('migrateIn', 'download', t`Migrate into this device`, 'blue')}
         </div>`;
     }
 
     expireText() {
         const left = this.f.migrate.expiresAt - Date.now();
-        return left > 0 ? `${ic('clock')}${clock(left)} 后失效 · 只能用一次` : `${ic('clock')}已失效`;
+        return left > 0 ? `${ic('clock')}${t`Expires in ${clock(left)} · single use`}` : `${ic('clock')}${t`Expired`}`;
     }
 
     viewMigrateOut() {
@@ -846,34 +861,35 @@ class DataWindow {
         if (m.link) {
             const link = m.link(m.addr);
             return `
-                <div class="dw-step"><i>${ic('check')}</i>迁移链接已生成</div>
-                <div class="dw-step"><i>2</i>在新设备的「迁入数据到这台」里粘贴</div>
+                <div class="dw-step"><i>${ic('check')}</i>${t`Migration link generated`}</div>
+                <div class="dw-step"><i>2</i>${t`Paste it into "Migrate into this device" on the new device`}</div>
                 ${m.addresses.length > 1 ? `
-                    <label class="dw-field"><span>新设备通过哪个地址访问本机</span>
-                        <select class="dw-inp" data-act-change="migrate-addr">${m.addresses.map(a => `<option value="${esc(a)}" ${a === m.addr ? 'selected' : ''}>${esc(a)}${isLoopback(a) ? '（仅本机）' : ''}</option>`).join('')}</select>
+                    <label class="dw-field"><span>${t`Address the new device uses to reach this one`}</span>
+                        <select class="dw-inp" data-act-change="migrate-addr">${m.addresses.map(a => `<option value="${esc(a)}" ${a === m.addr ? 'selected' : ''}>${esc(a)}${isLoopback(a) ? t`(this device only)` : ''}</option>`).join('')}</select>
                     </label>` : ''}
-                ${isLoopback(m.addr) ? `<div class="dw-banner warning">${ic('warn')}<span>这个地址只有本机能访问，新设备打不开</span></div>` : ''}
+                ${isLoopback(m.addr) ? `<div class="dw-banner warning">${ic('warn')}<span>${t`Only this device can reach this address; the new device can't open it`}</span></div>` : ''}
+                ${m.addresses.every(isLoopback) ? `<label class="dw-field"><span>${t`This device's LAN address`}</span><input class="dw-inp" data-act-change="migrate-addr" value="${isLoopback(m.addr) ? '' : esc(m.addr)}" placeholder="192.168.1.20"></label>` : ''}
                 <div class="dw-linkbox">
                     <input class="dw-inp mono" readonly value="${esc(link)}">
-                    <button class="dw-btn primary" data-act="copy" data-text="${esc(link)}">${ic('copy')}复制</button>
-                    <button class="dw-btn icon" data-act="migrate-link" title="换一条新链接">${ic('sync')}</button>
+                    <button class="dw-btn primary" data-act="copy" data-text="${esc(link)}">${ic('copy')}${t`Copy`}</button>
+                    <button class="dw-btn icon" data-act="migrate-link" title="${t`Generate a new link`}">${ic('sync')}</button>
                 </div>
                 <span class="dw-expire" data-region="expire">${this.expireText()}</span>
-                ${this.foot('<button class="dw-btn big" data-act="back">完成</button>')}`;
+                ${this.foot(`<button class="dw-btn big" data-act="back">${t`Done`}</button>`)}`;
         }
         return `
-            ${this.backupCats('要迁移的内容')}
-            ${this.foot(`<button class="dw-btn primary big${m.busy ? ' busy' : ''}" data-act="migrate-link" ${this.backupSel.size ? this.lockAttr(false) : 'disabled'}>${m.busy ? ic('sync', 'dw-spin') : ic('link')}生成迁移链接</button>`)}`;
+            ${this.backupCats(t`Content to migrate`)}
+            ${this.foot(`<button class="dw-btn primary big${m.busy ? ' busy' : ''}" data-act="migrate-link" ${this.backupSel.size ? this.lockAttr(false) : 'disabled'}>${m.busy ? ic('sync', 'dw-spin') : ic('link')}${t`Generate migration link`}</button>`)}`;
     }
 
     viewMigrateIn() {
         const m = this.f.migrate;
         return `
-            <label class="dw-field"><span>迁移链接</span><input class="dw-inp mono" data-model="migrate.inLink" value="${esc(m.inLink)}" placeholder="粘贴旧设备生成的链接" ${m.running ? 'disabled' : ''}></label>
+            <label class="dw-field"><span>${t`Migration link`}</span><input class="dw-inp mono" data-model="migrate.inLink" value="${esc(m.inLink)}" placeholder="${t`Paste the link generated on the old device`}" ${m.running ? 'disabled' : ''}></label>
             ${this.modeRadios('migrate', m.mode)}
-            ${this.backupCats('要迁入的内容')}
-            ${this.renderRun(m, MIGRATE_STAGES, '迁移完成')}
-            ${m.done ? '' : this.foot(`<button class="dw-btn ${m.mode === 'replace' ? 'danger solid' : 'primary'} big${m.running ? ' busy' : ''}" data-act="migrate-go" ${this.backupSel.size ? this.lockAttr(m.running) : 'disabled'}>${ic('move')}开始迁移</button>`)}`;
+            ${this.backupCats(t`Content to migrate in`)}
+            ${this.renderRun(m, migrateStages(), t`Migration complete`)}
+            ${m.done ? '' : this.foot(`<button class="dw-btn ${m.mode === 'replace' ? 'danger solid' : 'primary'} big${m.running ? ' busy' : ''}" data-act="migrate-go" ${this.backupSel.size ? this.lockAttr(m.running) : 'disabled'}>${ic('move')}${t`Start migration`}</button>`)}`;
     }
 
     setModel(path, value) {
@@ -886,6 +902,7 @@ class DataWindow {
     onInput(e) {
         const el = e.target;
         if (el.dataset.model) this.setModel(el.dataset.model, el.value);
+        if (/^(device|schedule)\./.test(el.dataset.model || '')) this.settingsTouched = true;
         if (el.dataset.actInput === 'parse-link') {
             const parsed = this.p.parsePairLink(el.value);
             if (!parsed) return;
@@ -926,11 +943,11 @@ class DataWindow {
 
     setFile(file) {
         if (!/\.zip$/i.test(file.name)) {
-            this.toast('请选择 .zip 格式的备份文件', true);
+            this.toast(t`Choose a backup file in .zip format`, true);
             return;
         }
         if (!file.size) {
-            this.toast('这个文件是空的', true);
+            this.toast(t`This file is empty`, true);
             return;
         }
         Object.assign(this.f.restore, { file, needsDb: null, uploaded: false, error: null, done: null, interrupted: null });
@@ -996,7 +1013,7 @@ class DataWindow {
                 return this.push(b.kind === 's3' ? 's3' : 'lanEdit', { id });
             }
             case 'unlock': return this.push('unlock', { id });
-            case 'clear-auth': return this.backendAction(id, () => this.p.clearAuth(id), '已清除保存的账号');
+            case 'clear-auth': return this.backendAction(id, () => this.p.clearAuth(id), t`Saved account cleared`);
             case 'remove': return this.remove(id);
             case 'save-local': return this.saveLocal(el);
             case 'cat':
@@ -1040,12 +1057,14 @@ class DataWindow {
                 return this.render();
             case 'upload-resume': return this.restoreGo(true);
             case 'upload-cancel':
+                this.p.cancelUpload?.();
                 Object.assign(this.f.restore, { interrupted: null, running: false });
-                this.toast('已放弃这次上传');
+                this.toast(t`Upload discarded`);
                 return this.rerender();
             case 'backup-go': return this.backupGo();
             case 'pick': return this.root.querySelector('[data-role="file"]')?.click();
             case 'file-x':
+                if (this.f.restore.uploaded || this.f.restore.interrupted) this.p.cancelUpload?.();
                 Object.assign(this.f.restore, { file: null, needsDb: null, uploaded: false, error: null, interrupted: null });
                 return this.rerender();
             case 'mode':
@@ -1073,14 +1092,18 @@ class DataWindow {
     async copy(text) {
         try {
             await navigator.clipboard.writeText(text);
-            this.toast('已复制');
+            this.toast(t`Copied`);
         } catch {
-            this.toast('复制失败，请手动选中复制', true);
+            this.toast(t`Copy failed. Select and copy it manually.`, true);
         }
     }
 
+    isLocked(id) {
+        return this.pending.has(id) || !!this.p.isBusy?.(id);
+    }
+
     async backendAction(id, fn, okText) {
-        if (this.pending.has(id)) return;
+        if (this.isLocked(id)) return;
         this.pending.add(id);
         this.menu = null;
         this.refreshRegion('cards');
@@ -1098,19 +1121,19 @@ class DataWindow {
 
     async syncNow(id) {
         const b = this.snap.backends.find(x => x.id === id);
-        if (this.pending.has(id)) return;
+        if (this.isLocked(id)) return;
         this.flash = null;
         this.refreshRegion('top');
         this.pending.add(id);
         try {
             const r = await this.p.syncNow(id);
-            if (r?.conflicts && r?.stalled) this.flash = { tone: 'warning', text: `已与「${b.label}」同步，${r.conflicts} 个文件需要你选版本，${r.stalled} 个文件保留了本机版本`, act: 'conflicts', actLabel: '去处理' };
-            else if (r?.conflicts) this.flash = { tone: 'warning', text: `已与「${b.label}」同步，${r.conflicts} 个文件需要你选版本`, act: 'conflicts', actLabel: '去处理' };
-            else if (r?.stalled) this.flash = { tone: 'warning', text: `已与「${b.label}」同步，${r.stalled} 个文件没能更新，保留了本机版本` };
-            else this.flash = { tone: 'success', text: `已与「${b.label}」同步` };
+            if (r?.conflicts && r?.stalled) this.flash = { tone: 'warning', text: t`Synced with "${b.label}"; ${r.conflicts} files need you to choose a version, and ${r.stalled} files kept this device's version`, act: 'conflicts', actLabel: t`Resolve` };
+            else if (r?.conflicts) this.flash = { tone: 'warning', text: t`Synced with "${b.label}"; ${r.conflicts} files need you to choose a version`, act: 'conflicts', actLabel: t`Resolve` };
+            else if (r?.stalled) this.flash = { tone: 'warning', text: t`Synced with "${b.label}"; ${r.stalled} files could not be updated and kept this device's version` };
+            else this.flash = { tone: 'success', text: t`Synced with "${b.label}"` };
         } catch (err) {
             console.error('[data-window] sync failed', err);
-            this.flash = { tone: 'error', text: `「${b.label}」同步失败：${err.message}` };
+            this.flash = { tone: 'error', text: t`Sync with "${b.label}" failed: ${err.message}` };
         } finally {
             this.pending.delete(id);
             this.refreshLive();
@@ -1121,15 +1144,15 @@ class DataWindow {
         const b = this.snap.backends.find(x => x.id === id);
         this.menu = null;
         this.refreshRegion('cards');
-        if (!await this.confirm({ title: `撤销与「${b.label}」的上次同步？`, text: '撤销本身也会同步到其他设备。', ok: '撤销' })) return;
-        if (this.pending.has(id)) return;
+        if (!await this.confirm({ title: t`Undo the last sync with "${b.label}"?`, text: t`The undo itself will also sync to other devices.`, ok: t`Undo` })) return;
+        if (this.isLocked(id)) return;
         this.pending.add(id);
         this.refreshRegion('cards');
         try {
             const r = await this.p.undo(id);
             this.flash = r?.kept?.length
-                ? { tone: 'warning', text: `已撤销。下面 ${r.kept.length} 个文件在同步后又改过，保留了当前版本：`, files: r.kept }
-                : { tone: 'success', text: `已撤销与「${b.label}」的上次同步` };
+                ? { tone: 'warning', text: t`Undone. The ${r.kept.length} files below were edited after the sync and kept their current version:`, files: r.kept }
+                : { tone: 'success', text: t`Undid the last sync with "${b.label}"` };
         } catch (err) {
             this.flash = { tone: 'error', text: err.message };
         } finally {
@@ -1144,17 +1167,17 @@ class DataWindow {
         this.refreshRegion('cards');
         const pendingPair = b.state === 'pending';
         const ok = await this.confirm(pendingPair
-            ? { title: `取消与「${b.label}」的配对？`, text: '已经发出去的配对链接会失效。', ok: '取消配对', danger: true }
-            : { title: `移除「${b.label}」？`, text: '本机的同步设置和同步历史会被删除，之前的同步也不能再撤销；存储桶和其他设备上的数据不受影响。', ok: '移除', danger: true });
+            ? { title: t`Cancel pairing with "${b.label}"?`, text: t`The pairing link you already sent will stop working.`, ok: t`Cancel pairing`, danger: true }
+            : { title: t`Remove "${b.label}"?`, text: t`This device's sync settings and sync history will be deleted, and earlier syncs can no longer be undone. The bucket and data on other devices are not affected.`, ok: t`Remove`, danger: true });
         if (!ok) return;
-        await this.backendAction(id, () => this.p.remove(id), pendingPair ? '已取消配对' : '已移除');
+        await this.backendAction(id, () => this.p.remove(id), pendingPair ? t`Pairing cancelled` : t`Removed`);
     }
 
     async saveLocal(btn) {
         const idle = Number(this.f.schedule.idle);
         const poll = Number(this.f.schedule.poll);
         if (!(idle > 0) || !(poll > 0)) {
-            this.toast('时间要填大于 0 的数字', true);
+            this.toast(t`Enter a number greater than 0 for the times`, true);
             return;
         }
         btn.classList.add('busy');
@@ -1162,28 +1185,28 @@ class DataWindow {
             this.f.device.label = await this.p.saveDevice(this.f.device.label.trim());
             this.f.schedule = { ...await this.p.saveSchedule(idle, poll) };
             this.rerender();
-            this.toast('已保存');
+            this.toast(t`Saved`);
         } catch (err) {
-            this.toast(err.code === 'INVALID_DEVICE_LABEL' ? '请输入有效的设备名' : err.message, true);
+            this.toast(err.code === 'INVALID_DEVICE_LABEL' ? t`Enter a valid device name` : err.message, true);
         } finally {
             btn.classList.remove('busy');
         }
     }
 
     async pairGen() {
-        const t = this.top;
-        if (!t.label.trim()) return this.formError('请填写对方设备名称');
-        if (!t.cats.size) return this.formError('请至少选一项同步内容');
-        t.busy = true;
-        t.error = null;
+        const tp = this.top;
+        if (!tp.label.trim()) return this.formError(t`Enter the other device's name`);
+        if (!tp.cats.size) return this.formError(t`Select at least one item to sync`);
+        tp.busy = true;
+        tp.error = null;
         this.rerender();
         try {
-            t.result = await this.p.createPairLink({ label: t.label.trim(), categories: [...t.cats] });
-            t.addr = firstReachable(t.result.addresses);
+            tp.result = await this.p.createPairLink({ label: tp.label.trim(), categories: [...t.cats] });
+            tp.addr = firstReachable(tp.result.addresses);
         } catch (err) {
-            t.error = err.message;
+            tp.error = err.message;
         } finally {
-            t.busy = false;
+            tp.busy = false;
             this.rerender();
         }
     }
@@ -1195,99 +1218,100 @@ class DataWindow {
     }
 
     async pairAccept() {
-        const t = this.top;
-        const f = t.form;
+        const tp = this.top;
+        const f = tp.form;
         if (!f.url || !f.peerId) {
-            t.manual = !f.link;
-            return this.formError(f.link ? '这条配对链接看不懂，请让对方重新生成' : '请粘贴配对链接，或手动填写对方地址和设备 ID');
+            tp.manual = !f.link;
+            return this.formError(f.link ? t`This pairing link is not valid. Ask the other device to generate a new one.` : t`Paste the pairing link, or enter the other device's address and device ID manually`);
         }
-        if (!t.cats.size) return this.formError('请至少选一项同步内容');
+        if (!tp.cats.size) return this.formError(t`Select at least one item to sync`);
         const me = this.p.currentHandle();
-        if (f.handle && f.handle !== me) return this.formError(`这条配对链接是给用户「${f.handle}」的，你现在登录的是「${me}」`);
-        t.busy = true;
-        t.error = null;
+        if (f.handle && f.handle !== me) return this.formError(t`This pairing link is for user "${f.handle}", but you are signed in as "${me}"`);
+        tp.busy = true;
+        tp.error = null;
         this.rerender();
         try {
-            const b = await this.p.acceptPair({ ...f, categories: [...t.cats] });
+            const b = await this.p.acceptPair({ ...f, label: f.label.trim() || f.peerId, categories: [...t.cats] });
             this.stack.sync = [{ view: 'list' }];
-            this.flash = { tone: 'success', text: `已与「${b.label}」配对并完成同步${f.user ? '。对方的账号已保存在本机，可在设备菜单里清除' : ''}` };
+            this.flash = { tone: 'success', text: f.user ? t`Paired and synced with "${b.label}". The other device's account is saved on this device and can be cleared from the device menu.` : t`Paired and synced with "${b.label}"` };
             this.render();
         } catch (err) {
-            t.busy = false;
+            tp.busy = false;
             if (err.paired) {
                 this.stack.sync = [{ view: 'list' }];
-                this.flash = { tone: 'warning', text: `已配对，但第一次同步失败：${err.message}` };
+                this.flash = { tone: 'warning', text: t`Paired, but the first sync failed: ${err.message}` };
                 return this.render();
             }
             if (/^PEER_AUTH/.test(err.code || '')) {
-                t.manual = true;
-                t.error = err.message;
+                tp.manual = true;
+                tp.error = err.message;
                 this.rerender();
                 return this.root.querySelector('[data-focus="user"]')?.focus();
             }
             Object.assign(f, { code: '', pass: '', link: '' });
-            t.error = `${err.message}。配对码已失效，请让对方重新生成链接`;
+            tp.error = t`${err.message}. The pairing code is no longer valid; ask the other device to generate a new link.`;
             this.rerender();
         }
     }
 
     async s3Save() {
-        const t = this.top;
-        const f = t.form;
+        const tp = this.top;
+        const f = tp.form;
         const missing = [];
-        if (!f.label.trim()) missing.push('名称');
+        const sep = t`, `;
+        if (!f.label.trim()) missing.push(t`Name`);
         if (!f.endpoint.trim()) missing.push('Endpoint');
-        if (!f.bucket.trim()) missing.push('桶');
-        if (!t.id && !f.accessKey) missing.push('Access Key ID');
-        if (!t.id && !f.secretKey) missing.push('Secret Access Key');
-        if (!t.id && !f.passphrase) missing.push('加密口令');
-        if (missing.length) return this.formError(`请填写${missing.join('、')}`);
-        if (!f.cats.size) return this.formError('请至少选一项同步内容');
-        t.busy = true;
-        t.error = null;
+        if (!f.bucket.trim()) missing.push(t`Bucket name`);
+        if (!tp.id && !f.accessKey) missing.push('Access Key ID');
+        if (!tp.id && !f.secretKey) missing.push('Secret Access Key');
+        if (!tp.id && !f.passphrase) missing.push(t`Encryption passphrase`);
+        if (missing.length) return this.formError(t`Please fill in: ${missing.join(sep)}`);
+        if (!f.cats.size) return this.formError(t`Select at least one item to sync`);
+        tp.busy = true;
+        tp.error = null;
         this.rerender();
         try {
-            await this.p.saveS3({ ...f, region: f.region.trim() || 'us-east-1', categories: [...f.cats] }, t.id);
+            await this.p.saveS3({ ...f, region: f.region.trim() || 'us-east-1', categories: [...f.cats] }, tp.id);
             this.stack.sync = [{ view: 'list' }];
-            this.flash = { tone: 'success', text: t.id ? `已保存「${f.label}」` : `已添加「${f.label}」` };
+            this.flash = { tone: 'success', text: tp.id ? t`Saved "${f.label}"` : t`Added "${f.label}"` };
             this.render();
         } catch (err) {
-            t.error = err.message;
-            t.busy = false;
+            tp.error = err.message;
+            tp.busy = false;
             this.rerender();
         }
     }
 
     async unlockSave() {
-        const t = this.top;
-        t.busy = true;
-        t.error = null;
+        const tp = this.top;
+        tp.busy = true;
+        tp.error = null;
         this.rerender();
         try {
-            await this.p.unlockS3(t.id, t.form.pass);
+            await this.p.unlockS3(tp.id, tp.form.pass);
             this.pop();
-            this.toast('已解锁');
+            this.toast(t`Unlocked`);
         } catch (err) {
-            t.error = err.message;
-            t.busy = false;
+            tp.error = err.message;
+            tp.busy = false;
             this.rerender();
         }
     }
 
     async lanSave() {
-        const t = this.top;
-        if (!t.label.trim()) return this.formError('请填写名称');
-        if (!t.cats.size) return this.formError('请至少选一项同步内容');
-        t.busy = true;
-        t.error = null;
+        const tp = this.top;
+        if (!tp.label.trim()) return this.formError(t`Enter a name`);
+        if (!tp.cats.size) return this.formError(t`Select at least one item to sync`);
+        tp.busy = true;
+        tp.error = null;
         this.rerender();
         try {
-            await this.p.editLan(t.id, { label: t.label.trim(), categories: [...t.cats] });
+            await this.p.editLan(tp.id, { label: tp.label.trim(), categories: [...t.cats] });
             this.pop();
-            this.toast('已保存');
+            this.toast(t`Saved`);
         } catch (err) {
-            t.busy = false;
-            t.error = err.message;
+            tp.busy = false;
+            tp.error = err.message;
             this.rerender();
         }
     }
@@ -1296,7 +1320,7 @@ class DataWindow {
         for (const c of this.snap.conflicts) {
             const pick = this.choices[c.key];
             if (c.stale && pick && pick !== 'current') {
-                if (!await this.confirm({ title: `覆盖「${c.path.split('/').pop()}」？`, text: '冲突之后的修改会被覆盖，被覆盖的版本仍留在同步历史里。', ok: '覆盖', danger: true })) return;
+                if (!await this.confirm({ title: t`Overwrite "${c.path.split('/').pop()}"?`, text: t`Changes made after the conflict will be overwritten; the overwritten version stays in sync history.`, ok: t`Overwrite`, danger: true })) return;
             }
         }
         this.applying = true;
@@ -1306,8 +1330,8 @@ class DataWindow {
             const r = await this.p.applyConflicts(picks);
             this.failedKeys = new Set(r.failed.map(x => x.key));
             for (const k of [...r.applied, ...r.alreadyResolved.map(x => x.key)]) delete this.choices[k];
-            if (r.alreadyResolved.length) this.toast(`${r.alreadyResolved.length} 个文件已在其他设备处理过`);
-            else if (!r.failed.length) this.toast('已应用');
+            if (r.alreadyResolved.length) this.toast(t`${r.alreadyResolved.length} files were already handled on another device`);
+            else if (!r.failed.length) this.toast(t`Applied`);
         } catch (err) {
             this.toast(err.message, true);
         } finally {
@@ -1338,7 +1362,7 @@ class DataWindow {
         try {
             await this.p.dismissNotice(id);
         } catch (err) {
-            this.toast(`有些通知没能关闭：${err.message}`, true);
+            this.toast(t`Some notices could not be dismissed: ${err.message}`, true);
         } finally {
             this.noticeBusy.delete(id);
             this.rerender();
@@ -1366,12 +1390,12 @@ class DataWindow {
         const r = this.f.restore;
         if (!resume && !r.needsDb) {
             const ok = await this.confirm(r.mode === 'replace'
-                ? { title: '覆盖恢复？', text: '所选内容会先被清空，再写入备份里的数据。', ok: '覆盖并恢复', danger: true }
-                : { title: '开始恢复？', text: '同路径的文件会被备份里的版本替换，其他文件不动。', ok: '开始恢复' });
+                ? { title: t`Replace and restore?`, text: t`The selected content will be cleared first, then the data in the backup is written.`, ok: t`Replace and restore`, danger: true }
+                : { title: t`Start restore?`, text: t`Files at the same path will be replaced by the version in the backup; other files are left alone.`, ok: t`Start restore` });
             if (!ok) return;
         }
         if (r.needsDb && !(r.db.host && r.db.user)) {
-            this.toast('请填写临时数据库的地址和用户名', true);
+            this.toast(t`Enter the host and username of the temporary database`, true);
             return;
         }
         const resumeFrom = resume ? r.interrupted?.percent || 0 : 0;
@@ -1384,7 +1408,7 @@ class DataWindow {
                 if (this.top.view === 'restore') this.rerender();
             });
             Object.assign(r, { file: null, needsDb: null, uploaded: false });
-            if (!r.done.skipped && !r.done.rejected) setTimeout(() => this.f.restore.done && this.finish(), 3000);
+            if (!r.done.skipped && !r.done.rejected && !r.done.failed) setTimeout(() => this.f.restore.done && this.finish(), 3000);
         } catch (err) {
             if (err.code === 'needs-temp-db') {
                 r.needsDb = { kind: err.kind, source: err.source, target: err.target };
@@ -1402,7 +1426,7 @@ class DataWindow {
     /** After a successful restore or migration the page reloads, like the old manager. */
     finish() {
         if (this.onDone) return this.onDone();
-        this.toast('预览里不会真的刷新页面');
+        this.toast(t`The preview does not actually reload the page`);
     }
 
     async migrateLink() {
@@ -1423,12 +1447,12 @@ class DataWindow {
     async migrateGo() {
         const m = this.f.migrate;
         if (!m.inLink.trim()) {
-            this.toast('请先粘贴迁移链接', true);
+            this.toast(t`Paste the migration link first`, true);
             return;
         }
         const ok = await this.confirm(m.mode === 'replace'
-            ? { title: '覆盖迁入？', text: '所选内容会先被清空，再写入旧设备的数据。', ok: '覆盖并迁入', danger: true }
-            : { title: '开始迁入？', text: '同路径的文件会被旧设备的版本替换，其他文件不动。', ok: '开始迁移' });
+            ? { title: t`Replace and migrate in?`, text: t`The selected content will be cleared first, then the data from the old device is written.`, ok: t`Replace and migrate in`, danger: true }
+            : { title: t`Start migrating in?`, text: t`Files at the same path will be replaced by the version from the old device; other files are left alone.`, ok: t`Start migration` });
         if (!ok) return;
         Object.assign(m, { running: true, stage: 0, percent: 0, error: null, done: null });
         this.rerender();
@@ -1438,7 +1462,7 @@ class DataWindow {
                 if (this.top.view === 'migrateIn') this.rerender();
             });
             m.inLink = '';
-            if (!m.done.skipped && !m.done.rejected) setTimeout(() => this.f.migrate.done && this.finish(), 3000);
+            if (!m.done.skipped && !m.done.rejected && !m.done.failed) setTimeout(() => this.f.migrate.done && this.finish(), 3000);
         } catch (err) {
             m.error = err.message;
         } finally {
@@ -1483,11 +1507,15 @@ let openWindow = null;
  * @param {'conflicts'} [options.view] Sub-page to open inside the tab
  * @param {string} [options.handle] User whose data backup/restore/migration acts on (admin panel)
  * @param {() => void} [options.onDone] Called after a successful restore or migration
- * @param {object} [options.provider] Data source; defaults to the preview mock
+ * @param {object} [options.provider] Data source; defaults to the live Luker provider (pass createMockProvider() to preview)
  * @returns {Promise<void>} Resolves when the window closes
  */
 export function openDataWindow({ tab = 'sync', view, handle, onDone, provider } = {}) {
+    if (openWindow && (openWindow.handle !== handle || provider)) {
+        openWindow.ui.close();
+    }
     if (openWindow) {
+        if (onDone) openWindow.ui.onDone = onDone;
         openWindow.ui.navigate({ tab, view });
         openWindow.win.focus();
         return openWindow.closed;
@@ -1500,7 +1528,7 @@ export function openDataWindow({ tab = 'sync', view, handle, onDone, provider } 
     const win = document.createElement('section');
     win.className = 'dw-win';
     win.setAttribute('role', 'dialog');
-    win.setAttribute('aria-label', '数据');
+    win.setAttribute('aria-label', t`Data`);
     win.tabIndex = -1;
     const root = document.createElement('div');
     root.className = 'dw';
@@ -1509,7 +1537,9 @@ export function openDataWindow({ tab = 'sync', view, handle, onDone, provider } 
 
     let resolveClosed;
     const closed = new Promise(resolve => resolveClosed = resolve);
-    const ui = new DataWindow(root, provider || (shared.provider ??= createMockProvider()), { tab, view, handle, onDone });
+    const source = provider || createLukerProvider({ handle });
+    source.start?.();
+    const ui = new DataWindow(root, source, { tab, view, handle, onDone });
     layer.dataset.theme = ui.theme;
     ui.onTheme = theme => layer.dataset.theme = theme;
     const onKey = e => {
@@ -1527,11 +1557,12 @@ export function openDataWindow({ tab = 'sync', view, handle, onDone, provider } 
     // Long jobs keep running on the server; closing only hides their progress.
     async function requestClose() {
         const job = ui.busyJob;
-        if (job && !await ui.confirm({ title: `${job}，确定关闭窗口？`, text: '任务会继续在服务器上进行，重新打开窗口可以看到进度。', ok: '关闭' })) return;
+        if (job && !await ui.confirm({ title: t`${job}. Close the window anyway?`, text: t`The task keeps running on the server. Reopen the window to see its progress.`, ok: t`Close` })) return;
         close();
     }
     function close() {
         ui.destroy();
+        if (!provider) source.stop?.();
         document.removeEventListener('keydown', onKey, true);
         layer.remove();
         openWindow = null;
@@ -1550,6 +1581,6 @@ export function openDataWindow({ tab = 'sync', view, handle, onDone, provider } 
     document.body.append(layer);
     layer.showModal();
     win.focus();
-    openWindow = { win, ui, closed };
+    openWindow = { win, ui, closed, handle };
     return closed;
 }

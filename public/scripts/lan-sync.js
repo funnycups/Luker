@@ -47,9 +47,35 @@ const ENDPOINTS = {
 const PAIR_LINK_SCHEME = 'luker-sync';
 const PAIR_LINK_VERSION = 'v1';
 let openPanelPromise = null;
-const pendingBackendActions = new Set();
 
-function buildPairLink({ peerBaseUrl, peerId, label, categories, pairCode }) {
+/**
+ * Backends with a user action in progress. Module-level so the lock
+ * outlives the surface that started the action and holds in every
+ * window that shows the backend.
+ * @type {Set<string>}
+ */
+export const pendingBackendActions = new Set();
+
+/**
+ * Claim the action lock of a backend.
+ * @param {string} backendId
+ * @returns {(() => void) | null} Releases the lock and announces it; null while another action holds it
+ */
+export function claimBackendAction(backendId) {
+    if (pendingBackendActions.has(backendId)) return null;
+    pendingBackendActions.add(backendId);
+    let released = false;
+    return () => {
+        if (released) return;
+        released = true;
+        pendingBackendActions.delete(backendId);
+        document.dispatchEvent(new CustomEvent('sync-backend-actions-updated'));
+    };
+}
+
+export { ENDPOINTS as SYNC_ENDPOINTS };
+
+export function buildPairLink({ peerBaseUrl, peerId, label, categories, pairCode }) {
     const params = new URLSearchParams();
     params.set('base', peerBaseUrl);
     params.set('peer', peerId);
@@ -67,7 +93,7 @@ function buildPairLink({ peerBaseUrl, peerId, label, categories, pairCode }) {
  * The function is intentionally lenient about scheme prefix so a user who
  * accidentally clipped the prefix can still paste the rest.
  */
-function parsePairLink(raw) {
+export function parsePairLink(raw) {
     if (!raw || typeof raw !== 'string') return null;
     let trimmed = raw.trim();
     if (!trimmed) return null;
@@ -130,7 +156,7 @@ function renderGeneratedPairLink(template, state) {
  * already speaks displayKey/descriptionKey i18n keys; we render directly
  * against them rather than maintaining a parallel UI registry.
  */
-async function loadCategories() {
+export async function loadCategories() {
     try {
         const res = await fetch(ENDPOINTS.categories, { headers: getRequestHeaders() });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -147,7 +173,7 @@ async function loadCategories() {
  *
  * @returns {Promise<{ backends: Record<string, any>, running: Record<string, boolean>, schedule: { idleSeconds?: number, pollSeconds?: number } }>}
  */
-async function loadBackends() {
+export async function loadBackends() {
     const res = await fetch(ENDPOINTS.backends, { headers: getRequestHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const body = await res.json();
@@ -163,7 +189,7 @@ async function loadBackends() {
  * the caller can render an honest error instead of crashing on a missing
  * field.
  */
-async function loadAvailability() {
+export async function loadAvailability() {
     try {
         const res = await fetch(ENDPOINTS.availability, { headers: getRequestHeaders() });
         if (!res.ok) return { available: false, reason: 'unreachable' };
@@ -182,7 +208,7 @@ async function loadAvailability() {
  *
  * @returns {Promise<string | null>}
  */
-async function getCurrentHandleForSync() {
+export async function getCurrentHandleForSync() {
     try {
         const res = await fetch('/api/users/me', { headers: getRequestHeaders() });
         if (!res.ok) return null;
@@ -230,7 +256,7 @@ function renderCategoryGrid(container, categories, defaultSelected) {
     }
 }
 
-function englishFallbackForCategory(id) {
+export function englishFallbackForCategory(id) {
     return String(id)
         .split('-')
         .map(w => w[0]?.toUpperCase() + w.slice(1))
@@ -327,7 +353,20 @@ function syncErrorCodeMessage(code, body = {}) {
  * `body.error` is shown. The log always carries the raw detail, so a
  * retry plus a debug-log export still names the real cause.
  */
-function reportSyncError(template, { stage, status, code, message, body = {}, kind } = {}) {
+function reportSyncError(template, failure = {}) {
+    const shown = describeSyncFailure(failure);
+    showStatusBanner(template, 'error', shown);
+    toastr.error(shown, t`LAN Sync`);
+}
+
+/**
+ * Log a sync failure and return the user-facing reason for it, as
+ * `reportSyncError` shows it.
+ *
+ * @param {{ stage?: string, status?: number, code?: string, message?: string, body?: any, kind?: string }} [failure]
+ * @returns {string}
+ */
+export function describeSyncFailure({ stage, status, code, message, body = {}, kind } = {}) {
     const shown = String(message || '').trim()
         || (code ? syncFailureReason(code, body, kind) : null)
         || String(body.error || '').trim()
@@ -338,12 +377,11 @@ function reportSyncError(template, { stage, status, code, message, body = {}, ki
         code,
         detail: rawDetail || undefined,
     });
-    showStatusBanner(template, 'error', shown);
-    toastr.error(shown, t`LAN Sync`);
+    return shown;
 }
 
 /** The reason a failed sync shows, translated when its code is known. */
-function syncFailureReason(code, body, kind) {
+export function syncFailureReason(code, body, kind) {
     return syncErrorCodeMessage(code, body) || (kind === 's3' ? syncSettingsError(code) : null)
         || String(body?.error || '').trim() || String(code || '');
 }
@@ -619,21 +657,12 @@ async function showLanSyncPanel() {
             if (confirm !== POPUP_RESULT.AFFIRMATIVE) return;
             showStatusBanner(template, 'info', t`Undo`);
             try {
-                const res = await fetch(ENDPOINTS.backendUndo(backendId), {
-                    method: 'POST',
-                    headers: getRequestHeaders(),
-                });
-                const body = await res.json().catch(() => ({}));
-                if (res.status === 404 && body.code === 'NO_BACKUP_TAG') {
+                const result = await undoLastBackendSync(backendId, backend.kind);
+                if (result.nothingToUndo) {
                     toastr.info(t`Nothing to undo — no prior sync recorded.`, t`LAN Sync`);
                     return;
                 }
-                if (!res.ok || body.ok === false || body.committed === false || body.propagation?.ok === false) {
-                    const reason = syncFailureReason(body.code || body.propagation?.code, body, backend.kind);
-                    const diagnostic = body.reconcile ? ` ${JSON.stringify(body.reconcile)}` : '';
-                    throw new Error((reason || `HTTP ${res.status}`) + diagnostic);
-                }
-                const keptEdited = Array.isArray(body.keptEdited) ? body.keptEdited : [];
+                const { keptEdited } = result;
                 if (keptEdited.length) {
                     const message = t`Reverted the last sync with ${label}. These files were edited after it and were left as they are: ${keptEdited.join(', ')}`;
                     showStatusBanner(template, 'warning', message);
@@ -704,14 +733,14 @@ async function showLanSyncPanel() {
     template.data('syncPendingActions', pendingActions);
     for (const [name, handler] of Object.entries(handlers)) {
         handlers[name] = async (backendId, backend) => {
-            if (pendingActions.has(backendId)) return;
-            pendingActions.add(backendId);
+            const release = claimBackendAction(backendId);
+            if (!release) return;
             const render = () => renderPeersList(template, template.data('syncBackendState') ?? state, handlers);
             render();
             try { await handler(backendId, backend); } finally {
                 pendingActions.delete(backendId);
                 render();
-                document.dispatchEvent(new CustomEvent('sync-backend-actions-updated'));
+                release();
             }
         };
     }
@@ -796,11 +825,7 @@ async function showLanSyncPanel() {
             // origin first, then the reachable interface addresses the
             // server detected. Default to a non-loopback one when present,
             // so the shared link is usable without manual editing.
-            const bases = [];
-            for (const candidate of [body.peerBaseUrl, ...(Array.isArray(body.candidateBaseUrls) ? body.candidateBaseUrls : [])]) {
-                const base = String(candidate || '').trim();
-                if (base && !bases.includes(base)) bases.push(base);
-            }
+            const bases = pairLinkBaseUrls(body);
             const select = template.find('.lanSyncBaseUrlSelect');
             select.empty();
             for (const base of bases) {
@@ -929,10 +954,64 @@ async function refreshPeers(template, handlers) {
 }
 
 /**
+ * Every address a peer could use to reach this device, from a `/pair/start`
+ * answer: the request-derived origin first, then the reachable interface
+ * addresses the server detected.
+ *
+ * @param {{ peerBaseUrl?: string, candidateBaseUrls?: string[] }} body
+ * @returns {string[]}
+ */
+export function pairLinkBaseUrls(body) {
+    const bases = [];
+    for (const candidate of [body?.peerBaseUrl, ...(Array.isArray(body?.candidateBaseUrls) ? body.candidateBaseUrls : [])]) {
+        const base = String(candidate || '').trim();
+        if (base && !bases.includes(base)) bases.push(base);
+    }
+    return bases;
+}
+
+/**
+ * The handle as it appears before the `@` of a peer id. MUST stay in sync
+ * with `sanitizeHandleForPeerId` in `src/endpoints/sync.js` — both sides
+ * need to agree on the sanitized form to compare correctly.
+ *
+ * @param {string} handle
+ * @returns {string}
+ */
+export function sanitizeHandleForPeerId(handle) {
+    return String(handle || 'peer').replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.(?=\.)/g, '_').replace(/^\./, '_');
+}
+
+/**
+ * Revert the last sync of a backend, which then syncs again so the revert
+ * reaches the other device.
+ *
+ * @param {string} backendId
+ * @param {string} [kind] Backend kind, for S3-specific failure messages
+ * @returns {Promise<{ nothingToUndo: true } | { nothingToUndo?: false, keptEdited: string[] }>} `keptEdited` lists files edited after the sync and left as they are
+ * @throws {Error & { code?: string }} With a user-facing message when the undo failed
+ */
+export async function undoLastBackendSync(backendId, kind) {
+    const res = await fetch(ENDPOINTS.backendUndo(backendId), {
+        method: 'POST',
+        headers: getRequestHeaders(),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 404 && body.code === 'NO_BACKUP_TAG') return { nothingToUndo: true };
+    if (!res.ok || body.ok === false || body.committed === false || body.propagation?.ok === false) {
+        const code = body.code || body.propagation?.code;
+        const reason = syncFailureReason(code, body, kind);
+        const diagnostic = body.reconcile ? ` ${JSON.stringify(body.reconcile)}` : '';
+        throw Object.assign(new Error((reason || `HTTP ${res.status}`) + diagnostic), { code });
+    }
+    return { keptEdited: Array.isArray(body.keptEdited) ? body.keptEdited : [] };
+}
+
+/**
  * Message for a pairing that failed before it was saved, when it differs
  * from the one for a failed sync of a paired device.
  */
-function pairFailureMessage(body) {
+export function pairFailureMessage(body) {
     if (body.code === 'PEER_AUTH_FAILED' || body.code === 'PEER_AUTH_REQUIRED') {
         return t`Authentication to the other device failed. Check your credentials.`;
     }
@@ -958,7 +1037,7 @@ async function runPairAccept(template, payload) {
     const peerIdPrefix = String(payload.remotePeerId || '').split('@')[0];
     const localHandle = await getCurrentHandleForSync();
     if (localHandle !== null) {
-        const expected = String(localHandle || 'peer').replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.(?=\.)/g, '_').replace(/^\./, '_');
+        const expected = sanitizeHandleForPeerId(localHandle);
         if (expected !== peerIdPrefix) {
             showStatusBanner(template, 'error',
                 t`This pairing link is for ${peerIdPrefix}, but you're logged in as ${expected}. Pair from the matching account, or use the same handle on both devices.`);

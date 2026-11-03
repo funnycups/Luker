@@ -53,12 +53,15 @@ function stalledPathsOf(status) {
     return [...paths].sort();
 }
 
-const conflictKey = entry => `c:${entry.path}:${entry.createdAt}`;
+/** Key of a pending conflict; a conflict recorded again gets a new key. */
+export const conflictKey = entry => `c:${entry.path}:${entry.createdAt}`;
+/** Key of a pending notice. */
+export const noticeKey = notice => `n:${notice.path}`;
 
 function pendingKeys(status) {
     return [
         ...status.conflicts.map(conflictKey),
-        ...status.notices.map(n => `n:${n.path}`),
+        ...status.notices.map(noticeKey),
         ...Object.entries(status.backends ?? {}).flatMap(([id, b]) => (b.lastSync?.stalled ?? []).map(p => `s:${id}:${p}`)),
     ];
 }
@@ -67,7 +70,7 @@ function pendingKeys(status) {
  * Blobs and object URLs of one popup, by backend and oid, so cards that
  * show the same version share one download.
  */
-function createPreviewCache() {
+export function createPreviewCache() {
     const blobs = new Map();
     const urls = new Map();
     let revoked = false;
@@ -97,26 +100,43 @@ function createPreviewCache() {
     };
 }
 
-async function fillPreview(preview, { backendId, oid, path }, previews) {
-    if (oid === null) {
-        preview.append(element('span', '', t`Deleted`));
-        return;
-    }
+/**
+ * Load one version of a conflicting file for preview. Text and image files
+ * are told apart by the extension of the path.
+ *
+ * @param {ReturnType<typeof createPreviewCache>} previews
+ * @param {{ backendId: string, oid: string | null, path: string }} version
+ * @returns {Promise<{ kind: 'deleted' } | { kind: 'text', text: string } | { kind: 'image', url: string } | { kind: 'binary', bytes: number } | null>}
+ * Null when the cache was revoked before an image finished downloading.
+ */
+export async function loadSyncPreview(previews, { backendId, oid, path }) {
+    if (oid === null) return { kind: 'deleted' };
     const blob = await previews.blob(backendId, oid);
     const lower = path.toLowerCase();
-    if (TEXT_EXTENSIONS.some(ext => lower.endsWith(ext))) {
-        const text = element('pre', 'syncConflictText', await blob.text());
+    if (TEXT_EXTENSIONS.some(ext => lower.endsWith(ext))) return { kind: 'text', text: await blob.text() };
+    if (IMAGE_EXTENSIONS.some(ext => lower.endsWith(ext))) {
+        const url = await previews.url(backendId, oid);
+        return url === null ? null : { kind: 'image', url };
+    }
+    return { kind: 'binary', bytes: blob.size };
+}
+
+async function fillPreview(preview, version, previews) {
+    const shown = await loadSyncPreview(previews, version);
+    if (shown === null) return;
+    if (shown.kind === 'deleted') {
+        preview.append(element('span', '', t`Deleted`));
+    } else if (shown.kind === 'text') {
+        const text = element('pre', 'syncConflictText', shown.text);
         Object.assign(text.style, { maxHeight: '40vh', overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' });
         preview.append(text);
-    } else if (IMAGE_EXTENSIONS.some(ext => lower.endsWith(ext))) {
-        const url = await previews.url(backendId, oid);
-        if (url === null) return;
+    } else if (shown.kind === 'image') {
         const image = element('img', 'syncConflictImage');
         image.style.maxWidth = '100%';
-        image.src = url;
+        image.src = shown.url;
         preview.append(image);
     } else {
-        preview.append(element('span', '', t`Binary file, ${blob.size} bytes`));
+        preview.append(element('span', '', t`Binary file, ${shown.bytes} bytes`));
     }
 }
 
@@ -151,11 +171,12 @@ function markResolvedElsewhere(row) {
     row.querySelector('.syncConflictPath')?.after(element('div', 'syncConflictResolvedNote menu_button_note', t`Resolved on another device.`));
 }
 
-function reportingBackends(entry) {
+export function reportingBackends(entry) {
     return [...new Set([...(entry?.backends ?? []), ...Object.keys(entry?.recordVersions ?? {}), entry?.backendId].filter(Boolean))];
 }
 
-function recordUnknown(entry, status) {
+/** True when a backend that reports the entry has pending records that could not be read. */
+export function recordUnknown(entry, status) {
     return !status || reportingBackends(entry).some(id => status.errors?.[id] || status.backends?.[id]?.pendingError);
 }
 
@@ -194,41 +215,57 @@ async function findCharacterIndex(avatar) {
     return characters.findIndex(c => c.avatar === avatar);
 }
 
-/** @returns {Promise<boolean>} true when the chat was opened */
-async function openNoticeTarget(notice) {
+/**
+ * Open the chat a notice points at.
+ *
+ * @param {object} notice Pending notice of the status
+ * @throws {Error & { code: string }} With a user-facing message when the chat or its group could not be found or opened
+ */
+export async function openSyncNoticeTarget(notice) {
     const { target } = notice;
-    const missing = notice.kind === 'restored' ? t`The chat could not be found.` : t`The branch chat could not be found.`;
+    const restored = notice.kind === 'restored';
+    const failure = (message, code) => Object.assign(new Error(message), { code });
+    const missing = () => failure(restored ? t`The chat could not be found.` : t`The branch chat could not be found.`, 'CHAT_MISSING');
     if (target.kind === 'group') {
+        if (target.groupId === null) throw failure(restored ? t`The group of this chat could not be found.` : t`The group of this branch chat could not be found.`, 'GROUP_MISSING');
         // The group list loaded at page start does not hold chats a sync added.
         await getGroups();
         const group = groups.find(g => g.id === target.groupId);
-        if (!group || !group.chats.includes(target.name)) {
-            toastr.warning(missing);
-            return false;
-        }
+        if (!group || !group.chats.includes(target.name)) throw missing();
         // `openGroupChat` switches chats within the selected group only.
         if (selected_group !== target.groupId && !await openGroupById(target.groupId)) {
-            toastr.warning(t`The group of this chat could not be opened.`);
-            return false;
+            throw failure(t`The group of this chat could not be opened.`, 'GROUP_OPEN_FAILED');
         }
         await openGroupChat(target.groupId, target.name);
-        return true;
+        return;
     }
     const index = await findCharacterIndex(target.avatar);
-    if (index < 0) {
-        toastr.warning(missing);
-        return false;
-    }
+    if (index < 0) throw missing();
     await selectCharacterById(index);
     await openCharacterChat(target.name);
-    return true;
 }
 
-async function dismissNotice(notice, row) {
-    if (row.dataset.dismissing === 'true' || row.classList.contains('syncNoticeUnknown')) return;
-    row.dataset.dismissing = 'true';
-    const dismiss = row.querySelector('.syncNoticeDismissButton');
-    dismiss.classList.add('disabled');
+/** @returns {Promise<boolean>} true when the chat was opened */
+async function openNoticeTarget(notice) {
+    try {
+        await openSyncNoticeTarget(notice);
+        return true;
+    } catch (error) {
+        if (!error?.code) throw error;
+        toastr.warning(error.message);
+        return false;
+    }
+}
+
+/**
+ * Dismiss a notice, then read the status again to learn whether it is gone.
+ * Status reads that started before are discarded.
+ *
+ * @param {object} notice Pending notice of the status
+ * @returns {Promise<{ removed: boolean }>} `removed` is false when another backend still reports the notice
+ * @throws {Error & { code?: string }} `NOTICE_UNKNOWN` when the records of a reporting backend could not be read
+ */
+export async function dismissSyncNotice(notice) {
     statusVersion += 1;
     try {
         const response = await fetch(ENDPOINTS.dismiss, {
@@ -237,27 +274,40 @@ async function dismissNotice(notice, row) {
             body: JSON.stringify({ paths: [notice.path] }),
         });
         const body = await response.json();
-        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        if (!response.ok) throw Object.assign(new Error(body.error || `HTTP ${response.status}`), { code: body.code });
         const result = body.results?.find(result => result.path === notice.path);
         const latest = await readStatus();
-        if (!latest || recordUnknown(notice, latest)) {
-            markNoticeUnknown(row);
-            throw new Error(t`Some notices could not be dismissed. Recover the affected backends and retry.`);
-        }
+        const failed = code => Object.assign(new Error(t`Some notices could not be dismissed. Recover the affected backends and retry.`), { code });
+        if (!latest || recordUnknown(notice, latest)) throw failed('NOTICE_UNKNOWN');
         if (latest.notices.some(entry => entry.path === notice.path)) {
-            if (body.ok === false || !result?.applied) throw new Error(t`Some notices could not be dismissed. Recover the affected backends and retry.`);
-        } else {
+            if (body.ok === false || !result?.applied) throw failed('NOTICE_NOT_DISMISSED');
+            return { removed: false };
+        }
+        return { removed: true };
+    } finally {
+        statusVersion += 1;
+    }
+}
+
+async function dismissNotice(notice, row) {
+    if (row.dataset.dismissing === 'true' || row.classList.contains('syncNoticeUnknown')) return;
+    row.dataset.dismissing = 'true';
+    const dismiss = row.querySelector('.syncNoticeDismissButton');
+    dismiss.classList.add('disabled');
+    try {
+        const { removed } = await dismissSyncNotice(notice);
+        if (removed) {
             const section = row.closest('.syncNoticesSection');
             row.remove();
             if (section && !section.querySelector('.syncNoticeRow')) section.classList.add('displayNone');
         }
     } catch (error) {
+        if (error?.code === 'NOTICE_UNKNOWN') markNoticeUnknown(row);
         console.error('[sync] could not dismiss the notice', error);
         toastr.error(String(error?.message || error));
     } finally {
         row.dataset.dismissing = 'false';
         if (!row.classList.contains('syncNoticeUnknown')) dismiss.classList.remove('disabled');
-        statusVersion += 1;
     }
 }
 
@@ -327,6 +377,8 @@ async function collectChoices(template, conflictByPath) {
     return choices;
 }
 
+// The Data window replaced this popup; it stays until the old sync UI is removed.
+// eslint-disable-next-line no-unused-vars
 async function openSyncPopup(status) {
     const template = $(await renderTemplateAsync('syncConflicts'));
     const previews = createPreviewCache();
@@ -380,17 +432,7 @@ async function openSyncPopup(status) {
         statusVersion += 1;
         applyButton.addClass('disabled');
         try {
-            const response = await fetch(ENDPOINTS.resolve, {
-                method: 'POST',
-                headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
-                body: JSON.stringify(choices),
-            });
-            const body = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-            const results = Array.isArray(body.results) ? body.results : [];
-            const resultErrors = Object.assign({}, body.errors, ...results.map(result => result.errors));
-            const partialFailure = body.ok === false || Object.keys(resultErrors).length > 0;
-            const unapplied = results.filter(result => !result.applied).map(result => result.path);
+            const { results, partialFailure, unapplied } = await submitConflictChoices(choices);
             // A choice another device resolved first is no longer pending.
             const latest = unapplied.length > 0 || partialFailure ? await readStatus() : null;
             if (latest) refresh(latest, true);
@@ -537,6 +579,34 @@ async function openSyncPopup(status) {
     });
 }
 
+/**
+ * Send conflict choices to the server.
+ *
+ * @param {{ path: string, choice: string, review: object }[]} choices
+ * @returns {Promise<{ results: any[], partialFailure: boolean, unapplied: string[] }>} `unapplied` lists the paths whose choice was not applied
+ */
+export async function submitConflictChoices(choices) {
+    const response = await fetch(ENDPOINTS.resolve, {
+        method: 'POST',
+        headers: { ...getRequestHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(choices),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw Object.assign(new Error(body.error || `HTTP ${response.status}`), { code: body.code });
+    const results = Array.isArray(body.results) ? body.results : [];
+    const resultErrors = Object.assign({}, body.errors, ...results.map(result => result.errors));
+    return {
+        results,
+        partialFailure: body.ok === false || Object.keys(resultErrors).length > 0,
+        unapplied: results.filter(result => !result.applied).map(result => result.path),
+    };
+}
+
+/** Discard status reads in flight, such as before and after a choice changes the pending records. */
+export function invalidateSyncStatusReads() {
+    statusVersion += 1;
+}
+
 function statusFailure() {
     console.error('[sync] status read failed');
     failOpenPopup?.();
@@ -553,8 +623,12 @@ async function requestStatus() {
     return status;
 }
 
-/** Null denotes an invalidated response, never a failed read. */
-async function readStatus() {
+/**
+ * Read the status and announce it with `sync-status-updated`.
+ * Null denotes an invalidated response, never a failed read.
+ * @returns {Promise<object | null>}
+ */
+export async function readStatus() {
     const version = ++statusVersion;
     try {
         const status = await requestStatus();
@@ -585,16 +659,13 @@ async function check({ showSeen = false } = {}) {
         }
         const keys = pendingKeys(status);
         const unseen = keys.some(key => !shownKeys.has(key));
-        if (popupOpen && refreshOpenPopup) {
-            refreshOpenPopup(status);
-        } else if (!popupOpen && keys.length > 0 && (showSeen || unseen)) {
-            popupOpen = true;
-            try {
-                await openSyncPopup(status);
-            } catch (error) {
-                popupOpen = false;
-                throw error;
-            }
+        // An open Data window lists new items live, so they count as shown
+        // without moving the user away from the page they are on.
+        const windowOpen = popupOpen || isDataWindowOpen();
+        if (keys.length > 0 && (showSeen || (unseen && !windowOpen))) {
+            await showSyncIssues();
+            for (const key of keys) shownKeys.add(key);
+        } else if (windowOpen) {
             for (const key of keys) shownKeys.add(key);
         }
     } catch (error) {
@@ -602,6 +673,21 @@ async function check({ showSeen = false } = {}) {
     } finally {
         checks += 1;
         document.body.dataset.syncStatusChecks = String(checks);
+    }
+}
+
+/** True while the Data window is on screen. */
+function isDataWindowOpen() {
+    return document.querySelector('dialog.dw-layer[open]') !== null;
+}
+
+/** Open the Data window on the page listing what sync left to decide. */
+async function showSyncIssues() {
+    try {
+        const { openDataWindow } = await import('./data-window.js');
+        openDataWindow({ tab: 'sync', view: 'conflicts' });
+    } catch (error) {
+        console.error('[sync] could not open the Data window', error);
     }
 }
 

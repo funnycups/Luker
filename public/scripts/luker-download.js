@@ -27,11 +27,15 @@
  * @property {'GET'|'POST'} [method] HTTP method. Default 'GET'.
  * @property {Record<string,string>} [headers] Request headers.
  * @property {string|null} [body]    Serialized request body (POST only).
+ * @property {(progress: { loaded: number, total: number }) => void} [onProgress]
+ *           Browser-only byte progress while the body streams in; `total` is 0
+ *           when the server sends no Content-Length.
  */
 
 /**
  * @typedef {Object} DownloadFromServerResult
  * @property {'android'|'browser'} via  Which code path handled the download.
+ * @property {number} size             Bytes saved (0 on Android, where the native side writes the file).
  */
 
 /**
@@ -47,7 +51,7 @@
  * @returns {Promise<DownloadFromServerResult>}
  */
 export async function downloadFromServer(opts) {
-    const { url, fileName, mimeType, method = 'GET', headers = {}, body = null } = opts || {};
+    const { url, fileName, mimeType, method = 'GET', headers = {}, body = null, onProgress = null } = opts || {};
     if (!url || !fileName || !mimeType) {
         throw new Error('downloadFromServer: url, fileName and mimeType are required');
     }
@@ -55,7 +59,7 @@ export async function downloadFromServer(opts) {
     const bridge = (typeof window !== 'undefined') ? window.LukerAndroid : null;
     if (bridge && typeof bridge.saveFileFromUrl === 'function') {
         bridge.saveFileFromUrl(JSON.stringify({ url, fileName, mimeType, method, headers, body }));
-        return { via: 'android' };
+        return { via: 'android', size: 0 };
     }
 
     const response = await fetch(url, { method, headers, body });
@@ -74,7 +78,9 @@ export async function downloadFromServer(opts) {
         err.serverMessage = serverMessage;
         throw err;
     }
-    const blob = await response.blob();
+    const blob = typeof onProgress === 'function' && response.body
+        ? await readBlobWithProgress(response, mimeType, onProgress)
+        : await response.blob();
     const objectUrl = URL.createObjectURL(blob);
     try {
         const anchor = document.createElement('a');
@@ -86,5 +92,31 @@ export async function downloadFromServer(opts) {
     } finally {
         URL.revokeObjectURL(objectUrl);
     }
-    return { via: 'browser' };
+    return { via: 'browser', size: blob.size };
+}
+
+/**
+ * Reads a response body chunk by chunk so callers can show byte progress.
+ * @param {Response} response Successful fetch response with a body
+ * @param {string} mimeType Type of the resulting blob
+ * @param {(progress: { loaded: number, total: number }) => void} onProgress Progress observer
+ * @returns {Promise<Blob>} The whole body
+ */
+async function readBlobWithProgress(response, mimeType, onProgress) {
+    const total = Number(response.headers.get('content-length')) || 0;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let loaded = 0;
+    const report = () => {
+        try { onProgress({ loaded, total }); } catch { /* observer errors must not abort the download */ }
+    };
+    report();
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.byteLength;
+        report();
+    }
+    return new Blob(chunks, { type: response.headers.get('content-type') || mimeType });
 }

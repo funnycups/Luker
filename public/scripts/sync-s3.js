@@ -49,6 +49,55 @@ export function renderSyncCategories(container, categories, selected) {
     }
 }
 
+/**
+ * The `s3` settings and passphrase of a backend form. Blank credentials and
+ * passphrase are left out when editing, so the stored values are kept.
+ *
+ * @param {{ endpoint: string, region: string, bucket: string, prefix: string, accessKeyId: string, secretAccessKey: string, forcePathStyle: boolean, passphrase: string }} values
+ * @param {'add'|'edit'} mode
+ * @returns {{ s3: Record<string, string|boolean>, passphrase?: string }}
+ */
+export function s3SettingsPayload(values, mode) {
+    const s3 = {};
+    for (const name of ['endpoint', 'region', 'bucket', 'prefix', 'accessKeyId', 'secretAccessKey']) {
+        const value = String(values[name] || '');
+        if (mode === 'add' || value || !['accessKeyId', 'secretAccessKey'].includes(name)) s3[name] = value;
+    }
+    s3.forcePathStyle = Boolean(values.forcePathStyle);
+    s3.stripIfMatchQuotes = Boolean(values.stripIfMatchQuotes);
+    const payload = { s3 };
+    if (mode === 'add' || values.passphrase) payload.passphrase = String(values.passphrase || '');
+    return payload;
+}
+
+/**
+ * Route that saves a backend form.
+ *
+ * @param {'add'|'edit'|'unlock'} mode
+ * @param {string} [backendId]
+ * @param {boolean} [lan] A LAN backend, whose edit saves only label and categories
+ * @returns {string}
+ */
+export function backendSettingsUrl(mode, backendId, lan = false) {
+    const base = '/api/sync/v1/backends';
+    return mode === 'add' ? `${base}/s3` : `${base}/${encodeURIComponent(backendId)}${mode === 'unlock' ? '/unlock' : lan ? '' : '/s3'}`;
+}
+
+/**
+ * Save backend settings.
+ *
+ * @param {string} url From `backendSettingsUrl`
+ * @param {object} payload
+ * @returns {Promise<any>} The answer of the route
+ * @throws {Error & { code?: string }} With a user-facing message when the save failed
+ */
+export async function postBackendSettings(url, payload) {
+    const response = await fetch(url, { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(payload) });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body.ok === false) throw Object.assign(new Error(syncSettingsError(body.code)), { code: body.code });
+    return body;
+}
+
 /** Secrets are supplied only by the user; blank edit fields retain stored values. */
 export async function openS3BackendForm({ mode, backendId, backend, categories, onSaved }) {
     const template = $(await renderTemplateAsync('userSyncS3'));
@@ -86,26 +135,20 @@ export async function openS3BackendForm({ mode, backendId, backend, categories, 
         }
         const payload = unlock ? { passphrase: String(field('Passphrase').val() || '') } : { label, categories: selected };
         if (!lan && !unlock) {
-            payload.s3 = {};
+            const values = { forcePathStyle: field('ForcePathStyle').prop('checked'), stripIfMatchQuotes: field('StripIfMatchQuotes').prop('checked'), passphrase: String(field('Passphrase').val() || '') };
             for (const name of ['Endpoint', 'Region', 'Bucket', 'Prefix', 'AccessKeyId', 'SecretAccessKey']) {
-                const value = String(field(name).val() || '');
-                if (mode === 'add' || value || !['AccessKeyId', 'SecretAccessKey'].includes(name)) payload.s3[name[0].toLowerCase() + name.slice(1)] = value;
+                values[name[0].toLowerCase() + name.slice(1)] = String(field(name).val() || '');
             }
-            payload.s3.forcePathStyle = field('ForcePathStyle').prop('checked');
-            payload.s3.stripIfMatchQuotes = field('StripIfMatchQuotes').prop('checked');
-            if (mode === 'add' || field('Passphrase').val()) payload.passphrase = String(field('Passphrase').val() || '');
+            Object.assign(payload, s3SettingsPayload(values, mode));
         }
-        const base = '/api/sync/v1/backends';
-        const url = mode === 'add' ? `${base}/s3` : `${base}/${encodeURIComponent(backendId)}${unlock ? '/unlock' : lan ? '' : '/s3'}`;
+        const url = backendSettingsUrl(mode, backendId, lan);
         saving = true;
         let settled;
         pendingSave = new Promise(resolve => { settled = resolve; });
         field('SaveButton').prop('disabled', true);
         field('Error').addClass('displayNone').text('');
         try {
-            const response = await fetch(url, { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(payload) });
-            const body = await response.json();
-            if (!response.ok || body.ok === false) throw new Error(syncSettingsError(body.code));
+            const body = await postBackendSettings(url, payload);
             clear();
             if (!disposed) await popup.completeAffirmative();
             await onSaved?.(body);
