@@ -82,6 +82,7 @@ const STORAGE_KEYS = {
 
 export const USER_BACKUP_SELECTION_DEFAULTS = Object.freeze({
     settings: true,
+    settingsBackups: true,
     secrets: true,
     characters: true,
     chats: true,
@@ -1382,6 +1383,9 @@ export function getUserBackupTargets(directories, selection, options = {}) {
 
     if (selection.settings) {
         selectedFiles.add(path.join(directories.root, SETTINGS_FILE));
+    }
+
+    if (selection.settingsBackups) {
         selectedDirectories.add(directories.backups);
     }
 

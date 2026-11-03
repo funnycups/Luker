@@ -29,6 +29,7 @@ export let accountsEnabled = false;
 const SESSION_EXTEND_INTERVAL = 10 * 60 * 1000;
 const BACKUP_CATEGORY_KEYS = Object.freeze([
     'settings',
+    'settingsBackups',
     'secrets',
     'characters',
     'chats',
@@ -41,6 +42,7 @@ const BACKUP_CATEGORY_KEYS = Object.freeze([
 ]);
 const BACKUP_DEFAULT_SELECTION = Object.freeze({
     settings: true,
+    settingsBackups: true,
     secrets: true,
     characters: true,
     chats: true,
