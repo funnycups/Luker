@@ -368,7 +368,7 @@ export class DataPages extends LukerWindow {
             <div class="dw-menu" role="menu">
                 ${b.state === 'pending' ? '' : `
                 ${b.canUndo ? `<button data-act="undo" data-id="${b.id}">${ic('undo')}${t`Undo last sync`}</button>` : ''}
-                <button data-act="edit" data-id="${b.id}" ${running || locked ? 'disabled' : ''}>${ic('edit')}${t`Edit`}</button>
+                <button data-act="edit" data-id="${b.id}" ${locked ? 'disabled' : ''}>${ic('edit')}${t`Edit`}</button>
                 ${b.kind === 's3' ? `<button data-act="unlock" data-id="${b.id}" ${running || locked ? 'disabled' : ''}>${ic('key')}${t`Unlock`}</button>` : ''}
                 ${b.kind === 'lan' && b.hasStoredCredentials ? `<button data-act="clear-auth" data-id="${b.id}">${ic('key')}${t`Clear saved account`}</button>` : ''}
                 <hr>`}
@@ -1146,7 +1146,8 @@ export class DataPages extends LukerWindow {
             const picks = Object.fromEntries(this.snap.conflicts.filter(c => this.choices[c.key]).map(c => [c.key, { version: this.choices[c.key], review: c.review }]));
             const r = await this.p.applyConflicts(picks);
             this.failedKeys = new Set(r.failed.map(x => x.key));
-            for (const k of [...r.applied, ...r.alreadyResolved.map(x => x.key)]) delete this.choices[k];
+            // Failed picks are cleared too: the file may have changed, so the user chooses again.
+            for (const k of [...r.applied, ...r.alreadyResolved.map(x => x.key), ...r.failed.map(x => x.key)]) delete this.choices[k];
             if (r.alreadyResolved.length) message = [t`${r.alreadyResolved.length} files were already handled on another device`];
             else if (!r.failed.length) message = [t`Applied`];
         } catch (err) {
