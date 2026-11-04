@@ -1,5 +1,4 @@
-// Real data source for the backup, restore and migration pages of the Data window.
-// The shapes follow data-window-mock.js, which is the contract the window renders.
+// Data source for the backup, restore and migration pages of the Data window.
 
 import { getRequestHeaders } from '../script.js';
 import { t } from './i18n.js';
@@ -174,7 +173,7 @@ function linkWithAddress(link, address) {
  * @param {object} state Shared snapshot object; fields are updated in place
  * @param {() => void} emit Notifies the window that `state` changed
  * @param {{ handle?: string }} [options] Target user when the admin panel acts for someone else
- * @returns {object} Source with start/stop and the backup methods of the mock provider
+ * @returns {object} Source with start/stop and the backup methods
  */
 export function createBackupSource(state, emit, options = {}) {
     /** Upload session kept between calls, so a restore can continue without sending the file again. */
@@ -322,7 +321,7 @@ export function createBackupSource(state, emit, options = {}) {
          * Uploads and restores a backup ZIP. After `needs-temp-db` or
          * `upload-interrupted` a call with the same file reuses what the
          * server already has instead of sending the file again.
-         * @param {{ file: File, mode: 'merge'|'replace', categories: string[], tempDb?: object|null, resumeFrom?: number, handle?: string }} request
+         * @param {{ file: File, mode: 'merge'|'replace', categories: string[], tempDb?: object|null, handle?: string }} request
          * @param {(progress: { stage: number, percent?: number, note?: string }) => void} onProgress Progress observer
          * @returns {Promise<{ restored: number, skipped: number, rejected: number, failed: number, crossEngine: string, samples: string[] }>}
          */

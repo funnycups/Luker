@@ -6780,7 +6780,6 @@
     ,"Start restore?": "开始恢复？"
     ,"Files at the same path will be replaced by the version in the backup; other files are left alone.": "同路径的文件会被备份里的版本替换，其他文件不动。"
     ,"Enter the host and username of the temporary database": "请填写临时数据库的地址和用户名"
-    ,"The preview does not actually reload the page": "预览里不会真的刷新页面"
     ,"Paste the migration link first": "请先粘贴迁移链接"
     ,"Replace and migrate in?": "覆盖迁入？"
     ,"The selected content will be cleared first, then the data from the old device is written.": "所选内容会先被清空，再写入旧设备的数据。"

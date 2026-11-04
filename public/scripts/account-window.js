@@ -600,12 +600,11 @@ function reopenUsers(usersStack) {
  * @param {string} [options.view] Sub-page to open inside the tab (e.g. 'conflicts')
  * @param {string} [options.handle] User whose data backup/restore/migration acts on (admin panel); another user's handle limits the window to those pages
  * @param {() => void} [options.onDone] Called after a successful restore or migration; reloads the page by default
- * @param {object} [options.provider] Data source; defaults to the live Luker provider
  * @param {object[]} [options.usersStack] User-management pages to show (internal)
  * @returns {Promise<void>} Resolves when the window closes
  */
-export function openAccountWindow({ tab = 'profile', view, handle, onDone, provider, usersStack } = {}) {
-    if (openWindow && (openWindow.handle !== handle || provider)) {
+export function openAccountWindow({ tab = 'profile', view, handle, onDone, usersStack } = {}) {
+    if (openWindow && openWindow.handle !== handle) {
         openWindow.close();
     }
     if (openWindow) {
@@ -614,14 +613,14 @@ export function openAccountWindow({ tab = 'profile', view, handle, onDone, provi
         openWindow.win.focus();
         return openWindow.closed;
     }
-    const source = provider || createLukerProvider({ handle });
-    source.start?.();
-    const done = onDone ?? (provider ? undefined : () => location.reload());
+    const source = createLukerProvider({ handle });
+    source.start();
+    const done = onDone ?? (() => location.reload());
     const mounted = mountLukerWindow({
         label: t`Account`,
         create: root => new AccountWindow(root, source, { tab, view, handle, onDone: done, usersStack }),
         onClosed: () => {
-            if (!provider) source.stop?.();
+            source.stop();
             openWindow = null;
         },
     });

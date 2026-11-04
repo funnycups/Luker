@@ -877,14 +877,14 @@ export class DataPages extends LukerWindow {
                 return this.render();
             case 'upload-resume': return this.restoreGo(true);
             case 'upload-cancel':
-                this.p.cancelUpload?.();
+                this.p.cancelUpload();
                 Object.assign(this.f.restore, { interrupted: null, running: false });
                 this.toast(t`Upload discarded`);
                 return this.rerender();
             case 'backup-go': return this.backupGo();
             case 'pick': return this.root.querySelector('[data-role="file"]')?.click();
             case 'file-x':
-                if (this.f.restore.uploaded || this.f.restore.interrupted) this.p.cancelUpload?.();
+                if (this.f.restore.uploaded || this.f.restore.interrupted) this.p.cancelUpload();
                 Object.assign(this.f.restore, { file: null, needsDb: null, uploaded: false, error: null, interrupted: null });
                 return this.rerender();
             case 'mode':
@@ -919,7 +919,7 @@ export class DataPages extends LukerWindow {
     }
 
     isLocked(id) {
-        return this.pending.has(id) || !!this.p.isBusy?.(id);
+        return this.pending.has(id) || !!this.p.isBusy(id);
     }
 
     async backendAction(id, fn, okText) {
@@ -1222,11 +1222,11 @@ export class DataPages extends LukerWindow {
             this.toast(t`Enter the host and username of the temporary database`, true);
             return;
         }
-        const resumeFrom = resume ? r.interrupted?.percent || 0 : 0;
-        Object.assign(r, { running: true, stage: 0, percent: resumeFrom, note: '', error: null, done: null, interrupted: null });
+        const initialPercent = resume ? r.interrupted?.percent || 0 : 0;
+        Object.assign(r, { running: true, stage: 0, percent: initialPercent, note: '', error: null, done: null, interrupted: null });
         this.rerender();
         try {
-            r.done = await this.p.restoreBackup({ file: r.file, mode: r.mode, categories: [...this.backupSel], tempDb: r.needsDb ? r.db : null, resumeFrom, handle: this.handle }, p => {
+            r.done = await this.p.restoreBackup({ file: r.file, mode: r.mode, categories: [...this.backupSel], tempDb: r.needsDb ? r.db : null, handle: this.handle }, p => {
                 Object.assign(r, p);
                 if (p.stage > 0) r.uploaded = true;
                 if (this.top.view === 'restore') this.rerender();
@@ -1249,8 +1249,7 @@ export class DataPages extends LukerWindow {
 
     /** After a successful restore or migration the page reloads, like the old manager. */
     finish() {
-        if (this.onDone) return this.onDone();
-        this.toast(t`The preview does not actually reload the page`);
+        this.onDone?.();
     }
 
     async migrateLink() {
@@ -1304,7 +1303,6 @@ export class DataPages extends LukerWindow {
  * @param {'conflicts'} [options.view] Sub-page to open inside the tab
  * @param {string} [options.handle] User whose data backup/restore/migration acts on (admin panel)
  * @param {() => void} [options.onDone] Called after a successful restore or migration
- * @param {object} [options.provider] Data source; defaults to the live Luker provider (pass createMockProvider() to preview)
  * @returns {Promise<void>} Resolves when the window closes
  */
 export async function openDataWindow(options = {}) {

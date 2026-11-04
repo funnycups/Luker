@@ -1,9 +1,8 @@
 /**
  * Sync data source of the Data window: backends, pairing, S3 settings,
  * the conflicts and notices sync left to decide, and the local device
- * settings. Fills the shared snapshot in the shape of
- * `data-window-mock.js` and drives the routes through the helpers of
- * `lan-sync.js`, `sync-s3.js` and `sync-status.js`.
+ * settings. Fills the shared snapshot and drives the routes through the
+ * helpers of `lan-sync.js`, `sync-s3.js` and `sync-status.js`.
  *
  * Status follows the cadence of `sync-status.js`, which reads it every
  * 30 seconds while the page is visible, every 5 seconds while a sync runs,

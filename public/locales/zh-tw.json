@@ -6633,7 +6633,6 @@
     ,"Start restore?": "開始恢復？"
     ,"Files at the same path will be replaced by the version in the backup; other files are left alone.": "同路徑的檔案會被備份裡的版本替換，其他檔案不動。"
     ,"Enter the host and username of the temporary database": "請填寫臨時資料庫的地址和使用者名稱"
-    ,"The preview does not actually reload the page": "預覽裡不會真的重新整理頁面"
     ,"Paste the migration link first": "請先貼上遷移連結"
     ,"Replace and migrate in?": "覆蓋遷入？"
     ,"The selected content will be cleared first, then the data from the old device is written.": "所選內容會先被清空，再寫入舊裝置的資料。"
