@@ -127,16 +127,23 @@ function buildScratchCreds(kind, db) {
 /**
  * Restore/migration result in the window's shape.
  * @param {any} result Server result (`restoredCount`, `skippedCount`, `preflight`, `crossMode`, ...)
- * @returns {{ restored: number, skipped: number, rejected: number, failed: number, crossEngine: string, samples: string[] }}
+ * @returns {{ restored: number, skipped: number, rejected: number, failed: number, empty: boolean, crossEngine: string, samples: string[] }}
  */
 function toOutcome(result) {
     const cross = result?.crossMode;
     const samples = Array.isArray(result?.preflight?.sampleSkippedEntries) ? result.preflight.sampleSkippedEntries : [];
+    const restored = Number(result?.restoredCount || 0);
+    const skipped = Number(result?.skippedCount || 0);
+    const rejected = Number(result?.rejectedCount || 0);
+    const failed = Number(result?.failedCount || 0);
+    const targetable = result?.preflight?.targetableEntries;
+    const empty = targetable !== undefined ? Number(targetable) === 0 : restored === 0;
     return {
-        restored: Number(result?.restoredCount || 0),
-        skipped: Number(result?.skippedCount || 0),
-        rejected: Number(result?.rejectedCount || 0),
-        failed: Number(result?.failedCount || 0),
+        restored,
+        skipped,
+        rejected,
+        failed,
+        empty,
         crossEngine: cross ? `${engineLabel(cross.sourceKind)} → ${engineLabel(cross.destKind)}` : '',
         samples: samples.slice(0, 12).map(item => (item?.reason ? `${item.entry} (${item.reason})` : String(item?.entry ?? item))),
     };
@@ -323,7 +330,7 @@ export function createBackupSource(state, emit, options = {}) {
          * server already has instead of sending the file again.
          * @param {{ file: File, mode: 'merge'|'replace', categories: string[], tempDb?: object|null, handle?: string }} request
          * @param {(progress: { stage: number, percent?: number, note?: string }) => void} onProgress Progress observer
-         * @returns {Promise<{ restored: number, skipped: number, rejected: number, failed: number, crossEngine: string, samples: string[] }>}
+         * @returns {Promise<{ restored: number, skipped: number, rejected: number, failed: number, empty: boolean, crossEngine: string, samples: string[] }>}
          */
         async restoreBackup({ file, mode, categories, tempDb = null, handle } = {}, onProgress = () => {}) {
             if (!file) throw failure(t`Choose a backup ZIP first.`, 'NO_FILE');
@@ -429,7 +436,7 @@ export function createBackupSource(state, emit, options = {}) {
          * Pulls the data behind a migration link from the other device.
          * @param {{ link: string, mode: 'merge'|'replace', categories: string[], handle?: string }} request
          * @param {(progress: { stage: number, percent?: number }) => void} onProgress Progress observer
-         * @returns {Promise<{ restored: number, skipped: number, rejected: number, failed: number, crossEngine: string, samples: string[] }>}
+         * @returns {Promise<{ restored: number, skipped: number, rejected: number, failed: number, empty: boolean, crossEngine: string, samples: string[] }>}
          */
         async migrateFromLink({ link, mode, categories, handle } = {}, onProgress = () => {}) {
             const url = String(link || '').trim();

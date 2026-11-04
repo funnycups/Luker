@@ -663,11 +663,13 @@ export class DataPages extends LukerWindow {
         if (run.error) return `<div class="dw-banner error">${ic('x')}<span>${esc(run.error)}</span></div>`;
         if (run.done) {
             const d = run.done;
-            const parts = [t`Restored ${d.restored} files`];
+            // A restore that matched nothing is not a success: show it as a warning
+            // and skip the auto-reload so the user reads it instead of missing it.
+            const parts = [d.restored ? t`Restored ${d.restored} files` : t`No files were restored`];
             if (d.skipped) parts.push(t`${d.skipped} skipped`);
             if (d.rejected) parts.push(t`${d.rejected} rejected`);
             if (d.failed) parts.push(t`${d.failed} failed to write`);
-            const warn = d.skipped || d.rejected || d.failed;
+            const warn = d.skipped || d.rejected || d.failed || d.empty;
             const sep = t`, `;
             return `<div class="dw-banner${warn ? ' warning' : ''}">${ic(warn ? 'warn' : 'check')}<span>${t`${doneText}: ${parts.join(sep)}`}${d.crossEngine ? t` (${esc(d.crossEngine)})` : ''}</span>
                     <button class="dw-btn sm" data-act="reload">${t`Reload page`}</button></div>
@@ -1232,7 +1234,7 @@ export class DataPages extends LukerWindow {
                 if (this.top.view === 'restore') this.rerender();
             });
             Object.assign(r, { file: null, needsDb: null, uploaded: false });
-            if (!r.done.skipped && !r.done.rejected && !r.done.failed) setTimeout(() => this.f.restore.done && this.finish(), 3000);
+            if (!r.done.skipped && !r.done.rejected && !r.done.failed && !r.done.empty) setTimeout(() => this.f.restore.done && this.finish(), 3000);
         } catch (err) {
             if (err.code === 'needs-temp-db') {
                 r.needsDb = { kind: err.kind, source: err.source, target: err.target };
@@ -1285,7 +1287,7 @@ export class DataPages extends LukerWindow {
                 if (this.top.view === 'migrateIn') this.rerender();
             });
             m.inLink = '';
-            if (!m.done.skipped && !m.done.rejected && !m.done.failed) setTimeout(() => this.f.migrate.done && this.finish(), 3000);
+            if (!m.done.skipped && !m.done.rejected && !m.done.failed && !m.done.empty) setTimeout(() => this.f.migrate.done && this.finish(), 3000);
         } catch (err) {
             m.error = err.message;
         } finally {
