@@ -838,7 +838,7 @@ dialog.dw-layer::backdrop {
     height: 32px;
     border-radius: 9px;
     color: var(--tone);
-    background: color-mix(in srgb, var(--tone) 14%, transparent);
+    background: color-mix(in srgb, var(--tone) 14%, var(--dw-surface));
 }
 
 .dw-card-main {
