@@ -497,7 +497,10 @@ export function mountLukerWindow({ label, create, onClosed }) {
         if (job && !await ui.confirm({ title: t`${job}. Close the window anyway?`, text: t`The task keeps running on the server. Reopen the window to see its progress.`, ok: t`Close` })) return;
         close();
     }
+    let closedOnce = false;
     function close() {
+        if (closedOnce) return;
+        closedOnce = true;
         ui.destroy();
         document.removeEventListener('keydown', onKey, true);
         layer.remove();

@@ -120,6 +120,7 @@ export class DataPages extends LukerWindow {
         this.root.addEventListener('drop', e => this.onDrop(e));
         this.unsubscribe = this.p.subscribe(() => this.refreshLive());
         this.ticker = setInterval(() => this.tick(), 1000);
+        this.finishTimer = null;
     }
 
     /** Name of the long-running job in progress, if any. */
@@ -141,6 +142,8 @@ export class DataPages extends LukerWindow {
     destroy() {
         this.unsubscribe?.();
         clearInterval(this.ticker);
+        clearTimeout(this.finishTimer);
+        this.finishTimer = null;
     }
 
     get snap() {
@@ -1251,7 +1254,15 @@ export class DataPages extends LukerWindow {
                 if (this.top.view === 'restore') this.rerender();
             });
             Object.assign(r, { file: null, needsDb: null, uploaded: false });
-            if (!r.done.skipped && !r.done.rejected && !r.done.failed && !r.done.empty) setTimeout(() => this.f.restore.done && this.finish(), 3000);
+            // A job keeps running after its window closes; do not schedule a
+            // page reload or a close for a window that is already gone.
+            if (this.root.isConnected && !r.done.skipped && !r.done.rejected && !r.done.failed && !r.done.empty) {
+                clearTimeout(this.finishTimer);
+                this.finishTimer = setTimeout(() => {
+                    this.finishTimer = null;
+                    if (this.f.restore.done) this.finish();
+                }, 3000);
+            }
         } catch (err) {
             if (err.code === 'needs-temp-db') {
                 r.needsDb = { kind: err.kind, source: err.source, target: err.target };
@@ -1268,6 +1279,8 @@ export class DataPages extends LukerWindow {
 
     /** After a successful restore or migration the page reloads (or closes the per-user window). */
     finish() {
+        clearTimeout(this.finishTimer);
+        this.finishTimer = null;
         if (this.isOtherUser) {
             this.f.restore.done = null;
             this.f.migrate.done = null;
@@ -1308,7 +1321,13 @@ export class DataPages extends LukerWindow {
                 if (this.top.view === 'migrateIn') this.rerender();
             });
             m.inLink = '';
-            if (!m.done.skipped && !m.done.rejected && !m.done.failed && !m.done.empty) setTimeout(() => this.f.migrate.done && this.finish(), 3000);
+            if (this.root.isConnected && !m.done.skipped && !m.done.rejected && !m.done.failed && !m.done.empty) {
+                clearTimeout(this.finishTimer);
+                this.finishTimer = setTimeout(() => {
+                    this.finishTimer = null;
+                    if (this.f.migrate.done) this.finish();
+                }, 3000);
+            }
         } catch (err) {
             m.error = err.message;
         } finally {
