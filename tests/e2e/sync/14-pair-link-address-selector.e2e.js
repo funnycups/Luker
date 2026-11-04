@@ -12,7 +12,10 @@ import { test, expect } from '@playwright/test';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
-import { openLanSyncPanel, selectCategories } from '../_lib/sync.js';
+import { openLanSyncPanel, generatePairingLink, pairingLinkField, accountWindow } from '../_lib/sync.js';
+
+/** Warning the window shows while the selected address is loopback. */
+const loopbackWarning = page => accountWindow(page).locator('.dw-banner.warning', { hasText: 'Only this device can reach this address' });
 
 let A;
 
@@ -38,13 +41,9 @@ test.describe('LAN Sync — pairing link address selector', () => {
         await awaitMainUI(page, A.baseURL);
 
         await openLanSyncPanel(page);
-        await page.locator('.lanSyncTabPairNew').click();
-        await page.locator('.lanSyncPairLabel').fill('B device');
-        await selectCategories(page.locator('.lanSyncCategoryGrid'), ['worlds']);
-        await page.locator('.lanSyncGenerateLinkButton').click();
-        await page.locator('.lanSyncPairNewResult').waitFor({ state: 'visible', timeout: 10_000 });
+        await generatePairingLink(page, { label: 'B device', categories: ['worlds'] });
 
-        const select = page.locator('.lanSyncBaseUrlSelect');
+        const select = accountWindow(page).locator('select[data-act-change="pair-addr"]');
         await select.waitFor({ state: 'visible' });
         const options = await select.locator('option').evaluateAll(nodes => nodes.map(node => node.value));
         expect(options.length).toBeGreaterThan(0);
@@ -59,20 +58,20 @@ test.describe('LAN Sync — pairing link address selector', () => {
         const selected = await select.inputValue();
 
         // The generated link embeds the selected address.
-        const link = decodeURIComponent(await page.locator('.lanSyncGeneratedLink').inputValue());
+        const link = decodeURIComponent(await pairingLinkField(page).inputValue());
         expect(link).toContain(selected);
 
         // Selecting loopback rebuilds the link and surfaces the warning.
         await select.selectOption(loopback);
-        await expect(page.locator('.lanSyncBaseUrlWarning')).toBeVisible();
-        const loopbackLink = decodeURIComponent(await page.locator('.lanSyncGeneratedLink').inputValue());
+        await expect(loopbackWarning(page)).toBeVisible();
+        const loopbackLink = decodeURIComponent(await pairingLinkField(page).inputValue());
         expect(loopbackLink).toContain(loopback);
 
         // Selecting a LAN address hides the warning again and rebuilds the link.
         const lan = options.find(value => value !== loopback);
         await select.selectOption(lan);
-        await expect(page.locator('.lanSyncBaseUrlWarning')).toBeHidden();
-        const lanLink = decodeURIComponent(await page.locator('.lanSyncGeneratedLink').inputValue());
+        await expect(loopbackWarning(page)).toBeHidden();
+        const lanLink = decodeURIComponent(await pairingLinkField(page).inputValue());
         expect(lanLink).toContain(lan);
 
         await ctx.close();

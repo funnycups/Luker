@@ -7,10 +7,15 @@ import { S3Client, CreateBucketCommand } from '@aws-sdk/client-s3';
 import { startRustfsContainer } from './s3-container.js';
 import { startS3Proxy } from './s3-proxy.js';
 import { startServer, tearDownServer } from './server.js';
-import { openLanSyncPanel, setSyncSchedule, userRootOf } from './sync.js';
+import { backendCard, openLanSyncPanel, setSyncSchedule, userRootOf } from './sync.js';
 import { createWorldBook, selectWorldBook } from './ui-worldinfo.js';
 
-export const backendRow = (page, label = 'Cloud') => page.locator('.lanSyncPeerRow').filter({ has: page.locator('.lanSyncPeerLabel', { hasText: label }) });
+/** Card of a sync backend on the Sync page of the Account window (`data-backend` holds its id). */
+export const backendRow = (page, label = 'Cloud') => backendCard(page, label);
+/** Failure reason a backend card shows after a failed sync. */
+export const backendError = (page, label = 'Cloud') => backendRow(page, label).locator('.dw-card-note.bad');
+/** Paths a backend card lists as files sync could not update. */
+export const backendStalled = (page, label = 'Cloud') => backendRow(page, label).locator('.dw-stalled code');
 export const registryOf = server => JSON.parse(fs.readFileSync(path.join(userRootOf(server), '.sync/state.json'), 'utf8'));
 
 export async function awaitS3Page(page) {

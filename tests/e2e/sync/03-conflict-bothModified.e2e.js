@@ -1,5 +1,5 @@
 // After pair, both sides edit the SAME file.
-// Sync records a conflict and opens the sync popup; B picks its own
+// Sync records a conflict and offers it on the Sync issues page; B picks its own
 // version; the resolution lands on both sides.
 //
 // This is the "make a difficult choice" path — by design
@@ -57,7 +57,7 @@ test.afterAll(async () => {
 });
 
 test.describe('LAN Sync — bothModified conflict', () => {
-    test('same file edited on both sides → sync popup → B picks its own version → it wins on both sides', async ({ browser }) => {
+    test('same file edited on both sides → Sync issues page → B picks its own version → it wins on both sides', async ({ browser }) => {
         const ctxA = await browser.newContext();
         const ctxB = await browser.newContext();
         const pageA = await ctxA.newPage();

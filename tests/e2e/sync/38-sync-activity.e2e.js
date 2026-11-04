@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { s3Fixture, backendRow, createReadyWorldBook, selectReadyWorldBook } from '../_lib/sync-s3.js';
 import { addWorldEntry } from '../_lib/ui-worldinfo.js';
 import { addS3Backend, waitForBackendSync, closeAllPopups, openLanSyncPanel, clickSyncNow, waitForSyncPopup, closeSyncPopup, syncPopup, chooseConflictVersion, applyConflictChoices, waitForStatusChecks } from '../_lib/sync.js';
+import { accountWindow, closeAccountWindow } from '../_lib/account-window.js';
 import { selectCharacterByName, closeAnyOpenTopSettingsDrawer, openTopDrawer, closeTopDrawer, openExtensionsDrawer, openInlineDrawer, closeExtensionsDrawer } from '../_lib/page.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { importCharacterFile } from '../_lib/ui-character.js';
@@ -11,6 +12,8 @@ import { importCharacterFile } from '../_lib/ui-character.js';
 const fixture = s3Fixture(test);
 test.describe.configure({ timeout: 300_000 });
 const pill = page => page.locator('#luker-sync-activity-pill');
+/** The Resolve button the Sync page shows while sync issues wait. */
+const reviewButton = page => accountWindow(page).locator('.dw-banner [data-act="conflicts"]');
 const checks = page => page.evaluate(() => Number(document.body.dataset.syncStatusChecks || 0));
 const observe = promise => promise.then(value => ({ value }), error => ({ error }));
 async function result(promise) {
@@ -39,7 +42,7 @@ function syncResponse(page, id) {
 async function addCloud(page, options) {
     await addS3Backend(page, options);
     await waitForBackendSync(page, { label: options.label });
-    return backendRow(page, options.label).getAttribute('data-backend-id');
+    return backendRow(page, options.label).getAttribute('data-backend');
 }
 
 async function closePopupButtons(page) {
@@ -49,6 +52,8 @@ async function closePopupButtons(page) {
         await dialogs.last().locator('.popup-button-ok').click();
         await expect(page.locator(`dialog.popup[data-id="${id}"]`)).toHaveCount(0);
     }
+    // The Account window closes with its own close button.
+    await closeAccountWindow(page);
 }
 
 async function assertPlacement(page) {
@@ -72,13 +77,13 @@ async function assertPlacement(page) {
     await expect(page.locator('.activity-pill-host')).toHaveCount(1);
 }
 
-test('manual S3 activity owns the real request through panel closure and late status until settlement', async ({ browser }, testInfo) => {
+test('manual S3 activity owns the real request through window closure and late status until settlement', async ({ browser }, testInfo) => {
     const { page, server } = await fixture.device(browser, 'activity-request');
     expect(server.execArgv.includes('--jitless')).toBe(process.env.LUKER_SYNC_ACCEPTANCE_JITLESS === '1');
     const proxy = await fixture.proxy();
     const options = { ...await fixture.options(), endpoint: proxy.endpoint, label: 'Harbor cloud' };
     const id = await addCloud(page, options);
-    await expect(page.locator('.syncReviewIssuesButton')).toBeHidden();
+    await expect(reviewButton(page)).toHaveCount(0);
     const storage = proxy.addFault({ match: { method: 'GET', keySuffix: '/head' }, hold: 'before-forward' });
     const responseGate = gate(), captured = gate();
     const handlers = [];
@@ -94,7 +99,7 @@ test('manual S3 activity owns the real request through panel closure and late st
     });
     const response = syncResponse(page, id);
     try {
-        await backendRow(page, options.label).locator('.lanSyncPeerSyncButton').click();
+        await backendRow(page, options.label).locator('[data-act="sync-now"]').click();
         await expect(pill(page)).toContainText(options.label, { timeout: 2000 });
         await expect(pill(page).getByRole('progressbar')).toBeVisible();
         await expect(pill(page)).not.toContainText(/\d+%/);
@@ -106,19 +111,19 @@ test('manual S3 activity owns the real request through panel closure and late st
         await waitForStatusChecks(page, await checks(page) + 1);
         await expect(page.locator('#send_textarea')).toBeFocused();
         await expect(page.locator('#send_textarea')).toHaveValue(/harbor signal/);
-        await expect(page.locator('.userLanSync')).toHaveCount(0);
+        await expect(accountWindow(page)).toHaveCount(0);
         await pill(page).dblclick();
-        await expect(page.locator('.userLanSync')).toHaveCount(1);
-        await expect(backendRow(page, options.label).locator('.backupActionRow')).toHaveClass(/disabled/);
+        await expect(accountWindow(page)).toHaveCount(1);
+        await expect(backendRow(page, options.label)).toHaveClass(/\blocked\b/);
         await closeAllPopups(page);
         await pill(page).focus();
         await page.keyboard.press('Enter');
-        await expect(page.locator('.userLanSync')).toHaveCount(1);
+        await expect(accountWindow(page)).toHaveCount(1);
         storage.release();
         await reached(captured.promise);
         await waitForStatusChecks(page, await checks(page) + 1);
         await expect(pill(page).getByRole('progressbar')).toBeVisible();
-        await expect(backendRow(page, options.label).locator('.backupActionRow')).toHaveClass(/disabled/);
+        await expect(backendRow(page, options.label)).toHaveClass(/\blocked\b/);
         responseGate.release();
         expect(await result(response)).toMatchObject({ status: 200, body: { ok: true, lastSync: { error: null }, pendingConflicts: 0, stalled: null } });
         await expect(pill(page)).toBeHidden({ timeout: 15_000 });
@@ -144,7 +149,8 @@ test('storage and status-network errors retain backend evidence through unrelate
         const fault = proxy.addFault({ match: { method: 'GET', keySuffix: '/keyinfo.json' }, [failure]: true });
         const response = syncResponse(page, id);
         try {
-            await backendRow(page, options.label).locator('.lanSyncPeerSyncButton').click();
+            await openLanSyncPanel(page);
+            await backendRow(page, options.label).locator('[data-act="sync-now"]').click();
             expect((await result(response)).body).toMatchObject({ ok: false, code: failure === 'invalidSignature' ? 'AUTH_FAILED' : 'UNREACHABLE' });
             await expect(pill(page)).toHaveAttribute('data-tone', 'error');
             await expect(pill(page)).toContainText(options.label);
@@ -159,7 +165,7 @@ test('storage and status-network errors retain backend evidence through unrelate
         await waitForStatusChecks(page, await checks(page) + 1);
         await expect(pill(page)).toHaveAttribute('data-tone', 'unknown');
         await expect(pill(page)).toContainText(options.label);
-        await expect(page.locator('.lanSyncStatusBanner.error')).toContainText('Could not read sync status');
+        await expect(accountWindow(page).locator('.dw-banner.error', { hasText: 'Can\'t read sync status' })).toBeVisible();
     } finally { await page.unroute('**/api/sync/v1/status', network); }
     await waitForStatusChecks(page, await checks(page) + 1);
     await expect(pill(page)).toHaveAttribute('data-tone', 'error');
@@ -167,22 +173,23 @@ test('storage and status-network errors retain backend evidence through unrelate
     await closeAnyOpenTopSettingsDrawer(page);
     await page.route('**/api/sync/v1/categories', network);
     try {
+        // The window opens on Sync and says why sync cannot be shown.
         await pill(page).click();
-        const errorToast = page.locator('.toast-error', { hasText: 'Could not load sync categories' });
-        await expect(errorToast).toBeVisible();
-        await expect(page.locator('.userLanSync')).toHaveCount(0);
+        await expect(accountWindow(page).locator('.dw-empty')).toContainText('Could not load sync categories');
+        await expect(backendRow(page, options.label)).toHaveCount(0);
         await expect(pill(page)).toBeVisible();
-        await errorToast.click();
-        await expect(errorToast).toHaveCount(0);
+        await closeAccountWindow(page);
+        await expect(accountWindow(page)).toHaveCount(0);
     } finally { await page.unroute('**/api/sync/v1/categories', network); }
     await pill(page).click();
-    await expect(page.locator('.userLanSync')).toHaveCount(1);
-    await expect(backendRow(page, options.label).locator('.lanSyncPeerError')).toContainText('Last sync failed');
+    await expect(accountWindow(page)).toHaveCount(1);
+    await expect(backendRow(page, options.label)).toHaveAttribute('data-state', 'error');
+    await expect(backendRow(page, options.label).locator('.dw-card-note.bad')).toBeVisible();
     expect(await clickSyncNow(page, options.label)).toBe('success');
     await expect(pill(page)).toBeHidden({ timeout: 15_000 });
 });
 
-test('closed genuine conflicts retain the capsule and review through the existing popup in all locales', async ({ browser }) => {
+test('closed genuine conflicts retain the capsule and review through the Sync issues page in all locales', async ({ browser }) => {
     const a = await fixture.device(browser, 'activity-conflict-a');
     const b = await fixture.device(browser, 'activity-conflict-b');
     const options = { ...await fixture.options(), label: 'Grove archive' };
@@ -205,9 +212,9 @@ test('closed genuine conflicts retain the capsule and review through the existin
     await closeSyncPopup(b.page);
     await expect(pill(b.page)).toHaveAttribute('data-tone', 'attention');
     for (const [locale, review, activity] of [
-        ['en', 'Review sync issues', 'Sync needs attention'],
-        ['zh-cn', '检查同步问题', '同步需要处理'],
-        ['zh-tw', '檢查同步問題', '同步需要處理'],
+        ['en', 'Resolve', 'Sync needs attention'],
+        ['zh-cn', '去处理', '同步需要处理'],
+        ['zh-tw', '去處理', '同步需要處理'],
     ]) {
         await closeAllPopups(b.page);
         if (locale !== 'en') {
@@ -219,13 +226,15 @@ test('closed genuine conflicts retain the capsule and review through the existin
         }
         await expect(pill(b.page)).toContainText(activity);
         await pill(b.page).click();
-        await expect(b.page.locator('.userLanSync')).toHaveCount(1);
-        await b.page.getByRole('button', { name: review, exact: true }).click();
+        await expect(accountWindow(b.page)).toHaveCount(1);
+        await accountWindow(b.page).getByRole('button', { name: review, exact: true }).click();
         await waitForSyncPopup(b.page);
-        await expect(syncPopup(b.page).locator('.syncConflictPath')).toHaveText('worlds/Lantern Grove.json');
+        await expect(syncPopup(b.page).locator('.dw-conflict-head b')).toHaveText('worlds/Lantern Grove.json');
         await closeSyncPopup(b.page);
     }
-    await b.page.getByRole('button', { name: '檢查同步問題', exact: true }).click();
+    await pill(b.page).click();
+    await accountWindow(b.page).getByRole('button', { name: '去處理', exact: true }).click();
+    await waitForSyncPopup(b.page);
     await chooseConflictVersion(b.page, 'worlds/Lantern Grove.json', 'current');
     expect(await applyConflictChoices(b.page)).toBe('success');
     await waitForStatusChecks(b.page, await checks(b.page) + 1);
@@ -320,7 +329,7 @@ test('real orchestration and Sync share desktop and narrow placement with long l
         await openLanSyncPanel(page);
         storage = proxy.addFault({ match: { method: 'GET', keySuffix: '/head' }, hold: 'before-forward' });
         response = syncResponse(page, id);
-        await backendRow(page, label).locator('.lanSyncPeerSyncButton').click();
+        await backendRow(page, label).locator('[data-act="sync-now"]').click();
         await reached(storage.reached);
         await closePopupButtons(page);
         await closeAnyOpenTopSettingsDrawer(page);

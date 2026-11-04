@@ -3,16 +3,16 @@
 // The 12 cross-mode pairs all do the same thing through real DOM clicks:
 //   1. Start server in <sourceMode> (with testcontainers when source=mysql/pg).
 //   2. Login → pick character → send a chat → create a lorebook entry → tweak preset.
-//   3. Open Backup Manager → Download Backup ZIP to local disk.
+//   3. Open Account → Backup → Download backup ZIP to local disk.
 //   4. Kill server.
 //   5. Re-write config.yaml with storage.mode=<destMode> (+ creds for db destinations).
 //   6. Restart server.
 //   7. Login → confirm chat history is gone.
-//   8. Open Backup Manager → select the ZIP → click Restore → confirm. The
+//   8. Open Account → Restore → select the ZIP → Replace → confirm. The
 //      client then uploads the ZIP in chunks, assembles it server-side, and
-//      probes the assembled archive; when the source is mysql/pg, the
-//      cross-mode prompt asks for the scratch DB connection after the probe.
-//   9. Wait for the success reload (the restore callback reloads the page).
+//      probes the assembled archive; when the source is mysql/pg, the page
+//      asks for a temporary DB connection after the probe.
+//   9. Wait for the success reload (a finished restore reloads the page).
 //  10. Verify chat / lorebook / preset readable via DOM probes.
 //  11. Screenshot the verified state for visual review.
 //
@@ -28,6 +28,7 @@ import { startMockLLM } from '../../../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../../../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../../../_lib/page.js';
 import { startMysqlContainer, startPostgresContainer } from '../../../_lib/db-containers.js';
+import { accountWindow, answerWindowConfirm, closeAccountWindow, openAccountTab, pageHead } from '../../../_lib/account-window.js';
 
 const SEED_MESSAGE = '*Whispers* The conversion ritual begins — 跨模式恢复 🌍';
 const SEED_REPLY = '*Nods* Acknowledged, the lantern stays lit through the swap.';
@@ -110,7 +111,7 @@ export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, spe
                 fs.writeFileSync(path.join(filesDir, 'multichunk-asset.bin'), crypto.randomBytes(seedLargeAssetBytes));
             }
 
-            // Step 3: download backup ZIP via the Backup Manager UI.
+            // Step 3: download backup ZIP via Account → Backup.
             const backupZipPath = path.join(tempDir, 'backup.zip');
             await downloadBackupViaUI(page, backupZipPath);
             expect(fs.existsSync(backupZipPath)).toBe(true);
@@ -143,20 +144,19 @@ export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, spe
                 });
                 expect(preChatSnapshot.some(m => m.includes('跨模式恢复'))).toBe(false);
 
-                // Step 8: open Backup Manager and run restore via real DOM clicks.
-                // The runRestore success path ends in `location.reload()` (the
-                // Backup Manager callback), which destroys the success toast
-                // before it can be asserted on and reloads the page away from
-                // the Backup Manager. That navigation is the end-of-restore
-                // signal we wait on before reading the destination engine.
+                // Step 8: open Account → Restore and run restore via real DOM clicks.
+                // A finished restore ends in `location.reload()`, which reloads
+                // the page away from the Account window. That navigation is the
+                // end-of-restore signal we wait on before reading the
+                // destination engine.
                 const scratchDbConfig = mapSourceModeToScratchCreds(sourceMode, containers);
                 const restoreReload = page.waitForEvent('framenavigated', {
                     predicate: (frame) => frame === page.mainFrame(),
                     timeout: 120_000,
                 });
                 // Count chunk PUTs while the restore upload is in flight.
-                // restoreBackupViaUI returns right after the confirm popup is
-                // resolved — the chunked upload starts after that, so the
+                // restoreBackupViaUI returns right after the confirm is
+                // answered — the chunked upload starts after that, so the
                 // listener must stay attached through the reload.
                 const chunkRequests = [];
                 const recordChunkRequest = (req) => {
@@ -207,140 +207,66 @@ export async function runCrossModeRecoveryFlow({ page, sourceMode, destMode, spe
 // DOM-level helpers
 // --------------------------------------------------------------------------
 
-export async function openBackupManagerViaUI(page) {
-    await ensureUserSettingsDrawerOpen(page);
-    // The Backup Manager opens from inside the User Profile popup, which is
-    // reached via the `#account_button` in the user-settings drawer.
-    const accountBtn = page.locator('#account_button');
-    await accountBtn.waitFor({ state: 'visible', timeout: 10_000 });
-    await accountBtn.click();
-    // The user profile popup contains the `.userBackupButton`.
-    const backupBtn = page.locator('.userBackupButton').last();
-    await backupBtn.waitFor({ state: 'visible', timeout: 10_000 });
-    await backupBtn.click();
-    // Backup Manager popup is now open.
-    await page.locator('.userBackupManager').last().waitFor({ state: 'visible', timeout: 10_000 });
+/**
+ * Open the Account window on its Backup or Restore page
+ * (User Settings → Account → Backup / Restore).
+ * @param {import('@playwright/test').Page} page
+ * @param {'backup'|'restore'} [tab]
+ */
+export async function openBackupManagerViaUI(page, tab = 'backup') {
+    await openAccountTab(page, tab);
+    await expect(pageHead(page)).toHaveAttribute('data-view', tab);
 }
 
-async function downloadBackupViaUI(page, destPath) {
-    await openBackupManagerViaUI(page);
+export async function downloadBackupViaUI(page, destPath, { timeout = 30_000 } = {}) {
+    await openBackupManagerViaUI(page, 'backup');
     const [download] = await Promise.all([
-        page.waitForEvent('download', { timeout: 30_000 }),
-        page.locator('.backupDownloadButton').last().click(),
+        page.waitForEvent('download', { timeout }),
+        accountWindow(page).locator('[data-act="backup-go"]').click(),
     ]);
     await download.saveAs(destPath);
-    // Close the popup chain to leave the page in a clean state.
-    await page.keyboard.press('Escape').catch(() => {});
-    await page.keyboard.press('Escape').catch(() => {});
+    // Close the window to leave the page in a clean state.
+    await closeAccountWindow(page);
 }
 
-async function restoreBackupViaUI(page, zipPath, { sourceMode, scratchDbConfig }) {
-    await openBackupManagerViaUI(page);
+export async function restoreBackupViaUI(page, zipPath, { sourceMode, scratchDbConfig } = {}) {
+    await openBackupManagerViaUI(page, 'restore');
+    const win = accountWindow(page);
 
-    // Pick "Overwrite Update" so the migrated chat replaces the dest's
-    // pre-seeded default Seraphina chat (merge mode would keep both as
-    // separate chats keyed by name; since the names are identical the
-    // result depends on which write happens last).
-    await page.locator('input[name="backupRestoreMode"][value="overwrite"]').last().click();
+    // Pick "Replace" so the migrated chat replaces the dest's pre-seeded
+    // default Seraphina chat (incremental mode would keep both as separate
+    // chats keyed by name; since the names are identical the result
+    // depends on which write happens last).
+    const replace = win.locator('[data-act="mode"][data-set="restore"][data-mode="replace"]');
+    await replace.click();
+    await expect(replace).toHaveClass(/\bon\b/);
 
     // Pick the ZIP file directly via the hidden file input.
-    const fileInput = page.locator('.backupRestoreFileInput').last();
-    await fileInput.setInputFiles(zipPath);
+    await win.locator('input[data-role="file"]').setInputFiles(zipPath);
+    await win.locator('.dw-file').waitFor({ state: 'visible', timeout: 10_000 });
 
-    // Snapshot the current open-popup count BEFORE triggering the restore;
-    // resolveTopmostPopupAffirmative waits for one MORE popup to mount so
-    // we don't accidentally dismiss a pre-existing popup (Account Info /
-    // Backup Manager itself).
-    const baseOpenCount = await openPopupCount(page);
-
-    // Click Restore — this triggers the confirm popup.
-    await page.locator('.backupRestoreButton').last().click();
-
-    // Wait for the confirm popup to mount (open count = base + 1), then
-    // resolve it with POPUP_RESULT.AFFIRMATIVE via Popup.util.complete.
-    // We bypass locator.click() / dispatchEvent on the OK <div>: in
-    // headless Chrome both occasionally land on the dialog backdrop and
-    // silently no-op, leaving the restore POST unsent. Calling the Popup
-    // instance's complete() directly is the same path the click handler
-    // ends up taking, just without the DOM event plumbing.
-    await resolveTopmostPopupAffirmative(page, baseOpenCount + 1);
+    // Click Replace and restore — the window asks to confirm first.
+    await win.locator('[data-act="restore-go"]').click();
+    await answerWindowConfirm(page);
 
     // For mysql/pg source: the chunked upload + server-side assembly + probe
-    // run first, then the probe-driven prompt asks for the scratch URL.
+    // run first, then the page asks for a temporary database connection.
+    // A full connection URL typed into the host field is used as-is.
     if ((sourceMode === 'mysql' || sourceMode === 'postgres') && scratchDbConfig) {
-        const credsBlock = page.locator('.crossModeScratchCreds').last();
-        await credsBlock.waitFor({ state: 'visible', timeout: 30_000 });
+        const host = win.locator('[data-model="restore.db.host"]');
+        await host.waitFor({ state: 'visible', timeout: 30_000 });
         const url = sourceMode === 'mysql' ? scratchDbConfig.mysql?.url : scratchDbConfig.postgres?.url;
-        const inputSel = sourceMode === 'mysql' ? '.crossModeScratchMysqlUrl' : '.crossModeScratchPostgresUrl';
-        // Use evaluate to set value directly and dispatch input event so
-        // jQuery sees the change. locator.fill() under headless Chrome has
-        // intermittently no-op'd here against the cross-mode template.
-        await page.evaluate(({ sel, val }) => {
-            const el = document.querySelector(sel);
-            if (!el) throw new Error(`scratch input not found: ${sel}`);
-            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-            setter.call(el, val);
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }, { sel: inputSel, val: url });
-        const probedVal = await page.locator(inputSel).last().inputValue();
+        await host.fill(url);
+        const probedVal = await host.inputValue();
         if (probedVal !== url) {
             throw new Error(`scratch URL input did not accept fill: got "${probedVal}" want "${url}"`);
         }
-        const credsBaseOpenCount = await openPopupCount(page);
-        await resolveTopmostPopupAffirmative(page, credsBaseOpenCount);
+        await win.locator('[data-act="restore-go"]').click();
     }
-}
 
-async function openPopupCount(page) {
-    return await page.evaluate(async () => {
-        const mod = await import('/scripts/popup.js');
-        return (mod?.Popup?.util?.popups || []).filter(p => p?.dlg?.hasAttribute('open')).length;
-    });
-}
-
-/**
- * Resolve the topmost open Popup with POPUP_RESULT.AFFIRMATIVE (= 1).
- *
- * The popup.js OK button is a `<div role="button">` whose click handler
- * is wired via `addEventListener('click', ...)` on the `[data-result]`
- * node. Playwright's locator.click() on this div under headless Chrome
- * lands intermittently — the click sometimes hits the dialog backdrop
- * instead of the div and silently no-ops. Synthetic MouseEvent dispatch
- * works but races the dialog's opening animation. The deterministic
- * path is to grab the Popup instance from `Popup.util.popups` and call
- * its `complete()` directly — the same code path the click handler
- * ultimately runs, without the DOM event plumbing in the middle.
- *
- * @param {import('@playwright/test').Page} page
- * @param {number} expectedMinOpenCount  minimum number of open popups we
- *   expect by the time the target popup has mounted. Critical: the
- *   caller usually triggered the new popup with a click that's in flight;
- *   without this guard we'd grab whichever popup was already open and
- *   accidentally dismiss it.
- */
-async function resolveTopmostPopupAffirmative(page, expectedMinOpenCount) {
-    await page.waitForFunction(async (minOpen) => {
-        const mod = await import('/scripts/popup.js');
-        const open = (mod?.Popup?.util?.popups || []).filter(p => p?.dlg?.hasAttribute('open'));
-        return open.length >= minOpen;
-    }, expectedMinOpenCount, { timeout: 15_000 });
-    const beforeCount = await openPopupCount(page);
-    await page.evaluate(async () => {
-        const mod = await import('/scripts/popup.js');
-        const open = (mod?.Popup?.util?.popups || []).filter(p => p?.dlg?.hasAttribute('open'));
-        if (open.length === 0) throw new Error('no open popup');
-        // POPUP_RESULT.AFFIRMATIVE = 1
-        await open[open.length - 1].complete(1);
-    });
-    // Wait briefly for the popup to close — the synthetic complete resolves
-    // its promise but `runAfterAnimation` closes the dialog on the next
-    // frame. Without this wait the next openPopupCount call is racy.
-    await page.waitForFunction(async (expected) => {
-        const mod = await import('/scripts/popup.js');
-        const open = (mod?.Popup?.util?.popups || []).filter(p => p?.dlg?.hasAttribute('open'));
-        return open.length === expected;
-    }, beforeCount - 1, { timeout: 5_000 }).catch(() => {});
+    // A clean restore reloads the page by itself; a restore that skipped
+    // files waits on its "Reload page" button. Click it then, like a user.
+    win.locator('[data-act="reload"]').click({ timeout: 120_000 }).catch(() => {});
 }
 
 /**
@@ -430,20 +356,6 @@ async function readChatFromEngine(dataRoot, destMode, destDbConfig) {
         }
     }
     throw new Error(`readChatFromEngine: unsupported destMode "${destMode}"`);
-}
-
-async function ensureUserSettingsDrawerOpen(page) {
-    const settingsDrawer = page.locator('#user-settings-button');
-    if (await settingsDrawer.count() === 0) return;
-    const drawerClosed = await page
-        .locator('#user-settings-button .drawer-icon.closedIcon').count().then(n => n > 0);
-    if (drawerClosed) {
-        await page.locator('#user-settings-button .drawer-toggle').click();
-        await page.waitForFunction(() => {
-            const el = document.getElementById('user-settings-block');
-            return el && !el.classList.contains('closedDrawer');
-        }, { timeout: 5_000 });
-    }
 }
 
 function mapSourceModeToScratchCreds(sourceMode, containers) {

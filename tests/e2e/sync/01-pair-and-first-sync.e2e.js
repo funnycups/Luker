@@ -3,7 +3,7 @@
 //
 // Per `feedback_e2e_real_user_flow`: two real `startServer` instances
 // on distinct loopback ports / data dirs, a real Playwright browser
-// driving each side, real toastr / popup gestures. No LLM calls in
+// driving each side, real clicks in the Account window. No LLM calls in
 // this flow, so nothing to mock.
 //
 // These specs run in default (single-user) mode. Multi-user pairings

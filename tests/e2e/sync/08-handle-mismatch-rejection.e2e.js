@@ -14,7 +14,8 @@ import {
     generatePairingLink,
     loginAs,
     expectHandleMismatchToast,
-    selectCategories,
+    fillPairingForm,
+    accountWindow,
 } from '../_lib/sync.js';
 
 const ALICE_PASSWORD = 'alice-pass-8';
@@ -82,15 +83,12 @@ test.describe('LAN Sync — handle-mismatch rejection', () => {
         expect(link).toMatch(/peer=alice%40/);
 
         await openLanSyncPanel(pageB);
-        // Drive the Accept form the same way the user does: paste link,
-        // pick categories, click Pair. The pre-flight in runPairAccept
-        // immediately surfaces the error banner and never hits the
-        // network — assert the banner names both handles.
-        await pageB.locator('.lanSyncTabPairExisting').click();
-        await pageB.locator('.lanSyncAcceptLink').fill(link);
-        await pageB.locator('.lanSyncAcceptLink').dispatchEvent('input');
-        await selectCategories(pageB.locator('.lanSyncAcceptCategoryGrid'), ['worlds']);
-        await pageB.locator('.lanSyncAcceptButton').click();
+        // Drive the "Connect to another device" form the same way the user
+        // does: paste link, pick categories, click Pair and sync. The
+        // pre-flight in the Account window surfaces the form error before
+        // the pairing request — assert the error names both handles.
+        await fillPairingForm(pageB, link, { categories: ['worlds'] });
+        await accountWindow(pageB).locator('[data-act="pair-accept"]').click();
         await expectHandleMismatchToast(pageB, { expectedHandle: 'bob', gotHandle: 'alice' });
 
         // Verify the pair did NOT register on A's side. Use A's own
@@ -115,10 +113,9 @@ test.describe('LAN Sync — handle-mismatch rejection', () => {
         await pageB.route('**/api/sync/v1/pair/accept', route => route.continue({ postData: JSON.stringify({ ...route.request().postDataJSON(), remotePeerId: 'alice@deadbeefdeadbeef' }) }));
         const forged = new URL(link.replace('luker-sync://', 'http://'));
         forged.searchParams.set('peer', 'bob@deadbeefdeadbeef');
-        await pageB.locator('.lanSyncAcceptLink').fill(`luker-sync://pair/v1?${forged.searchParams}`);
-        await pageB.locator('.lanSyncAcceptLink').dispatchEvent('input');
+        await accountWindow(pageB).locator('[data-model="top.form.link"]').fill(`luker-sync://pair/v1?${forged.searchParams}`);
         const rejected = pageB.waitForResponse(response => new URL(response.url()).pathname === '/api/sync/v1/pair/accept');
-        await pageB.locator('.lanSyncAcceptButton').click();
+        await accountWindow(pageB).locator('[data-act="pair-accept"]').click();
         const actual = await rejected;
         const bypass = { status: actual.status(), body: await actual.json() };
 

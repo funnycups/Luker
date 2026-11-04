@@ -1,0 +1,344 @@
+/* Account window pages: profile, settings snapshots, storage and reset.
+ * Shell and shared controls live in luker-window.css. */
+
+/* ---------- profile ---------- */
+
+.dw-profile {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+    background: var(--dw-surface-2);
+}
+
+.dw-avatar {
+    flex: none;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--dw-hover);
+    box-shadow: 0 0 0 1px var(--dw-border);
+}
+
+.dw-avatar img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.dw-profile-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.dw-profile-name {
+    font-size: 16px;
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dw-profile-act {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.dw-setrow-val {
+    justify-self: end !important;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-align: right;
+    color: var(--dw-muted);
+}
+
+.dw-pilltag svg.dw-ic {
+    width: 11px;
+    height: 11px;
+    margin-right: 3px;
+    vertical-align: -1px;
+}
+
+.dw-option.red {
+    --tone: var(--dw-danger);
+}
+
+.dw-option.red b {
+    color: var(--dw-danger);
+}
+
+/* ---------- settings snapshots ---------- */
+
+.dw-snap-pre {
+    grid-column: 1 / -1;
+    max-height: 260px;
+    margin: 0;
+    padding: 10px 12px;
+    overflow: auto;
+    border-radius: var(--dw-r-sm);
+    background: var(--dw-surface-2);
+    font-family: var(--dw-mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--dw-text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* ---------- segmented switch ---------- */
+
+.dw-seg {
+    align-self: flex-start;
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+    background: var(--dw-surface-2);
+}
+
+.dw-seg > button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: var(--dw-r-sm);
+    background: none;
+    color: var(--dw-muted);
+    font-size: 12.5px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.dw-seg > button:hover {
+    color: var(--dw-text);
+}
+
+.dw-seg > button.on {
+    background: var(--dw-raised);
+    color: var(--dw-text);
+    font-weight: 600;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 1px var(--dw-border);
+}
+
+/* ---------- storage inspector, restyled inside the window ---------- */
+
+.dw-layer .storageInspectorContainer {
+    gap: 12px;
+    min-height: 0;
+    padding: 0;
+}
+
+.dw-layer .storageInspectorHeader {
+    gap: 8px;
+}
+
+.dw-layer .storageInspectorBreadcrumbs {
+    font-size: 12.5px;
+    color: var(--dw-muted);
+}
+
+.dw-layer .storageInspectorBreadcrumbCrumb {
+    color: var(--dw-accent);
+}
+
+.dw-layer .storageInspectorBreadcrumbCurrent {
+    color: var(--dw-text);
+    font-weight: 650;
+}
+
+.dw-layer .storageInspectorContainer .menu_button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 30px;
+    height: 30px;
+    margin: 0;
+    padding: 0 10px;
+    border: 1px solid var(--dw-border-strong);
+    border-radius: var(--dw-r-sm);
+    background: var(--dw-surface);
+    color: var(--dw-muted);
+    font-size: 12.5px;
+    box-shadow: none;
+    filter: none;
+    opacity: 1;
+    cursor: pointer;
+}
+
+.dw-layer .storageInspectorContainer .menu_button:hover {
+    background: var(--dw-hover);
+    color: var(--dw-text);
+}
+
+.dw-layer .storageInspectorRefreshButton {
+    padding: 0 !important;
+}
+
+.dw-layer .storageInspectorQuota {
+    padding: 0;
+    font-size: 12.5px;
+    color: var(--dw-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.dw-layer .storageInspectorQuotaUsed {
+    color: var(--dw-text);
+    font-weight: 650;
+}
+
+.dw-layer .storageInspectorQuotaOver {
+    color: var(--dw-danger);
+}
+
+.dw-layer .storageInspectorStackedBar {
+    height: 10px;
+    border-radius: 999px;
+    background: var(--dw-surface-2);
+    box-shadow: inset 0 0 0 1px var(--dw-border);
+}
+
+.dw-layer .storageInspectorBarSegment {
+    cursor: pointer;
+}
+
+.dw-layer .storageInspectorLegend {
+    gap: 6px 14px;
+    margin-top: -4px;
+    font-size: 12px;
+    color: var(--dw-muted);
+}
+
+.dw-layer .storageInspectorLegendSwatch {
+    border-radius: 3px;
+}
+
+.dw-layer .storageInspectorList {
+    gap: 0;
+    max-height: none;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+}
+
+.dw-layer .storageInspectorList:empty {
+    display: none;
+}
+
+.dw-layer .storageInspectorEntry {
+    gap: 10px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--dw-border);
+    border-radius: 0;
+    font-size: 12.5px;
+}
+
+.dw-layer .storageInspectorEntry:first-child {
+    border-top: 0;
+}
+
+.dw-layer .storageInspectorEntry.storageInspectorEntryDrillable:hover {
+    background: var(--dw-hover);
+}
+
+.dw-layer .storageInspectorEntrySize {
+    color: var(--dw-muted);
+    opacity: 1;
+}
+
+.dw-layer .storageInspectorEntryDot {
+    background: var(--dw-border-strong);
+}
+
+.dw-layer .storageInspectorEntryDot.storageInspectorEntryDotFilled {
+    background: currentColor;
+}
+
+.dw-layer .storageInspectorEntryChevron {
+    color: var(--dw-faint);
+    opacity: 1;
+}
+
+.dw-layer .storageInspectorEntryDeleteButton {
+    min-width: 26px;
+    height: 26px;
+    padding: 0 !important;
+    border-color: transparent !important;
+    background: none !important;
+}
+
+.dw-layer .storageInspectorEntryDeleteButton:hover {
+    color: var(--dw-danger) !important;
+}
+
+.dw-layer .storageInspectorLoading::before,
+.dw-layer .storageInspectorLoading::after {
+    background: linear-gradient(90deg, var(--dw-surface-2) 0%, var(--dw-hover) 50%, var(--dw-surface-2) 100%);
+    background-size: 200% 100%;
+    border-radius: var(--dw-r-sm);
+}
+
+.dw-layer .storageInspectorLoading > span,
+.dw-layer .storageInspectorEmpty {
+    font-size: 12.5px;
+    color: var(--dw-faint);
+}
+
+.dw-layer .storageInspectorEmpty {
+    padding: 24px 0;
+    text-align: center;
+}
+
+.dw-layer .storageInspectorError {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: var(--dw-r);
+    background: var(--dw-danger-soft);
+    color: var(--dw-danger);
+    font-size: 12.5px;
+}
+
+.dw-layer .storageInspectorErrorMessage {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+@container (max-width: 600px) {
+    .dw-profile {
+        flex-wrap: wrap;
+    }
+
+    .dw-profile-act {
+        flex-basis: 100%;
+    }
+
+    .dw-profile-act .dw-btn:not(.icon) {
+        flex: 1;
+    }
+
+    .dw-seg {
+        align-self: stretch;
+    }
+
+    .dw-seg > button {
+        flex: 1;
+        justify-content: center;
+        height: 34px;
+    }
+
+    .dw-setrow:has(> .dw-setrow-val) {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+}

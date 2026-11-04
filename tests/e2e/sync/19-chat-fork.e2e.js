@@ -1,11 +1,12 @@
 // Chat conflicts: a chat edited on both devices keeps one version and
 // saves the other as a branch chat, for a character and for a group; a
 // chat deleted on one device and edited on the other is restored; the
-// popup lists each with a button that opens the chat.
+// Sync issues page of the Account window lists each with a button that
+// opens the chat.
 //
 // Two real servers seeded with the same character, chats and group on
 // disk. Edits and deletions go through the chat UI. Device labels are set
-// through the Sync panel before pairing. No current version writes a restored notice
+// through Account → Device settings before pairing. No current version writes a restored notice
 // without the deleting device; the last test commits one into A's sync
 // history the way an older version would have, and B receives it by sync.
 
@@ -93,7 +94,7 @@ async function pairedPages(browser) {
     // devices finished their runs.
     await waitForBackgroundSync(pageA, { since: pairedSince });
     await waitForBackgroundSync(pageB, { since: pairedSince });
-    // Closes the User Settings drawer the LAN Sync panel opened.
+    // Closes the User Settings drawer the Account window was opened from.
     await reloadAndAwait(pageA, A.baseURL);
     await reloadAndAwait(pageB, B.baseURL);
     return { pageA, pageB };
@@ -187,7 +188,7 @@ test.describe('LAN Sync — chat conflicts', () => {
         await reloadAndAwait(pageB, B.baseURL);
         await waitForSyncPopup(pageB);
         await dismissNotice(pageB, notice.path);
-        // A's popup shows the notice until B's dismissal reaches it.
+        // A's Sync issues page shows the notice until B's dismissal reaches it.
         for (const [page, server] of [[pageA, A], [pageB, B]]) {
             await expect.poll(async () => {
                 await reloadAndAwait(page, server.baseURL);
@@ -249,7 +250,7 @@ test.describe('LAN Sync — chat conflicts', () => {
             { path: 'chats/Seraphina/Forest Path.jsonl', text: `Forest Path was deleted on ${LABELS.A} but kept on ${LABELS.B}, so it was restored.` },
             { path: 'chats/Seraphina/River Ford.jsonl', text: `River Ford was deleted on ${LABELS.B} but kept on ${LABELS.A}, so it was restored.` },
         ]);
-        await expect(syncPopup(pageB).locator('.syncNoticeOpenButton')).toHaveText(['Open chat', 'Open chat']);
+        await expect(syncPopup(pageB).locator('[data-act="notice-open"]')).toHaveText(['Open chat', 'Open chat']);
         for (const server of [A, B]) {
             for (const side of ['A', 'B']) {
                 await expect.poll(() => fileText(server, `chats/Seraphina/${plan[side].edit}.jsonl`), { timeout: 60_000 }).toContain(texts[side]);
@@ -278,7 +279,7 @@ test.describe('LAN Sync — chat conflicts', () => {
         const [notice, ...rest] = await listPopupNotices(pageB);
         expect(rest).toEqual([]);
         expect(notice).toEqual({ path: rel, text: `Forest Path was deleted on one device but kept on ${LABELS.A}, so it was restored.` });
-        await expect(syncPopup(pageB).locator('.syncNoticeOpenButton')).toHaveText('Open chat');
+        await expect(syncPopup(pageB).locator('[data-act="notice-open"]')).toHaveText('Open chat');
         await openBranchFromNotice(pageB, rel, 'Forest Path');
     });
 });

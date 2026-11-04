@@ -15,7 +15,7 @@ import path from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { awaitMainUI, reloadAndAwait } from '../_lib/page.js';
 import { createWorldBook, addWorldEntry, selectWorldBook } from '../_lib/ui-worldinfo.js';
-import { openLanSyncPanel, generatePairingLink, acceptPairingLink, clickSyncNow, setSyncSchedule, closeAllPopups, readUserFile, waitForSyncPopup, listPopupConflicts, waitForBackgroundSync, conflictChoiceShowing, chooseConflictVersion, applyConflictChoices } from '../_lib/sync.js';
+import { openLanSyncPanel, backendCard, generatePairingLink, acceptPairingLink, clickSyncNow, setSyncSchedule, closeAllPopups, readUserFile, waitForSyncPopup, listPopupConflicts, waitForBackgroundSync, conflictChoiceShowing, chooseConflictVersion, applyConflictChoices } from '../_lib/sync.js';
 
 let A;
 let B;
@@ -101,7 +101,7 @@ test.describe('LAN Sync — concurrency', () => {
         await reloadAndAwait(pageB, B.baseURL);
         await openLanSyncPanel(pageB);
         arm('after-remote-head');
-        await pageB.locator('.lanSyncPeerRow', { hasText: 'A device' }).locator('.lanSyncPeerSyncButton').click();
+        await backendCard(pageB, 'A device').locator('[data-act="sync-now"]').click();
         await reached('after-remote-head');
         await closeAllPopups(pageB);
         await selectWorldBook(pageB, 'Ash Road');
@@ -129,7 +129,7 @@ test.describe('LAN Sync — concurrency', () => {
         await createWorldBook(pageB, 'Fen Lantern');
         await openLanSyncPanel(pageB);
         arm('inside-snapshot-lock');
-        await pageB.locator('.lanSyncPeerRow', { hasText: 'A device' }).locator('.lanSyncPeerSyncButton').click();
+        await backendCard(pageB, 'A device').locator('[data-act="sync-now"]').click();
         await reached('inside-snapshot-lock');
         await closeAllPopups(pageB);
         const saving = pageB.waitForRequest(worldSave('Marsh lights'));

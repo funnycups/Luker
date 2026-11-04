@@ -15,8 +15,10 @@ import {
     setSyncDeviceLabel, setSyncSchedule, waitForBackendSync, generatePairingLink,
     acceptPairingLink, clickSyncNow, clickForgetPeer,
     readUserFile, userRootOf, clickUndoLastSync, waitForSyncPopup,
-    syncPopup, chooseConflictVersion, applyConflictChoices, waitForStatusChecks, closeSyncPopup,
+    chooseConflictVersion, applyConflictChoices, waitForStatusChecks,
+    backendCard, clickBackendMenu, conflictRow, openAddBackend, syncFlash,
 } from '../_lib/sync.js';
+import { accountWindow, answerWindowConfirm, formError, pageHead, windowConfirm, windowToast } from '../_lib/account-window.js';
 
 let storage;
 let servers = [];
@@ -61,7 +63,43 @@ async function bucket() {
     try { await client.send(new CreateBucketCommand({ Bucket: name })); } finally { client.destroy(); }
     return name;
 }
-const row = (page, label) => page.locator('.lanSyncPeerRow').filter({ has: page.locator('.lanSyncPeerLabel', { hasText: label }) });
+const row = (page, label) => backendCard(page, label);
+/** Failure reason a backend card shows after a failed sync. */
+const cardError = (page, label) => row(page, label).locator('.dw-card-note.bad');
+/** Leave the form on the current Sync page with its Cancel button. */
+async function cancelForm(page) {
+    await accountWindow(page).locator('.dw-foot [data-act="back"]').click();
+    await expect(pageHead(page)).toHaveAttribute('data-view', 'list');
+}
+/** True when an input anywhere in the document still holds `value`. */
+const inputHolds = (page, value) => page.evaluate(wanted => [...document.querySelectorAll('input')].some(input => input.value === wanted), value);
+/** Remove the result banner of an earlier action, then click Sync now on the card. */
+async function clickCardSyncNow(page, label) {
+    const close = syncFlash(page).locator('[data-act="flash-x"]');
+    if (await close.count() > 0) await close.first().click();
+    await expect(syncFlash(page)).toHaveCount(0);
+    await row(page, label).locator('[data-act="sync-now"]').click();
+}
+/**
+ * Fire every action of a backend card and its menu, as queued clicks would,
+ * answering the confirmations they ask. A locked backend must admit none.
+ */
+async function fireCardActions(page, label) {
+    for (const act of ['sync-now', 'undo', 'edit', 'unlock', 'remove']) {
+        const card = row(page, label);
+        if (act !== 'sync-now' && await card.locator('.dw-menu').count() === 0) await card.locator('[data-act="menu"]').click();
+        const control = card.locator(`[data-act="${act}"]`);
+        if (await control.count() === 0) continue;
+        // Edit and Unlock of a locked backend are disabled controls.
+        if (act === 'edit' || act === 'unlock') {
+            await expect(control).toBeDisabled();
+            continue;
+        }
+        await control.dispatchEvent('click');
+        if ((act === 'undo' || act === 'remove') && await windowConfirm(page).count() > 0) await answerWindowConfirm(page);
+        if (await card.locator('.dw-menu').count() > 0) await card.locator('[data-act="menu"]').click();
+    }
+}
 const registry = server => JSON.parse(fs.readFileSync(path.join(userRootOf(server), '.sync/state.json'), 'utf8'));
 const status = page => page.evaluate(async () => (await (await fetch('/api/sync/v1/status')).json()));
 const checks = page => page.evaluate(() => Number(document.body.dataset.syncStatusChecks || 0));
@@ -81,11 +119,12 @@ test.describe('Unified Sync panel', () => {
     test('LAN and S3 setup retains credentials privately and edits immutable identity', async ({ browser }) => {
         const { page: a } = await device(browser, 'a');
         const { page: b } = await device(browser, 'b');
-        await expect(a.locator('.userLanSync h3')).toHaveText('Sync');
+        await expect(pageHead(a).locator('.dw-h2')).toHaveText('Sync');
         await setSyncDeviceLabel(a, 'Desk');
         await setSyncDeviceLabel(a, '');
-        await expect(a.locator('.syncDeviceLabel')).toHaveValue('');
-        await expect(a.locator('.syncDeviceLabelResolved')).not.toHaveText('');
+        await expect(accountWindow(a).locator('[data-model="device.label"]')).toHaveValue('');
+        // A blank name falls back to the resolved host name, shown as the placeholder.
+        await expect(accountWindow(a).locator('[data-model="device.label"]')).toHaveAttribute('placeholder', /\S/);
         await setSyncSchedule(a, { idleSeconds: 3600, pollSeconds: 3600 });
         const options = { ...storage, bucket: await bucket(), prefix: 'shared/', label: 'Cloud',
             passphrase: 'unified test phrase', forcePathStyle: true, categories: ['worlds'] };
@@ -95,31 +134,30 @@ test.describe('Unified Sync panel', () => {
         for (const secret of [options.accessKeyId, options.secretAccessKey, options.passphrase]) expect(publicBody).not.toContain(secret);
         await waitForBackendSync(a, { label: 'Cloud' });
         await expect(row(a, 'Cloud')).toHaveAttribute('data-kind', 's3');
-        await expect(row(a, 'Cloud').locator('.syncBackendKind')).toHaveText('S3');
-        await row(a, 'Cloud').locator('.syncBackendEditButton').click();
-        await expect(a.locator('.syncS3Region')).toHaveJSProperty('tagName', 'SELECT');
-        for (const field of ['AccessKeyId', 'SecretAccessKey', 'Passphrase']) await expect(a.locator(`.syncS3${field}`)).toHaveValue('');
-        await expect(a.locator('.syncS3Bucket')).toHaveAttribute('readonly', '');
-        await expect(a.locator('.syncS3Prefix')).toHaveAttribute('readonly', '');
-        await a.locator('.syncS3SecretAccessKey').fill('cancelled-secret');
-        const cancelledSecret = await a.locator('.syncS3SecretAccessKey').elementHandle();
-        await a.locator('.syncS3Passphrase').fill('cancelled-phrase');
-        const cancelledPhrase = await a.locator('.syncS3Passphrase').elementHandle();
-        await a.keyboard.press('Escape');
-        expect(await cancelledSecret.evaluate(input => input.value)).toBe('');
-        expect(await cancelledPhrase.evaluate(input => input.value)).toBe('');
+        await expect(row(a, 'Cloud').locator('.dw-kind')).toHaveText('S3');
+        await clickBackendMenu(a, 'Cloud', 'edit');
+        const form = accountWindow(a);
+        // The region is free text with the known regions offered as suggestions.
+        await expect(form.locator('[data-model="top.form.region"]')).toHaveAttribute('list', 'dw-regions');
+        for (const field of ['accessKey', 'secretKey', 'passphrase']) await expect(form.locator(`[data-model="top.form.${field}"]`)).toHaveValue('');
+        await expect(form.locator('[data-model="top.form.bucket"]')).toBeDisabled();
+        await expect(form.locator('[data-model="top.form.prefix"]')).toBeDisabled();
+        await form.locator('[data-model="top.form.secretKey"]').fill('cancelled-secret');
+        await form.locator('[data-model="top.form.passphrase"]').fill('cancelled-phrase');
+        await cancelForm(a);
+        expect(await inputHolds(a, 'cancelled-secret')).toBe(false);
+        expect(await inputHolds(a, 'cancelled-phrase')).toBe(false);
         const hostile = '<img src=x onerror="window.__syncXss=1">';
         await editSyncBackend(a, 'Cloud', { label: hostile });
         await expect(row(a, hostile).locator('img')).toHaveCount(0);
         expect(await a.evaluate(() => window.__syncXss)).toBeUndefined();
-        await row(a, hostile).locator('.syncBackendUnlockButton').click();
-        await expect(a.locator('.syncS3Endpoint')).toBeHidden();
-        await a.locator('.syncS3Passphrase').fill('wrong phrase');
-        const wrongPhrase = await a.locator('.syncS3Passphrase').elementHandle();
-        await a.locator('.syncS3SaveButton').click();
-        await expect(a.locator('.syncS3Error')).toContainText('passphrase');
-        await a.keyboard.press('Escape');
-        expect(await wrongPhrase.evaluate(input => input.value)).toBe('');
+        await clickBackendMenu(a, hostile, 'unlock');
+        await expect(accountWindow(a).locator('[data-model="top.form.endpoint"]')).toHaveCount(0);
+        await accountWindow(a).locator('[data-model="top.form.pass"]').fill('wrong phrase');
+        await accountWindow(a).locator('[data-act="unlock-save"]').click();
+        await expect(formError(a)).toContainText('passphrase');
+        await cancelForm(a);
+        expect(await inputHolds(a, 'wrong phrase')).toBe(false);
         await unlockS3Backend(a, hostile, options.passphrase);
         await addS3Backend(b, { ...options, label: 'Shared cloud' });
         await waitForBackendSync(b, { label: 'Shared cloud' });
@@ -127,18 +165,18 @@ test.describe('Unified Sync panel', () => {
         expect(await acceptPairingLink(b, link, { localLabel: 'Desk', categories: ['worlds'] })).toBe('success');
         await closeAllPopups(a);
         await openLanSyncPanel(a);
-        await expect(a.locator('.lanSyncPanelPeers')).toBeVisible();
+        await expect(pageHead(a)).toHaveAttribute('data-view', 'list');
         await expect(row(a, 'Tablet')).toHaveAttribute('data-kind', 'lan');
         await editSyncBackend(a, 'Tablet', { label: 'LAN tablet', categories: ['worlds'] });
         expect(await clickSyncNow(a, 'LAN tablet')).toBe('success');
         expect(await clickSyncNow(a, hostile)).toBe('success');
-        await row(a, hostile).locator('.lanSyncPeerForgetButton').click();
-        await expect(a.locator('dialog[open]').last()).toContainText('bucket');
-        await expect(a.locator('dialog[open]').last().locator('.popup-content img')).toHaveCount(0);
-        await a.locator('.popup-button-cancel').last().click();
+        await clickBackendMenu(a, hostile, 'remove');
+        await expect(windowConfirm(a)).toContainText('bucket');
+        await expect(windowConfirm(a).locator('img')).toHaveCount(0);
+        await answerWindowConfirm(a, { confirm: false });
         await clickForgetPeer(a, hostile);
         await clickForgetPeer(a, 'LAN tablet');
-        await expect(a.locator('.lanSyncPeerRow')).toHaveCount(0);
+        await expect(accountWindow(a).locator('.dw-card[data-backend]')).toHaveCount(0);
     });
 
     test('S3 Undo rejects an obstructed local apply without propagation and retains its undo point', async ({ browser }) => {
@@ -178,7 +216,7 @@ test.describe('Unified Sync panel', () => {
         const failed = await response;
         expect(failed.status()).toBe(409);
         expect(await failed.json()).toMatchObject({ ok: false, committed: false, propagation: null, code: 'UNDO_NOT_COMMITTED' });
-        await expect(b.locator('.toast-success', { hasText: 'Reverted the last sync' })).toHaveCount(0);
+        await expect(syncFlash(b).filter({ hasText: 'Undid the last sync' })).toHaveCount(0);
         expect(readUserFile(serverA, rel)).toContain('arrived from cloud');
         fs.rmdirSync(file);
         fs.writeFileSync(file, bytes);
@@ -206,11 +244,12 @@ test.describe('Unified Sync panel', () => {
         try {
             expect(await stalledSync).toBe('warning');
             expect((await (await stalledResponse).json()).stalled).toContain(stalledRel);
-            // Dismiss only the status overlay; keep the panel that received
+            // Leave only the Sync issues page; keep the window that received
             // this run rather than allowing a fresh run to replace its state.
             await waitForSyncPopup(b);
-            await closeSyncPopup(b);
-            await expect(row(b, 'Cloud').locator('.lanSyncPeerStalledPath')).toHaveText(stalledRel);
+            await pageHead(b).locator('[data-act="back"]').click();
+            await expect(pageHead(b)).toHaveAttribute('data-view', 'list');
+            await expect(row(b, 'Cloud').locator('.dw-stalled code')).toHaveText(stalledRel);
         } finally {
             fs.rmdirSync(stalledFile);
         }
@@ -225,31 +264,36 @@ test.describe('Unified Sync panel', () => {
         Object.values(state.backends)[0].s3.keyId = 'invalid';
         fs.writeFileSync(path.join(userRootOf(server), '.sync/state.json'), JSON.stringify(state));
         for (const [locale, words] of [
-            ['zh-cn', { title: '同步', add: '添加 S3 后端', label: '保存设备名称', invalid: '此后端的密钥标识无效或已更改。请移除后重新添加。解锁不能更改其标识。', name: '后续编辑使用的名称：Glade', save: '保存', remove: '移除' }],
-            ['zh-tw', { title: '同步', add: '新增 S3 後端', label: '儲存裝置名稱', invalid: '此後端的金鑰識別無效或已變更。請移除後重新新增。解鎖不能變更其識別。', name: '後續編輯使用的名稱：Glade', save: '儲存', remove: '移除' }],
-            ['en', { title: 'Sync', add: 'Add S3 backend', label: 'Save device label', invalid: 'This backend\'s key identity is invalid or changed. Remove it and add it again. Unlock cannot change its identity.', name: 'Name for future edits: Glade', save: 'Save', remove: 'Remove' }],
+            ['zh-cn', { title: '同步', add: '添加', s3: '使用 S3 存储', invalid: '此后端的密钥标识无效或已更改。请移除后重新添加。解锁不能更改其标识。', name: '本机名称', save: '保存', remove: '移除' }],
+            ['zh-tw', { title: '同步', add: '新增', s3: '使用 S3 儲存', invalid: '此後端的金鑰識別無效或已變更。請移除後重新新增。解鎖不能變更其識別。', name: '本機名稱', save: '儲存', remove: '移除' }],
+            ['en', { title: 'Sync', add: 'Add', s3: 'Use S3 storage', invalid: 'This backend\'s key identity is invalid or changed. Remove it and add it again. Unlock cannot change its identity.', name: 'Device name', save: 'Save', remove: 'Remove' }],
         ]) {
             await closeAllPopups(page);
             // The panel navigation leaves the settings drawer open.
             await Promise.all([page.waitForEvent('load'), page.locator('#ui_language_select').selectOption(locale)]);
             await page.waitForFunction(() => document.getElementById('preloader') === null && !!window.Luker?.getContext);
             await openLanSyncPanel(page);
-            await expect(page.locator('.userLanSync h3')).toHaveText(words.title);
-            await expect(page.locator('.syncAddS3Button')).toHaveText(words.add);
-            await expect(page.locator('.syncSaveDeviceLabelButton')).toHaveText(words.label);
+            await expect(pageHead(page).locator('.dw-h2')).toHaveText(words.title);
+            await expect(pageHead(page).locator('[data-act="push"][data-view="add"]')).toHaveText(words.add);
             await setSyncDeviceLabel(page, 'Glade');
-            await expect(page.locator('.syncDeviceLabelResolved')).toHaveText(words.name);
-            await page.locator('.syncAddS3Button').click();
-            await expect(page.locator('.syncS3SaveButton')).toHaveText(words.save);
-            await page.locator('.syncS3SaveButton').click();
-            await expect(page.locator('.syncS3Error')).not.toHaveClass(/displayNone/);
-            await page.keyboard.press('Escape');
-            await row(page, 'Locale cloud').locator('.syncBackendUnlockButton').click();
-            await page.locator('.syncS3Passphrase').fill('locale phrase');
-            await page.locator('.syncS3SaveButton').click();
-            await expect(page.locator('.syncS3Error')).toHaveText(words.invalid);
-            await page.keyboard.press('Escape');
-            await expect(row(page, 'Locale cloud').locator('.lanSyncPeerForgetButton')).toHaveText(words.remove);
+            await expect(accountWindow(page).locator('.dw-setrow', { has: page.locator('[data-model="device.label"]') }).locator('span').first()).toHaveText(words.name);
+            await expect(accountWindow(page).locator('[data-act="save-local"]')).toHaveText(words.save);
+            await openLanSyncPanel(page);
+            await pageHead(page).locator('[data-act="push"][data-view="add"]').click();
+            await expect(accountWindow(page).locator('.dw-option[data-view="s3"]')).toHaveText(words.s3);
+            await openAddBackend(page, 's3');
+            await expect(accountWindow(page).locator('[data-act="s3-save"]')).toHaveText(words.save);
+            await accountWindow(page).locator('[data-act="s3-save"]').click();
+            await expect(formError(page)).toBeVisible();
+            await cancelForm(page);
+            await clickBackendMenu(page, 'Locale cloud', 'unlock');
+            await accountWindow(page).locator('[data-model="top.form.pass"]').fill('locale phrase');
+            await accountWindow(page).locator('[data-act="unlock-save"]').click();
+            await expect(formError(page)).toHaveText(words.invalid);
+            await cancelForm(page);
+            await row(page, 'Locale cloud').locator('[data-act="menu"]').click();
+            await expect(row(page, 'Locale cloud').locator('.dw-menu [data-act="remove"]')).toHaveText(words.remove);
+            await row(page, 'Locale cloud').locator('[data-act="menu"]').click();
         }
     });
 
@@ -300,15 +344,16 @@ test.describe('Unified Sync panel', () => {
         const restore = await corruptMetadata(serverB, cloudId);
         const lanPath = 'worlds/LAN Grove.json';
         const cloudPath = 'worlds/Cloud Grove.json';
-        const conflict = rel => syncPopup(b).locator(`.syncConflictRow[data-path=${JSON.stringify(rel)}]`);
+        const conflict = rel => conflictRow(b, rel);
         try {
             await waitForStatusChecks(b, await checks(b) + 1);
             const pending = await status(b);
             expect(pending).toMatchObject({ ok: false, errors: { [cloudId]: { code: 'PENDING_READ_FAILED' } } });
             expect(pending.conflicts.find(entry => entry.path === lanPath).recordVersions).toBeTruthy();
-            await expect(conflict(cloudPath).locator('.syncConflictUnknownNote')).toBeVisible();
-            await expect(conflict(cloudPath).locator('.syncConflictResolvedNote')).toHaveCount(0);
-            await expect(conflict(lanPath).locator('input[value="current"]')).toBeEnabled();
+            // A conflict whose records could not be read offers no choice.
+            for (const version of await conflict(cloudPath).locator('.dw-version').all()) await expect(version).toBeDisabled();
+            await expect(windowToast(b, 'already handled on another device')).toHaveCount(0);
+            await expect(conflict(lanPath).locator('.dw-version[data-v="current"]')).toBeEnabled();
             await chooseConflictVersion(b, lanPath, 'current');
             const response = b.waitForResponse(r => r.url().endsWith('/conflicts/resolve'));
             expect(await applyConflictChoices(b)).toBe('error');
@@ -319,16 +364,18 @@ test.describe('Unified Sync panel', () => {
             expect(resolved.errors[cloudId].code).toBe('PENDING_READ_FAILED');
             const lanId = Object.entries(registry(serverB).backends).find(([, entry]) => entry.kind === 'lan')[0];
             expect(resolved.results[0].committedBackends).toEqual([lanId]);
-            await expect(b.locator('.toast-success', { hasText: 'Choices applied.' })).toHaveCount(0);
-            await closeSyncPopup(b);
-            await expect(row(b, 'Cloud').locator('.lanSyncPeerError')).toContainText('pending sync records');
-            // A real list refresh after an action must retain the pending error overlay.
+            await expect(windowToast(b, 'Applied')).toHaveCount(0);
+            await openLanSyncPanel(b);
+            await expect(row(b, 'Cloud')).toHaveAttribute('data-state', 'unknown');
+            await expect(row(b, 'Cloud').locator('.dw-card-meta')).toContainText('Pending records could not be read');
+            // A real list refresh after an action must retain the pending error state.
             await editSyncBackend(b, 'LAN A', { label: 'LAN A renamed' });
-            await expect(row(b, 'Cloud').locator('.lanSyncPeerError')).toContainText('pending sync records');
+            await expect(row(b, 'Cloud')).toHaveAttribute('data-state', 'unknown');
+            await expect(row(b, 'Cloud').locator('.dw-card-meta')).toContainText('Pending records could not be read');
         } finally { restore(); }
         await waitForStatusChecks(b, await checks(b) + 1);
         await waitForSyncPopup(b);
-        await expect(conflict(cloudPath).locator('input[value="current"]')).toBeEnabled();
+        await expect(conflict(cloudPath).locator('.dw-version[data-v="current"]')).toBeEnabled();
         await chooseConflictVersion(b, cloudPath, 'current');
         expect(await applyConflictChoices(b)).toBe('success');
     });
@@ -344,14 +391,14 @@ test.describe('Unified Sync panel', () => {
         // Explicit identity-corruption fixture, not a setup shortcut.
         state.backends[id].s3.keyId = 'invalid';
         fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
-        await row(page, 'Identity cloud').locator('.syncBackendUnlockButton').click();
-        await page.locator('.syncS3Passphrase').fill('identity phrase');
+        await clickBackendMenu(page, 'Identity cloud', 'unlock');
+        await accountWindow(page).locator('[data-model="top.form.pass"]').fill('identity phrase');
         const response = page.waitForResponse(r => r.url().endsWith('/unlock'));
-        await page.locator('.syncS3SaveButton').click();
+        await accountWindow(page).locator('[data-act="unlock-save"]').click();
         expect(await (await response).json()).toMatchObject({ code: 'S3_LOCAL_KEY_ID_INVALID' });
-        await expect(page.locator('.syncS3Error')).toContainText('Remove it and add it again');
+        await expect(formError(page)).toContainText('Remove it and add it again');
         expect(registry(server).backends[id].s3.keyId).toBe('invalid');
-        await page.keyboard.press('Escape');
+        await cancelForm(page);
         await clickForgetPeer(page, 'Identity cloud');
     });
 
@@ -364,16 +411,19 @@ test.describe('Unified Sync panel', () => {
         await waitForBackendSync(page, { label: 'Slow cloud' });
         await setSyncSchedule(page, { idleSeconds: 3600, pollSeconds: 3600 });
         const held = proxy.addFault({ match: { method: 'GET', keySuffix: '/head' }, hold: 'before-forward' });
-        await row(page, 'Slow cloud').locator('.lanSyncPeerSyncButton').click();
+        await openLanSyncPanel(page);
+        await clickCardSyncNow(page, 'Slow cloud');
         await held.reached;
-        await expect(row(page, 'Slow cloud').locator('.lanSyncPeerRunning')).toBeVisible({ timeout: 15_000 });
+        await expect(row(page, 'Slow cloud')).toHaveAttribute('data-state', 'running', { timeout: 15_000 });
         held.release();
-        await expect(page.locator('.lanSyncStatusBanner.success')).toBeVisible({ timeout: 60_000 });
+        await expect(syncFlash(page)).toHaveAttribute('data-flash', 'success', { timeout: 60_000 });
         await proxy.close();
         proxies = [];
         expect(await clickSyncNow(page, 'Slow cloud')).toBe('error');
-        await expect(row(page, 'Slow cloud').locator('.lanSyncPeerError')).toContainText('Last sync failed');
-        await expect(row(page, 'Slow cloud').locator('.lanSyncPeerMeta')).toContainText('Last sync:');
+        await expect(row(page, 'Slow cloud')).toHaveAttribute('data-state', 'error');
+        await expect(cardError(page, 'Slow cloud')).toBeVisible();
+        // The card still shows when the last sync happened.
+        await expect(row(page, 'Slow cloud').locator('.dw-card-meta')).not.toContainText('Never synced');
     });
 
     for (const action of ['sync', 'undo', 'edit', 'remove']) test(`pending ${action} cannot admit backend actions after list and status refresh`, async ({ browser }) => {
@@ -381,7 +431,8 @@ test.describe('Unified Sync panel', () => {
         await addS3Backend(page, { ...storage, bucket: await bucket(), prefix: 'pending-action/', label: 'Pending cloud', passphrase: 'pending action phrase', forcePathStyle: true, categories: ['worlds'] });
         await waitForBackendSync(page, { label: 'Pending cloud' });
         await setSyncSchedule(page, { idleSeconds: 3600, pollSeconds: 3600 });
-        const id = await row(page, 'Pending cloud').getAttribute('data-backend-id');
+        await openLanSyncPanel(page);
+        const id = await row(page, 'Pending cloud').getAttribute('data-backend');
         const endpoint = `/api/sync/v1/backends/${id}${action === 'edit' ? '/s3' : action === 'remove' ? '' : `/${action}`}`;
         let release;
         let reached;
@@ -402,28 +453,29 @@ test.describe('Unified Sync panel', () => {
         });
         const primary = row(page, 'Pending cloud');
         if (action === 'edit') {
-            await primary.locator('.syncBackendEditButton').click();
-            await page.locator('.syncS3SaveButton').click();
+            await clickBackendMenu(page, 'Pending cloud', 'edit');
+            await accountWindow(page).locator('[data-act="s3-save"]').click();
         } else if (action === 'remove' || action === 'undo') {
-            await primary.locator(action === 'remove' ? '.lanSyncPeerForgetButton' : '.lanSyncPeerUndoButton').click();
-            await page.locator('.popup-button-ok').last().click();
-        } else await primary.locator('.lanSyncPeerSyncButton').click();
+            await clickBackendMenu(page, 'Pending cloud', action);
+            await answerWindowConfirm(page);
+        } else await primary.locator('[data-act="sync-now"]').click();
         await held;
+        // The edit form stays open while its save is pending; go back to the
+        // list, which keeps the backend's action lock until the save settles.
+        if (action === 'edit') await cancelForm(page);
         const originalRow = await primary.elementHandle();
         const refreshed = page.waitForResponse(response => response.url().endsWith('/api/sync/v1/status') && response.ok());
         await refreshed;
         await expect.poll(() => originalRow.evaluate(node => node.isConnected)).toBe(false);
         try {
-            await expect(primary.locator('.backupActionRow')).toHaveClass(/disabled/);
-            for (const selector of ['.lanSyncPeerSyncButton', '.lanSyncPeerUndoButton', '.syncBackendEditButton', '.syncBackendUnlockButton', '.lanSyncPeerForgetButton']) {
-                // Exercise handlers as well as disabled rendering, including
-                // clicks already queued when a status render replaces a row.
-                await primary.locator(selector).dispatchEvent('click');
-            }
-            await expect(page.locator('.userSyncS3')).toHaveCount(action === 'edit' ? 1 : 0);
+            await expect(primary).toHaveClass(/\blocked\b/);
+            // Exercise handlers as well as disabled rendering, including
+            // clicks already queued when a status render replaces a card.
+            await fireCardActions(page, 'Pending cloud');
+            await expect(pageHead(page)).toHaveAttribute('data-view', 'list');
             const nextRefresh = page.waitForResponse(response => response.url().endsWith('/api/sync/v1/backends') && response.ok());
             await nextRefresh;
-            await expect(primary.locator('.backupActionRow')).toHaveClass(/disabled/);
+            await expect(primary).toHaveClass(/\blocked\b/);
             expect(writes).toHaveLength(1);
             const completed = page.waitForResponse(response => new URL(response.url()).pathname === endpoint);
             release();
@@ -437,6 +489,7 @@ test.describe('Unified Sync panel', () => {
     });
 
     for (const { mode, phrase, statusCode, close } of [
+        // Escape closes the whole Account window; Cancel leaves only the form.
         { mode: 'edit', phrase: 'cancel phrase', statusCode: 200, close: 'Escape' },
         { mode: 'edit', phrase: 'wrong phrase', statusCode: 422, close: 'Cancel' },
         { mode: 'unlock', phrase: 'cancel phrase', statusCode: 200, close: 'Cancel' },
@@ -448,8 +501,9 @@ test.describe('Unified Sync panel', () => {
         await addS3Backend(page, { ...storage, bucket: await bucket(), prefix: 'cancel/', label: 'Cancel cloud', passphrase: 'cancel phrase', forcePathStyle: true, categories: ['worlds'] });
         await waitForBackendSync(page, { label: 'Cancel cloud' });
         await setSyncSchedule(page, { idleSeconds: 3600, pollSeconds: 3600 });
+        await openLanSyncPanel(page);
         const primary = row(page, 'Cancel cloud');
-        const id = await primary.getAttribute('data-backend-id');
+        const id = await primary.getAttribute('data-backend');
         const endpoint = `/api/sync/v1/backends/${id}/${mode === 'edit' ? 's3' : 'unlock'}`;
         let release;
         let reached;
@@ -465,40 +519,43 @@ test.describe('Unified Sync panel', () => {
             const response = await route.fetch();
             await route.fulfill({ response });
         });
-        await primary.locator(mode === 'edit' ? '.syncBackendEditButton' : '.syncBackendUnlockButton').click();
-        await page.locator('.syncS3Passphrase').fill(phrase);
-        const secret = await page.locator('.syncS3Passphrase').elementHandle();
-        await page.locator('.syncS3SaveButton').click();
+        await clickBackendMenu(page, 'Cancel cloud', mode);
+        const passphrase = accountWindow(page).locator(`[data-model="top.form.${mode === 'edit' ? 'passphrase' : 'pass'}"]`);
+        await passphrase.fill(phrase);
+        await accountWindow(page).locator(`[data-act="${mode === 'edit' ? 's3-save' : 'unlock-save'}"]`).click();
         await held;
         try {
-            if (close === 'Escape') await page.keyboard.press('Escape');
-            else await page.locator('dialog.popup[open]').last().locator('.popup-button-ok').click();
-            expect(await secret.evaluate(input => input.value)).toBe('');
-            await expect(page.locator('.userSyncS3')).toHaveCount(0);
+            if (close === 'Escape') {
+                await page.keyboard.press('Escape');
+                await expect(accountWindow(page)).toHaveCount(0);
+                await openLanSyncPanel(page);
+            } else await cancelForm(page);
+            expect(await inputHolds(page, phrase)).toBe(false);
+            await expect(pageHead(page)).toHaveAttribute('data-view', 'list');
             const original = await primary.elementHandle();
             await page.waitForResponse(response => response.url().endsWith('/api/sync/v1/status') && response.ok());
             await expect.poll(() => original.evaluate(node => node.isConnected)).toBe(false);
-            await expect(primary.locator('.backupActionRow')).toHaveClass(/disabled/);
-            for (const selector of ['.lanSyncPeerSyncButton', '.lanSyncPeerUndoButton', '.syncBackendEditButton', '.syncBackendUnlockButton', '.lanSyncPeerForgetButton']) await primary.locator(selector).dispatchEvent('click');
+            await expect(primary).toHaveClass(/\blocked\b/);
+            await fireCardActions(page, 'Cancel cloud');
             await page.waitForResponse(response => response.url().endsWith('/api/sync/v1/backends') && response.ok());
-            await expect(primary.locator('.backupActionRow')).toHaveClass(/disabled/);
+            await expect(primary).toHaveClass(/\blocked\b/);
             expect(writes).toHaveLength(1);
-            await expect(page.locator('.userSyncS3')).toHaveCount(0);
+            await expect(pageHead(page)).toHaveAttribute('data-view', 'list');
             const completed = page.waitForResponse(response => new URL(response.url()).pathname === endpoint);
             release();
             expect((await completed).status()).toBe(statusCode);
-            await expect(primary.locator('.backupActionRow')).not.toHaveClass(/disabled/);
-            await primary.locator('.syncBackendEditButton').click();
-            await expect(page.locator('.syncS3Passphrase')).toHaveValue('');
-            await page.keyboard.press('Escape');
+            await expect(primary).not.toHaveClass(/\blocked\b/);
+            await clickBackendMenu(page, 'Cancel cloud', 'edit');
+            await expect(accountWindow(page).locator('[data-model="top.form.passphrase"]')).toHaveValue('');
+            await cancelForm(page);
             await closeAllPopups(page);
             await openLanSyncPanel(page);
-            await expect(primary.locator('.backupActionRow')).not.toHaveClass(/disabled/);
+            await expect(primary).not.toHaveClass(/\blocked\b/);
             expect(pageErrors).toEqual([]);
         } finally { release(); }
     });
 
-    test('S3 runtime Sync and Undo failures show actionable locale text in the banner and list', async ({ browser }) => {
+    test('S3 runtime Sync and Undo failures show actionable locale text in the result banner and backend card', async ({ browser }) => {
         const proxy = await startS3Proxy({ upstream: storage.endpoint, region: storage.region,
             credentials: { accessKeyId: storage.accessKeyId, secretAccessKey: storage.secretAccessKey } });
         proxies.push(proxy);
@@ -512,10 +569,12 @@ test.describe('Unified Sync panel', () => {
         await addS3Backend(publisher, options);
         await waitForBackendSync(publisher, { label: 'Runtime cloud' });
         await setSyncSchedule(publisher, { idleSeconds: 3600, pollSeconds: 3600 });
-        for (const [locale, message, lastSync, auth, missing, failurePrefix] of [
-            ['en', 'The S3 endpoint could not be reached.', 'Last sync failed: The S3 endpoint could not be reached.', 'S3 authentication failed. Check the credentials and bucket permissions.', 'The encryption metadata is missing. Restore it before syncing.', 'Last sync failed: '],
-            ['zh-cn', '无法连接 S3 端点。', '上次同步失败：无法连接 S3 端点。', 'S3 身份验证失败。请检查凭据及存储桶权限。', '缺少加密元数据。请恢复后再同步。', '上次同步失败：'],
-            ['zh-tw', '無法連線至 S3 端點。', '上次同步失敗：無法連線至 S3 端點。', 'S3 驗證失敗。請檢查憑證及儲存桶權限。', '缺少加密中繼資料。請還原後再同步。', '上次同步失敗：'],
+        // The result banner wraps the reason in "Sync with … failed: …"; the
+        // card shows the reason of the last failed sync on its own.
+        for (const [locale, message, auth, missing] of [
+            ['en', 'The S3 endpoint could not be reached.', 'S3 authentication failed. Check the credentials and bucket permissions.', 'The encryption metadata is missing. Restore it before syncing.'],
+            ['zh-cn', '无法连接 S3 端点。', 'S3 身份验证失败。请检查凭据及存储桶权限。', '缺少加密元数据。请恢复后再同步。'],
+            ['zh-tw', '無法連線至 S3 端點。', 'S3 驗證失敗。請檢查憑證及儲存桶權限。', '缺少加密中繼資料。請還原後再同步。'],
         ]) {
             await closeAllPopups(page);
             await closeAllPopups(publisher);
@@ -523,24 +582,26 @@ test.describe('Unified Sync panel', () => {
             await openLanSyncPanel(publisher);
             expect(await clickSyncNow(publisher, 'Runtime cloud')).toBe('success');
             await openLanSyncPanel(page);
-            await row(page, 'Runtime cloud').locator('.lanSyncPeerSyncButton').click();
-            await expect(page.locator('.lanSyncStatusBanner.success')).toBeVisible({ timeout: 60_000 });
+            await clickCardSyncNow(page, 'Runtime cloud');
+            await expect(syncFlash(page)).toHaveAttribute('data-flash', 'success', { timeout: 60_000 });
             await closeAllPopups(page);
             await Promise.all([page.waitForEvent('load'), page.locator('#ui_language_select').selectOption(locale)]);
             await page.waitForFunction(() => document.getElementById('preloader') === null && !!window.Luker?.getContext);
             await openLanSyncPanel(page);
             proxy.addFault({ match: { method: 'GET', keySuffix: '/keyinfo.json' }, dropConnection: true });
             const sync = page.waitForResponse(response => response.url().endsWith('/sync'));
-            await row(page, 'Runtime cloud').locator('.lanSyncPeerSyncButton').click();
+            await clickCardSyncNow(page, 'Runtime cloud');
             expect(await (await sync).json()).toMatchObject({ ok: false, code: 'UNREACHABLE' });
-            await expect(page.locator('.lanSyncStatusBanner.error')).toHaveText(message);
-            await expect(row(page, 'Runtime cloud').locator('.lanSyncPeerError')).toHaveText(lastSync);
+            await expect(syncFlash(page)).toHaveAttribute('data-flash', 'error');
+            await expect(syncFlash(page)).toContainText(message);
+            await expect(cardError(page, 'Runtime cloud')).toHaveText(message);
             proxy.addFault({ match: { method: 'GET', keySuffix: '/keyinfo.json' }, invalidSignature: true });
             const authResponse = page.waitForResponse(response => response.url().endsWith('/sync'));
-            await row(page, 'Runtime cloud').locator('.lanSyncPeerSyncButton').click();
+            await clickCardSyncNow(page, 'Runtime cloud');
             expect(await (await authResponse).json()).toMatchObject({ code: 'AUTH_FAILED' });
-            await expect(page.locator('.lanSyncStatusBanner.error')).toHaveText(auth);
-            await expect(row(page, 'Runtime cloud').locator('.lanSyncPeerError')).toHaveText(failurePrefix + auth);
+            await expect(syncFlash(page)).toHaveAttribute('data-flash', 'error');
+            await expect(syncFlash(page)).toContainText(auth);
+            await expect(cardError(page, 'Runtime cloud')).toHaveText(auth);
             // Narrow remote-corruption fixture: preserve exact keyinfo bytes.
             const key = 'runtime/keyinfo.json';
             const object = await fixture.send(new GetObjectCommand({ Bucket: options.bucket, Key: key }));
@@ -548,20 +609,23 @@ test.describe('Unified Sync panel', () => {
             await fixture.send(new DeleteObjectCommand({ Bucket: options.bucket, Key: key }));
             try {
                 const missingResponse = page.waitForResponse(response => response.url().endsWith('/sync'));
-                await row(page, 'Runtime cloud').locator('.lanSyncPeerSyncButton').click();
+                await clickCardSyncNow(page, 'Runtime cloud');
                 expect(await (await missingResponse).json()).toMatchObject({ code: 'S3_KEYINFO_MISSING' });
-                await expect(page.locator('.lanSyncStatusBanner.error')).toHaveText(missing);
-                await expect(row(page, 'Runtime cloud').locator('.lanSyncPeerError')).toHaveText(failurePrefix + missing);
+                await expect(syncFlash(page)).toHaveAttribute('data-flash', 'error');
+                await expect(syncFlash(page)).toContainText(missing);
+                await expect(cardError(page, 'Runtime cloud')).toHaveText(missing);
             } finally { await fixture.send(new PutObjectCommand({ Bucket: options.bucket, Key: key, Body: bytes })); }
             // A genuine local Undo commits before the forwarding proxy drops
-            // propagation's authentication read. It must not toast success.
+            // propagation's authentication read. It must not report success.
             proxy.addFault({ match: { method: 'GET', keySuffix: '/keyinfo.json' }, dropConnection: true });
             const undo = page.waitForResponse(response => response.url().endsWith('/undo'));
-            await row(page, 'Runtime cloud').locator('.lanSyncPeerUndoButton').click();
-            await page.locator('.popup-button-ok').last().click();
+            await syncFlash(page).locator('[data-act="flash-x"]').click();
+            await clickBackendMenu(page, 'Runtime cloud', 'undo');
+            await answerWindowConfirm(page);
             expect(await (await undo).json()).toMatchObject({ ok: false, committed: true, propagation: { ok: false, code: 'UNREACHABLE' } });
-            await expect(page.locator('.lanSyncStatusBanner.error')).toHaveText(message);
-            await expect(row(page, 'Runtime cloud').locator('.lanSyncPeerError')).toHaveText(lastSync);
+            await expect(syncFlash(page)).toHaveAttribute('data-flash', 'error');
+            await expect(syncFlash(page)).toContainText(message);
+            await expect(cardError(page, 'Runtime cloud')).toHaveText(message);
             await closeAllPopups(page);
             await Promise.all([page.waitForEvent('load'), page.locator('#ui_language_select').selectOption('en')]);
             await page.waitForFunction(() => document.getElementById('preloader') === null && !!window.Luker?.getContext);

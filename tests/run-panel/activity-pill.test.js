@@ -166,3 +166,16 @@ test.each([
     expect(live.element.isConnected).toBe(true);
     expect(document.querySelectorAll('.activity-pill-host')).toHaveLength(1);
 });
+
+test('detail text is decorative and hidden when empty', () => {
+    const pill = make();
+    pill.update({ visible: true, text: 'Syncing: Cloud', tone: 'running', loading: true, detail: '0:42' });
+    const meta = pill.element.querySelector('.activity-pill-meta');
+    expect(meta.hidden).toBe(false);
+    expect(meta.textContent).toBe('0:42');
+    expect(meta.getAttribute('aria-hidden')).toBe('true');
+    expect(pill.element.getAttribute('aria-label')).toBe('Syncing: Cloud');
+    pill.update({ visible: true, text: 'Review', tone: 'attention', loading: false });
+    expect(meta.hidden).toBe(true);
+    expect(meta.textContent).toBe('');
+});

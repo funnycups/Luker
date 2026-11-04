@@ -5,14 +5,14 @@
 // git repo, and dematerializes the merged tree back through the storage
 // engine. Same chat path on both sides with different bytes forks: the
 // merge keeps one version under the chat's name and writes the other as
-// a branch chat, which the sync popup announces with a notice. The
+// a branch chat, which the Sync issues page announces with a notice. The
 // branch chat must then be listed by the real /api/characters/chats
 // route of B's SQLite engine.
 //
 // The companion in-process test at
 // `tests/sync/integration/sqlite-mode.test.js` pins the engine contract
 // (rows land under the device's handle); this e2e proves the user-
-// visible flow — admin migration UI, sync popup, chat list — on a real
+// visible flow — admin migration UI, Sync issues page, chat list — on a real
 // Playwright browser pair.
 
 import os from 'node:os';
@@ -196,7 +196,7 @@ test.describe('LAN Sync — SQLite per-record chat conflict', () => {
         expect((await fetchChat(pageB, CHAT_FILE))[1].mes).toBe(B_CHAT_BODY[0].mes);
 
         // Pair with the chats category enabled. Worlds is left off so
-        // the popup holds only the one chat notice — keeps the
+        // the Sync issues page holds only the one chat notice — keeps the
         // assertion below tight on the per-record contract.
         const pairedSince = Date.now();
         await openLanSyncPanel(pageA);

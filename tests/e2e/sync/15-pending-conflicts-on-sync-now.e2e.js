@@ -1,10 +1,10 @@
 // "Sync now" tells the user about conflicts that are still undecided, also
-// when the run it started merged nothing: the banner shows the warning and
-// the sync popup opens again after the user closed it.
+// when the run it started merged nothing: the result banner shows the warning
+// and leads back to the Sync issues page after the user closed it.
 //
 // Two real servers; the conflicting edits are written straight to disk as
-// in spec 02, everything else goes through the LAN Sync panel and the sync
-// popup.
+// in spec 02, everything else goes through the Sync pages of the Account
+// window.
 
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
@@ -40,7 +40,7 @@ test.afterAll(async () => {
 });
 
 test.describe('LAN Sync — pending conflicts after Sync now', () => {
-    test('Sync now warns and reopens the popup while a conflict is undecided', async ({ browser }) => {
+    test('Sync now warns and leads back to the Sync issues page while a conflict is undecided', async ({ browser }) => {
         test.setTimeout(180_000);
         const ctxA = await browser.newContext();
         const ctxB = await browser.newContext();
@@ -61,14 +61,14 @@ test.describe('LAN Sync — pending conflicts after Sync now', () => {
         fs.writeFileSync(worldFile(B), JSON.stringify({ name: 'pending-conflict', note: 'edited on B' }));
         const editedSince = Date.now();
 
-        // B's run records the conflict and the popup opens.
+        // B's run records the conflict and the Sync issues page lists it.
         expect(await clickSyncNow(pageB, 'A device')).toBe('warning');
         await waitForSyncPopup(pageB);
         expect((await listPopupConflicts(pageB)).map(c => c.path)).toEqual([WORLD]);
         await closeSyncPopup(pageB);
 
         // The next run merges nothing. The conflict is still undecided, so
-        // the banner warns and the popup the user closed opens again.
+        // the banner warns and its Resolve button opens the Sync issues page again.
         expect(await clickSyncNow(pageB, 'A device')).toBe('warning');
         await waitForSyncPopup(pageB, 10_000);
         expect((await listPopupConflicts(pageB)).map(c => c.path)).toEqual([WORLD]);
@@ -76,7 +76,7 @@ test.describe('LAN Sync — pending conflicts after Sync now', () => {
 
         // A gets the conflict through the run B's push started. Reloading
         // shows it once; after the user closes it, Sync now warns and
-        // opens it again.
+        // leads to it again.
         await waitForBackgroundSync(pageA, { since: editedSince });
         await awaitMainUI(pageA, A.baseURL);
         await waitForSyncPopup(pageA);

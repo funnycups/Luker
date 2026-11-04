@@ -1,0 +1,1608 @@
+/* Luker window: the floating window shell (title bar, side navigation, pages, footer,
+ * toast, confirm, help, colour schemes) and the controls shared by every page.
+ * Graphite neutrals, one accent; amber = needs attention, coral = failed. */
+
+.dw-layer {
+    --dw-font: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    --dw-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --dw-r-sm: 6px;
+    --dw-r: 8px;
+    --dw-r-lg: 14px;
+    --dw-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --dw-dur: 160ms;
+
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    overflow: hidden;
+    z-index: 10050;
+    font-family: var(--dw-font);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--dw-text);
+    -webkit-font-smoothing: antialiased;
+    isolation: isolate;
+}
+
+dialog.dw-layer::backdrop {
+    background: transparent;
+}
+
+/* Four palettes, picked from the title bar. */
+
+.dw-layer[data-theme="mist"] {
+    color-scheme: light;
+    --dw-surface: #fcfcfb;
+    --dw-surface-2: #f3f4f2;
+    --dw-raised: #ffffff;
+    --dw-hover: rgba(30, 40, 50, 0.045);
+    --dw-active: rgba(30, 40, 50, 0.08);
+    --dw-border: rgba(30, 40, 50, 0.09);
+    --dw-border-strong: rgba(30, 40, 50, 0.16);
+    --dw-text: #22262c;
+    --dw-muted: #5c636e;
+    --dw-faint: #8f959f;
+    --dw-accent: #13a68b;
+    --dw-accent-soft: rgba(19, 166, 139, 0.11);
+    --dw-accent-text: #ffffff;
+    --dw-amber: #c78300;
+    --dw-amber-soft: rgba(214, 145, 0, 0.12);
+    --dw-danger: #d4553f;
+    --dw-danger-soft: rgba(212, 85, 63, 0.1);
+    --dw-blue: #2f7fd0;
+    --dw-shadow: 0 30px 70px -24px rgba(20, 25, 40, 0.32), 0 0 0 1px rgba(20, 25, 40, 0.08);
+    --dw-scrim: rgba(20, 24, 30, 0.28);
+}
+
+.dw-layer[data-theme="latte"] {
+    color-scheme: light;
+    --dw-surface: #fbf7f1;
+    --dw-surface-2: #f3ece2;
+    --dw-raised: #fffdf9;
+    --dw-hover: rgba(90, 60, 30, 0.05);
+    --dw-active: rgba(90, 60, 30, 0.09);
+    --dw-border: rgba(90, 60, 30, 0.1);
+    --dw-border-strong: rgba(90, 60, 30, 0.18);
+    --dw-text: #3a2f26;
+    --dw-muted: #75665a;
+    --dw-faint: #a39484;
+    --dw-accent: #c0673b;
+    --dw-accent-soft: rgba(192, 103, 59, 0.12);
+    --dw-accent-text: #ffffff;
+    --dw-amber: #b9800d;
+    --dw-amber-soft: rgba(185, 128, 13, 0.13);
+    --dw-danger: #c2463a;
+    --dw-danger-soft: rgba(194, 70, 58, 0.1);
+    --dw-blue: #4b7fa8;
+    --dw-shadow: 0 30px 70px -24px rgba(70, 45, 20, 0.32), 0 0 0 1px rgba(90, 60, 30, 0.09);
+    --dw-scrim: rgba(40, 28, 16, 0.28);
+}
+
+.dw-layer[data-theme="ocean"] {
+    color-scheme: dark;
+    --dw-surface: #1c2433;
+    --dw-surface-2: #212a3b;
+    --dw-raised: #283245;
+    --dw-hover: rgba(200, 220, 255, 0.05);
+    --dw-active: rgba(200, 220, 255, 0.09);
+    --dw-border: rgba(200, 220, 255, 0.08);
+    --dw-border-strong: rgba(200, 220, 255, 0.15);
+    --dw-text: #e7ecf4;
+    --dw-muted: #a3afc2;
+    --dw-faint: #717d92;
+    --dw-accent: #4fd1b9;
+    --dw-accent-soft: rgba(79, 209, 185, 0.15);
+    --dw-accent-text: #07261f;
+    --dw-amber: #f2bb4f;
+    --dw-amber-soft: rgba(242, 187, 79, 0.15);
+    --dw-danger: #f08a7c;
+    --dw-danger-soft: rgba(240, 138, 124, 0.13);
+    --dw-blue: #7cb8f4;
+    --dw-shadow: 0 30px 80px -20px rgba(5, 10, 20, 0.7), 0 0 0 1px rgba(200, 220, 255, 0.09);
+    --dw-scrim: rgba(8, 12, 20, 0.45);
+}
+
+.dw-layer[data-theme="dusk"] {
+    color-scheme: dark;
+    --dw-surface: #2a2833;
+    --dw-surface-2: #302e3a;
+    --dw-raised: #37343f;
+    --dw-hover: rgba(235, 225, 255, 0.05);
+    --dw-active: rgba(235, 225, 255, 0.09);
+    --dw-border: rgba(235, 225, 255, 0.08);
+    --dw-border-strong: rgba(235, 225, 255, 0.15);
+    --dw-text: #eeebf3;
+    --dw-muted: #b0aabd;
+    --dw-faint: #7f7a8c;
+    --dw-accent: #a594f9;
+    --dw-accent-soft: rgba(165, 148, 249, 0.16);
+    --dw-accent-text: #1c1440;
+    --dw-amber: #f0bf5a;
+    --dw-amber-soft: rgba(240, 191, 90, 0.15);
+    --dw-danger: #f38b8b;
+    --dw-danger-soft: rgba(243, 139, 139, 0.13);
+    --dw-blue: #86b7f2;
+    --dw-shadow: 0 30px 80px -20px rgba(10, 6, 20, 0.7), 0 0 0 1px rgba(235, 225, 255, 0.09);
+    --dw-scrim: rgba(14, 10, 22, 0.45);
+}
+
+/* Theme picker */
+
+.dw-themes {
+    position: absolute;
+    top: 50px;
+    right: 48px;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 200px;
+    padding: 6px;
+    border-radius: var(--dw-r);
+    background: var(--dw-raised);
+    box-shadow: var(--dw-shadow);
+    animation: dw-in-menu 140ms var(--dw-ease);
+}
+
+.dw-theme {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 40px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--dw-r-sm);
+    background: none;
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dw-theme:hover {
+    background: var(--dw-hover);
+}
+
+.dw-theme[aria-checked="true"] {
+    background: var(--dw-active);
+    font-weight: 600;
+}
+
+.dw-theme > span:nth-child(2) {
+    flex: 1;
+}
+
+.dw-theme > svg.dw-ic {
+    color: var(--dw-accent);
+}
+
+.dw-swatch {
+    position: relative;
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: var(--a);
+    box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.25);
+    overflow: hidden;
+}
+
+.dw-swatch::after {
+    content: '';
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--b);
+}
+
+/* Luker styles bare elements; reset everything inside the window. */
+
+.dw-layer *,
+.dw-layer *::before,
+.dw-layer *::after {
+    box-sizing: border-box;
+    text-shadow: none;
+}
+
+.dw-layer code,
+.dw-layer small,
+.dw-layer b,
+.dw-layer strong,
+.dw-layer a {
+    color: inherit;
+    opacity: 1;
+}
+
+.dw-layer button,
+.dw-layer input,
+.dw-layer select,
+.dw-layer textarea {
+    font: inherit;
+    color: inherit;
+    margin: 0;
+}
+
+.dw-layer h2,
+.dw-layer h3,
+.dw-layer h4,
+.dw-layer p {
+    margin: 0;
+    padding: 0;
+}
+
+.dw-layer select {
+    margin-bottom: 0;
+}
+
+.dw-layer select option {
+    background: var(--dw-surface);
+    color: var(--dw-text);
+}
+
+.dw-layer [hidden] {
+    display: none !important;
+}
+
+.dw-layer :focus-visible {
+    outline: 2px solid var(--dw-accent);
+    outline-offset: 2px;
+}
+
+.dw-layer ::selection {
+    background: var(--dw-accent-soft);
+}
+
+.dw-layer * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--dw-border-strong) transparent;
+}
+
+.dw-layer svg.dw-ic {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.dw-sp {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* ---------- window ---------- */
+
+.dw-scrim {
+    position: absolute;
+    inset: 0;
+    background: var(--dw-scrim);
+    animation: dw-fade 160ms ease-out;
+}
+
+@keyframes dw-fade {
+    from {
+        opacity: 0;
+    }
+}
+
+.dw-win {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: min(820px, calc(100vw - 32px));
+    height: min(600px, calc(100dvh - 48px));
+    transform: translate(-50%, -50%);
+    border-radius: var(--dw-r-lg);
+    background: var(--dw-surface);
+    box-shadow: var(--dw-shadow);
+    overflow: hidden;
+    outline: none;
+    container-type: inline-size;
+    animation: dw-in 200ms var(--dw-ease);
+}
+
+@keyframes dw-in {
+    from {
+        opacity: 0;
+        transform: translate(-50%, calc(-50% + 8px)) scale(0.985);
+    }
+}
+
+.dw {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.dw-titlebar {
+    position: relative;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 46px;
+    padding: 0 8px 0 14px;
+    border-bottom: 1px solid var(--dw-border);
+    background: var(--dw-surface-2);
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+}
+
+.dw-titlebar.is-dragging {
+    cursor: grabbing;
+}
+
+.dw-mark {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    background: var(--dw-accent-soft);
+    color: var(--dw-accent);
+}
+
+.dw-title {
+    font-weight: 650;
+    font-size: 13.5px;
+    white-space: nowrap;
+}
+
+.dw-title-ctx {
+    --tone: var(--dw-faint);
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    padding-left: 10px;
+    border-left: 1px solid var(--dw-border-strong);
+    color: var(--dw-muted);
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+    cursor: default;
+}
+
+.dw-title-ctx > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dw-title-ctx[data-tone="ok"],
+.dw-title-ctx[data-tone="running"] {
+    --tone: var(--dw-accent);
+}
+
+.dw-title-ctx[data-tone="attention"] {
+    --tone: var(--dw-amber);
+    color: var(--dw-amber);
+    cursor: pointer;
+}
+
+.dw-title-ctx[data-tone="error"] {
+    --tone: var(--dw-danger);
+    color: var(--dw-danger);
+}
+
+.dw-title-ctx[data-tone="running"] .dw-dot {
+    animation: dw-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes dw-blink {
+    50% {
+        opacity: 0.35;
+    }
+}
+
+.dw-shell {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+}
+
+.dw-rail {
+    flex: none;
+    width: 150px;
+    padding: 10px 8px;
+    border-right: 1px solid var(--dw-border);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: auto;
+}
+
+.dw-tab {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--dw-r-sm);
+    background: none;
+    color: var(--dw-muted);
+    cursor: pointer;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.dw-tab:hover {
+    background: var(--dw-hover);
+    color: var(--dw-text);
+}
+
+.dw-tab[aria-selected="true"] {
+    background: var(--dw-active);
+    color: var(--dw-text);
+    font-weight: 600;
+}
+
+.dw-tab-count {
+    margin-left: auto;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--dw-amber);
+    color: #1b1300;
+    font-size: 11px;
+    font-weight: 650;
+    display: grid;
+    place-items: center;
+}
+
+.dw-tab.is-danger,
+.dw-tab.is-danger:hover,
+.dw-tab.is-danger[aria-selected="true"] {
+    color: var(--dw-danger);
+}
+
+.dw-rail-sep {
+    flex: none;
+    height: 0;
+    margin: 6px 4px;
+    border: 0;
+    border-top: 1px solid var(--dw-border);
+    background: none;
+}
+
+.dw-rail-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--dw-border);
+}
+
+.dw-main {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 18px 20px 0;
+}
+
+/* Primary actions stay in reach at the bottom of long forms. */
+
+.dw-foot {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin: auto -20px -20px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--dw-border);
+    background: var(--dw-surface);
+}
+
+.dw-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 100%;
+    padding-bottom: 20px;
+    animation: dw-page 160ms var(--dw-ease);
+}
+
+@keyframes dw-page {
+    from {
+        opacity: 0;
+        transform: translateY(3px);
+    }
+}
+
+.dw-pagehead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 30px;
+}
+
+.dw-h2 {
+    font-size: 15px;
+    font-weight: 650;
+}
+
+.dw-sec {
+    display: flex;
+    flex-direction: column;
+}
+
+.dw-sec-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--dw-faint);
+}
+
+.dw-count {
+    font-size: 12px;
+    color: var(--dw-faint);
+    font-variant-numeric: tabular-nums;
+}
+
+.dw-note {
+    font-size: 11.5px;
+    color: var(--dw-faint);
+    line-height: 1.6;
+}
+
+/* ---------- buttons ---------- */
+
+.dw-ibtn {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--dw-r-sm);
+    background: none;
+    color: var(--dw-muted);
+    cursor: pointer;
+}
+
+.dw-ibtn:hover,
+.dw-ibtn.on {
+    background: var(--dw-hover);
+    color: var(--dw-text);
+}
+
+.dw-ibtn.is-close:hover {
+    background: var(--dw-danger);
+    color: #fff;
+}
+
+.dw-ibtn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.dw-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex: none;
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid var(--dw-border-strong);
+    border-radius: var(--dw-r-sm);
+    background: var(--dw-surface);
+    font-size: 12.5px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--dw-dur), border-color var(--dw-dur), filter var(--dw-dur);
+}
+
+.dw-btn:hover {
+    background: var(--dw-hover);
+}
+
+.dw-btn.primary {
+    border-color: var(--dw-accent);
+    background: var(--dw-accent);
+    color: var(--dw-accent-text);
+    font-weight: 600;
+}
+
+.dw-btn.primary:hover {
+    filter: brightness(1.06);
+}
+
+.dw-btn.danger {
+    color: var(--dw-danger);
+}
+
+.dw-btn.danger.solid {
+    border-color: var(--dw-danger);
+    background: var(--dw-danger);
+    color: #fff;
+    font-weight: 600;
+}
+
+.dw-btn.ghost {
+    border-color: transparent;
+    background: none;
+    color: var(--dw-muted);
+}
+
+.dw-btn.ghost:hover {
+    color: var(--dw-text);
+    background: var(--dw-hover);
+}
+
+.dw-btn.sm {
+    height: 26px;
+    padding: 0 9px;
+    font-size: 12px;
+}
+
+.dw-btn.icon {
+    width: 30px;
+    padding: 0;
+}
+
+.dw-btn.big {
+    height: 34px;
+    padding: 0 16px;
+    font-size: 13px;
+}
+
+.dw-btn.wide {
+    width: 100%;
+}
+
+.dw-btn[disabled] {
+    opacity: 0.45;
+    cursor: default;
+    pointer-events: none;
+}
+
+.dw-btn.busy {
+    pointer-events: none;
+    filter: saturate(0.7);
+}
+
+.dw-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--dw-accent);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.dw-link:hover {
+    text-decoration: underline;
+}
+
+.dw-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* ---------- tags, dots, hints ---------- */
+
+.dw-dot {
+    display: inline-block;
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 3px;
+    background: var(--tone, var(--dw-faint));
+}
+
+.dw-pilltag {
+    flex: none;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    background: var(--dw-hover);
+    color: var(--dw-muted);
+    white-space: nowrap;
+}
+
+.dw-pilltag.is-ok {
+    background: var(--dw-accent-soft);
+    color: var(--dw-accent);
+}
+
+.dw-pilltag.is-warn {
+    background: var(--dw-amber-soft);
+    color: var(--dw-amber);
+}
+
+.dw-pilltag.is-bad {
+    background: var(--dw-danger-soft);
+    color: var(--dw-danger);
+}
+
+.dw-banner {
+    --tone: var(--dw-accent);
+    --soft: var(--dw-accent-soft);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: var(--dw-r);
+    background: var(--soft);
+    font-size: 12.5px;
+    line-height: 1.6;
+}
+
+.dw-banner > svg.dw-ic {
+    color: var(--tone);
+}
+
+.dw-banner > span {
+    flex: 1;
+    min-width: 0;
+}
+
+.dw-banner.warning {
+    --tone: var(--dw-amber);
+    --soft: var(--dw-amber-soft);
+}
+
+.dw-banner.error {
+    --tone: var(--dw-danger);
+    --soft: var(--dw-danger-soft);
+}
+
+/* ---------- backend cards ---------- */
+
+.dw-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.dw-card {
+    --tone: var(--dw-faint);
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 12px 14px 16px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+    background: var(--dw-surface);
+    transition: border-color var(--dw-dur);
+}
+
+.dw-card:hover {
+    border-color: var(--dw-border-strong);
+}
+
+.dw-card::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 14px;
+    bottom: 14px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--tone);
+}
+
+.dw-card[data-state="ok"],
+.dw-card[data-state="running"] {
+    --tone: var(--dw-accent);
+}
+
+.dw-card[data-state="attention"] {
+    --tone: var(--dw-amber);
+}
+
+.dw-card[data-state="error"] {
+    --tone: var(--dw-danger);
+}
+
+.dw-card-icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    color: var(--tone);
+    background: color-mix(in srgb, var(--tone) 14%, var(--dw-surface));
+}
+
+.dw-card-main {
+    min-width: 0;
+}
+
+.dw-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.dw-card-name {
+    font-weight: 650;
+    font-size: 13.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dw-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 3px;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--dw-muted);
+    white-space: nowrap;
+}
+
+.dw-card-meta > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dw-card-act {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.dw-card.locked .dw-card-act .dw-btn,
+.dw-card.locked .dw-card-act .dw-ibtn {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+.dw-spin {
+    animation: dw-spin 0.9s linear infinite;
+}
+
+@keyframes dw-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ---------- dropdown menu ---------- */
+
+.dw-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 30;
+    min-width: 180px;
+    padding: 5px;
+    border-radius: var(--dw-r);
+    background: var(--dw-raised);
+    box-shadow: var(--dw-shadow);
+    animation: dw-in-menu 140ms var(--dw-ease);
+}
+
+@keyframes dw-in-menu {
+    from {
+        opacity: 0;
+        transform: translateY(-3px);
+    }
+}
+
+.dw-menu button {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 9px;
+    height: 32px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--dw-r-sm);
+    font-size: 12.5px;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+}
+
+.dw-menu button svg.dw-ic {
+    color: var(--dw-muted);
+}
+
+.dw-menu button:hover {
+    background: var(--dw-hover);
+}
+
+.dw-menu button.danger,
+.dw-menu button.danger svg.dw-ic {
+    color: var(--dw-danger);
+}
+
+.dw-menu hr {
+    height: 0;
+    margin: 4px 2px;
+    border: 0;
+    border-top: 1px solid var(--dw-border);
+    background: none;
+}
+
+/* ---------- empty state ---------- */
+
+.dw-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 40px 20px;
+    border: 1px dashed var(--dw-border-strong);
+    border-radius: var(--dw-r);
+    text-align: center;
+    color: var(--dw-muted);
+}
+
+.dw-empty b {
+    color: var(--dw-text);
+    font-size: 14px;
+    font-weight: 650;
+}
+
+.dw-empty > .dw-card-icon {
+    --tone: var(--dw-accent);
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+}
+
+/* ---------- lists & setting rows ---------- */
+
+.dw-list {
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+    overflow: hidden;
+}
+
+.dw-setrow {
+    display: grid;
+    grid-template-columns: 1fr minmax(160px, 220px);
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--dw-border);
+    font-size: 12.5px;
+}
+
+.dw-setrow:first-child {
+    border-top: 0;
+}
+
+.dw-setrow > :last-child {
+    justify-self: stretch;
+}
+
+.dw-num {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.dw-unit {
+    font-size: 12px;
+    color: var(--dw-faint);
+}
+
+.dw-listfoot {
+    display: flex;
+    justify-content: flex-end;
+    padding: 10px 12px;
+    border-top: 1px solid var(--dw-border);
+    background: var(--dw-surface-2);
+}
+
+.dw-fold {
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+    overflow: hidden;
+}
+
+.dw-fold > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    list-style: none;
+    cursor: pointer;
+    font-size: 12.5px;
+    color: var(--dw-muted);
+}
+
+.dw-fold > summary:hover {
+    background: var(--dw-hover);
+    color: var(--dw-text);
+}
+
+.dw-fold > summary::-webkit-details-marker {
+    display: none;
+}
+
+.dw-chev {
+    transition: transform var(--dw-dur);
+}
+
+details[open] > summary .dw-chev {
+    transform: rotate(90deg);
+}
+
+.dw-fold > .dw-setrow:first-of-type {
+    border-top: 1px solid var(--dw-border);
+}
+
+/* ---------- inputs ---------- */
+
+.dw-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    margin: 0;
+}
+
+.dw-field > span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--dw-muted);
+}
+
+.dw-layer .dw-inp {
+    width: 100%;
+    min-width: 0;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--dw-border-strong);
+    border-radius: var(--dw-r-sm);
+    background: var(--dw-surface);
+    color: var(--dw-text);
+    font-size: 12.5px;
+    outline: none;
+    transition: border-color var(--dw-dur);
+}
+
+.dw-layer .dw-inp::placeholder {
+    color: var(--dw-faint);
+    opacity: 1;
+}
+
+.dw-layer .dw-inp:focus {
+    border-color: var(--dw-accent);
+}
+
+.dw-layer .dw-inp[readonly] {
+    background: var(--dw-surface-2);
+    color: var(--dw-muted);
+}
+
+.dw-layer .dw-inp[disabled] {
+    background: var(--dw-surface-2);
+    color: var(--dw-faint);
+}
+
+.dw-layer select.dw-inp {
+    padding-right: 26px;
+    background-image: url('/img/down-arrow.svg');
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 8px 5px;
+    appearance: none;
+}
+
+.dw-layer .dw-inp.num {
+    width: 88px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.dw-layer .dw-inp.mono {
+    font-family: var(--dw-mono);
+    font-size: 11.5px;
+}
+
+.dw-grid2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.dw-pw {
+    position: relative;
+    display: block;
+}
+
+.dw-layer .dw-pw .dw-inp {
+    padding-right: 36px;
+}
+
+.dw-eye {
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--dw-r-sm);
+    background: none;
+    color: var(--dw-faint);
+    cursor: pointer;
+}
+
+.dw-eye:hover {
+    color: var(--dw-text);
+}
+
+.dw-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+}
+
+.dw-group > .dw-sec-title {
+    margin-bottom: 0;
+}
+
+.dw-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    align-self: flex-start;
+    padding: 4px 6px;
+    margin: -4px -6px;
+    border: 0;
+    border-radius: var(--dw-r-sm);
+    background: none;
+    font-size: 12.5px;
+    cursor: pointer;
+    user-select: none;
+    text-align: left;
+}
+
+.dw-toggle:hover {
+    background: var(--dw-hover);
+}
+
+.dw-sw {
+    position: relative;
+    flex: none;
+    width: 30px;
+    height: 18px;
+    border-radius: 999px;
+    background: var(--dw-active);
+    transition: background var(--dw-dur);
+}
+
+.dw-sw::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--dw-muted);
+    transition: left var(--dw-dur), background var(--dw-dur);
+}
+
+.dw-toggle.on .dw-sw {
+    background: var(--dw-accent);
+}
+
+.dw-toggle.on .dw-sw::after {
+    left: 15px;
+    background: var(--dw-accent-text);
+}
+
+.dw-err {
+    padding: 9px 12px;
+    border-radius: var(--dw-r);
+    background: var(--dw-danger-soft);
+    color: var(--dw-danger);
+    font-size: 12.5px;
+}
+
+/* ---------- option rows (add backend, migration direction) ---------- */
+
+.dw-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.dw-option {
+    --tone: var(--dw-accent);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 14px 14px 14px 16px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+    background: var(--dw-surface);
+    text-align: left;
+    cursor: pointer;
+    transition: border-color var(--dw-dur), background var(--dw-dur);
+}
+
+.dw-option:hover {
+    border-color: var(--dw-border-strong);
+    background: var(--dw-hover);
+}
+
+.dw-option b {
+    font-size: 13.5px;
+    font-weight: 650;
+}
+
+.dw-option > svg.dw-ic:last-child {
+    color: var(--dw-faint);
+}
+
+.dw-option.blue {
+    --tone: var(--dw-blue);
+}
+
+.dw-option.amber {
+    --tone: var(--dw-amber);
+}
+
+/* ---------- radio cards ---------- */
+
+.dw-radios {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.dw-radio {
+    --tone: var(--dw-accent);
+    --soft: var(--dw-accent-soft);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 12px;
+    border: 1px solid var(--dw-border-strong);
+    border-radius: var(--dw-r);
+    background: var(--dw-surface);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dw-radio:hover {
+    background: var(--dw-hover);
+}
+
+.dw-radio.danger {
+    --tone: var(--dw-danger);
+    --soft: var(--dw-danger-soft);
+}
+
+.dw-ring {
+    position: relative;
+    flex: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 1.5px solid var(--dw-border-strong);
+}
+
+.dw-radio.on {
+    border-color: var(--tone);
+    background: var(--soft);
+}
+
+.dw-radio.on .dw-ring,
+.dw-version.on .dw-ring {
+    border-color: var(--tone, var(--dw-accent));
+}
+
+.dw-radio.on .dw-ring::after,
+.dw-version.on .dw-ring::after {
+    content: '';
+    position: absolute;
+    inset: 3px;
+    border-radius: 50%;
+    background: var(--tone, var(--dw-accent));
+}
+
+/* ---------- popover, confirm, toast ---------- */
+
+.dw-pop {
+    position: absolute;
+    top: 50px;
+    right: 12px;
+    z-index: 40;
+    width: min(320px, calc(100% - 24px));
+    padding: 12px 14px;
+    border-radius: var(--dw-r);
+    background: var(--dw-raised);
+    box-shadow: var(--dw-shadow);
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--dw-muted);
+    animation: dw-in-menu 140ms var(--dw-ease);
+}
+
+.dw-pop p + p {
+    margin-top: 6px;
+}
+
+.dw-modal {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: var(--dw-scrim);
+    animation: dw-fade 140ms ease-out;
+}
+
+.dw-modal-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(380px, 100%);
+    padding: 18px;
+    border-radius: var(--dw-r-lg);
+    background: var(--dw-raised);
+    box-shadow: var(--dw-shadow);
+}
+
+.dw-modal-card h4 {
+    font-size: 14.5px;
+    font-weight: 650;
+}
+
+.dw-modal-card p {
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--dw-muted);
+}
+
+.dw-modal-card .dw-actions {
+    margin-top: 4px;
+}
+
+.dw-toast {
+    position: absolute;
+    left: 50%;
+    bottom: 20px;
+    z-index: 60;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: min(520px, calc(100% - 32px));
+    padding: 9px 14px;
+    border-radius: 999px;
+    background: var(--dw-raised);
+    box-shadow: var(--dw-shadow);
+    font-size: 12.5px;
+    animation: dw-toast-in 160ms var(--dw-ease);
+}
+
+.dw-toast > svg.dw-ic {
+    color: var(--dw-accent);
+}
+
+.dw-toast.error {
+    color: var(--dw-danger);
+}
+
+.dw-toast.error > svg.dw-ic {
+    color: var(--dw-danger);
+}
+
+@keyframes dw-toast-in {
+    from {
+        opacity: 0;
+        transform: translate(-50%, 6px);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dw-layer *,
+    .dw-layer *::before,
+    .dw-layer *::after {
+        animation: none !important;
+        transition: none !important;
+    }
+}
+
+/* ---------- phone: same centered window, nav across the top ---------- */
+
+@media (max-width: 640px) {
+    .dw-win {
+        width: calc(100vw - 16px);
+        height: calc(100dvh - 32px);
+        border-radius: 16px;
+    }
+
+    .dw-titlebar {
+        cursor: default;
+    }
+}
+
+@container (max-width: 600px) {
+    .dw-shell {
+        flex-direction: column;
+    }
+
+    .dw-rail {
+        width: auto;
+        flex-direction: row;
+        gap: 4px;
+        padding: 6px;
+        border-right: 0;
+        border-bottom: 1px solid var(--dw-border);
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+
+    .dw-tab {
+        flex: 1 0 auto;
+        justify-content: center;
+        width: auto;
+        height: 36px;
+        padding: 0 8px;
+        gap: 6px;
+        font-size: 12.5px;
+    }
+
+    .dw-tab-count {
+        margin-left: 0;
+    }
+
+    .dw-title-ctx {
+        display: none;
+    }
+
+    .dw-main {
+        padding: 14px 14px 0;
+    }
+
+    .dw-foot {
+        margin: auto -14px -20px;
+        padding: 10px 14px;
+    }
+
+    .dw-foot .dw-btn {
+        flex: 1;
+    }
+
+    .dw-rail-sep {
+        align-self: stretch;
+        height: auto;
+        margin: 4px 2px;
+        border-top: 0;
+        border-left: 1px solid var(--dw-border);
+    }
+
+    .dw-rail-foot {
+        flex-direction: row;
+        gap: 4px;
+        margin: 0;
+        padding: 0 0 0 4px;
+        border-top: 0;
+        border-left: 1px solid var(--dw-border);
+    }
+
+    .dw-btn {
+        height: 36px;
+        font-size: 13px;
+    }
+
+    .dw-btn.sm {
+        height: 32px;
+    }
+
+    .dw-btn.icon,
+    .dw-ibtn {
+        width: 36px;
+        height: 36px;
+    }
+
+    .dw-btn.big {
+        height: 42px;
+    }
+
+    .dw-layer .dw-inp {
+        height: 40px;
+        font-size: 16px;
+    }
+
+    .dw-layer .dw-inp.mono {
+        font-size: 14px;
+    }
+
+    .dw-grid2,
+    .dw-grid-ep,
+    .dw-radios {
+        grid-template-columns: 1fr;
+    }
+
+    .dw-setrow {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+
+    .dw-card {
+        gap: 10px;
+        padding: 12px 10px 12px 14px;
+    }
+
+    .dw-card-act .dw-btn:not(.icon) {
+        width: 36px;
+        padding: 0;
+        gap: 0;
+        font-size: 0;
+    }
+
+    .dw-card-act .dw-btn:not(.icon) svg.dw-ic {
+        width: 16px;
+        height: 16px;
+    }
+
+    .dw-menu button {
+        height: 42px;
+        font-size: 14px;
+    }
+
+    .dw-actions .dw-btn {
+        flex: 1;
+    }
+}
+
+.dw-menu button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}

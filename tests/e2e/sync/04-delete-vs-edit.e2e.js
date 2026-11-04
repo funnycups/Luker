@@ -1,5 +1,5 @@
 // A deletes a file, B edits the same file.
-// The sync popup lists the file; B picks its own edit, which survives
+// The Sync issues page lists the file; B picks its own edit, which survives
 // on both sides.
 
 import { test, expect } from '@playwright/test';
@@ -51,7 +51,7 @@ test.afterAll(async () => {
 });
 
 test.describe('LAN Sync — delete vs edit conflict', () => {
-    test('A deletes, B edits → sync popup → B picks its edit → file kept on both sides', async ({ browser }) => {
+    test('A deletes, B edits → Sync issues page → B picks its edit → file kept on both sides', async ({ browser }) => {
         const ctxA = await browser.newContext();
         const ctxB = await browser.newContext();
         const pageA = await ctxA.newPage();

@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
-import { s3Fixture, backendRow, registryOf, createReadyWorldBook as createWorldBook, reloadS3Page } from '../_lib/sync-s3.js';
-import { addS3Backend, fillS3Form, editSyncBackend, unlockS3Backend, waitForBackendSync, closeAllPopups, openLanSyncPanel, clickSyncNow, shadowMain, userRootOf } from '../_lib/sync.js';
+import { s3Fixture, backendError, registryOf, createReadyWorldBook as createWorldBook, reloadS3Page } from '../_lib/sync-s3.js';
+import { addS3Backend, fillS3Form, editSyncBackend, unlockS3Backend, waitForBackendSync, closeAllPopups, openLanSyncPanel, clickSyncNow, shadowMain, userRootOf, openAddBackend, clickBackendMenu } from '../_lib/sync.js';
+import { accountWindow, formError, pageHead } from '../_lib/account-window.js';
 import { addWorldEntry } from '../_lib/ui-worldinfo.js';
 
 /* eslint-disable playwright/no-conditional-in-test, playwright/no-conditional-expect -- Table-driven genuine provider faults and encrypted object formats. */
@@ -14,16 +15,23 @@ const fixture = s3Fixture(test);
 test.describe.configure({ timeout: 300_000 });
 
 async function rejectAdd(page, options, code, status) {
-    await page.locator('.syncAddS3Button').click();
+    await openAddBackend(page, 's3');
     await fillS3Form(page, options);
     const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/sync/v1/backends/s3');
-    await page.locator('.syncS3SaveButton').click();
+    await accountWindow(page).locator('[data-act="s3-save"]').click();
     const actual = await response;
     expect(actual.status()).toBe(status);
     expect(await actual.json()).toMatchObject({ code });
-    await expect(page.locator('.syncS3Error')).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.lanSyncPeerRow')).toHaveCount(0);
+    await expect(formError(page)).toBeVisible();
+    await cancelForm(page);
+    await expect(accountWindow(page).locator('.dw-card[data-backend]')).toHaveCount(0);
+}
+
+/** Leave the form on the current Sync page with its Cancel button. */
+async function cancelForm(page) {
+    await accountWindow(page).locator('.dw-foot [data-act="back"]').click();
+    await expect(pageHead(page)).toHaveAttribute('data-view', /^(list|add)$/);
+    await openLanSyncPanel(page);
 }
 
 function observePublic(page, responses, urls, consoleMessages, pending) {
@@ -151,15 +159,15 @@ test('Edit retains identity and history and Unlock refuses a changed remote ID b
     expect(Object.keys(registryOf(server).backends)).toEqual([id]);
     expect(await shadowMain(server, id)).toBe(oid);
     expect(registryOf(server).backends[id].s3).toMatchObject({ ...original, endpoint: proxy.endpoint });
-    await backendRow(page).locator('.syncBackendEditButton').click();
-    await page.locator('.syncS3AccessKeyId').fill('half-pair');
+    await clickBackendMenu(page, 'Cloud', 'edit');
+    await fillS3Form(page, { accessKeyId: 'half-pair' });
     const badEdit = page.waitForResponse(r => r.url().endsWith(`/${id}/s3`));
-    await page.locator('.syncS3SaveButton').click();
+    await accountWindow(page).locator('[data-act="s3-save"]').click();
     expect(await (await badEdit).json()).toMatchObject({ code: 'S3_SETTINGS_INVALID' });
-    await expect(page.locator('.syncS3Error')).toBeVisible();
+    await expect(formError(page)).toBeVisible();
     expect(registryOf(server).backends[id].s3.accessKeyId).toBe(original.accessKeyId);
     expect(registryOf(server).backends[id].s3.secretAccessKey).toBe(original.secretAccessKey);
-    await page.keyboard.press('Escape');
+    await cancelForm(page);
     const sdk = fixture.client();
     const key = 'shared/keyinfo.json';
     const bytes = Buffer.from(await (await sdk.send(new GetObjectCommand({ Bucket: options.bucket, Key: key }))).Body.transformToByteArray());
@@ -174,27 +182,27 @@ test('Edit retains identity and history and Unlock refuses a changed remote ID b
         const sync = page.waitForResponse(r => r.url().endsWith(`/${id}/sync`));
         expect(await clickSyncNow(page, 'Cloud')).toBe('error');
         expect(await (await sync).json()).toMatchObject({ code: 'S3_KEY_MISMATCH' });
-        await backendRow(page).locator('.syncBackendUnlockButton').click();
-        await page.locator('.syncS3Passphrase').fill(options.passphrase);
+        await clickBackendMenu(page, 'Cloud', 'unlock');
+        await accountWindow(page).locator('[data-model="top.form.pass"]').fill(options.passphrase);
         const unlock = page.waitForResponse(r => r.url().endsWith('/unlock'));
-        await page.locator('.syncS3SaveButton').click();
+        await accountWindow(page).locator('[data-act="unlock-save"]').click();
         const rejected = await unlock;
         expect(rejected.status()).toBe(409);
         expect(await rejected.json()).toMatchObject({ code: 'S3_KEY_MISMATCH' });
-        await expect(page.locator('.syncS3Error')).toContainText('Remove it and add it again');
+        await expect(formError(page)).toContainText('Remove it and add it again');
         expect(proxy.requests.slice(from).filter(r => ['PUT', 'DELETE'].includes(r.method) && (r.relativeKey === 'shared/head' || r.relativeKey.startsWith('shared/packs/')))).toEqual([]);
         expect(registryOf(server).backends[id].s3.derivedKey).toBe(original.derivedKey);
-        await page.keyboard.press('Escape');
+        await cancelForm(page);
     } finally { await sdk.send(new PutObjectCommand({ Bucket: options.bucket, Key: key, Body: bytes })); }
     await unlockS3Backend(page, 'Cloud', options.passphrase);
     expect(registryOf(server).backends[id].s3.keyId).toBe(original.keyId);
     expect(await clickSyncNow(page, 'Cloud')).toBe('success');
     proxy.addFault({ match: { method: 'GET', keySuffix: '/keyinfo.json' }, dropConnection: true });
     expect(await clickSyncNow(page, 'Cloud')).toBe('error');
-    await expect(backendRow(page).locator('.lanSyncPeerError')).toContainText('The S3 endpoint could not be reached.');
+    await expect(backendError(page)).toContainText('The S3 endpoint could not be reached.');
     await closeAllPopups(page);
     await reloadS3Page(page);
     await openLanSyncPanel(page);
-    await expect(backendRow(page).locator('.lanSyncPeerError')).toContainText('The S3 endpoint could not be reached.');
+    await expect(backendError(page)).toContainText('The S3 endpoint could not be reached.');
     expect(registryOf(server).backends[id].lastSync.error).toBeTruthy();
 });

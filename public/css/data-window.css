@@ -1,0 +1,651 @@
+/* Data pages of the Account window: sync categories, pairing steps, file drop,
+ * progress, conflicts and notices. Shell and shared controls live in luker-window.css. */
+
+.dw-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 18px;
+    font-size: 12px;
+    color: var(--dw-muted);
+}
+
+.dw-summary b {
+    color: var(--dw-text);
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+}
+
+.dw-summary .warn b {
+    color: var(--dw-amber);
+}
+
+.dw-summary .bad b {
+    color: var(--dw-danger);
+}
+
+.dw-kind {
+    flex: none;
+    font-size: 11.5px;
+    color: var(--dw-faint);
+}
+
+.dw-stalled {
+    grid-column: 2 / 4;
+    padding: 8px 10px;
+    border-radius: var(--dw-r-sm);
+    background: var(--dw-surface-2);
+    font-size: 12px;
+    color: var(--dw-muted);
+}
+
+.dw-stalled code {
+    display: block;
+    margin: 3px 0 0;
+    padding: 0;
+    background: none;
+    font-family: var(--dw-mono);
+    font-size: 11.5px;
+    color: var(--dw-text);
+    overflow-wrap: anywhere;
+}
+
+.dw-grid-ep {
+    display: grid;
+    grid-template-columns: 1fr 150px;
+    gap: 12px;
+}
+
+.dw-lockhint {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    color: var(--dw-faint);
+}
+
+.dw-lockhint svg.dw-ic {
+    width: 12px;
+    height: 12px;
+}
+
+/* ---------- category chips ---------- */
+
+.dw-cats {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+    overflow: hidden;
+}
+
+.dw-cat-g {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    padding: 10px 12px;
+    border-top: 1px solid var(--dw-border);
+}
+
+.dw-cat-g:first-child {
+    border-top: 0;
+}
+
+.dw-cat-g > button {
+    padding: 4px 0 0;
+    border: 0;
+    background: none;
+    font-size: 12px;
+    color: var(--dw-muted);
+    text-align: left;
+    cursor: pointer;
+}
+
+.dw-cat-g > button:hover {
+    color: var(--dw-text);
+}
+
+.dw-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.dw-cats > .dw-chips {
+    padding: 12px;
+}
+
+.dw-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 11px;
+    border: 1px solid var(--dw-border-strong);
+    border-radius: 999px;
+    background: none;
+    color: var(--dw-muted);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background var(--dw-dur), border-color var(--dw-dur), color var(--dw-dur);
+}
+
+.dw-chip:hover {
+    background: var(--dw-hover);
+    color: var(--dw-text);
+}
+
+.dw-chip.on {
+    border-color: transparent;
+    background: var(--dw-accent-soft);
+    color: var(--dw-accent);
+    font-weight: 600;
+}
+
+.dw-chip.opt:not(.on) {
+    border-style: dashed;
+}
+
+.dw-chip svg.dw-ic {
+    width: 11px;
+    height: 11px;
+}
+
+/* ---------- steps ---------- */
+
+.dw-step {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.dw-step i {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 650;
+    color: var(--dw-accent-text);
+    background: var(--dw-accent);
+    flex: none;
+}
+
+.dw-step i svg.dw-ic {
+    width: 12px;
+    height: 12px;
+    stroke-width: 2.6;
+}
+
+.dw-step.todo {
+    color: var(--dw-faint);
+}
+
+.dw-step.todo i {
+    color: var(--dw-muted);
+    background: var(--dw-active);
+}
+
+.dw-linkbox {
+    display: flex;
+    gap: 8px;
+}
+
+.dw-expire {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--dw-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.dw-more {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    list-style: none;
+    font-size: 12.5px;
+    color: var(--dw-muted);
+    cursor: pointer;
+}
+
+.dw-more:hover {
+    color: var(--dw-text);
+}
+
+.dw-more::-webkit-details-marker {
+    display: none;
+}
+
+.dw-more-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 12px;
+}
+
+/* ---------- file drop ---------- */
+
+.dw-drop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 128px;
+    padding: 20px;
+    border: 1.5px dashed var(--dw-border-strong);
+    border-radius: var(--dw-r);
+    color: var(--dw-muted);
+    text-align: center;
+    cursor: pointer;
+    transition: border-color var(--dw-dur), background var(--dw-dur), color var(--dw-dur);
+}
+
+.dw-drop:hover,
+.dw-drop.over {
+    border-color: var(--dw-accent);
+    background: var(--dw-accent-soft);
+    color: var(--dw-text);
+}
+
+.dw-drop > .dw-card-icon {
+    --tone: var(--dw-accent);
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+}
+
+.dw-file {
+    --tone: var(--dw-blue);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 10px 12px 14px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+}
+
+.dw-file b {
+    display: block;
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dw-file small {
+    font-size: 12px;
+    color: var(--dw-faint);
+}
+
+/* ---------- progress ---------- */
+
+.dw-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+}
+
+.dw-progress-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+}
+
+.dw-progress-line > svg.dw-ic {
+    color: var(--dw-accent);
+}
+
+.dw-progress-line .dw-sp + span {
+    color: var(--dw-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.dw-stages {
+    display: flex;
+    gap: 4px;
+}
+
+.dw-stage {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--dw-faint);
+}
+
+.dw-stage::before {
+    content: '';
+    height: 6px;
+    border-radius: 999px;
+    background: var(--dw-hover);
+}
+
+.dw-stage.done {
+    color: var(--dw-muted);
+}
+
+.dw-stage.done::before {
+    background: var(--dw-accent);
+}
+
+.dw-stage.now {
+    color: var(--dw-text);
+    font-weight: 600;
+}
+
+.dw-stage.now::before {
+    background: linear-gradient(90deg, var(--dw-accent) var(--p, 30%), var(--dw-hover) var(--p, 30%));
+}
+
+.dw-stage.now.indet::before {
+    background: linear-gradient(90deg, var(--dw-hover) 0%, var(--dw-accent) 50%, var(--dw-hover) 100%);
+    background-size: 200% 100%;
+    animation: dw-shimmer 1.2s linear infinite;
+}
+
+@keyframes dw-shimmer {
+    from {
+        background-position: 100% 0;
+    }
+
+    to {
+        background-position: -100% 0;
+    }
+}
+
+.dw-bar {
+    position: relative;
+    height: 6px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--dw-hover);
+}
+
+.dw-bar::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 35%;
+    border-radius: 999px;
+    background: var(--dw-accent);
+    animation: dw-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes dw-slide {
+    from {
+        left: -35%;
+    }
+
+    to {
+        left: 100%;
+    }
+}
+
+/* ---------- conflicts ---------- */
+
+.dw-conflict {
+    --tone: var(--dw-amber);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 14px 14px 16px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+}
+
+.dw-conflict::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 14px;
+    bottom: 14px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--tone);
+}
+
+.dw-conflict-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.dw-conflict-head b {
+    font-weight: 650;
+    font-family: var(--dw-mono);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dw-versions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 8px;
+}
+
+.dw-version {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    padding: 10px;
+    border: 1px solid var(--dw-border-strong);
+    border-radius: var(--dw-r);
+    background: var(--dw-surface);
+    text-align: left;
+    cursor: pointer;
+}
+
+.dw-version:hover {
+    background: var(--dw-hover);
+}
+
+.dw-version.on {
+    border-color: var(--dw-accent);
+    background: var(--dw-accent-soft);
+}
+
+.dw-version-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.dw-version-head > span:nth-child(2) {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dw-version .dw-ring {
+    width: 14px;
+    height: 14px;
+}
+
+.dw-version .dw-ring::after {
+    inset: 2.5px;
+}
+
+.dw-preview {
+    max-height: 120px;
+    overflow: auto;
+    padding: 8px 10px;
+    border-radius: var(--dw-r-sm);
+    background: var(--dw-surface-2);
+    font-family: var(--dw-mono);
+    font-size: 11.5px;
+    line-height: 1.6;
+    color: var(--dw-muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.dw-notice {
+    --tone: var(--dw-blue);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 12px 12px 14px;
+    border-radius: var(--dw-r);
+    background: var(--dw-surface-2);
+}
+
+.dw-notice b {
+    display: block;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dw-notice small {
+    display: block;
+    font-size: 11.5px;
+    color: var(--dw-faint);
+}
+
+.dw-notice-act {
+    display: flex;
+    gap: 6px;
+}
+
+@container (max-width: 600px) {
+    .dw-chip {
+        height: 32px;
+        padding: 0 13px;
+        font-size: 12.5px;
+    }
+
+    .dw-cat-g {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+
+    .dw-cat-g > button {
+        padding: 0;
+    }
+
+    .dw-stalled {
+        grid-column: 1 / 4;
+    }
+
+    .dw-linkbox {
+        flex-wrap: wrap;
+    }
+
+    .dw-linkbox .dw-inp {
+        flex-basis: 100%;
+    }
+
+    .dw-linkbox .dw-btn.primary {
+        flex: 1;
+    }
+
+    .dw-notice {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .dw-notice-act {
+        grid-column: 1 / 3;
+    }
+
+    .dw-notice-act .dw-btn {
+        flex: 1;
+    }
+}
+
+/* ---------- extra states ---------- */
+
+.dw-card-note {
+    grid-column: 2 / 4;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.dw-card-note.bad {
+    color: var(--dw-danger);
+}
+
+.dw-files {
+    display: block;
+    margin-top: 4px;
+    padding: 0;
+    background: none;
+    font-family: var(--dw-mono);
+    font-size: 11.5px;
+    overflow-wrap: anywhere;
+}
+
+.dw-preview.is-empty {
+    font-family: var(--dw-font);
+    font-style: italic;
+    color: var(--dw-faint);
+}
+
+.dw-preview.is-image {
+    display: grid;
+    place-items: center;
+    max-height: 160px;
+    padding: 6px;
+}
+
+.dw-preview.is-image img {
+    max-width: 100%;
+    max-height: 148px;
+    border-radius: 4px;
+    object-fit: contain;
+}
+
+.dw-version-act {
+    font-size: 11.5px;
+    color: var(--dw-faint);
+}
+
+.dw-version.on .dw-version-act {
+    color: var(--dw-accent);
+    font-weight: 600;
+}
+
+.dw-version:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.dw-conflict.is-failed {
+    --tone: var(--dw-danger);
+    border-color: var(--dw-danger);
+}
+
+.dw-chip:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+@container (max-width: 600px) {
+    .dw-card-note {
+        grid-column: 1 / 4;
+    }
+}

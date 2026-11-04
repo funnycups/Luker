@@ -12,8 +12,8 @@ export function initializeSyncActivity() {
         id: 'luker-sync-activity-pill',
         className: 'sync-activity-pill',
         onOpen: async () => {
-            const { openLanSyncPanel } = await import('./lan-sync.js');
-            await openLanSyncPanel();
+            const { openDataWindow } = await import('./data-window.js');
+            await openDataWindow({ tab: 'sync' });
         },
         onError: error => {
             console.error('[sync] could not open Sync', error);
@@ -21,6 +21,12 @@ export function initializeSyncActivity() {
         },
     });
 
+    let runningSince = 0;
+    let ticker = null;
+    function elapsed() {
+        const seconds = Math.floor((Date.now() - runningSince) / 1000);
+        return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    }
     function render() {
         const view = state.getView();
         const names = ids => ids.map(id => view.labels[id]).join(', ');
@@ -30,11 +36,20 @@ export function initializeSyncActivity() {
         if (view.attentionBackendIds.length) text.push(t`Sync needs attention: ${names(view.attentionBackendIds)}`);
         if (view.unknown) text.push(t`Sync status unavailable`);
         const running = view.runningBackendIds.length > 0;
+        if (running && !runningSince) {
+            runningSince = Date.now();
+            ticker = setInterval(render, 1000);
+        } else if (!running && runningSince) {
+            runningSince = 0;
+            clearInterval(ticker);
+            ticker = null;
+        }
         pill.update({
             visible: view.visible,
             text: text.join(' · '),
             tone: view.unknown ? 'unknown' : view.failedBackendIds.length ? 'error' : view.attentionBackendIds.length ? 'attention' : 'running',
             loading: running,
+            detail: running ? elapsed() : '',
         });
         document.dispatchEvent(new CustomEvent('sync-activity-updated', { detail: { running } }));
     }
@@ -46,6 +61,7 @@ export function initializeSyncActivity() {
         if (observer?.dispose !== dispose) return;
         document.removeEventListener('sync-status-updated', onStatus);
         document.removeEventListener('sync-status-read-failed', onFailure);
+        clearInterval(ticker);
         pill.destroy();
         observer = null;
     }
@@ -63,8 +79,4 @@ export function beginSyncActivity({ backendId, label }) {
         state.finishRequest(token, outcome);
         observer?.render();
     };
-}
-
-export function syncActivityNeedsAttention() {
-    return state.getView().attentionBackendIds.length > 0;
 }

@@ -263,7 +263,7 @@ Reads `./config.yaml` from the CWD (so the script assumes you ran it from the re
 
 ### Admin panel UI
 
-`public/scripts/templates/admin.html` + `public/scripts/user.js`:
+`public/scripts/account-admin.js` + `public/scripts/user.js`:
 
 - "Storage Backend" tab in the admin panel.
 - Shows current mode, the read-only flag, and the last-migration timestamp returned by `/api/users/storage/status`.

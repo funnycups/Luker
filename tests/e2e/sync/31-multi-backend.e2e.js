@@ -7,14 +7,15 @@ import { addWorldEntry } from '../_lib/ui-worldinfo.js';
 import { manual } from '../_lib/s3-races.js';
 import { addS3Backend, waitForBackendSync, openLanSyncPanel, closeAllPopups, generatePairingLink, acceptPairingLink,
     waitForBackgroundSync, clickSyncNow, readUserFile, userRootOf, waitForSyncPopup, syncPopup,
-    chooseConflictVersion, applyConflictChoices, waitForStatusChecks, editSyncBackend, clickForgetPeer } from '../_lib/sync.js';
+    chooseConflictVersion, applyConflictChoices, waitForStatusChecks, editSyncBackend, clickForgetPeer, conflictRow } from '../_lib/sync.js';
+import { windowToast } from '../_lib/account-window.js';
 
 const fixture = s3Fixture(test);
 test.describe.configure({ timeout: 360_000 });
 const REL = 'worlds/Bridge Grove.json';
 const status = page => page.evaluate(async () => (await (await fetch('/api/sync/v1/status')).json()));
 const checks = page => page.evaluate(() => Number(document.body.dataset.syncStatusChecks || 0));
-const row = page => syncPopup(page).locator(`.syncConflictRow[data-path=${JSON.stringify(REL)}]`);
+const row = page => conflictRow(page, REL);
 
 async function lan(a, b) {
     await closeAllPopups(a.page); await openLanSyncPanel(a.page);
@@ -112,14 +113,14 @@ test('an unreadable grouped backend preserves readable commitment and repairs wi
         } }]);
         await testInfo.attach('reviewed-grouped-outcome', { body: JSON.stringify({ submitted, result, shown, live: readUserFile(a.server, REL) }), contentType: 'application/json' });
         expect(result).toMatchObject({ ok: false, errors: { [cloudId]: { code: 'PENDING_READ_FAILED' } }, results: [{ path: REL, applied: false, committedBackends: [lanId] }] });
-        await expect(a.page.locator('.toast-success', { hasText: 'Choices applied.' })).toHaveCount(0);
-        await expect(row(a.page).locator('.syncConflictResolvedNote')).toHaveCount(0);
+        await expect(windowToast(a.page, 'Applied')).toHaveCount(0);
+        await expect(windowToast(a.page, 'already handled on another device')).toHaveCount(0);
         const pending = await status(a.page);
         expect(pending.errors[cloudId].code).toBe('PENDING_READ_FAILED');
         expect(pending.conflicts).toEqual([]);
     } finally { fs.writeFileSync(file, bytes); }
     await waitForStatusChecks(a.page, await checks(a.page) + 1);
-    await expect(row(a.page).locator('input[value="current"]')).toBeEnabled();
+    await expect(row(a.page).locator('.dw-version[data-v="current"]')).toBeEnabled();
     const repaired = await status(a.page);
     expect(repaired.ok).toBe(true);
     expect(repaired.conflicts[0].backends).toEqual([cloudId]);

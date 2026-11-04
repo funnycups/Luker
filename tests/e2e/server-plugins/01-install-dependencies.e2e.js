@@ -19,7 +19,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { startServer, tearDownServer } from '../_lib/server.js';
-import { awaitMainUI, openAdminPanel } from '../_lib/page.js';
+import { awaitMainUI } from '../_lib/page.js';
+import { accountWindow, answerWindowConfirm, openAdminPage, windowConfirm } from '../_lib/account-window.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 
 let server;
@@ -126,36 +127,33 @@ test.afterAll(async () => {
 test.describe('Server plugins · dependency install', () => {
     test('installs dependencies from the row and admin prompt and resolves them after restart', async ({ page, request }, testInfo) => {
         await awaitMainUI(page, server.baseURL);
-        await openAdminPanel(page);
+        await openAdminPage(page, 'adminPlugins');
+        const tab = accountWindow(page);
+        const pluginCard = dir => tab.locator('.dw-card', { has: page.locator('.dw-card-name', { hasText: dir }) });
 
-        const adminPopup = page.locator('dialog.popup[open]').last();
-        await adminPopup.locator('.serverPluginsButton').click();
-
-        const tab = adminPopup.locator('.serverPluginsTab');
-        await tab.waitFor({ state: 'visible', timeout: 10_000 });
-
-        const copiedRow = tab.locator('.serverPluginRow', { has: page.locator('.serverPluginDirectory', { hasText: 'copied-plugin' }) });
-        await expect(copiedRow.locator('.serverPluginInstallDepsButton')).toBeVisible();
+        const copiedRow = pluginCard('copied-plugin');
+        await expect(copiedRow.locator('[data-act="adm-plugin-deps"]')).toBeVisible();
         await page.screenshot({ path: testInfo.outputPath('optional-dependencies-missing.png') });
-        await copiedRow.locator('.serverPluginInstallDepsButton').click();
-        await expect(copiedRow.locator('.serverPluginDependencyStatus'))
+        await copiedRow.locator('[data-act="adm-plugin-deps"]').click();
+        await expect(copiedRow.locator('.dw-card-meta'))
             .toContainText('Dependencies installed', { timeout: 60_000 });
         expect(fs.existsSync(path.join(copiedPluginDir, 'node_modules', 'tiny-dep', 'package.json'))).toBe(true);
         await page.screenshot({ path: testInfo.outputPath('optional-dependencies-installed.png') });
 
-        await tab.locator('#serverPluginRepoUrlInput').fill(bareRepo);
-        await tab.locator('.installServerPluginButton').click();
+        await tab.locator('[data-model="top.repo"]').fill(bareRepo);
+        await tab.locator('[data-act="adm-plugin-install"]').click();
+        // Installing asks to confirm trusting the repository first.
+        await answerWindowConfirm(page, { text: 'Install this server plugin?' });
 
-        // Cloning finishes, then the UI asks whether to install the missing
-        // dependencies. Accept through the real affirmative button. Target it
-        // by its label because the Admin Panel dialog stays open underneath.
-        const installDepsButton = page.locator('dialog.popup[open] .popup-button-ok', { hasText: 'Install dependencies' });
-        await installDepsButton.waitFor({ state: 'visible', timeout: 30_000 });
-        await installDepsButton.click();
+        // Cloning finishes, then the window asks whether to install the
+        // missing dependencies. Accept through the real affirmative button.
+        const installDeps = windowConfirm(page).locator('[data-r="1"]', { hasText: 'Install dependencies' });
+        await installDeps.waitFor({ state: 'visible', timeout: 30_000 });
+        await installDeps.click();
 
-        // The row re-renders once the install round-trips.
-        const installedRow = tab.locator('.serverPluginRow', { has: page.locator('.serverPluginDirectory', { hasText: 'example-plugin' }) });
-        await expect(installedRow.locator('.serverPluginDependencyStatus'))
+        // The card re-renders once the install round-trips.
+        const installedRow = pluginCard('example-plugin');
+        await expect(installedRow.locator('.dw-card-meta'))
             .toContainText('Dependencies installed', { timeout: 60_000 });
 
         // The plugin only loads at boot, so restart before probing its route.

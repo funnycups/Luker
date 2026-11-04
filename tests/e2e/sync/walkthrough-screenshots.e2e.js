@@ -14,13 +14,14 @@ import { addWorldEntry } from '../_lib/ui-worldinfo.js';
 import { openCharacterList } from '../_lib/ui-character.js';
 import { editMessageViaUI, renameCurrentChatViaUI, closeAnyOpenTopSettingsDrawer } from '../_lib/page.js';
 import {
-    openLanSyncPanel, generatePairingLink, acceptPairingLink, selectCategories,
-    setSyncSchedule, setSyncDeviceLabel, waitForBackendSync, clickSyncNow,
+    openLanSyncPanel, generatePairingLink, acceptPairingLink, selectCategories, fillPairingForm,
+    setSyncSchedule, setSyncDeviceLabel, waitForBackendSync, clickSyncNow, openAddBackend,
     closeAllPopups, waitForSyncPopup, syncPopup, closeSyncPopup, waitForStatusChecks,
     listPopupConflicts, listPopupNotices, conflictChoiceShowing, chooseConflictVersion,
     applyConflictChoices, openBranchFromNotice, dismissNotice, openChatByName,
-    fillS3Form, readUserFile,
+    fillS3Form, readUserFile, syncFlash, conflictRow, pairingLinkField,
 } from '../_lib/sync.js';
+import { accountWindow, pageHead, formError, windowConfirm } from '../_lib/account-window.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const IMAGES = path.join(ROOT, 'docs/public/images/sync');
@@ -53,10 +54,10 @@ test.beforeAll(() => {
     expect(new Set(FILENAMES).size, 'Documentation image filenames must be unique').toBe(FILENAMES.length);
 });
 
-const panel = page => page.locator('.userLanSync');
-const dialogFor = (page, content) => page.locator('dialog.popup[open]', { has: content });
-const backend = (page, label) => page.locator('.lanSyncPeerRow').filter({ has: page.locator('.lanSyncPeerLabel', { hasText: new RegExp(`^${RegExp.escape(label)}$`) }) });
-const conflict = page => syncPopup(page).locator(`.syncConflictRow[data-path=${JSON.stringify(LORE)}]`);
+// The Account window replaced the sync panel, its popups and the S3 form popup.
+const panel = page => accountWindow(page);
+const backend = (page, label) => accountWindow(page).locator('.dw-card[data-backend]').filter({ has: page.locator('.dw-card-name', { hasText: new RegExp(`^${RegExp.escape(label)}$`) }) });
+const conflict = page => conflictRow(page, LORE);
 const observe = promise => promise.then(value => ({ value }), error => ({ error }));
 async function observed(promise) {
     const result = await promise;
@@ -94,7 +95,7 @@ async function journey(browser, testInfo, name, body) {
             await openLanSyncPanel(page);
             await setSyncSchedule(page, { idleSeconds: 3600, pollSeconds: 3600 });
             await setSyncDeviceLabel(page, label);
-            await expect(page.locator('.syncDeviceLabel')).toHaveValue(label);
+            await expect(accountWindow(page).locator('[data-model="device.label"]')).toHaveValue(label);
             await leavePanels(page);
             return { server, page, context, label };
         },
@@ -188,36 +189,35 @@ async function dismissToasts(page) {
 }
 
 async function leavePanels(page) {
-    const dialogs = page.locator('dialog.popup[open]');
-    while (await dialogs.count()) {
-        const id = await dialogs.last().getAttribute('data-id');
-        await dialogs.last().locator('.popup-button-ok').click();
-        await expect(page.locator(`dialog.popup[data-id="${id}"]`)).toHaveCount(0);
-    }
+    await closeAllPopups(page);
     await closeAnyOpenTopSettingsDrawer(page);
     await dismissToasts(page);
 }
 
-async function assertCategories(grid, categories) {
-    await expect(grid).toBeVisible();
-    expect(await grid.locator('input:checked').evaluateAll(inputs => inputs.map(input => input.value).sort())).toEqual([...categories].sort());
+/** The chips of one sync content picker (`set`) that are selected. */
+async function assertCategories(page, set, categories) {
+    const chips = accountWindow(page).locator(`[data-act="cat"][data-set="${set}"]`);
+    await expect(chips.first()).toBeVisible();
+    expect(await chips.evaluateAll(els => els.filter(el => el.classList.contains('on')).map(el => el.dataset.id).sort())).toEqual([...categories].sort());
 }
 
 async function assertBackend(page, label, kind) {
     const row = backend(page, label);
     await expect(row).toHaveCount(1);
     await expect(row).toHaveAttribute('data-kind', kind);
-    await expect(row.locator('.syncBackendKind')).toHaveText(kind.toUpperCase());
-    await expect(row.locator('.lanSyncPeerMeta')).toContainText('Last sync:');
-    await expect(row.locator('.lanSyncPeerMeta')).not.toContainText('Never');
-    for (const [selector, text] of [
-        ['.lanSyncPeerSyncButton', 'Sync now'], ['.lanSyncPeerUndoButton', 'Undo last sync'],
-        ['.syncBackendEditButton', 'Edit'], ['.lanSyncPeerForgetButton', 'Remove'],
-    ]) {
-        await expect(row.locator(selector)).toBeVisible();
-        await expect(row.locator(selector)).toHaveText(text);
+    await expect(row.locator('.dw-kind')).toHaveText(kind.toUpperCase());
+    await expect(row.locator('.dw-card-meta')).not.toContainText('Never synced');
+    await expect(row.locator('[data-act="sync-now"]')).toBeVisible();
+    await expect(row.locator('[data-act="sync-now"]')).toHaveText('Sync now');
+    // Undo, Edit and Remove live in the card's menu.
+    await row.locator('[data-act="menu"]').click();
+    for (const [act, text] of [['undo', 'Undo last sync'], ['edit', 'Edit'], ['remove', 'Remove'], ...(kind === 's3' ? [['unlock', 'Unlock']] : [])]) {
+        await expect(row.locator(`.dw-menu [data-act="${act}"]`)).toBeVisible();
+        await expect(row.locator(`.dw-menu [data-act="${act}"]`)).toHaveText(text);
     }
-    await expect(row.locator('.backupActionRow')).not.toHaveClass(/disabled/);
+    await row.locator('[data-act="menu"]').click();
+    await expect(row.locator('.dw-menu')).toHaveCount(0);
+    await expect(row).not.toHaveClass(/\blocked\b/);
 }
 
 async function createLore(device) {
@@ -262,17 +262,18 @@ async function divergentLore(a, b) {
 
 async function assertLoreCards(page, { stale = false } = {}) {
     const row = conflict(page);
-    await expect(row.locator('.syncConflictPath')).toHaveText(LORE);
-    await expect(row.locator('.syncConflictCard[data-choice="current"] .syncConflictCardTitle')).toHaveText('Current version');
-    await expect(row.locator('.syncConflictCard[data-choice="current"] .syncConflictInUse')).toHaveCount(0);
-    await expect(row.locator('.syncConflictCard:not([data-choice="current"]) .syncConflictCardTitle')).toContainText(['Version from', 'Version from']);
-    expect((await row.locator('.syncConflictCard:not([data-choice="current"]) .syncConflictCardTitle').allTextContents()).map(title => title.replace(' In use', '')).sort()).toEqual(['Version from Desk', 'Version from Tablet']);
-    await expect(row.locator('.syncConflictInUse')).toHaveCount(1);
-    await expect(row.locator('.syncConflictCard[data-choice="ours"] .syncConflictPreview')).not.toBeEmpty();
-    await expect(row.locator('.syncConflictCard[data-choice="theirs"] .syncConflictPreview')).not.toBeEmpty();
-    await expect(row.locator('.syncConflictStale')).toHaveCount(stale ? 1 : 0);
-    await expect(syncPopup(page).locator('.syncConflictsApplyButton')).toBeVisible();
-    await expect(syncPopup(page).locator('.syncConflictsApplyButton')).toHaveText('Apply choices');
+    const titles = row.locator('.dw-version:not([data-v="current"]) .dw-version-head > span:nth-child(2)');
+    await expect(row.locator('.dw-conflict-head b')).toHaveText(LORE);
+    await expect(row.locator('.dw-version[data-v="current"] .dw-version-head')).toHaveText('Current version');
+    await expect(row.locator('.dw-version[data-v="current"] .dw-pilltag')).toHaveCount(0);
+    await expect(titles).toContainText(['Version from', 'Version from']);
+    expect((await titles.allTextContents()).sort()).toEqual(['Version from Desk', 'Version from Tablet']);
+    await expect(row.locator('.dw-version .dw-pilltag.is-ok')).toHaveCount(1);
+    await expect(row.locator('.dw-version[data-v="ours"] .dw-preview')).not.toBeEmpty();
+    await expect(row.locator('.dw-version[data-v="theirs"] .dw-preview')).not.toBeEmpty();
+    await expect(row.locator('.dw-banner.warning')).toHaveCount(stale ? 1 : 0);
+    await expect(syncPopup(page).locator('[data-act="apply"]')).toBeVisible();
+    await expect(syncPopup(page).locator('[data-act="apply"]')).toHaveText('Apply choices');
 }
 
 async function assertNoPendingAfterReload(device) {
@@ -280,7 +281,7 @@ async function assertNoPendingAfterReload(device) {
     await waitForStatusChecks(device.page, 1);
     expect((await status(device.page)).conflicts).toEqual([]);
     await expect(syncPopup(device.page)).toHaveCount(0);
-    await expect(device.page.locator('.syncConflictRow')).toHaveCount(0);
+    await expect(device.page.locator('.dw-conflict')).toHaveCount(0);
 }
 
 test('LAN pairing, pending lore and resolution images', async ({ browser }, testInfo) => {
@@ -289,78 +290,74 @@ test('LAN pairing, pending lore and resolution images', async ({ browser }, test
         const b = await scope.device('Tablet', { lan: true });
         await createLore(a);
         await openLanSyncPanel(a.page);
-        await a.page.locator('.lanSyncTabPeers').click();
         await scope.capture('01-panel-empty', a.page, panel(a.page), async () => {
-            await expect(panel(a.page).locator('h3')).toHaveText('Sync');
-            await expect(a.page.locator('.lanSyncPanelPeers')).toBeVisible();
-            await expect(a.page.locator('.lanSyncPeersEmpty')).toHaveText('No sync backends yet. Pair a LAN device or add S3 storage.');
-            await expect(a.page.locator('.syncAddS3Button')).toBeVisible();
-            await expect(a.page.locator('.lanSyncSchedule')).toContainText('Sync schedule');
-            await expect(a.page.locator('.lanSyncIdleSeconds')).toBeVisible();
-            await expect(a.page.locator('.lanSyncPollSeconds')).toBeVisible();
+            await expect(pageHead(a.page).locator('.dw-h2')).toHaveText('Sync');
+            await expect(pageHead(a.page)).toHaveAttribute('data-view', 'list');
+            await expect(panel(a.page).locator('.dw-empty')).toContainText('No sync backends yet');
+            await expect(panel(a.page).locator('.dw-empty [data-act="push"][data-view="add"]')).toBeVisible();
+            // The sync schedule moved to its own Device settings page.
+            await expect(panel(a.page).locator('.dw-tab[data-tab="settings"]')).toContainText('Device settings');
         });
-        await a.page.locator('.lanSyncTabPairNew').click();
-        await a.page.locator('.lanSyncPairLabel').fill('Tablet');
-        await selectCategories(a.page.locator('.lanSyncCategoryGrid'), CATEGORIES);
+        await openAddBackend(a.page, 'pairNew');
+        await panel(a.page).locator('[data-model="top.label"]').fill('Tablet');
+        await selectCategories(panel(a.page), CATEGORIES, 'pairNew');
         await scope.capture('02-pair-new-form-filled', a.page, panel(a.page), async () => {
-            await expect(a.page.locator('.lanSyncPairLabel'), '02-pair-new-form-filled must identify Tablet, not the old generic device').toHaveValue('Tablet');
-            await assertCategories(a.page.locator('.lanSyncCategoryGrid'), CATEGORIES);
-            await expect(a.page.locator('.lanSyncGenerateLinkButton')).toBeVisible();
+            await expect(panel(a.page).locator('[data-model="top.label"]'), '02-pair-new-form-filled must identify Tablet, not the old generic device').toHaveValue('Tablet');
+            await assertCategories(a.page, 'pairNew', CATEGORIES);
+            await expect(panel(a.page).locator('[data-act="pair-gen"]')).toBeVisible();
         });
         const link = await generatePairingLink(a.page, { label: 'Tablet', categories: CATEGORIES });
         const parsed = new URL(link);
         await scope.capture('03-pair-link-generated', a.page, panel(a.page), async () => {
-            await expect(a.page.locator('.lanSyncGeneratedLink')).toHaveValue(link);
-            await expect(a.page.locator('.lanSyncPairNewResult > .menu_button_note').last()).toBeVisible();
-            await expect(a.page.locator('.lanSyncPairNewResult > .menu_button_note').last()).toHaveText('Basic-auth credentials entered on the other device are saved on its server after pairing for future syncs. Use Clear credentials on that device\'s backend row to remove them.');
-            await expect(a.page.locator('.lanSyncBaseUrlSelect')).toBeVisible();
-            const bases = await a.page.locator('.lanSyncBaseUrlSelect option').evaluateAll(options => options.map(option => option.value));
+            await expect(pairingLinkField(a.page)).toHaveValue(link);
+            await expect(panel(a.page).locator('.dw-step').first()).toHaveText('Link generated. "Tablet" was added to the sync list and is waiting for the other device to connect');
+            const select = panel(a.page).locator('select[data-act-change="pair-addr"]');
+            await expect(select).toBeVisible();
+            const bases = await select.locator('option').evaluateAll(options => options.map(option => option.value));
             expect(bases.some(base => !['localhost', '127.0.0.1', '[::1]'].includes(new URL(base).hostname)), 'LAN-listening fixture must offer a non-loopback address').toBe(true);
-            expect(parsed.searchParams.get('base')).toBe(await a.page.locator('.lanSyncBaseUrlSelect').inputValue());
-            await expect(a.page.locator('.lanSyncBaseUrlWarning')).toBeHidden();
-            await expect(a.page.locator('.lanSyncCopyLinkButton')).toBeVisible();
+            expect(parsed.searchParams.get('base')).toBe(await select.inputValue());
+            await expect(panel(a.page).locator('.dw-banner.warning')).toHaveCount(0);
+            await expect(panel(a.page).locator('.dw-linkbox [data-act="copy"]')).toBeVisible();
         });
         await openLanSyncPanel(b.page);
-        await b.page.locator('.lanSyncTabPairExisting').click();
-        await b.page.locator('.lanSyncAcceptLink').fill(link);
-        await b.page.locator('.lanSyncAcceptLabel').fill('Desk');
+        await fillPairingForm(b.page, link, { categories: CATEGORIES, localLabel: 'Desk' });
         await scope.capture('04-pair-existing-pasted', b.page, panel(b.page), async () => {
-            await expect(b.page.locator('.lanSyncAcceptAuthFields > .menu_button_note')).toBeVisible();
-            await expect(b.page.locator('.lanSyncAcceptAuthFields > .menu_button_note')).toHaveText('Enter basic-auth credentials only if the other device requires them. After pairing, they are saved on this server for future syncs. Use Clear credentials on the backend row to remove them.');
-            for (const [selector, value] of [['.lanSyncAcceptBaseUrl', parsed.searchParams.get('base')], ['.lanSyncAcceptPeerId', parsed.searchParams.get('peer')]]) {
-                await expect(b.page.locator(selector)).toBeVisible();
-                await expect(b.page.locator(selector)).toHaveValue(value);
+            await expect(panel(b.page).locator('summary.dw-more')).toHaveText('Enter manually / the other device has a login password');
+            for (const [model, value] of [['top.form.url', parsed.searchParams.get('base')], ['top.form.peerId', parsed.searchParams.get('peer')]]) {
+                await expect(panel(b.page).locator(`[data-model="${model}"]`)).toBeVisible();
+                await expect(panel(b.page).locator(`[data-model="${model}"]`)).toHaveValue(value);
             }
-            await expect(b.page.locator('.lanSyncAcceptPairCode')).toHaveAttribute('type', 'hidden');
-            await expect(b.page.locator('.lanSyncAcceptPairCode')).toHaveValue(parsed.searchParams.get('code'));
-            await expect(b.page.locator('.lanSyncAcceptLabel')).toHaveValue('Desk');
-            await assertCategories(b.page.locator('.lanSyncAcceptCategoryGrid'), CATEGORIES);
-            await expect(b.page.locator('.lanSyncAcceptButton')).toBeVisible();
+            await expect(panel(b.page).locator('[data-model="top.form.link"]')).toHaveValue(link);
+            await expect(panel(b.page).locator('[data-model="top.form.label"]')).toHaveValue('Desk');
+            await assertCategories(b.page, 'pairExist', CATEGORIES);
+            await expect(panel(b.page).locator('[data-act="pair-accept"]')).toBeVisible();
         });
         const since = Date.now();
         const accepted = scope.response(b.page, '/api/sync/v1/pair/accept');
-        await b.page.locator('.lanSyncAcceptButton').click();
+        await panel(b.page).locator('[data-act="pair-accept"]').click();
         expect((await observed(accepted)).ok()).toBe(true);
         await settlePair(a, b, since);
         await scope.capture('05-pair-success-banner', b.page, panel(b.page), async () => {
-            await expect(b.page.locator('.lanSyncStatusBanner.success')).toHaveText('Synced with Desk.');
+            await expect(syncFlash(b.page)).toHaveAttribute('data-flash', 'success');
+            await expect(syncFlash(b.page)).toContainText('Paired and synced with "Desk"');
             expect(readUserFile(b.server, LORE)).toBe(readUserFile(a.server, LORE));
         });
-        await b.page.locator('.lanSyncTabPeers').click();
         await scope.capture('06-backends-after-pair', b.page, panel(b.page), () => assertBackend(b.page, 'Desk', 'lan'));
         await leavePanels(a.page);
         await leavePanels(b.page);
         await reloadS3Page(b.page);
         await divergentLore(a, b);
-        // The popup owns the top layer; close it through its actual Close button for the banner.
-        await closeSyncPopup(b.page);
-        await scope.capture('07-conflict-banner', b.page, b.page.locator('.lanSyncStatusBanner'), async () => {
-            await expect(b.page.locator('.lanSyncStatusBanner.warning')).toHaveText('Synced with Desk. 1 file(s) need a decision.');
+        // The result banner stays on the Sync list the issues page was opened from.
+        await pageHead(b.page).locator('[data-act="back"]').click();
+        await expect(pageHead(b.page)).toHaveAttribute('data-view', 'list');
+        await scope.capture('07-conflict-banner', b.page, syncFlash(b.page), async () => {
+            await expect(syncFlash(b.page)).toHaveAttribute('data-flash', 'warning');
+            await expect(syncFlash(b.page)).toContainText('Synced with "Desk"; 1 files need you to choose a version');
             expect((await status(b.page)).conflicts.map(entry => entry.path)).toEqual([LORE]);
         });
-        await b.page.locator('.syncReviewIssuesButton').click();
+        await syncFlash(b.page).locator('[data-act="conflicts"]').click();
         await waitForSyncPopup(b.page);
-        await scope.capture('08-conflict-popup', b.page, syncPopup(b.page), () => assertLoreCards(b.page));
+        await scope.capture('08-conflict-popup', b.page, panel(b.page), () => assertLoreCards(b.page));
         await closeSyncPopup(b.page);
         await reloadS3Page(b.page);
         await waitForStatusChecks(b.page, 1);
@@ -375,7 +372,8 @@ test('LAN pairing, pending lore and resolution images', async ({ browser }, test
         await openLanSyncPanel(b.page);
         expect(await clickSyncNow(b.page, 'Desk')).toBe('success');
         await scope.capture('09-resolved-success', b.page, panel(b.page), async () => {
-            await expect(b.page.locator('.lanSyncStatusBanner.success')).toHaveText('Synced with Desk.');
+            await expect(syncFlash(b.page)).toHaveAttribute('data-flash', 'success');
+            await expect(syncFlash(b.page)).toContainText('Synced with "Desk"');
             expect((await status(b.page)).conflicts).toEqual([]);
         });
         await assertNoPendingAfterReload(b);
@@ -404,21 +402,21 @@ test('Stale lore preview and cancelled then confirmed overwrite images', async (
         expect(await clickSyncNow(b.page, 'Desk')).toBe('warning');
         await reloadS3Page(b.page);
         await waitForSyncPopup(b.page);
-        await scope.capture('conflict-stale', b.page, syncPopup(b.page), async () => {
+        await scope.capture('conflict-stale', b.page, panel(b.page), async () => {
             await assertLoreCards(b.page, { stale: true });
-            await expect(conflict(b.page).locator('.syncConflictStale')).toContainText('This file changed after the conflict was found.');
-            await expect(conflict(b.page).locator('.syncConflictCard[data-choice="current"] .syncConflictPreview')).toContainText(WORDS.later);
+            await expect(conflict(b.page).locator('.dw-banner.warning')).toContainText('This file was edited again after the conflict');
+            await expect(conflict(b.page).locator('.dw-version[data-v="current"] .dw-preview')).toContainText(WORDS.later);
         });
         await chooseConflictVersion(b.page, LORE, await conflictChoiceShowing(b.page, LORE, WORDS.desk));
-        await syncPopup(b.page).locator('.syncConflictsApplyButton').click();
-        const confirm = b.page.locator('dialog.popup[open]', { hasText: 'Overwrite the current version', hasNot: syncPopup(b.page) });
-        await scope.capture('conflict-stale-confirm', b.page, confirm, async () => {
-            await expect(confirm).toContainText(`Overwrite the current version of ${LORE}?`);
-            await expect(confirm.locator('.popup-button-ok')).toHaveText('Overwrite');
-            await expect(confirm.locator('.popup-button-cancel')).toHaveText('Cancel');
+        await syncPopup(b.page).locator('[data-act="apply"]').click();
+        const confirm = windowConfirm(b.page);
+        await scope.capture('conflict-stale-confirm', b.page, confirm.locator('.dw-modal-card'), async () => {
+            await expect(confirm).toContainText(`Overwrite "${path.posix.basename(LORE)}"?`);
+            await expect(confirm.locator('[data-r="1"]')).toHaveText('Overwrite');
+            await expect(confirm.locator('[data-r="0"]')).toHaveText('Cancel');
         });
         const unchanged = readUserFile(b.server, LORE);
-        await confirm.locator('.popup-button-cancel').click();
+        await confirm.locator('[data-r="0"]').click();
         await expect(confirm).toHaveCount(0);
         expect(readUserFile(b.server, LORE)).toBe(unchanged);
         expect(await listPopupConflicts(b.page)).toEqual([{ path: LORE, stale: true }]);
@@ -433,36 +431,38 @@ test('Stale lore preview and cancelled then confirmed overwrite images', async (
 });
 
 async function assertS3Form(page, options) {
-    await expect(page.locator('.userSyncS3 h3')).toHaveText('Add S3 backend');
-    for (const [field, value] of [['Label', options.label], ['Endpoint', options.endpoint], ['Bucket', options.bucket], ['Prefix', 'seraphina/']]) {
-        await expect(page.locator(`.syncS3${field}`)).toBeVisible();
-        await expect(page.locator(`.syncS3${field}`)).toHaveValue(value);
+    const win = accountWindow(page);
+    const field = model => win.locator(`[data-model="top.form.${model}"]`);
+    await expect(pageHead(page)).toHaveAttribute('data-view', 's3');
+    await expect(pageHead(page).locator('.dw-h2')).toHaveText('Add S3 storage');
+    for (const [model, value] of [['label', options.label], ['endpoint', options.endpoint], ['bucket', options.bucket], ['prefix', 'seraphina/']]) {
+        await expect(field(model)).toBeVisible();
+        await expect(field(model)).toHaveValue(value);
     }
-    await expect(page.locator('.syncS3Region')).toHaveJSProperty('tagName', 'SELECT');
-    await expect(page.locator('.syncS3Region')).toHaveValue(options.region);
-    for (const [field, value] of [['AccessKeyId', options.accessKeyId], ['SecretAccessKey', options.secretAccessKey], ['Passphrase', options.passphrase]]) {
-        await expect(page.locator(`.syncS3${field}`)).toHaveAttribute('type', 'password');
-        await expect(page.locator(`.syncS3${field}`)).toHaveValue(value);
-        await expect(page.locator(`.syncS3${field}`)).toBeVisible();
+    await expect(field('region')).toHaveValue(options.region);
+    for (const [model, value] of [['accessKey', options.accessKeyId], ['secretKey', options.secretAccessKey], ['passphrase', options.passphrase]]) {
+        await expect(field(model)).toHaveAttribute('type', 'password');
+        await expect(field(model)).toHaveValue(value);
+        await expect(field(model)).toBeVisible();
     }
-    await expect(page.locator('.syncS3PassphraseField')).toContainText('Encryption passphrase');
-    await assertCategories(page.locator('.syncS3CategoryGrid'), ['worlds']);
-    await expect(page.locator('.syncS3SaveButton')).toBeVisible();
+    await expect(win.locator('label.dw-field', { has: field('passphrase') })).toContainText('Encryption passphrase');
+    await assertCategories(page, 's3', ['worlds']);
+    await expect(win.locator('[data-act="s3-save"]')).toBeVisible();
 }
 
 async function submitS3(scope, page, { rejected = false } = {}) {
     const response = scope.response(page, '/api/sync/v1/backends/s3');
-    await page.locator('.syncS3SaveButton').click();
+    await accountWindow(page).locator('[data-act="s3-save"]').click();
     const actual = await observed(response);
     if (rejected) {
         expect(actual.status()).toBe(422);
         expect(await actual.json()).toMatchObject({ code: 'S3_WRONG_PASSPHRASE' });
-        await expect(page.locator('.userSyncS3')).toBeVisible();
-        await expect(page.locator('.syncS3Error')).toHaveText('The passphrase does not match this bucket and prefix.');
+        await expect(pageHead(page)).toHaveAttribute('data-view', 's3');
+        await expect(formError(page)).toHaveText('The passphrase does not match this bucket and prefix.');
         return;
     }
     expect(actual.ok()).toBe(true);
-    await expect(page.locator('.userSyncS3')).toHaveCount(0, { timeout: 60_000 });
+    await expect(pageHead(page)).toHaveAttribute('data-view', 'list', { timeout: 60_000 });
     await waitForBackendSync(page, { label: 'Shared archive' });
 }
 
@@ -473,18 +473,16 @@ test('S3 setup, second-device pull, mixed backends and genuine active capsule im
         const b = await scope.device('Tablet');
         await createLore(a);
         await addLore(a, WORDS.base);
-        await openLanSyncPanel(a.page);
-        await a.page.locator('.syncAddS3Button').click();
+        await openAddBackend(a.page, 's3');
         await fillS3Form(a.page, options);
-        await scope.capture('s3-form', a.page, dialogFor(a.page, a.page.locator('.userSyncS3')), () => assertS3Form(a.page, options));
+        await scope.capture('s3-form', a.page, panel(a.page), () => assertS3Form(a.page, options));
         await submitS3(scope, a.page);
-        await openLanSyncPanel(b.page);
-        await b.page.locator('.syncAddS3Button').click();
+        await openAddBackend(b.page, 's3');
         const wrong = { ...options, passphrase: 'The river lantern is not the moonwell key' };
         await fillS3Form(b.page, wrong);
-        await scope.capture('s3-second-device-passphrase', b.page, dialogFor(b.page, b.page.locator('.userSyncS3')), () => assertS3Form(b.page, wrong));
+        await scope.capture('s3-second-device-passphrase', b.page, panel(b.page), () => assertS3Form(b.page, wrong));
         await submitS3(scope, b.page, { rejected: true });
-        await b.page.locator('.syncS3Passphrase').fill(options.passphrase);
+        await accountWindow(b.page).locator('[data-model="top.form.passphrase"]').fill(options.passphrase);
         await submitS3(scope, b.page);
         expect(readUserFile(b.server, LORE)).toContain(WORDS.base);
         await leavePanels(b.page);
@@ -499,21 +497,20 @@ test('S3 setup, second-device pull, mixed backends and genuine active capsule im
         await openLanSyncPanel(a.page);
         await scope.capture('backend-list', a.page, panel(a.page), async () => {
             await assertBackend(a.page, 'Tablet', 'lan');
+            // assertBackend also checks the Unlock entry of the S3 card's menu.
             await assertBackend(a.page, 'Shared archive', 's3');
-            await expect(backend(a.page, 'Shared archive').locator('.syncBackendUnlockButton')).toHaveText('Unlock');
-            await expect(a.page.locator('.syncDeviceLabel')).toHaveValue('Desk');
-            await expect(a.page.locator('.lanSyncIdleSeconds')).toBeVisible();
-            await expect(a.page.locator('.lanSyncPollSeconds')).toBeVisible();
+            // The device name shows in the summary; the schedule is on Device settings.
+            await expect(panel(a.page).locator('.dw-summary')).toContainText('This device Desk');
         });
         await leavePanels(a.page);
         await selectSeraphina(a.page);
         await editMessageViaUI(a.page, 0, WORDS.desk);
         await renameChat(a.page, 'Forest Path');
         await openLanSyncPanel(a.page);
-        const id = await backend(a.page, 'Shared archive').getAttribute('data-backend-id');
+        const id = await backend(a.page, 'Shared archive').getAttribute('data-backend');
         const held = scope.hold(proxy);
         const response = scope.response(a.page, `/api/sync/v1/backends/${id}/sync`, 90_000);
-        await backend(a.page, 'Shared archive').locator('.lanSyncPeerSyncButton').click();
+        await backend(a.page, 'Shared archive').locator('[data-act="sync-now"]').click();
         await expect.poll(() => proxy.requests.some(request => request.method === 'GET' && request.relativeKey === 'seraphina/head' && !request.responseDelivered && !request.closed), { timeout: 30_000, message: 'Active capsule must be backed by a genuinely held storage read' }).toBe(true);
         await held.reached;
         await leavePanels(a.page);
@@ -535,7 +532,7 @@ test('S3 setup, second-device pull, mixed backends and genuine active capsule im
         await expect(composer).toBeFocused();
         await pill.click();
         await expect(panel(a.page)).toHaveCount(1);
-        await expect(backend(a.page, 'Shared archive').locator('.backupActionRow')).toHaveClass(/disabled/);
+        await expect(backend(a.page, 'Shared archive')).toHaveClass(/\blocked\b/);
         held.release();
         expect((await observed(response)).ok()).toBe(true);
         await waitForBackendSync(a.page, { label: 'Shared archive' });
@@ -661,12 +658,12 @@ async function deleteGroup(device, id, scope) {
 }
 
 async function captureNotice(scope, device, image, notice, expectedText, openText) {
-    await scope.capture(image, device.page, syncPopup(device.page), async () => {
+    await scope.capture(image, device.page, panel(device.page), async () => {
         expect(await listPopupConflicts(device.page)).toEqual([]);
         expect(await listPopupNotices(device.page)).toEqual([{ path: notice.path, text: expectedText }]);
-        await expect(syncPopup(device.page).locator('.syncNoticeOpenButton')).toHaveText(openText);
-        await expect(syncPopup(device.page).locator('.syncNoticeOpenButton')).not.toHaveClass(/disabled/);
-        await expect(syncPopup(device.page).locator('.syncNoticeDismissButton')).toHaveText('Dismiss');
+        await expect(syncPopup(device.page).locator('[data-act="notice-open"]')).toHaveText(openText);
+        await expect(syncPopup(device.page).locator('[data-act="notice-open"]')).toBeEnabled();
+        await expect(syncPopup(device.page).locator('[data-act="notice-x"]')).toHaveText('Close');
     });
 }
 

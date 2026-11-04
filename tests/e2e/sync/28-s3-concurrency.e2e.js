@@ -4,7 +4,8 @@ import { randomBytes } from 'node:crypto';
 import { s3Fixture, createReadyWorldBook, selectReadyWorldBook, reloadS3Page, awaitS3Page, backendRow, registryOf } from '../_lib/sync-s3.js';
 import { pair, manual, startManual, remoteHead, assertLocal, entryOf, publishedHead, pathsOf } from '../_lib/s3-races.js';
 import { addWorldEntry } from '../_lib/ui-worldinfo.js';
-import { readUserFile, openLanSyncPanel, closeAllPopups, addS3Backend, waitForBackendSync, fillS3Form, shadowMain, waitForSyncPopup, conflictChoiceShowing, chooseConflictVersion, applyConflictChoices } from '../_lib/sync.js';
+import { readUserFile, openLanSyncPanel, closeAllPopups, addS3Backend, waitForBackendSync, fillS3Form, shadowMain, waitForSyncPopup, conflictChoiceShowing, chooseConflictVersion, applyConflictChoices, clickBackendMenu } from '../_lib/sync.js';
+import { accountWindow, answerWindowConfirm } from '../_lib/account-window.js';
 import { blobOidOf, readCommitFiles } from '../../../src/sync/pipeline/git-tree.js';
 
 test.afterEach(async ({}, info) => {
@@ -218,8 +219,8 @@ for (const action of ['edit', 'remove']) {
         await waitForBackendSync(a.page, { label: 'Other' });
         const otherBefore = Object.values(registryOf(a.server).backends).find(entry => entry.label === 'Other').lastSync.at;
         const id = entryOf(a)[0];
-        // Pending row actions are deliberately disabled in the tab that
-        // started Sync. A separate real tab can request maintenance.
+        // Backend cards are deliberately locked in the tab that started
+        // Sync. A separate real tab can request maintenance.
         const control = await a.context.newPage();
         await control.goto(a.server.baseURL); await awaitS3Page(control);
         await openLanSyncPanel(control);
@@ -236,17 +237,17 @@ for (const action of ['edit', 'remove']) {
             const response = control.waitForResponse(r => new URL(r.url()).pathname === `/api/sync/v1/backends/${id}${action === 'edit' ? '/s3' : ''}` && r.request().method() === (action === 'edit' ? 'POST' : 'DELETE')).then(r => { acknowledged = true; return r; });
             response.catch(() => {});
             if (action === 'edit') {
-                await backendRow(control).locator('.syncBackendEditButton').click();
+                await clickBackendMenu(control, 'Cloud', 'edit');
                 await fillS3Form(control, { label: 'Renamed Cloud' });
-                await control.locator('.syncS3SaveButton').click();
+                await accountWindow(control).locator('[data-act="s3-save"]').click();
             } else {
-                await backendRow(control).locator('.lanSyncPeerForgetButton').click();
-                await control.locator('.popup-button-ok').last().click();
+                await clickBackendMenu(control, 'Cloud', 'remove');
+                await answerWindowConfirm(control);
             }
             await sent;
             // Another browser tab performs an independent DOM sync while the
             // first dialog awaits its real maintenance acknowledgement.
-            await tab.locator('.lanSyncPeerRow', { hasText: 'Other' }).locator('.lanSyncPeerSyncButton').click();
+            await backendRow(tab, 'Other').locator('[data-act="sync-now"]').click();
             await waitForBackendSync(tab, { label: 'Other', since: otherBefore });
             expect(acknowledged).toBe(false);
             expect(registryOf(a.server).backends[id].label).toBe('Cloud');
