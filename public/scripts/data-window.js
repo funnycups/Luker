@@ -69,6 +69,11 @@ const allSyncCats = groups => groups.flatMap(([, items]) => items.map(i => i[0])
 const isLoopback = url => /\/\/(127\.\d+\.\d+\.\d+|localhost|\[::1\]|::1)(:|\/|$)/i.test(url);
 const firstReachable = list => list.find(a => !isLoopback(a)) || list[0];
 
+/** Hostname of a database connection URL, or '' when it has no usable host. */
+function dbUrlHost(url) {
+    try { return new URL(url).hostname; } catch { return ''; }
+}
+
 // Survives closing and reopening the window, like the old per-backend action lock.
 const shared = { pending: new Set(), jobsByHandle: new Map(), backupSel: null };
 
@@ -1238,8 +1243,10 @@ export class DataPages extends LukerWindow {
         }
         if (r.needsDb) {
             const host = r.db.host.trim();
-            const isUrl = /^(mysql|postgres(ql)?):\/\//i.test(host);
-            if (!host || (!isUrl && !r.db.user.trim())) {
+            const scheme = /^(mysql|postgres(ql)?):\/\//i.exec(host);
+            const kind = r.needsDb.kind;
+            const urlOk = !scheme || (!kind || scheme[1].toLowerCase().startsWith(kind)) && Boolean(dbUrlHost(host));
+            if (!host || (scheme ? !urlOk : !r.db.user.trim())) {
                 this.toast(t`Enter the host and username of the temporary database`, true);
                 return;
             }
