@@ -137,7 +137,10 @@ function toOutcome(result) {
     const rejected = Number(result?.rejectedCount || 0);
     const failed = Number(result?.failedCount || 0);
     const targetable = result?.preflight?.targetableEntries;
-    const empty = targetable !== undefined ? Number(targetable) === 0 : restored === 0;
+    // Database backups carry their rows in the engine dump instead of files:
+    // the restore moved data even when no file was written, so it is not empty.
+    const engineDump = Number(result?.preflight?.engineDumpEntries || 0) > 0;
+    const empty = !engineDump && (targetable !== undefined ? Number(targetable) === 0 : restored === 0);
     return {
         restored,
         skipped,

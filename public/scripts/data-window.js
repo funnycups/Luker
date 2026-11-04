@@ -673,13 +673,18 @@ export class DataPages extends LukerWindow {
             const d = run.done;
             // A restore that matched nothing is not a success: show it as a warning
             // and skip the auto-reload so the user reads it instead of missing it.
-            const parts = [d.restored ? t`Restored ${d.restored} files` : t`No files were restored`];
+            // A database backup restores rows from its engine dump, so no files
+            // written is not the same as nothing restored.
+            const parts = [];
+            if (d.empty) parts.push(t`No files were restored`);
+            else if (d.restored) parts.push(t`Restored ${d.restored} files`);
             if (d.skipped) parts.push(t`${d.skipped} skipped`);
             if (d.rejected) parts.push(t`${d.rejected} rejected`);
             if (d.failed) parts.push(t`${d.failed} failed to write`);
             const warn = d.skipped || d.rejected || d.failed || d.empty;
             const sep = t`, `;
-            return `<div class="dw-banner${warn ? ' warning' : ''}">${ic(warn ? 'warn' : 'check')}<span>${t`${doneText}: ${parts.join(sep)}`}${d.crossEngine ? t` (${esc(d.crossEngine)})` : ''}</span>
+            const line = parts.length ? t`${doneText}: ${parts.join(sep)}` : doneText;
+            return `<div class="dw-banner${warn ? ' warning' : ''}">${ic(warn ? 'warn' : 'check')}<span>${line}${d.crossEngine ? t` (${esc(d.crossEngine)})` : ''}</span>
                     <button class="dw-btn sm" data-act="reload">${this.isOtherUser ? t`Done` : t`Reload page`}</button></div>
                 ${d.samples?.length ? `<details class="dw-fold"><summary>${ic('chev', 'dw-chev')}${t`View skipped files`}</summary>
                     <div class="dw-stalled" style="margin:0 12px 12px">${d.samples.map(x => `<code>${esc(x)}</code>`).join('')}</div></details>` : ''}`;
