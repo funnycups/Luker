@@ -105,6 +105,7 @@ export class LukerWindow {
         this.themeMenu = false;
         this.theme = loadTheme();
         this.modal = null;
+        this.shownPw = new Set();
         this.root.addEventListener('click', e => this.onClick(e));
     }
 
@@ -189,6 +190,7 @@ export class LukerWindow {
     push(view, params = {}) {
         this.stack[this.tab].push({ view, ...params });
         this.help = false;
+        this.shownPw.clear();
         this.render();
     }
 
@@ -196,6 +198,7 @@ export class LukerWindow {
         const s = this.stack[this.tab];
         if (s.length > 1) s.pop();
         this.help = false;
+        this.shownPw.clear();
         this.render();
     }
 
@@ -206,6 +209,7 @@ export class LukerWindow {
     navigate({ tab, view }) {
         if (tab && this.stack[tab]) this.tab = tab;
         if (view && this.top.view !== view) this.stack[this.tab].push({ view });
+        this.shownPw.clear();
         this.render();
     }
 
@@ -306,7 +310,8 @@ export class LukerWindow {
      * @returns {string} Markup
      */
     pw(model, value, placeholder = '', autocomplete = 'new-password') {
-        return `<span class="dw-pw"><input class="dw-inp" type="password" data-model="${model}" value="${esc(value)}" placeholder="${esc(placeholder)}" autocomplete="${autocomplete}"><button class="dw-eye" data-act="eye" type="button" title="${t`Show`}">${ic('eye')}</button></span>`;
+        const shown = this.shownPw.has(model);
+        return `<span class="dw-pw"><input class="dw-inp" type="${shown ? 'text' : 'password'}" data-model="${model}" value="${esc(value)}" placeholder="${esc(placeholder)}" autocomplete="${autocomplete}"><button class="dw-eye" data-act="eye" type="button" title="${t`Show`}">${ic('eye')}</button></span>`;
     }
 
     toast(text, error = false) {
@@ -391,6 +396,7 @@ export class LukerWindow {
             case 'tab':
                 this.tab = el.dataset.tab;
                 this.help = false;
+                this.shownPw.clear();
                 return this.render();
             case 'back': return this.pop();
             case 'push': return this.push(el.dataset.view);
@@ -410,7 +416,10 @@ export class LukerWindow {
                 return this.render();
             case 'eye': {
                 const input = el.previousElementSibling;
-                input.type = input.type === 'password' ? 'text' : 'password';
+                const show = input.type === 'password';
+                input.type = show ? 'text' : 'password';
+                const model = input.dataset.model;
+                if (model) show ? this.shownPw.add(model) : this.shownPw.delete(model);
                 return;
             }
         }
