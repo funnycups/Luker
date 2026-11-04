@@ -596,7 +596,7 @@ export class AdminPages {
         if (handle === currentUser?.handle) return this.w.navigate({ tab: 'backup' });
         const stack = this.w.stack.users;
         // Opening another user's data replaces this window; come back here once it closes.
-        await openDataWindow({ tab: 'backup', handle, onDone: () => {} });
+        await openDataWindow({ tab: 'backup', handle });
         this.reopen(stack);
     }
 

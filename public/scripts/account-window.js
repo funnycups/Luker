@@ -599,7 +599,7 @@ function reopenUsers(usersStack) {
  * @param {string} [options.tab] Page to show first: profile, sync, backup, restore, migrate, settings, snapshots, storage, users or reset
  * @param {string} [options.view] Sub-page to open inside the tab (e.g. 'conflicts')
  * @param {string} [options.handle] User whose data backup/restore/migration acts on (admin panel); another user's handle limits the window to those pages
- * @param {() => void} [options.onDone] Called after a successful restore or migration; reloads the page by default
+ * @param {() => void} [options.onDone] Called after a successful restore or migration; reloads the page (or closes a per-user window) by default
  * @param {object[]} [options.usersStack] User-management pages to show (internal)
  * @returns {Promise<void>} Resolves when the window closes
  */
@@ -615,8 +615,9 @@ export function openAccountWindow({ tab = 'profile', view, handle, onDone, users
     }
     const source = createLukerProvider({ handle });
     source.start();
-    const done = onDone ?? (() => location.reload());
-    const mounted = mountLukerWindow({
+    let mounted;
+    const done = onDone ?? (() => (mounted.ui.otherUser ? mounted.close() : location.reload()));
+    mounted = mountLukerWindow({
         label: t`Account`,
         create: root => new AccountWindow(root, source, { tab, view, handle, onDone: done, usersStack }),
         onClosed: () => {

@@ -70,7 +70,19 @@ const isLoopback = url => /\/\/(127\.\d+\.\d+\.\d+|localhost|\[::1\]|::1)(:|\/|$
 const firstReachable = list => list.find(a => !isLoopback(a)) || list[0];
 
 // Survives closing and reopening the window, like the old per-backend action lock.
-const shared = { pending: new Set(), jobs: null, backupSel: null };
+const shared = { pending: new Set(), jobsByHandle: new Map(), backupSel: null };
+
+function getSharedJobs(key) {
+    if (!shared.jobsByHandle.has(key)) {
+        shared.jobsByHandle.set(key, {
+            backup: { running: false, stage: null, percent: 0, done: null },
+            restore: { file: null, mode: 'merge', needsDb: null, db: { host: '', port: '', user: '', pass: '', name: '' }, running: false, stage: -1, percent: 0, note: '', done: null, error: null, interrupted: null },
+            migrate: { link: null, addresses: [], addr: '', expiresAt: 0, inLink: '', mode: 'merge', running: false, stage: -1, percent: 0, done: null, error: null, busy: false },
+        });
+    }
+    return shared.jobsByHandle.get(key);
+}
+
 /**
  * Sync, backup, restore and migration pages. The Account window extends this with its own pages.
  */
@@ -98,12 +110,8 @@ export class DataPages extends LukerWindow {
         const s = this.p.snapshot();
         shared.backupSel ??= new Set(s.backupCategories.filter(c => c.def && (c.id !== 'secrets' || s.caps.allowSecrets)).map(c => c.id));
         this.backupSel = shared.backupSel;
-        shared.jobs ??= {
-            backup: { running: false, stage: null, percent: 0, done: null },
-            restore: { file: null, mode: 'merge', needsDb: null, db: { host: '', port: '', user: '', pass: '', name: '' }, running: false, stage: -1, percent: 0, note: '', done: null, error: null, interrupted: null },
-            migrate: { link: null, addresses: [], addr: '', expiresAt: 0, inLink: '', mode: 'merge', running: false, stage: -1, percent: 0, done: null, error: null, busy: false },
-        };
-        this.f = { device: { label: s.device.label }, schedule: { ...s.schedule }, ...shared.jobs };
+        const jobsKey = this.handle || s.handle || '';
+        this.f = { device: { label: s.device.label }, schedule: { ...s.schedule }, ...getSharedJobs(jobsKey) };
 
         this.root.addEventListener('input', e => this.onInput(e));
         this.root.addEventListener('change', e => this.onChange(e));
@@ -672,7 +680,7 @@ export class DataPages extends LukerWindow {
             const warn = d.skipped || d.rejected || d.failed || d.empty;
             const sep = t`, `;
             return `<div class="dw-banner${warn ? ' warning' : ''}">${ic(warn ? 'warn' : 'check')}<span>${t`${doneText}: ${parts.join(sep)}`}${d.crossEngine ? t` (${esc(d.crossEngine)})` : ''}</span>
-                    <button class="dw-btn sm" data-act="reload">${t`Reload page`}</button></div>
+                    <button class="dw-btn sm" data-act="reload">${this.isOtherUser ? t`Done` : t`Reload page`}</button></div>
                 ${d.samples?.length ? `<details class="dw-fold"><summary>${ic('chev', 'dw-chev')}${t`View skipped files`}</summary>
                     <div class="dw-stalled" style="margin:0 12px 12px">${d.samples.map(x => `<code>${esc(x)}</code>`).join('')}</div></details>` : ''}`;
         }
@@ -1249,8 +1257,12 @@ export class DataPages extends LukerWindow {
         }
     }
 
-    /** After a successful restore or migration the page reloads, like the old manager. */
+    /** After a successful restore or migration the page reloads (or closes the per-user window). */
     finish() {
+        if (this.isOtherUser) {
+            this.f.restore.done = null;
+            this.f.migrate.done = null;
+        }
         this.onDone?.();
     }
 
