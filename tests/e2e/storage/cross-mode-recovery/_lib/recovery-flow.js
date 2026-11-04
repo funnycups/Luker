@@ -257,8 +257,6 @@ export async function restoreBackupViaUI(page, zipPath, { sourceMode, scratchDbC
         await host.waitFor({ state: 'visible', timeout: 30_000 });
         const url = sourceMode === 'mysql' ? scratchDbConfig.mysql?.url : scratchDbConfig.postgres?.url;
         await host.fill(url);
-        // The page requires a username next to the host.
-        await win.locator('[data-model="restore.db.user"]').fill(decodeURIComponent(new URL(url).username) || 'root');
         const probedVal = await host.inputValue();
         if (probedVal !== url) {
             throw new Error(`scratch URL input did not accept fill: got "${probedVal}" want "${url}"`);

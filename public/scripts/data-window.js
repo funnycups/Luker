@@ -1228,9 +1228,13 @@ export class DataPages extends LukerWindow {
                 : { title: t`Start restore?`, text: t`Files at the same path will be replaced by the version in the backup; other files are left alone.`, ok: t`Start restore` });
             if (!ok) return;
         }
-        if (r.needsDb && !(r.db.host && r.db.user)) {
-            this.toast(t`Enter the host and username of the temporary database`, true);
-            return;
+        if (r.needsDb) {
+            const host = r.db.host.trim();
+            const isUrl = /^(mysql|postgres(ql)?):\/\//i.test(host);
+            if (!host || (!isUrl && !r.db.user.trim())) {
+                this.toast(t`Enter the host and username of the temporary database`, true);
+                return;
+            }
         }
         const initialPercent = resume ? r.interrupted?.percent || 0 : 0;
         Object.assign(r, { running: true, stage: 0, percent: initialPercent, note: '', error: null, done: null, interrupted: null });
