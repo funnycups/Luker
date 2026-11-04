@@ -1228,12 +1228,6 @@ export async function triggerStorageBackendMigration(targetMode, dbCreds = {}) {
 }
 
 /**
- * Opens the old account popup.
- * @deprecated Replaced by the Account window (openDataWindow({ tab: 'profile' })); kept until the old templates are removed.
- */
-// eslint-disable-next-line no-unused-vars
-
-/**
  * Log out the current user.
  * @returns {Promise<void>}
  */
