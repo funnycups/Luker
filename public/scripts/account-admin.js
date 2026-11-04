@@ -388,6 +388,7 @@ export class AdminPages {
     /** Leaves every sub-page and shows the user list. */
     toRoot() {
         this.w.stack.users.length = 1;
+        this.w.shownPw.clear();
         this.w.render();
     }
 
