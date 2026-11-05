@@ -461,14 +461,104 @@ export const conflictRow = (page, rel) => syncPopup(page).locator(`.dw-conflict[
 export const noticeRow = (page, rel) => syncPopup(page).locator(`.dw-notice[data-path=${JSON.stringify(rel)}]`);
 
 /**
- * The merge role (`ours` or `theirs`) of the device version whose preview
- * shows `text`. Both e2e servers share a host name, so the version titles
- * do not tell the devices apart.
+ * Open the conflict panel of `rel` and every closed section, entry and
+ * field inside it. Values load only when a field opens, so a caller that
+ * needs to read a value must expand first. Repeats until no closed
+ * details remain, because opening a section renders its children.
+ *
+ * @returns {import('@playwright/test').Locator} the opened panel
+ */
+export async function expandConflictDiff(page, rel, { index = 0 } = {}) {
+    const diff = await openConflictPanel(page, rel, index);
+    await readConflictDiff(page, rel, { index });
+    return diff;
+}
+
+/**
+ * The conflict panel of one row, opened and waiting for its summary to
+ * leave the loading state.
+ */
+async function openConflictPanel(page, rel, index) {
+    const diff = conflictRow(page, rel).locator('.syncConflictDiff').nth(index);
+    await expect(diff).toBeVisible({ timeout: 30_000 });
+    await expect(diff.locator('.syncConflictDiffSummary')).not.toHaveText('Comparing versions…', { timeout: 30_000 });
+    if (!(await diff.evaluate(element => element.open))) {
+        await diff.locator('.syncConflictDiffSummary').click();
+    }
+    return diff;
+}
+
+/**
+ * Open every section, entry and field of one conflict panel and return a
+ * snapshot of its rendered text and value cells.
+ *
+ * Expansion runs inside the page: a status refresh can replace the row
+ * while a value request is in flight, and Playwright's actionability
+ * checks would then wait on a detached panel forever. Each step still
+ * clicks the visible summary, so the same toggle handlers and value
+ * requests run as when a user opens the tree.
+ */
+export async function readConflictDiff(page, rel, { index = 0 } = {}) {
+    await openConflictPanel(page, rel, index);
+    return page.evaluate(async ({ rel, index }) => {
+        const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+        const panelOf = () => [...document.querySelectorAll('.dw-conflict')]
+            .find(row => row.dataset.path === rel)
+            ?.querySelectorAll('.syncConflictDiff')[index];
+        const readValues = (panel, side) => [...panel.querySelectorAll(`.syncDiffValue[data-side="${side}"] .syncDiffValueText`)]
+            .map(element => element.textContent);
+        for (let guard = 0; guard < 100; guard++) {
+            const panel = panelOf();
+            if (!panel) return { text: '', ours: [], theirs: [], current: [], kept: [], missing: true };
+            const closed = [...panel.querySelectorAll('details:not([open])')];
+            if (closed.length > 0) {
+                for (const details of closed) details.querySelector(':scope > summary')?.click();
+                await sleep(50);
+                continue;
+            }
+            if (panel.querySelector('.syncDiffLoading')) {
+                await sleep(50);
+                continue;
+            }
+            // A summary click opens the details on the next task, which can
+            // render children and start a value request after this pass.
+            // Return only after a second pass sees the same settled state.
+            await sleep(100);
+            const settled = panelOf();
+            if (settled && !settled.querySelectorAll('details:not([open])').length && !settled.querySelector('.syncDiffLoading')) {
+                return {
+                    text: settled.textContent,
+                    ours: readValues(settled, 'ours'),
+                    theirs: readValues(settled, 'theirs'),
+                    current: readValues(settled, 'current'),
+                    kept: readValues(settled, 'kept'),
+                };
+            }
+        }
+        const panel = panelOf();
+        return { text: panel?.textContent ?? '', ours: [], theirs: [], current: [], kept: [], timeout: true };
+    }, { rel, index });
+}
+
+/**
+ * The merge role (`ours` or `theirs`) of the device version whose value
+ * shows `text`. Both e2e servers share a host name, so the card titles do
+ * not tell the devices apart. Every field is opened first because values
+ * are fetched only on demand.
  */
 export async function conflictChoiceShowing(page, rel, text) {
-    const card = conflictRow(page, rel).locator('.dw-version:not([data-v="current"])', { has: page.locator('.dw-preview', { hasText: text }) });
-    await expect(card).toHaveCount(1, { timeout: 30_000 });
-    return card.getAttribute('data-v');
+    let outcome = null;
+    await expect.poll(async () => {
+        const snapshot = await readConflictDiff(page, rel);
+        const count = values => values.filter(value => value.includes(text)).length;
+        const ours = count(snapshot.ours);
+        const theirs = count(snapshot.theirs);
+        if (ours === 1 && theirs === 0) outcome = 'ours';
+        else if (theirs === 1 && ours === 0) outcome = 'theirs';
+        else outcome = `ambiguous:${ours}:${theirs}`;
+        return outcome;
+    }, { timeout: 30_000 }).toMatch(/^(ours|theirs)$/);
+    return outcome;
 }
 
 export async function chooseConflictVersion(page, rel, choice) {

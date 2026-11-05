@@ -17,7 +17,7 @@ import {
     openLanSyncPanel, generatePairingLink, acceptPairingLink, selectCategories, fillPairingForm,
     setSyncSchedule, setSyncDeviceLabel, waitForBackendSync, clickSyncNow, openAddBackend,
     closeAllPopups, waitForSyncPopup, syncPopup, closeSyncPopup, waitForStatusChecks,
-    listPopupConflicts, listPopupNotices, conflictChoiceShowing, chooseConflictVersion,
+    listPopupConflicts, listPopupNotices, conflictChoiceShowing, chooseConflictVersion, expandConflictDiff,
     applyConflictChoices, openBranchFromNotice, dismissNotice, openChatByName,
     fillS3Form, readUserFile, syncFlash, conflictRow, pairingLinkField,
 } from '../_lib/sync.js';
@@ -269,9 +269,12 @@ async function assertLoreCards(page, { stale = false } = {}) {
     await expect(titles).toContainText(['Version from', 'Version from']);
     expect((await titles.allTextContents()).sort()).toEqual(['Version from Desk', 'Version from Tablet']);
     await expect(row.locator('.dw-version .dw-pilltag.is-ok')).toHaveCount(1);
-    await expect(row.locator('.dw-version[data-v="ours"] .dw-preview')).not.toBeEmpty();
-    await expect(row.locator('.dw-version[data-v="theirs"] .dw-preview')).not.toBeEmpty();
+    await expect(row.locator('.dw-preview')).toHaveCount(0);
     await expect(row.locator('.dw-banner.warning')).toHaveCount(stale ? 1 : 0);
+    const diff = row.locator('.syncConflictDiff').first();
+    await expect(diff).toBeVisible();
+    await expect(diff.locator('.syncConflictDiffSummary')).not.toHaveText('Comparing versions…');
+    await expect(diff.locator('.syncDiffSection').first()).toBeVisible();
     await expect(syncPopup(page).locator('[data-act="apply"]')).toBeVisible();
     await expect(syncPopup(page).locator('[data-act="apply"]')).toHaveText('Apply choices');
 }
@@ -405,7 +408,7 @@ test('Stale lore preview and cancelled then confirmed overwrite images', async (
         await scope.capture('conflict-stale', b.page, panel(b.page), async () => {
             await assertLoreCards(b.page, { stale: true });
             await expect(conflict(b.page).locator('.dw-banner.warning')).toContainText('This file was edited again after the conflict');
-            await expect(conflict(b.page).locator('.dw-version[data-v="current"] .dw-preview')).toContainText(WORDS.later);
+            await expect(await expandConflictDiff(b.page, LORE, { index: 1 })).toContainText(WORDS.later);
         });
         await chooseConflictVersion(b.page, LORE, await conflictChoiceShowing(b.page, LORE, WORDS.desk));
         await syncPopup(b.page).locator('[data-act="apply"]').click();

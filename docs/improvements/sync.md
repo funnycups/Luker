@@ -49,21 +49,21 @@ The indicator reports activity without a percentage or elapsed-time estimate. St
 
 ## Pending decisions
 
-When incompatible changes require a decision, sync keeps a provisional version available and lists the file in **Sync conflicts**. That provisional data is usable while the decision remains pending. The same path reported by several backends is grouped together, and an applied decision propagates through the reporting backends.
+When incompatible changes require a decision, sync keeps a provisional version available and lists the file under **Sync issues**. That provisional data is usable while the decision remains pending. The same path reported by several backends is grouped together, and an applied decision propagates through the reporting backends.
 
 ![Sync warning that files need a decision](/images/sync/07-conflict-banner.png)
 
-Read the previews and the **Version from …** labels, rather than treating the left or right card as local or remote. A parent version is marked **In use** only when it exactly matches the provisionally kept content. A merged version can differ from both parents, so a conflict need not have that badge. **Current version** never receives it.
+Read the change tree and the **Version from …** labels, rather than treating the left or right card as local or remote. The file lists its changed sections; expand a section to see entries or fields, and open a field to load its old and new values. Presets group into parameters, prompts, prompt order and extensions. World books list entries by comment or first content line. Character cards separate the profile, embedded world book and extensions. Chats separate metadata and messages. A reordered entry is marked as a move. Values load on demand and continue with **Load more** past the first page. A secret file shows entry labels and masked values with the last four characters. A version identical to another is marked **Same as …**. A parent version is marked **In use** only when it exactly matches the provisionally kept content. A merged version can differ from both parents, so a conflict need not have that badge. **Current version** never receives it.
 
-![Conflict popup with origin-labelled versions, a matching In use parent and Current version](/images/sync/08-conflict-popup.png)
+![Sync issues page with origin-labelled versions, a change tree and Current version](/images/sync/08-conflict-popup.png)
 
-Choose **Use this version** or **Keep the current version**, then **Apply choices**. Decisions apply to the whole file where a choice is required. A **Deleted** preview represents deletion; choosing it deletes that file. Pending items reopen on page load until resolved or dismissed as appropriate.
+Choose **Use this version** or **Keep the current version**, then **Apply choices**. Decisions apply to the whole file where a choice is required. A missing side is reported as a deletion; choosing it deletes that file. Pending items reopen on page load until resolved or dismissed as appropriate.
 
 ![Successful sync after resolving the pending lore decision](/images/sync/09-resolved-success.png)
 
 ### Changes made after a conflict
 
-If the file changed again, the popup shows the current data and an overwrite warning. **Keep the current version** preserves that newer data. Choosing another version requires **Overwrite** confirmation; **Cancel** leaves the current data and the pending decision unchanged. The overwritten version remains in sync history.
+If the file changed again, the Sync issues page compares the current data with the version that was in use and shows an overwrite warning. **Keep the current version** preserves that newer data. Choosing another version requires **Overwrite** confirmation; **Cancel** leaves the current data and the pending decision unchanged. The overwritten version remains in sync history.
 
 ![Stale conflict with newer current content and an overwrite warning](/images/sync/conflict-stale.png)
 
@@ -71,7 +71,7 @@ If the file changed again, the popup shows the current data and an overwrite war
 
 **Resolved on another device.** means a readable result confirmed that the decision is no longer pending. An unreadable backend instead leaves its choice unknown. If **Some pending sync records could not be read.** appears, inspect the affected backend, restore connectivity or its valid data, and check again. Absence from an incomplete response does not establish resolution.
 
-Files listed under **Files sync cannot update** still need attention. Inspect the reported paths, storage access and destination layout, correct the reported problem, then choose **Sync now**.
+Files listed under **Files not updated** still need attention. Inspect the reported paths, storage access and destination layout, correct the reported problem, then choose **Sync now**.
 
 ### Automatic merges
 

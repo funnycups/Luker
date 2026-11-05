@@ -241,4 +241,128 @@ describe('conflict routes across two devices', () => {
         expect((await B.call('GET', `/blob/u@ffffffff/${entry.theirs}`)).status).toBe(404);
         expect((await B.call('GET', `/blob/${id}/${'e'.repeat(40)}`)).status).toBe(404);
     });
+
+    test('conflict diff returns a tree without values and the value route pages it', async () => {
+        const entries = (alphaContent, alphaIndex, betaIndex) => ({
+            entries: {
+                0: { uid: 1, displayIndex: alphaIndex, comment: 'Alpha', content: alphaContent, key: ['a'] },
+                1: { uid: 2, displayIndex: betaIndex, comment: 'Beta', content: 'B', key: ['b'] },
+            },
+        });
+        A.write('worlds/w.json', JSON.stringify(entries('base', 0, 1)));
+        A.write('secrets.json', JSON.stringify({ api_key_custom: [{ id: 'one', value: 'sk-base-secret', label: 'base label', active: true }] }));
+        id = await pair(A, B, { categories: ['worlds', 'secrets'] });
+        const worldLeft = JSON.stringify(entries('LEFT_CONTENT_MARKER', 0, 1));
+        const worldRight = JSON.stringify(entries('RIGHT_CONTENT_MARKER', 1, 0));
+        const secretsLeft = JSON.stringify({ api_key_custom: [{ id: 'one', value: 'sk-left-secret', label: 'left label', active: true }] });
+        const secretsRight = JSON.stringify({ api_key_custom: [{ id: 'one', value: 'sk-right-secret', label: 'right label', active: false }] });
+        const commitSide = async (device, relPath, content) => {
+            await commitLocalEdit(await syncService.contextFor(device.owner, id), async ({ gitdir, files }) => ({
+                files: new Map(files).set(relPath, { oid: await git.writeBlob({ fs: atomicFs, gitdir, blob: Buffer.from(content) }), mode: '100644' }),
+                message: `edit ${relPath}`,
+            }));
+        };
+        A.write('worlds/w.json', worldLeft);
+        B.write('worlds/w.json', worldRight);
+        A.write('secrets.json', secretsLeft);
+        B.write('secrets.json', secretsRight);
+        // A merge records the peer's committed branch. Commit both edits first
+        // so the conflict compares the two intentional versions rather than an
+        // older branch head.
+        await commitSide(A, 'worlds/w.json', worldLeft);
+        await commitSide(A, 'secrets.json', secretsLeft);
+        await commitSide(B, 'worlds/w.json', worldRight);
+        await commitSide(B, 'secrets.json', secretsRight);
+        await sync(B);
+        const conflicts = (await status(B)).conflicts;
+        const world = conflicts.find(entry => entry.path === 'worlds/w.json');
+        const secrets = conflicts.find(entry => entry.path === 'secrets.json');
+        expect(world).toBeTruthy();
+        expect(secrets).toBeTruthy();
+
+        const diffRoute = entry => `/conflicts/diff?backendId=${encodeURIComponent(entry.backendId)}&path=${encodeURIComponent(entry.path)}&ours=${entry.ours ?? ''}&theirs=${entry.theirs ?? ''}`;
+        const valueRoute = (entry, nodeId, offset = 0) => `/conflicts/value?backendId=${encodeURIComponent(entry.backendId)}&path=${encodeURIComponent(entry.path)}&ours=${entry.ours ?? ''}&theirs=${entry.theirs ?? ''}&nodeId=${encodeURIComponent(nodeId)}&offset=${offset}`;
+        const findNode = (nodes, label) => {
+            for (const node of nodes ?? []) {
+                if (node.label === label) return node;
+                const found = findNode(node.children, label);
+                if (found) return found;
+            }
+            return null;
+        };
+
+        const worldDiff = await B.call('GET', diffRoute(world));
+        expect(worldDiff.status).toBe(200);
+        expect(worldDiff.body).toMatchObject({ kind: 'worldbook', identical: false });
+        expect(JSON.stringify(worldDiff.body)).not.toContain('LEFT_CONTENT_MARKER');
+        expect(JSON.stringify(worldDiff.body)).not.toContain('RIGHT_CONTENT_MARKER');
+        const entriesSection = findNode(worldDiff.body.sections, 'Entries');
+        // Either entry can be the stable anchor of a two-entry reorder; the
+        // view must surface the other one as a move.
+        const moved = entriesSection.children.find(child => child.meta?.move);
+        expect(moved).toMatchObject({ type: 'item', meta: { move: { from: 1, to: 2 } } });
+        const alpha = findNode(worldDiff.body.sections, 'Alpha');
+        const content = findNode(alpha.children, 'Content');
+        expect(content).toMatchObject({ type: 'field', status: 'changed', value: { kind: 'scalar' } });
+        const contentValue = await B.call('GET', valueRoute(world, content.id));
+        expect(contentValue.status).toBe(200);
+        expect(contentValue.body).toMatchObject({ mode: 'cells', offset: 0, nextOffset: null });
+        expect([contentValue.body.before.text, contentValue.body.after.text].sort()).toEqual(['LEFT_CONTENT_MARKER', 'RIGHT_CONTENT_MARKER']);
+
+        const secretsDiff = await B.call('GET', diffRoute(secrets));
+        expect(secretsDiff.status).toBe(200);
+        expect(JSON.stringify(secretsDiff.body)).not.toContain('sk-left-secret');
+        expect(JSON.stringify(secretsDiff.body)).not.toContain('sk-right-secret');
+        const keys = findNode(secretsDiff.body.sections, 'Keys');
+        const custom = findNode(keys.children, 'Api key custom');
+        const entry = custom.children[0];
+        const label = findNode(entry.children, 'Label');
+        const masked = findNode(entry.children, 'Value');
+        expect(label).toMatchObject({ type: 'field' });
+        expect(masked).toMatchObject({ type: 'field' });
+        const labelValue = await B.call('GET', valueRoute(secrets, label.id));
+        expect([labelValue.body.before.text, labelValue.body.after.text].sort()).toEqual(['left label', 'right label']);
+        const maskedValue = await B.call('GET', valueRoute(secrets, masked.id));
+        expect(maskedValue.status).toBe(200);
+        expect(JSON.stringify(maskedValue.body)).not.toContain('sk-left-secret');
+        expect(JSON.stringify(maskedValue.body)).not.toContain('sk-right-secret');
+        expect([maskedValue.body.before.text, maskedValue.body.after.text]).toEqual(['********cret', '********cret']);
+
+        expect((await B.call('GET', `/conflicts/diff?backendId=${id}&path=worlds%2Fw.json&ours=nothex&theirs=${world.theirs}`)).status).toBe(400);
+        expect((await B.call('GET', `/conflicts/diff?backendId=${id}&path=worlds%2Fw.json&ours=${'e'.repeat(40)}&theirs=${world.theirs}`)).status).toBe(404);
+        expect((await B.call('GET', `/conflicts/diff?backendId=${id}&path=worlds%2Fw.json&theirs=${world.theirs}`)).status).toBe(400);
+        expect((await B.call('GET', valueRoute(world, '999999'))).status).toBe(404);
+        expect((await B.call('GET', `/conflicts/value?backendId=${id}&path=worlds%2Fw.json&ours=${world.ours}&theirs=${world.theirs}&nodeId=0&offset=-1`)).status).toBe(400);
+    });
+
+    test('a one megabyte value stays out of the tree and pages through the value route', async () => {
+        const entry = content => ({ entries: { 0: { uid: 1, displayIndex: 0, comment: 'Alpha', content, key: ['a'] } } });
+        const huge = 'x'.repeat(1_000_000);
+        A.write('worlds/big.json', JSON.stringify(entry('base')));
+        id = await pair(A, B, { categories: ['worlds'] });
+        A.write('worlds/big.json', JSON.stringify(entry(huge)));
+        B.write('worlds/big.json', JSON.stringify(entry(huge.replaceAll('x', 'y'))));
+        await sync(B);
+        const conflict = (await status(B)).conflicts.find(item => item.path === 'worlds/big.json');
+        expect(conflict).toBeTruthy();
+        const diffRoute = `/conflicts/diff?backendId=${encodeURIComponent(conflict.backendId)}&path=${encodeURIComponent(conflict.path)}&ours=${conflict.ours ?? ''}&theirs=${conflict.theirs ?? ''}`;
+        const diff = await B.call('GET', diffRoute);
+        expect(diff.status).toBe(200);
+        expect(JSON.stringify(diff.body).length).toBeLessThan(10_000);
+        const content = (function find(nodes) {
+            for (const node of nodes ?? []) {
+                if (node.label === 'Content') return node;
+                const found = find(node.children);
+                if (found) return found;
+            }
+            return null;
+        })(diff.body.sections);
+        const value = await B.call('GET', `/conflicts/value?backendId=${encodeURIComponent(conflict.backendId)}&path=${encodeURIComponent(conflict.path)}&ours=${conflict.ours ?? ''}&theirs=${conflict.theirs ?? ''}&nodeId=${content.id}&offset=0`);
+        expect(value.status).toBe(200);
+        expect(value.body).toMatchObject({ mode: 'cells', offset: 0, nextOffset: 4000 });
+        expect(value.body.before.chars).toBe(1_000_000);
+        expect(value.body.after.chars).toBe(1_000_000);
+        expect(value.body.before.text).toHaveLength(4000);
+        expect(value.body.after.text).toHaveLength(4000);
+    });
 });

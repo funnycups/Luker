@@ -1,6 +1,7 @@
 // Data pages of the Account window: sync, backup, restore and migration.
 import { t } from './i18n.js';
 import { LukerWindow, ic, esc } from './luker-window.js';
+import { createConflictDiffPanels, createConflictDiffQueue } from './sync-conflict-view.js';
 
 export const dataTitles = () => ({
     list: t`Sync`,
@@ -126,6 +127,45 @@ export class DataPages extends LukerWindow {
         this.unsubscribe = this.p.subscribe(() => this.refreshLive());
         this.ticker = setInterval(() => this.tick(), 1000);
         this.finishTimer = null;
+        this.conflictTrees = new Map();
+        this.conflictQueue = createConflictDiffQueue(2);
+    }
+
+    afterRender() {
+        this.mountConflictViews();
+    }
+
+    /**
+     * Keep the mounted diff panels across page rerenders: a status refresh
+     * replaces the page markup, so the existing panel is moved into the new
+     * placeholder instead of being rebuilt and losing its open fields.
+     */
+    mountConflictViews() {
+        if (this.top.view !== 'conflicts') return;
+        const shown = new Set();
+        for (const slot of this.root.querySelectorAll('[data-conflict-view]')) {
+            const key = slot.dataset.conflictView;
+            shown.add(key);
+            const conflict = this.snap.conflicts.find(item => item.key === key);
+            if (!conflict) continue;
+            const signature = JSON.stringify(conflict.review);
+            let mounted = this.conflictTrees.get(key);
+            if (!mounted || mounted.signature !== signature) {
+                mounted = {
+                    signature,
+                    group: createConflictDiffPanels(
+                        conflict.review,
+                        this.conflictQueue,
+                        oid => this.p.previewUrl(conflict.review.backendId, oid),
+                    ),
+                };
+                this.conflictTrees.set(key, mounted);
+            }
+            slot.append(mounted.group);
+        }
+        for (const key of this.conflictTrees.keys()) {
+            if (!shown.has(key)) this.conflictTrees.delete(key);
+        }
     }
 
     /** Name of the long-running job in progress, if any. */
@@ -573,24 +613,26 @@ export class DataPages extends LukerWindow {
         const chosen = Object.keys(this.choices).filter(k => conflicts.some(c => c.key === k)).length;
         const failed = conflicts.filter(c => this.failedKeys.has(c.key));
         const preview = p => {
-            if (p?.kind === 'loading') return `<span class="dw-preview is-empty">${t`Reading…`}</span>`;
-            if (!p || p.kind === 'deleted') return `<span class="dw-preview is-empty">${t`The file is deleted in this version`}</span>`;
+            if (!p) return '';
+            if (p.kind === 'loading') return `<span class="dw-preview is-empty">${t`Reading…`}</span>`;
+            if (p.kind === 'deleted') return `<span class="dw-preview is-empty">${t`The file is deleted in this version`}</span>`;
             if (p.kind === 'image') return `<span class="dw-preview is-image"><img src="${esc(p.url)}" alt=""></span>`;
-            if (p.kind === 'binary') return `<span class="dw-preview is-empty">${t`Binary file ${size(p.bytes)}`}</span>`;
             if (p.kind === 'error') return `<span class="dw-preview is-empty">${t`Failed to read: ${esc(p.message)}`}</span>`;
-            return `<span class="dw-preview">${esc(p.text)}</span>`;
+            return '';
         };
         const conflictHtml = conflicts.map(c => `
             <div class="dw-conflict${this.failedKeys.has(c.key) ? ' is-failed' : ''}" data-path="${esc(c.path)}" data-stale="${c.stale}">
                 <div class="dw-conflict-head"><span class="dw-pilltag is-warn">${esc(c.kind)}</span><b title="${esc(c.path)}">${esc(c.path)}</b></div>
                 ${c.stale ? `<div class="dw-banner warning">${ic('clock')}<span>${t`This file was edited again after the conflict; choosing another version will overwrite those changes`}</span></div>` : ''}
                 <div class="dw-versions">${c.versions.map(v => `
-                    <button class="dw-version${this.choices[c.key] === v.id ? ' on' : ''}" data-act="choose" data-key="${c.key}" data-v="${v.id}" ${c.unknown ? 'disabled' : ''}>
+                    <button class="dw-version${this.choices[c.key] === v.id ? ' on' : ''}" data-act="choose" data-key="${esc(c.key)}" data-v="${v.id}" ${c.unknown ? 'disabled' : ''}>
                         <span class="dw-version-head"><span class="dw-ring"></span><span>${v.current ? t`Current version` : t`Version from ${esc(v.from)}`}</span>${v.inUse ? `<span class="dw-pilltag is-ok">${t`In use`}</span>` : ''}</span>
                         ${preview(v.preview)}
+                        ${v.sameAs?.length ? `<span class="dw-version-note">${t`Same as ${v.sameAs.join(', ')}`}</span>` : ''}
                         <span class="dw-version-act">${v.current ? t`Keep current version` : t`Use this version`}</span>
                     </button>`).join('')}
                 </div>
+                <div class="dw-conflict-diff" data-conflict-view="${esc(c.key)}"></div>
             </div>`).join('');
         const noticeHtml = notices.map(n => {
             const busy = this.noticeBusy.has(n.id);

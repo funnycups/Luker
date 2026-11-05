@@ -56,6 +56,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Storage & Sync
 
+- Sync conflicts show a change tree grouped by preset sections, world book entries, character card fields and chat messages, with values loaded on demand and reordered entries marked as moves.
+- Conflict previews mask secret values and compare embedded character-card data.
 - Fixed group conversation renames failing or leaving the renamed chat inaccessible, with complete messages, metadata, state and pins retained and occupied destinations protected.
 - Fixed group chats losing displayed greetings on save, reporting patch conflicts on edits, or overwriting or clearing a conversation after a failed load or delayed chat switch.
 - Added encrypted [S3 Sync](/improvements/s3-sync) and a unified [Sync panel](/improvements/sync) for [LAN pairing](/improvements/lan-sync), backend editing, key repair, removal, scheduling and device labels. A backend-labelled capsule shows indeterminate activity and keeps errors or pending decisions accessible, coordinated with other activity. Failed reads retain loaded configuration and mark uncertain status.

@@ -94,6 +94,7 @@ const PATH_CATEGORIES = [
 ];
 
 const LOADING = Object.freeze({ kind: 'loading' });
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
 
 // Module-level so they survive closing and reopening the window while a
 // request is still in flight.
@@ -240,8 +241,10 @@ export function createSyncSource(state, emit) {
 
     const find = id => state.backends.find(backend => backend.id === id);
 
+    /** Image preview only: text versions are reviewed through the change tree. */
     function previewOf(backendId, oid, path) {
         if (oid === null || oid === undefined) return { kind: 'deleted' };
+        if (!IMAGE_EXTENSIONS.some(ext => String(path).toLowerCase().endsWith(ext))) return null;
         const key = `${backendId}:${oid}:${path}`;
         if (previewResults.has(key)) return previewResults.get(key);
         if (!previews) return LOADING;
@@ -262,7 +265,18 @@ export function createSyncSource(state, emit) {
     function buildConflicts() {
         state.conflicts = [...conflicts.entries()].map(([key, entry]) => {
             const category = categoryOfPath(entry.path);
-            const version = (id, oid, from) => ({ id, from, inUse: oid === entry.kept, preview: previewOf(entry.backendId, oid, entry.path) });
+            const titles = {
+                ours: t`Version from ${entry.oursDevice}`,
+                theirs: t`Version from ${entry.theirsDevice}`,
+                current: t`Current version`,
+            };
+            const oids = { ours: entry.ours, theirs: entry.theirs, current: entry.current };
+            // A version identical to another is labelled once on the parent
+            // that carries the note; the current version never receives it.
+            const sameAs = id => id === 'current' ? [] : ['ours', 'theirs']
+                .filter(other => other !== id && oids[other] !== null && oids[other] === oids[id])
+                .map(other => titles[other]);
+            const version = (id, oid, from) => ({ id, from, inUse: oid === entry.kept, preview: previewOf(entry.backendId, oid, entry.path), sameAs: sameAs(id) });
             return {
                 key,
                 backendId: entry.backendId,
@@ -272,16 +286,21 @@ export function createSyncSource(state, emit) {
                 unknown: statusError || recordUnknown(entry, status),
                 review: {
                     backendId: entry.backendId,
+                    path: entry.path,
                     ours: entry.ours,
                     theirs: entry.theirs,
                     current: entry.current,
+                    kept: entry.kept,
+                    oursDevice: entry.oursDevice,
+                    theirsDevice: entry.theirsDevice,
+                    stale: Boolean(entry.stale),
                     recordVersions: { ...entry.recordVersions },
                     currentVersions: { ...entry.currentVersions },
                 },
                 versions: [
                     version('ours', entry.ours, entry.oursDevice),
                     version('theirs', entry.theirs, entry.theirsDevice),
-                    { id: 'current', current: true, inUse: false, preview: previewOf(entry.backendId, entry.current, entry.path) },
+                    { id: 'current', current: true, inUse: false, preview: previewOf(entry.backendId, entry.current, entry.path), sameAs: [] },
                 ],
             };
         });
@@ -739,6 +758,17 @@ export function createSyncSource(state, emit) {
                     await refreshBackends();
                 }
             });
+        },
+
+        /**
+         * Object URL of one recorded version for the diff image pair.
+         * @param {string} backendId
+         * @param {string | null} oid
+         * @returns {Promise<string | null>}
+         */
+        async previewUrl(backendId, oid) {
+            if (!previews || oid === null || oid === undefined) return null;
+            return previews.url(backendId, oid);
         },
 
         /**

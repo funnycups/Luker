@@ -1,0 +1,250 @@
+.dw-conflict-diff {
+    min-width: 0;
+}
+
+.syncConflictDiffGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.dw-version-note {
+    font-size: 11.5px;
+    color: var(--dw-muted);
+}
+
+.syncConflictDiff {
+    margin-top: 4px;
+}
+
+.syncConflictDiffSummary {
+    cursor: pointer;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.syncConflictDiffBody {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+    min-width: 0;
+}
+
+.syncDiffTree {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.syncDiffSection,
+.syncDiffItem,
+.syncDiffField {
+    border-radius: 4px;
+    min-width: 0;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 2.2em;
+}
+
+.syncDiffSection > summary,
+.syncDiffItem > summary,
+.syncDiffField > summary {
+    cursor: pointer;
+}
+
+.syncDiffSectionBody,
+.syncDiffItemBody {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    margin-left: 0.9em;
+    padding-left: 0.6em;
+    border-left: 1px solid var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.3));
+}
+
+.syncDiffFieldBody {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding: 4px 0 6px 0.9em;
+}
+
+.syncDiffNodeSummary {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+    padding: 2px 0;
+}
+
+.syncDiffNodeLabel {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.syncDiffCount {
+    font-size: 0.8em;
+    opacity: 0.7;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    padding: 0 6px;
+}
+
+.syncDiffBadge {
+    font-size: 0.75em;
+    border-radius: 3px;
+    padding: 0 5px;
+}
+
+.syncDiffBadge-added {
+    background: rgba(92, 184, 92, 0.18);
+    color: #3c8c3c;
+}
+
+.syncDiffBadge-removed {
+    background: rgba(217, 83, 79, 0.18);
+    color: #b6423e;
+}
+
+.syncDiffBadge-changed {
+    background: rgba(240, 173, 78, 0.2);
+    color: #a86b1f;
+}
+
+.syncDiffBadge-moved {
+    background: rgba(91, 155, 213, 0.2);
+    color: #3f76a8;
+}
+
+.syncDiffMove {
+    font-size: 0.8em;
+    opacity: 0.8;
+}
+
+.syncDiffValues {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.syncDiffValue {
+    min-width: 0;
+}
+
+.syncDiffValueTitle {
+    font-size: 0.8em;
+    font-weight: 600;
+    opacity: 0.8;
+    overflow-wrap: anywhere;
+}
+
+.syncDiffValueText {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: var(--mono-font, monospace);
+    font-size: 0.9em;
+}
+
+.syncDiffLines {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    font-family: var(--mono-font, monospace);
+    font-size: 0.9em;
+    min-width: 0;
+}
+
+.syncDiffLine {
+    display: grid;
+    grid-template-columns: 3.2em 3.2em minmax(0, 1fr);
+    gap: 4px;
+    align-items: start;
+    min-width: 0;
+    padding: 1px 0;
+}
+
+.syncDiffLineNo {
+    text-align: right;
+    opacity: 0.55;
+    user-select: none;
+}
+
+.syncDiffLineText {
+    margin: 0;
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.syncDiffLine[data-kind='removed'] {
+    background: rgba(217, 83, 79, 0.1);
+}
+
+.syncDiffLine[data-kind='added'] {
+    background: rgba(92, 184, 92, 0.1);
+}
+
+.syncDiffLine[data-kind='context'] {
+    opacity: 0.8;
+}
+
+.syncDiffLoading {
+    font-size: 0.9em;
+    opacity: 0.7;
+}
+
+.syncDiffError {
+    color: #d9534f;
+    overflow-wrap: anywhere;
+}
+
+.syncDiffLoadMore,
+.syncDiffLoadMoreLines,
+.syncDiffRetry {
+    align-self: flex-start;
+}
+
+.syncConflictDiffTruncated {
+    font-size: 0.85em;
+    margin-top: 2px;
+}
+
+.syncConflictDiffImages {
+    align-items: flex-start;
+}
+
+.syncConflictDiffImage {
+    flex: 1 1 0;
+    min-width: 0;
+    margin: 0;
+}
+
+.syncConflictDiffImage img {
+    display: block;
+    max-width: 100%;
+    max-height: 30vh;
+    object-fit: contain;
+}
+
+@media (max-width: 720px) {
+    .syncDiffSectionBody,
+    .syncDiffItemBody {
+        margin-left: 0.35em;
+        padding-left: 0.35em;
+    }
+
+    .syncDiffFieldBody {
+        padding-left: 0.35em;
+    }
+
+    .syncDiffLine {
+        grid-template-columns: 2.4em 2.4em minmax(0, 1fr);
+    }
+}

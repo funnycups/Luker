@@ -6,6 +6,7 @@
 import express from 'express';
 import { syncError } from '../sync/errors.js';
 
+import { buildConflictView, readConflictValue } from '../sync/conflict-diff/index.js';
 import { applyConflictChoices, dismissNotices, isConflictChoiceList, undoLastSync } from '../sync/pipeline/local-ops.js';
 import { readPendingState } from '../sync/pipeline/pending-status.js';
 import { readBlobBytes } from '../sync/pipeline/git-tree.js';
@@ -108,6 +109,17 @@ export async function syncResponse(owner, backendId, result) {
 
 const OID_PATTERN = /^[a-f0-9]{40}$/;
 
+/**
+ * An empty query value means a deleted side, an absent one is invalid and
+ * a malformed one is false. The route reports each case differently.
+ */
+function queryOid(value) {
+    if (typeof value !== 'string') return undefined;
+    if (value === '') return null;
+    const oid = value.toLowerCase();
+    return OID_PATTERN.test(oid) ? oid : false;
+}
+
 const isPathList = paths => Array.isArray(paths) && paths.every(item => typeof item === 'string');
 
 /**
@@ -168,6 +180,46 @@ export function createBackendsRouter({ userStore = defaultUserStore } = {}) {
         const owner = ownerFromUser(user, userStore);
         syncService.rememberOwner(owner);
         return owner;
+    }
+
+    /**
+     * Read the two recorded versions of one conflict, or answer the
+     * validation/backend/not-found error and return null. Shared by the
+     * navigation and value routes so both see exactly the same blobs.
+     */
+    async function conflictVersions(request, response) {
+        const owner = ownerOf(request, response);
+        if (!owner) return null;
+        const backendId = String(request.query.backendId ?? '');
+        const relPath = typeof request.query.path === 'string' ? request.query.path : '';
+        const ours = queryOid(request.query.ours);
+        const theirs = queryOid(request.query.theirs);
+        if (!backendId || !relPath || ours === undefined || theirs === undefined || ours === false || theirs === false || (ours === null && theirs === null)) {
+            response.status(400).json({ code: 'INVALID_DIFF_REQUEST', error: 'Expected backendId, path and at least one version oid' });
+            return null;
+        }
+        try {
+            assertSafeBackendId(backendId);
+            const registry = await readRegistry({ userRoot: owner.userRoot });
+            if (!registry.backends[backendId]) {
+                response.status(404).json({ code: 'UNKNOWN_BACKEND', error: `No sync backend ${backendId}` });
+                return null;
+            }
+            const { gitDir } = getShadowPaths({ userRoot: owner.userRoot, peerId: backendId });
+            const ctx = await syncService.contextFor(owner, backendId);
+            const [left, right] = await ctx.withRead(() => Promise.all([
+                ours === null ? null : readBlobBytes({ gitdir: gitDir, oid: ours }),
+                theirs === null ? null : readBlobBytes({ gitdir: gitDir, oid: theirs }),
+            ]));
+            return { path: relPath, left, right };
+        } catch (error) {
+            if (error?.code === 'NotFoundError' || error?.code === 'ObjectTypeError') {
+                response.status(404).json({ code: 'NOT_FOUND', error: 'Not found' });
+                return null;
+            }
+            sendError(response, error);
+            return null;
+        }
     }
 
     router.get('/backends', async (request, response) => {
@@ -296,6 +348,44 @@ export function createBackendsRouter({ userStore = defaultUserStore } = {}) {
             response.send(bytes);
         } catch (error) {
             if (error?.code === 'NotFoundError' || error?.code === 'ObjectTypeError') return response.status(404).json({ code: 'NOT_FOUND', error: 'Not found' });
+            sendError(response, error);
+        }
+    });
+
+    /**
+     * The navigation tree of the two recorded versions. The browser never
+     * receives full blobs or value text here, so a multi-megabyte preset
+     * cannot stall layout. `secrets.json` values are masked before the
+     * tree is built.
+     */
+    router.get('/conflicts/diff', async (request, response) => {
+        const versions = await conflictVersions(request, response);
+        if (!versions) return;
+        response.json(buildConflictView(versions).view);
+    });
+
+    /**
+     * One page of one node's value. The client asks only after the user
+     * opens a field, and asks again with the returned `nextOffset` to
+     * continue a cut value.
+     */
+    router.get('/conflicts/value', async (request, response) => {
+        const nodeId = typeof request.query.nodeId === 'string' ? request.query.nodeId : '';
+        if (!/^\d+$/.test(nodeId)) {
+            return response.status(400).json({ code: 'INVALID_NODE', error: 'Expected a numeric nodeId' });
+        }
+        const offsetText = request.query.offset === undefined ? '0' : request.query.offset;
+        const offset = typeof offsetText === 'string' && /^\d+$/.test(offsetText) ? Number(offsetText) : NaN;
+        if (!Number.isSafeInteger(offset)) {
+            return response.status(400).json({ code: 'INVALID_OFFSET', error: 'Expected a non-negative integer offset' });
+        }
+        const versions = await conflictVersions(request, response);
+        if (!versions) return;
+        try {
+            response.json(readConflictValue({ ...versions, nodeId, offset }));
+        } catch (error) {
+            if (error?.code === 'UNKNOWN_NODE') return response.status(404).json({ code: 'UNKNOWN_NODE', error: error.message });
+            if (error?.code === 'INVALID_OFFSET') return response.status(400).json({ code: 'INVALID_OFFSET', error: error.message });
             sendError(response, error);
         }
     });

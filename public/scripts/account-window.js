@@ -188,6 +188,7 @@ class AccountWindow extends DataPages {
     }
 
     afterRender() {
+        super.afterRender();
         const slot = this.root.querySelector('[data-region="storage"]');
         if (slot) this.mountInspector(slot);
         if (this.isAdminView) this.admin.afterRender();
