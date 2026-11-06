@@ -7728,7 +7728,9 @@ export async function Generate(type, options = {}, dryRun = false) {
 async function generateInternal(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0 } = {}, dryRun = false) {
     console.log('Generate entered');
     setGenerationProgress(0);
-    generation_started = new Date();
+    if (!dryRun) {
+        generation_started = new Date();
+    }
     setActiveWorldInfoPromptSnapshot();
     const generationEventParams = { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage };
 
@@ -7738,13 +7740,15 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
     // Occurs every time, even if the generation is aborted due to slash commands execution
     await eventSource.emit(event_types.GENERATION_STARTED, type, generationEventParams, dryRun);
 
-    // Don't recreate abort controller if signal is passed
-    if (!(abortController && signal)) {
+    // Prompt estimates must not replace the controller that owns a live generation.
+    // Don't recreate the live controller if a signal is passed (group generation).
+    if (!dryRun && !(abortController && signal)) {
         abortController = new AbortController();
     }
+    const generationAbortController = dryRun ? new AbortController() : abortController;
 
     const isGenerationAborted = () => Boolean(
-        abortController?.signal?.aborted
+        generationAbortController?.signal?.aborted
         || (signal && typeof signal === 'object' && 'aborted' in signal && signal.aborted),
     );
 
@@ -7918,7 +7922,7 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
     const isContinue = type == 'continue';
 
     // Rewrite the generation timer to account for the time passed for all the continuations.
-    if (isContinue && chat.length) {
+    if (!dryRun && isContinue && chat.length) {
         const prevFinished = lastMessage.gen_finished;
         const prevStarted = lastMessage.gen_started;
 
@@ -8256,7 +8260,7 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
     const wiScanPayload = {
         type,
         dryRun,
-        signal: abortController?.signal || null,
+        signal: generationAbortController?.signal || null,
         maxContext: this_max_context,
         coreChat,
         chatForWI,
