@@ -734,7 +734,7 @@ export function createSyncSource(state, emit) {
                 region: s3.region || '',
                 bucket: s3.bucket || '',
                 prefix: s3.prefix || '',
-                pathStyle: s3.forcePathStyle ?? true,
+                pathStyle: s3.forcePathStyle ?? false,
                 stripQuotes: s3.stripIfMatchQuotes ?? false,
             };
         },

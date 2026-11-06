@@ -337,7 +337,7 @@ export async function setSyncDeviceLabel(page, label) {
 /** Sync → Add → Use S3 storage, fill the form and save it. */
 export async function addS3Backend(page, options) {
     await openAddBackend(page, 's3');
-    // The old form started with path-style requests on; keep that default.
+    // The fixture storage requires path-style requests.
     await fillS3Form(page, { forcePathStyle: true, ...options });
     await saveS3Form(page);
 }
