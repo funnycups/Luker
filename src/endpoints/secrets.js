@@ -55,6 +55,7 @@ export const SECRET_KEYS = {
     FALAI: 'api_key_falai',
     GENERIC: 'api_key_generic',
     DEEPSEEK: 'api_key_deepseek',
+    DEEPSEEK_SEARCH: 'api_key_deepseek_search',
     SERPER: 'api_key_serper',
     BRAVE_SEARCH: 'api_key_brave_search',
     EXA: 'api_key_exa',

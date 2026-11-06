@@ -11,6 +11,8 @@ import {
     normalizeSerpapiResults,
     buildZaiRequest,
     normalizeZaiResults,
+    buildDeepseekRequest,
+    normalizeDeepseekResults,
 } from '../../src/endpoints/search.js';
 
 const ctx = (over = {}) => ({
@@ -149,6 +151,30 @@ describe('zai adapter', () => {
     test('normalizes search_result rows', () => {
         const out = normalizeZaiResults({ search_result: [{ title: 'T', link: 'https://t.example', content: 'C' }] }, 5);
         expect(out).toEqual([{ title: 'T', url: 'https://t.example', snippet: 'C' }]);
+    });
+});
+
+describe('deepseek adapter', () => {
+    test('builds the tools/search request with count and bearer auth', () => {
+        const { url, init } = buildDeepseekRequest(ctx());
+        expect(url).toBe('https://api.deepseek.com/v1/tools/search');
+        const body = JSON.parse(init.body);
+        expect(body.query).toBe('capybara');
+        expect(body.count).toBe(5);
+        expect(init.headers.Authorization).toBe('Bearer secret');
+    });
+
+    test('prefers summary over snippet and falls back to snippet', () => {
+        const out = normalizeDeepseekResults({
+            results: [
+                { title: 'A', url: 'https://a.example', summary: 'long', snippet: 'short' },
+                { title: 'B', url: 'https://b.example', summary: '', snippet: 'short' },
+            ],
+        }, 5);
+        expect(out).toEqual([
+            { title: 'A', url: 'https://a.example', snippet: 'long' },
+            { title: 'B', url: 'https://b.example', snippet: 'short' },
+        ]);
     });
 });
 

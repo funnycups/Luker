@@ -151,6 +151,12 @@ export const SEARCH_PROVIDERS = [
             },
         ],
     },
+    {
+        id: 'deepseek',
+        label: 'DeepSeek (API key)',
+        secretKey: 'api_key_deepseek_search',
+        fields: [],
+    },
 ];
 
 const SAFE_SEARCH_VALUES = SAFE_SEARCH_OPTIONS.map(([value]) => value);

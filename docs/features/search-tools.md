@@ -94,8 +94,9 @@ The top toggles map to the modes above ("Expose tools to main model" = Tool Mode
 | **Serper** | Google results via serper.dev | Requires API key |
 | **SerpApi** | Google results via SerpApi | Requires API key |
 | **Z.AI** | Z.AI web search | Requires API key |
+| **DeepSeek** | DeepSeek native web search | Requires the DeepSeek API key |
 
-The search engine is selected via the `provider` configuration option, with each engine's independent configuration stored in `providerSettings`. Safe search is available for DuckDuckGo, SearXNG, Brave Search, Tavily, Exa, and SerpApi via the `safeSearch` option; Serper and Z.AI do not expose safe search.
+The search engine is selected via the `provider` configuration option, with each engine's independent configuration stored in `providerSettings`. Safe search is available for DuckDuckGo, SearXNG, Brave Search, Tavily, Exa, and SerpApi via the `safeSearch` option; Serper, Z.AI, and DeepSeek do not expose safe search.
 
 ## World Info Entry Management
 
@@ -140,7 +141,7 @@ The plugin keeps the shared lorebook aligned with the stored search results as t
 |---------|-------------|
 | Enable Search Tools | Enable Tool Mode, allowing the model to autonomously call search during conversation |
 | Enable Pre-request Agent | Enable Pre-request Agent Mode, automatically searching before generation |
-| Search Engine | Select search engine (DuckDuckGo / SearXNG / Brave Search / Tavily / Exa / Serper / SerpApi / Z.AI) |
+| Search Engine | Select search engine (DuckDuckGo / SearXNG / Brave Search / Tavily / Exa / Serper / SerpApi / Z.AI / DeepSeek) |
 | Search Result Count | Number of results returned by a search |
 | Page Extract Characters | Maximum text length extracted when visiting web pages |
 | Safe Search | Safety filtering level for search results |

@@ -42,6 +42,11 @@ describe('SEARCH_PROVIDERS', () => {
         }
     });
 
+    test('deepseek search uses a dedicated secret slot', () => {
+        const deepseek = SEARCH_PROVIDERS.find(p => p.id === 'deepseek');
+        expect(deepseek.secretKey).toBe('api_key_deepseek_search');
+    });
+
     test('safe search is present only where the provider supports it', () => {
         const withSafe = SEARCH_PROVIDERS.filter(p => p.fields.some(f => f.key === 'safeSearch')).map(p => p.id).sort();
         expect(withSafe).toEqual(['brave', 'ddg', 'exa', 'searxng', 'serpapi', 'tavily']);

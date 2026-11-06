@@ -43,13 +43,18 @@ describe('POST /api/search/query validation', () => {
         const res = await query({ provider: 'tavily', query: 'x' });
         expect(res.status).toBe(400);
     });
+
+    test('requires an API key for deepseek with 400', async () => {
+        const res = await query({ provider: 'deepseek', query: 'x' });
+        expect(res.status).toBe(400);
+    });
 });
 
 describe('SEARCH_PROVIDER_IDS', () => {
     test('contains the registered providers', async () => {
         const { SEARCH_PROVIDER_IDS } = await import('../../src/endpoints/search.js');
         expect([...SEARCH_PROVIDER_IDS].sort()).toEqual(
-            ['brave', 'ddg', 'exa', 'searxng', 'serpapi', 'serper', 'tavily', 'zai'],
+            ['brave', 'ddg', 'deepseek', 'exa', 'searxng', 'serpapi', 'serper', 'tavily', 'zai'],
         );
     });
 });
