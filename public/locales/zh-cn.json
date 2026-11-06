@@ -6721,7 +6721,7 @@
     ,"e.g. Shared archive": "例如：共享归档"
     ,"Storage location": "存储位置"
     ,"Bucket and prefix cannot be changed after saving": "桶和前缀保存后不能改"
-    ,"Path-style requests (needed by MinIO, etc.)": "路径风格请求（MinIO 等需要）"
+    ,"Path-style requests (needed by MinIO, etc.)": "路径样式请求（MinIO 等需要）"
     ,"Credentials": "访问凭据"
     ,"Other devices must use the same passphrase": "其他设备要用同一个口令"
     ,"Connecting…": "正在连接…"
