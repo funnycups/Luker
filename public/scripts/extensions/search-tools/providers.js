@@ -137,7 +137,7 @@ export const SEARCH_PROVIDERS = [
     {
         id: 'zai',
         label: 'Z.AI (API key)',
-        secretKey: 'api_key_zai',
+        secretKey: 'api_key_zai_search',
         fields: [
             {
                 key: 'recency',

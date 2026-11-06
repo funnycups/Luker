@@ -69,6 +69,7 @@ export const SECRET_KEYS = {
     COMETAPI: 'api_key_cometapi',
     AZURE_OPENAI: 'api_key_azure_openai',
     ZAI: 'api_key_zai',
+    ZAI_SEARCH: 'api_key_zai_search',
     SILICONFLOW: 'api_key_siliconflow',
     ELEVENLABS: 'api_key_elevenlabs',
     POLLINATIONS: 'api_key_pollinations',

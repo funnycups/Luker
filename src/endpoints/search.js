@@ -685,9 +685,9 @@ const SEARCH_ADAPTERS = {
     },
     zai: {
         async execute(ctx) {
-            const apiKey = readSecret(ctx.directories, SECRET_KEYS.ZAI);
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.ZAI_SEARCH);
             if (!apiKey) {
-                throw new HttpError(400, 'No Z.AI key found');
+                throw new HttpError(400, 'No Z.AI Search key found');
             }
             const { url, init } = buildZaiRequest({ ...ctx, apiKey });
             const raw = await fetchProviderJson(url, init, 'Z.AI');

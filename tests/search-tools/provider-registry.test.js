@@ -42,9 +42,11 @@ describe('SEARCH_PROVIDERS', () => {
         }
     });
 
-    test('deepseek search uses a dedicated secret slot', () => {
+    test('vendors with a chat API use dedicated search secret slots', () => {
         const deepseek = SEARCH_PROVIDERS.find(p => p.id === 'deepseek');
         expect(deepseek.secretKey).toBe('api_key_deepseek_search');
+        const zai = SEARCH_PROVIDERS.find(p => p.id === 'zai');
+        expect(zai.secretKey).toBe('api_key_zai_search');
     });
 
     test('safe search is present only where the provider supports it', () => {
