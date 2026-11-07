@@ -55,8 +55,16 @@ function hasIOSKeepAliveBridge() {
         && typeof window.LukerIOS.setGenerationActive === 'function';
 }
 
+// iOS Home Screen web apps report PiP as enabled, but WebKit never actually
+// opens the window there (https://bugs.webkit.org/show_bug.cgi?id=303885).
+// navigator.standalone is only defined by iOS WebKit.
+function isIOSHomeScreenApp() {
+    return typeof navigator !== 'undefined' && navigator.standalone === true;
+}
+
 function hasPipSupport() {
     return typeof document !== 'undefined'
+        && !isIOSHomeScreenApp()
         && 'pictureInPictureEnabled' in document
         && document.pictureInPictureEnabled === true
         && typeof HTMLVideoElement !== 'undefined'
@@ -96,38 +104,79 @@ function ensurePipVideo() {
     return video;
 }
 
+function isInPip(video) {
+    return !!video && (document.pictureInPictureElement === video
+        || video.webkitPresentationMode === 'picture-in-picture');
+}
+
 function onLeavePip() {
     if (activeMode !== 'pip') return;
     activeMode = 'off';
     notifyStateChange();
 }
 
+function onPresentationModeChanged() {
+    if (pipVideo && pipVideo.webkitPresentationMode !== 'picture-in-picture') onLeavePip();
+}
+
 function attachPipListeners() {
     if (pipListenersAttached || !pipVideo) return;
     pipVideo.addEventListener('leavepictureinpicture', onLeavePip);
+    pipVideo.addEventListener('webkitpresentationmodechanged', onPresentationModeChanged);
     pipListenersAttached = true;
 }
 
 function detachPipListeners() {
     if (!pipListenersAttached || !pipVideo) return;
     pipVideo.removeEventListener('leavepictureinpicture', onLeavePip);
+    pipVideo.removeEventListener('webkitpresentationmodechanged', onPresentationModeChanged);
     pipListenersAttached = false;
 }
 
-// WebKit rejects requestPictureInPicture() outside a user gesture and while the
-// element is still HAVE_NOTHING; iOS also refuses to load media data without a
-// gesture. When the video was primed earlier, play() and the PiP request are
-// issued in the same synchronous turn so both run inside the caller's gesture.
+// WebKit only opens PiP when the request is made synchronously inside the
+// user's tap and the video already has metadata. Both play() and the PiP
+// request are therefore issued in the same synchronous turn — never after an
+// await. On iOS the legacy webkitSetPresentationMode() is used when available:
+// it is the path Safari itself uses and is more reliable than the standard
+// API there. The video is primed by primePipKeepAlive() on an earlier tap.
+function waitForPipEntry(video, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        if (isInPip(video)) {
+            resolve();
+            return;
+        }
+        const done = () => {
+            clearTimeout(timer);
+            video.removeEventListener('webkitpresentationmodechanged', check);
+            video.removeEventListener('enterpictureinpicture', check);
+        };
+        const check = () => {
+            if (!isInPip(video)) return;
+            done();
+            resolve();
+        };
+        const timer = setTimeout(() => {
+            done();
+            if (isInPip(video)) resolve();
+            else reject(new Error('Picture-in-Picture did not open'));
+        }, timeoutMs);
+        video.addEventListener('webkitpresentationmodechanged', check);
+        video.addEventListener('enterpictureinpicture', check);
+    });
+}
+
 async function enterPip() {
     const video = ensurePipVideo();
     attachPipListeners();
-    if (document.pictureInPictureElement === video) return;
-    if (video.readyState === HTMLMediaElement.HAVE_NOTHING) {
-        await video.play();
-        await video.requestPictureInPicture();
+    if (isInPip(video)) return;
+    const playPromise = video.play();
+    if (typeof video.webkitSetPresentationMode === 'function'
+        && typeof video.webkitSupportsPresentationMode === 'function'
+        && video.webkitSupportsPresentationMode('picture-in-picture')) {
+        video.webkitSetPresentationMode('picture-in-picture');
+        await Promise.all([playPromise, waitForPipEntry(video, 3000)]);
         return;
     }
-    const playPromise = video.play();
     const pipPromise = video.requestPictureInPicture();
     await Promise.all([playPromise, pipPromise]);
 }
@@ -136,6 +185,8 @@ async function exitPip() {
     try {
         if (document.pictureInPictureElement === pipVideo && pipVideo) {
             await document.exitPictureInPicture();
+        } else if (pipVideo?.webkitPresentationMode === 'picture-in-picture') {
+            pipVideo.webkitSetPresentationMode('inline');
         }
     } finally {
         if (pipVideo) {
@@ -476,5 +527,22 @@ export async function setKeepAliveMode(desired) {
 
 export function initKeepAlive() {
     platform = resolvePlatform();
+    if (platform === 'web' && hasPipSupport()) armPipPriming();
     return platform;
+}
+
+// iOS only loads media inside a user gesture, and PiP can only open once the
+// video has metadata. Load the tiny silent video on the first tap anywhere so
+// it is ready long before the user picks Picture-in-Picture.
+let pipPrimingArmed = false;
+function armPipPriming() {
+    if (pipPrimingArmed || typeof document === 'undefined') return;
+    pipPrimingArmed = true;
+    const prime = () => {
+        document.removeEventListener('touchend', prime, true);
+        document.removeEventListener('click', prime, true);
+        primePipKeepAlive();
+    };
+    document.addEventListener('touchend', prime, true);
+    document.addEventListener('click', prime, true);
 }
