@@ -34,7 +34,11 @@ import {
     settingsReady,
     isGenerationInFlight,
     setGenerationInFlightListener,
+    name2,
+    this_chid,
+    getThumbnailUrl,
 } from '../script.js';
+import { updatePipView } from './luker-pip-view.js';
 import { isMobile, initMovingUI, favsToHotswap } from './RossAscends-mods.js';
 import {
     getActiveKeepAliveMode,
@@ -693,6 +697,46 @@ function reopenPipOnGenerationTap(event) {
         });
 }
 
+// Feeds the PiP keep-alive window: who is replying, the status and the tail of
+// the reply. Updates are throttled inside the view, so per-token calls are fine.
+function syncPipViewCharacter() {
+    const character = this_chid !== undefined ? characters[this_chid] : null;
+    updatePipView({
+        name: character?.name || name2 || '',
+        avatarUrl: character?.avatar ? getThumbnailUrl('avatar', character.avatar) : '',
+    });
+}
+
+function initPipViewFeed() {
+    let stopped = false;
+    syncPipViewCharacter();
+    eventSource.on(event_types.CHAT_CHANGED, () => {
+        syncPipViewCharacter();
+        updatePipView({ status: 'idle', text: '' });
+    });
+    eventSource.on(event_types.GENERATION_STARTED, (type, _params, dryRun) => {
+        if (dryRun || type === 'quiet') return;
+        stopped = false;
+        syncPipViewCharacter();
+        updatePipView({ status: 'generating', text: '' });
+    });
+    eventSource.on(event_types.STREAM_TOKEN_RECEIVED, (text) => {
+        updatePipView({ status: 'generating', text: String(text || '') });
+    });
+    eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
+        const message = chat[messageId];
+        if (!message || message.is_user) return;
+        updatePipView({ name: message.name || name2 || '', status: 'done', text: String(message.mes || '') });
+    });
+    eventSource.on(event_types.GENERATION_STOPPED, () => {
+        stopped = true;
+        updatePipView({ status: 'stopped' });
+    });
+    eventSource.on(event_types.GENERATION_ENDED, () => {
+        if (!stopped && !isGenerationInFlight()) updatePipView({ status: 'done' });
+    });
+}
+
 function syncMobileKeepAliveUi() {
     // isMobile() gates the entire subsystem, not just UI visibility. The
     // audio-mode setting persists in settings.json across devices; if a user
@@ -714,6 +758,7 @@ function syncMobileKeepAliveUi() {
         eventSource.on(event_types.IMAGE_GENERATION_STARTED, onScopedKeepAliveImageGenerationStarted);
         eventSource.on(event_types.IMAGE_GENERATION_ENDED, onScopedKeepAliveImageGenerationEnded);
         document.addEventListener('click', reopenPipOnGenerationTap, true);
+        initPipViewFeed();
         onKeepAliveStateChanged(() => {
             // Reflect whatever the module says is currently in effect — the user closing the
             // PiP window from the OS UI or autoplay being denied both land here.

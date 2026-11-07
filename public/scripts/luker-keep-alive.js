@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
+import { getPipViewStream } from './luker-pip-view.js';
+
 const SILENT_VIDEO_URL = '/sounds/silent.mp4';
+// Set once the live PiP view failed to open on this device, so later attempts
+// go straight to the silent video that is known to work.
+const PIP_VIEW_FAILED_KEY = 'luker_pip_view_failed';
 const SILENT_AUDIO_URL = '/sounds/silent-keepalive.m4a';
 
 /** @typedef {'off'|'android'|'harmony'|'ios'|'pip'|'audio'} KeepAliveMode */
@@ -90,18 +95,46 @@ function resolvePlatform() {
 function ensurePipVideo() {
     if (pipVideo) return pipVideo;
     const video = document.createElement('video');
-    video.src = SILENT_VIDEO_URL;
+    const viewStream = isPipViewDisabled() ? null : getPipViewStream();
+    if (viewStream) {
+        video.srcObject = viewStream;
+        // Start muted so the frames flow and metadata is ready before the
+        // user picks PiP, without taking over the audio session yet.
+        video.muted = true;
+        video.addEventListener('loadeddata', () => {
+            if (activeMode !== 'pip' && !isInPip(video)) video.pause();
+        }, { once: true });
+        video.play().catch(() => { /* noop */ });
+    } else {
+        video.src = SILENT_VIDEO_URL;
+    }
     video.loop = true;
     video.playsInline = true;
     video.preload = 'auto';
     // iOS refuses PiP on muted media; near-zero volume keeps it inaudible.
-    video.muted = false;
+    if (!viewStream) video.muted = false;
     video.volume = 0.0001;
     video.setAttribute('aria-hidden', 'true');
     video.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:160px;height:90px;pointer-events:none;opacity:0;';
     document.body.appendChild(video);
     pipVideo = video;
     return video;
+}
+
+function isPipViewDisabled() {
+    try { return localStorage.getItem(PIP_VIEW_FAILED_KEY) === '1'; } catch (_) { return false; }
+}
+
+// The live view failed to open PiP: drop the element so the next attempt
+// rebuilds it on the silent video.
+function abandonPipView() {
+    if (!pipVideo || pipVideo.srcObject === null) return;
+    try { localStorage.setItem(PIP_VIEW_FAILED_KEY, '1'); } catch (_) { /* noop */ }
+    detachPipListeners();
+    try { pipVideo.pause(); } catch (_) { /* noop */ }
+    pipVideo.srcObject = null;
+    pipVideo.remove();
+    pipVideo = null;
 }
 
 function isInPip(video) {
@@ -169,6 +202,23 @@ async function enterPip() {
     const video = ensurePipVideo();
     attachPipListeners();
     if (isInPip(video)) return;
+    if (video.srcObject) {
+        // Only a failure with the stream fully ready says the device can't do
+        // the live view; an early tap just needs another try.
+        const ready = video.readyState >= HTMLMediaElement.HAVE_METADATA;
+        try {
+            await enterPipOn(video);
+        } catch (error) {
+            if (ready) abandonPipView();
+            throw error;
+        }
+        return;
+    }
+    await enterPipOn(video);
+}
+
+async function enterPipOn(video) {
+    video.muted = false;
     const playPromise = video.play();
     if (typeof video.webkitSetPresentationMode === 'function'
         && typeof video.webkitSupportsPresentationMode === 'function'
@@ -373,7 +423,7 @@ export function getAvailableWebModes() {
 export function primePipKeepAlive() {
     if (!hasPipSupport()) return;
     const video = ensurePipVideo();
-    if (video.readyState === HTMLMediaElement.HAVE_NOTHING) {
+    if (!video.srcObject && video.readyState === HTMLMediaElement.HAVE_NOTHING) {
         video.load();
     }
 }
