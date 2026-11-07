@@ -36,6 +36,8 @@ let avatarImg = null;
 let avatarImgUrl = '';
 let renderTimer = null;
 let lastRenderAt = 0;
+let heartbeatTimer = null;
+const HEARTBEAT_MS = 1000;
 
 export function isPipViewSupported() {
     return typeof document !== 'undefined'
@@ -191,6 +193,22 @@ function scheduleRender() {
 }
 
 /**
+ * While the PiP window is open, redraw once a second even without changes so
+ * the stream keeps delivering frames (WebKit shows nothing until frames flow).
+ * @param {boolean} live
+ */
+export function setPipViewLive(live) {
+    if (live) {
+        if (!canvas) return;
+        render();
+        if (!heartbeatTimer) heartbeatTimer = setInterval(render, HEARTBEAT_MS);
+    } else if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+    }
+}
+
+/**
  * Update what the window shows. Cheap to call on every streamed token.
  * @param {Partial<typeof state>} patch
  */
@@ -214,6 +232,10 @@ export function getPipViewStream() {
         canvas = document.createElement('canvas');
         canvas.width = WIDTH;
         canvas.height = HEIGHT;
+        // WebKit only captures frames from a canvas that is in the document.
+        canvas.setAttribute('aria-hidden', 'true');
+        canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:160px;height:90px;pointer-events:none;opacity:0.01;';
+        document.body.appendChild(canvas);
         ctx = canvas.getContext('2d');
         // captureStream(0) + requestFrame() pushes a frame exactly when we
         // redraw, which keeps working while the page is in the background.
@@ -241,6 +263,7 @@ export function getPipViewStream() {
         return stream;
     } catch (error) {
         console.warn('[Luker] PiP view unavailable', error);
+        canvas?.remove();
         canvas = null;
         ctx = null;
         stream = null;

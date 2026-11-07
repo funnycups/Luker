@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
-import { getPipViewStream } from './luker-pip-view.js';
+import { getPipViewStream, setPipViewLive } from './luker-pip-view.js';
 
 const SILENT_VIDEO_URL = '/sounds/silent.mp4';
 // Set once the live PiP view failed to open on this device, so later attempts
 // go straight to the silent video that is known to work.
-const PIP_VIEW_FAILED_KEY = 'luker_pip_view_failed';
+const PIP_VIEW_FAILED_KEY = 'luker_pip_view_failed_v2';
 const SILENT_AUDIO_URL = '/sounds/silent-keepalive.m4a';
 
 /** @typedef {'off'|'android'|'harmony'|'ios'|'pip'|'audio'} KeepAliveMode */
@@ -110,6 +110,7 @@ function ensurePipVideo() {
     }
     video.loop = true;
     video.playsInline = true;
+    video.setAttribute('autopictureinpicture', '');
     video.preload = 'auto';
     // iOS refuses PiP on muted media; near-zero volume keeps it inaudible.
     if (!viewStream) video.muted = false;
@@ -143,6 +144,7 @@ function isInPip(video) {
 }
 
 function onLeavePip() {
+    setPipViewLive(false);
     if (activeMode !== 'pip') return;
     activeMode = 'off';
     notifyStateChange();
@@ -206,9 +208,11 @@ async function enterPip() {
         // Only a failure with the stream fully ready says the device can't do
         // the live view; an early tap just needs another try.
         const ready = video.readyState >= HTMLMediaElement.HAVE_METADATA;
+        setPipViewLive(true);
         try {
             await enterPipOn(video);
         } catch (error) {
+            setPipViewLive(false);
             if (ready) abandonPipView();
             throw error;
         }
