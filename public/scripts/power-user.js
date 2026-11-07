@@ -243,6 +243,7 @@ export const power_user = {
     luker_mobile_keep_alive_harmony_enabled: false,
     luker_mobile_keep_alive_ios_enabled: false,
     luker_mobile_keep_alive_web_audio_enabled: false,
+    luker_mobile_keep_alive_web_pip_enabled: false,
     luker_open_external_links_in_browser: true,
     hotswap_enabled: true,
     timer_enabled: true,
@@ -539,7 +540,9 @@ function syncMobileKeepAliveCheckbox() {
     } else if (platform === 'ios') {
         checked = !!power_user.luker_mobile_keep_alive_ios_enabled;
     } else if (platform === 'web') {
-        checked = !!power_user.luker_mobile_keep_alive_web_audio_enabled || getActiveKeepAliveMode() === 'pip';
+        checked = !!power_user.luker_mobile_keep_alive_web_audio_enabled
+            || !!power_user.luker_mobile_keep_alive_web_pip_enabled
+            || getActiveKeepAliveMode() === 'pip';
     }
     $('#luker_mobile_keep_alive').prop('checked', checked);
 }
@@ -673,6 +676,23 @@ function syncExternalLinkPolicyUi() {
     pushExternalLinkPolicy(power_user.luker_open_external_links_in_browser);
 }
 
+// Closing the PiP window (including tapping it to return to the page) must not
+// switch keep-alive off: iOS closes it every time the user comes back. PiP can
+// only be reopened from a user tap, so the taps that start a generation reopen
+// it. This also restores PiP after a page reload.
+const PIP_REOPEN_SELECTOR = '#send_but, #mes_continue, #mes_impersonate, #option_regenerate, #option_continue, #option_impersonate, .swipe_right';
+
+function reopenPipOnGenerationTap(event) {
+    if (getKeepAlivePlatform() !== 'web' || !power_user.luker_mobile_keep_alive_web_pip_enabled) return;
+    if (getActiveKeepAliveMode() === 'pip') return;
+    if (!(event.target instanceof Element) || !event.target.closest(PIP_REOPEN_SELECTOR)) return;
+    setKeepAliveMode('pip')
+        .then(syncMobileKeepAliveCheckbox)
+        .catch((error) => {
+            console.warn('[Luker] Failed to reopen PiP keep-alive', error);
+        });
+}
+
 function syncMobileKeepAliveUi() {
     // isMobile() gates the entire subsystem, not just UI visibility. The
     // audio-mode setting persists in settings.json across devices; if a user
@@ -693,6 +713,7 @@ function syncMobileKeepAliveUi() {
         setGenerationInFlightListener(() => scopedKeepAliveActivationSync());
         eventSource.on(event_types.IMAGE_GENERATION_STARTED, onScopedKeepAliveImageGenerationStarted);
         eventSource.on(event_types.IMAGE_GENERATION_ENDED, onScopedKeepAliveImageGenerationEnded);
+        document.addEventListener('click', reopenPipOnGenerationTap, true);
         onKeepAliveStateChanged(() => {
             // Reflect whatever the module says is currently in effect — the user closing the
             // PiP window from the OS UI or autoplay being denied both land here.
@@ -787,6 +808,7 @@ async function applyMobileKeepAliveFromUser(checked) {
             saveSettingsDebounced();
         } else if (platform === 'web') {
             power_user.luker_mobile_keep_alive_web_audio_enabled = false;
+            power_user.luker_mobile_keep_alive_web_pip_enabled = false;
             saveSettingsDebounced();
         }
         syncMobileKeepAliveCheckbox();
@@ -841,9 +863,11 @@ async function applyMobileKeepAliveFromUser(checked) {
         try {
             await (pipAttempt ?? setKeepAliveMode('pip'));
             power_user.luker_mobile_keep_alive_web_audio_enabled = false;
+            power_user.luker_mobile_keep_alive_web_pip_enabled = true;
             saveSettingsDebounced();
         } catch (_error) {
             power_user.luker_mobile_keep_alive_web_audio_enabled = false;
+            power_user.luker_mobile_keep_alive_web_pip_enabled = false;
             saveSettingsDebounced();
             toastr.warning(t`Background keep-alive could not be enabled. Try again from a tap on the page.`);
         }
@@ -851,6 +875,7 @@ async function applyMobileKeepAliveFromUser(checked) {
         // audio: just flag the setting on. The next GENERATION_STARTED enters
         // audio mode automatically; nothing should happen right now.
         power_user.luker_mobile_keep_alive_web_audio_enabled = true;
+        power_user.luker_mobile_keep_alive_web_pip_enabled = false;
         saveSettingsDebounced();
     }
     syncMobileKeepAliveCheckbox();
