@@ -1996,6 +1996,9 @@ export let extension_prompts = {};
 
 export let main_api;// = "kobold";
 let abortController = new AbortController();
+// Quiet background prompts must not own the foreground generation's controller.
+// The stop button aborts both.
+let quietAbortController = null;
 
 //css
 var css_send_form_display = $('<div id=send_form></div>').css('display');
@@ -7728,7 +7731,7 @@ export async function Generate(type, options = {}, dryRun = false) {
 async function generateInternal(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0 } = {}, dryRun = false) {
     console.log('Generate entered');
     setGenerationProgress(0);
-    if (!dryRun) {
+    if (!dryRun && type !== 'quiet') {
         generation_started = new Date();
     }
     setActiveWorldInfoPromptSnapshot();
@@ -7740,12 +7743,21 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
     // Occurs every time, even if the generation is aborted due to slash commands execution
     await eventSource.emit(event_types.GENERATION_STARTED, type, generationEventParams, dryRun);
 
-    // Prompt estimates must not replace the controller that owns a live generation.
-    // Don't recreate the live controller if a signal is passed (group generation).
-    if (!dryRun && !(abortController && signal)) {
+    // Prompt estimates and quiet background prompts must not replace the
+    // controller that owns a live foreground generation. Don't recreate the
+    // live controller if a signal is passed (group generation).
+    if (!dryRun && type !== 'quiet' && !(abortController && signal)) {
         abortController = new AbortController();
     }
-    const generationAbortController = dryRun ? new AbortController() : abortController;
+    let generationAbortController;
+    if (dryRun) {
+        generationAbortController = new AbortController();
+    } else if (type === 'quiet') {
+        quietAbortController = new AbortController();
+        generationAbortController = quietAbortController;
+    } else {
+        generationAbortController = abortController;
+    }
 
     const isGenerationAborted = () => Boolean(
         generationAbortController?.signal?.aborted
@@ -7833,7 +7845,7 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
     if (selected_group && !is_group_generating) {
         if (!dryRun) {
             // Returns the promise that generateGroupWrapper returns; resolves when generation is done
-            return generateGroupWrapper(false, type, { quiet_prompt, force_chid, signal: abortController.signal, quietImage, jsonSchema });
+            return generateGroupWrapper(false, type, { quiet_prompt, force_chid, signal: generationAbortController.signal, quietImage, jsonSchema });
         }
 
         const characterIndexMap = new Map(characters.map((char, index) => [char.avatar, index]));
@@ -9189,7 +9201,7 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
                 finalPrompt,
                 generateData: generate_data,
                 takeoverHandle: null,
-                abortSignal: abortController.signal,
+                abortSignal: generationAbortController.signal,
             };
             await eventSource.emit(event_types.GENERATE_TAKEOVER_DISPATCH, dispatchEvent);
 
@@ -9216,9 +9228,9 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
 
                 const handle = dispatchEvent.takeoverHandle;
                 // Snapshot the module-level abortController. A fresh
-                // Generate() replaces it (see the recreate at
-                // `if (!(abortController && signal))` earlier in this
-                // function) — so reference inequality is the canonical
+                // foreground Generate() replaces it (see the recreate
+                // earlier in this function; dry runs and quiet prompts use
+                // their own controllers) — so reference inequality is the canonical
                 // "a new Generate has started" signal. We use it below
                 // to bail out of the committed/discarded cleanup the
                 // moment a quick user "stop then regenerate" has
@@ -9566,7 +9578,7 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
                 });
             }
         } else {
-            return await sendGenerationRequest(type, generate_data, { jsonSchema });
+            return await sendGenerationRequest(type, generate_data, { jsonSchema }, generationAbortController.signal);
         }
     }
 
@@ -9798,15 +9810,15 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
     function onError(exception) {
         clearMessageProgressNotification();
 
-        const isAbortedError = abortController?.signal?.aborted
+        const isAbortedError = generationAbortController?.signal?.aborted
             || exception?.name === 'AbortError'
             || /aborted/i.test(String(exception?.message || ''));
         // A server-initiated abort (request inspector) arrives as an
         // AbortError but the local controller was never aborted. Flip it so
         // every downstream check (auto-continue, auto-swipe, retry helpers)
-        // sees the same state as a user stop. Quiet requests share the
-        // module-level controller with the main turn; aborting it from a
-        // background request would cancel the visible reply.
+        // sees the same state as a user stop. Quiet requests have their own
+        // controller; aborting the foreground one from a background request
+        // would cancel the visible reply.
         if (type !== 'quiet' && exception?.name === 'AbortError' && abortController && !abortController.signal.aborted) {
             abortController.abort('Aborted by server');
         }
@@ -9859,6 +9871,10 @@ export function stopGeneration() {
     }
     if (abortController) {
         abortController.abort('Clicked stop button');
+        stopped = true;
+    }
+    if (quietAbortController) {
+        quietAbortController.abort('Clicked stop button');
         stopped = true;
     }
     if (stopped) {
@@ -10499,21 +10515,22 @@ function setInContextMessages(msgInContextCount, type) {
  * @param {string} type Generation type
  * @param {object} data Generation data
  * @param {AdditionalRequestOptions} [options] Additional options for the generation request
+ * @param {AbortSignal} [signal] Request abort signal. Defaults to the active foreground controller.
  * @returns {Promise<object>} Response data from the API
  * @throws {Error|object}
  */
-export async function sendGenerationRequest(type, data, options = {}) {
+export async function sendGenerationRequest(type, data, options = {}, signal = abortController.signal) {
     const requestPayload = { type, data, options, mainApi: main_api, stream: false };
     await eventSource.emit(event_types.GENERATION_BEFORE_API_REQUEST, requestPayload);
     data = requestPayload.data;
     options = requestPayload.options || options;
 
     if (main_api === 'openai') {
-        return await sendOpenAIRequest(type, data.prompt, abortController.signal, options);
+        return await sendOpenAIRequest(type, data.prompt, signal, options);
     }
 
     if (main_api === 'koboldhorde') {
-        return await generateHorde(data.prompt, data, abortController.signal, true);
+        return await generateHorde(data.prompt, data, signal, true);
     }
 
     const shouldTrackLukerGenerationState = shouldUseLukerServerPersistenceForType(type) && supportsLukerServerPersistence(main_api);
@@ -10548,10 +10565,10 @@ export async function sendGenerationRequest(type, data, options = {}) {
             headers: getRequestHeaders(),
             cache: 'no-cache',
             body: JSON.stringify(requestData),
-            signal: abortController.signal,
+            signal,
         });
     }, {
-        signal: abortController.signal,
+        signal,
         label: `generic-non-stream:${main_api}`,
         onAttempt: (attempt, _err, _delay, maxRetries) => {
             toastr.info(

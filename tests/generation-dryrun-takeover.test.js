@@ -25,6 +25,7 @@ const initializationSource = between('async function generateInternal(', '\n    
 const takeoverSource = between('                const handle = dispatchEvent.takeoverHandle;', '\n            }\n        }\n\n        if (isStreamingEnabled()');
 const saveReplySource = between('export async function saveReply(', '\n/**\n * Creates a message\'s').replace('export ', '');
 const acquireSource = between('async function acquireTakeoverPlaceholder(', '\n/**\n * Roll back the placeholder');
+const stopSource = between('export function stopGeneration() {', '\n/**\n * Injects extension prompts').replace('export ', '');
 
 function createHost() {
     let now = '2026-01-01T00:00:10.000Z';
@@ -39,6 +40,7 @@ function createHost() {
         event_types,
         eventSource: { emit: async (event) => { effects.push(event); } },
         abortController: new AbortController(),
+        quietAbortController: null,
         generation_started: new Date('2026-01-01T00:00:00.000Z'),
         chat: [{ is_user: true, mes: 'input', extra: {} }],
         chat_metadata: {}, name2: 'Assistant', selected_group: null, characters: [{}], this_chid: '0',
@@ -56,8 +58,12 @@ function createHost() {
         saveChatConditional: async () => { saved.push(structuredClone(context.chat.slice(-1))); },
         unblockGeneration: () => { effects.push('unblock'); },
         triggerAutoContinue: () => { effects.push('autoContinue'); },
+        clearMessageProgressNotification() {},
+        forceUnblockGenerationUi() { effects.push('forceUnblock'); },
+        getLastLukerGenerationIdForApi: () => '',
+        streamingProcessor: null,
     });
-    vm.runInContext(initializationSource + '\n' + saveReplySource + '\n' + acquireSource, context);
+    vm.runInContext(initializationSource + '\n' + saveReplySource + '\n' + acquireSource + '\n' + stopSource, context);
 
     async function startTakeover(type = 'normal') {
         const handle = createMessageEditorHandle({ generationType: type, abortSignal: context.abortController.signal, flushIntervalMs: 0 });
@@ -78,6 +84,7 @@ function createHost() {
     return {
         context, effects, saved, startTakeover,
         initialize: (type = 'normal', options = {}, dryRun = false) => context.generateInternal(type, options, dryRun),
+        stop: () => context.stopGeneration(),
         setTime: (time) => { now = time; },
     };
 }
@@ -186,5 +193,50 @@ describe('dry-run generation ownership', () => {
         expect(host.context.chat.at(-1).swipes[0]).toBe('partial answer');
         expect(host.saved).toHaveLength(0);
         expect(host.effects).not.toContain(event_types.MESSAGE_RECEIVED);
+    });
+});
+
+describe('quiet generation ownership', () => {
+    test('a quiet generation during takeover still finalizes the takeover', async () => {
+        const host = createHost();
+        await host.initialize();
+        const { handle, complete } = await host.startTakeover();
+        host.setTime('2026-01-01T00:00:20.000Z');
+        await host.initialize('quiet', { quiet_prompt: 'classify' });
+        host.setTime('2026-01-01T00:00:30.000Z');
+        handle.setText('final answer');
+        await handle.commit();
+        const result = await complete;
+
+        const message = host.context.chat.at(-1);
+        expect(message.swipes[0]).toBe('final answer');
+        expect(host.saved).toEqual([[message]]);
+        expect(host.effects.filter(effect => effect === event_types.MESSAGE_RECEIVED)).toHaveLength(1);
+        expect(String(result)).toBe('final answer');
+    });
+
+    test('a quiet generation does not replace the live controller or restart its timer', async () => {
+        const host = createHost();
+        const controller = host.context.abortController;
+        const started = host.context.generation_started;
+        await host.initialize('quiet', { quiet_prompt: 'classify' });
+
+        expect(host.context.abortController).toBe(controller);
+        expect(host.context.generation_started).toBe(started);
+        expect(host.context.quietAbortController).not.toBeNull();
+        expect(host.context.quietAbortController).not.toBe(controller);
+    });
+
+    test('stopping aborts the live controller and the quiet controller', async () => {
+        const host = createHost();
+        const live = host.context.abortController;
+        await host.initialize('quiet', { quiet_prompt: 'classify' });
+        const quiet = host.context.quietAbortController;
+        expect(quiet).not.toBeNull();
+
+        host.stop();
+
+        expect(live.signal.aborted).toBe(true);
+        expect(quiet.signal.aborted).toBe(true);
     });
 });

@@ -78,6 +78,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed LAN Sync on SQLite, MySQL, and PostgreSQL storage ignoring file-backed categories such as characters, and deleting them when database-backed categories synced.
 - Fixed deletions of worlds, chats, and other database-backed records not reaching the other device on SQLite, MySQL, and PostgreSQL storage.
 - Fixed LAN Sync between MySQL or PostgreSQL storage and SQLite or file storage reporting conflicts on identical worlds, presets, and other records.
+- Fixed the Docker image shipping without the SQLite native binding, which made switching the storage backend to SQLite fail.
 - Fixed the media deletion preview overflowing the screen.
 - The Clean-Up dialog now renders a category's items only when it is expanded, so large scan results no longer stall the page.
 - Fixed LAN Sync reporting success when the other device failed to write the changes, which could leave both devices out of sync.
@@ -188,6 +189,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed state replay dropping full-replacement patches, which could lose stored extension data when a large change was saved.
 - Fixed the **Auth & Limits** admin tab rendering its fields centered and misaligned.
 - Fixed a click between two checkboxes in the multi-select pickers switching the active item.
+- Fixed takeover replies being dropped when a token estimate or a background generation overlaps.
 
 ## v2.8.0 (2026-10-01)
 
