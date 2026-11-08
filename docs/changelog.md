@@ -156,6 +156,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Background Keep-Alive
 
+- Added a picture-in-picture window that shows the character, the generation status and the reply as it streams.
+- Added a button that reopens picture-in-picture after the window closes during a generation.
 - Fixed picture-in-picture keep-alive failing to start on iOS.
 - Fixed the background keep-alive failing to exit after a generation ended.
 

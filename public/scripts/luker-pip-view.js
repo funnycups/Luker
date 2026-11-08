@@ -32,6 +32,8 @@ let ctx = null;
 let stream = null;
 let videoTrack = null;
 let audioCtx = null;
+let audioOscillator = null;
+let audioGain = null;
 let avatarImg = null;
 let avatarImgUrl = '';
 let renderTimer = null;
@@ -200,12 +202,25 @@ function scheduleRender() {
 export function setPipViewLive(live) {
     if (live) {
         if (!canvas) return;
+        if (audioCtx?.state === 'suspended') audioCtx.resume().catch(() => { /* noop */ });
         render();
         if (!heartbeatTimer) heartbeatTimer = setInterval(render, HEARTBEAT_MS);
-    } else if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
+    } else {
+        if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+        }
+        // The window is closed: release the audio session until the next
+        // entry, which runs inside a user gesture and may resume it.
+        if (audioCtx?.state === 'running') audioCtx.suspend().catch(() => { /* noop */ });
     }
+}
+
+/**
+ * @returns {PipStatus} what the window is currently showing.
+ */
+export function getPipViewStatus() {
+    return state.status;
 }
 
 /**
@@ -237,6 +252,7 @@ export function getPipViewStream() {
         canvas.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:160px;height:90px;pointer-events:none;opacity:0.01;';
         document.body.appendChild(canvas);
         ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('2D canvas is unavailable');
         // captureStream(0) + requestFrame() pushes a frame exactly when we
         // redraw, which keeps working while the page is in the background.
         stream = canvas.captureStream(0);
@@ -249,13 +265,13 @@ export function getPipViewStream() {
         const Ctx = window.AudioContext || window.webkitAudioContext;
         if (typeof Ctx === 'function') {
             audioCtx = new Ctx();
-            const gain = audioCtx.createGain();
-            gain.gain.value = 0.001;
-            const osc = audioCtx.createOscillator();
-            osc.frequency.value = 1;
+            audioGain = audioCtx.createGain();
+            audioGain.gain.value = 0.001;
+            audioOscillator = audioCtx.createOscillator();
+            audioOscillator.frequency.value = 1;
             const dest = audioCtx.createMediaStreamDestination();
-            osc.connect(gain).connect(dest);
-            osc.start();
+            audioOscillator.connect(audioGain).connect(dest);
+            audioOscillator.start();
             dest.stream.getAudioTracks().forEach(track => stream.addTrack(track));
             audioCtx.resume().catch(() => { /* noop */ });
         }
@@ -263,11 +279,42 @@ export function getPipViewStream() {
         return stream;
     } catch (error) {
         console.warn('[Luker] PiP view unavailable', error);
-        canvas?.remove();
-        canvas = null;
-        ctx = null;
-        stream = null;
-        videoTrack = null;
+        disposePipView();
         return null;
     }
+}
+
+/**
+ * Tear down the canvas, the captured stream and the audio context. The next
+ * getPipViewStream() rebuilds them; that call must run inside a user gesture.
+ */
+export function disposePipView() {
+    if (renderTimer) {
+        clearTimeout(renderTimer);
+        renderTimer = null;
+    }
+    if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+    }
+    try { audioOscillator?.stop(); } catch (_) { /* noop */ }
+    try { audioOscillator?.disconnect(); } catch (_) { /* noop */ }
+    audioOscillator = null;
+    try { audioGain?.disconnect(); } catch (_) { /* noop */ }
+    audioGain = null;
+    if (audioCtx) {
+        audioCtx.close().catch(() => { /* noop */ });
+        audioCtx = null;
+    }
+    stream?.getTracks().forEach((track) => {
+        try { track.stop(); } catch (_) { /* noop */ }
+    });
+    stream = null;
+    videoTrack = null;
+    canvas?.remove();
+    canvas = null;
+    ctx = null;
+    avatarImg = null;
+    avatarImgUrl = '';
+    lastRenderAt = 0;
 }
