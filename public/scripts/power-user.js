@@ -34,8 +34,12 @@ import {
     settingsReady,
     isGenerationInFlight,
     setGenerationInFlightListener,
+    name2,
+    this_chid,
+    getThumbnailUrl,
 } from '../script.js';
-import { isMobile, initMovingUI, favsToHotswap } from './RossAscends-mods.js';
+import { getPipViewStatus, updatePipView } from './luker-pip-view.js';
+import { isMobile, initMovingUI, favsToHotswap, shouldSendOnEnter } from './RossAscends-mods.js';
 import {
     getActiveKeepAliveMode,
     getAvailableWebModes,
@@ -43,9 +47,12 @@ import {
     hasNativeKeepAliveBridge,
     initKeepAlive,
     isKeepAliveSupported,
+    isPipWindowOpen,
     onKeepAliveStateChanged,
     primePipKeepAlive,
+    releasePipKeepAlive,
     setKeepAliveMode,
+    setPipPrimingEnabled,
 } from './luker-keep-alive.js';
 import { initAppEndpointControls } from './app-endpoint-controls.js';
 import {
@@ -243,6 +250,7 @@ export const power_user = {
     luker_mobile_keep_alive_harmony_enabled: false,
     luker_mobile_keep_alive_ios_enabled: false,
     luker_mobile_keep_alive_web_audio_enabled: false,
+    luker_mobile_keep_alive_web_pip_enabled: false,
     luker_open_external_links_in_browser: true,
     hotswap_enabled: true,
     timer_enabled: true,
@@ -539,7 +547,9 @@ function syncMobileKeepAliveCheckbox() {
     } else if (platform === 'ios') {
         checked = !!power_user.luker_mobile_keep_alive_ios_enabled;
     } else if (platform === 'web') {
-        checked = !!power_user.luker_mobile_keep_alive_web_audio_enabled || getActiveKeepAliveMode() === 'pip';
+        checked = !!power_user.luker_mobile_keep_alive_web_audio_enabled
+            || !!power_user.luker_mobile_keep_alive_web_pip_enabled
+            || getActiveKeepAliveMode() === 'pip';
     }
     $('#luker_mobile_keep_alive').prop('checked', checked);
 }
@@ -619,11 +629,13 @@ function scopedKeepAliveActivationSync() {
 function onScopedKeepAliveImageGenerationStarted() {
     scopedKeepAliveImageGenerationCount += 1;
     scopedKeepAliveActivationSync();
+    syncPipReopenBanner();
 }
 
 function onScopedKeepAliveImageGenerationEnded() {
     scopedKeepAliveImageGenerationCount = Math.max(0, scopedKeepAliveImageGenerationCount - 1);
     scopedKeepAliveActivationSync();
+    syncPipReopenBanner();
 }
 
 function cancelScopedKeepAliveDeactivateTimer() {
@@ -673,6 +685,156 @@ function syncExternalLinkPolicyUi() {
     pushExternalLinkPolicy(power_user.luker_open_external_links_in_browser);
 }
 
+// Closing the PiP window (including tapping it to return to the page) must not
+// switch keep-alive off: iOS closes it every time the user comes back. PiP can
+// only be reopened from a user tap, so the taps that start a generation reopen
+// it. This also restores PiP after a page reload.
+const PIP_REOPEN_SELECTOR = '#send_but, #mes_continue, #mes_impersonate, #option_regenerate, #option_continue, #option_impersonate, .swipe_right';
+
+function reopenPipFromGesture() {
+    if (getKeepAlivePlatform() !== 'web' || !power_user.luker_mobile_keep_alive_web_pip_enabled) return;
+    if (isPipWindowOpen()) return;
+    setKeepAliveMode('pip')
+        .then(() => {
+            syncMobileKeepAliveCheckbox();
+            syncPipReopenBanner();
+        })
+        .catch((error) => {
+            console.warn('[Luker] Failed to reopen PiP keep-alive', error);
+        });
+}
+
+function reopenPipOnGenerationTap(event) {
+    // Auto-continue and scripted triggers dispatch clicks without a user
+    // gesture; WebKit rejects the PiP request and the attempt is wasted.
+    if (event.isTrusted === false) return;
+    if (!(event.target instanceof Element) || !event.target.closest(PIP_REOPEN_SELECTOR)) return;
+    reopenPipFromGesture();
+}
+
+// Enter sends the message without a click, so the keydown itself is the
+// gesture that can reopen PiP.
+function reopenPipOnGenerationKey(event) {
+    if (event.isTrusted === false || event.isComposing || event.key !== 'Enter') return;
+    if (event.shiftKey || event.ctrlKey || event.altKey) return;
+    if (!(event.target instanceof Element) || !event.target.closest('#send_textarea')) return;
+    if (!shouldSendOnEnter()) return;
+    reopenPipFromGesture();
+}
+
+// Tapping the PiP window to return to the page closes it, and a generation that
+// is already running has no tap left to reopen it. This button is that tap.
+let pipReopenBanner = null;
+
+function ensurePipReopenBanner() {
+    if (pipReopenBanner) return pipReopenBanner;
+    pipReopenBanner = $('<button></button>')
+        .attr({ id: 'luker_pip_reopen', type: 'button' })
+        .addClass('menu_button')
+        .text(t`Restore Picture-in-Picture`)
+        .css({
+            position: 'fixed',
+            left: '50%',
+            // Clear the message input so the stop button stays reachable.
+            bottom: 'calc(88px + env(safe-area-inset-bottom, 0px))',
+            transform: 'translateX(-50%)',
+            zIndex: 40000,
+            display: 'none',
+        })
+        .on('click', () => {
+            setKeepAliveMode('pip')
+                .then(() => {
+                    syncMobileKeepAliveCheckbox();
+                    syncPipReopenBanner();
+                })
+                .catch((error) => {
+                    console.warn('[Luker] Failed to restore PiP keep-alive', error);
+                    toastr.warning(t`Picture-in-Picture could not be restored. Tap the page and try again.`);
+                });
+        });
+    $('body').append(pipReopenBanner);
+    return pipReopenBanner;
+}
+
+function syncPipReopenBanner() {
+    // Quiet generations run for internal requests and never surface in the
+    // PiP window, so they do not prompt the user to restore it.
+    const visibleGeneration = getPipViewStatus() === 'generating' || scopedKeepAliveImageGenerationCount > 0;
+    const shouldShow = getKeepAlivePlatform() === 'web'
+        && !!power_user.luker_mobile_keep_alive_web_pip_enabled
+        && visibleGeneration
+        && !isPipWindowOpen();
+    if (!shouldShow) {
+        pipReopenBanner?.hide();
+        return;
+    }
+    ensurePipReopenBanner().show();
+}
+
+// Feeds the PiP keep-alive window: who is replying, the status and the tail of
+// the reply. Updates are throttled inside the view, so per-token calls are fine.
+function syncPipViewCharacter() {
+    const character = this_chid !== undefined ? characters[this_chid] : null;
+    updatePipView({
+        name: character?.name || name2 || '',
+        avatarUrl: character?.avatar ? getThumbnailUrl('avatar', character.avatar) : '',
+    });
+}
+
+let pipGenerationStopped = false;
+
+// The single in-flight listener owned by keep-alive: the generation-scoped
+// modes follow the exact Generate() count, the PiP window closes out its last
+// status here, and the restore button follows both.
+function onGenerationInFlightChanged() {
+    scopedKeepAliveActivationSync();
+    if (!isGenerationInFlight() && !pipGenerationStopped && getPipViewStatus() === 'generating') {
+        updatePipView({ status: 'done' });
+    }
+    syncPipReopenBanner();
+}
+
+function initPipViewFeed() {
+    pipGenerationStopped = false;
+    syncPipViewCharacter();
+    eventSource.on(event_types.CHAT_CHANGED, () => {
+        pipGenerationStopped = false;
+        syncPipViewCharacter();
+        updatePipView({ status: 'idle', text: '' });
+        syncPipReopenBanner();
+    });
+    eventSource.on(event_types.GENERATION_STARTED, (type, _params, dryRun) => {
+        if (dryRun || type === 'quiet') return;
+        pipGenerationStopped = false;
+        syncPipViewCharacter();
+        updatePipView({ status: 'generating', text: '' });
+        syncPipReopenBanner();
+    });
+    eventSource.on(event_types.STREAM_TOKEN_RECEIVED, (text) => {
+        if (pipGenerationStopped) return;
+        updatePipView({ status: 'generating', text: String(text || '') });
+    });
+    eventSource.on(event_types.MESSAGE_RECEIVED, (messageId) => {
+        // A stopped generation still persists its partial reply; keep the
+        // "Stopped" status instead of reporting it as completed.
+        if (pipGenerationStopped) return;
+        const message = chat[messageId];
+        if (!message || message.is_user) return;
+        updatePipView({ name: message.name || name2 || '', status: 'done', text: String(message.mes || '') });
+        syncPipReopenBanner();
+    });
+    eventSource.on(event_types.IMPERSONATE_READY, (text) => {
+        pipGenerationStopped = false;
+        updatePipView({ status: 'done', text: String(text || '') });
+        syncPipReopenBanner();
+    });
+    eventSource.on(event_types.GENERATION_STOPPED, () => {
+        pipGenerationStopped = true;
+        updatePipView({ status: 'stopped' });
+        syncPipReopenBanner();
+    });
+}
+
 function syncMobileKeepAliveUi() {
     // isMobile() gates the entire subsystem, not just UI visibility. The
     // audio-mode setting persists in settings.json across devices; if a user
@@ -690,9 +852,16 @@ function syncMobileKeepAliveUi() {
 
     if (!syncMobileKeepAliveUi._initialized) {
         initKeepAlive();
-        setGenerationInFlightListener(() => scopedKeepAliveActivationSync());
+        setPipPrimingEnabled(!!power_user.luker_mobile_keep_alive_web_pip_enabled);
+        setGenerationInFlightListener(onGenerationInFlightChanged);
         eventSource.on(event_types.IMAGE_GENERATION_STARTED, onScopedKeepAliveImageGenerationStarted);
         eventSource.on(event_types.IMAGE_GENERATION_ENDED, onScopedKeepAliveImageGenerationEnded);
+        document.addEventListener('click', reopenPipOnGenerationTap, true);
+        document.addEventListener('keydown', reopenPipOnGenerationKey, true);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') syncPipReopenBanner();
+        });
+        initPipViewFeed();
         onKeepAliveStateChanged(() => {
             // Reflect whatever the module says is currently in effect — the user closing the
             // PiP window from the OS UI or autoplay being denied both land here.
@@ -703,6 +872,7 @@ function syncMobileKeepAliveUi() {
                 saveSettingsDebounced();
             }
             syncMobileKeepAliveCheckbox();
+            syncPipReopenBanner();
         });
         syncMobileKeepAliveUi._initialized = true;
     }
@@ -710,6 +880,7 @@ function syncMobileKeepAliveUi() {
     const $row = $('#luker_mobile_keep_alive').closest('label.checkbox_label');
     $row.toggle(supported);
     syncMobileKeepAliveCheckbox();
+    syncPipReopenBanner();
 
     if (!supported) return;
 
@@ -774,7 +945,8 @@ async function applyMobileKeepAliveFromUser(checked) {
         // generation; shut it down explicitly so a generation that ends with
         // the setting off doesn't leave the mode active.
         cancelScopedKeepAliveDeactivateTimer();
-        try { await setKeepAliveMode('off'); } catch (_) { /* noop */ }
+        // Clear the saved choice before the mode teardown so the PiP leave
+        // event cannot briefly surface the restore button.
         const platform = getKeepAlivePlatform();
         if (platform === 'android') {
             power_user.luker_mobile_keep_alive_android_enabled = false;
@@ -787,9 +959,13 @@ async function applyMobileKeepAliveFromUser(checked) {
             saveSettingsDebounced();
         } else if (platform === 'web') {
             power_user.luker_mobile_keep_alive_web_audio_enabled = false;
+            power_user.luker_mobile_keep_alive_web_pip_enabled = false;
             saveSettingsDebounced();
         }
+        setPipPrimingEnabled(false);
+        try { await setKeepAliveMode('off'); } catch (_) { /* noop */ }
         syncMobileKeepAliveCheckbox();
+        syncPipReopenBanner();
         return;
     }
 
@@ -834,6 +1010,7 @@ async function applyMobileKeepAliveFromUser(checked) {
         pipAttempt.catch(() => { /* noop */ });
     });
     if (!desired) {
+        releasePipKeepAlive();
         syncMobileKeepAliveCheckbox();
         return;
     }
@@ -841,19 +1018,28 @@ async function applyMobileKeepAliveFromUser(checked) {
         try {
             await (pipAttempt ?? setKeepAliveMode('pip'));
             power_user.luker_mobile_keep_alive_web_audio_enabled = false;
+            power_user.luker_mobile_keep_alive_web_pip_enabled = true;
             saveSettingsDebounced();
         } catch (_error) {
+            // Keep the choice: the next trusted tap on a generation button
+            // retries, and the session now falls back to the silent video.
             power_user.luker_mobile_keep_alive_web_audio_enabled = false;
+            power_user.luker_mobile_keep_alive_web_pip_enabled = true;
             saveSettingsDebounced();
-            toastr.warning(t`Background keep-alive could not be enabled. Try again from a tap on the page.`);
+            toastr.warning(t`Picture-in-Picture did not open. Send a message or tap the restore button to try again.`);
         }
+        setPipPrimingEnabled(true);
     } else {
         // audio: just flag the setting on. The next GENERATION_STARTED enters
         // audio mode automatically; nothing should happen right now.
         power_user.luker_mobile_keep_alive_web_audio_enabled = true;
+        power_user.luker_mobile_keep_alive_web_pip_enabled = false;
+        setPipPrimingEnabled(false);
+        releasePipKeepAlive();
         saveSettingsDebounced();
     }
     syncMobileKeepAliveCheckbox();
+    syncPipReopenBanner();
 }
 
 function shouldSuppressBackgroundNotification() {

@@ -48,7 +48,7 @@ Two settings matter when generation leaves the foreground.
 
 - **Background keep-alive on mobile** (under **UI Theme**) — maintains AI requests when the app or the browser is in the background. On Android and HarmonyOS it is a single switch that asks the native layer to keep requests alive. In a mobile browser, enabling it opens a popup where you choose:
 
-  - **Picture-in-Picture** — a small floating window stays on screen. It does not interrupt music.
+  - **Picture-in-Picture** — a small floating window stays on screen and shows the character, the generation status and the reply as it streams. It does not interrupt music. Tapping the window to return to Luker closes it; while a generation is running, **Restore Picture-in-Picture** reopens it. iPhone Home Screen web apps do not offer this option.
   - **Audio** — a silent media session that engages only while a message is generating and disengages shortly after it finishes; other music or video apps are paused while it runs.
 
   Both choices are remembered. On desktop the row is hidden entirely, because the issue does not arise there.

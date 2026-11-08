@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
+import { disposePipView, getPipViewStream, setPipViewLive } from './luker-pip-view.js';
+
 const SILENT_VIDEO_URL = '/sounds/silent.mp4';
 const SILENT_AUDIO_URL = '/sounds/silent-keepalive.m4a';
 
@@ -15,6 +17,10 @@ let stateChangeCallback = null;
 // PiP state
 let pipVideo = null;
 let pipListenersAttached = false;
+// The live view failed to open once in this session; later entries use the
+// silent video. Not persisted: a reload retries the live view.
+let pipViewFailed = false;
+let pipEntryPending = false;
 
 // Audio mode runs in a single binary state: built when entered, fully torn
 // down when exited. A 1Hz OscillatorNode running through near-zero gain into
@@ -55,8 +61,16 @@ function hasIOSKeepAliveBridge() {
         && typeof window.LukerIOS.setGenerationActive === 'function';
 }
 
+// iOS Home Screen web apps report PiP as enabled, but WebKit never actually
+// opens the window there (https://bugs.webkit.org/show_bug.cgi?id=303885).
+// navigator.standalone is only defined by iOS WebKit.
+function isIOSHomeScreenApp() {
+    return typeof navigator !== 'undefined' && navigator.standalone === true;
+}
+
 function hasPipSupport() {
     return typeof document !== 'undefined'
+        && !isIOSHomeScreenApp()
         && 'pictureInPictureEnabled' in document
         && document.pictureInPictureEnabled === true
         && typeof HTMLVideoElement !== 'undefined'
@@ -82,66 +96,194 @@ function resolvePlatform() {
 function ensurePipVideo() {
     if (pipVideo) return pipVideo;
     const video = document.createElement('video');
-    video.src = SILENT_VIDEO_URL;
+    const viewStream = pipViewFailed ? null : getPipViewStream();
     video.loop = true;
     video.playsInline = true;
+    video.setAttribute('autopictureinpicture', '');
     video.preload = 'auto';
-    // iOS refuses PiP on muted media; near-zero volume keeps it inaudible.
-    video.muted = false;
+    if (viewStream) {
+        video.srcObject = viewStream;
+        // Start muted so the frames flow and metadata is ready before the
+        // user picks PiP, without taking over the audio session yet.
+        video.muted = true;
+        video.addEventListener('loadeddata', () => {
+            if (!pipEntryPending && activeMode !== 'pip' && !isInPip(video)) video.pause();
+        }, { once: true });
+    } else {
+        video.src = SILENT_VIDEO_URL;
+        // iOS refuses PiP on muted media; near-zero volume keeps it inaudible.
+        video.muted = false;
+    }
     video.volume = 0.0001;
     video.setAttribute('aria-hidden', 'true');
     video.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:160px;height:90px;pointer-events:none;opacity:0;';
     document.body.appendChild(video);
     pipVideo = video;
+    if (viewStream) video.play().catch(() => { /* noop */ });
     return video;
 }
 
+// The live view failed to open PiP: drop the element so this session falls
+// back to the silent video. A reload retries the live view.
+function abandonPipView() {
+    if (!pipVideo || pipVideo.srcObject === null) return;
+    pipViewFailed = true;
+    detachPipListeners();
+    try { pipVideo.pause(); } catch (_) { /* noop */ }
+    pipVideo.srcObject = null;
+    pipVideo.remove();
+    pipVideo = null;
+    disposePipView();
+}
+
+function isInPip(video) {
+    return !!video && (document.pictureInPictureElement === video
+        || video.webkitPresentationMode === 'picture-in-picture');
+}
+
 function onLeavePip() {
+    setPipViewLive(false);
+    // The hidden element keeps decoding otherwise; pause it until the next
+    // entry runs inside a user gesture. An entry in progress keeps playing.
+    if (pipVideo && !pipEntryPending) {
+        try { pipVideo.pause(); } catch (_) { /* noop */ }
+    }
     if (activeMode !== 'pip') return;
     activeMode = 'off';
     notifyStateChange();
 }
 
+function onPresentationModeChanged() {
+    if (pipVideo && pipVideo.webkitPresentationMode !== 'picture-in-picture') onLeavePip();
+}
+
 function attachPipListeners() {
     if (pipListenersAttached || !pipVideo) return;
     pipVideo.addEventListener('leavepictureinpicture', onLeavePip);
+    pipVideo.addEventListener('webkitpresentationmodechanged', onPresentationModeChanged);
     pipListenersAttached = true;
 }
 
 function detachPipListeners() {
     if (!pipListenersAttached || !pipVideo) return;
     pipVideo.removeEventListener('leavepictureinpicture', onLeavePip);
+    pipVideo.removeEventListener('webkitpresentationmodechanged', onPresentationModeChanged);
     pipListenersAttached = false;
 }
 
-// WebKit rejects requestPictureInPicture() outside a user gesture and while the
-// element is still HAVE_NOTHING; iOS also refuses to load media data without a
-// gesture. When the video was primed earlier, play() and the PiP request are
-// issued in the same synchronous turn so both run inside the caller's gesture.
+// WebKit only opens PiP when the request is made synchronously inside the
+// user's tap and the video already has metadata. Both play() and the PiP
+// request are therefore issued in the same synchronous turn — never after an
+// await. On iOS the legacy webkitSetPresentationMode() is used when available:
+// it is the path Safari itself uses and is more reliable than the standard
+// API there. The video is primed by primePipKeepAlive() on an earlier tap.
+//
+// The legacy API reports the outcome only through an event. The bound keeps a
+// transition that never reports back from leaving the setting toggle pending;
+// a missed entry stays retryable.
+const PIP_ENTRY_TIMEOUT_MS = 3000;
+function waitForPipEntry(video) {
+    return new Promise((resolve, reject) => {
+        if (isInPip(video)) {
+            resolve();
+            return;
+        }
+        const done = () => {
+            clearTimeout(timer);
+            video.removeEventListener('webkitpresentationmodechanged', check);
+            video.removeEventListener('enterpictureinpicture', check);
+        };
+        const check = () => {
+            if (!isInPip(video)) return;
+            done();
+            resolve();
+        };
+        const timer = setTimeout(() => {
+            done();
+            if (isInPip(video)) resolve();
+            else reject(new Error('Picture-in-Picture did not open'));
+        }, PIP_ENTRY_TIMEOUT_MS);
+        video.addEventListener('webkitpresentationmodechanged', check);
+        video.addEventListener('enterpictureinpicture', check);
+    });
+}
+
 async function enterPip() {
     const video = ensurePipVideo();
     attachPipListeners();
-    if (document.pictureInPictureElement === video) return;
-    if (video.readyState === HTMLMediaElement.HAVE_NOTHING) {
-        await video.play();
-        await video.requestPictureInPicture();
+    if (isInPip(video)) return;
+    if (video.srcObject) {
+        // Only a failure with the stream fully ready says the device can't do
+        // the live view; an early tap just needs another try.
+        const ready = video.readyState >= HTMLMediaElement.HAVE_METADATA;
+        setPipViewLive(true);
+        pipEntryPending = true;
+        try {
+            await enterPipOn(video);
+        } catch (error) {
+            // The presentation event can trail the timeout; a window that did
+            // open is a success.
+            if (!isInPip(video)) {
+                setPipViewLive(false);
+                if (ready) abandonPipView();
+                throw error;
+            }
+        } finally {
+            pipEntryPending = false;
+        }
         return;
     }
+    await enterPipOn(video);
+}
+
+async function enterPipOn(video) {
+    // The silent fallback is a network media element; requesting PiP while it
+    // is still HAVE_NOTHING rejects with InvalidStateError on WebKit.
+    if (!video.srcObject && video.readyState === HTMLMediaElement.HAVE_NOTHING) {
+        video.load();
+    }
+    video.muted = false;
     const playPromise = video.play();
+    if (typeof video.webkitSetPresentationMode === 'function'
+        && typeof video.webkitSupportsPresentationMode === 'function'
+        && video.webkitSupportsPresentationMode('picture-in-picture')) {
+        video.webkitSetPresentationMode('picture-in-picture');
+        await Promise.all([playPromise, waitForPipEntry(video)]);
+        return;
+    }
     const pipPromise = video.requestPictureInPicture();
     await Promise.all([playPromise, pipPromise]);
 }
 
 async function exitPip() {
+    setPipViewLive(false);
     try {
         if (document.pictureInPictureElement === pipVideo && pipVideo) {
             await document.exitPictureInPicture();
+        } else if (pipVideo?.webkitPresentationMode === 'picture-in-picture') {
+            pipVideo.webkitSetPresentationMode('inline');
         }
+    } catch (error) {
+        // Teardown still proceeds; the element is paused and released below.
+        console.warn('[Luker] Failed to close the PiP window', error);
     } finally {
         if (pipVideo) {
             try { pipVideo.pause(); } catch (_) { /* noop */ }
         }
     }
+}
+
+// Keep-alive is leaving PiP for good: release the captured stream, the
+// canvas and the audio context instead of keeping them alive for a reopen.
+function releasePipResources() {
+    detachPipListeners();
+    if (pipVideo) {
+        try { pipVideo.pause(); } catch (_) { /* noop */ }
+        pipVideo.srcObject = null;
+        pipVideo.remove();
+        pipVideo = null;
+    }
+    disposePipView();
 }
 
 // ---------- Audio ----------
@@ -250,6 +392,9 @@ function resumeIfNeeded() {
 
 function onVisibilityChange() {
     if (document.visibilityState === 'visible') {
+        // WebKit can skip the presentation-mode event when the user taps the
+        // PiP window to return; reconcile against the real window state.
+        if (activeMode === 'pip' && !isInPip(pipVideo)) onLeavePip();
         resumeIfNeeded();
     }
 }
@@ -293,6 +438,23 @@ export function getActiveKeepAliveMode() {
 }
 
 /**
+ * Whether the PiP window is open right now. Safari can leave
+ * webkitPresentationMode stale, so callers use the document-level check
+ * instead of trusting the last mode the page set.
+ */
+export function isPipWindowOpen() {
+    return isInPip(pipVideo);
+}
+
+/**
+ * Drop the primed PiP video and live view without changing the active mode.
+ * Used when the user picks the audio mode after the chooser primed PiP.
+ */
+export function releasePipKeepAlive() {
+    releasePipResources();
+}
+
+/**
  * Whether the page runs inside a Luker app shell that provides native keep-alive.
  */
 export function hasNativeKeepAliveBridge() {
@@ -322,7 +484,7 @@ export function getAvailableWebModes() {
 export function primePipKeepAlive() {
     if (!hasPipSupport()) return;
     const video = ensurePipVideo();
-    if (video.readyState === HTMLMediaElement.HAVE_NOTHING) {
+    if (!video.srcObject && video.readyState === HTMLMediaElement.HAVE_NOTHING) {
         video.load();
     }
 }
@@ -349,6 +511,7 @@ export async function setKeepAliveMode(desired) {
     // Switching away from the current mode: tear down first.
     if (activeMode === 'pip' && target !== 'pip') {
         await exitPip();
+        releasePipResources();
     }
     if (activeMode === 'audio' && target !== 'audio') {
         await exitAudio();
@@ -382,6 +545,7 @@ export async function setKeepAliveMode(desired) {
     }
 
     if (target === 'off') {
+        releasePipResources();
         activeMode = 'off';
         return 'off';
     }
@@ -477,4 +641,35 @@ export async function setKeepAliveMode(desired) {
 export function initKeepAlive() {
     platform = resolvePlatform();
     return platform;
+}
+
+/**
+ * Prime the PiP video on the next tap. Only needed when the saved setting
+ * keeps PiP enabled across reloads; enabling it through the toggle already
+ * builds the video inside that click.
+ * @param {boolean} enabled
+ */
+export function setPipPrimingEnabled(enabled) {
+    pipPrimingEnabled = Boolean(enabled);
+    if (pipPrimingEnabled) armPipPriming();
+}
+
+// iOS only loads media inside a user gesture, and PiP can only open once the
+// video has metadata. Load the tiny silent video on the first tap anywhere so
+// it is ready long before the user picks Picture-in-Picture.
+let pipPrimingEnabled = false;
+let pipPrimingArmed = false;
+function armPipPriming() {
+    if (!pipPrimingEnabled || pipPrimingArmed || typeof document === 'undefined') return;
+    if (platform !== 'web' || !hasPipSupport()) return;
+    pipPrimingArmed = true;
+    const prime = () => {
+        document.removeEventListener('touchend', prime, true);
+        document.removeEventListener('click', prime, true);
+        pipPrimingArmed = false;
+        if (!pipPrimingEnabled) return;
+        primePipKeepAlive();
+    };
+    document.addEventListener('touchend', prime, true);
+    document.addEventListener('click', prime, true);
 }
