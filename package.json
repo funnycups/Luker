@@ -135,6 +135,9 @@
             "whatwg-url": "^14.0.0"
         }
     },
+    "allowScripts": {
+        "better-sqlite3": true
+    },
     "name": "luker",
     "type": "module",
     "license": "AGPL-3.0",
@@ -157,6 +160,7 @@
         "lint:plugin-imports": "node scripts/check-plugin-imports.js",
         "plugins:update": "node plugins update",
         "plugins:install": "node plugins install",
+        "storage:install-sqlite": "npm rebuild better-sqlite3 --ignore-scripts=false",
         "storage:migrate": "node scripts/storage-migrate.js",
         "storage:audit-names": "node scripts/audit-storage-names.js"
     },
