@@ -8,6 +8,7 @@
 //     the dock's menu; then the native panels come back)
 
 import { extensionNames } from '../../../extensions.js';
+import { accountLocalStorage } from '../../lens-shared/current-account.js';
 import { createRecorder } from './model/recorder.js';
 import { buildFlow } from './model/profile.js';
 import { createLukerSource } from './source-luker.js';
@@ -33,7 +34,7 @@ function startRuntime() {
     if (!runtimeReady) {
         runtimeReady = (async () => {
             const source = createLukerSource();
-            const recorder = createRecorder({ getRunContext: (from) => source.runContext(from) });
+            const recorder = createRecorder({ storage: accountLocalStorage(), getRunContext: (from) => source.runContext(from) });
             let dock = null;
             let lastStart = 0;
             recorder.subscribe((kind) => { if (kind === 'start') lastStart = Date.now(); });

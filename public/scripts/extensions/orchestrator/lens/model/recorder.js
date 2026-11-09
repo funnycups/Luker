@@ -4,7 +4,8 @@
 // search agent's) and keeps:
 //   - a live copy of each store's current run, plus per-section start/end
 //     stamps (the stores only time rounds; spec nodes share one round)
-//   - a small history of finished runs, persisted to localStorage
+//   - a small history of finished runs, persisted to the storage passed in
+//     (per account in Luker; it holds chat text)
 //
 // Store events carry ids only; data is read via getCurrentRun(). No DOM.
 // `storage` is injectable so Node tests can pass a Map-backed shim.
@@ -65,12 +66,14 @@ export function createMemoryStorage() {
  * @param {{ storage?: Storage, now?: () => number, wallNow?: () => number, getRunContext?: (source: string) => object }} options
  *   getRunContext: called once when a run starts; returns { chatId, floor, chatLabel, presetName }.
  */
-export function createRecorder({ storage = globalThis.localStorage, now = () => globalThis.performance?.now?.() ?? Date.now(), wallNow = () => Date.now(), getRunContext = () => ({}) } = {}) {
+export function createRecorder({ storage = createMemoryStorage(), now = () => globalThis.performance?.now?.() ?? Date.now(), wallNow = () => Date.now(), getRunContext = () => ({}) } = {}) {
     // store → { source, unsubscribe, current }
     // current = { run (live ref), times, context, startedAtWall, finished, source, seq }
     const attached = new Map();
     const listeners = new Set();
-    let history = loadHistory();
+    // Read on first use: the account is not known yet when the recorder is built.
+    let history = null;
+    const runs = () => (history ??= loadHistory());
     let latest = null; // the most recently started `current` across stores
     let seq = 0;
     let notifyQueued = false;
@@ -89,7 +92,7 @@ export function createRecorder({ storage = globalThis.localStorage, now = () => 
             storage?.setItem(HISTORY_KEY, JSON.stringify(history));
         } catch {
             // Quota: drop the oldest half and retry once.
-            history = history.slice(0, Math.floor(history.length / 2));
+            history = runs().slice(0, Math.floor(runs().length / 2));
             try { storage?.setItem(HISTORY_KEY, JSON.stringify(history)); } catch { /* give up quietly */ }
         }
     }
@@ -139,7 +142,7 @@ export function createRecorder({ storage = globalThis.localStorage, now = () => 
         const snap = snapshot(current, { truncate: true });
         current.finished = true;
         if (!snap || snap.quiet) return;
-        history = [snap, ...history.filter(item => item.runId !== snap.runId || item.source !== snap.source)].slice(0, MAX_RUNS);
+        history = [snap, ...runs().filter(item => item.runId !== snap.runId || item.source !== snap.source)].slice(0, MAX_RUNS);
         saveHistory();
     }
 
@@ -216,9 +219,9 @@ export function createRecorder({ storage = globalThis.localStorage, now = () => 
             fn();
             return true;
         },
-        history: () => history.slice(),
+        history: () => runs().slice(),
         removeWhere(predicate) {
-            history = history.filter(item => !predicate(item));
+            history = runs().filter(item => !predicate(item));
             saveHistory();
             emit('history');
         },
