@@ -1,0 +1,76 @@
+<div id="sd_illustration_container">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b data-i18n="sd_illustration_title">AI Illustration</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <label for="sd_illustration_enabled" class="checkbox_label">
+                <input id="sd_illustration_enabled" type="checkbox" />
+                <span data-i18n="sd_illustration_enabled">Enable AI illustration</span>
+            </label>
+            <label for="sd_illustration_auto_generate" class="checkbox_label">
+                <input id="sd_illustration_auto_generate" type="checkbox" />
+                <span data-i18n="sd_illustration_auto_generate">Illustrate assistant messages automatically</span>
+            </label>
+
+            <hr />
+
+            <div class="sd_illustration_block">
+                <div class="sd_illustration_row">
+                    <label for="sd_illustration_preset" class="flex1" data-i18n="sd_illustration_preset">Prompt preset</label>
+                    <select id="sd_illustration_preset" class="text_pole"></select>
+                </div>
+                <div class="sd_illustration_button_row">
+                    <div id="sd_illustration_preset_new" class="menu_button menu_button_icon" data-i18n="sd_illustration_preset_new">New</div>
+                    <div id="sd_illustration_preset_rename" class="menu_button menu_button_icon" data-i18n="sd_illustration_preset_rename">Rename</div>
+                    <div id="sd_illustration_preset_delete" class="menu_button menu_button_icon" data-i18n="sd_illustration_preset_delete">Delete</div>
+                </div>
+            </div>
+
+            <label for="sd_illustration_prompt" data-i18n="sd_illustration_prompt">Message illustration prompt</label>
+            <textarea id="sd_illustration_prompt" class="textarea_compact text_pole" rows="8"></textarea>
+
+            <label for="sd_illustration_studio_prompt" data-i18n="sd_illustration_studio_prompt">Studio prompt</label>
+            <textarea id="sd_illustration_studio_prompt" class="textarea_compact text_pole" rows="5"></textarea>
+
+            <div class="sd_illustration_row">
+                <label for="sd_illustration_api_preset" class="flex1" data-i18n="sd_illustration_api_preset">Connection profile</label>
+                <select id="sd_illustration_api_preset" class="text_pole"></select>
+            </div>
+            <div class="sd_illustration_row">
+                <label for="sd_illustration_llm_preset" class="flex1" data-i18n="sd_illustration_llm_preset">Completion preset</label>
+                <select id="sd_illustration_llm_preset" class="text_pole"></select>
+            </div>
+
+            <div class="sd_illustration_button_row">
+                <div id="sd_illustration_update_image_config" class="menu_button menu_button_icon" data-i18n="sd_illustration_update_image_config">Update from current image settings</div>
+                <div id="sd_illustration_apply_image_config" class="menu_button menu_button_icon" data-i18n="sd_illustration_apply_image_config">Apply to image settings</div>
+            </div>
+            <div id="sd_illustration_image_summary" class="sd_illustration_summary"></div>
+
+            <hr />
+
+            <div class="sd_illustration_row">
+                <label for="sd_illustration_max_prompts" class="flex1" data-i18n="sd_illustration_max_prompts">Maximum prompts per message</label>
+                <input id="sd_illustration_max_prompts" class="text_pole" type="number" step="1" />
+            </div>
+            <div class="sd_illustration_row">
+                <label for="sd_illustration_context_count" class="flex1" data-i18n="sd_illustration_context_count">Context messages</label>
+                <input id="sd_illustration_context_count" class="text_pole" type="number" step="1" />
+            </div>
+            <div class="sd_illustration_row">
+                <label for="sd_illustration_max_concurrent" class="flex1" data-i18n="sd_illustration_max_concurrent">Concurrent image generations</label>
+                <input id="sd_illustration_max_concurrent" class="text_pole" type="number" step="1" />
+            </div>
+            <div class="sd_illustration_row">
+                <label for="sd_illustration_min_interval" class="flex1" data-i18n="sd_illustration_min_interval">Minimum interval between requests, milliseconds</label>
+                <input id="sd_illustration_min_interval" class="text_pole" type="number" step="100" />
+            </div>
+            <div class="sd_illustration_row">
+                <label for="sd_illustration_display_width" class="flex1" data-i18n="sd_illustration_display_width">Image display width, percent</label>
+                <input id="sd_illustration_display_width" class="text_pole" type="number" step="1" />
+            </div>
+        </div>
+    </div>
+</div>

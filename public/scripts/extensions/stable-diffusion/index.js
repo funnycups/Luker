@@ -62,6 +62,9 @@ import { withProfileRetry } from '../connection-manager/profile-retry.js';
 import { oai_settings } from '../../openai.js';
 import { power_user } from '/scripts/power-user.js';
 import { MacrosParser } from '/scripts/macros.js';
+import { applyImageConfig as applyIllustrationImageConfig, readImageConfig as readIllustrationImageConfig } from './illustration/settings.js';
+import { stripIllustrationMarkup } from './illustration/message.js';
+import { initIllustration } from './illustration/index.js';
 
 export { MODULE_NAME };
 
@@ -511,6 +514,19 @@ async function loadSettings() {
         delete extension_settings.sd.original_seed;
     }
 
+    applySettingsToUi();
+
+    toggleSourceControls();
+    addPromptTemplates();
+    registerFunctionTool();
+
+    await loadSettingOptions();
+}
+
+/**
+ * Push the current image generation settings into the settings panel controls.
+ */
+function applySettingsToUi() {
     $('#sd_source').val(extension_settings.sd.source);
     $('#sd_scale').val(extension_settings.sd.scale).trigger('input');
     $('#sd_steps').val(extension_settings.sd.steps).trigger('input');
@@ -571,6 +587,7 @@ async function loadSettings() {
     $('#sd_google_enhance').prop('checked', extension_settings.sd.google_enhance);
     $('#sd_google_duration').val(extension_settings.sd.google_duration);
 
+    $('#sd_style').empty();
     for (const style of extension_settings.sd.styles) {
         const option = document.createElement('option');
         option.value = style.name;
@@ -581,12 +598,69 @@ async function loadSettings() {
 
     const resolutionId = getClosestKnownResolution();
     $('#sd_resolution').val(resolutionId);
+}
 
-    toggleSourceControls();
-    addPromptTemplates();
-    registerFunctionTool();
+/**
+ * Bridge used by the illustration modules so they never import this file.
+ */
+export function createIllustrationBridge() {
+    return {
+        readImageConfig() {
+            return readIllustrationImageConfig(extension_settings.sd);
+        },
+        refreshSettingsUi() {
+            applySettingsToUi();
+        },
+        async applyImageConfig(config) {
+            applyIllustrationImageConfig(extension_settings.sd, config);
+            saveSettingsDebounced();
+            applySettingsToUi();
+            await loadSettingOptions();
+            applySettingsToUi();
+        },
+        async generateImage(prompt, { characterName = '', signal = undefined } = {}) {
+            const controller = new AbortController();
+            const forwardAbort = () => controller.abort(signal?.reason);
+            if (signal?.aborted) {
+                forwardAbort();
+            } else {
+                signal?.addEventListener('abort', forwardAbort, { once: true });
+            }
 
-    await loadSettingOptions();
+            let capturedError = null;
+            registerAbortController(controller);
+            startGenerationTracking(controller);
+            try {
+                const preparedPrompt = await getPrompt(generationMode.FREE, prompt, prompt, '', null);
+                const imagePath = await sendGenerationRequest(
+                    generationMode.FREE,
+                    preparedPrompt,
+                    '',
+                    characterName,
+                    async () => {},
+                    initiators.tool,
+                    controller.signal,
+                    error => { capturedError = error; },
+                );
+                if (capturedError) {
+                    throw capturedError;
+                }
+                if (controller.signal.aborted) {
+                    const error = new Error('Image generation aborted.');
+                    error.name = 'AbortError';
+                    throw error;
+                }
+                if (!imagePath) {
+                    throw new Error('Image generation returned no file path.');
+                }
+                return imagePath;
+            } finally {
+                signal?.removeEventListener('abort', forwardAbort);
+                unregisterAbortController(controller);
+                endGenerationTracking(controller);
+            }
+        },
+    };
 }
 
 /**
@@ -2891,10 +2965,10 @@ function getRawLastMessage() {
 
     if (!character) {
         console.debug('Character not found, using raw message.');
-        return processReply(lastMessage.mes);
+        return stripIllustrationMarkup(processReply(lastMessage.mes));
     }
 
-    return `((${processReply(lastMessage.mes)})), (${processReply(getCharacterScenario(character))}:0.7), (${processReply(getCharacterDescription(character))}:0.5)`;
+    return `((${stripIllustrationMarkup(processReply(lastMessage.mes))})), (${stripIllustrationMarkup(processReply(getCharacterScenario(character)))}:0.7), (${stripIllustrationMarkup(processReply(getCharacterDescription(character)))}:0.5)`;
 }
 
 /**
@@ -3255,6 +3329,9 @@ function restoreOriginalDimensions(savedParams) {
  */
 async function getPrompt(generationType, message, trigger, quietPrompt, combineNegatives) {
     let prompt;
+    if (typeof message === 'string') {
+        message = stripIllustrationMarkup(message);
+    }
     console.log('getPrompt: Generation mode', generationType, 'triggered with', trigger);
     switch (generationType) {
         case generationMode.RAW_LAST:
@@ -3405,7 +3482,7 @@ async function generatePrompt(quietPrompt) {
  * @param {AbortSignal} signal Abort signal to cancel the request
  * @returns
  */
-async function sendGenerationRequest(generationType, prompt, additionalNegativePrefix, characterName, callback, initiator, signal) {
+async function sendGenerationRequest(generationType, prompt, additionalNegativePrefix, characterName, callback, initiator, signal, onError = null) {
     const noCharPrefix = [generationMode.FREE, generationMode.BACKGROUND, generationMode.USER, generationMode.USER_MULTIMODAL, generationMode.FREE_EXTENDED];
     const isCharChat = this_chid !== undefined && !selected_group;
     const ignoreNoCharForSwipe = initiator === initiators.swipe && isCharChat;
@@ -3534,12 +3611,18 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
         }
 
         console.error('Image generation request error: ', err);
+        if (typeof onError === 'function') {
+            onError(err);
+        }
         toastr.error('Image generation failed. Please try again.' + '\n\n' + String(err), t`Image Generation`);
         return;
     }
 
     if (currentChatId !== getCurrentChatId()) {
         console.warn('Chat changed, aborting SD result saving');
+        if (typeof onError === 'function') {
+            onError(new Error('Chat changed, generated image discarded.'));
+        }
         toastr.warning('Chat changed, generated image discarded.', t`Image Generation`);
         return;
     }
@@ -6001,6 +6084,7 @@ export async function init() {
 
     await loadSettings();
     $('body').addClass('sd');
+    await initIllustration(createIllustrationBridge());
 
     const getMacroValue = ({ isNegative }) => {
         if (selected_group || this_chid === undefined) {

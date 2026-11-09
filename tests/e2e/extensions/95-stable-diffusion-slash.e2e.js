@@ -10,79 +10,13 @@
 //   - Verify a chat message with an image attachment lands at the tail.
 
 import { test, expect } from '@playwright/test';
-import http from 'node:http';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
-
-const ONE_PX_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+import { ONE_PX_PNG_BASE64, startSdWebUiMock } from '../_lib/sdMock.js';
 
 let server, mock, sdMock;
-
-async function startSdWebUiMock() {
-    const requests = [];
-    const httpServer = http.createServer(async (req, res) => {
-        let body = '';
-        for await (const chunk of req) body += chunk;
-        let parsed = {};
-        try { parsed = body ? JSON.parse(body) : {}; } catch { /* ignore non-JSON probes */ }
-        requests.push({ url: req.url, method: req.method, body: parsed });
-
-        const respondJson = (status, payload) => {
-            res.writeHead(status, { 'content-type': 'application/json' });
-            res.end(JSON.stringify(payload));
-        };
-
-        if (req.url === '/sdapi/v1/options' && req.method === 'GET') {
-            respondJson(200, { samples_format: 'png', sd_model_checkpoint: 'mock-model' });
-            return;
-        }
-        if (req.url === '/sdapi/v1/sd-models') {
-            respondJson(200, [
-                { title: 'mock-model [abc]', model_name: 'mock-model', hash: 'abc', sha256: 'def', filename: 'mock-model.safetensors', config: null },
-            ]);
-            return;
-        }
-        if (req.url === '/sdapi/v1/samplers') {
-            respondJson(200, [{ name: 'DDIM', aliases: [], options: {} }]);
-            return;
-        }
-        if (req.url === '/sdapi/v1/schedulers') {
-            respondJson(200, [{ name: 'normal', label: 'Normal' }]);
-            return;
-        }
-        if (req.url === '/sdapi/v1/upscalers') {
-            respondJson(200, [{ name: 'Latent' }]);
-            return;
-        }
-        if (req.url === '/sdapi/v1/latent-upscale-modes') {
-            respondJson(200, [{ name: 'Latent' }]);
-            return;
-        }
-        if (req.url === '/sdapi/v1/txt2img' && req.method === 'POST') {
-            respondJson(200, {
-                images: [ONE_PX_PNG_BASE64],
-                parameters: parsed,
-                info: JSON.stringify({ prompt: parsed.prompt, seed: 42 }),
-            });
-            return;
-        }
-        if (req.url === '/sdapi/v1/interrupt' && req.method === 'POST') {
-            respondJson(200, {});
-            return;
-        }
-        respondJson(200, {});
-    });
-
-    await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
-    const port = httpServer.address().port;
-    return {
-        baseURL: `http://127.0.0.1:${port}`,
-        requests,
-        stop: () => new Promise((resolve) => httpServer.close(() => resolve())),
-    };
-}
 
 test.beforeAll(async () => {
     sdMock = await startSdWebUiMock();
@@ -107,6 +41,11 @@ test.describe('#95 — Stable Diffusion /imagine via real send textarea + send b
     test('typing /imagine ... + clicking send attaches a generated PNG to a new chat message', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
+
+        // Establish the chat-completion connection with the real plug button.
+        // e2e starts from persisted settings; the status check is a user gesture.
+        await page.evaluate(() => document.querySelector('#api_button_openai').click());
+        await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
 
         await page.waitForFunction(() => {
             const ctx = window.Luker.getContext();

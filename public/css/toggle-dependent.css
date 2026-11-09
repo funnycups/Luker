@@ -9,9 +9,15 @@ body.tts .mes[is_system="true"] .mes_narrate {
 }
 
 body.sd .sd_message_gen,
+body.sd.illustration-enabled .sd_illustration_gen,
 body.translate .mes_translate,
 body.tts .mes_narrate {
     display: inline-block;
+}
+
+body.sd.illustration-enabled .mes[is_user="true"] .sd_illustration_gen,
+body.sd.illustration-enabled .mes[is_system="true"] .sd_illustration_gen {
+    display: none;
 }
 
 body:not(.tts) #ttsExtensionNarrateAll {

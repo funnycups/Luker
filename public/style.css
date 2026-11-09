@@ -635,6 +635,7 @@ input[type='checkbox']:focus-visible {
 
 .mes_translate,
 .sd_message_gen,
+.sd_illustration_gen,
 .mes_ghost,
 .mes_narrate {
     display: none;
