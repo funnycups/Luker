@@ -5,25 +5,34 @@
 // Settings live in `extension_settings.orchestrator`; a character card may
 // carry its own preset library under `data.extensions.orchestrator`. We
 // resolve the effective profile the same way the orchestrator does
-// (card preset > global preset > factory default), but without its lazy
-// migrations / default seeding, so opening the lens never writes anything.
+// (card preset > global preset > factory default). If a mode has no stored
+// preset yet, the orchestrator's own default seeding fills it in memory so the
+// profile can be edited; nothing is written until something is saved.
 //
 // The live run comes from the orchestrator's run-panel store, the instance
 // the runtimes write to.
 
 import { i18n, i18nFormat } from './i18n.js';
 import runStore from '../run-state/store.js';
-import { getPreset } from '../preset-library.js';
+import { getActivePreset, getPreset } from '../preset-library.js';
+import { mountNotesPanel } from '../notes-panel.js';
+import { openCustomToolEditor } from '../custom-tool-editor.js';
+import { openBridgeStToolPicker } from '../bridge-st-tool-picker.js';
+import { getBuiltinToolRegistry } from '../loop-tools.js';
+import { importDefaultCustomTools } from '../seed-default-custom-tools.js';
+import { DEFAULT_CUSTOM_TOOLS } from '../default-custom-tools.js';
+import { mountSkillChips } from '../../../skills/skill-chips.js';
 import { createFactoryPresetForMode } from '../defaults.js';
 import { getLoadedAnchorMap } from '../snapshot-cache.js';
 import { invalidateSkillInventory } from '../skill-resolution.js';
-import { createProfileAccess, createAiAccess } from './source-write.js';
+import { createProfileAccess, createAiAccess, createPresetAccess, createSettingsAccess } from './source-write.js';
 
 const MODES = ['spec', 'single', 'agenda', 'loop', 'director'];
 const CHAT_EVENTS = ['CHAT_CHANGED', 'CHAT_DELETED', 'GROUP_CHAT_DELETED'];
 const CONFIG_EVENTS = ['SETTINGS_UPDATED', 'CHARACTER_EDITED', 'CHARACTER_REPLACED', 'CHARACTER_FIELDS_UPDATED'];
 const MESSAGE_EVENTS = ['MESSAGE_DELETED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED'];
 const RESULT_EVENT = 'luker.orchestrator.result';
+const CONFIG_CHANGED_EVENT = 'luker.orchestrator.config-changed';
 
 export class SourceError extends Error {
     constructor(code, message) {
@@ -74,7 +83,7 @@ export function presetDisplayName(name) {
     return inner ? i18nFormat('Default profile (${0})', inner[1]) : i18nFormat('Default profile ${0}', rest);
 }
 
-function resolveProfile(ctx, settings) {
+function resolveProfile(ctx, settings, seeded = false) {
     const mode = normalizeMode(settings.executionMode);
     const character = currentCharacter(ctx);
     if (mode === 'single') {
@@ -117,9 +126,10 @@ function resolveProfile(ctx, settings) {
         return { mode, source: 'global', presetId: id, presetName: presetDisplayName(library[id].name), profile: sanitize('global', id, library[id]) };
     }
 
+    if (getActivePreset(settings, mode, { scope: 'global', context: ctx }).state && !seeded) return resolveProfile(ctx, settings, true);
+
     let factory = createFactoryPresetForMode(mode) || null;
     if (Array.isArray(factory)) factory = factory[0];
-    // Nothing stored yet: editing needs the orchestrator to seed a preset first.
     return { mode, source: 'factory', presetId: '', presetName: presetDisplayName(factory?.name || 'Default'), profile: factory || {} };
 }
 
@@ -158,6 +168,8 @@ function readAnchors(ctx) {
 
 export function createLukerSource() {
     let lastPresetName = '';
+    let notesHost = null;
+    const api = () => getContext().getExtensionApi('orchestrator');
     const host = () => {
         const ctx = getContext();
         return { ctx, settings: settingsOf(ctx) };
@@ -166,6 +178,36 @@ export function createLukerSource() {
         kind: 'luker',
         edit: createProfileAccess(host),
         ai: createAiAccess(host),
+        presets: createPresetAccess(host),
+        settings: createSettingsAccess(host),
+        openIterationStudio: () => api()?.openIterationStudio?.(),
+        openSkillManager: () => api()?.openSkillManager?.(),
+        editLastResult: () => api()?.editLastResult?.(),
+        lastRunSummary: () => api()?.getLastRunSummary?.() || '',
+        searchRunStore: () => getContext().getExtensionApi('search_tools')?.getRunStore?.() || null,
+
+        /** One notes panel per page: its listeners live as long as the page. */
+        async mountNotes(parent) {
+            if (!notesHost) notesHost = document.createElement('div');
+            parent.appendChild(notesHost);
+            await mountNotesPanel(notesHost, getContext());
+        },
+
+        customToolEditor: {
+            registry: () => api()?.listExtensionTools?.() || [],
+            open: (options) => openCustomToolEditor({ ...options, nameConflictsBuiltin: (name) => getBuiltinToolRegistry().has(name), t: i18n }),
+            bridge: () => {
+                const { ctx, settings } = host();
+                return openBridgeStToolPicker({ settings, t: i18n, persist: () => ctx.saveSettingsDebounced() });
+            },
+            importDefaults: importDefaultCustomTools,
+            defaults: () => DEFAULT_CUSTOM_TOOLS,
+        },
+
+        skills: {
+            inventory: () => api()?.loadSkillInventory?.() || [],
+            mount: (el, options) => mountSkillChips(el, { ...options, t: i18n }),
+        },
         locale() {
             return getContext().getCurrentLocale() || navigator.language;
         },
@@ -219,38 +261,28 @@ export function createLukerSource() {
                 for (const key of CONFIG_EVENTS) on(types[key], 'config');
                 for (const key of MESSAGE_EVENTS) on(types[key], 'message');
                 on(RESULT_EVENT, 'result');
+                on(CONFIG_CHANGED_EVENT, 'config');
             } catch { /* host gone: nothing to unsubscribe */ }
             return () => offs.forEach(off => { try { off(); } catch { /* ignore */ } });
         },
 
-        // The native panel keeps its own copy of these fields in the DOM;
-        // drive its controls when present so both stay in step (its handlers
-        // also refresh dependent panels). Otherwise write settings directly.
         async setEnabled(value) {
             const ctx = getContext();
             const settings = settingsOf(ctx);
-            const box = $('#luker_orch_enabled');
-            if (box.length) {
-                box.prop('checked', Boolean(value)).trigger('input');
-                return;
-            }
             settings.enabled = Boolean(value);
             ctx.saveSettingsDebounced();
+            api()?.refreshLegacyPanel?.();
         },
 
         async setMode(mode) {
             const next = normalizeMode(mode);
             const ctx = getContext();
             const settings = settingsOf(ctx);
-            const select = $('#luker_orch_execution_mode');
-            if (select.length) {
-                select.val(next).trigger('change');
-                return;
-            }
             settings.executionMode = next;
             settings.singleAgentModeEnabled = next === 'single';
             invalidateSkillInventory();
             ctx.saveSettingsDebounced();
+            api()?.refreshLegacyPanel?.();
         },
 
         openNative() {

@@ -5,7 +5,7 @@
 // stored profile (native editor saved something else) keeps both: the
 // draft = stored profile + our changes. Pure: no DOM.
 
-import { applyChanges, getField, agentFields } from './edit.js';
+import { applyChanges, canHold, diffProfiles, getField, PROFILE } from './edit.js';
 
 const keyOf = (agentId, field) => `${agentId}.${field}`;
 export const targetKey = (t) => (t ? [t.mode, t.scope, t.presetId, t.scope === 'character' ? t.avatar : '', t.scope === 'chat' ? t.chatKey : ''].join('|') : '');
@@ -31,8 +31,9 @@ export function createDrafts() {
                 target = nextTarget;
                 base = profile;
                 // Drop changes the stored profile already has (saved, or made the same elsewhere).
+                const withSlots = applyChanges(target.mode, base, [...changes.values()].filter(c => c.agentId === PROFILE));
                 for (const [key, c] of [...changes]) {
-                    if (!agentFields(target.mode, base, c.agentId).includes(c.field)) { changes.delete(key); continue; }
+                    if (!canHold(target.mode, withSlots, c.agentId, c.field)) { changes.delete(key); continue; }
                     const now = getField(target.mode, base, c.agentId, c.field);
                     if (now === c.after) changes.delete(key);
                     else c.before = now;
@@ -47,12 +48,20 @@ export function createDrafts() {
         base: () => base,
         get(agentId, field) {
             const c = changes.get(keyOf(agentId, field));
-            return c ? c.after : getField(target?.mode, base, agentId, field);
+            return c ? c.after : getField(target?.mode, this.profile(), agentId, field);
         },
         changeFor: (agentId, field) => changes.get(keyOf(agentId, field)) || null,
         set(agentId, field, value, { by = 'hand' } = {}) {
             if (!target) return;
             put(agentId, field, value, by);
+            emit();
+        },
+        /** Makes the draft equal `next` (a whole profile from a structural operation). */
+        setProfile(next, { by = 'hand' } = {}) {
+            if (!target) return;
+            const previous = new Map(changes);
+            changes.clear();
+            for (const c of diffProfiles(target.mode, base, next)) changes.set(keyOf(c.agentId, c.field), { ...c, by: previous.get(keyOf(c.agentId, c.field))?.by || by });
             emit();
         },
         /** Several changes at once ({agentId, field, after}). Returns a snapshot to undo with restore(). */

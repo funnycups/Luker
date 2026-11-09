@@ -20,6 +20,16 @@ const KIND = {
 };
 const LONG = 700;
 
+/** Folds every long text block inside `root`. */
+export function collapseAllText(root) {
+    root.querySelectorAll('.ol-textblock:not(.is-folded)').forEach((block) => {
+        const more = block.parentElement?.querySelector('.ol-textblock-more');
+        if (!more) return;
+        block.classList.add('is-folded');
+        more.textContent = i18n('Expand all');
+    });
+}
+
 /** Collapsible text block; long text starts folded. */
 function textBlock(text, { app, title = '', mono = false, collapsed = null } = {}) {
     const value = String(text ?? '');

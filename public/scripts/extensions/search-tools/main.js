@@ -314,12 +314,14 @@ let loadedChatStateKey = '';
 
 let searchRunPanel = null;
 
+__ctx.registerExtensionApi?.(MODULE_NAME, { getRunStore: () => searchRunPanel?.store || null });
+
 function initSearchRunPanel() {
     if (searchRunPanel) {
         return;
     }
-    searchRunPanel = createSearchRunPanel({ t: i18nFormat });
-    searchRunPanel.init();
+    searchRunPanel = createSearchRunPanel();
+    getContext().eventSource.emit('luker.search-tools.run-store-ready');
 }
 
 function i18n(text) {
@@ -2622,7 +2624,7 @@ const {
     normalizeSafeSearch,
     normalizeWhitespace,
     saveSettingsDebounced,
-    showRunPanel: () => searchRunPanel?.open(),
+    showRunPanel: () => getContext().getExtensionApi('orchestrator')?.openRunDock?.(),
     syncSharedLorebookForCurrentChat,
     syncSharedLorebookForLoadedChat,
     world_info_position,

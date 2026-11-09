@@ -7,11 +7,13 @@
 import { h, clear, put } from '../../../lens-shared/util.js';
 import { icon } from '../icons.js';
 import { i18n, i18nFormat, agentName } from '../i18n.js';
-import { fieldLabel } from '../model/edit.js';
+import { fieldLabel, PROFILE } from '../model/edit.js';
 import { button } from '../ui/components.js';
 
+const ownerName = (change) => (change.agentId === PROFILE ? i18n('Profile structure') : agentName(change.agentId));
+
 export function changeText(change) {
-    return `${agentName(change.agentId)} · ${fieldLabel(change.field) || change.field}`;
+    return `${ownerName(change)} · ${fieldLabel(change.field) || change.field}`;
 }
 
 /** Character-level diff (common prefix / suffix) → highlighted spans. */
@@ -84,7 +86,7 @@ export function changeList(opts) {
                 onFocus?.(change);
             },
         },
-        h('span', { class: 'ol-change-agent', text: agentName(change.agentId) }),
+        h('span', { class: 'ol-change-agent', text: ownerName(change) }),
         h('span', { class: 'ol-change-field', text: fieldLabel(change.field) || change.field }),
         isStale ? h('span', { class: 'ol-change-stale', text: i18n('You edited this by hand'), title: i18n('You edited this by hand after the AI finished, so it cannot be applied directly') }) : null,
         caret);

@@ -186,3 +186,23 @@
     .olens:not(.is-compact) .ol-viewswitch .ol-seg-btn[aria-pressed="false"] .ol-seg-label, .olens:not(.is-compact) .ol-brand-chat { display: none; }
     .olens:not(.is-compact).ai-open .ol-aipane { position: absolute; z-index: 6; top: 0; right: 0; bottom: 0; box-shadow: var(--ol-shadow-3); }
 }
+
+/* Setup and settings views */
+.olens .ol-setup { display: grid; gap: 14px; padding: 16px; width: 100%; max-width: 880px; margin: 0 auto; overflow-y: auto; height: 100%; align-content: start; box-sizing: border-box; }
+.olens .ol-setup-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.olens .ol-setup-bar .ol-select { width: auto; min-width: 180px; }
+.olens .ol-setup-section { display: grid; gap: 8px; }
+.olens .ol-setup-stage { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--ol-border); border-radius: 8px; }
+.olens .ol-setup-stagehead, .olens .ol-setup-row, .olens .ol-setup-node > summary { display: flex; align-items: center; gap: 6px; }
+.olens .ol-setup-stagehead .ol-input, .olens .ol-setup-stagehead .ol-select { width: auto; max-width: 200px; }
+.olens .ol-setup-node { padding: 6px 8px; border: 1px solid var(--ol-border); border-radius: 6px; }
+.olens .ol-setup-node > summary { cursor: pointer; list-style: none; }
+.olens .ol-setup-node[open] > summary { margin-bottom: 8px; }
+.olens .ol-setup-name { font-size: 13px; color: var(--ol-text); }
+.olens .ol-setup-tools { display: flex; flex-wrap: wrap; gap: 12px; }
+.olens .ol-setup-toolgroup { display: grid; gap: 2px; align-content: start; }
+.olens .ol-setup-toolhead { font-size: 11px; color: var(--ol-text-faint); }
+.olens .ol-setup-override { display: grid; gap: 8px; margin-top: 8px; }
+.olens .ol-input, .olens .ol-textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit; font-size: 12.5px; color: var(--ol-text); background: var(--ol-surface-2); border: 1px solid var(--ol-border-strong); border-radius: var(--ol-radius-sm); }
+.olens .ol-textarea { resize: vertical; line-height: 1.5; }
+.olens.is-compact .ol-input, .olens.is-compact .ol-textarea { font-size: 16px; }

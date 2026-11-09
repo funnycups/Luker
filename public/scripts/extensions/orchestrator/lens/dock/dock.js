@@ -218,6 +218,7 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
         const data = currentView();
         put(clear(menu),
             item(i18n('Open automatically on run'), () => { prefs.autoOpen = !prefs.autoOpen; savePrefs(prefs); setMenu(true); }, { role: 'menuitemcheckbox', 'aria-checked': String(prefs.autoOpen) }),
+            data ? item(i18n('Export trace'), () => { setMenu(false); exportTrace(data.view); }) : null,
             openLens && data ? item(i18n('View in Orchestra Lens'), () => { setMenu(false); openLens(`${data.view.source}:${data.view.runId}`); }) : null,
             onRestoreNative ? item(i18n('Use native panels'), () => { setMenu(false); restoreNative(); }) : null);
     }
@@ -225,6 +226,18 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
         if (menuOpen && !menu.contains(event.target) && !event.target.closest?.('.ol-dock-more')) setMenu(false);
     };
     document.addEventListener('pointerdown', onOutside, true);
+
+    function exportTrace(view) {
+        const raw = recorder.currents().find(item => item.runId === view.runId) || recorder.history().find(item => item.runId === view.runId);
+        if (!raw) return;
+        const text = JSON.stringify(raw, (key, value) => (key === 'abortFn' || key === 'stopFn' ? undefined : value), 2);
+        const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+        const link = h('a', { href: url, download: `${view.source === 'search' ? 'search-agent' : 'orch'}-run-${view.runId}.json` });
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
 
     function restoreNative() {
         if (!globalThis.confirm?.(i18n('Go back to the built-in run panels? Takes effect after reloading; you can change it back on the History page of Orchestra Lens.'))) return;

@@ -10,7 +10,7 @@ import { i18n, i18nFormat, agentName, statusLabel, modeInfo } from '../i18n.js';
 import { formatDuration, formatTokens } from '../model/run.js';
 import { emptyState, button, iconButton } from '../ui/components.js';
 import { agentAvatar, toneOf } from './flow-view.js';
-import { renderSections } from './sections.js';
+import { renderSections, collapseAllText } from './sections.js';
 
 const TICK_STEPS = [500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000];
 
@@ -56,6 +56,9 @@ export function createRunView(app) {
                 run.floor >= 0 && run.floor !== 0 ? stat(i18n('Floor'), `#${run.floor}`) : null,
                 started ? stat(i18n('Started'), started) : null,
                 h('span', { class: 'ol-spacer' }),
+                app.source?.lastRunSummary ? h('span', { class: 'ol-insp-note', text: app.source.lastRunSummary() }) : null,
+                iconButton('shrink', i18n('Collapse all'), () => collapseAllText(el), { className: 'ol-iconbtn-sm' }),
+                !running && app.source?.editLastResult ? button(i18n('Edit result'), async () => { if (await app.source.editLastResult()) await app.reload(); }, { iconName: 'pen', className: 'ol-btn-sm' }) : null,
                 !running && app.source?.ai ? button(i18n('AI diagnosis'), () => app.diagnose(run.key), { iconName: 'target', className: 'ol-btn-sm', title: i18n('Let the AI find what went wrong in this run') }) : null,
                 running && !pinned ? button(i18n('Stop run'), () => { if (!app.recorder.stop()) app.notify(i18n('Could not stop'), { error: true }); }, { iconName: 'stop', className: 'ol-btn-sm ol-btn-danger' }) : null),
             run.error && run.status !== 'committed' ? h('div', { class: 'ol-run-error' }, icon('alert', { size: 14 }), h('span', { text: humanError(run.error) })) : null);

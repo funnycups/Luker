@@ -14,6 +14,9 @@ import { createFlowView } from './views/flow-view.js';
 import { createRunView } from './views/run-view.js';
 import { createHistoryView } from './views/history-view.js';
 import { createStatsView } from './views/stats-view.js';
+import { createSetupView } from './views/setup-view.js';
+import { createSettingsView } from './views/settings-view.js';
+import { createNotesView } from './views/notes-view.js';
 import { createAiPanel } from './panels/ai-panel.js';
 import { changeList } from './panels/change-list.js';
 import { createDrafts } from './model/drafts.js';
@@ -24,7 +27,7 @@ import { iconButton, segmented, emptyState, button, switchControl, isTouch } fro
 import { fitToViewport } from './viewport.js';
 
 const COMPACT_QUERY = '(max-width: 860px)';
-const VIEWS = ['flow', 'run', 'history', 'stats'];
+const VIEWS = ['flow', 'run', 'history', 'stats', 'setup', 'settings', 'notes'];
 const ERROR_TEXT = { 'no-extension': 'Orchestrator extension not detected. Make sure it is enabled.' };
 
 function detectTheme() {
@@ -70,7 +73,6 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
         if (!source.edit) return i18n('Cannot edit in preview mode');
         const target = snapshot?.target;
         if (!target) return '';
-        if (target.scope === 'factory') return i18n('No profile saved yet: save one in the native panel first, then you can edit it here');
         if (!draftsActive()) return i18n('Another profile still has unsaved edits');
         return '';
     }
@@ -138,9 +140,20 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
     const runView = createRunView(app);
     const historyView = createHistoryView(app);
     const statsView = createStatsView(app);
-    const views = { flow: flowView, run: runView, history: historyView, stats: statsView };
+    const setupView = createSetupView(app);
+    const settingsView = createSettingsView(app);
+    const notesView = createNotesView(app);
+    const views = { flow: flowView, run: runView, history: historyView, stats: statsView, setup: setupView, settings: settingsView, notes: notesView };
     const inspector = createInspector(app);
     const dialog = createDialog();
+    Object.assign(app, {
+        dialog,
+        reload: () => load(),
+        promptText,
+        async guard(fn) {
+            try { await fn(); await load(); } catch (err) { showToast(String(err?.message || err), { error: true }); }
+        },
+    });
 
     // ----- Layout ---------------------------------------------------------
     const titleChat = h('span', { class: 'ol-brand-chat' });
@@ -227,6 +240,9 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
             { value: 'run', label: i18n('Run'), icon: 'play' },
             { value: 'history', label: i18n('History'), icon: 'history' },
             { value: 'stats', label: i18n('Stats'), icon: 'timeline' },
+            { value: 'setup', label: i18n('Setup'), icon: 'layers' },
+            { value: 'settings', label: i18n('Settings'), icon: 'gear' },
+            { value: 'notes', label: i18n('Notes'), icon: 'doc' },
         ], state.view, (value) => store.set({ view: value, modeMenu: false }), { ariaLabel: i18n('Flow'), iconOnlyMobile: true }));
         if (badge) viewSwitch.querySelectorAll('.ol-seg-btn')[1]?.appendChild(badge);
         const live = liveState();
@@ -350,6 +366,13 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
         } catch (err) {
             showToast(i18nFormat('Undo failed: ${0}', String(err?.message || err)), { error: true });
         }
+    }
+
+    /** Asks for one line of text; null when dismissed. */
+    async function promptText(heading, initial = '') {
+        const input = h('input', { class: 'ol-input', value: initial });
+        const value = await dialog.ask(heading, h('div', { class: 'ol-form' }, input), [{ label: i18n('Cancel'), value: '' }, { label: i18n('OK'), value: 'ok', primary: true }]);
+        return value ? input.value.trim() : null;
     }
 
     // ----- AI -----------------------------------------------------------------
@@ -508,6 +531,7 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
         renderSavebar();
         inspector.render();
         flowView.onRunUpdate?.();
+        if (store.get().view === 'setup') setupView.onDraftChange();
     });
     const unsubscribeSource = source.subscribe?.(() => scheduleReload()) || (() => {});
 

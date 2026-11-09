@@ -35,6 +35,11 @@ function startRuntime() {
         runtimeReady = (async () => {
             const source = createLukerSource();
             const recorder = createRecorder({ storage: accountLocalStorage(), getRunContext: (from) => source.runContext(from) });
+            // The third-party copy records runs itself; here only the lens window is offered.
+            if (thirdPartyCopyActive()) {
+                source.runStore = null;
+                return { recorder, source, dock: () => null };
+            }
             let dock = null;
             let lastStart = 0;
             recorder.subscribe((kind) => { if (kind === 'start') lastStart = Date.now(); });
@@ -47,6 +52,17 @@ function startRuntime() {
                 onNativeOpen: () => { if (Date.now() - lastStart > 800) dock?.open(); },
             });
             recorder.attach(source.runStore(), 'orchestrator');
+            // search-tools loads before us but builds its store when ready; pick it up either way.
+            const attachSearch = () => {
+                const store = source.searchRunStore();
+                if (store) recorder.attach(store, 'search');
+            };
+            attachSearch();
+            try {
+                const { eventSource, eventTypes } = getContext();
+                eventSource.on('luker.search-tools.run-store-ready', attachSearch);
+                eventSource.on(eventTypes.APP_READY, attachSearch);
+            } catch { /* host gone */ }
             if (enabled) {
                 const { createDock } = await import('./dock/dock.js');
                 let flow = null;
@@ -97,10 +113,19 @@ export async function openOrchestraLens(runId = '', { diagnose = false } = {}) {
     }
 }
 
+/** Shows the run dock (the lens's run view when the dock is off). */
+export async function openRunDock() {
+    const runtime = await startRuntime();
+    const dock = runtime.dock();
+    if (dock) dock.open();
+    else await openOrchestraLens();
+}
+
 async function toggleDock() {
     const runtime = await startRuntime();
     const dock = runtime.dock();
     if (dock) dock.toggle();
+    else if (thirdPartyCopyActive()) await openOrchestraLens();
     else toastr.info(i18n('The run panel is off. You can turn it back on from the History page of Orchestra Lens.'));
 }
 
@@ -147,11 +172,12 @@ function thirdPartyCopyActive() {
 export function initOrchestraLens() {
     const { addLocaleData } = getContext();
     registerLensLocaleData(addLocaleData);
+    addMenuItems();
     if (thirdPartyCopyActive()) {
         console.warn('[orchestrator/lens] the third-party copy is still enabled; remove it to use the built-in one');
+        toastr.warning(i18n('The third-party Orchestra Lens is still enabled. Remove it to use the built-in one.'), i18n('Orchestra Lens'));
         return;
     }
-    addMenuItems();
     // Hide the native panels right away so they never flash.
     if (takeoverEnabled()) document.documentElement.classList.add('ol-takeover');
     startRuntime().catch(() => {});
