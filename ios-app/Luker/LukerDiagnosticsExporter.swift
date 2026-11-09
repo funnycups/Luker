@@ -162,6 +162,7 @@ final class LukerDiagnosticsExporter {
             LukerCrashReporter.exceptionFileName,
             LukerCrashReporter.signalFileName,
             LukerCrashReporter.webViewFileName,
+            LukerCrashReporter.bootFailureFileName,
         ] {
             let file = root.appendingPathComponent(name)
             guard manager.fileExists(atPath: file.path) else { continue }

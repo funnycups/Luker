@@ -28,6 +28,7 @@ final class ViewController: UIViewController {
     private var safeModeTripped = false
     private var safeModeBanner: UIView?
     private var pendingCrashShown = false
+    private var pendingCrashRetryCount = 0
     private var isExportingDiagnostics = false
     #if DEBUG
     private var didHandleLaunchEndpointArgument = false
@@ -93,6 +94,9 @@ final class ViewController: UIViewController {
         if LukerDeepLinkRouter.shared.consumePendingEndpointSettings() {
             presentEndpointSettings()
         }
+        // Do not wait for the WebView: a crash loop that never reaches the
+        // home page must still show the previous run's report and export path.
+        showPendingCrashIfNeeded()
     }
 
     private func configureConstraints() {
@@ -151,6 +155,10 @@ final class ViewController: UIViewController {
         if armWatchdog {
             let watchdog = LukerBootWatchdog.shared.detectAndArm(dataRoot: runtime.dataRootURL)
             safeModeTripped = watchdog.tripped
+            LukerDebugTrail.shared.append(
+                category: "native",
+                text: "boot watchdog armed tripped=\(watchdog.tripped) streak=\(watchdog.failedStreak)"
+            )
         }
 
         startLocalRuntimeAndWait(generation: generation)
@@ -164,10 +172,13 @@ final class ViewController: UIViewController {
                 guard let result else { return }
                 guard generation == self.bootGeneration else { return }
                 if result.ok {
+                    LukerDebugTrail.shared.append(category: "native", text: "runtime start ok; waiting for server")
                     self.setBootState(.waitingForServer)
                     self.waitForServer(generation: generation)
                 } else {
-                    self.setBootState(.failed(reason: result.error ?? NSLocalizedString("runtime_failure_reason_unknown_error", comment: "")))
+                    let reason = result.error ?? NSLocalizedString("runtime_failure_reason_unknown_error", comment: "")
+                    LukerDebugTrail.shared.append(category: "native", text: "runtime start failed: \(reason)")
+                    self.setBootState(.failed(reason: reason))
                 }
             }
         }
@@ -182,6 +193,10 @@ final class ViewController: UIViewController {
                 if self.runtime.isServerReady() {
                     DispatchQueue.main.async { [weak self] in
                         guard let self, generation == self.bootGeneration else { return }
+                        LukerDebugTrail.shared.append(
+                            category: "native",
+                            text: "server ready after \(String(format: "%.1f", Date().timeIntervalSince(startedAt)))s"
+                        )
                         LukerBootWatchdog.shared.markBootSucceeded()
                         self.setBootState(.ready)
                         if self.safeModeTripped {
@@ -210,6 +225,7 @@ final class ViewController: UIViewController {
             }
             DispatchQueue.main.async { [weak self] in
                 guard let self, generation == self.bootGeneration else { return }
+                LukerDebugTrail.shared.append(category: "native", text: "server ready timeout")
                 self.setBootState(.failed(reason: NSLocalizedString("loading_failed_timeout", comment: "")))
             }
         }
@@ -258,6 +274,7 @@ final class ViewController: UIViewController {
             spinner.stopAnimating()
             statusStack.isHidden = true
             webView?.isHidden = false
+            LukerDebugTrail.shared.append(category: "native", text: "interface ready")
             loadCurrentEndpoint()
             showPendingCrashIfNeeded()
         }
@@ -369,6 +386,15 @@ final class ViewController: UIViewController {
 
     private func showPendingCrashIfNeeded() {
         guard !pendingCrashShown else { return }
+        guard view.window != nil else { return }
+        guard presentedViewController == nil else {
+            guard pendingCrashRetryCount < 20 else { return }
+            pendingCrashRetryCount += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.showPendingCrashIfNeeded()
+            }
+            return
+        }
         guard let crash = LukerDiagnosticsCenter.shared.takePendingCrash() else { return }
         pendingCrashShown = true
         let summary = String(crash.report.prefix(4000))

@@ -29,6 +29,7 @@ final class LukerCrashReporter {
     static let exceptionFileName = "luker-last-crash-report.txt"
     static let signalFileName = "luker-last-signal-crash.txt"
     static let webViewFileName = "luker-last-webview-crash-report.txt"
+    static let bootFailureFileName = "luker-last-boot-failure.txt"
 
     private static let archiveDirName = "crash-archive"
     private static let maxArchivedReports = 10
@@ -58,7 +59,7 @@ final class LukerCrashReporter {
     /// run ended normally.
     func collectPendingReport(in directory: URL) -> LukerCapturedCrash? {
         self.directory = directory
-        let candidates = [Self.exceptionFileName, Self.signalFileName]
+        let candidates = [Self.exceptionFileName, Self.signalFileName, Self.bootFailureFileName]
         var sections: [String] = []
         var newestFile: URL?
         var newestDate = Date.distantPast

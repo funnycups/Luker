@@ -9,6 +9,15 @@ struct LukerBootWatchdogResult {
     let failedStreak: Int
 }
 
+/// A previous launch that never reached server-ready. The next launch turns
+/// this into a report even when the crash left no signal or exception file
+/// (for example, a system kill or a fault before the handlers installed).
+struct LukerPendingBootFailure {
+    let startedAt: Date
+    let failedStreak: Int
+    let lastFailedAt: Date?
+}
+
 /// Detects "the previous launch never reached server-ready", typically because
 /// Node died before the WebView could connect. On detection it drops the same
 /// `.luker-safe-mode.json` sentinel Android writes; `src/safe-mode.js` consumes
@@ -61,6 +70,20 @@ final class LukerBootWatchdog {
 
         defaults.set(now.timeIntervalSince1970, forKey: Self.inProgressKey)
         return LukerBootWatchdogResult(tripped: tripped, sentinelPath: sentinelPath, failedStreak: nextStreak)
+    }
+
+    /// The previous run's boot marker. `markBootSucceeded` removes it once the
+    /// server answers, so a surviving marker means the previous run ended
+    /// before the interface was usable.
+    func pendingBootFailure() -> LukerPendingBootFailure? {
+        let millis = defaults.double(forKey: Self.inProgressKey)
+        guard millis > 0 else { return nil }
+        let failedMillis = defaults.double(forKey: Self.failedAtKey)
+        return LukerPendingBootFailure(
+            startedAt: Date(timeIntervalSince1970: millis),
+            failedStreak: defaults.integer(forKey: Self.streakKey),
+            lastFailedAt: failedMillis > 0 ? Date(timeIntervalSince1970: failedMillis) : nil
+        )
     }
 
     func markBootSucceeded() {

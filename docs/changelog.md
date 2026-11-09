@@ -8,6 +8,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Added a **Check for pre-release updates** switch to User Settings, on by default.
 
+### iOS App
+
+- Added a startup-failure report on the next launch.
+
 ## v2.9.0-rc.1 (2026-11-09)
 
 ### Server Plugins
