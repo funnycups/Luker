@@ -6,23 +6,47 @@ import { LOREBOOK_READ_TOOL_DEFS, isLorebookReadTool, runLorebookReadTool } from
 import { readFieldsByPaths } from '../../../iteration-library/read-fields-helper.js';
 import { requestToolCallsWithRetry } from '../../../iteration-library/runner.js';
 import { getChatCompletionConnectionProfiles } from '../../connection-manager/profile-resolver.js';
+import { listEmbeddingProfiles, listRerankProfiles } from '../../connection-manager/embed-rerank.js';
 import { getEffectiveSettings } from '../character-overrides.js';
 import { LEGACY_SCHEMA_ITER_SYSTEM_PROMPT } from '../config-iteration/prompt-migration.js';
 import { CONTROL_TOOL_NAMES, buildToolCatalog, normalizeToolCallToEdit, projectNodeTypeForRead } from '../config-iteration/tools.js';
 import { buildSchemaExportPayload, getSchemaExportFileName, parseSchemaImportPayload } from '../import-export.js';
 import {
+    addMemoryStatusListener,
+    applyRawGraphJson,
+    clearMemoryAdvancedOverride,
     commitGraphUiMutation,
     ensureMemoryStoreLoaded,
     ensureStoreSyncedWithChat,
+    exportMemoryGraph,
     getChatKey,
     getDefaultNodeTypeSchema,
+    getMemoryGraphStats,
+    getMemorySettingsView,
+    getMemoryStatus,
+    getRawGraphJson,
+    getRebuildableLatestSeq,
     getSettings,
+    importMemoryGraphFile,
     normalizeNodeTypeSchema,
+    openMemoryConfigStudio,
+    openMemoryGraphStudio,
+    resetMemoryGraphForChat,
+    runFillGraph,
+    runManualCompression,
+    runRebuildGraph,
+    runRebuildRecent,
+    runRecallDebug,
+    runVectorRecomputeForChat,
+    saveMemoryAdvancedSettings,
+    setMemorySetting,
+    stopMemoryExtraction,
     syncGraphVectorsAfterMutation,
 } from '../main.js';
 import { getMemoryGraphReadApi } from '../read-api.js';
 import { getMemoryGraphWriteApi } from '../write-api.js';
 import { commitSkipMessage } from './edit/edit-model.js';
+import { createMutator, patchNode, addExactEdge, removeExactEdge, replaceExactEdge } from './edit/graph-edit.js';
 import { i18n } from './i18n.js';
 import { readFilterSettings, writeFilterSettings, previewFloor, filterStatus } from './filter/filter-runtime.js';
 import { SUBMIT_FILTER, diagnoseSystemPrompt, diagnoseUserPrompt, readDiagnosis } from './filter/filter-ai.js';
@@ -165,18 +189,12 @@ export function createLukerSource() {
             };
         },
 
-        /** Opens memory-graph's built-in inspector (editing lives there). */
-        openNative() {
-            const button = document.getElementById('luker_rpg_memory_view_graph');
-            if (!button) return false;
-            button.click();
-            return true;
-        },
-
         schema: createSchemaAccess(resolveApi),
         ai: createAiAccess(resolveApi),
         edit: createEditAccess(resolveApi),
         filter: createFilterAccess(),
+        settings: createSettingsAccess(),
+        ops: createOperationsAccess(),
     };
 }
 
@@ -209,58 +227,86 @@ function createFilterAccess() {
 // Editing stored memories
 // ---------------------------------------------------------------------------
 //
-// Mirrors memory-graph's own manual-edit commit (as used by its graph
-// iteration studio): edit a copy of the live store with the write-api
-// (preserveSeqOnEdit, so the node keeps its place on the timeline), commit it
-// through commitGraphUiMutation (persists + fires onStoreCommit), then
-// re-sync vectors. Undo writes the previous values back the same way.
+// Every edit runs on a copy of the live store and lands through
+// commitGraphUiMutation (persists + fires onStoreCommit), then re-syncs
+// vectors. The result carries the before/after snapshot used for undo.
 
 function createEditAccess(resolveApi) {
-    const split = (fields) => {
-        const setFields = {};
-        const clearFields = [];
-        for (const [key, value] of Object.entries(fields || {})) {
-            const empty = value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length);
-            if (empty) clearFields.push(key);
-            else setFields[key] = value;
-        }
-        return { setFields, clearFields };
-    };
+    const context = () => resolveApi().ctx;
+    const mutator = createMutator({
+        getLive: () => ensureStoreSyncedWithChat(context()),
+        async commit(beforeStore, afterStore) {
+            const ctx = context();
+            const chatKey = String(getChatKey(ctx) || '').trim();
+            if (!chatKey) throw new SourceError('no-chat');
+            const skipped = commitSkipMessage(await commitGraphUiMutation(ctx, chatKey, { beforeStore, afterStore, replaceGraph: false, seq: null }));
+            if (skipped) throw new SourceError('write-skipped', skipped);
+            try { await syncGraphVectorsAfterMutation(ctx, chatKey, afterStore); } catch (err) { console.warn('[memory-graph/lens] vector sync after edit failed', err); }
+        },
+    });
+    const writeApi = (working) => getMemoryGraphWriteApi(working, context(), { onCommit: null, useInFlightAnchor: false, preserveSeqOnEdit: true });
     const check = (result) => {
         if (result && result.ok === false) throw new SourceError('write-failed', result.error?.message || result.error?.code || 'edit failed');
         return result;
     };
-    const run = async (id, fields, title) => {
-        const { ctx } = resolveApi();
-        const op = { id, ...split(fields), ...(title !== undefined ? { title } : {}) };
-        const live = await ensureStoreSyncedWithChat(ctx);
-        const chatKey = String(getChatKey(ctx) || '').trim();
-        if (!live || !chatKey) throw new SourceError('no-chat');
-        const working = structuredClone(live);
-        const api = getMemoryGraphWriteApi(working, ctx, { onCommit: null, useInFlightAnchor: false, preserveSeqOnEdit: true });
-        const result = check(await api.editNode(op));
-        if (result?.changed === false) return result;
-        const skipped = commitSkipMessage(await commitGraphUiMutation(ctx, chatKey, { beforeStore: live, afterStore: working, replaceGraph: false, seq: null }));
-        if (skipped) throw new SourceError('write-skipped', skipped);
-        try { await syncGraphVectorsAfterMutation(ctx, chatKey, working); } catch (err) { console.warn('[memory-graph/lens] vector sync after edit failed', err); }
-        return result;
-    };
     return {
-        /**
-         * @param {object} node model node
-         * @param {{ fields?: object, title?: string }} patch
-         * @returns previous values, for restore()
-         */
-        async updateNode(node, { fields = {}, title } = {}) {
-            const previous = { id: node.id, fields: {}, title: undefined };
-            for (const key of Object.keys(fields)) previous.fields[key] = structuredClone(node.fields?.[key] ?? null);
-            if (title !== undefined) previous.title = node.rawTitle || '';
-            await run(node.id, fields, title);
-            return previous;
+        /** @param {{ fields?: object, title?: string, type?: string, level?: string, seqTo?: number|null, archived?: boolean, parentId?: string }} patch */
+        updateNode: (node, patch) => mutator.mutate(working => patchNode(working, node.id, patch)),
+        createNode: (spec) => mutator.mutate(async working => (await writeApi(working).createNode(spec)).id),
+        removeNode: (id) => mutator.mutate(async working => check(await writeApi(working).deleteNode({ id }))),
+        addEdge: (edge) => mutator.mutate(working => addExactEdge(working, edge)),
+        updateEdge: (edge, next) => mutator.mutate(working => replaceExactEdge(working, edge, next)),
+        removeEdge: (edge) => mutator.mutate(working => removeExactEdge(working, edge)),
+        restore: (snapshot) => mutator.restore(snapshot),
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Settings page and graph operations
+// ---------------------------------------------------------------------------
+
+function createSettingsAccess() {
+    return {
+        read() {
+            const view = getMemorySettingsView(getContext());
+            const brief = ({ id, name }) => ({ id, name });
+            view.options.embeddingProfiles = listEmbeddingProfiles().map(brief);
+            view.options.rerankProfiles = listRerankProfiles().map(brief);
+            return view;
         },
-        async restore(previous) {
-            await run(previous.id, previous.fields, previous.title);
+        set: (key, value) => setMemorySetting(key, value),
+        saveAdvanced: (values, scope) => saveMemoryAdvancedSettings(getContext(), values, scope),
+        clearAdvanced: () => clearMemoryAdvancedOverride(getContext()),
+    };
+}
+
+function createOperationsAccess() {
+    const ctx = getContext;
+    return {
+        status: getMemoryStatus,
+        onStatus: addMemoryStatusListener,
+        stats: () => getMemoryGraphStats(ctx()),
+        latestSeq: () => getRebuildableLatestSeq(ctx()),
+        stop: stopMemoryExtraction,
+        fill: () => runFillGraph(ctx()),
+        rebuild: () => runRebuildGraph(ctx()),
+        rebuildRecent: (turns) => runRebuildRecent(ctx(), turns),
+        compress: (values) => runManualCompression(ctx(), getEffectiveSettings(ctx(), getSettings()), values),
+        reset: () => resetMemoryGraphForChat(ctx()),
+        vectors: (mode) => runVectorRecomputeForChat(ctx(), mode),
+        exportGraph: () => exportMemoryGraph(ctx()),
+        async importGraph() {
+            const file = await pickFile('.json,application/json');
+            if (file) await importMemoryGraphFile(ctx(), file);
         },
+        recallDebug: (query) => runRecallDebug(ctx(), query),
+        async rawJson() {
+            await ensureMemoryStoreLoaded(ctx());
+            return getRawGraphJson(ctx());
+        },
+        applyRawJson: (text) => applyRawGraphJson(ctx(), text),
+        openConfigStudio: () => openMemoryConfigStudio(ctx()),
+        openGraphStudio: () => openMemoryGraphStudio(ctx()),
     };
 }
 

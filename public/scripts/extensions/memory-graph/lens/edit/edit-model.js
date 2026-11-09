@@ -13,16 +13,9 @@ export function commitSkipMessage(result) {
     return result?.skipped ? i18nFormat('Memory save skipped: ${0}', result.hint || result.reason || i18n('reason unknown')) : '';
 }
 
-/**
- * Whether a field of a node may be edited here, with a Chinese reason if not.
- * @param {object} node model node (from buildModel)
- * @param {string} key field key, or '' for the title
- */
-export function editRule(node, key) {
+/** Whether a field of a node may be edited here, with a reason if not. */
+export function editRule(node) {
     if (!node) return { ok: false, reason: i18n('This memory could not be found') };
-    if (node.isRollup) return { ok: false, reason: i18n('This summary was merged automatically and is regenerated at the next merge, so it cannot be changed here') };
-    if (node.archived) return { ok: false, reason: i18n('Archived memories cannot be changed') };
-    if (key === '' && node.type === 'event') return { ok: false, reason: i18n('Event titles are generated from the body; change the body instead') };
     return { ok: true, reason: '' };
 }
 

@@ -45,6 +45,7 @@ export function createPalette(app) {
             { id: 'graph', label: i18n('Graph'), icon: 'graph' },
             { id: 'timeline', label: i18n('Timeline'), icon: 'timeline' },
             { id: 'table', label: i18n('Data table'), icon: 'table' },
+            { id: 'settings', label: i18n('Settings'), icon: 'gear' },
         ];
         return [
             ...views.filter(v => v.id !== app.state().view).map(v => ({ kind: 'cmd', icon: v.icon, label: i18nFormat('Switch to ${0}', v.label), run: () => app.setState({ view: v.id }) })),

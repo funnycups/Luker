@@ -2,12 +2,10 @@ import './_mocks/luker-zh.js';
 import { test, expect } from '@jest/globals';
 import { editRule, toEditText, fromEditText, isChanged, hasParagraphs, commitSkipMessage } from '../../../public/scripts/extensions/memory-graph/lens/edit/edit-model.js';
 
-test('editRule blocks rollups, archived nodes and event titles', () => {
-    expect(editRule({ type: 'character_sheet' }, 'identity').ok).toBe(true);
-    expect(editRule({ type: 'event', isRollup: true }, 'summary').ok).toBe(false);
-    expect(editRule({ type: 'thread', archived: true }, 'state').ok).toBe(false);
-    expect(editRule({ type: 'event' }, '').ok).toBe(false);
-    expect(editRule({ type: 'event' }, 'summary').ok).toBe(true);
+test('editRule allows everything the native editor allows', () => {
+    expect(editRule({ type: 'event', isRollup: true }, 'summary').ok).toBe(true);
+    expect(editRule({ type: 'thread', archived: true }, 'state').ok).toBe(true);
+    expect(editRule({ type: 'event' }, '').ok).toBe(true);
     expect(editRule(null, 'x').reason).toMatch(/找不到/);
 });
 

@@ -52,6 +52,15 @@ export function relationLabel(type) {
     return i18n(RELATION_LABELS[type] || 'Related');
 }
 
+export function relationTypes() {
+    return Object.keys(RELATION_LABELS);
+}
+
+/** A known relation's name, or the stored type as written. */
+export function relationOptionLabel(type) {
+    return RELATION_LABELS[type] ? i18n(RELATION_LABELS[type]) : String(type);
+}
+
 export function hasFieldLabel(key) {
     return Object.hasOwn(FIELD_LABELS, key);
 }

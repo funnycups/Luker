@@ -77,11 +77,12 @@ export function initMemoryLens() {
     const { addLocaleData } = getContext();
     registerLensSharedLocaleData(addLocaleData);
     registerLensLocaleData(addLocaleData);
+    addMenuItem();
+    // The old copy would run the filter and recorder a second time.
     if (thirdPartyCopyActive()) {
-        console.warn('[memory-graph/lens] the third-party copy is still enabled; remove it to use the built-in one');
+        toastr.warning(i18n('Please remove the third-party Memory Lens; the built-in one replaces it'), i18n('Memory Lens'));
         return;
     }
-    addMenuItem();
     try {
         startTagFilter(getContext);
     } catch (err) {

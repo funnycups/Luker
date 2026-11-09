@@ -200,6 +200,8 @@ export function fromDraft(draft) {
     }
     raw.primaryKeyColumns = identity;
     raw.compression = { ...(raw.compression || {}), mode: draft.compression ? 'hierarchical' : 'none' };
+    // Force-update types run every pass, so a cadence would be meaningless.
+    if (raw.forceUpdate) delete raw.extractEveryN;
     return raw;
 }
 

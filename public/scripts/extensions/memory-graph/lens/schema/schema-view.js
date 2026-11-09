@@ -273,9 +273,50 @@ export function createSchemaView(app, source) {
                     flag(draft, 'alwaysInject', i18n('Always visible to the AI'), i18n('Sent with every reply, without waiting for recall. Best for a few important things like plot threads and rules.')),
                     flag(draft, 'latestOnly', i18n('Keep only the latest per name'), i18n('Only one entry stays for the same character or place; new content replaces the old.')),
                     draft.id === 'event' || draft.compression ? flag(draft, 'compression', i18n('Merge into summaries automatically'), i18n('Once there are many entries, several are merged into one summary to save space.')) : null)),
-            h('p', { class: 'ml-schema-note', text: i18n('The detailed recording and merging rules for the AI are not here; change them in the native panel if needed.') }),
+            advancedSection(draft),
         ));
         if (draft.isNew && !draft.name) requestAnimationFrame(() => nameInput.focus());
+    }
+
+    function advancedSection(draft) {
+        const raw = draft.raw;
+        const compression = (raw.compression ||= {});
+        const text = (target, key, label, rows = 0) => h('label', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: label }),
+            h(rows ? 'textarea' : 'input', { class: 'ml-schema-input', rows: rows || null, type: rows ? null : 'text', ...(rows ? { text: String(target[key] ?? '') } : { value: String(target[key] ?? '') }), onInput: (event) => { target[key] = event.target.value; touched(); } }));
+        const list = (key, label) => h('label', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: label }),
+            h('input', { class: 'ml-schema-input', type: 'text', value: (raw[key] || []).join(', '), onInput: (event) => { raw[key] = event.target.value.split(',').map(s => s.trim()).filter(Boolean); touched(); } }));
+        const number = (target, key, label, min) => h('label', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: label }),
+            h('input', { class: 'ml-schema-input', type: 'number', min, step: 1, value: String(target[key] ?? ''), onInput: (event) => { target[key] = event.target.value === '' ? undefined : Number(event.target.value); touched(); } }));
+        const check = (key, label) => checkRow({ checked: raw[key], label, onChange: (value) => { raw[key] = value; touched(); } });
+        const searchable = () => (Array.isArray(raw.embeddingColumns) ? raw.embeddingColumns : draft.columns.map(c => c.key));
+        return h('section', { class: 'ml-schema-section' },
+            h('div', { class: 'ml-section-title' }, h('span', { text: i18n('Advanced Settings') })),
+            h('div', { class: 'ml-aiset' },
+                h('div', { class: 'ml-aiset-fields' },
+                    text(raw, 'tableName', i18n('Table Name')),
+                    list('keywords', i18n('Keywords (comma separated)')),
+                    number(raw, 'extractEveryN', i18n('Extract Every N Floors'), 1),
+                    number(raw, 'ragPerTypeK', i18n('RAG per-type quota override'), 0)),
+                check('forceUpdate', i18n('Force Update (must appear each extraction batch)')),
+                check('editable', i18n('Editable (enable edit/delete tools and graph edit context)')),
+                h('div', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: i18n('Embedding Columns') }),
+                    draft.columns.map(column => checkRow({
+                        checked: searchable().includes(column.key),
+                        label: column.label || column.key,
+                        onChange: (value) => {
+                            const next = searchable().filter(key => key !== column.key);
+                            raw.embeddingColumns = value ? [...next, column.key] : next;
+                            touched();
+                        },
+                    }))),
+                text(raw, 'extractionInstructions', i18n('Extraction Instructions'), 4),
+                h('div', { class: 'ml-aiset-fields' },
+                    number(compression, 'threshold', i18n('Threshold'), 2),
+                    number(compression, 'fanIn', i18n('Fan-In'), 2),
+                    number(compression, 'maxDepth', i18n('Max Depth'), 1),
+                    number(compression, 'keepRecentLeaves', i18n('Keep Recent Leaves'), 0)),
+                text(compression, 'rule', i18n('Compression Rule (optional)'), 2),
+                text(compression, 'summarizeInstruction', i18n('Summarize Instruction'), 4)));
     }
 
     function flag(draft, key, title, hint) {

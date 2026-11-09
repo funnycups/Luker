@@ -10,6 +10,7 @@ import { i18n, typeLabel, relationLabel, fieldLabel, depthLabel } from '../i18n.
 import { neighborsOf, entitiesOfEvent, contextState, formatFloor, fieldText, compareTimeline, typeVisual } from '../model.js';
 import { iconButton, nodeLink, contextBadge, sectionTitle, typeChip, emptyState, button, isTouch, withMod } from '../ui/components.js';
 import { editable } from '../edit/inline-edit.js';
+import { confirmDeleteNode, openEdgeManager, openNodeProperties } from '../edit/node-forms.js';
 
 export function createInspector(app) {
     const body = h('div', { class: 'ml-inspector-body' });
@@ -163,6 +164,9 @@ export function createInspector(app) {
                 node.archived ? h('span', { class: 'ml-tag-muted', text: i18n('Archived') }) : null,
                 h('span', { class: 'ml-spacer' }),
                 iconButton('crosshair', i18n('Locate in graph'), () => app.locate(node.id), { className: 'ml-iconbtn-sm' }),
+                app.canEdit() ? iconButton('gear', i18n('Node properties'), () => openNodeProperties(app, node), { className: 'ml-iconbtn-sm' }) : null,
+                app.canEdit() ? iconButton('link', i18n('Relationships'), () => openEdgeManager(app, node), { className: 'ml-iconbtn-sm' }) : null,
+                app.canEdit() ? iconButton('trash', i18n('Delete'), () => confirmDeleteNode(app, node), { className: 'ml-iconbtn-sm' }) : null,
                 iconButton('x', i18n('Close'), () => select(''), { className: 'ml-iconbtn-sm ml-insp-close' })),
             node.type !== 'event' && node.fields.title !== undefined
                 ? editable(h('h2', { class: 'ml-insp-title', text: node.title }), { app, node, key: 'title', value: node.fields.title, label: i18n('Name') })

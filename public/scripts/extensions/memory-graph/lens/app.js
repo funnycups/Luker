@@ -19,6 +19,8 @@ import { tokenPanel } from './panels/token-panel.js';
 import { createDialog } from './panels/dialog.js';
 import { iconButton, segmented, emptyState, button, kbd, isTouch } from './ui/components.js';
 import { createSchemaView } from './schema/schema-view.js';
+import { createSettingsView } from './settings/settings-view.js';
+import { openCreateNode } from './edit/node-forms.js';
 import { buildLabelMaps } from './schema/schema-model.js';
 import { setDisplayLabels } from './i18n.js';
 import { fromEditText } from './edit/edit-model.js';
@@ -42,7 +44,7 @@ export function mountMemoryLens({ source, container = document.body, onClose = n
     const compactMql = globalThis.matchMedia?.(COMPACT_QUERY);
     const store = createStore({
         theme: prefs.theme === 'light' || prefs.theme === 'dark' ? prefs.theme : detectTheme(),
-        view: ['graph', 'timeline', 'table', 'schema'].includes(prefs.view) ? prefs.view : 'graph',
+        view: ['graph', 'timeline', 'table', 'schema', 'settings'].includes(prefs.view) ? prefs.view : 'graph',
         graphLayout: prefs.graphLayout === 'chrono' ? 'chrono' : 'force',
         timelineOrder: prefs.timelineOrder === 'desc' ? 'desc' : 'asc',
         sidebarOpen: prefs.sidebarOpen !== false,
@@ -109,25 +111,7 @@ export function mountMemoryLens({ source, container = document.body, onClose = n
             const patch = key === '' ? { title: value }
                 : key === 'title' && String(value).trim() ? { fields: { title: value }, title: String(value).trim() }
                     : { fields: { [key]: value } };
-            try {
-                const previous = await source.edit.updateNode(node, patch);
-                showToast(i18n('Modified'), {
-                    action: i18n('Undo'),
-                    onAction: async () => {
-                        try {
-                            await source.edit.restore(previous);
-                            showToast(i18n('Undone'));
-                        } catch (err) {
-                            showToast(i18nFormat('Edit failed: ${0}', String(err?.message || err)), { error: true });
-                        }
-                        scheduleReload();
-                    },
-                    duration: EDIT_UNDO_MS,
-                });
-            } catch (err) {
-                showToast(i18nFormat('Edit failed: ${0}', String(err?.message || err)), { error: true });
-            }
-            scheduleReload();
+            await app.applyEdit(edit => edit.updateNode(node, patch), i18n('Modified'));
         },
         showTokens() {
             const clearLog = source.clearTokens ? () => {
@@ -149,12 +133,34 @@ export function mountMemoryLens({ source, container = document.body, onClose = n
                 { title: i18n('Focus memory packet'), text: recall?.blocks?.focusPacket },
             ]);
         },
-        openNative() {
-            if (!source.openNative?.()) {
-                toastr.warning(i18n('Native memory graph panel not found (enable Memory in the extension settings first)'));
-                return;
+        openStatus: (title, sections) => dialog.open(title, sections),
+        refresh: () => scheduleReload(),
+        showToast: (text, options) => showToast(text, options),
+        /** Runs one graph edit and offers to undo it. */
+        async applyEdit(run, doneText) {
+            if (!source.edit) return null;
+            try {
+                const snapshot = await run(source.edit);
+                showToast(doneText, {
+                    action: i18n('Undo'),
+                    onAction: async () => {
+                        try {
+                            await source.edit.restore(snapshot);
+                            showToast(i18n('Undone'));
+                        } catch (err) {
+                            showToast(i18nFormat('Edit failed: ${0}', String(err?.message || err)), { error: true });
+                        }
+                        scheduleReload();
+                    },
+                    duration: EDIT_UNDO_MS,
+                });
+                scheduleReload();
+                return snapshot;
+            } catch (err) {
+                showToast(i18nFormat('Edit failed: ${0}', String(err?.message || err)), { error: true });
+                scheduleReload();
+                return null;
             }
-            close();
         },
     };
 
@@ -164,8 +170,9 @@ export function mountMemoryLens({ source, container = document.body, onClose = n
         timeline: createTimelineView(app),
         table: createTableView(app),
         schema: createSchemaView(app, source),
+        settings: createSettingsView(app, source),
     };
-    const isFullView = (view) => view === 'schema';
+    const isFullView = (view) => view === 'schema' || view === 'settings';
     const sidebar = createSidebar(app);
     const inspector = createInspector(app);
     const palette = createPalette(app);
@@ -214,6 +221,7 @@ export function mountMemoryLens({ source, container = document.body, onClose = n
             { value: 'timeline', label: i18n('Timeline'), icon: 'timeline' },
             { value: 'table', label: i18n('Data table'), icon: 'table' },
             { value: 'schema', label: i18n('Memory structure'), icon: 'blocks' },
+            { value: 'settings', label: i18n('Settings'), icon: 'gear' },
         ], state.view, (value) => store.set({ view: value }), { ariaLabel: i18n('Display'), iconOnlyMobile: true }));
         put(clear(topbarRight),
             h('button', { type: 'button', class: 'ml-searchbtn', onClick: () => palette.open(), 'aria-label': i18n('Search') },
@@ -221,7 +229,7 @@ export function mountMemoryLens({ source, container = document.body, onClose = n
             syncDot,
             iconButton('refresh', i18n('Refresh'), () => load({ manual: true }), { className: state.syncing ? 'is-spinning' : '' }),
             iconButton(state.theme === 'dark' ? 'sun' : 'moon', i18n('Toggle theme'), () => app.toggleTheme()),
-            source.openNative ? iconButton('external', i18n('Edit in native panel'), () => app.openNative(), { className: 'ml-hide-compact' }) : null,
+            source.edit ? iconButton('plus', i18n('New memory'), () => openCreateNode(app)) : null,
             iconButton('sidebarRight', i18n('Details panel'), () => toggleInspector(), { className: 'ml-toggle-inspector', pressed: state.inspectorOpen }),
             embedded ? null : iconButton('x', i18n('Close'), () => close(), { className: 'ml-close' }));
         renderSync();
@@ -396,8 +404,8 @@ export function mountMemoryLens({ source, container = document.body, onClose = n
         if (event.key === '/') {
             event.preventDefault();
             palette.open();
-        } else if (['1', '2', '3', '4'].includes(event.key)) {
-            store.set({ view: ['graph', 'timeline', 'table', 'schema'][Number(event.key) - 1] });
+        } else if (['1', '2', '3', '4', '5'].includes(event.key)) {
+            store.set({ view: ['graph', 'timeline', 'table', 'schema', 'settings'][Number(event.key) - 1] });
         } else if (event.key === '[') {
             toggleSidebar();
         } else if (event.key === ']') {

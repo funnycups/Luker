@@ -171,6 +171,8 @@ import {
     repairStoreAfterRollback,
     compareNodesByTimeline,
     getSemanticCoverageSeq,
+    reparentNode,
+    willCreateParentCycle,
 } from './graph-ops.js';
 import { __recordInjectedNodeIds } from './external-api.js';
 
@@ -2551,29 +2553,6 @@ function createNode(store, node) {
 
 export { createNode as _createNodeForTest };
 export { createRollupWithChildren as _createRollupWithChildrenForTest };
-
-function reparentNode(store, childId, parentId) {
-    const child = store.nodes[childId];
-    const parent = store.nodes[parentId];
-    if (!child || !parent) {
-        return;
-    }
-
-    const oldParentId = String(child.parentId || '');
-    if (oldParentId && store.nodes[oldParentId]) {
-        const oldParent = store.nodes[oldParentId];
-        oldParent.childrenIds = (oldParent.childrenIds || []).filter(id => id !== childId);
-    }
-
-    child.parentId = parentId;
-    if (!Array.isArray(parent.childrenIds)) {
-        parent.childrenIds = [];
-    }
-    if (!parent.childrenIds.includes(childId)) {
-        parent.childrenIds.push(childId);
-    }
-    addEdge(store, parentId, childId, 'contains');
-}
 
 function listNodesByLevel(store, level) {
     return Object.values(store.nodes)
@@ -10248,25 +10227,6 @@ function renderNodeFormEditorHtml(node, store, settings, editorId) {
 </div>`;
 }
 
-function willCreateParentCycle(store, nodeId, parentId) {
-    const childId = String(nodeId || '').trim();
-    let current = String(parentId || '').trim();
-    if (!childId || !current) {
-        return false;
-    }
-
-    let guard = 0;
-    while (current && guard < 3000) {
-        if (current === childId) {
-            return true;
-        }
-        const node = store.nodes?.[current];
-        current = String(node?.parentId || '').trim();
-        guard += 1;
-    }
-    return false;
-}
-
 async function ensureCytoscapeLoaded() {
     if (window.cytoscape) {
         return window.cytoscape;
@@ -11971,26 +11931,9 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
 
         try {
             const raw = String(jQuery(`#${editorId}`).val() || '').trim();
-            const parsed = JSON.parse(raw);
-            const migrated = normalizeStoreForRuntime(parsed);
-            updateStoreSourceState(migrated, context);
-            const migratedSeq = getStoreCoveredSeqTo(migrated);
-            const applyResult = await replacePersistedGraphWithStore(
-                context,
-                chatKey,
-                migrated,
-                migratedSeq,
-                { floor: seqToFloor(context, migratedSeq) },
-            );
-            clearRollbackHistory(chatKey);
-            await persistMemoryStoreByChatKey(context, chatKey, migrated, { syncPersistentProjection: true });
-            refreshUiStats();
-            if (applyResult && applyResult.skipped) {
-                notifyError(i18nFormat('Failed to apply graph JSON: ${0}', applyResult.hint || applyResult.reason || i18n('reason unknown')));
+            if (!await applyRawGraphJson(context, raw)) {
                 return;
             }
-            updateUiStatus(i18n('Applied raw graph JSON edit.'));
-            notifySuccess(i18n('Memory graph JSON updated.'));
             selectedEdgeIndex = -1;
             await rerender();
         } catch (error) {
@@ -12018,18 +11961,21 @@ ${renderEdgeFormEditorHtml(latest, editorId, edge, selectedEdgeIndex)}
 }
 
 function notifySuccess(message) {
+    emitMemoryStatus(message);
     if (typeof toastr !== 'undefined') {
         toastr.success(String(message));
     }
 }
 
 function notifyError(message) {
+    emitMemoryStatus(message);
     if (typeof toastr !== 'undefined') {
         toastr.error(String(message));
     }
 }
 
 function notifyInfo(message) {
+    emitMemoryStatus(message);
     if (typeof toastr !== 'undefined') {
         toastr.info(String(message));
     }
@@ -12096,6 +12042,7 @@ function notifyEventCompressionIfAny(compressionStats) {
 }
 
 function showRuntimeInfoToast(message, { stopLabel = '', onStop = null, kind = 'extraction' } = {}) {
+    if (kind === 'extraction') emitMemoryStatus(message);
     if (typeof toastr === 'undefined') {
         return;
     }
@@ -12138,6 +12085,7 @@ function showRuntimeInfoToast(message, { stopLabel = '', onStop = null, kind = '
 }
 
 function updateRuntimeInfoToastMessage(message, kind = 'extraction') {
+    if (kind === 'extraction') emitMemoryStatus(message);
     const toastRef = kind === 'recall' ? activeRecallToast : activeExtractionToast;
     if (!toastRef) {
         return;
@@ -12193,6 +12141,7 @@ async function stopMemoryRuntimeWork() {
 }
 
 function updateUiStatus(text) {
+    emitMemoryStatus(text);
     jQuery('#luker_rpg_memory_status').text(String(text || ''));
 }
 
@@ -14646,7 +14595,7 @@ function applyAdvancedTabToLiveSettings(root, settings) {
 }
 
 
-function getCompressibleTypeSpecs(settings, context = null) {
+export function getCompressibleTypeSpecs(settings, context = null) {
     const schema = getEffectiveNodeTypeSchema(context, settings);
     const specs = [];
     for (const item of schema) {
@@ -14735,6 +14684,784 @@ async function openManualCompressionPopup(context, settings) {
     const values = captured || readValues();
     if (!values) {
         notifyError(i18n('Failed to read advanced settings.'));
+        return;
+    }
+    await runManualCompression(context, settings, values);
+}
+
+async function prepareVectorRecompute(context, settings) {
+    await ensureMemoryStoreLoaded(context);
+    const chatKey = getChatKey(context);
+    const store = memoryStoreCache.get(chatKey);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
+        return null;
+    }
+
+    const vectorConfig = getVectorConfigFromSettings(settings);
+    const validation = validateVectorConfig(vectorConfig);
+    if (!validation.valid) {
+        notifyError(i18n('Embedding profile is not configured. Configure it in the settings above first.'));
+        return null;
+    }
+
+    const nodes = store?.nodes || {};
+    const hasAnyNode = Object.values(nodes).some(node => !node?.archived);
+    if (!hasAnyNode) {
+        notifyInfo(i18n('No eligible nodes to embed.'));
+        return null;
+    }
+    return { store, chatKey };
+}
+
+/** Recomputes vectors for the current chat; mode is incremental or full. */
+export async function runVectorRecomputeForChat(context, mode, settings = getEffectiveSettings(context, getSettings())) {
+    const prepared = await prepareVectorRecompute(context, settings);
+    if (prepared) await runVectorRecompute(context, settings, prepared.store, prepared.chatKey, { mode });
+}
+
+async function openVectorRecomputePopup(context, settings) {
+    const prepared = await prepareVectorRecompute(context, settings);
+    if (!prepared) {
+        return;
+    }
+
+    const content = `
+        <div class="flex-container flexFlowColumn" style="gap:6px">
+            <div>${escapeHtml(i18n('Recompute vector embeddings for memory graph nodes.'))}</div>
+            <div style="opacity:0.85">${escapeHtml(i18n('Fill Missing: re-embed only nodes whose vectors are missing or stale (after node edits).'))}</div>
+            <div style="opacity:0.85">${escapeHtml(i18n('Full Rebuild: clear and re-embed all eligible nodes (after changing embedding model/profile).'))}</div>
+        </div>
+    `;
+    const choice = await context.callGenericPopup(content, context.POPUP_TYPE.TEXT, '', {
+        okButton: false,
+        cancelButton: i18n('Cancel'),
+        wider: true,
+        customButtons: [
+            { text: i18n('Fill Missing'), result: context.POPUP_RESULT.CUSTOM1 },
+            { text: i18n('Full Rebuild'), result: context.POPUP_RESULT.CUSTOM2 },
+        ],
+    });
+
+    if (choice === context.POPUP_RESULT.CUSTOM1) {
+        await runVectorRecompute(context, settings, prepared.store, prepared.chatKey, { mode: 'incremental' });
+    } else if (choice === context.POPUP_RESULT.CUSTOM2) {
+        await runVectorRecompute(context, settings, prepared.store, prepared.chatKey, { mode: 'full' });
+    }
+}
+
+async function runVectorRecompute(context, settings, store, chatKey, { mode }) {
+    const vectorConfig = getVectorConfigFromSettings(settings);
+    const schema = getEffectiveNodeTypeSchema(context, settings);
+    const vs = ensureVectorIndexState(store);
+    const profileChanged = Boolean(vs.source) && (vs.source !== vectorConfig.source || (vs.model || '') !== (vectorConfig.model || ''));
+
+    let purge = mode === 'full';
+    if (mode === 'incremental' && profileChanged) {
+        notifyInfo(i18n('Embedding configuration changed. Switching to full rebuild automatically.'));
+        purge = true;
+    }
+
+    let progressToast = null;
+    const updateProgressToast = (current, total) => {
+        if (typeof toastr === 'undefined') return;
+        const message = i18nFormat('Recomputing vectors: ${0} / ${1}', current, total);
+        if (!progressToast) {
+            progressToast = toastr.info(message, '', {
+                timeOut: 0,
+                extendedTimeOut: 0,
+                tapToDismiss: false,
+                closeButton: false,
+                progressBar: false,
+            });
+        }
+        if (progressToast) {
+            const body = progressToast.find('.toast-message');
+            if (body && body.length) body.text(message);
+        }
+    };
+    const dismissProgressToast = () => {
+        if (progressToast && typeof toastr !== 'undefined') {
+            toastr.clear(progressToast);
+        }
+        progressToast = null;
+    };
+
+    notifyInfo(i18n('Starting vector recompute…'));
+    try {
+        const result = await syncVectorIndex(store, vectorConfig, chatKey, {
+            schema,
+            purge,
+            tolerateErrors: true,
+            onProgress: ({ current, total }) => updateProgressToast(current, total),
+        });
+        await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
+        const total = Number(result?.stats?.total || 0);
+        const inserted = Number(result?.insertedCount || 0);
+        const deleted = Number(result?.deletedCount || 0);
+        const failed = Array.isArray(result?.failedNodeIds) ? result.failedNodeIds.length : 0;
+        if (total === 0) {
+            notifyInfo(i18n('No eligible nodes to embed.'));
+        } else if (inserted === 0 && deleted === 0 && failed === 0) {
+            notifySuccess(i18n('Vector index already up to date.'));
+        } else if (failed > 0) {
+            notifyError(i18nFormat('Vector recompute complete: ${0} indexed, ${1} failed (see console).', inserted, failed));
+        } else {
+            notifySuccess(i18nFormat('Vector recompute complete: ${0} indexed.', inserted));
+        }
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Vector recompute (${mode}) failed:`, error);
+        notifyError(i18nFormat('Vector recompute failed: ${0}', String(error?.message || error)));
+    } finally {
+        dismissProgressToast();
+        refreshUiStats();
+    }
+}
+
+// ---- Shared by the settings drawer and Memory Lens --------------------------
+
+const memoryStatusListeners = new Set();
+let lastMemoryStatus = '';
+
+function emitMemoryStatus(text) {
+    lastMemoryStatus = String(text || '');
+    for (const cb of memoryStatusListeners) {
+        try { cb(lastMemoryStatus); } catch { /* listener errors stay local */ }
+    }
+}
+
+export function getMemoryStatus() {
+    return lastMemoryStatus;
+}
+
+export function addMemoryStatusListener(cb) {
+    memoryStatusListeners.add(cb);
+    return () => memoryStatusListeners.delete(cb);
+}
+
+export function getMemoryGraphStats(context) {
+    return getStoreStats(getMemoryStore(context) || createEmptyStore());
+}
+
+/** Same effect as the runtime toast's Stop button for the running extraction. */
+export function stopMemoryExtraction() {
+    if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
+        activeExtractionAbortController.abort();
+    }
+}
+
+export function getRebuildableLatestSeq(context, settings = getSettings()) {
+    return getExtractableLatestSeq(buildPlayableFramesFromContext(context).length, getEffectiveSettings(context, settings));
+}
+
+export function openMemoryGraphStudio(context) {
+    return openGraphIterationStudioWithDeps(context);
+}
+
+const clampInt = (value, min, max, fallback) => Math.max(min, Math.min(max, Math.floor(Number(value) || fallback)));
+const trimmed = (value) => String(value || '').trim();
+const recallPreset = { read: trimmed, recall: true };
+const plainPreset = { read: trimmed };
+
+const MEMORY_SETTING_RULES = {
+    enabled: {
+        read: Boolean,
+        after(settings) {
+            invalidateLatestRecallSnapshot();
+            syncGenerationVisibleHistoryRuntimeRegexScripts();
+            void syncMemoryLorebookActivation(getContext(), settings);
+            if (settings.enabled) {
+                void syncPersistentProjectionForCurrentChat(getContext());
+            } else {
+                void stopMemoryRuntimeWork();
+                updateUiStatus(i18n('Memory disabled, cleared memory lorebook injections.'));
+            }
+        },
+    },
+    recallEnabled: { read: Boolean, recall: true },
+    autoExtractionEnabled: { read: Boolean },
+    autoCompressionEnabled: { read: Boolean },
+    recallMethod: { read: (v) => trimmed(v) || 'llm', recall: true },
+    vectorTopK: { read: (v) => clampInt(v, 5, 100, 20), recall: true },
+    hybridMaxResults: { read: (v) => clampInt(v, 3, 50, 15), recall: true },
+    ragDefaultPerTypeK: {
+        read: (v) => Math.max(0, Math.min(50, Math.floor(Number.isFinite(Number(v)) ? Number(v) : defaultSettings.ragDefaultPerTypeK))),
+        recall: true,
+    },
+    embeddingProfileId: { read: (v) => String(v || ''), recall: true },
+    rerankProfileId: { read: (v) => String(v || ''), recall: true },
+    ragUseRerank: { read: Boolean, recall: true },
+    ragUseQueryRewrite: { read: Boolean, recall: true },
+    ragRewriteApiPresetName: recallPreset,
+    ragRewriteLlmPresetName: recallPreset,
+    recallInjectPosition: { read: normalizeRecallInjectPosition, projection: true },
+    recallInjectDepth: { read: normalizeRecallInjectDepth, projection: true },
+    recallInjectRole: { read: normalizeRecallInjectRole, projection: true },
+    recallApiPresetName: recallPreset,
+    recallPresetName: recallPreset,
+    extractApiPresetName: plainPreset,
+    extractPresetName: plainPreset,
+    requestApiPresetName: plainPreset,
+    requestLlmPresetName: plainPreset,
+    updateEvery: { read: (v) => Math.max(1, Math.floor(Number(v) || defaultSettings.updateEvery)) },
+};
+
+/** Writes one drawer-level setting with the side effects of its native control. */
+export function setMemorySetting(key, value) {
+    const rule = MEMORY_SETTING_RULES[key];
+    if (!rule) throw new Error(`Unknown memory setting: ${key}`);
+    const settings = getSettings();
+    settings[key] = rule.read(value);
+    if (rule.recall) invalidateLatestRecallSnapshot();
+    if (rule.projection) void syncPersistentProjectionForCurrentChat(getContext());
+    rule.after?.(settings);
+    saveSettingsDebounced();
+    return settings[key];
+}
+
+function withAdvancedPromptDefaults(source) {
+    return {
+        ...source,
+        extractTemplate: source.extractTemplate || DEFAULT_EXTRACT_TEMPLATE,
+        extractEdgeRules: source.extractEdgeRules || DEFAULT_EXTRACT_EDGE_RULES,
+        extractCrawlSystemPrompt: source.extractCrawlSystemPrompt || DEFAULT_CRAWL_SYSTEM_PROMPT,
+        recallRouteSystemPrompt: source.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
+        recallFinalizeSystemPrompt: source.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
+        ragRewriteSystemPrompt: source.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT,
+        configIterSystemPrompt: source.configIterSystemPrompt || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT,
+    };
+}
+
+/** Everything the settings page shows: values, choices and the advanced scope. */
+export function getMemorySettingsView(context) {
+    const settings = getSettings();
+    const values = Object.fromEntries(Object.keys(MEMORY_SETTING_RULES).map(key => [key, structuredClone(settings[key])]));
+    const info = getAdvancedScopeInfo(context, settings);
+    return {
+        values,
+        options: {
+            connections: getConnectionProfiles().map(profile => profile.name).filter(Boolean),
+            presets: getOpenAIPresetNames(context),
+            positions: { ...world_info_position },
+            roles: { ...extension_prompt_roles },
+            compressibleTypes: getCompressibleTypeSpecs(getEffectiveSettings(context, settings), context),
+        },
+        advanced: {
+            values: withAdvancedPromptDefaults(info.settings),
+            defaults: withAdvancedPromptDefaults(normalizeAdvancedSettings(defaultSettings, defaultSettings)),
+            scope: info.scope,
+            hasAvatar: info.hasAvatar,
+            hasOverride: info.hasOverride,
+            characterName: info.characterName,
+        },
+    };
+}
+
+/** @param {'global'|'character'} scope */
+export async function saveMemoryAdvancedSettings(context, values, scope) {
+    const settings = getSettings();
+    const normalized = normalizeAdvancedSettings(values, settings);
+    if (scope === 'character') {
+        const info = getAdvancedScopeInfo(context, settings);
+        if (!info.hasAvatar) throw new Error(i18n('No active character selected.'));
+        if (!await persistAdvancedToCharacter(context, info.avatar, normalized)) {
+            throw new Error(i18n('Failed to persist character advanced override.'));
+        }
+    } else {
+        await persistAdvancedToGlobal(settings, normalized);
+    }
+    syncGenerationVisibleHistoryRuntimeRegexScripts();
+}
+
+export async function clearMemoryAdvancedOverride(context) {
+    const info = getAdvancedScopeInfo(context, getSettings());
+    if (!info.hasAvatar) throw new Error(i18n('No active character selected.'));
+    if (!await removeCharacterAdvancedOverride(context, info.avatar)) {
+        throw new Error(i18n('Failed to clear character advanced override.'));
+    }
+    syncGenerationVisibleHistoryRuntimeRegexScripts();
+    invalidateLatestRecallSnapshot();
+}
+
+
+/** Stops running work, then imports a graph file into the current chat. */
+export async function importMemoryGraphFile(context, file) {
+    await stopMemoryRuntimeWork();
+    await ensureMemoryStoreLoaded(context);
+    const store = getMemoryStore(context);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
+        return;
+    }
+    const importToast = toastr.info(i18n('Importing memory graph…'), '', {
+        timeOut: 0,
+        extendedTimeOut: 0,
+        tapToDismiss: false,
+    });
+    try {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const parsed = JSON.parse(await getFileText(file));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const imported = await importMemoryGraphStore(context, parsed);
+        if (!imported) {
+            return;
+        }
+        notifySuccess(i18n('Memory graph imported for current chat.'));
+        if (imported.importMode === 'restore') {
+            updateUiStatus(i18nFormat('Imported memory graph and restored exported floor ${0}.', imported.bindFloor));
+        } else if (imported.importMode === 'bind_latest') {
+            updateUiStatus(i18nFormat('Imported memory graph and bound it to latest assistant floor ${0}.', imported.bindFloor));
+        } else {
+            updateUiStatus(i18nFormat('Imported memory graph and bound it to assistant floor ${0}.', imported.bindFloor));
+        }
+    } catch (error) {
+        notifyError(i18nFormat('Import failed: ${0}', error?.message || error));
+        updateUiStatus(i18n('Memory graph import failed.'));
+    } finally {
+        if (importToast) {
+            toastr.clear(importToast);
+        }
+    }
+}
+
+/** Downloads the current chat's memory graph as JSON. */
+export async function exportMemoryGraph(context) {
+    await ensureMemoryStoreLoaded(context);
+    const store = getMemoryStore(context);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
+        return;
+    }
+    const fileName = getMemoryGraphExportFileNameForContext(context);
+    download(JSON.stringify(store, null, 2), fileName, 'application/json');
+    notifySuccess(i18n('Memory graph exported for current chat.'));
+    updateUiStatus(i18nFormat('Downloaded memory graph file: ${0}', fileName));
+}
+
+/** Clears the current chat's graph, projections and vectors. */
+export async function resetMemoryGraphForChat(context, settings = getSettings()) {
+    await stopMemoryRuntimeWork();
+    const chatKey = getChatKey(context);
+    const target = memoryStoreTargets.get(chatKey) || buildMemoryTargetFromContext(context);
+    if (target) {
+        memoryStoreTargets.set(chatKey, target);
+    }
+    memoryStoreCache.set(chatKey, createEmptyStore());
+    clearCachedMeta(chatKey);
+    clearRollbackHistory(chatKey);
+    let resetResult = { ok: true, partial: {} };
+    if (target) {
+        resetResult = await deleteMemoryStoreByTarget(context, target);
+    }
+    await clearAllMemoryLorebookProjection(context, settings);
+    try {
+        const vectorConfig = getVectorConfigFromSettings(settings);
+        if (vectorConfig) {
+            await purgeVectorCollection(buildCollectionId(chatKey));
+        }
+    } catch (vectorError) {
+        console.warn(`[${MODULE_NAME}] Failed to purge vector collection on reset`, vectorError);
+    }
+    refreshUiStats();
+    if (resetResult.ok) {
+        notifySuccess(i18n('Current chat memory graph reset.'));
+    } else {
+        const stages = Object.entries(resetResult.partial).map(([k, v]) => `${k}=${v}`).join(', ');
+        notifyError(i18nFormat('Memory graph reset incomplete: ${0}', stages));
+    }
+    updateUiStatus(i18n('Reset memory graph for current chat.'));
+}
+
+/** Re-extracts the latest N assistant turns. */
+export async function runRebuildRecent(context, recentTurns, settings = getSettings()) {
+    await ensureMemoryStoreLoaded(context);
+    const chatKey = getChatKey(context);
+    let store = memoryStoreCache.get(chatKey);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
+        return;
+    }
+    const runtimeSettings = getEffectiveSettings(context, settings);
+    alignStoreCoverageToChat(store, context, runtimeSettings);
+    const latestSeq = getExtractableLatestSeq(buildPlayableFramesFromContext(context).length, runtimeSettings);
+    if (latestSeq <= 0) {
+        notifyError(i18n('No assistant turns available to rebuild.'));
+        return;
+    }
+
+    const startSeq = Math.max(1, latestSeq - recentTurns + 1);
+    const workingStore = normalizeStoreForRuntime(store);
+    truncateStoreFromSeq(workingStore, startSeq);
+    updateStoreSourceState(workingStore, context);
+    const rebuildAbortController = new AbortController();
+    activeExtractionAbortController = rebuildAbortController;
+    let hasCommittedBatch = false;
+    const extractBatchTurns = Math.max(
+        1,
+        Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
+    );
+    const initialEndSeq = Math.min(
+        latestSeq,
+        startSeq + extractBatchTurns - 1,
+    );
+    showRuntimeInfoToast(formatExtractionRangeToast(startSeq, initialEndSeq, latestSeq), {
+        stopLabel: i18n('Stop'),
+        onStop: () => {
+            if (!rebuildAbortController.signal.aborted) {
+                rebuildAbortController.abort();
+            }
+        },
+    });
+    try {
+        const extracted = await runExtractionForStore(context, workingStore, {
+            force: true,
+            startSeq,
+            abortSignal: rebuildAbortController.signal,
+            onBatchStart: ({ beginSeq, endSeq, latestSeq: latest }) => {
+                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latest));
+            },
+            onPhaseProgress: ({ beginSeq, endSeq, latestSeq: latest, stage, done, total }) => {
+                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latest)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+            },
+            onBatchApplied: async ({ endSeq }) => {
+                if (!hasCommittedBatch) {
+                    const currentBatchEntries = getRollbackHistory(chatKey)
+                        .filter(entry => Number(entry?.seqTo || 0) === Number(endSeq || 0));
+                    trimRollbackHistoryFromSeq(chatKey, startSeq);
+                    for (const entry of currentBatchEntries) {
+                        recordRollbackEntry(chatKey, entry);
+                    }
+                    hasCommittedBatch = true;
+                }
+                await commitMemoryStoreReplaceByChatKey(
+                    context,
+                    chatKey,
+                    workingStore,
+                    endSeq,
+                    { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
+                );
+            },
+            onCompressionApplied: async ({ batchEndSeq }) => {
+                await commitMemoryStoreReplaceByChatKey(
+                    context,
+                    chatKey,
+                    workingStore,
+                    batchEndSeq,
+                    { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
+                );
+            },
+        });
+        const debug = workingStore.lastExtractionDebug || {};
+        if (!extracted && Number(debug.latestSeq || 0) >= startSeq && String(debug.reason || '') !== 'no_graph_changes') {
+            throw new Error('Memory extraction returned no graph updates. Existing graph preserved.');
+        }
+        const finalSeq = Number(latestSeq || debug.latestSeq || 0);
+        const persistResult = await commitMemoryStoreReplaceByChatKey(
+            context,
+            chatKey,
+            workingStore,
+            finalSeq,
+            { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
+        );
+        const persistedStore = persistResult.store;
+        const committedDebug = persistedStore?.lastExtractionDebug || debug;
+        refreshUiStats();
+        notifySuccess(i18nFormat('Memory graph rebuilt for recent ${0} assistant turn(s).', recentTurns));
+        updateUiStatus(i18nFormat('Rebuilt recent memory graph range: seq ${0}-${1}.', startSeq, Number(committedDebug.latestSeq || latestSeq)));
+    } catch (error) {
+        if (isAbortError(error, rebuildAbortController.signal)) {
+            updateUiStatus(i18n('Memory graph update cancelled by user.'));
+            refreshUiStats();
+            return;
+        }
+        console.warn(`[${MODULE_NAME}] Recent rebuild failed`, error);
+        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild_recent', String(error?.message || error)));
+    } finally {
+        if (activeExtractionAbortController === rebuildAbortController) {
+            activeExtractionAbortController = null;
+        }
+        clearRuntimeInfoToast('extraction');
+    }
+}
+
+/** Rebuilds the whole graph from the current chat. */
+export async function runRebuildGraph(context, settings = getSettings()) {
+    const runtimeSettings = getEffectiveSettings(context, settings);
+    const rebuildLatestSeq = getExtractableLatestSeq(buildPlayableFramesFromContext(context).length, runtimeSettings);
+    if (rebuildLatestSeq <= 0) {
+        notifyError(i18n('No assistant turns available to rebuild.'));
+        return;
+    }
+    const rebuildAbortController = new AbortController();
+    activeExtractionAbortController = rebuildAbortController;
+    showRuntimeInfoToast(formatExtractionRangeToast(1, Math.min(1, rebuildLatestSeq || 1), Math.max(1, rebuildLatestSeq)), {
+        stopLabel: i18n('Stop'),
+        onStop: () => {
+            if (!rebuildAbortController.signal.aborted) {
+                rebuildAbortController.abort();
+            }
+        },
+    });
+    try {
+        const store = await rebuildStoreFromCurrentChat(context, {
+            abortSignal: rebuildAbortController.signal,
+            onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
+                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
+            },
+            onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
+                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+            },
+        });
+        if (!store) {
+            notifyError(i18n('No active chat selected.'));
+            return;
+        }
+        refreshUiStats();
+        notifySuccess(i18n('Memory graph rebuilt from current chat.'));
+        notifyEventCompressionIfAny(store?.lastExtractionDebug?.compression);
+        updateUiStatus(i18n('Rebuilt memory graph and compression from chat.'));
+    } catch (error) {
+        if (isAbortError(error, rebuildAbortController.signal)) {
+            updateUiStatus(i18n('Memory graph update cancelled by user.'));
+            refreshUiStats();
+            return;
+        }
+        console.warn(`[${MODULE_NAME}] Rebuild failed`, error);
+        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild', String(error?.message || error)));
+    } finally {
+        if (activeExtractionAbortController === rebuildAbortController) {
+            activeExtractionAbortController = null;
+        }
+        clearRuntimeInfoToast('extraction');
+    }
+}
+
+/** Runs recall for a test query without injecting anything. */
+export async function runRecallDebug(context, query = '') {
+    await ensureStoreSyncedWithChat(context);
+    const store = getMemoryStore(context);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
+        return null;
+    }
+    const effectiveSettings = getEffectiveSettings(context, getSettings());
+    const payload = {
+        coreChat: buildRecallDebugCoreChat(context, query, effectiveSettings),
+        forceWorldInfoResimulate: true,
+    };
+
+    const recallMethod = String(effectiveSettings.recallMethod || 'llm').trim().toLowerCase();
+    let selectedNodes = [];
+    let trace = [];
+
+    if (recallMethod === 'rag' && !hasRecallableNodes(store)) {
+        trace = [{ step: 'skip_rag_recall_no_nodes' }];
+    } else if (recallMethod === 'rag') {
+        const chatKey = getChatKey(context);
+        const queryBundle = getRecallQueryBundle(payload, context, effectiveSettings);
+        const queryText = normalizeText(queryBundle.fullText || '');
+
+        let rewrittenQuery = null;
+        if (effectiveSettings.ragUseQueryRewrite && String(effectiveSettings.ragRewriteApiPresetName || '').trim()) {
+            rewrittenQuery = await runQueryRewrite(context, effectiveSettings, queryBundle, {
+                abortSignal: null,
+                recallRunToken: null,
+            });
+        }
+
+        const useRerank = Boolean(effectiveSettings.ragUseRerank);
+        const rerankProfile = useRerank ? getRerankProfileFromSettings(effectiveSettings) : null;
+        const { perTypeK, defaultPerTypeK } = buildRagPerTypeQuotas(context, effectiveSettings);
+
+        const ragResult = await runRagRecall(store, queryText, chatKey, effectiveSettings, {
+            maxResults: Number(effectiveSettings.hybridMaxResults) || 15,
+            vectorTopK: Number(effectiveSettings.vectorTopK) || 20,
+            useRerank,
+            rerankProfile,
+            rewrittenQuery,
+            perTypeK,
+            defaultPerTypeK,
+            signal: null,
+        });
+
+        const latestSeqIndex = getLatestSeqIndex(store);
+        const excludeMessages = Math.max(0, Number(effectiveSettings.recentRawTurns ?? defaultSettings.recentRawTurns));
+
+        selectedNodes = ragResult.candidates
+            .map(c => store.nodes?.[c.nodeId])
+            .filter(node => node && !node.archived)
+            .filter(node => !isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages))
+            .sort(compareNodesByTimeline);
+
+        trace = [{
+            step: 'rag_recall',
+            method: 'rag',
+            meta: ragResult.meta,
+            selected_ids: selectedNodes.map(n => n.id),
+        }];
+    } else {
+        const result = await runLLMDrivenRecall(context, store, payload);
+        selectedNodes = result.selectedNodes;
+        trace = result.trace;
+    }
+
+    store.lastRecallTrace = trace;
+    updateUiStatus(i18nFormat('Recall ready. selected=${0}', selectedNodes.length));
+    refreshUiStats();
+    return { selectedNodes, trace };
+}
+
+/** Extracts every assistant turn the graph has not covered yet. */
+export async function runFillGraph(context, settings = getSettings()) {
+    await ensureStoreSyncedWithChat(context);
+    const chatKey = getChatKey(context);
+    const store = memoryStoreCache.get(chatKey);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
+        return;
+    }
+    const runtimeSettings = getEffectiveSettings(context, settings);
+    alignStoreCoverageToChat(store, context, runtimeSettings);
+    const fillAbortController = new AbortController();
+    activeExtractionAbortController = fillAbortController;
+    try {
+        const preview = computeExtractionWindow(context, store, null, runtimeSettings);
+        if (preview.beginSeq > preview.latestSeq) {
+            notifySuccess(i18n('Memory graph is already up to date.'));
+            updateUiStatus(i18n('Memory graph is already up to date.'));
+            refreshUiStats();
+            return;
+        }
+        const extractBatchTurns = Math.max(
+            1,
+            Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
+        );
+        const initialEndSeq = Math.min(
+            Number(preview.latestSeq || 0),
+            Number(preview.beginSeq || 1) + extractBatchTurns - 1,
+        );
+        showRuntimeInfoToast(formatExtractionRangeToast(preview.beginSeq, initialEndSeq, preview.latestSeq), {
+            stopLabel: i18n('Stop'),
+            onStop: () => {
+                if (!fillAbortController.signal.aborted) {
+                    fillAbortController.abort();
+                }
+            },
+        });
+        const workingStore = normalizeStoreForRuntime(store);
+        let committedStore = normalizeStoreForRuntime(store);
+        await runExtractionForStore(context, workingStore, {
+            force: true,
+            abortSignal: fillAbortController.signal,
+            onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
+                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
+            },
+            onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
+                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+            },
+            onBatchApplied: async ({ endSeq }) => {
+                const batchResult = await commitMemoryStoreDiffByChatKey(
+                    context,
+                    chatKey,
+                    committedStore,
+                    workingStore,
+                    endSeq,
+                    { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
+                );
+                committedStore = batchResult.store;
+            },
+            onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
+                const compactionResult = await commitMemoryStoreDiffByChatKey(
+                    context,
+                    chatKey,
+                    beforeStore,
+                    workingStore,
+                    batchEndSeq,
+                    { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
+                );
+                committedStore = compactionResult.store;
+            },
+        });
+        const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
+        const finalResult = await commitMemoryStoreDiffByChatKey(
+            context,
+            chatKey,
+            committedStore,
+            workingStore,
+            finalSeq,
+            { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
+        );
+        const finalStore = finalResult.store;
+        const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
+        updateUiStatus(i18nFormat(
+            'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
+            debug.extracted ? 'ok' : 'skip',
+            Number(debug.beginSeq || 0),
+            Number(debug.latestSeq || 0),
+            Number(debug.coveredSeqTo || 0),
+        ));
+        refreshUiStats();
+        notifySuccess(i18n('Memory graph incremental fill completed.'));
+    } catch (error) {
+        if (isAbortError(error, fillAbortController.signal)) {
+            updateUiStatus(i18n('Memory graph update cancelled by user.'));
+            refreshUiStats();
+            return;
+        }
+        console.warn(`[${MODULE_NAME}] Incremental fill failed`, error);
+        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'fill', String(error?.message || error)));
+    } finally {
+        if (activeExtractionAbortController === fillAbortController) {
+            activeExtractionAbortController = null;
+        }
+        clearRuntimeInfoToast('extraction');
+    }
+}
+
+/** Opens the configuration workbench; `root` is the optional settings drawer. */
+export async function openMemoryConfigStudio(context, settings = getSettings(), root = jQuery()) {
+    await openConfigIterationStudio({
+        context,
+        settings,
+        root,
+        normalizeNodeTypeSchema,
+        getEffectiveNodeTypeSchema,
+        getEffectiveSettings,
+        getSchemaScopeInfo,
+        getDefaultNodeTypeSchema,
+        persistCharacterSchemaOverride,
+        persistCharacterAdvancedOverridePatch,
+        syncGenerationVisibleHistoryRuntimeRegexScripts,
+        saveSettings,
+        i18n,
+        i18nFormat,
+        refreshRootUi: (uiRoot) => {
+            invalidateLatestRecallSnapshot();
+            try { syncGenerationVisibleHistoryRuntimeRegexScripts(); } catch { /* host refresh errors surface elsewhere */ }
+            if (!uiRoot?.length) {
+                return;
+            }
+            const nextScopeInfo = getSchemaScopeInfo(context, settings);
+            updateSchemaSummary(uiRoot, nextScopeInfo.schema);
+            updateSchemaScopeIndicator(uiRoot, nextScopeInfo);
+            // Re-hydrate the Advanced form so a workbench commit shows up
+            // in the panel without a reload — unless the form holds
+            // unsaved edits, in which case hydration would clobber them.
+            if (uiRoot.attr('data-mg-advanced-dirty') !== '1') {
+                const advancedScopeInfo = getAdvancedScopeInfo(context, settings);
+                hydrateAdvancedTabFields(uiRoot, advancedScopeInfo.settings);
+                updateAdvancedScopeIndicator(uiRoot, advancedScopeInfo);
+            }
+        },
+    });
+}
+
+/** Runs manual compression with already-collected options. */
+export async function runManualCompression(context, settings, values) {
+    await ensureMemoryStoreLoaded(context);
+    const store = getMemoryStore(context);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
         return;
     }
     if (!Array.isArray(values.selectedTypeIds) || values.selectedTypeIds.length === 0) {
@@ -14828,119 +15555,35 @@ async function openManualCompressionPopup(context, settings) {
     }
 }
 
-async function openVectorRecomputePopup(context, settings) {
-    await ensureMemoryStoreLoaded(context);
-    const chatKey = getChatKey(context);
-    const store = memoryStoreCache.get(chatKey);
-    if (!store) {
-        notifyError(i18n('No active chat selected.'));
-        return;
-    }
-
-    const vectorConfig = getVectorConfigFromSettings(settings);
-    const validation = validateVectorConfig(vectorConfig);
-    if (!validation.valid) {
-        notifyError(i18n('Embedding profile is not configured. Configure it in the settings above first.'));
-        return;
-    }
-
-    const nodes = store?.nodes || {};
-    const hasAnyNode = Object.values(nodes).some(node => !node?.archived);
-    if (!hasAnyNode) {
-        notifyInfo(i18n('No eligible nodes to embed.'));
-        return;
-    }
-
-    const content = `
-        <div class="flex-container flexFlowColumn" style="gap:6px">
-            <div>${escapeHtml(i18n('Recompute vector embeddings for memory graph nodes.'))}</div>
-            <div style="opacity:0.85">${escapeHtml(i18n('Fill Missing: re-embed only nodes whose vectors are missing or stale (after node edits).'))}</div>
-            <div style="opacity:0.85">${escapeHtml(i18n('Full Rebuild: clear and re-embed all eligible nodes (after changing embedding model/profile).'))}</div>
-        </div>
-    `;
-    const choice = await context.callGenericPopup(content, context.POPUP_TYPE.TEXT, '', {
-        okButton: false,
-        cancelButton: i18n('Cancel'),
-        wider: true,
-        customButtons: [
-            { text: i18n('Fill Missing'), result: context.POPUP_RESULT.CUSTOM1 },
-            { text: i18n('Full Rebuild'), result: context.POPUP_RESULT.CUSTOM2 },
-        ],
-    });
-
-    if (choice === context.POPUP_RESULT.CUSTOM1) {
-        await runVectorRecompute(context, settings, store, chatKey, { mode: 'incremental' });
-    } else if (choice === context.POPUP_RESULT.CUSTOM2) {
-        await runVectorRecompute(context, settings, store, chatKey, { mode: 'full' });
-    }
+export function getRawGraphJson(context) {
+    const store = getMemoryStore(context);
+    return store ? JSON.stringify(store, null, 2) : '';
 }
 
-async function runVectorRecompute(context, settings, store, chatKey, { mode }) {
-    const vectorConfig = getVectorConfigFromSettings(settings);
-    const schema = getEffectiveNodeTypeSchema(context, settings);
-    const vs = ensureVectorIndexState(store);
-    const profileChanged = Boolean(vs.source) && (vs.source !== vectorConfig.source || (vs.model || '') !== (vectorConfig.model || ''));
-
-    let purge = mode === 'full';
-    if (mode === 'incremental' && profileChanged) {
-        notifyInfo(i18n('Embedding configuration changed. Switching to full rebuild automatically.'));
-        purge = true;
+/** Replaces the current chat's graph with edited JSON. Throws on invalid JSON. */
+export async function applyRawGraphJson(context, raw) {
+    const chatKey = getChatKey(context);
+    const parsed = JSON.parse(raw);
+    const migrated = normalizeStoreForRuntime(parsed);
+    updateStoreSourceState(migrated, context);
+    const migratedSeq = getStoreCoveredSeqTo(migrated);
+    const applyResult = await replacePersistedGraphWithStore(
+        context,
+        chatKey,
+        migrated,
+        migratedSeq,
+        { floor: seqToFloor(context, migratedSeq) },
+    );
+    clearRollbackHistory(chatKey);
+    await persistMemoryStoreByChatKey(context, chatKey, migrated, { syncPersistentProjection: true });
+    refreshUiStats();
+    if (applyResult && applyResult.skipped) {
+        notifyError(i18nFormat('Failed to apply graph JSON: ${0}', applyResult.hint || applyResult.reason || i18n('reason unknown')));
+        return false;
     }
-
-    let progressToast = null;
-    const updateProgressToast = (current, total) => {
-        if (typeof toastr === 'undefined') return;
-        const message = i18nFormat('Recomputing vectors: ${0} / ${1}', current, total);
-        if (!progressToast) {
-            progressToast = toastr.info(message, '', {
-                timeOut: 0,
-                extendedTimeOut: 0,
-                tapToDismiss: false,
-                closeButton: false,
-                progressBar: false,
-            });
-        }
-        if (progressToast) {
-            const body = progressToast.find('.toast-message');
-            if (body && body.length) body.text(message);
-        }
-    };
-    const dismissProgressToast = () => {
-        if (progressToast && typeof toastr !== 'undefined') {
-            toastr.clear(progressToast);
-        }
-        progressToast = null;
-    };
-
-    notifyInfo(i18n('Starting vector recompute…'));
-    try {
-        const result = await syncVectorIndex(store, vectorConfig, chatKey, {
-            schema,
-            purge,
-            tolerateErrors: true,
-            onProgress: ({ current, total }) => updateProgressToast(current, total),
-        });
-        await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
-        const total = Number(result?.stats?.total || 0);
-        const inserted = Number(result?.insertedCount || 0);
-        const deleted = Number(result?.deletedCount || 0);
-        const failed = Array.isArray(result?.failedNodeIds) ? result.failedNodeIds.length : 0;
-        if (total === 0) {
-            notifyInfo(i18n('No eligible nodes to embed.'));
-        } else if (inserted === 0 && deleted === 0 && failed === 0) {
-            notifySuccess(i18n('Vector index already up to date.'));
-        } else if (failed > 0) {
-            notifyError(i18nFormat('Vector recompute complete: ${0} indexed, ${1} failed (see console).', inserted, failed));
-        } else {
-            notifySuccess(i18nFormat('Vector recompute complete: ${0} indexed.', inserted));
-        }
-    } catch (error) {
-        console.error(`[${MODULE_NAME}] Vector recompute (${mode}) failed:`, error);
-        notifyError(i18nFormat('Vector recompute failed: ${0}', String(error?.message || error)));
-    } finally {
-        dismissProgressToast();
-        refreshUiStats();
-    }
+    updateUiStatus(i18n('Applied raw graph JSON edit.'));
+    notifySuccess(i18n('Memory graph JSON updated.'));
+    return true;
 }
 
 function bindUi() {
@@ -15210,40 +15853,7 @@ function bindUi() {
         await openSchemaEditorPopup(context, settings, root);
     });
     root.find('#luker_rpg_memory_open_schema_studio').off('click').on('click', async function () {
-        await openConfigIterationStudio({
-            context,
-            settings,
-            root,
-            normalizeNodeTypeSchema,
-            getEffectiveNodeTypeSchema,
-            getEffectiveSettings,
-            getSchemaScopeInfo,
-            getDefaultNodeTypeSchema,
-            persistCharacterSchemaOverride,
-            persistCharacterAdvancedOverridePatch,
-            syncGenerationVisibleHistoryRuntimeRegexScripts,
-            saveSettings,
-            i18n,
-            i18nFormat,
-            refreshRootUi: (uiRoot) => {
-                if (!uiRoot?.length) {
-                    return;
-                }
-                invalidateLatestRecallSnapshot();
-                const nextScopeInfo = getSchemaScopeInfo(context, settings);
-                updateSchemaSummary(uiRoot, nextScopeInfo.schema);
-                updateSchemaScopeIndicator(uiRoot, nextScopeInfo);
-                // Re-hydrate the Advanced form so a workbench commit shows up
-                // in the panel without a reload — unless the form holds
-                // unsaved edits, in which case hydration would clobber them.
-                if (uiRoot.attr('data-mg-advanced-dirty') !== '1') {
-                    const advancedScopeInfo = getAdvancedScopeInfo(context, settings);
-                    hydrateAdvancedTabFields(uiRoot, advancedScopeInfo.settings);
-                    updateAdvancedScopeIndicator(uiRoot, advancedScopeInfo);
-                }
-                try { syncGenerationVisibleHistoryRuntimeRegexScripts(); } catch { /* host refresh errors surface elsewhere */ }
-            },
-        });
+        await openMemoryConfigStudio(context, settings, root);
     });
     root.find('#luker_rpg_memory_open_graph_studio').off('click').on('click', async function () {
         await openGraphIterationStudioWithDeps(context);
@@ -15356,183 +15966,11 @@ function bindUi() {
     });
 
     root.find('#luker_rpg_memory_fill').off('click').on('click', async function () {
-        await ensureStoreSyncedWithChat(context);
-        const chatKey = getChatKey(context);
-        const store = memoryStoreCache.get(chatKey);
-        if (!store) {
-            notifyError(i18n('No active chat selected.'));
-            return;
-        }
-        const runtimeSettings = getEffectiveSettings(context, settings);
-        alignStoreCoverageToChat(store, context, runtimeSettings);
-        const fillAbortController = new AbortController();
-        activeExtractionAbortController = fillAbortController;
-        try {
-            const preview = computeExtractionWindow(context, store, null, runtimeSettings);
-            if (preview.beginSeq > preview.latestSeq) {
-                notifySuccess(i18n('Memory graph is already up to date.'));
-                updateUiStatus(i18n('Memory graph is already up to date.'));
-                refreshUiStats();
-                return;
-            }
-            const extractBatchTurns = Math.max(
-                1,
-                Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
-            );
-            const initialEndSeq = Math.min(
-                Number(preview.latestSeq || 0),
-                Number(preview.beginSeq || 1) + extractBatchTurns - 1,
-            );
-            showRuntimeInfoToast(formatExtractionRangeToast(preview.beginSeq, initialEndSeq, preview.latestSeq), {
-                stopLabel: i18n('Stop'),
-                onStop: () => {
-                    if (!fillAbortController.signal.aborted) {
-                        fillAbortController.abort();
-                    }
-                },
-            });
-            const workingStore = normalizeStoreForRuntime(store);
-            let committedStore = normalizeStoreForRuntime(store);
-            await runExtractionForStore(context, workingStore, {
-                force: true,
-                abortSignal: fillAbortController.signal,
-                onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
-                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
-                },
-                onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
-                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
-                },
-                onBatchApplied: async ({ endSeq }) => {
-                    const batchResult = await commitMemoryStoreDiffByChatKey(
-                        context,
-                        chatKey,
-                        committedStore,
-                        workingStore,
-                        endSeq,
-                        { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
-                    );
-                    committedStore = batchResult.store;
-                },
-                onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
-                    const compactionResult = await commitMemoryStoreDiffByChatKey(
-                        context,
-                        chatKey,
-                        beforeStore,
-                        workingStore,
-                        batchEndSeq,
-                        { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
-                    );
-                    committedStore = compactionResult.store;
-                },
-            });
-            const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
-            const finalResult = await commitMemoryStoreDiffByChatKey(
-                context,
-                chatKey,
-                committedStore,
-                workingStore,
-                finalSeq,
-                { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
-            );
-            const finalStore = finalResult.store;
-            const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
-            updateUiStatus(i18nFormat(
-                'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
-                debug.extracted ? 'ok' : 'skip',
-                Number(debug.beginSeq || 0),
-                Number(debug.latestSeq || 0),
-                Number(debug.coveredSeqTo || 0),
-            ));
-            refreshUiStats();
-            notifySuccess(i18n('Memory graph incremental fill completed.'));
-        } catch (error) {
-            if (isAbortError(error, fillAbortController.signal)) {
-                updateUiStatus(i18n('Memory graph update cancelled by user.'));
-                refreshUiStats();
-                return;
-            }
-            console.warn(`[${MODULE_NAME}] Incremental fill failed`, error);
-            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'fill', String(error?.message || error)));
-        } finally {
-            if (activeExtractionAbortController === fillAbortController) {
-                activeExtractionAbortController = null;
-            }
-            clearRuntimeInfoToast('extraction');
-        }
+        await runFillGraph(context, settings);
     });
 
     root.find('#luker_rpg_memory_recall_debug').off('click').on('click', async function () {
-        await ensureStoreSyncedWithChat(context);
-        const store = getMemoryStore(context);
-        if (!store) {
-            notifyError(i18n('No active chat selected.'));
-            return;
-        }
-        const query = String(root.find('#luker_rpg_memory_debug_query').val() || '');
-        const effectiveSettings = getEffectiveSettings(context, getSettings());
-        const payload = {
-            coreChat: buildRecallDebugCoreChat(context, query, effectiveSettings),
-            forceWorldInfoResimulate: true,
-        };
-
-        const recallMethod = String(effectiveSettings.recallMethod || 'llm').trim().toLowerCase();
-        let selectedNodes = [];
-        let trace = [];
-
-        if (recallMethod === 'rag' && !hasRecallableNodes(store)) {
-            trace = [{ step: 'skip_rag_recall_no_nodes' }];
-        } else if (recallMethod === 'rag') {
-            const chatKey = getChatKey(context);
-            const queryBundle = getRecallQueryBundle(payload, context, effectiveSettings);
-            const queryText = normalizeText(queryBundle.fullText || '');
-
-            let rewrittenQuery = null;
-            if (effectiveSettings.ragUseQueryRewrite && String(effectiveSettings.ragRewriteApiPresetName || '').trim()) {
-                rewrittenQuery = await runQueryRewrite(context, effectiveSettings, queryBundle, {
-                    abortSignal: null,
-                    recallRunToken: null,
-                });
-            }
-
-            const useRerank = Boolean(effectiveSettings.ragUseRerank);
-            const rerankProfile = useRerank ? getRerankProfileFromSettings(effectiveSettings) : null;
-            const { perTypeK, defaultPerTypeK } = buildRagPerTypeQuotas(context, effectiveSettings);
-
-            const ragResult = await runRagRecall(store, queryText, chatKey, effectiveSettings, {
-                maxResults: Number(effectiveSettings.hybridMaxResults) || 15,
-                vectorTopK: Number(effectiveSettings.vectorTopK) || 20,
-                useRerank,
-                rerankProfile,
-                rewrittenQuery,
-                perTypeK,
-                defaultPerTypeK,
-                signal: null,
-            });
-
-            const latestSeqIndex = getLatestSeqIndex(store);
-            const excludeMessages = Math.max(0, Number(effectiveSettings.recentRawTurns ?? defaultSettings.recentRawTurns));
-
-            selectedNodes = ragResult.candidates
-                .map(c => store.nodes?.[c.nodeId])
-                .filter(node => node && !node.archived)
-                .filter(node => !isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages))
-                .sort(compareNodesByTimeline);
-
-            trace = [{
-                step: 'rag_recall',
-                method: 'rag',
-                meta: ragResult.meta,
-                selected_ids: selectedNodes.map(n => n.id),
-            }];
-        } else {
-            const result = await runLLMDrivenRecall(context, store, payload);
-            selectedNodes = result.selectedNodes;
-            trace = result.trace;
-        }
-
-        store.lastRecallTrace = trace;
-        updateUiStatus(i18nFormat('Recall ready. selected=${0}', selectedNodes.length));
-        refreshUiStats();
+        await runRecallDebug(context, String(root.find('#luker_rpg_memory_debug_query').val() || ''));
     });
 
     root.find('#luker_rpg_memory_view_last_injection').off('click').on('click', async function () {
@@ -15548,54 +15986,7 @@ function bindUi() {
     });
 
     root.find('#luker_rpg_memory_rebuild').off('click').on('click', async function () {
-        const runtimeSettings = getEffectiveSettings(context, settings);
-        const rebuildLatestSeq = getExtractableLatestSeq(buildPlayableFramesFromContext(context).length, runtimeSettings);
-        if (rebuildLatestSeq <= 0) {
-            notifyError(i18n('No assistant turns available to rebuild.'));
-            return;
-        }
-        const rebuildAbortController = new AbortController();
-        activeExtractionAbortController = rebuildAbortController;
-        showRuntimeInfoToast(formatExtractionRangeToast(1, Math.min(1, rebuildLatestSeq || 1), Math.max(1, rebuildLatestSeq)), {
-            stopLabel: i18n('Stop'),
-            onStop: () => {
-                if (!rebuildAbortController.signal.aborted) {
-                    rebuildAbortController.abort();
-                }
-            },
-        });
-        try {
-            const store = await rebuildStoreFromCurrentChat(context, {
-                abortSignal: rebuildAbortController.signal,
-                onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
-                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
-                },
-                onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
-                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
-                },
-            });
-            if (!store) {
-                notifyError(i18n('No active chat selected.'));
-                return;
-            }
-            refreshUiStats();
-            notifySuccess(i18n('Memory graph rebuilt from current chat.'));
-            notifyEventCompressionIfAny(store?.lastExtractionDebug?.compression);
-            updateUiStatus(i18n('Rebuilt memory graph and compression from chat.'));
-        } catch (error) {
-            if (isAbortError(error, rebuildAbortController.signal)) {
-                updateUiStatus(i18n('Memory graph update cancelled by user.'));
-                refreshUiStats();
-                return;
-            }
-            console.warn(`[${MODULE_NAME}] Rebuild failed`, error);
-            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild', String(error?.message || error)));
-        } finally {
-            if (activeExtractionAbortController === rebuildAbortController) {
-                activeExtractionAbortController = null;
-            }
-            clearRuntimeInfoToast('extraction');
-        }
+        await runRebuildGraph(context, settings);
     });
 
     root.find('#luker_rpg_memory_rebuild_recent').off('click').on('click', async function () {
@@ -15635,99 +16026,7 @@ function bindUi() {
             return;
         }
 
-        const startSeq = Math.max(1, latestSeq - recentTurns + 1);
-        const workingStore = normalizeStoreForRuntime(store);
-        truncateStoreFromSeq(workingStore, startSeq);
-        updateStoreSourceState(workingStore, context);
-        const rebuildAbortController = new AbortController();
-        activeExtractionAbortController = rebuildAbortController;
-        let hasCommittedBatch = false;
-        const extractBatchTurns = Math.max(
-            1,
-            Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
-        );
-        const initialEndSeq = Math.min(
-            latestSeq,
-            startSeq + extractBatchTurns - 1,
-        );
-        showRuntimeInfoToast(formatExtractionRangeToast(startSeq, initialEndSeq, latestSeq), {
-            stopLabel: i18n('Stop'),
-            onStop: () => {
-                if (!rebuildAbortController.signal.aborted) {
-                    rebuildAbortController.abort();
-                }
-            },
-        });
-        try {
-            const extracted = await runExtractionForStore(context, workingStore, {
-                force: true,
-                startSeq,
-                abortSignal: rebuildAbortController.signal,
-                onBatchStart: ({ beginSeq, endSeq, latestSeq: latest }) => {
-                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latest));
-                },
-                onPhaseProgress: ({ beginSeq, endSeq, latestSeq: latest, stage, done, total }) => {
-                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latest)} · ${formatExtractionPhaseToast(stage, done, total)}`);
-                },
-                onBatchApplied: async ({ endSeq }) => {
-                    if (!hasCommittedBatch) {
-                        const currentBatchEntries = getRollbackHistory(chatKey)
-                            .filter(entry => Number(entry?.seqTo || 0) === Number(endSeq || 0));
-                        trimRollbackHistoryFromSeq(chatKey, startSeq);
-                        for (const entry of currentBatchEntries) {
-                            recordRollbackEntry(chatKey, entry);
-                        }
-                        hasCommittedBatch = true;
-                    }
-                    await commitMemoryStoreReplaceByChatKey(
-                        context,
-                        chatKey,
-                        workingStore,
-                        endSeq,
-                        { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
-                    );
-                },
-                onCompressionApplied: async ({ batchEndSeq }) => {
-                    await commitMemoryStoreReplaceByChatKey(
-                        context,
-                        chatKey,
-                        workingStore,
-                        batchEndSeq,
-                        { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
-                    );
-                },
-            });
-            const debug = workingStore.lastExtractionDebug || {};
-            if (!extracted && Number(debug.latestSeq || 0) >= startSeq && String(debug.reason || '') !== 'no_graph_changes') {
-                throw new Error('Memory extraction returned no graph updates. Existing graph preserved.');
-            }
-            const finalSeq = Number(latestSeq || debug.latestSeq || 0);
-            const persistResult = await commitMemoryStoreReplaceByChatKey(
-                context,
-                chatKey,
-                workingStore,
-                finalSeq,
-                { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
-            );
-            const persistedStore = persistResult.store;
-            const committedDebug = persistedStore?.lastExtractionDebug || debug;
-            refreshUiStats();
-            notifySuccess(i18nFormat('Memory graph rebuilt for recent ${0} assistant turn(s).', recentTurns));
-            updateUiStatus(i18nFormat('Rebuilt recent memory graph range: seq ${0}-${1}.', startSeq, Number(committedDebug.latestSeq || latestSeq)));
-        } catch (error) {
-            if (isAbortError(error, rebuildAbortController.signal)) {
-                updateUiStatus(i18n('Memory graph update cancelled by user.'));
-                refreshUiStats();
-                return;
-            }
-            console.warn(`[${MODULE_NAME}] Recent rebuild failed`, error);
-            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild_recent', String(error?.message || error)));
-        } finally {
-            if (activeExtractionAbortController === rebuildAbortController) {
-                activeExtractionAbortController = null;
-            }
-            clearRuntimeInfoToast('extraction');
-        }
+        await runRebuildRecent(context, recentTurns, settings);
     });
 
     root.find('#luker_rpg_memory_manual_compress').off('click').on('click', async function () {
@@ -15744,36 +16043,7 @@ function bindUi() {
         if (confirm !== context.POPUP_RESULT.AFFIRMATIVE) {
             return;
         }
-        await stopMemoryRuntimeWork();
-        const chatKey = getChatKey(context);
-        const target = memoryStoreTargets.get(chatKey) || buildMemoryTargetFromContext(context);
-        if (target) {
-            memoryStoreTargets.set(chatKey, target);
-        }
-        memoryStoreCache.set(chatKey, createEmptyStore());
-        clearCachedMeta(chatKey);
-        clearRollbackHistory(chatKey);
-        let resetResult = { ok: true, partial: {} };
-        if (target) {
-            resetResult = await deleteMemoryStoreByTarget(context, target);
-        }
-        await clearAllMemoryLorebookProjection(context, settings);
-        try {
-            const vectorConfig = getVectorConfigFromSettings(settings);
-            if (vectorConfig) {
-                await purgeVectorCollection(buildCollectionId(chatKey));
-            }
-        } catch (vectorError) {
-            console.warn(`[${MODULE_NAME}] Failed to purge vector collection on reset`, vectorError);
-        }
-        refreshUiStats();
-        if (resetResult.ok) {
-            notifySuccess(i18n('Current chat memory graph reset.'));
-        } else {
-            const stages = Object.entries(resetResult.partial).map(([k, v]) => `${k}=${v}`).join(', ');
-            notifyError(i18nFormat('Memory graph reset incomplete: ${0}', stages));
-        }
-        updateUiStatus(i18n('Reset memory graph for current chat.'));
+        await resetMemoryGraphForChat(context, settings);
     });
 
     root.find('#luker_rpg_memory_recompute_vectors').off('click').on('click', async function () {
@@ -15783,16 +16053,7 @@ function bindUi() {
     const importFileInput = root.find('#luker_rpg_memory_import_file');
 
     root.find('#luker_rpg_memory_export').off('click').on('click', async function () {
-        await ensureMemoryStoreLoaded(context);
-        const store = getMemoryStore(context);
-        if (!store) {
-            notifyError(i18n('No active chat selected.'));
-            return;
-        }
-        const fileName = getMemoryGraphExportFileNameForContext(context);
-        download(JSON.stringify(store, null, 2), fileName, 'application/json');
-        notifySuccess(i18n('Memory graph exported for current chat.'));
-        updateUiStatus(i18nFormat('Downloaded memory graph file: ${0}', fileName));
+        await exportMemoryGraph(context);
     });
 
     root.find('#luker_rpg_memory_import').off('click').on('click', function () {
@@ -15810,42 +16071,7 @@ function bindUi() {
         if (!file) {
             return;
         }
-        await stopMemoryRuntimeWork();
-        await ensureMemoryStoreLoaded(context);
-        const store = getMemoryStore(context);
-        if (!store) {
-            notifyError(i18n('No active chat selected.'));
-            return;
-        }
-        const importToast = toastr.info(i18n('Importing memory graph…'), '', {
-            timeOut: 0,
-            extendedTimeOut: 0,
-            tapToDismiss: false,
-        });
-        try {
-            await new Promise(resolve => setTimeout(resolve, 0));
-            const parsed = JSON.parse(await getFileText(file));
-            await new Promise(resolve => setTimeout(resolve, 0));
-            const imported = await importMemoryGraphStore(context, parsed);
-            if (!imported) {
-                return;
-            }
-            notifySuccess(i18n('Memory graph imported for current chat.'));
-            if (imported.importMode === 'restore') {
-                updateUiStatus(i18nFormat('Imported memory graph and restored exported floor ${0}.', imported.bindFloor));
-            } else if (imported.importMode === 'bind_latest') {
-                updateUiStatus(i18nFormat('Imported memory graph and bound it to latest assistant floor ${0}.', imported.bindFloor));
-            } else {
-                updateUiStatus(i18nFormat('Imported memory graph and bound it to assistant floor ${0}.', imported.bindFloor));
-            }
-        } catch (error) {
-            notifyError(i18nFormat('Import failed: ${0}', error?.message || error));
-            updateUiStatus(i18n('Memory graph import failed.'));
-        } finally {
-            if (importToast) {
-                toastr.clear(importToast);
-            }
-        }
+        await importMemoryGraphFile(context, file);
     });
 }
 
