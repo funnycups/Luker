@@ -18,6 +18,8 @@ import { ExternalLinkSettings, LinkRoute, originOf, routeNewWindow, routeTopLeve
 import { FileSelectionPlan, MediaKind, planFileSelection } from '../FileSelectionPlanner';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AppConfig } from '../AppConfig';
+import { HttpAuthCredentials, HttpAuthDecision, decideHttpAuth, httpAuthKey } from '../HttpAuth';
+import { HttpAuthStore } from '../HttpAuthStore';
 import { DEFAULT_LOCAL_BASE_URL, isLocalBaseUrl, normalizeCustomBaseUrl } from '../EndpointUrl';
 import {
   shouldShowEndpointFailureForError,
@@ -39,6 +41,14 @@ interface ProbeResult {
   error: string;
 }
 
+interface PendingHttpAuthRequest {
+  key: string;
+  host: string;
+  realm: string;
+  prefill: HttpAuthCredentials | null;
+  handler: HttpAuthHandler;
+}
+
 @Entry
 @Component
 struct Index {
@@ -58,6 +68,11 @@ struct Index {
   private popupDialogToken: number = 0;
   private endpointDialogController: CustomDialogController | null = null;
   private endpointDialogToken: number = 0;
+  private httpAuthDialogController: CustomDialogController | null = null;
+  private httpAuthDialogToken: number = 0;
+  private activeHttpAuthRequest: PendingHttpAuthRequest | null = null;
+  private pendingHttpAuthRequests: PendingHttpAuthRequest[] = [];
+  private recentHttpAuthAttempts: Map<string, HttpAuthCredentials> = new Map<string, HttpAuthCredentials>();
   private reloadWhenReady: boolean = false;
   private controllerAttached: boolean = false;
   private pageShown: boolean = false;
@@ -310,6 +325,120 @@ struct Index {
     controller?.close();
   }
 
+  private handleHttpAuthRequest(event: OnHttpAuthRequestEvent): boolean {
+    const host: string = event.host.trim();
+    const realm: string = event.realm.trim();
+    if (host.length === 0) {
+      event.handler.cancel();
+      return true;
+    }
+    const key: string = httpAuthKey(host, realm);
+    const stored: HttpAuthCredentials | null = HttpAuthStore.load(host, realm);
+    const lastAttempted: HttpAuthCredentials | null = this.recentHttpAuthAttempts.get(key) ?? null;
+    const decision: HttpAuthDecision = decideHttpAuth(stored, lastAttempted);
+    if (decision.useStored && decision.stored !== null) {
+      this.recentHttpAuthAttempts.set(key, decision.stored);
+      const accepted: boolean = event.handler.confirm(decision.stored.username, decision.stored.password);
+      hilog.info(DOMAIN, TAG, 'http auth using stored credentials host=%{public}s accepted=%{public}s',
+        host, String(accepted));
+      return true;
+    }
+    if (decision.clearStored) {
+      HttpAuthStore.clear(host, realm);
+      hilog.info(DOMAIN, TAG, 'http auth stored credentials rejected host=%{public}s', host);
+    }
+    this.pendingHttpAuthRequests.push({
+      key: key,
+      host: host,
+      realm: realm,
+      prefill: decision.prefill,
+      handler: event.handler,
+    });
+    this.showNextHttpAuthDialog();
+    return true;
+  }
+
+  private showNextHttpAuthDialog(): void {
+    if (this.httpAuthDialogController !== null || this.pendingHttpAuthRequests.length === 0) {
+      return;
+    }
+    const request: PendingHttpAuthRequest | undefined = this.pendingHttpAuthRequests.shift();
+    if (request === undefined) {
+      return;
+    }
+    const token: number = ++this.httpAuthDialogToken;
+    const dialogController: CustomDialogController = new CustomDialogController({
+      builder: HttpAuthDialog({
+        host: request.host,
+        realm: request.realm,
+        initialUsername: request.prefill?.username ?? '',
+        initialPassword: request.prefill?.password ?? '',
+        onLogin: (username: string, password: string) => this.resolveHttpAuth(request, token, username, password),
+        onCancel: () => this.cancelHttpAuth(request, token),
+        onClosed: () => this.showNextHttpAuthDialog(),
+      }),
+      autoCancel: false,
+      customStyle: true,
+    });
+    try {
+      dialogController.open();
+      this.httpAuthDialogController = dialogController;
+      this.activeHttpAuthRequest = request;
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'http auth dialog open failed: %{public}s', JSON.stringify(e));
+      request.handler.cancel();
+      this.showNextHttpAuthDialog();
+    }
+  }
+
+  private resolveHttpAuth(
+    request: PendingHttpAuthRequest,
+    token: number,
+    username: string,
+    password: string,
+  ): void {
+    if (token !== this.httpAuthDialogToken) {
+      return;
+    }
+    const credentials: HttpAuthCredentials = { username: username, password: password };
+    HttpAuthStore.save(request.host, request.realm, credentials);
+    this.recentHttpAuthAttempts.set(request.key, credentials);
+    const accepted: boolean = request.handler.confirm(username, password);
+    hilog.info(DOMAIN, TAG, 'http auth credentials submitted host=%{public}s accepted=%{public}s',
+      request.host, String(accepted));
+    this.closeHttpAuthDialog();
+  }
+
+  private cancelHttpAuth(request: PendingHttpAuthRequest, token: number): void {
+    if (token !== this.httpAuthDialogToken) {
+      return;
+    }
+    request.handler.cancel();
+    hilog.info(DOMAIN, TAG, 'http auth cancelled by the user host=%{public}s', request.host);
+    this.closeHttpAuthDialog();
+  }
+
+  private closeHttpAuthDialog(): void {
+    const controller: CustomDialogController | null = this.httpAuthDialogController;
+    this.httpAuthDialogController = null;
+    this.activeHttpAuthRequest = null;
+    controller?.close();
+  }
+
+  private cancelPendingHttpAuthRequests(): void {
+    const active: PendingHttpAuthRequest | null = this.activeHttpAuthRequest;
+    const pending: PendingHttpAuthRequest[] = this.pendingHttpAuthRequests;
+    this.pendingHttpAuthRequests = [];
+    this.closeHttpAuthDialog();
+    if (active !== null) {
+      active.handler.cancel();
+    }
+    for (const request of pending) {
+      request.handler.cancel();
+    }
+    this.recentHttpAuthAttempts.clear();
+  }
+
   private openEndpointDialog(): void {
     if (this.endpointDialogController !== null) {
       return;
@@ -409,6 +538,7 @@ struct Index {
     this.endpointFailureShown = false;
     this.pendingEndpointFailureUrl = '';
     this.closePopupDialog();
+    this.cancelPendingHttpAuthRequests();
     KeepAliveManager.release();
     RuntimeNotification.setServerReady(false);
     RuntimeNotification.setKeepAliveActive(false);
@@ -738,6 +868,14 @@ struct Index {
               this.maybeShowEndpointFailure(event.request.getRequestUrl());
             }
           })
+          .onHttpAuthRequest((event) => {
+            return this.handleHttpAuthRequest(event);
+          })
+          .onPageEnd(() => {
+            // A finished page proves the accepted credentials work; the next
+            // navigation may reuse them without treating them as a failed attempt.
+            this.recentHttpAuthAttempts.clear();
+          })
           .onRenderExited((event) => {
             this.closePopupDialog();
             KeepAliveManager.setGenerationActive(false);
@@ -863,6 +1001,114 @@ function mediaMimeType(kind: MediaKind): photoAccessHelper.PhotoViewMIMETypes {
       return photoAccessHelper.PhotoViewMIMETypes.VIDEO_TYPE;
     default:
       return photoAccessHelper.PhotoViewMIMETypes.IMAGE_VIDEO_TYPE;
+  }
+}
+
+/**
+ * Collects HTTP authentication credentials for an endpoint. Cancel resolves
+ * the pending challenge as cancelled, so the load fails instead of hanging.
+ */
+@CustomDialog
+struct HttpAuthDialog {
+  controller?: CustomDialogController;
+  host: string = '';
+  realm: string = '';
+  initialUsername: string = '';
+  initialPassword: string = '';
+  onLogin?: (username: string, password: string) => void;
+  onCancel?: () => void;
+  onClosed?: () => void;
+  @State username: string = '';
+  @State password: string = '';
+  private resolved: boolean = false;
+
+  aboutToAppear(): void {
+    this.username = this.initialUsername;
+    this.password = this.initialPassword;
+  }
+
+  aboutToDisappear(): void {
+    this.onClosed?.();
+  }
+
+  private res(id: number, arg?: string): string {
+    const mgr = getContext(this).resourceManager;
+    return arg === undefined ? mgr.getStringSync(id) : mgr.getStringSync(id, arg);
+  }
+
+  private submit(): void {
+    if (this.resolved) {
+      return;
+    }
+    this.resolved = true;
+    this.onLogin?.(this.username, this.password);
+  }
+
+  private cancel(): void {
+    if (this.resolved) {
+      return;
+    }
+    this.resolved = true;
+    this.onCancel?.();
+  }
+
+  build() {
+    Column({ space: 12 }) {
+      Text($r('app.string.http_auth_dialog_title'))
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#cfd6e4')
+        .width('100%')
+      Text(this.res($r('app.string.http_auth_dialog_host').id, this.host))
+        .fontSize(12)
+        .fontColor('#8b93a7')
+        .width('100%')
+      if (this.realm.length > 0) {
+        Text(this.res($r('app.string.http_auth_dialog_realm').id, this.realm))
+          .fontSize(12)
+          .fontColor('#8b93a7')
+          .width('100%')
+      }
+      Text($r('app.string.http_auth_dialog_message'))
+        .fontSize(12)
+        .fontColor('#8b93a7')
+        .width('100%')
+      TextInput({ text: this.username, placeholder: $r('app.string.http_auth_dialog_username_hint') })
+        .width('100%')
+        .fontColor('#cfd6e4')
+        .placeholderColor('#5c6370')
+        .backgroundColor('#232830')
+        .onChange((value: string) => {
+          this.username = value;
+        })
+      TextInput({ text: this.password, placeholder: $r('app.string.http_auth_dialog_password_hint') })
+        .width('100%')
+        .type(InputType.Password)
+        .fontColor('#cfd6e4')
+        .placeholderColor('#5c6370')
+        .backgroundColor('#232830')
+        .onChange((value: string) => {
+          this.password = value;
+        })
+      Row({ space: 8 }) {
+        Button($r('app.string.http_auth_dialog_cancel'))
+          .fontSize(13)
+          .fontColor('#8b93a7')
+          .backgroundColor(Color.Transparent)
+          .onClick(() => this.cancel())
+        Button($r('app.string.http_auth_dialog_login'))
+          .fontSize(13)
+          .fontColor('#ffffff')
+          .backgroundColor('#4aa3ff')
+          .onClick(() => this.submit())
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.End)
+    }
+    .width('90%')
+    .padding(20)
+    .backgroundColor('#1c1f24')
+    .borderRadius(16)
   }
 }
 

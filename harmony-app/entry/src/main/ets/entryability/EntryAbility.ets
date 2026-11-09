@@ -10,6 +10,7 @@ import { KeepAliveManager } from '../KeepAliveManager';
 import { launchInProcessEarly, prepareDataDir } from '../BackendLauncher';
 import { LastExit, recordLastExit } from '../crash/LastExit';
 import { AppConfig } from '../AppConfig';
+import { HttpAuthStore } from '../HttpAuthStore';
 import { RuntimeNotification } from '../RuntimeNotification';
 import {
   ACTION_OPEN_ENDPOINT_SETTINGS,
@@ -26,6 +27,7 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     KeepAliveManager.attach(this.context);
     AppConfig.attach(this.context);
+    HttpAuthStore.attach(this.context);
     RuntimeNotification.attach(this.context);
     const customEndpoint: boolean = AppConfig.usesCustomEndpoint();
     AppStorage.setOrCreate(STORAGE_SERVER_URL, AppConfig.resolveBaseUrl());
