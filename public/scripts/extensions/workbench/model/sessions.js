@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Conversation storage for Ask and AI iteration (localStorage, per browser).
+// Conversation storage for Ask and AI iteration (per-account storage).
 // A session: { id, kind: 'ask'|'iterate', ws?, scope?, target?, title,
 // createdAt, updatedAt, turns: [...] }. Pure apart from the injected storage.
 
@@ -9,27 +9,65 @@ import { i18n } from '../i18n.js';
 const KEY = 'workbench.sessions.v1';
 export const MAX_SESSIONS = 40;
 const MAX_TURN_TEXT = 20000;
+// The ceiling localStorage used to impose, so migrated data always fits.
+const MAX_STORED_CHARS = 5_000_000;
 
-export function createSessionStore(storage = globalThis.localStorage) {
-    let cache = null;
+const parseList = (raw) => {
+    try {
+        const v = JSON.parse(raw || '[]');
+        return Array.isArray(v) ? v : null;
+    } catch {
+        return null;
+    }
+};
+
+/** Oldest sessions go first until the list fits the storage ceiling. */
+function fitToCeiling(list) {
+    let kept = list;
+    let text = JSON.stringify(kept);
+    while (text.length > MAX_STORED_CHARS && kept.length > 1) {
+        const oldest = kept.reduce((low, s) => (s.updatedAt < low.updatedAt ? s : low));
+        kept = kept.filter(s => s !== oldest);
+        text = JSON.stringify(kept);
+    }
+    return { text, kept };
+}
+
+/**
+ * Moves sessions from the browser-wide localStorage key into this account.
+ * The account copy lives in memory until settings reach the server, so the
+ * browser copy is removed only once `persist` reports a save.
+ * @param {{ account: Storage, legacy: Storage, persist: (onSaved: () => void) => void }} io
+ */
+export function migrateLegacySessions({ account, legacy, persist }) {
+    const raw = legacy?.getItem(KEY);
+    if (raw === null || raw === undefined) return;
+    const old = parseList(raw);
+    if (!old) return;
+    const own = parseList(account.getItem(KEY)) || [];
+    const known = new Set(own.map(s => s.id));
+    const merged = [...own, ...old.filter(s => !known.has(s.id))].sort((a, b) => b.updatedAt - a.updatedAt);
+    account.setItem(KEY, fitToCeiling(merged).text);
+    persist(() => legacy.removeItem(KEY));
+}
+
+export function createSessionStore(storage) {
+    let lastRaw = null;
+    let lastList = [];
+    // Always from storage, so a stale copy can never overwrite newer sessions.
     const read = () => {
-        if (cache) return cache;
-        try {
-            const v = JSON.parse(storage?.getItem(KEY) || '[]');
-            cache = Array.isArray(v) ? v : [];
-        } catch {
-            cache = [];
+        const raw = storage?.getItem(KEY) ?? null;
+        if (raw !== lastRaw) {
+            lastRaw = raw;
+            lastList = parseList(raw) || [];
         }
-        return cache;
+        return lastList;
     };
-    const write = () => {
-        try {
-            storage?.setItem(KEY, JSON.stringify(cache));
-        } catch {
-            // Quota: drop the oldest half and retry once.
-            cache = cache.slice(0, Math.ceil(cache.length / 2));
-            try { storage?.setItem(KEY, JSON.stringify(cache)); } catch { /* give up */ }
-        }
+    const write = (list) => {
+        const { text, kept } = fitToCeiling(list);
+        storage?.setItem(KEY, text);
+        lastRaw = text;
+        lastList = kept;
     };
     const trimTurn = (turn) => {
         const t = { ...turn };
@@ -42,23 +80,21 @@ export function createSessionStore(storage = globalThis.localStorage) {
         create(fields) {
             const now = Date.now();
             const s = { id: `s${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`, title: '', createdAt: now, updatedAt: now, turns: [], ...fields };
-            cache = [s, ...read()].slice(0, MAX_SESSIONS);
-            write();
+            write([s, ...read()].slice(0, MAX_SESSIONS));
             return s;
         },
         update(id, patch) {
-            const list = read();
+            const list = [...read()];
             const i = list.findIndex(s => s.id === id);
             if (i < 0) return null;
             const next = { ...list[i], ...patch, updatedAt: Date.now() };
             if (patch.turns) next.turns = patch.turns.map(trimTurn);
             list[i] = next;
-            write();
+            write(list);
             return next;
         },
         remove(id) {
-            cache = read().filter(s => s.id !== id);
-            write();
+            write(read().filter(s => s.id !== id));
         },
     };
 }

@@ -47,13 +47,13 @@ Review these first. Everything else in the branch is a new file.
 
 ## Data compatibility
 
-No storage key changed, so plugin users keep their data.
+No storage key name changed, so plugin users keep their data. `workbench.sessions.v1` moved from localStorage to `accountStorage`: it is copied into the first account that opens Workbench, and the localStorage copy is removed once settings have been saved.
 
 | Workspace | Keys |
 |---|---|
 | Memory Lens | `extensionSettings.memory_lens`, `chatMetadata.memory_lens_tokens`, `memoryLens.prefs.v1`, `memoryLens.aiAutoApply`, regex owner `memory-lens-tag-filter`, id prefix `memory-lens-tagfilter-`, `memoryLensLabels` in exports |
 | Orchestra Lens | `extensionSettings.orchestra_lens.ai`, `orchestraLens.history.v1`, `.prefs.v1`, `.dock.v1`, `.ai.v1`, `.aiAutoApply`, `.takeover` |
-| Workbench | `extensionSettings.luker_workbench`, `workbench.prefs.v1`, `.sessions.v1`, `.history.v1`; `workbench.orchRuns.v1` is now read-only, used when lens history is empty |
+| Workbench | `extensionSettings.luker_workbench`, `accountStorage` `workbench.sessions.v1`, localStorage `workbench.prefs.v1`, `.history.v1`; `workbench.orchRuns.v1` is now read-only, used when lens history is empty |
 
 ## Differences from the plugins
 

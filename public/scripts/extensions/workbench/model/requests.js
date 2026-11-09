@@ -87,8 +87,43 @@ export function redact(text) {
     return String(text ?? '')
         .replace(/\b(sk|pk|rk|ak)-[A-Za-z0-9_-]{12,}\b/g, '$1-***')
         .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, 'Bearer ***')
-        .replace(/\b(api[_-]?key|token|secret|password|authorization)(["'\s:=]+)([^"'\s,;}{]{6,})/gi, '$1$2***')
-        .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => {
+        .replace(/\b(api[_-]?key|token|secret|password|authorization)(["'\\\s:=]+)([^"'\\\s,;}{]{6,})/gi, '$1$2***')
+        .replace(/https?:\/\/[^\s"'\\<>]+/gi, (url) => {
             try { const u = new URL(url); return `${u.protocol}//${u.hostname.replace(/^[^.]+(?=\.[^.]+\.)/, '*')}/…`; } catch { return '[地址]'; }
         });
+}
+
+const SECRET_KEY = /(?:^|[_-])(?:api[_-]?key|token|secret|password|authorization)$/i;
+
+function parseJsonText(text) {
+    if (!/^\s*[[{]/.test(text)) return null;
+    try {
+        const v = JSON.parse(text);
+        return v && typeof v === 'object' ? v : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * `redact` applied value by value, so the result keeps its shape. A string
+ * that is itself JSON is cleaned as data and stays valid JSON.
+ */
+export function redactValue(value) {
+    if (typeof value === 'string') {
+        const nested = parseJsonText(value);
+        return nested ? JSON.stringify(redactValue(nested)) : redact(value);
+    }
+    if (Array.isArray(value)) return value.map(redactValue);
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, typeof v === 'string' && v && SECRET_KEY.test(k) ? '***' : redactValue(v)]));
+    }
+    return value;
+}
+
+/** Applies the Ask settings to an overview before anything can read it. */
+export function finishOverview(overview, { inspector = true, redactText = true } = {}) {
+    const out = { ...overview };
+    if (!inspector) delete out.最近的请求;
+    return redactText ? redactValue(out) : out;
 }

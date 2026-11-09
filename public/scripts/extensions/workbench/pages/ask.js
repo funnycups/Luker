@@ -10,13 +10,14 @@ import { icon } from '../icons.js';
 import { button, iconButton, checkRow, msgActions } from '../ui/components.js';
 import { renderMarkdown } from '../ui/markdown.js';
 import { runAsk, readsSummary } from '../model/ask.js';
-import { createSessionStore, titleFrom } from '../model/sessions.js';
+import { finishOverview } from '../model/requests.js';
+import { titleFrom } from '../model/sessions.js';
 
 const CHIPS = [i18n('Why was this reply written this way'), i18n('Why did that error happen'), i18n('Which extension uses the most tokens'), i18n('What was in the prompt sent to the model this time'), i18n('Write a bug report for me with the debug info')];
 const WS_NAME = { memory: i18n('Memory graph'), orch: i18n('Orchestration'), preset: i18n('Preset'), card: i18n('Character card'), world: i18n('World book') };
 
 export function createAskPage(app) {
-    const store = createSessionStore();
+    const store = app.sessions;
     const side = h('aside', { class: 'wb-src' });
     const chatHead = h('div', { class: 'wb-chat-head' });
     const body = h('div', { class: 'wb-chat-body' });
@@ -200,7 +201,7 @@ export function createAskPage(app) {
             t.sent ? h('details', { class: 'wb-sent' },
                 h('summary', null, icon('up', { size: 12 }), h('span', { text: i18nFormat('Sent to the AI (about ${0} tokens)', formatTokens(Math.round(t.sent / 1.6))) })),
                 h('ul', null,
-                    h('li', { text: i18n('The question and an overview (chat, preset, prompt usage, status of the last 8 requests)') }),
+                    h('li', { text: app.settings().ask.sources.inspector !== false ? i18n('The question and an overview (chat, preset, prompt usage, status of the last 8 requests)') : i18n('The question and an overview (chat, preset, prompt usage)') }),
                     (t.reads || []).map(r => h('li', { text: i18nFormat('${0}${1} (${2} characters)', readsSummary([r]), r.args && Object.keys(r.args).length ? i18nFormat(': ${0}', JSON.stringify(r.args)) : '', r.chars.toLocaleString()) })),
                     app.settings().ask.redact ? h('li', { text: i18n('API keys and endpoint addresses were removed') }) : null)) : null,
             acts);
@@ -223,7 +224,8 @@ export function createAskPage(app) {
         if (!question || busy) return;
         const s = app.settings();
         let overview;
-        try { overview = await app.source.askOverview(); } catch (err) { overview = { 错误: String(err?.message || err) }; }
+        const filter = { inspector: s.ask.sources.inspector !== false, redactText: s.ask.redact };
+        try { overview = await app.source.askOverview(filter); } catch (err) { overview = finishOverview({ 错误: String(err?.message || err) }, filter); }
         if (s.ask.previewBeforeSend && !globalThis.confirm(i18nFormat('To be sent to the AI:\n\nQuestion: ${0}\n\nOverview:\n${1}\n\nThe AI will then read data as needed. Continue?', question, JSON.stringify(overview, null, 1).slice(0, 1500)))) return;
         if (!session) session = store.create({ kind: 'ask', title: titleFrom(question) });
         session = store.update(session.id, { turns: [...session.turns, { role: 'user', text: question, at: Date.now() }] });

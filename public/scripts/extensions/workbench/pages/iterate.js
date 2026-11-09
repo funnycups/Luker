@@ -16,7 +16,7 @@ import { renderMarkdown } from '../ui/markdown.js';
 import { changeList } from '../ui/change-list.js';
 import { diffUnits } from '../model/units.js';
 import { runIterateTurn, wrapperPrompt, decisionNote, trimMessages } from '../model/iterate.js';
-import { createSessionStore, groupSessions, titleFrom } from '../model/sessions.js';
+import { groupSessions, titleFrom } from '../model/sessions.js';
 
 const WS = [
     { value: 'memory', label: i18n('Memory graph'), tone: 'memory' },
@@ -42,7 +42,7 @@ const SCOPE_NOTE = {
 };
 
 export function createIteratePage(app) {
-    const store = createSessionStore();
+    const store = app.sessions;
     const sess = h('aside', { class: 'wb-sess' });
     const head = h('div', { class: 'wb-chat-head' });
     const body = h('div', { class: 'wb-chat-body' });

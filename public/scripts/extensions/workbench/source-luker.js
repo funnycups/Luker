@@ -12,7 +12,9 @@ import { HISTORY_KEY as ORCH_LENS_HISTORY } from '../orchestrator/lens/model/rec
 import { i18n, i18nFormat } from './i18n.js';
 import { askSystemPrompt } from './model/ask.js';
 import { buildBudget } from './model/budget.js';
-import { attribute, describeRequest, redact } from './model/requests.js';
+import { SourceError } from './model/errors.js';
+import { attribute, describeRequest, finishOverview, redactValue } from './model/requests.js';
+import { createSessionStore, migrateLegacySessions } from './model/sessions.js';
 import { hasTextCalls, salvageTextCalls } from './model/textcalls.js';
 import { iterate, promptInfo as iteratePromptInfo } from './source-iterate.js';
 
@@ -27,14 +29,22 @@ const MAX_ORCH_RUNS = 20;
 const memoryMain = () => import('../memory-graph/main.js');
 const memoryRead = () => import('../memory-graph/read-api.js');
 
-export class SourceError extends Error {
-    constructor(code, message) {
-        super(message || code);
-        this.code = code;
-    }
-}
+export { SourceError };
 
 export const getContext = () => Luker.getContext();
+
+/** The one session store for this window, in the signed-in account's storage. */
+export function createSessions(ctx = getContext()) {
+    const persist = (onSaved) => {
+        // saveSettings swallows failures; this event fires only after a real save.
+        const type = ctx.eventTypes.SETTINGS_UPDATED;
+        const handler = () => { ctx.eventSource.removeListener(type, handler); onSaved(); };
+        ctx.eventSource.on(type, handler);
+        ctx.saveSettings();
+    };
+    migrateLegacySessions({ account: ctx.accountStorage, legacy: globalThis.localStorage, persist });
+    return createSessionStore(ctx.accountStorage);
+}
 
 /** Current character (null in group chats or when none is open). */
 export function currentCharacter(ctx = getContext()) {
@@ -594,8 +604,8 @@ async function memoryDetail({ part = 'summary' } = {}) {
 /** Reader functions keyed by tool name (see model/ask.js). */
 export function askReaders({ redactText = true, suggestions = () => [] } = {}) {
     const R = async (value) => {
-        if (!redactText) return value;
-        return JSON.parse(redact(JSON.stringify(value)));
+        if (!redactText || value === undefined) return value;
+        return redactValue(JSON.parse(JSON.stringify(value)));
     };
     return {
         async wb_list_requests({ limit = 20, only_errors = false } = {}) {
@@ -631,13 +641,15 @@ export function askReaders({ redactText = true, suggestions = () => [] } = {}) {
 }
 
 /** Compact overview sent with every question. */
-export async function askOverview() {
+export async function askOverview({ inspector = true, redactText = true } = {}) {
     const snap = await loadSnapshot();
     let requests = [];
-    try {
-        requests = (await listRequests({ limit: 8 })).map(e => describeRequest(e, e.attr));
-    } catch { requests = i18n('Unreadable'); }
-    return {
+    if (inspector) {
+        try {
+            requests = (await listRequests({ limit: 8 })).map(e => describeRequest(e, e.attr));
+        } catch { requests = i18n('Unreadable'); }
+    }
+    return finishOverview({
         聊天: snap.chat.label ? `${snap.chat.label}，${snap.chat.floors} 楼` : '没有打开聊天',
         角色卡: snap.card?.name || i18n('None selected'),
         预设: snap.preset?.name || '',
@@ -647,5 +659,5 @@ export async function askOverview() {
         编排: snap.orch ? { 开启: snap.orch.enabled, 模式: snap.orch.mode, 最近运行: snap.orch.runs.length } : i18n('Not present'),
         最近的请求: requests,
         调试日志开关: debugLoggingOn() === null ? '未知' : debugLoggingOn() ? '开' : '关',
-    };
+    }, { inspector, redactText });
 }

@@ -68,6 +68,7 @@ export function mountWorkbench({ source, container = document.body, onClose = nu
     const app = {
         source,
         history,
+        sessions: source.createSessions(),
         refreshBadges() { computeSuggestions(); paintRail(); pages.home?.onSnapshot?.(); },
         layer: win.layer,
         snapshot: () => snapshot,

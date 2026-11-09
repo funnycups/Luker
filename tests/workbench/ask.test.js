@@ -2,7 +2,7 @@ import './_mocks/luker-zh.js';
 import { test } from '@jest/globals';
 import assert from 'node:assert/strict';
 import { askTools, runAsk, readsSummary, clip } from '../../public/scripts/extensions/workbench/model/ask.js';
-import { attribute, groupByGeneration, redact, describeRequest } from '../../public/scripts/extensions/workbench/model/requests.js';
+import { attribute, groupByGeneration, redact, redactValue, finishOverview, describeRequest } from '../../public/scripts/extensions/workbench/model/requests.js';
 
 test('tools follow the allowed sources and always include wb_answer', () => {
     const names = (s) => askTools(s).map(t => t.function.name);
@@ -65,4 +65,23 @@ test('redact hides keys and hosts', () => {
     assert.ok(!out.includes('/v1/chat'));
     assert.ok(!out.includes('hunter2hunter2'));
     assert.match(clip('x'.repeat(20000)), /已截断/);
+});
+
+test('redactValue cleans nested JSON strings and stays parseable', () => {
+    const out = redactValue({ log: '{"api_key":"FAKEVALUE123456789","url":"https://api.secret-host.example.com/v1"}', list: ['Bearer abcdefghijklmnopqrst'], usage: { prompt_tokens: 12 }, token: 'short' });
+    const nested = JSON.parse(out.log);
+    assert.equal(nested.api_key, '***');
+    assert.doesNotMatch(nested.url, /api\.secret-host|\/v1/);
+    assert.deepEqual(out.list, ['Bearer ***']);
+    assert.equal(out.usage.prompt_tokens, 12);
+    assert.equal(out.token, '***');
+    assert.doesNotMatch(redact(String.raw`{\"api_key\":\"FAKEVALUE123456789\"}`), /FAKEVALUE/);
+});
+
+test('finishOverview honours the inspector source and the redaction switch', () => {
+    const overview = { 聊天: 'a', 最近的请求: [{ error: 'failed at https://private.example.com/x key sk-abcdefghijklmnop1234' }] };
+    assert.ok(!('最近的请求' in finishOverview(overview, { inspector: false, redactText: false })));
+    const text = JSON.stringify(finishOverview(overview, { inspector: true, redactText: true }));
+    assert.doesNotMatch(text, /private\.example|abcdefghijklmnop1234/);
+    assert.match(JSON.stringify(finishOverview(overview, { inspector: true, redactText: false })), /private\.example/);
 });
