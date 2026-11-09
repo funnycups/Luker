@@ -35,6 +35,7 @@ test('finding 3: a recorder reads run history for the account known at first use
     storage.setItem('orchestraLens.history.v1::alice', JSON.stringify([{ runId: 1 }]));
     let handle = null;
     const recorder = createRecorder({ storage: accountScopedStorage(storage, () => handle) });
+    assert.deepEqual(recorder.history(), []);
     handle = 'alice';
     assert.equal(recorder.history().length, 1);
 });
