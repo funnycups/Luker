@@ -41,6 +41,16 @@ describe('sync staging helpers', () => {
         expect(fs.statSync(a).isDirectory()).toBe(true);
     });
 
+    test('concurrent makeStagingPath calls tolerate entries that vanish during the sweep', async () => {
+        const target = path.join(root, 'extensions', 'ext');
+        const worker = async () => {
+            for (let i = 0; i < 200; i++) {
+                await fs.promises.rmdir(await makeStagingPath(target, 'extension'));
+            }
+        };
+        await expect(Promise.all(Array.from({ length: 16 }, worker))).resolves.toBeDefined();
+    });
+
     test('sweepStaleStaging removes staging entries left by an earlier process and keeps the rest', async () => {
         const parent = path.join(root, 'extensions');
         fs.mkdirSync(path.join(parent, `${STAGING_PREFIX}extension-old`, 'nested'), { recursive: true });

@@ -95,7 +95,15 @@ export async function sweepStaleStaging(parentDir) {
         // legacy copies without journals and active replacements.
         if (entry.name.startsWith(`${STAGING_PREFIX}replaced-`) || ACTIVE_SWAPS.has(path.join(parentDir, entry.name))) continue;
         const abs = path.join(parentDir, entry.name);
-        const stat = await fs.promises.lstat(abs);
+        let stat;
+        try {
+            stat = await fs.promises.lstat(abs);
+        } catch (error) {
+            // A concurrent operation may have consumed its staging entry
+            // between the readdir above and this lstat.
+            if (error.code === 'ENOENT') continue;
+            throw error;
+        }
         if (stat.mtimeMs >= PROCESS_STARTED_AT_MS) continue;
         await fs.promises.rm(abs, { recursive: true, force: true });
         removed.push(entry.name);
