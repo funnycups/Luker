@@ -195,6 +195,13 @@
 - 修復了多選選擇器中點擊核取方塊之間的位置會切換目前項目的問題。
 - 修復了訊息接管在 token 估算或背景靜默生成同時發生時遺失回覆的問題。
 
+### 新貢獻者
+* @MCSeekeri 在 https://github.com/funnycups/Luker/pull/44 中完成了第一次貢獻
+* @AX995 在 https://github.com/funnycups/Luker/pull/49 中完成了第一次貢獻
+* @Pixcj 在 https://github.com/funnycups/Luker/pull/53 中完成了第一次貢獻
+
+**完整更新日誌**：https://github.com/funnycups/Luker/compare/v2.8.0...v2.9.0-rc.1
+
 ## v2.8.0 (2026-10-01)
 
 ### 多 agent 編排

@@ -193,6 +193,13 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed a click between two checkboxes in the multi-select pickers switching the active item.
 - Fixed takeover replies being dropped when a token estimate or a background generation overlaps.
 
+### New Contributors
+* @MCSeekeri made their first contribution in https://github.com/funnycups/Luker/pull/44
+* @AX995 made their first contribution in https://github.com/funnycups/Luker/pull/49
+* @Pixcj made their first contribution in https://github.com/funnycups/Luker/pull/53
+
+**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.8.0...v2.9.0-rc.1
+
 ## v2.8.0 (2026-10-01)
 
 ### Multi-Agent Orchestrator

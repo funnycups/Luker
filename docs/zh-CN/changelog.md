@@ -195,6 +195,13 @@
 - 修复了多选选择器中点击复选框之间的位置会切换当前项的问题。
 - 修复了消息接管在 token 估算或后台静默生成同时发生时丢失回复的问题。
 
+### 新贡献者
+* @MCSeekeri 在 https://github.com/funnycups/Luker/pull/44 中完成了第一次贡献
+* @AX995 在 https://github.com/funnycups/Luker/pull/49 中完成了第一次贡献
+* @Pixcj 在 https://github.com/funnycups/Luker/pull/53 中完成了第一次贡献
+
+**完整更新日志**：https://github.com/funnycups/Luker/compare/v2.8.0...v2.9.0-rc.1
+
 ## v2.8.0 (2026-10-01)
 
 ### 多 agent 编排
