@@ -47,13 +47,13 @@ Review these first. Everything else in the branch is a new file.
 
 ## Data compatibility
 
-No storage key name changed, so plugin users keep their data. `workbench.sessions.v1` moved from localStorage to `accountStorage`: it is copied into the first account that opens Workbench, and the localStorage copy is removed once settings have been saved. The list is capped at 1M characters because it is sent with every settings save; the oldest sessions are dropped first, including during migration.
+Legacy data has no owner, so it is never attached to an account. `workbench.sessions.v1` is now in `accountStorage` and starts empty; the old localStorage key is left untouched and unread. The session list is capped at 1M characters because it is sent with every settings save, and each session at 200K (oldest model history, then oldest turns, then long text is cut first), so one long chat cannot push out the others. Run and change history are kept per account under `<key>::<user handle>` in localStorage; the unsuffixed keys are left untouched and unread. With accounts on and no known user, history is not stored.
 
 | Workspace | Keys |
 |---|---|
 | Memory Lens | `extensionSettings.memory_lens`, `chatMetadata.memory_lens_tokens`, `memoryLens.prefs.v1`, `memoryLens.aiAutoApply`, regex owner `memory-lens-tag-filter`, id prefix `memory-lens-tagfilter-`, `memoryLensLabels` in exports |
-| Orchestra Lens | `extensionSettings.orchestra_lens.ai`, `orchestraLens.history.v1`, `.prefs.v1`, `.dock.v1`, `.ai.v1`, `.aiAutoApply`, `.takeover` |
-| Workbench | `extensionSettings.luker_workbench`, `accountStorage` `workbench.sessions.v1`, localStorage `workbench.prefs.v1`, `.history.v1`; `workbench.orchRuns.v1` is now read-only, used when lens history is empty |
+| Orchestra Lens | `extensionSettings.orchestra_lens.ai`, `orchestraLens.history.v1::<handle>`, `.prefs.v1`, `.dock.v1`, `.ai.v1`, `.aiAutoApply`, `.takeover` |
+| Workbench | `extensionSettings.luker_workbench`, `accountStorage` `workbench.sessions.v1`, localStorage `workbench.prefs.v1`, `workbench.history.v1::<handle>`; the unowned `workbench.orchRuns.v1` is no longer read |
 
 ## Differences from the plugins
 
@@ -68,7 +68,7 @@ No storage key name changed, so plugin users keep their data. `workbench.session
 Areas that deserve the closest look:
 
 1. The AI assistant path into `config-iteration` (`memory-graph/lens/source-luker.js`, `workbench/source-iterate.js`).
-2. Writes to user data: schema save, inline edit (`memory-graph/lens/edit/`), agent edit (`orchestrator/lens/source-write.js`), iteration apply and undo (`workbench/`).
+2. Writes to user data: schema save, inline edit (`memory-graph/lens/edit/`), agent edit (`orchestrator/lens/source-write.js`), iteration apply and undo (`workbench/`). Workbench apply and undo follow one rule (`workbench/model/patch.js`): field changes are computed from the proposal baseline by the same diff the preview shows, merged onto freshly read data at a target fixed when the action started, and a field changed elsewhere makes its unit a conflict. Undo is the same merge reversed. Failed reads and saves stop with an error and leave history unchanged; world books are compared with the server copy, because Luker caches a save before it reaches the server.
 3. The tag filter runtime (`memory-graph/lens/filter/filter-runtime.js`), which registers regex scripts.
 4. The run-panel wrapper (`orchestrator/lens/dock/takeover.js`).
 5. Secret redaction in Workbench's request reader (`workbench/model/requests.js`).

@@ -64,7 +64,7 @@ export function mountWorkbench({ source, container = document.body, onClose = nu
     const toast = h('div', { class: 'wb-toast', role: 'status', 'aria-live': 'polite', hidden: true });
     put(win.layer, toast);
 
-    const history = createHistory();
+    const history = createHistory(source.historyStorage());
     const app = {
         source,
         history,

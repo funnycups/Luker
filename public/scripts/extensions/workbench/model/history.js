@@ -3,14 +3,15 @@
 // Change history: everything the workbench wrote to Luker, newest first. Undo
 // functions live only in memory (they close over Luker state); entries from
 // earlier page loads keep their text but can no longer be undone here.
-// Persisted list: localStorage 'workbench.history.v1' (60 entries).
+// Persisted list: 'workbench.history.v1' (60 entries) in the storage the caller
+// passes, which is scoped to the signed-in account.
 
 import { i18n } from '../i18n.js';
 
 const KEY = 'workbench.history.v1';
 const MAX = 60;
 
-export function createHistory(storage = globalThis.localStorage) {
+export function createHistory(storage = null) {
     const undos = new Map();
     const listeners = new Set();
     let list = [];

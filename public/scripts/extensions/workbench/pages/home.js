@@ -91,10 +91,17 @@ export function createHomePage(app) {
         if (a.kind === 'setHorizon') {
             try {
                 const result = await app.source.setMemoryHorizon(a.value);
-                app.history.record({ ws: 'memory', title: i18nFormat('Max lookback floors for always-on injection ${0} → ${1}', result.before || i18n('No limit'), a.value), lines: [result.scope === 'character' ? i18n('Changed the settings for this character only') : i18n('Changed the global settings')], from: i18n('Suggestions'), undo: () => app.source.setMemoryHorizon(result.before) });
+                const historyId = app.history.record({ ws: 'memory', title: i18nFormat('Max lookback floors for always-on injection ${0} → ${1}', result.before || i18n('No limit'), a.value), lines: [result.scope === 'character' ? i18n('Changed the settings for this character only') : i18n('Changed the global settings')], from: i18n('Suggestions'), undo: result.undo });
                 app.toast(i18nFormat('Set to ${0}', a.value), {
                     action: i18n('Undo'),
-                    onAction: async () => { await app.source.setMemoryHorizon(result.before); app.reload(); },
+                    onAction: async () => {
+                        try {
+                            await app.history.undo(historyId);
+                            app.reload();
+                        } catch (err) {
+                            app.toast(i18nFormat('Could not undo: ${0}', err?.message || err), { error: true });
+                        }
+                    },
                 });
                 app.reload();
             } catch (err) {

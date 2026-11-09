@@ -9,25 +9,26 @@ import { getFrontendLogsSnapshot } from '../../frontend-log-manager.js';
 import { requestToolCallsWithRetry } from '../../iteration-library/runner.js';
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import { HISTORY_KEY as ORCH_LENS_HISTORY } from '../orchestrator/lens/model/recorder.js';
+import { accountLocalStorage } from '../lens-shared/current-account.js';
 import { i18n, i18nFormat } from './i18n.js';
 import { askSystemPrompt } from './model/ask.js';
 import { buildBudget } from './model/budget.js';
 import { SourceError } from './model/errors.js';
-import { attribute, describeRequest, finishOverview, redactValue } from './model/requests.js';
-import { createSessionStore, migrateLegacySessions } from './model/sessions.js';
+import { commitFields, saveSettingsChecked } from './model/patch.js';
+import { attribute, describeRequest, finishOverview, redactReaders } from './model/requests.js';
+import { createSessionStore } from './model/sessions.js';
 import { hasTextCalls, salvageTextCalls } from './model/textcalls.js';
 import { iterate, promptInfo as iteratePromptInfo } from './source-iterate.js';
 
 export { iterate };
 
 const SETTINGS_KEY = 'luker_workbench';
-// Run summaries kept by the plugin version of the workbench; read-only now.
-const ORCH_RUNS_KEY = 'workbench.orchRuns.v1';
 const MAX_ORCH_RUNS = 20;
 
 // Loaded on demand: the modules of a disabled extension must not be evaluated.
 const memoryMain = () => import('../memory-graph/main.js');
 const memoryRead = () => import('../memory-graph/read-api.js');
+const memoryOverrides = () => import('../memory-graph/character-overrides.js');
 
 export { SourceError };
 
@@ -35,16 +36,11 @@ export const getContext = () => Luker.getContext();
 
 /** The one session store for this window, in the signed-in account's storage. */
 export function createSessions(ctx = getContext()) {
-    const persist = (onSaved) => {
-        // saveSettings swallows failures; this event fires only after a real save.
-        const type = ctx.eventTypes.SETTINGS_UPDATED;
-        const handler = () => { ctx.eventSource.removeListener(type, handler); onSaved(); };
-        ctx.eventSource.on(type, handler);
-        ctx.saveSettings();
-    };
-    migrateLegacySessions({ account: ctx.accountStorage, legacy: globalThis.localStorage, persist });
     return createSessionStore(ctx.accountStorage);
 }
+
+/** Where change history is kept: this browser, per signed-in account. */
+export const historyStorage = () => accountLocalStorage();
 
 /** Current character (null in group chats or when none is open). */
 export function currentCharacter(ctx = getContext()) {
@@ -137,17 +133,11 @@ export function summarizeOrchRun(run) {
     };
 }
 
-function readJson(key, fallback) {
-    try { return JSON.parse(globalThis.localStorage?.getItem(key) || '') ?? fallback; } catch { return fallback; }
-}
-
 function orchRuns() {
-    const lens = readJson(ORCH_LENS_HISTORY, null);
-    if (Array.isArray(lens) && lens.length) {
-        return lens.filter(r => (r.source || 'orchestrator') === 'orchestrator' && !r.quiet).slice(0, MAX_ORCH_RUNS).reverse().map(summarizeOrchRun).filter(Boolean);
-    }
-    const own = readJson(ORCH_RUNS_KEY, []);
-    return Array.isArray(own) ? own : [];
+    let lens = null;
+    try { lens = JSON.parse(accountLocalStorage().getItem(ORCH_LENS_HISTORY) || 'null'); } catch { lens = null; }
+    if (!Array.isArray(lens)) return [];
+    return lens.filter(r => (r.source || 'orchestrator') === 'orchestrator' && !r.quiet).slice(0, MAX_ORCH_RUNS).reverse().map(summarizeOrchRun).filter(Boolean);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,25 +274,52 @@ export async function loadSnapshot() {
 // Quick actions from suggestions
 // ---------------------------------------------------------------------------
 
-/** Sets memory-graph's max lookback floors in whichever scope is active. Returns the old value. */
+const HORIZON_KEY = 'persistentInjectionMaxSeqDistance';
+
+/**
+ * Sets memory-graph's max lookback floors in the scope active right now, and
+ * keeps that scope for the undo.
+ * @returns {Promise<{ before: number, scope: string, avatar?: string, undo: () => Promise<void> }>}
+ */
 export async function setMemoryHorizon(value) {
     const ctx = getContext();
     const mg = ctx.getExtensionApi('memory-graph');
     const settings = mg ? (await memoryMain()).getSettings() : null;
     if (!mg || !settings) throw new SourceError('unsupported', i18n('Memory graph settings could not be read'));
     const adv = mg.getAdvancedScopeInfo(ctx, settings);
-    const before = Number(adv?.settings?.persistentInjectionMaxSeqDistance ?? settings.persistentInjectionMaxSeqDistance ?? 0);
-    if (adv?.scope === 'character' && adv.avatar) {
-        const ok = await mg.persistCharacterAdvancedOverride(ctx, adv.avatar, { ...adv.settings, persistentInjectionMaxSeqDistance: value });
-        if (!ok) throw new SourceError('write-failed', i18n('Failed to write to the character card'));
-        return { before, scope: 'character', avatar: adv.avatar };
-    }
-    settings.persistentInjectionMaxSeqDistance = value;
-    ctx.saveSettingsDebounced();
-    // Keep the native settings field in step if it is on screen.
-    const input = document.getElementById('luker_rpg_memory_advanced_persistent_injection_max_seq_distance');
-    if (input) input.value = String(value);
-    return { before, scope: 'global' };
+    const before = Number(adv?.settings?.[HORIZON_KEY] ?? settings[HORIZON_KEY] ?? 0);
+    const character = adv?.scope === 'character' && adv.avatar ? String(adv.avatar) : '';
+    const overrides = character ? await memoryOverrides() : null;
+    const wrap = (current) => new Map([['horizon', { key: 'horizon', fields: { value: current } }]]);
+    const store = character ? {
+        read() {
+            const ctx = getContext();
+            if (!(ctx.characters || []).some(c => c?.avatar === character)) throw new SourceError('target-gone', i18n('The character card this change was made to no longer exists'));
+            return overrides.getCharacterAdvancedOverrideByAvatar(ctx, character) || {};
+        },
+        async save(next) {
+            const patch = next === undefined ? { unset: [HORIZON_KEY] } : { set: { [HORIZON_KEY]: next } };
+            if (!await overrides.persistCharacterAdvancedOverridePatch(getContext(), character, patch)) throw new SourceError('write-failed', i18n('Failed to write to the character card'));
+        },
+    } : {
+        read: () => settings,
+        async save(next) {
+            const previous = settings[HORIZON_KEY];
+            settings[HORIZON_KEY] = next;
+            try { await saveSettingsChecked(getContext()); } catch (err) { settings[HORIZON_KEY] = previous; throw err; }
+            // Keep the native settings field in step if it is on screen.
+            const input = document.getElementById('luker_rpg_memory_advanced_persistent_injection_max_seq_distance');
+            if (input) input.value = String(next);
+        },
+    };
+    const current = (await store.read())[HORIZON_KEY];
+    const handle = await commitFields({
+        read: store.read,
+        units: (data) => wrap(data[HORIZON_KEY]),
+        apply: (data, ops) => ops[0].changes[0].after,
+        write: (next) => store.save(next),
+    }, [{ key: 'horizon', kind: 'change', changes: [{ field: 'value', before: current, after: value }] }]);
+    return { before, scope: character ? 'character' : 'global', avatar: character || undefined, undo: handle.undo };
 }
 
 /** Subscribes to the Luker events that should refresh the window. */
@@ -603,15 +620,11 @@ async function memoryDetail({ part = 'summary' } = {}) {
 
 /** Reader functions keyed by tool name (see model/ask.js). */
 export function askReaders({ redactText = true, suggestions = () => [] } = {}) {
-    const R = async (value) => {
-        if (!redactText || value === undefined) return value;
-        return redactValue(JSON.parse(JSON.stringify(value)));
-    };
-    return {
+    return redactReaders({
         async wb_list_requests({ limit = 20, only_errors = false } = {}) {
             const list = await listRequests({ limit: 200 });
             const pick = list.filter(e => !only_errors || e.status === 'error' || e.error).slice(0, Math.max(1, Math.min(60, limit)));
-            return R(pick.map(e => describeRequest(e, e.attr)));
+            return pick.map(e => describeRequest(e, e.attr));
         },
         async wb_read_request({ id, part = 'both' } = {}) {
             const d = await inspectorDetail(id);
@@ -619,10 +632,10 @@ export function askReaders({ redactText = true, suggestions = () => [] } = {}) {
             const out = { id: d.id, model: d.model, status: d.status, httpStatus: d.httpStatus, error: d.error, durationMs: d.durationMs, usage: d.usage, finishReason: d.finishReason };
             if (part !== 'reply') out.messages = msgs;
             if (part !== 'messages') out.reply = String(d.responseText || '').slice(0, 6000);
-            return R(out);
+            return out;
         },
-        wb_read_frontend_logs: async (args) => R(await frontendLogs(args)),
-        wb_read_server_logs: async (args) => R(await serverLogs(args)),
+        wb_read_frontend_logs: async (args) => frontendLogs(args),
+        wb_read_server_logs: async (args) => serverLogs(args),
         wb_read_chat: async (args) => chatMessages(args),
         wb_read_character: async (args) => characterFields(args),
         wb_read_world_info: async (args) => worldInfo(args),
@@ -637,7 +650,7 @@ export function askReaders({ redactText = true, suggestions = () => [] } = {}) {
             return o ? { enabled: o.enabled, mode: o.mode, runs: o.runs.slice(-8) } : { error: '没有编排' };
         },
         wb_read_suggestions: async () => suggestions().map(s => ({ text: s.text, why: s.why })),
-    };
+    }, redactText);
 }
 
 /** Compact overview sent with every question. */

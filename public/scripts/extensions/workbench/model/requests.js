@@ -121,6 +121,15 @@ export function redactValue(value) {
     return value;
 }
 
+/** Wraps every reader so what it hands the model passes through the same redaction. */
+export function redactReaders(readers, enabled) {
+    if (!enabled) return readers;
+    return Object.fromEntries(Object.entries(readers).map(([name, read]) => [name, async (args) => {
+        const value = await read(args);
+        return value === undefined ? value : redactValue(JSON.parse(JSON.stringify(value)));
+    }]));
+}
+
 /** Applies the Ask settings to an overview before anything can read it. */
 export function finishOverview(overview, { inspector = true, redactText = true } = {}) {
     const out = { ...overview };
