@@ -9,8 +9,8 @@ import { i18n } from '../i18n.js';
 const KEY = 'workbench.sessions.v1';
 export const MAX_SESSIONS = 40;
 const MAX_TURN_TEXT = 20000;
-// The ceiling localStorage used to impose, so migrated data always fits.
-const MAX_STORED_CHARS = 5_000_000;
+// Sessions travel with every settings save, so the list has to stay small.
+const MAX_STORED_CHARS = 1_000_000;
 
 const parseList = (raw) => {
     try {

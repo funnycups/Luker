@@ -47,7 +47,7 @@ Review these first. Everything else in the branch is a new file.
 
 ## Data compatibility
 
-No storage key name changed, so plugin users keep their data. `workbench.sessions.v1` moved from localStorage to `accountStorage`: it is copied into the first account that opens Workbench, and the localStorage copy is removed once settings have been saved.
+No storage key name changed, so plugin users keep their data. `workbench.sessions.v1` moved from localStorage to `accountStorage`: it is copied into the first account that opens Workbench, and the localStorage copy is removed once settings have been saved. The list is capped at 1M characters because it is sent with every settings save; the oldest sessions are dropped first, including during migration.
 
 | Workspace | Keys |
 |---|---|
