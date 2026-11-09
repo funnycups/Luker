@@ -55,7 +55,7 @@ function startRuntime() {
                 };
                 void refreshFlow();
                 recorder.subscribe((kind) => { if (kind === 'start') void refreshFlow().then(() => dock?.refresh()); });
-                dock = createDock({ recorder, getFlow: () => flow, openLens: (key) => open(key), onDiagnose: (key) => open(key, { diagnose: true }), onRestoreNative: () => setTakeover(false) });
+                dock = createDock({ recorder, getFlow: () => flow, openLens: (key) => openOrchestraLens(key), onDiagnose: (key) => openOrchestraLens(key, { diagnose: true }), onRestoreNative: () => setTakeover(false) });
             }
             return { recorder, source, dock: () => dock };
         })().catch((err) => {
@@ -67,7 +67,7 @@ function startRuntime() {
     return runtimeReady;
 }
 
-async function open(runId = '', { diagnose = false } = {}) {
+export async function openOrchestraLens(runId = '', { diagnose = false } = {}) {
     const show = () => {
         if (runId) handle.app.openRun(runId);
         if (runId && diagnose) handle.app.diagnose(runId);
@@ -92,10 +92,6 @@ async function open(runId = '', { diagnose = false } = {}) {
     } finally {
         opening = null;
     }
-}
-
-function close() {
-    handle?.close();
 }
 
 async function toggleDock() {
@@ -135,7 +131,7 @@ function menuItem(id, iconClass, label, onActivate) {
 function addMenuItems() {
     const menu = document.getElementById('extensionsMenu');
     if (!menu) return;
-    if (!document.getElementById(MENU_ID)) menu.appendChild(menuItem(MENU_ID, 'fa-diagram-project', i18n('Orchestra Lens'), () => open()));
+    if (!document.getElementById(MENU_ID)) menu.appendChild(menuItem(MENU_ID, 'fa-diagram-project', i18n('Orchestra Lens'), () => openOrchestraLens()));
     if (takeoverEnabled() && !document.getElementById(DOCK_MENU_ID)) menu.appendChild(menuItem(DOCK_MENU_ID, 'fa-list-check', i18n('Run panel'), toggleDock));
 }
 
@@ -146,6 +142,4 @@ export function initOrchestraLens() {
     // Hide the native panels right away so they never flash.
     if (takeoverEnabled()) document.documentElement.classList.add('ol-takeover');
     startRuntime().catch(() => {});
-    // Luker Workbench looks the lens up through this global.
-    globalThis.OrchestraLens = Object.freeze({ open, close, toggleDock, setTakeover, takeoverEnabled });
 }

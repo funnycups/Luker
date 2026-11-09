@@ -1,0 +1,9 @@
+{
+    "display_name": "Workbench",
+    "loading_order": 140,
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Luker",
+    "version": "0.1.0",
+    "homePage": "https://github.com/funnycups/Luker"
+}

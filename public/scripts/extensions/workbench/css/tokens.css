@@ -1,0 +1,69 @@
+/* Design tokens. Graphite neutrals, one teal accent; amber = needs attention.
+ * Workbench tones: memory amber, orchestrator violet, preset blue, card coral. */
+.wbench {
+    --wb-font: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+    --wb-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --wb-r-sm: 6px;
+    --wb-r: 8px;
+    --wb-r-lg: 14px;
+    --wb-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --wb-dur: 160ms;
+}
+.wbench[data-theme="dark"] {
+    color-scheme: dark;
+    --wb-surface: #141519;
+    --wb-surface-2: #191b20;
+    --wb-raised: #1f2127;
+    --wb-hover: rgba(255, 255, 255, 0.045);
+    --wb-active: rgba(255, 255, 255, 0.08);
+    --wb-border: rgba(255, 255, 255, 0.07);
+    --wb-border-strong: rgba(255, 255, 255, 0.13);
+    --wb-text: #e9eaed;
+    --wb-muted: #9da1ab;
+    --wb-faint: #676b74;
+    --wb-accent: #3fd0b4;
+    --wb-accent-soft: rgba(63, 208, 180, 0.14);
+    --wb-accent-text: #062a23;
+    --wb-amber: #f4b740;
+    --wb-amber-soft: rgba(244, 183, 64, 0.14);
+    --wb-danger: #ef7d6e;
+    --wb-danger-soft: rgba(239, 125, 110, 0.12);
+    --wb-t-memory: #f4b740;
+    --wb-t-orch: #b99af7;
+    --wb-t-preset: #6fb3f2;
+    --wb-t-card: #ff8f6b;
+    --wb-t-world: #d4cf6f;
+    --wb-t-chat: rgba(157, 161, 171, 0.45);
+    --wb-t-other: #5dc3d8;
+    --wb-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08);
+    --wb-scrim: rgba(4, 5, 7, 0.5);
+}
+.wbench[data-theme="light"] {
+    color-scheme: light;
+    --wb-surface: #ffffff;
+    --wb-surface-2: #f6f7f9;
+    --wb-raised: #ffffff;
+    --wb-hover: rgba(15, 20, 30, 0.04);
+    --wb-active: rgba(15, 20, 30, 0.07);
+    --wb-border: rgba(15, 20, 30, 0.08);
+    --wb-border-strong: rgba(15, 20, 30, 0.15);
+    --wb-text: #1b1d22;
+    --wb-muted: #5d626d;
+    --wb-faint: #9196a0;
+    --wb-accent: #12a58a;
+    --wb-accent-soft: rgba(18, 165, 138, 0.11);
+    --wb-accent-text: #ffffff;
+    --wb-amber: #c98500;
+    --wb-amber-soft: rgba(214, 145, 0, 0.12);
+    --wb-danger: #d4553f;
+    --wb-danger-soft: rgba(212, 85, 63, 0.1);
+    --wb-t-memory: #c98500;
+    --wb-t-orch: #8a63e0;
+    --wb-t-preset: #2f7fd0;
+    --wb-t-card: #e0643f;
+    --wb-t-world: #a8a23a;
+    --wb-t-chat: rgba(93, 98, 109, 0.3);
+    --wb-t-other: #1d97ad;
+    --wb-shadow: 0 30px 70px -24px rgba(20, 25, 40, 0.35), 0 0 0 1px rgba(15, 20, 30, 0.08);
+    --wb-scrim: rgba(10, 12, 16, 0.3);
+}

@@ -1,0 +1,36 @@
+/* 设置 */
+.wbench .wb-api { width: 100%; border-collapse: collapse; }
+.wbench .wb-api th { padding: 8px 12px; font-size: 11.5px; font-weight: 500; color: var(--wb-faint); text-align: left; background: var(--wb-surface-2); }
+.wbench .wb-api td { padding: 8px 12px; border-top: 1px solid var(--wb-border); vertical-align: middle; }
+.wbench .wb-api td:first-child { width: 110px; white-space: nowrap; }
+.wbench .wb-api td:first-child .wb-dot { margin-right: 7px; }
+.wbench .wb-api-note { margin-top: 8px; }
+.wbench .wb-checks { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding-left: 6px; }
+.wbench .wb-setrow { display: grid; grid-template-columns: 1fr minmax(160px, 220px); align-items: center; gap: 12px; padding: 10px 12px; border-top: 1px solid var(--wb-border); }
+.wbench .wb-setrow:first-child { border-top: 0; }
+.wbench .wb-setrow > :last-child { justify-self: end; }
+.wbench .wb-setrow > .wb-select { justify-self: stretch; }
+.wbench .wb-setrow-name { font-size: 12.5px; }
+.wbench .wb-rules-intro { margin: 0 0 8px; }
+.wbench .wb-rule { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--wb-border); }
+.wbench .wb-rule:first-child { border-top: 0; }
+.wbench .wb-rule > .wb-dot { margin-top: 6px; }
+.wbench .wb-rule-main { flex: 1; min-width: 0; font-size: 12.5px; }
+.wbench.is-compact .wb-api td, .wbench.is-compact .wb-api th { padding: 8px 6px; }
+.wbench.is-compact .wb-api td:first-child { width: 72px; }
+.wbench.is-compact .wb-setrow { grid-template-columns: 1fr; }
+.wbench.is-compact .wb-setrow > :last-child { justify-self: start; }
+.wbench.is-compact .wb-setrow > .wb-select { justify-self: stretch; }
+.wbench .wb-hint { display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 10px 12px; border-radius: var(--wb-r); background: var(--wb-accent-soft); font-size: 12.5px; line-height: 1.6; }
+.wbench .wb-hint > div:first-child { flex: 1; min-width: 0; }
+.wbench .wb-hint-acts { flex: none; }
+.wbench .wb-prompt { border-top: 1px solid var(--wb-border); }
+.wbench .wb-prompt:first-child { border-top: 0; }
+.wbench .wb-prompt summary { display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; list-style: none; font-size: 12.5px; }
+.wbench .wb-prompt summary::-webkit-details-marker { display: none; }
+.wbench .wb-prompt summary:hover { background: var(--wb-hover); }
+.wbench .wb-prompt-name { flex: none; }
+.wbench .wb-prompt-from { flex: 1; min-width: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wbench .wb-prompt-text { margin: 0; padding: 10px 12px 12px; max-height: 280px; overflow: auto; font-family: var(--wb-mono); font-size: 11.5px; line-height: 1.6; color: var(--wb-muted); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--wb-surface-2); border-top: 1px dashed var(--wb-border); }
+.wbench.is-compact .wb-hint { flex-direction: column; align-items: stretch; }
+.wbench.is-compact .wb-prompt-from { text-align: left; }

@@ -1,0 +1,10 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+ * Workbench styles. Everything is scoped under `.wbench`.
+ */
+@import url('./css/tokens.css');
+@import url('./css/shell.css');
+@import url('./css/controls.css');
+@import url('./css/home.css');
+@import url('./css/settings.css');
+@import url('./css/chat.css');
+@import url('./css/iterate.css');

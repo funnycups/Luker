@@ -11,7 +11,7 @@
 
 import { i18n } from '../i18n.js';
 
-const HISTORY_KEY = 'orchestraLens.history.v1';
+export const HISTORY_KEY = 'orchestraLens.history.v1';
 const MAX_RUNS = 30;
 const MAX_BODY = 24000;
 const TERMINAL = new Set(['done', 'failed']);

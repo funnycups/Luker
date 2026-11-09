@@ -1,0 +1,43 @@
+/* 总览 */
+.wbench .wb-budget { padding: 14px; border: 1px solid var(--wb-border); border-radius: var(--wb-r); }
+.wbench .wb-budget-top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 10px; }
+.wbench .wb-budget-total { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.wbench .wb-budget-of { color: var(--wb-muted); font-size: 12px; }
+.wbench .wb-budget-warn { margin-left: auto; font-size: 12px; color: var(--wb-amber); }
+.wbench .wb-bar { display: flex; gap: 2px; height: 12px; border-radius: 999px; overflow: hidden; background: var(--wb-hover); }
+.wbench .wb-bar span { display: block; height: 100%; min-width: 3px; flex-basis: 0; }
+.wbench .wb-bar span:hover { filter: brightness(1.15); }
+.wbench .wb-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 12px; color: var(--wb-muted); }
+.wbench .wb-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.wbench .wb-legend b { color: var(--wb-text); font-weight: 600; margin-left: 4px; font-variant-numeric: tabular-nums; }
+
+.wbench .wb-tips { display: flex; flex-direction: column; gap: 6px; }
+.wbench .wb-tip { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--wb-r); background: var(--wb-surface-2); font-size: 12.5px; line-height: 1.6; }
+.wbench .wb-tip > .wb-dot { margin-top: 6px; }
+.wbench .wb-tip-main { flex: 1; min-width: 0; }
+.wbench .wb-tip-meta { font-size: 11.5px; color: var(--wb-faint); }
+.wbench .wb-tip-acts { display: flex; gap: 6px; flex: none; }
+.wbench .wb-why { margin-top: 6px; }
+.wbench .wb-why summary { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--wb-faint); cursor: pointer; list-style: none; }
+.wbench .wb-why summary::-webkit-details-marker { display: none; }
+.wbench .wb-why summary:hover, .wbench .wb-why[open] summary { color: var(--wb-muted); }
+.wbench .wb-why-body { margin-top: 6px; padding: 8px 10px; border-radius: var(--wb-r-sm); background: var(--wb-surface); border: 1px solid var(--wb-border); font-size: 12px; line-height: 1.7; color: var(--wb-muted); }
+.wbench .wb-why-src { display: inline-block; margin-top: 4px; font-size: 11px; color: var(--wb-faint); }
+
+.wbench .wb-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.wbench .wb-card { position: relative; display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--wb-border); border-radius: var(--wb-r); background: var(--wb-surface); transition: border-color var(--wb-dur); }
+.wbench .wb-card:hover { border-color: var(--wb-border-strong); }
+.wbench .wb-card::before { content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: var(--tone); }
+.wbench .wb-card-head { display: flex; align-items: center; gap: 10px; }
+.wbench .wb-card-icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 9px; color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent); }
+.wbench .wb-card-title { flex: 1; min-width: 0; }
+.wbench .wb-card-name { font-weight: 650; font-size: 13.5px; }
+.wbench .wb-card-by { font-size: 11.5px; color: var(--wb-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wbench .wb-card-stat { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--wb-muted); min-height: 18px; }
+.wbench .wb-card-stat b { color: var(--wb-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.wbench .wb-card-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.wbench.is-compact .wb-cards { grid-template-columns: 1fr; }
+.wbench.is-compact .wb-budget-warn { margin-left: 0; width: 100%; }
+.wbench.is-compact .wb-tip { flex-wrap: wrap; }
+.wbench.is-compact .wb-tip-acts { width: 100%; padding-left: 18px; }

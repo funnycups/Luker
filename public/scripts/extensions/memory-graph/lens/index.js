@@ -42,10 +42,6 @@ export async function openMemoryLens() {
     }
 }
 
-function closeMemoryLens() {
-    handle?.close();
-}
-
 function addMenuItem() {
     const menu = document.getElementById('extensionsMenu');
     if (!menu || document.getElementById(MENU_ID)) return;
@@ -80,6 +76,4 @@ export function initMemoryLens() {
         console.warn('[memory-graph/lens] tag filter unavailable', err);
     }
     startRecorder(getContext);
-    // Luker Workbench looks the lens up through this global.
-    globalThis.MemoryLens = Object.freeze({ open: openMemoryLens, close: closeMemoryLens });
 }

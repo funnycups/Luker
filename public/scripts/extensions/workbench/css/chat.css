@@ -1,0 +1,80 @@
+/* Shared by 问问 and AI 迭代: side column, chat, composer, answers. */
+.wbench .wb-src, .wbench .wb-sess { flex: none; width: 210px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--wb-border); background: var(--wb-surface); }
+.wbench .wb-src-head { position: relative; padding: 12px 12px 6px; }
+.wbench .wb-src-title { font-size: 12.5px; font-weight: 650; }
+.wbench .wb-src-close { position: absolute; right: 6px; top: 6px; }
+.wbench .wb-src-list { flex: 1; overflow: auto; padding: 2px 6px 8px; }
+.wbench .wb-src-group { padding: 10px 8px 3px; font-size: 11px; color: var(--wb-faint); }
+.wbench .wb-src-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--wb-r-sm); font-size: 12.5px; }
+.wbench .wb-src-st { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--wb-accent); }
+.wbench .wb-src-st.is-warn { background: var(--wb-amber); }
+.wbench .wb-src-st.is-off { background: var(--wb-faint); opacity: 0.5; }
+.wbench .wb-src-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wbench .wb-src-n { font-size: 11px; color: var(--wb-faint); white-space: nowrap; max-width: 90px; overflow: hidden; text-overflow: ellipsis; }
+.wbench .wb-src-warn { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin: 6px 4px 2px; padding: 8px 10px; border-radius: var(--wb-r-sm); background: var(--wb-amber-soft); font-size: 11.5px; line-height: 1.55; }
+.wbench .wb-src-foot { padding: 6px 8px 10px; }
+.wbench .wb-src-toggle { display: none; }
+
+.wbench .wb-chat { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.wbench .wb-chat-head { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 9px 14px; border-bottom: 1px solid var(--wb-border); }
+.wbench .wb-chat-title { font-weight: 650; }
+.wbench .wb-chat-hist { width: auto; max-width: 200px; }
+.wbench .wb-chat-body { flex: 1; overflow: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.wbench .wb-msg-me { align-self: flex-end; max-width: 78%; padding: 9px 13px; border-radius: 12px 12px 4px 12px; background: var(--wb-accent-soft); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wbench .wb-msg-ai { max-width: 94%; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; line-height: 1.7; }
+.wbench .wb-msg-ai > * { max-width: 100%; }
+.wbench .wb-msg-error { color: var(--wb-danger); }
+.wbench .wb-reads { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: var(--wb-hover); color: var(--wb-faint); font-size: 11.5px; }
+.wbench .wb-reads.is-live { color: var(--wb-muted); }
+.wbench .wb-reads .wb-spinner { width: 12px; height: 12px; }
+.wbench .wb-ans-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.wbench .wb-sent { width: 100%; border: 1px dashed var(--wb-border-strong); border-radius: var(--wb-r); font-size: 12px; }
+.wbench .wb-sent summary { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--wb-muted); cursor: pointer; list-style: none; }
+.wbench .wb-sent summary::-webkit-details-marker { display: none; }
+.wbench .wb-sent ul { padding: 0 10px 9px 28px; list-style: disc; color: var(--wb-muted); line-height: 1.75; overflow-wrap: anywhere; }
+
+.wbench .wb-md { display: flex; flex-direction: column; gap: 8px; width: 100%; overflow-wrap: anywhere; }
+.wbench .wb-md p { white-space: pre-wrap; }
+.wbench .wb-md .wb-md-h { font-weight: 650; }
+.wbench .wb-md ul, .wbench .wb-md ol { padding-left: 20px; list-style: disc; }
+.wbench .wb-md ol { list-style: decimal; }
+.wbench .wb-md code { font-family: var(--wb-mono); font-size: 0.92em; padding: 0 4px; border-radius: 4px; background: var(--wb-hover); }
+.wbench .wb-md-table { overflow-x: auto; }
+.wbench .wb-md table { border-collapse: collapse; font-size: 12px; min-width: 60%; }
+.wbench .wb-md th { text-align: left; font-weight: 500; color: var(--wb-faint); background: var(--wb-surface-2); padding: 6px 10px; }
+.wbench .wb-md td { padding: 6px 10px; border-top: 1px solid var(--wb-border); font-variant-numeric: tabular-nums; }
+
+.wbench .wb-composer { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 12px; border-top: 1px solid var(--wb-border); }
+.wbench .wb-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.wbench .wb-chip { flex: none; height: 26px; padding: 0 10px; border: 1px solid var(--wb-border); border-radius: 999px; background: var(--wb-surface); color: var(--wb-muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.wbench .wb-chip:hover { color: var(--wb-text); border-color: var(--wb-border-strong); }
+.wbench .wb-input-row { display: flex; gap: 8px; align-items: flex-end; }
+.wbench .wb-input { flex: 1; min-height: 38px; max-height: 120px; padding: 9px 11px; border: 1px solid var(--wb-border-strong); border-radius: var(--wb-r); background: var(--wb-surface); color: var(--wb-text); resize: none; line-height: 1.45; }
+.wbench .wb-input:focus { outline: none; border-color: var(--wb-accent); }
+.wbench .wb-send { height: 38px; }
+.wbench .wb-composer-opts { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-left: 6px; }
+
+.wbench.is-compact .wb-src, .wbench.is-compact .wb-sess { display: none; }
+.wbench.is-compact .wb-src.is-open, .wbench.is-compact .wb-sess.is-open { display: flex; position: absolute; inset: 0; z-index: 3; width: auto; }
+.wbench.is-compact .wb-src-toggle { display: grid; }
+.wbench.is-compact .wb-chat-tag { display: none; }
+.wbench.is-compact .wb-chat-body { padding: 12px; }
+.wbench.is-compact .wb-msg-ai { max-width: 100%; }
+.wbench.is-compact .wb-main.is-flush { position: relative; }
+.wbench.is-compact .wb-chat-head { flex-wrap: nowrap; padding: 6px 8px; }
+.wbench.is-compact .wb-chat-hist { max-width: 140px; }
+.wbench.is-compact .wb-chat-new span { display: none; }
+.wbench.is-compact .wb-chat-new { padding: 0 8px; }
+
+/* Message actions: quiet until hovered; always visible on touch. */
+.wbench .wb-msg-acts { display: flex; flex-wrap: wrap; gap: 2px; margin-left: -6px; opacity: 0.55; transition: opacity var(--wb-dur); }
+.wbench .wb-msg-ai:hover .wb-msg-acts, .wbench .wb-msg-turn:hover .wb-msg-acts, .wbench .wb-msg-acts:focus-within { opacity: 1; }
+.wbench .wb-msg-act { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 7px; border: 0; border-radius: var(--wb-r-sm); background: none; color: var(--wb-faint); font-size: 11.5px; cursor: pointer; }
+.wbench .wb-msg-act:hover { background: var(--wb-hover); color: var(--wb-text); }
+.wbench .wb-msg-act:disabled { opacity: 0.4; cursor: default; background: none; }
+.wbench .wb-msg-act.is-done { color: var(--wb-accent); }
+.wbench .wb-msg-turn { align-self: flex-end; max-width: 78%; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.wbench .wb-msg-turn > .wb-msg-me { max-width: 100%; }
+.wbench .wb-msg-turn .wb-msg-acts { margin: 0 -6px 0 0; opacity: 0; }
+.wbench .wb-fork-note { align-self: center; font-size: 11.5px; color: var(--wb-faint); padding: 2px 10px; border-radius: 999px; background: var(--wb-hover); }
+@media (hover: none) { .wbench .wb-msg-acts, .wbench .wb-msg-turn .wb-msg-acts { opacity: 1; } }
