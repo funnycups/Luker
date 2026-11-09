@@ -209,7 +209,7 @@ export function createIteratePage(app) {
         const messages = turns.flatMap(t => (t.role === 'user'
             ? [{ role: 'user', content: t.text }]
             : (t.text || t.changes?.length ? [{ role: 'assistant', content: turnText(t) }] : [])));
-        session = store.create({ kind: 'iterate', ws: src.ws, scope: src.scope, scopeName: src.scopeName, title: i18nFormat('${0} (branch)', src.title), forkedFrom: src.title, turns, messages,
+        session = store.create({ kind: 'iterate', ws: src.ws, scope: src.scope, scopeName: src.scopeName, title: i18nFormat('${0} (branch)', src.title), forkedFrom: src.title, turns, messages, targetId: src.targetId,
             note: '（这段对话是从之前的对话分出来的。前面列出的改动，已应用的已经保存进 Luker，其余没有保存；以现在读到的内容为准。）' });
         paintAll();
         return session;
@@ -239,6 +239,10 @@ export function createIteratePage(app) {
 
     function aiBlock(t, index) {
         const reads = t.reads ? `${i18nFormat('Read ${0} times', t.reads)}${t.edits ? i18nFormat(', edited ${0} times', t.edits) : ''}${t.failed ? i18nFormat(', ${0} failed', t.failed) : ''}` : '';
+        const owner = session.id;
+        const draft = drafts.get(owner);
+        // A stored change may be shortened; while its draft exists, show it in full.
+        const changes = t.state === 'pending' && draft?.changes ? draft.changes : t.changes;
         const node = h('div', { class: 'wb-msg-ai' },
             reads ? h('div', { class: 'wb-reads' }, icon('eye', { size: 12 }), h('span', { text: reads })) : null,
             t.error ? h('div', { class: 'wb-msg-error', text: t.error }) : t.text ? renderMarkdown(t.text) : null);
@@ -248,15 +252,15 @@ export function createIteratePage(app) {
             last ? { iconName: 'refresh', label: i18n('Answer again'), title: canRegen(t) ? i18n('Discard this round and let the AI redo it') : i18n('This round has been applied; undo it first to answer again'), disabled: busy || !canRegen(t), onClick: () => regenerate() } : null,
             { iconName: 'fork', label: i18n('Branch from here'), title: i18n('Copy up to this message into a new chat and continue editing there'), disabled: busy, onClick: () => { forkAt(index + 1); app.toast(i18n('Branched into a new chat; the original is still in the chat list')); input.focus(); } },
         ]);
-        if (t.changes?.length) {
+        if (changes?.length) {
             const card = changeList({
-                changes: t.changes,
+                changes,
                 state: t.state || 'pending',
                 target: t.target || '',
                 note: app.settings().reviewChanges ? '' : i18n('Applied automatically. You can undo it in Change history'),
-                onApply: (keys) => apply(index, keys),
-                onDiscard: () => discard(index),
-                onUndo: t.historyId && app.history.canUndo(t.historyId) ? () => undoTurn(index) : null,
+                onApply: (keys) => apply(owner, index, keys),
+                onDiscard: () => discard(owner, index),
+                onUndo: t.historyId && app.history.canUndo(t.historyId) ? () => undoTurn(owner, index) : null,
             });
             put(node, card.el);
         }
@@ -285,7 +289,9 @@ export function createIteratePage(app) {
     }
 
     // ----- working copies -------------------------------------------------
-    const keyOf = (w = ws, s = scope) => `${w}:${s}:${s === 'character' ? app.snapshot()?.chat?.character?.avatar || '' : ''}`;
+    const keyOf = (w = ws, s = scope) => `${w}:${s}:${s === 'character' ? app.snapshot()?.chat?.character?.avatar || '' : w === 'preset' ? app.snapshot()?.preset?.name || '' : ''}`;
+    // What a conversation edits, ignoring details that may change (a card's list position).
+    const targetId = ({ scope: s, avatar, mode, presetId, ref }) => JSON.stringify({ s, avatar, mode, presetId, ref });
 
     async function ensureWork() {
         if (blocked() || !iter()) return null;
@@ -318,82 +324,128 @@ export function createIteratePage(app) {
         }
     });
 
+    /** Writes to one session whichever is on screen, and keeps the on-screen copy current. */
+    function saveTo(id, patch) {
+        const updated = store.update(id, patch);
+        if (updated && session?.id === id) session = updated;
+        return updated;
+    }
+
     async function send() {
         const text = input.value.trim();
         if (!text || busy || blocked()) return;
-        const w = await ensureWork();
-        if (!w) { app.toast(loadError || i18n('Could not read what should be edited'), { error: true }); return; }
-        const workKey = keyOf();
-        if (!session) session = store.create({ kind: 'iterate', ws, scope, scopeName: scope === 'character' ? charName() : '', title: titleFrom(text), messages: [] });
-        // Pending changes from the last turn that were never decided count as discarded.
-        const turns = session.turns.map(t => (t.state === 'pending' ? { ...t, state: 'discarded' } : t));
-        // Every earlier proposal is decided now, so this turn drafts from the saved copy.
-        const draft = { base: structuredClone(w.base), ai: structuredClone(w.base), target: w.target, title: w.title, workKey };
-        drafts.set(session.id, draft);
-        let userContent = text;
-        const note = session.note || '';
-        if (note) userContent = `${note}\n\n${text}`;
-        if (withReply) {
-            const reply = await iter().lastReply?.();
-            if (reply) userContent += `\n\n<最近一条回复>\n${reply}\n</最近一条回复>`;
-        }
-        session = store.update(session.id, { turns: [...turns, { role: 'user', text, at: Date.now() }], note: '' });
-        input.value = '';
-        grow();
+        // Everything below belongs to this request, whatever the user opens meanwhile.
+        const runWs = ws;
+        const runScope = scope;
+        const runKey = keyOf();
+        let runId = session?.id || null;
         busy = true;
-        liveStep = '';
-        abort = new AbortController();
-        paintBody();
-        paintOpts();
-        let turn;
         try {
-            const system = await iter().systemPrompt(ws, scope, draft.ai, { wrapper: wrapperPrompt({ wsName: WS_NAME[ws], scopeText: draft.title, builtin: app.settings().builtinPrompt }) });
-            const history = (session.messages || []).filter(m => m.role !== 'system');
+            let loaded;
+            try {
+                loaded = await iter().load(runWs, runScope);
+            } catch (err) {
+                loadError = String(err?.message || err);
+                app.toast(loadError || i18n('Could not read what should be edited'), { error: true });
+                return;
+            }
+            loadError = '';
+            const w = { base: loaded.live, target: loaded.target, title: loaded.title };
+            work.set(runKey, w);
+            const id = targetId(w.target);
+            let current = runId ? store.get(runId) : null;
+            if (current?.targetId && current.targetId !== id) {
+                app.toast(i18nFormat('This chat was editing something else (${0}). Start a new conversation to edit the current selection.', current.scopeName || WS_NAME[runWs]), { error: true, duration: 7000 });
+                return;
+            }
+            if (!current) {
+                current = store.create({ kind: 'iterate', ws: runWs, scope: runScope, scopeName: runScope === 'character' ? charName() : '', title: titleFrom(text), messages: [], targetId: id });
+                runId = current.id;
+                session = current;
+            } else if (!current.targetId) {
+                current = saveTo(runId, { targetId: id });
+            }
+            // Pending changes from the last turn that were never decided count as discarded.
+            const turns = current.turns.map(t => (t.state === 'pending' ? { ...t, state: 'discarded' } : t));
+            const draft = { base: structuredClone(w.base), ai: structuredClone(w.base), target: w.target, title: w.title, workKey: runKey, ws: runWs };
+            drafts.set(runId, draft);
+            let userContent = current.note ? `${current.note}\n\n${text}` : text;
+            if (withReply) {
+                const reply = await iter().lastReply?.();
+                if (reply) userContent += `\n\n<最近一条回复>\n${reply}\n</最近一条回复>`;
+            }
+            current = saveTo(runId, { turns: [...turns, { role: 'user', text, at: Date.now() }], note: '' });
+            input.value = '';
+            grow();
+            liveStep = '';
+            const controller = new AbortController();
+            abort = controller;
+            paintBody();
+            paintOpts();
+            const turn = await runTurn({ runId, runWs, runScope, current, draft, userContent, controller });
+            current = store.get(runId);
+            if (!current) return;
+            current = saveTo(runId, { turns: [...current.turns, turn] });
+            if (turn.changes?.length && !app.settings().reviewChanges) {
+                busy = false;
+                await apply(runId, current.turns.length - 1, turn.changes.map(c => c.key));
+            }
+        } finally {
+            busy = false;
+            abort = null;
+            paintAll();
+            app.refreshBadges();
+        }
+    }
+
+    /** One model request. Never throws: a failure becomes the turn's error text. */
+    async function runTurn({ runId, runWs, runScope, current, draft, userContent, controller }) {
+        try {
+            const system = await iter().systemPrompt(runWs, runScope, draft.ai, { wrapper: wrapperPrompt({ wsName: WS_NAME[runWs], scopeText: draft.title, builtin: app.settings().builtinPrompt }) });
+            const history = (current.messages || []).filter(m => m.role !== 'system');
             const messages = trimMessages([{ role: 'system', content: system }, ...history, { role: 'user', content: userContent }]);
-            const tools = await iter().tools(ws, draft.ai);
+            const tools = await iter().tools(runWs, draft.ai);
             const result = await runIterateTurn({
                 messages,
                 live: draft.ai,
                 tools,
-                isRead: (n) => iter().isRead(ws, n),
-                runRead: (call, live) => iter().runRead(ws, call, live),
-                runEdit: (call, live) => iter().runEdit(ws, call, live),
-                request: (msgs, t) => app.source.aiRequest(ws, { messages: msgs, tools: t, signal: abort.signal }),
+                isRead: (n) => iter().isRead(runWs, n),
+                runRead: (call, live) => iter().runRead(runWs, call, live),
+                runEdit: (call, live) => iter().runEdit(runWs, call, live),
+                request: (msgs, t) => app.source.aiRequest(runWs, { messages: msgs, tools: t, signal: controller.signal }),
                 onRound: (info) => { liveStep = i18nFormat('Read ${0} times, edited ${1} times…', info.reads, info.edits); paintBody(); },
-                signal: abort.signal,
+                signal: controller.signal,
             });
             draft.ai = result.live;
-            const changes = diffUnits(iter().units(ws, draft.base), iter().units(ws, draft.ai));
-            if (!changes.length) drafts.delete(session.id);
+            const changes = diffUnits(iter().units(runWs, draft.base), iter().units(runWs, draft.ai));
+            draft.changes = changes;
+            if (!changes.length) drafts.delete(runId);
             const all = result.messages.filter(m => m.role !== 'system');
             // Where this turn's messages start in the stored (last 60) list — Answer again cuts back to it.
             const prior = messages.filter(m => m.role !== 'system').length - 1;
             const msgKeep = Math.max(0, prior - Math.max(0, all.length - 60));
-            turn = { role: 'ai', text: result.text || (changes.length ? '' : i18n('(The AI made no changes)')), reads: result.reads.length, edits: result.edits.length, failed: result.failed.length, changes, state: changes.length ? 'pending' : '', target: draft.title, msgKeep, at: Date.now() };
-            session = store.update(session.id, { messages: all.slice(-60) });
+            saveTo(runId, { messages: all.slice(-60) });
+            return { role: 'ai', text: result.text || (changes.length ? '' : i18n('(The AI made no changes)')), reads: result.reads.length, edits: result.edits.length, failed: result.failed.length, changes, state: changes.length ? 'pending' : '', target: draft.title, msgKeep, at: Date.now() };
         } catch (err) {
-            drafts.delete(session.id);
-            turn = { role: 'ai', text: '', error: abort.signal.aborted ? i18n('Stopped.') : i18nFormat('Not changed: ${0}', err?.message || err), msgKeep: (session.messages || []).length, at: Date.now() };
+            drafts.delete(runId);
+            return { role: 'ai', text: '', error: controller.signal.aborted ? i18n('Stopped.') : i18nFormat('Not changed: ${0}', err?.message || err), msgKeep: (store.get(runId)?.messages || []).length, at: Date.now() };
         }
-        busy = false;
-        abort = null;
-        session = store.update(session.id, { turns: [...session.turns, turn] });
-        const idx = session.turns.length - 1;
-        if (turn.changes?.length && !app.settings().reviewChanges) await apply(idx, turn.changes.map(c => c.key));
-        paintAll();
-        app.refreshBadges();
     }
 
     // ----- decide ---------------------------------------------------------
-    async function apply(index, keys) {
-        const t = session.turns[index];
-        if (!t?.changes) return;
-        const draft = drafts.get(session.id);
-        const sessionWs = session.ws;
-        if (!draft || !approvalMatches(t.changes, keys, diffUnits(iter().units(sessionWs, draft.base), iter().units(sessionWs, draft.ai)))) {
+    const applying = new Set();
+
+    async function apply(id, index, keys) {
+        const owner = store.get(id);
+        const t = owner?.turns[index];
+        if (!t?.changes || applying.has(id)) return;
+        const draft = drafts.get(id);
+        const sessionWs = owner.ws;
+        if (!draft || !approvalMatches(t.changes, diffUnits(iter().units(sessionWs, draft.base), iter().units(sessionWs, draft.ai)), keys)) {
             app.toast(i18n('This draft is no longer available. Ask the AI again.'), { error: true, duration: 7000 });
             return;
         }
+        applying.add(id);
         try {
             const next = iter().rebuild(sessionWs, draft.base, draft.ai, keys);
             const handle = await iter().commit(sessionWs, draft.target, draft.base, next, keys);
@@ -406,44 +458,46 @@ export function createIteratePage(app) {
             const dropped = t.changes.filter(c => !keys.includes(c.key)).map(c => c.label);
             const { workKey } = draft;
             const historyId = app.history.record({
-                ws: sessionWs, title: `${session.title}`, scope: draft.title,
+                ws: sessionWs, title: `${owner.title}`, scope: draft.title,
                 lines: t.changes.filter(c => saved.has(c.key)).map(c => i18nFormat('${0} "${1}"', { add: i18n('Added'), remove: i18n('Removed item'), change: i18n('Edited') }[c.kind], c.label)),
                 from: i18n('AI chat'),
                 undo: async () => { await handle.undo(); work.delete(workKey); },
             });
-            // After a partial save the saved copy is unknown, so it is reloaded.
-            const w = work.get(workKey);
-            if (unsaved.length || failure) work.delete(workKey);
-            else if (w) w.base = structuredClone(next);
-            drafts.delete(session.id);
-            const turns = session.turns.map((x, i) => (i === index ? { ...x, state: dropped.length || unsaved.length ? 'partial' : 'applied', historyId } : x));
-            session = store.update(session.id, { turns, note: decisionNote({ applied: labels, discarded: dropped, unsaved }) });
-            if (unsaved.length) app.toast([i18nFormat('Saved ${0}; not saved: ${1}', saved.size, unsaved.join(listSeparator())), failure].filter(Boolean).join(' · '), { error: true, duration: 7000, action: i18n('Undo'), onAction: () => undoTurn(index) });
-            else app.toast(i18nFormat('Applied ${0}', keys.length), { action: i18n('Undo'), onAction: () => undoTurn(index) });
+            // What is stored now may differ from the draft, so it is reloaded next time.
+            work.delete(workKey);
+            drafts.delete(id);
+            const fresh = store.get(id);
+            if (fresh) saveTo(id, { turns: fresh.turns.map((x, i) => (i === index ? { ...x, state: dropped.length || unsaved.length ? 'partial' : 'applied', historyId } : x)), note: decisionNote({ applied: labels, discarded: dropped, unsaved }) });
+            if (unsaved.length) app.toast([i18nFormat('Saved ${0}; not saved: ${1}', saved.size, unsaved.join(listSeparator())), failure].filter(Boolean).join(' · '), { error: true, duration: 7000, action: i18n('Undo'), onAction: () => undoTurn(id, index) });
+            else app.toast(i18nFormat('Applied ${0}', saved.size), { action: i18n('Undo'), onAction: () => undoTurn(id, index) });
             app.reload();
         } catch (err) {
             app.toast(i18nFormat('Not saved: ${0}', err?.message || err), { error: true, duration: 7000 });
+        } finally {
+            applying.delete(id);
         }
         paintAll();
         app.refreshBadges();
     }
 
-    function discard(index) {
-        const t = session.turns[index];
-        drafts.delete(session.id);
-        const turns = session.turns.map((x, i) => (i === index ? { ...x, state: 'discarded' } : x));
-        session = store.update(session.id, { turns, note: decisionNote({ discarded: (t?.changes || []).map(c => c.label) }) });
+    function discard(id, index) {
+        const owner = store.get(id);
+        if (!owner) return;
+        const t = owner.turns[index];
+        drafts.delete(id);
+        const turns = owner.turns.map((x, i) => (i === index ? { ...x, state: 'discarded' } : x));
+        saveTo(id, { turns, note: decisionNote({ discarded: (t?.changes || []).map(c => c.label) }) });
         paintAll();
         app.refreshBadges();
     }
 
-    async function undoTurn(index) {
-        const t = session.turns[index];
+    async function undoTurn(id, index) {
+        const t = store.get(id)?.turns[index];
         if (!t?.historyId) return;
         try {
             await app.history.undo(t.historyId);
-            const turns = session.turns.map((x, i) => (i === index ? { ...x, state: 'discarded' } : x));
-            session = store.update(session.id, { turns, note: `（用户撤销了上一轮应用的改动：${t.changes.map(c => c.label).join(listSeparator())}。现在是改之前的样子。）` });
+            const fresh = store.get(id);
+            if (fresh) saveTo(id, { turns: fresh.turns.map((x, i) => (i === index ? { ...x, state: 'discarded' } : x)), note: `（用户撤销了上一轮应用的改动：${t.changes.map(c => c.label).join(listSeparator())}。现在是改之前的样子。）` });
             app.toast(i18n('Undone'));
             app.reload();
         } catch (err) {

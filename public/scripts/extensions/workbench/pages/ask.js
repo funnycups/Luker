@@ -222,41 +222,54 @@ export function createAskPage(app) {
     async function send() {
         const question = input.value.trim();
         if (!question || busy) return;
-        const s = app.settings();
-        let overview;
-        const filter = { inspector: s.ask.sources.inspector !== false, redactText: s.ask.redact };
-        try { overview = await app.source.askOverview(filter); } catch (err) { overview = finishOverview({ 错误: String(err?.message || err) }, filter); }
-        if (s.ask.previewBeforeSend && !globalThis.confirm(i18nFormat('To be sent to the AI:\n\nQuestion: ${0}\n\nOverview:\n${1}\n\nThe AI will then read data as needed. Continue?', question, JSON.stringify(overview, null, 1).slice(0, 1500)))) return;
-        if (!session) session = store.create({ kind: 'ask', title: titleFrom(question) });
-        session = store.update(session.id, { turns: [...session.turns, { role: 'user', text: question, at: Date.now() }] });
-        input.value = '';
-        grow();
         busy = true;
-        steps = [];
-        abort = new AbortController();
-        paintBody();
-        const history = session.turns.slice(0, -1).slice(-6).map(t => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.role === 'user' ? t.text : t.answer || '' }));
-        let turn;
+        let controller = null;
         try {
-            const result = await runAsk({
-                question,
-                overview,
-                history,
-                sources: s.ask.sources,
-                signal: abort.signal,
-                readers: app.source.askReaders({ redactText: s.ask.redact, suggestions: () => app.suggestions() }),
-                request: (messages, tools) => app.source.aiRequest('ask', { messages, tools, signal: abort.signal }),
-                onStep: (step) => { steps.push(step); paintBody(); },
-            });
-            turn = { role: 'ai', ...result, at: Date.now() };
-        } catch (err) {
-            turn = { role: 'ai', answer: '', error: abort.signal.aborted ? i18n('Stopped.') : i18nFormat('Could not ask: ${0}', err?.message || err), reads: steps, at: Date.now() };
+            const s = app.settings();
+            let overview;
+            const filter = { inspector: s.ask.sources.inspector !== false, redactText: s.ask.redact };
+            try { overview = await app.source.askOverview(filter); } catch (err) { overview = finishOverview({ 错误: String(err?.message || err) }, filter); }
+            if (s.ask.previewBeforeSend && !globalThis.confirm(i18nFormat('To be sent to the AI:\n\nQuestion: ${0}\n\nOverview:\n${1}\n\nThe AI will then read data as needed. Continue?', question, JSON.stringify(overview, null, 1).slice(0, 1500)))) return;
+            // The answer belongs to this session, whichever one is open when it arrives.
+            const runId = (session || (session = store.create({ kind: 'ask', title: titleFrom(question) }))).id;
+            const started = store.get(runId);
+            const saveTo = (patch) => {
+                const updated = store.update(runId, patch);
+                if (updated && session?.id === runId) session = updated;
+                return updated;
+            };
+            saveTo({ turns: [...started.turns, { role: 'user', text: question, at: Date.now() }] });
+            input.value = '';
+            grow();
+            steps = [];
+            controller = new AbortController();
+            abort = controller;
+            paintBody();
+            const history = started.turns.slice(-6).map(t => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.role === 'user' ? t.text : t.answer || '' }));
+            let turn;
+            try {
+                const result = await runAsk({
+                    question,
+                    overview,
+                    history,
+                    sources: s.ask.sources,
+                    signal: controller.signal,
+                    readers: app.source.askReaders({ redactText: s.ask.redact, suggestions: () => app.suggestions() }),
+                    request: (messages, tools) => app.source.aiRequest('ask', { messages, tools, signal: controller.signal }),
+                    onStep: (step) => { steps.push(step); paintBody(); },
+                });
+                turn = { role: 'ai', ...result, at: Date.now() };
+            } catch (err) {
+                turn = { role: 'ai', answer: '', error: controller.signal.aborted ? i18n('Stopped.') : i18nFormat('Could not ask: ${0}', err?.message || err), reads: steps, at: Date.now() };
+            }
+            const finished = store.get(runId);
+            if (finished) saveTo({ turns: [...finished.turns, turn] });
+        } finally {
+            busy = false;
+            abort = null;
+            paintHead();
+            paintBody();
         }
-        busy = false;
-        abort = null;
-        session = store.update(session.id, { turns: [...session.turns, turn] });
-        paintHead();
-        paintBody();
     }
 
     return {
