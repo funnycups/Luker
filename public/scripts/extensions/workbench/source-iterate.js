@@ -10,7 +10,8 @@
 //   runEdit(call, live)    → next live
 //   units(live)            → Map of units for the change list (model/adapters.js)
 //   rebuild(base, ai, keys) → live with accepted keys applied
-//   commit(target, base, next, keys) → { undo() } writes to Luker
+//   commit(target, base, next, keys) → { applied, skipped, failure, undo() } writes
+//                          field changes to the target fixed by load (model/patch.js)
 // `ext` names the Luker extension an adapter depends on; while the user has it
 // disabled the adapter reports itself unavailable and none of its modules load.
 
@@ -18,12 +19,16 @@ import { i18n, i18nFormat, listSeparator } from './i18n.js';
 import { LEGACY_SCHEMA_ITER_SYSTEM_PROMPT } from '../memory-graph/config-iteration/prompt-migration.js';
 import { CONTROL_TOOL_NAMES, buildToolCatalog as buildMemoryToolCatalog, normalizeToolCallToEdit as normalizeMemoryToolCall, projectNodeTypeForRead } from '../memory-graph/config-iteration/tools.js';
 import { readFieldsByPaths } from '../../iteration-library/read-fields-helper.js';
+import { readWorldInfoDocument } from '../../named-resource-read.js';
+import { worldInfoCache } from '../../world-info.js';
 import { getContext, currentCharacter, boundBooks, SourceError } from './source-luker.js';
-import { ceaHelperSource, commitCardAndBooks, orchCharacterRecord, writeCharacterProfile } from './model/commit.js';
-import { memoryUnits, memoryRebuild, orchUnits, orchRebuild, presetUnits, presetRebuild, cardUnits, cardRebuild, cardEditsFor, worldUnits, worldRebuild } from './model/adapters.js';
+import { bookForWrite, ceaHelperSource, commitCardAndBooks, orchCharacterRecord, writeCharacterProfile } from './model/commit.js';
+import { applyMemoryOps, applyOrchOps, applyPresetOps, memoryUnits, memoryRebuild, orchUnits, orchRebuild, presetUnits, presetRebuild, cardUnits, cardRebuild, cardEditsFor, worldUnits, worldRebuild } from './model/adapters.js';
+import { commitFields, fieldPlan, same, saveSettingsChecked } from './model/patch.js';
 import { listAgents, agentFields, getField, setField, replaceInField, validateField, fieldLabel, EditError } from '../orchestrator/lens/model/edit.js';
 
 const memoryMain = () => import('../memory-graph/main.js');
+const memoryOverrides = () => import('../memory-graph/character-overrides.js');
 const orchDefaults = () => import('../orchestrator/defaults.js');
 const orchEditorState = () => import('../orchestrator/editor-state.js');
 const cpaTools = () => import('../completion-preset-assistant/cpa-iteration/tools.js');
@@ -78,7 +83,7 @@ const memory = {
             schema = settings.nodeTypeSchema;
         }
         const live = clone(main.normalizeNodeTypeSchema(schema));
-        return { live, target: { scope, avatar: info?.avatar || '', hadOverride: Boolean(info?.hasOverride) }, title: scope === 'character' ? i18nFormat('Memory structure for "${0}" only${1}', info.characterName, info.hasOverride ? '' : i18n(' (none yet; created on save)')) : i18n('Memory structure shared by all characters') };
+        return { live, target: { scope, avatar: scope === 'character' ? info?.avatar || '' : '' }, title: scope === 'character' ? i18nFormat('Memory structure for "${0}" only${1}', info.characterName, info.hasOverride ? '' : i18n(' (none yet; created on save)')) : i18n('Memory structure shared by all characters') };
     },
     async prompt() {
         // The configuration workbench prompt documents settings tools this
@@ -101,27 +106,45 @@ const memory = {
     },
     units: (live) => memoryUnits(live),
     rebuild: (base, ai, keys) => memoryRebuild(base, ai, keys),
-    async commit(target, base, next) {
-        const ctx = getContext();
-        const mg = ctx.getExtensionApi('memory-graph');
+    async commit(target, base, next, keys) {
+        const mg = getContext().getExtensionApi('memory-graph');
         const main = await memoryMain();
         const settings = main.getSettings();
-        const normalized = main.normalizeNodeTypeSchema(next);
+        const ops = fieldPlan(memoryUnits(base), memoryUnits(next), keys);
+        const io = { units: memoryUnits, apply: applyMemoryOps };
         if (target.scope === 'character') {
-            const before = mg.getSchemaScopeInfo(ctx, settings);
-            const ok = await mg.persistCharacterSchemaOverride(ctx, target.avatar, normalized);
-            if (!ok) throw new SourceError('write-failed', i18n('Failed to write to the character card'));
-            return {
-                async undo() {
-                    if (before.hasOverride) await mg.persistCharacterSchemaOverride(ctx, target.avatar, before.schema);
-                    else await mg.removeCharacterSchemaOverride(ctx, target.avatar);
+            const overrides = await memoryOverrides();
+            const avatar = target.avatar;
+            const hadOverride = Boolean(overrides.getCharacterSchemaOverrideByAvatar(getContext(), avatar));
+            let pristine = null;
+            return commitFields({
+                ...io,
+                read() {
+                    const ctx = getContext();
+                    if (!(ctx.characters || []).some(c => c?.avatar === avatar)) throw new SourceError('target-gone', i18n('The character card this change was made to no longer exists'));
+                    const schema = clone(overrides.getCharacterSchemaOverrideByAvatar(ctx, avatar)) ?? clone(main.normalizeNodeTypeSchema(settings.nodeTypeSchema));
+                    pristine ??= clone(schema);
+                    return schema;
                 },
-            };
+                async write(schema, { undoing }) {
+                    const ctx = getContext();
+                    // Undoing the write that created the override removes it again.
+                    const ok = undoing && !hadOverride && same(schema, pristine)
+                        ? await mg.removeCharacterSchemaOverride(ctx, avatar)
+                        : await mg.persistCharacterSchemaOverride(ctx, avatar, main.normalizeNodeTypeSchema(schema));
+                    if (!ok) throw new SourceError('write-failed', i18n('Failed to write to the character card'));
+                },
+            }, ops);
         }
-        const previous = clone(settings.nodeTypeSchema);
-        settings.nodeTypeSchema = normalized;
-        await ctx.saveSettings();
-        return { async undo() { settings.nodeTypeSchema = previous; await ctx.saveSettings(); } };
+        return commitFields({
+            ...io,
+            read: () => clone(main.normalizeNodeTypeSchema(settings.nodeTypeSchema)),
+            async write(schema) {
+                const previous = settings.nodeTypeSchema;
+                settings.nodeTypeSchema = main.normalizeNodeTypeSchema(schema);
+                try { await saveSettingsChecked(getContext()); } catch (err) { settings.nodeTypeSchema = previous; throw err; }
+            },
+        }, ops);
     },
 };
 
@@ -191,7 +214,7 @@ function resolveOrch(ctx, scope) {
 function resolveOrchTarget(ctx, target) {
     const settings = ctx.extensionSettings?.orchestrator;
     if (!settings) throw new SourceError('no-extension', i18n('Orchestrator not found'));
-    if (target.mode === 'single') return { settings };
+    if (target.mode === 'single') return { settings, profile: { spec: { stages: [{ id: 'single', mode: 'serial', nodes: ['single_agent'] }] }, presets: { single_agent: { systemPrompt: settings.singleAgentSystemPrompt, userPromptTemplate: settings.singleAgentUserPromptTemplate } } } };
     const gone = () => new SourceError('target-gone', i18n('The orchestration profile this change was made to no longer exists'));
     if (target.scope === 'character') {
         const record = orchCharacterRecord(ctx.characters, target);
@@ -242,39 +265,37 @@ const orch = {
     },
     units: (live) => orchUnits(live, agentName),
     rebuild: (base, ai, keys) => orchRebuild(base, ai, keys),
-    async commit(target, base, next) {
-        const ctx = getContext();
-        const character = target.scope === 'character';
-        const fresh = character ? resolveOrchTarget(ctx, target) : resolveOrch(ctx, target.scope);
-        if (!character && (fresh.mode !== target.mode || fresh.presetId !== target.presetId)) throw new SourceError('target-gone', i18n('The orchestration profile was switched elsewhere; reopen this chat'));
-        const previous = clone(fresh.profile);
-        // Only the fields that changed, on top of what is stored now.
-        let merged = clone(fresh.profile);
-        for (const id of listAgents(next.mode, next.profile)) {
-            for (const f of agentFields(next.mode, next.profile, id)) {
-                const v = getField(next.mode, next.profile, id, f);
-                if (v !== getField(base.mode, base.profile, id, f)) merged = setField(next.mode, merged, id, f, v);
-            }
-        }
-        await writeOrch(ctx, target, fresh, merged);
-        return { undo: () => writeOrch(getContext(), target, resolveOrchTarget(getContext(), target), previous) };
+    async commit(target, base, next, keys) {
+        return commitFields({
+            read: () => ({ mode: target.mode, profile: resolveOrchTarget(getContext(), target).profile }),
+            units: (live) => orchUnits(live, agentName),
+            apply: applyOrchOps,
+            write: (live) => writeOrch(getContext(), target, live.profile),
+        }, fieldPlan(orchUnits(base, agentName), orchUnits(next, agentName), keys));
     },
 };
 
-async function writeOrch(ctx, target, fresh, profile) {
+async function writeOrch(ctx, target, profile) {
+    const fresh = resolveOrchTarget(ctx, target);
     const s = fresh.settings;
-    if (target.mode === 'single') {
-        const sa = profile?.presets?.single_agent || {};
-        s.singleAgentSystemPrompt = String(sa.systemPrompt || '');
-        s.singleAgentUserPromptTemplate = String(sa.userPromptTemplate || '');
-    } else if (target.scope === 'global') {
-        const lib = s.presetLibraries[target.mode];
-        lib[target.presetId] = { ...profile, name: lib[target.presetId]?.name };
-    } else {
+    if (target.scope === 'character' && target.mode !== 'single') {
         await writeCharacterProfile(ctx, target, fresh.index, profile);
         return;
     }
-    await ctx.saveSettings();
+    let restore;
+    if (target.mode === 'single') {
+        const sa = profile?.presets?.single_agent || {};
+        const previous = [s.singleAgentSystemPrompt, s.singleAgentUserPromptTemplate];
+        restore = () => { [s.singleAgentSystemPrompt, s.singleAgentUserPromptTemplate] = previous; };
+        s.singleAgentSystemPrompt = String(sa.systemPrompt || '');
+        s.singleAgentUserPromptTemplate = String(sa.userPromptTemplate || '');
+    } else {
+        const lib = s.presetLibraries[target.mode];
+        const previous = lib[target.presetId];
+        restore = () => { lib[target.presetId] = previous; };
+        lib[target.presetId] = { ...profile, name: previous?.name };
+    }
+    try { await saveSettingsChecked(ctx); } catch (err) { restore(); throw err; }
     // Native editor caches drafts; make it reload from settings.
     try { (await orchEditorState()).initializeUiState(ctx); } catch { /* panel not built yet */ }
 }
@@ -323,26 +344,52 @@ const preset = {
     units: (live) => presetUnits(live),
     rebuild: (base, ai, keys) => presetRebuild(base, ai, keys),
     async commit(target, base, next, keys) {
-        const ctx = getContext();
-        const previous = clone(ctx.presets.getStored(target.ref)?.body);
-        if (!previous) throw new SourceError('no-preset', i18nFormat('Preset "${0}" is unreadable', target.ref?.name || ''));
-        // Only approved units, on top of what is stored now (connection fields included).
-        const body = presetRebuild(previous, next, keys);
-        const res = await ctx.presets.save(target.ref, body, { select: true });
-        if (res?.ok === false) throw new SourceError('write-failed', i18n('Failed to save the preset'));
-        return {
-            async undo() {
-                const c = getContext();
-                const now = c.presets.getStored(target.ref)?.body;
-                if (now) await c.presets.save(target.ref, presetRebuild(clone(now), previous, keys), { select: true });
+        return commitFields({
+            read() {
+                const body = clone(getContext().presets.getStored(target.ref)?.body);
+                if (!body) throw new SourceError('no-preset', i18nFormat('Preset "${0}" is unreadable', target.ref?.name || ''));
+                return body;
             },
-        };
+            units: presetUnits,
+            apply: applyPresetOps,
+            async write(body) {
+                // No `select`: saving keeps whichever preset is selected now.
+                const res = await getContext().presets.save(target.ref, body);
+                if (res?.ok !== true) throw new SourceError('write-failed', i18n('Failed to save the preset'));
+            },
+        }, fieldPlan(presetUnits(base), presetUnits(next), keys));
     },
 };
 
 // ---------------------------------------------------------------------------
 // character card + world book (character-editor-assistant tools and saving)
 // ---------------------------------------------------------------------------
+
+/** The book as stored on the server, past Luker's cache; throws if it is gone or unreadable. */
+async function readPersistedBook(name) {
+    try {
+        return clone(await readWorldInfoDocument(name));
+    } catch (err) {
+        if (err?.status === 404) throw new SourceError('target-gone', i18nFormat('World book "${0}" no longer exists', name));
+        throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', name));
+    }
+}
+
+const worldBookIo = {
+    readBook: async (book, uids) => {
+        const persisted = await readPersistedBook(book);
+        return bookForWrite(persisted, clone(await getContext().loadWorldInfo(book)), uids, book);
+    },
+    async saveBook(book, data) {
+        try {
+            await getContext().saveWorldInfo(book, data, true, { refreshEditor: true });
+        } catch (err) {
+            // Luker caches the book before the request; a retry must not read that copy.
+            worldInfoCache.delete(String(book).trim());
+            throw err;
+        }
+    },
+};
 
 const card = {
     name: i18n('Character card'),
@@ -402,15 +449,12 @@ const card = {
     rebuild: (base, ai, keys) => cardRebuild(base, ai, keys),
     async commit(target, base, next, keys) {
         const main = await ceaMain();
-        const settings = getContext().extensionSettings?.character_editor_assistant || {};
         return commitCardAndBooks(cardEditsFor(base, next, keys), {
             commitCard(edits) {
                 const ctx = getContext();
                 return main.commitCharacterEditorOperations(ctx, target.avatar, edits, { liveCharacter: (ctx.characters || []).find(c => c?.avatar === target.avatar) });
             },
-            readBook: async (book) => clone(await getContext().loadWorldInfo(book)),
-            commitBook: (book, before, edits) => main.commitLorebookOperations(book, before, edits, { context: getContext(), settings }),
-            saveBook: (book, data) => getContext().saveWorldInfo(book, data, true, { refreshEditor: true }),
+            ...worldBookIo,
         });
     },
 };

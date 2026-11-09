@@ -43,7 +43,7 @@ test('lenientJson keeps valid JSON and escapes', () => {
 test('world units only cover lorebook entries', () => {
     const base = { lorebooks: { 雾港: { entries: { 1: { uid: 1, key: ['码头'], content: '旧' } } } } };
     const ai = { lorebooks: { 雾港: { entries: { 1: { uid: 1, key: ['码头'], content: '新' }, 2: { uid: 2, key: ['灯塔'], content: '加' } } } } };
-    assert.deepEqual([...worldUnits(ai).keys()], ['wi:雾港:1', 'wi:雾港:2']);
+    assert.deepEqual([...worldUnits(ai).keys()], ['wi:雾港:1', 'wi:雾港:2', 'wi:雾港:__meta']);
     const next = worldRebuild(base, ai, ['wi:雾港:2', 'card:name']);
     assert.equal(next.lorebooks.雾港.entries[1].content, '旧');
     assert.equal(next.lorebooks.雾港.entries[2].content, '加');

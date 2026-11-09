@@ -8,22 +8,38 @@
 // accepted units. Pure: no DOM.
 
 import { i18nFormat } from '../i18n.js';
+import { differingFields } from './patch.js';
 
 /**
- * @typedef {{ key: string, label: string, group?: string, text: string, raw: any }} Unit
- * @typedef {{ key: string, kind: 'add'|'remove'|'change', label: string, group: string, before: string, after: string }} Change
+ * @typedef {{ key: string, label: string, group?: string, text: string, raw?: any, fields?: object, hidden?: object }} Unit
+ * @typedef {{ key: string, kind: 'add'|'remove'|'change', label: string, group: string, before: string, after: string, sig: string }} Change
  */
+
+const hash = (text) => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+    return (h >>> 0).toString(36);
+};
+
+// Field changes the unit's text cannot show are listed under it, so nothing
+// is written that the user did not see.
+const withHidden = (text, hidden, names) => [text, ...names.map(name => `· ${name}: ${JSON.stringify(hidden?.[name] ?? null)}`)].filter(Boolean).join('\n');
+
+function change(kind, unit, group, before, after) {
+    return { key: unit.key, kind, label: unit.label, group, before, after, sig: hash(`${kind}\0${before}\0${after}`) };
+}
 
 /** @param {Map<string, Unit>} before  @param {Map<string, Unit>} after */
 export function diffUnits(before, after) {
     const out = [];
     for (const [key, unit] of after) {
         const prev = before.get(key);
-        if (!prev) out.push({ key, kind: 'add', label: unit.label, group: unit.group || '', before: '', after: unit.text });
-        else if (prev.text !== unit.text) out.push({ key, kind: 'change', label: unit.label, group: unit.group || prev.group || '', before: prev.text, after: unit.text });
+        if (!prev) { out.push(change('add', unit, unit.group || '', '', unit.text)); continue; }
+        const names = differingFields(prev.hidden, unit.hidden);
+        if (prev.text !== unit.text || names.length) out.push(change('change', unit, unit.group || prev.group || '', withHidden(prev.text, prev.hidden, names), withHidden(unit.text, unit.hidden, names)));
     }
     for (const [key, unit] of before) {
-        if (!after.has(key)) out.push({ key, kind: 'remove', label: unit.label, group: unit.group || '', before: unit.text, after: '' });
+        if (!after.has(key)) out.push(change('remove', unit, unit.group || '', unit.text, ''));
     }
     return out;
 }
@@ -76,29 +92,14 @@ export function inlineMarks(a, b) {
     return { prefix: p, suffix: q };
 }
 
-/**
- * Which keys to take from `ai` when building the result: accepted ones.
- * Returns a units map = base with accepted changes applied.
- */
-export function pickUnits(base, ai, acceptedKeys) {
-    const keys = new Set(acceptedKeys);
-    const out = new Map();
-    // Keep base order, then appended new units in AI order.
-    for (const [key, unit] of base) {
-        if (!keys.has(key)) out.set(key, unit);
-        else if (ai.has(key)) out.set(key, ai.get(key));
-        // accepted removal: drop
-    }
-    for (const [key, unit] of ai) if (keys.has(key) && !base.has(key)) out.set(key, unit);
-    return out;
-}
-
 /** Whether the draft still produces exactly what the user approved for these keys. */
 export function approvalMatches(shown, current, keys) {
     const now = new Map(current.map(c => [c.key, c]));
     return (shown || []).filter(c => keys.includes(c.key)).every((c) => {
         const cur = now.get(c.key);
-        return cur && cur.kind === c.kind && cur.before === c.before && cur.after === c.after;
+        if (!cur || cur.kind !== c.kind) return false;
+        // Stored changes may be shortened to fit the session cap; the signature covers the full text.
+        return c.sig && cur.sig ? c.sig === cur.sig : cur.before === c.before && cur.after === c.after;
     });
 }
 

@@ -45,11 +45,11 @@ test('card: field + lorebook edits as iteration-library ops', () => {
     const ai = { character: { description: '克制' }, lorebooks: { 雾港: { entries: { 1: { uid: 1, key: ['港口'], content: '新' }, 3: { uid: 3, key: ['码头'], content: 'y' } } } } };
     const keys = diffUnits(cardUnits(base), cardUnits(ai)).map(c => c.key).sort();
     assert.deepEqual(keys, ['card:description', 'wi:雾港:1', 'wi:雾港:2', 'wi:雾港:3']);
-    const { cardEdits, bookEdits } = cardEditsFor(base, ai, keys);
+    const { cardEdits, bookOps } = cardEditsFor(base, ai, keys);
     assert.deepEqual(cardEdits, [{ op: 'set', path: 'description', oldValue: '温柔', newValue: '克制' }]);
-    assert.deepEqual(bookEdits.雾港.map(e => e.op).sort(), ['lorebook_entry_add', 'lorebook_entry_remove', 'lorebook_entry_update']);
-    const upd = bookEdits.雾港.find(e => e.op === 'lorebook_entry_update');
-    assert.deepEqual(upd.patch, { content: '新' });
+    assert.deepEqual(bookOps.雾港.map(e => e.kind).sort(), ['add', 'change', 'remove']);
+    const upd = bookOps.雾港.find(e => e.kind === 'change');
+    assert.deepEqual(upd.changes, [{ field: 'content', before: '旧', after: '新' }]);
     const rebuilt = cardRebuild(base, ai, ['wi:雾港:2']);
     assert.ok(!rebuilt.lorebooks.雾港.entries[2]);
     assert.equal(rebuilt.character.description, '温柔');
@@ -110,15 +110,16 @@ test('helpers', () => {
     assert.ok(trimmed.length < msgs.length);
 });
 
-test('memory: summary instruction shows in the diff and hidden fields stay put', () => {
+test('memory: a change in a hidden field is listed and written', () => {
     const before = [{ id: 'event', label: '事件', tableColumns: ['summary'], keywords: ['旧'], compression: { mode: 'hierarchical', threshold: 9, summarizeInstruction: '旧指令' } }];
-    const ai = [{ ...before[0], label: '大事', keywords: ['新'], compression: { mode: 'hierarchical', threshold: 2, summarizeInstruction: '新指令' } }];
-    assert.equal(diffUnits(memoryUnits(before), memoryUnits([{ ...before[0], compression: ai[0].compression }])).length, 1);
+    const ai = [{ ...before[0], keywords: ['新'], compression: { mode: 'hierarchical', threshold: 2, summarizeInstruction: '新指令' } }];
+    const [change] = diffUnits(memoryUnits(before), memoryUnits(ai));
+    assert.match(change.after, /keywords/);
+    assert.match(change.after, /compression\.threshold: 2/);
     const [next] = memoryRebuild(before, ai, ['event']);
-    assert.equal(next.label, '大事');
     assert.equal(next.compression.summarizeInstruction, '新指令');
-    assert.equal(next.compression.threshold, 9);
-    assert.deepEqual(next.keywords, ['旧']);
+    assert.equal(next.compression.threshold, 2);
+    assert.deepEqual(next.keywords, ['新']);
 });
 
 test('preset: approved units land on freshly read data', () => {

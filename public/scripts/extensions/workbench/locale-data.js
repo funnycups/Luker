@@ -3,6 +3,15 @@
 // Locale tables for the workbench. Keys are the English source strings.
 
 const ZH_CN = {
+    'The saved data could not be read, so nothing was changed': '读不到已保存的内容，没有做任何修改',
+    'Could not read "${0}", so nothing was changed': '读不到「${0}」，没有做任何修改',
+    '"${0}" reads as empty but had entries before, so nothing was written': '「${0}」读出来是空的，但之前有条目，没有写入',
+    '"${0}" has unsaved edits in the world info panel. Wait for them to save, then try again.': '「${0}」在世界书面板里还有没保存的修改，等保存好再试',
+    'World book "${0}" no longer exists': '世界书「${0}」已经不存在了',
+    'Failed to save the settings': '设置保存失败',
+    'The character card this change was made to no longer exists': '这次改动对应的角色卡已经不存在了',
+    'World book settings': '世界书设置',
+    'This chat was editing something else (${0}). Start a new conversation to edit the current selection.': '这段对话改的是别的内容（${0}）。要改现在选中的，请新建对话',
     'Switched on': '开启',
     'Off': '关闭',
     'Select "${0}"': '选择「${0}」',
@@ -464,6 +473,15 @@ const ZH_CN = {
 };
 
 const ZH_TW = {
+    'The saved data could not be read, so nothing was changed': '讀不到已儲存的內容，沒有做任何修改',
+    'Could not read "${0}", so nothing was changed': '讀不到「${0}」，沒有做任何修改',
+    '"${0}" reads as empty but had entries before, so nothing was written': '「${0}」讀出來是空的，但之前有條目，沒有寫入',
+    '"${0}" has unsaved edits in the world info panel. Wait for them to save, then try again.': '「${0}」在世界書面板裡還有沒儲存的修改，等儲存好再試',
+    'World book "${0}" no longer exists': '世界書「${0}」已經不存在了',
+    'Failed to save the settings': '設定儲存失敗',
+    'The character card this change was made to no longer exists': '這次改動對應的角色卡已經不存在了',
+    'World book settings': '世界書設定',
+    'This chat was editing something else (${0}). Start a new conversation to edit the current selection.': '這段對話改的是別的內容（${0}）。要改現在選取的，請新建對話',
     'Switched on': '開啟',
     'Off': '關閉',
     'Select "${0}"': '選擇「${0}」',

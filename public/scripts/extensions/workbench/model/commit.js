@@ -1,111 +1,110 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Save and undo rules for AI iteration that do not need Luker itself: what a
-// partly saved batch reports, how world book entries are reverted, and which
+// partly saved batch reports, how world books are read for writing, and which
 // stored orchestration profile a change belongs to. Luker's functions are
 // passed in.
 
 import { i18n, i18nFormat } from '../i18n.js';
+import { BOOK_META, applyBookOps, bookUnits } from './adapters.js';
 import { SourceError } from './errors.js';
+import { clone, conflictsLeftAlone, requireApplied, same, writeFields } from './patch.js';
 
-const canon = (value) => JSON.stringify(value ?? null, (_, v) => (v && typeof v === 'object' && !Array.isArray(v)
-    ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-    : v));
-const same = (a, b) => canon(a) === canon(b);
-const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
+const parseBookKey = (key) => key.match(/^wi:(.*):([^:]+)$/)?.[2];
 
-/** The entry a world book edit leaves behind; null when it removes the entry. */
-export function entryAfterEdit(before, edit) {
-    if (edit.op === 'lorebook_entry_add') return clone(edit.entry);
-    if (edit.op === 'lorebook_entry_remove') return null;
-    return clone({ ...(before || {}), ...edit.patch });
+/** Throws unless a book read back as a real book with entries to work on. */
+function requireBook(book, name, count) {
+    if (!book || typeof book.entries !== 'object' || book.entries === null) throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', name));
+    if (count > 0 && !Object.keys(book.entries).length) throw new SourceError('book-empty', i18nFormat('"${0}" reads as empty but had entries before, so nothing was written', name));
+    return book;
 }
 
 /**
- * Puts back only the entries in `records` ({ uid, before, after }). An entry
- * that no longer matches what the edit wrote was changed since, so it stays.
- * @returns {{ book: object, changed: number, conflicts: Array<string|number> }}
+ * A book to write to. Luker's cache can hold unsaved or failed writes, so
+ * every touched entry is compared with the copy on the server; untouched
+ * entries keep the cached version, which a pending save would write anyway.
  */
-export function revertBookEntries(current, records) {
-    const book = clone(current) || { entries: {} };
-    book.entries ||= {};
-    let changed = 0;
-    const conflicts = [];
-    for (const { uid, before, after } of records) {
-        const now = book.entries[uid] ?? null;
-        if (same(now, before)) continue;
-        if (!same(now, after)) { conflicts.push(uid); continue; }
-        if (before === null) delete book.entries[uid];
-        else book.entries[uid] = clone(before);
-        changed++;
+export function bookForWrite(persisted, cached, uids, name) {
+    if (!persisted) return persisted;
+    if (!cached?.entries) return persisted;
+    for (const uid of uids) {
+        if (uid !== BOOK_META && !same(persisted.entries?.[uid], cached.entries?.[uid])) throw new SourceError('unsaved', i18nFormat('"${0}" has unsaved edits in the world info panel. Wait for them to save, then try again.', name));
     }
-    return { book, changed, conflicts };
+    return cached;
+}
+
+async function commitBook(name, ops, baseCount, io) {
+    const uids = ops.map(op => parseBookKey(op.key));
+    let lastCount = 0;
+    let requiredCount = baseCount;
+    const result = await writeFields({
+        async read() {
+            const book = requireBook(await io.readBook(name, uids), name, requiredCount);
+            lastCount = Object.keys(book.entries).length;
+            return book;
+        },
+        units: (book) => bookUnits(name, book),
+        apply: applyBookOps,
+        write: (next) => io.saveBook(name, next),
+    }, ops);
+    // What undo may expect to find: entries this record did not touch.
+    const touched = result.written.filter(op => op.kind !== 'add' && parseBookKey(op.key) !== BOOK_META).length;
+    requiredCount = Math.max(0, lastCount - touched) + result.written.filter(op => op.kind === 'change' && parseBookKey(op.key) !== BOOK_META).length;
+    return result;
 }
 
 /**
- * Saves card edits, then each book's edits. Luker saves the edits that do not
- * conflict and reports the rest, so the outcome is tracked per edit.
- * @param {{ cardEdits: object[], bookEdits: Record<string, object[]>, keyOf: Map<object, string> }} batch
- * @param {{ commitCard, readBook, commitBook, saveBook }} io
+ * Saves card edits, then each book's field changes. The outcome is tracked
+ * per unit, and only writes that reached storage count as applied.
+ * @param {{ cardEdits: object[], bookOps: Record<string, object[]>, baseCounts: Record<string, number>, keyOf: Map<object, string> }} batch
+ * @param {{ commitCard, readBook, saveBook }} io
  * @returns {Promise<{ applied: string[], skipped: { key: string, reason: string }[], failure: string, undo: () => Promise<void> }>}
  */
-export async function commitCardAndBooks({ cardEdits, bookEdits, keyOf }, io) {
+export async function commitCardAndBooks({ cardEdits, bookOps, baseCounts = {}, keyOf }, io) {
     const applied = [];
     const skipped = [];
     const steps = [];
     let failure = null;
-    const skip = (edits, reason) => { for (const e of edits) skipped.push({ key: keyOf.get(e), reason }); };
-    /** Sorts a batch by outcome; returns the edits that really changed saved data. */
-    const settle = (edits, res) => {
-        const conflicts = new Map((res?.conflicts || []).map(c => [c.edit, c.reason]));
-        const done = new Set(res?.alreadyDone || []);
-        const written = [];
-        for (const e of edits) {
-            if (conflicts.has(e)) { skipped.push({ key: keyOf.get(e), reason: conflicts.get(e) }); continue; }
-            applied.push(keyOf.get(e));
-            if (res?.persisted && !done.has(e)) written.push(e);
-        }
-        return written;
-    };
 
     if (cardEdits.length) {
         try {
-            const written = settle(cardEdits, await io.commitCard(cardEdits));
+            const res = await io.commitCard(cardEdits);
+            const conflicts = new Map((res?.conflicts || []).map(c => [c.edit, c.reason]));
+            const done = new Set(res?.alreadyDone || []);
+            const written = [];
+            for (const e of cardEdits) {
+                if (conflicts.has(e)) skipped.push({ key: keyOf.get(e), reason: conflicts.get(e) });
+                // Luker's character list can hold a failed write, so "already
+                // there" does not prove the value was saved.
+                else if (!res?.persisted || done.has(e)) skipped.push({ key: keyOf.get(e), reason: 'not-saved' });
+                else { applied.push(keyOf.get(e)); written.push(e); }
+            }
             if (written.length) {
                 const inverse = written.map(e => ({ op: 'set', path: e.path, oldValue: e.newValue, newValue: e.oldValue }));
                 steps.push(async () => (await io.commitCard(inverse))?.conflicts?.length || 0);
             }
         } catch (err) {
             failure = err;
-            skip(cardEdits, 'failed');
+            for (const e of cardEdits) skipped.push({ key: keyOf.get(e), reason: 'failed' });
         }
     }
-    for (const [book, edits] of Object.entries(bookEdits)) {
-        if (!edits.length) continue;
-        if (failure) { skip(edits, 'failed'); continue; }
+    for (const [book, ops] of Object.entries(bookOps)) {
+        if (!ops.length) continue;
+        if (failure) { for (const op of ops) skipped.push({ key: op.key, reason: 'failed' }); continue; }
         try {
-            const before = await io.readBook(book);
-            const written = settle(edits, await io.commitBook(book, before, edits));
-            if (written.length) {
-                const records = written.map((e) => {
-                    const prior = before?.entries?.[e.uid] ?? null;
-                    return { uid: e.uid, before: clone(prior), after: entryAfterEdit(prior, e) };
-                });
-                steps.push(async () => {
-                    const result = revertBookEntries(await io.readBook(book), records);
-                    if (result.changed) await io.saveBook(book, result.book);
-                    return result.conflicts.length;
-                });
-            }
+            const result = await commitBook(book, ops, baseCounts[book] || 0, io);
+            applied.push(...result.applied);
+            skipped.push(...result.skipped);
+            if (result.written.length) steps.push(() => result.revert());
         } catch (err) {
             failure = err;
-            skip(edits, 'failed');
+            for (const op of ops) skipped.push({ key: op.key, reason: 'failed' });
         }
     }
 
     if (!applied.length) {
         if (failure) throw failure;
-        if (skipped.length) throw new SourceError('conflict', i18nFormat('${0} changes conflict with edits made elsewhere, so nothing was saved. Reopen the chat.', skipped.length));
+        requireApplied({ applied, skipped });
     }
     return {
         applied,
@@ -118,7 +117,7 @@ export async function commitCardAndBooks({ cardEdits, bookEdits, keyOf }, io) {
                 try { conflicts += await step(); } catch (err) { error ||= err; }
             }
             if (error) throw error;
-            if (conflicts) throw new SourceError('conflict', i18nFormat('${0} places were changed after this edit and were left alone; everything else was undone.', conflicts));
+            if (conflicts) throw conflictsLeftAlone(conflicts);
         },
     };
 }
