@@ -1,6 +1,6 @@
 import './_mocks/luker-zh.js';
 import { test, expect } from '@jest/globals';
-import { editRule, toEditText, fromEditText, isChanged, hasParagraphs } from '../../../public/scripts/extensions/memory-graph/lens/edit/edit-model.js';
+import { editRule, toEditText, fromEditText, isChanged, hasParagraphs, commitSkipMessage } from '../../../public/scripts/extensions/memory-graph/lens/edit/edit-model.js';
 
 test('editRule blocks rollups, archived nodes and event titles', () => {
     expect(editRule({ type: 'character_sheet' }, 'identity').ok).toBe(true);
@@ -33,4 +33,11 @@ test('only paragraph text saves with Ctrl+Enter', () => {
     expect(hasParagraphs('summary', '短')).toBe(true);
     expect(hasParagraphs('identity', 'x'.repeat(80))).toBe(false);
     expect(hasParagraphs('note', 'a\nb')).toBe(true);
+});
+
+test('a skipped graph commit is reported, a completed one is not', () => {
+    expect(commitSkipMessage({ skipped: true, hint: '聊天已切换' })).toMatch('聊天已切换');
+    expect(commitSkipMessage({ skipped: true })).not.toBe('');
+    expect(commitSkipMessage({ skipped: false })).toBe('');
+    expect(commitSkipMessage(undefined)).toBe('');
 });

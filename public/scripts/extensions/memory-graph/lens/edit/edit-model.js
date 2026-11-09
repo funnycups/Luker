@@ -4,9 +4,14 @@
 // Values are edited as plain text; arrays round-trip through the list separator so a
 // field stored as a list stays a list.
 
-import { i18n, listSeparator } from '../i18n.js';
+import { i18n, i18nFormat, listSeparator } from '../i18n.js';
 
 const LIST_SPLIT = /[、,，\n]+/;
+
+/** Why commitGraphUiMutation did not land, or '' when it did. */
+export function commitSkipMessage(result) {
+    return result?.skipped ? i18nFormat('Memory save skipped: ${0}', result.hint || result.reason || i18n('reason unknown')) : '';
+}
 
 /**
  * Whether a field of a node may be edited here, with a Chinese reason if not.

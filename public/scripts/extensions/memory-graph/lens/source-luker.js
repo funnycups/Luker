@@ -22,6 +22,7 @@ import {
 } from '../main.js';
 import { getMemoryGraphReadApi } from '../read-api.js';
 import { getMemoryGraphWriteApi } from '../write-api.js';
+import { commitSkipMessage } from './edit/edit-model.js';
 import { i18n } from './i18n.js';
 import { readFilterSettings, writeFilterSettings, previewFloor, filterStatus } from './filter/filter-runtime.js';
 import { SUBMIT_FILTER, diagnoseSystemPrompt, diagnoseUserPrompt, readDiagnosis } from './filter/filter-ai.js';
@@ -239,7 +240,8 @@ function createEditAccess(resolveApi) {
         const api = getMemoryGraphWriteApi(working, ctx, { onCommit: null, useInFlightAnchor: false, preserveSeqOnEdit: true });
         const result = check(await api.editNode(op));
         if (result?.changed === false) return result;
-        await commitGraphUiMutation(ctx, chatKey, { beforeStore: live, afterStore: working, replaceGraph: false, seq: null });
+        const skipped = commitSkipMessage(await commitGraphUiMutation(ctx, chatKey, { beforeStore: live, afterStore: working, replaceGraph: false, seq: null }));
+        if (skipped) throw new SourceError('write-skipped', skipped);
         try { await syncGraphVectorsAfterMutation(ctx, chatKey, working); } catch (err) { console.warn('[memory-graph/lens] vector sync after edit failed', err); }
         return result;
     };
