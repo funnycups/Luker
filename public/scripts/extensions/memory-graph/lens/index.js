@@ -4,6 +4,7 @@
 // workspace UI the first time it is opened. The tag filter and the token
 // recorder start here because they work while the lens is closed.
 
+import { extensionNames } from '../../../extensions.js';
 import { registerLensSharedLocaleData } from '../../lens-shared/locale-data.js';
 import { startTagFilter } from './filter/filter-runtime.js';
 import { i18n } from './i18n.js';
@@ -11,6 +12,7 @@ import { registerLensLocaleData } from './locale-data.js';
 import { startRecorder } from './token-stats.js';
 
 const MENU_ID = 'memory_lens_wand_item';
+const THIRD_PARTY_COPY = /third-party\/memory-lens$/i;
 const getContext = () => Luker.getContext();
 
 let handle = null;
@@ -65,10 +67,20 @@ function addMenuItem() {
     menu.appendChild(item);
 }
 
+/** The former third-party copy would run the tag filter and token recorder a second time. */
+function thirdPartyCopyActive() {
+    const disabled = getContext().extensionSettings.disabledExtensions || [];
+    return extensionNames.some(name => THIRD_PARTY_COPY.test(name) && !disabled.includes(name));
+}
+
 export function initMemoryLens() {
     const { addLocaleData } = getContext();
     registerLensSharedLocaleData(addLocaleData);
     registerLensLocaleData(addLocaleData);
+    if (thirdPartyCopyActive()) {
+        console.warn('[memory-graph/lens] the third-party copy is still enabled; remove it to use the built-in one');
+        return;
+    }
     addMenuItem();
     try {
         startTagFilter(getContext);

@@ -7,6 +7,7 @@
 //   - the dock that replaces the native run panels (it can be turned off from
 //     the dock's menu; then the native panels come back)
 
+import { extensionNames } from '../../../extensions.js';
 import { createRecorder } from './model/recorder.js';
 import { buildFlow } from './model/profile.js';
 import { createLukerSource } from './source-luker.js';
@@ -17,6 +18,7 @@ import { registerLensLocaleData } from './locale-data.js';
 const MENU_ID = 'orchestra_lens_wand_item';
 const DOCK_MENU_ID = 'orchestra_lens_dock_item';
 const TAKEOVER_KEY = 'orchestraLens.takeover';
+const THIRD_PARTY_COPY = /third-party\/orchestra-lens$/i;
 const getContext = () => Luker.getContext();
 
 let handle = null;
@@ -135,9 +137,19 @@ function addMenuItems() {
     if (takeoverEnabled() && !document.getElementById(DOCK_MENU_ID)) menu.appendChild(menuItem(DOCK_MENU_ID, 'fa-list-check', i18n('Run panel'), toggleDock));
 }
 
+/** The former third-party copy would wrap the run panel and record every run a second time. */
+function thirdPartyCopyActive() {
+    const disabled = getContext().extensionSettings.disabledExtensions || [];
+    return extensionNames.some(name => THIRD_PARTY_COPY.test(name) && !disabled.includes(name));
+}
+
 export function initOrchestraLens() {
     const { addLocaleData } = getContext();
     registerLensLocaleData(addLocaleData);
+    if (thirdPartyCopyActive()) {
+        console.warn('[orchestrator/lens] the third-party copy is still enabled; remove it to use the built-in one');
+        return;
+    }
     addMenuItems();
     // Hide the native panels right away so they never flash.
     if (takeoverEnabled()) document.documentElement.classList.add('ol-takeover');
