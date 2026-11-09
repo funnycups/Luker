@@ -252,6 +252,7 @@ export const power_user = {
     luker_mobile_keep_alive_web_audio_enabled: false,
     luker_mobile_keep_alive_web_pip_enabled: false,
     luker_open_external_links_in_browser: true,
+    luker_check_beta_updates: true,
     hotswap_enabled: true,
     timer_enabled: true,
     timestamps_enabled: true,
@@ -2690,6 +2691,7 @@ export async function loadPowerUserSettings(settings, data) {
     $('#hotswapEnabled').prop('checked', power_user.hotswap_enabled);
     $('#immersiveKeepTopBar').prop('checked', power_user.immersive_mode_keep_top_bar);
     syncMobileKeepAliveUi();
+    $('#luker_check_beta_updates').prop('checked', power_user.luker_check_beta_updates !== false);
     $('#messageTimerEnabled').prop('checked', power_user.timer_enabled);
     $('#messageTimestampsEnabled').prop('checked', power_user.timestamps_enabled);
     $('#messageModelIconEnabled').prop('checked', power_user.timestamp_model_icon);
@@ -4880,6 +4882,11 @@ jQuery(() => {
         power_user.luker_open_external_links_in_browser = value;
         saveSettingsDebounced();
         pushExternalLinkPolicy(value);
+    });
+
+    $('#luker_check_beta_updates').on('change', function () {
+        power_user.luker_check_beta_updates = !!$(this).prop('checked');
+        saveSettingsDebounced();
     });
 
     $('#prefer_character_prompt').on('input', function () {

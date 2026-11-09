@@ -642,8 +642,9 @@ app.get('/version', async function (_, response) {
     response.send({ ...data, updateCheckDisabled: isUpdateCheckDisabled() });
 });
 
-app.post('/api/system/update-check', async function (_, response) {
-    const data = await checkRemoteVersion();
+app.post('/api/system/update-check', async function (request, response) {
+    const includePrerelease = request.body?.includePrerelease === true;
+    const data = await checkRemoteVersion({ includePrerelease });
     response.send(data);
 });
 

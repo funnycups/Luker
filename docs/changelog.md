@@ -2,6 +2,12 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
+## Unreleased
+
+### Client Apps
+
+- Added a **Check for pre-release updates** switch to User Settings, on by default.
+
 ## v2.9.0-rc.1 (2026-11-09)
 
 ### Server Plugins

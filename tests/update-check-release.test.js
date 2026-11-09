@@ -108,6 +108,49 @@ describe('release lookup', () => {
         });
     });
 
+    test('selects the highest semver release when pre-releases are included', async () => {
+        const repository = getGitHubRepository();
+        stub.setResponse(200, [
+            releasePayload('2.8.0'),
+            releasePayload('2.9.0-beta.2'),
+            releasePayload('2.9.0-rc.1'),
+        ]);
+
+        const release = await fetchLatestRelease({ includePrerelease: true });
+
+        const expectedPath = `/repos/${repository.owner}/${repository.repo}/releases?per_page=100`;
+        expect(stub.requests).toContain(expectedPath);
+        expect(release.tagName).toBe('2.9.0-rc.1');
+    });
+
+    test('ignores draft releases when pre-releases are included', async () => {
+        stub.setResponse(200, [
+            { ...releasePayload('2.9.0'), draft: true },
+            releasePayload('2.8.0'),
+        ]);
+
+        const release = await fetchLatestRelease({ includePrerelease: true });
+
+        expect(release.tagName).toBe('2.8.0');
+    });
+
+    test('treats an empty release list as no published release', async () => {
+        stub.setResponse(200, []);
+
+        await expect(fetchLatestRelease({ includePrerelease: true })).resolves.toBeNull();
+    });
+
+    test('checks pre-release updates when the caller includes them', async () => {
+        const remoteTag = aheadOf(pkgVersion);
+        stub.setResponse(200, [releasePayload(remoteTag)]);
+
+        await expect(checkRemoteVersion({ includePrerelease: true })).resolves.toEqual({
+            isLatest: false,
+            tagName: remoteTag,
+            htmlUrl: `https://example.invalid/releases/tag/${remoteTag}`,
+        });
+    });
+
     test('reports an available update when the remote tag is ahead of the local version', async () => {
         const remoteTag = aheadOf(pkgVersion);
         stub.setResponse(200, releasePayload(remoteTag));

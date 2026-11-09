@@ -13,15 +13,17 @@ import http from 'node:http';
 
 /**
  * @param {object} [options]
- * @param {string} [options.tag]  Release tag the lookup reports.
+ * @param {string} [options.tag]  Release tag the latest-release lookup reports.
+ * @param {string[]} [options.releases]  Tags the release-list lookup reports; defaults to [tag].
  * @param {Array<{ name: string, url: string, size?: number }>} [options.assets]
  * @param {string} [options.assetBody]  Bytes every asset download returns.
  * @param {number} [options.assetStatus]  Status for asset downloads; 200 by default.
  * @param {number} [options.releaseStatus]  Status for the release lookup; 200 by default.
- * @returns {Promise<{ baseURL: string, requests: Array<{ method: string, path: string }>, setAssetStatus: (status: number) => void, setAssets: (assets: Array<{ name: string, url: string, size?: number }>) => void, stop: () => Promise<void> }>}
+ * @returns {Promise<{ baseURL: string, requests: Array<{ method: string, path: string }>, clearRequests: () => void, setAssetStatus: (status: number) => void, setAssets: (assets: Array<{ name: string, url: string, size?: number }>) => void, stop: () => Promise<void> }>}
  */
 export async function startReleaseStub({
     tag = '9.9.9',
+    releases = [],
     assets = [],
     assetBody = '<bytes>',
     assetStatus = 200,
@@ -32,9 +34,35 @@ export async function startReleaseStub({
     let currentAssets = assets;
     let origin = '';
 
+    const releasePayload = releaseTag => ({
+        tag_name: releaseTag,
+        name: `Luker ${releaseTag}`,
+        html_url: `${origin}/releases/tag/${releaseTag}`,
+        published_at: '2026-01-01T00:00:00Z',
+        prerelease: releaseTag.includes('-'),
+        draft: false,
+        assets: currentAssets.map(asset => ({
+            name: asset.name,
+            size: asset.size ?? 0,
+            browser_download_url: /^https?:/i.test(asset.url) ? asset.url : `${origin}${asset.url}`,
+        })),
+    });
+
     const server = http.createServer((request, response) => {
         const url = new URL(request.url, 'http://127.0.0.1');
         requests.push({ method: request.method, path: url.pathname });
+
+        if (/^\/repos\/[^/]+\/[^/]+\/releases$/.test(url.pathname)) {
+            if (releaseStatus !== 200) {
+                response.writeHead(releaseStatus, { 'content-type': 'application/json' });
+                response.end(JSON.stringify({ message: 'release lookup failed' }));
+                return;
+            }
+            const releaseTags = releases.length > 0 ? releases : [tag];
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify(releaseTags.map(releasePayload)));
+            return;
+        }
 
         if (/^\/repos\/[^/]+\/[^/]+\/releases\/latest$/.test(url.pathname)) {
             if (releaseStatus !== 200) {
@@ -43,17 +71,7 @@ export async function startReleaseStub({
                 return;
             }
             response.writeHead(200, { 'content-type': 'application/json' });
-            response.end(JSON.stringify({
-                tag_name: tag,
-                name: `Luker ${tag}`,
-                html_url: `${origin}/releases/tag/${tag}`,
-                published_at: '2026-01-01T00:00:00Z',
-                assets: currentAssets.map(asset => ({
-                    name: asset.name,
-                    size: asset.size ?? 0,
-                    browser_download_url: /^https?:/i.test(asset.url) ? asset.url : `${origin}${asset.url}`,
-                })),
-            }));
+            response.end(JSON.stringify(releasePayload(tag)));
             return;
         }
 
@@ -84,6 +102,9 @@ export async function startReleaseStub({
     return {
         baseURL: origin,
         requests,
+        clearRequests() {
+            requests.length = 0;
+        },
         setAssetStatus(status) {
             currentAssetStatus = status;
         },

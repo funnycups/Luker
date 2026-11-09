@@ -284,9 +284,11 @@ router.post('/update/start', requireAdminMiddleware, async (_request, response) 
     }
 });
 
-router.post('/update/apk-latest', requireAdminMiddleware, async (_request, response) => {
+router.post('/update/apk-latest', requireAdminMiddleware, async (request, response) => {
     try {
-        const release = await fetchLatestApkReleaseInfo();
+        const release = await fetchLatestApkReleaseInfo({
+            includePrerelease: request.body?.includePrerelease === true,
+        });
         return response.json(release);
     } catch (error) {
         console.error('APK latest release fetch failed:', error);
@@ -300,7 +302,9 @@ router.post('/update/desktop-latest', requireAdminMiddleware, async (request, re
         const arch = String(request.body?.arch || '');
         const flavour = String(request.body?.flavour || '');
 
-        const release = await fetchLatestRelease();
+        const release = await fetchLatestRelease({
+            includePrerelease: request.body?.includePrerelease === true,
+        });
         if (!release) {
             return response.status(400).json({ error: 'The repository has no published release.' });
         }

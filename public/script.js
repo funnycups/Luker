@@ -1508,6 +1508,9 @@ async function doLukerUpdateCheck(versionData) {
         const response = await fetch('/api/system/update-check', {
             method: 'POST',
             headers: getRequestHeaders(),
+            body: JSON.stringify({
+                includePrerelease: power_user.luker_check_beta_updates !== false,
+            }),
         });
         if (!response.ok) return;
         const updateData = await response.json();
@@ -1524,7 +1527,7 @@ async function doLukerUpdateCheck(versionData) {
             }
             lukerUpdatePromptShown = true;
             toastr.info(
-                t`A Luker update is available for this Docker deployment. Pull the latest image and recreate the container to update.`,
+                t`A Luker update is available for this Docker deployment. Pull the ${combinedData.tagName} image and recreate the container to update.`,
                 t`Update Available`,
                 {
                     timeOut: 0,
@@ -1742,7 +1745,9 @@ async function runAndroidApkUpdateFlow() {
 
     await showUpdateProgressPopup(t`Luker App Update`, async ({ pushLog, setStatus }) => {
         setStatus(t`Fetching latest APK release...`);
-        const release = await callLukerUpdateApi('apk-latest', {});
+        const release = await callLukerUpdateApi('apk-latest', {
+            includePrerelease: power_user.luker_check_beta_updates !== false,
+        });
         const apkName = String(release?.apk?.name || '');
         const apkUrl = String(release?.apk?.url || '');
         const tagName = String(release?.tagName || '');
@@ -1771,7 +1776,12 @@ async function runDesktopUpdateFlow() {
 
     await showUpdateProgressPopup(t`Luker App Update`, async ({ pushLog, setStatus }) => {
         setStatus(t`Fetching the latest desktop release...`);
-        const release = await callLukerUpdateApi('desktop-latest', { platform, arch, flavour });
+        const release = await callLukerUpdateApi('desktop-latest', {
+            platform,
+            arch,
+            flavour,
+            includePrerelease: power_user.luker_check_beta_updates !== false,
+        });
         const assetName = String(release?.asset?.name || '');
         const assetUrl = String(release?.asset?.url || '');
         const tagName = String(release?.tagName || '');
@@ -2252,7 +2262,6 @@ async function firstLoadInit() {
     }
     await readSecretState();
     await initLocales();
-    setTimeout(() => doLukerUpdateCheck(clientVersionData), 1);
     initChatUtilities();
     initDefaultSlashCommands();
     registerReasoningSlashCommands();
@@ -2277,6 +2286,7 @@ async function firstLoadInit() {
     await getSettings({ bootstrap: true, payload: settingsPayload });
     console.debug('[init] getSettings done');
     performance.mark('[init] getSettings done');
+    setTimeout(() => doLukerUpdateCheck(clientVersionData), 1);
     await checkOpenRouterAuth();
     primeRecentChatsSnapshotPromise(fetchRecentChatsSnapshot());
     initWelcomeScreen();

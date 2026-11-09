@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { sync as commandExistsSync } from 'command-exists';
 import { CheckRepoActions, default as simpleGit } from 'simple-git';
 import { serverDirectory } from './server-directory.js';
+import { compareSemver } from './semver.js';
 
 const MAX_LOG_ENTRIES = 1000;
 const DEFAULT_LOG_LIMIT = 400;
@@ -370,37 +371,11 @@ export function startGitUpdate() {
 }
 
 /**
- * Fetches the newest published release of the configured repository.
- * Resolves to null when the repository has no published release at all, and
- * throws for every other unsuccessful response.
- * @param {{ apiBase?: string, fetchImpl?: typeof fetch }} [options]
- * @returns {Promise<{ tagName: string, name: string, htmlUrl: string, publishedAt: string | null, assets: Array<{ name: string, url: string, size: number }> } | null>}
+ * Converts a GitHub release payload into the shape the update checks consume.
+ * @param {any} payload
+ * @returns {{ tagName: string, name: string, htmlUrl: string, publishedAt: string | null, assets: Array<{ name: string, url: string, size: number }> }}
  */
-export async function fetchLatestRelease({ apiBase = process.env.LUKER_GITHUB_API_BASE || 'https://api.github.com', fetchImpl = globalThis.fetch } = {}) {
-    const repository = getGitHubRepository();
-    if (!repository) {
-        throw new Error('GitHub repository metadata is unavailable.');
-    }
-
-    const base = String(apiBase).replace(/\/+$/, '');
-    const releaseApiUrl = `${base}/repos/${repository.owner}/${repository.repo}/releases/latest`;
-    const response = await fetchImpl(releaseApiUrl, {
-        method: 'GET',
-        headers: {
-            Accept: 'application/vnd.github+json',
-            'User-Agent': 'Luker-Updater',
-        },
-    });
-
-    if (response.status === 404) {
-        return null;
-    }
-
-    if (!response.ok) {
-        throw new Error(`Failed to query the latest GitHub release (${response.status}).`);
-    }
-
-    const payload = await response.json();
+function mapReleasePayload(payload) {
     const assets = Array.isArray(payload?.assets) ? payload.assets : [];
 
     return {
@@ -414,6 +389,67 @@ export async function fetchLatestRelease({ apiBase = process.env.LUKER_GITHUB_AP
             size: Number(asset?.size) || 0,
         })),
     };
+}
+
+/**
+ * Fetches the newest published release of the configured repository.
+ * Resolves to null when the repository has no published release at all, and
+ * throws for every other unsuccessful response. When `includePrerelease` is
+ * true, every published release is considered and the highest semantic version
+ * wins, so a prerelease published after the latest stable one is returned.
+ * @param {{ apiBase?: string, fetchImpl?: typeof fetch, includePrerelease?: boolean }} [options]
+ * @returns {Promise<{ tagName: string, name: string, htmlUrl: string, publishedAt: string | null, assets: Array<{ name: string, url: string, size: number }> } | null>}
+ */
+export async function fetchLatestRelease({ apiBase = process.env.LUKER_GITHUB_API_BASE || 'https://api.github.com', fetchImpl = globalThis.fetch, includePrerelease = false } = {}) {
+    const repository = getGitHubRepository();
+    if (!repository) {
+        throw new Error('GitHub repository metadata is unavailable.');
+    }
+
+    const base = String(apiBase).replace(/\/+$/, '');
+    const releasesApiUrl = `${base}/repos/${repository.owner}/${repository.repo}/releases`;
+    const releaseApiUrl = includePrerelease
+        ? `${releasesApiUrl}?per_page=100`
+        : `${releasesApiUrl}/latest`;
+    const response = await fetchImpl(releaseApiUrl, {
+        method: 'GET',
+        headers: {
+            Accept: 'application/vnd.github+json',
+            'User-Agent': 'Luker-Updater',
+        },
+    });
+
+    if (response.status === 404) {
+        return null;
+    }
+
+    if (!response.ok) {
+        throw new Error(`Failed to query GitHub releases (${response.status}).`);
+    }
+
+    const payload = await response.json();
+
+    if (!includePrerelease) {
+        return mapReleasePayload(payload);
+    }
+
+    const releases = payload.filter(release => release?.draft !== true);
+    if (releases.length === 0) {
+        return null;
+    }
+
+    let latest = null;
+    for (const release of releases) {
+        const candidate = mapReleasePayload(release);
+        if (!candidate.tagName) {
+            continue;
+        }
+        if (!latest || compareSemver(candidate.tagName, latest.tagName) > 0) {
+            latest = candidate;
+        }
+    }
+
+    return latest;
 }
 
 const DESKTOP_OS_NAMES = { darwin: 'mac', win32: 'win', linux: 'linux' };
@@ -472,8 +508,8 @@ export function selectDesktopAsset(assets, platform, arch, flavour = '') {
     return null;
 }
 
-export async function fetchLatestApkReleaseInfo() {
-    const release = await fetchLatestRelease();
+export async function fetchLatestApkReleaseInfo({ includePrerelease = false } = {}) {
+    const release = await fetchLatestRelease({ includePrerelease });
     if (!release) {
         throw new Error('The repository has no published release.');
     }
