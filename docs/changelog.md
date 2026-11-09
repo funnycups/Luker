@@ -11,6 +11,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### iOS App
 
 - Added a startup-failure report on the next launch.
+- Fixed the missing scene configuration.
 
 ## v2.9.0-rc.1 (2026-11-09)
 
