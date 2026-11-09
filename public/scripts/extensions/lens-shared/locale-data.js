@@ -12,7 +12,7 @@ const ZH_CN = {
 };
 
 const ZH_TW = {
-    'just now': '剛剛',
+    'just now': '剛才',
     '${0} min ago': '${0} 分鐘前',
     '${0} hr ago': '${0} 小時前',
     'yesterday ${0}': '昨天 ${0}',
