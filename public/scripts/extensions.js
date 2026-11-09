@@ -2128,10 +2128,11 @@ export const UNSET_VALUE = '__@@UNSET@@__';
  * @param {any} value Field value, or {@link UNSET_VALUE} to delete
  * @returns {Promise<void>} When the field is written
  */
-export async function writeExtensionField(characterId, key, value) {
+export async function writeExtensionField(characterId, key, value, { requireSaved = false } = {}) {
     const context = getContext();
     const character = context.characters[characterId];
     if (!character) {
+        if (requireSaved) throw new Error('Character not found');
         console.warn('Character not found', characterId);
         return;
     }
@@ -2160,35 +2161,38 @@ export async function writeExtensionField(characterId, key, value) {
         valueSummary: summary,
         isUnset,
     });
-    if (isUnset) {
-        deleteValueByPath(character, extensionPath);
-    } else {
-        setValueByPath(character, extensionPath, value);
-    }
-
-    // Process JSON data
-    if (character.json_data) {
-        const jsonData = JSON.parse(character.json_data);
+    function updateLocalCharacter() {
         if (isUnset) {
-            deleteValueByPath(jsonData, extensionPath);
+            deleteValueByPath(character, extensionPath);
         } else {
-            setValueByPath(jsonData, extensionPath, value);
-        }
-        character.json_data = JSON.stringify(jsonData);
-
-        // Make sure the data doesn't get lost when saving the current character
-        if (Number(characterId) === Number(context.characterId)) {
-            $('#character_json_data').val(character.json_data);
+            setValueByPath(character, extensionPath, value);
         }
 
-        console.debug('[Extensions] writeExtensionField updated in-memory character JSON', {
-            characterId,
-            avatar: character.avatar || null,
-            key,
-            mirroredToOpenEditor: Number(characterId) === Number(context.characterId),
-            jsonLength: character.json_data.length,
-        });
+        // Process JSON data
+        if (character.json_data) {
+            const jsonData = JSON.parse(character.json_data);
+            if (isUnset) {
+                deleteValueByPath(jsonData, extensionPath);
+            } else {
+                setValueByPath(jsonData, extensionPath, value);
+            }
+            character.json_data = JSON.stringify(jsonData);
+
+            // Make sure the data doesn't get lost when saving the current character
+            if (getContext().characters?.[getContext().characterId]?.avatar === character.avatar) {
+                $('#character_json_data').val(character.json_data);
+            }
+
+            console.debug('[Extensions] writeExtensionField updated in-memory character JSON', {
+                characterId,
+                avatar: character.avatar || null,
+                key,
+                mirroredToOpenEditor: getContext().characters?.[getContext().characterId]?.avatar === character.avatar,
+                jsonLength: character.json_data.length,
+            });
+        }
     }
+    if (!requireSaved) updateLocalCharacter();
 
     // Save data to the server
     const saveDataRequest = {
@@ -2216,8 +2220,13 @@ export async function writeExtensionField(characterId, key, value) {
     });
 
     if (!mergeResponse.ok) {
-        console.error('Failed to save extension field', mergeResponse.statusText);
+        if (!requireSaved) {
+            console.error('Failed to save extension field', mergeResponse.statusText);
+            return;
+        }
+        throw new Error(`Failed to save extension field (${mergeResponse.status}): ${mergeResponse.statusText}`);
     }
+    if (requireSaved) updateLocalCharacter();
 }
 
 /**

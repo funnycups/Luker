@@ -597,6 +597,7 @@ async function editLastOrchestrationResult(context) {
         return false;
     }
 
+    const original = getActiveSnapshot();
     const input = await context.callGenericPopup(
         i18n('Edit latest orchestration result text.'),
         context.POPUP_TYPE.INPUT,
@@ -626,7 +627,7 @@ async function editLastOrchestrationResult(context) {
         notifyError(i18n('No recent orchestration result available for this chat.'));
         return false;
     }
-    if (String(activeSnapshot.chatKey || '') !== String(chatKey || '')) {
+    if (activeSnapshot !== original || getChatKey(getContext()) !== chatKey || activeSnapshot.chatKey !== chatKey) {
         notifyError(i18n('No recent orchestration result available for this chat.'));
         return false;
     }
@@ -635,8 +636,6 @@ async function editLastOrchestrationResult(context) {
         ...activeSnapshot,
         capsuleText: nextText,
     };
-    setActiveSnapshot(updatedSnapshot);
-    clearCapsulePrompt(context);
     const persisted = await persistEditedSnapshotToFloorState(context, updatedSnapshot);
     if (!persisted.ok) {
         notifyError(i18nFormat(
@@ -644,6 +643,10 @@ async function editLastOrchestrationResult(context) {
             persisted.hint || persisted.reason || i18n('reason unknown'),
         ));
         return false;
+    }
+    if (getActiveSnapshot() === original) {
+        setActiveSnapshot(updatedSnapshot);
+        clearCapsulePrompt(context);
     }
     notifySuccess(i18n('Saved latest orchestration result.'));
     updateUiStatus(i18n('Saved latest orchestration result.'));
@@ -5502,6 +5505,7 @@ jQuery(() => {
         });
     }
     clearCapsulePrompt(context);
+    syncCharacterEditorWithActiveAvatar(context);
     void loadOrchestratorChatState(context);
 
     if (context.eventTypes.GENERATION_WORLD_INFO_FINALIZED) {
@@ -5804,6 +5808,7 @@ jQuery(() => {
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, () => {
         const liveContext = getContext();
         abortActiveOrchestratorRun();
+        syncCharacterEditorWithActiveAvatar(liveContext);
         clearCacheForChatChange();
         const run = getCurrentRun();
         if (run && run.status === 'running' && typeof run.abortFn === 'function') {

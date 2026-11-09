@@ -2624,7 +2624,11 @@ const {
     normalizeSafeSearch,
     normalizeWhitespace,
     saveSettingsDebounced,
-    showRunPanel: () => getContext().getExtensionApi('orchestrator')?.openRunDock?.(),
+    showRunPanel: async () => {
+        const orch = getContext().getExtensionApi('orchestrator');
+        if (orch?.openRunDock) return orch.openRunDock();
+        (await searchRunPanel.standaloneDock()).open();
+    },
     syncSharedLorebookForCurrentChat,
     syncSharedLorebookForLoadedChat,
     world_info_position,
@@ -2650,6 +2654,9 @@ jQuery(() => {
     // Silent no-op when orchestrator isn't installed.
     eventSource.on(event_types.APP_READY, () => {
         registerSearchToolsOrchestrationTools();
+        if (!getContext().getExtensionApi('orchestrator')?.openRunDock) {
+            return searchRunPanel.standaloneDock();
+        }
     });
     void loadSearchToolsChatState(context, { force: true })
         .then(() => syncSharedLorebookForCurrentChat(context))

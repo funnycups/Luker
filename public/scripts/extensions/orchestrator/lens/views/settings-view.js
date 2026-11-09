@@ -78,6 +78,8 @@ export function createSettingsView(app) {
                 atDepth ? number('Injection depth', 'capsuleInjectDepth') : null,
                 atDepth ? formRow(i18n('Injection role'), selectInput([{ value: '0', label: i18n('System') }, { value: '1', label: i18n('User') }, { value: '2', label: i18n('Assistant') }], String(values.capsuleInjectRole), set('capsuleInjectRole'))) : null,
                 formRow(i18n('Custom instruction'), textArea(values.capsuleCustomInstruction, set('capsuleCustomInstruction')))),
+            app.source.editLastResult ? section('Latest Orchestration Result',
+                button(i18n('Edit latest orchestration result text.'), async () => { if (await app.source.editLastResult()) await app.reload(); }, { iconName: 'pen' })) : null,
             section('AI Iteration Studio configuration',
                 formRow(i18n('Connection profile'), selectInput(options(opts.connections, values.requestApiPresetName), values.requestApiPresetName, set('requestApiPresetName'))),
                 formRow(i18n('Generation preset'), selectInput(options(opts.presets, values.requestLlmPresetName), values.requestLlmPresetName, set('requestLlmPresetName'))),

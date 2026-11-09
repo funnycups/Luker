@@ -1129,7 +1129,7 @@ function formatPersistFailure({ op, stage, seq, floor, chatLen, reason }) {
  * loggedSeqTo). It doubles as the seq that derived the floor, but the floor
  * is supplied explicitly so callers don't all re-derive it.
  */
-async function replaceGraphLogForTarget(context, store, seq, floor) {
+async function replaceGraphLogForTarget(context, store, seq, floor, validate) {
     const fs = await getFloorStateInstance(context);
     await fs.ready();
     const normalizedStore = normalizeStoreForRuntime(store);
@@ -1145,6 +1145,7 @@ async function replaceGraphLogForTarget(context, store, seq, floor) {
     const patches = await buildObjectPatchOperationsAsync({}, finalPayload);
 
     if (Array.isArray(patches) && patches.length > 0 && floorResolved) {
+        validate?.();
         const result = await fs.reset([{ floor, swipeId, patches }]);
         return {
             payload: finalPayload,
@@ -1197,6 +1198,7 @@ async function replaceGraphLogForTarget(context, store, seq, floor) {
             };
         }
     }
+    validate?.();
     const result = await fs.reset([]);
     return {
         payload: finalPayload,
@@ -1295,7 +1297,7 @@ async function persistMetaForChatKey(context, chatKey, store, target = undefined
  * from `seqToFloor(context, seq)` (or the equivalent for the covered watermark)
  * so the commit anchors at the chat slot the covered seq actually maps to.
  */
-async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, { syncPersistentProjection = false, floor = null } = {}) {
+async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, { syncPersistentProjection = false, floor = null, validate } = {}) {
     const target = memoryStoreTargets.get(chatKey);
     if (!target) {
         throw new Error('Memory store target is unavailable.');
@@ -1303,7 +1305,7 @@ async function commitMemoryStoreReplaceByChatKey(context, chatKey, store, seq, {
     const normalizedStore = normalizeStoreForRuntime(store);
     const normalizedSeq = resolveStoreCommitSeq(seq, normalizedStore);
 
-    const replaceResult = await replaceGraphLogForTarget(context, normalizedStore, normalizedSeq, floor);
+    const replaceResult = await replaceGraphLogForTarget(context, normalizedStore, normalizedSeq, floor, validate);
     if (replaceResult.skipped) {
         // Disk untouched; do not advance the in-memory cache to a state that
         // is not persisted. Existing cache stays the source of truth until
@@ -1631,8 +1633,6 @@ export async function commitGraphUiMutation(context, chatKey, {
     if (!key || !latest || typeof latest !== 'object') {
         throw new Error('commitGraphUiMutation: chatKey and afterStore are required.');
     }
-    memoryStoreCache.set(key, latest);
-    clearRollbackHistory(key);
     const effectiveSeq = resolveStoreCommitSeq(seq, latest);
     const floor = seqToFloor(context, effectiveSeq);
     let innerResult = { skipped: false, reason: null, hint: null };
@@ -1641,6 +1641,8 @@ export async function commitGraphUiMutation(context, chatKey, {
     } else if (beforeStore) {
         innerResult = await appendPersistedDiffEntry(context, key, beforeStore, latest, effectiveSeq, { floor });
     }
+    if (innerResult?.skipped) return innerResult;
+    clearRollbackHistory(key);
     try {
         await persistMemoryStoreByChatKey(context, key, latest, { syncPersistentProjection: true });
     } catch (err) {
@@ -2304,7 +2306,7 @@ function nextNodeId(store) {
     return `n_${store.nodeSeq}`;
 }
 
-function createNode(store, node) {
+export function createNode(store, node) {
     const id = nextNodeId(store);
     const seqToRaw = Number.isFinite(Number(node.seqTo))
         ? Number(node.seqTo)
@@ -9753,17 +9755,19 @@ export function getMemorySettingsView(context) {
             scope: info.scope,
             hasAvatar: info.hasAvatar,
             hasOverride: info.hasOverride,
+            avatar: info.avatar,
             characterName: info.characterName,
         },
     };
 }
 
 /** @param {'global'|'character'} scope */
-export async function saveMemoryAdvancedSettings(context, values, scope) {
+export async function saveMemoryAdvancedSettings(context, values, scope, expectedAvatar) {
     const settings = getSettings();
     const normalized = normalizeAdvancedSettings(values, settings);
     if (scope === 'character') {
         const info = getAdvancedScopeInfo(context, settings);
+        if (expectedAvatar !== undefined && info.avatar !== expectedAvatar) throw new Error(i18n('The active character has changed.'));
         if (!info.hasAvatar) throw new Error(i18n('No active character selected.'));
         if (!await persistAdvancedToCharacter(context, info.avatar, normalized)) {
             throw new Error(i18n('Failed to persist character advanced override.'));
@@ -9774,8 +9778,9 @@ export async function saveMemoryAdvancedSettings(context, values, scope) {
     syncGenerationVisibleHistoryRuntimeRegexScripts();
 }
 
-export async function clearMemoryAdvancedOverride(context) {
+export async function clearMemoryAdvancedOverride(context, expectedAvatar) {
     const info = getAdvancedScopeInfo(context, getSettings());
+    if (expectedAvatar !== undefined && info.avatar !== expectedAvatar) throw new Error(i18n('The active character has changed.'));
     if (!info.hasAvatar) throw new Error(i18n('No active character selected.'));
     if (!await removeCharacterAdvancedOverride(context, info.avatar)) {
         throw new Error(i18n('Failed to clear character advanced override.'));
@@ -10347,26 +10352,36 @@ export function getRawGraphJson(context) {
 }
 
 /** Replaces the current chat's graph with edited JSON. Throws on invalid JSON. */
-export async function applyRawGraphJson(context, raw) {
+export async function applyRawGraphJson(context, raw, base) {
     const chatKey = getChatKey(context);
+    function validate() {
+        if (base && (base.chatKey !== getChatKey(getContext()) || getRawGraphJson(context) !== base.text)) {
+            throw new Error(i18n('The memory graph changed. Reopen the editor before applying changes.'));
+        }
+    }
+    validate();
     const parsed = JSON.parse(raw);
     const migrated = normalizeStoreForRuntime(parsed);
     updateStoreSourceState(migrated, context);
     const migratedSeq = getStoreCoveredSeqTo(migrated);
-    const applyResult = await replacePersistedGraphWithStore(
+    const applyResult = await commitMemoryStoreReplaceByChatKey(
         context,
         chatKey,
         migrated,
         migratedSeq,
-        { floor: seqToFloor(context, migratedSeq) },
+        { floor: seqToFloor(context, migratedSeq), validate },
     );
-    clearRollbackHistory(chatKey);
-    await persistMemoryStoreByChatKey(context, chatKey, migrated, { syncPersistentProjection: true });
-    refreshUiStats();
     if (applyResult && applyResult.skipped) {
         notifyError(i18nFormat('Failed to apply graph JSON: ${0}', applyResult.hint || applyResult.reason || i18n('reason unknown')));
         return false;
     }
+    clearRollbackHistory(chatKey);
+    await persistMemoryStoreByChatKey(context, chatKey, migrated, { syncPersistentProjection: true });
+    refreshUiStats();
+    try { await syncGraphVectorsAfterMutation(context, chatKey, migrated); } catch (err) {
+        notifyError(i18nFormat('Vector recompute failed: ${0}', err?.message || err));
+    }
+    emitStoreCommit(chatKey);
     updateUiStatus(i18n('Applied raw graph JSON edit.'));
     notifySuccess(i18n('Memory graph JSON updated.'));
     return true;

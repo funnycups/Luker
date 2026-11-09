@@ -1,7 +1,7 @@
 import { test, expect, jest } from '@jest/globals';
 
 const settings = { presetLibraries: { spec: { a: { name: 'A', spec: { stages: [] }, presets: {} } } }, activePresetIds: { spec: 'a' } };
-const save = jest.fn(async () => {});
+const save = jest.fn(async (_loop, options) => options.onSaved());
 const persist = jest.fn(async () => true);
 const ext = { presetLibraries: { spec: { c: { name: 'Card' } } }, activePresetIds: { spec: 'c' } };
 const ctx = {
@@ -161,4 +161,11 @@ test('a failed preset creation on import is reported', async () => {
     preset.createPreset.mockReturnValueOnce('');
     const parsed = presets.parseImport(global, '{}');
     await expect(presets.importParsed(global, parsed, 'Z')).rejects.toThrow();
+});
+
+test('an unacknowledged settings save rejects and restores the prior library', async () => {
+    const previous = settings.presetLibraries;
+    save.mockImplementationOnce(async () => {});
+    await expect(presets.create(global, 'Unsaved')).rejects.toThrow();
+    expect(settings.presetLibraries).toBe(previous);
 });

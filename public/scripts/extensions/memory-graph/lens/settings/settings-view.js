@@ -192,15 +192,27 @@ export function createSettingsView(app, source) {
     }
 
     function askRawEdit() {
-        void source.ops.rawJson().then((text) => {
-            const area = h('textarea', { class: 'ml-schema-input ml-settings-json', rows: 22, text });
+        void source.ops.readRawEdit().then((base) => {
+            const area = h('textarea', { class: 'ml-schema-input ml-settings-json', rows: 22, text: base.text });
+            const error = h('div', { role: 'alert' });
+            let applying = false;
             openModal(app, {
                 title: i18n('Edit graph JSON'),
-                content: area,
+                content: h('div', null, area, error),
                 okLabel: i18n('Apply Graph'),
-                onOk() {
-                    void run(() => source.ops.applyRawJson(area.value.trim()));
-                    return true;
+                async onOk() {
+                    if (applying) return false;
+                    applying = true;
+                    try {
+                        const saved = await source.ops.applyRawJson(area.value.trim(), base);
+                        if (saved) app.refresh();
+                        return saved;
+                    } catch (err) {
+                        error.textContent = String(err?.message || err);
+                        return false;
+                    } finally {
+                        applying = false;
+                    }
                 },
             });
         }).catch((err) => { statusEl.textContent = String(err?.message || err); });
@@ -287,8 +299,8 @@ export function createSettingsView(app, source) {
                     danger: true,
                     onOk: () => { advanced = structuredClone(info.defaults); advancedDirty = true; paint(); },
                 }), { className: 'ml-btn-ghost' }),
-                button(i18n('Clear Character Advanced Override'), () => saveAdvanced(() => source.settings.clearAdvanced(), i18n('Cleared')), { className: 'ml-btn-ghost', disabled: !info.hasOverride }),
-                button(i18n('Save Advanced to Character'), () => saveAdvanced(() => source.settings.saveAdvanced(advanced, 'character'), i18n('Saved')), { disabled: !info.hasAvatar }),
+                button(i18n('Clear Character Advanced Override'), () => saveAdvanced(() => source.settings.clearAdvanced(info.avatar), i18n('Cleared')), { className: 'ml-btn-ghost', disabled: !info.hasOverride }),
+                button(i18n('Save Advanced to Character'), () => saveAdvanced(() => source.settings.saveAdvanced(advanced, 'character', info.avatar), i18n('Saved')), { disabled: !info.hasAvatar }),
                 button(i18n('Save Advanced to Global'), () => saveAdvanced(() => source.settings.saveAdvanced(advanced, 'global'), i18n('Saved')), { className: 'ml-btn-primary' })),
         ];
     }

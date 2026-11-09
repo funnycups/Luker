@@ -149,7 +149,7 @@ export function createRecorder({ storage = createMemoryStorage(), now = () => gl
         if (!current || current.finished) return;
         const snap = snapshot(current, { truncate: true });
         current.finished = true;
-        if (!snap || snap.quiet) return;
+        if (!snap) return;
         history = [snap, ...runs().filter(item => item.runId !== snap.runId || item.source !== snap.source)].slice(0, MAX_RUNS);
         saveHistory();
     }
@@ -220,8 +220,9 @@ export function createRecorder({ storage = createMemoryStorage(), now = () => gl
         /** Live / last run of every store, newest first. */
         currents: () => [...attached.values()].map(entry => entry.current).filter(Boolean).sort((a, b) => b.seq - a.seq).map(c => snapshot(c)).filter(Boolean),
         isRunning: () => running().length > 0,
-        stop() {
-            const live = running().sort((a, b) => b.seq - a.seq)[0];
+        stop(target) {
+            const live = running().sort((a, b) => b.seq - a.seq).find(current =>
+                !target || (current.source === target.source && String(current.run.runId) === String(target.runId)));
             const fn = live?.run?.stopFn || live?.run?.abortFn;
             if (typeof fn !== 'function') return false;
             fn();

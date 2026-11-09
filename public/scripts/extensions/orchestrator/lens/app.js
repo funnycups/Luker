@@ -342,7 +342,7 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
                 return;
             }
             drafts.discard();
-            lastSaved = { target, changes };
+            lastSaved = { target, changes: result.applied };
             showToast(`${i18nFormat('Saved to ${0}', scopeText(target))}${result.missing.length ? i18nFormat(' (skipped ${0}: their agents are no longer in the profile)', result.missing.length) : ''}`, { action: { label: i18n('Undo'), run: () => undoSave() }, duration: 12000 });
             await load();
         } catch (err) {
@@ -356,9 +356,10 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
     async function undoSave() {
         const saved = lastSaved;
         if (!saved) return;
-        lastSaved = null;
         try {
-            await source.edit.save(saved.target, invertChanges(saved.changes), { force: true });
+            const result = await source.edit.save(saved.target, invertChanges(saved.changes), { requireAll: true });
+            if (!result.saved || result.missing.length) throw new Error(i18n('These were also changed elsewhere'));
+            lastSaved = null;
             showToast(i18n('The last save was undone'));
             await load();
         } catch (err) {

@@ -58,9 +58,8 @@ export function createRunView(app) {
                 h('span', { class: 'ol-spacer' }),
                 app.source?.lastRunSummary ? h('span', { class: 'ol-insp-note', text: app.source.lastRunSummary() }) : null,
                 iconButton('shrink', i18n('Collapse all'), () => collapseAllText(el), { className: 'ol-iconbtn-sm' }),
-                !running && app.source?.editLastResult ? button(i18n('Edit result'), async () => { if (await app.source.editLastResult()) await app.reload(); }, { iconName: 'pen', className: 'ol-btn-sm' }) : null,
                 !running && app.source?.ai ? button(i18n('AI diagnosis'), () => app.diagnose(run.key), { iconName: 'target', className: 'ol-btn-sm', title: i18n('Let the AI find what went wrong in this run') }) : null,
-                running && !pinned ? button(i18n('Stop run'), () => { if (!app.recorder.stop()) app.notify(i18n('Could not stop'), { error: true }); }, { iconName: 'stop', className: 'ol-btn-sm ol-btn-danger' }) : null),
+                running && !pinned ? button(i18n('Stop run'), () => { if (!app.recorder.stop(run)) app.notify(i18n('Could not stop'), { error: true }); }, { iconName: 'stop', className: 'ol-btn-sm ol-btn-danger' }) : null),
             run.error && run.status !== 'committed' ? h('div', { class: 'ol-run-error' }, icon('alert', { size: 14 }), h('span', { text: humanError(run.error) })) : null);
     }
 

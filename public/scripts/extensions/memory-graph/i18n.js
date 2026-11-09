@@ -23,6 +23,9 @@ export function i18nFormat(key, ...values) {
 
 export function registerLocaleData() {
     addLocaleData('zh-cn', {
+        'The active chat has changed.': '当前聊天已切换。',
+        'The active character has changed.': '当前角色已切换。',
+        'The memory graph changed. Reopen the editor before applying changes.': '记忆图谱已变化，请重新打开编辑器。',
         'Memory': '记忆',
         'Regenerate aborted': '重新生成已中止',
         'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新生成已中止——无法回退 ${0} 上的提交：${1}',
@@ -632,6 +635,9 @@ export function registerLocaleData() {
         'Memory graph extraction result invalid, retrying (${0}/${1})…': '记忆图抽取结果无效，正在重试（第 ${0}/${1} 次）…',
     });
     addLocaleData('zh-tw', {
+        'The active chat has changed.': '目前的聊天已切換。',
+        'The active character has changed.': '目前的角色已切換。',
+        'The memory graph changed. Reopen the editor before applying changes.': '記憶圖譜已變更，請重新開啟編輯器。',
         'Memory': '記憶',
         'Regenerate aborted': '重新產生已中止',
         'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新產生已中止——無法回退 ${0} 上的提交：${1}',

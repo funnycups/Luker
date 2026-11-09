@@ -194,3 +194,21 @@ test('stats diagnosis: evidence picks failures and slow/fast steps, message carr
     const read = executeTools([{ id: 'x', name: 'olens_read_step', args: { step: 1 } }], { mode: 'spec', profile: PROFILES.spec, steps: ev });
     expect(read.results[0].result).toMatch(/E1\. planner/);
 });
+
+test('reloading a modified field preserves its original conflict baseline', () => {
+    const drafts = createDrafts();
+    const target = { mode: 'spec', scope: 'global', presetId: 'default' };
+    drafts.setBase(target, PROFILES.spec);
+    drafts.set('critic', 'system', 'draft');
+    const fresh = setField('spec', PROFILES.spec, 'critic', 'system', 'external');
+    drafts.setBase(target, fresh);
+    drafts.set('critic', 'system', 'revised draft');
+    expect(mergeChanges('spec', fresh, drafts.list()).conflicts).toHaveLength(1);
+});
+
+test('a preset template can change independently of an overriding node', () => {
+    const base = { spec: { stages: [{ id: 's', nodes: [{ id: 'n', preset: 'p', userPromptTemplate: 'node' }] }] }, presets: { p: { userPromptTemplate: 'old' } } };
+    const next = structuredClone(base);
+    next.presets.p.userPromptTemplate = 'new';
+    expect(applyChanges('spec', base, diffProfiles('spec', base, next))).toEqual(next);
+});

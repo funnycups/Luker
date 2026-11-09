@@ -62,6 +62,7 @@ export function editable(el, { app, node, key, value, label = '' }) {
 
 function open(el, { app, node, key, value, label }) {
     active?.commit();
+    const chatKey = app.model()?.chatKey;
     const original = value;
     const text = key === 'summary' && node.type === 'event' ? restoreSummaryLayout(toEditText(value)) : toEditText(value);
     // Measure the shown value before it is swapped out: wrapped → textarea.
@@ -114,7 +115,7 @@ function open(el, { app, node, key, value, label }) {
             app.notify?.(i18n('The name cannot be empty'));
             return;
         }
-        app.editNode(node, key, next, original);
+        app.editNode(node, key, next, original, chatKey);
     };
     const cancel = () => { close(); el.focus?.(); };
     const outside = (event) => { if (!wrap.contains(event.target)) commit(); };

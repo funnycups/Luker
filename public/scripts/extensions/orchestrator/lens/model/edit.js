@@ -216,7 +216,11 @@ const ALL_FIELDS = [...BASE_FIELDS, 'tools', 'skills', 'maxRounds'];
 
 /** Whether a change can be placed on this profile. */
 export function canHold(mode, profile, agentId, field) {
-    return agentId === PROFILE || Boolean(locate(mode, profile, agentId)[field]);
+    if (agentId === PROFILE) {
+        const [container, id, key] = String(field).split('/');
+        return container !== 'presets' || !key || Object.hasOwn(profile.presets || {}, id);
+    }
+    return Boolean(locate(mode, profile, agentId)[field]);
 }
 
 export function getField(mode, profile, agentId, field) {
@@ -291,6 +295,18 @@ export function diffProfiles(mode, before, after) {
             const a = getField(mode, before, agentId, field);
             const b = getField(mode, after, agentId, field);
             if (a !== b) out.push({ id: `${agentId}.${field}`, agentId, field, before: a, after: b });
+        }
+    }
+    if (mode === 'spec') {
+        // When every node overrides the task, no agent field exposes the preset template.
+        for (const id of Object.keys(before.presets || {})) {
+            if (!after.presets?.[id]) continue;
+            const field = `presets/${id}/userPromptTemplate`;
+            const a = readSlot(before, field);
+            const b = readSlot(after, field);
+            if (a === b) continue;
+            const represented = out.some(c => c.field === 'task' && locate(mode, after, c.agentId).task?.obj === after.presets[id]);
+            if (!represented) out.push({ id: `${PROFILE}.${field}`, agentId: PROFILE, field, before: a, after: b });
         }
     }
     return out;

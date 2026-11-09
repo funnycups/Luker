@@ -334,7 +334,7 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
                     h('span', { class: 'ol-status-dot', 'aria-hidden': 'true' }),
                     h('span', { text: statusLabel(view.status) })),
                 h('span', { class: 'ol-spacer' }),
-                running ? iconButton('stop', i18n('Stop run'), () => { recorder.stop(); }, { className: 'ol-iconbtn-sm ol-dock-stop' }) : null,
+                running ? iconButton('stop', i18n('Stop run'), () => { recorder.stop(view); }, { className: 'ol-iconbtn-sm ol-dock-stop' }) : null,
                 openLens ? iconButton('fit', i18n('View in Orchestra Lens'), () => openLens(`${view.source}:${view.runId}`), { className: 'ol-iconbtn-sm' }) : null,
                 iconButton(compactMql?.matches ? 'chevronDown' : 'chevronRight', i18n('Collapse'), () => collapse(), { className: 'ol-iconbtn-sm' })),
             h('div', { class: 'ol-dock-stats' },
@@ -358,7 +358,7 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
                     h('span', { class: 'ol-dock-mini-stat', title: i18n('Time used'), text: formatDuration(view.duration) }),
                     view.tokens ? h('span', { class: 'ol-dock-mini-stat ol-dock-mini-tokens', title: `${formatTokens(view.tokens)} tokens`, text: formatTokens(view.tokens).replace(/\s+/g, '') }) : null,
                     h('span', { class: 'ol-spacer' }),
-                    running ? iconButton('stop', i18n('Stop run'), () => { recorder.stop(); }, { className: 'ol-iconbtn-sm ol-dock-stop' }) : null,
+                    running ? iconButton('stop', i18n('Stop run'), () => { recorder.stop(view); }, { className: 'ol-iconbtn-sm ol-dock-stop' }) : null,
                     iconButton('fit', i18n('Enlarge'), () => setSize('large'), { className: 'ol-iconbtn-sm' }),
                     iconButton('minus', i18n('Collapse'), () => collapse(), { className: 'ol-iconbtn-sm' }),
                     iconButton('more', i18n('More'), () => setMenu(!menuOpen), { className: 'ol-iconbtn-sm ol-dock-more', pressed: menuOpen })));
@@ -372,7 +372,7 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
                     h('span', { class: 'ol-status-dot', 'aria-hidden': 'true' }),
                     h('span', { text: statusLabel(view.status) })),
                 h('span', { class: 'ol-spacer' }),
-                running ? iconButton('stop', i18n('Stop run'), () => { recorder.stop(); }, { className: 'ol-iconbtn-sm ol-dock-stop' }) : null,
+                running ? iconButton('stop', i18n('Stop run'), () => { recorder.stop(view); }, { className: 'ol-iconbtn-sm ol-dock-stop' }) : null,
                 large ? iconButton('shrink', i18n('Shrink'), () => setSize('small'), { className: 'ol-iconbtn-sm' })
                     : iconButton('fit', i18n('Enlarge'), () => setSize('large'), { className: 'ol-iconbtn-sm' }),
                 large ? null : iconButton('minus', i18n('Collapse'), () => collapse(), { className: 'ol-iconbtn-sm' }),
@@ -602,6 +602,7 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
     root.dataset.size = size;
     placeFloat();
     applyTheme();
+    if (currentView()?.view.status === 'running') setState(prefs.autoOpen ? 'open' : 'pill');
 
     return {
         open: () => setState('open'),

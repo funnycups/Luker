@@ -55,6 +55,16 @@ describe('mutate and undo', () => {
         expect(state.live.nodes.a.title).toBe('Extraction wrote this');
     });
 
+    test('undo ignores property order and preserves newer recall metadata', async () => {
+        const { state, mutator } = harness();
+        const snapshot = await mutator.mutate(working => patchNode(working, 'a', { title: 'Changed' }));
+        state.live.nodes.a = Object.fromEntries(Object.entries(state.live.nodes.a).reverse());
+        state.live.lastRecallProjection = { at: 42 };
+        await mutator.restore(snapshot);
+        expect(state.live.nodes.a.title).toBe('A');
+        expect(state.live.lastRecallProjection).toEqual({ at: 42 });
+    });
+
     test('no-chat surfaces as an error', async () => {
         const mutator = createMutator({ getLive: async () => null, commit: async () => {} });
         await expect(mutator.mutate(() => {})).rejects.toMatchObject({ code: 'no-chat' });

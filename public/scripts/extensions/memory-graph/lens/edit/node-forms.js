@@ -54,7 +54,7 @@ export function openCreateNode(app) {
             }
             const title = titleInput ? titleInput.value.trim() : String(fields.title || '');
             if (!title && !Object.keys(fields).length) { app.notify(i18n('Fill in at least one item')); return false; }
-            const snapshot = await app.applyEdit(edit => edit.createNode({ type: typeSelect.value, title, fields }), i18n('Created'));
+            const snapshot = await app.applyEdit(edit => edit.createNode({ type: typeSelect.value, title, fields }), i18n('Created'), model.chatKey);
             if (snapshot?.result) app.select(snapshot.result);
             return true;
         },
@@ -77,7 +77,8 @@ function countSubtree(model, node) {
 }
 
 export function confirmDeleteNode(app, node) {
-    const descendants = countSubtree(app.model(), node);
+    const model = app.model();
+    const descendants = countSubtree(model, node);
     confirmText(app, {
         title: i18n('Delete'),
         lines: [
@@ -87,7 +88,7 @@ export function confirmDeleteNode(app, node) {
         okLabel: i18n('Delete'),
         danger: true,
         async onOk() {
-            const snapshot = await app.applyEdit(edit => edit.removeNode(node.id), i18n('Deleted'));
+            const snapshot = await app.applyEdit(edit => edit.removeNode(node.id), i18n('Deleted'), model.chatKey);
             if (snapshot) app.select('');
         },
     });
@@ -126,7 +127,7 @@ export function openNodeProperties(app, node) {
             if ((seq ?? -1) !== node.seqTo) patch.seqTo = seq;
             if (archived !== node.archived) patch.archived = archived;
             if (parentSelect.value !== node.parentId) patch.parentId = parentSelect.value;
-            if (Object.keys(patch).length) await app.applyEdit(edit => edit.updateNode(node, patch), i18n('Modified'));
+            if (Object.keys(patch).length) await app.applyEdit(edit => edit.updateNode(node, patch), i18n('Modified'), model.chatKey);
             return true;
         },
     });
@@ -150,8 +151,7 @@ export function storedEdgesOf(model, id) {
 const nodeTitle = (model, id) => model.nodes.get(id)?.title || id;
 const edgeText = (model, edge) => `${nodeTitle(model, edge.from)} → ${nodeTitle(model, edge.to)}`;
 
-function openEdgeForm(app, node, edge = null) {
-    const model = app.model();
+function openEdgeForm(app, model, node, edge = null) {
     const typeValues = [...new Set([...relationTypes(), ...model.edges.map(item => item.type), ...(edge ? [edge.type] : [])])];
     const fromSelect = selectInput(nodeOptions(model), edge?.from || node.id);
     const toSelect = selectInput(nodeOptions(model), edge?.to || '');
@@ -167,8 +167,8 @@ function openEdgeForm(app, node, edge = null) {
         async onOk() {
             const next = { from: fromSelect.value, to: toSelect.value, type: typeSelect.value };
             if (!next.to) { app.notify(i18n('Choose both memories')); return false; }
-            if (edge) await app.applyEdit(item => item.updateEdge(edge, next), i18n('Modified'));
-            else await app.applyEdit(item => item.addEdge(next), i18n('Created'));
+            if (edge) await app.applyEdit(item => item.updateEdge(edge, next), i18n('Modified'), model.chatKey);
+            else await app.applyEdit(item => item.addEdge(next), i18n('Created'), model.chatKey);
             return true;
         },
     });
@@ -189,16 +189,16 @@ export function openEdgeManager(app, node) {
             ],
             okLabel: i18n('Delete'),
             danger: true,
-            onOk: () => { void app.applyEdit(item => item.removeEdge(edge), i18n('Deleted')); },
+            onOk: () => { void app.applyEdit(item => item.removeEdge(edge), i18n('Deleted'), model.chatKey); },
         });
     };
     const rows = edges.map(edge => h('div', { class: 'ml-edge-row' },
         h('span', { class: 'ml-edge-text', text: edgeText(model, edge) }),
         h('span', { class: 'ml-tag-muted', text: relationOptionLabel(edge.type) }),
-        iconButton('gear', i18n('Edit relationship'), () => { closeList?.(); openEdgeForm(app, node, edge); }, { className: 'ml-iconbtn-sm' }),
+        iconButton('gear', i18n('Edit relationship'), () => { closeList?.(); openEdgeForm(app, model, node, edge); }, { className: 'ml-iconbtn-sm' }),
         iconButton('trash', i18n('Delete relationship'), () => askDelete(edge), { className: 'ml-iconbtn-sm' })));
     closeList = openModal(app, {
         title: i18n('Relationships'),
-        content: h('div', { class: 'ml-edge-list' }, rows, button(i18n('Add relationship'), () => { closeList?.(); openEdgeForm(app, node); }, { iconName: 'plus', className: 'ml-btn-ghost' })),
+        content: h('div', { class: 'ml-edge-list' }, rows, button(i18n('Add relationship'), () => { closeList?.(); openEdgeForm(app, model, node); }, { iconName: 'plus', className: 'ml-btn-ghost' })),
     });
 }

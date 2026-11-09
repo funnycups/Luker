@@ -181,7 +181,7 @@ export function createSetupView(app) {
                 h('span', { class: 'ol-setup-toolhead', text: group.id }),
                 group.verbs.map(verb => flag(`${group.id}.${verb}`, verb, Boolean(value[group.id]?.[verb]))))),
             customNames().length ? h('div', { class: 'ol-setup-toolgroup' },
-                h('span', { class: 'ol-setup-toolhead', text: 'custom' }),
+                h('span', { class: 'ol-setup-toolhead', text: i18n('Custom tools') }),
                 customNames().map(name => flag(`custom.${name}`, name, value.custom?.[name] !== false))) : null);
     }
 

@@ -8,13 +8,18 @@ import { addEdge, removeEdge, reparentNode, willCreateParentCycle } from '../../
 import { i18n } from '../i18n.js';
 
 const clone = (value) => structuredClone(value);
-const graphKey = (store) => JSON.stringify([store?.nodes ?? {}, store?.edges ?? []]);
+function graphKey(store) {
+    return JSON.stringify([store.nodes, store.edges], (_key, value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+        return Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]));
+    });
+}
 const isEmpty = (value) => value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length);
 
 /**
  * @param {{ getLive: () => Promise<object|null>, commit: (before: object, after: object) => Promise<void> }} deps
  */
-export function createMutator({ getLive, commit }) {
+export function createMutator({ getLive, commit, normalize = value => value }) {
     const requireLive = async () => {
         const live = await getLive();
         if (!live) throw Object.assign(new Error('no-chat'), { code: 'no-chat' });
@@ -28,13 +33,16 @@ export function createMutator({ getLive, commit }) {
             const working = clone(live);
             const result = await edit(working);
             await commit(live, working);
-            return { result, before, afterKey: graphKey(working) };
+            return { result, before, afterKey: graphKey(normalize(working)) };
         },
         /** Puts the graph back, refusing when something else changed it since. */
         async restore(snapshot) {
             const live = await requireLive();
-            if (graphKey(live) !== snapshot.afterKey) throw new Error(i18n('The memory has changed since then, so this cannot be undone'));
-            await commit(live, clone(snapshot.before));
+            if (graphKey(normalize(live)) !== snapshot.afterKey) throw new Error(i18n('The memory has changed since then, so this cannot be undone'));
+            const restored = clone(live);
+            restored.nodes = clone(snapshot.before.nodes);
+            restored.edges = clone(snapshot.before.edges);
+            await commit(live, restored);
         },
     };
 }

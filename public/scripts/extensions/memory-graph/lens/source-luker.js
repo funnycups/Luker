@@ -16,6 +16,7 @@ import {
     applyRawGraphJson,
     clearMemoryAdvancedOverride,
     commitGraphUiMutation,
+    createNode,
     ensureMemoryStoreLoaded,
     ensureStoreSyncedWithChat,
     exportMemoryGraph,
@@ -43,6 +44,7 @@ import {
     stopMemoryExtraction,
     syncGraphVectorsAfterMutation,
 } from '../main.js';
+import { normalizeStoreForRuntime } from '../persistence.js';
 import { getMemoryGraphReadApi } from '../read-api.js';
 import { getMemoryGraphWriteApi } from '../write-api.js';
 import { commitSkipMessage } from './edit/edit-model.js';
@@ -123,7 +125,7 @@ export function createLukerSource() {
                 tokens = { current: at ? { ...tokenCache } : null, entries: structuredClone(readEntries(ctx)) };
             } catch { tokens = null; }
             return {
-                chatKey: String(chatId),
+                chatKey: getChatKey(ctx),
                 chatLabel: chatLabelOf(ctx),
                 loadedAt: Date.now(),
                 nodes,
@@ -191,7 +193,7 @@ export function createLukerSource() {
 
         schema: createSchemaAccess(resolveApi),
         ai: createAiAccess(resolveApi),
-        edit: createEditAccess(resolveApi),
+        edit: { forChat: key => createEditAccess(resolveApi, key) },
         filter: createFilterAccess(),
         settings: createSettingsAccess(),
         ops: createOperationsAccess(),
@@ -231,12 +233,20 @@ function createFilterAccess() {
 // commitGraphUiMutation (persists + fires onStoreCommit), then re-syncs
 // vectors. The result carries the before/after snapshot used for undo.
 
-function createEditAccess(resolveApi) {
+function createEditAccess(resolveApi, expectedChat) {
     const context = () => resolveApi().ctx;
+    function checkTarget() {
+        const ctx = context();
+        if (!expectedChat || expectedChat === 'invalid_target' || getChatKey(ctx) !== expectedChat) {
+            throw new SourceError('chat-changed', i18n('The active chat has changed.'));
+        }
+        return ctx;
+    }
     const mutator = createMutator({
-        getLive: () => ensureStoreSyncedWithChat(context()),
+        normalize: normalizeStoreForRuntime,
+        getLive: () => ensureStoreSyncedWithChat(checkTarget()),
         async commit(beforeStore, afterStore) {
-            const ctx = context();
+            const ctx = checkTarget();
             const chatKey = String(getChatKey(ctx) || '').trim();
             if (!chatKey) throw new SourceError('no-chat');
             const skipped = commitSkipMessage(await commitGraphUiMutation(ctx, chatKey, { beforeStore, afterStore, replaceGraph: false, seq: null }));
@@ -252,7 +262,7 @@ function createEditAccess(resolveApi) {
     return {
         /** @param {{ fields?: object, title?: string, type?: string, level?: string, seqTo?: number|null, archived?: boolean, parentId?: string }} patch */
         updateNode: (node, patch) => mutator.mutate(working => patchNode(working, node.id, patch)),
-        createNode: (spec) => mutator.mutate(async working => (await writeApi(working).createNode(spec)).id),
+        createNode: (spec) => mutator.mutate(working => createNode(working, spec).id),
         removeNode: (id) => mutator.mutate(async working => check(await writeApi(working).deleteNode({ id }))),
         addEdge: (edge) => mutator.mutate(working => addExactEdge(working, edge)),
         updateEdge: (edge, next) => mutator.mutate(working => replaceExactEdge(working, edge, next)),
@@ -275,8 +285,8 @@ function createSettingsAccess() {
             return view;
         },
         set: (key, value) => setMemorySetting(key, value),
-        saveAdvanced: (values, scope) => saveMemoryAdvancedSettings(getContext(), values, scope),
-        clearAdvanced: () => clearMemoryAdvancedOverride(getContext()),
+        saveAdvanced: (values, scope, avatar) => saveMemoryAdvancedSettings(getContext(), values, scope, avatar),
+        clearAdvanced: avatar => clearMemoryAdvancedOverride(getContext(), avatar),
     };
 }
 
@@ -304,7 +314,13 @@ function createOperationsAccess() {
             await ensureMemoryStoreLoaded(ctx());
             return getRawGraphJson(ctx());
         },
-        applyRawJson: (text) => applyRawGraphJson(ctx(), text),
+        async readRawEdit() {
+            const chatKey = getChatKey(ctx());
+            await ensureStoreSyncedWithChat(ctx());
+            if (getChatKey(ctx()) !== chatKey || chatKey === 'invalid_target') throw new SourceError('chat-changed', i18n('The active chat has changed.'));
+            return { chatKey, text: getRawGraphJson(ctx()) };
+        },
+        applyRawJson: (text, base) => applyRawGraphJson(ctx(), text, base),
         openConfigStudio: () => openMemoryConfigStudio(ctx()),
         openGraphStudio: () => openMemoryGraphStudio(ctx()),
     };

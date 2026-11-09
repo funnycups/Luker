@@ -66,7 +66,7 @@ test('a run frozen mid-way is live: running segments extend to now', () => {
     expect(agentActivity(view).main.status).toBe('running');
 });
 
-test('recorder persists finished runs, newest first, and skips quiet runs', () => {
+test('recorder persists finished runs, newest first, including quiet runs', () => {
     const clock = createClock();
     const store = createMockRunStore({ now: clock.now });
     const storage = createMemoryStorage();
@@ -76,11 +76,11 @@ test('recorder persists finished runs, newest first, and skips quiet runs', () =
     playScript(store, scriptFor('agenda'), { speed: Infinity, clock });
     const quiet = store.startRun({ mode: 'spec', quiet: true });
     store.finishRun({ runId: quiet, status: 'committed' });
-    expect(recorder.history().map(r => r.mode)).toEqual(['agenda', 'loop']);
+    expect(recorder.history().map(r => r.mode)).toEqual(['spec', 'agenda', 'loop']);
     const again = createRecorder({ storage, now: clock.now });
-    expect(again.history().length).toBe(2);
+    expect(again.history().length).toBe(3);
     again.removeWhere(r => r.mode === 'loop');
-    expect(again.history().map(r => r.mode)).toEqual(['agenda']);
+    expect(again.history().map(r => r.mode)).toEqual(['spec', 'agenda']);
 });
 
 test('recorder keeps the first finish when director reports twice', () => {

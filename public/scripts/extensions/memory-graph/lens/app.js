@@ -104,14 +104,14 @@ export function mountMemoryLens({ source, container = document.body, onClose = n
         canEdit: () => Boolean(source.edit),
         notify: (text) => showToast(text),
         /** Saves one edited value; key '' = title. Offers undo afterwards. */
-        async editNode(node, key, text, original) {
+        async editNode(node, key, text, original, chatKey) {
             if (!source.edit) return;
             const value = key === '' ? String(text).trim() : fromEditText(text, original);
             // An entity's 'title' column is its name; keep the node title in step.
             const patch = key === '' ? { title: value }
                 : key === 'title' && String(value).trim() ? { fields: { title: value }, title: String(value).trim() }
                     : { fields: { [key]: value } };
-            await app.applyEdit(edit => edit.updateNode(node, patch), i18n('Modified'));
+            await app.applyEdit(edit => edit.updateNode(node, patch), i18n('Modified'), chatKey);
         },
         showTokens() {
             const clearLog = source.clearTokens ? () => {
@@ -137,15 +137,16 @@ export function mountMemoryLens({ source, container = document.body, onClose = n
         refresh: () => scheduleReload(),
         showToast: (text, options) => showToast(text, options),
         /** Runs one graph edit and offers to undo it. */
-        async applyEdit(run, doneText) {
+        async applyEdit(run, doneText, chatKey = model?.chatKey) {
             if (!source.edit) return null;
             try {
-                const snapshot = await run(source.edit);
+                const edit = source.edit.forChat(chatKey);
+                const snapshot = await run(edit);
                 showToast(doneText, {
                     action: i18n('Undo'),
                     onAction: async () => {
                         try {
-                            await source.edit.restore(snapshot);
+                            await edit.restore(snapshot);
                             showToast(i18n('Undone'));
                         } catch (err) {
                             showToast(i18nFormat('Edit failed: ${0}', String(err?.message || err)), { error: true });
@@ -354,7 +355,7 @@ export function mountMemoryLens({ source, container = document.body, onClose = n
         }
         if (changed.has('view')) {
             const view = views[state.view];
-            if (model && !isFullView(state.view)) view.render();
+            if (state.view === 'settings' || (model && !isFullView(state.view))) view.render();
             view.onShow?.();
         }
         if (changed.has('graphLayout') || changed.has('timelineOrder')) {

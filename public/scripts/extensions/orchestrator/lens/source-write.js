@@ -15,6 +15,7 @@
 // prompt untouched. The default model is the orchestrator's iteration AI
 // presets; the lens can pick its own.
 
+import { saveSettingsChecked } from '../../workbench/model/patch.js';
 import { i18n, i18nFormat } from './i18n.js';
 import { requestToolCallsWithRetry } from '../../../iteration-library/runner.js';
 import { getChatCompletionConnectionProfiles } from '../../connection-manager/profile-resolver.js';
@@ -76,7 +77,7 @@ import { normalizeCapsuleInjectPosition } from '../capsule-injection.js';
 import { sanitizeIdentifierToken } from '../editable-spec.js';
 import { buildDirectorDefaultSystemPrompt } from '../director-default-prompt.js';
 import { promptEmbedUnembeddedPresetsForCharacterApply } from '../prompt-embed-unembedded.js';
-import { mergeChanges, validateStructure } from './model/edit.js';
+import { getField, mergeChanges, validateStructure } from './model/edit.js';
 
 const LENS_KEY = 'orchestra_lens';
 const SESSIONS_KEY = 'orchestraLens.ai.v1';
@@ -115,25 +116,36 @@ function readTarget(ctx, settings, target) {
     return clone(entry);
 }
 
+async function saveFields(ctx, holder, fields) {
+    const previous = new Map(Object.keys(fields).map(key => [key, Object.getOwnPropertyDescriptor(holder, key)]));
+    Object.assign(holder, fields);
+    try {
+        await saveSettingsChecked(ctx);
+    } catch (error) {
+        for (const [key, descriptor] of previous) {
+            if (holder[key] !== fields[key]) continue;
+            if (descriptor) Object.defineProperty(holder, key, descriptor);
+            else delete holder[key];
+        }
+        throw error;
+    }
+}
+
 async function writeTarget(ctx, settings, target, profile) {
     const { mode, scope, presetId } = target;
     if (mode === 'single') {
         const single = profile?.presets?.single_agent || {};
-        settings.singleAgentSystemPrompt = String(single.systemPrompt || '');
-        settings.singleAgentUserPromptTemplate = String(single.userPromptTemplate || '');
-        await ctx.saveSettings();
+        await saveFields(ctx, settings, { singleAgentSystemPrompt: String(single.systemPrompt || ''), singleAgentUserPromptTemplate: String(single.userPromptTemplate || '') });
         return;
     }
     if (scope === 'chat') {
-        settings.chatOverrides[target.chatKey].agenda = { ...profile, enabled: true };
-        await ctx.saveSettings();
+        await saveFields(ctx, settings.chatOverrides[target.chatKey], { agenda: { ...profile, enabled: true } });
         return;
     }
     if (scope === 'global') {
         const library = settings.presetLibraries?.[mode];
         if (!library?.[presetId]) throw new WriteError('target-gone', i18n('The profile to edit was deleted'));
-        library[presetId] = sanitizePresetEntry(mode, { ...profile, name: library[presetId].name });
-        await ctx.saveSettings();
+        await saveFields(ctx, library, { [presetId]: sanitizePresetEntry(mode, { ...profile, name: library[presetId].name }) });
         return;
     }
     // Character card: write the whole orchestrator block back through the
@@ -163,16 +175,19 @@ export function createProfileAccess(host) {
          * @param {{ force?: boolean }} opts  write even if some fields changed elsewhere
          * @returns {Promise<{ saved: boolean, conflicts: object[], missing: object[] }>}
          */
-        async save(target, changes, { force = false } = {}) {
+        async save(target, changes, { force = false, requireAll = false } = {}) {
             const { ctx, settings } = host();
             const fresh = readTarget(ctx, settings, target);
             const { profile, conflicts, missing } = mergeChanges(target.mode, fresh, changes);
-            if (conflicts.length && !force) return { saved: false, conflicts, missing };
+            if ((conflicts.length && !force) || (requireAll && missing.length)) return { saved: false, conflicts, missing };
             const problems = validateStructure(target.mode, profile);
             if (problems.length) throw new WriteError('invalid', problems.join('\n'));
+            const applied = changes.filter(change => !missing.includes(change)).map(change => ({
+                ...change, before: getField(target.mode, fresh, change.agentId, change.field),
+            })).filter(change => change.before !== change.after);
             await writeTarget(ctx, settings, target, profile);
             refreshEditors(ctx);
-            return { saved: true, conflicts, missing };
+            return { saved: true, conflicts, missing, applied };
         },
 
         /** Connection profiles and generation presets to pick from. */
@@ -213,15 +228,28 @@ export function createProfileAccess(host) {
 
 const scopeOf = (target) => (target?.scope === 'character' ? 'character' : 'global');
 
-async function persistScope(ctx, scope, avatar) {
-    if (scope !== 'character') {
-        await ctx.saveSettings();
-        return;
+// Library helpers mutate their arguments. Stage those edits before writing the selected scope.
+async function changeLibrary(ctx, settings, { mode, avatar }, scope, edit) {
+    const index = scope === 'character' ? getCharacterIndexByAvatar(ctx, avatar) : -1;
+    const card = ctx.characters?.[index];
+    if (scope === 'character' && !card) throw new WriteError('no-character', i18n('No character selected.'));
+    const owner = card ? getCharacterExtensionDataByAvatar(ctx, avatar) : settings;
+    const staged = {
+        ...owner,
+        presetLibraries: { ...owner.presetLibraries, [mode]: clone(owner.presetLibraries?.[mode] || {}) },
+        activePresetIds: { ...owner.activePresetIds },
+    };
+    let context = ctx;
+    if (card) {
+        const characters = ctx.characters.slice();
+        characters[index] = { ...card, data: { ...card.data, extensions: { ...card.data?.extensions, orchestrator: staged } } };
+        context = { ...ctx, characters };
     }
-    const index = getCharacterIndexByAvatar(ctx, avatar);
-    if (index < 0) throw new WriteError('no-character', i18n('No character selected.'));
-    if (!await persistOrchestratorCharacterExtension(ctx, index, { ...(getCharacterExtensionDataByAvatar(ctx, avatar) || {}) })) {
-        throw new WriteError('write', i18n('Failed to persist character override.'));
+    edit(card ? settings : staged, { context, avatar });
+    if (card) {
+        if (!await persistOrchestratorCharacterExtension(ctx, index, staged)) throw new WriteError('write', i18n('Failed to persist character override.'));
+    } else {
+        await saveFields(ctx, settings, { presetLibraries: staged.presetLibraries, activePresetIds: staged.activePresetIds });
     }
 }
 
@@ -260,25 +288,22 @@ export function createPresetAccess(host) {
             const { ctx, settings } = host();
             const { mode, avatar } = target;
             const hadCardSlot = Boolean(avatar) && Boolean(getCharacterActivePresetId(ctx, avatar, mode));
-            if (scope === 'global' && hadCardSlot) setActivePresetId(settings, mode, 'character', '', opts(ctx, avatar));
-            if (!setActivePresetId(settings, mode, scope, presetId, opts(ctx, avatar))) throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
-            if (hadCardSlot || (scope === 'character' && avatar)) {
-                const index = getCharacterIndexByAvatar(ctx, avatar);
-                const ext = getCharacterExtensionDataByAvatar(ctx, avatar);
-                if (index >= 0 && ext && Object.keys(ext).length && !await persistOrchestratorCharacterExtension(ctx, index, { ...ext })) {
-                    throw new WriteError('write', i18n('Failed to persist character override.'));
-                }
+            await changeLibrary(ctx, settings, target, scope, (working, options) => {
+                if (!setActivePresetId(working, mode, scope, presetId, options)) throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
+            });
+            if (scope === 'global' && hadCardSlot) {
+                await changeLibrary(ctx, settings, target, 'character', (working, options) => setActivePresetId(working, mode, 'character', '', options));
             }
-            if (scope === 'global') await ctx.saveSettings();
             refreshed(ctx);
         },
 
         async create(target, name) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
-            const id = createPreset(settings, target.mode, scope, { name }, opts(ctx, target.avatar));
-            setActivePresetId(settings, target.mode, scope, id, opts(ctx, target.avatar));
-            await persistScope(ctx, scope, target.avatar);
+            await changeLibrary(ctx, settings, target, scope, (working, options) => {
+                const id = createPreset(working, target.mode, scope, { name }, options);
+                if (!id || !setActivePresetId(working, target.mode, scope, id, options)) throw new WriteError('write', i18n('Could not save the preset.'));
+            });
             refreshed(ctx);
         },
 
@@ -286,10 +311,11 @@ export function createPresetAccess(host) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const oldName = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
-            const id = duplicatePreset(settings, target.mode, scope, target.presetId, { name }, opts(ctx, target.avatar));
-            setActivePresetId(settings, target.mode, scope, id, opts(ctx, target.avatar));
+            await changeLibrary(ctx, settings, target, scope, (working, options) => {
+                const id = duplicatePreset(working, target.mode, scope, target.presetId, { name }, options);
+                if (!id || !setActivePresetId(working, target.mode, scope, id, options)) throw new WriteError('write', i18n('Could not save the preset.'));
+            });
             await copyOrchPresetSkills(ctx, { mode: target.mode, oldName, newName: name });
-            await persistScope(ctx, scope, target.avatar);
             refreshed(ctx);
         },
 
@@ -297,9 +323,10 @@ export function createPresetAccess(host) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const oldName = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
-            renamePreset(settings, target.mode, scope, target.presetId, { name }, opts(ctx, target.avatar));
+            await changeLibrary(ctx, settings, target, scope, (working, options) => {
+                if (!renamePreset(working, target.mode, scope, target.presetId, { name }, options)) throw new WriteError('write', i18n('Could not save the preset.'));
+            });
             await renameOrchPresetSkills(ctx, { mode: target.mode, oldName, newName: name });
-            await persistScope(ctx, scope, target.avatar);
             refreshed(ctx);
         },
 
@@ -307,9 +334,10 @@ export function createPresetAccess(host) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
             const name = nameOf(ctx, settings, target.mode, scope, target.avatar, target.presetId);
-            deletePreset(settings, target.mode, scope, target.presetId, opts(ctx, target.avatar));
+            await changeLibrary(ctx, settings, target, scope, (working, options) => {
+                if (!deletePreset(working, target.mode, scope, target.presetId, options)) throw new WriteError('write', i18n('Could not save the preset.'));
+            });
             await emitOrchPresetDeleted(ctx, { mode: target.mode, name });
-            await persistScope(ctx, scope, target.avatar);
             refreshed(ctx);
         },
 
@@ -333,14 +361,14 @@ export function createPresetAccess(host) {
         async importParsed(target, { imported, fileText }, name) {
             const { ctx, settings } = host();
             const scope = scopeOf(target);
-            const { mode, avatar } = target;
-            const id = createPreset(settings, mode, scope, { name }, opts(ctx, avatar));
-            if (!id) throw new WriteError('write', i18n('Could not create the preset.'));
-            setActivePresetId(settings, mode, scope, id, opts(ctx, avatar));
+            const { mode } = target;
             const profile = extractImportedProfileForMode(imported);
-            const result = writeActivePreset(settings, mode, scope, profile, opts(ctx, avatar));
-            if (!result.ok) throw new WriteError('write', result.hint || result.reason);
-            await persistScope(ctx, scope, avatar);
+            await changeLibrary(ctx, settings, target, scope, (working, options) => {
+                const id = createPreset(working, mode, scope, { name }, options);
+                if (!id || !setActivePresetId(working, mode, scope, id, options)) throw new WriteError('write', i18n('Could not create the preset.'));
+                const result = writeActivePreset(working, mode, scope, profile, options);
+                if (!result.ok) throw new WriteError('write', result.hint || result.reason);
+            });
             const data = { ...profile };
             const envelope = JSON.parse(fileText);
             if (envelope?.extensions) data.extensions = envelope.extensions;
@@ -354,10 +382,11 @@ export function createPresetAccess(host) {
             const current = getPreset(settings, target.mode, scopeOf(target), target.presetId, opts(ctx, target.avatar));
             if (!current) throw new WriteError('target-gone', i18n('The profile to edit was deleted'));
             const { name: _name, ...body } = current;
-            getActivePreset(settings, target.mode, { scope: 'global', context: ctx });
-            const result = writeActivePreset(settings, target.mode, 'global', body, { context: ctx });
-            if (!result.ok) throw new WriteError('write', result.hint || result.reason);
-            await ctx.saveSettings();
+            await changeLibrary(ctx, settings, target, 'global', (working, options) => {
+                getActivePreset(working, target.mode, { scope: 'global', ...options });
+                const result = writeActivePreset(working, target.mode, 'global', body, options);
+                if (!result.ok) throw new WriteError('write', result.hint || result.reason);
+            });
             refreshed(ctx);
         },
 
@@ -409,15 +438,14 @@ export function createPresetAccess(host) {
 
         async resetSingle() {
             const { ctx, settings } = host();
-            settings.singleAgentSystemPrompt = DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT;
-            settings.singleAgentUserPromptTemplate = DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE;
-            await ctx.saveSettings();
+            await saveFields(ctx, settings, { singleAgentSystemPrompt: DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT, singleAgentUserPromptTemplate: DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE });
             refreshed(ctx);
         },
 
         async saveCustomTools(target, tools) {
             const { ctx, settings } = host();
-            await persistCustomToolsPatch(ctx, settings, target.mode, scopeOf(target), tools, { avatar: target.avatar });
+            if (getActivePresetId(settings, target.mode, { scope: scopeOf(target), context: ctx, avatar: target.avatar }) !== target.presetId) throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
+            if (!await persistCustomToolsPatch(ctx, settings, target.mode, scopeOf(target), tools, { avatar: target.avatar, saveGlobal: () => saveSettingsChecked(ctx) })) throw new WriteError('write', i18n('Failed to persist character override.'));
             refreshed(ctx);
         },
     };
@@ -471,7 +499,8 @@ export function createSettingsAccess(host) {
         /** Limits live inside the active preset of agenda / loop / director. */
         async setLimit(target, patch) {
             const { ctx, settings } = host();
-            await persistRuntimeLimitsPatch(ctx, settings, target.mode, scopeOf(target), patch, { avatar: target.avatar });
+            if (getActivePresetId(settings, target.mode, { scope: scopeOf(target), context: ctx, avatar: target.avatar }) !== target.presetId) throw new WriteError('target-gone', i18n('Preset no longer exists — refreshing the list.'));
+            if (!await persistRuntimeLimitsPatch(ctx, settings, target.mode, scopeOf(target), patch, { avatar: target.avatar, saveGlobal: () => saveSettingsChecked(ctx) })) throw new WriteError('write', i18n('Failed to persist character override.'));
             refreshEditors(ctx);
         },
     };

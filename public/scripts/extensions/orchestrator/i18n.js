@@ -34,6 +34,7 @@ export function i18nFormat(key, ...values) {
 export function registerLocaleData() {
     ctx();
     _addLocaleData('zh-cn', {
+        'Could not save the preset.': '无法保存预设。',
         'Multi-agent orchestration (card settings)': '多智能体编排（本卡配置）',
         'Saved mode presets: ${0}': '已保存模式预设：${0}',
         'Custom orchestration settings': '自定义编排配置',
@@ -794,6 +795,7 @@ export function registerLocaleData() {
         'Iteration mode prompt help body': 'AI 迭代工作台针对某个模式起草配置时，拼在基础提示后面的模式专属指令块。改这个只影响 iteration 的行为，不影响编排运行时。',
     });
     _addLocaleData('zh-tw', {
+        'Could not save the preset.': '無法儲存預設。',
         'Multi-agent orchestration (card settings)': '多智能體編排（本卡設定）',
         'Saved mode presets: ${0}': '已儲存模式預設：${0}',
         'Custom orchestration settings': '自訂編排設定',

@@ -19,7 +19,7 @@ export function createDrafts() {
 
     function put(agentId, field, value, by) {
         const key = keyOf(agentId, field);
-        const before = getField(target.mode, base, agentId, field);
+        const before = changes.get(key)?.before ?? getField(target.mode, base, agentId, field);
         if (String(value) === before) changes.delete(key);
         else changes.set(key, { id: key, agentId, field, before, after: String(value), by });
     }
@@ -36,7 +36,6 @@ export function createDrafts() {
                     if (!canHold(target.mode, withSlots, c.agentId, c.field)) { changes.delete(key); continue; }
                     const now = getField(target.mode, base, c.agentId, c.field);
                     if (now === c.after) changes.delete(key);
-                    else c.before = now;
                 }
                 emit();
             }
@@ -61,7 +60,11 @@ export function createDrafts() {
             if (!target) return;
             const previous = new Map(changes);
             changes.clear();
-            for (const c of diffProfiles(target.mode, base, next)) changes.set(keyOf(c.agentId, c.field), { ...c, by: previous.get(keyOf(c.agentId, c.field))?.by || by });
+            for (const c of diffProfiles(target.mode, base, next)) {
+                const key = keyOf(c.agentId, c.field);
+                const prior = previous.get(key);
+                changes.set(key, { ...c, before: prior?.before ?? c.before, by: prior?.by || by });
+            }
             emit();
         },
         /** Several changes at once ({agentId, field, after}). Returns a snapshot to undo with restore(). */
