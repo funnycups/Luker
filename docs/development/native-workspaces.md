@@ -91,4 +91,4 @@ Full-suite comparison on macOS against a clean `release` export: 667 failures on
 
 ## Not verified
 
-Nothing has been run in a browser or on a device. That includes rendering, CSS loading, mobile layouts, the dock and takeover switch, tag filter at runtime, every save path and all real AI calls. `zh-tw` was machine-converted and only partly proofread.
+Nothing has been run in a browser or on a device. That includes rendering, CSS loading, mobile layouts, the dock and takeover switch, tag filter at runtime, every save path and all real AI calls. The four Traditional Chinese locale tables have been proofread for Taiwan usage.

@@ -342,6 +342,7 @@ export function createIteratePage(app) {
         const runWs = ws;
         const runScope = scope;
         const runKey = keyOf();
+        const scopeName = runScope === 'character' ? charName() : '';
         let runId = session?.id || null;
         busy = true;
         try {
@@ -353,7 +354,7 @@ export function createIteratePage(app) {
                 app.toast(loadError || i18n('Could not read what should be edited'), { error: true });
                 return;
             }
-            if (selection !== selectionVersion || ws !== runWs || scope !== runScope || (session?.id || null) !== runId) return;
+            const visible = selection === selectionVersion && runWs === ws && runScope === scope && (session?.id || null) === runId;
             loadError = '';
             const w = { base: loaded.live, target: loaded.target, title: loaded.title };
             work.set(runKey, w);
@@ -364,9 +365,9 @@ export function createIteratePage(app) {
                 return;
             }
             if (!current) {
-                current = store.create({ kind: 'iterate', ws: runWs, scope: runScope, scopeName: runScope === 'character' ? charName() : '', title: titleFrom(text), messages: [], targetId: id });
+                current = store.create({ kind: 'iterate', ws: runWs, scope: runScope, scopeName, title: titleFrom(text), messages: [], targetId: id });
                 runId = current.id;
-                session = current;
+                if (visible) session = current;
             } else if (!current.targetId) {
                 current = saveTo(runId, { targetId: id });
             }
@@ -375,8 +376,10 @@ export function createIteratePage(app) {
             const draft = { base: structuredClone(w.base), ai: structuredClone(w.base), target: w.target, title: w.title, workKey: runKey, ws: runWs };
             drafts.set(runId, draft);
             let userContent = current.note ? `${current.note}\n\n${text}` : text;
-            input.value = '';
-            grow();
+            if (visible && input.value.trim() === text) {
+                input.value = '';
+                grow();
+            }
             if (withReply) {
                 const reply = await iter().lastReply?.();
                 if (reply) userContent += `\n\n<最近一条回复>\n${reply}\n</最近一条回复>`;

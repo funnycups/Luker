@@ -233,10 +233,12 @@ export function createAskPage(app) {
             let overview;
             const filter = { inspector: s.ask.sources.inspector !== false, redactText: s.ask.redact };
             try { overview = await app.source.askOverview(filter); } catch (err) { overview = finishOverview({ 错误: String(err?.message || err) }, filter); }
-            if (selection !== selectionVersion || startingSession !== session) return;
+            const visible = selection === selectionVersion && startingSession === session;
             if (s.ask.previewBeforeSend && !globalThis.confirm(i18nFormat('To be sent to the AI:\n\nQuestion: ${0}\n\nOverview:\n${1}\n\nThe AI will then read data as needed. Continue?', question, JSON.stringify(overview, null, 1).slice(0, 1500)))) return;
             // The answer belongs to this session, whichever one is open when it arrives.
-            const runId = (session || (session = store.create({ kind: 'ask', title: titleFrom(question) }))).id;
+            const owner = startingSession || store.create({ kind: 'ask', title: titleFrom(question) });
+            if (visible) session = owner;
+            const runId = owner.id;
             const started = store.get(runId);
             const saveTo = (patch) => {
                 const updated = store.update(runId, patch);
@@ -244,8 +246,10 @@ export function createAskPage(app) {
                 return updated;
             };
             saveTo({ turns: [...started.turns, { role: 'user', text: question, at: Date.now() }] });
-            input.value = '';
-            grow();
+            if (visible && input.value.trim() === question) {
+                input.value = '';
+                grow();
+            }
             steps = [];
             controller = new AbortController();
             abort = controller;
