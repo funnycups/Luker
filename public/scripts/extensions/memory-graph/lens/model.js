@@ -232,6 +232,7 @@ export function buildModel(snapshot = {}) {
             id: str(raw.id),
             type,
             level: raw.level === 'semantic' ? 'semantic' : 'episodic',
+            rawLevel: str(raw.level),
             rawTitle: str(raw.title).trim(),
             fields,
             seqTo: Number.isFinite(Number(raw.seqTo)) ? Number(raw.seqTo) : -1,

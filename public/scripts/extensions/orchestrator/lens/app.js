@@ -39,7 +39,7 @@ function detectTheme() {
  *   recorder: a long-lived recorder (index.js keeps one so runs are captured
  *   even while the lens is closed). Created here when absent.
  */
-export function mountOrchestraLens({ source, container = document.body, onClose = null, recorder = null, takeover = null, embedded = false }) {
+export function mountOrchestraLens({ source, container = document.body, onClose = null, recorder = null, embedded = false }) {
     const prefs = loadPrefs();
     const compactMql = globalThis.matchMedia?.(COMPACT_QUERY);
     const store = createStore({
@@ -95,7 +95,6 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
         recorder: rec,
         runKey,
         runViewOf,
-        takeover,
         source,
         drafts,
         draftsActive,
@@ -267,7 +266,6 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
             aiPanel ? h('button', { type: 'button', class: 'ol-aibtn', 'aria-pressed': String(state.aiOpen), title: i18n('AI assistant'), onClick: () => store.set({ aiOpen: !state.aiOpen }) },
                 icon('sparkle', { size: 14 }), h('span', { class: 'ol-aibtn-label', text: 'AI' })) : null,
             iconButton(state.theme === 'dark' ? 'sun' : 'moon', i18n('Toggle theme'), () => store.set({ theme: state.theme === 'dark' ? 'light' : 'dark' })),
-            source.openNative ? iconButton('external', i18n('Edit in native panel'), () => openNative(), { className: 'ol-hide-compact' }) : null,
             iconButton('sidebarRight', i18n('Details panel'), () => toggleInspector(), { className: 'ol-toggle-inspector', pressed: state.inspectorOpen }),
             embedded ? null : iconButton('x', i18n('Close'), () => close(), { className: 'ol-close' }));
     }
@@ -334,7 +332,7 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
             const result = await source.edit.save(target, changes, { force });
             if (!result.saved) {
                 const value = await dialog.ask(i18n('These were also changed elsewhere'), h('div', null,
-                    h('p', { class: 'ol-dialog-text', text: i18n('After you started editing, the items below were also changed in the native panel. Saving anyway overwrites them with your version.') }),
+                    h('p', { class: 'ol-dialog-text', text: i18n('After you started editing, the items below were also changed elsewhere. Saving anyway overwrites them with your version.') }),
                     changeList({ changes: result.conflicts.map(c => ({ ...c, before: c.current })), state: 'review' })), [
                     { label: i18n('Cancel'), value: '' },
                     { label: i18n('Overwrite with my version'), value: 'force', danger: true },
@@ -416,14 +414,6 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
             try { modelOptions = await source.edit.options(); modelOptionsLoaded = true; } catch { /* keep empty */ }
         }
         return modelOptions;
-    }
-
-    function openNative() {
-        if (!source.openNative?.()) {
-            showToast(i18n('Orchestrator panel not found (make sure the extension is enabled)'), { error: true });
-            return;
-        }
-        close();
     }
 
     function toggleInspector() {

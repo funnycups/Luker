@@ -2,8 +2,6 @@
  * size and stacking; tokens come from `.olens[data-theme]`. */
 
 /* While taken over, Luker's own run panels and their pills stay hidden. */
-html.ol-takeover .luker-run-panel,
-html.ol-takeover .luker-run-panel-pill { display: none !important; }
 
 .olens.ol-dock {
     position: fixed; top: 0; right: 0; bottom: 0; left: auto;
@@ -92,8 +90,6 @@ html.ol-takeover .luker-run-panel-pill { display: none !important; }
 .olens .ol-dock-foot { position: relative; flex: none; display: flex; align-items: center; padding: 4px 14px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--ol-border); }
 .olens .ol-dock-foot:empty { display: none; }
 .olens .ol-dock-auto { padding: 6px 0; flex: 1; }
-.olens .ol-dock-native { margin-left: 14px; color: var(--ol-text-faint); font-weight: 500; white-space: nowrap; }
-.olens .ol-dock-native:hover { color: var(--ol-text-muted); }
 .olens .ol-dock-auto .ol-switch-label { font-size: 12px; color: var(--ol-text-muted); }
 .olens .ol-dock-toast {
     position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 5;

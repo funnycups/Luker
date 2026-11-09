@@ -4,7 +4,7 @@
 //
 // Saving agent fields: re-read the stored profile for the same target
 // (mode + scope + preset id), put only the changed fields on top (so the
-// rest, including edits made in the native editor meanwhile, survives) and
+// rest, including edits made elsewhere meanwhile, survives) and
 // write it the way the orchestrator's own editor does. Afterwards the
 // editor's cached drafts are reloaded (editor-state.js initializeUiState),
 // otherwise a later save would overwrite ours.
@@ -80,7 +80,6 @@ import { mergeChanges, validateStructure } from './model/edit.js';
 
 const LENS_KEY = 'orchestra_lens';
 const SESSIONS_KEY = 'orchestraLens.ai.v1';
-const MODES = ['spec', 'single', 'agenda', 'loop', 'director'];
 
 export class WriteError extends Error {
     constructor(code, message) {
@@ -151,7 +150,6 @@ async function writeTarget(ctx, settings, target, profile) {
 /** Makes the shared editor state drop its cached drafts. */
 function refreshEditors(ctx) {
     initializeUiState(ctx);
-    ctx.getExtensionApi('orchestrator')?.refreshLegacyPanel?.();
 }
 
 /**
@@ -215,11 +213,16 @@ export function createProfileAccess(host) {
 
 const scopeOf = (target) => (target?.scope === 'character' ? 'character' : 'global');
 
-function persistScope(ctx, scope, avatar) {
-    if (scope !== 'character') return ctx.saveSettings();
+async function persistScope(ctx, scope, avatar) {
+    if (scope !== 'character') {
+        await ctx.saveSettings();
+        return;
+    }
     const index = getCharacterIndexByAvatar(ctx, avatar);
-    if (index < 0) return false;
-    return persistOrchestratorCharacterExtension(ctx, index, { ...(getCharacterExtensionDataByAvatar(ctx, avatar) || {}) });
+    if (index < 0) throw new WriteError('no-character', i18n('No character selected.'));
+    if (!await persistOrchestratorCharacterExtension(ctx, index, { ...(getCharacterExtensionDataByAvatar(ctx, avatar) || {}) })) {
+        throw new WriteError('write', i18n('Failed to persist character override.'));
+    }
 }
 
 function downloadJson(fileName, payload) {
@@ -262,7 +265,9 @@ export function createPresetAccess(host) {
             if (hadCardSlot || (scope === 'character' && avatar)) {
                 const index = getCharacterIndexByAvatar(ctx, avatar);
                 const ext = getCharacterExtensionDataByAvatar(ctx, avatar);
-                if (index >= 0 && ext && Object.keys(ext).length) await persistOrchestratorCharacterExtension(ctx, index, { ...ext });
+                if (index >= 0 && ext && Object.keys(ext).length && !await persistOrchestratorCharacterExtension(ctx, index, { ...ext })) {
+                    throw new WriteError('write', i18n('Failed to persist character override.'));
+                }
             }
             if (scope === 'global') await ctx.saveSettings();
             refreshed(ctx);
@@ -330,7 +335,7 @@ export function createPresetAccess(host) {
             const scope = scopeOf(target);
             const { mode, avatar } = target;
             const id = createPreset(settings, mode, scope, { name }, opts(ctx, avatar));
-            if (!id) throw new WriteError('write', i18n('No active preset to export.'));
+            if (!id) throw new WriteError('write', i18n('Could not create the preset.'));
             setActivePresetId(settings, mode, scope, id, opts(ctx, avatar));
             const profile = extractImportedProfileForMode(imported);
             const result = writeActivePreset(settings, mode, scope, profile, opts(ctx, avatar));
@@ -458,7 +463,6 @@ export function createSettingsAccess(host) {
             settings[key] = SETTING_RULES[key](value);
             if (CAPSULE_KEYS.includes(key)) api(ctx)?.reapplyCapsule?.();
             ctx.saveSettingsDebounced();
-            api(ctx)?.refreshLegacyPanel?.();
         },
         promptDefaults() {
             const { ctx } = host();

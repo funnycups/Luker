@@ -4,10 +4,9 @@
 
 一個可重用的記憶體內執行軌跡，供任何執行多步 LLM 任務的外掛使用。它會在聊天區旁渲染一塊滑入式面板（窄屏下改為底部抽屜），每一輪是一張可折疊的卡片，分節內容串流填充，附帶停止按鈕與匯出動作，執行進行中還會顯示一枚懸浮膠囊。
 
-共享層位於 `public/scripts/run-panel/`，在 Luker context 上暴露為 `runPanel`。倉庫內消費方：
+共享層位於 `public/scripts/run-panel/`，在 Luker context 上暴露為 `runPanel`。
 
-- 編排器 —— `public/scripts/extensions/orchestrator/run-panel/panel.js`
-- 搜尋工具 —— `public/scripts/extensions/search-tools/run-panel.js`
+編排器和搜尋工具將執行資料寫入這一層的 run store，並在編排透鏡的執行浮窗（`public/scripts/extensions/orchestrator/lens/dock/`）中顯示，不再掛載此面板；此面板繼續供其他擴充功能使用。
 
 ![搜尋 Agent 在共享面板中的執行](/images/search-tools/run-panel.png)
 
@@ -122,4 +121,3 @@ const { createRunStore } = SillyTavern.getContext().runPanel;
 ## 參考消費方
 
 - 編排器執行時寫入輪次與分節，面板在每次執行時自動開啟：`public/scripts/extensions/orchestrator/loop-runtime.js`、`director-runtime.js`、`agenda-runtime.js`、`spec-runtime.js`。
-- 編排器封裝層設定 i18n 與匯出檔名：`public/scripts/extensions/orchestrator/run-panel/panel.js`。

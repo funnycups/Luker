@@ -133,14 +133,6 @@ jest.unstable_mockModule('../../public/scripts/slash-commands.js', () => ({
     ARGUMENT_TYPE: { STRING: 'string' },
 }));
 
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/ui-templates.js', () => ({
-    buildOrchestrationEditorPopupPanelHtml: () => '',
-    buildOrchestratorSettingsHtml: () => '',
-    injectWorkspaceIntoTabHost: () => {},
-    refreshPresetSelectorBars: () => {},
-    renderInheritOrOverridePanel: () => '',
-    renderSkillChipsPlaceholder: () => '',
-}));
 jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/styles.js', () => ({
     ensureStyles: () => {},
 }));

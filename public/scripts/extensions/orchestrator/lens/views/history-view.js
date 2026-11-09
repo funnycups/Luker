@@ -7,7 +7,7 @@ import { h, clear, put, formatTime, truncate } from '../../../lens-shared/util.j
 import { icon } from '../icons.js';
 import { i18n, i18nFormat, statusLabel, modeInfo } from '../i18n.js';
 import { buildRunView, displayStatus, formatDuration, formatTokens } from '../model/run.js';
-import { emptyState, segmented, button, switchControl } from '../ui/components.js';
+import { emptyState, segmented, button } from '../ui/components.js';
 import { agentAvatar } from './flow-view.js';
 
 function dayLabel(ms) {
@@ -90,16 +90,6 @@ export function createHistoryView(app) {
             }, { className: 'ol-btn-sm ol-btn-ghost', iconName: 'trash' }) : null));
 
         const body = h('div', { class: 'ol-history-body' });
-        const takeover = app.takeover;
-        if (takeover) {
-            const on = takeover.enabled();
-            put(body, h('div', { class: 'ol-history-setting' },
-                switchControl(i18n('Use the Orchestra Lens run panel instead of the built-in ones (search and orchestration both show on the right)'), on, (value) => {
-                    takeover.set(value);
-                    render();
-                }),
-                h('p', { class: 'ol-history-hint', text: i18n('Reload the page after changing this.') })));
-        }
         if (!list.length) put(body, emptyState('history', i18n('No records for this chat yet.'), i18n('Orchestration runs automatically when you send a message, and the process shows here live.')));
         let lastDay = '';
         for (const raw of list) {

@@ -149,3 +149,16 @@ test('save runs structural validation', async () => {
     const changes = [{ agentId: '@profile', field: 'spec/stages', before: '[]', after: '[{"id":"s","nodes":[{"id":"x","preset":"missing"}]}]' }];
     await expect(access.save(global, changes, {})).rejects.toThrow(/missing/);
 });
+
+test('a failed card write is reported', async () => {
+    persist.mockResolvedValueOnce(false);
+    await expect(presets.create(card, 'X')).rejects.toThrow();
+    overrides.getCharacterIndexByAvatar.mockReturnValueOnce(-1);
+    await expect(presets.rename(card, 'Y')).rejects.toThrow();
+});
+
+test('a failed preset creation on import is reported', async () => {
+    preset.createPreset.mockReturnValueOnce('');
+    const parsed = presets.parseImport(global, '{}');
+    await expect(presets.importParsed(global, parsed, 'Z')).rejects.toThrow();
+});

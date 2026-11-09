@@ -53,9 +53,9 @@ function detectTheme() {
 }
 
 /**
- * @param {{ recorder: object, getFlow?: () => object|null, openLens?: (runKey?: string) => void, onRestoreNative?: () => void, container?: HTMLElement }} options
+ * @param {{ recorder: object, getFlow?: () => object|null, openLens?: (runKey?: string) => void, container?: HTMLElement }} options
  */
-export function createDock({ recorder, getFlow = () => null, openLens = null, onDiagnose = null, onRestoreNative = null, container = document.body }) {
+export function createDock({ recorder, getFlow = () => null, openLens = null, onDiagnose = null, container = document.body }) {
     const prefs = { autoOpen: true, ...loadPrefs() };
     const compactMql = globalThis.matchMedia?.(COMPACT_QUERY);
     let state = 'closed'; // closed | open | pill
@@ -219,8 +219,7 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
         put(clear(menu),
             item(i18n('Open automatically on run'), () => { prefs.autoOpen = !prefs.autoOpen; savePrefs(prefs); setMenu(true); }, { role: 'menuitemcheckbox', 'aria-checked': String(prefs.autoOpen) }),
             data ? item(i18n('Export trace'), () => { setMenu(false); exportTrace(data.view); }) : null,
-            openLens && data ? item(i18n('View in Orchestra Lens'), () => { setMenu(false); openLens(`${data.view.source}:${data.view.runId}`); }) : null,
-            onRestoreNative ? item(i18n('Use native panels'), () => { setMenu(false); restoreNative(); }) : null);
+            openLens && data ? item(i18n('View in Orchestra Lens'), () => { setMenu(false); openLens(`${data.view.source}:${data.view.runId}`); }) : null);
     }
     const onOutside = (event) => {
         if (menuOpen && !menu.contains(event.target) && !event.target.closest?.('.ol-dock-more')) setMenu(false);
@@ -237,11 +236,6 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
         link.click();
         link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 0);
-    }
-
-    function restoreNative() {
-        if (!globalThis.confirm?.(i18n('Go back to the built-in run panels? Takes effect after reloading; you can change it back on the History page of Orchestra Lens.'))) return;
-        onRestoreNative();
     }
 
     // ---- After a run ends the small window lingers, then shrinks to the pill ----
@@ -568,14 +562,7 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
                 class: 'ol-switch ol-dock-auto',
                 'aria-checked': String(prefs.autoOpen),
                 onClick: () => { prefs.autoOpen = !prefs.autoOpen; savePrefs(prefs); render(); },
-            }, h('span', { class: 'ol-switch-label', text: i18n('Open automatically on run') }), h('span', { class: 'ol-switch-track' }, h('span', { class: 'ol-switch-thumb' }))),
-            onRestoreNative ? h('button', {
-                type: 'button',
-                class: 'ol-linkbtn ol-dock-native',
-                title: i18n('Stop using this panel and go back to the built-in run panels (applies after reload)'),
-                onClick: () => restoreNative(),
-                text: i18n('Use native panels'),
-            }) : null);
+            }, h('span', { class: 'ol-switch-label', text: i18n('Open automatically on run') }), h('span', { class: 'ol-switch-track' }, h('span', { class: 'ol-switch-thumb' }))));
     }
 
     function humanError(text) {

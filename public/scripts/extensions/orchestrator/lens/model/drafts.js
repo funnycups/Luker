@@ -2,7 +2,7 @@
 //
 // Unsaved agent edits (by hand or applied from the AI). Kept as a change
 // list against the stored profile, not as a whole copy, so a reload of the
-// stored profile (native editor saved something else) keeps both: the
+// stored profile (something else saved) keeps both: the
 // draft = stored profile + our changes. Pure: no DOM.
 
 import { applyChanges, canHold, diffProfiles, getField, PROFILE } from './edit.js';

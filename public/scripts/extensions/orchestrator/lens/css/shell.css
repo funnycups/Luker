@@ -122,3 +122,6 @@
 @media (prefers-reduced-motion: reduce) {
     .olens, .olens * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* Toasts stay above the open lens. */
+body:has(.ol-lens:not(.is-embedded)) #toast-container { z-index: 2147482001 !important; }

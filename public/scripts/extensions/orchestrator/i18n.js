@@ -670,8 +670,7 @@ export function registerLocaleData() {
         'Exported preset.': '已导出预设。',
         // Run Panel (Stage 4–5) — live orchestration progress dock that
         // replaced the per-mode runtime-trace popups. Strings here are
-        // consumed by panel/renderer modules under
-        // public/scripts/extensions/orchestrator/run-panel/. `Stop` and
+        // consumed by the shared run panel. `Stop` and
         // `Close` reuse the existing global entries; everything else is
         // new. Format-arg keys use ${0}/${1}/${2} to match i18nFormat.
         'Show Run Panel': '显示运行面板',

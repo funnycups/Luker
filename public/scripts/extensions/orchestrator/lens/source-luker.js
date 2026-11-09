@@ -271,7 +271,6 @@ export function createLukerSource() {
             const settings = settingsOf(ctx);
             settings.enabled = Boolean(value);
             ctx.saveSettingsDebounced();
-            api()?.refreshLegacyPanel?.();
         },
 
         async setMode(mode) {
@@ -282,20 +281,6 @@ export function createLukerSource() {
             settings.singleAgentModeEnabled = next === 'single';
             invalidateSkillInventory();
             ctx.saveSettingsDebounced();
-            api()?.refreshLegacyPanel?.();
-        },
-
-        openNative() {
-            const block = document.getElementById('orchestrator_settings');
-            if (!block) return false;
-            const drawer = document.getElementById('rm_extensions_block');
-            if (drawer?.classList.contains('closedDrawer')) {
-                document.querySelector('#extensions-settings-button .drawer-toggle')?.click();
-            }
-            const content = block.querySelector('.inline-drawer-content');
-            if (content && getComputedStyle(content).display === 'none') block.querySelector('.inline-drawer-toggle')?.click();
-            setTimeout(() => block.scrollIntoView({ block: 'start', behavior: 'smooth' }), 120);
-            return true;
         },
     };
 }

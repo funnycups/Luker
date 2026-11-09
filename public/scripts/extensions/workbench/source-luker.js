@@ -307,9 +307,6 @@ export async function setMemoryHorizon(value) {
             const previous = settings[HORIZON_KEY];
             settings[HORIZON_KEY] = next;
             try { await saveSettingsChecked(getContext()); } catch (err) { settings[HORIZON_KEY] = previous; throw err; }
-            // Keep the native settings field in step if it is on screen.
-            const input = document.getElementById('luker_rpg_memory_advanced_persistent_injection_max_seq_distance');
-            if (input) input.value = String(next);
         },
     };
     const current = (await store.read())[HORIZON_KEY];

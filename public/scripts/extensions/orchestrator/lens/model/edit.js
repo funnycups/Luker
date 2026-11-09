@@ -308,7 +308,7 @@ export function applyChanges(mode, base, changes) {
 
 /**
  * Puts the changes on top of the freshly stored profile so edits made
- * elsewhere (the native editor) to other fields survive. A field that was
+ * elsewhere to other fields survive. A field that was
  * also changed elsewhere since the draft started is a conflict.
  * @returns {{ profile: object, conflicts: object[], missing: object[] }}
  */

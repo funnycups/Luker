@@ -96,10 +96,11 @@ export function confirmDeleteNode(app, node) {
 export function openNodeProperties(app, node) {
     const model = app.model();
     const typeSelect = selectInput(typeOptions(model, node.type), node.type);
+    const level = node.rawLevel || 'semantic';
     const levelSelect = selectInput([
         { value: 'semantic', label: i18n('Semantic') },
-        { value: 'episodic', label: i18n('Episodic') },
-    ], node.level);
+        ...(level === 'semantic' ? [] : [{ value: level, label: level }]),
+    ], level);
     const titleInput = textInput(node.rawTitle);
     const seqInput = h('input', { class: 'ml-schema-input', type: 'number', step: 1, value: node.seqTo >= 0 ? String(node.seqTo) : '' });
     const parentSelect = selectInput(nodeOptions(model, { exclude: node.id, empty: i18n('(none)') }), node.parentId);
@@ -118,7 +119,7 @@ export function openNodeProperties(app, node) {
         async onOk() {
             const patch = {};
             if (typeSelect.value !== node.type) patch.type = typeSelect.value;
-            if (levelSelect.value !== node.level) patch.level = levelSelect.value;
+            if (levelSelect.value !== level) patch.level = levelSelect.value;
             if (titleInput.value.trim() !== node.rawTitle) patch.title = titleInput.value;
             const seqText = seqInput.value.trim();
             const seq = seqText === '' ? null : Number(seqText);

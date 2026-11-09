@@ -4,10 +4,9 @@
 
 A reusable, in-memory run trace for any plugin that runs a multi-step LLM task. It renders a slide-in panel beside the chat (or a bottom drawer on narrow screens) with one collapsible card per round, streaming section bodies, a Stop button, an export action, and a floating pill while a run is in progress.
 
-The shared layer lives in `public/scripts/run-panel/` and is exposed as `runPanel` on the Luker context. In-tree consumers:
+The shared layer lives in `public/scripts/run-panel/` and is exposed as `runPanel` on the Luker context.
 
-- Orchestrator — `public/scripts/extensions/orchestrator/run-panel/panel.js`
-- Search Tools — `public/scripts/extensions/search-tools/run-panel.js`
+Orchestrator and Search Tools write to run stores from this layer and show their runs in the Orchestra Lens dock (`public/scripts/extensions/orchestrator/lens/dock/`). They no longer mount this panel; it remains for other extensions.
 
 ![Search agent run in the shared panel](/images/search-tools/run-panel.png)
 
@@ -121,5 +120,4 @@ const { createRunStore } = SillyTavern.getContext().runPanel;
 
 ## Reference consumers
 
-- Orchestrator runtimes write rounds and sections, and the panel auto-opens on each run: `public/scripts/extensions/orchestrator/loop-runtime.js`, `director-runtime.js`, `agenda-runtime.js`, `spec-runtime.js`.
-- The orchestrator wrapper configures i18n and the export filename: `public/scripts/extensions/orchestrator/run-panel/panel.js`.
+- Orchestrator runtimes write rounds and sections to the run store: `public/scripts/extensions/orchestrator/loop-runtime.js`, `director-runtime.js`, `agenda-runtime.js`, `spec-runtime.js`.

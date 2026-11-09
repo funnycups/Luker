@@ -12,3 +12,6 @@
 .mlens .ml-edge-list > .ml-btn { align-self: flex-start; margin-top: 6px; }
 .mlens .ml-edge-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--ml-border); font-size: 13px; }
 .mlens .ml-edge-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The lens overlay sits above toastr's default layer. */
+body:has(.mlens:not(.is-embedded)) #toast-container { z-index: 2147483000; }
