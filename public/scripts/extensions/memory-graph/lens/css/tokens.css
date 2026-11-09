@@ -1,0 +1,117 @@
+/* Design tokens. Graphite neutrals, one teal accent, amber = "recalled now". */
+.mlens {
+    --ml-font: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Noto Sans", sans-serif;
+    --ml-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, "Noto Sans Mono", monospace;
+    --ml-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
+
+    --ml-radius-xs: 4px;
+    --ml-radius-sm: 6px;
+    --ml-radius: 8px;
+    --ml-radius-lg: 12px;
+    --ml-topbar-h: 52px;
+    --ml-side-w: 268px;
+    --ml-insp-w: 392px;
+    --ml-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ml-dur: 180ms;
+}
+
+.mlens[data-theme="dark"] {
+    color-scheme: dark;
+    --ml-bg: #0d0e11;
+    --ml-canvas: #0f1014;
+    --ml-surface: #141519;
+    --ml-surface-2: #191b20;
+    --ml-raised: #1f2127;
+    --ml-hover: rgba(255, 255, 255, 0.045);
+    --ml-active: rgba(255, 255, 255, 0.08);
+    --ml-border: rgba(255, 255, 255, 0.07);
+    --ml-border-strong: rgba(255, 255, 255, 0.13);
+    --ml-text: #e9eaed;
+    --ml-text-muted: #9da1ab;
+    --ml-text-faint: #676b74;
+    --ml-grid-dot: rgba(255, 255, 255, 0.055);
+    --ml-accent: #3fd0b4;
+    --ml-accent-soft: rgba(63, 208, 180, 0.14);
+    --ml-accent-text: #062a23;
+    --ml-recalled: #f4b740;
+    --ml-recalled-soft: rgba(244, 183, 64, 0.13);
+    --ml-pinned: #6fb3f2;
+    --ml-pinned-soft: rgba(111, 179, 242, 0.12);
+    --ml-danger: #ef7d6e;
+    --ml-danger-soft: rgba(239, 125, 110, 0.1);
+    --ml-shadow-1: 0 1px 0 rgba(0, 0, 0, 0.4);
+    --ml-shadow-2: 0 10px 30px -8px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+    --ml-shadow-3: 0 24px 64px -12px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.08);
+    --ml-scrim: rgba(4, 5, 7, 0.62);
+
+    --ml-tone-event: #8e97ab;
+    --ml-tone-character: #ff8f6b;
+    --ml-tone-location: #4fc78b;
+    --ml-tone-thread: #b99af7;
+    --ml-tone-rule: #d4cf6f;
+    --ml-tone-extra1: #5dc3d8;
+    --ml-tone-extra2: #e58fcf;
+    --ml-tone-extra3: #98cf68;
+    --ml-tone-extra4: #dba36d;
+
+    --ml-edge: rgba(160, 168, 186, 0.3);
+    --ml-edge-bond: #4fbfa6;
+    --ml-edge-conflict: #ef7d6e;
+    --ml-edge-hierarchy: rgba(160, 168, 186, 0.22);
+}
+
+.mlens[data-theme="light"] {
+    color-scheme: light;
+    --ml-bg: #f4f4f5;
+    --ml-canvas: #fafafa;
+    --ml-surface: #ffffff;
+    --ml-surface-2: #f7f7f8;
+    --ml-raised: #ffffff;
+    --ml-hover: rgba(15, 18, 25, 0.04);
+    --ml-active: rgba(15, 18, 25, 0.075);
+    --ml-border: rgba(15, 18, 25, 0.08);
+    --ml-border-strong: rgba(15, 18, 25, 0.15);
+    --ml-text: #18191c;
+    --ml-text-muted: #5d616b;
+    --ml-text-faint: #8f939b;
+    --ml-grid-dot: rgba(15, 18, 25, 0.09);
+    --ml-accent: #0f9c84;
+    --ml-accent-soft: rgba(15, 156, 132, 0.11);
+    --ml-accent-text: #ffffff;
+    --ml-recalled: #c98500;
+    --ml-recalled-soft: rgba(214, 145, 0, 0.12);
+    --ml-pinned: #2f7fd0;
+    --ml-pinned-soft: rgba(47, 127, 208, 0.1);
+    --ml-danger: #d0503f;
+    --ml-danger-soft: rgba(208, 80, 63, 0.08);
+    --ml-shadow-1: 0 1px 0 rgba(15, 18, 25, 0.04);
+    --ml-shadow-2: 0 10px 30px -10px rgba(15, 18, 25, 0.2), 0 0 0 1px rgba(15, 18, 25, 0.07);
+    --ml-shadow-3: 0 24px 64px -16px rgba(15, 18, 25, 0.3), 0 0 0 1px rgba(15, 18, 25, 0.08);
+    --ml-scrim: rgba(15, 18, 25, 0.32);
+
+    --ml-tone-event: #6c7487;
+    --ml-tone-character: #e5643f;
+    --ml-tone-location: #22a066;
+    --ml-tone-thread: #8a63e0;
+    --ml-tone-rule: #a39a1c;
+    --ml-tone-extra1: #1e9bb5;
+    --ml-tone-extra2: #c4509f;
+    --ml-tone-extra3: #5f9e2c;
+    --ml-tone-extra4: #b87632;
+
+    --ml-edge: rgba(70, 78, 96, 0.28);
+    --ml-edge-bond: #179b80;
+    --ml-edge-conflict: #d0503f;
+    --ml-edge-hierarchy: rgba(70, 78, 96, 0.2);
+}
+
+/* Per-tone helper so components can use var(--ml-tone). */
+.mlens [data-tone="event"] { --ml-tone: var(--ml-tone-event); }
+.mlens [data-tone="character"] { --ml-tone: var(--ml-tone-character); }
+.mlens [data-tone="location"] { --ml-tone: var(--ml-tone-location); }
+.mlens [data-tone="thread"] { --ml-tone: var(--ml-tone-thread); }
+.mlens [data-tone="rule"] { --ml-tone: var(--ml-tone-rule); }
+.mlens [data-tone="extra1"] { --ml-tone: var(--ml-tone-extra1); }
+.mlens [data-tone="extra2"] { --ml-tone: var(--ml-tone-extra2); }
+.mlens [data-tone="extra3"] { --ml-tone: var(--ml-tone-extra3); }
+.mlens [data-tone="extra4"] { --ml-tone: var(--ml-tone-extra4); }

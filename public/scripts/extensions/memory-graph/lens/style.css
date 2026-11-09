@@ -1,0 +1,14 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+ * Memory Lens styles. Everything is scoped under `.mlens`.
+ */
+@import url('./css/tokens.css');
+@import url('./css/shell.css');
+@import url('./css/controls.css');
+@import url('./css/sidebar.css');
+@import url('./css/graph.css');
+@import url('./css/timeline.css');
+@import url('./css/table.css');
+@import url('./css/inspector.css');
+@import url('./css/overlays.css');
+@import url('./css/schema.css');
+@import url('./css/compact.css');

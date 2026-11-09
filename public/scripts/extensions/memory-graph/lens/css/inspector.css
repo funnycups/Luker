@@ -1,0 +1,78 @@
+/* Inspector */
+.mlens .ml-inspector-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 0 20px 32px; align-content: start; }
+/* Long single-line rows (event links, field values) must not widen the column. */
+.mlens .ml-inspector-body > *, .mlens .ml-insp-block > *, .mlens .ml-insp-fields > *,
+.mlens .ml-insp-eventlist > *, .mlens .ml-insp-children > *, .mlens .ml-insp-relgroup > *, .mlens .ml-insp-rellist > * { min-width: 0; }
+.mlens .ml-inspector { overflow-x: hidden; }
+.mlens .ml-insp-head {
+    position: sticky; top: 0; z-index: 1;
+    display: grid; gap: 8px; margin: 0 -20px; padding: 14px 20px 14px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--ml-tone) 9%, var(--ml-surface)) 0%, var(--ml-surface) 100%);
+    border-bottom: 1px solid var(--ml-border);
+}
+.mlens .ml-insp-toprow { display: flex; align-items: center; gap: 6px; margin: -4px -8px 0 0; }
+.mlens .ml-insp-title { font-size: 17px; line-height: 1.35; letter-spacing: -0.005em; word-break: break-word; }
+.mlens .ml-insp-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+
+.mlens .ml-insp-anchors { display: grid; gap: 4px; padding: 10px 12px; border-radius: var(--ml-radius); background: var(--ml-surface-2); border: 1px solid var(--ml-border); }
+.mlens .ml-insp-anchor { display: grid; grid-template-columns: 16px 34px 1fr; align-items: baseline; gap: 6px; }
+.mlens .ml-insp-anchor .mlens-icon { color: var(--ml-text-faint); transform: translateY(2px); }
+.mlens .ml-insp-anchor-label { font-size: 11.5px; color: var(--ml-text-faint); }
+
+.mlens .ml-insp-prose { display: grid; gap: 10px; font-family: var(--ml-serif); font-size: 14px; line-height: 1.85; color: var(--ml-text); }
+.mlens .ml-insp-prose p { text-wrap: pretty; }
+
+.mlens .ml-insp-callout { padding: 10px 12px 10px 14px; border-radius: var(--ml-radius); border-left: 3px solid var(--ml-text-faint); background: var(--ml-surface-2); }
+.mlens .ml-insp-callout[data-kind="irreversible"] { border-left-color: var(--ml-danger); background: var(--ml-danger-soft); }
+.mlens .ml-insp-callout[data-kind="open"] { border-left-color: var(--ml-tone-thread); background: color-mix(in srgb, var(--ml-tone-thread) 8%, transparent); }
+.mlens .ml-insp-callout-title { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-weight: 600; font-size: 12px; }
+.mlens .ml-insp-callout[data-kind="irreversible"] .ml-insp-callout-title { color: var(--ml-danger); }
+.mlens .ml-insp-callout[data-kind="open"] .ml-insp-callout-title { color: var(--ml-tone-thread); }
+.mlens .ml-insp-callout ul { display: grid; gap: 5px; }
+.mlens .ml-insp-callout li { position: relative; padding-left: 12px; line-height: 1.55; }
+.mlens .ml-insp-callout li::before { content: ""; position: absolute; left: 0; top: 0.68em; width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0.5; }
+
+.mlens .ml-insp-quotes { display: grid; gap: 8px; }
+.mlens .ml-insp-quote { padding: 2px 0 2px 14px; border-left: 2px solid var(--ml-border-strong); }
+.mlens .ml-insp-quote blockquote { font-family: var(--ml-serif); font-size: 13.5px; line-height: 1.7; color: var(--ml-text); }
+.mlens .ml-insp-quote blockquote::before { content: "“"; color: var(--ml-text-faint); }
+.mlens .ml-insp-quote blockquote::after { content: "”"; color: var(--ml-text-faint); }
+.mlens .ml-insp-quote figcaption { margin-top: 2px; font-size: 11.5px; color: var(--ml-text-faint); }
+.mlens .ml-insp-quote figcaption::before { content: "— "; }
+
+.mlens .ml-insp-block { display: flex; flex-wrap: wrap; gap: 6px; }
+.mlens .ml-insp-block > .ml-section-title { flex-basis: 100%; margin-bottom: 2px; }
+.mlens .ml-insp-sub { flex-basis: 100%; font-size: 11.5px; color: var(--ml-text-faint); margin-top: 2px; }
+.mlens .ml-insp-children { display: grid; gap: 4px; flex-basis: 100%; }
+.mlens .ml-insp-children .ml-nodelink { width: 100%; }
+
+.mlens .ml-insp-fields { display: grid; grid-template-columns: minmax(72px, auto) minmax(0, 1fr); gap: 0; flex-basis: 100%; min-width: 0; border: 1px solid var(--ml-border); border-radius: var(--ml-radius); overflow: hidden; }
+.mlens .ml-insp-fields dt, .mlens .ml-insp-fields dd { padding: 8px 12px; border-bottom: 1px solid var(--ml-border); }
+.mlens .ml-insp-fields dt { color: var(--ml-text-faint); font-size: 12px; background: var(--ml-surface-2); white-space: nowrap; }
+.mlens .ml-insp-fields dd { color: var(--ml-text); line-height: 1.6; word-break: break-word; white-space: pre-wrap; }
+.mlens .ml-insp-fields dt:nth-last-of-type(1), .mlens .ml-insp-fields dd:last-child { border-bottom: 0; }
+
+.mlens .ml-insp-relgroup { flex-basis: 100%; display: grid; gap: 6px; }
+.mlens .ml-insp-reltitle { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 500; color: var(--ml-text-muted); }
+.mlens .ml-insp-relbar { width: 14px; height: 2px; border-radius: 2px; background: var(--ml-text-faint); }
+.mlens .ml-insp-relgroup[data-category="bond"] .ml-insp-relbar { background: var(--ml-edge-bond); }
+.mlens .ml-insp-relgroup[data-category="conflict"] .ml-insp-relbar { background: repeating-linear-gradient(90deg, var(--ml-edge-conflict) 0 4px, transparent 4px 6px); }
+.mlens .ml-insp-count { color: var(--ml-text-faint); font-size: 11px; }
+.mlens .ml-insp-rellist { display: flex; flex-wrap: wrap; gap: 5px; }
+.mlens .ml-insp-eventlist { display: grid; gap: 4px; flex-basis: 100%; }
+.mlens .ml-insp-eventlist .ml-nodelink { width: 100%; }
+
+.mlens .ml-insp-muted { color: var(--ml-text-faint); font-size: 12.5px; }
+.mlens .ml-insp-pre {
+    margin: 0; padding: 12px 14px; border-radius: var(--ml-radius);
+    background: var(--ml-surface-2); border: 1px solid var(--ml-border);
+    font-family: var(--ml-mono); font-size: 11.5px; line-height: 1.65; color: var(--ml-text-muted);
+    white-space: pre-wrap; word-break: break-word; max-height: 60vh; overflow: auto;
+}
+.mlens .ml-insp-pre.is-clamped { max-height: 180px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 60%, transparent); mask-image: linear-gradient(#000 60%, transparent); }
+.mlens .ml-insp-recall { display: grid; gap: 10px; flex-basis: 100%; justify-items: start; }
+.mlens .ml-insp-recall .ml-insp-pre { width: 100%; }
+
+.mlens .ml-insp-overview { display: grid; justify-items: start; gap: 6px; padding-top: 24px; }
+.mlens .ml-insp-overview-mark { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; color: var(--ml-accent); background: var(--ml-accent-soft); margin-bottom: 6px; }
+.mlens .ml-insp-overview h3 { font-size: 16px; }

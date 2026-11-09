@@ -16282,6 +16282,9 @@ export { readSchemaCard };
 jQuery(() => {
     const context = getContext();
     registerLocaleData();
+    import('./lens/index.js')
+        .then(({ initMemoryLens }) => initMemoryLens())
+        .catch(err => console.error(`[${MODULE_NAME}] Failed to start Memory Lens`, err));
     ensureSettings();
     configureCharacterOverrides({
         MODULE_NAME,
