@@ -85,11 +85,12 @@ export async function runIterateTurn({ messages, live, tools, isRead, runRead, r
  * After the user decides, tell the model what happened (so it does not redo
  * rejected changes): appended as a short system-ish user note on the next turn.
  */
-export function decisionNote({ applied = [], discarded = [] }) {
-    if (!applied.length && !discarded.length) return '';
+export function decisionNote({ applied = [], discarded = [], unsaved = [] }) {
+    if (!applied.length && !discarded.length && !unsaved.length) return '';
     const parts = [];
     if (applied.length) parts.push(`用户应用了：${applied.join(listSeparator())}`);
     if (discarded.length) parts.push(`用户没要：${discarded.join(listSeparator())}（不要再提同样的改法，除非用户要求）`);
+    if (unsaved.length) parts.push(`用户批准了但没保存成功：${unsaved.join(listSeparator())}（内容已被别处改动或写入失败，要改请先重新读取）`);
     return `（上一轮的改动：${parts.join('；')}。没要的部分已从草稿里撤回。）`;
 }
 

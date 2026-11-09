@@ -14,7 +14,7 @@ import { icon } from '../icons.js';
 import { button, iconButton, checkRow, segmented, dot, msgActions } from '../ui/components.js';
 import { renderMarkdown } from '../ui/markdown.js';
 import { changeList } from '../ui/change-list.js';
-import { diffUnits } from '../model/units.js';
+import { approvalMatches, diffUnits } from '../model/units.js';
 import { runIterateTurn, wrapperPrompt, decisionNote, trimMessages } from '../model/iterate.js';
 import { groupSessions, titleFrom } from '../model/sessions.js';
 
@@ -58,8 +58,10 @@ export function createIteratePage(app) {
     let scope = 'character';
     let scopes = null; // { memory: { global, character }, ... }
     let session = null;
-    // In-memory per session: { base, ai, target, title } — rebuilt when missing.
+    // Saved copies per target: { base, target, title } — rebuilt when missing.
     const work = new Map();
+    // Pending proposals per session id: { base, ai, target, title, workKey }.
+    const drafts = new Map();
     let busy = false;
     let abort = null;
     let liveStep = '';
@@ -207,8 +209,6 @@ export function createIteratePage(app) {
         const messages = turns.flatMap(t => (t.role === 'user'
             ? [{ role: 'user', content: t.text }]
             : (t.text || t.changes?.length ? [{ role: 'assistant', content: turnText(t) }] : [])));
-        const w = work.get(keyOf(src.ws, src.scope));
-        if (w) w.ai = structuredClone(w.base);
         session = store.create({ kind: 'iterate', ws: src.ws, scope: src.scope, scopeName: src.scopeName, title: i18nFormat('${0} (branch)', src.title), forkedFrom: src.title, turns, messages,
             note: '（这段对话是从之前的对话分出来的。前面列出的改动，已应用的已经保存进 Luker，其余没有保存；以现在读到的内容为准。）' });
         paintAll();
@@ -230,8 +230,7 @@ export function createIteratePage(app) {
         const last = turns[turns.length - 1];
         const q = turns[turns.length - 2];
         if (busy || !q || q.role !== 'user' || !canRegen(last)) return;
-        const w = work.get(keyOf(session.ws, session.scope));
-        if (w) w.ai = structuredClone(w.base);
+        drafts.delete(session.id);
         const keep = Number.isInteger(last.msgKeep) ? last.msgKeep : Math.max(0, (session.messages || []).length - 2);
         session = store.update(session.id, { turns: turns.slice(0, -2), messages: (session.messages || []).slice(0, keep) });
         input.value = q.text;
@@ -294,7 +293,7 @@ export function createIteratePage(app) {
         if (work.has(k)) return work.get(k);
         try {
             const res = await iter().load(ws, scope);
-            const w = { base: res.live, ai: structuredClone(res.live), target: res.target, title: res.title };
+            const w = { base: res.live, target: res.target, title: res.title };
             work.set(k, w);
             loadError = '';
             if (!session?.turns?.length && !busy) paintBody();
@@ -324,10 +323,13 @@ export function createIteratePage(app) {
         if (!text || busy || blocked()) return;
         const w = await ensureWork();
         if (!w) { app.toast(loadError || i18n('Could not read what should be edited'), { error: true }); return; }
+        const workKey = keyOf();
         if (!session) session = store.create({ kind: 'iterate', ws, scope, scopeName: scope === 'character' ? charName() : '', title: titleFrom(text), messages: [] });
         // Pending changes from the last turn that were never decided count as discarded.
         const turns = session.turns.map(t => (t.state === 'pending' ? { ...t, state: 'discarded' } : t));
-        if (turns.some((t, i) => t.state !== session.turns[i].state)) w.ai = structuredClone(w.base);
+        // Every earlier proposal is decided now, so this turn drafts from the saved copy.
+        const draft = { base: structuredClone(w.base), ai: structuredClone(w.base), target: w.target, title: w.title, workKey };
+        drafts.set(session.id, draft);
         let userContent = text;
         const note = session.note || '';
         if (note) userContent = `${note}\n\n${text}`;
@@ -345,13 +347,13 @@ export function createIteratePage(app) {
         paintOpts();
         let turn;
         try {
-            const system = await iter().systemPrompt(ws, scope, w.ai, { wrapper: wrapperPrompt({ wsName: WS_NAME[ws], scopeText: w.title, builtin: app.settings().builtinPrompt }) });
+            const system = await iter().systemPrompt(ws, scope, draft.ai, { wrapper: wrapperPrompt({ wsName: WS_NAME[ws], scopeText: draft.title, builtin: app.settings().builtinPrompt }) });
             const history = (session.messages || []).filter(m => m.role !== 'system');
             const messages = trimMessages([{ role: 'system', content: system }, ...history, { role: 'user', content: userContent }]);
-            const tools = await iter().tools(ws, w.ai);
+            const tools = await iter().tools(ws, draft.ai);
             const result = await runIterateTurn({
                 messages,
-                live: w.ai,
+                live: draft.ai,
                 tools,
                 isRead: (n) => iter().isRead(ws, n),
                 runRead: (call, live) => iter().runRead(ws, call, live),
@@ -360,15 +362,17 @@ export function createIteratePage(app) {
                 onRound: (info) => { liveStep = i18nFormat('Read ${0} times, edited ${1} times…', info.reads, info.edits); paintBody(); },
                 signal: abort.signal,
             });
-            w.ai = result.live;
-            const changes = diffUnits(iter().units(ws, w.base), iter().units(ws, w.ai));
+            draft.ai = result.live;
+            const changes = diffUnits(iter().units(ws, draft.base), iter().units(ws, draft.ai));
+            if (!changes.length) drafts.delete(session.id);
             const all = result.messages.filter(m => m.role !== 'system');
             // Where this turn's messages start in the stored (last 60) list — Answer again cuts back to it.
             const prior = messages.filter(m => m.role !== 'system').length - 1;
             const msgKeep = Math.max(0, prior - Math.max(0, all.length - 60));
-            turn = { role: 'ai', text: result.text || (changes.length ? '' : i18n('(The AI made no changes)')), reads: result.reads.length, edits: result.edits.length, failed: result.failed.length, changes, state: changes.length ? 'pending' : '', target: w.title, msgKeep, at: Date.now() };
+            turn = { role: 'ai', text: result.text || (changes.length ? '' : i18n('(The AI made no changes)')), reads: result.reads.length, edits: result.edits.length, failed: result.failed.length, changes, state: changes.length ? 'pending' : '', target: draft.title, msgKeep, at: Date.now() };
             session = store.update(session.id, { messages: all.slice(-60) });
         } catch (err) {
+            drafts.delete(session.id);
             turn = { role: 'ai', text: '', error: abort.signal.aborted ? i18n('Stopped.') : i18nFormat('Not changed: ${0}', err?.message || err), msgKeep: (session.messages || []).length, at: Date.now() };
         }
         busy = false;
@@ -382,25 +386,40 @@ export function createIteratePage(app) {
 
     // ----- decide ---------------------------------------------------------
     async function apply(index, keys) {
-        const w = work.get(keyOf(session.ws, session.scope));
         const t = session.turns[index];
-        if (!w || !t?.changes) return;
+        if (!t?.changes) return;
+        const draft = drafts.get(session.id);
+        const sessionWs = session.ws;
+        if (!draft || !approvalMatches(t.changes, keys, diffUnits(iter().units(sessionWs, draft.base), iter().units(sessionWs, draft.ai)))) {
+            app.toast(i18n('This draft is no longer available. Ask the AI again.'), { error: true, duration: 7000 });
+            return;
+        }
         try {
-            const next = iter().rebuild(ws, w.base, w.ai, keys);
-            const handle = await iter().commit(ws, w.target, w.base, next, keys);
-            const labels = t.changes.filter(c => keys.includes(c.key)).map(c => c.label);
+            const next = iter().rebuild(sessionWs, draft.base, draft.ai, keys);
+            const handle = await iter().commit(sessionWs, draft.target, draft.base, next, keys);
+            const saved = new Set(handle.applied ?? keys);
+            const skipped = handle.skipped ?? [];
+            const failure = handle.failure ?? '';
+            const labelOf = (key) => t.changes.find(c => c.key === key)?.label ?? key;
+            const unsaved = skipped.map(s => labelOf(s.key));
+            const labels = t.changes.filter(c => saved.has(c.key)).map(c => c.label);
             const dropped = t.changes.filter(c => !keys.includes(c.key)).map(c => c.label);
+            const { workKey } = draft;
             const historyId = app.history.record({
-                ws, title: `${session.title}`, scope: w.title,
-                lines: t.changes.filter(c => keys.includes(c.key)).map(c => i18nFormat('${0} "${1}"', { add: i18n('Added'), remove: i18n('Removed item'), change: i18n('Edited') }[c.kind], c.label)),
+                ws: sessionWs, title: `${session.title}`, scope: draft.title,
+                lines: t.changes.filter(c => saved.has(c.key)).map(c => i18nFormat('${0} "${1}"', { add: i18n('Added'), remove: i18n('Removed item'), change: i18n('Edited') }[c.kind], c.label)),
                 from: i18n('AI chat'),
-                undo: async () => { await handle.undo(); work.delete(keyOf(session.ws, session.scope)); },
+                undo: async () => { await handle.undo(); work.delete(workKey); },
             });
-            w.base = structuredClone(next);
-            w.ai = structuredClone(next);
-            const turns = session.turns.map((x, i) => (i === index ? { ...x, state: dropped.length ? 'partial' : 'applied', historyId } : x));
-            session = store.update(session.id, { turns, note: decisionNote({ applied: labels, discarded: dropped }) });
-            app.toast(i18nFormat('Applied ${0}', keys.length), { action: i18n('Undo'), onAction: () => undoTurn(index) });
+            // After a partial save the saved copy is unknown, so it is reloaded.
+            const w = work.get(workKey);
+            if (unsaved.length || failure) work.delete(workKey);
+            else if (w) w.base = structuredClone(next);
+            drafts.delete(session.id);
+            const turns = session.turns.map((x, i) => (i === index ? { ...x, state: dropped.length || unsaved.length ? 'partial' : 'applied', historyId } : x));
+            session = store.update(session.id, { turns, note: decisionNote({ applied: labels, discarded: dropped, unsaved }) });
+            if (unsaved.length) app.toast([i18nFormat('Saved ${0}; not saved: ${1}', saved.size, unsaved.join(listSeparator())), failure].filter(Boolean).join(' · '), { error: true, duration: 7000, action: i18n('Undo'), onAction: () => undoTurn(index) });
+            else app.toast(i18nFormat('Applied ${0}', keys.length), { action: i18n('Undo'), onAction: () => undoTurn(index) });
             app.reload();
         } catch (err) {
             app.toast(i18nFormat('Not saved: ${0}', err?.message || err), { error: true, duration: 7000 });
@@ -410,9 +429,8 @@ export function createIteratePage(app) {
     }
 
     function discard(index) {
-        const w = work.get(keyOf(session.ws, session.scope));
         const t = session.turns[index];
-        if (w) w.ai = structuredClone(w.base);
+        drafts.delete(session.id);
         const turns = session.turns.map((x, i) => (i === index ? { ...x, state: 'discarded' } : x));
         session = store.update(session.id, { turns, note: decisionNote({ discarded: (t?.changes || []).map(c => c.label) }) });
         paintAll();
@@ -424,7 +442,6 @@ export function createIteratePage(app) {
         if (!t?.historyId) return;
         try {
             await app.history.undo(t.historyId);
-            work.delete(keyOf(session.ws, session.scope));
             const turns = session.turns.map((x, i) => (i === index ? { ...x, state: 'discarded' } : x));
             session = store.update(session.id, { turns, note: `（用户撤销了上一轮应用的改动：${t.changes.map(c => c.label).join(listSeparator())}。现在是改之前的样子。）` });
             app.toast(i18n('Undone'));

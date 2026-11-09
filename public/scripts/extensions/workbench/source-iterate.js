@@ -19,9 +19,9 @@ import { LEGACY_SCHEMA_ITER_SYSTEM_PROMPT } from '../memory-graph/config-iterati
 import { CONTROL_TOOL_NAMES, buildToolCatalog as buildMemoryToolCatalog, normalizeToolCallToEdit as normalizeMemoryToolCall, projectNodeTypeForRead } from '../memory-graph/config-iteration/tools.js';
 import { readFieldsByPaths } from '../../iteration-library/read-fields-helper.js';
 import { getContext, currentCharacter, boundBooks, SourceError } from './source-luker.js';
+import { ceaHelperSource, commitCardAndBooks, orchCharacterRecord, writeCharacterProfile } from './model/commit.js';
 import { memoryUnits, memoryRebuild, orchUnits, orchRebuild, presetUnits, presetRebuild, cardUnits, cardRebuild, cardEditsFor, worldUnits, worldRebuild } from './model/adapters.js';
 import { listAgents, agentFields, getField, setField, replaceInField, validateField, fieldLabel, EditError } from '../orchestrator/lens/model/edit.js';
-import { pickUnits } from './model/units.js';
 
 const memoryMain = () => import('../memory-graph/main.js');
 const orchDefaults = () => import('../orchestrator/defaults.js');
@@ -100,7 +100,7 @@ const memory = {
         return edits?.length ? edits[edits.length - 1].newValue.schema : live;
     },
     units: (live) => memoryUnits(live),
-    rebuild: (base, ai, keys) => memoryRebuild(pickUnits(memoryUnits(base), memoryUnits(ai), keys)),
+    rebuild: (base, ai, keys) => memoryRebuild(base, ai, keys),
     async commit(target, base, next) {
         const ctx = getContext();
         const mg = ctx.getExtensionApi('memory-graph');
@@ -187,6 +187,22 @@ function resolveOrch(ctx, scope) {
     return { settings, mode, presetId: id, profile: clone(lib[id]), name: lib[id].name || id };
 }
 
+/** The exact stored profile a change was made to, whatever is selected now. */
+function resolveOrchTarget(ctx, target) {
+    const settings = ctx.extensionSettings?.orchestrator;
+    if (!settings) throw new SourceError('no-extension', i18n('Orchestrator not found'));
+    if (target.mode === 'single') return { settings };
+    const gone = () => new SourceError('target-gone', i18n('The orchestration profile this change was made to no longer exists'));
+    if (target.scope === 'character') {
+        const record = orchCharacterRecord(ctx.characters, target);
+        if (!record) throw gone();
+        return { settings, profile: clone(record.raw), index: record.index };
+    }
+    const raw = settings.presetLibraries?.[target.mode]?.[target.presetId];
+    if (!raw) throw gone();
+    return { settings, profile: clone(raw) };
+}
+
 const orch = {
     name: i18n('Orchestration'),
     ext: 'orchestrator',
@@ -228,8 +244,9 @@ const orch = {
     rebuild: (base, ai, keys) => orchRebuild(base, ai, keys),
     async commit(target, base, next) {
         const ctx = getContext();
-        const fresh = resolveOrch(ctx, target.scope);
-        if (fresh.mode !== target.mode || fresh.presetId !== target.presetId) throw new SourceError('target-gone', i18n('The orchestration profile was switched elsewhere; reopen this chat'));
+        const character = target.scope === 'character';
+        const fresh = character ? resolveOrchTarget(ctx, target) : resolveOrch(ctx, target.scope);
+        if (!character && (fresh.mode !== target.mode || fresh.presetId !== target.presetId)) throw new SourceError('target-gone', i18n('The orchestration profile was switched elsewhere; reopen this chat'));
         const previous = clone(fresh.profile);
         // Only the fields that changed, on top of what is stored now.
         let merged = clone(fresh.profile);
@@ -240,7 +257,7 @@ const orch = {
             }
         }
         await writeOrch(ctx, target, fresh, merged);
-        return { undo: () => writeOrch(getContext(), target, resolveOrch(getContext(), target.scope), previous) };
+        return { undo: () => writeOrch(getContext(), target, resolveOrchTarget(getContext(), target), previous) };
     },
 };
 
@@ -254,10 +271,7 @@ async function writeOrch(ctx, target, fresh, profile) {
         const lib = s.presetLibraries[target.mode];
         lib[target.presetId] = { ...profile, name: lib[target.presetId]?.name };
     } else {
-        const ext = clone(ctx.characters[fresh.index]?.data?.extensions?.orchestrator);
-        const lib = ext.presetLibraries[target.mode];
-        lib[target.presetId] = { ...profile, name: lib[target.presetId]?.name };
-        await ctx.getExtensionApi('orchestrator').persistOrchestratorCharacterExtension(ctx, fresh.index, ext);
+        await writeCharacterProfile(ctx, target, fresh.index, profile);
         return;
     }
     await ctx.saveSettings();
@@ -308,15 +322,21 @@ const preset = {
     },
     units: (live) => presetUnits(live),
     rebuild: (base, ai, keys) => presetRebuild(base, ai, keys),
-    async commit(target, base, next) {
+    async commit(target, base, next, keys) {
         const ctx = getContext();
-        const stored = ctx.presets.getStored(target.ref);
-        const previous = clone(stored?.body);
-        // Re-attach the connection fields the working copy had stripped.
-        const body = { ...(previous || {}), ...next };
+        const previous = clone(ctx.presets.getStored(target.ref)?.body);
+        if (!previous) throw new SourceError('no-preset', i18nFormat('Preset "${0}" is unreadable', target.ref?.name || ''));
+        // Only approved units, on top of what is stored now (connection fields included).
+        const body = presetRebuild(previous, next, keys);
         const res = await ctx.presets.save(target.ref, body, { select: true });
         if (res?.ok === false) throw new SourceError('write-failed', i18n('Failed to save the preset'));
-        return { async undo() { if (previous) await getContext().presets.save(target.ref, previous, { select: true }); } };
+        return {
+            async undo() {
+                const c = getContext();
+                const now = c.presets.getStored(target.ref)?.body;
+                if (now) await c.presets.save(target.ref, presetRebuild(clone(now), previous, keys), { select: true });
+            },
+        };
     },
 };
 
@@ -352,9 +372,9 @@ const card = {
     },
     isRead: (name) => /^(cea_read_|lorebook_|world_book_|simulate_|inspect_)/.test(name),
     async runRead(call, live) {
-        const [t, main] = await Promise.all([ceaTools(), ceaMain()]);
         const ctx = getContext();
-        const helperApis = main.buildCharacterEditorHelperApis(ctx, { avatar: currentCharacter(ctx)?.avatar }) || [];
+        const [t, cea] = await Promise.all([ceaTools(), ceaHelperSource(ctx, ceaMain)]);
+        const helperApis = cea.buildCharacterEditorHelperApis(ctx, { avatar: currentCharacter(ctx)?.avatar }) || [];
         const settings = ctx.extensionSettings?.character_editor_assistant || {};
         const res = await t.runCeaEditorReadTool({ id: call.id, name: call.name, args: call.args || {} }, { context: ctx, settings, helperApis, state: { live } });
         if (res?.ok === false) throw new SourceError('read', res.error || i18n('Read failed'));
@@ -381,25 +401,17 @@ const card = {
     units: (live) => cardUnits(live),
     rebuild: (base, ai, keys) => cardRebuild(base, ai, keys),
     async commit(target, base, next, keys) {
-        const ctx = getContext();
         const main = await ceaMain();
-        const { cardEdits, bookEdits } = cardEditsFor(base, next, keys);
-        const undo = [];
-        if (cardEdits.length) {
-            const live = (ctx.characters || []).find(c => c?.avatar === target.avatar);
-            const res = await main.commitCharacterEditorOperations(ctx, target.avatar, cardEdits, { liveCharacter: live });
-            if (res?.conflicts?.length) throw new SourceError('conflict', i18nFormat('${0} places on the character card were changed elsewhere, so nothing was saved. Reopen the chat.', res.conflicts.length));
-            const inverse = cardEdits.map(e => ({ op: 'set', path: e.path, oldValue: e.newValue, newValue: e.oldValue }));
-            undo.push(async () => { const c = getContext(); await main.commitCharacterEditorOperations(c, target.avatar, inverse, { liveCharacter: (c.characters || []).find(x => x?.avatar === target.avatar) }); });
-        }
-        for (const [book, edits] of Object.entries(bookEdits)) {
-            if (!edits.length) continue;
-            const before = clone(await ctx.loadWorldInfo(book));
-            const res = await main.commitLorebookOperations(book, before, edits, { context: ctx, settings: ctx.extensionSettings?.character_editor_assistant || {} });
-            if (res?.conflicts?.length) throw new SourceError('conflict', i18nFormat('World book "${0}" has ${1} conflicts, so nothing was saved.', book, res.conflicts.length));
-            undo.push(async () => { await getContext().saveWorldInfo(book, before, true); });
-        }
-        return { async undo() { for (const u of undo.reverse()) await u(); } };
+        const settings = getContext().extensionSettings?.character_editor_assistant || {};
+        return commitCardAndBooks(cardEditsFor(base, next, keys), {
+            commitCard(edits) {
+                const ctx = getContext();
+                return main.commitCharacterEditorOperations(ctx, target.avatar, edits, { liveCharacter: (ctx.characters || []).find(c => c?.avatar === target.avatar) });
+            },
+            readBook: async (book) => clone(await getContext().loadWorldInfo(book)),
+            commitBook: (book, before, edits) => main.commitLorebookOperations(book, before, edits, { context: getContext(), settings }),
+            saveBook: (book, data) => getContext().saveWorldInfo(book, data, true, { refreshEditor: true }),
+        });
     },
 };
 

@@ -11,6 +11,7 @@
 
 import { i18n, i18nFormat, listSeparator } from '../i18n.js';
 import { listAgents, agentFields, getField, setField, fieldLabel } from '../../orchestrator/lens/model/edit.js';
+import { pickUnits } from './units.js';
 
 const json = (v) => JSON.stringify(v ?? null, null, 1);
 const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
@@ -27,11 +28,40 @@ function memoryText(spec) {
     const flags = [spec.alwaysInject ? i18n('Always visible to the AI') : '', spec.latestOnly ? i18n('Keep only the latest of the same name') : '', spec.compression?.mode === 'hierarchical' ? i18n('Auto-merge into summaries') : ''].filter(Boolean);
     if (flags.length) lines.push(i18nFormat('Recording: ${0}', flags.join(listSeparator())));
     if (spec.extractionInstructions) lines.push(i18nFormat('Extraction rules: ${0}', spec.extractionInstructions));
+    if (spec.compression?.summarizeInstruction) lines.push(i18nFormat('Summary instruction: ${0}', spec.compression.summarizeInstruction));
     return lines.join('\n');
 }
 
 export const memoryUnits = (schema) => new Map((schema || []).map(spec => [String(spec.id), { key: String(spec.id), label: spec.label || spec.id, group: i18n('Memory types'), text: memoryText(spec), raw: spec }]));
-export const memoryRebuild = (units) => [...units.values()].map(u => clone(u.raw));
+
+// The fields memoryText shows. Only these can have been reviewed.
+const MEMORY_SHOWN_FIELDS = ['label', 'extractHint', 'tableColumns', 'columnHints', 'requiredColumns', 'alwaysInject', 'latestOnly', 'extractionInstructions'];
+
+function takeField(target, source, field) {
+    if (source && field in source) target[field] = clone(source[field]);
+    else delete target[field];
+}
+
+function mergeShownMemoryFields(prev, next) {
+    const out = clone(prev);
+    for (const field of MEMORY_SHOWN_FIELDS) takeField(out, next, field);
+    const compression = { ...(prev.compression || {}) };
+    takeField(compression, next.compression, 'summarizeInstruction');
+    // The list only shows whether a type is merged hierarchically.
+    if ((prev.compression?.mode === 'hierarchical') !== (next.compression?.mode === 'hierarchical')) takeField(compression, next.compression, 'mode');
+    if (Object.keys(compression).length) out.compression = compression;
+    else delete out.compression;
+    return out;
+}
+
+/** Base schema with accepted types applied; a brand-new type is taken whole. */
+export function memoryRebuild(base, ai, accepted) {
+    const before = memoryUnits(base);
+    const after = memoryUnits(ai);
+    return [...pickUnits(before, after, accepted)].map(([key, unit]) => (accepted.includes(key) && before.has(key)
+        ? mergeShownMemoryFields(before.get(key).raw, unit.raw)
+        : clone(unit.raw)));
+}
 
 // ----- orchestrator: one unit per agent field --------------------------------
 
@@ -146,30 +176,32 @@ export function cardUnits(live) {
 export function cardEditsFor(base, ai, accepted) {
     const cardEdits = [];
     const bookEdits = {};
+    const keyOf = new Map();
+    const add = (list, key, edit) => { list.push(edit); keyOf.set(edit, key); };
     for (const key of accepted) {
         if (key.startsWith('card:')) {
             const f = key.slice(5);
             const before = base.character?.[f] ?? base.character?.data?.[f];
             const after = ai.character?.[f] ?? ai.character?.data?.[f];
-            cardEdits.push({ op: 'set', path: f, oldValue: clone(before), newValue: clone(after) });
+            add(cardEdits, key, { op: 'set', path: f, oldValue: clone(before), newValue: clone(after) });
         } else if (key.startsWith('wi:')) {
             const [, book, uid] = key.match(/^wi:(.*):([^:]+)$/) || [];
             const prev = base.lorebooks?.[book]?.entries?.[uid];
             const next = ai.lorebooks?.[book]?.entries?.[uid];
             const list = (bookEdits[book] ||= []);
-            if (!prev && next) list.push({ op: 'lorebook_entry_add', path: 'entries', uid: next.uid ?? uid, entry: clone(next) });
-            else if (prev && !next) list.push({ op: 'lorebook_entry_remove', path: 'entries', uid: prev.uid ?? uid, entry: clone(prev) });
+            if (!prev && next) add(list, key, { op: 'lorebook_entry_add', path: 'entries', uid: next.uid ?? uid, entry: clone(next) });
+            else if (prev && !next) add(list, key, { op: 'lorebook_entry_remove', path: 'entries', uid: prev.uid ?? uid, entry: clone(prev) });
             else if (prev && next) {
                 const patch = {};
                 const before = {};
                 for (const k of new Set([...Object.keys(prev), ...Object.keys(next)])) {
                     if (JSON.stringify(prev[k]) !== JSON.stringify(next[k])) { patch[k] = clone(next[k]); before[k] = clone(prev[k]); }
                 }
-                if (Object.keys(patch).length) list.push({ op: 'lorebook_entry_update', path: 'entries', uid: prev.uid ?? uid, patch, before });
+                if (Object.keys(patch).length) add(list, key, { op: 'lorebook_entry_update', path: 'entries', uid: prev.uid ?? uid, patch, before });
             }
         }
     }
-    return { cardEdits, bookEdits };
+    return { cardEdits, bookEdits, keyOf };
 }
 
 /** Builds the card live that results from accepting some changes (for continuing the chat). */

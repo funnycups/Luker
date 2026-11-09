@@ -1,7 +1,7 @@
 import './_mocks/luker-zh.js';
 import { test } from '@jest/globals';
 import assert from 'node:assert/strict';
-import { diffUnits, pickUnits, lineDiff, changeSummary } from '../../public/scripts/extensions/workbench/model/units.js';
+import { diffUnits, lineDiff, changeSummary, approvalMatches } from '../../public/scripts/extensions/workbench/model/units.js';
 import { memoryUnits, memoryRebuild, presetUnits, presetRebuild, cardUnits, cardEditsFor, cardRebuild, orchUnits, orchRebuild } from '../../public/scripts/extensions/workbench/model/adapters.js';
 import { runIterateTurn, decisionNote, trimMessages } from '../../public/scripts/extensions/workbench/model/iterate.js';
 
@@ -14,10 +14,10 @@ test('memory: diff, accept one, rebuild keeps order', () => {
     const ai = [{ ...schema[0], label: '大事' }, schema[1], { id: 'quest', label: '任务', tableColumns: ['title'] }];
     const changes = diffUnits(memoryUnits(schema), memoryUnits(ai));
     assert.deepEqual(changes.map(c => `${c.kind}:${c.key}`), ['change:event', 'add:quest']);
-    const next = memoryRebuild(pickUnits(memoryUnits(schema), memoryUnits(ai), ['quest']));
+    const next = memoryRebuild(schema, ai, ['quest']);
     assert.deepEqual(next.map(s => s.id), ['event', 'item', 'quest']);
     assert.equal(next[0].label, '事件');
-    const removed = memoryRebuild(pickUnits(memoryUnits(schema), memoryUnits([schema[0]]), ['item']));
+    const removed = memoryRebuild(schema, [schema[0]], ['item']);
     assert.deepEqual(removed.map(s => s.id), ['event']);
     assert.equal(changeSummary(changes), '改 1 处 · 新增 1');
 });
@@ -108,4 +108,33 @@ test('helpers', () => {
     const trimmed = trimMessages(msgs, 30000);
     assert.equal(trimmed[0].role, 'system');
     assert.ok(trimmed.length < msgs.length);
+});
+
+test('memory: summary instruction shows in the diff and hidden fields stay put', () => {
+    const before = [{ id: 'event', label: '事件', tableColumns: ['summary'], keywords: ['旧'], compression: { mode: 'hierarchical', threshold: 9, summarizeInstruction: '旧指令' } }];
+    const ai = [{ ...before[0], label: '大事', keywords: ['新'], compression: { mode: 'hierarchical', threshold: 2, summarizeInstruction: '新指令' } }];
+    assert.equal(diffUnits(memoryUnits(before), memoryUnits([{ ...before[0], compression: ai[0].compression }])).length, 1);
+    const [next] = memoryRebuild(before, ai, ['event']);
+    assert.equal(next.label, '大事');
+    assert.equal(next.compression.summarizeInstruction, '新指令');
+    assert.equal(next.compression.threshold, 9);
+    assert.deepEqual(next.keywords, ['旧']);
+});
+
+test('preset: approved units land on freshly read data', () => {
+    const base = { temperature: 1, prompts: [{ identifier: 'main', content: 'A' }], prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }] };
+    const ai = { ...base, prompts: [{ identifier: 'main', content: 'B' }] };
+    const fresh = { ...base, temperature: 0.4, reverse_proxy: 'kept' };
+    const merged = presetRebuild(fresh, presetRebuild(base, ai, ['prompt:main']), ['prompt:main']);
+    assert.equal(merged.prompts[0].content, 'B');
+    assert.equal(merged.temperature, 0.4);
+    assert.equal(merged.reverse_proxy, 'kept');
+});
+
+test('approval is refused when the draft no longer produces what was shown', () => {
+    const shown = [{ key: 'a', kind: 'change', before: '1', after: '2' }, { key: 'b', kind: 'change', before: '1', after: '3' }];
+    assert.ok(approvalMatches(shown, shown, ['a', 'b']));
+    assert.ok(approvalMatches(shown, [shown[0]], ['a']));
+    assert.ok(!approvalMatches(shown, [{ ...shown[0], after: 'other draft' }], ['a']));
+    assert.ok(!approvalMatches(shown, [], ['a']));
 });

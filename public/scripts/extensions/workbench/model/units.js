@@ -93,6 +93,15 @@ export function pickUnits(base, ai, acceptedKeys) {
     return out;
 }
 
+/** Whether the draft still produces exactly what the user approved for these keys. */
+export function approvalMatches(shown, current, keys) {
+    const now = new Map(current.map(c => [c.key, c]));
+    return (shown || []).filter(c => keys.includes(c.key)).every((c) => {
+        const cur = now.get(c.key);
+        return cur && cur.kind === c.kind && cur.before === c.before && cur.after === c.after;
+    });
+}
+
 export function changeSummary(changes) {
     const add = changes.filter(c => c.kind === 'add').length;
     const del = changes.filter(c => c.kind === 'remove').length;
