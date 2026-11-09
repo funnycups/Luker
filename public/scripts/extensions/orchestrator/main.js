@@ -8446,6 +8446,9 @@ function ensureUi() {
 jQuery(() => {
     const context = getContext();
     registerLocaleData();
+    import('./lens/index.js')
+        .then(({ initOrchestraLens }) => initOrchestraLens())
+        .catch(err => console.error(`[${MODULE_NAME}] Failed to start Orchestra Lens`, err));
     ensureSimulationReviewLocaleData();
     initRunPanel();
     ensureSettings();

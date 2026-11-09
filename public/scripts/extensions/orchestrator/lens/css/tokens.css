@@ -1,0 +1,121 @@
+/* Design tokens. Graphite neutrals, one teal accent, amber = "working now". */
+.olens {
+    --ol-font: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Noto Sans", sans-serif;
+    --ol-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, "Noto Sans Mono", monospace;
+    --ol-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
+
+    --ol-radius-xs: 4px;
+    --ol-radius-sm: 6px;
+    --ol-radius: 8px;
+    --ol-radius-lg: 12px;
+    --ol-topbar-h: 52px;
+    --ol-side-w: 268px;
+    --ol-insp-w: 392px;
+    --ol-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ol-dur: 180ms;
+}
+
+.olens[data-theme="dark"] {
+    color-scheme: dark;
+    --ol-bg: #0d0e11;
+    --ol-canvas: #0f1014;
+    --ol-surface: #141519;
+    --ol-surface-2: #191b20;
+    --ol-raised: #1f2127;
+    --ol-hover: rgba(255, 255, 255, 0.045);
+    --ol-active: rgba(255, 255, 255, 0.08);
+    --ol-border: rgba(255, 255, 255, 0.07);
+    --ol-border-strong: rgba(255, 255, 255, 0.13);
+    --ol-text: #e9eaed;
+    --ol-text-muted: #9da1ab;
+    --ol-text-faint: #676b74;
+    --ol-grid-dot: rgba(255, 255, 255, 0.055);
+    --ol-accent: #3fd0b4;
+    --ol-accent-soft: rgba(63, 208, 180, 0.14);
+    --ol-accent-text: #062a23;
+    --ol-recalled: #f4b740;
+    --ol-recalled-soft: rgba(244, 183, 64, 0.13);
+    --ol-pinned: #6fb3f2;
+    --ol-pinned-soft: rgba(111, 179, 242, 0.12);
+    --ol-danger: #ef7d6e;
+    --ol-danger-soft: rgba(239, 125, 110, 0.1);
+    --ol-shadow-1: 0 1px 0 rgba(0, 0, 0, 0.4);
+    --ol-shadow-2: 0 10px 30px -8px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+    --ol-shadow-3: 0 24px 64px -12px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.08);
+    --ol-scrim: rgba(4, 5, 7, 0.62);
+
+    --ol-t0: #ff8f6b; --ol-t1: #4fc78b; --ol-t2: #b99af7; --ol-t3: #5dc3d8; --ol-t4: #e58fcf; --ol-t5: #d4cf6f; --ol-t6: #6fb3f2; --ol-t7: #dba36d;
+    --ol-wire: rgba(160, 168, 186, 0.26);
+    --ol-tone-event: #8e97ab;
+    --ol-tone-character: #ff8f6b;
+    --ol-tone-location: #4fc78b;
+    --ol-tone-thread: #b99af7;
+    --ol-tone-rule: #d4cf6f;
+    --ol-tone-extra1: #5dc3d8;
+    --ol-tone-extra2: #e58fcf;
+    --ol-tone-extra3: #98cf68;
+    --ol-tone-extra4: #dba36d;
+
+    --ol-edge: rgba(160, 168, 186, 0.3);
+    --ol-edge-bond: #4fbfa6;
+    --ol-edge-conflict: #ef7d6e;
+    --ol-edge-hierarchy: rgba(160, 168, 186, 0.22);
+}
+
+.olens[data-theme="light"] {
+    color-scheme: light;
+    --ol-bg: #f4f4f5;
+    --ol-canvas: #fafafa;
+    --ol-surface: #ffffff;
+    --ol-surface-2: #f7f7f8;
+    --ol-raised: #ffffff;
+    --ol-hover: rgba(15, 18, 25, 0.04);
+    --ol-active: rgba(15, 18, 25, 0.075);
+    --ol-border: rgba(15, 18, 25, 0.08);
+    --ol-border-strong: rgba(15, 18, 25, 0.15);
+    --ol-text: #18191c;
+    --ol-text-muted: #5d616b;
+    --ol-text-faint: #8f939b;
+    --ol-grid-dot: rgba(15, 18, 25, 0.09);
+    --ol-accent: #0f9c84;
+    --ol-accent-soft: rgba(15, 156, 132, 0.11);
+    --ol-accent-text: #ffffff;
+    --ol-recalled: #c98500;
+    --ol-recalled-soft: rgba(214, 145, 0, 0.12);
+    --ol-pinned: #2f7fd0;
+    --ol-pinned-soft: rgba(47, 127, 208, 0.1);
+    --ol-danger: #d0503f;
+    --ol-danger-soft: rgba(208, 80, 63, 0.08);
+    --ol-shadow-1: 0 1px 0 rgba(15, 18, 25, 0.04);
+    --ol-shadow-2: 0 10px 30px -10px rgba(15, 18, 25, 0.2), 0 0 0 1px rgba(15, 18, 25, 0.07);
+    --ol-shadow-3: 0 24px 64px -16px rgba(15, 18, 25, 0.3), 0 0 0 1px rgba(15, 18, 25, 0.08);
+    --ol-scrim: rgba(15, 18, 25, 0.32);
+
+    --ol-t0: #e5643f; --ol-t1: #22a066; --ol-t2: #8a63e0; --ol-t3: #1e9bb5; --ol-t4: #c4509f; --ol-t5: #a39a1c; --ol-t6: #2f7fd0; --ol-t7: #b87632;
+    --ol-wire: rgba(70, 78, 96, 0.24);
+    --ol-tone-event: #6c7487;
+    --ol-tone-character: #e5643f;
+    --ol-tone-location: #22a066;
+    --ol-tone-thread: #8a63e0;
+    --ol-tone-rule: #a39a1c;
+    --ol-tone-extra1: #1e9bb5;
+    --ol-tone-extra2: #c4509f;
+    --ol-tone-extra3: #5f9e2c;
+    --ol-tone-extra4: #b87632;
+
+    --ol-edge: rgba(70, 78, 96, 0.28);
+    --ol-edge-bond: #179b80;
+    --ol-edge-conflict: #d0503f;
+    --ol-edge-hierarchy: rgba(70, 78, 96, 0.2);
+}
+
+/* Agent tones: stable per agent id (hash % 8). */
+.olens [data-tone="t0"] { --ol-tone: var(--ol-t0); }
+.olens [data-tone="t1"] { --ol-tone: var(--ol-t1); }
+.olens [data-tone="t2"] { --ol-tone: var(--ol-t2); }
+.olens [data-tone="t3"] { --ol-tone: var(--ol-t3); }
+.olens [data-tone="t4"] { --ol-tone: var(--ol-t4); }
+.olens [data-tone="t5"] { --ol-tone: var(--ol-t5); }
+.olens [data-tone="t6"] { --ol-tone: var(--ol-t6); }
+.olens [data-tone="t7"] { --ol-tone: var(--ol-t7); }
+.olens { --ol-tone: var(--ol-accent); --ol-running: var(--ol-recalled); --ol-running-soft: var(--ol-recalled-soft); }
