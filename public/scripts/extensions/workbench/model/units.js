@@ -34,12 +34,12 @@ export function diffUnits(before, after) {
     const out = [];
     for (const [key, unit] of after) {
         const prev = before.get(key);
-        if (!prev) { out.push(change('add', unit, unit.group || '', '', unit.text)); continue; }
+        if (!prev) { out.push(change('add', unit, unit.group || '', '', withHidden(unit.text, unit.hidden, Object.keys(unit.hidden || {})))); continue; }
         const names = differingFields(prev.hidden, unit.hidden);
         if (prev.text !== unit.text || names.length) out.push(change('change', unit, unit.group || prev.group || '', withHidden(prev.text, prev.hidden, names), withHidden(unit.text, unit.hidden, names)));
     }
     for (const [key, unit] of before) {
-        if (!after.has(key)) out.push(change('remove', unit, unit.group || '', unit.text, ''));
+        if (!after.has(key)) out.push(change('remove', unit, unit.group || '', withHidden(unit.text, unit.hidden, Object.keys(unit.hidden || {})), ''));
     }
     return out;
 }

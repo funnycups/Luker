@@ -11,6 +11,7 @@ export function accountScopedStorage(storage, getHandle) {
         return handle ? `${key}::${handle}` : null;
     };
     return {
+        getHandle,
         getItem(key) {
             const name = scoped(key);
             return name ? storage?.getItem(name) ?? null : null;

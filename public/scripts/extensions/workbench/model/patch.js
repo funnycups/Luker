@@ -11,7 +11,7 @@
 import { i18n, i18nFormat } from '../i18n.js';
 import { SourceError } from './errors.js';
 
-const canon = (value) => JSON.stringify(value ?? null, (_, v) => (v && typeof v === 'object' && !Array.isArray(v)
+const canon = (value) => JSON.stringify(value, (_, v) => (v && typeof v === 'object' && !Array.isArray(v)
     ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
     : v));
 export const same = (a, b) => canon(a) === canon(b);
@@ -128,19 +128,9 @@ export async function commitFields(io, ops) {
     };
 }
 
-/**
- * Saves settings and reports whether the save really happened: Luker's
- * saveSettings catches its own failures, and fires this event only on success.
- */
+/** Acknowledge the save batch containing this request, including queued saves. */
 export async function saveSettingsChecked(ctx) {
     let saved = false;
-    const type = ctx.eventTypes.SETTINGS_UPDATED;
-    const handler = () => { saved = true; };
-    ctx.eventSource.on(type, handler);
-    try {
-        await ctx.saveSettings();
-    } finally {
-        ctx.eventSource.removeListener(type, handler);
-    }
+    await ctx.saveSettings(0, { onSaved: () => { saved = true; } });
     if (!saved) throw new SourceError('write-failed', i18n('Failed to save the settings'));
 }

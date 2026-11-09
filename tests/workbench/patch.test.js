@@ -95,13 +95,9 @@ test('finding 17: a missing target or failed save leaves undo failing', async ()
     assert.equal(history.list()[0].undone, true);
 });
 
-test('settings saves are confirmed by Luker\'s success event only', async () => {
-    const listeners = new Set();
-    const ctx = { eventTypes: { SETTINGS_UPDATED: 'x' }, eventSource: { on: (_, h) => listeners.add(h), removeListener: (_, h) => listeners.delete(h) }, saveSettings: async () => {} };
-    await assert.rejects(saveSettingsChecked(ctx), { code: 'write-failed' });
-    ctx.saveSettings = async () => { for (const h of listeners) h(); };
-    await saveSettingsChecked(ctx);
-    assert.equal(listeners.size, 0);
+test('a settings save needs acknowledgement from its own batch', async () => {
+    await assert.rejects(saveSettingsChecked({ saveSettings: async () => {} }), { code: 'write-failed' });
+    await saveSettingsChecked({ saveSettings: async (_, options) => options.onSaved() });
 });
 
 test('approval compares the full proposal even when the stored text was shortened', () => {

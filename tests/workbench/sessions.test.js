@@ -57,3 +57,9 @@ test('dropping old messages keeps Answer again pointing at the right place', () 
     const fitted = fitSession({ id: 'a', turns: [{ role: 'ai', msgKeep: 15 }], messages: Array.from({ length: 20 }, () => big) });
     assert.equal(fitted.turns[0].msgKeep, 15 - (20 - fitted.messages.length));
 });
+
+test('oversized read arguments cannot escape the session cap', () => {
+    const s = fitSession({ id: 'ask', turns: [{ role: 'ai', answer: 'answer', reads: [{ args: { query: 'x'.repeat(1_100_000) } }] }] });
+    assert.ok(JSON.stringify(s).length <= MAX_SESSION_CHARS);
+    assert.equal(s.turns[0].answer, 'answer');
+});

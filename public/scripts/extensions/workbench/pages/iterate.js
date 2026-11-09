@@ -58,6 +58,7 @@ export function createIteratePage(app) {
     let scope = 'character';
     let scopes = null; // { memory: { global, character }, ... }
     let session = null;
+    let selectionVersion = 0;
     // Saved copies per target: { base, target, title } — rebuilt when missing.
     const work = new Map();
     // Pending proposals per session id: { base, ai, target, title, workKey }.
@@ -116,6 +117,7 @@ export function createIteratePage(app) {
     }
 
     function newChat() {
+        selectionVersion++;
         session = null;
         sessOpen = false;
         paintAll();
@@ -123,6 +125,7 @@ export function createIteratePage(app) {
     }
 
     function openSession(id) {
+        selectionVersion++;
         const s = store.get(id);
         if (!s) return;
         session = s;
@@ -333,8 +336,9 @@ export function createIteratePage(app) {
 
     async function send() {
         const text = input.value.trim();
-        if (!text || busy || blocked()) return;
+        if (!text || busy || applying.has(session?.id) || blocked()) return;
         // Everything below belongs to this request, whatever the user opens meanwhile.
+        const selection = selectionVersion;
         const runWs = ws;
         const runScope = scope;
         const runKey = keyOf();
@@ -349,6 +353,7 @@ export function createIteratePage(app) {
                 app.toast(loadError || i18n('Could not read what should be edited'), { error: true });
                 return;
             }
+            if (selection !== selectionVersion || ws !== runWs || scope !== runScope || (session?.id || null) !== runId) return;
             loadError = '';
             const w = { base: loaded.live, target: loaded.target, title: loaded.title };
             work.set(runKey, w);
@@ -370,13 +375,13 @@ export function createIteratePage(app) {
             const draft = { base: structuredClone(w.base), ai: structuredClone(w.base), target: w.target, title: w.title, workKey: runKey, ws: runWs };
             drafts.set(runId, draft);
             let userContent = current.note ? `${current.note}\n\n${text}` : text;
+            input.value = '';
+            grow();
             if (withReply) {
                 const reply = await iter().lastReply?.();
                 if (reply) userContent += `\n\n<最近一条回复>\n${reply}\n</最近一条回复>`;
             }
             current = saveTo(runId, { turns: [...turns, { role: 'user', text, at: Date.now() }], note: '' });
-            input.value = '';
-            grow();
             liveStep = '';
             const controller = new AbortController();
             abort = controller;
@@ -387,7 +392,6 @@ export function createIteratePage(app) {
             if (!current) return;
             current = saveTo(runId, { turns: [...current.turns, turn] });
             if (turn.changes?.length && !app.settings().reviewChanges) {
-                busy = false;
                 await apply(runId, current.turns.length - 1, turn.changes.map(c => c.key));
             }
         } finally {
@@ -516,6 +520,7 @@ export function createIteratePage(app) {
         el,
         flush: true,
         async show(o = {}) {
+            selectionVersion++;
             if (o.sessionId) {
                 const s = store.get(o.sessionId);
                 if (s) { session = s; ws = s.ws; scope = s.scope; }

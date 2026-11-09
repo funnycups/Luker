@@ -136,9 +136,9 @@ test('a failed save is not retried as already done, and failed undo can be retri
 test('reading for a write refuses a cached entry the server does not have', () => {
     const persisted = { entries: { 1: { content: 'a' }, 2: { content: 'b' } } };
     const cached = { entries: { 1: { content: 'unsaved' }, 2: { content: 'b' } } };
-    assert.throws(() => bookForWrite(persisted, cached, ['1'], '书'), { code: 'unsaved' });
-    assert.equal(bookForWrite(persisted, cached, ['2'], '书'), cached);
-    assert.equal(bookForWrite(persisted, null, ['1'], '书'), persisted);
+    assert.throws(() => bookForWrite(persisted, cached, '书'), { code: 'unsaved' });
+    assert.throws(() => bookForWrite(persisted, { ...persisted, scan_depth: 2 }, '书'), { code: 'unsaved' });
+    assert.equal(bookForWrite(persisted, null, '书'), persisted);
 });
 
 test('orchestrator undo targets the recorded card', () => {
@@ -159,4 +159,28 @@ test('character assistant helpers prefer the published API and report absence', 
     const main = { buildCharacterEditorHelperApis: () => [] };
     assert.equal(await ceaHelperSource({ getExtensionApi: () => undefined }, async () => main), main);
     await assert.rejects(ceaHelperSource({ getExtensionApi: () => undefined }, async () => { throw new Error('missing'); }), { code: 'no-extension' });
+});
+
+test('an added entry previews and round-trips hidden and null fields', async () => {
+    const { diffUnits } = await import('../../public/scripts/extensions/workbench/model/units.js');
+    const { worldUnits } = await import('../../public/scripts/extensions/workbench/model/adapters.js');
+    const empty = { lorebooks: { book: { entries: {} } } };
+    const entry = { uid: 7, content: 'text', order: 3, group: null };
+    const next = { lorebooks: { book: { entries: { 7: entry } } } };
+    const [change] = diffUnits(worldUnits(empty), worldUnits(next));
+    assert.match(change.after, /order: 3/);
+    const stored = { book: empty.lorebooks.book };
+    const result = await commitCardAndBooks(cardEditsFor(empty, next, [change.key]), bookIo(stored));
+    assert.deepEqual(stored.book.entries[7], entry);
+    await result.undo();
+    assert.deepEqual(stored.book.entries, {});
+});
+
+test('undo rejects an inverse confirmed only by the runtime cache', async () => {
+    let saving = true;
+    const result = await commitCardAndBooks(cardEditsFor(base, ai, ['card:description']), {
+        commitCard: async edits => saving ? { persisted: true } : { persisted: false, alreadyDone: edits },
+    });
+    saving = false;
+    await assert.rejects(result.undo(), { code: 'conflict' });
 });

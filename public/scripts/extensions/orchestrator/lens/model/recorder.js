@@ -73,7 +73,15 @@ export function createRecorder({ storage = createMemoryStorage(), now = () => gl
     const listeners = new Set();
     // Read on first use: the account is not known yet when the recorder is built.
     let history = null;
-    const runs = () => (history ??= loadHistory());
+    let owner;
+    const runs = () => {
+        const current = storage?.getHandle?.();
+        if (current !== owner || history === null) {
+            owner = current;
+            history = loadHistory();
+        }
+        return history;
+    };
     let latest = null; // the most recently started `current` across stores
     let seq = 0;
     let notifyQueued = false;

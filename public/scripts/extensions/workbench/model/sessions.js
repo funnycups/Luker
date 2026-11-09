@@ -55,6 +55,14 @@ export function fitSession(session) {
     while (Array.isArray(s.turns) && s.turns.length > 2 && sizeOf(s) > MAX_SESSION_CHARS) s.turns = s.turns.slice(1);
     for (let max = MAX_TURN_TEXT / 2; Array.isArray(s.turns) && sizeOf(s) > MAX_SESSION_CHARS && max >= 16; max = Math.floor(max / 2)) s.turns = s.turns.map(t => fitTurn(t, max));
     if (Array.isArray(s.turns) && sizeOf(s) > MAX_SESSION_CHARS) s.turns = s.turns.map(t => ({ ...t, changes: [] }));
+    if (sizeOf(s) > MAX_SESSION_CHARS) {
+        // Read arguments, fix prompts and decision notes can contain entire documents.
+        delete s.note;
+        s.turns = (s.turns || []).map(({ role, at, text, answer, state }) => ({ role, at, text, answer, state }));
+        for (const key of Object.keys(s)) {
+            if (typeof s[key] === 'string') s[key] = cut(s[key], 2000);
+        }
+    }
     return s;
 }
 

@@ -376,16 +376,21 @@ async function readPersistedBook(name) {
 }
 
 const worldBookIo = {
-    readBook: async (book, uids) => {
+    readBook: async (book) => {
         const persisted = await readPersistedBook(book);
-        return bookForWrite(persisted, clone(await getContext().loadWorldInfo(book)), uids, book);
+        return bookForWrite(persisted, clone(await getContext().loadWorldInfo(book)), book);
     },
     async saveBook(book, data) {
+        const key = String(book).trim();
+        const previous = worldInfoCache.get(key);
         try {
             await getContext().saveWorldInfo(book, data, true, { refreshEditor: true });
         } catch (err) {
             // Luker caches the book before the request; a retry must not read that copy.
-            worldInfoCache.delete(String(book).trim());
+            if (same(worldInfoCache.get(key), data)) {
+                if (previous === undefined) worldInfoCache.delete(key);
+                else worldInfoCache.set(key, previous);
+            }
             throw err;
         }
     },

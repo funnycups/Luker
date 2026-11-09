@@ -2,16 +2,17 @@
 //
 // Which account this page is signed in to. Browser only: imports Luker's user module.
 
-import { currentUser } from '../../user.js';
+import { settingsReady } from '../../../script.js';
+import { accountsEnabled, currentUser } from '../../user.js';
 import { accountScopedStorage } from './account-storage.js';
 
 /**
  * The signed-in handle, or null when it is unknown. Without accounts Luker
- * never loads a user and hides the logout button; everyone is the default user.
+ * never loads a user; once settings are ready, everyone is the default user.
  */
 export function currentAccountHandle() {
     if (currentUser?.handle) return String(currentUser.handle);
-    return globalThis.document?.getElementById('logout_button')?.style.display === 'none' ? 'default-user' : null;
+    return settingsReady && !accountsEnabled ? 'default-user' : null;
 }
 
 /** This browser's localStorage, limited to the signed-in account. */

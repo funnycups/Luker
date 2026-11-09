@@ -21,25 +21,19 @@ function requireBook(book, name, count) {
 
 /**
  * A book to write to. Luker's cache can hold unsaved or failed writes, so
- * every touched entry is compared with the copy on the server; untouched
- * entries keep the cached version, which a pending save would write anyway.
+ * comparing the entire document also protects metadata and untouched entries.
  */
-export function bookForWrite(persisted, cached, uids, name) {
-    if (!persisted) return persisted;
-    if (!cached?.entries) return persisted;
-    for (const uid of uids) {
-        if (uid !== BOOK_META && !same(persisted.entries?.[uid], cached.entries?.[uid])) throw new SourceError('unsaved', i18nFormat('"${0}" has unsaved edits in the world info panel. Wait for them to save, then try again.', name));
-    }
-    return cached;
+export function bookForWrite(persisted, cached, name) {
+    if (persisted && cached && !same(persisted, cached)) throw new SourceError('unsaved', i18nFormat('"${0}" has unsaved edits in the world info panel. Wait for them to save, then try again.', name));
+    return persisted;
 }
 
 async function commitBook(name, ops, baseCount, io) {
-    const uids = ops.map(op => parseBookKey(op.key));
     let lastCount = 0;
     let requiredCount = baseCount;
     const result = await writeFields({
         async read() {
-            const book = requireBook(await io.readBook(name, uids), name, requiredCount);
+            const book = requireBook(await io.readBook(name), name, requiredCount);
             lastCount = Object.keys(book.entries).length;
             return book;
         },
@@ -81,7 +75,13 @@ export async function commitCardAndBooks({ cardEdits, bookOps, baseCounts = {}, 
             }
             if (written.length) {
                 const inverse = written.map(e => ({ op: 'set', path: e.path, oldValue: e.newValue, newValue: e.oldValue }));
-                steps.push(async () => (await io.commitCard(inverse))?.conflicts?.length || 0);
+                let pending = inverse;
+                steps.push(async () => {
+                    const result = await io.commitCard(pending);
+                    const unresolved = new Set([...(result.conflicts || []).map(c => c.edit), ...(result.alreadyDone || [])]);
+                    if (result.persisted) pending = pending.filter(e => unresolved.has(e));
+                    return pending.length;
+                });
             }
         } catch (err) {
             failure = err;

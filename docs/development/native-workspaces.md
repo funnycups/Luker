@@ -33,6 +33,7 @@ Review these first. Everything else in the branch is a new file.
 
 | File | Change | Why |
 |---|---|---|
+| `public/script.js` | Optional save acknowledgement | Lets Workbench confirm its own settings payload was saved when requests overlap. |
 | `memory-graph/main.js` | +3 lines | Dynamic import of `lens/index.js` at bootstrap. It is dynamic because a static import broke partial mocks in tests that import `main.js`. |
 | `memory-graph/manifest.json` | +1 line | Loads `lens/style.css`. |
 | `orchestrator/main.js` | +3 lines | Same bootstrap import. |
@@ -68,7 +69,7 @@ Legacy data has no owner, so it is never attached to an account. `workbench.sess
 Areas that deserve the closest look:
 
 1. The AI assistant path into `config-iteration` (`memory-graph/lens/source-luker.js`, `workbench/source-iterate.js`).
-2. Writes to user data: schema save, inline edit (`memory-graph/lens/edit/`), agent edit (`orchestrator/lens/source-write.js`), iteration apply and undo (`workbench/`). Workbench apply and undo follow one rule (`workbench/model/patch.js`): field changes are computed from the proposal baseline by the same diff the preview shows, merged onto freshly read data at a target fixed when the action started, and a field changed elsewhere makes its unit a conflict. Undo is the same merge reversed. Failed reads and saves stop with an error and leave history unchanged; world books are compared with the server copy, because Luker caches a save before it reaches the server.
+2. Writes to user data: schema save, inline edit (`memory-graph/lens/edit/`), agent edit (`orchestrator/lens/source-write.js`), iteration apply and undo (`workbench/`). Workbench apply and undo follow one rule (`workbench/model/patch.js`): field changes are computed from the proposal baseline by the same diff the preview shows, merged onto freshly read data at a target fixed when the action started, and a field changed elsewhere makes its unit a conflict. Undo is the same merge reversed. Failed reads and saves stop with an error and leave history unchanged; world book writes require the cached and persisted documents to agree, because Luker caches edits before they reach the server.
 3. The tag filter runtime (`memory-graph/lens/filter/filter-runtime.js`), which registers regex scripts.
 4. The run-panel wrapper (`orchestrator/lens/dock/takeover.js`).
 5. Secret redaction in Workbench's request reader (`workbench/model/requests.js`).
@@ -83,7 +84,7 @@ The Workbench prompts are not localized yet.
 ## Tests
 
 ```bash
-npm run test:unit --prefix tests -- --maxWorkers=2 lens-shared memory-graph/lens orchestrator/lens workbench
+cd tests && npm run test:unit -- --maxWorkers=1 workbench memory-graph/lens orchestrator/lens lens-shared
 ```
 
 Full-suite comparison on macOS against a clean `release` export: 667 failures on this branch, 674 on `release`, 664 of them shared. The shared failures come from the local environment (for example a missing sqlite native binding). The 11 failures seen only on the branch were all server-side, and all passed when rerun serially. The two full runs executed at the same time, so they were competing for resources. The coexistence guards were added after that comparison.

@@ -30,6 +30,7 @@ export function createAskPage(app) {
     const el = h('div', { class: 'wb-page is-split' }, side, chat);
 
     let session = null;
+    let selectionVersion = 0;
     let busy = false;
     let abort = null;
     let steps = [];
@@ -109,7 +110,7 @@ export function createAskPage(app) {
             h('span', { class: 'wb-note wb-chat-tag', text: i18n('Read-only; nothing gets changed') }),
             h('span', { class: 'wb-spacer' }),
             recent.length ? historyMenu(recent) : null,
-            button(i18n('New conversation'), () => { session = null; steps = []; paintHead(); paintBody(); input.focus(); }, { iconName: 'plus', className: 'is-ghost wb-chat-new', title: i18n('New conversation') }));
+            button(i18n('New conversation'), () => { selectionVersion++; session = null; steps = []; paintHead(); paintBody(); input.focus(); }, { iconName: 'plus', className: 'is-ghost wb-chat-new', title: i18n('New conversation') }));
     }
 
     function historyMenu(recent) {
@@ -117,7 +118,7 @@ export function createAskPage(app) {
             h('option', { value: '', text: i18n('Earlier chats') }),
             recent.map(s => h('option', { value: s.id, text: `${s.title} · ${relativeTime(s.updatedAt)}` })));
         sel.value = session?.id || '';
-        sel.addEventListener('change', () => { session = store.get(sel.value); steps = []; paintBody(); });
+        sel.addEventListener('change', () => { selectionVersion++; session = store.get(sel.value); steps = []; paintBody(); });
         return sel;
     }
 
@@ -222,13 +223,17 @@ export function createAskPage(app) {
     async function send() {
         const question = input.value.trim();
         if (!question || busy) return;
+        const selection = selectionVersion;
+        const startingSession = session;
         busy = true;
+        paintOpts();
         let controller = null;
         try {
             const s = app.settings();
             let overview;
             const filter = { inspector: s.ask.sources.inspector !== false, redactText: s.ask.redact };
             try { overview = await app.source.askOverview(filter); } catch (err) { overview = finishOverview({ 错误: String(err?.message || err) }, filter); }
+            if (selection !== selectionVersion || startingSession !== session) return;
             if (s.ask.previewBeforeSend && !globalThis.confirm(i18nFormat('To be sent to the AI:\n\nQuestion: ${0}\n\nOverview:\n${1}\n\nThe AI will then read data as needed. Continue?', question, JSON.stringify(overview, null, 1).slice(0, 1500)))) return;
             // The answer belongs to this session, whichever one is open when it arrives.
             const runId = (session || (session = store.create({ kind: 'ask', title: titleFrom(question) }))).id;
