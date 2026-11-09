@@ -32,6 +32,14 @@
 "endpoint_invalid_url" = "Please enter a valid http(s) endpoint";
 "endpoint_settings" = "Endpoint";
 
+"http_auth_dialog_title" = "Sign in required";
+"http_auth_dialog_message" = "This endpoint requires HTTP Basic authentication before Luker can load.";
+"http_auth_dialog_host" = "Endpoint: %@";
+"http_auth_dialog_realm" = "Realm: %@";
+"http_auth_dialog_username_hint" = "Username";
+"http_auth_dialog_password_hint" = "Password";
+"http_auth_dialog_login" = "Sign In";
+
 "endpoint_failure_title" = "Unable to Load Endpoint";
 "endpoint_failure_message" = "Could not connect to %@. Switch endpoint?";
 "endpoint_failure_switch" = "Switch Endpoint";
