@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 
 import { replaceRunningAppImage } from './appimage-update.js';
+import { createHttpAuthController, HttpAuthStore } from './http-auth.js';
 import { detectInstallFlavour } from './install-flavour.js';
 import { hidesOnClose, usesTray, devtoolsShortcutFor } from './window-behaviour.js';
 
@@ -67,6 +68,8 @@ const userData = process.env.LUKER_DESKTOP_USER_DATA || app.getPath('userData');
 if (process.env.LUKER_DESKTOP_USER_DATA) {
     app.setPath('userData', userData);
 }
+
+const httpAuthStore = new HttpAuthStore(path.join(userData, 'http-auth.json'));
 
 const UPDATE_PROGRESS_CHANNEL = 'luker:update-progress';
 
@@ -471,18 +474,42 @@ const SHELL_STRINGS = {
         openDataDirectory: 'Open data directory',
         quit: 'Quit Luker',
         trayHint: 'Luker keeps running in the notification area. Quit from its menu when you are done.',
+        httpAuthTitle: 'Sign in required',
+        httpAuthMessage: 'This endpoint requires HTTP Basic authentication before Luker can load.',
+        httpAuthEndpoint: 'Endpoint: %s',
+        httpAuthRealm: 'Realm: %s',
+        httpAuthUsername: 'Username',
+        httpAuthPassword: 'Password',
+        httpAuthLogin: 'Sign In',
+        httpAuthCancel: 'Cancel',
     },
     'zh-CN': {
         showWindow: '显示 Luker',
         openDataDirectory: '打开数据目录',
         quit: '退出 Luker',
         trayHint: 'Luker 仍在通知区域运行，结束时请从托盘菜单退出。',
+        httpAuthTitle: '需要登录',
+        httpAuthMessage: '此端点启用了 HTTP Basic 认证，Luker 需要先完成账号密码验证后才能载入。',
+        httpAuthEndpoint: '端点：%s',
+        httpAuthRealm: '认证域：%s',
+        httpAuthUsername: '用户名',
+        httpAuthPassword: '密码',
+        httpAuthLogin: '登录',
+        httpAuthCancel: '取消',
     },
     'zh-TW': {
         showWindow: '顯示 Luker',
         openDataDirectory: '開啟資料目錄',
         quit: '結束 Luker',
         trayHint: 'Luker 仍在通知區域執行，結束時請從托盤選單結束。',
+        httpAuthTitle: '需要登入',
+        httpAuthMessage: '此端點啟用了 HTTP Basic 驗證，Luker 需要先完成帳號密碼驗證後才能載入。',
+        httpAuthEndpoint: '端點：%s',
+        httpAuthRealm: '驗證領域：%s',
+        httpAuthUsername: '使用者名稱',
+        httpAuthPassword: '密碼',
+        httpAuthLogin: '登入',
+        httpAuthCancel: '取消',
     },
 };
 
@@ -570,6 +597,81 @@ function installApplicationMenu(strings) {
     ]));
 }
 
+function showHttpAuthDialog({ parent, host, port, realm, prefill }, strings) {
+    return new Promise((resolve) => {
+        const dialog = new BrowserWindow({
+            parent: parent && !parent.isDestroyed() ? parent : undefined,
+            modal: true,
+            show: false,
+            resizable: false,
+            minimizable: false,
+            maximizable: false,
+            width: 420,
+            height: 380,
+            title: strings.httpAuthTitle,
+            webPreferences: {
+                preload: path.join(import.meta.dirname, 'http-auth-preload.js'),
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: true,
+            },
+        });
+        let settled = false;
+        const finish = (value) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            ipcMain.removeListener('luker:http-auth:submit', onSubmit);
+            ipcMain.removeListener('luker:http-auth:cancel', onCancel);
+            if (!dialog.isDestroyed()) {
+                dialog.destroy();
+            }
+            resolve(value);
+        };
+        const onSubmit = (event, payload) => {
+            if (event.sender !== dialog.webContents) {
+                return;
+            }
+            finish({
+                username: String(payload?.username ?? ''),
+                password: String(payload?.password ?? ''),
+            });
+        };
+        const onCancel = (event) => {
+            if (event.sender !== dialog.webContents) {
+                return;
+            }
+            finish(null);
+        };
+        ipcMain.on('luker:http-auth:submit', onSubmit);
+        ipcMain.on('luker:http-auth:cancel', onCancel);
+        dialog.on('closed', () => finish(null));
+        dialog.webContents.on('did-finish-load', () => {
+            dialog.show();
+            dialog.focus();
+            dialog.webContents.send('luker:http-auth:context', {
+                username: prefill?.username ?? '',
+                password: prefill?.password ?? '',
+                endpointText: strings.httpAuthEndpoint.replace('%s', `${host}:${port}`),
+                realmText: realm.length > 0 ? strings.httpAuthRealm.replace('%s', realm) : '',
+                strings: {
+                    title: strings.httpAuthTitle,
+                    message: strings.httpAuthMessage,
+                    usernameHint: strings.httpAuthUsername,
+                    passwordHint: strings.httpAuthPassword,
+                    login: strings.httpAuthLogin,
+                    cancel: strings.httpAuthCancel,
+                },
+            });
+        });
+        dialog.loadFile('http-auth.html').catch((error) => {
+            console.error('Failed to open the HTTP authentication dialog:', error);
+            finish(null);
+        });
+    });
+}
+
 app.whenReady().then(async () => {
     // Electron installs a default application menu, which Windows and Linux
     // draw as an in-window bar the shell has no use for. macOS keeps its own,
@@ -594,6 +696,22 @@ app.whenReady().then(async () => {
         },
     });
     routeExternalNavigation(win);
+
+    const httpAuth = createHttpAuthController({
+        store: httpAuthStore,
+        prompt: (request) => showHttpAuthDialog(request, strings),
+    });
+    app.on('login', (event, contents, _details, authInfo, callback) => {
+        // Proxy authentication is outside the endpoint credentials the shell
+        // manages, so the proxy keeps whatever handling Electron gives it.
+        if (authInfo.isProxy) {
+            return;
+        }
+        event.preventDefault();
+        const owner = contents ? BrowserWindow.fromWebContents(contents) : null;
+        httpAuth.handle(authInfo, callback, owner || win);
+    });
+    win.webContents.on('did-finish-load', () => httpAuth.resetAttempts());
 
     // macOS keeps an application menu that already binds the devtools toggle,
     // so the handler would race it. Only the menu-less platforms get one.

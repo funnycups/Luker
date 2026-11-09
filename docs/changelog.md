@@ -7,6 +7,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Client Apps
 
 - Added a **Check for pre-release updates** switch to User Settings, on by default.
+- Fixed the iOS, HarmonyOS and desktop apps not prompting for HTTP Basic authentication when the endpoint requires it.
 
 ### iOS App
 

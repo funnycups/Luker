@@ -41,17 +41,19 @@ function isSettled(url) {
 }
 
 /**
- * @param {{ scenarioId?: string, passPort?: boolean, port?: number|null, userData?: string|null, extraEnv?: Record<string, string>, packaged?: boolean }} [options]
+ * @param {{ scenarioId?: string, passPort?: boolean, port?: number|null, userData?: string|null, extraEnv?: Record<string, string>, packaged?: boolean, waitForSettle?: boolean }} [options]
  *   `passPort: false` leaves the port unpinned so the shell probes upward
  *   from its default (the "preferred port is taken" case). `userData`
  *   skips the seed clone, for specs that construct the data root themselves.
  *   `packaged: true` launches the built artifact instead of the checkout, so
  *   the app carries its own backend and takes no application directory.
- *   `extraEnv` overrides the child environment, for the settings a spec has
- *   to vary per launch.
+ *   `extraEnv` overrides the child environment, for the settings a test has
+ *   to vary per launch. `waitForSettle: false` returns as soon as the shell
+ *   window exists, for a first navigation the test has to answer before it
+ *   can reach the app (an authentication challenge, for example).
  * @returns {Promise<{ electronApp: object, page: object, baseURL: string, port: number, dataRoot: string, userData: string, relaunch: () => Promise<void>, close: () => Promise<void> }>}
  */
-export async function launchLukerDesktop({ scenarioId = 'default', passPort = true, port = null, userData = null, extraEnv = {}, packaged = false } = {}) {
+export async function launchLukerDesktop({ scenarioId = 'default', passPort = true, port = null, userData = null, extraEnv = {}, packaged = false, waitForSettle = true } = {}) {
     const reservedPort = port ?? await reservePort('desktop');
     const resolvedUserData = userData ?? resolve(SCRATCH_ROOT, `desktop-${scenarioId}-${reservedPort}`);
     if (!userData) {
@@ -75,7 +77,9 @@ export async function launchLukerDesktop({ scenarioId = 'default', passPort = tr
             env: { ...process.env, LUKER_DESKTOP_USER_DATA: resolvedUserData, ...extraEnv },
         });
         const page = await electronApp.firstWindow();
-        await page.waitForURL(u => isSettled(u), { timeout: 60_000 });
+        if (waitForSettle) {
+            await page.waitForURL(u => isSettled(u), { timeout: 60_000 });
+        }
         const actual = new URL(page.url());
         handle.electronApp = electronApp;
         handle.page = page;

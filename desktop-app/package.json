@@ -30,6 +30,9 @@
     "files": [
       "main.js",
       "appimage-update.js",
+      "http-auth.js",
+      "http-auth.html",
+      "http-auth-preload.js",
       "install-flavour.js",
       "window-behaviour.js",
       "preload.js",

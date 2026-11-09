@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Luker</title>
+<style>
+    :root {
+        color-scheme: dark;
+    }
+    * {
+        box-sizing: border-box;
+    }
+    body {
+        margin: 0;
+        padding: 20px;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: #1c1f24;
+        color: #cfd6e4;
+        font-size: 13px;
+    }
+    h1 {
+        margin: 0 0 12px;
+        font-size: 18px;
+    }
+    .hint {
+        margin: 0 0 6px;
+        color: #8b93a7;
+        font-size: 12px;
+        word-break: break-all;
+    }
+    #message {
+        margin-bottom: 12px;
+    }
+    label {
+        display: block;
+        margin: 10px 0 4px;
+        color: #8b93a7;
+        font-size: 12px;
+    }
+    input {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #2d333d;
+        border-radius: 8px;
+        background: #232830;
+        color: #cfd6e4;
+        font-size: 13px;
+        outline: none;
+    }
+    input:focus {
+        border-color: #4aa3ff;
+    }
+    .actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 18px;
+    }
+    button {
+        padding: 7px 14px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: #8b93a7;
+        font-size: 13px;
+        cursor: pointer;
+    }
+    button.primary {
+        background: #4aa3ff;
+        color: #ffffff;
+    }
+    button:hover {
+        filter: brightness(1.1);
+    }
+</style>
+</head>
+<body>
+    <h1 id="title"></h1>
+    <p id="message" class="hint"></p>
+    <p id="endpoint" class="hint"></p>
+    <p id="realm" class="hint" hidden></p>
+    <label for="username" id="usernameLabel"></label>
+    <input id="username" autocomplete="username" spellcheck="false">
+    <label for="password" id="passwordLabel"></label>
+    <input id="password" type="password" autocomplete="current-password">
+    <div class="actions">
+        <button id="cancel" type="button"></button>
+        <button id="login" type="button" class="primary"></button>
+    </div>
+    <script>
+        const api = window.lukerHttpAuth;
+        const byId = (id) => document.getElementById(id);
+        let submitted = false;
+
+        function submit() {
+            if (submitted) {
+                return;
+            }
+            submitted = true;
+            api.submit(byId('username').value, byId('password').value);
+        }
+
+        function cancel() {
+            if (submitted) {
+                return;
+            }
+            submitted = true;
+            api.cancel();
+        }
+
+        api.onContext((context) => {
+            const strings = context.strings || {};
+            document.title = strings.title || 'Luker';
+            byId('title').textContent = strings.title || '';
+            byId('message').textContent = strings.message || '';
+            byId('endpoint').textContent = context.endpointText || '';
+            byId('realm').textContent = context.realmText || '';
+            byId('realm').hidden = !context.realmText;
+            byId('usernameLabel').textContent = strings.usernameHint || '';
+            byId('passwordLabel').textContent = strings.passwordHint || '';
+            byId('cancel').textContent = strings.cancel || '';
+            byId('login').textContent = strings.login || '';
+            byId('username').value = context.username || '';
+            byId('password').value = context.password || '';
+            (context.username ? byId('password') : byId('username')).focus();
+        });
+
+        byId('login').addEventListener('click', submit);
+        byId('cancel').addEventListener('click', cancel);
+        byId('password').addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                submit();
+            }
+        });
+    </script>
+</body>
+</html>
