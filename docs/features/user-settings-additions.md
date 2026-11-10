@@ -42,6 +42,8 @@ The **Account** button in the top row opens a popup with the following Luker add
 
 - **Storage Inspector** and **Browser Storage** — two views of where your data resides. The [Storage Inspector](/features/storage-inspector) breaks down your server-side data directory by category with a quota bar, size-only entries for sensitive blobs and no delete actions; **Browser Storage** inspects this browser's `localStorage`, `sessionStorage`, IndexedDB and Cache Storage, and can delete individual keys, stores, databases and caches.
 
+- **Data directory** — desktop app only. Shows where Luker keeps chats, backups, plugins and extensions. **Change** moves them to another folder and restarts Luker, or switches to an existing Luker data folder; the folder must be writable and have enough free space. If it is unavailable at startup, Luker offers retry, another folder, or quit. See [Changing the Data Directory](/guide/desktop#changing-the-data-directory).
+
 ## Background generation and notifications
 
 Two settings matter when generation leaves the foreground.
