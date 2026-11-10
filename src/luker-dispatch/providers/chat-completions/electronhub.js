@@ -20,7 +20,9 @@ import {
     cachingSystemPromptForOpenRouter,
 } from '../../../prompt-converters.js';
 import { getConfigValue } from '../../../util.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { applyAdditionalParameters } from './custom-params.js';
 import { passthroughReasoningEffort } from './reasoning-params.js';
 
 const API_ELECTRONHUB = 'https://api.electronhub.ai/v1';
@@ -127,7 +129,12 @@ export async function dispatchElectronHub(ctx) {
         };
 
         const fetchUrl = API_ELECTRONHUB + '/chat/completions';
-        ctx.inspection.attach(fetchUrl, apiKey, requestBody);
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + apiKey,
+        };
+        applyAdditionalParameters(requestBody, headers, body);
+        ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(headers, apiKey, ['authorization']), requestBody);
 
         console.debug('Electron Hub request:', requestBody);
 
@@ -135,10 +142,7 @@ export async function dispatchElectronHub(ctx) {
             method: 'POST',
             signal: ctx.signal,
             body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey,
-            },
+            headers,
         });
 
         // Architectural contract: every dispatch emits a single head frame

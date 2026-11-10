@@ -39,9 +39,7 @@ import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { getCookieSecret } from '../../../users.js';
 import { TEXT_COMPLETION_MODELS } from '../../../endpoints/tokenizers.js';
 import {
-    excludeKeysByYaml,
     getConfigValue,
-    mergeObjectWithYaml,
     modelIdMatchesFamily,
     uuidv4,
 } from '../../../util.js';
@@ -62,6 +60,7 @@ import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { GeminiHistoryCache } from '../../gemini-history-cache.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { resolveOpenAIEffort, passthroughReasoningEffort, applyReasoningExclude, normalizeReasoningToken } from './reasoning-params.js';
+import { applyAdditionalParameters } from './custom-params.js';
 
 const geminiHistoryCache = new GeminiHistoryCache();
 
@@ -360,8 +359,6 @@ async function resolveCustom(ctx) {
         bodyParams.top_logprobs = bodyParams.logprobs;
         bodyParams.logprobs = true;
     }
-    mergeObjectWithYaml(bodyParams, body.custom_include_body);
-    mergeObjectWithYaml(headers, body.custom_include_headers);
     embedOpenRouterMedia(body.messages, { audio: true, video: false });
     if (body.json_schema) {
         bodyParams.response_format = {
@@ -823,10 +820,6 @@ export async function dispatchOpenAICompatible(ctx) {
             ...bodyParams,
         };
 
-        if (source === CHAT_COMPLETION_SOURCES.CUSTOM) {
-            excludeKeysByYaml(requestBody, body.custom_exclude_body);
-        }
-
         if (geminiCacheOptions) {
             const plan = geminiHistoryCache.apply(requestBody, geminiCacheOptions);
             if (plan.reason === 'no-history' && resolveGeminiSystemPromptCache(body)) {
@@ -834,6 +827,8 @@ export async function dispatchOpenAICompatible(ctx) {
             }
             console.debug('OpenRouter Gemini history cache:', plan);
         }
+
+        applyAdditionalParameters(requestBody, headers, body);
 
         const requestHeaders = {
             'Content-Type': 'application/json',

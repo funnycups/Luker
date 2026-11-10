@@ -28,13 +28,12 @@ import {
     calculateClaudeBudgetTokens,
 } from '../../../prompt-converters.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
+import { applyAdditionalParameters } from './custom-params.js';
 import {
     buildClaudeTool,
     color,
     convertClaudeToolChoice,
-    excludeKeysByYaml,
     getConfigValue,
-    mergeObjectWithYaml,
     modelIdMatchesFamily,
 } from '../../../util.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
@@ -328,9 +327,7 @@ export async function dispatchClaude(ctx) {
             additionalHeaders['anthropic-beta'] = betaHeaders.join(',');
         }
 
-        mergeObjectWithYaml(requestBody, body.custom_include_body);
-        excludeKeysByYaml(requestBody, body.custom_exclude_body);
-        mergeObjectWithYaml(additionalHeaders, body.custom_include_headers);
+        applyAdditionalParameters(requestBody, additionalHeaders, body);
 
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'messages' : apiUrl + '/messages';
         const requestHeaders = {

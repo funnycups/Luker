@@ -10,7 +10,9 @@
 // header for the full recipe).
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { applyAdditionalParameters } from './custom-params.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
 
 const API_CHUTES = 'https://llm.chutes.ai/v1';
@@ -85,7 +87,12 @@ export async function dispatchChutes(ctx) {
         };
 
         const fetchUrl = API_CHUTES + '/chat/completions';
-        ctx.inspection.attach(fetchUrl, apiKey, requestBody);
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + apiKey,
+        };
+        applyAdditionalParameters(requestBody, headers, body);
+        ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(headers, apiKey, ['authorization']), requestBody);
 
         console.debug('Chutes request:', requestBody);
 
@@ -93,10 +100,7 @@ export async function dispatchChutes(ctx) {
             method: 'POST',
             signal: ctx.signal,
             body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey,
-            },
+            headers,
         });
 
         // Architectural contract: every dispatch emits a single head frame

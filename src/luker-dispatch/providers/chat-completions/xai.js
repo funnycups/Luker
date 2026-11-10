@@ -11,7 +11,9 @@
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { convertXAIMessages, getPromptNames } from '../../../prompt-converters.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { applyAdditionalParameters } from './custom-params.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 
@@ -106,7 +108,12 @@ export async function dispatchXai(ctx) {
         };
 
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'chat/completions' : apiUrl + '/chat/completions';
-        ctx.inspection.attach(fetchUrl, apiKey, requestBody);
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + apiKey,
+        };
+        applyAdditionalParameters(requestBody, headers, body);
+        ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(headers, apiKey, ['authorization']), requestBody);
 
         console.debug('xAI request:', requestBody);
 
@@ -114,10 +121,7 @@ export async function dispatchXai(ctx) {
             method: 'POST',
             signal: ctx.signal,
             body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey,
-            },
+            headers,
         });
 
         // Architectural contract: every dispatch emits a single head frame

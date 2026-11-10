@@ -1021,6 +1021,56 @@ export function mergeObjectWithYaml(obj, yamlString) {
 }
 
 /**
+ * Adds a YAML-serialized object to the object, merging one nested object
+ * instead of replacing it. Other top-level keys are assigned as usual.
+ * Nested values inside the merged object are replaced, not recursively
+ * merged.
+ * @param {object} obj Object
+ * @param {string} yamlString YAML-serialized object
+ * @param {string} nestedKey Key whose object value should be merged
+ * @returns {void} Nothing
+ */
+export function mergeNestedObjectWithYaml(obj, yamlString, nestedKey) {
+    if (!yamlString || !nestedKey) {
+        return;
+    }
+
+    try {
+        const parsedObject = yaml.parse(yamlString);
+
+        const mergeItem = (item) => {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) {
+                return;
+            }
+
+            const nestedValue = item[nestedKey];
+            if (nestedValue && typeof nestedValue === 'object' && !Array.isArray(nestedValue)) {
+                if (obj[nestedKey] && typeof obj[nestedKey] === 'object' && !Array.isArray(obj[nestedKey])) {
+                    Object.assign(obj[nestedKey], nestedValue);
+                } else {
+                    obj[nestedKey] = nestedValue;
+                }
+
+                const rest = { ...item };
+                delete rest[nestedKey];
+                Object.assign(obj, rest);
+                return;
+            }
+
+            Object.assign(obj, item);
+        };
+
+        if (Array.isArray(parsedObject)) {
+            parsedObject.forEach(mergeItem);
+        } else {
+            mergeItem(parsedObject);
+        }
+    } catch {
+        // Do nothing
+    }
+}
+
+/**
  * Removes keys from the object by YAML-serialized array.
  * @param {object} obj Object
  * @param {string} yamlString YAML-serialized array

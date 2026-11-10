@@ -49,7 +49,9 @@ import {
     tryParse,
 } from '../../../util.js';
 import { normalizeGeminiResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { applyAdditionalParameters } from './custom-params.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 
@@ -405,7 +407,8 @@ export async function dispatchMakerSuite(ctx) {
             url = `${apiUrl.toString().replace(/\/$/, '')}/${apiVersion}/models/${model}:${responseType}?key=${apiKey}${stream ? '&alt=sse' : ''}`;
         }
 
-        ctx.inspection.attach(url, apiKey || '', requestBody);
+        applyAdditionalParameters(requestBody, headers, body, { nestedBodyKey: 'generationConfig' });
+        ctx.inspection.attach(url, resolveEffectiveApiKey(headers, apiKey || '', ['authorization', 'x-goog-api-key']), requestBody);
         const generateResponse = await ctx.fetch(url, {
             body: JSON.stringify(requestBody),
             method: 'POST',

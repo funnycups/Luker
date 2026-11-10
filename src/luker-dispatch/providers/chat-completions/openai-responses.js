@@ -12,13 +12,10 @@
 // head/chunk/end/error events; never touches Express.
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
-import {
-    excludeKeysByYaml,
-    mergeObjectWithYaml,
-} from '../../../util.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
+import { applyAdditionalParameters } from './custom-params.js';
 import { resolveOpenAIEffort } from './reasoning-params.js';
 
 const DEFAULT_RESPONSES_BASE_URL = 'https://api.openai.com/v1';
@@ -198,11 +195,8 @@ export async function dispatchOpenAIResponses(ctx) {
 
         /** @type {any} */
         const headers = {};
-        mergeObjectWithYaml(headers, body.custom_include_headers);
-
         const requestBody = buildResponsesRequestBody(body);
-        mergeObjectWithYaml(requestBody, body.custom_include_body);
-        excludeKeysByYaml(requestBody, body.custom_exclude_body);
+        applyAdditionalParameters(requestBody, headers, body);
 
         const endpointUrl = `${apiUrl}/responses`;
         const requestHeaders = {

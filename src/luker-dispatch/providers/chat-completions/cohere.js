@@ -20,7 +20,9 @@
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { convertCohereMessages, getPromptNames } from '../../../prompt-converters.js';
 import { normalizeCohereResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { applyAdditionalParameters } from './custom-params.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
 
 const API_COHERE_V2 = 'https://api.cohere.ai/v2';
@@ -108,7 +110,12 @@ export async function dispatchCohere(ctx) {
         }
 
         const fetchUrl = API_COHERE_V2 + '/chat';
-        ctx.inspection.attach(fetchUrl, apiKey, requestBody);
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + apiKey,
+        };
+        applyAdditionalParameters(requestBody, headers, body);
+        ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(headers, apiKey, ['authorization']), requestBody);
 
         console.debug('Cohere request:', requestBody);
 
@@ -116,10 +123,7 @@ export async function dispatchCohere(ctx) {
             method: 'POST',
             signal: ctx.signal,
             body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey,
-            },
+            headers,
         });
 
         // Architectural contract: every dispatch emits a single head frame

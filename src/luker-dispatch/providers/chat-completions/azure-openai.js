@@ -25,7 +25,9 @@ import {
     OPENAI_REASONING_EFFORT_MODELS,
 } from '../../../constants.js';
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { applyAdditionalParameters } from './custom-params.js';
 import { resolveOpenAIEffort } from './reasoning-params.js';
 
 /**
@@ -89,16 +91,18 @@ export async function dispatchAzureOpenAI(ctx) {
         console.info(`Sending request to Azure OpenAI: ${fetchUrl}`);
         console.debug('Azure OpenAI Request Body:', apiRequestBody);
 
-        ctx.inspection.attach(fetchUrl, apiKey, apiRequestBody);
+        const headers = {
+            'Content-Type': 'application/json',
+            'api-key': apiKey,
+        };
+        applyAdditionalParameters(apiRequestBody, headers, body);
+        ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(headers, apiKey, ['api-key']), apiRequestBody);
 
         const resp = await ctx.fetch(fetchUrl, {
             method: 'POST',
             signal: ctx.signal,
             body: JSON.stringify(apiRequestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'api-key': apiKey,
-            },
+            headers,
         });
 
         // Architectural contract: every dispatch emits a single head frame

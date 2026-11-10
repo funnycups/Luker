@@ -11,7 +11,9 @@
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { AIMLAPI_HEADERS } from '../../../constants.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { applyAdditionalParameters } from './custom-params.js';
 import { passthroughReasoningEffort } from './reasoning-params.js';
 
 const API_AIMLAPI = 'https://api.aimlapi.com/v1';
@@ -86,7 +88,13 @@ export async function dispatchAimlapi(ctx) {
         };
 
         const fetchUrl = API_AIMLAPI + '/chat/completions';
-        ctx.inspection.attach(fetchUrl, apiKey, requestBody);
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + apiKey,
+            ...AIMLAPI_HEADERS,
+        };
+        applyAdditionalParameters(requestBody, headers, body);
+        ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(headers, apiKey, ['authorization']), requestBody);
 
         console.debug('AI/ML API request:', requestBody);
 
@@ -94,11 +102,7 @@ export async function dispatchAimlapi(ctx) {
             method: 'POST',
             signal: ctx.signal,
             body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + apiKey,
-                ...AIMLAPI_HEADERS,
-            },
+            headers,
         });
 
         // Architectural contract: every dispatch emits a single head frame

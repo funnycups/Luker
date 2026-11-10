@@ -522,6 +522,34 @@ describe('dispatchMakerSuite', () => {
         });
     });
 
+    describe('additional parameters', () => {
+        test('deep-merges generationConfig, keeps generated fields, and applies top-level overrides', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    custom_include_body: 'generationConfig:\n  topK: 64\n  thinkingConfig:\n    thinkingBudget: 1024\ncustomProbe: applied\n',
+                    custom_exclude_body: 'safetySettings\n',
+                    custom_include_headers: 'X-Additional-Parameter: applied\n',
+                },
+            });
+
+            await dispatchMakerSuite(ctx);
+
+            const [, init] = ctx.fetch.mock.calls[0];
+            expect(init.headers['X-Additional-Parameter']).toBe('applied');
+
+            const requestBody = JSON.parse(init.body);
+            expect(requestBody.customProbe).toBe('applied');
+            expect(requestBody.safetySettings).toBeUndefined();
+            expect(requestBody.generationConfig.topK).toBe(64);
+            // The generated sampling and token fields survive the merge.
+            expect(requestBody.generationConfig.temperature).toBe(0.7);
+            expect(requestBody.generationConfig.maxOutputTokens).toBe(128);
+            // A nested object supplied by the user replaces the generated one
+            // instead of accumulating stale fields.
+            expect(requestBody.generationConfig.thinkingConfig).toEqual({ thinkingBudget: 1024 });
+        });
+    });
+
     test('VERTEXAI reverse-proxy branch: /v1/publishers/google/models URL, Authorization header, no key= param', async () => {
         // Vertex express/full auth modes read secrets via readSecret (NOT
         // ctx.secrets.read) inside getVertexAIAuth; those paths need the

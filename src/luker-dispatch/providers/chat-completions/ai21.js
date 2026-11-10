@@ -11,7 +11,9 @@
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { convertAI21Messages, getPromptNames } from '../../../prompt-converters.js';
+import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
+import { applyAdditionalParameters } from './custom-params.js';
 
 const API_AI21 = 'https://api.ai21.com/studio/v1';
 
@@ -68,7 +70,13 @@ export async function dispatchAI21(ctx) {
         };
 
         const fetchUrl = API_AI21 + '/chat/completions';
-        ctx.inspection.attach(fetchUrl, apiKey, requestBody);
+        const headers = {
+            'accept': 'application/json',
+            'content-type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+        };
+        applyAdditionalParameters(requestBody, headers, body);
+        ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(headers, apiKey, ['authorization']), requestBody);
 
         console.debug('AI21 request:', requestBody);
 
@@ -76,11 +84,7 @@ export async function dispatchAI21(ctx) {
             method: 'POST',
             signal: ctx.signal,
             body: JSON.stringify(requestBody),
-            headers: {
-                'accept': 'application/json',
-                'content-type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-            },
+            headers,
         });
 
         // Architectural contract: every dispatch emits a single head frame

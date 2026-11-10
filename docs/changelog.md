@@ -4,6 +4,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Connections & Models
+
+- Additional Parameters now applies to every chat completion source.
+
 ### Client Apps
 
 - Added a **Check for pre-release updates** switch to User Settings, on by default.

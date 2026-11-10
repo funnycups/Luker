@@ -17,10 +17,10 @@ import {
     ensureDeepSeekReasoningContent,
     getPromptNames,
 } from '../../../prompt-converters.js';
-import { excludeKeysByYaml, mergeObjectWithYaml } from '../../../util.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
+import { applyAdditionalParameters } from './custom-params.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
 
 const API_DEEPSEEK = 'https://api.deepseek.com/beta';
@@ -94,9 +94,6 @@ export async function dispatchDeepSeek(ctx) {
             body.messages.push(message);
         }
 
-        mergeObjectWithYaml(bodyParams, body.custom_include_body);
-        mergeObjectWithYaml(headers, body.custom_include_headers);
-
         const processedMessages = addAssistantPrefix(
             postProcessPrompt(body.messages, PROMPT_PROCESSING_TYPE.SEMI, getPromptNames({ body })),
             bodyParams.tools,
@@ -130,7 +127,7 @@ export async function dispatchDeepSeek(ctx) {
             ...bodyParams,
         };
 
-        excludeKeysByYaml(requestBody, body.custom_exclude_body);
+        applyAdditionalParameters(requestBody, headers, body);
 
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'chat/completions' : apiUrl + '/chat/completions';
         const requestHeaders = {
