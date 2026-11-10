@@ -32,8 +32,8 @@ test('the root manifest approves the sqlite native install script', () => {
 test('the sqlite installer defines the Android gyp variable', () => {
     const source = read('scripts/install-sqlite.js');
 
-    expect(source).toContain("android_ndk_path=''");
-    expect(source).toContain("process.platform === 'android'");
+    expect(source).toContain('android_ndk_path=\'\'');
+    expect(source).toContain('process.platform === \'android\'');
 });
 
 test.each(INSTALLERS)('%s builds the sqlite native binding after installing packages', (installer) => {
@@ -53,14 +53,14 @@ test.each(INSTALLERS)('%s keeps dependency install scripts disabled', (installer
 test('start.sh leaves the sqlite build opt-in on Android', () => {
     const source = read('start.sh');
 
-    expect(source).toContain("node -p 'process.platform'");
+    expect(source).toContain('node -p \'process.platform\'');
     expect(source).toContain('!= "android"');
 });
 
 test('the Docker image fails the build when the sqlite binding cannot load', () => {
     const dockerfile = read('Dockerfile');
     const rebuildAt = dockerfile.indexOf('npm run storage:install-sqlite');
-    const smokeAt = dockerfile.indexOf("import Database from 'better-sqlite3'");
+    const smokeAt = dockerfile.indexOf('import Database from \'better-sqlite3\'');
 
     expect(rebuildAt).toBeGreaterThanOrEqual(0);
     expect(smokeAt).toBeGreaterThan(rebuildAt);

@@ -16,6 +16,6 @@ test('st-context.js imports and exposes the run-panel namespace', () => {
         fileURLToPath(new URL('../../public/scripts/st-context.js', import.meta.url)),
         'utf8',
     );
-    expect(src).toContain("import * as RUN_PANEL_API_NS from './run-panel/index.js';");
+    expect(src).toContain('import * as RUN_PANEL_API_NS from \'./run-panel/index.js\';');
     expect(src).toContain('runPanel: RUN_PANEL_API,');
 });

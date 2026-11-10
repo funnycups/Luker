@@ -11,7 +11,7 @@ describe('EXA secret key registration', () => {
 
     test('client secrets.js declares the EXA key and label', () => {
         const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../public/scripts/secrets.js'), 'utf8');
-        expect(source).toContain("EXA: 'api_key_exa'");
+        expect(source).toContain('EXA: \'api_key_exa\'');
         expect(source).toContain('[SECRET_KEYS.EXA]: \'Exa\'');
     });
 });

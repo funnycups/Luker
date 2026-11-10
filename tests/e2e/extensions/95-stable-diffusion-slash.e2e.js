@@ -14,7 +14,7 @@ import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
-import { ONE_PX_PNG_BASE64, startSdWebUiMock } from '../_lib/sdMock.js';
+import { startSdWebUiMock } from '../_lib/sdMock.js';
 
 let server, mock, sdMock;
 
