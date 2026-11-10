@@ -41,6 +41,30 @@ describe('sync staging helpers', () => {
         expect(fs.statSync(a).isDirectory()).toBe(true);
     });
 
+    test('concurrent makeStagingPath calls tolerate entries that vanish during the sweep', async () => {
+        const target = path.join(root, 'extensions', 'ext');
+        const worker = async () => {
+            for (let i = 0; i < 200; i++) {
+                await fs.promises.rmdir(await makeStagingPath(target, 'extension'));
+            }
+        };
+        await expect(Promise.all(Array.from({ length: 16 }, worker))).resolves.toBeDefined();
+    });
+
+    test('concurrent swaps in one parent tolerate journals another recovery already consumed', async () => {
+        const parent = path.join(root, 'extensions');
+        const worker = async (n) => {
+            const target = path.join(parent, `ext-${n}`);
+            for (let i = 0; i < 50; i++) {
+                const staging = await makeStagingPath(target, 'extension');
+                fs.writeFileSync(path.join(staging, 'v.txt'), String(i));
+                await swapDirectoryInto(staging, target);
+            }
+        };
+        await expect(Promise.all(Array.from({ length: 16 }, (_, n) => worker(n)))).resolves.toBeDefined();
+        expect(fs.readdirSync(parent).filter(isStagingEntryName)).toEqual([]);
+    });
+
     test('sweepStaleStaging removes staging entries left by an earlier process and keeps the rest', async () => {
         const parent = path.join(root, 'extensions');
         fs.mkdirSync(path.join(parent, `${STAGING_PREFIX}extension-old`, 'nested'), { recursive: true });

@@ -34,7 +34,16 @@ export async function recoverStagedSwaps(parentDir) {
         if (!name.startsWith(SWAP_JOURNAL_PREFIX) || !name.endsWith('.json')) continue;
         const journal = path.join(parentDir, name);
         if (ACTIVE_SWAPS.has(journal)) continue;
-        const { target, parked } = JSON.parse(await fs.promises.readFile(journal, 'utf8'));
+        let raw;
+        try {
+            raw = await fs.promises.readFile(journal, 'utf8');
+        } catch (error) {
+            // A concurrent recovery may have consumed this journal between
+            // the readdir above and this read.
+            if (error.code === 'ENOENT') continue;
+            throw error;
+        }
+        const { target, parked } = JSON.parse(raw);
         if (typeof target !== 'string' || target !== path.basename(target) || target === '.' || target === '..'
             || typeof parked !== 'string' || parked !== path.basename(parked) || !parked.startsWith(`${STAGING_PREFIX}replaced-`)) {
             throw new Error(`Invalid staging recovery journal: ${journal}`);
@@ -50,7 +59,9 @@ export async function recoverStagedSwaps(parentDir) {
             }
         }
         await fs.promises.rm(old, { recursive: true, force: true });
-        await fs.promises.unlink(journal);
+        try { await fs.promises.unlink(journal); } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+        }
     }
 }
 
@@ -95,7 +106,15 @@ export async function sweepStaleStaging(parentDir) {
         // legacy copies without journals and active replacements.
         if (entry.name.startsWith(`${STAGING_PREFIX}replaced-`) || ACTIVE_SWAPS.has(path.join(parentDir, entry.name))) continue;
         const abs = path.join(parentDir, entry.name);
-        const stat = await fs.promises.lstat(abs);
+        let stat;
+        try {
+            stat = await fs.promises.lstat(abs);
+        } catch (error) {
+            // A concurrent operation may have consumed its staging entry
+            // between the readdir above and this lstat.
+            if (error.code === 'ENOENT') continue;
+            throw error;
+        }
         if (stat.mtimeMs >= PROCESS_STARTED_AT_MS) continue;
         await fs.promises.rm(abs, { recursive: true, force: true });
         removed.push(entry.name);
