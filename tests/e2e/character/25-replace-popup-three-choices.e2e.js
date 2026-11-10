@@ -217,12 +217,12 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             // The character's bound world is now the new embedded book.
             // Read from the live character via getContext rather than the
             // visible select — the WI drawer overlay hides the panel.
-            await page.waitForFunction(({ avatar, want }) => {
+            await page.waitForFunction(({ name, want }) => {
                 const ctx = window.Luker?.getContext?.();
-                const idx = ctx?.characters?.findIndex?.(c => c?.avatar === avatar) ?? -1;
+                const idx = ctx?.characters?.findIndex?.(c => (c?.data?.name || c?.name) === name) ?? -1;
                 const bound = idx >= 0 ? ctx.characters[idx]?.data?.extensions?.world : '';
                 return String(bound || '').trim() === want;
-            }, { avatar: 'ash-import-branch.png', want: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
+            }, { name: BRIALLEN_NAME, want: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
 
             // The previous world book is untouched on disk — only the
             // binding moved, the book itself stays.
@@ -237,12 +237,12 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             await clickCharacterCard(page, BRIALLEN_NAME, { timeoutMs: 20_000 });
             await dismissAnyPopup(page);
             await openCharacterEditPanel(page);
-            await page.waitForFunction(({ avatar, want }) => {
+            await page.waitForFunction(({ name, want }) => {
                 const ctx = window.Luker?.getContext?.();
-                const idx = ctx?.characters?.findIndex?.(c => c?.avatar === avatar) ?? -1;
+                const idx = ctx?.characters?.findIndex?.(c => (c?.data?.name || c?.name) === name) ?? -1;
                 const bound = idx >= 0 ? ctx.characters[idx]?.data?.extensions?.world : '';
                 return String(bound || '').trim() === want;
-            }, { avatar: 'ash-import-branch.png', want: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
+            }, { name: BRIALLEN_NAME, want: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
         } finally {
             await tearDownServer(server);
         }
@@ -279,12 +279,12 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
 
             // The character's bound world must STILL be the previous
             // book — not the new embedded book and not empty.
-            await page.waitForFunction(({ avatar, want }) => {
+            await page.waitForFunction(({ name, want }) => {
                 const ctx = window.Luker?.getContext?.();
-                const idx = ctx?.characters?.findIndex?.(c => c?.avatar === avatar) ?? -1;
+                const idx = ctx?.characters?.findIndex?.(c => (c?.data?.name || c?.name) === name) ?? -1;
                 const bound = idx >= 0 ? ctx.characters[idx]?.data?.extensions?.world : '';
                 return String(bound || '').trim() === want;
-            }, { avatar: 'ash-keep-branch.png', want: ashBook }, { timeout: 10_000 });
+            }, { name: BRIALLEN_NAME, want: ashBook }, { timeout: 10_000 });
 
             // The new card's embedded book MUST NOT have been imported
             // — only the binding was preserved, the embedded payload
@@ -300,12 +300,12 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             await clickCharacterCard(page, BRIALLEN_NAME, { timeoutMs: 20_000 });
             await dismissAnyPopup(page);
             await openCharacterEditPanel(page);
-            await page.waitForFunction(({ avatar, want }) => {
+            await page.waitForFunction(({ name, want }) => {
                 const ctx = window.Luker?.getContext?.();
-                const idx = ctx?.characters?.findIndex?.(c => c?.avatar === avatar) ?? -1;
+                const idx = ctx?.characters?.findIndex?.(c => (c?.data?.name || c?.name) === name) ?? -1;
                 const bound = idx >= 0 ? ctx.characters[idx]?.data?.extensions?.world : '';
                 return String(bound || '').trim() === want;
-            }, { avatar: 'ash-keep-branch.png', want: ashBook }, { timeout: 10_000 });
+            }, { name: BRIALLEN_NAME, want: ashBook }, { timeout: 10_000 });
             expect(existsSync(newBookPath), 'still no embedded book file after restart').toBe(false);
         } finally {
             await tearDownServer(server);

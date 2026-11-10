@@ -11910,8 +11910,8 @@ export async function renameCharacter(name = null, { silent = false, renameChats
         return false;
     }
 
-    const oldAvatar = characters[this_chid].avatar;
-    const currentCharacterName = getCharacterName(characters[this_chid]);
+    const characterId = this_chid;
+    const currentCharacterName = getCharacterName(characters[characterId]);
     const newValue = name || await callGenericPopup('<h3>' + t`New name:` + '</h3>', POPUP_TYPE.INPUT, currentCharacterName);
 
     if (!newValue) {
@@ -11923,91 +11923,11 @@ export async function renameCharacter(name = null, { silent = false, renameChats
         return false;
     }
 
-    const body = JSON.stringify({ avatar_url: oldAvatar, new_name: newValue });
-    const response = await fetch('/api/characters/rename', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body,
-    });
-
     try {
-        if (response.ok) {
-            const data = await response.json();
-            const newAvatar = data.avatar;
-
-            const oldName = getCharaFilename(null, { manualAvatarKey: oldAvatar });
-            const newName = getCharaFilename(null, { manualAvatarKey: newAvatar });
-
-            // Replace other auxiliary fields where was referenced by avatar key
-            // Tag List
-            renameTagKey(oldAvatar, newAvatar);
-
-            // Additional lore books
-            const charLore = world_info.charLore?.find(x => x.name == oldName);
-            if (charLore) {
-                charLore.name = newName;
-                saveSettingsDebounced();
-            }
-
-            // Char-bound Author's Notes
-            const charNote = extension_settings.note.chara?.find(x => x.name == oldName);
-            if (charNote) {
-                charNote.name = newName;
-                saveSettingsDebounced();
-            }
-
-            // Update active character, if the current one was the currently active one
-            if (active_character === oldAvatar) {
-                active_character = newAvatar;
-                saveSettingsDebounced();
-            }
-
-            await eventSource.emit(event_types.CHARACTER_RENAMED, oldAvatar, newAvatar);
-
-            // Unload current character
-            setCharacterId(undefined);
-            // Reload characters list
-            await getCharacters();
-
-            // Find newly renamed character
-            const newChId = characters.findIndex(c => c.avatar == data.avatar);
-
-            if (newChId !== -1) {
-                // Select the character after the renaming
-                await selectCharacterById(newChId);
-
-                // Async delay to update UI
-                await delay(1);
-
-                if (this_chid === undefined) {
-                    throw new Error('New character not selected');
-                }
-
-                // Also rename as a group member
-                await renameGroupMember(oldAvatar, newAvatar, newValue.toString());
-                const renamePastChatsConfirm = renameChats !== null
-                    ? renameChats
-                    : silent
-                        ? false
-                        : await Popup.show.confirm(
-                            t`Character renamed!`,
-                            `<p>${t`Past chats will still contain the old character name. Would you like to update the character name in previous chats as well?`}</p>
-                            <i><b>${t`Sprites folder (if any) should be renamed manually.`}</b></i>`,
-                        ) == POPUP_RESULT.AFFIRMATIVE;
-
-                if (renamePastChatsConfirm) {
-                    await renamePastChats(oldAvatar, newAvatar, newValue);
-                    await reloadCurrentChat();
-                    toastr.success(t`Character renamed and past chats updated!`, t`Rename Character`);
-                } else {
-                    toastr.success(t`Character renamed!`, t`Rename Character`);
-                }
-            } else {
-                throw new Error('Newly renamed character was lost?');
-            }
-        } else {
-            throw new Error('Could not rename the character');
-        }
+        await performCharacterRename(characterId, newValue, {
+            silent,
+            renameChats,
+        });
     } catch (error) {
         // Reloading to prevent data corruption; surface the underlying error so the user isn't blind on mobile.
         console.error('Renaming character error:', error);
@@ -12028,8 +11948,144 @@ export async function renameCharacter(name = null, { silent = false, renameChats
     return true;
 }
 
-async function renamePastChats(oldAvatar, newAvatar, newName) {
+/**
+ * Applies a server-side character rename and migrates the client-side
+ * references that mirror the avatar key. Shared by the Rename action and
+ * the Replace / Update flow.
+ *
+ * @param {number|string} characterId Character array index.
+ * @param {string} newValue New display name.
+ * @param {object} [options]
+ * @param {boolean} [options.silent=false] Suppress prompts.
+ * @param {boolean?} [options.renameChats=null] Rename past chats; null prompts when not silent.
+ * @param {string} [options.previousDisplayName=''] Old display name, used to match auto-generated chat file names.
+ * @param {boolean} [options.renameChatFiles=false] Rename auto-generated chat files to the new name.
+ * @returns {Promise<string>} New avatar file name.
+ */
+async function performCharacterRename(characterId, newValue, { silent = false, renameChats = null, previousDisplayName = '', renameChatFiles = false } = {}) {
+    const oldAvatar = characters[characterId].avatar;
+    const body = JSON.stringify({ avatar_url: oldAvatar, new_name: newValue });
+    const response = await fetch('/api/characters/rename', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body,
+    });
+
+    if (!response.ok) {
+        throw new Error('Could not rename the character');
+    }
+
+    const data = await response.json();
+    const newAvatar = data.avatar;
+
+    const oldAvatarName = getCharaFilename(null, { manualAvatarKey: oldAvatar });
+    const newAvatarName = getCharaFilename(null, { manualAvatarKey: newAvatar });
+
+    // Replace other auxiliary fields where was referenced by avatar key
+    // Tag List
+    renameTagKey(oldAvatar, newAvatar);
+
+    // Additional lore books
+    const charLore = world_info.charLore?.find(x => x.name == oldAvatarName);
+    if (charLore) {
+        charLore.name = newAvatarName;
+        saveSettingsDebounced();
+    }
+
+    // Char-bound Author's Notes
+    const charNote = extension_settings.note.chara?.find(x => x.name == oldAvatarName);
+    if (charNote) {
+        charNote.name = newAvatarName;
+        saveSettingsDebounced();
+    }
+
+    // Update active character, if the current one was the currently active one
+    if (active_character === oldAvatar) {
+        active_character = newAvatar;
+        saveSettingsDebounced();
+    }
+
+    await eventSource.emit(event_types.CHARACTER_RENAMED, oldAvatar, newAvatar);
+
+    // Unload current character
+    setCharacterId(undefined);
+    // Reload characters list
+    await getCharacters();
+
+    // Find newly renamed character
+    const newChId = characters.findIndex(c => c.avatar == newAvatar);
+
+    if (newChId === -1) {
+        throw new Error('Newly renamed character was lost?');
+    }
+
+    // Select the character after the renaming
+    await selectCharacterById(newChId);
+
+    // Async delay to update UI
+    await delay(1);
+
+    if (this_chid === undefined) {
+        throw new Error('New character not selected');
+    }
+
+    // Also rename as a group member
+    await renameGroupMember(oldAvatar, newAvatar, newValue.toString());
+    const renamePastChatsConfirm = renameChats !== null
+        ? renameChats
+        : silent
+            ? false
+            : await Popup.show.confirm(
+                t`Character renamed!`,
+                `<p>${t`Past chats will still contain the old character name. Would you like to update the character name in previous chats as well?`}</p>
+                <i><b>${t`Sprites folder (if any) should be renamed manually.`}</b></i>`,
+            ) == POPUP_RESULT.AFFIRMATIVE;
+
+    if (renamePastChatsConfirm) {
+        await renamePastChats(oldAvatar, newAvatar, newValue, previousDisplayName, { renameChatFiles });
+        await reloadCurrentChat();
+        toastr.success(t`Character renamed and past chats updated!`, t`Rename Character`);
+    } else {
+        toastr.success(t`Character renamed!`, t`Rename Character`);
+    }
+
+    return newAvatar;
+}
+
+/**
+ * Renames the character that was just overwritten by the Replace / Update
+ * flow. The incoming card already carries its new display name, so the
+ * name-equality guard used by the manual rename action must be bypassed.
+ *
+ * @param {string} oldAvatar Avatar key before the replacement.
+ * @param {string} newValue Display name carried by the incoming card.
+ * @param {string} previousDisplayName Display name before the replacement.
+ * @returns {Promise<string|null>} New avatar file name, or null when the rename failed.
+ */
+async function renameReplacedCharacter(oldAvatar, newValue, previousDisplayName) {
+    const characterId = characters.findIndex(character => String(character?.avatar || '') === String(oldAvatar || ''));
+    if (characterId === -1) {
+        console.warn('Could not find the replaced character to rename', oldAvatar);
+        return null;
+    }
+
+    try {
+        return await performCharacterRename(characterId, newValue, {
+            silent: true,
+            renameChats: true,
+            previousDisplayName,
+            renameChatFiles: true,
+        });
+    } catch (error) {
+        console.error('Renaming replaced character error:', error);
+        toastr.error(String(error?.message || error || ''), t`Rename Character`);
+        return null;
+    }
+}
+
+async function renamePastChats(oldAvatar, newAvatar, newName, previousDisplayName = '', { renameChatFiles = false } = {}) {
     const pastChats = await getPastCharacterChats();
+    const oldPrefix = renameChatFiles && previousDisplayName ? `${previousDisplayName} - ` : '';
 
     for (const { file_name } of pastChats) {
         try {
@@ -12070,29 +12126,71 @@ async function renamePastChats(oldAvatar, newAvatar, newName) {
 
             const operations = await buildChatMessagePatchOperations(previousMessages, currentChat.slice(1));
 
-            if (operations.length === 0) {
+            if (operations.length > 0) {
+                await eventSource.emit(event_types.CHARACTER_RENAMED_IN_PAST_CHAT, currentChat, oldAvatar, newAvatar);
+
+                const patchResponse = await fetch('/api/chats/patch', {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    body: JSON.stringify({
+                        ch_name: newName,
+                        file_name: fileNameWithoutExtension,
+                        avatar_url: newAvatar,
+                        operations,
+                        chat_metadata: currentChat?.[0]?.chat_metadata || {},
+                        integrity: currentChat?.[0]?.chat_metadata?.integrity,
+                    }),
+                    cache: 'no-cache',
+                });
+
+                if (!patchResponse.ok) {
+                    throw new Error('Could not patch chat');
+                }
+            }
+
+            // Auto-generated chat files carry the character name as their
+            // prefix. Rename only those; user-named chat files stay put.
+            if (!oldPrefix || !fileNameWithoutExtension.startsWith(oldPrefix)) {
                 continue;
             }
 
-            await eventSource.emit(event_types.CHARACTER_RENAMED_IN_PAST_CHAT, currentChat, oldAvatar, newAvatar);
+            const renamedBase = `${newName} - ${fileNameWithoutExtension.slice(oldPrefix.length)}`;
+            if (renamedBase === fileNameWithoutExtension) {
+                continue;
+            }
 
-            const patchResponse = await fetch('/api/chats/patch', {
+            const renameResponse = await fetch('/api/chats/rename', {
                 method: 'POST',
                 headers: getRequestHeaders(),
                 body: JSON.stringify({
-                    ch_name: newName,
-                    file_name: fileNameWithoutExtension,
                     avatar_url: newAvatar,
-                    operations,
-                    chat_metadata: currentChat?.[0]?.chat_metadata || {},
-                    integrity: currentChat?.[0]?.chat_metadata?.integrity,
+                    original_file: `${fileNameWithoutExtension}.jsonl`,
+                    renamed_file: `${renamedBase}.jsonl`,
                 }),
                 cache: 'no-cache',
             });
 
-            if (!patchResponse.ok) {
-                throw new Error('Could not patch chat');
+            if (!renameResponse.ok) {
+                throw new Error('Could not rename chat file');
             }
+
+            const renameData = await renameResponse.json();
+            const finalBase = renameData?.sanitizedFileName
+                ? String(renameData.sanitizedFileName).replace(/\.jsonl$/i, '')
+                : renamedBase;
+
+            if (String(characters[this_chid]?.chat || '').replace(/\.jsonl$/i, '') === fileNameWithoutExtension) {
+                characters[this_chid].chat = finalBase;
+                $('#selected_chat_pole').val(finalBase);
+                await updateRemoteChatName(this_chid, finalBase);
+            }
+
+            await eventSource.emit(event_types.CHAT_RENAMED, {
+                avatarId: newAvatar,
+                groupId: null,
+                oldFileName: `${fileNameWithoutExtension}.jsonl`,
+                newFileName: `${finalBase}.jsonl`,
+            });
         } catch (error) {
             toastr.error(t`Past chat could not be updated: ${file_name}`);
             console.error(error);
@@ -22336,18 +22434,19 @@ jQuery(async function () {
                     }
                 }
 
-                async function emitCharacterReplacedEvent() {
+                async function emitCharacterReplacedEvent(replacedAvatar = previousAvatar) {
                     try {
-                        const replacedIndex = previousAvatar
-                            ? characters.findIndex(item => String(item?.avatar || '').trim() === previousAvatar)
+                        const finalAvatar = String(replacedAvatar || previousAvatar || '').trim();
+                        const replacedIndex = finalAvatar
+                            ? characters.findIndex(item => String(item?.avatar || '').trim() === finalAvatar)
                             : this_chid;
                         let replacedCharacter = null;
-                        if (previousAvatar) {
+                        if (finalAvatar) {
                             try {
                                 const response = await fetch('/api/characters/get', {
                                     method: 'POST',
                                     headers: getRequestHeaders(),
-                                    body: JSON.stringify({ avatar_url: previousAvatar }),
+                                    body: JSON.stringify({ avatar_url: finalAvatar }),
                                     cache: 'no-cache',
                                 });
                                 if (response.ok) {
@@ -22357,12 +22456,12 @@ jQuery(async function () {
                                 // A dropped connection or unreadable body must not
                                 // skip the post-replace event: the !replacedCharacter
                                 // fallback below emits with the in-memory character.
-                                console.warn(`Failed to refresh character ${previousAvatar} for the replaced event; falling back to current data`, error);
+                                console.warn(`Failed to refresh character ${finalAvatar} for the replaced event; falling back to current data`, error);
                             }
                         }
                         if (!replacedCharacter) {
-                            if (previousAvatar) {
-                                await getOneCharacter(previousAvatar, { preserveChat: true });
+                            if (finalAvatar) {
+                                await getOneCharacter(finalAvatar, { preserveChat: true });
                             }
                             replacedCharacter = replacedIndex >= 0
                                 ? characters[replacedIndex]
@@ -22419,7 +22518,27 @@ jQuery(async function () {
                 // Remember the chat currently selected, so we can reload it after the replacement
                 const currentChatFile = characters[this_chid].chat;
                 async function postReplace() {
-                    await openCharacterChat(currentChatFile);
+                    const chatFile = String(characters[this_chid]?.chat || currentChatFile || '');
+                    await openCharacterChat(chatFile);
+                }
+
+                // The import keeps the old avatar filename so chats survive.
+                // When the incoming card carries a different display name,
+                // move the whole identity to that name before the
+                // post-replace binding/world-book handlers run.
+                async function renameReplacementIfNeeded() {
+                    const importedCharacter = characters[this_chid]
+                        || characters.find(character => String(character?.avatar || '') === previousAvatar);
+                    if (!importedCharacter) {
+                        return previousAvatar;
+                    }
+                    const previousDisplayName = getCharacterName(previousCharacter);
+                    const incomingDisplayName = getCharacterName(importedCharacter);
+                    if (!incomingDisplayName || incomingDisplayName === previousDisplayName) {
+                        return importedCharacter.avatar;
+                    }
+                    const renamedAvatar = await renameReplacedCharacter(previousAvatar, incomingDisplayName, previousDisplayName);
+                    return renamedAvatar || importedCharacter.avatar;
                 }
 
                 switch (result) {
@@ -22437,8 +22556,9 @@ jQuery(async function () {
                                 const data = new Map();
                                 data.set(file, characters[this_chid].avatar);
                                 await processDroppedFiles([file], data, { preserveChat: currentChatFile });
+                                const replacedAvatar = await renameReplacementIfNeeded();
                                 await postReplace();
-                                await emitCharacterReplacedEvent();
+                                await emitCharacterReplacedEvent(replacedAvatar);
                             } catch (error) {
                                 console.error('Failed to replace the character card', error);
                                 toastr.error('Failed to replace the character card.', 'Something went wrong');
@@ -22457,8 +22577,9 @@ jQuery(async function () {
                         }
                         onlineUrl = inputUrl;
                         await importFromExternalUrl(onlineUrl, { preserveFileName: characters[this_chid].avatar, preserveChat: currentChatFile });
+                        const replacedAvatar = await renameReplacementIfNeeded();
                         await postReplace();
-                        await emitCharacterReplacedEvent();
+                        await emitCharacterReplacedEvent(replacedAvatar);
                         break;
                     }
                 }

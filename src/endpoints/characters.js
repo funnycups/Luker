@@ -1460,35 +1460,56 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         const oldData = getStoredCharaCardV2(JSON.parse(rawOldData), request.user.directories);
         _.set(oldData, 'data.name', newName);
         const newData = JSON.stringify(oldData);
+        const sameInternalName = newInternalName === oldInternalName;
+        const oldCardAppsPath = path.join(request.user.directories.cardApps, oldInternalName);
+        const newCardAppsPath = path.join(request.user.directories.cardApps, newInternalName);
 
-        // Write data to new location
+        if (!sameInternalName && fs.existsSync(oldCardAppsPath) && fs.existsSync(newCardAppsPath)) {
+            throw new Error(`CardApp directory already exists: ${newCardAppsPath}`);
+        }
+
+        // Write data to new location. When the sanitized name is unchanged
+        // the write targets the existing card, so the move/unlink steps
+        // below must not run against the same path.
         await writeCharacterData(oldAvatarPath, newData, newInternalName, request);
 
-        // Migrate chat data from old to new charDir. ChatRepo handles every
-        // storage engine; the fs.cpSync below is for the legacy fs-only
-        // sidecars (avatar PNGs and any third-party content that lives next
-        // to chats on disk).
-        const handle = request.user.profile.handle;
-        await getChatRepo().renameCharDir(handle, oldInternalName, newInternalName);
+        if (!sameInternalName) {
+            // Migrate chat data from old to new charDir. ChatRepo handles every
+            // storage engine; the fs.cpSync below is for the legacy fs-only
+            // sidecars (avatar PNGs and any third-party content that lives next
+            // to chats on disk).
+            const handle = request.user.profile.handle;
+            await getChatRepo().renameCharDir(handle, oldInternalName, newInternalName);
 
-        // Rename on-disk chats folder if present. In db modes this folder
-        // may be empty (chats live in the engine), but legacy fs-mode users
-        // and imported chats sit on disk.
-        if (fs.existsSync(oldChatsPath) && !fs.existsSync(newChatsPath)) {
-            // Supplying a filter avoids a Node.js Windows copyDir crash while preserving all entries.
-            // https://github.com/nodejs/node/issues/63970
-            fs.cpSync(oldChatsPath, newChatsPath, { recursive: true, filter: () => true });
-            fs.rmSync(oldChatsPath, { recursive: true, force: true });
+            // Rename on-disk chats folder if present. In db modes this folder
+            // may be empty (chats live in the engine), but legacy fs-mode users
+            // and imported chats sit on disk. The repo move above may already
+            // have created the target directory and left the source empty, so
+            // merge and remove unconditionally when the source still exists.
+            if (fs.existsSync(oldChatsPath)) {
+                // Supplying a filter avoids a Node.js Windows copyDir crash while preserving all entries.
+                // https://github.com/nodejs/node/issues/63970
+                fs.cpSync(oldChatsPath, newChatsPath, { recursive: true, filter: () => true });
+                fs.rmSync(oldChatsPath, { recursive: true, force: true });
+            }
+
+            // CardApp files are keyed by the avatar base too. Move them with
+            // the character so the app stays attached after the rename.
+            if (fs.existsSync(oldCardAppsPath) && !fs.existsSync(newCardAppsPath)) {
+                fs.cpSync(oldCardAppsPath, newCardAppsPath, { recursive: true, filter: () => true });
+                fs.rmSync(oldCardAppsPath, { recursive: true, force: true });
+            }
+
+            renameAllCharacterStateSidecars(oldAvatarPath, newAvatarPath);
+
+            // Remove the old character file
+            fs.unlinkSync(oldAvatarPath);
         }
+
         // Recent-chat cache holds entries keyed by the now-removed paths and
         // tagged with the old avatar; force a rebuild so the renamed chats
         // resurface under the new avatar.
         await invalidateRecentChatIndex(request);
-
-        renameAllCharacterStateSidecars(oldAvatarPath, newAvatarPath);
-
-        // Remove the old character file
-        fs.unlinkSync(oldAvatarPath);
 
         // Return new avatar name to ST
         return response.send({ avatar: newAvatarName });
@@ -2782,7 +2803,8 @@ function getPngName(file, directories, options = {}) {
 
         const avatarPath = path.join(directories.characters, `${name}.png`);
         const chatsPath = path.join(directories.chats, name);
-        return fs.existsSync(avatarPath) || fs.existsSync(chatsPath);
+        const cardAppsPath = path.join(directories.cardApps, name);
+        return fs.existsSync(avatarPath) || fs.existsSync(chatsPath) || fs.existsSync(cardAppsPath);
     };
 
     let i = 1;

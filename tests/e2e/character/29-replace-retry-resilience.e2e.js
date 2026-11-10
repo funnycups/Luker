@@ -45,7 +45,6 @@ import { write as writePngCard } from '../../../src/character-card-parser.js';
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
 
 const ASH_NAME = 'Ash the Cartographer';
-const ASH_AVATAR = 'ash-the-cartographer.png';
 
 const BRIALLEN_NAME = 'Briallen the Lighthouse Keeper';
 const BRIALLEN_DESCRIPTION = 'A weathered keeper of the eastern light, raised on the rocks beyond the reef. She knows every tide and every name carved into the lantern base.';
@@ -193,13 +192,11 @@ test.describe('#29 — replace flow failure resilience', () => {
             // The import ran exactly once for this replace.
             expect(importRequests).toBe(1);
 
-            // The replaced card is live: same avatar slot, new identity.
-            await page.waitForFunction(({ avatar, want }) => {
+            // The replaced card is live under its new identity.
+            await page.waitForFunction(({ want }) => {
                 const ctx = window.Luker?.getContext?.();
-                const idx = ctx?.characters?.findIndex?.(c => c?.avatar === avatar) ?? -1;
-                const name = idx >= 0 ? ctx.characters[idx]?.data?.name : '';
-                return String(name || '') === want;
-            }, { avatar: ASH_AVATAR, want: BRIALLEN_NAME }, { timeout: 10_000 });
+                return (ctx?.characters || []).some(c => String(c?.data?.name || c?.name || '') === want);
+            }, { want: BRIALLEN_NAME }, { timeout: 10_000 });
         } finally {
             await tearDownServer(server);
         }

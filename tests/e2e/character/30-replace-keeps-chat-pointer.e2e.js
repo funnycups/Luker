@@ -84,6 +84,10 @@ function readCardDataFromDisk(charsDir, expectedName) {
     return null;
 }
 
+function renamedChatId(chatId) {
+    return `${BRIALLEN_NAME} - ${String(chatId).slice(`${ASH_NAME} - `.length)}`;
+}
+
 function listJsonlFiles(root) {
     const found = [];
     if (!existsSync(root)) return found;
@@ -191,6 +195,7 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
             const before = await getChatSnapshot(page);
             expect(before.chatId, 'chat file name is set before replace').toBeTruthy();
             expect(before.messages?.length, 'chat has first_mes + user + reply').toBeGreaterThanOrEqual(3);
+            const expectedChatId = renamedChatId(before.chatId);
 
             const mergePointerWrites = [];
             page.on('request', req => {
@@ -212,7 +217,7 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
             await expect.poll(() => {
                 const onDisk = readCardDataFromDisk(charsDir, BRIALLEN_NAME);
                 return onDisk?.meta?.chat || '';
-            }, { timeout: 10_000 }).toBe(before.chatId);
+            }, { timeout: 10_000 }).toBe(expectedChatId);
 
             // ── In-memory pointer must match too.
             const afterReplace = await page.evaluate(() => {
@@ -222,8 +227,8 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
                     pole: document.querySelector('#selected_chat_pole')?.value || '',
                 };
             });
-            expect(afterReplace.chatId, 'in-memory pointer after replace').toBe(before.chatId);
-            expect(afterReplace.pole, 'selected-chat pole after replace').toBe(before.chatId);
+            expect(afterReplace.chatId, 'in-memory pointer after replace').toBe(expectedChatId);
+            expect(afterReplace.pole, 'selected-chat pole after replace').toBe(expectedChatId);
 
             // ── Next open (reload + click) must land on the same chat and
             // render the conversation it had, not a fresh first_mes chat.
@@ -232,7 +237,7 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
             await dismissAnyPopup(page);
 
             const afterReload = await getChatSnapshot(page);
-            expect(afterReload.chatId, 'pointer after reload').toBe(before.chatId);
+            expect(afterReload.chatId, 'pointer after reload').toBe(expectedChatId);
             const rendered = await getRenderedChatTexts(page);
             expect(rendered.join('\n'), 'conversation still rendered after reload').toContain(userLine);
         } finally {
@@ -263,6 +268,7 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
             await sendMessageAndAwaitReply(page, userLine);
             const before = await getChatSnapshot(page);
             expect(before.chatId, 'chat file name is set before replace').toBeTruthy();
+            const expectedChatId = renamedChatId(before.chatId);
 
             // Drop exactly one pointer persist write — the observable
             // failure of a congested tunnel during the post-import window.
@@ -292,7 +298,7 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
             await dismissAnyPopup(page);
 
             const afterReload = await getChatSnapshot(page);
-            expect(afterReload.chatId, 'chat reopened after a dropped pointer write').toBe(before.chatId);
+            expect(afterReload.chatId, 'chat reopened after a dropped pointer write').toBe(expectedChatId);
             const rendered = await getRenderedChatTexts(page);
             expect(rendered.join('\n'), 'conversation still rendered after reload').toContain(userLine);
         } finally {
@@ -323,6 +329,7 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
             await sendMessageAndAwaitReply(page, userLine);
             const before = await getChatSnapshot(page);
             expect(before.chatId, 'chat file name is set before replace').toBeTruthy();
+            const expectedChatId = renamedChatId(before.chatId);
 
             // Compound failure for the emit fallback: the pointer persist
             // write is dropped (PNG keeps the V1 import's minted stamp,
@@ -373,8 +380,8 @@ test.describe('#30 — replace keeps the active chat pointer', () => {
                     pole: document.querySelector('#selected_chat_pole')?.value || '',
                 };
             });
-            expect(afterReplace.chatId, 'in-memory pointer survives the emit fallback refresh').toBe(before.chatId);
-            expect(afterReplace.pole, 'selected-chat pole survives the emit fallback refresh').toBe(before.chatId);
+            expect(afterReplace.chatId, 'in-memory pointer survives the emit fallback refresh').toBe(expectedChatId);
+            expect(afterReplace.pole, 'selected-chat pole survives the emit fallback refresh').toBe(expectedChatId);
         } finally {
             await tearDownServer(server);
         }
