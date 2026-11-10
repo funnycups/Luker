@@ -9319,6 +9319,7 @@ export function isAudioInliningSupported() {
         'gemini-2.0',
         'gemini-2.5',
         'gemini-3',
+        'gemini-4',
         'gemini-exp-1206',
         'gpt-4o-audio',
         'gpt-4o-realtime',
