@@ -341,6 +341,7 @@ describeMysql('round-trip via MysqlEngine: GroupRepo', () => {
         const fsRepo = new GroupRepo({ engine: fsh.engine });
         const original = {
             id: 'grp-1',
+            date_added: 1700000000000,
             name: 'Crew',
             members: ['alice.png', 'bob.png', 'carol.png'],
             chats: ['chat-a', 'chat-b'],
@@ -374,6 +375,7 @@ describeMysql('round-trip via MysqlEngine: GroupRepo', () => {
         const sqRepo = new GroupRepo({ engine: sqh.engine });
         const original = {
             id: 'grp-2',
+            date_added: 1700000001000,
             name: '剧组',
             members: ['x.png', 'y.png'],
             chats: ['gc-1'],
@@ -405,6 +407,7 @@ describeMysql('round-trip via MysqlEngine: GroupRepo', () => {
         const myRepo = new GroupRepo({ engine: myh.engine });
         const original = {
             id: 'grp-3',
+            date_added: 1700000002000,
             name: 'Trio',
             members: ['m1.png', 'm2.png', 'm3.png'],
             chats: [],

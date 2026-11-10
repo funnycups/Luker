@@ -338,7 +338,7 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         // for the "creds missing" assertion. The cross-mode delegation
         // detects mysql/postgres source without creds and returns 400 with
         // crossModeScratchRequired payload.
-        const otherKind = 'postgres';
+        const otherKind = mode === 'postgres' ? 'mysql' : 'postgres';
         const meta = {
             engineKind: otherKind,
             schemaVersion: 1,
@@ -368,7 +368,7 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         // The body must signal cross-mode-scratch-required so the UI knows
         // to prompt for a scratch DB URL and re-submit.
         expect(restoreRes.body?.crossModeScratchRequired?.kind).toBe(otherKind);
-        expect(String(restoreRes.body?.error || '')).toMatch(/scratch postgres/i);
+        expect(String(restoreRes.body?.error || '')).toMatch(new RegExp(`scratch ${otherKind}`, 'i'));
     });
 
     test('REGRESSION: legacy fs-only backup on db-mode server is now cross-mode-restored', async () => {
@@ -414,7 +414,7 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
         // returns 400 with crossModeScratchRequired payload.
         if (mode === 'fs') return; // fs has no engine_meta-driven validation path
 
-        const otherKind = 'postgres';
+        const otherKind = mode === 'postgres' ? 'mysql' : 'postgres';
         const meta = {
             engineKind: otherKind,
             schemaVersion: 1,
@@ -442,6 +442,6 @@ describe.each(ENDPOINT_HARNESSES)('backup/restore roundtrip on $name', ({ mode }
             .attach('avatar', zipBytes, 'backup.zip');
         expect(importRes.status).toBe(400);
         expect(importRes.body?.crossModeScratchRequired?.kind).toBe(otherKind);
-        expect(String(importRes.body?.error || '')).toMatch(/scratch postgres/i);
+        expect(String(importRes.body?.error || '')).toMatch(new RegExp(`scratch ${otherKind}`, 'i'));
     });
 });

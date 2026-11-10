@@ -138,7 +138,7 @@ describe('createGenerationJob', () => {
         j1.error = 'boom';
         j1.acked = true;
         j1.text = 'stale';
-        // events array pre-existing is preserved (only replaced if not an array)
+        // events array pre-existing is cleared on reuse
         j1.events.push({ seq: 999, data: 'stale', ts: 0 });
 
         const j2 = createGenerationJob(baseRequest(), { job_id: jobId });
@@ -146,10 +146,10 @@ describe('createGenerationJob', () => {
         expect(j2.status).toBe('running');
         expect(j2.error).toBe('');
         expect(j2.acked).toBe(false);
-        // text is NOT reset when reusing (documenting current behavior)
-        expect(j2.text).toBe('stale');
-        // events array is preserved (documenting current behavior)
-        expect(j2.events.length).toBe(1);
+        // text is reset on reuse so a retry does not replay the old stream
+        expect(j2.text).toBe('');
+        // events array is reset for the same reason
+        expect(j2.events.length).toBe(0);
     });
 });
 

@@ -342,6 +342,7 @@ describePostgres('round-trip via PgEngine: GroupRepo', () => {
         const fsRepo = new GroupRepo({ engine: fsh.engine });
         const original = {
             id: 'grp-1',
+            date_added: 1700000000000,
             name: 'Crew',
             members: ['alice.png', 'bob.png', 'carol.png'],
             chats: ['chat-a', 'chat-b'],
@@ -375,6 +376,7 @@ describePostgres('round-trip via PgEngine: GroupRepo', () => {
         const sqRepo = new GroupRepo({ engine: sqh.engine });
         const original = {
             id: 'grp-2',
+            date_added: 1700000001000,
             name: '剧组',
             members: ['x.png', 'y.png'],
             chats: ['gc-1'],
@@ -406,6 +408,7 @@ describePostgres('round-trip via PgEngine: GroupRepo', () => {
         const pgRepo = new GroupRepo({ engine: pgh.engine });
         const original = {
             id: 'grp-3',
+            date_added: 1700000002000,
             name: 'Trio',
             members: ['m1.png', 'm2.png', 'm3.png'],
             chats: [],
