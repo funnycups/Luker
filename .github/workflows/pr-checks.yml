@@ -80,7 +80,7 @@ jobs:
         ports:
           - 55432:5432
         options: >-
-          --health-cmd="pg_isready -U luker -d luker_test"
+          --health-cmd="pg_isready -h 127.0.0.1 -U luker -d luker_test"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
