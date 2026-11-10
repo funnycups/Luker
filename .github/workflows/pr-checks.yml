@@ -58,6 +58,37 @@ jobs:
     # Only needs to run when code is changed
     if: always() && (github.event.action == 'opened' || github.event.action == 'synchronize')
 
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_ROOT_HOST: '%'
+        ports:
+          - 53306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: luker
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: luker_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd="pg_isready -U luker -d luker_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      LUKER_TEST_MYSQL_ROOT_URL: mysql://root:root@127.0.0.1:53306
+      LUKER_TEST_POSTGRES_URL: postgresql://luker:postgres@127.0.0.1:55432/luker_test
+
     steps:
       - name: Checkout Repository
         # Checkout
@@ -84,4 +115,6 @@ jobs:
         run: npm rebuild better-sqlite3 --ignore-scripts=false
 
       - name: Run unit tests
-        run: npm run test:unit --prefix tests
+        # The DB fixtures share one MySQL/Postgres service. More workers exhaust
+        # connections and DDL locks, which surfaces as 15s hook timeouts.
+        run: npm run test:unit --prefix tests -- --maxWorkers=3
