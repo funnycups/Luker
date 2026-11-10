@@ -1,9 +1,9 @@
 export const ACTION_OPEN_ENDPOINT_SETTINGS: string =
-  'com.luker.harmony.action.OPEN_ENDPOINT_SETTINGS';
+  'com.luker.hmos.action.OPEN_ENDPOINT_SETTINGS';
 export const ACTION_RELOAD_WEBVIEW: string =
-  'com.luker.harmony.action.RELOAD_WEBVIEW';
+  'com.luker.hmos.action.RELOAD_WEBVIEW';
 export const NOTIFICATION_REMOVED_EVENT: string =
-  'com.luker.harmony.event.NOTIFICATION_REMOVED';
+  'com.luker.hmos.event.NOTIFICATION_REMOVED';
 
 // The Index page uses these exact strings in @StorageLink decorators. Keep
 // both sides in sync when renaming one of them.

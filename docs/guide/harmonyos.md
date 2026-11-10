@@ -19,6 +19,14 @@ After installing the app, opening it displays the full Luker interface — there
 - Node.js 24 or newer
 - DevEco Studio, installed and signed in once (it provides the HarmonyOS toolchain and `hvigorw`)
 
+### Set the package name
+
+The package name is configured in `harmony-app/AppScope/app.json5` and defaults to `com.luker.hmos`. AppGallery requires every HarmonyOS app to use a package name that is unique across all apps, including Android apps, so choose your own before building. If AppGallery reports that the name is already taken, choose another one and update the file to match.
+
+A package name has at least three segments separated by dots, each using only letters, digits, and underscores. These words cannot be a segment on their own: `oh`, `ohos`, `harmony`, `harmonyos`, `openharmony`, `system`. For example, `com.yourname.luker` works and `com.yourname.harmony` does not.
+
+The package name cannot be changed after the APP ID is created, and the value entered there must match this one.
+
 ### macOS and Linux
 
 ```bash
@@ -39,18 +47,21 @@ The build writes the unsigned HAP to `harmony-app/entry/build/default/outputs/de
 
 ## Sign and Install
 
-### 1. Create a signing certificate
+### 1. Create the app
+
+Sign in to [AppGallery Connect](https://developer.huawei.com/consumer/en/service/josp/agc/index.html) and open **Certificates, App ID and Profile**. Select **HarmonyOS** and create an app. Enter the app name, the package name you set in `harmony-app/AppScope/app.json5`, and the remaining app information.
+
+### 2. Create a signing certificate
 
 Generate a key and a certificate signing request in DevEco Studio: choose **Build** → **Generate Key and CSR**, then set the keystore name and path, the keystore password, the key alias, and the key password.
 
-Then create the certificate and the provisioning profile in AppGallery Connect:
+Then create the certificate and the provisioning profile:
 
-1. Sign in to [AppGallery Connect](https://developer.huawei.com/consumer/en/service/josp/agc/index.html) and open **Certificates, App ID and Profile**.
-2. Under **Certificates**, create a **debug** certificate and upload the `.csr` file. Download the resulting `.cer` file.
-3. Connect your device and run `hdc shell bm get --udid` to read its UDID. Under **Devices**, add the device with that UDID.
-4. Under **Profile**, create a **debug** profile for the bundle name `com.luker.harmony`, select the certificate and the device, then download the `.p7b` file.
+1. Under **Certificates**, create a **debug** certificate and upload the `.csr` file. Download the resulting `.cer` file.
+2. Connect your device and run `hdc shell bm get --udid` to read its UDID. Under **Devices**, add the device with that UDID.
+3. Under **Profile**, create a **debug** profile for the package name you set, select the certificate and the device, then download the `.p7b` file.
 
-### 2. Sign the HAP
+### 3. Sign the HAP
 
 Sign the built HAP with `hap-sign-tool.jar` from the HarmonyOS SDK:
 
@@ -68,7 +79,7 @@ java -jar hap-sign-tool.jar sign-app \
   -keystorePwd <keystore-password>
 ```
 
-### 3. Install the HAP
+### 4. Install the HAP
 
 Enable **Developer options** and **USB debugging** on the device, connect it, then install:
 

@@ -19,6 +19,14 @@ Luker 提供了鴻蒙應用，讓你可以直接在裝置上執行完整的 Luke
 - Node.js 24 或更高版本
 - DevEco Studio，安裝並登入一次，它提供鴻蒙工具鏈與 `hvigorw`
 
+### 設定套件名稱
+
+套件名稱在 `harmony-app/AppScope/app.json5` 中設定，預設為 `com.luker.hmos`。鴻蒙應用程式的套件名稱在 AppGallery 內必須全域唯一，且不能與其他 Android 應用程式重複，因此請在建置前換成你自己的套件名稱。如果 AppGallery 提示名稱已被使用，換一個並同步修改這個檔案。
+
+套件名稱至少包含三段，以點號分隔，每段只能使用字母、數字與底線。以下保留字不能單獨作為一段：`oh`、`ohos`、`harmony`、`harmonyos`、`openharmony`、`system`。例如 `com.yourname.luker` 可用，`com.yourname.harmony` 不可用。
+
+APP ID 建立後套件名稱不能修改，填寫時必須與這裡設定的套件名稱一致。
+
 ### macOS 與 Linux
 
 ```bash
@@ -39,18 +47,21 @@ powershell -ExecutionPolicy Bypass -File harmony-app\scripts\build.ps1
 
 ## 簽名與安裝
 
-### 1. 建立簽名憑證
+### 1. 建立應用
+
+登入 [AppGallery Connect](https://developer.huawei.com/consumer/en/service/josp/agc/index.html)，進入 **憑證、App ID 和 Profile**，選擇 **HarmonyOS**，建立應用。填寫應用名稱、`app.json5` 中設定的套件名稱以及其餘應用資訊。
+
+### 2. 建立簽名憑證
 
 在 DevEco Studio 裡產生金鑰與憑證請求檔：依序選擇 **Build** → **Generate Key and CSR**，設定金鑰庫名稱與路徑、金鑰庫密碼、金鑰別名與金鑰密碼。
 
-隨後在 AppGallery Connect 建立憑證與描述檔：
+然後建立憑證與描述檔：
 
-1. 登入 [AppGallery Connect](https://developer.huawei.com/consumer/en/service/josp/agc/index.html)，進入 **憑證、App ID 和 Profile**。
-2. 在 **憑證** 下建立 **偵錯** 憑證，上傳 `.csr` 檔案，下載產生的 `.cer` 檔案。
-3. 連接裝置，執行 `hdc shell bm get --udid` 讀取裝置 UDID。在 **裝置** 下用該 UDID 新增裝置。
-4. 在 **Profile** 下為套件名稱 `com.luker.harmony` 建立 **偵錯** 描述檔，選擇憑證與裝置，下載 `.p7b` 檔案。
+1. 在 **憑證** 下建立 **偵錯** 憑證，上傳 `.csr` 檔案，下載產生的 `.cer` 檔案。
+2. 連接裝置，執行 `hdc shell bm get --udid` 讀取裝置 UDID。在 **裝置** 下用該 UDID 新增裝置。
+3. 在 **Profile** 下為這個套件名稱建立 **偵錯** 描述檔，選擇憑證與裝置，下載 `.p7b` 檔案。
 
-### 2. 簽名 HAP
+### 3. 簽名 HAP
 
 用鴻蒙 SDK 裡的 `hap-sign-tool.jar` 為建置出的 HAP 簽名：
 
@@ -68,7 +79,7 @@ java -jar hap-sign-tool.jar sign-app \
   -keystorePwd <金鑰庫密碼>
 ```
 
-### 3. 安裝 HAP
+### 4. 安裝 HAP
 
 在裝置上啟用 **開發者選項** 與 **USB 偵錯**，連接裝置後安裝：
 

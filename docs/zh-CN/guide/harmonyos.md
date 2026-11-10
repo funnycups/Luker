@@ -19,6 +19,14 @@ Luker 提供了鸿蒙应用，让你直接在设备上运行完整的 Luker 服�
 - Node.js 24 或更高版本
 - DevEco Studio，安装并登录一次，它提供鸿蒙工具链与 `hvigorw`
 
+### 设置包名
+
+包名在 `harmony-app/AppScope/app.json5` 中配置，默认为 `com.luker.hmos`。鸿蒙应用的包名在 AppGallery 内必须全局唯一，且不能与其他 Android 应用重复，因此请在构建前换成你自己的包名。如果 AppGallery 提示名称已被占用，换一个并同步修改这个文件。
+
+包名至少包含三段，以点号分隔，每段只能使用字母、数字与下划线。以下保留字不能单独作为一段：`oh`、`ohos`、`harmony`、`harmonyos`、`openharmony`、`system`。例如 `com.yourname.luker` 可用，`com.yourname.harmony` 不可用。
+
+APP ID 创建后包名不能修改，填写时必须与这里设置的包名一致。
+
 ### macOS 与 Linux
 
 ```bash
@@ -39,18 +47,21 @@ powershell -ExecutionPolicy Bypass -File harmony-app\scripts\build.ps1
 
 ## 签名与安装
 
-### 1. 创建签名证书
+### 1. 创建应用
+
+登录 [AppGallery Connect](https://developer.huawei.com/consumer/cn/service/josp/agc/index.html)，进入 **证书、App ID 和 Profile**，选择 **HarmonyOS**，创建应用。填写应用名称、`app.json5` 中设置的包名以及其余应用信息。
+
+### 2. 创建签名证书
 
 在 DevEco Studio 里生成密钥与证书请求文件：依次选择 **Build** → **Generate Key and CSR**，设置密钥库名称与路径、密钥库密码、密钥别名与密钥密码。
 
-随后在 AppGallery Connect 创建证书与描述文件：
+然后创建证书与描述文件：
 
-1. 登录 [AppGallery Connect](https://developer.huawei.com/consumer/cn/service/josp/agc/index.html)，进入 **证书、App ID 和 Profile**。
-2. 在 **证书** 下创建 **调试** 证书，上传 `.csr` 文件，下载生成的 `.cer` 文件。
-3. 连接设备，执行 `hdc shell bm get --udid` 读取设备 UDID。在 **设备** 下用该 UDID 添加设备。
-4. 在 **Profile** 下为包名 `com.luker.harmony` 创建 **调试** 描述文件，选择证书与设备，下载 `.p7b` 文件。
+1. 在 **证书** 下创建 **调试** 证书，上传 `.csr` 文件，下载生成的 `.cer` 文件。
+2. 连接设备，执行 `hdc shell bm get --udid` 读取设备 UDID。在 **设备** 下用该 UDID 添加设备。
+3. 在 **Profile** 下为这个包名创建 **调试** 描述文件，选择证书与设备，下载 `.p7b` 文件。
 
-### 2. 签名 HAP
+### 3. 签名 HAP
 
 用鸿蒙 SDK 里的 `hap-sign-tool.jar` 为构建出的 HAP 签名：
 
@@ -68,7 +79,7 @@ java -jar hap-sign-tool.jar sign-app \
   -keystorePwd <密钥库密码>
 ```
 
-### 3. 安装 HAP
+### 4. 安装 HAP
 
 在设备上启用 **开发者选项** 与 **USB 调试**，连接设备后安装：
 
