@@ -156,3 +156,4 @@ Luker 完全兼容 SillyTavern 的数据。如果你是 SillyTavern 用户，可
 - [配置 API 连接](/zh-CN/basics/connections) —— 连接你的 LLM 服务
 - [了解角色卡](/zh-CN/basics/character-cards) —— 开始你的第一次角色扮演
 - [从 SillyTavern 迁移](/zh-CN/guide/migration) —— 如果你是 SillyTavern 用户
+- [了解用户设置新增功能](/zh-CN/features/user-settings-additions) —— 数据目录、备份、同步与存储工具

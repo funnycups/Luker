@@ -84,6 +84,7 @@ const zhCNSidebar = [
   { text: 'HarmonyOS App', link: '/zh-CN/guide/harmonyos' },
   { text: '桌面端 App', link: '/zh-CN/guide/desktop' },
   { text: '服务端插件', link: '/zh-CN/guide/server-plugins' },
+  { text: '用户设置新增功能', link: '/zh-CN/features/user-settings-additions' },
   ],
   },
   {
@@ -182,7 +183,6 @@ const zhCNSidebar = [
           { text: '编排器集成', link: '/zh-CN/features/skills/orchestrator-integration' },
         ],
       },
-      { text: '用户设置新增功能', link: '/zh-CN/features/user-settings-additions' },
       { text: '其他功能', link: '/zh-CN/features/other-features' },
   ],
   },
@@ -249,6 +249,7 @@ const zhTWSidebar = [
       { text: 'HarmonyOS App', link: '/zh-TW/guide/harmonyos' },
       { text: '桌面端 App', link: '/zh-TW/guide/desktop' },
       { text: '伺服端外掛', link: '/zh-TW/guide/server-plugins' },
+      { text: '使用者設定新增功能', link: '/zh-TW/features/user-settings-additions' },
     ],
   },
   {
@@ -347,7 +348,6 @@ const zhTWSidebar = [
           { text: '編排器整合', link: '/zh-TW/features/skills/orchestrator-integration' },
         ],
       },
-      { text: '使用者設定新增功能', link: '/zh-TW/features/user-settings-additions' },
       { text: '其他功能', link: '/zh-TW/features/other-features' },
     ],
   },
@@ -414,6 +414,7 @@ const enSidebar = [
       { text: 'HarmonyOS App', link: '/guide/harmonyos' },
       { text: 'Desktop App', link: '/guide/desktop' },
       { text: 'Server Plugins', link: '/guide/server-plugins' },
+      { text: 'User Settings Additions', link: '/features/user-settings-additions' },
     ],
   },
   {
@@ -512,7 +513,6 @@ const enSidebar = [
           { text: 'Orchestrator integration', link: '/features/skills/orchestrator-integration' },
         ],
       },
-      { text: 'User Settings Additions', link: '/features/user-settings-additions' },
       { text: 'Other Features', link: '/features/other-features' },
     ],
   },

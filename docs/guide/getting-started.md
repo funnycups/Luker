@@ -156,3 +156,4 @@ For a detailed migration guide, see [Migrating from SillyTavern](/guide/migratio
 - [Configure API Connections](/basics/connections) — Connect your LLM service
 - [Learn about Character Cards](/basics/character-cards) — Start your first roleplay
 - [Migrate from SillyTavern](/guide/migration) — If you're a SillyTavern user
+- [Explore User Settings](/features/user-settings-additions) — Find the desktop data directory, backup, sync and storage tools
