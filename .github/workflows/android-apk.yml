@@ -133,6 +133,10 @@ jobs:
           name: luker-android-release-apk-${{ github.sha }}
           path: android-app/app/build/outputs/apk/release/*.apk
 
+      - name: Extract release notes from changelog
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        run: bash .github/scripts/release-notes.sh "${GITHUB_REF_NAME}" > release-notes.md
+
       - name: Publish release assets
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -140,6 +144,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             android-app/app/build/outputs/apk/release/*.apk
