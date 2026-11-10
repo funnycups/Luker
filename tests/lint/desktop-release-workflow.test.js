@@ -73,7 +73,7 @@ test('the platform jobs run on their own runners behind the repository gate', ()
     expect(jobs['build-macos']['runs-on']).toBe('macos-latest');
     expect(jobs['build-windows']['runs-on']).toBe('windows-latest');
     for (const job of Object.values(jobs)) {
-        expect(String(job.if)).toContain("github.repository == 'funnycups/Luker'");
+        expect(String(job.if)).toContain('github.repository == \'funnycups/Luker\'');
     }
 });
 
@@ -119,7 +119,7 @@ test('each job builds through the desktop build script', () => {
 
 test('a tag build refuses to run when the tag and the manifest version disagree', () => {
     const validate = runSteps(readWorkflow())
-        .find(step => step.run.includes("require('./package.json').version"));
+        .find(step => step.run.includes('require(\'./package.json\').version'));
     expect(validate).toBeDefined();
     expect(validate.run).toContain('GITHUB_REF_NAME');
     expect(validate.run).toContain('exit 1');
@@ -137,8 +137,9 @@ test('a tag build publishes the artifacts through the shared release action', ()
         expect(step.uses).toBe('softprops/action-gh-release@v2');
         expect(step.with.tag_name).toBe('${{ github.ref_name }}');
         expect(step.with.name).toBe('${{ github.ref_name }}');
-        expect(step.with.prerelease).toBe("${{ contains(github.ref_name, '-') }}");
-        expect(step.with.generate_release_notes).toBe(true);
+        expect(step.with.prerelease).toBe('${{ contains(github.ref_name, \'-\') }}');
+        expect(step.with.body_path).toBe('release-notes.md');
+        expect(step.with.generate_release_notes).toBeUndefined();
     }
 
     // The tag gate sits on the publishing job, and the files it publishes are

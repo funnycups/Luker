@@ -231,6 +231,7 @@ jobs:
           path: release-assets
 
       - name: Extract release notes from changelog
+        shell: bash
         run: bash .github/scripts/release-notes.sh "${GITHUB_REF_NAME}" > release-notes.md
 
       - name: Publish release assets
