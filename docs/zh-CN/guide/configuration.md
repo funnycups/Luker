@@ -225,6 +225,8 @@ Luker 支持多种用户数据持久化后端，由 `mode` 选择；只有匹配
 
 桌面版仅支持 `fs`、`mysql`、`postgres` 后端。
 
+在 Termux 中使用 `sqlite` 后端前，先运行 `npm run storage:install-sqlite`。
+
 ## 其他配置
 
 ```yaml

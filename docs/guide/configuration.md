@@ -225,6 +225,8 @@ The command-line script accepts any source and target pair; pass the connection 
 
 The desktop app supports only the `fs`, `mysql`, and `postgres` backends.
 
+In Termux, run `npm run storage:install-sqlite` before enabling the `sqlite` backend.
+
 ## Other Settings
 
 ```yaml
