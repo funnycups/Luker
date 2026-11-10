@@ -30,6 +30,7 @@
     "files": [
       "main.js",
       "appimage-update.js",
+      "data-location.js",
       "http-auth.js",
       "http-auth.html",
       "http-auth-preload.js",

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -7,6 +7,18 @@ import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 
 import { replaceRunningAppImage } from './appimage-update.js';
+import {
+    POINTER_VERSION,
+    checkFreeSpace,
+    classifyDataTarget,
+    classifyRecoveryTarget,
+    directoryIdentity,
+    finishPendingCleanup as finishCleanup,
+    migrateDataDirectory,
+    resolveLocation,
+    validateWritableDirectory,
+    writeLocationState,
+} from './data-location.js';
 import { createHttpAuthController, HttpAuthStore } from './http-auth.js';
 import { detectInstallFlavour } from './install-flavour.js';
 import { hidesOnClose, usesTray, devtoolsShortcutFor } from './window-behaviour.js';
@@ -32,6 +44,66 @@ const DEFAULT_PORT = 8000;
 const PORT_PROBE_COUNT = 50;
 
 app.setName('Luker');
+
+// The data directory is resolved before Electron touches its user data. The
+// pointer lives in the default directory, so the chosen directory can move
+// without leaving a record inside itself. Both paths are set before `ready`
+// so Chromium's session storage follows the same root.
+const defaultUserData = process.env.LUKER_DESKTOP_DEFAULT_USER_DATA || app.getPath('userData');
+const launchArgs = process.argv.slice(1);
+if (process.env.LUKER_DESKTOP_DEFAULT_USER_DATA) {
+    app.setPath('userData', defaultUserData);
+    app.setPath('sessionData', defaultUserData);
+}
+const location = resolveLocation({
+    defaultUserData,
+    envUserData: process.env.LUKER_DESKTOP_USER_DATA || null,
+});
+prepareLocation(location);
+const userData = location.error ? defaultUserData : location.activeUserData;
+app.setPath('userData', userData);
+app.setPath('sessionData', userData);
+
+function sameDirectory(a, b) {
+    const left = path.resolve(a);
+    const right = path.resolve(b);
+    return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function prepareLocation(current) {
+    if (current.error) {
+        return current;
+    }
+    const directory = current.activeUserData;
+    if (sameDirectory(directory, current.defaultUserData) || current.locked) {
+        try {
+            fs.mkdirSync(directory, { recursive: true });
+        } catch (error) {
+            current.error = { code: 'target-not-writable', path: directory, message: error.message };
+            return current;
+        }
+    } else if (!fs.existsSync(directory)) {
+        current.error = { code: 'target-missing', path: directory };
+        return current;
+    }
+    let stats;
+    try {
+        stats = fs.statSync(directory);
+    } catch (error) {
+        current.error = { code: 'target-missing', path: directory, message: error.message };
+        return current;
+    }
+    if (!stats.isDirectory()) {
+        current.error = { code: 'target-not-directory', path: directory };
+        return current;
+    }
+    try {
+        validateWritableDirectory(directory);
+    } catch (error) {
+        current.error = { code: 'target-not-writable', path: directory, message: error.message };
+    }
+    return current;
+}
 
 // The backend tree lives next to this file in a checkout and under the app's
 // resources once installed. Resolve it once and route every backend path
@@ -64,21 +136,11 @@ function readPreferredPort(argv) {
 
 const preferredPort = readPreferredPort(process.argv);
 
-const userData = process.env.LUKER_DESKTOP_USER_DATA || app.getPath('userData');
-if (process.env.LUKER_DESKTOP_USER_DATA) {
-    app.setPath('userData', userData);
-}
-
 const httpAuthStore = new HttpAuthStore(path.join(userData, 'http-auth.json'));
 
 const UPDATE_PROGRESS_CHANNEL = 'luker:update-progress';
 
 const updatesDirectory = path.join(userData, 'updates');
-
-// The update prompt hands the downloaded installer to the OS, which owns it
-// from there on, so the copy under the data root is only a staging file. A
-// launch clears whatever an earlier run left behind.
-fs.rmSync(updatesDirectory, { recursive: true, force: true });
 
 // The renderer can only name the asset; the main process fetches it over the
 // network and writes it under the data root. Streamed through a counting
@@ -135,6 +197,16 @@ function assertAppFrame(event, action) {
     }
 }
 
+ipcMain.handle('luker:get-data-directory', (event) => {
+    assertAppFrame(event, 'The data directory setting');
+    return {
+        path: location.error ? location.error.path || location.activeUserData : location.activeUserData,
+        defaultPath: defaultUserData,
+        locked: Boolean(process.env.LUKER_DESKTOP_USER_DATA),
+        pendingCleanup: Boolean(location.state?.pendingDeleteFrom),
+    };
+});
+
 ipcMain.handle('luker:external-link-policy', (event, enabled) => {
     assertAppFrame(event, 'The external link setting');
     openExternalLinksInBrowser = enabled !== false;
@@ -187,26 +259,38 @@ ipcMain.handle('luker:install-update', async (event, payload) => {
 
 // The backend is imported into this process, so a crash during module
 // evaluation would otherwise leave no trace anywhere. Tee both streams to a
-// file under the data directory until the server reports that it is up.
+// file under the data directory until the server reports that it is up. The
+// tee starts only once the window is ready, so a location error or a migration
+// session does not write into a directory that is not the active one.
 const logPath = path.join(userData, 'data', 'luker-boot.log');
-fs.mkdirSync(path.dirname(logPath), { recursive: true });
+let originalStdoutWrite = null;
+let originalStderrWrite = null;
 
-const originalStdoutWrite = process.stdout.write.bind(process.stdout);
-const originalStderrWrite = process.stderr.write.bind(process.stderr);
-
-process.stdout.write = (chunk, encoding, callback) => {
-    fs.appendFileSync(logPath, chunk);
-    return originalStdoutWrite(chunk, encoding, callback);
-};
-
-process.stderr.write = (chunk, encoding, callback) => {
-    fs.appendFileSync(logPath, chunk);
-    return originalStderrWrite(chunk, encoding, callback);
-};
+function startLogTee() {
+    if (originalStdoutWrite) {
+        return;
+    }
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    originalStdoutWrite = process.stdout.write.bind(process.stdout);
+    originalStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stdout.write = (chunk, encoding, callback) => {
+        fs.appendFileSync(logPath, chunk);
+        return originalStdoutWrite(chunk, encoding, callback);
+    };
+    process.stderr.write = (chunk, encoding, callback) => {
+        fs.appendFileSync(logPath, chunk);
+        return originalStderrWrite(chunk, encoding, callback);
+    };
+}
 
 function stopTeeingLogs() {
+    if (!originalStdoutWrite) {
+        return;
+    }
     process.stdout.write = originalStdoutWrite;
     process.stderr.write = originalStderrWrite;
+    originalStdoutWrite = null;
+    originalStderrWrite = null;
 }
 
 // The backend reports an unrecoverable startup problem in three ways, and all
@@ -329,6 +413,11 @@ async function startBackend(win, locale, port) {
         if (!failed) {
             backendOrigin = url.origin;
             win.loadURL(url.toString());
+        }
+        if (!failed && location.state?.pendingDeleteFrom) {
+            finishPendingCleanup().catch((error) => {
+                console.error('Failed to remove the old data directory:', error);
+            });
         }
     });
 
@@ -482,6 +571,32 @@ const SHELL_STRINGS = {
         httpAuthPassword: 'Password',
         httpAuthLogin: 'Sign In',
         httpAuthCancel: 'Cancel',
+        locationErrorTitle: "Luker can't open its data folder",
+        locationPointerError: 'Luker could not read its data location record.',
+        locationTargetMissing: 'The data folder does not exist: %s',
+        locationTargetUnwritable: 'Luker cannot write to the data folder: %s',
+        locationTargetNotDirectory: 'The data folder is not a folder: %s',
+        locationRetry: 'Retry',
+        locationChoose: 'Choose Another Folder…',
+        locationQuit: 'Quit',
+        locationOpenFolder: 'Open Folder',
+        locationOk: 'OK',
+        chooseDataDirectoryTitle: 'Choose a data folder',
+        dataDirectoryInvalid: 'Choose an empty folder or an existing Luker data folder.',
+        dataDirectoryNotWritable: 'Luker cannot write to that folder.',
+        dataDirectoryNoSpace: 'The folder does not have enough free space.',
+        dataDirectorySame: 'That is the current data folder.',
+        moveConfirmTitle: 'Move Luker data?',
+        moveConfirmMessage: 'Luker will move its data to %s and restart. The current data folder will be emptied.',
+        adoptConfirmTitle: 'Use this data folder?',
+        adoptConfirmMessage: 'Luker will use the existing data in %s and restart. The current data folder stays in place. The chosen folder is used exclusively by Luker.',
+        moveConfirmButton: 'Move and Restart',
+        adoptConfirmButton: 'Use and Restart',
+        cancel: 'Cancel',
+        emptyStartConfirmTitle: 'Start with an empty data folder?',
+        emptyStartConfirmMessage: 'Luker will use %s as an empty data folder. Existing data in the old folder stays in place.',
+        moveFailedTitle: 'Luker could not move its data',
+        moveFailedMessage: 'Luker could not move its data to %s.',
     },
     'zh-CN': {
         showWindow: '显示 Luker',
@@ -496,6 +611,32 @@ const SHELL_STRINGS = {
         httpAuthPassword: '密码',
         httpAuthLogin: '登录',
         httpAuthCancel: '取消',
+        locationErrorTitle: 'Luker 无法打开数据目录',
+        locationPointerError: 'Luker 无法读取数据位置记录。',
+        locationTargetMissing: '数据目录不存在：%s',
+        locationTargetUnwritable: 'Luker 无法写入数据目录：%s',
+        locationTargetNotDirectory: '数据目录不是文件夹：%s',
+        locationRetry: '重试',
+        locationChoose: '重新选择目录……',
+        locationQuit: '退出',
+        locationOpenFolder: '打开所在文件夹',
+        locationOk: '确定',
+        chooseDataDirectoryTitle: '选择数据目录',
+        dataDirectoryInvalid: '请选择空目录或已有的 Luker 数据目录。',
+        dataDirectoryNotWritable: 'Luker 无法写入该目录。',
+        dataDirectoryNoSpace: '该目录的可用空间不足。',
+        dataDirectorySame: '该目录就是当前数据目录。',
+        moveConfirmTitle: '移动 Luker 数据？',
+        moveConfirmMessage: 'Luker 会把数据迁移到 %s 并重启。当前数据目录会被清空。',
+        adoptConfirmTitle: '使用该数据目录？',
+        adoptConfirmMessage: 'Luker 会使用 %s 中的现有数据并重启。当前数据目录保持不变。所选目录由 Luker 独占。',
+        moveConfirmButton: '迁移并重启',
+        adoptConfirmButton: '使用并重启',
+        cancel: '取消',
+        emptyStartConfirmTitle: '从空的数据目录开始？',
+        emptyStartConfirmMessage: 'Luker 会把 %s 作为空的数据目录。旧目录中的现有数据保持不变。',
+        moveFailedTitle: 'Luker 无法迁移数据',
+        moveFailedMessage: 'Luker 无法把数据迁移到 %s。',
     },
     'zh-TW': {
         showWindow: '顯示 Luker',
@@ -510,6 +651,32 @@ const SHELL_STRINGS = {
         httpAuthPassword: '密碼',
         httpAuthLogin: '登入',
         httpAuthCancel: '取消',
+        locationErrorTitle: 'Luker 無法開啟資料目錄',
+        locationPointerError: 'Luker 無法讀取資料位置記錄。',
+        locationTargetMissing: '資料目錄不存在：%s',
+        locationTargetUnwritable: 'Luker 無法寫入資料目錄：%s',
+        locationTargetNotDirectory: '資料目錄不是資料夾：%s',
+        locationRetry: '重試',
+        locationChoose: '重新選擇目錄……',
+        locationQuit: '結束',
+        locationOpenFolder: '開啟所在資料夾',
+        locationOk: '確定',
+        chooseDataDirectoryTitle: '選擇資料目錄',
+        dataDirectoryInvalid: '請選擇空目錄或既有的 Luker 資料目錄。',
+        dataDirectoryNotWritable: 'Luker 無法寫入該目錄。',
+        dataDirectoryNoSpace: '該目錄的可用空間不足。',
+        dataDirectorySame: '該目錄就是目前資料目錄。',
+        moveConfirmTitle: '移動 Luker 資料？',
+        moveConfirmMessage: 'Luker 會把資料遷移到 %s 並重新啟動。目前資料目錄會被清空。',
+        adoptConfirmTitle: '使用該資料目錄？',
+        adoptConfirmMessage: 'Luker 會使用 %s 中的現有資料並重新啟動。目前資料目錄保持不變。所選目錄由 Luker 獨占。',
+        moveConfirmButton: '遷移並重新啟動',
+        adoptConfirmButton: '使用並重新啟動',
+        cancel: '取消',
+        emptyStartConfirmTitle: '從空的資料目錄開始？',
+        emptyStartConfirmMessage: 'Luker 會把 %s 作為空的資料目錄。舊目錄中的現有資料保持不變。',
+        moveFailedTitle: 'Luker 無法遷移資料',
+        moveFailedMessage: 'Luker 無法把資料遷移到 %s。',
     },
 };
 
@@ -525,6 +692,441 @@ function pickShellStrings(locale) {
         return SHELL_STRINGS['zh-CN'];
     }
     return SHELL_STRINGS.en;
+}
+
+function relaunchApp() {
+    if (process.env.LUKER_DESKTOP_TEST_NO_RELAUNCH === '1') {
+        app.quit();
+        return;
+    }
+    app.relaunch({ args: launchArgs });
+    app.quit();
+}
+
+function locationErrorDetail(error, strings) {
+    switch (error?.code) {
+        case 'pointer-invalid':
+            return strings.locationPointerError;
+        case 'target-missing':
+            return strings.locationTargetMissing.replace('%s', error.path || '');
+        case 'target-not-directory':
+            return strings.locationTargetNotDirectory.replace('%s', error.path || '');
+        case 'target-not-writable':
+            return strings.locationTargetUnwritable.replace('%s', error.path || '');
+        default:
+            return error?.message || String(error);
+    }
+}
+
+async function confirmRecovery(strings, title, message) {
+    if (process.env.LUKER_DESKTOP_TEST_LOCATION_CONFIRM === '1') {
+        return true;
+    }
+    return confirmDialog(null, title, message, strings.adoptConfirmButton, strings.cancel);
+}
+
+async function chooseRecoveryDirectory(current, strings) {
+    let chosen = process.env.LUKER_DESKTOP_TEST_LOCATION_DIRECTORY || null;
+    if (!chosen) {
+        const result = await dialog.showOpenDialog({
+            title: strings.chooseDataDirectoryTitle,
+            defaultPath: app.getPath('home'),
+            properties: process.platform === 'darwin'
+                ? ['openDirectory', 'createDirectory']
+                : ['openDirectory'],
+        });
+        if (result.canceled || !result.filePaths[0]) {
+            return false;
+        }
+        chosen = result.filePaths[0];
+    }
+    const target = path.resolve(chosen);
+    let stats;
+    try {
+        stats = fs.statSync(target);
+    } catch {
+        stats = null;
+    }
+    if (stats && !stats.isDirectory()) {
+        await showDialogMessage(null, strings, strings.dataDirectoryInvalid, target);
+        return false;
+    }
+    if (!stats) {
+        try {
+            fs.mkdirSync(target, { recursive: true });
+        } catch (error) {
+            await showDialogMessage(null, strings, strings.dataDirectoryInvalid, error.message);
+            return false;
+        }
+    }
+    let classified;
+    try {
+        classified = classifyRecoveryTarget(target, { defaultUserData: current.defaultUserData });
+    } catch (error) {
+        await showDialogMessage(null, strings, strings.dataDirectoryInvalid, error.message);
+        return false;
+    }
+    if (classified.mode === 'reject') {
+        const { message, detail } = formatDialogError(strings, classified.reason, target);
+        await showDialogMessage(null, strings, message, detail);
+        return false;
+    }
+    try {
+        validateWritableDirectory(target);
+    } catch (error) {
+        await showDialogMessage(null, strings, strings.dataDirectoryNotWritable, error.message);
+        return false;
+    }
+    const confirmed = classified.mode === 'adopt'
+        ? await confirmRecovery(
+            strings,
+            strings.adoptConfirmTitle,
+            strings.adoptConfirmMessage.replace('%s', target),
+        )
+        : await confirmRecovery(
+            strings,
+            strings.emptyStartConfirmTitle,
+            strings.emptyStartConfirmMessage.replace('%s', target),
+        );
+    if (!confirmed) {
+        return false;
+    }
+    writeLocationState(current.pointerPath, { version: POINTER_VERSION, userData: target });
+    relaunchApp();
+    return true;
+}
+
+async function showLocationError(current, strings) {
+    const pointerError = current.error?.code === 'pointer-invalid';
+    const buttons = pointerError
+        ? [strings.locationOpenFolder, strings.locationChoose, strings.locationQuit]
+        : [strings.locationRetry, strings.locationChoose, strings.locationQuit];
+    const testChoice = process.env.LUKER_DESKTOP_TEST_LOCATION_DIALOG;
+    while (true) {
+        let action;
+        if (testChoice === 'quit') {
+            action = 'quit';
+        } else if (testChoice === 'choose') {
+            action = 'choose';
+        } else if (testChoice === 'retry' && !pointerError) {
+            action = 'retry';
+        } else {
+            const result = await dialog.showMessageBox({
+                type: 'error',
+                title: strings.locationErrorTitle,
+                message: strings.locationErrorTitle,
+                detail: locationErrorDetail(current.error, strings),
+                buttons,
+                defaultId: 0,
+                cancelId: buttons.length - 1,
+                noLink: true,
+            });
+            action = result.response === 0
+                ? (pointerError ? 'open' : 'retry')
+                : result.response === 1 ? 'choose' : 'quit';
+        }
+        if (action === 'quit') {
+            app.quit();
+            return;
+        }
+        if (action === 'retry') {
+            relaunchApp();
+            return;
+        }
+        if (action === 'open') {
+            await shell.openPath(path.dirname(current.pointerPath));
+            continue;
+        }
+        if (await chooseRecoveryDirectory(current, strings)) {
+            return;
+        }
+    }
+}
+
+async function pickDataDirectory(win, strings) {
+    const options = {
+        title: strings.chooseDataDirectoryTitle,
+        defaultPath: userData,
+        properties: process.platform === 'darwin'
+            ? ['openDirectory', 'createDirectory']
+            : process.platform === 'win32'
+                ? ['openDirectory', 'promptToCreate']
+                : ['openDirectory'],
+    };
+    const result = win && !win.isDestroyed()
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options);
+    return result.canceled || !result.filePaths[0] ? null : path.resolve(result.filePaths[0]);
+}
+
+async function confirmDialog(win, title, message, confirmLabel, cancelLabel) {
+    const options = {
+        type: 'question',
+        title,
+        message,
+        buttons: [confirmLabel, cancelLabel],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+    };
+    const result = win && !win.isDestroyed()
+        ? await dialog.showMessageBox(win, options)
+        : await dialog.showMessageBox(options);
+    return result.response === 0;
+}
+
+function formatDialogError(strings, code, target, detail = '') {
+    if (code === 'same') {
+        return { message: strings.dataDirectorySame, detail: target };
+    }
+    if (code === 'not-writable') {
+        return { message: strings.dataDirectoryNotWritable, detail: target };
+    }
+    if (code === 'no-space') {
+        return { message: strings.dataDirectoryNoSpace, detail: target };
+    }
+    return { message: strings.dataDirectoryInvalid, detail: detail || target };
+}
+
+async function showDialogMessage(win, strings, message, detail = '') {
+    const options = {
+        type: 'error',
+        title: strings.locationErrorTitle,
+        message,
+        detail,
+        buttons: [strings.locationOk],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+    };
+    if (win && !win.isDestroyed()) {
+        await dialog.showMessageBox(win, options);
+    } else {
+        await dialog.showMessageBox(options);
+    }
+}
+
+let cleanupPromise = null;
+async function finishPendingCleanup() {
+    if (!location.state?.pendingDeleteFrom) {
+        return;
+    }
+    if (!cleanupPromise) {
+        cleanupPromise = (async () => {
+            location.state = await finishCleanup({
+                pointerPath: location.pointerPath,
+                state: location.state,
+                defaultUserData,
+            });
+        })().finally(() => {
+            cleanupPromise = null;
+        });
+    }
+    await cleanupPromise;
+}
+
+ipcMain.handle('luker:choose-data-directory', async (event) => {
+    assertAppFrame(event, 'The data directory setting');
+    if (process.env.LUKER_DESKTOP_USER_DATA) {
+        throw new Error('The data directory is managed by the launch environment.');
+    }
+    await finishPendingCleanup();
+
+    const strings = pickShellStrings(app.getLocale());
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const selected = await pickDataDirectory(win, strings);
+    if (!selected) {
+        return { canceled: true };
+    }
+
+    let classified;
+    try {
+        classified = classifyDataTarget(selected, { source: userData, defaultUserData });
+    } catch (error) {
+        await showDialogMessage(win, strings, strings.dataDirectoryInvalid, error.message);
+        return { canceled: true };
+    }
+    if (classified.mode === 'reject') {
+        const { message, detail } = formatDialogError(strings, classified.reason, selected);
+        await showDialogMessage(win, strings, message, detail);
+        return { canceled: true };
+    }
+
+    if (classified.mode === 'move') {
+        try {
+            fs.mkdirSync(selected, { recursive: true });
+            validateWritableDirectory(selected);
+        } catch (error) {
+            await showDialogMessage(win, strings, strings.dataDirectoryNotWritable, error.message);
+            return { canceled: true };
+        }
+        let space;
+        try {
+            space = checkFreeSpace(userData, selected);
+        } catch (error) {
+            await showDialogMessage(win, strings, strings.dataDirectoryInvalid, error.message);
+            return { canceled: true };
+        }
+        if (!space.enough) {
+            const { message, detail } = formatDialogError(strings, 'no-space', selected);
+            await showDialogMessage(win, strings, message, detail);
+            return { canceled: true };
+        }
+        const confirmed = await confirmDialog(
+            win,
+            strings.moveConfirmTitle,
+            strings.moveConfirmMessage.replace('%s', selected),
+            strings.moveConfirmButton,
+            strings.cancel,
+        );
+        if (!confirmed) {
+            return { canceled: true };
+        }
+        try {
+            writeLocationState(location.pointerPath, {
+                version: POINTER_VERSION,
+                userData,
+                pendingMoveTo: selected,
+                pendingMoveToIdentity: directoryIdentity(selected),
+            });
+        } catch (error) {
+            await showDialogMessage(win, strings, strings.dataDirectoryInvalid, error.message);
+            return { canceled: true };
+        }
+    } else {
+        try {
+            validateWritableDirectory(selected);
+        } catch (error) {
+            await showDialogMessage(win, strings, strings.dataDirectoryNotWritable, error.message);
+            return { canceled: true };
+        }
+        const confirmed = await confirmDialog(
+            win,
+            strings.adoptConfirmTitle,
+            strings.adoptConfirmMessage.replace('%s', selected),
+            strings.adoptConfirmButton,
+            strings.cancel,
+        );
+        if (!confirmed) {
+            return { canceled: true };
+        }
+        try {
+            writeLocationState(location.pointerPath, { version: POINTER_VERSION, userData: selected });
+        } catch (error) {
+            await showDialogMessage(win, strings, strings.dataDirectoryInvalid, error.message);
+            return { canceled: true };
+        }
+    }
+
+    setTimeout(() => relaunchApp(), 250);
+    return { restarting: true };
+});
+
+async function showMoveFailure(current, strings, source, target, error) {
+    const buttons = [strings.locationRetry, strings.locationChoose, strings.locationQuit];
+    while (true) {
+        const result = await dialog.showMessageBox({
+            type: 'error',
+            title: strings.moveFailedTitle,
+            message: strings.moveFailedMessage.replace('%s', target),
+            detail: error?.message || String(error),
+            buttons,
+            defaultId: 0,
+            cancelId: 2,
+            noLink: true,
+        });
+        if (result.response === 0) {
+            relaunchApp();
+            return;
+        }
+        if (result.response === 2) {
+            app.quit();
+            return;
+        }
+        const selected = await pickDataDirectory(null, strings);
+        if (!selected) {
+            continue;
+        }
+        const classified = classifyDataTarget(selected, { source, defaultUserData });
+        if (classified.mode === 'reject') {
+            const { message, detail } = formatDialogError(strings, classified.reason, selected);
+            await showDialogMessage(null, strings, message, detail);
+            continue;
+        }
+        if (classified.mode === 'adopt') {
+            writeLocationState(current.pointerPath, { version: POINTER_VERSION, userData: selected });
+            relaunchApp();
+            return;
+        }
+        try {
+            fs.mkdirSync(selected, { recursive: true });
+            validateWritableDirectory(selected);
+        } catch (selectionError) {
+            await showDialogMessage(null, strings, strings.dataDirectoryNotWritable, selectionError.message);
+            continue;
+        }
+        writeLocationState(current.pointerPath, {
+            version: POINTER_VERSION,
+            userData: source,
+            pendingMoveTo: selected,
+            pendingMoveToIdentity: directoryIdentity(selected),
+        });
+        relaunchApp();
+        return;
+    }
+}
+
+async function runMigrationSession(current, strings, locale) {
+    const source = current.state.userData;
+    const target = current.state.pendingMoveTo;
+    let settled = false;
+    const win = new BrowserWindow({
+        width: 520,
+        height: 320,
+        show: false,
+        webPreferences: {
+            preload: path.join(import.meta.dirname, 'preload.js'),
+            backgroundThrottling: false,
+        },
+    });
+    win.once('ready-to-show', () => win.show());
+    win.on('close', (event) => {
+        if (settled) {
+            return;
+        }
+        event.preventDefault();
+        app.quit();
+    });
+    try {
+        await win.loadFile('loading.html', { query: { locale, mode: 'move' } });
+        await migrateDataDirectory({
+            source,
+            target,
+            targetIdentity: current.state.pendingMoveToIdentity,
+            defaultUserData,
+            onProgress: (progress) => {
+                if (!win.isDestroyed()) {
+                    win.webContents.send('luker:data-move-progress', progress);
+                }
+            },
+        });
+        writeLocationState(current.pointerPath, {
+            version: POINTER_VERSION,
+            userData: target,
+            pendingDeleteFrom: source,
+        });
+        if (!win.isDestroyed()) {
+            win.webContents.send('luker:data-move-progress', { done: true });
+        }
+        settled = true;
+        setTimeout(() => relaunchApp(), 300);
+    } catch (error) {
+        settled = true;
+        if (!win.isDestroyed()) {
+            win.destroy();
+        }
+        await showMoveFailure(current, strings, source, target, error);
+    }
 }
 
 // Where the platform keeps an entry point back into the app, closing the
@@ -683,6 +1285,14 @@ app.whenReady().then(async () => {
 
     const locale = app.getLocale();
     const strings = pickShellStrings(locale);
+    if (location.error) {
+        await showLocationError(location, strings);
+        return;
+    }
+    if (location.state?.pendingMoveTo) {
+        await runMigrationSession(location, strings, locale);
+        return;
+    }
     const win = new BrowserWindow({
         width: 1024,
         height: 768,
@@ -696,6 +1306,9 @@ app.whenReady().then(async () => {
         },
     });
     routeExternalNavigation(win);
+
+    startLogTee();
+    fs.rmSync(updatesDirectory, { recursive: true, force: true });
 
     const httpAuth = createHttpAuthController({
         store: httpAuthStore,

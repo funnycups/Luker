@@ -58,6 +58,33 @@
         75% { content: '...'; }
     }
 
+    .status.moving::after {
+        content: none;
+        animation: none;
+    }
+
+    .progress {
+        width: 100%;
+        height: 6px;
+        margin-top: 1.5rem;
+        border-radius: 3px;
+        background: rgba(127, 127, 127, 0.2);
+        overflow: hidden;
+    }
+
+    .progress .bar {
+        height: 100%;
+        width: 0;
+        background: currentColor;
+        transition: width 120ms linear;
+    }
+
+    .progress-text {
+        margin-top: 0.75rem;
+        font-size: 0.9rem;
+        opacity: 0.8;
+    }
+
     .error {
         text-align: left;
         margin-top: 1.5rem;
@@ -94,16 +121,25 @@
             starting: 'Starting Luker',
             failed: 'Luker failed to start.',
             logAt: 'Details were written to:',
+            moving: 'Moving Luker data',
+            moveDone: 'Data moved. Restarting Luker.',
+            moveProgress: '%s%',
         },
         'zh-CN': {
             starting: '正在启动 Luker',
             failed: 'Luker 启动失败。',
             logAt: '详细信息已写入:',
+            moving: '正在迁移 Luker 数据',
+            moveDone: '数据迁移完成，正在重启 Luker。',
+            moveProgress: '%s%',
         },
         'zh-TW': {
             starting: '正在啟動 Luker',
             failed: 'Luker 啟動失敗。',
             logAt: '詳細資訊已寫入:',
+            moving: '正在遷移 Luker 資料',
+            moveDone: '資料遷移完成，正在重新啟動 Luker。',
+            moveProgress: '%s%',
         },
     };
 
@@ -125,6 +161,7 @@
     const strings = pickStrings(params.get('locale'));
     const error = params.get('error');
     const logPath = params.get('logPath');
+    const mode = params.get('mode');
 
     const content = document.getElementById('content');
 
@@ -156,6 +193,41 @@
 
         content.appendChild(status);
         content.appendChild(block);
+    } else if (mode === 'move') {
+        const status = document.createElement('div');
+        status.className = 'status moving';
+        status.textContent = strings.moving;
+
+        const progress = document.createElement('div');
+        progress.className = 'progress';
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+        progress.appendChild(bar);
+
+        const label = document.createElement('div');
+        label.className = 'progress-text';
+        label.textContent = strings.moveProgress.replace('%s', '0');
+
+        content.appendChild(status);
+        content.appendChild(progress);
+        content.appendChild(label);
+
+        const setProgress = (payload) => {
+            if (payload?.done) {
+                bar.style.width = '100%';
+                label.textContent = strings.moveProgress.replace('%s', '100');
+                status.textContent = strings.moveDone;
+                return;
+            }
+            const total = Number(payload?.totalBytes) || 0;
+            const copied = Number(payload?.copiedBytes) || 0;
+            const percent = total === 0 ? 100 : Math.min(100, Math.round((copied / total) * 100));
+            bar.style.width = `${percent}%`;
+            label.textContent = strings.moveProgress.replace('%s', String(percent));
+        };
+        if (window.LukerDesktop?.onDataMoveProgress) {
+            window.LukerDesktop.onDataMoveProgress(setProgress);
+        }
     } else {
         const status = document.createElement('div');
         status.className = 'status';

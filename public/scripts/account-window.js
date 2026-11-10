@@ -44,7 +44,7 @@ const accountHelp = () => ({
     rename: [t`The display name is what others see. The handle used to sign in stays the same.`],
     password: [t`Leave the new password blank to remove the password.`],
     snapshots: [t`A snapshot records your settings only, not characters or chats.`, t`Restoring a snapshot replaces the current settings and reloads the page.`],
-    storage: [t`Server storage shows how much space your data takes on the server.`, t`Browser storage shows what this browser keeps for Luker. Deleting items here only affects this browser.`],
+    storage: [t`Server storage shows how much space your data takes on the server.`, t`Browser storage shows what this browser keeps for Luker. Deleting items here only affects this browser.`, t`The data directory is where Luker stores chats, backups, plugins, and extensions on this device.`],
     reset: [t`Reset Settings only restores settings to factory defaults. Reset Everything deletes all your data.`],
     resetSettings: [t`Don't forget to save a snapshot of your settings before proceeding.`],
     resetAll: [t`Account reset code has been posted to the server console.`, t`Make sure you have a backup before proceeding.`],
@@ -80,6 +80,9 @@ class AccountWindow extends DataPages {
         this.snaps = { list: null, loading: false, error: null, busy: false, open: new Set(), content: new Map() };
         this.storageKind = 'server';
         this.inspectors = {};
+        this.dataDirectory = null;
+        this.dataDirectoryLoading = false;
+        this.dataDirectoryBusy = false;
         const keys = this.navKeys();
         if (!keys.includes(this.tab)) this.tab = keys[0];
         if (view && this.top.view !== view) this.stack[this.tab].push({ view });
@@ -191,7 +194,41 @@ class AccountWindow extends DataPages {
         super.afterRender();
         const slot = this.root.querySelector('[data-region="storage"]');
         if (slot) this.mountInspector(slot);
+        if (this.top.view === 'storage' && this.storageKind === 'server') this.loadDataDirectory();
         if (this.isAdminView) this.admin.afterRender();
+    }
+
+    async loadDataDirectory() {
+        if (this.dataDirectory || this.dataDirectoryLoading) return;
+        const bridge = window.LukerDesktop;
+        if (!bridge || typeof bridge.getDataDirectory !== 'function') return;
+        this.dataDirectoryLoading = true;
+        try {
+            this.dataDirectory = await bridge.getDataDirectory() || { error: true };
+        } catch (error) {
+            this.dataDirectory = { error: error?.message || String(error) };
+        } finally {
+            this.dataDirectoryLoading = false;
+        }
+        if (this.root.isConnected && this.top.view === 'storage') this.rerender();
+    }
+
+    async changeDataDirectory() {
+        const bridge = window.LukerDesktop;
+        if (!bridge || typeof bridge.chooseDataDirectory !== 'function' || this.dataDirectoryBusy) return;
+        this.dataDirectoryBusy = true;
+        this.rerender();
+        try {
+            const result = await bridge.chooseDataDirectory();
+            if (result?.restarting) {
+                this.toast(t`Restarting Luker to apply the new data directory…`);
+            }
+        } catch (error) {
+            this.toast(error?.message || String(error), true);
+        } finally {
+            this.dataDirectoryBusy = false;
+            if (this.root.isConnected && this.top.view === 'storage') this.rerender();
+        }
     }
 
     errorLine() {
@@ -447,7 +484,23 @@ class AccountWindow extends DataPages {
 
     viewStorage() {
         const seg = (kind, icon, label) => `<button class="${this.storageKind === kind ? 'on' : ''}" data-act="storage-kind" data-kind="${kind}" role="tab" aria-selected="${this.storageKind === kind}">${ic(icon)}${label}</button>`;
-        return `
+        const showPath = this.storageKind === 'server'
+            && window.LukerDesktop?.getDataDirectory
+            && (!accountsEnabled || isAdmin());
+        const dir = this.dataDirectory;
+        const canChoose = showPath && typeof window.LukerDesktop?.chooseDataDirectory === 'function';
+        const row = showPath ? `<div class="dw-data-dir">
+            <div class="dw-data-dir-main">
+                <span>${t`Data directory`}</span>
+                <span class="dw-data-dir-path" title="${esc(dir?.path || '')}">${esc(dir?.path || (dir?.error ? t`Unavailable` : t`Loading…`))}</span>
+            </div>
+            ${canChoose ? `<button class="dw-btn sm${this.dataDirectoryBusy ? ' busy' : ''}" data-act="data-dir-change"
+                ${!dir || dir.locked || dir.error || this.dataDirectoryBusy ? 'disabled' : ''}
+                title="${dir?.locked ? t`Managed by the launch environment.` : ''}">
+                ${this.dataDirectoryBusy ? ic('sync', 'dw-spin') : ic('move')}${t`Change`}
+            </button>` : ''}
+        </div>` : '';
+        return `${row}
             <div class="dw-seg" role="tablist">${seg('server', 'server', t`Server storage`)}${seg('browser', 'browser', t`Browser Storage`)}</div>
             <div class="dw-inspector" data-region="storage"></div>`;
     }
@@ -575,6 +628,7 @@ class AccountWindow extends DataPages {
             case 'storage-kind':
                 this.storageKind = el.dataset.kind;
                 return this.rerender();
+            case 'data-dir-change': return this.changeDataDirectory();
             case 'reset-code': return this.sendResetCode(this.top);
             case 'reset-settings-go': return this.resetSettingsGo();
             case 'reset-all-go': return this.resetAllGo();

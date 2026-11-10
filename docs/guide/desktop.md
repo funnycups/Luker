@@ -82,9 +82,17 @@ Inside it:
 - `plugins/` — server plugins
 - `extensions/third-party/` — third-party extensions
 
+### Changing the Data Directory
+
+Open **User Settings** → **Account** → **Storage**, find **Data directory**, and click **Change**. Choose an empty folder or an existing Luker data folder. The folder is used exclusively by Luker and needs enough free space for the current data.
+
+The app moves chats, backups, plugins, extensions, and the server configuration to the chosen folder and restarts. After the move completes, the app removes the old data. If the folder is unavailable at startup, the app offers to retry, choose another folder, or quit, and does not fall back to the default directory.
+
+Browser sign-in state and cache are not moved. If user accounts are enabled, sign in again after the move.
+
 ## Uninstall
 
-Uninstalling removes the app itself and leaves the data directory untouched, for both the installer and the no-install form. Chats, presets, and settings stay in place, and a later install uses them again.
+Uninstalling removes the app itself and leaves the data directory untouched, for both the installer and the no-install form. The app keeps a record of the chosen data location, so a later install uses the same directory. Chats, presets, and settings stay in place.
 
 To remove everything as well, delete the data directory listed above after uninstalling.
 

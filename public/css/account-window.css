@@ -57,6 +57,31 @@
     color: var(--dw-muted);
 }
 
+.dw-data-dir {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--dw-border);
+    border-radius: var(--dw-r);
+    margin-bottom: 12px;
+}
+
+.dw-data-dir-main {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.dw-data-dir-path {
+    color: var(--dw-muted);
+    font-size: 12px;
+    font-family: var(--dw-mono);
+    overflow-wrap: anywhere;
+}
+
 .dw-pilltag svg.dw-ic {
     width: 11px;
     height: 11px;

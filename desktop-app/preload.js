@@ -8,6 +8,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 let progressCallback = null;
+let moveProgressCallback = null;
 
 ipcRenderer.on('luker:update-progress', (_event, progress) => {
     if (typeof progressCallback === 'function') {
@@ -15,13 +16,24 @@ ipcRenderer.on('luker:update-progress', (_event, progress) => {
     }
 });
 
+ipcRenderer.on('luker:data-move-progress', (_event, progress) => {
+    if (typeof moveProgressCallback === 'function') {
+        moveProgressCallback(progress);
+    }
+});
+
 contextBridge.exposeInMainWorld('LukerDesktop', {
     platform: process.platform,
     arch: process.arch,
     installFlavour: ipcRenderer.sendSync('luker:install-flavour'),
+    getDataDirectory: () => ipcRenderer.invoke('luker:get-data-directory'),
+    chooseDataDirectory: () => ipcRenderer.invoke('luker:choose-data-directory'),
     installUpdateFromUrl: (url, name) => ipcRenderer.invoke('luker:install-update', { url, name }),
     setOpenExternalLinksInBrowser: (enabled) => ipcRenderer.invoke('luker:external-link-policy', Boolean(enabled)),
     onUpdateProgress: (callback) => {
         progressCallback = callback;
+    },
+    onDataMoveProgress: (callback) => {
+        moveProgressCallback = callback;
     },
 });

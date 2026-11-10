@@ -7061,4 +7061,10 @@
     ,"Zoom": "放大"
     ,"Could not delete server image files": "无法删除服务器图片文件"
     ,"Generated": "已生成"
+    ,"Data directory": "数据目录"
+    ,"The data directory is where Luker stores chats, backups, plugins, and extensions on this device.": "Luker 在本机存放聊天、备份、插件与扩展的目录。"
+    ,"Unavailable": "不可用"
+    ,"Change": "更改"
+    ,"Restarting Luker to apply the new data directory…": "正在重启 Luker 以应用新的数据目录……"
+    ,"Managed by the launch environment.": "由启动环境管理。"
 }

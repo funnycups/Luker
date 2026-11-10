@@ -8,6 +8,7 @@
 // what make a spec isolated from the developer's own install.
 
 import { _electron as electron } from '@playwright/test';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -41,22 +42,27 @@ function isSettled(url) {
 }
 
 /**
- * @param {{ scenarioId?: string, passPort?: boolean, port?: number|null, userData?: string|null, extraEnv?: Record<string, string>, packaged?: boolean, waitForSettle?: boolean }} [options]
+ * @param {{ scenarioId?: string, passPort?: boolean, port?: number|null, userData?: string|null, defaultUserData?: string|null, seed?: boolean, extraEnv?: Record<string, string>, packaged?: boolean, waitForSettle?: boolean, waitForWindow?: boolean }} [options]
  *   `passPort: false` leaves the port unpinned so the shell probes upward
  *   from its default (the "preferred port is taken" case). `userData`
  *   skips the seed clone, for specs that construct the data root themselves.
- *   `packaged: true` launches the built artifact instead of the checkout, so
- *   the app carries its own backend and takes no application directory.
- *   `extraEnv` overrides the child environment, for the settings a test has
- *   to vary per launch. `waitForSettle: false` returns as soon as the shell
- *   window exists, for a first navigation the test has to answer before it
- *   can reach the app (an authentication challenge, for example).
- * @returns {Promise<{ electronApp: object, page: object, baseURL: string, port: number, dataRoot: string, userData: string, relaunch: () => Promise<void>, close: () => Promise<void> }>}
+ *   `defaultUserData` isolates the pointer location and the default data
+ *   root, so a spec can exercise the pointer without touching the real
+ *   `~/Library/Application Support/Luker`; it clones the seed unless
+ *   `seed: false`. `packaged: true` launches the built artifact instead of
+ *   the checkout, so the app carries its own backend and takes no
+ *   application directory. `extraEnv` overrides the child environment, for
+ *   the settings a test has to vary per launch. `waitForSettle: false`
+ *   returns as soon as the shell window exists, for a first navigation the
+ *   test has to answer before it can reach the app (an authentication
+ *   challenge, for example). `waitForWindow: false` leaves `page` null for
+ *   a launch that is expected to quit before showing a window.
+ * @returns {Promise<{ electronApp: object, page: object|null, baseURL: string|null, port: number|null, dataRoot: string, userData: string, defaultUserData: string|null, relaunch: () => Promise<void>, waitForExit: () => Promise<void>, close: () => Promise<void> }>}
  */
-export async function launchLukerDesktop({ scenarioId = 'default', passPort = true, port = null, userData = null, extraEnv = {}, packaged = false, waitForSettle = true } = {}) {
+export async function launchLukerDesktop({ scenarioId = 'default', passPort = true, port = null, userData = null, defaultUserData = null, seed = true, extraEnv = {}, packaged = false, waitForSettle = true, waitForWindow = true } = {}) {
     const reservedPort = port ?? await reservePort('desktop');
-    const resolvedUserData = userData ?? resolve(SCRATCH_ROOT, `desktop-${scenarioId}-${reservedPort}`);
-    if (!userData) {
+    const resolvedUserData = defaultUserData ?? userData ?? resolve(SCRATCH_ROOT, `desktop-${scenarioId}-${reservedPort}`);
+    if (!userData && seed !== false) {
         mkdirSync(resolvedUserData, { recursive: true });
         cloneDataDir(resolve(resolvedUserData, 'data'));
     }
@@ -68,20 +74,35 @@ export async function launchLukerDesktop({ scenarioId = 'default', passPort = tr
         port: null,
         dataRoot: resolve(resolvedUserData, 'data'),
         userData: resolvedUserData,
+        defaultUserData: defaultUserData ?? null,
     };
 
     const open = async () => {
+        const launchEnv = { ...process.env };
+        if (defaultUserData) {
+            delete launchEnv.LUKER_DESKTOP_USER_DATA;
+            launchEnv.LUKER_DESKTOP_DEFAULT_USER_DATA = resolvedUserData;
+        } else {
+            launchEnv.LUKER_DESKTOP_USER_DATA = resolvedUserData;
+        }
+        Object.assign(launchEnv, extraEnv);
         const electronApp = await electron.launch({
             executablePath: packaged ? PACKAGED_EXECUTABLE : ELECTRON_EXECUTABLE,
             args: [...(packaged ? [] : [DESKTOP_APP_DIR]), ...(passPort ? [`--port=${reservedPort}`] : [])],
-            env: { ...process.env, LUKER_DESKTOP_USER_DATA: resolvedUserData, ...extraEnv },
+            env: launchEnv,
         });
+        handle.electronApp = electronApp;
+        if (!waitForWindow) {
+            handle.page = null;
+            handle.baseURL = null;
+            handle.port = null;
+            return;
+        }
         const page = await electronApp.firstWindow();
         if (waitForSettle) {
             await page.waitForURL(u => isSettled(u), { timeout: 60_000 });
         }
         const actual = new URL(page.url());
-        handle.electronApp = electronApp;
         handle.page = page;
         if (BACKEND_URL.test(actual.href)) {
             handle.baseURL = actual.origin;
@@ -95,6 +116,30 @@ export async function launchLukerDesktop({ scenarioId = 'default', passPort = tr
     handle.relaunch = async () => {
         await handle.close({ removeData: false });
         await open();
+    };
+
+    handle.waitForExit = async () => {
+        const electronApp = handle.electronApp;
+        if (!electronApp) return;
+        const child = electronApp.process();
+        if (child.exitCode === null) {
+            await new Promise((resolvePromise, rejectPromise) => {
+                const timeout = setTimeout(
+                    () => rejectPromise(new Error('Timed out waiting for the desktop app to exit.')),
+                    60_000,
+                );
+                const finish = () => {
+                    clearTimeout(timeout);
+                    resolvePromise();
+                };
+                electronApp.once('close', finish);
+                if (child.exitCode !== null) finish();
+            });
+        }
+        handle.electronApp = null;
+        handle.page = null;
+        handle.baseURL = null;
+        handle.port = null;
     };
 
     // The data root is a full clone of the seed tree, so a spec that leaves it
@@ -113,4 +158,40 @@ export async function launchLukerDesktop({ scenarioId = 'default', passPort = tr
 
     await open();
     return handle;
+}
+
+/**
+ * Launch the shell without Playwright's driver. A startup that is expected to
+ * quit before showing a window cannot be attached to with `electron.launch`,
+ * because the process is gone before the driver connects.
+ * @param {{ defaultUserData: string, port?: number|null, extraEnv?: Record<string, string> }} options
+ * @returns {{ child: import('node:child_process').ChildProcess, waitForExit: () => Promise<{ code: number|null, signal: string|null }> }}
+ */
+export function spawnLukerDesktop({ defaultUserData, port = null, extraEnv = {} }) {
+    const env = { ...process.env };
+    delete env.LUKER_DESKTOP_USER_DATA;
+    env.LUKER_DESKTOP_DEFAULT_USER_DATA = defaultUserData;
+    Object.assign(env, extraEnv);
+
+    const child = spawn(ELECTRON_EXECUTABLE, [
+        DESKTOP_APP_DIR,
+        ...(port ? [`--port=${port}`] : []),
+    ], { env, stdio: 'ignore' });
+
+    const exited = new Promise((resolvePromise, rejectPromise) => {
+        const timeout = setTimeout(
+            () => rejectPromise(new Error('Timed out waiting for the desktop app to exit.')),
+            30_000,
+        );
+        child.once('error', (error) => {
+            clearTimeout(timeout);
+            rejectPromise(error);
+        });
+        child.once('exit', (code, signal) => {
+            clearTimeout(timeout);
+            resolvePromise({ code, signal });
+        });
+    });
+
+    return { child, waitForExit: () => exited };
 }
