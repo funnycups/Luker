@@ -13,8 +13,11 @@ export NODE_ENV=production
 npm install --no-save --no-audit --no-fund --loglevel=error --no-progress --omit=dev --ignore-scripts
 
 # npm install scripts stay disabled in this repository, so the native SQLite
-# binding is built explicitly. Skipping it keeps file storage usable.
-if [ ! -f "node_modules/better-sqlite3/build/Release/better_sqlite3.node" ]; then
+# binding is built explicitly. Android has no prebuilt binary, so it stays
+# opt-in there: run `npm run storage:install-sqlite` when the SQLite backend is
+# needed. File storage works without the binding.
+if [ ! -f "node_modules/better-sqlite3/build/Release/better_sqlite3.node" ] \
+    && [ "$(node -p 'process.platform')" != "android" ]; then
     echo "Installing the SQLite storage dependency..."
     npm run storage:install-sqlite
 fi

@@ -186,7 +186,7 @@ One table per resource kind (`chats`, `chat_states`, `settings`, `presets`, `pre
 
 ## Dependencies and install gotchas
 
-- Native dep: `better-sqlite3`. Dependency install scripts stay disabled, so run `npm run storage:install-sqlite` after `npm install` when the SQLite backend is needed. The Docker image and start scripts run it during setup.
+- Native dep: `better-sqlite3`. Dependency install scripts stay disabled, so run `npm run storage:install-sqlite` after `npm install` when the SQLite backend is needed. The Docker image and desktop start scripts run it during setup. Android leaves it opt-in: there is no prebuilt binary, so the SQLite backend requires a source build.
 - SQLite version requirement: ≥ 3.31 (for `STORED GENERATED COLUMN` support in the `chats` table). better-sqlite3 bundles a recent SQLite, so this is satisfied out of the box.
 - macOS install gotcha: Homebrew Python 3.14.6 ships a broken `pyexpat`, which makes node-gyp's setup crash before better-sqlite3 can build. Workaround: rerun the install with `npm rebuild better-sqlite3 --python=/usr/bin/python3` (system Python) or set `PYTHON=/usr/bin/python3` for the install command.
 
