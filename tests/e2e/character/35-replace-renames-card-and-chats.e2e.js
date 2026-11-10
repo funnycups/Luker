@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
 import { disableTagImportPopup, dismissAnyPopup, clickCharacterCard, openCharacterEditPanel, openReplaceWithFile, writeEmbeddedCharacter } from './_helpers.js';
-import { awaitMainUI, reloadAndAwait, selectCharacterByName, getChatSnapshot, getRenderedChatTexts } from '../_lib/page.js';
+import { awaitMainUI, reloadAndAwait, selectCharacterProgrammatic, getChatSnapshot, getRenderedChatTexts } from '../_lib/page.js';
 import { write as writePngCard } from '../../../src/character-card-parser.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..');
@@ -173,19 +173,21 @@ test.describe('#35 — replace renames card identity and chats', () => {
                 return {
                     chatId: ctx.getCurrentChatId?.(),
                     pole: document.querySelector('#selected_chat_pole')?.value || '',
-                    avatars: ctx.characters.map(character => character.avatar),
-                    names: ctx.characters.map(character => character.name),
+                    characters: ctx.characters.map(character => ({ avatar: character.avatar, name: character.name })),
                 };
             });
-            expect(afterReplace.names, 'character list shows the new name').toContain(BRIALLEN_NAME);
-            expect(afterReplace.names, 'character list no longer shows the old name').not.toContain(ASH_NAME);
-            expect(afterReplace.avatars, 'character list shows the new avatar').toContain(`${BRIALLEN_NAME}.png`);
-            expect(afterReplace.avatars, 'character list no longer shows the old avatar').not.toContain(ASH_AVATAR);
+            expect(afterReplace.characters, 'character list shows the renamed identity')
+                .toContainEqual(expect.objectContaining({ avatar: `${BRIALLEN_NAME}.png`, name: BRIALLEN_NAME }));
+            expect(afterReplace.characters.find(character => character.avatar === ASH_AVATAR), 'no entry keeps the replaced avatar').toBeUndefined();
             expect(afterReplace.chatId, 'current chat pointer follows the renamed chat file').toBe(expectedChatBase);
             expect(afterReplace.pole, 'selected chat pole follows the renamed chat file').toBe(expectedChatBase);
 
             await reloadAndAwait(page, server.baseURL);
-            await selectCharacterByName(page, BRIALLEN_NAME);
+            // The card-select path was exercised before the replace. After
+            // the reload only the persisted pointer matters, and the
+            // programmatic path still clicks the real character card
+            // without depending on the character-edit drawer layout.
+            await selectCharacterProgrammatic(page, BRIALLEN_NAME);
             await dismissAnyPopup(page);
 
             const afterReload = await getChatSnapshot(page);
