@@ -52,7 +52,6 @@
 "close" = "Close";
 "ok" = "OK";
 "cancel" = "Cancel";
-"no_app_can_open_link" = "No app can open this link";
 
 "download_saved" = "File saved: %@";
 "download_saved_fallback_name" = "file";

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
 import Foundation
+import UIKit
 import WebKit
 
 protocol LukerBridgePresenter: AnyObject {
@@ -9,6 +10,8 @@ protocol LukerBridgePresenter: AnyObject {
     func exportDiagnosticsBundle()
     func reloadWebView()
     func applyEndpointChange()
+    func setWebViewFullBleed(_ enabled: Bool)
+    func applySystemBarsColor(_ color: UIColor)
 }
 
 /// Installs `window.LukerIOS` and the console capture hook into the WebView.
@@ -113,9 +116,89 @@ final class LukerBridge: NSObject {
             }
             reply(nil, nil)
 
+        case "setFullBleed":
+            let enabled = body["enabled"] as? Bool ?? false
+            presenter?.setWebViewFullBleed(enabled)
+            reply(nil, nil)
+
+        case "setSystemBarsColor":
+            guard let rawColor = body["color"] as? String,
+                  let color = Self.color(fromCSS: rawColor) else {
+                reply(nil, "invalid color")
+                return
+            }
+            presenter?.applySystemBarsColor(color)
+            reply(nil, nil)
+
+        case "setOpenExternalLinksInBrowser":
+            LukerExternalLinkSettings.shared.openExternally = body["enabled"] as? Bool ?? true
+            reply(nil, nil)
+
         default:
             reply(nil, "unknown method: \(method)")
         }
+    }
+
+    private static func color(fromCSS value: String) -> UIColor? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if trimmed.hasPrefix("#") {
+            let hex = String(trimmed.dropFirst())
+            guard let raw = UInt64(hex, radix: 16) else { return nil }
+            switch hex.count {
+            case 3:
+                return UIColor(
+                    red: CGFloat((raw >> 8) & 0xF) / 15,
+                    green: CGFloat((raw >> 4) & 0xF) / 15,
+                    blue: CGFloat(raw & 0xF) / 15,
+                    alpha: 1
+                )
+            case 6:
+                return UIColor(
+                    red: CGFloat((raw >> 16) & 0xFF) / 255,
+                    green: CGFloat((raw >> 8) & 0xFF) / 255,
+                    blue: CGFloat(raw & 0xFF) / 255,
+                    alpha: 1
+                )
+            case 8:
+                return UIColor(
+                    red: CGFloat((raw >> 24) & 0xFF) / 255,
+                    green: CGFloat((raw >> 16) & 0xFF) / 255,
+                    blue: CGFloat((raw >> 8) & 0xFF) / 255,
+                    alpha: 1
+                )
+            default:
+                return nil
+            }
+        }
+
+        guard let open = trimmed.firstIndex(of: "("),
+              let close = trimmed.lastIndex(of: ")") else {
+            return nil
+        }
+        let name = trimmed[..<open].trimmingCharacters(in: .whitespaces)
+        guard name == "rgb" || name == "rgba" else { return nil }
+        let body = trimmed[trimmed.index(after: open)..<close]
+        let parts = body.split(whereSeparator: { $0 == "," || $0 == "/" || $0 == " " })
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard parts.count >= 3 else { return nil }
+
+        func channel(_ raw: String) -> CGFloat? {
+            if raw.hasSuffix("%") {
+                guard let percent = Double(raw.dropLast()) else { return nil }
+                return CGFloat(percent / 100)
+            }
+            guard let value = Double(raw) else { return nil }
+            return CGFloat(value / 255)
+        }
+
+        guard let red = channel(parts[0]),
+              let green = channel(parts[1]),
+              let blue = channel(parts[2]) else {
+            return nil
+        }
+        return UIColor(red: red, green: green, blue: blue, alpha: 1)
     }
 
     // MARK: - Scripts
@@ -129,6 +212,15 @@ final class LukerBridge: NSObject {
         window.LukerIOS = {
             setGenerationActive(active) {
                 post({ method: 'setGenerationActive', active: !!active });
+            },
+            setFullBleed(enabled) {
+                post({ method: 'setFullBleed', enabled: !!enabled });
+            },
+            setSystemBarsColor(color) {
+                post({ method: 'setSystemBarsColor', color: String(color == null ? '' : color) });
+            },
+            setOpenExternalLinksInBrowser(enabled) {
+                post({ method: 'setOpenExternalLinksInBrowser', enabled: !!enabled });
             },
             notifyMessageFinished(title, body) {
                 post({

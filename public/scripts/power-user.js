@@ -535,6 +535,38 @@ function syncAndroidSystemBarsColor() {
     }
 }
 
+function canUseIosSystemBarsColorBridge() {
+    return typeof window !== 'undefined'
+        && typeof window.LukerIOS === 'object'
+        && window.LukerIOS !== null
+        && typeof window.LukerIOS.setSystemBarsColor === 'function';
+}
+
+function resolveCssColorForNative(value) {
+    const probe = document.createElement('span');
+    probe.style.color = value;
+    probe.style.display = 'none';
+    document.body.appendChild(probe);
+    const resolved = getComputedStyle(probe).color;
+    probe.remove();
+    return resolved;
+}
+
+function syncIosSystemBarsColor() {
+    if (!canUseIosSystemBarsColorBridge()) {
+        return;
+    }
+    const statusBarColor = power_user.blur_tint_color;
+    if (!statusBarColor) {
+        return;
+    }
+    try {
+        window.LukerIOS.setSystemBarsColor(resolveCssColorForNative(statusBarColor));
+    } catch (error) {
+        console.warn('Failed to sync iOS system bars color via bridge', error);
+    }
+}
+
 function syncMobileKeepAliveCheckbox() {
     const platform = getKeepAlivePlatform();
     // Generation-scoped modes reflect the setting, not the live active mode —
@@ -652,7 +684,7 @@ function cancelScopedKeepAliveDeactivateTimer() {
  * @returns {object|null}
  */
 function externalLinkPolicyBridge() {
-    for (const bridge of [window.LukerDesktop, window.LukerAndroid, window.LukerHarmony]) {
+    for (const bridge of [window.LukerDesktop, window.LukerAndroid, window.LukerHarmony, window.LukerIOS]) {
         if (bridge && typeof bridge.setOpenExternalLinksInBrowser === 'function') {
             return bridge;
         }
@@ -2045,6 +2077,7 @@ function applyThemeColor(type) {
         document.documentElement.style.setProperty('--SmartThemeBlurTintColor', power_user.blur_tint_color);
         metaThemeColor.setAttribute('content', power_user.blur_tint_color);
         syncAndroidSystemBarsColor();
+        syncIosSystemBarsColor();
     }
     if (type === 'chatTint') {
         document.documentElement.style.setProperty('--SmartThemeChatTintColor', power_user.chat_tint_color);
@@ -2412,6 +2445,7 @@ export function applyPowerUserSettings() {
     applyFontScale('forced');
     applyThemeColor();
     syncAndroidSystemBarsColor();
+    syncIosSystemBarsColor();
     syncExternalLinkPolicyUi();
     applyChatWidth('forced');
     applyAvatarStyle();

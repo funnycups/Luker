@@ -23,6 +23,9 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Added a startup-failure report on the next launch.
 - Fixed the missing scene configuration.
+- Fixed the iOS app showing the system background in the status bar and the bottom area instead of the interface theme.
+- Added the external link setting to the iOS app.
+- Fixed the iOS app showing a "No app can open this link" alert when a page loads an iframe.
 
 ## v2.9.0-rc.1 (2026-11-09)
 

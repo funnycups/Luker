@@ -20,6 +20,10 @@ final class ViewController: UIViewController {
     private let bridge = LukerBridge()
     private let runtimeQueue = DispatchQueue(label: "com.luker.app.runtime-lifecycle")
     private var webView: WKWebView?
+    private var webViewSafeAreaConstraints: [NSLayoutConstraint] = []
+    private var webViewFullBleedConstraints: [NSLayoutConstraint] = []
+    private var isWebViewFullBleed = false
+    private var statusBarStyle: UIStatusBarStyle = .default
     private var currentBootState: BootState = .startingRuntime
     private var bootGeneration = 0
     private var navigationFailureAlertShown = false
@@ -103,6 +107,10 @@ final class ViewController: UIViewController {
         configureConstraints()
         setBootState(.startingRuntime)
         startRuntime()
+    }
+
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        statusBarStyle
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -256,6 +264,11 @@ final class ViewController: UIViewController {
 
     private func setBootState(_ state: BootState) {
         currentBootState = state
+        if case .ready = state {
+            // Keep the last theme color until the new document reports its own.
+        } else {
+            resetSystemBarsAppearance()
+        }
         switch state {
         case .startingRuntime:
             spinner.startAnimating()
@@ -355,18 +368,64 @@ final class ViewController: UIViewController {
         webView.uiDelegate = self
         webView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(webView)
-        // Keep the web layer inside the safe area: the page uses viewport-fit=cover
-        // but never applies env(safe-area-inset-*), so a full-bleed web view puts the
-        // top bar under the Dynamic Island and the input under the home indicator.
+        // Start inside the safe area. The page switches to full-bleed only after
+        // it confirms it owns the safe-area padding, so pages served by an older
+        // shell never put the top bar under the Dynamic Island.
         view.backgroundColor = .systemBackground
-        NSLayoutConstraint.activate([
+        let safeAreaConstraints = [
             webView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             webView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-        ])
+        ]
+        let fullBleedConstraints = [
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ]
+        NSLayoutConstraint.activate(safeAreaConstraints)
+        self.webViewSafeAreaConstraints = safeAreaConstraints
+        self.webViewFullBleedConstraints = fullBleedConstraints
+        self.isWebViewFullBleed = false
         self.webView = webView
         webView.load(URLRequest(url: runtime.serverURL))
+    }
+
+    func setWebViewFullBleed(_ enabled: Bool) {
+        guard let webView, enabled != isWebViewFullBleed else { return }
+        NSLayoutConstraint.deactivate(enabled ? webViewSafeAreaConstraints : webViewFullBleedConstraints)
+        NSLayoutConstraint.activate(enabled ? webViewFullBleedConstraints : webViewSafeAreaConstraints)
+        // Let CSS env(safe-area-inset-*) be the only source of edge spacing.
+        webView.scrollView.contentInsetAdjustmentBehavior = enabled ? .never : .automatic
+        isWebViewFullBleed = enabled
+        if enabled {
+            // The preloader paints a dark background before the saved theme loads.
+            statusBarStyle = .lightContent
+            setNeedsStatusBarAppearanceUpdate()
+        }
+        view.layoutIfNeeded()
+    }
+
+    func applySystemBarsColor(_ color: UIColor) {
+        view.backgroundColor = color
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        if color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+            let luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+            statusBarStyle = luma > 0.6 ? .darkContent : .lightContent
+        } else {
+            statusBarStyle = .default
+        }
+        setNeedsStatusBarAppearanceUpdate()
+    }
+
+    private func resetSystemBarsAppearance() {
+        view.backgroundColor = .systemBackground
+        statusBarStyle = .default
+        setNeedsStatusBarAppearanceUpdate()
     }
 
     // MARK: - Diagnostics UI
@@ -801,8 +860,9 @@ final class ViewController: UIViewController {
 // MARK: - WKNavigationDelegate
 
 extension ViewController: WKNavigationDelegate {
-    /// Mirrors the Android external link policy: same-origin navigations stay
-    /// inside the app, everything else goes to the system browser.
+    /// Mirrors the Android external link policy: a top-level `http` or `https`
+    /// navigation to another origin goes to the system browser; subframes and
+    /// every non-network scheme stay inside the app.
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
@@ -814,33 +874,41 @@ extension ViewController: WKNavigationDelegate {
             return
         }
 
+        // A subframe belongs to the page that hosts it. Inline frames routinely
+        // navigate to `about:srcdoc`, `about:blank` and `blob:` URLs, none of
+        // which can leave the app.
+        if let targetFrame = navigationAction.targetFrame, !targetFrame.isMainFrame {
+            decisionHandler(.allow, preferences)
+            return
+        }
+
         let url = navigationAction.request.url
-        if runtime.isSameOriginURL(url) {
+        let route = LukerExternalLinkPolicy.routeTopLevelNavigation(
+            url: url,
+            currentURL: navigationAction.targetFrame == nil ? nil : webView.url,
+            appOrigin: LukerExternalLinkPolicy.origin(of: runtime.serverURL),
+            openExternally: LukerExternalLinkSettings.shared.openExternally
+        )
+
+        switch route {
+        case .inApp:
             if navigationAction.targetFrame == nil {
-                // A popup (target=_blank) from the local UI: load it in the
-                // same web view instead of dropping the navigation.
-                if let request = navigationAction.request as URLRequest? {
-                    webView.load(request)
+                // Without popup support a new-window request can only continue
+                // in this web view when it carries a page; a blank frame would
+                // replace the app page with nothing.
+                if let scheme = url?.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+                    webView.load(navigationAction.request)
                 }
                 decisionHandler(.cancel, preferences)
                 return
             }
             decisionHandler(.allow, preferences)
-            return
+        case .systemBrowser:
+            if let url {
+                UIApplication.shared.open(url)
+            }
+            decisionHandler(.cancel, preferences)
         }
-
-        if let url, UIApplication.shared.canOpenURL(url) {
-            UIApplication.shared.open(url)
-        } else if let url {
-            let alert = UIAlertController(
-                title: nil,
-                message: NSLocalizedString("no_app_can_open_link", comment: ""),
-                preferredStyle: .alert
-            )
-            alert.addAction(UIAlertAction(title: NSLocalizedString("close", comment: ""), style: .default))
-            present(alert, animated: true)
-        }
-        decisionHandler(.cancel, preferences)
     }
 
     func webView(
@@ -910,6 +978,9 @@ extension ViewController: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // A new document must opt in again; a page from an older server keeps
+        // the safe-area layout instead of inheriting full-bleed from the last one.
+        setWebViewFullBleed(false)
         navigationFailureAlertShown = false
     }
 

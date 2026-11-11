@@ -52,7 +52,6 @@
 "close" = "關閉";
 "ok" = "好";
 "cancel" = "取消";
-"no_app_can_open_link" = "沒有可開啟此連結的應用程式";
 
 "download_saved" = "檔案已儲存：%@";
 "download_saved_fallback_name" = "檔案";

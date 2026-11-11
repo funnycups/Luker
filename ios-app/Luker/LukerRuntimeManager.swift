@@ -91,15 +91,6 @@ final class LukerRuntimeManager {
         applicationSupportRoot.appendingPathComponent(Self.persistentDataDirName, isDirectory: true)
     }
 
-    // MARK: - Same-origin policy
-
-    func isSameOriginURL(_ url: URL?) -> Bool {
-        guard let url, let base = URL(string: serverURL.absoluteString) else { return false }
-        return url.scheme?.lowercased() == base.scheme?.lowercased()
-            && url.host?.lowercased() == base.host?.lowercased()
-            && url.port == base.port
-    }
-
     // MARK: - Start
 
     func startIfNeeded() -> StartResult {

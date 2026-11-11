@@ -52,7 +52,6 @@
 "close" = "关闭";
 "ok" = "好";
 "cancel" = "取消";
-"no_app_can_open_link" = "没有可打开此链接的应用";
 
 "download_saved" = "文件已保存：%@";
 "download_saved_fallback_name" = "文件";
