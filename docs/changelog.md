@@ -2,6 +2,13 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
+## Unreleased
+
+### Fixes
+
+- Fixed Memory Graph LLM recall not drilling into always-inject event rollups.
+- Fixed Memory Graph RAG recall filtering always-inject nodes after the per-type quota.
+
 ## v2.9.0-rc.2 (2026-11-11)
 
 ### Connections & Models

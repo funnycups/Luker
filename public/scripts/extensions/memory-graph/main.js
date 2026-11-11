@@ -4223,6 +4223,7 @@ function buildRecallRouteInputHead() {
         '<recall_route_input>',
         '  <input_guide>Plan recall route from the data blocks below. Use node ids from candidate_nodes only.</input_guide>',
         '  <input_guide>always_inject_node_ids are injected separately; never include them in selected_node_ids.</input_guide>',
+        '  <input_guide>Candidate rows marked always_inject=true are injected at rollup granularity only. Never put them in selected_node_ids, but you MAY use them as expand_plan seed_node_id to drill into their child detail.</input_guide>',
         '  <input_guide>The dialogue_context block below carries recent chat turns as real role=user|assistant messages (raw dialogue, no per-turn seq wrapper). Use them to reason about scene, entities, and intent.</input_guide>',
         '  <dialogue_context>',
     ].join('\n');
@@ -4251,6 +4252,7 @@ function buildRecallFinalizeInputHead() {
         '<recall_finalize_input>',
         '  <input_guide>Finalize selected node ids for injection from candidate_nodes.</input_guide>',
         '  <input_guide>always_inject_node_ids are injected separately; never include them in selected_node_ids.</input_guide>',
+        '  <input_guide>Candidate rows marked always_inject=true are injected at rollup granularity only. Never put them in selected_node_ids; select the drilled child rows instead.</input_guide>',
         '  <input_guide>The dialogue_context block below carries recent chat turns as real role=user|assistant messages (raw dialogue, no per-turn seq wrapper). Use them to reason about scene, entities, and intent.</input_guide>',
         '  <dialogue_context>',
     ].join('\n');
@@ -6978,6 +6980,38 @@ export function isRecallDiagnosticNode(node) {
     return type === 'recall' || type.startsWith('recall_');
 }
 
+/**
+ * Build the route-stage candidate pool.
+ *
+ * The pool keeps every visible, selectable candidate and re-admits
+ * always-inject nodes that still have active children. Those nodes are
+ * injected at rollup granularity in the persistent projection; the route
+ * LLM must see them as drill seeds so it can pull the more specific
+ * descendants into the next pass. Always-inject nodes without children
+ * (threads, uncompressed leaves) stay out of the pool: they are already
+ * injected and have nothing to drill.
+ */
+export function buildRecallRouteCandidatePool(rootCandidates, alwaysInjectSet, store) {
+    const injectSet = alwaysInjectSet instanceof Set
+        ? alwaysInjectSet
+        : new Set(alwaysInjectSet || []);
+    const candidates = Array.isArray(rootCandidates) ? rootCandidates : [];
+    const picked = [];
+    const seen = new Set();
+    for (const node of candidates) {
+        const id = String(node?.id || '');
+        if (!id || seen.has(id)) {
+            continue;
+        }
+        if (injectSet.has(id) && getChildren(store, id).length === 0) {
+            continue;
+        }
+        seen.add(id);
+        picked.push(node);
+    }
+    return picked;
+}
+
 export function collectRootCandidates(store, settings, queryBundle = { fullText: '' }, alwaysInjectNodes = [], context = null, {
     latestSeqIndex = -1,
     excludeMessages = 0,
@@ -7041,7 +7075,11 @@ async function chooseRecallRoute(context, settings, recallState) {
             visibleNodeIds: candidateSet,
             edgeSummaryLimit: 8,
         });
-        if (brief) return brief;
+        // The read-api brief derives `always_inject` from the last recorded
+        // injection snapshot, which is stale until the pipeline settles for
+        // this run. Override with the live set the route prompt was built
+        // from so drillable always-inject rows stay marked correctly.
+        if (brief) return { ...brief, always_inject: alwaysInjectIds.includes(id) };
         // Fallback: node was dropped from the live store between candidate
         // collection and this point (archived / merged). Reconstruct the
         // legacy shape so the route LLM still sees a row for it.
@@ -8169,7 +8207,7 @@ async function runLLMDrivenRecall(context, store, payload) {
     const trace = [];
     const alwaysInjectIds = alwaysInjectNodes.map(node => String(node?.id || '')).filter(Boolean);
     const alwaysInjectSet = new Set(alwaysInjectIds);
-    const routeCandidates = rootCandidates.filter((node) => node?.id && !alwaysInjectSet.has(String(node.id)));
+    const routeCandidates = buildRecallRouteCandidatePool(rootCandidates, alwaysInjectSet, store);
 
     if (routeCandidates.length === 0) {
         trace.push({
@@ -8701,6 +8739,21 @@ async function collectRecallSelection(context, store, payload, settings, {
         const rerankProfile = useRerank ? getRerankProfileFromSettings(settings) : null;
         const { perTypeK, defaultPerTypeK } = buildRagPerTypeQuotas(context, settings);
 
+        // Nodes already covered by persistent injection or raw dialogue must
+        // not consume per-type quota slots. Build the exclusion set before
+        // retrieval so `runRagRecall` filters it out ahead of bucketing.
+        const alwaysInjectSet = new Set(alwaysInjectNodes.map(n => n?.id).filter(Boolean));
+        const latestSeqIndex = getLatestSeqIndex(store);
+        const excludeMessages = Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns));
+        const excludeNodeIds = new Set(alwaysInjectSet);
+        if (excludeMessages > 0) {
+            for (const node of Object.values(store.nodes || {})) {
+                if (isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages)) {
+                    excludeNodeIds.add(node.id);
+                }
+            }
+        }
+
         const ragResult = await runRagRecall(store, queryText, chatKey, settings, {
             maxResults: Number(settings.hybridMaxResults) || 15,
             vectorTopK: Number(settings.vectorTopK) || 20,
@@ -8709,6 +8762,7 @@ async function collectRecallSelection(context, store, payload, settings, {
             rewrittenQuery,
             perTypeK,
             defaultPerTypeK,
+            excludeNodeIds,
             signal: payload?.signal,
         });
         throwIfRecallRunInvalid(recallRunToken, payload?.signal, 'Memory recall aborted.');
@@ -8728,10 +8782,6 @@ async function collectRecallSelection(context, store, payload, settings, {
                 ];
             }
 
-            const alwaysInjectSet = new Set(alwaysInjectNodes.map(n => n?.id).filter(Boolean));
-            const latestSeqIndex = getLatestSeqIndex(store);
-            const excludeMessages = Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns));
-
             selectedNodes = ragResult.candidates
                 .map(c => store.nodes?.[c.nodeId])
                 .filter(node => node && !node.archived && !alwaysInjectSet.has(node.id))
@@ -8742,11 +8792,11 @@ async function collectRecallSelection(context, store, payload, settings, {
             // can grep `[memory_graph] rag_recall` in DevTools when injection ends
             // up empty or lopsided. All numbers are counts so the payload stays
             // small — actual candidate lists are already in `store.lastRecallTrace`.
-            // The three stages must add up for anyone reading the log to know
-            // WHERE candidates disappeared:
-            //   vector_hits   → returned by the embedding backend (post store-filter)
-            //   rag_candidates → after per-type bucketing + optional rerank + maxResults trim
-            //   selected      → after main-flow filters (alwaysInject exclusion + recent-turns window)
+            // Stage counts:
+            //   vector_hits              → returned by the embedding backend
+            //   vector.excludedBeforeBucketing → always-inject / recent-window hits removed before quotas
+            //   rag_candidates           → after per-type bucketing + optional rerank + maxResults trim
+            //   selected                 → after the post-retrieval safety-net filters (normally 0 dropped)
             try {
                 const candByType = ragResult.candidates.reduce((acc, c) => {
                     const t = c.nodeType || 'unknown';
@@ -8782,6 +8832,7 @@ async function collectRecallSelection(context, store, payload, settings, {
                     vector: {
                         topKRequested: Number(settings.vectorTopK) || 20,
                         hits: ragResult.meta?.vectorHits ?? 0,
+                        excludedBeforeBucketing: ragResult.meta?.excludedHits ?? 0,
                     },
                     rerank: {
                         enabled: useRerank,

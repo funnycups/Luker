@@ -63,6 +63,7 @@ export function hasRecallableNodes(store) {
 function createEmptyMeta() {
     return {
         vectorHits: 0,
+        excludedHits: 0,
         finalCount: 0,
         rerankApplied: false,
         rewriteApplied: false,
@@ -209,8 +210,13 @@ export async function runRagRecall(store, queryText, chatId, settings, options =
         rewrittenQuery = null,
         perTypeK = null,
         defaultPerTypeK = null,
+        excludeNodeIds = null,
         signal = null,
     } = options;
+
+    const excludeSet = excludeNodeIds instanceof Set
+        ? excludeNodeIds
+        : new Set(excludeNodeIds || []);
 
     const meta = createEmptyMeta();
     const timings = {};
@@ -267,10 +273,16 @@ export async function runRagRecall(store, queryText, chatId, settings, options =
     meta.vectorHits = vectorHits.length;
 
     // Filter out hits pointing at nodes not in the store (stale index rows).
+    // Also drop nodes the caller has already ruled out (always-inject set,
+    // recent raw-dialogue window) BEFORE per-type quotas slice each bucket.
+    // Filtering after the slice would let excluded nodes occupy quota slots
+    // and leave a type with zero selectable candidates even though lower-
+    // ranked selectable leaves exist.
     const scored = [];
     for (const hit of vectorHits) {
         const nodeId = String(hit.nodeId || '').trim();
         if (!nodeId || !store?.nodes?.[nodeId]) continue;
+        if (excludeSet.has(nodeId)) continue;
         scored.push({
             nodeId,
             nodeType: '', // filled in by bucketByType
@@ -279,6 +291,7 @@ export async function runRagRecall(store, queryText, chatId, settings, options =
             finalScore: Number(hit.score) || 0,
         });
     }
+    meta.excludedHits = vectorHits.length - scored.length;
 
     // If neither perTypeK nor defaultPerTypeK is provided, run the legacy
     // single-pool path: no bucketing, one rerank call (if enabled), trim to

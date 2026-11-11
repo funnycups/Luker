@@ -343,6 +343,25 @@ describe('runRagRecall — per-type bucketing', () => {
         expect(meta.perBucket.location_state.finalCount).toBe(2);
     });
 
+    test('excludeNodeIds filters before per-type quota, so lower-ranked selectable hits fill the bucket', async () => {
+        const { runRagRecall } = await retrieverModulePromise;
+        findSimilarNodesMock.mockResolvedValue([
+            { nodeId: 'e1', score: 0.99 },
+            { nodeId: 'e2', score: 0.98 },
+            { nodeId: 'e3', score: 0.97 },
+            { nodeId: 'e4', score: 0.96 },
+            { nodeId: 'e5', score: 0.95 },
+            { nodeId: 'e6', score: 0.94 },
+        ]);
+        const { candidates, meta } = await runRagRecall(makeMixedStore(), 'q', 'chat', {}, {
+            perTypeK: { event: 3 },
+            maxResults: 20,
+            excludeNodeIds: new Set(['e1', 'e2', 'e3']),
+        });
+        expect(candidates.map(c => c.nodeId)).toEqual(['e4', 'e5', 'e6']);
+        expect(meta.excludedHits).toBe(3);
+    });
+
     test('vectorTopK auto-lifts to at least sum(perTypeK) so all buckets can fill', async () => {
         const { runRagRecall } = await retrieverModulePromise;
         findSimilarNodesMock.mockResolvedValue([]);
