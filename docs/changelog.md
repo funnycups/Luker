@@ -2,7 +2,7 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
-## Unreleased
+## v2.9.0-rc.2 (2026-11-11)
 
 ### Connections & Models
 
@@ -39,6 +39,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Storage & Sync
 
 - Fixed extension updates failing when several updates run at the same time.
+
+**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.1...v2.9.0-rc.2
 
 ## v2.9.0-rc.1 (2026-11-09)
 
