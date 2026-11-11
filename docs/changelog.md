@@ -4,6 +4,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Image generation
+
+- Fixed AI Illustration settings labels being squeezed into vertical text.
+
 ### Fixes
 
 - Fixed Memory Graph LLM recall not drilling into always-inject event rollups.
