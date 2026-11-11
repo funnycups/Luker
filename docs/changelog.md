@@ -7,6 +7,15 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Connections & Models
 
 - Additional Parameters now applies to every chat completion source.
+- Fixed audio attachments for Gemini 4 models.
+
+### Image generation
+
+- Added AI Illustration, which generates illustrations for assistant messages automatically or on demand, with prompt presets and an image iteration studio.
+
+### Character Cards
+
+- Replacing a character card now renames the character and its chats to the new card name.
 
 ### Client Apps
 
@@ -26,6 +35,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed the iOS app showing the system background in the status bar and the bottom area instead of the interface theme.
 - Added the external link setting to the iOS app.
 - Fixed the iOS app showing a "No app can open this link" alert when a page loads an iframe.
+
+### Storage & Sync
+
+- Fixed extension updates failing when several updates run at the same time.
 
 ## v2.9.0-rc.1 (2026-11-09)
 
