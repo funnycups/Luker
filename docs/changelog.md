@@ -14,6 +14,11 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed the iOS, HarmonyOS and desktop apps not prompting for HTTP Basic authentication when the endpoint requires it.
 - Added a data directory setting that moves existing data and restarts the app when changed.
 
+### Android App
+
+- Fixed server plugin dependency installation failing on Android.
+- Fixed the Android app compiling frontend bundles at startup instead of using the bundles packaged in the APK.
+
 ### iOS App
 
 - Added a startup-failure report on the next launch.

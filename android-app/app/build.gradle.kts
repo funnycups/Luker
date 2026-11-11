@@ -202,6 +202,13 @@ android {
         }
     }
 
+    androidResources {
+        // AAPT's default ignore pattern contains "<dir>_*", which silently drops
+        // underscore-prefixed directories from APK assets. Node packages keep
+        // runtime modules in such directories, so requiring them fails on device.
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
