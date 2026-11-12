@@ -542,7 +542,23 @@ function canUseIosSystemBarsColorBridge() {
         && typeof window.LukerIOS.setSystemBarsColor === 'function';
 }
 
+function parseRgbaCssColor(cssColor) {
+    const match = String(cssColor || '').match(/^rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)(?:\s*,\s*([0-9.]+))?\s*\)$/i);
+    if (!match) {
+        return null;
+    }
+    return {
+        r: Number(match[1]),
+        g: Number(match[2]),
+        b: Number(match[3]),
+        a: match[4] === undefined ? 1 : Number(match[4]),
+    };
+}
+
 function resolveCssColorForNative(value) {
+    if (!document.body) {
+        return String(value || '');
+    }
     const probe = document.createElement('span');
     probe.style.color = value;
     probe.style.display = 'none';
@@ -552,16 +568,69 @@ function resolveCssColorForNative(value) {
     return resolved;
 }
 
+function sampleCompositeBarColor(selectors, fallbackCssColor) {
+    const layers = [];
+    for (const selector of selectors) {
+        const el = typeof selector === 'string' ? document.querySelector(selector) : selector;
+        if (!el) {
+            continue;
+        }
+        const cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden') {
+            continue;
+        }
+        const parsed = parseRgbaCssColor(cs.backgroundColor);
+        if (!parsed || parsed.a <= 0) {
+            continue;
+        }
+        layers.push(parsed);
+    }
+    if (layers.length === 0) {
+        if (!fallbackCssColor) {
+            return null;
+        }
+        const resolved = resolveCssColorForNative(fallbackCssColor);
+        const parsed = parseRgbaCssColor(resolved);
+        return parsed
+            ? `rgb(${Math.round(parsed.r)}, ${Math.round(parsed.g)}, ${Math.round(parsed.b)})`
+            : (resolved || null);
+    }
+    let acc = { r: layers[0].r, g: layers[0].g, b: layers[0].b };
+    for (let i = 1; i < layers.length; i++) {
+        const layer = layers[i];
+        const a = Math.min(1, Math.max(0, layer.a));
+        acc = {
+            r: layer.r * a + acc.r * (1 - a),
+            g: layer.g * a + acc.g * (1 - a),
+            b: layer.b * a + acc.b * (1 - a),
+        };
+    }
+    return `rgb(${Math.round(acc.r)}, ${Math.round(acc.g)}, ${Math.round(acc.b)})`;
+}
+
 function syncIosSystemBarsColor() {
     if (!canUseIosSystemBarsColorBridge()) {
         return;
     }
-    const statusBarColor = power_user.blur_tint_color;
-    if (!statusBarColor) {
+    const fallback = power_user.blur_tint_color;
+    const baseSelectors = [document.documentElement, document.body, '#bg1'];
+    const topVisible = ['#top-bar', '#top-settings-holder'].some((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        const cs = getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden';
+    });
+    const topSelectors = topVisible
+        ? [...baseSelectors, '#top-bar', '#top-settings-holder']
+        : [...baseSelectors, '#sheld', '#chat'];
+    const bottomSelectors = [...baseSelectors, '#sheld', '#form_sheld', '#send_form'];
+    const topColor = sampleCompositeBarColor(topSelectors, fallback);
+    const bottomColor = sampleCompositeBarColor(bottomSelectors, topColor || fallback) || topColor;
+    if (!topColor) {
         return;
     }
     try {
-        window.LukerIOS.setSystemBarsColor(resolveCssColorForNative(statusBarColor));
+        window.LukerIOS.setSystemBarsColor(topColor, bottomColor || topColor);
     } catch (error) {
         console.warn('Failed to sync iOS system bars color via bridge', error);
     }
@@ -2107,6 +2176,7 @@ function applyCustomCSS() {
         document.head.appendChild(style);
     }
     style.innerHTML = power_user.custom_css;
+    syncIosSystemBarsColor();
 }
 
 function applyBlurStrength() {
@@ -2445,7 +2515,6 @@ export function applyPowerUserSettings() {
     applyFontScale('forced');
     applyThemeColor();
     syncAndroidSystemBarsColor();
-    syncIosSystemBarsColor();
     syncExternalLinkPolicyUi();
     applyChatWidth('forced');
     applyAvatarStyle();

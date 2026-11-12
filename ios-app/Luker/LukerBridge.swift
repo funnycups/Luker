@@ -10,8 +10,7 @@ protocol LukerBridgePresenter: AnyObject {
     func exportDiagnosticsBundle()
     func reloadWebView()
     func applyEndpointChange()
-    func setWebViewFullBleed(_ enabled: Bool)
-    func applySystemBarsColor(_ color: UIColor)
+    func applySystemBarsColor(top: UIColor, bottom: UIColor)
 }
 
 /// Installs `window.LukerIOS` and the console capture hook into the WebView.
@@ -116,18 +115,23 @@ final class LukerBridge: NSObject {
             }
             reply(nil, nil)
 
-        case "setFullBleed":
-            let enabled = body["enabled"] as? Bool ?? false
-            presenter?.setWebViewFullBleed(enabled)
-            reply(nil, nil)
-
         case "setSystemBarsColor":
-            guard let rawColor = body["color"] as? String,
-                  let color = Self.color(fromCSS: rawColor) else {
+            guard let rawTop = (body["topColor"] as? String) ?? (body["color"] as? String),
+                  let topColor = Self.color(fromCSS: rawTop) else {
                 reply(nil, "invalid color")
                 return
             }
-            presenter?.applySystemBarsColor(color)
+            let bottomColor: UIColor
+            if let rawBottom = body["bottomColor"] as? String, !rawBottom.isEmpty {
+                guard let parsedBottom = Self.color(fromCSS: rawBottom) else {
+                    reply(nil, "invalid bottom color")
+                    return
+                }
+                bottomColor = parsedBottom
+            } else {
+                bottomColor = topColor
+            }
+            presenter?.applySystemBarsColor(top: topColor, bottom: bottomColor)
             reply(nil, nil)
 
         case "setOpenExternalLinksInBrowser":
@@ -213,11 +217,10 @@ final class LukerBridge: NSObject {
             setGenerationActive(active) {
                 post({ method: 'setGenerationActive', active: !!active });
             },
-            setFullBleed(enabled) {
-                post({ method: 'setFullBleed', enabled: !!enabled });
-            },
-            setSystemBarsColor(color) {
-                post({ method: 'setSystemBarsColor', color: String(color == null ? '' : color) });
+            setSystemBarsColor(topColor, bottomColor) {
+                const top = String(topColor == null ? '' : topColor);
+                const bottom = bottomColor == null ? top : String(bottomColor);
+                post({ method: 'setSystemBarsColor', topColor: top, bottomColor: bottom });
             },
             setOpenExternalLinksInBrowser(enabled) {
                 post({ method: 'setOpenExternalLinksInBrowser', enabled: !!enabled });

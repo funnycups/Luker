@@ -36,6 +36,11 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed app updates wiping installed server plugins and third-party extensions in the HarmonyOS app.
 - Added retry and diagnostics export actions to the startup failure screen in the HarmonyOS app.
 
+### iOS App
+
+- Fixed full-screen pages and custom themes overlapping the status bar and bottom area in the iOS app.
+- Synced the iOS status bar and bottom area separately to the rendered top and bottom bar colors.
+
 ## v2.9.0-rc.2 (2026-11-11)
 
 ### Connections & Models
