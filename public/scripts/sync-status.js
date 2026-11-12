@@ -23,8 +23,15 @@ const ENDPOINTS = {
 // opens for conflicts found by a background sync.
 const STATUS_POLL_MS = 30_000;
 const ACTIVE_STATUS_POLL_MS = 5000;
+// A network switch rejects the request in flight; retry once after a pause
+// so the read survives the switch instead of reporting a lost connection.
+const STATUS_RETRY_DELAY_MS = 1000;
+// Last authoritative answer to "does this account have sync backends", kept
+// across loads so a failed read can stay quiet for an account without sync.
+const CONFIGURED_STORAGE_KEY = 'syncConfigured';
 let pollTimer = null;
 let activityRunning = false;
+let syncConfigured = globalThis.localStorage?.getItem(CONFIGURED_STORAGE_KEY) === 'true';
 
 const TEXT_EXTENSIONS = ['.json', '.jsonl', '.txt', '.md', '.yaml', '.yml', '.css', '.js'];
 const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
@@ -215,16 +222,38 @@ export function invalidateSyncStatusReads() {
 
 function statusFailure() {
     console.error('[sync] status read failed');
+    // Without backends there is no sync state to be uncertain about.
+    if (!syncConfigured) return;
     document.dispatchEvent(new CustomEvent('sync-status-read-failed'));
     if (!statusReadFailed) toastr.error(t`Could not read sync status. Check the connection and retry.`, t`Sync`);
     statusReadFailed = true;
 }
 
-async function requestStatus() {
+async function fetchStatus() {
     const response = await fetch(ENDPOINTS.status, { headers: getRequestHeaders() });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const status = await response.json();
     if (!Array.isArray(status?.conflicts) || !Array.isArray(status?.notices) || ![status.backends, status.errors].every(value => value !== null && typeof value === 'object' && !Array.isArray(value))) throw new Error('Invalid sync status response');
+    return status;
+}
+
+async function requestStatus(version) {
+    let status;
+    try {
+        status = await fetchStatus();
+    } catch (error) {
+        // `fetch` rejects with a TypeError when the request never reached the
+        // server. An answer with an error status or an invalid body is final.
+        if (!(error instanceof TypeError) || version !== statusVersion) throw error;
+        await new Promise(resolve => setTimeout(resolve, STATUS_RETRY_DELAY_MS));
+        if (version !== statusVersion) return null;
+        status = await fetchStatus();
+    }
+    const configured = Object.keys(status.backends).length > 0;
+    if (configured !== syncConfigured) {
+        syncConfigured = configured;
+        globalThis.localStorage?.setItem(CONFIGURED_STORAGE_KEY, String(configured));
+    }
     return status;
 }
 
@@ -236,8 +265,8 @@ async function requestStatus() {
 export async function readStatus() {
     const version = ++statusVersion;
     try {
-        const status = await requestStatus();
-        if (version !== statusVersion) return null;
+        const status = await requestStatus(version);
+        if (!status || version !== statusVersion) return null;
         statusReadFailed = false;
         document.dispatchEvent(new CustomEvent('sync-status-updated', { detail: status }));
         return status;
@@ -255,8 +284,8 @@ export async function readStatus() {
 async function check({ showSeen = false } = {}) {
     const version = ++statusVersion;
     try {
-        const status = await requestStatus();
-        if (version !== statusVersion) return;
+        const status = await requestStatus(version);
+        if (!status || version !== statusVersion) return;
         statusReadFailed = false;
         document.dispatchEvent(new CustomEvent('sync-status-updated', { detail: status }));
         for (const backendId of Object.keys(status.errors ?? {})) {

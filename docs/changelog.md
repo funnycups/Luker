@@ -27,6 +27,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed character card field edits bypassing sync locking and account storage quotas.
 - Fixed reading SQL settings strings starting with quotes and extension keys containing control characters.
+- Fixed sync status checks failing immediately on an interrupted request or alerting accounts without configured sync backends.
 
 ### iOS App
 
