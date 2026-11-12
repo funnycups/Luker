@@ -241,6 +241,14 @@ describe('lens-shared ui primitives', () => {
         expect(bodyBackdrop.dataset.theme).toBe('light');
         const bodyPanel = bodyBackdrop.querySelector('.lw-dialog');
         expect(bodyPanel.hasAttribute('aria-label')).toBe(false);
+
+        const cssText = readFileSync(fileURLToPath(new URL('../../public/scripts/lens-shared/tokens.css', import.meta.url)), 'utf8');
+        const styleEl = document.createElement('style');
+        styleEl.textContent = cssText;
+        document.head.appendChild(styleEl);
+        expect(getComputedStyle(bodyBackdrop).position).toBe('fixed');
+        styleEl.remove();
+
         bodyBackdrop.querySelector('.lw-btn.is-primary').click();
         await expect(bodyPromise).resolves.toBe(true);
 

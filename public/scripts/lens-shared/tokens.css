@@ -315,7 +315,8 @@
     background: var(--lw-scrim);
     animation: lw-fade 140ms ease-out;
 }
-body > .lw-dialog-backdrop {
+body > .lw-dialog-backdrop,
+body > .lw-dialog-backdrop.lw-surface {
     position: fixed;
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog {
