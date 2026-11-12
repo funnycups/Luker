@@ -83,7 +83,7 @@ export const GATED_ROUTES = Object.freeze([
     route(/^\/api\/quick-replies\/(save|delete)$/i, ['quickreplies']),
     route(/^\/api\/moving-ui\/save$/i, ['movingUI']),
     route(/^\/api\/worldinfo\/(edit|patch|delete|import)$/i, ['worlds']),
-    route(/^\/api\/characters\/(create|rename|edit|edit-avatar|edit-attribute|merge-attributes|delete|import|duplicate|state\/set|state\/patch|state\/delete)$/i, ['characters', 'chats']),
+    route(/^\/api\/characters\/(create|rename|edit|patch|edit-avatar|edit-attribute|merge-attributes|delete|import|duplicate|state\/set|state\/patch|state\/delete)$/i, ['characters', 'chats']),
     route(/^\/api\/sprites\/(delete|upload-zip|upload)$/i, ['characters']),
     route(/^\/api\/card-app\/[^/]+\/.+$/i, ['card-apps']),
     route(/^\/api\/skills\/(pack-for-embed|extract-embed\/preview)$/i, ['skills'], { dirty: false }),

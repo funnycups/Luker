@@ -19,6 +19,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed Memory Graph LLM recall not drilling into always-inject event rollups.
 - Fixed Memory Graph RAG recall filtering always-inject nodes after the per-type quota.
 
+### Storage & Sync
+
+- Fixed character card field edits bypassing sync locking and account storage quotas.
+
 ### iOS App
 
 - Fixed the app failing to start when preparing the local service was interrupted.
