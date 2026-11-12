@@ -108,8 +108,10 @@ import {
     converter,
     sendTextareaMessage,
     buildObjectPatchOperationsAsync,
+    settingsReady,
 } from '../script.js';
 import {
+    extensionNames,
     extension_settings,
     getExtensionManifest,
     ModuleWorkerWrapper,
@@ -194,6 +196,7 @@ import { skillsApi } from './skills/api.js';
 import * as RUN_PANEL_API_NS from './run-panel/index.js';
 import { SECRET_KEYS, secret_state } from './secrets.js';
 import { EmbeddingService } from './embedding-service.js';
+import { accountsEnabled, currentUser } from './user.js';
 import * as LIB_BUNDLE from '../lib.js';
 
 /**
@@ -2910,6 +2913,10 @@ export function getContext() {
         textCompletion: {
             types: textgen_types,
         },
+        get accountsEnabled() { return Boolean(accountsEnabled); },
+        get currentUser() { return currentUser ? Object.freeze({ ...currentUser }) : null; },
+        get settingsReady() { return Boolean(settingsReady); },
+        listExtensionNames: () => Array.isArray(extensionNames) ? [...extensionNames] : [],
     };
 }
 

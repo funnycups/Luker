@@ -49,6 +49,7 @@ const LUKER_PLUGIN_DIRS = new Set([
 
 const LUKER_PLATFORM_DIRS = new Set([
     'iteration-library',
+    'lens-shared',
     'skills',
     'lib',
     'vendor',

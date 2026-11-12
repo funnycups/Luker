@@ -174,6 +174,7 @@ jest.unstable_mockModule('../../public/script.js', () => ({
     converter: { makeHtml: (s) => String(s ?? '') },
     sendTextareaMessage: () => Promise.resolve(),
     buildObjectPatchOperationsAsync: () => Promise.resolve([]),
+    settingsReady: false,
 }));
 
 jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
@@ -185,6 +186,7 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
         c.data.extensions[ns] = value;
     }),
     writeExtensionFieldBulk: async () => {},
+    extensionNames: [],
     extension_settings: {},
     getExtensionManifest: () => null,
     ModuleWorkerWrapper: class {},
@@ -439,6 +441,10 @@ jest.unstable_mockModule('../../public/scripts/secrets.js', () => ({
 }));
 jest.unstable_mockModule('../../public/scripts/embedding-service.js', () => ({
     EmbeddingService: class {},
+}));
+jest.unstable_mockModule('../../public/scripts/user.js', () => ({
+    accountsEnabled: false,
+    currentUser: null,
 }));
 
 const { getContext } = await import('../../public/scripts/st-context.js');

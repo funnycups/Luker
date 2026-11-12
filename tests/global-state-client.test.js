@@ -202,6 +202,7 @@ jest.unstable_mockModule('../public/script.js', () => ({
     resolveChatStateTarget: () => ({ is_group: false, avatar_url: 'a.png', file_name: 'chat' }),
     converter: { makeHtml: (s) => String(s ?? '') },
     sendTextareaMessage: () => Promise.resolve(),
+    settingsReady: false,
 }));
 
 const noop = () => undefined;
@@ -269,6 +270,8 @@ jest.unstable_mockModule('../public/scripts/templates.js', () => ({
 }));
 jest.unstable_mockModule('../public/scripts/user.js', () => ({
     isAdmin: () => true,
+    accountsEnabled: false,
+    currentUser: null,
 }));
 jest.unstable_mockModule('../public/scripts/group-chats.js', () => ({
     groups: [], openGroupChat: () => Promise.resolve(), selected_group: null, unshallowGroupMembers: () => Promise.resolve(),
