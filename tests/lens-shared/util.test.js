@@ -228,4 +228,29 @@ describe('lens-shared ui primitives', () => {
         cancelBtn.click();
         await expect(promiseFalse).resolves.toBe(false);
     });
+
+    test('confirmDialog mounted on document.body adds .lw-surface and skips redundant .lw-surface inside surface hosts', async () => {
+        const bodyPromise = confirmDialog({
+            title: '',
+            lines: ['Body mounted'],
+            theme: 'light',
+        });
+        const bodyBackdrop = document.body.querySelector(':scope > .lw-dialog-backdrop');
+        expect(bodyBackdrop).not.toBeNull();
+        expect(bodyBackdrop.classList.contains('lw-surface')).toBe(true);
+        expect(bodyBackdrop.dataset.theme).toBe('light');
+        const bodyPanel = bodyBackdrop.querySelector('.lw-dialog');
+        expect(bodyPanel.hasAttribute('aria-label')).toBe(false);
+        bodyBackdrop.querySelector('.lw-btn.is-primary').click();
+        await expect(bodyPromise).resolves.toBe(true);
+
+        const surfaceHost = h('div', { class: 'wbench' });
+        document.body.appendChild(surfaceHost);
+        const surfacePromise = confirmDialog(surfaceHost, { title: 'Inside surface' });
+        const innerBackdrop = surfaceHost.querySelector('.lw-dialog-backdrop');
+        expect(innerBackdrop.classList.contains('lw-surface')).toBe(false);
+        expect(innerBackdrop.querySelector('.lw-dialog').getAttribute('aria-label')).toBe('Inside surface');
+        innerBackdrop.querySelector('.lw-btn.is-ghost').click();
+        await expect(surfacePromise).resolves.toBe(false);
+    });
 });

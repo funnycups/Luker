@@ -232,6 +232,10 @@
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg.is-block { display: flex; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg.is-block .lw-seg-btn { flex: 1; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg.is-scroll { max-width: 100%; overflow-x: auto; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock).is-compact .lw-seg-compact .lw-seg-btn[aria-pressed="false"] .lw-seg-label { display: none; }
+@media (max-width: 720px) {
+    :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg-compact .lw-seg-btn[aria-pressed="false"] .lw-seg-label { display: none; }
+}
 
 /* ---- Check row ---- */
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-check {
@@ -303,7 +307,8 @@
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-empty-title { color: var(--lw-text); font-size: 14px; font-weight: 600; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-empty-hint { color: var(--lw-muted); font-size: 12.5px; }
 
-:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog-backdrop {
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog-backdrop,
+.lw-dialog-backdrop.lw-surface {
     position: absolute; inset: 0; z-index: 30;
     display: flex; justify-content: center; align-items: flex-start;
     padding: min(14vh, 120px) 16px 16px;

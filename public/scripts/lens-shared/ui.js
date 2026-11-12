@@ -239,9 +239,16 @@ export function confirmDialog(hostOrOptions, maybeOptions) {
         okLabel = '',
         cancelLabel = '',
         danger = false,
+        theme = '',
         onOk = null,
         onCancel = null,
     } = options;
+
+    const surfaceSelector = '.lw-surface, .wbench, .mlens, .olens, .rpdock';
+    const hasSurfaceAncestor = host instanceof Element && Boolean(host.closest(surfaceSelector));
+    const resolvedTheme = !hasSurfaceAncestor
+        ? (theme || document.documentElement?.dataset?.theme || '')
+        : '';
 
     const textLines = [message, ...(Array.isArray(lines) ? lines : [])]
         .map(line => String(line ?? '').trim())
@@ -280,7 +287,7 @@ export function confirmDialog(hostOrOptions, maybeOptions) {
             class: 'lw-dialog',
             role: 'alertdialog',
             'aria-modal': 'true',
-            'aria-label': title,
+            'aria-label': title || null,
             tabIndex: -1,
         },
         h('header', { class: 'lw-dialog-head' }, h('h3', { class: 'lw-dialog-title', text: title })),
@@ -289,7 +296,8 @@ export function confirmDialog(hostOrOptions, maybeOptions) {
         h('footer', { class: 'lw-dialog-foot' }, cancelBtn, confirmBtn));
 
         const backdrop = h('div', {
-            class: 'lw-dialog-backdrop',
+            class: hasSurfaceAncestor ? 'lw-dialog-backdrop' : 'lw-dialog-backdrop lw-surface',
+            dataset: resolvedTheme ? { theme: resolvedTheme } : null,
             onMousedown: (event) => { if (event.target === backdrop) close(false); },
             onKeydown: (event) => {
                 event.stopPropagation();
