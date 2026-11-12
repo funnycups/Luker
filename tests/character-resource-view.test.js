@@ -49,13 +49,15 @@ describe('character resource source views', () => {
     });
 
     test('reconstructs legacy runtime objects from a lossless projection', () => {
-        const raw = '{"spec":"chara_card_v2","data":{"name":"A","description":"d","extensions":{"keep":{"x":1}}}}';
+        const raw = '{"spec":"chara_card_v2","data":{"name":"A","description":"d","tags":["navigation","coastal"],"extensions":{"keep":{"x":1}}}}';
+        const data = JSON.parse(raw).data;
         const legacy = {
             avatar: 'A.png',
             spec: 'chara_card_v2',
-            data: { name: 'A', description: 'd', extensions: { keep: { x: 1 } } },
+            data,
             name: 'A',
             description: 'd',
+            tags: data.tags,
             json_data: raw,
             date_added: 123,
             create_date: '2026-01-01T00:00:00.000Z',

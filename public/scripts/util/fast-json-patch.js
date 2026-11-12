@@ -7,44 +7,20 @@ function cloneJsonValue(value) {
         try {
             return structuredClone(value);
         } catch {
-            // Fallback below.
+            // Normalize non-cloneable values as JSON below.
         }
     }
 
-    const seen = new WeakSet();
-    const serialized = JSON.stringify(value, (_, nextValue) => {
-        if (typeof nextValue === 'function' || typeof nextValue === 'symbol') {
-            return undefined;
-        }
-        if (typeof nextValue === 'bigint') {
-            return String(nextValue);
-        }
-        if (nextValue && typeof nextValue === 'object') {
-            if (seen.has(nextValue)) {
-                return undefined;
-            }
-            seen.add(nextValue);
-        }
-        return nextValue;
-    });
-
-    return serialized === undefined ? undefined : JSON.parse(serialized);
+    return cloneComparableJsonValue(value);
 }
 
 function cloneComparableJsonValue(value) {
-    const seen = new WeakSet();
     const serialized = JSON.stringify(value, (_, nextValue) => {
         if (typeof nextValue === 'function' || typeof nextValue === 'symbol') {
             return undefined;
         }
         if (typeof nextValue === 'bigint') {
             return String(nextValue);
-        }
-        if (nextValue && typeof nextValue === 'object') {
-            if (seen.has(nextValue)) {
-                return undefined;
-            }
-            seen.add(nextValue);
         }
         return nextValue;
     });

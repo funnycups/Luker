@@ -8,6 +8,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed AI Illustration settings labels being squeezed into vertical text.
 
+### Character Cards
+
+- Fixed character card replacement failing when importing tags.
+
 ### Fixes
 
 - Fixed Memory Graph LLM recall not drilling into always-inject event rollups.
