@@ -3,9 +3,12 @@ import _ from 'lodash';
 import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError, UnsafePatchPathError } from '../errors.js';
 
 export function applyJsonPatch(doc, ops) {
-    const result = _.cloneDeep(doc);
+    let result = _.cloneDeep(doc);
     for (const op of ops) {
-        const segs = op.path.split('/').slice(1).map(decode);
+        if (typeof op?.path !== 'string' || (op.path !== '' && !op.path.startsWith('/'))) {
+            throw new UnsafePatchPathError(op?.path);
+        }
+        const segs = op.path === '' ? [] : op.path.split('/').slice(1).map(decode);
         assertSafePath(result, segs, op.path);
         if (op.op === 'test') {
             if (!_.isEqual(getAt(result, segs), op.value)) {
@@ -13,9 +16,29 @@ export function applyJsonPatch(doc, ops) {
             }
             continue;
         }
-        if (op.op === 'replace') { setAt(result, segs, op.value, op.path); continue; }
-        if (op.op === 'add')     { addAt(result, segs, op.value); continue; }
-        if (op.op === 'remove')  { removeAt(result, segs, op.path); continue; }
+        if (op.op === 'replace') {
+            if (segs.length === 0) {
+                result = _.cloneDeep(op.value);
+            } else {
+                setAt(result, segs, op.value, op.path);
+            }
+            continue;
+        }
+        if (op.op === 'add') {
+            if (segs.length === 0) {
+                result = _.cloneDeep(op.value);
+            } else {
+                addAt(result, segs, op.value);
+            }
+            continue;
+        }
+        if (op.op === 'remove') {
+            if (segs.length === 0) {
+                throw new UnsupportedPatchOpError(op.op);
+            }
+            removeAt(result, segs, op.path);
+            continue;
+        }
         throw new UnsupportedPatchOpError(op.op);
     }
     return result;

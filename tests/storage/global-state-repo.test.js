@@ -148,6 +148,66 @@ describe.each(ENGINES)('NamedDocRepo globalStates on $name', ({ make }) => {
         expect(await repo.get(h.handle, 'globalStates', 'trimmed_ns')).toEqual({ rev: 2 });
     });
 
+    test('patch supports root pointer replace/add/test and rejects root remove or non-object result without mutating existing doc', async () => {
+        const initial = { existing: 1, nested: { keep: true } };
+        await repo.save(h.handle, 'globalStates', 'root-ops', initial);
+
+        // Root test mismatch -> PatchTestFailedError, doc intact
+        await expect(repo.patch(h.handle, 'globalStates', 'root-ops', [
+            { op: 'test', path: '', value: { existing: 999 } },
+            { op: 'replace', path: '', value: { whole: 'doc' } },
+        ])).rejects.toBeInstanceOf(PatchTestFailedError);
+        expect(await repo.get(h.handle, 'globalStates', 'root-ops')).toEqual(initial);
+
+        // Root remove -> UnsupportedPatchOpError, doc intact
+        await expect(repo.patch(h.handle, 'globalStates', 'root-ops', [
+            { op: 'remove', path: '' },
+        ])).rejects.toBeInstanceOf(UnsupportedPatchOpError);
+        expect(await repo.get(h.handle, 'globalStates', 'root-ops')).toEqual(initial);
+
+        // Root replace with non-object -> InvalidArgumentError, doc intact
+        for (const badValue of [[1, 2, 3], null, 'scalar', 42]) {
+            await expect(repo.patch(h.handle, 'globalStates', 'root-ops', [
+                { op: 'replace', path: '', value: badValue },
+            ])).rejects.toBeInstanceOf(InvalidArgumentError);
+            expect(await repo.get(h.handle, 'globalStates', 'root-ops')).toEqual(initial);
+        }
+
+        // Root test match + replace -> replaces whole doc
+        const replaced = await repo.patch(h.handle, 'globalStates', 'root-ops', [
+            { op: 'test', path: '', value: initial },
+            { op: 'replace', path: '', value: { whole: 'doc' } },
+        ]);
+        expect(replaced).toEqual({
+            applied: 2,
+            created: false,
+            state: { whole: 'doc' },
+        });
+        expect(await repo.get(h.handle, 'globalStates', 'root-ops')).toEqual({ whole: 'doc' });
+
+        // Root add -> replaces whole doc
+        const added = await repo.patch(h.handle, 'globalStates', 'root-ops', [
+            { op: 'add', path: '', value: { replacedByAdd: true } },
+        ]);
+        expect(added).toEqual({
+            applied: 1,
+            created: false,
+            state: { replacedByAdd: true },
+        });
+        expect(await repo.get(h.handle, 'globalStates', 'root-ops')).toEqual({ replacedByAdd: true });
+    });
+
+    test('patch rejects empty operations array cleanly without opening a transaction', async () => {
+        const txSpy = jest.spyOn(h.engine, 'withTransaction');
+        try {
+            await expect(repo.patch(h.handle, 'globalStates', 'empty-ops', []))
+                .rejects.toBeInstanceOf(InvalidArgumentError);
+            expect(txSpy).not.toHaveBeenCalled();
+        } finally {
+            txSpy.mockRestore();
+        }
+    });
+
     test('assertWritable rejects save, patch, and delete when read-only mode is active', async () => {
         await repo.save(h.handle, 'globalStates', 'locked', { v: 1 });
         setReadOnly(true);

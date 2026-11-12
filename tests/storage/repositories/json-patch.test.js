@@ -119,4 +119,45 @@ describe('applyJsonPatch', () => {
             expect(err.op).toBe('move');
         }
     });
+
+    test('root pointer replace and add replace the whole document with a deep clone', () => {
+        const nextReplace = { whole: { nested: 1 } };
+        const replaced = applyJsonPatch({ a: 1 }, [{ op: 'replace', path: '', value: nextReplace }]);
+        expect(replaced).toEqual({ whole: { nested: 1 } });
+        nextReplace.whole.nested = 99;
+        expect(replaced).toEqual({ whole: { nested: 1 } });
+
+        const added = applyJsonPatch({ a: 1 }, [
+            { op: 'add', path: '', value: { fresh: true } },
+            { op: 'add', path: '/extra', value: 2 },
+        ]);
+        expect(added).toEqual({ fresh: true, extra: 2 });
+    });
+
+    test('root pointer test verifies the whole document', () => {
+        expect(applyJsonPatch({ a: 1, b: 2 }, [
+            { op: 'test', path: '', value: { a: 1, b: 2 } },
+            { op: 'replace', path: '/a', value: 3 },
+        ])).toEqual({ a: 3, b: 2 });
+
+        expect(() => applyJsonPatch({ a: 1 }, [
+            { op: 'test', path: '', value: { a: 2 } },
+        ])).toThrow(PatchTestFailedError);
+    });
+
+    test('root pointer remove throws UnsupportedPatchOpError', () => {
+        let caught;
+        try {
+            applyJsonPatch({ a: 1 }, [{ op: 'remove', path: '' }]);
+        } catch (err) {
+            caught = err;
+        }
+        expect(caught).toBeInstanceOf(UnsupportedPatchOpError);
+        expect(caught.op).toBe('remove');
+    });
+
+    test('non-empty path without leading slash throws UnsupportedPatchOpError', () => {
+        expect(() => applyJsonPatch({ a: 1 }, [{ op: 'replace', path: 'a', value: 2 }]))
+            .toThrow(UnsupportedPatchOpError);
+    });
 });

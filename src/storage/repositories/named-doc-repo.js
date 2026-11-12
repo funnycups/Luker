@@ -74,13 +74,13 @@ export class NamedDocRepo {
 
     async patch(handle, bucket, name, operations) {
         assertWritable();
-        if (!Array.isArray(operations)) {
-            throw new InvalidArgumentError('NamedDocRepo.patch: operations must be an array');
+        if (!Array.isArray(operations) || operations.length === 0) {
+            throw new InvalidArgumentError('NamedDocRepo.patch: operations must be a non-empty array');
         }
         for (const op of operations) {
             if (!op || typeof op !== 'object' || Array.isArray(op)
-                || typeof op.path !== 'string' || !op.path.startsWith('/')) {
-                throw new InvalidArgumentError('NamedDocRepo.patch: each operation must be an object with a JSON Pointer path starting with "/"');
+                || typeof op.path !== 'string' || (op.path !== '' && !op.path.startsWith('/'))) {
+                throw new InvalidArgumentError('NamedDocRepo.patch: each operation must be an object with a JSON Pointer path ("" or starting with "/")');
             }
         }
         const canonicalName = assertSafeRepoNameShape(name, { field: 'named-doc.name' });
@@ -89,6 +89,9 @@ export class NamedDocRepo {
             const existing = await tx.getResource(key);
             const seed = (existing && typeof existing === 'object' && !Array.isArray(existing)) ? existing : {};
             const next = applyJsonPatch(seed, operations);
+            if (next === null || typeof next !== 'object' || Array.isArray(next)) {
+                throw new InvalidArgumentError('NamedDocRepo.patch: resulting document must be a plain object');
+            }
             await tx.putResource(key, { doc: next });
             return {
                 applied: operations.length,
