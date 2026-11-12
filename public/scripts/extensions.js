@@ -2546,6 +2546,34 @@ export async function deleteCharacterState(avatar, namespace) {
 }
 
 /**
+ * Validate and normalize a global state namespace on the client.
+ * Mirrors server-side `normalizeGlobalStateNamespace` rules for unsafe paths
+ * and control characters so invalid callers fail fast with VALIDATION_ARGS.
+ * @param {*} namespace
+ * @returns {string} Trimmed namespace, or empty string if invalid.
+ */
+function normalizeGlobalStateNamespaceClient(namespace) {
+    if (typeof namespace !== 'string') {
+        return '';
+    }
+    const trimmed = namespace.trim();
+    if (!trimmed) {
+        return '';
+    }
+    if (
+        trimmed.includes('/')
+        || trimmed.includes('\\')
+        || trimmed.includes('..')
+        || trimmed.includes('\0')
+        || trimmed.startsWith('.')
+        || /[\x00-\x1f\x7f]/.test(trimmed)
+    ) {
+        return '';
+    }
+    return trimmed;
+}
+
+/**
  * Read per-user global state for a given namespace.
  * Data is stored in the user's globalStates repository bucket,
  * separate from settings.json.
@@ -2554,17 +2582,17 @@ export async function deleteCharacterState(avatar, namespace) {
  *          Envelope: `{ok: true, state}` on hit or empty miss; `{ok: false, state: null, reason, hint}` on failure.
  */
 export async function getGlobalState(namespace) {
-    const safeNamespace = typeof namespace === 'string' ? namespace.trim() : '';
+    const safeNamespace = normalizeGlobalStateNamespaceClient(namespace);
     if (!safeNamespace) {
         return { ok: false, state: null,
             reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
-            hint: formatValidationArgsHint('namespace', 'is required') };
+            hint: formatValidationArgsHint('namespace', 'is required and must be a valid identifier') };
     }
     try {
         const payload = await readStateEnvelope('/api/state/get', {
             namespace: safeNamespace,
         });
-        const state = payload && typeof payload === 'object' ? payload.data : null;
+        const state = payload && typeof payload === 'object' ? (payload.data ?? null) : null;
         return { ok: true, state };
     } catch (error) {
         if (error?.status) {
@@ -2586,10 +2614,10 @@ export async function getGlobalState(namespace) {
  *          Envelope: `{ok: true, state}` on success; `{ok: false, reason, hint}` on failure.
  */
 export async function setGlobalState(namespace, data) {
-    const safeNamespace = typeof namespace === 'string' ? namespace.trim() : '';
+    const safeNamespace = normalizeGlobalStateNamespaceClient(namespace);
     if (!safeNamespace) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
-            formatValidationArgsHint('namespace', 'is required'));
+            formatValidationArgsHint('namespace', 'is required and must be a valid identifier'));
     }
     let response;
     try {
@@ -2629,10 +2657,10 @@ export async function setGlobalState(namespace, data) {
  * @returns {Promise<{ok: boolean, applied?: number, created?: boolean, reason?: string, hint?: string}>}
  */
 export async function patchGlobalState(namespace, operations) {
-    const safeNamespace = typeof namespace === 'string' ? namespace.trim() : '';
+    const safeNamespace = normalizeGlobalStateNamespaceClient(namespace);
     if (!safeNamespace) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
-            formatValidationArgsHint('namespace', 'is required'));
+            formatValidationArgsHint('namespace', 'is required and must be a valid identifier'));
     }
     if (!Array.isArray(operations) || operations.length === 0) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
@@ -2678,13 +2706,23 @@ export async function patchGlobalState(namespace, operations) {
  * @returns {Promise<{ok: boolean, results: Map<string, {ok: boolean, state: object|null, reason?: string, hint?: string}>, reason?: string, hint?: string}>}
  */
 export async function getGlobalStateBatch(namespaces) {
-    const cleaned = Array.from(new Set(
-        (Array.isArray(namespaces) ? namespaces : [])
-            .map(n => (typeof n === 'string' ? n.trim() : ''))
-            .filter(Boolean),
-    ));
-    if (cleaned.length === 0) {
+    const rawList = Array.isArray(namespaces) ? namespaces : [];
+    if (rawList.length === 0) {
         return { ok: true, results: new Map() };
+    }
+    const seen = new Set();
+    const cleaned = [];
+    for (const entry of rawList) {
+        const safeNamespace = normalizeGlobalStateNamespaceClient(entry);
+        if (!safeNamespace) {
+            return { ok: false, results: new Map(),
+                reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+                hint: formatValidationArgsHint('namespaces', 'contains an invalid namespace') };
+        }
+        if (!seen.has(safeNamespace)) {
+            seen.add(safeNamespace);
+            cleaned.push(safeNamespace);
+        }
     }
 
     try {
@@ -2695,7 +2733,7 @@ export async function getGlobalStateBatch(namespaces) {
         const results = new Map();
         for (let index = 0; index < cleaned.length; index += 1) {
             const payload = payloads[index];
-            const state = payload && typeof payload === 'object' ? payload.data : null;
+            const state = payload && typeof payload === 'object' ? (payload.data ?? null) : null;
             results.set(cleaned[index], { ok: true, state });
         }
         return { ok: true, results };
@@ -2737,7 +2775,7 @@ export async function getGlobalStateBatch(namespaces) {
  * @returns {Promise<{ok: boolean, state?: object|null, updated?: boolean, created?: boolean, reason?: string, hint?: string}>}
  */
 export async function updateGlobalState(namespace, updater, options = {}) {
-    const safeNamespace = typeof namespace === 'string' ? namespace.trim() : '';
+    const safeNamespace = normalizeGlobalStateNamespaceClient(namespace);
     if (!safeNamespace || typeof updater !== 'function') {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
             formatValidationArgsHint(!safeNamespace ? 'namespace' : 'updater',
@@ -2809,10 +2847,10 @@ export async function updateGlobalState(namespace, updater, options = {}) {
  * @returns {Promise<{ok: boolean, reason?: string, hint?: string}>}
  */
 export async function deleteGlobalState(namespace) {
-    const safeNamespace = typeof namespace === 'string' ? namespace.trim() : '';
+    const safeNamespace = normalizeGlobalStateNamespaceClient(namespace);
     if (!safeNamespace) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
-            formatValidationArgsHint('namespace', 'is required'));
+            formatValidationArgsHint('namespace', 'is required and must be a valid identifier'));
     }
     let response;
     try {

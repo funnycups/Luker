@@ -2,13 +2,54 @@
 // Copyright (C) 2026 FunnyCups
 
 import { jest } from '@jest/globals';
-import { compare as compareJsonPatch } from '../public/scripts/util/fast-json-patch.js';
+import { applyPatch as applyJsonPatch, compare as compareJsonPatch } from '../public/scripts/util/fast-json-patch.js';
 import { cloneAsJsonWire } from '../public/scripts/util/json-clone.js';
 import { STATE_ERROR_REASONS } from '../public/scripts/state-errors.js';
 import { resetResourceReads } from '../public/scripts/resource-read.js';
 
 function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function getJsonPointerValue(root, path) {
+    if (path === '') return { found: true, value: root };
+    if (typeof path !== 'string' || !path.startsWith('/')) return { found: false, value: undefined };
+    const segments = path.slice(1).split('/').map(s => s.replace(/~1/g, '/').replace(/~0/g, '~'));
+    let cursor = root;
+    for (const segment of segments) {
+        if (!cursor || typeof cursor !== 'object' || !(segment in cursor)) {
+            return { found: false, value: undefined };
+        }
+        cursor = cursor[segment];
+    }
+    return { found: true, value: cursor };
+}
+
+function attachObjectPatchTests(previousState, operations) {
+    let workingState = cloneAsJsonWire(previousState);
+    let lastTestedPath = null;
+    const guarded = [];
+    for (const op of operations) {
+        const opName = String(op.op || '').trim().toLowerCase();
+        const path = typeof op.path === 'string' ? op.path : null;
+        if ((opName === 'replace' || opName === 'remove') && path && path !== lastTestedPath) {
+            const resolved = getJsonPointerValue(workingState, path);
+            if (resolved.found) {
+                guarded.push({ op: 'test', path, value: cloneAsJsonWire(resolved.value) });
+                lastTestedPath = path;
+            }
+        }
+        guarded.push(op);
+        try {
+            workingState = applyJsonPatch(workingState, [op], true, false)?.newDocument;
+        } catch {
+            // Keep operation list intact.
+        }
+        if (opName === 'add' || opName === 'remove') {
+            lastTestedPath = null;
+        }
+    }
+    return guarded;
 }
 
 function buildObjectPatchOperations(previousState, nextState, options = {}) {
@@ -22,7 +63,7 @@ function buildObjectPatchOperations(previousState, nextState, options = {}) {
     if (operations.length > maxOperations) {
         return [{ op: 'replace', path: '', value: cloneAsJsonWire(next) }];
     }
-    return operations;
+    return attachObjectPatchTests(previous, operations);
 }
 
 async function buildObjectPatchOperationsAsync(previousState, nextState, options = {}) {
@@ -488,11 +529,28 @@ describe('global state client helpers', () => {
         true,
         {},
         [],
-    ])('rejects empty/non-string namespace %p with VALIDATION_ARGS without issuing fetch', async (badNs) => {
+        '../x',
+        '../secret',
+        '.hidden',
+        'a/b',
+        'a\\b',
+        'foo..bar',
+        'x\0y',
+        'bad\nns',
+        'bad\x7fns',
+    ])('rejects invalid namespace %p with VALIDATION_ARGS without issuing fetch', async (badNs) => {
         const getRes = await getGlobalState(badNs);
         expect(getRes).toEqual({
             ok: false,
             state: null,
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+            hint: expect.any(String),
+        });
+
+        const batchRes = await getGlobalStateBatch(['valid_ns', badNs]);
+        expect(batchRes).toEqual({
+            ok: false,
+            results: new Map(),
             reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
             hint: expect.any(String),
         });
@@ -542,7 +600,11 @@ describe('global state client helpers', () => {
             reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
         });
         expect(await getGlobalStateBatch([])).toEqual({ ok: true, results: new Map() });
-        expect(await getGlobalStateBatch(['', '  ', 123])).toEqual({ ok: true, results: new Map() });
+        expect(await getGlobalStateBatch(['', '  ', 123])).toMatchObject({
+            ok: false,
+            results: new Map(),
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+        });
         expect(fetchMock).not.toHaveBeenCalled();
     });
 
@@ -601,7 +663,7 @@ describe('global state client helpers', () => {
             throw new Error(`Unexpected URL: ${url}`);
         });
 
-        const res = await getGlobalStateBatch(['Alpha', 'Missing', '  Alpha  ', '', 42]);
+        const res = await getGlobalStateBatch(['Alpha', 'Missing', '  Alpha  ']);
         expect(res.ok).toBe(true);
         expect(res.results).toBeInstanceOf(Map);
         expect(Array.from(res.results.entries())).toEqual([
@@ -740,7 +802,12 @@ describe('global state client helpers', () => {
             { current: { count: 5, untouched: true }, meta: { attempt: 1, namespace: 'CounterNs' } },
         ]);
         expect(patchBodies).toHaveLength(2);
+        expect(patchBodies[0].operations).toEqual([
+            { op: 'test', path: '/count', value: 1 },
+            { op: 'replace', path: '/count', value: 2 },
+        ]);
         expect(patchBodies[1].operations).toEqual([
+            { op: 'test', path: '/count', value: 5 },
             { op: 'replace', path: '/count', value: 6 },
         ]);
 
