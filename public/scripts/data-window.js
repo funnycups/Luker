@@ -32,7 +32,7 @@ export const dataHelp = () => ({
     unlock: [t`After a server restart, enter the passphrase again to keep reading and writing this bucket.`],
     lanEdit: [t`Only changes the name and sync content on this device's side.`],
     conflicts: [t`When two devices edit the same file and it cannot be merged, it waits here for you to pick a version.`, t`Choosing anything other than "Current version" overwrites changes made after the conflict; the overwritten version stays in sync history.`],
-    backup: [t`Packs the selected data into a ZIP and downloads it.`, t`API keys are not included by default. Backup, restore and migrate share the same content selection.`],
+    backup: [t`Packs the selected data into a ZIP and downloads it.`, t`API keys are included by default, so keep the file safe. Backup, restore and migrate share the same content selection.`],
     restore: [t`Incremental: writes the files in the backup, replacing files at the same path and leaving everything else alone.`, t`Replace: clears the selected content first, then writes the backup.`, t`Stages after the upload cannot be cancelled.`, t`If the backup comes from a different type of database, you will be asked for a temporary database connection to relay through.`],
     migrate: [t`Moves data to another device in one go. For long-term use across several devices, use "Sync".`],
     migrateOut: [t`The link expires quickly and works only once.`],
@@ -76,17 +76,50 @@ function dbUrlHost(url) {
 }
 
 // Survives closing and reopening the window, like the old per-backend action lock.
-const shared = { pending: new Set(), jobsByHandle: new Map(), backupSel: null };
+// Jobs, their listeners and the backup selection are kept per user handle.
+const shared = { pending: new Set(), jobsByHandle: new Map(), jobListeners: new Map(), selByHandle: new Map() };
 
 function getSharedJobs(key) {
     if (!shared.jobsByHandle.has(key)) {
         shared.jobsByHandle.set(key, {
-            backup: { running: false, stage: null, percent: 0, done: null },
+            backup: { running: false, stage: null, percent: 0, done: null, error: null },
             restore: { file: null, mode: 'merge', needsDb: null, db: { host: '', port: '', user: '', pass: '', name: '' }, running: false, stage: -1, percent: 0, note: '', done: null, error: null, interrupted: null },
-            migrate: { link: null, addresses: [], addr: '', expiresAt: 0, inLink: '', mode: 'merge', running: false, stage: -1, percent: 0, done: null, error: null, busy: false },
+            migrate: { link: null, addresses: [], addr: '', expiresAt: 0, inLink: '', mode: 'merge', running: false, stage: -1, percent: 0, done: null, error: null, busy: false, linkError: null, linkCats: null, linkSeq: 0 },
         });
     }
     return shared.jobsByHandle.get(key);
+}
+
+/**
+ * Whether this user has a job or an unfinished draft (a chosen restore file, a pasted migration link,
+ * a migration link being generated) that was set up with the current selection, so reopening must
+ * not change it. A generated link no longer depends on it: the server fixed its content.
+ */
+function jobHoldsSelection({ backup, restore, migrate }) {
+    return backup.running || restore.running || !!restore.file || !!restore.interrupted || !!restore.needsDb
+        || migrate.running || migrate.busy || !!migrate.inLink.trim();
+}
+
+/** Forgets a generated migration link; a generation still in flight will not bring it back. */
+function dropMigrationLink(migrate) {
+    Object.assign(migrate, { link: null, linkCats: null, linkSeq: migrate.linkSeq + 1 });
+}
+
+/**
+ * Listens for progress of this user's jobs; the window that started a job may already be closed.
+ * @param {string} key User handle
+ * @param {(job: string, final: boolean, info: { error?: string, success?: boolean }) => void} fn Listener
+ * @returns {() => void} Unsubscribes
+ */
+function onJobChange(key, fn) {
+    if (!shared.jobListeners.has(key)) shared.jobListeners.set(key, new Set());
+    const set = shared.jobListeners.get(key);
+    set.add(fn);
+    return () => set.delete(fn);
+}
+
+function notifyJob(key, job, final = false, info = {}) {
+    for (const fn of shared.jobListeners.get(key) || []) fn(job, final, info);
 }
 
 /**
@@ -114,17 +147,31 @@ export class DataPages extends LukerWindow {
         this.failedKeys = new Set();
         this.noticeBusy = new Set();
         const s = this.p.snapshot();
-        shared.backupSel ??= new Set(s.backupCategories.filter(c => c.def && (c.id !== 'secrets' || s.caps.allowSecrets)).map(c => c.id));
-        this.backupSel = shared.backupSel;
-        const jobsKey = this.handle || s.handle || '';
-        this.f = { device: { label: s.device.label }, schedule: { ...s.schedule }, ...getSharedJobs(jobsKey) };
+        this.jobsKey = this.handle || s.handle || '';
+        const jobs = getSharedJobs(this.jobsKey);
+        // A fresh window starts from the defaults unless a job or draft still depends on the selection.
+        // The mode resets with it, so a fresh window never pairs "Replace" with a selection the user did not make.
+        if (!shared.selByHandle.has(this.jobsKey) || !jobHoldsSelection(jobs)) {
+            shared.selByHandle.set(this.jobsKey, new Set(s.backupCategories.filter(c => c.def).map(c => c.id)));
+            jobs.restore.mode = 'merge';
+            jobs.migrate.mode = 'merge';
+        }
+        if (jobs.migrate.link && jobs.migrate.expiresAt <= Date.now()) dropMigrationLink(jobs.migrate);
+        this.backupSel = shared.selByHandle.get(this.jobsKey);
+        this.f = { device: { label: s.device.label }, schedule: { ...s.schedule }, ...jobs };
+        this.settingsKey = JSON.stringify([s.device, s.schedule]);
+        // Settings fields the user has edited since the last save; the others follow the server.
+        this.settingsDirty = new Set();
+        this.settingsStale = false;
 
         this.root.addEventListener('input', e => this.onInput(e));
+        this.root.addEventListener('focusout', e => this.onFocusOut(e));
         this.root.addEventListener('change', e => this.onChange(e));
         this.root.addEventListener('dragover', e => this.onDrag(e, true));
         this.root.addEventListener('dragleave', e => this.onDrag(e, false));
         this.root.addEventListener('drop', e => this.onDrop(e));
         this.unsubscribe = this.p.subscribe(() => this.refreshLive());
+        this.offJob = onJobChange(this.jobsKey, (job, final, info) => this.onJobChange(job, final, info));
         this.ticker = setInterval(() => this.tick(), 1000);
         this.finishTimer = null;
         this.conflictTrees = new Map();
@@ -186,6 +233,7 @@ export class DataPages extends LukerWindow {
 
     destroy() {
         this.unsubscribe?.();
+        this.offJob?.();
         clearInterval(this.ticker);
         clearTimeout(this.finishTimer);
         this.finishTimer = null;
@@ -268,21 +316,70 @@ export class DataPages extends LukerWindow {
 
     tick() {
         this.renderStatus();
-        if (this.f.migrate.link && this.top.view === 'migrateOut') {
+        const m = this.f.migrate;
+        if (m.link && m.expiresAt <= Date.now()) {
+            // An expired link cannot be copied any more; go back to choosing what to migrate.
+            dropMigrationLink(m);
+            if (this.top.view === 'migrateOut') this.rerender();
+        } else if (m.link && this.top.view === 'migrateOut') {
             const el = this.root.querySelector('[data-region="expire"]');
             if (el) el.innerHTML = this.expireText();
         }
         if (Date.now() % 15000 < 1000) this.refreshRegion('cards');
     }
 
+    /**
+     * Whichever window is open when a job reports progress or ends shows it: it redraws the job's page
+     * (and the other job pages when one ends), shows the error, and after a success on the job's own
+     * page schedules the reload or close, even if a since-closed window started the job.
+     */
+    onJobChange(job, final, { error, success } = {}) {
+        const view = this.top.view;
+        const own = { backup: 'backup', restore: 'restore', migrate: 'migrateIn', migrateLink: 'migrateOut' }[job];
+        if (view === own || (final && ['backup', 'restore', 'migrateOut', 'migrateIn'].includes(view))) this.rerender();
+        this.renderStatus();
+        if (error && view !== own) this.toast(error, true);
+        // Reload or close only while the user is looking at the finished job; on any other page
+        // that would throw away what they are doing, so the result waits on the job's page.
+        if (success && view === own) {
+            const done = job === 'restore' ? 'restore' : 'migrate';
+            clearTimeout(this.finishTimer);
+            this.finishTimer = setTimeout(() => {
+                this.finishTimer = null;
+                // The user may have moved on during the delay; then the result waits on the job's page.
+                if (this.top.view === own && this.f[done].done) this.finish();
+            }, 3000);
+        }
+    }
+
+    /** Settings is a form that was not rebuilt while focused; catch it up once focus leaves it. */
+    onFocusOut(e) {
+        if (!this.settingsStale || this.top.view !== 'settings') return;
+        const body = this.root.querySelector('.dw-body');
+        if (body?.contains(e.relatedTarget)) return;
+        this.settingsStale = false;
+        this.rerender();
+    }
+
     refreshLive() {
         const v = this.top.view;
-        // Settings load after the window opens; fill the form until the user edits it.
-        if (!this.settingsTouched) {
-            const s = this.snap;
-            this.f.device = { label: s.device.label };
-            this.f.schedule = { ...s.schedule };
-            if (v === 'settings') this.rerender();
+        // Settings load after the window opens. Fields the user has not edited follow the server;
+        // the form is not rebuilt while focus is inside it, but catches up when focus leaves.
+        const s = this.snap;
+        const settingsKey = JSON.stringify([s.device, s.schedule]);
+        if (settingsKey !== this.settingsKey) {
+            this.settingsKey = settingsKey;
+            const dirty = this.settingsDirty;
+            if (!dirty.has('device.label')) this.f.device = { label: s.device.label };
+            this.f.schedule = {
+                idle: dirty.has('schedule.idle') ? this.f.schedule.idle : s.schedule.idle,
+                poll: dirty.has('schedule.poll') ? this.f.schedule.poll : s.schedule.poll,
+            };
+            if (v === 'settings') {
+                const focused = this.root.querySelector('.dw-body')?.contains(document.activeElement);
+                if (focused) this.settingsStale = true;
+                else this.rerender();
+            }
         }
         if (v === 'list') {
             this.refreshRegion('top');
@@ -329,10 +426,9 @@ export class DataPages extends LukerWindow {
     }
 
     backupCats(title = t`Content`) {
-        const { backupCategories, isAdmin, caps } = this.snap;
+        const { backupCategories, isAdmin } = this.snap;
         const cats = backupCategories.filter(c => !c.adminOnly || isAdmin);
         const n = cats.filter(c => this.backupSel.has(c.id)).length;
-        const off = c => c.id === 'secrets' && !caps.allowSecrets;
         return `<section class="dw-sec">
             <div class="dw-sec-title">${title}<span class="dw-count">${n} / ${cats.length}</span><span class="dw-sp"></span>
                 <button class="dw-link" data-act="bsel" data-mode="all">${t`Select all`}</button>
@@ -340,10 +436,10 @@ export class DataPages extends LukerWindow {
                 <button class="dw-link" data-act="bsel" data-mode="none">${t`Clear`}</button>
             </div>
             <div class="dw-cats"><div class="dw-chips">${cats.map(c => `
-                <button class="dw-chip${this.backupSel.has(c.id) ? ' on' : ''}${c.sensitive || c.adminOnly ? ' opt' : ''}" data-act="bcat" data-id="${c.id}" ${off(c) ? `disabled title="${t`The server does not allow exporting API keys`}"` : ''}>${c.sensitive ? ic('lock') : ''}${esc(c.label)}</button>`).join('')}
+                <button class="dw-chip${this.backupSel.has(c.id) ? ' on' : ''}${c.sensitive || c.adminOnly ? ' opt' : ''}" data-act="bcat" data-id="${c.id}">${c.sensitive ? ic('lock') : ''}${esc(c.label)}</button>`).join('')}
             </div></div>
         </section>
-        ${this.backupSel.has('secrets') && caps.allowSecrets ? `<div class="dw-banner warning">${ic('key')}<span>${t`API keys will be included. Keep the file safe.`}</span></div>` : ''}`;
+        ${this.backupSel.has('secrets') ? `<div class="dw-banner warning">${ic('key')}<span>${t`API keys will be included. Keep the file safe.`}</span></div>` : ''}`;
     }
 
     catSet(key) {
@@ -663,6 +759,8 @@ export class DataPages extends LukerWindow {
                 <div class="dw-progress-line">${ic('sync', 'dw-spin')}<span>${b.stage === 'pack' ? t`Packing…` : t`Downloading…`}</span><span class="dw-sp"></span><span>${b.stage === 'download' ? `${b.percent}%` : b.loaded ? size(b.loaded) : ''}</span></div>
                 ${b.stage === 'download' ? `<div class="dw-stages"><div class="dw-stage now" style="--p:${b.percent}%"></div></div>` : '<div class="dw-bar"></div>'}
             </div>`;
+        } else if (b.error) {
+            status = `<div class="dw-banner error">${ic('x')}<span>${esc(b.error)}</span></div>`;
         } else if (b.done) {
             status = `<div class="dw-banner">${ic('check')}<span>${t`Downloaded ${esc(b.done.fileName)} (${size(b.done.size)})`}</span></div>`;
         }
@@ -765,6 +863,8 @@ export class DataPages extends LukerWindow {
             return `
                 <div class="dw-step"><i>${ic('check')}</i>${t`Migration link generated`}</div>
                 <div class="dw-step"><i>2</i>${t`Paste it into "Migrate into this device" on the new device`}</div>
+                ${m.linkError ? `<div class="dw-banner error">${ic('x')}<span>${esc(m.linkError)}</span></div>` : ''}
+                ${m.linkCats?.includes('secrets') ? `<div class="dw-banner warning">${ic('key')}<span>${t`API keys will be included. Keep the file safe.`}</span></div>` : ''}
                 ${m.addresses.length > 1 ? `
                     <label class="dw-field"><span>${t`Address the new device uses to reach this one`}</span>
                         <select class="dw-inp" data-act-change="migrate-addr">${m.addresses.map(a => `<option value="${esc(a)}" ${a === m.addr ? 'selected' : ''}>${esc(a)}${isLoopback(a) ? t`(this device only)` : ''}</option>`).join('')}</select>
@@ -777,10 +877,11 @@ export class DataPages extends LukerWindow {
                     <button class="dw-btn icon" data-act="migrate-link" title="${t`Generate a new link`}">${ic('sync')}</button>
                 </div>
                 <span class="dw-expire" data-region="expire">${this.expireText()}</span>
-                ${this.foot(`<button class="dw-btn big" data-act="back">${t`Done`}</button>`)}`;
+                ${this.foot(`<button class="dw-btn big" data-act="migrate-done">${t`Done`}</button>`)}`;
         }
         return `
             ${this.backupCats(t`Content to migrate`)}
+            ${m.linkError ? `<div class="dw-banner error">${ic('x')}<span>${esc(m.linkError)}</span></div>` : ''}
             ${this.foot(`<button class="dw-btn primary big${m.busy ? ' busy' : ''}" data-act="migrate-link" ${this.backupSel.size ? this.lockAttr(false) : 'disabled'}>${m.busy ? ic('sync', 'dw-spin') : ic('link')}${t`Generate migration link`}</button>`)}`;
     }
 
@@ -804,7 +905,16 @@ export class DataPages extends LukerWindow {
     onInput(e) {
         const el = e.target;
         if (el.dataset.model) this.setModel(el.dataset.model, el.value);
-        if (/^(device|schedule)\./.test(el.dataset.model || '')) this.settingsTouched = true;
+        if (/^(device|schedule)\./.test(el.dataset.model || '')) this.settingsDirty.add(el.dataset.model);
+        // A new link after a finished migration starts over; bring back the start button and keep typing.
+        if (el.dataset.model === 'migrate.inLink' && this.f.migrate.done && !this.f.migrate.running && el.value.trim()) {
+            this.f.migrate.done = null;
+            const caret = el.selectionStart;
+            this.rerender();
+            const input = this.root.querySelector('[data-model="migrate.inLink"]');
+            input?.focus();
+            input?.setSelectionRange(caret, caret);
+        }
         if (el.dataset.actInput === 'parse-link') {
             const parsed = this.p.parsePairLink(el.value);
             if (!parsed) return;
@@ -905,14 +1015,12 @@ export class DataPages extends LukerWindow {
             case 'cat':
             case 'cat-group': return this.toggleCat(el);
             case 'bcat':
-                if (el.disabled) return;
                 this.backupSel.has(id) ? this.backupSel.delete(id) : this.backupSel.add(id);
                 return this.rerender();
             case 'bsel': {
                 const cats = this.snap.backupCategories.filter(c => !c.adminOnly || this.snap.isAdmin);
                 const mode = el.dataset.mode;
-                const allowed = cats.filter(c => c.id !== 'secrets' || this.snap.caps.allowSecrets);
-                const ids = mode === 'all' ? allowed.map(c => c.id) : mode === 'def' ? allowed.filter(c => c.def).map(c => c.id) : [];
+                const ids = mode === 'all' ? cats.map(c => c.id) : mode === 'def' ? cats.filter(c => c.def).map(c => c.id) : [];
                 this.backupSel.clear();
                 ids.forEach(x => this.backupSel.add(x));
                 return this.rerender();
@@ -957,6 +1065,9 @@ export class DataPages extends LukerWindow {
                 return this.rerender();
             case 'restore-go': return this.restoreGo();
             case 'migrate-link': return this.migrateLink();
+            case 'migrate-done':
+                dropMigrationLink(this.f.migrate);
+                return this.pop();
             case 'migrate-go': return this.migrateGo();
             case 'reload': return this.finish();
         }
@@ -1058,18 +1169,55 @@ export class DataPages extends LukerWindow {
         await this.backendAction(id, () => this.p.remove(id), pendingPair ? t`Pairing cancelled` : t`Removed`);
     }
 
+    /**
+     * Saves only the settings the user edited. Untouched fields keep following the server, and text
+     * typed while the request is out stays (and stays marked as edited) instead of being overwritten.
+     */
     async saveLocal(btn) {
-        const idle = Number(this.f.schedule.idle);
-        const poll = Number(this.f.schedule.poll);
-        if (!(idle > 0) || !(poll > 0)) {
+        const dirty = this.settingsDirty;
+        // What this save sends is fixed at the click; edits made while it is out stay for the next save.
+        const sending = new Set(dirty);
+        const sent = { label: this.f.device.label, idle: this.f.schedule.idle, poll: this.f.schedule.poll };
+        const scheduleDirty = sending.has('schedule.idle') || sending.has('schedule.poll');
+        if (scheduleDirty && (!(Number(sent.idle) > 0) || !(Number(sent.poll) > 0))) {
             this.toast(t`Enter a number greater than 0 for the times`, true);
+            return;
+        }
+        if (!sending.size) {
+            this.toast(t`Saved`);
             return;
         }
         btn.classList.add('busy');
         try {
-            this.f.device.label = await this.p.saveDevice(this.f.device.label.trim());
-            this.f.schedule = { ...await this.p.saveSchedule(idle, poll) };
-            this.rerender();
+            if (sending.has('device.label')) {
+                const label = await this.p.saveDevice(sent.label.trim());
+                if (this.f.device.label === sent.label) {
+                    this.f.device.label = label;
+                    dirty.delete('device.label');
+                }
+            }
+            if (scheduleDirty) {
+                // The server takes both values at once. Read the one this save did not edit only now,
+                // so a change from elsewhere that has reached this device meanwhile is not written back.
+                const pick = key => Number(sending.has(`schedule.${key}`) ? sent[key] : this.snap.schedule[key]);
+                const saved = await this.p.saveSchedule(pick('idle'), pick('poll'));
+                for (const key of ['idle', 'poll']) {
+                    const field = `schedule.${key}`;
+                    // Keep a value typed after the click (and its edited mark) for the next save.
+                    const editedSince = dirty.has(field) && (!sending.has(field) || this.f.schedule[key] !== sent[key]);
+                    if (!editedSince) {
+                        this.f.schedule[key] = saved[key];
+                        dirty.delete(field);
+                    }
+                }
+            }
+            this.settingsKey = JSON.stringify([this.snap.device, this.snap.schedule]);
+            this.settingsStale = false;
+            if (this.root.querySelector('.dw-body')?.contains(document.activeElement) && document.activeElement !== btn) {
+                this.settingsStale = true;
+            } else {
+                this.rerender();
+            }
             this.toast(t`Saved`);
         } catch (err) {
             this.toast(err.code === 'INVALID_DEVICE_LABEL' ? t`Enter a valid device name` : err.message, true);
@@ -1260,18 +1408,19 @@ export class DataPages extends LukerWindow {
 
     async backupGo() {
         const b = this.f.backup;
-        Object.assign(b, { running: true, done: null, stage: 'pack', percent: 0 });
+        Object.assign(b, { running: true, done: null, error: null, stage: 'pack', percent: 0 });
         this.rerender();
+        let error;
         try {
             b.done = await this.p.downloadBackup([...this.backupSel], p => {
                 Object.assign(b, p);
-                if (this.top.view === 'backup') this.rerender();
+                notifyJob(this.jobsKey, 'backup');
             });
         } catch (err) {
-            this.toast(err.message, true);
+            error = b.error = err.message;
         } finally {
             b.running = false;
-            if (this.top.view === 'backup') this.rerender();
+            notifyJob(this.jobsKey, 'backup', true, { error });
         }
     }
 
@@ -1296,22 +1445,15 @@ export class DataPages extends LukerWindow {
         const initialPercent = resume ? r.interrupted?.percent || 0 : 0;
         Object.assign(r, { running: true, stage: 0, percent: initialPercent, note: '', error: null, done: null, interrupted: null });
         this.rerender();
+        let success = false;
         try {
             r.done = await this.p.restoreBackup({ file: r.file, mode: r.mode, categories: [...this.backupSel], tempDb: r.needsDb ? r.db : null, handle: this.handle }, p => {
                 Object.assign(r, p);
                 if (p.stage > 0) r.uploaded = true;
-                if (this.top.view === 'restore') this.rerender();
+                notifyJob(this.jobsKey, 'restore');
             });
             Object.assign(r, { file: null, needsDb: null, uploaded: false });
-            // A job keeps running after its window closes; do not schedule a
-            // page reload or a close for a window that is already gone.
-            if (this.root.isConnected && !r.done.skipped && !r.done.rejected && !r.done.failed && !r.done.empty) {
-                clearTimeout(this.finishTimer);
-                this.finishTimer = setTimeout(() => {
-                    this.finishTimer = null;
-                    if (this.f.restore.done) this.finish();
-                }, 3000);
-            }
+            success = !r.done.skipped && !r.done.rejected && !r.done.failed && !r.done.empty;
         } catch (err) {
             if (err.code === 'needs-temp-db') {
                 r.needsDb = { kind: err.kind, source: err.source, target: err.target };
@@ -1322,7 +1464,8 @@ export class DataPages extends LukerWindow {
             }
         } finally {
             r.running = false;
-            if (this.top.view === 'restore') this.rerender();
+            // The window open at the end (maybe not this one) schedules the reload or close.
+            notifyJob(this.jobsKey, 'restore', true, { success });
         }
     }
 
@@ -1339,16 +1482,24 @@ export class DataPages extends LukerWindow {
 
     async migrateLink() {
         const m = this.f.migrate;
+        // "Generate a new link" keeps the content of the link it replaces: the selection on screen
+        // may have been reset since, and the link page does not show it.
+        const cats = m.link && m.linkCats ? [...m.linkCats] : [...this.backupSel];
+        const seq = m.linkSeq;
         m.busy = true;
+        m.linkError = null;
         this.rerender();
+        let error;
         try {
-            const res = await this.p.createMigrationLink([...this.backupSel], this.handle);
-            Object.assign(m, { link: res.link, addresses: res.addresses, addr: firstReachable(res.addresses), expiresAt: res.expiresAt });
+            const res = await this.p.createMigrationLink(cats, this.handle);
+            if (m.linkSeq === seq) {
+                Object.assign(m, { link: res.link, linkCats: cats, addresses: res.addresses, addr: firstReachable(res.addresses), expiresAt: res.expiresAt });
+            }
         } catch (err) {
-            this.toast(err.message, true);
+            error = m.linkError = err.message;
         } finally {
             m.busy = false;
-            this.rerender();
+            notifyJob(this.jobsKey, 'migrateLink', true, { error });
         }
     }
 
@@ -1364,24 +1515,19 @@ export class DataPages extends LukerWindow {
         if (!ok) return;
         Object.assign(m, { running: true, stage: 0, percent: 0, error: null, done: null });
         this.rerender();
+        let success = false;
         try {
             m.done = await this.p.migrateFromLink({ link: m.inLink, mode: m.mode, categories: [...this.backupSel], handle: this.handle }, p => {
                 Object.assign(m, p);
-                if (this.top.view === 'migrateIn') this.rerender();
+                notifyJob(this.jobsKey, 'migrate');
             });
             m.inLink = '';
-            if (this.root.isConnected && !m.done.skipped && !m.done.rejected && !m.done.failed && !m.done.empty) {
-                clearTimeout(this.finishTimer);
-                this.finishTimer = setTimeout(() => {
-                    this.finishTimer = null;
-                    if (this.f.migrate.done) this.finish();
-                }, 3000);
-            }
+            success = !m.done.skipped && !m.done.rejected && !m.done.failed && !m.done.empty;
         } catch (err) {
             m.error = err.message;
         } finally {
             m.running = false;
-            if (this.top.view === 'migrateIn') this.rerender();
+            notifyJob(this.jobsKey, 'migrate', true, { success });
         }
     }
 }

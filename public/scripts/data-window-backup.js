@@ -2,7 +2,6 @@
 
 import { getRequestHeaders } from '../script.js';
 import { t } from './i18n.js';
-import { canViewSecrets } from './secrets.js';
 import { uploadFileInChunks, finalizeRestoreUpload, abortRestoreUpload, RestoreUploadError } from './luker-chunked-upload.js';
 import {
     BACKUP_CATEGORY_KEYS,
@@ -196,7 +195,7 @@ export function createBackupSource(state, emit, options = {}) {
         state.handle = getCurrentUserHandle();
     };
     refreshIdentity();
-    state.caps = { allowFullBackup: true, allowSecrets: true, ...state.caps };
+    state.caps = { allowFullBackup: true, ...state.caps };
     state.backupCategories = buildCategories();
 
     const resolveHandle = handle => handle || options.handle || state.handle || getCurrentUserHandle();
@@ -285,10 +284,8 @@ export function createBackupSource(state, emit, options = {}) {
     );
 
     return {
-        async start() {
+        start() {
             refreshIdentity();
-            const allowSecrets = await canViewSecrets();
-            state.caps = { ...state.caps, allowSecrets: allowSecrets !== false };
             emit();
         },
 

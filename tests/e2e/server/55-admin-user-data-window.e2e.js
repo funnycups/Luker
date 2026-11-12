@@ -9,7 +9,12 @@
 //
 // Also checks that a ZIP picked in one user's restore form does not leak
 // into another user's window, while reopening the first user's window
-// keeps its own form state.
+// keeps its own form state: the file, the mode and the content selection
+// together. A draft with no file starts over from the defaults (mode and
+// selection both), and the reopened draft, restored without touching it,
+// requests exactly the narrowed selection. A migration link regenerated
+// after reopening keeps the content of the link it replaces. API keys are
+// an ordinary, selectable category.
 
 import { test, expect } from '@playwright/test';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -62,6 +67,18 @@ test.afterAll(async () => {
     rmSync(tempDir, { recursive: true, force: true });
 });
 
+const chip = (page, id) => accountWindow(page).locator(`[data-act="bcat"][data-id="${id}"]`);
+const modeButton = (page, mode) => accountWindow(page).locator(`[data-act="mode"][data-set="restore"][data-mode="${mode}"]`);
+
+/** Narrow the restore draft to "Replace" with only extensions selected. */
+async function narrowRestoreDraft(page) {
+    await modeButton(page, 'replace').click();
+    await accountWindow(page).locator('[data-act="bsel"][data-mode="none"]').click();
+    await chip(page, 'extensions').click();
+    await expect(chip(page, 'extensions')).toHaveClass(/\bon\b/);
+    await expect(chip(page, 'chats')).not.toHaveClass(/\bon\b/);
+}
+
 /** Open one user's data window from the user management list. */
 async function openUserData(page, handle) {
     await openAdminUser(page, handle);
@@ -98,22 +115,89 @@ test('admin acts on another user\'s data and comes back to user management', asy
     ]);
     await download.saveAs(backupZip);
 
-    // Pick the ZIP in alice's restore form, then leave the window.
+    // Pick the ZIP in alice's restore form, narrow it to "Replace" with
+    // only extensions, then leave the window.
     await openAccountTab(page, 'restore');
+    await expect(chip(page, 'secrets')).toBeEnabled();
+    await expect(chip(page, 'secrets')).toHaveClass(/\bon\b/);
     await accountWindow(page).locator('input[data-role="file"]').setInputFiles(backupZip);
     await accountWindow(page).locator('.dw-file').waitFor({ state: 'visible', timeout: 15_000 });
+    await narrowRestoreDraft(page);
     await closeUserData(page);
 
-    // The picked file belongs to alice, not to bob.
+    // The picked file and selection belong to alice, not to bob.
     await openUserData(page, 'bob');
     await openAccountTab(page, 'restore');
     await expect(accountWindow(page).locator('.dw-file')).toHaveCount(0);
+    await expect(chip(page, 'chats')).toHaveClass(/\bon\b/);
+    await expect(modeButton(page, 'merge')).toHaveClass(/\bon\b/);
+
+    // A draft without a file does not survive closing: "Replace" and the
+    // narrowed selection both go back to the defaults together.
+    await narrowRestoreDraft(page);
+    await closeUserData(page);
+    await openUserData(page, 'bob');
+    await openAccountTab(page, 'restore');
+    await expect(modeButton(page, 'merge')).toHaveClass(/\bon\b/);
+    await expect(chip(page, 'chats')).toHaveClass(/\bon\b/);
+    await expect(chip(page, 'secrets')).toHaveClass(/\bon\b/);
+
+    // A migration link made for extensions only, regenerated after reopening
+    // (when the selection on screen is back to the defaults), still offers
+    // extensions only.
+    const offerSelections = [];
+    await page.route('**/api/users/lan-migration/offer', route => {
+        offerSelections.push(route.request().postDataJSON().selection);
+        return route.continue();
+    });
+    const openMigrateOut = async () => {
+        await openAccountTab(page, 'migrate');
+        await accountWindow(page).locator('[data-act="push"][data-view="migrateOut"]').click();
+        await expect(pageHead(page)).toHaveAttribute('data-view', 'migrateOut');
+    };
+    await openMigrateOut();
+    await accountWindow(page).locator('[data-act="bsel"][data-mode="none"]').click();
+    await chip(page, 'extensions').click();
+    await accountWindow(page).locator('[data-act="migrate-link"]').click();
+    await accountWindow(page).locator('.dw-linkbox').waitFor({ state: 'visible', timeout: 15_000 });
+    await closeUserData(page);
+    await openUserData(page, 'bob');
+    await expect(chip(page, 'chats')).toHaveClass(/\bon\b/);
+    await openMigrateOut();
+    await accountWindow(page).locator('.dw-linkbox [data-act="migrate-link"]').click();
+    await expect.poll(() => offerSelections.length, { timeout: 15_000 }).toBe(2);
+    await page.unroute('**/api/users/lan-migration/offer');
+    for (const selection of offerSelections) {
+        expect(Object.keys(selection).filter(key => selection[key])).toEqual(['extensions']);
+    }
+    await accountWindow(page).locator('[data-act="migrate-done"]').click();
     await closeUserData(page);
 
-    // Reopening alice keeps her own form state.
+    // Reopening alice keeps her own form state: file, mode and selection.
     await openUserData(page, 'alice');
     await openAccountTab(page, 'restore');
     await expect(accountWindow(page).locator('.dw-file')).toBeVisible();
+    await expect(modeButton(page, 'replace')).toHaveClass(/\bon\b/);
+    await expect(chip(page, 'extensions')).toHaveClass(/\bon\b/);
+    await expect(chip(page, 'chats')).not.toHaveClass(/\bon\b/);
+    await expect(chip(page, 'secrets')).not.toHaveClass(/\bon\b/);
+
+    // Restoring the reopened draft as it is, without reselecting anything,
+    // asks to replace extensions only. The request is stopped before the
+    // server acts on it.
+    let draftRequest;
+    await page.route('**/api/users/restore-backup', route => {
+        draftRequest = route.request().postDataJSON();
+        return route.abort();
+    });
+    await accountWindow(page).locator('[data-act="restore-go"]').click();
+    await answerWindowConfirm(page);
+    await expect.poll(() => draftRequest, { timeout: 90_000 }).toBeTruthy();
+    await page.unroute('**/api/users/restore-backup');
+    expect(draftRequest.mode).toBe('overwrite');
+    expect(Object.keys(draftRequest.selection).filter(key => draftRequest.selection[key])).toEqual(['extensions']);
+    await expect(accountWindow(page).locator('[data-act="restore-go"]')).toBeEnabled({ timeout: 30_000 });
+    await modeButton(page, 'merge').click();
 
     // Restore only a category alice has no files for: the window reports
     // that nothing was restored and waits for Done instead of reloading.
@@ -133,7 +217,12 @@ test('admin acts on another user\'s data and comes back to user management', asy
     await accountWindow(page).locator('input[data-role="file"]').setInputFiles(extensionsZipPath);
     await accountWindow(page).locator('.dw-file').waitFor({ state: 'visible', timeout: 15_000 });
     await accountWindow(page).locator('[data-act="restore-go"]').click();
+    const restoreRequest = page.waitForRequest(req => req.url().endsWith('/api/users/restore-backup') && req.method() === 'POST', { timeout: 90_000 });
     await answerWindowConfirm(page);
+
+    // The request restores exactly what the window shows as selected.
+    const { selection } = (await restoreRequest).postDataJSON();
+    expect(Object.keys(selection).filter(key => selection[key])).toEqual(['extensions']);
 
     const banner = accountWindow(page).locator('.dw-banner.warning');
     await banner.waitFor({ state: 'visible', timeout: 90_000 });
