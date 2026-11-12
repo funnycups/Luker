@@ -15,7 +15,10 @@ function stateResourceUrl(path, params, account) {
         query.set(key, String(value));
     }
     if (namespace !== undefined) {
-        query.set('namespace', normalizeStateNamespace(namespace));
+        const normalized = path === '/api/state/get'
+            ? String(namespace || '').trim()
+            : normalizeStateNamespace(namespace);
+        query.set('namespace', normalized);
     }
     return `${path}?${query}`;
 }

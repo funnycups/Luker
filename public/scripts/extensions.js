@@ -2546,6 +2546,296 @@ export async function deleteCharacterState(avatar, namespace) {
 }
 
 /**
+ * Read per-user global state for a given namespace.
+ * Data is stored in the user's globalStates repository bucket,
+ * separate from settings.json.
+ * @param {string} namespace - Storage namespace (e.g. 'my_extension')
+ * @returns {Promise<{ok: boolean, state: object|null, reason?: string, hint?: string}>}
+ *          Envelope: `{ok: true, state}` on hit or empty miss; `{ok: false, state: null, reason, hint}` on failure.
+ */
+export async function getGlobalState(namespace) {
+    const safeNamespace = typeof namespace === 'string' ? namespace.trim() : '';
+    if (!safeNamespace) {
+        return { ok: false, state: null,
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+            hint: formatValidationArgsHint('namespace', 'is required') };
+    }
+    try {
+        const payload = await readStateEnvelope('/api/state/get', {
+            namespace: safeNamespace,
+        });
+        const state = payload && typeof payload === 'object' ? payload.data : null;
+        return { ok: true, state };
+    } catch (error) {
+        if (error?.status) {
+            return { ok: false, state: null,
+                reason: STATE_ERROR_REASONS.HTTP_ERROR,
+                hint: formatHttpErrorHint(error.status, '', error.message) };
+        }
+        return { ok: false, state: null,
+            reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            hint: formatTransportErrorHint(error?.message || error) };
+    }
+}
+
+/**
+ * Write per-user global state for a given namespace.
+ * @param {string} namespace - Storage namespace (e.g. 'my_extension')
+ * @param {object} data - Plain object data to store
+ * @returns {Promise<{ok: boolean, state?: object, reason?: string, hint?: string}>}
+ *          Envelope: `{ok: true, state}` on success; `{ok: false, reason, hint}` on failure.
+ */
+export async function setGlobalState(namespace, data) {
+    const safeNamespace = typeof namespace === 'string' ? namespace.trim() : '';
+    if (!safeNamespace) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint('namespace', 'is required'));
+    }
+    let response;
+    try {
+        response = await fetch('/api/state/set', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ namespace: safeNamespace, data }),
+            cache: 'no-cache',
+        });
+        if (response.ok) {
+            await invalidateStateResources('/api/state/get', {}, [safeNamespace]);
+        }
+    } catch (error) {
+        return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error));
+    }
+    if (response.ok) return makeStateOk({ state: data });
+    const bodyText = await response.text().catch(() => '');
+    return makeStateError(STATE_ERROR_REASONS.HTTP_ERROR,
+        formatHttpErrorHint(response.status, response.statusText, bodyText));
+}
+
+/**
+ * Apply RFC 6902 JSON Patch operations to a per-user global state entry.
+ * The server reads the current state, applies the operations, and writes
+ * the result back atomically. Returns an envelope; on success `applied` is
+ * the count of ops applied and `created` is true when the state did not
+ * previously exist (seeded from `{}`).
+ *
+ * Returns `{ok: false, reason: CONFLICT}` when the server returns 409
+ * (patch test/missing-parent failures — treat as "another writer changed
+ * the state; retry"). Returns `{ok: false, reason: HTTP_ERROR}` for other
+ * non-2xx responses (e.g. 400 on malformed operations).
+ *
+ * @param {string} namespace - Storage namespace
+ * @param {Array<object>} operations - RFC 6902 patch operations
+ * @returns {Promise<{ok: boolean, applied?: number, created?: boolean, reason?: string, hint?: string}>}
+ */
+export async function patchGlobalState(namespace, operations) {
+    const safeNamespace = typeof namespace === 'string' ? namespace.trim() : '';
+    if (!safeNamespace) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint('namespace', 'is required'));
+    }
+    if (!Array.isArray(operations) || operations.length === 0) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint('operations', 'must be a non-empty array'));
+    }
+    let response;
+    try {
+        response = await fetch('/api/state/patch', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ namespace: safeNamespace, operations }),
+            cache: 'no-cache',
+        });
+        if (response.ok) {
+            await invalidateStateResources('/api/state/get', {}, [safeNamespace]);
+        }
+    } catch (error) {
+        return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error));
+    }
+    if (response.ok) {
+        const result = await response.json().catch(() => null);
+        return makeStateOk({
+            applied: Number(result?.applied) || 0,
+            created: Boolean(result?.created),
+        });
+    }
+    if (response.status === 409) {
+        return makeStateError(STATE_ERROR_REASONS.CONFLICT, formatConflictHint(0));
+    }
+    const bodyText = await response.text().catch(() => '');
+    return makeStateError(STATE_ERROR_REASONS.HTTP_ERROR,
+        formatHttpErrorHint(response.status, response.statusText, bodyText));
+}
+
+/**
+ * Read multiple global state namespaces in one batch. Returns an envelope
+ * with a per-namespace results map. Missing namespaces map to
+ * `{ok: true, state: null}` (treated as empty miss). Top-level `ok` reflects
+ * whole-batch transport/validation success.
+ *
+ * @param {string[]} namespaces - Storage namespaces to read
+ * @returns {Promise<{ok: boolean, results: Map<string, {ok: boolean, state: object|null, reason?: string, hint?: string}>, reason?: string, hint?: string}>}
+ */
+export async function getGlobalStateBatch(namespaces) {
+    const cleaned = Array.from(new Set(
+        (Array.isArray(namespaces) ? namespaces : [])
+            .map(n => (typeof n === 'string' ? n.trim() : ''))
+            .filter(Boolean),
+    ));
+    if (cleaned.length === 0) {
+        return { ok: true, results: new Map() };
+    }
+
+    try {
+        const payloads = await Promise.all(cleaned.map((namespace) =>
+            readStateEnvelope('/api/state/get', {
+                namespace,
+            })));
+        const results = new Map();
+        for (let index = 0; index < cleaned.length; index += 1) {
+            const payload = payloads[index];
+            const state = payload && typeof payload === 'object' ? payload.data : null;
+            results.set(cleaned[index], { ok: true, state });
+        }
+        return { ok: true, results };
+    } catch (error) {
+        if (error?.status) {
+            return { ok: false, results: new Map(),
+                reason: STATE_ERROR_REASONS.HTTP_ERROR,
+                hint: formatHttpErrorHint(error.status, '', error.message) };
+        }
+        return { ok: false, results: new Map(),
+            reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            hint: formatTransportErrorHint(error?.message || error) };
+    }
+}
+
+/**
+ * Read-modify-write helper for per-user global state. The `updater` receives
+ * a deep clone of the current state (`{}` when none exists) and must return
+ * the next state. The diff is computed with `buildObjectPatchOperationsAsync`
+ * and shipped through `patchGlobalState` — only the changed slice crosses
+ * the wire, not the whole document.
+ *
+ * Use this in preference to `setGlobalState` for any non-trivial payload.
+ * Returning `null` / `undefined` from the updater is treated as "no change"
+ * and resolves with `updated: false`.
+ *
+ * On a 409 (concurrent edit) the helper re-reads the state and re-runs the
+ * updater. The retry budget is controlled by `options.maxRetries` (default 1,
+ * i.e. one re-attempt after the initial try). All failures — transport, HTTP,
+ * conflict-after-retries, validation, reducer-throw — surface as `{ok: false,
+ * reason, hint}` envelopes; this helper does not throw.
+ *
+ * @param {string} namespace - Storage namespace
+ * @param {(currentState: object, meta: { attempt: number, namespace: string }) => (object|null|undefined|Promise<object|null|undefined>)} updater
+ * @param {object} [options]
+ * @param {number} [options.maxOperations] - Cap on patch op count before falling back to a single replace op. Default 2000.
+ * @param {number} [options.maxRetries] - Re-attempts on 409. Default 1.
+ * @param {boolean} [options.asyncDiff] - When `false`, use the sync diff path (skips the worker).
+ * @returns {Promise<{ok: boolean, state?: object|null, updated?: boolean, created?: boolean, reason?: string, hint?: string}>}
+ */
+export async function updateGlobalState(namespace, updater, options = {}) {
+    const safeNamespace = typeof namespace === 'string' ? namespace.trim() : '';
+    if (!safeNamespace || typeof updater !== 'function') {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint(!safeNamespace ? 'namespace' : 'updater',
+                'is required / must be a function'));
+    }
+
+    const maxOperations = Number.isInteger(options?.maxOperations) && options.maxOperations > 0
+        ? Number(options.maxOperations) : 2000;
+    const maxRetries = Number.isInteger(options?.maxRetries) && options.maxRetries >= 0
+        ? Number(options.maxRetries) : 1;
+
+    let lastFailure = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            await invalidateStateResources('/api/state/get', {}, [safeNamespace]);
+        } catch (error) {
+            return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
+                formatTransportErrorHint(error?.message || error));
+        }
+        const readResult = await getGlobalState(safeNamespace);
+        if (!readResult.ok) {
+            return { ok: false, reason: readResult.reason, hint: readResult.hint };
+        }
+        const currentRaw = readResult.state;
+        const currentState = (currentRaw != null && typeof currentRaw === 'object' && !Array.isArray(currentRaw))
+            ? cloneAsJsonWire(currentRaw) : {};
+        let nextRaw;
+        try {
+            nextRaw = await updater(cloneAsJsonWire(currentState), {
+                attempt, namespace: safeNamespace,
+            });
+        } catch (reducerError) {
+            return makeStateError(
+                STATE_ERROR_REASONS.VALIDATION_ARGS,
+                `reducer threw: ${String(reducerError?.message || reducerError).slice(0, 80)}`,
+            );
+        }
+        if (nextRaw === undefined || nextRaw === null) {
+            return makeStateOk({ state: currentState, updated: false });
+        }
+        if (!(nextRaw && typeof nextRaw === 'object' && !Array.isArray(nextRaw))) {
+            return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+                'updater must return a plain object (or null/undefined to skip)');
+        }
+        const nextState = cloneAsJsonWire(nextRaw);
+        const operations = options?.asyncDiff === false
+            ? buildObjectPatchOperations(currentState, nextState, { maxOperations })
+            : await buildObjectPatchOperationsAsync(currentState, nextState, { maxOperations });
+        if (operations.length === 0) {
+            return makeStateOk({ state: nextState, updated: false });
+        }
+
+        const patchResult = await patchGlobalState(safeNamespace, operations);
+        if (patchResult.ok) {
+            return makeStateOk({
+                state: nextState, updated: true, created: Boolean(patchResult.created),
+            });
+        }
+        lastFailure = patchResult;
+        if (patchResult.reason !== STATE_ERROR_REASONS.CONFLICT) return patchResult;
+    }
+    return lastFailure ?? makeStateError(STATE_ERROR_REASONS.CONFLICT, formatConflictHint(maxRetries));
+}
+
+/**
+ * Remove a per-user global state entry entirely.
+ *
+ * @param {string} namespace
+ * @returns {Promise<{ok: boolean, reason?: string, hint?: string}>}
+ */
+export async function deleteGlobalState(namespace) {
+    const safeNamespace = typeof namespace === 'string' ? namespace.trim() : '';
+    if (!safeNamespace) {
+        return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
+            formatValidationArgsHint('namespace', 'is required'));
+    }
+    let response;
+    try {
+        response = await fetch('/api/state/delete', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ namespace: safeNamespace }),
+            cache: 'no-cache',
+        });
+        if (response.ok) {
+            await invalidateStateResources('/api/state/get', {}, [safeNamespace]);
+        }
+    } catch (error) {
+        return makeStateError(STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            formatTransportErrorHint(error?.message || error));
+    }
+    if (response.ok) return makeStateOk();
+    const bodyText = await response.text().catch(() => '');
+    return makeStateError(STATE_ERROR_REASONS.HTTP_ERROR,
+        formatHttpErrorHint(response.status, response.statusText, bodyText));
+}
+
+/**
  * @typedef {object} BulkExtensionFieldResult
  * @property {string[]} updated  Avatar filenames that were successfully updated
  * @property {string[]} skipped  Avatar filenames skipped (filter didn't match or unreadable)
