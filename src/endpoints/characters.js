@@ -1520,7 +1520,8 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
 });
 
 router.post('/patch', validateAvatarUrlMiddleware, async function (request, response) {
-    if (!request.body?.avatar_url) {
+    if (typeof request.body?.avatar_url !== 'string' || !request.body.avatar_url
+        || request.body.avatar_url === '.' || request.body.avatar_url === '..') {
         return response.status(400).send('Error: invalid avatar.');
     }
     const operations = request.body.operations;
@@ -1542,7 +1543,7 @@ router.post('/patch', validateAvatarUrlMiddleware, async function (request, resp
     }
 
     try {
-        const avatar = sanitize(String(request.body.avatar_url));
+        const avatar = request.body.avatar_url;
         const avatarPath = path.join(request.user.directories.characters, avatar);
         if (!avatar || path.dirname(avatarPath) !== request.user.directories.characters || !fs.existsSync(avatarPath)) {
             return response.status(404).send('Error: character not found.');
@@ -2247,8 +2248,8 @@ function getQueryCharacterAvatar(request, response) {
         return null;
     }
 
-    const avatar = sanitize(String(request.query?.avatar || request.query?.avatar_url || '').trim());
-    if (!avatar || avatar === '.' || avatar === '..' || forbiddenRegExp.test(avatar)) {
+    const avatar = request.query?.avatar ?? request.query?.avatar_url;
+    if (typeof avatar !== 'string' || !avatar || avatar === '.' || avatar === '..' || forbiddenRegExp.test(avatar)) {
         sendResourceReadError(response, {
             code: 'invalid_args',
             resource: 'characters',
@@ -2384,7 +2385,7 @@ router.get('/field', async function (request, response) {
     const target = getQueryCharacterAvatar(request, response);
     if (!target) return;
     const fieldPath = String(request.query?.path || '');
-    if (!fieldPath.startsWith('/') || fieldPath === '/') {
+    if (!fieldPath.startsWith('/')) {
         return sendResourceReadError(response, {
             code: 'invalid_args',
             resource: `character:${target.avatar}:field`,

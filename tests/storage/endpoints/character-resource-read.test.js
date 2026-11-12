@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +12,7 @@ import { write as writeCardChunk, read as readCard } from '../../../src/characte
 import { getChatRepo } from '../../../src/storage/index.js';
 import { diskCache } from '../../../src/endpoints/characters.js';
 import { assembleCharacterRaw } from '../../../src/character-resource-view.js';
+import { applyPatch } from '../../../public/scripts/util/fast-json-patch.js';
 
 const seedPath = fileURLToPath(new URL('../../../default/content/default_Seraphina.png', import.meta.url));
 
@@ -63,6 +65,7 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
     beforeEach(async () => {
         harness = await makeEndpointHarness({
             mode,
+            handle: randomUUID(),
             mount: (app) => app.use('/api/characters', charactersRouter),
         });
         seedCard(harness.dirs.characters, 'Alice', CARD);
@@ -106,6 +109,9 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
             .expect(200);
         assert.equal(projectionResponse.body.patch.length > 0, true);
         assert.deepEqual(projectionResponse.body.keyOrder, Object.keys(legacyResponse.body));
+        const rebuilt = applyPatch(JSON.parse(raw), projectionResponse.body.patch).newDocument;
+        rebuilt.json_data = raw;
+        assert.deepEqual(JSON.parse(JSON.stringify(rebuilt)), legacyResponse.body);
     });
 
     test('reconstructs a V1 card from the same raw source contract', async () => {
@@ -194,5 +200,70 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
             .get('/api/characters/field')
             .query({ account: harness.handle, avatar: 'Alice.png', path: '/data' })
             .expect(400);
+    });
+
+    test.each([
+        [' Alice', 'Alice'],
+        ['Alice:Prime', 'AlicePrime'],
+    ])('reads the exact existing filename %s rather than its normalized sibling', async (name, sibling) => {
+        seedCard(harness.dirs.characters, sibling, CARD);
+        seedCard(harness.dirs.characters, name, {
+            ...CARD,
+            data: { ...CARD.data, description: 'Exact filename target' },
+        });
+        const response = await request(harness.server)
+            .get('/api/characters/field')
+            .query({ account: harness.handle, avatar: `${name}.png`, path: '/data/description' })
+            .expect(200);
+        assert.equal(JSON.parse(response.text), 'Exact filename target');
+    });
+
+    test.each([
+        [' Alice', 'Alice'],
+        ['Alice:Prime', 'AlicePrime'],
+    ])('patches the exact existing filename %s without changing its sibling', async (name, sibling) => {
+        seedCard(harness.dirs.characters, sibling, CARD);
+        seedCard(harness.dirs.characters, name, CARD);
+        const siblingPath = path.join(harness.dirs.characters, `${sibling}.png`);
+        const siblingBytes = fs.readFileSync(siblingPath);
+        await request(harness.server)
+            .post('/api/characters/patch')
+            .send({
+                avatar_url: `${name}.png`,
+                operations: [{ op: 'replace', path: '/data/description', value: 'Patched exact target' }],
+            })
+            .expect(200);
+        const saved = JSON.parse(readCard(fs.readFileSync(path.join(harness.dirs.characters, `${name}.png`))));
+        assert.equal(saved.data.description, 'Patched exact target');
+        assert.deepEqual(fs.readFileSync(siblingPath), siblingBytes);
+    });
+
+    test('reads an advertised field whose root property name is empty', async () => {
+        seedCard(harness.dirs.characters, 'EmptyKey', { ...CARD, '': { preserved: true } });
+        const directory = await request(harness.server)
+            .get('/api/characters/fields')
+            .query({ account: harness.handle, avatar: 'EmptyKey.png' })
+            .expect(200);
+        const field = directory.body.fields.find(candidate => candidate.path === '/');
+        assert.ok(field);
+        const response = await request(harness.server)
+            .get('/api/characters/field')
+            .query({ account: harness.handle, avatar: 'EmptyKey.png', path: '/' })
+            .expect(200);
+        assert.equal(response.headers.etag, field.etag);
+        assert.deepEqual(response.body, { preserved: true });
+    });
+
+    test.each(['../Alice.png', '/Alice.png', '.', '..'])('rejects an avatar path %s without mutating cards', async avatar => {
+        const before = fs.readFileSync(path.join(harness.dirs.characters, 'Alice.png'));
+        await request(harness.server)
+            .get('/api/characters/fields')
+            .query({ account: harness.handle, avatar })
+            .expect(400);
+        await request(harness.server)
+            .post('/api/characters/patch')
+            .send({ avatar_url: avatar, operations: [{ op: 'replace', path: '/data/description', value: 'escaped' }] })
+            .expect(400);
+        assert.deepEqual(fs.readFileSync(path.join(harness.dirs.characters, 'Alice.png')), before);
     });
 });

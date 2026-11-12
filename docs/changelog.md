@@ -11,6 +11,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Character Cards
 
 - Fixed character card replacement failing when importing tags.
+- Fixed reading and editing character cards whose filenames retain leading spaces or punctuation.
+- Fixed reading empty-named root properties from character cards.
 
 ### Fixes
 
