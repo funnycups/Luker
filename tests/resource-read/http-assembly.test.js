@@ -259,6 +259,86 @@ test('preserves each subscriber when one caller cancels a shared request', async
     }
 });
 
+test('starts a fresh read when the last subscriber aborts in the same turn', async () => {
+    let requests = 0;
+    let started;
+    const firstRequest = new Promise(resolve => { started = resolve; });
+    const app = express();
+    app.get('/shared', (request, response) => {
+        requests += 1;
+        if (requests === 1) {
+            started();
+            return;
+        }
+        response.json('fresh');
+    });
+
+    const { server, baseURL } = await listen(app);
+    const url = `${baseURL}/shared`;
+    try {
+        const controller = new AbortController();
+        const cancelled = readResourceText(url, { signal: controller.signal });
+        await firstRequest;
+
+        controller.abort();
+        const replacement = readResourceText(url);
+
+        await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+        await expect(replacement).resolves.toMatchObject({ text: '"fresh"' });
+        expect(requests).toBe(2);
+    } finally {
+        resetResourceReads();
+        server.closeAllConnections();
+        await new Promise(resolve => server.close(resolve));
+    }
+});
+
+test('keeps a replacement read shared after the aborted request settles', async () => {
+    let requests = 0;
+    let firstStarted;
+    let replacementStarted;
+    let release;
+    const firstRequest = new Promise(resolve => { firstStarted = resolve; });
+    const replacementRequest = new Promise(resolve => { replacementStarted = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const app = express();
+    app.get('/shared', async (request, response) => {
+        requests += 1;
+        if (requests === 1) {
+            firstStarted();
+            return;
+        }
+        replacementStarted();
+        await gate;
+        response.json('replacement');
+    });
+
+    const { server, baseURL } = await listen(app);
+    const url = `${baseURL}/shared`;
+    try {
+        const cancelled = readResourceText(url);
+        await firstRequest;
+
+        invalidateResourceReads([url]);
+        const replacement = readResourceText(url);
+        await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+        await replacementRequest;
+        const subscriber = readResourceText(url);
+        release();
+
+        await expect(Promise.all([replacement, subscriber])).resolves.toEqual([
+            expect.objectContaining({ text: '"replacement"' }),
+            expect.objectContaining({ text: '"replacement"' }),
+        ]);
+        expect(requests).toBe(2);
+    } finally {
+        release();
+        resetResourceReads();
+        server.closeAllConnections();
+        await new Promise(resolve => server.close(resolve));
+    }
+});
+
 test('invalidates an in-flight read', async () => {
     let requests = 0;
     let started;

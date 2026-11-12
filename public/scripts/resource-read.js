@@ -28,7 +28,7 @@ function abortError() {
 
 function entryFor(url) {
     const existing = inFlight.get(url);
-    if (existing) {
+    if (existing && !existing.controller.signal.aborted) {
         return existing;
     }
     const controller = new AbortController();
