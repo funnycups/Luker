@@ -2,6 +2,7 @@
    Copyright (C) 2026 FunnyCups (https://github.com/funnycups) */
 
 "loading_runtime" = "正在啟動本地 Luker 服務…";
+"loading_runtime_progress" = "正在準備內建服務檔案… %ld%%\n更新後的首次啟動可能需要幾分鐘。";
 "loading_webview" = "服務已啟動，正在載入介面…";
 "loading_failed_with_reason" = "服務啟動失敗：%@";
 "loading_failed_timeout" = "服務啟動逾時：本地服務未在預期時間內就緒。";

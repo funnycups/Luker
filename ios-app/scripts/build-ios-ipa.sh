@@ -81,6 +81,13 @@ done
 cp "${REPO_ROOT}/android-app/app/src/main/assets/nodejs-project/bootstrap.js" \
   "${STAGING_DIR}/bootstrap.js"
 
+# Content hash of the staged tree. The iOS shell keys its runtime marker on it,
+# so app updates that ship the same server tree skip the full copy on first
+# launch.
+RUNTIME_TREE_VERSION="$(node "${SCRIPT_DIR}/runtime-tree-version.mjs" "${STAGING_DIR}")"
+printf '%s\n' "${RUNTIME_TREE_VERSION}" > "${STAGING_DIR}/.runtime-tree-version"
+echo "Runtime tree version: ${RUNTIME_TREE_VERSION}"
+
 APP_VERSION="$(node -p "require('./package.json').version")"
 APP_BUILD_CODE="$(node -e "
 const m = /^(\\d+)\\.(\\d+)\\.(\\d+)/.exec(process.argv[1]);

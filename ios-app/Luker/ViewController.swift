@@ -54,6 +54,7 @@ final class ViewController: UIViewController {
     private var pendingCrashShown = false
     private var pendingCrashRetryCount = 0
     private var isExportingDiagnostics = false
+    private var runtimePrepareTask: UIBackgroundTaskIdentifier = .invalid
     #if DEBUG
     private var didHandleLaunchEndpointArgument = false
     #endif
@@ -193,10 +194,27 @@ final class ViewController: UIViewController {
     }
 
     private func startLocalRuntimeAndWait(generation: Int) {
+        // Preparing the bundled service tree can take a while on the first
+        // launch after an update. Keep the screen awake and hold a background
+        // lease so auto-lock or a brief app switch does not terminate the copy.
+        UIApplication.shared.isIdleTimerDisabled = true
+        beginRuntimePrepareTask()
         runtimeQueue.async { [weak self] in
-            let result = self?.runtime.startIfNeeded()
+            let result = self?.runtime.startIfNeeded { copied, total in
+                guard total > 0 else { return }
+                let percent = min(100, Int((Double(copied) / Double(total)) * 100))
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, generation == self.bootGeneration else { return }
+                    guard case .startingRuntime = self.currentBootState else { return }
+                    self.statusLabel.text = String(
+                        format: NSLocalizedString("loading_runtime_progress", comment: ""),
+                        percent
+                    )
+                }
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                self.endRuntimePrepareTask()
                 guard let result else { return }
                 guard generation == self.bootGeneration else { return }
                 if result.ok {
@@ -210,6 +228,21 @@ final class ViewController: UIViewController {
                 }
             }
         }
+    }
+
+    private func beginRuntimePrepareTask() {
+        guard runtimePrepareTask == .invalid else { return }
+        runtimePrepareTask = UIApplication.shared.beginBackgroundTask(withName: "Luker runtime prepare") { [weak self] in
+            DispatchQueue.main.async {
+                self?.endRuntimePrepareTask()
+            }
+        }
+    }
+
+    private func endRuntimePrepareTask() {
+        guard runtimePrepareTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(runtimePrepareTask)
+        runtimePrepareTask = .invalid
     }
 
     private func waitForServer(generation: Int) {
@@ -261,6 +294,13 @@ final class ViewController: UIViewController {
 
     private func setBootState(_ state: BootState) {
         currentBootState = state
+        switch state {
+        case .ready, .failed, .navigationFailed:
+            UIApplication.shared.isIdleTimerDisabled = false
+            endRuntimePrepareTask()
+        case .startingRuntime, .waitingForServer:
+            break
+        }
         if case .ready = state {
             // Keep the last theme color until the new document reports its own.
         } else {
@@ -593,6 +633,9 @@ final class ViewController: UIViewController {
             startRuntime(armWatchdog: false)
             return
         }
+        // A custom endpoint has no local preparation to keep awake.
+        UIApplication.shared.isIdleTimerDisabled = false
+        endRuntimePrepareTask()
         bootGeneration += 1
         let generation = bootGeneration
         runtimeQueue.async { [weak self] in

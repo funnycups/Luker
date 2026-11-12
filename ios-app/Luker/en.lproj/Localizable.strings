@@ -2,6 +2,7 @@
    Copyright (C) 2026 FunnyCups (https://github.com/funnycups) */
 
 "loading_runtime" = "Starting local Luker service...";
+"loading_runtime_progress" = "Preparing bundled service files... %ld%%\nThe first launch after an update can take a few minutes.";
 "loading_webview" = "Service is ready. Loading interface...";
 "loading_failed_with_reason" = "Failed to start the service: %@";
 "loading_failed_timeout" = "Service startup timed out: the local service did not become ready in time.";

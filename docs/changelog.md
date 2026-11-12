@@ -13,6 +13,11 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed Memory Graph LLM recall not drilling into always-inject event rollups.
 - Fixed Memory Graph RAG recall filtering always-inject nodes after the per-type quota.
 
+### iOS App
+
+- Fixed the app failing to start when preparing the local service was interrupted.
+- The first launch after an update now shows local service preparation progress.
+
 ## v2.9.0-rc.2 (2026-11-11)
 
 ### Connections & Models
