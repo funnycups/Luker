@@ -39,6 +39,20 @@ export function currentCharacter(ctx = getContext()) {
     return c?.avatar ? { avatar: String(c.avatar), name: String(c.name || c.data?.name || ''), index: Number(ctx.characterId) } : null;
 }
 
+function validChatTarget(t) {
+    if (!t || typeof t !== 'object') return null;
+    if (t.is_group === true && typeof t.id === 'string' && t.id) return { is_group: true, id: t.id };
+    if (t.is_group !== true && typeof t.avatar_url === 'string' && t.avatar_url && typeof t.file_name === 'string' && t.file_name) {
+        return {
+            is_group: false,
+            avatar_url: t.avatar_url,
+            file_name: t.file_name,
+            ...(typeof t.char_name === 'string' && t.char_name ? { char_name: t.char_name } : {}),
+        };
+    }
+    return null;
+}
+
 function chatInfo(ctx) {
     const chatId = ctx.getCurrentChatId?.();
     const character = currentCharacter(ctx);
@@ -46,7 +60,11 @@ function chatInfo(ctx) {
     let label = '';
     if (ctx.groupId) label = (ctx.groups || []).find(g => String(g.id) === String(ctx.groupId))?.name || i18n('Group chat');
     else label = character?.name || '';
-    return { chatId: chatId ? String(chatId) : '', label, character, floors: chat.length, group: Boolean(ctx.groupId) };
+    const resolvedTarget = validChatTarget(ctx.resolveChatStateTarget?.());
+    const target = resolvedTarget || (ctx.groupId && chatId
+        ? { is_group: true, id: String(chatId) }
+        : (character?.avatar && chatId ? { is_group: false, avatar_url: character.avatar, file_name: String(chatId) } : null));
+    return { chatId: chatId ? String(chatId) : '', label, character, floors: chat.length, group: Boolean(ctx.groupId), target };
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +484,8 @@ function chatMessages({ from, to, floors } = {}) {
     const last = chat.length - 1;
     const configured = floors !== undefined ? floors : readSettings(ctx).ask?.floors;
     const isAll = configured === 'all';
-    const numFloors = isAll ? null : Math.max(0, Number.isFinite(Number(configured)) ? Number(configured) : 2);
+    const hasNumericFloor = configured !== null && configured !== undefined && configured !== '' && Number.isFinite(Number(configured));
+    const numFloors = isAll ? null : Math.max(0, hasNumericFloor ? Number(configured) : 2);
     const maxSpan = isAll ? chat.length : (numFloors === 0 ? 1 : numFloors * 2 + 1);
 
     let start;
@@ -537,9 +556,16 @@ async function worldInfo({ search = '' } = {}) {
     const books = await boundBooks(ctx);
     const needle = String(search || '').toLowerCase();
     const out = [];
-    for (const name of books) {
+    const errors = [];
+    outer: for (const name of books) {
         let data = null;
-        try { data = await ctx.loadWorldInfo?.(name); } catch { data = null; }
+        try {
+            data = await ctx.loadWorldInfo?.(name);
+        } catch (err) {
+            console.warn(`[workbench] failed to load world book "${name}":`, err);
+            errors.push({ book: name, error: String(err?.message || err) });
+            continue;
+        }
         const entries = Object.values(data?.entries || {});
         for (const e of entries) {
             const keys = [...(e.key || []), ...(e.keysecondary || [])].map(String);
@@ -553,10 +579,10 @@ async function worldInfo({ search = '' } = {}) {
                 constant: Boolean(e.constant),
                 content: needle ? String(e.content || '').slice(0, 1500) : undefined,
             });
-            if (out.length >= 60) break;
+            if (out.length >= 60) break outer;
         }
     }
-    return { books, entries: out };
+    return errors.length ? { books, entries: out, errors } : { books, entries: out };
 }
 
 function presetDetail({ entry = '' } = {}) {

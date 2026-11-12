@@ -5,10 +5,12 @@
 
 import { i18n, i18nFormat } from '../i18n.js';
 
-export const RULES = [
-    { id: 'preset.dup', tone: 'preset', name: i18n('Duplicate preset entries'), when: i18n('Two enabled entries are over 80% the same'), defaultOn: false },
-    { id: 'card.pending', tone: 'card', name: i18n('Unconfirmed character card changes'), when: i18n('An AI chat has changes neither applied nor discarded'), defaultOn: true },
-];
+export function baseRules() {
+    return [
+        { id: 'preset.dup', tone: 'preset', name: i18n('Duplicate preset entries'), when: i18n('Two enabled entries are over 80% the same'), defaultOn: false },
+        { id: 'card.pending', tone: 'card', name: i18n('Unconfirmed character card changes'), when: i18n('An AI chat has changes neither applied nor discarded'), defaultOn: true },
+    ];
+}
 
 const CHECKS = {
     'preset.dup'(snap) {
@@ -68,7 +70,7 @@ export function similarity(a, b) {
  * @param {Array<{ id: string, rules?: Array<object> }>} [providers]
  */
 export function listRules(providers = []) {
-    const out = RULES.map(r => ({ ...r }));
+    const out = baseRules();
     const seen = new Set(out.map(r => r.id));
     for (const provider of Array.isArray(providers) ? providers : []) {
         for (const rule of Array.isArray(provider?.rules) ? provider.rules : []) {
@@ -103,7 +105,12 @@ export function runRules(snap, { enabled = {}, dismissed = {}, providers = [] } 
         const checker = typeof rule.check === 'function' ? rule.check : CHECKS[rule.id];
         if (typeof checker !== 'function') continue;
         let found = null;
-        try { found = checker(snap || {}); } catch { found = null; }
+        try {
+            found = checker(snap || {});
+        } catch (err) {
+            console.warn(`[workbench/suggest] rule "${rule.id}" failed:`, err);
+            found = null;
+        }
         if (!found) continue;
         if (dismissed[rule.id] && dismissed[rule.id] === found.sig) continue;
         seen.add(rule.id);
@@ -113,7 +120,12 @@ export function runRules(snap, { enabled = {}, dismissed = {}, providers = [] } 
     for (const provider of Array.isArray(providers) ? providers : []) {
         if (typeof provider?.evaluate !== 'function') continue;
         let items = [];
-        try { items = provider.evaluate(snap || {}, { enabled, dismissed }) || []; } catch { items = []; }
+        try {
+            items = provider.evaluate(snap || {}, { enabled, dismissed }) || [];
+        } catch (err) {
+            console.warn(`[workbench/suggest] provider "${provider?.id || 'unknown'}" failed:`, err);
+            items = [];
+        }
         for (const item of Array.isArray(items) ? items : []) {
             if (!item?.id || seen.has(item.id)) continue;
             const on = enabled[item.id] ?? item.defaultOn ?? true;

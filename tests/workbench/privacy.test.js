@@ -90,6 +90,12 @@ describe('workbench privacy and redaction', () => {
         expect(parsedNested.refreshToken).toBe('***');
         expect(parsedNested.wsUrl).not.toContain('user:pass');
         expect(parsedNested.auth).not.toContain('YWRtaW46cGFzcw==');
+
+        // Authorization: Basic inside JSON preserves trailing delimiters and remains valid JSON
+        const jsonBasic = redact('{"Authorization":"Basic dXNlcjpwYXNz"}');
+        expect(JSON.parse(jsonBasic)).toEqual({ Authorization: 'Basic ***' });
+        const escapedBasic = redact('{\\"Authorization\\":\\"Basic dXNlcjpwYXNz\\"}');
+        expect(escapedBasic).toBe('{\\"Authorization\\":\\"Basic ***\\"}');
     });
 
     test('askOverview excludes all disabled source sections when sources are false', async () => {

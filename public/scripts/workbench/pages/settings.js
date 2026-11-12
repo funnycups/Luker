@@ -9,22 +9,26 @@ import { h, put, clear } from '../../lens-shared/util.js';
 import { button, link, dot, checkRow, select, sectionTitle, loading } from '../ui/components.js';
 import { listRules } from '../model/suggest.js';
 
-const KNOWN_ROLES = [
-    { key: 'ask', label: i18n('Q&A'), tone: 'other' },
-    { key: 'memory', label: i18n('Memory graph'), tone: 'memory' },
-    { key: 'orch', label: i18n('Orchestration'), tone: 'orch' },
-    { key: 'preset', label: i18n('Preset'), tone: 'preset' },
-    { key: 'card', label: i18n('Character card'), tone: 'card' },
-    { key: 'world', label: i18n('World book'), tone: 'world' },
-];
+export function knownRoles() {
+    return [
+        { key: 'ask', label: i18n('Q&A'), tone: 'other' },
+        { key: 'memory', label: i18n('Memory graph'), tone: 'memory' },
+        { key: 'orch', label: i18n('Orchestration'), tone: 'orch' },
+        { key: 'preset', label: i18n('Preset'), tone: 'preset' },
+        { key: 'card', label: i18n('Character card'), tone: 'card' },
+        { key: 'world', label: i18n('World book'), tone: 'world' },
+    ];
+}
 
-const SOURCES = [
-    { key: 'inspector', name: i18n('Request inspector'), note: i18n('Full content, duration and status of the last 200 requests') },
-    { key: 'frontLogs', name: i18n('Frontend logs'), note: i18n('Browser console output, cleared on reload') },
-    { key: 'serverLogs', name: i18n('Server logs'), note: i18n('Only admins can read these in multi-user mode') },
-    { key: 'content', name: i18n('Current content'), note: i18n('Chat, character card, world books, preset, connection profile') },
-    { key: 'plugins', name: i18n('Installed extensions'), note: i18n('Memory graph, orchestration, token records, suggestions') },
-];
+export function sourceDefs() {
+    return [
+        { key: 'inspector', name: i18n('Request inspector'), note: i18n('Full content, duration and status of the last 200 requests') },
+        { key: 'frontLogs', name: i18n('Frontend logs'), note: i18n('Browser console output, cleared on reload') },
+        { key: 'serverLogs', name: i18n('Server logs'), note: i18n('Only admins can read these in multi-user mode') },
+        { key: 'content', name: i18n('Current content'), note: i18n('Chat, character card, world books, preset, connection profile') },
+        { key: 'plugins', name: i18n('Installed extensions'), note: i18n('Memory graph, orchestration, token records, suggestions') },
+    ];
+}
 
 export function createSettingsPage(app) {
     const el = h('div', { class: 'wb-page' });
@@ -34,7 +38,7 @@ export function createSettingsPage(app) {
 
     function activeRows() {
         const targets = app.iterateTargets?.() || [];
-        if (!targets.length) return KNOWN_ROLES;
+        if (!targets.length) return knownRoles();
         const rows = [{ key: 'ask', label: i18n('Q&A'), tone: 'other' }];
         const seen = new Set(['ask']);
         for (const t of targets) {
@@ -124,7 +128,7 @@ export function createSettingsPage(app) {
             h('section', null,
                 sectionTitle(i18n('Q&A')),
                 h('div', { class: 'wb-list' },
-                    SOURCES.map(src => setRow(src.name, src.note, checkRow({ checked: askSources[src.key] !== false, label: i18n('Read'), onChange: (v) => edit(n => { n.ask = n.ask || {}; n.ask.sources = n.ask.sources || {}; n.ask.sources[src.key] = v; }) }))),
+                    sourceDefs().map(src => setRow(src.name, src.note, checkRow({ checked: askSources[src.key] !== false, label: i18n('Read'), onChange: (v) => edit(n => { n.ask = n.ask || {}; n.ask.sources = n.ask.sources || {}; n.ask.sources[src.key] = v; }) }))),
                     setRow(i18n('Chat text floors to include'), i18n('When asking about a reply, also send the floors around it to the AI'),
                         select([
                             { value: '2', label: i18n('2 floors each side') },

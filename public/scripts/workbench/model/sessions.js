@@ -90,15 +90,13 @@ function resolveAdapter(ctx, scopeOpts = {}) {
  * @param {object | (() => object)} ctxOrProvider
  */
 export function createSessionStore(ctxOrProvider = null) {
-    const cache = new Map();
     const idToScope = new Map();
 
     const getCtx = () => (typeof ctxOrProvider === 'function'
         ? ctxOrProvider()
         : (ctxOrProvider || globalThis.Luker?.getContext?.() || globalThis.lukerContext || null));
 
-    const rememberList = (adapterKey, scopeOpts, sessions) => {
-        cache.set(adapterKey, clone(sessions));
+    const rememberScopes = (scopeOpts, sessions) => {
         for (const s of sessions) {
             if (s?.id) idToScope.set(s.id, clone(scopeOpts));
         }
@@ -110,7 +108,7 @@ export function createSessionStore(ctxOrProvider = null) {
             const res = await adapter.read();
             assertOk(res, 'read');
             const sessions = normalizeSessions(res.state);
-            rememberList(adapter.key, scopeOpts, sessions);
+            rememberScopes(scopeOpts, sessions);
             return sessions
                 .filter(s => !kind || s.kind === kind)
                 .sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0))
@@ -123,7 +121,7 @@ export function createSessionStore(ctxOrProvider = null) {
             const res = await adapter.read();
             assertOk(res, 'read');
             const sessions = normalizeSessions(res.state);
-            rememberList(adapter.key, effectiveScope, sessions);
+            rememberScopes(effectiveScope, sessions);
             const found = sessions.find(s => s.id === id);
             return found ? clone(found) : null;
         },
@@ -144,7 +142,7 @@ export function createSessionStore(ctxOrProvider = null) {
                 return { ...base, sessions: [session, ...normalizeSessions(base)] };
             });
             assertOk(res, 'create');
-            rememberList(adapter.key, scopeOpts, normalizeSessions(res.state));
+            rememberScopes(scopeOpts, normalizeSessions(res.state));
             idToScope.set(session.id, clone(scopeOpts));
             return clone(session);
         },
@@ -165,7 +163,7 @@ export function createSessionStore(ctxOrProvider = null) {
             });
             assertOk(res, 'update');
             if (!updatedSession) return null;
-            rememberList(adapter.key, effectiveScope, normalizeSessions(res.state));
+            rememberScopes(effectiveScope, normalizeSessions(res.state));
             idToScope.set(id, clone(effectiveScope));
             return clone(updatedSession);
         },
@@ -182,7 +180,7 @@ export function createSessionStore(ctxOrProvider = null) {
             });
             assertOk(res, 'remove');
             if (res.state) {
-                rememberList(adapter.key, effectiveScope, normalizeSessions(res.state));
+                rememberScopes(effectiveScope, normalizeSessions(res.state));
             }
             idToScope.delete(id);
         },

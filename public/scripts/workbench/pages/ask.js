@@ -15,21 +15,39 @@ import { runAsk, readsSummary, buildAskHistory } from '../model/ask.js';
 import { finishOverview } from '../model/requests.js';
 import { titleFrom } from '../model/sessions.js';
 
-const CHIPS = [
-    i18n('Why was this reply written this way'),
-    i18n('Why did that error happen'),
-    i18n('Which extension uses the most tokens'),
-    i18n('What was in the prompt sent to the model this time'),
-    i18n('Write a bug report for me with the debug info'),
+const CHIP_KEYS = [
+    'Why was this reply written this way',
+    'Why did that error happen',
+    'Which extension uses the most tokens',
+    'What was in the prompt sent to the model this time',
+    'Write a bug report for me with the debug info',
 ];
 
-const WS_NAME = {
-    memory: i18n('Memory graph'),
-    orch: i18n('Orchestration'),
-    preset: i18n('Preset'),
-    card: i18n('Character card'),
-    world: i18n('World book'),
+const WS_NAME_KEYS = {
+    memory: 'Memory graph',
+    orch: 'Orchestration',
+    preset: 'Preset',
+    card: 'Character card',
+    world: 'World book',
 };
+
+export function chips() {
+    return CHIP_KEYS.map(i18n);
+}
+
+export function wsName(id) {
+    const key = WS_NAME_KEYS[id];
+    return key ? i18n(key) : '';
+}
+
+function scopeKey(scope) {
+    if (!scope || scope.scope !== 'chat') return 'global';
+    const t = scope.target;
+    if (!t) return 'chat:active';
+    return t.is_group
+        ? `chat:group:${String(t.id || '')}`
+        : `chat:${String(t.avatar_url || '')}:${String(t.file_name || '')}`;
+}
 
 export function createAskPage(app) {
     const store = app.sessions;
@@ -38,26 +56,64 @@ export function createAskPage(app) {
     const body = h('div', { class: 'wb-chat-body' });
     const input = h('textarea', { class: 'wb-input', rows: 1, placeholder: i18n('Ask anything, for example: why did she suddenly forget yesterday?'), 'aria-label': i18n('Q&A') });
     const sendBtn = button(i18n('Send'), () => send(), { iconName: 'send', className: 'is-primary wb-send' });
-    const chips = h('div', { class: 'wb-chips' }, CHIPS.map(c => h('button', { type: 'button', class: 'wb-chip', onClick: () => { input.value = c; grow(); input.focus(); } }, c)));
+    const chipsRow = h('div', { class: 'wb-chips' });
     const opts = h('div', { class: 'wb-composer-opts' });
-    const composer = h('div', { class: 'wb-composer' }, chips, h('div', { class: 'wb-input-row' }, input, sendBtn), opts);
+    const composer = h('div', { class: 'wb-composer' }, chipsRow, h('div', { class: 'wb-input-row' }, input, sendBtn), opts);
     const chat = h('section', { class: 'wb-chat' }, chatHead, body, composer);
     const el = h('div', { class: 'wb-page is-split' }, side, chat);
+
+    function paintChips() {
+        clear(chipsRow);
+        put(chipsRow, chips().map(c => h('button', { type: 'button', class: 'wb-chip', onClick: () => { input.value = c; grow(); input.focus(); } }, c)));
+    }
+    paintChips();
 
     let session = null;
     let recentSessions = [];
     const sessionScopes = new Map();
     let selectionVersion = 0;
-    let pendingNewRun = false;
+    let pendingNewSelection = -1;
+    let refreshVersion = 0;
     const activeRuns = new Map();
     let sideOpen = false;
     let counts = null;
 
+    function validChatTarget(t) {
+        if (!t || typeof t !== 'object') return null;
+        if (t.is_group === true && typeof t.id === 'string' && t.id) return { is_group: true, id: t.id };
+        if (t.is_group !== true && typeof t.avatar_url === 'string' && t.avatar_url && typeof t.file_name === 'string' && t.file_name) {
+            return {
+                is_group: false,
+                avatar_url: t.avatar_url,
+                file_name: t.file_name,
+                ...(typeof t.char_name === 'string' && t.char_name ? { char_name: t.char_name } : {}),
+            };
+        }
+        return null;
+    }
+
     function currentScope() {
         const snap = app.snapshot?.();
         const ctx = globalThis.Luker?.getContext?.() ?? globalThis.lukerContext ?? null;
-        return (snap?.chat?.chatId || ctx?.getCurrentChatId?.()) ? { scope: 'chat' } : { scope: 'global' };
+        const resolved = validChatTarget(snap?.chat?.target) || validChatTarget(ctx?.resolveChatStateTarget?.());
+        if (resolved) return { scope: 'chat', target: resolved };
+        if (ctx?.groupId && Array.isArray(ctx.groups)) {
+            const g = ctx.groups.find(x => String(x.id) === String(ctx.groupId));
+            const id = String(g?.chat_id || snap?.chat?.chatId || '').trim();
+            if (id) return { scope: 'chat', target: { is_group: true, id } };
+        }
+        const ch = Array.isArray(ctx?.characters) ? ctx.characters[ctx?.characterId] : null;
+        const avatar = String(ch?.avatar || snap?.card?.avatar || '').trim();
+        const file = String(ch?.chat || snap?.chat?.chatId || '').trim();
+        if (avatar && file) {
+            return { scope: 'chat', target: { is_group: false, avatar_url: avatar, file_name: file } };
+        }
+        const rawChatId = ctx?.getCurrentChatId?.();
+        const hasChatId = Boolean(snap?.chat?.chatId || (typeof rawChatId === 'string' && rawChatId));
+        return hasChatId ? { scope: 'chat' } : { scope: 'global' };
     }
+
+    let activeScopeKey = scopeKey(currentScope());
 
     function scopeOf(s) {
         return (s?.id && sessionScopes.get(s.id)) || currentScope();
@@ -72,7 +128,7 @@ export function createAskPage(app) {
     }
 
     function currentBusy() {
-        return Boolean((session?.id && activeRunForSession(session.id)) || (!session && pendingNewRun));
+        return Boolean((session?.id && activeRunForSession(session.id)) || (!session && pendingNewSelection === selectionVersion));
     }
 
     function grow() {
@@ -148,17 +204,20 @@ export function createAskPage(app) {
     }
 
     async function refreshRecent() {
+        const scope = currentScope();
+        const key = scopeKey(scope);
+        const ver = ++refreshVersion;
         if (!store) {
             recentSessions = [];
             return;
         }
         try {
-            const scope = currentScope();
             const list = await store.list('ask', scope);
+            if (ver !== refreshVersion || key !== activeScopeKey) return;
             for (const s of list) sessionScopes.set(s.id, scope);
             recentSessions = list;
         } catch (err) {
-            app.toast(String(err?.message || err), { error: true });
+            if (ver === refreshVersion) app.toast(String(err?.message || err), { error: true });
         }
     }
 
@@ -250,7 +309,7 @@ export function createAskPage(app) {
     }
 
     function answerText(t) {
-        return t.error || [t.answer, t.fixPrompt ? `\n${i18nFormat('Suggested fix in "${0}": ${1}', WS_NAME[t.suggest] || '', t.fixPrompt)}` : ''].join('').trim();
+        return t.error || [t.answer, t.fixPrompt ? `\n${i18nFormat('Suggested fix in "${0}": ${1}', wsName(t.suggest), t.fixPrompt)}` : ''].join('').trim();
     }
 
     /** New session holding turns [0, upto). */
@@ -317,8 +376,8 @@ export function createAskPage(app) {
         return h('div', { class: 'wb-msg-ai' },
             reads ? h('div', { class: 'wb-reads' }, icon('eye', { size: 12 }), h('span', { text: i18nFormat('Read ${0}', reads) })) : null,
             t.error ? h('div', { class: 'wb-msg-error', text: t.error }) : renderMarkdown(t.answer),
-            t.suggest && WS_NAME[t.suggest] ? h('div', { class: 'wb-ans-acts' },
-                button(i18nFormat('Go edit ${0}', WS_NAME[t.suggest]), () => app.go('ai', { ws: t.suggest, draft: t.fixPrompt || '', from: t.answer }), { iconName: 'spark' })) : null,
+            t.suggest && wsName(t.suggest) ? h('div', { class: 'wb-ans-acts' },
+                button(i18nFormat('Go edit ${0}', wsName(t.suggest)), () => app.go('ai', { ws: t.suggest, draft: t.fixPrompt || '', from: t.answer }), { iconName: 'spark' })) : null,
             t.sent ? h('details', { class: 'wb-sent' },
                 h('summary', null, icon('up', { size: 12 }), h('span', { text: i18nFormat('Sent to the AI (about ${0} tokens)', formatTokens(Math.round(t.sent / 1.6))) })),
                 h('ul', null,
@@ -348,9 +407,11 @@ export function createAskPage(app) {
         const selection = selectionVersion;
         const startingSession = session;
         const ownerScope = startingSession ? scopeOf(startingSession) : currentScope();
-        if (!startingSession) pendingNewRun = true;
+        const stillViewingStart = () => selection === selectionVersion && session === startingSession;
+        if (!startingSession) pendingNewSelection = selection;
         paintOpts();
 
+        let ownerId = startingSession?.id || '';
         let runId = '';
         let controller = null;
         try {
@@ -364,25 +425,26 @@ export function createAskPage(app) {
             } catch (err) {
                 overview = finishOverview({ 错误: String(err?.message || err) }, filter);
             }
-            const stillViewingStart = selection === selectionVersion && startingSession === session;
             if (askCfg.previewBeforeSend && !globalThis.confirm(i18nFormat('To be sent to the AI:\n\nQuestion: ${0}\n\nOverview:\n${1}\n\nThe AI will then read data as needed. Continue?', question, JSON.stringify(overview, null, 1).slice(0, 1500)))) {
                 return;
             }
 
             const owner = startingSession || await store.create({ kind: 'ask', title: titleFrom(question) }, ownerScope);
-            sessionScopes.set(owner.id, ownerScope);
-            if (!startingSession && stillViewingStart) session = owner;
-            pendingNewRun = false;
+            ownerId = owner.id;
+            sessionScopes.set(ownerId, ownerScope);
+            if (pendingNewSelection === selection) pendingNewSelection = -1;
+            if (!startingSession && stillViewingStart()) session = owner;
 
-            const ownerId = owner.id;
             const started = (await store.get(ownerId, ownerScope)) || owner;
             const saveTo = async (patch) => {
                 const updated = await store.update(ownerId, patch, ownerScope);
                 if (updated) {
                     if (session?.id === ownerId) session = updated;
-                    const idx = recentSessions.findIndex(r => r.id === ownerId);
-                    if (idx >= 0) recentSessions[idx] = updated;
-                    else recentSessions = [updated, ...recentSessions];
+                    if (scopeKey(ownerScope) === activeScopeKey) {
+                        const idx = recentSessions.findIndex(r => r.id === ownerId);
+                        if (idx >= 0) recentSessions[idx] = updated;
+                        else recentSessions = [updated, ...recentSessions];
+                    }
                 }
                 return updated;
             };
@@ -436,11 +498,12 @@ export function createAskPage(app) {
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
         } finally {
-            pendingNewRun = false;
+            if (pendingNewSelection === selection) pendingNewSelection = -1;
             if (runId) activeRuns.delete(runId);
             await refreshRecent();
             paintHead();
-            if (!startingSession || session?.id === startingSession?.id) {
+            const viewingOwner = ownerId ? session?.id === ownerId : stillViewingStart();
+            if (viewingOwner) {
                 paintBody();
             } else {
                 paintOpts();
@@ -448,10 +511,26 @@ export function createAskPage(app) {
         }
     }
 
+    async function syncScopeChange() {
+        const nextScope = currentScope();
+        const nextKey = scopeKey(nextScope);
+        if (nextKey === activeScopeKey) return;
+        activeScopeKey = nextKey;
+        if (session && scopeKey(scopeOf(session)) !== nextKey) {
+            selectionVersion++;
+            session = null;
+            paintBody();
+        }
+        await refreshRecent();
+        if (activeScopeKey === nextKey) paintHead();
+    }
+
     return {
         el,
         flush: true,
         async show(o = {}) {
+            activeScopeKey = scopeKey(currentScope());
+            paintChips();
             paintSide();
             paintHead();
             paintBody();
@@ -461,7 +540,10 @@ export function createAskPage(app) {
             paintHead();
             requestAnimationFrame(() => input.focus());
         },
-        onSnapshot() { paintSide(); },
+        onSnapshot() {
+            paintSide();
+            void syncScopeChange();
+        },
         onEscape() {
             if (sideOpen) { sideOpen = false; paintSide(); return true; }
             const run = session?.id ? activeRunForSession(session.id) : null;

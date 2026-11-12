@@ -13,13 +13,22 @@ import {
 } from '../../lens-shared/ui.js';
 import { icon } from '../icons.js';
 
-export const TONES = {
-    memory: i18n('Memory graph'),
-    orch: i18n('Orchestration'),
-    preset: i18n('Preset'),
-    card: i18n('Character card'),
-    world: i18n('World book'),
+const TONE_KEYS = {
+    memory: 'Memory graph',
+    orch: 'Orchestration',
+    preset: 'Preset',
+    card: 'Character card',
+    world: 'World book',
 };
+
+export function toneLabel(tone) {
+    const key = TONE_KEYS[tone];
+    return key ? i18n(key) : String(tone ?? '');
+}
+
+export function getTones() {
+    return Object.fromEntries(Object.entries(TONE_KEYS).map(([k, v]) => [k, i18n(v)]));
+}
 
 export function iconButton(name, label, onClick, { className = '', disabled = false, pressed, size = 16 } = {}) {
     return sharedIconButton(name, label, onClick, { className, disabled, pressed, size, renderIcon: icon });

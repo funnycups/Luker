@@ -93,9 +93,9 @@ export function redact(text) {
         .replace(/\bxai-[A-Za-z0-9-]{10,}\b/g, 'xai-***')
         .replace(/\bAKIA[0-9A-Z]{16}\b/g, 'AKIA***')
         .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, 'Bearer ***')
-        .replace(/\b(authorization(?:\s*(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?|\s+))Basic\s+\S+/gi, '$1Basic ***')
+        .replace(/\b(authorization(?:\s*(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?|\s+))Basic\s+[^\s"'\\,;}{]+/gi, '$1Basic ***')
         .replace(/\bBasic\s+(?:[A-Za-z0-9+/]{8,}={0,2}|[A-Za-z0-9+/=]*[=0-9+/][A-Za-z0-9+/=]*)/g, 'Basic ***')
-        .replace(/\b([A-Za-z0-9_-]*(?:api[_-]?key|token|secret|password|authorization|cookie))((?:\\?["'])?\s*[:=]\s*(?:\\?["'])?)([^"'\\\s,;}{]{4,})/gi, '$1$2***')
+        .replace(/\b([A-Za-z0-9_-]*(?:api[_-]?key|token|secret|password|authorization|cookie))((?:\\?["'])?\s*[:=]\s*(?:\\?["'])?)(?!(?:Bearer|Basic)\s+\*\*\*)([^"'\\\s,;}{]{4,})/gi, '$1$2***')
         .replace(/\b(?:https?|wss?):\/\/[^\s"'\\<>]+/gi, (url) => {
             try {
                 const u = new URL(url);

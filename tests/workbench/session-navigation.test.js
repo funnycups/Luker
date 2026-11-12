@@ -169,4 +169,121 @@ describe('Ask page runId isolation across session switch & history cleanup', () 
         expect(lastMessages.some(m => m.role === 'assistant' && m.content === '')).toBe(false);
         expect(lastMessages.some(m => m.role === 'assistant' && m.content === 'Old A')).toBe(true);
     });
+
+    test('switching away from a brand-new session while store.create is awaiting and switching Luker chats mid-flight isolate targets and views', async () => {
+        const byChat = new Map();
+        const keyOf = (scope) => (scope?.target ? `${scope.target.avatar_url}:${scope.target.file_name}` : 'active');
+        const ensureBucket = (scope) => {
+            const k = keyOf(scope);
+            if (!byChat.has(k)) byChat.set(k, []);
+            return byChat.get(k);
+        };
+
+        let resolveCreate;
+        let resolveAi;
+        let activeChat = {
+            chatId: 'chat1.jsonl',
+            label: 'Chat 1',
+            floors: 3,
+            target: { is_group: false, avatar_url: 'alice.png', file_name: 'chat1.jsonl' },
+        };
+
+        const chat1Existing = { id: 's_c1_existing', kind: 'ask', title: 'Existing C1', createdAt: 1, updatedAt: 10, turns: [{ role: 'user', text: 'Existing Q', at: 1 }, { role: 'ai', answer: 'Existing A', at: 2 }] };
+        const chat2Existing = { id: 's_c2_existing', kind: 'ask', title: 'Existing C2', createdAt: 1, updatedAt: 20, turns: [{ role: 'user', text: 'C2 Q', at: 1 }, { role: 'ai', answer: 'C2 A', at: 2 }] };
+        byChat.set('alice.png:chat1.jsonl', [chat1Existing]);
+        byChat.set('alice.png:chat2.jsonl', [chat2Existing]);
+
+        const sessions = {
+            list: jest.fn(async (kind = null, scope = {}) => ensureBucket(scope).filter(s => !kind || s.kind === kind).map(s => JSON.parse(JSON.stringify(s)))),
+            get: jest.fn(async (id, scope = {}) => {
+                const hit = ensureBucket(scope).find(s => s.id === id);
+                return hit ? JSON.parse(JSON.stringify(hit)) : null;
+            }),
+            create: jest.fn(async (fields, scope = {}) => {
+                const created = { id: 's_new_c1', title: '', createdAt: 2, updatedAt: 30, turns: [], ...fields };
+                await new Promise((r) => { resolveCreate = r; });
+                ensureBucket(scope).unshift(JSON.parse(JSON.stringify(created)));
+                return JSON.parse(JSON.stringify(created));
+            }),
+            update: jest.fn(async (id, patch, scope = {}) => {
+                const list = ensureBucket(scope);
+                const idx = list.findIndex(s => s.id === id);
+                if (idx < 0) return null;
+                const next = { ...list[idx], ...patch, updatedAt: Date.now() };
+                list[idx] = JSON.parse(JSON.stringify(next));
+                return JSON.parse(JSON.stringify(next));
+            }),
+        };
+
+        const app = {
+            sessions,
+            snapshot: () => ({ chat: activeChat, card: { name: 'Alice', avatar: 'alice.png', books: [] }, preset: { name: 'P1' }, connection: 'OpenAI' }),
+            settings: () => ({ ask: { sources: { inspector: true, frontLogs: true, serverLogs: true, content: true, plugins: true }, floors: 2, previewBeforeSend: false, redact: true } }),
+            suggestions: () => [],
+            saveSettings: jest.fn(),
+            go: jest.fn(),
+            toast: jest.fn(),
+            source: {
+                listRequests: async () => [],
+                frontendLogCount: async () => 0,
+                debugLoggingOn: () => true,
+                askOverview: async () => ({ chat: activeChat.label }),
+                askReaders: () => ({}),
+                aiRequest: jest.fn(async () => new Promise((r) => { resolveAi = r; })),
+            },
+        };
+
+        const page = createAskPage(app);
+        document.body.appendChild(page.el);
+        await page.show();
+        await flushMicrotasks();
+
+        // Start a brand-new conversation (session === null) on Chat 1
+        const textarea = page.el.querySelector('textarea.wb-input');
+        const sendBtn = page.el.querySelector('button.wb-send');
+        textarea.value = 'New question on Chat 1';
+        sendBtn.click();
+        await flushMicrotasks();
+
+        // While store.create is still awaiting, switch to chat1Existing
+        const sel = page.el.querySelector('select.wb-chat-hist');
+        sel.value = chat1Existing.id;
+        sel.dispatchEvent(new Event('change'));
+        await flushMicrotasks();
+        expect(page.el.textContent).toContain('Existing A');
+
+        // Resolve store.create: must NOT hijack the current view away from chat1Existing
+        resolveCreate();
+        await flushMicrotasks();
+        await flushMicrotasks();
+        expect(page.el.textContent).toContain('Existing A');
+        expect(page.el.querySelector('.wb-reads.is-live')).toBeNull();
+
+        // Simulate Luker switching chats mid-flight (CHAT_CHANGED -> onSnapshot)
+        activeChat = {
+            chatId: 'chat2.jsonl',
+            label: 'Chat 2',
+            floors: 1,
+            target: { is_group: false, avatar_url: 'alice.png', file_name: 'chat2.jsonl' },
+        };
+        page.onSnapshot();
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        // Session resets off Chat 1's old session and history dropdown now lists Chat 2's session
+        expect(page.el.textContent).not.toContain('Existing A');
+        const optionsAfterSwitch = [...page.el.querySelectorAll('select.wb-chat-hist option')].map(o => o.value);
+        expect(optionsAfterSwitch).toContain('s_c2_existing');
+        expect(optionsAfterSwitch).not.toContain('s_c1_existing');
+
+        // Complete the in-flight AI request from Chat 1: must persist to Chat 1's explicit target, never Chat 2, and leave Chat 2 view clean
+        resolveAi({ text: '', calls: [{ id: 'a1', name: 'wb_answer', args: { text: 'Answer for Chat 1' } }] });
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        const chat1Stored = byChat.get('alice.png:chat1.jsonl').find(s => s.id === 's_new_c1');
+        expect(chat1Stored?.turns?.at(-1)?.answer).toBe('Answer for Chat 1');
+        expect(byChat.get('alice.png:chat2.jsonl').some(s => s.id === 's_new_c1')).toBe(false);
+        expect(page.el.textContent).not.toContain('Answer for Chat 1');
+    });
 });

@@ -75,6 +75,41 @@ describe('workbench Ask model & source readers', () => {
         expect(allFloors.messages).toHaveLength(15);
         expect(allFloors.messages[0].floor).toBe(0);
         expect(allFloors.messages.at(-1).floor).toBe(14);
+
+        // null, undefined, and empty string fall back to default 2 (5 floors), never 0
+        for (const unsetVal of [null, undefined, '']) {
+            globalThis.Luker = { getContext: () => ctxWithFloors(unsetVal) };
+            const defaulted = await askReaders({ redactText: false }).wb_read_chat({});
+            expect(defaulted.messages).toHaveLength(5);
+        }
+    });
+
+    test('wb_read_world_info stops across outer books at 60 entries and surfaces load errors', async () => {
+        const makeEntries = (prefix, count) => Object.fromEntries(
+            Array.from({ length: count }, (_, i) => [i, { uid: i, key: [`${prefix}_${i}`], comment: `${prefix} ${i}`, content: 'body' }]),
+        );
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        globalThis.Luker = {
+            getContext: () => ({
+                chat: [],
+                characters: [],
+                chatWorldInfo: {
+                    getNames: () => ['BrokenBook', 'BookA', 'BookB'],
+                    globalSelection: [],
+                },
+                loadWorldInfo: async (name) => {
+                    if (name === 'BrokenBook') throw new Error('disk read error');
+                    if (name === 'BookA') return { entries: makeEntries('a', 55) };
+                    return { entries: makeEntries('b', 20) };
+                },
+                extensionSettings: {},
+            }),
+        };
+
+        const res = await askReaders({ redactText: false }).wb_read_world_info({});
+        expect(res.entries).toHaveLength(60);
+        expect(res.errors).toEqual([{ book: 'BrokenBook', error: 'disk read error' }]);
+        expect(warnSpy).toHaveBeenCalled();
     });
 
     test('runAsk executes read calls then wb_answer, respects MAX_ROUNDS, and handles plain text', async () => {

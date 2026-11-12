@@ -214,28 +214,35 @@ export async function runAsk({ question, overview, readers, request, sources = {
     return { answer: i18n('(The AI read a lot without reaching a conclusion — try asking something more specific)'), suggest: '', fixPrompt: '', requestIds: [], reads, sent };
 }
 
-const READ_LABELS = {
-    wb_list_requests: i18n('Request list'),
-    wb_read_request: i18n('Request details'),
-    wb_read_frontend_logs: i18n('Frontend logs'),
-    wb_read_server_logs: i18n('Server logs'),
-    wb_read_chat: i18n('This chat'),
-    wb_read_character: i18n('Character card'),
-    wb_read_world_info: i18n('World book'),
-    wb_read_preset: i18n('Preset'),
-    wb_read_last_prompt: i18n('Prompt breakdown'),
-    wb_read_memory: i18n('Memory graph'),
-    wb_read_orchestrator: i18n('Orchestration'),
-    wb_read_suggestions: i18n('Suggestions'),
+const READ_LABEL_KEYS = {
+    wb_list_requests: 'Request list',
+    wb_read_request: 'Request details',
+    wb_read_frontend_logs: 'Frontend logs',
+    wb_read_server_logs: 'Server logs',
+    wb_read_chat: 'This chat',
+    wb_read_character: 'Character card',
+    wb_read_world_info: 'World book',
+    wb_read_preset: 'Preset',
+    wb_read_last_prompt: 'Prompt breakdown',
+    wb_read_memory: 'Memory graph',
+    wb_read_orchestrator: 'Orchestration',
+    wb_read_suggestions: 'Suggestions',
 };
+
+export function readLabel(name) {
+    const key = READ_LABEL_KEYS[name];
+    return key ? i18n(key) : String(name ?? '');
+}
+
+export function getReadLabels() {
+    return Object.fromEntries(Object.entries(READ_LABEL_KEYS).map(([k, v]) => [k, i18n(v)]));
+}
 
 /** "Request list · Request details ×3 · Frontend logs" */
 export function readsSummary(reads, extraLabels = null) {
     const counts = new Map();
     for (const r of reads || []) counts.set(r.name, (counts.get(r.name) || 0) + 1);
     return [...counts.entries()]
-        .map(([name, n]) => `${extraLabels?.[name] || READ_LABELS[name] || name}${n > 1 ? ` ×${n}` : ''}`)
+        .map(([name, n]) => `${extraLabels?.[name] || readLabel(name)}${n > 1 ? ` ×${n}` : ''}`)
         .join(' · ');
 }
-
-export { READ_LABELS };

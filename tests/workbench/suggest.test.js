@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, test, expect } from '@jest/globals';
-import { runRules, listRules, similarity, RULES } from '../../public/scripts/workbench/model/suggest.js';
+import { runRules, listRules, similarity, baseRules } from '../../public/scripts/workbench/model/suggest.js';
 
 const ids = (list) => list.map(s => s.id);
 
@@ -31,7 +31,7 @@ describe('workbench suggest rules & SuggestRuleProvider registry integration', (
         expect(ids(runRules(snap, { enabled: { 'preset.dup': true } }))).toEqual(['card.pending', 'preset.dup']);
         expect(similarity(text, text)).toBeGreaterThan(0.99);
         expect(similarity(text, 'A completely unrelated sentence about astrophysics and telescopes.')).toBeLessThan(0.3);
-        expect(RULES.length).toBeGreaterThanOrEqual(2);
+        expect(baseRules().length).toBeGreaterThanOrEqual(2);
     });
 
     test('integrates SuggestRuleProvider rules and respects enabled/dismissed state', () => {
