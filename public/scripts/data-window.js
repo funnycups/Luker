@@ -76,7 +76,8 @@ function dbUrlHost(url) {
 }
 
 // Survives closing and reopening the window, like the old per-backend action lock.
-const shared = { pending: new Set(), jobsByHandle: new Map(), backupSel: null };
+// Jobs, their listeners and the backup selection are kept per user handle.
+const shared = { pending: new Set(), jobsByHandle: new Map(), jobListeners: new Map(), selByHandle: new Map() };
 
 function getSharedJobs(key) {
     if (!shared.jobsByHandle.has(key)) {
@@ -87,6 +88,28 @@ function getSharedJobs(key) {
         });
     }
     return shared.jobsByHandle.get(key);
+}
+
+/** Whether a job for this user is running or waiting to be resumed. */
+function jobActive({ backup, restore, migrate }) {
+    return backup.running || restore.running || migrate.running || !!restore.interrupted || !!restore.needsDb;
+}
+
+/**
+ * Listens for progress of this user's jobs; the window that started a job may already be closed.
+ * @param {string} key User handle
+ * @param {(job: string, final: boolean) => void} fn Listener
+ * @returns {() => void} Unsubscribes
+ */
+function onJobChange(key, fn) {
+    if (!shared.jobListeners.has(key)) shared.jobListeners.set(key, new Set());
+    const set = shared.jobListeners.get(key);
+    set.add(fn);
+    return () => set.delete(fn);
+}
+
+function notifyJob(key, job, final = false) {
+    for (const fn of shared.jobListeners.get(key) || []) fn(job, final);
 }
 
 /**
@@ -114,10 +137,15 @@ export class DataPages extends LukerWindow {
         this.failedKeys = new Set();
         this.noticeBusy = new Set();
         const s = this.p.snapshot();
-        shared.backupSel ??= new Set(s.backupCategories.filter(c => c.def && (c.id !== 'secrets' || s.caps.allowSecrets)).map(c => c.id));
-        this.backupSel = shared.backupSel;
-        const jobsKey = this.handle || s.handle || '';
-        this.f = { device: { label: s.device.label }, schedule: { ...s.schedule }, ...getSharedJobs(jobsKey) };
+        this.jobsKey = this.handle || s.handle || '';
+        const jobs = getSharedJobs(this.jobsKey);
+        // A fresh window starts from the defaults unless a job still needs the selection it was started with.
+        if (!shared.selByHandle.has(this.jobsKey) || !jobActive(jobs)) {
+            shared.selByHandle.set(this.jobsKey, new Set(s.backupCategories.filter(c => c.def).map(c => c.id)));
+        }
+        this.backupSel = shared.selByHandle.get(this.jobsKey);
+        this.f = { device: { label: s.device.label }, schedule: { ...s.schedule }, ...jobs };
+        this.settingsKey = JSON.stringify([s.device, s.schedule]);
 
         this.root.addEventListener('input', e => this.onInput(e));
         this.root.addEventListener('change', e => this.onChange(e));
@@ -125,6 +153,7 @@ export class DataPages extends LukerWindow {
         this.root.addEventListener('dragleave', e => this.onDrag(e, false));
         this.root.addEventListener('drop', e => this.onDrop(e));
         this.unsubscribe = this.p.subscribe(() => this.refreshLive());
+        this.offJob = onJobChange(this.jobsKey, (job, final) => this.onJobChange(job, final));
         this.ticker = setInterval(() => this.tick(), 1000);
         this.finishTimer = null;
         this.conflictTrees = new Map();
@@ -186,6 +215,7 @@ export class DataPages extends LukerWindow {
 
     destroy() {
         this.unsubscribe?.();
+        this.offJob?.();
         clearInterval(this.ticker);
         clearTimeout(this.finishTimer);
         this.finishTimer = null;
@@ -275,11 +305,23 @@ export class DataPages extends LukerWindow {
         if (Date.now() % 15000 < 1000) this.refreshRegion('cards');
     }
 
+    /** Redraws the page of a job whose progress changed, and the other job pages when one ends. */
+    onJobChange(job, final) {
+        const view = this.top.view;
+        const own = { backup: 'backup', restore: 'restore', migrate: 'migrateIn' }[job];
+        if (view === own || (final && ['backup', 'restore', 'migrateOut', 'migrateIn'].includes(view))) this.rerender();
+        this.renderStatus();
+    }
+
     refreshLive() {
         const v = this.top.view;
-        // Settings load after the window opens; fill the form until the user edits it.
-        if (!this.settingsTouched) {
-            const s = this.snap;
+        // Settings load after the window opens; fill the form until the user edits it,
+        // and never rebuild it while the user is in one of its fields.
+        const s = this.snap;
+        const settingsKey = JSON.stringify([s.device, s.schedule]);
+        const focused = v === 'settings' && this.root.querySelector('.dw-body')?.contains(document.activeElement);
+        if (!this.settingsTouched && !focused && settingsKey !== this.settingsKey) {
+            this.settingsKey = settingsKey;
             this.f.device = { label: s.device.label };
             this.f.schedule = { ...s.schedule };
             if (v === 'settings') this.rerender();
@@ -329,10 +371,9 @@ export class DataPages extends LukerWindow {
     }
 
     backupCats(title = t`Content`) {
-        const { backupCategories, isAdmin, caps } = this.snap;
+        const { backupCategories, isAdmin } = this.snap;
         const cats = backupCategories.filter(c => !c.adminOnly || isAdmin);
         const n = cats.filter(c => this.backupSel.has(c.id)).length;
-        const off = c => c.id === 'secrets' && !caps.allowSecrets;
         return `<section class="dw-sec">
             <div class="dw-sec-title">${title}<span class="dw-count">${n} / ${cats.length}</span><span class="dw-sp"></span>
                 <button class="dw-link" data-act="bsel" data-mode="all">${t`Select all`}</button>
@@ -340,10 +381,10 @@ export class DataPages extends LukerWindow {
                 <button class="dw-link" data-act="bsel" data-mode="none">${t`Clear`}</button>
             </div>
             <div class="dw-cats"><div class="dw-chips">${cats.map(c => `
-                <button class="dw-chip${this.backupSel.has(c.id) ? ' on' : ''}${c.sensitive || c.adminOnly ? ' opt' : ''}" data-act="bcat" data-id="${c.id}" ${off(c) ? `disabled title="${t`The server does not allow exporting API keys`}"` : ''}>${c.sensitive ? ic('lock') : ''}${esc(c.label)}</button>`).join('')}
+                <button class="dw-chip${this.backupSel.has(c.id) ? ' on' : ''}${c.sensitive || c.adminOnly ? ' opt' : ''}" data-act="bcat" data-id="${c.id}">${c.sensitive ? ic('lock') : ''}${esc(c.label)}</button>`).join('')}
             </div></div>
         </section>
-        ${this.backupSel.has('secrets') && caps.allowSecrets ? `<div class="dw-banner warning">${ic('key')}<span>${t`API keys will be included. Keep the file safe.`}</span></div>` : ''}`;
+        ${this.backupSel.has('secrets') ? `<div class="dw-banner warning">${ic('key')}<span>${t`API keys will be included. Keep the file safe.`}</span></div>` : ''}`;
     }
 
     catSet(key) {
@@ -905,14 +946,12 @@ export class DataPages extends LukerWindow {
             case 'cat':
             case 'cat-group': return this.toggleCat(el);
             case 'bcat':
-                if (el.disabled) return;
                 this.backupSel.has(id) ? this.backupSel.delete(id) : this.backupSel.add(id);
                 return this.rerender();
             case 'bsel': {
                 const cats = this.snap.backupCategories.filter(c => !c.adminOnly || this.snap.isAdmin);
                 const mode = el.dataset.mode;
-                const allowed = cats.filter(c => c.id !== 'secrets' || this.snap.caps.allowSecrets);
-                const ids = mode === 'all' ? allowed.map(c => c.id) : mode === 'def' ? allowed.filter(c => c.def).map(c => c.id) : [];
+                const ids = mode === 'all' ? cats.map(c => c.id) : mode === 'def' ? cats.filter(c => c.def).map(c => c.id) : [];
                 this.backupSel.clear();
                 ids.forEach(x => this.backupSel.add(x));
                 return this.rerender();
@@ -1069,6 +1108,8 @@ export class DataPages extends LukerWindow {
         try {
             this.f.device.label = await this.p.saveDevice(this.f.device.label.trim());
             this.f.schedule = { ...await this.p.saveSchedule(idle, poll) };
+            this.settingsTouched = false;
+            this.settingsKey = JSON.stringify([this.snap.device, this.snap.schedule]);
             this.rerender();
             this.toast(t`Saved`);
         } catch (err) {
@@ -1265,13 +1306,13 @@ export class DataPages extends LukerWindow {
         try {
             b.done = await this.p.downloadBackup([...this.backupSel], p => {
                 Object.assign(b, p);
-                if (this.top.view === 'backup') this.rerender();
+                notifyJob(this.jobsKey, 'backup');
             });
         } catch (err) {
             this.toast(err.message, true);
         } finally {
             b.running = false;
-            if (this.top.view === 'backup') this.rerender();
+            notifyJob(this.jobsKey, 'backup', true);
         }
     }
 
@@ -1300,7 +1341,7 @@ export class DataPages extends LukerWindow {
             r.done = await this.p.restoreBackup({ file: r.file, mode: r.mode, categories: [...this.backupSel], tempDb: r.needsDb ? r.db : null, handle: this.handle }, p => {
                 Object.assign(r, p);
                 if (p.stage > 0) r.uploaded = true;
-                if (this.top.view === 'restore') this.rerender();
+                notifyJob(this.jobsKey, 'restore');
             });
             Object.assign(r, { file: null, needsDb: null, uploaded: false });
             // A job keeps running after its window closes; do not schedule a
@@ -1322,7 +1363,7 @@ export class DataPages extends LukerWindow {
             }
         } finally {
             r.running = false;
-            if (this.top.view === 'restore') this.rerender();
+            notifyJob(this.jobsKey, 'restore', true);
         }
     }
 
@@ -1367,7 +1408,7 @@ export class DataPages extends LukerWindow {
         try {
             m.done = await this.p.migrateFromLink({ link: m.inLink, mode: m.mode, categories: [...this.backupSel], handle: this.handle }, p => {
                 Object.assign(m, p);
-                if (this.top.view === 'migrateIn') this.rerender();
+                notifyJob(this.jobsKey, 'migrate');
             });
             m.inLink = '';
             if (this.root.isConnected && !m.done.skipped && !m.done.rejected && !m.done.failed && !m.done.empty) {
@@ -1381,7 +1422,7 @@ export class DataPages extends LukerWindow {
             m.error = err.message;
         } finally {
             m.running = false;
-            if (this.top.view === 'migrateIn') this.rerender();
+            notifyJob(this.jobsKey, 'migrate', true);
         }
     }
 }

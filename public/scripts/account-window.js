@@ -443,6 +443,7 @@ class AccountWindow extends DataPages {
             await requestMakeSnapshot();
             this.toast(t`Snapshot created`);
             s.list = null;
+            s.error = null;
         } catch (err) {
             this.toast(err.message || String(err), true);
         } finally {
