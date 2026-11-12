@@ -4,6 +4,7 @@
 <resources>
     <string name="app_name">Luker</string>
     <string name="loading_runtime">正在启动本地 Luker 服务…</string>
+    <string name="loading_runtime_progress">正在准备本地 Luker 服务…（%1$d%%）</string>
     <string name="loading_webview">服务已启动，正在载入界面…</string>
     <string name="loading_failed">服务启动失败，请重启应用。</string>
     <string name="loading_failed_with_reason">服务启动失败：%1$s</string>

@@ -442,7 +442,7 @@ typedef int (*node_start_fn)(int argc, char *argv[]);
 
 struct NodeThreadArgs {
   node_start_fn start;
-  char *argv[6]; /* node + up to 4 flags + NULL */
+  char *argv[8]; /* node + up to 6 flags + NULL */
   int rc;
 };
 
@@ -472,7 +472,7 @@ static void *bootstrapMain(void *arg) {
 static const char *startBackendAsync(const char *params) {
   static char errBuf[128];
 
-  if (g_started) {
+  if (g_started && getStatusCode() != ST_FAILED) {
     return "err:already started";
   }
   g_started = 1;
@@ -844,15 +844,19 @@ static const char *startEmbeddedNode(const char *params) {
   static char arg0[MAX_LINE * 2];
   static char arg1[] = "--no-verify-heap";
   static char arg2[] = "--jitless";
-  static char arg3[MAX_LINE * 2];
+  static char arg3[] = "--preserve-symlinks";
+  static char arg4[] = "--preserve-symlinks-main";
+  static char arg5[MAX_LINE * 2];
   snprintf(arg0, sizeof(arg0), "%s", nodePath);
-  snprintf(arg3, sizeof(arg3), "%s", cfg.script);
+  snprintf(arg5, sizeof(arg5), "%s", cfg.script);
   g_nodeArgs.start = start;
   g_nodeArgs.argv[0] = arg0;
   g_nodeArgs.argv[1] = arg1;
   g_nodeArgs.argv[2] = arg2;
   g_nodeArgs.argv[3] = arg3;
-  g_nodeArgs.argv[4] = NULL;
+  g_nodeArgs.argv[4] = arg4;
+  g_nodeArgs.argv[5] = arg5;
+  g_nodeArgs.argv[6] = NULL;
 
   /* Run node::Start on THIS thread — we are already the detached bootstrap
    * thread with a 32MB stack, so there is no reason to hand off again.
@@ -869,7 +873,7 @@ static const char *startEmbeddedNode(const char *params) {
   g_nodeTid = (pid_t)syscall(__NR_gettid);
   setStatus(ST_RUNNING, "node::Start");
   logWrite("[embed] bootstrap tid=%ld, calling node::Start", (long)g_nodeTid);
-  int rc = start(4, g_nodeArgs.argv);
+  int rc = start(6, g_nodeArgs.argv);
   logWrite("[embed] node::Start returned %d (backend stopped)", rc);
   snprintf(errBuf, sizeof(errBuf), "err:node::Start returned %d", rc);
   setStatus(ST_FAILED, errBuf);

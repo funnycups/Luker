@@ -5,8 +5,7 @@ plugins {
 
 val projectRootDir = rootProject.projectDir.parentFile
 val generatedNodeProjectDir = layout.buildDirectory.dir("generated/nodejs-project")
-val generatedNodeProjectLukerDir = generatedNodeProjectDir.map { it.dir("luker") }
-val prebuiltBundlesRelativePath = "_prebuilt-bundles"
+val stagingNodeProjectDir = layout.buildDirectory.dir("intermediates/mobile-runtime-staging")
 val jniLibsDir = file("src/main/jniLibs")
 val availableNodeAbis = jniLibsDir
     .listFiles()
@@ -51,53 +50,46 @@ val prebuildFrontendBundles by tasks.registering(Exec::class) {
     outputs.cacheIf { true }
 }
 
-val collectPrebuiltBundles by tasks.registering(Sync::class) {
+val prepareNodeProject by tasks.registering(Exec::class) {
     dependsOn(prebuildFrontendBundles)
-    val sourceRoot = File(projectRootDir, "dist/_webpack")
-    from(sourceRoot) {
-        // Webpack writes outputs to dist/_webpack/<cacheVersion>/output/*.js.
-        // Flatten so the runtime can resolve them by filename without knowing
-        // the cache version, which is git-rev-dependent and not available
-        // inside nodejs-mobile. build-lib.js passes pruneCache:true so only
-        // the current cacheVersion folder exists; the FAIL strategy guards
-        // against a stray sibling sneaking in via aborted/parallel builds.
-        include("*/output/*.js")
-        eachFile {
-            path = name
-        }
-        includeEmptyDirs = false
-    }
-    duplicatesStrategy = DuplicatesStrategy.FAIL
-    into(generatedNodeProjectDir.map { it.dir(prebuiltBundlesRelativePath) })
-}
+    workingDir = projectRootDir
+    val outAssetsDir = generatedNodeProjectDir.get().asFile
+    val outStagingDir = stagingNodeProjectDir.get().asFile
+    val tarFile = File(outAssetsDir, "runtime-bundle.tar")
+    val versionFile = File(outAssetsDir, "runtime-tree-version.txt")
+    val bootstrapFile = file("src/main/assets/nodejs-project/bootstrap.js")
 
-val prepareNodeProject by tasks.registering(Sync::class) {
-    from(projectRootDir) {
-        include("server.js")
-        include("webpack.config.js")
-        include("package.json")
-        include("package-lock.json")
-        include("plugins.js")
-        include("config.yaml")
-        include("src/**")
-        include("public/**")
-        include("default/**")
-        include("plugins/**")
-        include("node_modules/**")
-
-        exclude("**/.git/**")
-        exclude("**/.github/**")
-        exclude("android-app/**")
-        exclude("backups/**")
-        exclude("colab/**")
-        exclude("docker/**")
-        exclude("docs/**")
-        exclude("tests/**")
-        exclude("data/**")
-        exclude("**/*.map")
-        exclude("**/.DS_Store")
+    doFirst {
+        outAssetsDir.deleteRecursively()
+        outAssetsDir.mkdirs()
     }
-    into(generatedNodeProjectLukerDir)
+
+    commandLine(
+        "node",
+        File(projectRootDir, "scripts/stage-mobile-runtime.mjs").absolutePath,
+        "--repo-root",
+        projectRootDir.absolutePath,
+        "--output-dir",
+        outStagingDir.absolutePath,
+        "--bootstrap",
+        bootstrapFile.absolutePath,
+        "--tar",
+        tarFile.absolutePath,
+        "--version-file",
+        versionFile.absolutePath,
+    )
+
+    inputs.file(File(projectRootDir, "scripts/stage-mobile-runtime.mjs"))
+    inputs.file(File(projectRootDir, "server.js"))
+    inputs.file(File(projectRootDir, "webpack.config.js"))
+    inputs.file(File(projectRootDir, "package.json"))
+    inputs.file(File(projectRootDir, "package-lock.json"))
+    inputs.file(File(projectRootDir, "plugins.js"))
+    inputs.file(bootstrapFile)
+    inputs.dir(File(projectRootDir, "src"))
+    inputs.dir(File(projectRootDir, "dist/_webpack"))
+    outputs.file(tarFile)
+    outputs.file(versionFile)
 }
 
 android {
@@ -207,6 +199,7 @@ android {
         // underscore-prefixed directories from APK assets. Node packages keep
         // runtime modules in such directories, so requiring them fails on device.
         ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
+        noCompress += "tar"
     }
 
     packaging {
@@ -218,13 +211,17 @@ android {
 
 tasks.configureEach {
     val taskName = name
-    val requiresPreparedNodeProject =
-        (taskName.startsWith("merge") && taskName.endsWith("Assets")) ||
-        taskName.startsWith("lintVitalAnalyze") ||
-        taskName.endsWith("LintVitalReportModel")
+        val requestedTasks = gradle.startParameter.taskNames
+        val isUnitTestOnlyRun = requestedTasks.isNotEmpty() &&
+            requestedTasks.all { it.contains("UnitTest", ignoreCase = true) || it == "test" }
+        val requiresPreparedNodeProject =
+            !isUnitTestOnlyRun && (
+                (taskName.startsWith("merge") && taskName.endsWith("Assets") && !taskName.contains("UnitTest")) ||
+                taskName.startsWith("lintVitalAnalyze") ||
+                taskName.endsWith("LintVitalReportModel")
+            )
     if (requiresPreparedNodeProject) {
         dependsOn(prepareNodeProject)
-        dependsOn(collectPrebuiltBundles)
     }
 }
 

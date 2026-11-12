@@ -4,6 +4,7 @@
 <resources>
     <string name="app_name">Luker</string>
     <string name="loading_runtime">Starting local Luker service...</string>
+    <string name="loading_runtime_progress">Preparing local Luker service… (%1$d%%)</string>
     <string name="loading_webview">Service is ready. Loading interface...</string>
     <string name="loading_failed">Failed to start the service. Please restart the app.</string>
     <string name="loading_failed_with_reason">Failed to start the service: %1$s</string>

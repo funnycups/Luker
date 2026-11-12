@@ -549,6 +549,7 @@ class MainActivity : AppCompatActivity() {
                 recentHttpAuthAttempts.clear()
                 installBlobDownloadBridge()
                 loadingOverlay.visibility = View.GONE
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
 
             override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
@@ -2685,6 +2686,7 @@ class MainActivity : AppCompatActivity() {
         val bootstrapToken = bootstrapSequence.incrementAndGet()
         runtimeFailureDialogShown = false
         loadingOverlay.visibility = View.VISIBLE
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         LukerEndpointStatusNotification.sync(applicationContext, selection)
 
         if (!selection.usesDefaultLocalRuntime) {
@@ -2724,7 +2726,18 @@ class MainActivity : AppCompatActivity() {
                 if (!isBootstrapCurrent(bootstrapToken)) {
                     return@Thread
                 }
-                val result = LukerRuntimeManager.startIfNeeded(applicationContext)
+                var lastDisplayedPercent = -1
+                val result = LukerRuntimeManager.startIfNeeded(applicationContext) { processed, total ->
+                    if (total <= 0L) return@startIfNeeded
+                    val percent = ((processed * 100L) / total).toInt().coerceIn(0, 100)
+                    if (percent == lastDisplayedPercent) return@startIfNeeded
+                    lastDisplayedPercent = percent
+                    runOnUiThread {
+                        if (isBootstrapCurrent(bootstrapToken) && !isFinishing && !isDestroyed) {
+                            loadingText.text = getString(R.string.loading_runtime_progress, percent)
+                        }
+                    }
+                }
                 if (!result.ok) {
                     if (!isBootstrapCurrent(bootstrapToken)) {
                         return@Thread
@@ -2979,6 +2992,7 @@ class MainActivity : AppCompatActivity() {
         val reportFile = runCatching { persistRuntimeReport(report) }.getOrNull()
 
         runOnUiThread {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             loadingText.text = getString(R.string.loading_failed_with_reason, safeReason)
             if (runtimeFailureDialogShown) {
                 return@runOnUiThread

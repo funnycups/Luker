@@ -54,30 +54,12 @@ if ($LASTEXITCODE -ne 0) { throw "webpack build failed" }
 
 Write-Host "==> Staging Luker project into resfile"
 $ResfileDir = Join-Path $ProjectRoot "entry\src\main\resources\resfile\luker"
-$BundlesDir = Join-Path $ResfileDir "_prebuilt-bundles"
-if (Test-Path $ResfileDir) { Remove-Item -Recurse -Force $ResfileDir }
-New-Item -ItemType Directory -Force -Path $BundlesDir | Out-Null
-
-foreach ($item in @("server.js","webpack.config.js","package.json","package-lock.json","plugins.js","src","public","default","plugins","node_modules")) {
-  Copy-Item -Recurse -Force (Join-Path $RepoRoot $item) (Join-Path $ResfileDir $item)
-}
-
-$configSrc = Join-Path $RepoRoot "config.yaml"
-if (-not (Test-Path $configSrc)) { $configSrc = Join-Path $RepoRoot "default\config.yaml" }
-Copy-Item -Force $configSrc (Join-Path $ResfileDir "config.yaml")
-
-Copy-Item -Force (Join-Path $ProjectRoot "resfile-src\bootstrap.js") (Join-Path $ResfileDir "bootstrap.js")
-
-foreach ($bundle in @("lib.core.bundle.js","lib.optional.bundle.js","codemirror.bundle.js")) {
-  $src = Get-ChildItem -Path (Join-Path $RepoRoot "dist\_webpack") -Recurse -Filter $bundle -File | Select-Object -First 1
-  if (-not $src) { throw "missing bundle: $bundle" }
-  Copy-Item -Force $src.FullName (Join-Path $BundlesDir $bundle)
-}
-
-# hvigor's resfile copy aborts on symbolic links and junctions; drop them.
-Get-ChildItem -Path $ResfileDir -Recurse -Force -ErrorAction SilentlyContinue |
-  Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 } |
-  Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+$BootstrapSrc = Join-Path $ProjectRoot "resfile-src\bootstrap.js"
+node (Join-Path $RepoRoot "scripts\stage-mobile-runtime.mjs") `
+  --repo-root $RepoRoot `
+  --output-dir $ResfileDir `
+  --bootstrap $BootstrapSrc
+if ($LASTEXITCODE -ne 0) { throw "stage-mobile-runtime failed" }
 
 # --- Build the HAP -----------------------------------------------------------
 $hvigorw = $env:HVIGORW

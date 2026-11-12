@@ -13,30 +13,9 @@ cd "${REPO_ROOT}"
 node docker/build-lib.js
 
 echo "==> Staging Luker project into resfile"
-rm -rf "${RESFILE_DIR}"
-mkdir -p "${RESFILE_DIR}" "${BUNDLES_DIR}"
-
-# -L: hvigor's resfile copy aborts on symbolic links, so dereference them.
-for item in server.js webpack.config.js package.json package-lock.json plugins.js src public default plugins node_modules; do
-  cp -RL "${REPO_ROOT}/${item}" "${RESFILE_DIR}/"
-done
-
-if [ -f "${REPO_ROOT}/config.yaml" ]; then
-  cp "${REPO_ROOT}/config.yaml" "${RESFILE_DIR}/config.yaml"
-else
-  cp "${REPO_ROOT}/default/config.yaml" "${RESFILE_DIR}/config.yaml"
-fi
-
-cp "${PROJECT_ROOT}/resfile-src/bootstrap.js" "${RESFILE_DIR}/bootstrap.js"
-
-echo "==> Collecting prebuilt bundles"
-for bundle in lib.core.bundle.js lib.optional.bundle.js codemirror.bundle.js; do
-  src=$(find "${REPO_ROOT}/dist/_webpack" -name "${bundle}" -type f -print -quit)
-  if [ -z "${src}" ]; then
-    echo "missing bundle: ${bundle}" >&2
-    exit 1
-  fi
-  cp "${src}" "${BUNDLES_DIR}/${bundle}"
-done
+node "${REPO_ROOT}/scripts/stage-mobile-runtime.mjs" \
+  --repo-root "${REPO_ROOT}" \
+  --output-dir "${RESFILE_DIR}" \
+  --bootstrap "${PROJECT_ROOT}/resfile-src/bootstrap.js"
 
 echo "==> resfile ready: ${RESFILE_DIR} ($(du -sh "${RESFILE_DIR}" | cut -f1))"

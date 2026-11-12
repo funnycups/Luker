@@ -29,10 +29,12 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed reading SQL settings strings starting with quotes and extension keys containing control characters.
 - Fixed sync status checks failing immediately on an interrupted request or alerting accounts without configured sync backends.
 
-### iOS App
+### Client Apps
 
-- Fixed the app failing to start when preparing the local service was interrupted.
-- The first launch after an update now shows local service preparation progress.
+- Optimized first-launch startup speed and storage usage in the iOS, HarmonyOS, and Android apps.
+- Fixed the app failing to start when local service preparation was interrupted in the iOS and Android apps.
+- Fixed app updates wiping installed server plugins and third-party extensions in the HarmonyOS app.
+- Added retry and diagnostics export actions to the startup failure screen in the HarmonyOS app.
 
 ## v2.9.0-rc.2 (2026-11-11)
 

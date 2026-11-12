@@ -40,55 +40,16 @@ if [[ "${PREBUILD_FRONTEND_BUNDLES:-1}" == "1" ]]; then
   node docker/build-lib.js
 fi
 
-# Stage the server tree with the same layout the Android packager ships:
-# bootstrap.js + the Luker server tree + _prebuilt-bundles/, all inside the
-# nodejs-project folder reference that the runtime manager copies out on
-# first boot.
+# Stage the server tree with the shared mobile runtime stager:
+# bootstrap.js + git-shippable server tree + pruned production node_modules +
+# _prebuilt-bundles/ + .runtime-tree-version.
 STAGING_DIR="${IOS_APP_DIR}/Luker/Resources/nodejs-project"
-rm -rf "${STAGING_DIR}"
-mkdir -p "${STAGING_DIR}"
+node "${REPO_ROOT}/scripts/stage-mobile-runtime.mjs" \
+  --repo-root "${REPO_ROOT}" \
+  --output-dir "${STAGING_DIR}" \
+  --bootstrap "${REPO_ROOT}/android-app/app/src/main/assets/nodejs-project/bootstrap.js"
 
-rsync -a \
-  --exclude='.git' \
-  --exclude='.DS_Store' \
-  --exclude='*.map' \
-  --include='/server.js' \
-  --include='/webpack.config.js' \
-  --include='/package.json' \
-  --include='/package-lock.json' \
-  --include='/plugins.js' \
-  --include='/config.yaml' \
-  --include='/src/' --include='/src/***' \
-  --include='/public/' --include='/public/***' \
-  --include='/default/' --include='/default/***' \
-  --include='/plugins/' --include='/plugins/***' \
-  --include='/node_modules/' --include='/node_modules/***' \
-  --exclude='*' \
-  ./ "${STAGING_DIR}/"
-
-PREBUILT_DIR="${STAGING_DIR}/_prebuilt-bundles"
-mkdir -p "${PREBUILT_DIR}"
-for bundle in lib.core.bundle.js lib.optional.bundle.js codemirror.bundle.js; do
-  # build-lib.js writes outputs to dist/_webpack/<cacheVersion>/output/*.js.
-  found="$(find "${REPO_ROOT}/dist/_webpack" -type f -name "${bundle}" -path '*/output/*' | head -n 1)"
-  if [[ -z "${found}" ]]; then
-    echo "Prebuilt frontend bundle missing: ${bundle}" >&2
-    exit 1
-  fi
-  cp "${found}" "${PREBUILT_DIR}/${bundle}"
-done
-
-cp "${REPO_ROOT}/android-app/app/src/main/assets/nodejs-project/bootstrap.js" \
-  "${STAGING_DIR}/bootstrap.js"
-
-# Content hash of the staged tree. The iOS shell keys its runtime marker on it,
-# so app updates that ship the same server tree skip the full copy on first
-# launch.
-RUNTIME_TREE_VERSION="$(node "${SCRIPT_DIR}/runtime-tree-version.mjs" "${STAGING_DIR}")"
-printf '%s\n' "${RUNTIME_TREE_VERSION}" > "${STAGING_DIR}/.runtime-tree-version"
-echo "Runtime tree version: ${RUNTIME_TREE_VERSION}"
-
-APP_VERSION="$(node -p "require('./package.json').version")"
+APP_VERSION="$(node -e "import fs from 'node:fs'; console.log(JSON.parse(fs.readFileSync('./package.json', 'utf8')).version);")"
 APP_BUILD_CODE="$(node -e "
 const m = /^(\\d+)\\.(\\d+)\\.(\\d+)/.exec(process.argv[1]);
 if (!m) { console.error('Version is not in semver format: ' + process.argv[1]); process.exit(1); }

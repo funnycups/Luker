@@ -13,7 +13,7 @@ final class LukerRuntimeManager {
 
     private static let defaultServerPort = 8000
     private static let maxPortProbeAttempts = 50
-    private static let runtimeLayoutVersion = "4"
+    private static let runtimeLayoutVersion = "5"
     private static let runtimeMarkerName = ".runtime-version"
     private static let runtimeDirName = "luker-runtime"
     private static let persistentDataDirName = "luker-data"
@@ -126,6 +126,7 @@ final class LukerRuntimeManager {
             let arguments: [String] = [
                 "node",
                 "--preserve-symlinks",
+                "--preserve-symlinks-main",
                 "--report-on-fatalerror",
                 "--report-directory", paths.runtimeRoot.path,
                 script.path,
@@ -134,6 +135,7 @@ final class LukerRuntimeManager {
                 "--serverPluginsPath", paths.serverPluginsRoot.path,
                 "--globalExtensionsPath", paths.globalExtensionsRoot.path,
                 "--configPath", paths.dataRoot.appendingPathComponent(Self.configFileName).path,
+                "--backupsPath", paths.dataRoot.appendingPathComponent("backups", isDirectory: true).path,
             ]
             let rawArguments = arguments.map { strdup($0) }
             defer { rawArguments.forEach { free($0) } }
@@ -256,15 +258,12 @@ final class LukerRuntimeManager {
         )
 
         if needsRefresh {
-            // Sync in place instead of deleting the tree first. Nothing is
-            // removed up front, so an interrupted run keeps every file it
-            // already copied and the next launch continues from there.
             if FileManager.default.fileExists(atPath: runtimeRoot.path) {
                 try persistRuntimeArtifacts(from: runtimeRoot, to: persistRoot)
             }
             try FileManager.default.createDirectory(at: runtimeRoot, withIntermediateDirectories: true)
             do {
-                try syncBundledNodeProject(to: runtimeRoot, progress: progress)
+                try linkBundledNodeProject(to: runtimeRoot, progress: progress)
             } catch {
                 LukerDebugTrail.shared.append(
                     category: "native",
@@ -273,11 +272,13 @@ final class LukerRuntimeManager {
                 throw error
             }
             try restoreRuntimeArtifacts(from: persistRoot, to: runtimeRoot)
-            // The marker is written last: a half-synced tree never looks
-            // complete to the next launch.
             try markerValue.write(to: markerFile, atomically: true, encoding: .utf8)
             LukerDebugTrail.shared.append(category: "native", text: "runtime refresh done")
             NSLog("[LukerRuntime] Runtime assets prepared at %@", runtimeRoot.path)
+        } else {
+            // Verify/heal top-level symlinks in < 1 ms in case the app bundle
+            // container path changed across a reinstall or debugger re-deploy.
+            try linkBundledNodeProject(to: runtimeRoot, progress: nil)
         }
 
         try prepareServerPluginsAlias(runtimeRoot: runtimeRoot, pluginsRoot: serverPluginsRoot)
@@ -292,15 +293,13 @@ final class LukerRuntimeManager {
     }
 
     private func buildRuntimeMarker() -> String {
-        // A shell-only update keeps the same server tree; keying the marker on
-        // the tree content lets that update skip the full copy. Builds made
-        // without the staging script have no version file, so they fall back to
-        // the app build.
+        let bundlePath = Bundle.main.resourceURL?
+            .appendingPathComponent(Self.bundleProjectDirName, isDirectory: true).path ?? ""
         if let treeVersion = bundledRuntimeTreeVersion() {
-            return "layout=\(Self.runtimeLayoutVersion);tree=\(treeVersion)"
+            return "layout=\(Self.runtimeLayoutVersion);tree=\(treeVersion);bundlePath=\(bundlePath)"
         }
         let appBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
-        return "layout=\(Self.runtimeLayoutVersion);appBuild=\(appBuild)"
+        return "layout=\(Self.runtimeLayoutVersion);appBuild=\(appBuild);bundlePath=\(bundlePath)"
     }
 
     private func bundledRuntimeTreeVersion() -> String? {
@@ -313,14 +312,18 @@ final class LukerRuntimeManager {
         return value.isEmpty ? nil : value
     }
 
-    /// Syncs the bundled `nodejs-project` folder reference into the runtime
-    /// root. The build script stages it with the same layout Android uses:
-    /// `bootstrap.js` plus the server tree plus `_prebuilt-bundles/`.
-    ///
-    /// The pass is idempotent: a file already present with the same size and
-    /// modification date is skipped, so a launch that was terminated mid-copy
-    /// resumes where it stopped instead of starting over.
-    private func syncBundledNodeProject(
+    private func isSymbolicLink(_ url: URL) -> Bool {
+        (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil
+    }
+
+    /// Links the top-level entries of the bundled `nodejs-project` directory
+    /// into the writable `luker-runtime` directory. Because Node runs with
+    /// `--preserve-symlinks` and `--preserve-symlinks-main`, module resolution
+    /// stays anchored inside `luker-runtime` (so `_server-plugins` and
+    /// `whitelist.txt` resolve at the expected relative depth) while reading
+    /// the ~580 MB server + `node_modules` tree directly from the app bundle
+    /// without duplicating 32,000 files on disk.
+    private func linkBundledNodeProject(
         to runtimeRoot: URL,
         progress: ((Int, Int) -> Void)?
     ) throws {
@@ -332,173 +335,87 @@ final class LukerRuntimeManager {
             )
         }
         let sourceRoot = resourceURL.appendingPathComponent(Self.bundleProjectDirName, isDirectory: true)
+        let manager = FileManager.default
         var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: sourceRoot.path, isDirectory: &isDir), isDir.boolValue else {
+        guard manager.fileExists(atPath: sourceRoot.path, isDirectory: &isDir), isDir.boolValue else {
             throw NSError(
                 domain: "LukerRuntimeManager",
                 code: 3,
                 userInfo: [NSLocalizedDescriptionKey: "Bundled nodejs-project directory is missing"]
             )
         }
-        let total = countRuntimeFiles(in: sourceRoot)
-        LukerDebugTrail.shared.append(
-            category: "native",
-            text: "runtime sync start files=\(total)"
-        )
-        var counters = RuntimeSyncCounters()
-        progress?(0, total)
-        try syncDirectoryContents(
-            from: sourceRoot,
-            to: runtimeRoot,
-            total: total,
-            counters: &counters,
-            progress: progress
-        )
-        try pruneExtraneousEntries(in: runtimeRoot, relativeTo: sourceRoot, isRoot: true)
-        LukerDebugTrail.shared.append(
-            category: "native",
-            text: "runtime sync done files=\(counters.processed)/\(total)"
-                + " copied=\(counters.copied) skipped=\(counters.skipped)"
-        )
-    }
-
-    private struct RuntimeSyncCounters {
-        var processed = 0
-        var copied = 0
-        var skipped = 0
-    }
-
-    private func syncDirectoryContents(
-        from source: URL,
-        to target: URL,
-        total: Int,
-        counters: inout RuntimeSyncCounters,
-        progress: ((Int, Int) -> Void)?
-    ) throws {
-        let manager = FileManager.default
-        // options: [] keeps dotfiles (e.g. node_modules/.bin) in the copy set.
-        let entries = try manager.contentsOfDirectory(
-            at: source,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey],
-            options: []
-        )
-        for entry in entries {
-            let destination = target.appendingPathComponent(entry.lastPathComponent)
-            let values = try entry.resourceValues(
-                forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
+        let prebuiltRoot = sourceRoot.appendingPathComponent(Self.prebuiltBundlesDirName, isDirectory: true)
+        let missingBundles = Self.requiredPrebuiltBundles.filter {
+            !manager.fileExists(atPath: prebuiltRoot.appendingPathComponent($0).path)
+        }
+        if !missingBundles.isEmpty {
+            throw NSError(
+                domain: "LukerRuntimeManager",
+                code: 5,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Missing prebuilt frontend bundles in nodejs-project/\(Self.prebuiltBundlesDirName): "
+                        + missingBundles.sorted().joined(separator: ", "),
+                ]
             )
-            if values.isSymbolicLink == true {
-                if try syncSymbolicLink(from: entry, to: destination) {
-                    counters.copied += 1
-                } else {
-                    counters.skipped += 1
-                }
-            } else if values.isDirectory == true {
-                var destinationIsDirectory: ObjCBool = false
-                if !manager.fileExists(atPath: destination.path, isDirectory: &destinationIsDirectory)
-                    || !destinationIsDirectory.boolValue {
-                    try? manager.removeItem(at: destination)
-                    try manager.createDirectory(at: destination, withIntermediateDirectories: true)
-                }
-                try syncDirectoryContents(
-                    from: entry,
-                    to: destination,
-                    total: total,
-                    counters: &counters,
-                    progress: progress
-                )
-                continue
-            } else if isAlreadySynced(entry, destination: destination) {
-                counters.skipped += 1
-            } else {
-                try? manager.removeItem(at: destination)
-                try manager.copyItem(at: entry, to: destination)
-                counters.copied += 1
-            }
-            counters.processed += 1
-            if counters.processed % Self.copyProgressBatch == 0 || counters.processed == total {
-                progress?(counters.processed, total)
-            }
         }
-    }
 
-    private func isAlreadySynced(_ source: URL, destination: URL) -> Bool {
-        let manager = FileManager.default
-        guard let sourceValues = try? source.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
-              let destinationValues = try? destination.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
-              let sourceSize = sourceValues.fileSize,
-              let destinationSize = destinationValues.fileSize,
-              let sourceDate = sourceValues.contentModificationDate,
-              let destinationDate = destinationValues.contentModificationDate else {
-            return false
-        }
-        return sourceSize == destinationSize && sourceDate == destinationDate
-    }
-
-    /// Returns true when the link had to be created and false when it already
-    /// pointed at the same destination.
-    private func syncSymbolicLink(from source: URL, to destination: URL) throws -> Bool {
-        let manager = FileManager.default
-        let linkTarget = try manager.destinationOfSymbolicLink(atPath: source.path)
-        if let existing = try? manager.destinationOfSymbolicLink(atPath: destination.path), existing == linkTarget {
-            return false
-        }
-        try? manager.removeItem(at: destination)
-        try manager.createSymbolicLink(atPath: destination.path, withDestinationPath: linkTarget)
-        return true
-    }
-
-    /// Removes files from the runtime root that the bundled tree no longer
-    /// ships. Runtime-local files and the plugin alias are kept.
-    private func pruneExtraneousEntries(in target: URL, relativeTo source: URL, isRoot: Bool) throws {
-        let manager = FileManager.default
         let entries = try manager.contentsOfDirectory(
-            at: target,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            at: sourceRoot,
+            includingPropertiesForKeys: nil,
+            options: []
+        ).filter { $0.lastPathComponent != Self.runtimeTreeVersionFileName }
+
+        let total = entries.count
+        var linked = 0
+        var skipped = 0
+        progress?(0, total)
+
+        var sourceNames = Set<String>()
+        for (index, entry) in entries.enumerated() {
+            let name = entry.lastPathComponent
+            sourceNames.insert(name)
+            let destination = runtimeRoot.appendingPathComponent(name)
+            if let existingTarget = try? manager.destinationOfSymbolicLink(atPath: destination.path),
+               existingTarget == entry.path,
+               manager.fileExists(atPath: destination.path) {
+                skipped += 1
+            } else {
+                if isSymbolicLink(destination) || manager.fileExists(atPath: destination.path) {
+                    try manager.removeItem(at: destination)
+                }
+                try manager.createSymbolicLink(atPath: destination.path, withDestinationPath: entry.path)
+                linked += 1
+            }
+            progress?(index + 1, total)
+        }
+
+        let existingRuntimeEntries = try manager.contentsOfDirectory(
+            at: runtimeRoot,
+            includingPropertiesForKeys: nil,
             options: []
         )
-        let sourceNames = Set(try manager.contentsOfDirectory(atPath: source.path))
-        for entry in entries {
-            let name = entry.lastPathComponent
-            if isRoot && Self.runtimeRootLocalFileNames.contains(name) {
+        for existing in existingRuntimeEntries {
+            let name = existing.lastPathComponent
+            if Self.runtimeRootLocalFileNames.contains(name) || sourceNames.contains(name) {
                 continue
             }
-            guard sourceNames.contains(name) else {
-                try manager.removeItem(at: entry)
-                continue
-            }
-            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            guard values?.isSymbolicLink != true, values?.isDirectory == true else { continue }
-            let sourceChild = source.appendingPathComponent(name)
-            var sourceIsDirectory: ObjCBool = false
-            guard manager.fileExists(atPath: sourceChild.path, isDirectory: &sourceIsDirectory),
-                  sourceIsDirectory.boolValue else { continue }
-            try pruneExtraneousEntries(in: entry, relativeTo: sourceChild, isRoot: false)
+            try manager.removeItem(at: existing)
         }
-    }
 
-    private func countRuntimeFiles(in root: URL) -> Int {
-        guard let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-            options: [],
-            errorHandler: nil
-        ) else { return 0 }
-        var count = 0
-        for case let entry as URL in enumerator {
-            let values = try? entry.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            if values?.isRegularFile == true || values?.isSymbolicLink == true {
-                count += 1
-            }
+        if linked > 0 {
+            LukerDebugTrail.shared.append(
+                category: "native",
+                text: "runtime link done entries=\(total) linked=\(linked) skipped=\(skipped)"
+            )
         }
-        return count
     }
 
     // MARK: - Migrations (mirrors the Android manager)
 
     private func migrateLegacyDataRoot(legacy: URL, target: URL) throws {
         let manager = FileManager.default
-        guard manager.fileExists(atPath: legacy.path) else { return }
+        guard !isSymbolicLink(legacy), manager.fileExists(atPath: legacy.path) else { return }
         guard !manager.fileExists(atPath: target.path) else { return }
         try? manager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
@@ -518,7 +435,7 @@ final class LukerRuntimeManager {
         let runtimeConfig = runtimeRoot.appendingPathComponent(Self.configFileName)
         let persistedConfig = persistRoot.appendingPathComponent(Self.configFileName)
         let sourceConfig: URL
-        if FileManager.default.fileExists(atPath: runtimeConfig.path) {
+        if !isSymbolicLink(runtimeConfig), FileManager.default.fileExists(atPath: runtimeConfig.path) {
             sourceConfig = runtimeConfig
         } else if FileManager.default.fileExists(atPath: persistedConfig.path) {
             sourceConfig = persistedConfig
@@ -544,16 +461,22 @@ final class LukerRuntimeManager {
         serverPluginsRoot: URL,
         globalExtensionsRoot: URL
     ) throws {
-        try migrateDirectoryIfNeeded(
-            from: runtimeRoot.appendingPathComponent(Self.serverPluginsDirName, isDirectory: true),
-            to: serverPluginsRoot,
-            label: "runtime server plugins"
-        )
-        try migrateDirectoryIfNeeded(
-            from: runtimeRoot.appendingPathComponent("public/scripts/extensions/third-party", isDirectory: true),
-            to: globalExtensionsRoot,
-            label: "runtime global extensions"
-        )
+        let legacyPluginsDir = runtimeRoot.appendingPathComponent(Self.serverPluginsDirName, isDirectory: true)
+        if !isSymbolicLink(legacyPluginsDir) {
+            try migrateDirectoryIfNeeded(
+                from: legacyPluginsDir,
+                to: serverPluginsRoot,
+                label: "runtime server plugins"
+            )
+        }
+        let legacyPublicDir = runtimeRoot.appendingPathComponent("public", isDirectory: true)
+        if !isSymbolicLink(legacyPublicDir) {
+            try migrateDirectoryIfNeeded(
+                from: runtimeRoot.appendingPathComponent("public/scripts/extensions/third-party", isDirectory: true),
+                to: globalExtensionsRoot,
+                label: "runtime global extensions"
+            )
+        }
         try migrateDirectoryIfNeeded(
             from: persistRoot.appendingPathComponent(Self.serverPluginsDirName, isDirectory: true),
             to: serverPluginsRoot,

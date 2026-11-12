@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.res.AssetManager
 import android.net.Uri
 import android.util.Log
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.lang.Exception
@@ -19,8 +20,11 @@ object LukerRuntimeManager {
     private const val MAX_PORT_PROBE_ATTEMPTS = 50
     private val started = AtomicBoolean(false)
     private val librariesLoaded = AtomicBoolean(false)
-    private const val RUNTIME_LAYOUT_VERSION = "4"
+    private const val RUNTIME_LAYOUT_VERSION = "5"
     private const val RUNTIME_MARKER = ".runtime-version"
+    private const val RUNTIME_TREE_VERSION_ASSET_PATH = "runtime-tree-version.txt"
+    private const val LEGACY_RUNTIME_TREE_VERSION_ASSET_PATH = ".runtime-tree-version"
+    private const val RUNTIME_BUNDLE_TAR_ASSET_PATH = "runtime-bundle.tar"
     private const val RUNTIME_DIR_NAME = "luker-runtime"
     private const val PERSISTENT_DATA_DIR_NAME = "luker-data"
     private const val CONFIG_FILE_NAME = "config.yaml"
@@ -44,6 +48,13 @@ object LukerRuntimeManager {
     private const val PING_FAILURE_LOG_INTERVAL_MS = 30_000L
     private val RUNTIME_PERSIST_RELATIVE_PATHS = listOf(
         "whitelist.txt",
+    )
+    private val RUNTIME_ROOT_LOCAL_FILE_NAMES = setOf(
+        ".runtime-version",
+        "whitelist.txt",
+        "bootstrap.log",
+        "_server-plugins",
+        "data",
     )
 
     @Volatile
@@ -72,7 +83,7 @@ object LukerRuntimeManager {
     private var lastPingFailureLogMs: Long = 0L
 
     data class StartResult(val ok: Boolean, val error: String? = null)
-    private data class RuntimePaths(
+    internal data class RuntimePaths(
         val runtimeRoot: File,
         val dataRoot: File,
         val serverPluginsRoot: File,
@@ -108,7 +119,8 @@ object LukerRuntimeManager {
         }
     }
 
-    fun startIfNeeded(context: Context): StartResult {
+    @JvmOverloads
+    fun startIfNeeded(context: Context, onProgress: ((Long, Long) -> Unit)? = null): StartResult {
         val libLoadResult = ensureLibrariesLoaded(context)
         if (!libLoadResult.ok) {
             return libLoadResult
@@ -129,7 +141,7 @@ object LukerRuntimeManager {
             }
 
             return try {
-                val paths = prepareRuntime(context)
+                val paths = prepareRuntime(context, context.assets, onProgress)
                 runtimeDir = paths.runtimeRoot
                 dataRootDir = paths.dataRoot
                 val selectedPort = selectServerPort(context, DEFAULT_SERVER_PORT, MAX_PORT_PROBE_ATTEMPTS)
@@ -148,6 +160,8 @@ object LukerRuntimeManager {
                     paths.globalExtensionsRoot.absolutePath,
                     "--configPath",
                     File(paths.dataRoot, CONFIG_FILE_NAME).absolutePath,
+                    "--backupsPath",
+                    File(paths.dataRoot, "backups").absolutePath,
                 )
                 val exitCode = startNodeWithArguments(args)
                 if (exitCode != 0) {
@@ -195,7 +209,14 @@ object LukerRuntimeManager {
         }
     }
 
-    private fun prepareRuntime(context: Context): RuntimePaths {
+    private fun prepareRuntime(context: Context): RuntimePaths =
+        prepareRuntime(context, context.assets, null)
+
+    internal fun prepareRuntime(
+        context: Context,
+        assetManager: AssetManager,
+        onProgress: ((Long, Long) -> Unit)? = null,
+    ): RuntimePaths {
         val runtimeRoot = File(context.filesDir, RUNTIME_DIR_NAME)
         // Detach before migration or recursive runtime cleanup can follow the alias.
         ServerPluginRuntime.detach(runtimeRoot)
@@ -220,24 +241,37 @@ object LukerRuntimeManager {
             globalExtensionsRoot.mkdirs()
         }
 
-        val markerValue = buildRuntimeMarker(context)
-        val needsRefresh = !runtimeRoot.exists() || !markerFile.exists() || markerFile.readText() != markerValue
+        val markerValue = buildRuntimeMarker(context, assetManager)
+        val currentMarker = if (markerFile.exists()) runCatching { markerFile.readText() }.getOrNull() else null
+        val needsRefresh = !runtimeRoot.exists() || currentMarker != markerValue
+        LukerDebugTrail.append(
+            "native",
+            "runtime prepare start refresh=$needsRefresh marker=$markerValue",
+        )
 
         if (needsRefresh) {
             if (runtimeRoot.exists()) {
                 persistRuntimeArtifacts(runtimeRoot, persistRoot)
-                runtimeRoot.deleteRecursively()
             }
-            runtimeRoot.mkdirs()
-            copyAssetDirectory(context.assets, NODE_PROJECT_ASSET_PATH, runtimeRoot)
-            copyAssetFile(context.assets, NODE_SCRIPT_PATH, File(runtimeRoot, "bootstrap.js"))
-            copyPrebuiltBundlesIfPresent(context, runtimeRoot)
+            if (hasBundledTarArchive(assetManager)) {
+                extractBundledTarArchive(assetManager, runtimeRoot, onProgress)
+            } else {
+                if (runtimeRoot.exists()) {
+                    runtimeRoot.deleteRecursively()
+                }
+                runtimeRoot.mkdirs()
+                copyAssetDirectory(assetManager, NODE_PROJECT_ASSET_PATH, runtimeRoot)
+                copyAssetFile(assetManager, NODE_SCRIPT_PATH, File(runtimeRoot, "bootstrap.js"))
+                copyPrebuiltBundlesIfPresent(assetManager, runtimeRoot)
+            }
             restoreRuntimeArtifacts(persistRoot, runtimeRoot)
             markerFile.writeText(markerValue)
+            LukerDebugTrail.append("native", "runtime refresh done")
             Log.i(TAG, "Runtime assets prepared at ${runtimeRoot.absolutePath}")
         }
 
         ServerPluginRuntime.prepare(runtimeRoot, serverPluginsRoot)
+        LukerDebugTrail.append("native", "runtime prepare done")
 
         return RuntimePaths(
             runtimeRoot = runtimeRoot,
@@ -447,12 +481,62 @@ object LukerRuntimeManager {
         }
     }
 
-    private fun buildRuntimeMarker(context: Context): String {
+    private fun buildRuntimeMarker(context: Context, assetManager: AssetManager = context.assets): String {
+        val treeVersion = readBundledRuntimeTreeVersion(assetManager)
+        if (!treeVersion.isNullOrEmpty()) {
+            return "layout=$RUNTIME_LAYOUT_VERSION;tree=$treeVersion"
+        }
         val lastUpdateTime = runCatching {
             @Suppress("DEPRECATION")
             context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
         }.getOrElse { 0L }
         return "layout=$RUNTIME_LAYOUT_VERSION;apkUpdatedAt=$lastUpdateTime"
+    }
+
+    private fun readBundledRuntimeTreeVersion(assetManager: AssetManager): String? {
+        for (candidate in listOf(RUNTIME_TREE_VERSION_ASSET_PATH, LEGACY_RUNTIME_TREE_VERSION_ASSET_PATH)) {
+            val value = runCatching {
+                assetManager.open(candidate).bufferedReader(Charsets.UTF_8).use {
+                    it.readText().trim().takeIf { v -> v.isNotEmpty() }
+                }
+            }.getOrNull()
+            if (value != null) {
+                return value
+            }
+        }
+        return null
+    }
+
+    private fun hasBundledTarArchive(assetManager: AssetManager): Boolean {
+        return runCatching {
+            assetManager.open(RUNTIME_BUNDLE_TAR_ASSET_PATH).use { true }
+        }.getOrDefault(false)
+    }
+
+    private fun extractBundledTarArchive(
+        assetManager: AssetManager,
+        runtimeRoot: File,
+        onProgress: ((Long, Long) -> Unit)?,
+    ) {
+        val totalBytes = runCatching {
+            assetManager.openFd(RUNTIME_BUNDLE_TAR_ASSET_PATH).use { it.length }
+        }.getOrDefault(0L)
+        LukerDebugTrail.append("native", "runtime tar extract start bytes=$totalBytes")
+        assetManager.open(RUNTIME_BUNDLE_TAR_ASSET_PATH, AssetManager.ACCESS_STREAMING).use { rawStream ->
+            BufferedInputStream(rawStream, 64 * 1024).use { buffered ->
+                val stats = TarArchiveExtractor.extract(
+                    input = buffered,
+                    destinationRoot = runtimeRoot,
+                    totalBytes = totalBytes,
+                    preserveRootEntries = RUNTIME_ROOT_LOCAL_FILE_NAMES,
+                    onProgress = onProgress,
+                )
+                LukerDebugTrail.append(
+                    "native",
+                    "runtime tar extract done copied=${stats.copiedFiles} skipped=${stats.skippedFiles} pruned=${stats.prunedEntries}",
+                )
+            }
+        }
     }
 
     private fun copyAssetDirectory(assetManager: AssetManager, assetPath: String, targetDir: File) {
@@ -488,8 +572,8 @@ object LukerRuntimeManager {
      * server resolves them via the `LUKER_PREBUILT_BUNDLES_DIR` env var so the
      * in-process Webpack compile is skipped entirely on Android.
      */
-    private fun copyPrebuiltBundlesIfPresent(context: Context, runtimeRoot: File) {
-        val entries = runCatching { context.assets.list(PREBUILT_BUNDLES_ASSET_PATH) }.getOrNull()
+    private fun copyPrebuiltBundlesIfPresent(assetManager: AssetManager, runtimeRoot: File) {
+        val entries = runCatching { assetManager.list(PREBUILT_BUNDLES_ASSET_PATH) }.getOrNull()
         if (entries.isNullOrEmpty()) {
             Log.i(TAG, "No prebuilt frontend bundles bundled; server will fall back to in-process Webpack compile.")
             return
@@ -508,7 +592,7 @@ object LukerRuntimeManager {
         for (entry in entries) {
             val assetPath = "$PREBUILT_BUNDLES_ASSET_PATH/$entry"
             try {
-                copyAssetFile(context.assets, assetPath, File(target, entry))
+                copyAssetFile(assetManager, assetPath, File(target, entry))
             } catch (t: Throwable) {
                 Log.e(TAG, "Failed to release prebuilt bundle $entry", t)
             }
@@ -579,8 +663,14 @@ object LukerRuntimeManager {
             .append('\n')
         if (marker.exists()) {
             runCatching {
-                sb.append("marker=").append(marker.readText()).append('\n')
+                sb.append("runtimeMarker=").append(marker.readText().trim()).append('\n')
             }
+        } else {
+            sb.append("runtimeMarker=<missing>\n")
+        }
+        sb.append("expectedMarker=").append(buildRuntimeMarker(context)).append('\n')
+        runCatching {
+            sb.append("freeDiskBytes=").append(dir.usableSpace).append('\n')
         }
         val nodeArtifacts = listNodeDiagnosticArtifacts(context)
         if (nodeArtifacts.isNotEmpty()) {

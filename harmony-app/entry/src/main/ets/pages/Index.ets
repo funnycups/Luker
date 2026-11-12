@@ -14,6 +14,7 @@ import { exportTo } from '../crash/DiagnosticsExporter';
 import { writeArkWebExit } from '../crash/CrashCapture';
 import { LastExit } from '../crash/LastExit';
 import { KeepAliveManager, LukerHarmonyBridge } from '../KeepAliveManager';
+import { ImmersiveManager } from '../ImmersiveManager';
 import { ExternalLinkSettings, LinkRoute, originOf, routeNewWindow, routeTopLevelNavigation } from '../ExternalLinkPolicy';
 import { FileSelectionPlan, MediaKind, planFileSelection } from '../FileSelectionPlanner';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -55,6 +56,7 @@ struct Index {
   controller: webview.WebviewController = new webview.WebviewController();
   private bridge: LukerHarmonyBridge = new LukerHarmonyBridge();
   @State serverReady: boolean = false;
+  @State startupFailed: boolean = false;
   @State statusMessage: string = '';
   @StorageLink('luker.serverUrl') serverUrl: string = DEFAULT_LOCAL_BASE_URL;
   @StorageLink('luker.customEndpoint') customEndpoint: boolean = false;
@@ -197,10 +199,17 @@ struct Index {
     const customEndpoint: boolean = this.customEndpoint;
     const readyLimit: number = customEndpoint ? 400 : 500;
     let lastProbeError: string = '';
+    this.startupFailed = false;
     this.statusMessage = this.res($r('app.string.starting_engine').id, '0s');
+    ImmersiveManager.setKeepScreenOn(true);
     const context = getContext(this) as common.UIAbilityContext;
-    if (!customEndpoint && !BackendManager.launchAttempted) {
-      launchInProcessEarly(context);
+    if (!customEndpoint) {
+      if (getBackendStatusSafe().startsWith('failed:')) {
+        BackendManager.launchAttempted = false;
+      }
+      if (!BackendManager.launchAttempted) {
+        launchInProcessEarly(context);
+      }
     }
     const startedAt: number = Date.now();
     while (Date.now() - startedAt < BOOT_TIMEOUT_MS) {
@@ -212,6 +221,7 @@ struct Index {
         return;
       }
       if (result.ok) {
+        ImmersiveManager.setKeepScreenOn(false);
         this.serverReady = true;
         RuntimeNotification.setServerReady(true);
         return;
@@ -230,6 +240,8 @@ struct Index {
           this.res($r('app.string.starting_engine').id, `${secs}s`) + '\n' +
           this.res($r('app.string.backend_status').id, status);
         if (status.startsWith('failed:')) {
+          ImmersiveManager.setKeepScreenOn(false);
+          this.startupFailed = true;
           this.statusMessage = this.res($r('app.string.engine_failed').id, status);
           return;
         }
@@ -239,6 +251,8 @@ struct Index {
     if (token !== this.startToken) {
       return;
     }
+    ImmersiveManager.setKeepScreenOn(false);
+    this.startupFailed = true;
     if (customEndpoint) {
       let message: string = this.res($r('app.string.endpoint_timeout').id);
       if (lastProbeError.length > 0) {
@@ -898,10 +912,12 @@ struct Index {
       } else {
         Column({ space: 16 }) {
           Text('Luker').fontSize(24).fontWeight(FontWeight.Bold).fontColor('#cfd6e4')
-          LoadingProgress().width(36).height(36).color('#4aa3ff')
+          if (!this.startupFailed) {
+            LoadingProgress().width(36).height(36).color('#4aa3ff')
+          }
           Text(this.statusMessage)
             .fontSize(12)
-            .fontColor('#8b93a7')
+            .fontColor(this.startupFailed ? '#ff6b6b' : '#8b93a7')
             .textAlign(TextAlign.Center)
             .padding({ left: 24, right: 24 })
           Text(this.serverUrl)
@@ -909,6 +925,20 @@ struct Index {
             .fontColor('#5c6370')
             .textAlign(TextAlign.Center)
             .padding({ left: 24, right: 24 })
+          if (this.startupFailed) {
+            Row({ space: 12 }) {
+              Button($r('app.string.endpoint_failure_retry'))
+                .fontSize(13)
+                .fontColor('#ffffff')
+                .backgroundColor('#4aa3ff')
+                .onClick(() => this.start())
+              Button($r('app.string.export_diagnostics'))
+                .fontSize(13)
+                .fontColor('#cfd6e4')
+                .backgroundColor('#2d333d')
+                .onClick(() => this.doExport())
+            }
+          }
           Button($r('app.string.endpoint_settings'))
             .fontSize(13)
             .fontColor('#4aa3ff')

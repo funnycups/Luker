@@ -29,4 +29,14 @@ export class ImmersiveManager {
       hilog.error(DOMAIN, TAG, 'setWindowSystemBarEnable failed: %{public}s', JSON.stringify(err));
     });
   }
+
+  static setKeepScreenOn(keepScreenOn: boolean): void {
+    const mainWindow: window.Window | undefined = ImmersiveManager.mainWindow;
+    if (mainWindow === undefined) {
+      return;
+    }
+    mainWindow.setWindowKeepScreenOn(keepScreenOn).catch((err: Error) => {
+      hilog.error(DOMAIN, TAG, 'setWindowKeepScreenOn failed: %{public}s', JSON.stringify(err));
+    });
+  }
 }
