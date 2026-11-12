@@ -1,6 +1,6 @@
 # Chat & State
 
-APIs for reading chat data, sending and editing messages, persisting chat metadata, and storing per-chat / per-character state.
+APIs for reading chat data, sending and editing messages, persisting chat metadata, and storing per-chat / per-character / per-user global state.
 
 ## Chat Data (Read-Only)
 
@@ -728,6 +728,174 @@ if (!result.ok) {
 | Typical Use | Character-level plugin config, CardApp application state | Temporary in-chat data, conversation context |
 | API | `getCharacterState` / `getCharacterStateBatch` / `setCharacterState` / `updateCharacterState` / `deleteCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
 | Storage Location | Character state file (next to the card) | Chat metadata |
+
+## Global State
+
+Global state is per-user persistent storage scoped to the authenticated user account and stored outside `settings.json`. Unlike chat state or character state, global state is shared across all characters and chats for that user, making it suited for plugin configuration, cross-character catalogs, workbench layouts, and large structured documents.
+
+All six client helpers are exposed consistently across Layer 1 (`public/scripts/extensions.js`), Layer 2 (`globalThis.lukerContext`), and Layer 3 (`Luker.getContext()`).
+
+### Namespace Rules
+
+Global state namespaces are case-preserving, trimmed non-empty strings. A namespace is rejected on both client and server (`reason: 'VALIDATION_ARGS'`) if it contains `/`, `\`, `..`, null bytes, control characters, starts with `.`, ends with `.json` or `.jsonl`, or contains filename-unsafe characters such as `<`, `>`, `:`, `"`, `|`, `?`, or `*`.
+
+### getGlobalState
+
+```ts
+getGlobalState(
+  namespace: string,
+): Promise<
+  | { ok: true, state: object | null }
+  | { ok: false, state: null, reason: string, hint: string }
+>
+```
+
+Reads the per-user global state for the specified namespace through the browser HTTP resource cache (`GET /api/state/get`). On success returns `{ok: true, state}` where `state` is the stored object, or `null` if no state exists for that namespace. On failure returns `{ok: false, state: null, reason, hint}` — see [Error reasons](#error-reasons-3) below.
+
+| Parameter | Description |
+|------|------|
+| `namespace` | Case-preserving storage namespace, typically the plugin identifier (e.g. `'my-extension'`) |
+
+### getGlobalStateBatch
+
+```ts
+getGlobalStateBatch(
+  namespaces: string[],
+): Promise<
+  | { ok: true, results: Map<string, { ok: true, state: object | null }> }
+  | { ok: false, results: Map<string, never>, reason: string, hint: string }
+>
+```
+
+Reads multiple global state namespaces. Trimmed namespaces are deduplicated; an empty array returns `{ok: true, results: new Map()}`. If any entry is invalid, the call fails fast with `reason: 'VALIDATION_ARGS'`. On success returns `{ok: true, results}` where `results` is a `Map` keyed by namespace; each entry is `{ok: true, state}` and missing namespaces map to `{ok: true, state: null}`. On failure returns `{ok: false, results: <empty Map>, reason, hint}`.
+
+### setGlobalState
+
+```ts
+setGlobalState(
+  namespace: string,
+  data: object,
+): Promise<
+  | { ok: true, state: object }
+  | { ok: false, reason: string, hint: string }
+>
+```
+
+Writes global state under the specified namespace as a whole-document overwrite via `POST /api/state/set` and invalidates cached reads for that namespace. `data` must be a JSON-serializable plain object (`null` is rejected by `/api/state/set`; use `deleteGlobalState()` to remove an entry). For non-trivial payloads prefer `updateGlobalState()` — `setGlobalState()` transmits the entire document on every call. On success returns `{ok: true, state}` echoing `data`; on failure returns `{ok: false, reason, hint}`.
+
+| Parameter | Description |
+|------|------|
+| `namespace` | Storage namespace |
+| `data` | Plain object to store |
+
+### patchGlobalState
+
+```ts
+patchGlobalState(
+  namespace: string,
+  operations: RFC6902Operation[],
+): Promise<
+  | { ok: true, applied: number, created: boolean }
+  | { ok: false, reason: string, hint: string }
+>
+```
+
+Applies a non-empty array of RFC 6902 JSON Patch operations atomically via `POST /api/state/patch` and invalidates cached reads for that namespace. When no state exists yet, the server seeds from `{}` and returns `created: true`. Returns `{ok: true, applied, created}` on success, `{ok: false, reason: 'CONFLICT', hint}` on HTTP 409 (patch `test` failure or missing parent path), or `{ok: false, reason, hint}` on validation, HTTP, or transport errors. Most callers should use `updateGlobalState()` instead of constructing patch operations manually.
+
+| Parameter | Description |
+|------|------|
+| `namespace` | Storage namespace |
+| `operations` | Non-empty array of RFC 6902 patch operations |
+
+### updateGlobalState
+
+```ts
+updateGlobalState(
+  namespace: string,
+  updater: (currentState: object, meta: { attempt: number, namespace: string })
+    => object | null | undefined | Promise<object | null | undefined>,
+  options?: { maxOperations?: number, maxRetries?: number, asyncDiff?: boolean },
+): Promise<
+  | { ok: true, state: object | null, updated: boolean, created?: boolean }
+  | { ok: false, reason: string, hint: string }
+>
+```
+
+**Recommended read-modify-write approach.** Invalidates cached reads, fetches the current state, and passes a deep clone (`{}` when none exists) to `updater`. The system computes the minimal RFC 6902 diff internally via `buildObjectPatchOperationsAsync()` (or synchronously when `options.asyncDiff === false`) and ships only the changed slice through `patchGlobalState()`. Returning `null` or `undefined` from `updater`, or returning an unchanged object, resolves with `{ok: true, state, updated: false}` without issuing a write. 409 conflicts are retried automatically up to `options.maxRetries` (default `1`). `options.maxOperations` defaults to `2000`. This function never throws; reducer exceptions and non-object return values surface as `reason: 'VALIDATION_ARGS'`.
+
+```js
+await context.updateGlobalState('my-plugin', (current = {}) => ({
+  ...current,
+  counter: (current.counter || 0) + 1,
+  lastUpdated: Date.now(),
+}));
+```
+
+### deleteGlobalState
+
+```ts
+deleteGlobalState(
+  namespace: string,
+): Promise<{ ok: true } | { ok: false, reason: string, hint: string }>
+```
+
+Deletes the global state entry for the given namespace via `POST /api/state/delete` and invalidates cached reads. Idempotent — succeeds even when no state exists. Returns `{ok: true}` on success; `{ok: false, reason, hint}` on failure.
+
+### Best Practices
+
+- Use `updateGlobalState()` for read-modify-write instead of manually chaining `getGlobalState()` + `setGlobalState()` or `patchGlobalState()`.
+- Use `setGlobalState()` only for initial seeding or intentional whole-document replacement, and `deleteGlobalState()` to remove a namespace.
+- Keep payloads as JSON-serializable plain objects; top-level arrays and primitives are not supported.
+- Check `result.ok` and switch on `result.reason` instead of translating `hint`.
+
+### Error reasons
+
+Every call returns `{ok: false, reason, hint}` on failure. Possible `reason` values:
+
+| Reason | When it fires | Suggested handling |
+|---|---|---|
+| `VALIDATION_ARGS` | Invalid namespace, empty `operations`, non-function `updater`, reducer threw, or reducer returned a non-object value | Fix caller arguments or reducer |
+| `CONFLICT` | HTTP 409 from `patchGlobalState()`, or `updateGlobalState()` exhausted `maxRetries` | Re-read current state and retry |
+| `HTTP_ERROR` | Other non-2xx HTTP response | Inspect `hint` for status details; surface an error notice to the user |
+| `TRANSPORT_ERROR` | `fetch` threw (network error, CORS, abort) | Retry or surface network error to the user |
+
+The `hint` field is English, no longer than 120 characters, and contains actionable diagnostic info. Switch on `reason` to render localized user messages rather than translating `hint`.
+
+Example:
+
+```js
+const result = await context.updateGlobalState('my-ext', (cur) => ({ ...cur, x: 1 }));
+if (!result.ok) {
+    switch (result.reason) {
+        case 'CONFLICT':
+            toastr.warning(t('Save conflicted with another writer, please retry.'));
+            break;
+        case 'HTTP_ERROR':
+        case 'TRANSPORT_ERROR':
+            toastr.error(t('Server unreachable, changes not saved.'));
+            break;
+        case 'VALIDATION_ARGS':
+            console.error('[my-ext] bad arguments:', result.hint);
+            break;
+        default:
+            console.warn('[my-ext] save failed:', result.reason, result.hint);
+    }
+    return;
+}
+```
+
+### HTTP Endpoints (`/api/state/*`)
+
+Global state is persisted per user in the `globalStates` repository bucket (`states/` directory on the filesystem backend, `named_docs` table on SQLite / Postgres / MySQL). Server routes under `/api/state`:
+
+| Method | Path | Request | Response |
+|------|------|---------|----------|
+| `GET` | `/api/state/get` | Query: `namespace`, `account` | `{ ok: true, data: object \| null }` with `ETag` and `Cache-Control: private, no-cache, max-age=1` (`304` on match; `400` / `403` / `500` `{ code, resource, detail }`) |
+| `POST` | `/api/state/get` | Body: `{ namespace }` | `{ ok: true, data: object \| null }` |
+| `POST` | `/api/state/get-batch` | Body: `{ namespaces: string[] }` | `{ ok: true, data: Record<string, object \| null> }` (non-empty array; deduplicated server-side) |
+| `POST` | `/api/state/set` | Body: `{ namespace, data }` | `{ ok: true }` (`data` must be a plain object) |
+| `POST` | `/api/state/patch` | Body: `{ namespace, operations }` or `{ namespace, operation }` | `{ ok: true, applied: number, created: boolean }` (`409` `{ error, code }` on patch conflict; `400` on invalid operations) |
+| `POST` | `/api/state/delete` | Body: `{ namespace }` | `{ ok: true, deleted: boolean }` (idempotent) |
 
 ## Chat Lifecycle
 
