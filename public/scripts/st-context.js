@@ -230,6 +230,10 @@ const RUN_PANEL_API = Object.freeze({
     events: RUN_PANEL_API_NS.events,
     withRound: RUN_PANEL_API_NS.withRound,
     withStreamingSection: RUN_PANEL_API_NS.withStreamingSection,
+    attachDock: RUN_PANEL_API_NS.attachDock,
+    openRunDock: RUN_PANEL_API_NS.openRunDock,
+    toggleRunDock: RUN_PANEL_API_NS.toggleRunDock,
+    getRunRecorder: RUN_PANEL_API_NS.getRunRecorder,
 });
 
 function safeClone(value, fallback = {}) {

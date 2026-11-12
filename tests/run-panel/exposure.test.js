@@ -9,6 +9,10 @@ test('index.js exposes the public surface', () => {
     expect(typeof runPanel.withRound).toBe('function');
     expect(typeof runPanel.withStreamingSection).toBe('function');
     expect(runPanel.events.RUN_STARTED).toBe('run_started');
+    expect(typeof runPanel.attachDock).toBe('function');
+    expect(typeof runPanel.openRunDock).toBe('function');
+    expect(typeof runPanel.toggleRunDock).toBe('function');
+    expect(typeof runPanel.getRunRecorder).toBe('function');
 });
 
 test('st-context.js imports and exposes the run-panel namespace', () => {
@@ -18,4 +22,8 @@ test('st-context.js imports and exposes the run-panel namespace', () => {
     );
     expect(src).toContain('import * as RUN_PANEL_API_NS from \'./run-panel/index.js\';');
     expect(src).toContain('runPanel: RUN_PANEL_API,');
+    expect(src).toContain('attachDock: RUN_PANEL_API_NS.attachDock,');
+    expect(src).toContain('openRunDock: RUN_PANEL_API_NS.openRunDock,');
+    expect(src).toContain('toggleRunDock: RUN_PANEL_API_NS.toggleRunDock,');
+    expect(src).toContain('getRunRecorder: RUN_PANEL_API_NS.getRunRecorder,');
 });

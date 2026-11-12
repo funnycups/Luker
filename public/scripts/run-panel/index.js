@@ -13,3 +13,20 @@ export { createRunPanel } from './panel.js';
 export { PanelRenderer, DEFAULT_KIND_ICONS } from './render-incremental.js';
 export * as events from './events.js';
 export { withRound, withStreamingSection } from './helpers.js';
+export {
+    HISTORY_KEY,
+    runKeyOf,
+    parseRunKey,
+    serializeRunTrace,
+    createMemoryStorage,
+    createRecorder,
+} from './recorder.js';
+export {
+    ensureDockStyles,
+    createDock,
+    attachDock,
+    openRunDock,
+    toggleRunDock,
+    getRunRecorder,
+} from './dock.js';
+export { registerRunPanelLocaleData } from './locale-data.js';
