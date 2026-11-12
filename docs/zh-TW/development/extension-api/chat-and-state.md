@@ -738,7 +738,7 @@ if (!result.ok) {
 全域狀態的命名空間為保留大小寫、去除前後空白後的非空字串。校驗分為用戶端與伺服端兩層：
 
 - **用戶端校驗，失敗回傳 `reason: 'VALIDATION_ARGS'`：** 拒絕非字串值、`.trim()` 後為空的字串，以及包含 `/`、`\`、`..`、`\0`、以 `.` 開頭或含 ASCII 控制字元 `\x00-\x1f`、`\x7f` 的命名空間。
-- **伺服端校驗，回傳 HTTP 400，用戶端映射為 `reason: 'HTTP_ERROR'`：** 在上述檢查之外，透過 `assertSafeRepoNameShape` 額外拒絕以 `.json` 或 `.jsonl` 結尾以及包含檔名不安全字元如 `<`、`>`、`:`、`"`、`|`、`?`、`*` 的命名空間。
+- **伺服端校驗，回傳 HTTP 400，用戶端映射為 `reason: 'HTTP_ERROR'`：** 在上述檢查之外，透過 `assertSafeRepoNameShape` 額外拒絕以 `.json` 或 `.jsonl` 結尾以及包含檔名不安全字元如 `<`、`>`、`:`、`"`、`|`、`?`、`*` 的命名空間；寫入路由 `/api/state/set` 與 `/api/state/patch` 還透過 `assertSafeRepoName` 限制 UTF-8 編碼長度不超過 128 位元組，讀取與刪除路由仍允許存取超過該長度的既有命名空間。
 
 ### getGlobalState
 

@@ -740,7 +740,7 @@ All six client helpers are exposed consistently across Layer 1 (`public/scripts/
 Global state namespaces are case-preserving, trimmed non-empty strings. Validation happens at two boundaries:
 
 - **Client-side validation (`reason: 'VALIDATION_ARGS'`):** Rejects non-string values, empty strings after `.trim()`, `/`, `\`, `..`, `\0`, leading `.`, and ASCII control characters (`\x00-\x1f`, `\x7f`).
-- **Server-side validation (`HTTP 400` → client `reason: 'HTTP_ERROR'`):** Applies the same checks and additionally rejects `.json` / `.jsonl` suffixes and filename-unsafe characters such as `<`, `>`, `:`, `"`, `|`, `?`, or `*` via `assertSafeRepoNameShape`.
+- **Server-side validation (`HTTP 400` → client `reason: 'HTTP_ERROR'`):** Applies the same checks and additionally rejects `.json` / `.jsonl` suffixes and filename-unsafe characters such as `<`, `>`, `:`, `"`, `|`, `?`, or `*` via `assertSafeRepoNameShape`. Write routes (`/api/state/set` and `/api/state/patch`) also enforce a 128-byte UTF-8 length limit via `assertSafeRepoName`, while read and delete routes accept longer existing names.
 
 ### getGlobalState
 

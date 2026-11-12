@@ -738,7 +738,7 @@ if (!result.ok) {
 全局状态的命名空间为保留大小写、去除首尾空白后的非空字符串。校验分为客户端与服务端两层：
 
 - **客户端校验，失败返回 `reason: 'VALIDATION_ARGS'`：** 拒绝非字符串值、`.trim()` 后为空的字符串，以及包含 `/`、`\`、`..`、`\0`、以 `.` 开头或含 ASCII 控制字符 `\x00-\x1f`、`\x7f` 的命名空间。
-- **服务端校验，返回 HTTP 400，客户端映射为 `reason: 'HTTP_ERROR'`：** 在上述检查之外，通过 `assertSafeRepoNameShape` 额外拒绝以 `.json` 或 `.jsonl` 结尾以及包含文件名不安全字符如 `<`、`>`、`:`、`"`、`|`、`?`、`*` 的命名空间。
+- **服务端校验，返回 HTTP 400，客户端映射为 `reason: 'HTTP_ERROR'`：** 在上述检查之外，通过 `assertSafeRepoNameShape` 额外拒绝以 `.json` 或 `.jsonl` 结尾以及包含文件名不安全字符如 `<`、`>`、`:`、`"`、`|`、`?`、`*` 的命名空间；写入路由 `/api/state/set` 与 `/api/state/patch` 还通过 `assertSafeRepoName` 限制 UTF-8 编码长度不超过 128 字节，读取与删除路由仍允许访问超过该长度的既有命名空间。
 
 ### getGlobalState
 
@@ -768,7 +768,7 @@ getGlobalStateBatch(
 >
 ```
 
-经由已缓存的 `GET /api/state/get` 路径并发读取多个去重后的全局状态命名空间。传入的命名空间会去除首尾空白并去重；空数组会在本地直接返回 `{ok: true, results: new Map()}` 而不发起 HTTP 请求，而 `POST /api/state/get-batch` 端点则要求非空数组。若列表中存在未通过客户端校验的命名空间，调用会立即以 `reason: 'VALIDATION_ARGS'` 返回失败。成功时返回 `{ok: true, results}`，其中 `results` 是以命名空间为键的 `Map`，每条目本身是 `{ok: true, state}`，缺失的命名空间对应 `{ok: true, state: null}`。失败时返回 `{ok: false, results: <空 Map>, reason, hint}`。
+经由已缓存的 `GET /api/state/get` 路径并发读取多个去重后的全局状态命名空间。传入的命名空间会去除首尾空白并去重；空数组会在本地直接返回 `{ok: true, results: new Map()}` 而不发起 HTTP 请求，而 `POST /api/state/get-batch` 端点则要求非空数组。若列表中存在未通过客户端校验的命名空间，调用会立即以 `reason: 'VALIDATION_ARGS'` 返回失败。成功时返回 `{ok: true, results}`，其中 `results` 是以命名空间为键的 `Map`，每条结果本身为 `{ok: true, state}`，缺失的命名空间对应 `{ok: true, state: null}`。失败时返回 `{ok: false, results: <空 Map>, reason, hint}`。
 
 ### setGlobalState
 
