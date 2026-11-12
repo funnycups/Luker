@@ -150,6 +150,8 @@ export const USER_BACKUP_SELECTION_DEFAULTS = Object.freeze({
  * @property {string} backups - The directory where the backups are stored
  * @property {string} sysprompt - The directory where the system prompt data is stored
  * @property {string} reasoning - The directory where the reasoning templates are stored
+ * @property {string} cardApps - The directory where the CardApps are stored
+ * @property {string} states - The directory where the global state documents are stored
  */
 
 /**

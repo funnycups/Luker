@@ -38,6 +38,7 @@ const USER_DIRS = Object.freeze({
     sysprompt: 'sysprompt',
     reasoning: 'reasoning',
     cardApps: 'card-apps',
+    states: 'states',
 });
 
 export async function makeTempFsEngine() {

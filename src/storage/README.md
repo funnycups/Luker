@@ -50,7 +50,7 @@ router.post('/something', async function (req, res) {
 | `SettingsRepo` | `settings` | `<root>/settings.json` |
 | `PresetRepo` | `preset` | `<apiFolder>/<name>.json` (apiId → folder map) |
 | `WorldInfoRepo` | `world` | `<worlds>/<name>.json` with tolerant filename lookup |
-| `NamedDocRepo` | `named-doc` | `<themes\|movingUI\|quickreplies>/<name>.json` (one Repo, three buckets) |
+| `NamedDocRepo` | `named-doc` | `<themes\|movingUI\|quickreplies\|states>/<name>.json` (one Repo, four buckets) |
 | `GroupRepo` | `group` | `<groups>/<id>.json`; `delete` cascades member chat JSONLs |
 | `StatsRepo` | `stats` | `<root>/stats.json` (compact JSON, internal IO only) |
 
@@ -97,7 +97,7 @@ router.post('/something', async function (req, res) {
 | `SettingsRepo` | `get(handle)`, `save(handle, doc)`, `patch(handle, ops)` — `patch` throws `NotFoundError` when settings file missing |
 | `PresetRepo` | `get/save/delete/exists/patch(handle, apiId, name, ...)`, `getState/setState/deleteState/deleteAllStates/listStateNamespaces(... , namespace)`, `renameStates(... , oldName, newName)` |
 | `WorldInfoRepo` | `get/save/delete/exists/patch/list/resolveName(handle, name, ...)` — `save` and `patch` enforce `{entries: object}` invariant; `resolveName` performs tolerant lookup and returns the canonical name (without extension) for direct re-use with `get/save` |
-| `NamedDocRepo` | `save/delete(handle, bucket, name, {strict?})` — buckets: `themes`, `movingUI`, `quickReplies` |
+| `NamedDocRepo` | `get/list/listWithDocs/save/patch/delete(handle, bucket, name, {strict?})` — buckets: `themes`, `movingUI`, `quickReplies`, `globalStates` |
 | `GroupRepo` | `get/save/delete/list/listWithChatStats(handle, ...)` — `delete` returns `{deleted, chatsDeleted}` and cascades member chat JSONLs (and their sidecars) via the chat handler |
 | `StatsRepo` | `get(handle)`, `save(handle, doc)` |
 
@@ -321,7 +321,7 @@ In db modes (sqlite / mysql / postgres), the resources below live in the engine.
 | Presets (Kobold/OpenAI/NovelAI/textgen, instruct, context, sysprompt, reasoning) | `presets` | — |
 | Per-preset sidecar state | `preset_states` | — |
 | World info books | `worlds` | — |
-| Named docs (themes, moving UI, quick replies) | `named_docs` | — |
+| Named docs (themes, moving UI, quick replies, global states) | `named_docs` | — |
 | Group definitions | `groups_table` | — |
 | User-level chat stats | `stats` | — |
 | Character cards (PNG with embedded JSON) | — | `<root>/<handle>/characters/*.png` |

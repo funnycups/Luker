@@ -1,10 +1,12 @@
-import { NotFoundError } from '../errors.js';
+import { InvalidArgumentError, NotFoundError } from '../errors.js';
 import { assertWritable } from '../read-only-mode.js';
+import { applyJsonPatch } from './json-patch.js';
 
 export const BUCKET_TO_DIR = Object.freeze({
     themes: 'themes',
     movingUI: 'movingUI',
     quickReplies: 'quickreplies',
+    globalStates: 'states',
 });
 
 export class NamedDocRepo {
@@ -67,5 +69,33 @@ export class NamedDocRepo {
             throw new NotFoundError('named-doc', { handle, bucket, name });
         }
         return removed;
+    }
+
+    async patch(handle, bucket, name, operations) {
+        assertWritable();
+        if (!Array.isArray(operations)) {
+            throw new InvalidArgumentError('NamedDocRepo.patch: operations must be an array');
+        }
+        for (const op of operations) {
+            if (!op || typeof op !== 'object' || Array.isArray(op)
+                || typeof op.path !== 'string' || !op.path.startsWith('/')) {
+                throw new InvalidArgumentError('NamedDocRepo.patch: each operation must be an object with a JSON Pointer path starting with "/"');
+            }
+        }
+        return this._engine.withTransaction(handle, async (tx) => {
+            const key = this._key(handle, bucket, name);
+            const existing = await tx.getResource(key);
+            const seed = (existing && typeof existing === 'object' && !Array.isArray(existing)) ? existing : {};
+            const next = applyJsonPatch(seed, operations);
+            if (!next || typeof next !== 'object' || Array.isArray(next)) {
+                throw new InvalidArgumentError('NamedDocRepo.patch: result must be a plain object');
+            }
+            await tx.putResource(key, { doc: next });
+            return {
+                applied: operations.length,
+                created: existing == null,
+                state: next,
+            };
+        });
     }
 }

@@ -17,7 +17,7 @@ function bytesOver(name) {
  * @param {string} ctx.dstMode  'mysql' | 'postgres' | 'fs' | 'sqlite'
  * @param {object} ctx.sourceRepos  Repos { chat, preset, worldInfo, namedDoc, group }
  * @param {string[]} ctx.handles  User handles to scan
- * @param {string[]} [ctx.namedDocBuckets]  defaults to ['themes', 'movingUI', 'quickReplies']
+ * @param {string[]} [ctx.namedDocBuckets]  defaults to ['themes', 'movingUI', 'quickReplies', 'globalStates']
  * @param {string[]} [ctx.presetApiIds]  defaults to the keys of PRESET_FOLDER_BY_API_ID
  * @returns {Promise<{ok: true} | {ok: false, offenders: Array<{handle: string, bucket: string, name: string, bytes: number}>}>}
  */
@@ -25,7 +25,7 @@ export async function preflightNameLengths(ctx) {
     const { dstMode, sourceRepos, handles } = ctx;
     if (dstMode !== 'mysql' && dstMode !== 'postgres') return { ok: true };
 
-    const namedDocBuckets = ctx.namedDocBuckets ?? ['themes', 'movingUI', 'quickReplies'];
+    const namedDocBuckets = ctx.namedDocBuckets ?? ['themes', 'movingUI', 'quickReplies', 'globalStates'];
     const presetApiIds = ctx.presetApiIds ?? [];
 
     const offenders = [];

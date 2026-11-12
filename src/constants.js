@@ -64,6 +64,7 @@ export const USER_DIRECTORY_TEMPLATE = Object.freeze({
     sysprompt: 'sysprompt',
     reasoning: 'reasoning',
     cardApps: 'card-apps',
+    states: 'states',
 });
 
 /**
