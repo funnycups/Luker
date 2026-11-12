@@ -448,6 +448,7 @@ const ZH_CN = {
     'Change history could not be saved (storage quota exceeded).': '改动记录保存失败（浏览器存储空间已满）。',
     'Change history could not be saved.': '改动记录保存失败。',
     'Not available yet': '暂未启用',
+    'Workbenches': '工作台',
 };
 
 const ZH_TW = {
@@ -895,6 +896,7 @@ const ZH_TW = {
     'Change history could not be saved (storage quota exceeded).': '改動記錄儲存失敗（瀏覽器儲存空間已滿）。',
     'Change history could not be saved.': '改動記錄儲存失敗。',
     'Not available yet': '暫未啟用',
+    'Workbenches': '工作台',
 };
 
 export function registerWorkbenchLocaleData(addLocaleData) {

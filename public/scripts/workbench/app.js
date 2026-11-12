@@ -6,12 +6,16 @@
 import { i18n } from './i18n.js';
 import { h, put, clear, debounce, formatTokens } from '../lens-shared/util.js';
 import { emptyState } from '../lens-shared/ui.js';
-import { accountLocalStorage } from '../lens-shared/current-account.js';
 import { icon } from './icons.js';
 import { createWindow } from './ui/window.js';
 import { loadPrefs, savePrefs } from './prefs.js';
 import { createHistory } from './model/history.js';
 import { defaultRegistry } from './registry.js';
+import { createLukerSource } from './source-luker.js';
+import { createHomePage } from './pages/home.js';
+import { createAskPage } from './pages/ask.js';
+import { createHistoryPage } from './pages/history.js';
+import { createSettingsPage } from './pages/settings.js';
 
 const TOKENS_CSS_ID = 'luker-lens-shared-tokens-css';
 const WORKBENCH_CSS_ID = 'luker-workbench-style-css';
@@ -47,20 +51,12 @@ function detectTheme() {
     return globalThis.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
 }
 
-function createDefaultSource() {
-    return {
-        readSettings: () => {
-            const ext = globalThis.Luker?.getContext?.()?.extensionSettings || {};
-            return ext.workbench ?? ext.luker_workbench ?? {};
-        },
-        writeSettings: () => {},
-        loadSnapshot: async () => null,
-        subscribe: () => () => {},
-        historyStorage: () => accountLocalStorage(),
-        createSessions: () => null,
-        runRules: null,
-    };
-}
+const DEFAULT_PAGE_FACTORIES = {
+    home: createHomePage,
+    ask: createAskPage,
+    hist: createHistoryPage,
+    settings: createSettingsPage,
+};
 
 function createPlaceholderPage(def) {
     const label = typeof def.label === 'function' ? def.label() : String(def.label || def.id);
@@ -81,7 +77,7 @@ export function mountWorkbench({
     startCollapsed = false,
 } = {}) {
     ensureWorkbenchStyles(container?.ownerDocument || document);
-    const activeSource = source || createDefaultSource();
+    const activeSource = source || createLukerSource(registry);
     const prefs = loadPrefs();
     let theme = prefs.theme === 'light' || prefs.theme === 'dark' ? prefs.theme : detectTheme();
     const isKnownCore = (id) => CORE_PAGES.some(p => p.id === id) || id === FOOTER_PAGE.id;
@@ -162,7 +158,7 @@ export function mountWorkbench({
     };
 
     const buildCorePage = (def) => {
-        const factory = pageFactories?.[def.id];
+        const factory = pageFactories?.[def.id] ?? DEFAULT_PAGE_FACTORIES[def.id];
         return typeof factory === 'function' ? factory(app) : createPlaceholderPage(def);
     };
 
