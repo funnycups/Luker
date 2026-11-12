@@ -14,6 +14,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed reading and editing character cards whose filenames retain leading spaces or punctuation.
 - Fixed reading empty-named root properties from character cards.
 
+### CardApp
+
+- Fixed CardApp failing to list and read preset documents.
+
 ### Fixes
 
 - Fixed Memory Graph LLM recall not drilling into always-inject event rollups.
