@@ -1,4 +1,5 @@
 import { InvalidArgumentError, NotFoundError } from '../errors.js';
+import { assertSafeRepoNameShape } from '../name-validation.js';
 import { assertWritable } from '../read-only-mode.js';
 import { applyJsonPatch } from './json-patch.js';
 
@@ -82,14 +83,12 @@ export class NamedDocRepo {
                 throw new InvalidArgumentError('NamedDocRepo.patch: each operation must be an object with a JSON Pointer path starting with "/"');
             }
         }
+        const canonicalName = assertSafeRepoNameShape(name, { field: 'named-doc.name' });
+        const key = this._key(handle, bucket, canonicalName);
         return this._engine.withTransaction(handle, async (tx) => {
-            const key = this._key(handle, bucket, name);
             const existing = await tx.getResource(key);
             const seed = (existing && typeof existing === 'object' && !Array.isArray(existing)) ? existing : {};
             const next = applyJsonPatch(seed, operations);
-            if (!next || typeof next !== 'object' || Array.isArray(next)) {
-                throw new InvalidArgumentError('NamedDocRepo.patch: result must be a plain object');
-            }
             await tx.putResource(key, { doc: next });
             return {
                 applied: operations.length,

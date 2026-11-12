@@ -1,9 +1,17 @@
+import { jest } from '@jest/globals';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { makeTempFsEngineHarness, makeTempSqliteEngineHarness } from './harness/contract-harness.js';
 import { BUCKET_TO_DIR, NamedDocRepo } from '../../src/storage/repositories/named-doc-repo.js';
+import { ChatRepo } from '../../src/storage/repositories/chat-repo.js';
+import { SettingsRepo } from '../../src/storage/repositories/settings-repo.js';
+import { PresetRepo } from '../../src/storage/repositories/preset-repo.js';
+import { WorldInfoRepo } from '../../src/storage/repositories/world-info-repo.js';
+import { GroupRepo } from '../../src/storage/repositories/group-repo.js';
+import { StatsRepo } from '../../src/storage/repositories/stats-repo.js';
+import { MigrationRunner } from '../../src/storage/migration/runner.js';
 import {
     InvalidArgumentError,
     PatchMissingParentError,
@@ -111,12 +119,33 @@ describe.each(ENGINES)('NamedDocRepo globalStates on $name', ({ make }) => {
         expect(await repo.get(h.handle, 'globalStates', 'err-state')).toEqual(initial);
     });
 
-    test.each(['../escape', '', 'nested/ns', 'ns.json'])('rejects invalid name %j cleanly on save and patch', async (badName) => {
+    test.each(['../escape', '', '   ', 'nested/ns', 'ns.json'])('rejects invalid name %j cleanly on save and patch', async (badName) => {
         await expect(repo.save(h.handle, 'globalStates', badName, { v: 1 })).rejects.toThrow();
-        await expect(repo.patch(h.handle, 'globalStates', badName, [
-            { op: 'add', path: '/v', value: 1 },
-        ])).rejects.toThrow();
+        const txSpy = jest.spyOn(h.engine, 'withTransaction');
+        try {
+            await expect(repo.patch(h.handle, 'globalStates', badName, [
+                { op: 'test', path: '/v', value: 1 },
+                { op: 'replace', path: '/v', value: 2 },
+            ])).rejects.toBeInstanceOf(InvalidArgumentError);
+            expect(txSpy).not.toHaveBeenCalled();
+        } finally {
+            txSpy.mockRestore();
+        }
         expect(await repo.list(h.handle, 'globalStates')).toEqual([]);
+    });
+
+    test('patch canonicalizes surrounding whitespace on name before reading and writing', async () => {
+        await repo.save(h.handle, 'globalStates', 'trimmed_ns', { rev: 1 });
+        const result = await repo.patch(h.handle, 'globalStates', '  trimmed_ns  ', [
+            { op: 'test', path: '/rev', value: 1 },
+            { op: 'replace', path: '/rev', value: 2 },
+        ]);
+        expect(result).toEqual({
+            applied: 2,
+            created: false,
+            state: { rev: 2 },
+        });
+        expect(await repo.get(h.handle, 'globalStates', 'trimmed_ns')).toEqual({ rev: 2 });
     });
 
     test('assertWritable rejects save, patch, and delete when read-only mode is active', async () => {
@@ -191,7 +220,7 @@ describe('globalStates backend layout and integration', () => {
         }
     });
 
-    test('patch rejects non-array operations or non-object result cleanly', async () => {
+    test('patch rejects non-array operations or non-pointer op path cleanly', async () => {
         const h = await makeTempFsEngineHarness();
         try {
             const repo = new NamedDocRepo({ engine: h.engine });
@@ -199,9 +228,70 @@ describe('globalStates backend layout and integration', () => {
                 .rejects.toBeInstanceOf(InvalidArgumentError);
             await expect(repo.patch(h.handle, 'globalStates', 'bad-root', [
                 { op: 'replace', path: '', value: [1, 2, 3] },
-            ])).rejects.toThrow();
+            ])).rejects.toBeInstanceOf(InvalidArgumentError);
         } finally {
             h.cleanup();
+        }
+    });
+
+    test('MigrationRunner round-trips globalStates across FS and SQLite', async () => {
+        const fsH = await makeTempFsEngineHarness();
+        const sqH = await makeTempSqliteEngineHarness();
+        const fsH2 = await makeTempFsEngineHarness();
+        const buildRepos = (engine) => ({
+            chat: new ChatRepo({ engine }),
+            settings: new SettingsRepo({ engine }),
+            preset: new PresetRepo({ engine }),
+            worldInfo: new WorldInfoRepo({ engine }),
+            namedDoc: new NamedDocRepo({ engine }),
+            group: new GroupRepo({ engine }),
+            stats: new StatsRepo({ engine }),
+        });
+        try {
+            const fsRepos = buildRepos(fsH.engine);
+            const sqRepos = buildRepos(sqH.engine);
+            const fsRepos2 = buildRepos(fsH2.engine);
+
+            await fsRepos.namedDoc.patch(fsH.handle, 'globalStates', 'workbench_sessions', [
+                { op: 'add', path: '/sessions', value: [{ id: 's1', messages: [{ role: 'user', text: 'hello' }] }] },
+            ]);
+            await fsRepos.namedDoc.save(fsH.handle, 'globalStates', 'prefs_cache', { collapsed: true });
+
+            const forwardRunner = new MigrationRunner({
+                sourceRepos: fsRepos,
+                destRepos: sqRepos,
+                snapshotPaths: {
+                    backupRoot: fsH.backupRoot,
+                    getUserRoot: () => fsH.dirs.root,
+                },
+            });
+            const forwardRes = await forwardRunner.migrateUser(fsH.handle);
+            expect(forwardRes.verified).toBe(true);
+            expect(forwardRes.named_docs).toBe(2);
+            expect(await sqRepos.namedDoc.get(sqH.handle, 'globalStates', 'workbench_sessions')).toEqual({
+                sessions: [{ id: 's1', messages: [{ role: 'user', text: 'hello' }] }],
+            });
+            expect(await sqRepos.namedDoc.get(sqH.handle, 'globalStates', 'prefs_cache')).toEqual({ collapsed: true });
+
+            const reverseRunner = new MigrationRunner({
+                sourceRepos: sqRepos,
+                destRepos: fsRepos2,
+                snapshotPaths: {
+                    backupRoot: sqH.backupRoot,
+                    getUserRoot: () => sqH.dirs.root,
+                },
+            });
+            const reverseRes = await reverseRunner.migrateUser(sqH.handle);
+            expect(reverseRes.verified).toBe(true);
+            expect(reverseRes.named_docs).toBe(2);
+            expect(await fsRepos2.namedDoc.get(fsH2.handle, 'globalStates', 'workbench_sessions')).toEqual({
+                sessions: [{ id: 's1', messages: [{ role: 'user', text: 'hello' }] }],
+            });
+            expect(fs.existsSync(path.join(fsH2.dirs.states, 'workbench_sessions.json'))).toBe(true);
+        } finally {
+            fsH.cleanup();
+            sqH.cleanup();
+            fsH2.cleanup();
         }
     });
 
