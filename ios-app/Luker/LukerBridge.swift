@@ -10,7 +10,6 @@ protocol LukerBridgePresenter: AnyObject {
     func exportDiagnosticsBundle()
     func reloadWebView()
     func applyEndpointChange()
-    func setWebViewFullBleed(_ enabled: Bool)
     func applySystemBarsColor(_ color: UIColor)
 }
 
@@ -116,11 +115,6 @@ final class LukerBridge: NSObject {
             }
             reply(nil, nil)
 
-        case "setFullBleed":
-            let enabled = body["enabled"] as? Bool ?? false
-            presenter?.setWebViewFullBleed(enabled)
-            reply(nil, nil)
-
         case "setSystemBarsColor":
             guard let rawColor = body["color"] as? String,
                   let color = Self.color(fromCSS: rawColor) else {
@@ -212,9 +206,6 @@ final class LukerBridge: NSObject {
         window.LukerIOS = {
             setGenerationActive(active) {
                 post({ method: 'setGenerationActive', active: !!active });
-            },
-            setFullBleed(enabled) {
-                post({ method: 'setFullBleed', enabled: !!enabled });
             },
             setSystemBarsColor(color) {
                 post({ method: 'setSystemBarsColor', color: String(color == null ? '' : color) });

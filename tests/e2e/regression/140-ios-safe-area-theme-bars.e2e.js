@@ -7,16 +7,16 @@ test.use({ browserName: 'webkit', viewport: { width: 430, height: 932 }, isMobil
 let server;
 
 test.beforeAll(async () => {
-    server = await startServer({ batchKey: 'regression', scenarioId: 'ios-full-bleed-safe-area' });
+    server = await startServer({ batchKey: 'regression', scenarioId: 'ios-safe-area-theme-bars' });
     markOnboarded({ dataRoot: server.dataRoot });
 });
 
 test.afterAll(async () => { await tearDownServer(server); });
 
 async function openApp(page, { bridge = true } = {}) {
-    // Desktop WebKit does not enable the iOS-only stylesheet or report device
-    // insets. Enable the shipped iOS rules and let each test provide the inset
-    // values through the same custom properties the stylesheet reads on device.
+    // Desktop WebKit cannot enable the iOS-only stylesheet. Enable the shipped
+    // iOS rules with the same custom-property values the device reports; the
+    // native safe area stays outside the page, so the page must not compensate.
     await page.route('**/css/mobile-styles.css', async route => {
         const response = await route.fetch();
         await route.fulfill({ response, body: (await response.text()).replace(
@@ -25,12 +25,8 @@ async function openApp(page, { bridge = true } = {}) {
     });
     if (bridge) {
         await page.addInitScript(() => {
-            window.__lukerFullBleedCalls = [];
             window.__lukerSystemBarColors = [];
             window.LukerIOS = {
-                setFullBleed(enabled) {
-                    window.__lukerFullBleedCalls.push(Boolean(enabled));
-                },
                 setSystemBarsColor(color) {
                     window.__lukerSystemBarColors.push(String(color));
                 },
@@ -41,46 +37,36 @@ async function openApp(page, { bridge = true } = {}) {
     await page.waitForFunction(() => !document.getElementById('preloader') && !!window.Luker?.getContext);
 }
 
-async function applySimulatedInsets(page) {
-    await page.evaluate(() => {
-        const root = document.documentElement;
-        root.style.setProperty('--luker-safe-top', '62px');
-        root.style.setProperty('--luker-safe-bottom', '34px');
-        root.style.setProperty('--luker-safe-left', '0px');
-        root.style.setProperty('--luker-safe-right', '0px');
-    });
-}
-
-test('the iOS shell opts into full-bleed layout and the page keeps the safe areas', async ({ page }) => {
+test('the iOS shell themes the system bars and keeps the page inside the safe area', async ({ page }) => {
     await openApp(page);
-    await applySimulatedInsets(page);
 
-    await expect(page.locator('html')).toHaveClass(/luker-ios-full-bleed/);
-    expect(await page.evaluate(() => window.__lukerFullBleedCalls)).toEqual([true]);
+    const colors = await page.evaluate(() => window.__lukerSystemBarColors);
+    expect(colors.length).toBeGreaterThan(0);
+    expect(colors[0]).toMatch(/^rgba?\(/);
 
-    const systemBarColors = await page.evaluate(() => window.__lukerSystemBarColors);
-    expect(systemBarColors.length).toBeGreaterThan(0);
-    expect(systemBarColors[0]).toMatch(/^rgba?\(/);
+    // The page never claims the status bar or the home indicator: the native
+    // shell owns those strips, so full-screen extensions keep their top
+    // controls reachable below the Dynamic Island.
+    await expect(page.locator('html')).not.toHaveClass(/luker-ios-full-bleed/);
 
     const holder = await page.locator('#top-settings-holder').boundingBox();
-    expect(holder?.height ?? 0).toBeGreaterThan(62);
+    expect(holder?.height ?? 0).toBeGreaterThan(30);
+    expect(holder?.height ?? 0).toBeLessThan(45);
 
     const icon = await page.locator('#leftNavDrawerIcon').boundingBox();
-    expect(icon?.y ?? 0).toBeGreaterThanOrEqual(62);
+    expect(icon?.y ?? 0).toBeLessThan(10);
 
     const sheld = await page.locator('#sheld').boundingBox();
     expect(sheld?.y ?? 0).toBeCloseTo(holder?.height ?? 0, 0);
 
-    const form = await page.locator('#form_sheld').boundingBox();
-    expect((form?.y ?? 0) + (form?.height ?? 0)).toBeLessThanOrEqual(898);
-
     await page.locator('#leftNavDrawerIcon').click();
     await expect(page.locator('#left-nav-panel')).toHaveClass(/openDrawer/);
     const panel = await page.locator('#left-nav-panel').boundingBox();
-    expect(panel?.y ?? 0).toBeGreaterThanOrEqual(98);
+    expect(panel?.y ?? 0).toBeGreaterThanOrEqual(35);
+    expect(panel?.y ?? 0).toBeLessThan(60);
 });
 
-test('without the native full-bleed bridge the page keeps the safe-area layout', async ({ page }) => {
+test('without the native bridge the page keeps the safe-area layout and skips the color call', async ({ page }) => {
     await openApp(page, { bridge: false });
 
     await expect(page.locator('html')).not.toHaveClass(/luker-ios-full-bleed/);
