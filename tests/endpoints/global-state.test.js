@@ -250,6 +250,149 @@ describe.each(ENDPOINT_HARNESSES)('/api/state endpoints on $name', ({ mode }) =>
         }
     });
 
+    test('/patch supports root pointer replace/add/test and rejects root remove or non-object values without corrupting doc', async () => {
+        await request(harness.server)
+            .post('/api/state/set')
+            .send({ namespace: 'root_patch', data: { initial: true, keep: 'yes' } })
+            .expect(200);
+
+        // Root test mismatch -> 409 without mutating
+        await request(harness.server)
+            .post('/api/state/patch')
+            .send({
+                namespace: 'root_patch',
+                operations: [
+                    { op: 'test', path: '', value: { initial: false } },
+                    { op: 'replace', path: '', value: { whole: 'doc' } },
+                ],
+            })
+            .expect(409);
+
+        // Root remove -> 400 without mutating
+        await request(harness.server)
+            .post('/api/state/patch')
+            .send({
+                namespace: 'root_patch',
+                operations: [{ op: 'remove', path: '' }],
+            })
+            .expect(400);
+
+        // Root replace with non-object -> 400 without mutating
+        for (const badValue of [[1, 2, 3], null, 'scalar', 42]) {
+            await request(harness.server)
+                .post('/api/state/patch')
+                .send({
+                    namespace: 'root_patch',
+                    operations: [{ op: 'replace', path: '', value: badValue }],
+                })
+                .expect(400);
+        }
+
+        const intact = await request(harness.server)
+            .post('/api/state/get')
+            .send({ namespace: 'root_patch' })
+            .expect(200);
+        expect(intact.body.data).toEqual({ initial: true, keep: 'yes' });
+
+        // Root test match + replace -> 200 and whole-doc overwrite
+        const replaceRes = await request(harness.server)
+            .post('/api/state/patch')
+            .send({
+                namespace: 'root_patch',
+                operations: [
+                    { op: 'test', path: '', value: { initial: true, keep: 'yes' } },
+                    { op: 'replace', path: '', value: { whole: 'doc' } },
+                ],
+            })
+            .expect(200);
+        expect(replaceRes.body).toEqual({ ok: true, applied: 2, created: false });
+
+        const afterReplace = await request(harness.server)
+            .post('/api/state/get')
+            .send({ namespace: 'root_patch' })
+            .expect(200);
+        expect(afterReplace.body.data).toEqual({ whole: 'doc' });
+
+        // Root add -> 200 and whole-doc overwrite
+        const addRes = await request(harness.server)
+            .post('/api/state/patch')
+            .send({
+                namespace: 'root_patch',
+                operations: [{ op: 'add', path: '', value: { added: 'whole' } }],
+            })
+            .expect(200);
+        expect(addRes.body).toEqual({ ok: true, applied: 1, created: false });
+
+        const afterAdd = await request(harness.server)
+            .post('/api/state/get')
+            .send({ namespace: 'root_patch' })
+            .expect(200);
+        expect(afterAdd.body.data).toEqual({ added: 'whole' });
+    });
+
+    test('write routes enforce 128-byte UTF-8 namespace limit with 400 while read/delete allow longer existing names', async () => {
+        const exactAscii = 'a'.repeat(128);
+        const exactUtf8 = '汉'.repeat(42); // 42 * 3 = 126 bytes
+        const overAscii = 'a'.repeat(129);
+        const overUtf8 = '汉'.repeat(43); // 43 chars, 129 UTF-8 bytes
+
+        // Within 128 bytes -> allowed on /set and /patch
+        await request(harness.server)
+            .post('/api/state/set')
+            .send({ namespace: exactAscii, data: { ok: 1 } })
+            .expect(200);
+        await request(harness.server)
+            .post('/api/state/patch')
+            .send({ namespace: exactUtf8, operations: [{ op: 'add', path: '/ok', value: 2 }] })
+            .expect(200);
+
+        // Over 128 UTF-8 bytes -> 400 on /set and /patch
+        for (const longNs of [overAscii, overUtf8]) {
+            await request(harness.server)
+                .post('/api/state/set')
+                .send({ namespace: longNs, data: { ok: 1 } })
+                .expect(400);
+
+            await request(harness.server)
+                .post('/api/state/patch')
+                .send({ namespace: longNs, operations: [{ op: 'add', path: '/ok', value: 1 }] })
+                .expect(400);
+        }
+
+        // Pre-existing >128-byte namespace remains readable and deletable via /get, /get-batch, /delete
+        await getNamedDocRepo().save(harness.handle, 'globalStates', overUtf8, { legacy: true });
+
+        const getRes = await request(harness.server)
+            .get('/api/state/get')
+            .query({ account: harness.handle, namespace: overUtf8 })
+            .expect(200);
+        expect(getRes.body).toEqual({ ok: true, data: { legacy: true } });
+
+        const postGetRes = await request(harness.server)
+            .post('/api/state/get')
+            .send({ namespace: overUtf8 })
+            .expect(200);
+        expect(postGetRes.body).toEqual({ ok: true, data: { legacy: true } });
+
+        const batchRes = await request(harness.server)
+            .post('/api/state/get-batch')
+            .send({ namespaces: [overUtf8, overAscii] })
+            .expect(200);
+        expect(batchRes.body).toEqual({
+            ok: true,
+            data: {
+                [overUtf8]: { legacy: true },
+                [overAscii]: null,
+            },
+        });
+
+        const delRes = await request(harness.server)
+            .post('/api/state/delete')
+            .send({ namespace: overUtf8 })
+            .expect(200);
+        expect(delRes.body).toEqual({ ok: true, deleted: true });
+    });
+
     test('/delete removes namespace and reports deleted true then false', async () => {
         await request(harness.server)
             .post('/api/state/set')

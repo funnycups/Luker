@@ -8,14 +8,14 @@ import {
     UnsupportedPatchOpError,
 } from '../storage/errors.js';
 import { getNamedDocRepo } from '../storage/index.js';
-import { assertSafeRepoNameShape } from '../storage/name-validation.js';
+import { assertSafeRepoName, assertSafeRepoNameShape } from '../storage/name-validation.js';
 import { sendJsonResource, sendResourceReadError } from '../http-resource-cache.js';
 
 const GLOBAL_STATE_BUCKET = 'globalStates';
 
 export const router = express.Router();
 
-export function normalizeGlobalStateNamespace(raw) {
+export function normalizeGlobalStateNamespace(raw, { requireLengthBound = false } = {}) {
     if (typeof raw !== 'string') {
         return '';
     }
@@ -33,7 +33,8 @@ export function normalizeGlobalStateNamespace(raw) {
         return '';
     }
     try {
-        return assertSafeRepoNameShape(trimmed, { field: 'namespace' });
+        const validate = requireLengthBound ? assertSafeRepoName : assertSafeRepoNameShape;
+        return validate(trimmed, { field: 'namespace' });
     } catch (err) {
         if (err instanceof InvalidArgumentError) {
             return '';
@@ -140,7 +141,7 @@ router.post('/get-batch', async function (request, response) {
 
 router.post('/set', async function (request, response, next) {
     try {
-        const namespace = normalizeGlobalStateNamespace(request.body?.namespace);
+        const namespace = normalizeGlobalStateNamespace(request.body?.namespace, { requireLengthBound: true });
         if (!namespace) {
             return response.status(400).send({ error: 'Expected body.namespace string.' });
         }
@@ -165,7 +166,7 @@ router.post('/set', async function (request, response, next) {
 
 router.post('/patch', async function (request, response, next) {
     try {
-        const namespace = normalizeGlobalStateNamespace(request.body?.namespace);
+        const namespace = normalizeGlobalStateNamespace(request.body?.namespace, { requireLengthBound: true });
         if (!namespace) {
             return response.status(400).send({ error: 'Expected body.namespace string.' });
         }
