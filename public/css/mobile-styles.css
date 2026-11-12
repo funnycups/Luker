@@ -736,6 +736,146 @@
         height: unset;
     }
 
+    /*
+     * Full-bleed iOS shell: the page owns the safe-area padding so the theme
+     * background reaches the status bar and the home indicator. The class is
+     * only added when the native bridge confirms full-bleed mode, so pages
+     * served by an older shell keep the safe-area layout.
+     */
+    html.luker-ios-full-bleed {
+        --luker-safe-top: env(safe-area-inset-top, 0px);
+        --luker-safe-bottom: env(safe-area-inset-bottom, 0px);
+        --luker-safe-left: env(safe-area-inset-left, 0px);
+        --luker-safe-right: env(safe-area-inset-right, 0px);
+        --topBarBlockSize: calc(var(--topBarIconSize) + var(--topBarBlockPadding) + var(--luker-safe-top));
+        width: 100dvw;
+        height: var(--doc-height);
+    }
+
+    html.luker-ios-full-bleed #top-bar {
+        height: calc(var(--bottomFormBlockSize) + var(--luker-safe-top));
+        padding-top: var(--luker-safe-top);
+    }
+
+    html.luker-ios-full-bleed #top-settings-holder {
+        height: var(--topBarBlockSize);
+        padding-top: var(--luker-safe-top);
+        padding-left: var(--luker-safe-left);
+        padding-right: var(--luker-safe-right);
+    }
+
+    html.luker-ios-full-bleed #sheld {
+        height: calc(var(--doc-height) - var(--topBarBlockSize));
+        max-height: calc(var(--doc-height) - var(--topBarBlockSize));
+        padding-bottom: 0;
+    }
+
+    html.luker-ios-full-bleed #send_form {
+        padding-bottom: var(--luker-safe-bottom);
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+        border-bottom: none;
+    }
+
+    html.luker-ios-full-bleed #chat {
+        max-height: calc(var(--doc-height) - var(--topBarBlockSize) - var(--bottomFormBlockSize) - var(--luker-safe-bottom));
+    }
+
+    html.luker-ios-full-bleed #character_popup,
+    html.luker-ios-full-bleed #world_popup,
+    html.luker-ios-full-bleed #left-nav-panel,
+    html.luker-ios-full-bleed #right-nav-panel,
+    html.luker-ios-full-bleed .drawer-content {
+        height: calc(100dvh - 70px - var(--luker-safe-top) - var(--luker-safe-bottom));
+        max-height: calc(100dvh - 70px - var(--luker-safe-top) - var(--luker-safe-bottom));
+        left: calc(var(--luker-safe-left) + 2.5px);
+        right: calc(var(--luker-safe-right) + 2.5px);
+        width: auto;
+        max-width: none;
+    }
+
+    html.luker-ios-full-bleed #character_popup,
+    html.luker-ios-full-bleed #world_popup,
+    html.luker-ios-full-bleed .drawer-content {
+        margin-top: calc(36px + var(--luker-safe-top));
+    }
+
+    html.luker-ios-full-bleed .popup {
+        top: var(--luker-safe-top);
+        bottom: var(--luker-safe-bottom);
+        left: var(--luker-safe-left);
+        right: var(--luker-safe-right);
+        max-height: calc(100dvh - var(--luker-safe-top) - var(--luker-safe-bottom) - 16px);
+        max-width: calc(100dvw - var(--luker-safe-left) - var(--luker-safe-right) - 16px);
+    }
+
+    html.luker-ios-full-bleed .popup.large_dialogue_popup {
+        height: calc(100dvh - var(--luker-safe-top) - var(--luker-safe-bottom) - 16px) !important;
+        max-width: calc(100dvw - var(--luker-safe-left) - var(--luker-safe-right) - 16px) !important;
+    }
+
+    html.luker-ios-full-bleed .dw-win {
+        top: calc(50% + (var(--luker-safe-top) - var(--luker-safe-bottom)) / 2);
+        width: min(820px, calc(100vw - var(--luker-safe-left) - var(--luker-safe-right) - 32px));
+        height: min(600px, calc(100dvh - var(--luker-safe-top) - var(--luker-safe-bottom) - 48px));
+    }
+
+    @media (max-width: 640px) {
+        html.luker-ios-full-bleed .dw-win {
+            width: calc(100vw - var(--luker-safe-left) - var(--luker-safe-right) - 16px);
+            height: calc(100dvh - var(--luker-safe-top) - var(--luker-safe-bottom) - 32px);
+        }
+    }
+
+    html.luker-ios-full-bleed body.card-app-studio-active .card-app-studio-panel {
+        top: var(--luker-safe-top) !important;
+        height: calc(100dvh - 48px - var(--luker-safe-top) - var(--luker-safe-bottom)) !important;
+    }
+
+    html.luker-ios-full-bleed body.card-app-studio-active .card-app-studio-mobile-tabs {
+        top: calc(100dvh - 48px - var(--luker-safe-bottom)) !important;
+        height: calc(48px + var(--luker-safe-bottom)) !important;
+        padding-bottom: var(--luker-safe-bottom);
+    }
+
+    html.luker-ios-full-bleed body.card-app-studio-active.card-app-studio-mobile-tab-preview #sheld {
+        padding-bottom: calc(48px + var(--luker-safe-bottom)) !important;
+    }
+
+    html.luker-ios-full-bleed #card-app-menu-btn {
+        bottom: calc(16px + var(--luker-safe-bottom));
+        left: calc(16px + var(--luker-safe-left));
+    }
+
+    html.luker-ios-full-bleed [data-luker-ios-safe-fullscreen="1"] {
+        box-sizing: border-box !important;
+        border-top: var(--luker-safe-top) solid var(--luker-safe-fullscreen-bg, transparent) !important;
+        border-bottom: var(--luker-safe-bottom) solid var(--luker-safe-fullscreen-bg, transparent) !important;
+        border-left: var(--luker-safe-left) solid var(--luker-safe-fullscreen-bg, transparent) !important;
+        border-right: var(--luker-safe-right) solid var(--luker-safe-fullscreen-bg, transparent) !important;
+        background-clip: border-box !important;
+        contain: layout !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100dvw !important;
+        height: var(--doc-height) !important;
+        max-height: var(--doc-height) !important;
+    }
+
+    html.luker-ios-full-bleed body.luker-immersive-mode:not(.luker-immersive-keep-top-bar) #sheld {
+        top: var(--luker-safe-top) !important;
+        height: calc(var(--doc-height) - var(--luker-safe-top)) !important;
+        max-height: calc(var(--doc-height) - var(--luker-safe-top)) !important;
+        padding-bottom: 0;
+    }
+
+    html.luker-ios-full-bleed body.luker-immersive-mode #chat {
+        max-height: calc(var(--doc-height) - var(--topBarBlockSize) - var(--bottomFormBlockSize) - var(--luker-safe-bottom)) !important;
+    }
+
+    html.luker-ios-full-bleed body.luker-immersive-mode:not(.luker-immersive-keep-top-bar) #chat {
+        max-height: calc(var(--doc-height) - var(--luker-safe-top) - var(--bottomFormBlockSize) - var(--luker-safe-bottom)) !important;
+    }
 }
 
 /* World Info entry editor: compact, touch-safe layout for phones and small tablets. */

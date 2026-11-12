@@ -20,6 +20,9 @@ final class ViewController: UIViewController {
     private let bridge = LukerBridge()
     private let runtimeQueue = DispatchQueue(label: "com.luker.app.runtime-lifecycle")
     private var webView: WKWebView?
+    private var webViewSafeAreaConstraints: [NSLayoutConstraint] = []
+    private var webViewFullBleedConstraints: [NSLayoutConstraint] = []
+    private var isWebViewFullBleed = false
     private var statusBarStyle: UIStatusBarStyle = .default
     private var currentBootState: BootState = .startingRuntime
     private var bootGeneration = 0
@@ -405,20 +408,43 @@ final class ViewController: UIViewController {
         webView.uiDelegate = self
         webView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(webView)
-        // Keep the web layer inside the safe area. Pages and extensions can open
-        // their own full-screen layouts, and those assume the viewport starts
-        // below the status bar; a full-bleed web view puts their top controls
-        // under the Dynamic Island with no way back. The native background
-        // carries the theme color in the strips around the web view instead.
+        // Start inside the safe area. The page switches to full-bleed only after
+        // it confirms it owns the safe-area padding, so pages served by an older
+        // shell never put the top bar under the Dynamic Island.
         view.backgroundColor = .systemBackground
-        NSLayoutConstraint.activate([
+        let safeAreaConstraints = [
             webView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             webView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor),
-        ])
+        ]
+        let fullBleedConstraints = [
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ]
+        NSLayoutConstraint.activate(safeAreaConstraints)
+        self.webViewSafeAreaConstraints = safeAreaConstraints
+        self.webViewFullBleedConstraints = fullBleedConstraints
+        self.isWebViewFullBleed = false
         self.webView = webView
         webView.load(URLRequest(url: runtime.serverURL))
+    }
+
+    func setWebViewFullBleed(_ enabled: Bool) {
+        guard let webView, enabled != isWebViewFullBleed else { return }
+        NSLayoutConstraint.deactivate(enabled ? webViewSafeAreaConstraints : webViewFullBleedConstraints)
+        NSLayoutConstraint.activate(enabled ? webViewFullBleedConstraints : webViewSafeAreaConstraints)
+        // Let CSS env(safe-area-inset-*) be the only source of edge spacing.
+        webView.scrollView.contentInsetAdjustmentBehavior = enabled ? .never : .automatic
+        isWebViewFullBleed = enabled
+        if enabled {
+            // The preloader paints a dark background before the saved theme loads.
+            statusBarStyle = .lightContent
+            setNeedsStatusBarAppearanceUpdate()
+        }
+        view.layoutIfNeeded()
     }
 
     func applySystemBarsColor(_ color: UIColor) {
@@ -995,6 +1021,9 @@ extension ViewController: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // A new document must opt in again; a page from an older server keeps
+        // the safe-area layout instead of inheriting full-bleed from the last one.
+        setWebViewFullBleed(false)
         navigationFailureAlertShown = false
     }
 
