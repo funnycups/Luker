@@ -200,7 +200,10 @@ export function createWindow({ title, onThemeToggle, theme, startCollapsed = fal
             put(pill, h('span', { class: 'wb-mark', 'aria-hidden': 'true' }, icon('mark', { size: 15 })), ...nodes);
             globalThis.requestAnimationFrame?.(placePill);
         },
-        refresh: apply,
+        refresh() {
+            apply();
+            fit.refresh();
+        },
         collapse,
         expand,
         toggle: () => (collapsed ? expand() : collapse()),

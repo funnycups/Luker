@@ -3,8 +3,6 @@
  */
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { test, expect, beforeEach, jest } from '@jest/globals';
 
 import { commitFields, fieldPlan, saveSettingsChecked } from '../../public/scripts/workbench/model/patch.js';
@@ -126,16 +124,150 @@ test('saveSettingsChecked fails if onSaved never fires and succeeds when onSaved
     await expect(saveSettingsChecked({ saveSettings: async (_, options) => options.onSaved() })).resolves.toBeUndefined();
 });
 
-test('script.js and extensions.js expose save-ack plumbing', () => {
-    const scriptSrc = readFileSync(fileURLToPath(new URL('../../public/script.js', import.meta.url)), 'utf8');
-    expect(scriptSrc).toContain('baseOptions?.onSaved?.()');
-    expect(scriptSrc).toContain('overrideOptions?.onSaved?.()');
-    expect(scriptSrc).toContain('options.onSaved?.()');
-    expect(scriptSrc).toContain('initWorkbench');
+test('writeExtensionField with requireSaved keeps in-memory character unmutated on server failure and mutates + mirrors on success', async () => {
+    const mockContext = {
+        characterId: 0,
+        characters: [],
+    };
+    const noop = () => {};
 
-    const extSrc = readFileSync(fileURLToPath(new URL('../../public/scripts/extensions.js', import.meta.url)), 'utf8');
-    expect(extSrc).toContain('requireSaved = false');
-    expect(extSrc).toContain('if (requireSaved) updateLocalCharacter();');
+    jest.unstable_mockModule('fflate', () => ({
+        gzipSync: (x) => x,
+        gzip: (x, cb) => cb?.(null, x),
+    }));
+    jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
+        delay: async () => {},
+        equalsIgnoreCaseAndAccents: (a, b) => a === b,
+        escapeHtml: (s) => String(s ?? ''),
+        isSubsetOf: () => false,
+        sanitizeSelector: (s) => s,
+        versionCompare: () => 0,
+        setValueByPath: (obj, path, val) => {
+            const parts = String(path).split('.');
+            let cur = obj;
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+                cur = cur[parts[i]];
+            }
+            cur[parts[parts.length - 1]] = val;
+        },
+        deleteValueByPath: (obj, path) => {
+            const parts = String(path).split('.');
+            let cur = obj;
+            for (let i = 0; i < parts.length - 1; i++) {
+                if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') return;
+                cur = cur[parts[i]];
+            }
+            delete cur[parts[parts.length - 1]];
+        },
+    }));
+    jest.unstable_mockModule('../../public/script.js', () => ({
+        eventSource: { on: noop, off: noop, emit: async () => {} },
+        event_types: {},
+        saveSettings: async () => {},
+        saveSettingsDebounced: noop,
+        getRequestHeaders: () => ({ 'Content-Type': 'application/json' }),
+        animation_duration: 0,
+        EXTENSIONS_CLIENT_VERSION: '1.0.0',
+        buildObjectPatchOperationsAsync: async () => [],
+        buildObjectPatchOperations: () => [],
+        cloneAsJsonWire: (v) => clone(v),
+        ensureFullSettingsLoaded: async () => {},
+    }));
+    jest.unstable_mockModule('../../public/scripts/st-context.js', () => ({
+        getContext: () => mockContext,
+    }));
+    jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
+        POPUP_RESULT: {},
+        POPUP_TYPE: {},
+        Popup: class {},
+        callGenericPopup: async () => {},
+    }));
+    jest.unstable_mockModule('../../public/scripts/templates.js', () => ({
+        renderTemplate: async () => '',
+        renderTemplateAsync: async () => '',
+    }));
+    jest.unstable_mockModule('../../public/scripts/user.js', () => ({
+        isAdmin: () => false,
+    }));
+    jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
+        addLocaleData: noop,
+        getCurrentLocale: () => 'en',
+        t: (strings, ...values) => String.raw(strings, ...values),
+    }));
+    jest.unstable_mockModule('../../public/scripts/util/AccountStorage.js', () => ({
+        accountStorage: { getItem: () => null, setItem: noop, removeItem: noop },
+    }));
+    jest.unstable_mockModule('../../public/scripts/state-resource.js', () => ({
+        invalidateStateResources: noop,
+        readStateEnvelope: async () => ({ ok: true, state: null }),
+    }));
+
+    const { writeExtensionField } = await import('../../public/scripts/extensions.js');
+
+    const jsonInput = document.createElement('input');
+    jsonInput.id = 'character_json_data';
+    document.body.appendChild(jsonInput);
+    const prevDollar = globalThis.$;
+    globalThis.$ = (sel) => {
+        const el = typeof sel === 'string' ? document.querySelector(sel) : sel;
+        return {
+            val: (next) => {
+                if (next !== undefined) {
+                    if (el) el.value = next;
+                    return undefined;
+                }
+                return el?.value ?? '';
+            },
+        };
+    };
+
+    const initialJson = JSON.stringify({ data: { extensions: { existing: 'keep' } } });
+    const character = {
+        avatar: 'Aqua.png',
+        data: { extensions: { existing: 'keep' } },
+        json_data: initialJson,
+    };
+    mockContext.characters = [character];
+    mockContext.characterId = 0;
+    jsonInput.value = initialJson;
+
+    const prevFetch = globalThis.fetch;
+    try {
+        // 1. Server fails -> rejects, and neither character.data.extensions nor character.json_data nor DOM is mutated
+        globalThis.fetch = jest.fn(async () => ({ ok: false, status: 500, statusText: 'Server Error' }));
+        await expect(writeExtensionField(0, 'wb_test', { count: 1 }, { requireSaved: true }))
+            .rejects.toThrow('Failed to save extension field (500): Server Error');
+        expect(character.data.extensions.wb_test).toBeUndefined();
+        expect(character.data.extensions.existing).toBe('keep');
+        expect(character.json_data).toBe(initialJson);
+        expect(jsonInput.value).toBe(initialJson);
+
+        // 2. Missing character -> rejects
+        await expect(writeExtensionField(99, 'wb_test', { count: 1 }, { requireSaved: true }))
+            .rejects.toThrow('Character not found');
+
+        // 3. Server succeeds -> mutates character.data.extensions, character.json_data, and mirrors #character_json_data
+        globalThis.fetch = jest.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }));
+        await writeExtensionField(0, 'wb_test', { count: 2 }, { requireSaved: true });
+        expect(character.data.extensions.wb_test).toEqual({ count: 2 });
+        expect(JSON.parse(character.json_data).data.extensions.wb_test).toEqual({ count: 2 });
+        expect(JSON.parse(jsonInput.value).data.extensions.wb_test).toEqual({ count: 2 });
+
+        // 4. Undefined avatars must not spuriously mirror to #character_json_data
+        const avatarless = {
+            data: { extensions: {} },
+            json_data: JSON.stringify({ data: { extensions: {} } }),
+        };
+        mockContext.characters = [avatarless];
+        jsonInput.value = 'untouched';
+        await writeExtensionField(0, 'wb_test', { count: 3 }, { requireSaved: true });
+        expect(avatarless.data.extensions.wb_test).toEqual({ count: 3 });
+        expect(jsonInput.value).toBe('untouched');
+    } finally {
+        globalThis.fetch = prevFetch;
+        globalThis.$ = prevDollar;
+    }
 });
 
 test('approval compares the full proposal even when the stored text was shortened', () => {

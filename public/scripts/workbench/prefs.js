@@ -10,7 +10,8 @@ export function loadPrefs() {
     try {
         const value = JSON.parse(globalThis.localStorage?.getItem(KEY) || '{}');
         return value && typeof value === 'object' ? value : {};
-    } catch {
+    } catch (err) {
+        console.warn('[workbench/prefs] failed to parse preferences:', err);
         return {};
     }
 }
@@ -20,7 +21,8 @@ export function savePrefs(patch) {
         const next = { ...loadPrefs(), ...patch };
         globalThis.localStorage?.setItem(KEY, JSON.stringify(next));
         return next;
-    } catch {
+    } catch (err) {
+        console.warn('[workbench/prefs] failed to save preferences:', err);
         return null;
     }
 }

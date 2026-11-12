@@ -2180,7 +2180,8 @@ export async function writeExtensionField(characterId, key, value, { requireSave
             character.json_data = JSON.stringify(jsonData);
 
             // Make sure the data doesn't get lost when saving the current character
-            if (getContext().characters?.[getContext().characterId]?.avatar === character.avatar) {
+            const isMirroredToEditor = Boolean(character.avatar && getContext().characters?.[getContext().characterId]?.avatar === character.avatar);
+            if (isMirroredToEditor) {
                 $('#character_json_data').val(character.json_data);
             }
 
@@ -2188,7 +2189,7 @@ export async function writeExtensionField(characterId, key, value, { requireSave
                 characterId,
                 avatar: character.avatar || null,
                 key,
-                mirroredToOpenEditor: getContext().characters?.[getContext().characterId]?.avatar === character.avatar,
+                mirroredToOpenEditor: isMirroredToEditor,
                 jsonLength: character.json_data.length,
             });
         }

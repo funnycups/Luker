@@ -275,6 +275,7 @@ export function mountWorkbench({
         }
         const view = {
             el: host,
+            mount: ws.mount,
             flush: Boolean(ws.flush),
             instance,
             show: (showOpts) => {
@@ -354,15 +355,19 @@ export function mountWorkbench({
 
     const unsubscribeRegistry = registry.subscribe(() => {
         if (destroyed) return;
-        const enabledIds = new Set(registry.getWorkspaces({ enabledOnly: true }).map(w => w.id));
-        for (const wsId of [...workspaceViews.keys()]) {
-            if (!enabledIds.has(wsId)) {
+        const enabledWorkspaces = registry.getWorkspaces({ enabledOnly: true });
+        const enabledById = new Map(enabledWorkspaces.map(w => [w.id, w]));
+        for (const [wsId, entry] of [...workspaceViews.entries()]) {
+            const currentDef = enabledById.get(wsId);
+            if (!currentDef || currentDef.mount !== entry.mount) {
                 unmountWorkspace(wsId);
             }
         }
-        if (activeTab.startsWith('ws:') && !enabledIds.has(activeTab.slice(3))) {
+        if (activeTab.startsWith('ws:') && !enabledById.has(activeTab.slice(3))) {
             activeTab = 'home';
             if (shown) showPage();
+        } else if (activeTab.startsWith('ws:') && !workspaceViews.has(activeTab.slice(3)) && shown) {
+            showPage();
         }
         computeSuggestions();
         paintRail();
@@ -390,6 +395,7 @@ export function mountWorkbench({
     }
 
     container.appendChild(win.layer);
+    win.refresh();
     paintRail();
     if (shown) {
         showPage();

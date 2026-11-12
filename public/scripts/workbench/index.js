@@ -46,7 +46,7 @@ async function open(opts = null) {
     if (!instance) return null;
     if (opts && typeof opts === 'object' && Object.keys(opts).length > 0) {
         instance.open(opts);
-    } else {
+    } else if (instance.isCollapsed()) {
         instance.expand();
     }
     return instance;

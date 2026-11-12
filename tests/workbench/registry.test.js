@@ -92,9 +92,12 @@ afterEach(() => {
 });
 
 describe('workbench registry (order-independent)', () => {
-    test('registers workspaces/targets before and after mount and updates live rail & status on deregister/disable', () => {
+    test('registers workspaces/targets before and after mount and updates live rail & status on deregister/disable', async () => {
         const reg = createWorkbenchRegistry();
         let memEnabled = true;
+        const mountedMemoryOpts = [];
+        const shownMemoryOpts = [];
+        const aiShowOpts = [];
 
         // Register BEFORE mount
         const unregMem = reg.registerWorkspace({
@@ -104,12 +107,16 @@ describe('workbench registry (order-independent)', () => {
             order: 10,
             tone: 'memory',
             isEnabled: () => memEnabled,
-            mount: (host) => {
+            mount: (host, { opts }) => {
+                mountedMemoryOpts.push(opts);
                 const el = document.createElement('div');
                 el.className = 'test-mem-ws';
                 el.textContent = 'Memory workspace mounted';
                 host.appendChild(el);
-                return () => el.remove();
+                return {
+                    show: (showOpts) => shownMemoryOpts.push(showOpts),
+                    destroy: () => el.remove(),
+                };
             },
         });
         const unregTargetBefore = reg.registerIterateTarget({ id: 'memory', label: 'Memory graph', order: 1 });
@@ -117,7 +124,23 @@ describe('workbench registry (order-independent)', () => {
         expect(reg.getWorkspaces().map(w => w.id)).toEqual(['memory']);
         expect(reg.getIterateTargets().map(t => t.id)).toEqual(['memory']);
 
-        const wb = mountWorkbench({ registry: reg, startCollapsed: false });
+        const wb = mountWorkbench({
+            registry: reg,
+            startCollapsed: false,
+            pages: {
+                ai: () => {
+                    const el = document.createElement('div');
+                    el.className = 'test-ai-page';
+                    return { el, show: (opts) => aiShowOpts.push(opts) };
+                },
+            },
+        });
+
+        // Initial connected fitToViewport measurement runs via win.refresh() right after mount
+        await new Promise(r => globalThis.requestAnimationFrame(r));
+        const layer = document.querySelector('.wbench');
+        expect(layer.style.getPropertyValue('--wb-vh')).toBe(`${Math.round(window.innerHeight) / 100}px`);
+        expect(layer.style.width).toBe(`${Math.round(window.innerWidth)}px`);
 
         // Rail renders built-in tabs + pre-mounted workspace
         const tabLabels = () => [...document.querySelectorAll('.wb-rail .wb-tab')].map(el => el.textContent);
@@ -157,19 +180,47 @@ describe('workbench registry (order-independent)', () => {
         unregOrch(); // stale unregister must not remove the replacement
         expect(reg.getWorkspaces().map(w => w.id)).toEqual(['orch', 'memory']);
 
-        // Open the memory workspace and verify mount ran
+        // Open the memory workspace and verify mount + show received navigation opts
         wb.open({ ws: 'memory', subview: 'nodes', focusId: 'n42' });
         expect(document.querySelector('.test-mem-ws')).not.toBeNull();
+        expect(mountedMemoryOpts).toEqual([{ ws: 'memory', subview: 'nodes', focusId: 'n42' }]);
+        expect(shownMemoryOpts).toEqual([{ ws: 'memory', subview: 'nodes', focusId: 'n42' }]);
 
-        // Disable via isEnabled + notify updates live rail & tears down active workspace
+        // Re-registering an already-mounted workspace unmounts stale view and remounts new mount()
+        let v2Destroyed = false;
+        const unregMemV2 = reg.registerWorkspace({
+            id: 'memory',
+            title: 'Memory V2',
+            icon: 'memory',
+            order: 10,
+            tone: 'memory',
+            isEnabled: () => memEnabled,
+            mount: (host) => {
+                const el = document.createElement('div');
+                el.className = 'test-mem-ws-v2';
+                host.appendChild(el);
+                return () => { v2Destroyed = true; el.remove(); };
+            },
+        });
+        expect(document.querySelector('.test-mem-ws')).toBeNull();
+        expect(document.querySelector('.test-mem-ws-v2')).not.toBeNull();
+
+        // Open core page with target options -> pageFactories.ai.show receives exact opts
+        wb.open({ page: 'ai', ws: 'memory', scope: 'character' });
+        expect(aiShowOpts).toEqual([{ page: 'ai', ws: 'memory', scope: 'character' }]);
+
+        // Switch back to memory v2, then disable via isEnabled + notify -> tears down active workspace
+        wb.open({ ws: 'memory' });
         memEnabled = false;
         reg.notify();
-        expect(tabLabels()).not.toContain('Memory Lens');
-        expect(document.querySelector('.test-mem-ws')).toBeNull();
+        expect(v2Destroyed).toBe(true);
+        expect(tabLabels()).not.toContain('Memory V2');
+        expect(document.querySelector('.test-mem-ws-v2')).toBeNull();
 
         // Deregistration cleans up live state
         unregOrchNew();
         unregMem();
+        unregMemV2();
         unregTargetBefore();
         unregAsk();
         unregSuggest();
@@ -293,18 +344,23 @@ describe('workbench index bootstrap & st-context exposure', () => {
         await new Promise(r => setTimeout(r, 20));
         expect(document.querySelector('.wbench .wb-win').hidden).toBe(true);
 
-        // openWorkbench({ page: 'ai', ws: 'memory', scope: 'character' }) opens and navigates
-        let receivedOpts = null;
+        // openWorkbench({ page: 'ai', ws: 'memory', scope: 'character' }) opens core AI page without mounting memory workspace
+        let memoryMountedOpts = [];
         const unreg = registerWorkspace({
             id: 'memory',
             title: 'Memory',
             icon: 'memory',
-            mount: (_host, { opts }) => { receivedOpts = opts; },
+            mount: (_host, { opts }) => { memoryMountedOpts.push(opts); },
         });
         await openWorkbench({ page: 'ai', ws: 'memory', scope: 'character' });
         expect(document.querySelector('.wbench .wb-win').hidden).toBe(false);
         expect(document.querySelector('.wb-tab[aria-selected="true"]').textContent).toContain('AI iteration');
-        expect(receivedOpts === null || receivedOpts.scope === 'character').toBe(true);
+        expect(memoryMountedOpts).toEqual([]);
+
+        // openWorkbench({ ws: 'memory', subview: 'nodes', focusId: 'n1' }) mounts the workspace directly with opts
+        await openWorkbench({ ws: 'memory', subview: 'nodes', focusId: 'n1' });
+        expect(document.querySelector('.wb-tab[aria-selected="true"]').textContent).toContain('Memory');
+        expect(memoryMountedOpts).toEqual([{ ws: 'memory', subview: 'nodes', focusId: 'n1' }]);
         unreg();
     });
 });
