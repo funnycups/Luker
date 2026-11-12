@@ -194,6 +194,7 @@ import * as LUKER_TABS_API from './extensions/luker-tabs.js';
 import * as FIELD_HELP_API from './extensions/field-help.js';
 import { skillsApi } from './skills/api.js';
 import * as RUN_PANEL_API_NS from './run-panel/index.js';
+import * as WORKBENCH_REGISTRY from './workbench/registry.js';
 import { SECRET_KEYS, secret_state } from './secrets.js';
 import { EmbeddingService } from './embedding-service.js';
 import { accountsEnabled, currentUser } from './user.js';
@@ -234,6 +235,20 @@ const RUN_PANEL_API = Object.freeze({
     openRunDock: RUN_PANEL_API_NS.openRunDock,
     toggleRunDock: RUN_PANEL_API_NS.toggleRunDock,
     getRunRecorder: RUN_PANEL_API_NS.getRunRecorder,
+});
+
+const WORKBENCH_API = Object.freeze({
+    registerWorkspace: WORKBENCH_REGISTRY.registerWorkspace,
+    registerIterateTarget: WORKBENCH_REGISTRY.registerIterateTarget,
+    registerAskProvider: WORKBENCH_REGISTRY.registerAskProvider,
+    registerSuggestRuleProvider: WORKBENCH_REGISTRY.registerSuggestRuleProvider,
+    open: WORKBENCH_REGISTRY.open,
+    saveSettingsChecked: WORKBENCH_REGISTRY.saveSettingsChecked,
+    getWorkspaces: WORKBENCH_REGISTRY.getWorkspaces,
+    getIterateTargets: WORKBENCH_REGISTRY.getIterateTargets,
+    getAskProviders: WORKBENCH_REGISTRY.getAskProviders,
+    getSuggestRuleProviders: WORKBENCH_REGISTRY.getSuggestRuleProviders,
+    subscribe: WORKBENCH_REGISTRY.subscribe,
 });
 
 function safeClone(value, fallback = {}) {
@@ -2521,6 +2536,7 @@ export function getContext() {
         floorRecordToTaskMessage,
         iterationLibrary: ITERATION_LIBRARY_API,
         runPanel: RUN_PANEL_API,
+        workbench: WORKBENCH_API,
         edits: EDITS_API,
         renderLukerTabs: LUKER_TABS_API.renderLukerTabs,
         renderFieldHelpButton: FIELD_HELP_API.renderFieldHelpButton,

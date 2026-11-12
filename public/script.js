@@ -358,6 +358,7 @@ import { bootSelfProfilerFromStorage } from './scripts/self-profiler.js';
 import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes, installLifecycleHooks } from './scripts/ws-delivery.js';
 import { loadSettingsEnvelope } from './scripts/settings-resource-read.js';
 import { listPresetDocuments, loadPresetResources, readPresetDocument } from './scripts/named-resource-read.js';
+import { initWorkbench } from './scripts/workbench/index.js';
 
 installFrontendLogCapture();
 initAndroidDebugTrail();
@@ -2373,6 +2374,7 @@ async function firstLoadInit() {
         () => initItemizedPrompts(),
         () => initAccessibility(),
         () => initSwipePicker(),
+        () => initWorkbench(),
         () => addDebugFunctions(),
         () => doDailyExtensionUpdatesCheck(),
         () => {
@@ -16161,6 +16163,10 @@ function getSettingsSnapshot() {
 
 function mergeSettingsSaveOptions(baseOptions = null, overrideOptions = null) {
     return {
+        onSaved: () => {
+            baseOptions?.onSaved?.();
+            overrideOptions?.onSaved?.();
+        },
         asyncDiff: overrideOptions?.asyncDiff ?? baseOptions?.asyncDiff ?? true,
         directSave: overrideOptions?.directSave ?? baseOptions?.directSave ?? false,
     };
@@ -16168,6 +16174,7 @@ function mergeSettingsSaveOptions(baseOptions = null, overrideOptions = null) {
 
 function normalizeSettingsSaveOptions(options = null) {
     const normalized = {
+        onSaved: options?.onSaved,
         asyncDiff: options?.asyncDiff !== false && options?.diffMode !== 'sync',
         directSave: options?.directSave === true,
     };
@@ -16285,6 +16292,7 @@ async function saveSettingsInternal(loopCounter = 0, options = {}) {
         invalidateSettingsGetResponseCache();
         settings = payload;
         rememberSettingsSnapshot(payload);
+        options.onSaved?.();
         await eventSource.emit(event_types.SETTINGS_UPDATED);
     } catch (error) {
         console.error('Error saving settings:', error);
