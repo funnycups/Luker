@@ -737,7 +737,10 @@ All six client helpers are exposed consistently across Layer 1 (`public/scripts/
 
 ### Namespace Rules
 
-Global state namespaces are case-preserving, trimmed non-empty strings. A namespace is rejected on both client and server (`reason: 'VALIDATION_ARGS'`) if it contains `/`, `\`, `..`, null bytes, control characters, starts with `.`, ends with `.json` or `.jsonl`, or contains filename-unsafe characters such as `<`, `>`, `:`, `"`, `|`, `?`, or `*`.
+Global state namespaces are case-preserving, trimmed non-empty strings. Validation happens at two boundaries:
+
+- **Client-side validation (`reason: 'VALIDATION_ARGS'`):** Rejects non-string values, empty strings after `.trim()`, `/`, `\`, `..`, `\0`, leading `.`, and ASCII control characters (`\x00-\x1f`, `\x7f`).
+- **Server-side validation (`HTTP 400` → client `reason: 'HTTP_ERROR'`):** Applies the same checks and additionally rejects `.json` / `.jsonl` suffixes and filename-unsafe characters such as `<`, `>`, `:`, `"`, `|`, `?`, or `*` via `assertSafeRepoNameShape`.
 
 ### getGlobalState
 
@@ -767,7 +770,7 @@ getGlobalStateBatch(
 >
 ```
 
-Reads multiple global state namespaces. Trimmed namespaces are deduplicated; an empty array returns `{ok: true, results: new Map()}`. If any entry is invalid, the call fails fast with `reason: 'VALIDATION_ARGS'`. On success returns `{ok: true, results}` where `results` is a `Map` keyed by namespace; each entry is `{ok: true, state}` and missing namespaces map to `{ok: true, state: null}`. On failure returns `{ok: false, results: <empty Map>, reason, hint}`.
+Reads multiple global state namespaces in parallel through the cached `GET /api/state/get` resource path. Trimmed namespaces are deduplicated; an empty array resolves locally to `{ok: true, results: new Map()}` without issuing HTTP requests (whereas `POST /api/state/get-batch` requires a non-empty array). If any entry fails client-side validation, the call fails fast with `reason: 'VALIDATION_ARGS'`. On success returns `{ok: true, results}` where `results` is a `Map` keyed by namespace; each entry is `{ok: true, state}` and missing namespaces map to `{ok: true, state: null}`. On failure returns `{ok: false, results: <empty Map>, reason, hint}`.
 
 ### setGlobalState
 
@@ -821,7 +824,7 @@ updateGlobalState(
 >
 ```
 
-**Recommended read-modify-write approach.** Invalidates cached reads, fetches the current state, and passes a deep clone (`{}` when none exists) to `updater`. The system computes the minimal RFC 6902 diff internally via `buildObjectPatchOperationsAsync()` (or synchronously when `options.asyncDiff === false`) and ships only the changed slice through `patchGlobalState()`. Returning `null` or `undefined` from `updater`, or returning an unchanged object, resolves with `{ok: true, state, updated: false}` without issuing a write. 409 conflicts are retried automatically up to `options.maxRetries` (default `1`). `options.maxOperations` defaults to `2000`. This function never throws; reducer exceptions and non-object return values surface as `reason: 'VALIDATION_ARGS'`.
+**Recommended read-modify-write approach.** Invalidates cached reads, fetches the current state, and passes a deep clone (`{}` when none exists) to `updater`. The system computes the minimal RFC 6902 diff internally via `buildObjectPatchOperationsAsync()` (or synchronously when `options.asyncDiff === false`) and ships only the changed slice through `patchGlobalState()`. Returning `null` or `undefined` from `updater`, or returning an unchanged object, resolves with `{ok: true, state, updated: false}` without issuing a write. 409 conflicts are retried automatically up to `options.maxRetries` (default `1`). `options.maxOperations` defaults to `2000`. This function never throws; reducer exceptions and non-plain-object return values surface as `reason: 'VALIDATION_ARGS'`.
 
 ```js
 await context.updateGlobalState('my-plugin', (current = {}) => ({
@@ -854,9 +857,9 @@ Every call returns `{ok: false, reason, hint}` on failure. Possible `reason` val
 
 | Reason | When it fires | Suggested handling |
 |---|---|---|
-| `VALIDATION_ARGS` | Invalid namespace, empty `operations`, non-function `updater`, reducer threw, or reducer returned a non-object value | Fix caller arguments or reducer |
+| `VALIDATION_ARGS` | Client-side namespace validation failed, empty `operations`, non-function `updater`, reducer threw, or reducer returned a non-plain-object value | Fix caller arguments or reducer |
 | `CONFLICT` | HTTP 409 from `patchGlobalState()`, or `updateGlobalState()` exhausted `maxRetries` | Re-read current state and retry |
-| `HTTP_ERROR` | Other non-2xx HTTP response | Inspect `hint` for status details; surface an error notice to the user |
+| `HTTP_ERROR` | Other non-2xx HTTP response, including HTTP 400 from server-side namespace or payload validation | Inspect `hint` for status details; surface an error notice to the user |
 | `TRANSPORT_ERROR` | `fetch` threw (network error, CORS, abort) | Retry or surface network error to the user |
 
 The `hint` field is English, no longer than 120 characters, and contains actionable diagnostic info. Switch on `reason` to render localized user messages rather than translating `hint`.

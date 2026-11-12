@@ -735,7 +735,10 @@ if (!result.ok) {
 
 ### 命名空間規則
 
-全域狀態的命名空間為保留大小寫、去除前後空白後的非空字串。若命名空間包含 `/`、`\`、`..`、空位元組或控制字元，以 `.` 開頭，以 `.json` 或 `.jsonl` 結尾，或包含檔名不安全字元如 `<`、`>`、`:`、`"`、`|`、`?`、`*`，用戶端與伺服端均會直接拒絕並回傳 `reason: 'VALIDATION_ARGS'`。
+全域狀態的命名空間為保留大小寫、去除前後空白後的非空字串。校驗分為用戶端與伺服端兩層：
+
+- **用戶端校驗，失敗回傳 `reason: 'VALIDATION_ARGS'`：** 拒絕非字串值、`.trim()` 後為空的字串，以及包含 `/`、`\`、`..`、`\0`、以 `.` 開頭或含 ASCII 控制字元 `\x00-\x1f`、`\x7f` 的命名空間。
+- **伺服端校驗，回傳 HTTP 400，用戶端映射為 `reason: 'HTTP_ERROR'`：** 在上述檢查之外，透過 `assertSafeRepoNameShape` 額外拒絕以 `.json` 或 `.jsonl` 結尾以及包含檔名不安全字元如 `<`、`>`、`:`、`"`、`|`、`?`、`*` 的命名空間。
 
 ### getGlobalState
 
@@ -765,7 +768,7 @@ getGlobalStateBatch(
 >
 ```
 
-批次讀取多個全域狀態命名空間。傳入的命名空間會去除前後空白並去重；空陣列直接回傳 `{ok: true, results: new Map()}`。若清單中存在非法命名空間，呼叫會立即以 `reason: 'VALIDATION_ARGS'` 回傳失敗。成功時回傳 `{ok: true, results}`，其中 `results` 是以命名空間為鍵的 `Map`，每筆條目本身是 `{ok: true, state}`，缺失的命名空間對應 `{ok: true, state: null}`。失敗時回傳 `{ok: false, results: <空 Map>, reason, hint}`。
+經由已快取的 `GET /api/state/get` 路徑並發讀取多個去重後的全域狀態命名空間。傳入的命名空間會去除前後空白並去重；空陣列會在本地直接回傳 `{ok: true, results: new Map()}` 而不發起 HTTP 請求，而 `POST /api/state/get-batch` 端點則要求非空陣列。若清單中存在未通過用戶端校驗的命名空間，呼叫會立即以 `reason: 'VALIDATION_ARGS'` 回傳失敗。成功時回傳 `{ok: true, results}`，其中 `results` 是以命名空間為鍵的 `Map`，每筆條目本身是 `{ok: true, state}`，缺失的命名空間對應 `{ok: true, state: null}`。失敗時回傳 `{ok: false, results: <空 Map>, reason, hint}`。
 
 ### setGlobalState
 
@@ -852,9 +855,9 @@ deleteGlobalState(
 
 | Reason | 觸發時機 | 建議處理 |
 |---|---|---|
-| `VALIDATION_ARGS` | 命名空間非法、`operations` 為空、`updater` 非函式、reducer 拋錯或回傳值非普通物件 | 修正呼叫端引數或 reducer 實作 |
+| `VALIDATION_ARGS` | 未通過用戶端命名空間校驗、`operations` 為空、`updater` 非函式、reducer 拋錯或回傳值非普通物件 | 修正呼叫端引數或 reducer 實作 |
 | `CONFLICT` | `patchGlobalState()` 回傳 HTTP 409，或 `updateGlobalState()` 用盡 `maxRetries` | 重新讀取當前狀態後再試 |
-| `HTTP_ERROR` | 其他非 2xx HTTP 回應 | 檢查 `hint` 中的狀態碼並向使用者提示錯誤 |
+| `HTTP_ERROR` | 其他非 2xx HTTP 回應，包括伺服端命名空間或負載校驗回傳的 HTTP 400 | 檢查 `hint` 中的狀態碼並向使用者提示錯誤 |
 | `TRANSPORT_ERROR` | `fetch` 拋出例外：網路錯誤、CORS 或請求中止 | 重試或向使用者提示網路錯誤 |
 
 `hint` 欄位為英文、不超過 120 字元的可操作診斷資訊。面向使用者的在地化文案請依 `reason` 切換，不要直接翻譯 `hint`。
