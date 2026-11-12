@@ -57,6 +57,45 @@ describe.each(ENDPOINT_HARNESSES)('SettingsRepo.getField on $name', ({ mode }) =
             .toMatchObject({ exists: true, value: {} });
     });
 
+    test.each([
+        ['surrounding quotes', '"quoted"'],
+        ['an unmatched opening quote', '"unclosed'],
+        ['a lone quote', '"'],
+        ['quoted JSON text', '"[1,2]"'],
+        ['JSON boolean text', 'true'],
+        ['an empty string', ''],
+    ])('preserves %s in a string field', async (_label, value) => {
+        await repo.save(harness.handle, { ...DOCUMENT, username: value });
+
+        expect(await repo.getField(harness.handle, '/username'))
+            .toMatchObject({ exists: true, value, type: 'string' });
+        expect(await repo.getFieldType(harness.handle, '/username'))
+            .toEqual({ exists: true, type: 'string' });
+    });
+
+    test.each([
+        ['quoted', 'a"b', 'a"b'],
+        ['backslash', 'a\\b', 'a\\b'],
+        ['slash and tilde', 'a/b~c', 'a~1b~0c'],
+        ['numeric', '0', '0'],
+        ['empty', '', ''],
+        ['newline', 'line\nbreak', 'line\nbreak'],
+        ['tab', 'tab\tkey', 'tab\tkey'],
+        ['carriage return', 'return\rkey', 'return\rkey'],
+        ['backspace', 'back\bspace', 'back\bspace'],
+        ['form feed', 'form\ffeed', 'form\ffeed'],
+        ['unit separator', 'unit\u001fseparator', 'unit\u001fseparator'],
+    ])('reads %s namespace keys exactly', async (_label, key, pointerSegment) => {
+        const value = { enabled: true, text: 'exact namespace' };
+        await repo.save(harness.handle, { extension_settings: { [key]: value } });
+        const pointer = `/extension_settings/${pointerSegment}`;
+
+        expect(await repo.getField(harness.handle, pointer))
+            .toMatchObject({ exists: true, value, type: 'object' });
+        expect(await repo.getFieldType(harness.handle, pointer))
+            .toEqual({ exists: true, type: 'object' });
+    });
+
     test('reads reserved and escaped property names as own keys', async () => {
         expect(await repo.getField(harness.handle, '/extension_settings/example/a~1b~0c'))
             .toMatchObject({ exists: true, value: 'special' });

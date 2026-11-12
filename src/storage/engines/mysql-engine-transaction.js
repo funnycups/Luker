@@ -317,8 +317,6 @@ export function registerSettingsHandler(tx) {
             else if (type === 'boolean') value = value === true || value === 1 || value === '1' || value === 'true';
             else if (type === 'object' || type === 'array') {
                 value = typeof value === 'string' ? JSON.parse(value) : value;
-            } else if (type === 'string') {
-                value = typeof value === 'string' && value.startsWith('"') ? JSON.parse(value) : value;
             } else if (type === 'integer' || type === 'double' || type === 'decimal') {
                 value = Number(value);
             }
