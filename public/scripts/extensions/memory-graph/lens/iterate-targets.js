@@ -421,6 +421,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                 scope: targetRef.scope === 'character' ? 'character' : 'global',
                 avatar: String(targetRef.avatar || ''),
                 hasOverride: Boolean(targetRef.hasOverride),
+                characterName: String(targetRef.characterName || ''),
             };
         }
         if (targetRef && typeof targetRef === 'object' && metaByRef.has(targetRef)) {
@@ -430,10 +431,22 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             return metaByRef.get(live);
         }
         const resolvedScope = scope === 'character' ? 'character' : 'global';
+        if (resolvedScope === 'character') {
+            const c = ctx || resolveCtx();
+            const avatar = resolveActiveAvatar(c);
+            const info = avatar ? resolveScopeInfo(c, getMgSettings()) : null;
+            return {
+                scope: 'character',
+                avatar,
+                hasOverride: Boolean(info?.hasOverride),
+                characterName: String(info?.characterName || (avatar ? resolveActiveCharacterName(c, avatar) : '') || ''),
+            };
+        }
         return {
-            scope: resolvedScope,
-            avatar: resolvedScope === 'character' ? resolveActiveAvatar(ctx) : '',
+            scope: 'global',
+            avatar: '',
             hasOverride: false,
+            characterName: '',
         };
     };
 
@@ -579,7 +592,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                 const characterName = String(info?.characterName || resolveActiveCharacterName(c, avatar) || avatar);
                 const live = { schema: effectiveSchema, settings: effectiveSettings };
                 const target = { scope: 'character', avatar, hasOverride: Boolean(info?.hasOverride) };
-                const meta = { scope: 'character', avatar, hasOverride: Boolean(info?.hasOverride) };
+                const meta = { scope: 'character', avatar, hasOverride: Boolean(info?.hasOverride), characterName };
                 metaByRef.set(live, meta);
                 metaByRef.set(target, meta);
                 return {
@@ -611,11 +624,10 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             if (meta.scope === 'character') {
                 const effective = deps.getEffectiveSettings?.(c, mgSettings) || mgSettings;
                 const base = String(effective?.configIterSystemPrompt || '').trim() || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT;
-                const info = resolveScopeInfo(c, mgSettings);
                 return appendScopeHintIfNeeded(base, {
                     scope: 'character',
-                    hasOverride: Boolean(info?.hasOverride),
-                    characterDisplayName: info?.characterName || resolveActiveCharacterName(c, meta.avatar || resolveActiveAvatar(c)),
+                    hasOverride: Boolean(meta.hasOverride),
+                    characterDisplayName: meta.characterName || resolveActiveCharacterName(c, meta.avatar || resolveActiveAvatar(c)),
                 });
             }
             return String(mgSettings?.configIterSystemPrompt || '').trim() || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT;
@@ -624,10 +636,9 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             const c = resolveCtx(ctx);
             const meta = resolveMeta(live, extra?.target, { scope, ctx: c });
             if (meta.scope === 'character' && (meta.avatar || resolveActiveAvatar(c))) {
-                const info = resolveScopeInfo(c, getMgSettings());
                 const catalog = buildToolCatalog().filter((def) => {
                     const name = def?.function?.name;
-                    if (name === CONTROL_TOOL_NAMES.resetToGlobal) return Boolean(info?.hasOverride);
+                    if (name === CONTROL_TOOL_NAMES.resetToGlobal) return Boolean(meta.hasOverride);
                     return true;
                 });
                 return [...catalog, ...LOREBOOK_READ_TOOL_DEFS];

@@ -645,6 +645,32 @@ describe('memory IterateTarget (config + schema)', () => {
         );
         expect(booksViaTarget.books).toContain('AliceLore');
     });
+
+    test('prompt() and tools() read meta.hasOverride without re-calling getSchemaScopeInfo', async () => {
+        const h = makeConfigHarness({ avatar: 'alice.png' });
+        const scopeSpy = jest.fn(h.deps.getSchemaScopeInfo);
+        h.deps.getSchemaScopeInfo = scopeSpy;
+        globalThis.Luker = { getContext: () => h.ctx };
+        const target = createMemoryConfigTarget(() => h.ctx, h.deps);
+
+        const loaded = await target.load('character', h.ctx);
+        expect(scopeSpy).toHaveBeenCalledTimes(1);
+
+        // Prompt and tools use the WeakMap-cached meta without re-querying getSchemaScopeInfo.
+        const promptNoOverride = await target.prompt(loaded.live, 'character', h.ctx);
+        const toolsNoOverride = (await target.tools(loaded.live, 'character', h.ctx)).map(t => t.function.name);
+        expect(scopeSpy).toHaveBeenCalledTimes(1);
+        expect(promptNoOverride).toContain('This card has NO schema override yet');
+        expect(toolsNoOverride).not.toContain('luker_mg_schema_reset_live_to_global');
+
+        // Explicit extra.target with hasOverride: true drives both prompt and tools without re-querying.
+        const explicitTarget = { scope: 'character', avatar: 'alice.png', hasOverride: true };
+        const promptOverride = await target.prompt(clone(loaded.live), 'character', h.ctx, { target: explicitTarget });
+        const toolsOverride = (await target.tools(clone(loaded.live), 'character', h.ctx, { target: explicitTarget })).map(t => t.function.name);
+        expect(scopeSpy).toHaveBeenCalledTimes(1);
+        expect(promptOverride).not.toContain('This card has NO schema override yet');
+        expect(toolsOverride).toContain('luker_mg_schema_reset_live_to_global');
+    });
 });
 
 describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)', () => {
