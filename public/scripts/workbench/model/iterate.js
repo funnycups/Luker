@@ -124,6 +124,7 @@ export async function runIterateTurn({
     request,
     bus = null,
     proposalKinds = null,
+    targetRef = null,
     onRound = null,
     signal = null,
 }) {
@@ -174,6 +175,7 @@ export async function runIterateTurn({
                 const helpers = {
                     bus: activeBus,
                     sourceCallId: call.id,
+                    target: targetRef,
                     propose: async (input) => {
                         if (!activeBus) throw new SourceError('unsupported', 'ProposalBus is not configured for this target');
                         const out = await activeBus.propose({ sourceCallId: call.id, ...input });
@@ -335,9 +337,9 @@ export function proposalToChange(entry, adapter = null) {
  * Builds the unified change list for a turn from both field-diff units and
  * ProposalBus entries.
  */
-export function buildTurnChanges({ base, ai, units = null, bus = null, proposalIds = null, kindAdapters = null }) {
+export function buildTurnChanges({ base, ai, units = null, bus = null, proposalIds = null, kindAdapters = null, targetRef = null }) {
     const fieldChanges = typeof units === 'function'
-        ? diffUnits(units(base), units(ai)).map(c => ({ ...c, proposalKind: 'field-diff', inverseAvailable: true }))
+        ? diffUnits(units(base, targetRef), units(ai, targetRef)).map(c => ({ ...c, proposalKind: 'field-diff', inverseAvailable: true }))
         : [];
     if (!bus) return fieldChanges;
     const adapters = normalizeProposalAdapters(kindAdapters);
@@ -373,7 +375,7 @@ export async function commitTurnBatch({
 
     let fieldHandle = null;
     if (fieldKeys.length) {
-        const next = target.rebuild(base, ai, fieldKeys);
+        const next = target.rebuild(base, ai, fieldKeys, targetRef);
         fieldHandle = await target.commit(targetRef, base, next, fieldKeys);
     }
 

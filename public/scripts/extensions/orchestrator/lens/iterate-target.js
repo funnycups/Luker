@@ -673,13 +673,63 @@ function appendScopeHint(basePrompt, { scope, hasOverride, characterDisplayName 
 export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
     const resolveCtx = (explicitCtx = null) => explicitCtx || getCtx();
     const blankSeedKeys = new Set();
-    let activeScope = 'global';
-    let activeMode = 'spec';
-    let activeHasOverride = false;
-    let activePresetId = '';
-    let activePresetName = '';
+    const metaByRef = new WeakMap();
 
     const getOrchSettings = () => deps.getSettings?.() || resolveCtx()?.extensionSettings?.orchestrator || null;
+
+    const reportError = (message) => {
+        if (typeof deps.onError === 'function') {
+            deps.onError(message);
+        } else {
+            globalThis.toastr?.error?.(message, i18n('Orchestration'));
+        }
+    };
+
+    function inferModeFromLive(live, fallbackSettings = null) {
+        if (live && typeof live === 'object') {
+            if (live.spec && live.presets) return 'spec';
+            if ('mainAgent' in live || 'subAgents' in live) return 'director';
+            if ('planner' in live || ('agents' in live && 'finalAgentId' in live)) return 'agenda';
+            if ('system_prompt' in live || live.mode === 'loop') return 'loop';
+        }
+        return resolveMode(fallbackSettings);
+    }
+
+    function resolveMeta(live, targetRef = null, { scope = null, ctx = null, settings = null } = {}) {
+        if (targetRef && typeof targetRef === 'object' && (targetRef.mode || targetRef.scope)) {
+            const m = SUPPORTED_MODES.has(targetRef.mode) ? targetRef.mode : inferModeFromLive(live, settings);
+            const sc = targetRef.scope === 'character' ? 'character' : 'global';
+            return {
+                mode: m,
+                scope: sc,
+                avatar: String(targetRef.avatar || ''),
+                presetId: String(targetRef.presetId || ''),
+                presetName: String(targetRef.presetName || ''),
+                hasOverride: Boolean(targetRef.hasOverride),
+            };
+        }
+        if (targetRef && typeof targetRef === 'object' && metaByRef.has(targetRef)) {
+            return metaByRef.get(targetRef);
+        }
+        if (live && typeof live === 'object' && metaByRef.has(live)) {
+            return metaByRef.get(live);
+        }
+        const m = inferModeFromLive(live, settings);
+        const sc = scope === 'character' ? 'character' : 'global';
+        const av = sc === 'character' ? resolveActiveAvatar(ctx) : '';
+        const hasOverride = sc === 'character' && av ? (deps.getRuntimePresetScope?.(ctx, av, m) === 'character') : false;
+        const presetId = hasOverride
+            ? String(deps.getCharacterActivePresetId?.(ctx, av, m) || '')
+            : String(deps.getActivePresetId?.(settings, m, { scope: 'global' }) || '');
+        return {
+            mode: m,
+            scope: sc,
+            avatar: av,
+            presetId,
+            presetName: '',
+            hasOverride,
+        };
+    }
 
     function sanitizeForMode(mode, profile) {
         if (mode === 'loop') return deps.sanitizeLoopProfile ? deps.sanitizeLoopProfile(profile) : clone(profile);
@@ -733,8 +783,8 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
         read: async (target) => {
             const c = resolveCtx();
             const settings = getOrchSettings();
-            const m = target?._mode || activeMode;
-            const sc = target?._scope || activeScope;
+            const m = target?._mode || resolveMode(settings);
+            const sc = target?._scope || 'global';
             const av = target?._avatar || resolveActiveAvatar(c);
             const useChar = sc === 'character' && deps.getRuntimePresetScope?.(c, av, m) === 'character';
             const prof = readScopeProfile(c, settings, m, useChar ? 'character' : 'global', av);
@@ -746,8 +796,8 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             if (!target?._op) return;
             const c = resolveCtx();
             const settings = getOrchSettings();
-            const m = target._mode || activeMode;
-            const sc = target._scope || activeScope;
+            const m = target._mode || resolveMode(settings);
+            const sc = target._scope || 'global';
             const av = target._avatar || resolveActiveAvatar(c);
             const useChar = sc === 'character' && deps.getRuntimePresetScope?.(c, av, m) === 'character';
             const prof = readScopeProfile(c, settings, m, useChar ? 'character' : 'global', av);
@@ -888,10 +938,14 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                         class: 'lw-btn is-ghost is-sm',
                         'aria-pressed': String(isBlank),
                         dataset: { wbOrchControl: 'reset-blank' },
-                        onClick: () => {
-                            if (blankSeedKeys.has(blankKey)) blankSeedKeys.delete(blankKey);
-                            else blankSeedKeys.add(blankKey);
-                            onReload?.();
+                        onClick: async () => {
+                            try {
+                                if (blankSeedKeys.has(blankKey)) blankSeedKeys.delete(blankKey);
+                                else blankSeedKeys.add(blankKey);
+                                await onReload?.();
+                            } catch (err) {
+                                reportError(String(err?.message || err || i18n('Operation failed')));
+                            }
                         },
                     }, i18n('Reset to blank')),
                     h('button', {
@@ -900,15 +954,19 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                         disabled: !hasOverride && !isBlank,
                         dataset: { wbOrchControl: 'reset-global' },
                         onClick: async () => {
-                            blankSeedKeys.delete(blankKey);
-                            if (hasOverride && typeof deps.clearCharacterExtensionForMode === 'function') {
-                                const idx = deps.getCharacterIndexByAvatar?.(c, avatar) ?? -1;
-                                const prev = deps.getCharacterExtensionDataByAvatar?.(c, avatar) || {};
-                                const nextExt = deps.clearCharacterExtensionForMode(prev, mode);
-                                const ok = await deps.persistOrchestratorCharacterExtension?.(c, idx, nextExt);
-                                if (!ok) throw new SourceError('write-failed', i18n('Failed to persist character override.'));
+                            try {
+                                blankSeedKeys.delete(blankKey);
+                                if (hasOverride && typeof deps.clearCharacterExtensionForMode === 'function') {
+                                    const idx = deps.getCharacterIndexByAvatar?.(c, avatar) ?? -1;
+                                    const prev = deps.getCharacterExtensionDataByAvatar?.(c, avatar) || {};
+                                    const nextExt = deps.clearCharacterExtensionForMode(prev, mode);
+                                    const ok = await deps.persistOrchestratorCharacterExtension?.(c, idx, nextExt);
+                                    if (!ok) throw new SourceError('write-failed', i18n('Failed to persist character override.'));
+                                }
+                                await onReload?.();
+                            } catch (err) {
+                                reportError(String(err?.message || err || i18n('Failed to persist character override.')));
                             }
-                            onReload?.();
                         },
                     }, i18n('Reset to global')),
                 );
@@ -921,82 +979,85 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             const settings = getOrchSettings();
             if (!settings) throw new SourceError('no-extension', i18n('Orchestrator extension not detected. Make sure it is enabled.'));
             const mode = resolveMode(settings);
-            activeMode = mode;
-            activeScope = scope === 'character' ? 'character' : 'global';
+            const resolvedScope = scope === 'character' ? 'character' : 'global';
 
-            if (activeScope === 'character') {
+            if (resolvedScope === 'character') {
                 const avatar = resolveActiveAvatar(c);
                 if (!avatar) throw new SourceError('no-character', i18n('No character selected.'));
                 const hasOverride = deps.getRuntimePresetScope?.(c, avatar, mode) === 'character';
-                activeHasOverride = hasOverride;
                 const blankKey = `${mode}:${avatar}`;
-                const presetId = hasOverride ? (deps.getCharacterActivePresetId?.(c, avatar, mode) || '') : (deps.getActivePresetId?.(settings, mode, { scope: 'global' }) || '');
+                const presetId = String((hasOverride ? deps.getCharacterActivePresetId?.(c, avatar, mode) : deps.getActivePresetId?.(settings, mode, { scope: 'global' })) || '');
                 const live = blankSeedKeys.has(blankKey)
                     ? createBlankProfileForMode(mode)
                     : readScopeProfile(c, settings, mode, hasOverride ? 'character' : 'global', avatar);
                 const charName = deps.getCharacterDisplayNameByAvatar?.(c, avatar) || avatar;
                 const activeRes = deps.getActivePreset?.(settings, mode, { scope: hasOverride ? 'character' : 'global', context: c, avatar });
-                activePresetId = String(presetId || '');
-                activePresetName = String(activeRes?.state?.name || presetId || '');
+                const presetName = String(activeRes?.state?.name || presetId || '');
+                const target = { mode, scope: 'character', avatar, presetId, presetName, hasOverride };
+                const meta = { mode, scope: 'character', avatar, presetId, presetName, hasOverride };
+                metaByRef.set(live, meta);
+                metaByRef.set(target, meta);
                 return {
                     live,
-                    target: { mode, scope: 'character', avatar, presetId: activePresetId, presetName: activePresetName, hasOverride },
+                    target,
                     title: `${charName} · ${modeInfo(mode).label}${hasOverride ? '' : ' (global copy)'}`,
                 };
             }
 
-            activeHasOverride = false;
             const presetId = String(deps.getActivePresetId?.(settings, mode, { scope: 'global' }) || '');
             const activeRes = deps.getActivePreset?.(settings, mode, { scope: 'global', context: c });
-            activePresetId = presetId;
-            activePresetName = String(activeRes?.state?.name || presetId || '');
+            const presetName = String(activeRes?.state?.name || presetId || '');
             const live = readScopeProfile(c, settings, mode, 'global', '');
+            const target = { mode, scope: 'global', avatar: '', presetId, presetName, hasOverride: false };
+            const meta = { mode, scope: 'global', avatar: '', presetId, presetName, hasOverride: false };
+            metaByRef.set(live, meta);
+            metaByRef.set(target, meta);
             return {
                 live,
-                target: { mode, scope: 'global', avatar: '', presetId: activePresetId, presetName: activePresetName, hasOverride: false },
-                title: `${i18n('Global')} · ${modeInfo(mode).label}${activePresetName ? ` "${activePresetName}"` : ''}`,
+                target,
+                title: `${i18n('Global')} · ${modeInfo(mode).label}${presetName ? ` "${presetName}"` : ''}`,
             };
         },
-        async prompt(live, scope, ctx) {
+        async prompt(live, scope, ctx, extra = {}) {
             const c = resolveCtx(ctx);
             const settings = getOrchSettings() || {};
-            const mode = activeMode;
-            const avatar = resolveActiveAvatar(c);
-            const hasOverride = scope === 'character' && avatar ? (deps.getRuntimePresetScope?.(c, avatar, mode) === 'character') : false;
+            const meta = resolveMeta(live, extra?.target, { scope, ctx: c, settings });
+            const mode = meta.mode;
+            const resolvedScope = meta.scope;
+            const avatar = meta.avatar || (resolvedScope === 'character' ? resolveActiveAvatar(c) : '');
+            const hasOverride = resolvedScope === 'character' ? meta.hasOverride : false;
             const helperSession = {
                 mode,
-                scope,
+                scope: resolvedScope,
                 hasOverride,
-                characterDisplayName: scope === 'character' && avatar ? (deps.getCharacterDisplayNameByAvatar?.(c, avatar) || avatar) : '',
+                characterDisplayName: resolvedScope === 'character' && avatar ? (deps.getCharacterDisplayNameByAvatar?.(c, avatar) || avatar) : '',
                 workingProfile: live,
             };
             const rawBase = deps.buildAiIterationSystemPrompt ? deps.buildAiIterationSystemPrompt(settings, helperSession) : '';
             const hinted = appendScopeHint(rawBase, {
-                scope,
+                scope: resolvedScope,
                 hasOverride,
                 characterDisplayName: helperSession.characterDisplayName,
             });
-            const orchPresetForRuntime = activePresetId ? { mode, name: activePresetId } : null;
+            const orchPresetForRuntime = meta.presetId ? { mode, name: meta.presetId } : null;
             const defaultScope = orchPresetForRuntime ? { kind: 'orch-preset', mode, name: orchPresetForRuntime.name } : null;
             const skillRuntimeContext = buildSkillRuntimeContext(c, null, orchPresetForRuntime);
             return augmentIterStudioPromptWithSkills(hinted, live, skillRuntimeContext, { defaultScope });
         },
-        async tools(live, scope, ctx) {
+        async tools(live, scope, ctx, extra = {}) {
             const c = resolveCtx(ctx);
             const settings = getOrchSettings() || {};
-            const mode = resolveMode(settings);
-            activeMode = mode;
-            activeScope = scope === 'character' ? 'character' : 'global';
-            const avatar = resolveActiveAvatar(c);
-            const hasOverride = activeScope === 'character' && avatar ? (deps.getRuntimePresetScope?.(c, avatar, mode) === 'character') : false;
-            activeHasOverride = hasOverride;
+            const meta = resolveMeta(live, extra?.target, { scope, ctx: c, settings });
+            const mode = meta.mode;
+            const resolvedScope = meta.scope;
+            const hasOverride = resolvedScope === 'character' ? meta.hasOverride : false;
 
-            const helperSession = { mode, scope: activeScope, hasOverride, workingProfile: live };
+            const helperSession = { mode, scope: resolvedScope, hasOverride, workingProfile: live };
             const baseTools = (deps.buildAiIterationToolSet?.(helperSession) || []).filter(t => !CONTROL_TOOL_SET.has(t?.function?.name));
-            const controlTools = activeScope === 'character'
+            const controlTools = resolvedScope === 'character'
                 ? CONTROL_TOOL_DEFS.filter(t => t.function.name !== CONTROL_TOOL_NAMES.resetToGlobal || hasOverride)
                 : [];
-            const charTools = activeScope === 'character'
+            const charTools = resolvedScope === 'character'
                 ? [...LOREBOOK_WRITE_TOOL_DEFS, ...CHARACTER_PRESET_READ_TOOL_DEFS]
                 : [];
             return [
@@ -1018,15 +1079,16 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                 || SKILL_READ_TOOLS.has(n)
                 || CUSTOM_TOOL_READ_TOOLS.has(n);
         },
-        async runRead(call, live) {
+        async runRead(call, live, helpers = {}) {
             const c = resolveCtx();
             const name = String(call?.name || '');
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
             const callId = String(call?.id || `read_${Date.now().toString(36)}`);
-            const avatar = activeScope === 'character' ? resolveActiveAvatar(c) : '';
+            const meta = resolveMeta(live, helpers?.target, { ctx: c, settings: getOrchSettings() });
+            const avatar = meta.scope === 'character' ? (meta.avatar || resolveActiveAvatar(c)) : '';
 
             if (PROFILE_READ_TOOLS.has(name)) {
-                return dispatchReadFields({ sanitizedProfile: sanitizeForMode(activeMode, live), args });
+                return dispatchReadFields({ sanitizedProfile: sanitizeForMode(meta.mode, live), args });
             }
             if (isLorebookReadTool(name)) {
                 const out = await runLorebookReadTool({ id: callId, name, args }, { context: c, avatar });
@@ -1039,14 +1101,14 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                 return out.result;
             }
             if (SKILL_READ_TOOLS.has(name)) {
-                const orchPreset = activePresetId ? { mode: activeMode, name: activePresetId } : null;
+                const orchPreset = meta.presetId ? { mode: meta.mode, name: meta.presetId } : null;
                 const defaultScope = orchPreset ? { kind: 'orch-preset', mode: orchPreset.mode, name: orchPreset.name } : undefined;
                 const out = await runSkillIterStudioTool({ name, args }, { getWorkingProfile: () => live, defaultScope });
                 if (!out?.ok) throw new SourceError('read', String(out?.error || i18n('Read failed')));
                 return out.result;
             }
             if (CUSTOM_TOOL_READ_TOOLS.has(name)) {
-                const toolProfile = activeMode === 'spec' ? (live?.spec || {}) : live;
+                const toolProfile = meta.mode === 'spec' ? (live?.spec || {}) : live;
                 const out = await executeCustomToolIterStudioCall({ name, args }, { profile: toolProfile });
                 if (!out?.ok) {
                     const err = new SourceError('read', String(out?.hint || out?.error || i18n('Read failed')));
@@ -1057,7 +1119,7 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             }
             if (name === SIMULATE_TOOL_NAME) {
                 const sandbox = clone(live);
-                const fakeSession = { mode: activeMode, scope: activeScope, hasOverride: activeHasOverride, workingProfile: sandbox };
+                const fakeSession = { mode: meta.mode, scope: meta.scope, hasOverride: meta.hasOverride, workingProfile: sandbox };
                 const execResult = await deps.executeAiIterationToolCalls?.(c, fakeSession, [{ id: callId, name, args }], null);
                 const match = (execResult?.toolResults || []).find(r => String(r?.tool_call_id || '') === callId) || execResult?.toolResults?.[0];
                 let parsed = match?.content;
@@ -1116,23 +1178,31 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             const name = String(call?.name || '');
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
             const callId = String(call?.id || `edit_${Date.now().toString(36)}`);
-            const avatar = activeScope === 'character' ? resolveActiveAvatar(c) : '';
+            const meta = resolveMeta(live, helpers?.target, { ctx: c, settings });
+            const avatar = meta.scope === 'character' ? (meta.avatar || resolveActiveAvatar(c)) : '';
+
+            const tagNext = (next) => {
+                if (next && typeof next === 'object' && next !== live) {
+                    metaByRef.set(next, meta);
+                }
+                return next;
+            };
 
             if (CONTROL_TOOL_SET.has(name)) {
-                if (activeScope !== 'character') {
+                if (meta.scope !== 'character') {
                     throw new SourceError('not_allowed', `${name}: not_allowed — resets are only available in character scope.`);
                 }
                 if (name === CONTROL_TOOL_NAMES.resetToBlank) {
-                    if (activeHasOverride) {
+                    if (meta.hasOverride) {
                         throw new SourceError('not_allowed', `${name}: not_allowed — Reset rejected: this card already has an override. Use reset_to_global instead.`);
                     }
-                    return createBlankProfileForMode(activeMode);
+                    return tagNext(createBlankProfileForMode(meta.mode));
                 }
                 if (name === CONTROL_TOOL_NAMES.resetToGlobal) {
-                    if (!activeHasOverride) {
+                    if (!meta.hasOverride) {
                         throw new SourceError('not_allowed', `${name}: not_allowed — Reset rejected: this card has no character override yet. Use reset_to_blank instead.`);
                     }
-                    return readScopeProfile(c, settings, activeMode, 'global', '');
+                    return tagNext(readScopeProfile(c, settings, meta.mode, 'global', ''));
                 }
             }
 
@@ -1157,7 +1227,7 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             }
 
             if (isSkillIterStudioTool(name)) {
-                const orchPreset = activePresetId ? { mode: activeMode, name: activePresetId } : null;
+                const orchPreset = meta.presetId ? { mode: meta.mode, name: meta.presetId } : null;
                 const defaultScope = orchPreset ? { kind: 'orch-preset', mode: orchPreset.mode, name: orchPreset.name } : undefined;
                 const out = await runSkillIterStudioTool({ name, args }, { getWorkingProfile: () => live, defaultScope });
                 if (!out?.ok) throw new SourceError('skill', String(out?.error || 'Skill tool failed'));
@@ -1174,13 +1244,13 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                     return live;
                 }
                 if (out.pendingEdit) {
-                    return out.pendingEdit.newValue;
+                    return tagNext(out.pendingEdit.newValue);
                 }
                 return live;
             }
 
             if (isCustomToolIterStudioTool(name)) {
-                const toolProfile = activeMode === 'spec' ? (live?.spec || {}) : live;
+                const toolProfile = meta.mode === 'spec' ? (live?.spec || {}) : live;
                 const out = await executeCustomToolIterStudioCall({ name, args }, { profile: toolProfile });
                 if (!out?.ok) {
                     const err = new SourceError('custom-tool', String(out?.hint || out?.error || 'Custom tool failed'));
@@ -1196,8 +1266,8 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                             type: 'orch-custom-tool',
                             name: stable.name,
                             _op: blob.op,
-                            _mode: activeMode,
-                            _scope: activeScope,
+                            _mode: meta.mode,
+                            _scope: meta.scope,
                             _avatar: avatar,
                         },
                         before: stable,
@@ -1209,7 +1279,7 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             }
 
             const sandbox = clone(live);
-            const fakeSession = { mode: activeMode, scope: activeScope, hasOverride: activeHasOverride, workingProfile: sandbox };
+            const fakeSession = { mode: meta.mode, scope: meta.scope, hasOverride: meta.hasOverride, workingProfile: sandbox };
             const executorResult = await deps.executeAiIterationToolCalls?.(c, fakeSession, [{ id: callId, name, args }], null);
             const after = fakeSession.workingProfile != null ? fakeSession.workingProfile : sandbox;
             const outcome = interpretSandboxOutcome({ before: live, after, executorResult });
@@ -1218,16 +1288,17 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                 err.envelope = outcome.envelope;
                 throw err;
             }
-            if (outcome.kind === 'edits') return after;
+            if (outcome.kind === 'edits') return tagNext(after);
             return live;
         },
-        units: (live) => orchUnits(live, activeMode),
-        rebuild: (base, ai, keys) => rebuildOrchProfile(base, ai, keys, activeMode),
+        units: (live, targetRef = null) => orchUnits(live, resolveMeta(live, targetRef, { settings: getOrchSettings() }).mode),
+        rebuild: (base, ai, keys, targetRef = null) => rebuildOrchProfile(base, ai, keys, resolveMeta(base, targetRef, { settings: getOrchSettings() }).mode),
         async commit(targetRef, base, next, keys) {
             const c = resolveCtx();
             const settings = getOrchSettings();
             if (!settings) throw new SourceError('no-extension', i18n('Orchestrator extension not detected. Make sure it is enabled.'));
-            const m = targetRef?.mode || activeMode;
+            const meta = resolveMeta(base, targetRef, { settings });
+            const m = targetRef?.mode || meta.mode;
             const sc = targetRef?.scope === 'character' ? 'character' : 'global';
             const expectedAvatar = String(targetRef?.avatar || '').trim();
 

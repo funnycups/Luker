@@ -569,6 +569,82 @@ describe('memory IterateTarget (config + schema)', () => {
         expect(preview.textContent).toContain('召回最大轮数');
         expect(preview.textContent).toContain('6');
     });
+
+    test('surfaces reset-global and reset-blank errors via onError/toastr instead of unhandled rejections', async () => {
+        const charSchema = [clone(DEFAULT_SCHEMA[0])];
+        const onError = jest.fn();
+        const toastrError = jest.fn();
+        globalThis.toastr = { error: toastrError };
+        const h = makeConfigHarness({ avatar: 'alice.png', schemaOverride: charSchema });
+        h.deps.removeCharacterSchemaOverride = jest.fn(async () => false);
+        const target = createMemoryConfigTarget(() => h.ctx, { ...h.deps, onError });
+        const loaded = await target.load('character', h.ctx);
+
+        const controls = target.renderControls({
+            live: loaded.live,
+            scope: 'character',
+            settings: {},
+            onReload: async () => { throw new Error('reload failed'); },
+        });
+        const blankBtn = controls.querySelector('[data-wb-memory-control="reset-blank"]');
+        const globalBtn = controls.querySelector('[data-wb-memory-control="reset-global"]');
+
+        blankBtn.click();
+        await new Promise(r => setTimeout(r, 0));
+        expect(onError).toHaveBeenCalledWith(expect.stringContaining('reload failed'));
+
+        onError.mockClear();
+        globalBtn.click();
+        await new Promise(r => setTimeout(r, 0));
+        expect(onError).toHaveBeenCalledWith(expect.stringMatching(/Failed to reset character schema override|清除角色配置覆盖失败/));
+
+        // Without deps.onError, falls back to toastr.error
+        const targetToast = createMemoryConfigTarget(() => h.ctx, h.deps);
+        const controlsToast = targetToast.renderControls({ live: loaded.live, scope: 'character', settings: {}, onReload: jest.fn() });
+        controlsToast.querySelector('[data-wb-memory-control="reset-global"]').click();
+        await new Promise(r => setTimeout(r, 0));
+        expect(toastrError).toHaveBeenCalled();
+    });
+
+    test('isolates scope metadata per loaded target across concurrent load() calls and cloned live docs', async () => {
+        const h = makeConfigHarness({
+            avatar: 'alice.png',
+            books: {
+                AliceLore: {
+                    entries: {
+                        1: { uid: 1, comment: 'Rule', key: ['mana'], content: 'Rule text', disable: false, constant: true },
+                    },
+                },
+            },
+        });
+        globalThis.Luker = { getContext: () => h.ctx };
+        const target = createMemoryConfigTarget(() => h.ctx, h.deps);
+
+        const charLoaded = await target.load('character', h.ctx);
+        const globalLoaded = await target.load('global', h.ctx);
+        await target.tools(globalLoaded.live, 'global', h.ctx);
+
+        // Even after global load + tools(), charLoaded.live still operates in character scope (both via WeakMap and via cloned live + helpers.target)
+        const blankViaWeakMap = await target.runEdit({ id: 'rb1', name: 'luker_mg_schema_reset_live_to_blank', args: {} }, charLoaded.live);
+        expect(blankViaWeakMap.schema).toEqual([]);
+
+        const booksViaWeakMap = await target.runRead({ id: 'lb1', name: 'world_book_list', args: {} }, blankViaWeakMap);
+        expect(booksViaWeakMap.books).toContain('AliceLore');
+
+        const clonedCharLive = clone(charLoaded.live);
+        const blankViaTarget = await target.runEdit(
+            { id: 'rb2', name: 'luker_mg_schema_reset_live_to_blank', args: {} },
+            clonedCharLive,
+            { target: charLoaded.target },
+        );
+        expect(blankViaTarget.schema).toEqual([]);
+        const booksViaTarget = await target.runRead(
+            { id: 'lb2', name: 'world_book_list', args: {} },
+            clone(clonedCharLive),
+            { target: charLoaded.target },
+        );
+        expect(booksViaTarget.books).toContain('AliceLore');
+    });
 });
 
 describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)', () => {

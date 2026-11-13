@@ -1083,17 +1083,18 @@ export function createIteratePage(app) {
                 builtin: app.settings().builtinPrompt !== false,
             });
             const system = typeof runTargetObj.systemPrompt === 'function'
-                ? await runTargetObj.systemPrompt(runScope, draft.ai, { wrapper, ctx })
-                : [wrapper, await runTargetObj.prompt(draft.ai, runScope, ctx, { wrapper })].filter(Boolean).join('\n\n');
+                ? await runTargetObj.systemPrompt(runScope, draft.ai, { wrapper, ctx, target: draft.target })
+                : [wrapper, await runTargetObj.prompt(draft.ai, runScope, ctx, { wrapper, target: draft.target })].filter(Boolean).join('\n\n');
             const history = replayMessagesForApi(current.messages);
             const messages = trimMessages([{ role: 'system', content: system }, ...history, { role: 'user', content: userContent }]);
-            const tools = await runTargetObj.tools(draft.ai, runScope, ctx);
+            const tools = await runTargetObj.tools(draft.ai, runScope, ctx, { target: draft.target });
             const result = await runIterateTurn({
                 messages,
                 live: draft.ai,
                 tools,
                 bus: draft.bus,
                 proposalKinds: runTargetObj.proposalKinds || null,
+                targetRef: draft.target,
                 isRead: (n) => runTargetObj.isRead(n),
                 runRead: (call, live, helpers) => runTargetObj.runRead(call, live, helpers),
                 runEdit: (call, live, helpers) => runTargetObj.runEdit(call, live, helpers),
@@ -1114,6 +1115,7 @@ export function createIteratePage(app) {
                 bus: draft.bus,
                 proposalIds: draft.proposalIds,
                 kindAdapters: runTargetObj.proposalKinds,
+                targetRef: draft.target,
             });
             draft.changes = changes;
             if (!changes.length) drafts.delete(run.sessionId);
@@ -1168,6 +1170,7 @@ export function createIteratePage(app) {
             bus: draft.bus,
             proposalIds: turn.proposalIds || draft.proposalIds || [],
             kindAdapters: sessionTarget.proposalKinds,
+            targetRef: draft.target,
         });
         if (!approvalMatches(turn.changes, liveChanges, keys)) {
             app.toast(i18n('This draft is no longer available. Ask the AI again.'), { error: true, duration: 7000 });

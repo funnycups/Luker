@@ -656,4 +656,88 @@ describe('orchestrator/lens/iterate-target.js', () => {
         expect(preview).toBeInstanceOf(Node);
         expect(preview.textContent).toContain('distill');
     });
+
+    test('surfaces reset-global and reset-blank errors via onError/toastr instead of unhandled rejections', async () => {
+        const { ctx, deps } = makeHarness({ mode: 'spec', hasCharOverride: true });
+        const onError = jest.fn();
+        const toastrError = jest.fn();
+        globalThis.toastr = { error: toastrError };
+        deps.persistOrchestratorCharacterExtension = jest.fn(async () => false);
+        const target = createOrchIterateTarget(() => ctx, { ...deps, onError });
+        const loaded = await target.load('character', ctx);
+
+        const controls = target.renderControls({
+            live: loaded.live,
+            scope: 'character',
+            settings: {},
+            onReload: async () => { throw new Error('orch reload failed'); },
+        });
+        const blankBtn = controls.querySelector('[data-wb-orch-control="reset-blank"]');
+        const globalBtn = controls.querySelector('[data-wb-orch-control="reset-global"]');
+
+        blankBtn.click();
+        await new Promise(r => setTimeout(r, 0));
+        expect(onError).toHaveBeenCalledWith(expect.stringContaining('orch reload failed'));
+
+        onError.mockClear();
+        globalBtn.click();
+        await new Promise(r => setTimeout(r, 0));
+        expect(onError).toHaveBeenCalledWith(expect.stringContaining('Failed to persist character override.'));
+
+        // Without deps.onError, falls back to toastr.error
+        const targetToast = createOrchIterateTarget(() => ctx, deps);
+        const controlsToast = targetToast.renderControls({ live: loaded.live, scope: 'character', settings: {}, onReload: jest.fn() });
+        controlsToast.querySelector('[data-wb-orch-control="reset-global"]').click();
+        await new Promise(r => setTimeout(r, 0));
+        expect(toastrError).toHaveBeenCalled();
+    });
+
+    test('isolates mode/scope/hasOverride metadata per loaded target across concurrent load() calls and cloned live docs', async () => {
+        const gSpec = makeSpecProfile();
+        const cSpec = makeSpecProfile({
+            presets: {
+                distiller: { systemPrompt: 'Char custom distiller', userPromptTemplate: '', apiPresetName: '', promptPresetName: '' },
+                synthesizer: { systemPrompt: 'S', userPromptTemplate: '', apiPresetName: '', promptPresetName: '' },
+            },
+        });
+        const h = makeHarness({ mode: 'spec', hasCharOverride: true, globalProfile: gSpec, charProfile: cSpec });
+        h.orchSettings.presetLibraries.loop = { default: { name: 'Default', ...makeLoopProfile() } };
+        h.orchSettings.activePresetIds.loop = 'default';
+
+        const charLoaded = await h.target.load('character', h.ctx);
+
+        // Background switch to global loop mode + load/tools
+        h.orchSettings.executionMode = 'loop';
+        const globalLoaded = await h.target.load('global', h.ctx);
+        await h.target.tools(globalLoaded.live, 'global', h.ctx);
+
+        // Earlier spec/character session must NOT have its mode/scope/hasOverride clobbered (via WeakMap on loaded.live)
+        const readRes = await h.target.runRead({
+            id: 'r1',
+            name: 'luker_orch_read_spec_fields',
+            args: { paths: ['presets.distiller.systemPrompt'] },
+        }, charLoaded.live);
+        expect(readRes['presets.distiller.systemPrompt']).toBe('Char custom distiller');
+
+        const resetGlobal = await h.target.runEdit({ id: 'rg1', name: 'luker_orch_reset_live_to_global', args: {} }, charLoaded.live);
+        expect(resetGlobal.presets.distiller.systemPrompt).toBe('You are distiller.');
+
+        expect([...h.target.units(charLoaded.live).keys()]).toContain('preset:distiller');
+        const rebuilt = h.target.rebuild(charLoaded.live, resetGlobal, ['preset:distiller']);
+        expect(rebuilt.presets.distiller.systemPrompt).toBe('You are distiller.');
+
+        // Also works when live is JSON-cloned (as workbench/pages/iterate.js does) and targetRef is passed
+        const clonedChar = clone(charLoaded.live);
+        const clonedTools = (await h.target.tools(clonedChar, 'character', h.ctx, { target: charLoaded.target })).map(t => t.function.name);
+        expect(clonedTools).toContain('luker_orch_reset_live_to_global');
+        const resetViaTarget = await h.target.runEdit(
+            { id: 'rg2', name: 'luker_orch_reset_live_to_global', args: {} },
+            clonedChar,
+            { target: charLoaded.target },
+        );
+        expect(resetViaTarget.presets.distiller.systemPrompt).toBe('You are distiller.');
+        expect([...h.target.units(clonedChar, charLoaded.target).keys()]).toContain('preset:distiller');
+        const rebuiltViaTarget = h.target.rebuild(clonedChar, resetViaTarget, ['preset:distiller'], charLoaded.target);
+        expect(rebuiltViaTarget.presets.distiller.systemPrompt).toBe('You are distiller.');
+    });
 });

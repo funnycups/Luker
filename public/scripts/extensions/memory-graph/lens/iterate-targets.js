@@ -405,7 +405,37 @@ function renderMemoryConfigPreview({ base, ai }) {
 export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) {
     const resolveCtx = (explicitCtx = null) => explicitCtx || getCtx();
     const blankSeedAvatars = new Set();
-    let activeScope = 'global';
+    const metaByRef = new WeakMap();
+
+    const reportError = (message) => {
+        if (typeof deps.onError === 'function') {
+            deps.onError(message);
+        } else {
+            globalThis.toastr?.error?.(message, i18n('Memory graph'));
+        }
+    };
+
+    const resolveMeta = (live, targetRef = null, { scope = null, ctx = null } = {}) => {
+        if (targetRef && typeof targetRef === 'object' && targetRef.scope) {
+            return {
+                scope: targetRef.scope === 'character' ? 'character' : 'global',
+                avatar: String(targetRef.avatar || ''),
+                hasOverride: Boolean(targetRef.hasOverride),
+            };
+        }
+        if (targetRef && typeof targetRef === 'object' && metaByRef.has(targetRef)) {
+            return metaByRef.get(targetRef);
+        }
+        if (live && typeof live === 'object' && metaByRef.has(live)) {
+            return metaByRef.get(live);
+        }
+        const resolvedScope = scope === 'character' ? 'character' : 'global';
+        return {
+            scope: resolvedScope,
+            avatar: resolvedScope === 'character' ? resolveActiveAvatar(ctx) : '',
+            hasOverride: false,
+        };
+    };
 
     const getMgSettings = () => deps.getSettings?.() || resolveCtx()?.extensionSettings?.memory_graph || {};
     const normalizeSchema = (schema) => (typeof deps.normalizeNodeTypeSchema === 'function' ? deps.normalizeNodeTypeSchema(schema) : schema);
@@ -494,10 +524,14 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                 'aria-pressed': String(isBlank),
                 title: i18n('Start from a blank schema shell (keeps settings)'),
                 dataset: { wbMemoryControl: 'reset-blank' },
-                onClick: () => {
-                    if (blankSeedAvatars.has(avatar)) blankSeedAvatars.delete(avatar);
-                    else blankSeedAvatars.add(avatar);
-                    onReload?.();
+                onClick: async () => {
+                    try {
+                        if (blankSeedAvatars.has(avatar)) blankSeedAvatars.delete(avatar);
+                        else blankSeedAvatars.add(avatar);
+                        await onReload?.();
+                    } catch (err) {
+                        reportError(String(err?.message || err || i18n('Operation failed')));
+                    }
                 },
             }, i18n('Reset to blank'));
 
@@ -508,15 +542,19 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                 title: i18n('Remove this character\'s schema override and use the global schema'),
                 dataset: { wbMemoryControl: 'reset-global' },
                 onClick: async () => {
-                    blankSeedAvatars.delete(avatar);
-                    if (info?.hasOverride && typeof deps.removeCharacterSchemaOverride === 'function') {
-                        const ok = await deps.removeCharacterSchemaOverride(c, avatar, { requireSaved: true });
-                        if (ok !== true) {
-                            throw new SourceError('write-failed', i18n('Failed to reset character schema override'));
+                    try {
+                        blankSeedAvatars.delete(avatar);
+                        if (info?.hasOverride && typeof deps.removeCharacterSchemaOverride === 'function') {
+                            const ok = await deps.removeCharacterSchemaOverride(c, avatar, { requireSaved: true });
+                            if (ok !== true) {
+                                throw new SourceError('write-failed', i18n('Failed to reset character schema override'));
+                            }
+                            deps.invalidateLatestRecallSnapshot?.();
                         }
-                        deps.invalidateLatestRecallSnapshot?.();
+                        await onReload?.();
+                    } catch (err) {
+                        reportError(String(err?.message || err || i18n('Failed to reset character schema override')));
                     }
-                    onReload?.();
                 },
             }, i18n('Reset to global'));
 
@@ -526,9 +564,9 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
         async load(scope, ctx) {
             const c = resolveCtx(ctx);
             const mgSettings = getMgSettings();
-            activeScope = scope === 'character' ? 'character' : 'global';
+            const resolvedScope = scope === 'character' ? 'character' : 'global';
 
-            if (activeScope === 'character') {
+            if (resolvedScope === 'character') {
                 const avatar = resolveActiveAvatar(c);
                 if (!avatar) {
                     throw new SourceError('no-character', i18n('No active character selected.'));
@@ -539,9 +577,14 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                     : normalizeSchema(clone(deps.getEffectiveNodeTypeSchema ? deps.getEffectiveNodeTypeSchema(c, mgSettings) : info.schema));
                 const effectiveSettings = resolveSettingsForView(deps.getEffectiveSettings?.(c, mgSettings) || mgSettings);
                 const characterName = String(info?.characterName || resolveActiveCharacterName(c, avatar) || avatar);
+                const live = { schema: effectiveSchema, settings: effectiveSettings };
+                const target = { scope: 'character', avatar, hasOverride: Boolean(info?.hasOverride) };
+                const meta = { scope: 'character', avatar, hasOverride: Boolean(info?.hasOverride) };
+                metaByRef.set(live, meta);
+                metaByRef.set(target, meta);
                 return {
-                    live: { schema: effectiveSchema, settings: effectiveSettings },
-                    target: { scope: 'character', avatar, hasOverride: Boolean(info?.hasOverride) },
+                    live,
+                    target,
                     title: i18nFormat(
                         'Memory structure for "${0}" only${1}',
                         characterName,
@@ -550,31 +593,37 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                 };
             }
 
+            const live = resolveGlobalDoc(mgSettings);
+            const target = { scope: 'global', avatar: '', hasOverride: false };
+            const meta = { scope: 'global', avatar: '', hasOverride: false };
+            metaByRef.set(live, meta);
+            metaByRef.set(target, meta);
             return {
-                live: resolveGlobalDoc(mgSettings),
-                target: { scope: 'global' },
+                live,
+                target,
                 title: i18n('Memory structure shared by all characters'),
             };
         },
-        async prompt(_live, scope, ctx) {
+        async prompt(live, scope, ctx, extra = {}) {
             const c = resolveCtx(ctx);
             const mgSettings = getMgSettings();
-            if (scope === 'character') {
+            const meta = resolveMeta(live, extra?.target, { scope, ctx: c });
+            if (meta.scope === 'character') {
                 const effective = deps.getEffectiveSettings?.(c, mgSettings) || mgSettings;
                 const base = String(effective?.configIterSystemPrompt || '').trim() || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT;
                 const info = resolveScopeInfo(c, mgSettings);
                 return appendScopeHintIfNeeded(base, {
                     scope: 'character',
                     hasOverride: Boolean(info?.hasOverride),
-                    characterDisplayName: info?.characterName || resolveActiveCharacterName(c, resolveActiveAvatar(c)),
+                    characterDisplayName: info?.characterName || resolveActiveCharacterName(c, meta.avatar || resolveActiveAvatar(c)),
                 });
             }
             return String(mgSettings?.configIterSystemPrompt || '').trim() || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT;
         },
-        async tools(_live, scope, ctx) {
+        async tools(live, scope, ctx, extra = {}) {
             const c = resolveCtx(ctx);
-            activeScope = scope === 'character' ? 'character' : 'global';
-            if (activeScope === 'character' && resolveActiveAvatar(c)) {
+            const meta = resolveMeta(live, extra?.target, { scope, ctx: c });
+            if (meta.scope === 'character' && (meta.avatar || resolveActiveAvatar(c))) {
                 const info = resolveScopeInfo(c, getMgSettings());
                 const catalog = buildToolCatalog().filter((def) => {
                     const name = def?.function?.name;
@@ -586,13 +635,14 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             return [...CONFIG_TOOL_DEFS];
         },
         isRead: (name) => isMgConfigReadTool({ name }) || isLorebookReadTool(name),
-        async runRead(call, live) {
+        async runRead(call, live, helpers = {}) {
             const c = resolveCtx();
             const name = String(call?.name || '');
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
+            const meta = resolveMeta(live, helpers?.target, { ctx: c });
 
             if (isLorebookReadTool(name)) {
-                const avatar = activeScope === 'character' ? resolveActiveAvatar(c) : '';
+                const avatar = meta.scope === 'character' ? (meta.avatar || resolveActiveAvatar(c)) : '';
                 const out = await runLorebookReadTool({ id: call?.id, name, args }, { context: c, avatar });
                 if (!out?.ok) {
                     throw new SourceError('read', String(out?.error || i18n('Read failed')));
@@ -618,19 +668,27 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
 
             throw new SourceError('unknown_tool', `Unknown read tool: ${name}`);
         },
-        async runEdit(call, live) {
+        async runEdit(call, live, helpers = {}) {
             const name = String(call?.name || '');
             const mgSettings = getMgSettings();
+            const meta = resolveMeta(live, helpers?.target);
+
+            const tagNext = (next) => {
+                if (next && typeof next === 'object' && next !== live) {
+                    metaByRef.set(next, meta);
+                }
+                return next;
+            };
 
             if (isMgSchemaControlCall({ name })) {
-                if (activeScope !== 'character') {
+                if (meta.scope !== 'character') {
                     throw new SourceError('not_allowed', `${name}: not_allowed — schema resets are only available in character scope.`);
                 }
                 if (name === CONTROL_TOOL_NAMES.resetToBlank) {
-                    return { ...clone(live), schema: [] };
+                    return tagNext({ ...clone(live), schema: [] });
                 }
                 if (name === CONTROL_TOOL_NAMES.resetToGlobal) {
-                    return { ...clone(live), schema: normalizeSchema(clone(mgSettings?.nodeTypeSchema || [])) };
+                    return tagNext({ ...clone(live), schema: normalizeSchema(clone(mgSettings?.nodeTypeSchema || [])) });
                 }
             }
 
@@ -644,13 +702,13 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                     resolveUnsetBaseline: (rawPath) => {
                         const path = String(rawPath || '');
                         const key = path.startsWith('settings.') ? path.slice('settings.'.length) : path;
-                        const source = activeScope === 'character' ? globalSettings : defaultSettings;
+                        const source = meta.scope === 'character' ? globalSettings : defaultSettings;
                         return source?.[key];
                     },
                 },
             );
             if (!Array.isArray(normalized) || !normalized.length) return live;
-            return normalized[normalized.length - 1].newValue;
+            return tagNext(normalized[normalized.length - 1].newValue);
         },
         units: (live) => memoryConfigUnits(live),
         rebuild: (base, ai, keys) => rebuildMemoryConfig(base, ai, keys),
