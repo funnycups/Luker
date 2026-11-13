@@ -25,6 +25,60 @@ function writeText(path: string, text: string): void {
   fs.closeSync(file);
 }
 
+function clearDirFiles(dir: string): void {
+  let names: string[] = [];
+  try {
+    names = fs.listFileSync(dir);
+  } catch {
+    return;
+  }
+  for (let i = 0; i < names.length; i++) {
+    try {
+      fs.unlinkSync(dir + '/' + names[i]);
+    } catch {
+      // ignore non-file or missing
+    }
+  }
+}
+
+function copyNewestTrace(captureDir: string, tracesStagingDir: string): void {
+  let names: string[] = [];
+  try {
+    names = fs.listFileSync(captureDir);
+  } catch {
+    return;
+  }
+  let bestName: string = '';
+  let bestMtime: number = -1;
+  for (let i = 0; i < names.length; i++) {
+    const name: string = names[i];
+    if (!name.startsWith('luker-trace-') || !name.endsWith('.json')) {
+      continue;
+    }
+    try {
+      const stat = fs.statSync(captureDir + '/' + name);
+      if (stat.size <= 0) {
+        continue;
+      }
+      if (stat.mtime > bestMtime || (stat.mtime === bestMtime && name > bestName)) {
+        bestMtime = stat.mtime;
+        bestName = name;
+      }
+    } catch {
+      // skip unreadable entry
+    }
+  }
+  if (bestName === '') {
+    return;
+  }
+  ensureDir(tracesStagingDir);
+  try {
+    fs.copyFileSync(captureDir + '/' + bestName, tracesStagingDir + '/' + bestName);
+  } catch {
+    // ignore copy error so crash logs still export
+  }
+}
+
 function copyTail(src: string, dst: string): void {
   let size: number = 0;
   try {
@@ -86,6 +140,9 @@ export async function exportTo(context: common.UIAbilityContext): Promise<string
   copyTail(nodeLogDir + '/node-boot.log', staging + '/node/node-boot.log');
   copyTail(nodeLogDir + '/node-boot.prev.log', staging + '/node/node-boot.prev.log');
   copyTail(nodeLogDir + '/bootstrap.log', staging + '/node/bootstrap.log');
+
+  clearDirFiles(staging + '/traces');
+  copyNewestTrace(nodeLogDir + '/renderer-capture', staging + '/traces');
 
   const zipPath: string = context.cacheDir + '/luker-diagnostics-' + Date.now() + '.zip';
   await zlib.compressFile(staging, zipPath, {

@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { connectChannel } from '../../src/renderer-capture/cdp-channel.js';
 import { fetchTargets, selectPageTarget } from '../../src/renderer-capture/devtools-socket.js';
-import { writeHeapSnapshot, writeTraceStart, writeTraceDrain, TRACE_CATEGORIES } from '../../src/renderer-capture/capture-session.js';
+import {
+    writeHeapSnapshot,
+    writeTraceStart,
+    writeTraceDrain,
+    createStreamingTraceWriter,
+    TRACE_CATEGORIES,
+} from '../../src/renderer-capture/capture-session.js';
 import { startFakeDevtools } from './_lib/fake-devtools-server.js';
 
 async function openChannel(server) {
@@ -86,60 +92,95 @@ describe('heap snapshot capture', () => {
 });
 
 describe('performance trace capture', () => {
-    test('asks for a streamed trace', async () => {
-        const server = await startFakeDevtools({ traceChunks: ['{"traceEvents":[]}'] });
-        try {
-            const channel = await openChannel(server);
-            await expect(writeTraceStart({ channel, categories: TRACE_CATEGORIES })).resolves.toBeUndefined();
-            channel.close();
-        } finally {
-            await server.close();
-        }
-    });
-
-    test('drains the trace stream into the artifact', async () => {
-        const server = await startFakeDevtools({ traceChunks: ['{"traceEvents":', '[]}'] });
-        const artifact = openArtifact();
-        try {
-            const channel = await openChannel(server);
-            await writeTraceStart({ channel, categories: TRACE_CATEGORIES });
-            const bytes = await writeTraceDrain({ channel, fd: artifact.fd });
-            expect(artifact.read()).toBe('{"traceEvents":[]}');
-            expect(bytes).toBe(Buffer.byteLength('{"traceEvents":[]}'));
-            channel.close();
-        } finally {
-            artifact.dispose();
-            await server.close();
-        }
-    });
-
-    test('reports a failure when the trace arrives without any data', async () => {
-        const server = await startFakeDevtools({ traceChunks: [] });
-        const artifact = openArtifact();
-        try {
-            const channel = await openChannel(server);
-            await writeTraceStart({ channel, categories: TRACE_CATEGORIES });
-            await expect(writeTraceDrain({ channel, fd: artifact.fd }))
-                .rejects.toThrow('the trace arrived without any data');
-            channel.close();
-        } finally {
-            artifact.dispose();
-            await server.close();
-        }
-    });
-
-    test('keeps every chunk when a notification lands between reads', async () => {
+    test('asks for a ReportEvents trace and writes incremental JSON chunks as dataCollected arrives', async () => {
         const server = await startFakeDevtools({
-            traceChunks: ['{"a"', ',"b"', ',"c"}'],
-            notifyDuringTraceDrain: true,
+            traceEvents: [{ name: 'trailing', ph: 'I', ts: 30 }],
         });
         const artifact = openArtifact();
         try {
             const channel = await openChannel(server);
-            await writeTraceStart({ channel, categories: TRACE_CATEGORIES });
-            const bytes = await writeTraceDrain({ channel, fd: artifact.fd });
-            expect(artifact.read()).toBe('{"a","b","c"}');
-            expect(bytes).toBe(Buffer.byteLength('{"a","b","c"}'));
+            const writer = createStreamingTraceWriter(artifact.fd);
+            await writeTraceStart({ channel, categories: TRACE_CATEGORIES, writer, discoverTargets: false });
+
+            expect(server.connections[0].startParams).toEqual({
+                categories: TRACE_CATEGORIES,
+                transferMode: 'ReportEvents',
+            });
+            expect(server.connections[0].methods).toContain('Page.enable');
+
+            server.emitTraceEvents([
+                { name: 'first', ph: 'X', ts: 10, dur: 5 },
+                { name: 'second', ph: 'X', ts: 20, dur: 5 },
+            ]);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+
+            expect(writer.eventCount).toBe(2);
+            expect(artifact.read()).toBe('{"traceEvents":[{"name":"first","ph":"X","ts":10,"dur":5},{"name":"second","ph":"X","ts":20,"dur":5}');
+
+            const bytes = await writeTraceDrain({ channel, writer });
+            const text = artifact.read();
+            expect(text.endsWith(']}\n')).toBe(true);
+            expect(bytes).toBe(Buffer.byteLength(text));
+            expect(JSON.parse(text)).toEqual({
+                traceEvents: [
+                    { name: 'first', ph: 'X', ts: 10, dur: 5 },
+                    { name: 'second', ph: 'X', ts: 20, dur: 5 },
+                    { name: 'trailing', ph: 'I', ts: 30 },
+                ],
+            });
+            channel.close();
+        } finally {
+            artifact.dispose();
+            await server.close();
+        }
+    });
+
+    test('enables Target.setDiscoverTargets when attached to a browser target', async () => {
+        const server = await startFakeDevtools({
+            versionInfo: { webSocketDebuggerUrl: 'ws://localhost/devtools/browser/test' },
+        });
+        const artifact = openArtifact();
+        try {
+            const channel = await connectChannel(server.socketPath, 'ws://localhost/devtools/browser/test');
+            const writer = createStreamingTraceWriter(artifact.fd);
+            await writeTraceStart({ channel, categories: TRACE_CATEGORIES, writer, discoverTargets: true });
+
+            expect(server.connections[0].methods).toContain('Target.setDiscoverTargets');
+            expect(server.connections[0].methods).not.toContain('Page.enable');
+
+            const bytes = await writeTraceDrain({ channel, writer });
+            expect(artifact.read()).toBe('{"traceEvents":[]}\n');
+            expect(bytes).toBe(Buffer.byteLength('{"traceEvents":[]}\n'));
+            channel.close();
+        } finally {
+            artifact.dispose();
+            await server.close();
+        }
+    });
+
+    test('keeps every streamed trace event when unrelated notifications land before tracingComplete', async () => {
+        const server = await startFakeDevtools({
+            traceEvents: [{ name: 'final', ph: 'I', ts: 99 }],
+        });
+        const artifact = openArtifact();
+        try {
+            const channel = await openChannel(server);
+            const writer = createStreamingTraceWriter(artifact.fd);
+            await writeTraceStart({ channel, categories: TRACE_CATEGORIES, writer, discoverTargets: false });
+
+            server.navigate();
+            server.emitTraceEvents([{ name: 'mid', ph: 'B', ts: 50 }]);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+
+            const bytes = await writeTraceDrain({ channel, writer });
+            const parsed = JSON.parse(artifact.read());
+            expect(parsed).toEqual({
+                traceEvents: [
+                    { name: 'mid', ph: 'B', ts: 50 },
+                    { name: 'final', ph: 'I', ts: 99 },
+                ],
+            });
+            expect(bytes).toBe(Buffer.byteLength(artifact.read()));
             channel.close();
         } finally {
             artifact.dispose();

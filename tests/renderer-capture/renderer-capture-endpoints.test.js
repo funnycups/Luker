@@ -7,7 +7,7 @@ import path from 'node:path';
 import { startFakeDevtools } from './_lib/fake-devtools-server.js';
 
 const HEAP = '{"snapshot":{}}';
-const TRACE = '{"traceEvents":[]}';
+const TRACE = '{"traceEvents":[]}\n';
 
 let dataRoot;
 let server;
@@ -92,7 +92,7 @@ describe('renderer capture endpoints', () => {
     });
 
     test('tracks the recording state across start and stop', async () => {
-        server = await startFakeDevtools({ traceChunks: ['{"traceEvents":', '[]}'] });
+        server = await startFakeDevtools({ traceEvents: [] });
         process.env.LUKER_RENDERER_DEVTOOLS_SOCKET = server.socketPath;
         const app = adminApp;
 

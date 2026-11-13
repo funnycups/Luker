@@ -13,13 +13,13 @@ import { awaitMainUI } from '../_lib/page.js';
 import { startFakeDevtools } from '../../renderer-capture/_lib/fake-devtools-server.js';
 
 const HEAP_CHUNKS = ['{"snapshot":{"meta":{', '"node_count":1}}'];
-const TRACE_CHUNKS = ['{"traceEvents":[', '{"name":"RunTask"}]}'];
+const TRACE_EVENTS = [{ name: 'RunTask' }];
 
 let server;
 let devtools;
 
 test.beforeAll(async () => {
-    devtools = await startFakeDevtools({ heapChunks: HEAP_CHUNKS, traceChunks: TRACE_CHUNKS });
+    devtools = await startFakeDevtools({ heapChunks: HEAP_CHUNKS, traceEvents: TRACE_EVENTS });
     server = await startServer({
         batchKey: 'diagnostics',
         scenarioId: 'server-capture',
@@ -79,7 +79,7 @@ test('a performance recording downloads the trace when it stops', async ({ page 
     ]);
 
     expect(download.suggestedFilename()).toMatch(/^luker-trace-\d{8}-\d{6}-\d{3}\.json$/);
-    expect(readFileSync(await download.path(), 'utf8')).toBe(TRACE_CHUNKS.join(''));
+    expect(JSON.parse(readFileSync(await download.path(), 'utf8'))).toEqual({ traceEvents: TRACE_EVENTS });
     await expect(recordingItem).toHaveText('Start Performance Recording');
     await expect(page.locator('#debug-recording-indicator')).toBeHidden();
 });

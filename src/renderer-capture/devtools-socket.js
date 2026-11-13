@@ -54,6 +54,17 @@ export function selectPageTarget(targets) {
         && target.url.startsWith(PAGE_URL_PREFIX)) ?? null;
 }
 
+/**
+ * @param {object|null|undefined} versionInfo
+ * @returns {string|null} the browser-level CDP WebSocket URL when advertised
+ */
+export function selectBrowserWsUrl(versionInfo) {
+    if (!versionInfo || typeof versionInfo.webSocketDebuggerUrl !== 'string') {
+        return null;
+    }
+    return versionInfo.webSocketDebuggerUrl.length > 0 ? versionInfo.webSocketDebuggerUrl : null;
+}
+
 function parseResponse(buffer) {
     const headerEnd = buffer.indexOf('\r\n\r\n');
     if (headerEnd < 0) {
@@ -61,6 +72,11 @@ function parseResponse(buffer) {
     }
 
     const headers = buffer.slice(0, headerEnd).toString('utf8');
+    const statusMatch = /^HTTP\/\d+\.\d+\s+(\d+)/.exec(headers);
+    if (statusMatch && Number(statusMatch[1]) >= 400) {
+        throw new Error(`renderer-capture: devtools HTTP ${statusMatch[1]}`);
+    }
+
     const match = /(?:^|\r\n)Content-Length:\s*(\d+)/i.exec(headers);
     if (!match) {
         throw new Error('renderer-capture: devtools response has no Content-Length');
@@ -75,11 +91,7 @@ function parseResponse(buffer) {
     return JSON.parse(body.toString('utf8'));
 }
 
-/**
- * @param {string} socketPath
- * @returns {Promise<object[]>} the target list reported by the devtools server
- */
-export function fetchTargets(socketPath) {
+function httpGetJson(socketPath, requestPath) {
     return new Promise((resolve, reject) => {
         const socket = net.connect({ path: socketPath });
         let buffered = Buffer.alloc(0);
@@ -98,23 +110,23 @@ export function fetchTargets(socketPath) {
         // then keeps the connection open, so the reply is taken as soon as it
         // is whole rather than when the socket ends.
         const read = () => {
-            let targets;
+            let payload;
             try {
-                targets = parseResponse(buffered);
+                payload = parseResponse(buffered);
             } catch (error) {
                 fail(error);
                 return;
             }
-            if (targets === null) {
+            if (payload === null) {
                 return;
             }
             settled = true;
             socket.destroy();
-            resolve(targets);
+            resolve(payload);
         };
 
         socket.on('connect', () => {
-            socket.write('GET /json/list HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n');
+            socket.write(`GET ${requestPath} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`);
         });
         socket.on('data', (chunk) => {
             if (settled) {
@@ -127,4 +139,20 @@ export function fetchTargets(socketPath) {
         socket.on('end', () => fail(new Error('renderer-capture: the devtools response ended before it was complete')));
         socket.on('close', () => fail(new Error('renderer-capture: the devtools socket closed before a response arrived')));
     });
+}
+
+/**
+ * @param {string} socketPath
+ * @returns {Promise<object[]>} the target list reported by the devtools server
+ */
+export function fetchTargets(socketPath) {
+    return httpGetJson(socketPath, '/json/list');
+}
+
+/**
+ * @param {string} socketPath
+ * @returns {Promise<object>} the version metadata reported by the devtools server
+ */
+export function fetchVersionInfo(socketPath) {
+    return httpGetJson(socketPath, '/json/version');
 }

@@ -23,6 +23,7 @@ export function connectChannel(socketPath, wsUrl) {
         const queue = [];
         const waiters = [];
         const eventHandlers = new Set();
+        const closeHandlers = new Set();
         let failure = null;
         let closed = false;
 
@@ -38,10 +39,16 @@ export function connectChannel(socketPath, wsUrl) {
 
         ws.on('message', (raw) => {
             const message = JSON.parse(raw.toString());
+            let consumed = false;
             if (typeof message.method === 'string') {
                 for (const handler of eventHandlers) {
-                    handler(message);
+                    if (handler(message) === true) {
+                        consumed = true;
+                    }
                 }
+            }
+            if (consumed) {
+                return;
             }
             const waiter = waiters.shift();
             if (waiter) {
@@ -53,6 +60,9 @@ export function connectChannel(socketPath, wsUrl) {
         ws.on('close', () => {
             closed = true;
             fail(new Error('renderer-capture: the cdp channel closed'));
+            for (const handler of closeHandlers) {
+                handler();
+            }
         });
         ws.on('error', error => fail(new Error(`renderer-capture: the cdp channel failed: ${error.message}`)));
 
@@ -66,6 +76,9 @@ export function connectChannel(socketPath, wsUrl) {
                 },
                 onEvent(handler) {
                     eventHandlers.add(handler);
+                },
+                onClose(handler) {
+                    closeHandlers.add(handler);
                 },
                 next() {
                     if (queue.length > 0) {

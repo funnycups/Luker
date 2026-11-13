@@ -3,7 +3,9 @@ import {
     abstractSocketPath,
     resolveSocketPath,
     fetchTargets,
+    fetchVersionInfo,
     selectPageTarget,
+    selectBrowserWsUrl,
 } from '../../src/renderer-capture/devtools-socket.js';
 import { startFakeDevtools } from './_lib/fake-devtools-server.js';
 
@@ -63,4 +65,26 @@ describe('devtools socket discovery', () => {
             await server.close();
         }
     }, 5000);
+
+    test('reads /json/version and extracts the browser websocket URL', async () => {
+        const server = await startFakeDevtools({
+            versionInfo: {
+                Browser: 'ArkWeb/7.0',
+                webSocketDebuggerUrl: 'ws://localhost/devtools/browser/test',
+            },
+        });
+        try {
+            const versionInfo = await fetchVersionInfo(server.socketPath);
+            expect(versionInfo.Browser).toBe('ArkWeb/7.0');
+            expect(selectBrowserWsUrl(versionInfo)).toBe('ws://localhost/devtools/browser/test');
+        } finally {
+            await server.close();
+        }
+    });
+
+    test('returns null when /json/version has no browser websocket URL', () => {
+        expect(selectBrowserWsUrl({ Browser: 'ArkWeb/7.0' })).toBeNull();
+        expect(selectBrowserWsUrl(null)).toBeNull();
+        expect(selectBrowserWsUrl({})).toBeNull();
+    });
 });

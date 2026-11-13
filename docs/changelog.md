@@ -37,6 +37,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed app updates wiping installed server plugins and third-party extensions in the HarmonyOS app.
 - Added retry and diagnostics export actions to the startup failure screen in the HarmonyOS app.
 - Added a crash recovery screen with reload and diagnostics export actions when the HarmonyOS app web page exits abnormally.
+- Preserved partial performance recordings when the renderer exits or reloads in the HarmonyOS app.
+- Included the newest performance trace in HarmonyOS diagnostics bundles.
 
 ### iOS App
 

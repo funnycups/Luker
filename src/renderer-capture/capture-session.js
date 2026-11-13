@@ -80,109 +80,142 @@ export async function writeHeapSnapshot({ channel, fd }) {
 }
 
 /**
- * Begin a trace. The channel has to stay open until `writeTraceDrain` runs.
+ * Stream CDP `Tracing.dataCollected` events directly into a valid JSON trace
+ * file (`{"traceEvents":[...]}\n`).
  *
- * Page events are switched on here so a navigation during the recording
- * arrives as `Page.frameNavigated`.
+ * @param {number} fd
+ */
+export function createStreamingTraceWriter(fd) {
+    let headerWritten = false;
+    let sealed = false;
+    let bytesWritten = 0;
+    let eventCount = 0;
+
+    const writeHeaderOnce = () => {
+        if (headerWritten || sealed) {
+            return 0;
+        }
+        const header = '{"traceEvents":[';
+        writeChunk(fd, header);
+        headerWritten = true;
+        const bytes = Buffer.byteLength(header);
+        bytesWritten += bytes;
+        return bytes;
+    };
+
+    const appendEvents = (events) => {
+        if (sealed || !Array.isArray(events) || events.length === 0) {
+            return 0;
+        }
+        writeHeaderOnce();
+        let chunk = '';
+        for (let i = 0; i < events.length; i++) {
+            const prefix = eventCount > 0 ? ',' : '';
+            chunk += `${prefix}${JSON.stringify(events[i])}`;
+            eventCount += 1;
+        }
+        writeChunk(fd, chunk);
+        const bytes = Buffer.byteLength(chunk);
+        bytesWritten += bytes;
+        return bytes;
+    };
+
+    const seal = () => {
+        if (sealed) {
+            return bytesWritten;
+        }
+        writeHeaderOnce();
+        const footer = ']}\n';
+        writeChunk(fd, footer);
+        bytesWritten += Buffer.byteLength(footer);
+        sealed = true;
+        return bytesWritten;
+    };
+
+    return {
+        writeHeaderOnce,
+        appendEvents,
+        seal,
+        get bytesWritten() {
+            return bytesWritten;
+        },
+        get eventCount() {
+            return eventCount;
+        },
+        get headerWritten() {
+            return headerWritten;
+        },
+        get sealed() {
+            return sealed;
+        },
+    };
+}
+
+/**
+ * Begin a streamed trace (`ReportEvents`). Events arriving via
+ * `Tracing.dataCollected` are immediately written through `writer`.
  *
- * @param {{ channel: object, categories: string }} options
+ * @param {{ channel: object, categories: string, writer: ReturnType<typeof createStreamingTraceWriter>, discoverTargets?: boolean }} options
  * @returns {Promise<void>}
  */
-export async function writeTraceStart({ channel, categories }) {
-    const pageId = 1;
+export async function writeTraceStart({ channel, categories, writer, discoverTargets = false }) {
+    const lifecycleId = 1;
     const startId = 2;
 
-    channel.send({ id: pageId, method: 'Page.enable' });
+    channel.onEvent((message) => {
+        if (message.method === 'Tracing.dataCollected' && Array.isArray(message.params?.value)) {
+            writer.appendEvents(message.params.value);
+            return true;
+        }
+        return false;
+    });
+
+    if (discoverTargets) {
+        channel.send({ id: lifecycleId, method: 'Target.setDiscoverTargets', params: { discover: true } });
+    } else {
+        channel.send({ id: lifecycleId, method: 'Page.enable' });
+    }
     channel.send({
         id: startId,
         method: 'Tracing.start',
-        params: { categories, transferMode: 'ReturnAsStream' },
+        params: { categories, transferMode: 'ReportEvents' },
     });
 
     for (;;) {
         const message = await channel.next();
+        if (message.id === lifecycleId && message.error) {
+            continue;
+        }
         if (message.error) {
             throw new Error(`Tracing.start: ${message.error.message}`);
         }
         if (message.id === startId) {
+            writer.writeHeaderOnce();
             return;
         }
     }
 }
 
 /**
- * End the trace, drain the stream it produced, and write it into an open
- * descriptor.
+ * End the trace, wait for any trailing `Tracing.dataCollected` events until
+ * `Tracing.tracingComplete`, and seal the JSON trace file.
  *
- * @param {{ channel: object, fd: number }} options
- * @returns {Promise<number>} bytes written
+ * @param {{ channel: object, writer: ReturnType<typeof createStreamingTraceWriter> }} options
+ * @returns {Promise<number>} total bytes written to the trace file
  */
-export async function writeTraceDrain({ channel, fd }) {
+export async function writeTraceDrain({ channel, writer }) {
     const endId = 3;
     channel.send({ id: endId, method: 'Tracing.end' });
 
-    let stream = null;
     for (;;) {
         const message = await channel.next();
         if (message.error) {
             throw new Error(`Tracing.end: ${message.error.message}`);
         }
         if (message.method === 'Tracing.tracingComplete') {
-            stream = message.params?.stream ?? null;
             break;
         }
     }
 
-    if (!stream) {
-        throw new Error('renderer-capture: the trace finished without a stream');
-    }
-
-    let written = 0;
-    let readId = 4;
-
-    for (;;) {
-        const currentId = readId;
-        readId += 1;
-        channel.send({ id: currentId, method: 'IO.read', params: { handle: stream, size: TRACE_READ_CHUNK_BYTES } });
-
-        // Only one read is outstanding at a time, and notifications the
-        // channel forwards in between are stepped over rather than answered
-        // with a second read.
-        let message;
-        for (;;) {
-            message = await channel.next();
-            if (message.error) {
-                throw new Error(`IO.read: ${message.error.message}`);
-            }
-            if (message.id === currentId) {
-                break;
-            }
-        }
-
-        const result = message.result;
-        if (!result) {
-            throw new Error('renderer-capture: IO.read answered without a result');
-        }
-
-        // The embedded engine hands the trace back as plain text; base64 is
-        // honoured too so the same code survives a build that switches.
-        const data = result.base64Encoded ? Buffer.from(result.data, 'base64') : result.data;
-
-        if (data && data.length > 0) {
-            written += Buffer.byteLength(data);
-            writeChunk(fd, data);
-        }
-
-        if (result.eof) {
-            break;
-        }
-    }
-
-    channel.send({ id: readId, method: 'IO.close', params: { handle: stream } });
-
-    if (written === 0) {
-        throw new Error('renderer-capture: the trace arrived without any data');
-    }
-
-    return written;
+    return writer.seal();
 }
