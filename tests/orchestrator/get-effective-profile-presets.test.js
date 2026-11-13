@@ -331,9 +331,6 @@ jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/editor-pe
     setCharacterLoopOverrideEnabled: async () => {},
     setCharacterSpecOverrideEnabled: async () => {},
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/iter-studio/studio.js', () => ({
-    openOrchestratorIterationStudio: async () => null,
-}));
 jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/index.js', () => ({
     openSimulationReview: async () => null,
 }));

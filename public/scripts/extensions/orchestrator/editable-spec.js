@@ -103,6 +103,8 @@ export function createAgendaPlannerDraft(seed = {}) {
     });
 }
 
+const FORBIDDEN_PRESET_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 export function sanitizePresetMap(presets) {
     if (!presets || typeof presets !== 'object') {
         return {};
@@ -110,11 +112,14 @@ export function sanitizePresetMap(presets) {
 
     const normalized = {};
     for (const [key, value] of Object.entries(presets)) {
+        if (FORBIDDEN_PRESET_KEYS.has(key)) {
+            continue;
+        }
         if (!value || typeof value !== 'object') {
             continue;
         }
         const presetId = sanitizeIdentifierToken(key, '');
-        if (!presetId) {
+        if (!presetId || FORBIDDEN_PRESET_KEYS.has(presetId)) {
             continue;
         }
         normalized[presetId] = createPresetDraft(value);
@@ -129,11 +134,14 @@ export function mergePresetMaps(basePresets, patchPresets) {
     const merged = { ...base };
 
     for (const [key, rawValue] of Object.entries(patchSource)) {
+        if (FORBIDDEN_PRESET_KEYS.has(key)) {
+            continue;
+        }
         if (!rawValue || typeof rawValue !== 'object') {
             continue;
         }
         const presetId = sanitizeIdentifierToken(key, '');
-        if (!presetId) {
+        if (!presetId || FORBIDDEN_PRESET_KEYS.has(presetId)) {
             continue;
         }
         merged[presetId] = createPresetDraft({

@@ -219,7 +219,7 @@ export function canReuseLatestOrchestrationSnapshot(chatKey, anchor) {
  *
  * Returns the freshly-stored active snapshot, or null when the input
  * was incomplete. Callers that need a UI rebuild after the state
- * changes should run their own `ensureUi` step on the result.
+ * changes should refresh their own view of the result.
  */
 export async function storeCompletedOrchestrationSnapshot(context, anchor, capsuleText, stageOutputs) {
     const chatKey = getChatKey(context);

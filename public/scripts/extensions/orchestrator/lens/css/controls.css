@@ -1,0 +1,168 @@
+/* Buttons, segmented control, switches, chips, badges, empty state. */
+.olens .ol-iconbtn {
+    display: inline-grid; place-items: center;
+    width: 32px; height: 32px; padding: 0;
+    border: 0; border-radius: var(--ol-radius-sm);
+    background: transparent; color: var(--ol-text-muted);
+    cursor: pointer; flex: none;
+    transition: background var(--ol-dur), color var(--ol-dur);
+}
+.olens .ol-iconbtn:hover { background: var(--ol-hover); color: var(--ol-text); }
+.olens .ol-iconbtn:active { background: var(--ol-active); }
+.olens .ol-iconbtn[aria-pressed="true"] { color: var(--ol-text); }
+.olens .ol-iconbtn:disabled { opacity: 0.4; cursor: default; }
+.olens .ol-iconbtn-sm { width: 26px; height: 26px; }
+.olens .ol-iconbtn.is-spinning .olens-icon { animation: ol-spin 0.9s linear infinite; }
+
+.olens .ol-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 32px; padding: 0 12px;
+    border: 1px solid var(--ol-border-strong); border-radius: var(--ol-radius-sm);
+    background: var(--ol-raised); color: var(--ol-text);
+    font-weight: 500; cursor: pointer; white-space: nowrap;
+    box-shadow: var(--ol-shadow-1);
+    transition: background var(--ol-dur), border-color var(--ol-dur);
+}
+.olens .ol-btn:hover { background: var(--ol-surface-2); border-color: var(--ol-text-faint); }
+.olens .ol-btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
+.olens .ol-btn-ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--ol-text-muted); }
+.olens .ol-btn-ghost:hover { background: var(--ol-hover); color: var(--ol-text); border-color: transparent; }
+
+.olens .ol-linkbtn {
+    display: inline-flex; align-items: center; gap: 4px;
+    border: 0; padding: 0; background: none; cursor: pointer;
+    color: var(--ol-accent); font-size: 12px; font-weight: 500;
+}
+.olens .ol-linkbtn:hover { text-decoration: underline; }
+
+/* Segmented control */
+.olens .ol-seg {
+    display: inline-flex; align-items: center; gap: 2px;
+    padding: 3px; border-radius: var(--ol-radius);
+    background: var(--ol-surface-2); border: 1px solid var(--ol-border);
+}
+.olens .ol-seg-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 26px; padding: 0 12px; border: 0; border-radius: 6px;
+    background: transparent; color: var(--ol-text-muted);
+    font-weight: 500; white-space: nowrap; cursor: pointer;
+    transition: background var(--ol-dur), color var(--ol-dur), box-shadow var(--ol-dur);
+}
+.olens .ol-seg-btn:hover { color: var(--ol-text); }
+.olens .ol-seg-btn[aria-pressed="true"] { background: var(--ol-raised); color: var(--ol-text); box-shadow: var(--ol-shadow-2); }
+.olens .ol-seg-badge { font-size: 11px; color: var(--ol-text-faint); font-variant-numeric: tabular-nums; }
+.olens .ol-seg-sm .ol-seg-btn { height: 24px; padding: 0 9px; font-size: 12px; }
+.olens .ol-seg-block { display: flex; }
+.olens .ol-seg-block .ol-seg-btn { flex: 1; }
+.olens .ol-seg-scroll { max-width: 100%; overflow-x: auto; }
+
+/* Switch */
+.olens .ol-switch {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    width: 100%; padding: 6px 2px; border: 0; background: none; cursor: pointer;
+    color: var(--ol-text); text-align: left;
+}
+.olens .ol-switch-label { flex: 1; font-size: 12.5px; }
+.olens .ol-switch-track {
+    position: relative; flex: none; width: 28px; height: 16px; border-radius: 999px;
+    background: var(--ol-border-strong); transition: background var(--ol-dur);
+}
+.olens .ol-switch-thumb {
+    position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    transition: transform var(--ol-dur) var(--ol-ease);
+}
+/* Keyed on role, not class: any button[role=switch] that holds a track animates. */
+.olens [role="switch"][aria-checked="true"] .ol-switch-track { background: var(--ol-accent); }
+.olens [role="switch"][aria-checked="true"] .ol-switch-thumb { transform: translateX(12px); }
+
+/* Type dot: color + shape mirror the graph encoding */
+.olens .ol-dot {
+    --ol-dot-size: 10px;
+    display: inline-block; flex: none;
+    width: var(--ol-dot-size); height: var(--ol-dot-size);
+    background: var(--ol-tone);
+    border-radius: 50%;
+}
+.olens .ol-dot[data-shape="round-rectangle"] { border-radius: 3px; }
+.olens .ol-dot[data-shape="round-diamond"] { border-radius: 2px; transform: rotate(45deg) scale(0.82); }
+.olens .ol-dot[data-shape="round-hexagon"] { border-radius: 2px; clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0 50%); }
+.olens .ol-dot[data-shape="round-tag"] { border-radius: 2px; clip-path: polygon(0 0, 70% 0, 100% 50%, 70% 100%, 0 100%); }
+.olens .ol-dot[data-shape="round-octagon"] { clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%); border-radius: 0; }
+
+.olens .ol-typechip {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 22px; padding: 0 8px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 600;
+    color: var(--ol-tone);
+    background: color-mix(in srgb, var(--ol-tone) 13%, transparent);
+}
+
+.olens .ol-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 22px; padding: 0 7px; border-radius: var(--ol-radius-xs);
+    font-size: 11.5px; color: var(--ol-text-muted);
+    background: var(--ol-surface-2); border: 1px solid var(--ol-border);
+    white-space: nowrap; max-width: 100%; overflow: hidden;
+}
+.olens .ol-chip > span { overflow: hidden; text-overflow: ellipsis; }
+.olens .ol-chip-btn { cursor: pointer; }
+.olens .ol-chip-btn:hover { border-color: var(--ol-border-strong); color: var(--ol-text); }
+.olens .ol-chip-mono { font-family: var(--ol-mono); font-size: 11px; }
+.olens .ol-chip-copied { display: none; color: var(--ol-accent); }
+.olens .ol-chip-btn[data-copied] .ol-chip-mono { display: none; }
+.olens .ol-chip-btn[data-copied] .ol-chip-copied { display: inline; }
+
+.olens .ol-ctx {
+    display: inline-flex; align-items: center; gap: 5px; flex: none;
+    height: 20px; padding: 0 7px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.olens .ol-ctx-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.olens .ol-ctx[data-ctx="recalled"] { color: var(--ol-recalled); background: var(--ol-recalled-soft); }
+.olens .ol-ctx[data-ctx="recalled"] .ol-ctx-dot { box-shadow: 0 0 0 2px var(--ol-recalled-soft); animation: ol-pulse 2.4s ease-in-out infinite; }
+.olens .ol-ctx[data-ctx="pinned"] { color: var(--ol-pinned); background: var(--ol-pinned-soft); }
+
+.olens .ol-tl-tag, .olens .ol-tag-muted {
+    display: inline-flex; align-items: center; height: 18px; padding: 0 5px; border-radius: 4px;
+    font-family: var(--ol-mono); font-size: 10.5px; font-weight: 600;
+    color: var(--ol-tone-event); background: color-mix(in srgb, var(--ol-tone-event) 15%, transparent);
+    flex: none;
+}
+.olens .ol-tag-muted { font-family: var(--ol-font); color: var(--ol-text-faint); background: var(--ol-hover); }
+
+.olens .ol-nodelink {
+    display: inline-flex; align-items: center; gap: 7px; max-width: 100%;
+    height: 28px; padding: 0 9px; border-radius: var(--ol-radius-sm);
+    border: 1px solid var(--ol-border); background: var(--ol-surface-2);
+    color: var(--ol-text); cursor: pointer; text-align: left;
+    transition: border-color var(--ol-dur), background var(--ol-dur);
+}
+.olens .ol-nodelink:hover { border-color: color-mix(in srgb, var(--ol-tone) 55%, transparent); background: color-mix(in srgb, var(--ol-tone) 8%, var(--ol-surface-2)); }
+.olens .ol-nodelink-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.olens .ol-nodelink-meta { color: var(--ol-text-faint); font-size: 11px; font-family: var(--ol-mono); flex: none; }
+.olens .ol-nodelink.is-compact { height: 22px; padding: 0 7px; font-size: 11.5px; gap: 5px; border-radius: 999px; }
+
+.olens .ol-section-title {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-bottom: 8px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--ol-text-faint);
+}
+
+.olens .ol-kbd-group { display: inline-flex; gap: 3px; }
+.olens .ol-kbd {
+    display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px;
+    font-family: var(--ol-font); font-size: 10.5px; font-weight: 500; line-height: 1;
+    color: var(--ol-text-faint); background: var(--ol-surface); border: 1px solid var(--ol-border-strong);
+    border-bottom-width: 2px; border-radius: 4px;
+}
+
+.olens .ol-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 340px; margin: auto; padding: 32px 20px; text-align: center; }
+.olens .ol-empty-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; color: var(--ol-text-muted); background: var(--ol-surface-2); border: 1px solid var(--ol-border); margin-bottom: 6px; }
+.olens .ol-empty-title { font-size: 14px; font-weight: 600; }
+.olens .ol-empty-hint { color: var(--ol-text-muted); }
+.olens .ol-empty .ol-btn { margin-top: 10px; }
+
+.olens .ol-more { color: var(--ol-text-faint); font-size: 11.5px; align-self: center; }
+.olens .is-flipped { transform: rotate(180deg); }

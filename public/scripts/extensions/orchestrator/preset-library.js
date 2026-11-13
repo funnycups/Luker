@@ -92,7 +92,7 @@ function seedFactoryEntries(c, mode) {
     c.activeIds[mode] = rawEntries[0]?.id || DEFAULT_PRESET_ID;
 }
 
-function sanitizePresetEntry(mode, entry) {
+export function sanitizePresetEntry(mode, entry) {
     const raw = entry && typeof entry === 'object' ? entry : {};
     const name = String(raw.name || DEFAULT_PRESET_NAME).trim() || DEFAULT_PRESET_NAME;
     if (mode === ORCH_EXECUTION_MODE_LOOP) {

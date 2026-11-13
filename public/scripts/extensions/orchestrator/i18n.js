@@ -793,6 +793,9 @@ export function registerLocaleData() {
         'Iteration system prompt help body': 'AI 迭代工作台里起草编排配置时的基础系统提示词。会拼上模式专属提示一起发。',
         'About iteration mode prompt': '关于模式专属迭代提示词',
         'Iteration mode prompt help body': 'AI 迭代工作台针对某个模式起草配置时，拼在基础提示后面的模式专属指令块。改这个只影响 iteration 的行为，不影响编排运行时。',
+        'Could not save the preset.': '无法保存预设。',
+        'Orchestration settings, workflow graph, and run history are located in Workbench.': '编排设置、流程图和运行记录已移至工作台。',
+        'Open in Workbench': '在工作台中打开',
     });
     _addLocaleData('zh-tw', {
         'Multi-agent orchestration (card settings)': '多智能體編排（本卡設定）',
@@ -1544,5 +1547,8 @@ export function registerLocaleData() {
         'Iteration system prompt help body': 'AI 迭代工作台裡起草編排設定時的基礎系統提示詞。會拼上模式專屬提示一起發。',
         'About iteration mode prompt': '關於模式專屬迭代提示詞',
         'Iteration mode prompt help body': 'AI 迭代工作台針對某個模式起草設定時，拼在基礎提示後面的模式專屬指令塊。改這個只影響 iteration 的行為，不影響編排執行時。',
+        'Could not save the preset.': '無法儲存預設。',
+        'Orchestration settings, workflow graph, and run history are located in Workbench.': '編排設定、流程圖和執行記錄已移至工作台。',
+        'Open in Workbench': '在工作台中開啟',
     });
 }
