@@ -1,0 +1,90 @@
+/* Memory-specific controls, dots, chips, badges, node links, and kbd hints.
+ * Shared buttons, switches, segments, checks, empty states, and section titles
+ * live in platform lens-shared/tokens.css (.lw-*). */
+
+.mlens .lw-ibtn.is-spinning .mlens-icon { animation: ml-spin 0.9s linear infinite; }
+
+.mlens .ml-linkbtn {
+    display: inline-flex; align-items: center; gap: 4px;
+    border: 0; padding: 0; background: none; cursor: pointer;
+    color: var(--ml-accent); font-size: 12px; font-weight: 500;
+}
+.mlens .ml-linkbtn:hover { text-decoration: underline; }
+
+/* Type dot: color + shape mirror the graph encoding */
+.mlens .ml-dot {
+    --ml-dot-size: 10px;
+    display: inline-block; flex: none;
+    width: var(--ml-dot-size); height: var(--ml-dot-size);
+    background: var(--ml-tone);
+    border-radius: 50%;
+}
+.mlens .ml-dot[data-shape="round-rectangle"] { border-radius: 3px; }
+.mlens .ml-dot[data-shape="round-diamond"] { border-radius: 2px; transform: rotate(45deg) scale(0.82); }
+.mlens .ml-dot[data-shape="round-hexagon"] { border-radius: 2px; clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0 50%); }
+.mlens .ml-dot[data-shape="round-tag"] { border-radius: 2px; clip-path: polygon(0 0, 70% 0, 100% 50%, 70% 100%, 0 100%); }
+.mlens .ml-dot[data-shape="round-octagon"] { clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%); border-radius: 0; }
+
+.mlens .ml-typechip {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 22px; padding: 0 8px; border-radius: 999px;
+    font-size: 11.5px; font-weight: 600;
+    color: var(--ml-tone);
+    background: color-mix(in srgb, var(--ml-tone) 13%, transparent);
+}
+
+.mlens .ml-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 22px; padding: 0 7px; border-radius: var(--ml-radius-xs);
+    font-size: 11.5px; color: var(--ml-text-muted);
+    background: var(--ml-surface-2); border: 1px solid var(--ml-border);
+    white-space: nowrap; max-width: 100%; overflow: hidden;
+}
+.mlens .ml-chip > span { overflow: hidden; text-overflow: ellipsis; }
+.mlens .ml-chip-btn { cursor: pointer; }
+.mlens .ml-chip-btn:hover { border-color: var(--ml-border-strong); color: var(--ml-text); }
+.mlens .ml-chip-mono { font-family: var(--ml-mono); font-size: 11px; }
+.mlens .ml-chip-copied { display: none; color: var(--ml-accent); }
+.mlens .ml-chip-btn[data-copied] .ml-chip-mono { display: none; }
+.mlens .ml-chip-btn[data-copied] .ml-chip-copied { display: inline; }
+
+.mlens .ml-ctx {
+    display: inline-flex; align-items: center; gap: 5px; flex: none;
+    height: 20px; padding: 0 7px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.mlens .ml-ctx-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.mlens .ml-ctx[data-ctx="recalled"] { color: var(--ml-recalled); background: var(--ml-recalled-soft); }
+.mlens .ml-ctx[data-ctx="recalled"] .ml-ctx-dot { box-shadow: 0 0 0 2px var(--ml-recalled-soft); animation: ml-pulse 2.4s ease-in-out infinite; }
+.mlens .ml-ctx[data-ctx="pinned"] { color: var(--ml-pinned); background: var(--ml-pinned-soft); }
+
+.mlens .ml-tl-tag, .mlens .ml-tag-muted {
+    display: inline-flex; align-items: center; height: 18px; padding: 0 5px; border-radius: 4px;
+    font-family: var(--ml-mono); font-size: 10.5px; font-weight: 600;
+    color: var(--ml-tone-event); background: color-mix(in srgb, var(--ml-tone-event) 15%, transparent);
+    flex: none;
+}
+.mlens .ml-tag-muted { font-family: var(--ml-font); color: var(--ml-text-faint); background: var(--ml-hover); }
+
+.mlens .ml-nodelink {
+    display: inline-flex; align-items: center; gap: 7px; max-width: 100%;
+    height: 28px; padding: 0 9px; border-radius: var(--ml-radius-sm);
+    border: 1px solid var(--ml-border); background: var(--ml-surface-2);
+    color: var(--ml-text); cursor: pointer; text-align: left;
+    transition: border-color var(--ml-dur), background var(--ml-dur);
+}
+.mlens .ml-nodelink:hover { border-color: color-mix(in srgb, var(--ml-tone) 55%, transparent); background: color-mix(in srgb, var(--ml-tone) 8%, var(--ml-surface-2)); }
+.mlens .ml-nodelink-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mlens .ml-nodelink-meta { color: var(--ml-text-faint); font-size: 11px; font-family: var(--ml-mono); flex: none; }
+.mlens .ml-nodelink.is-compact { height: 22px; padding: 0 7px; font-size: 11.5px; gap: 5px; border-radius: 999px; }
+
+.mlens .ml-kbd-group { display: inline-flex; gap: 3px; }
+.mlens .ml-kbd {
+    display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px;
+    font-family: var(--ml-font); font-size: 10.5px; font-weight: 500; line-height: 1;
+    color: var(--ml-text-faint); background: var(--ml-surface); border: 1px solid var(--ml-border-strong);
+    border-bottom-width: 2px; border-radius: 4px;
+}
+
+.mlens .ml-more { color: var(--ml-text-faint); font-size: 11.5px; align-self: center; }
+.mlens .is-flipped { transform: rotate(180deg); }

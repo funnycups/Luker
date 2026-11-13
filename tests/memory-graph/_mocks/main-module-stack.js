@@ -24,7 +24,7 @@ import { jest } from '@jest/globals';
 // Return a chainable stub so top-level code like
 // `jQuery(document).off('click.foo').on('click.foo', ...)` in
 // public/scripts/extensions/luker-tabs.js (transitively imported via
-// memory-graph/ui-templates.js) doesn't blow up at module-load time.
+// memory-graph) doesn't blow up at module-load time.
 // Any prop access returns a callable that returns the same chain.
 globalThis.jQuery = (cb) => {
     if (typeof cb === 'function') { /* swallow DOM-ready callback */ }
