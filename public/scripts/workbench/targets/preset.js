@@ -208,7 +208,7 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
                 const prefix = i18n(SKILL_OP_LABELS[opKind] || 'Create skill');
                 return name ? `${prefix}: ${name}` : prefix;
             },
-            group: () => i18n('Skills'),
+            group: () => i18n('Preset skills'),
         },
         'preset-clone': {
             ...presetClone,

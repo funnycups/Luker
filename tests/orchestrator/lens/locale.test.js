@@ -85,10 +85,10 @@ describe('orchestrator/lens locale-data hygiene', () => {
     test('MODES hints match Spec Section 4.2.B and resolve in zh-CN/zh-TW', () => {
         const expectedHints = {
             single: 'Executes one standalone agent without multi-stage orchestration.',
-            spec: 'Executes agents along a fixed stage pipeline.',
-            agenda: 'A planner selects the next step at each stage based on current state.',
-            loop: 'An agent executes a multi-round tool loop until its objective is reached.',
-            director: 'A director plans dialogue direction before handing control to the main generation.',
+            spec: 'Executes configured stages and agent nodes in fixed order.',
+            agenda: 'A dispatcher agent selects which worker agents run and in what order for each turn.',
+            loop: 'A single agent iteratively calls read and world tools until producing a final output.',
+            director: 'A director agent plans and invokes sub-agents as tools during generation.',
         };
         for (const id of MODE_IDS) {
             const { hint } = modeInfo(id);

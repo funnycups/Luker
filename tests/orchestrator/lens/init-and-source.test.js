@@ -173,6 +173,16 @@ describe('orchestrator/lens/index.js & source-luker.js', () => {
         expect(snap.enabled).toBe(true);
         expect(snap.lastRun.runId).toBe('run_fail');
         expect(snap.lastRun.duration).toBe(28000);
+        expect(ask.overviewKey).toBe('Orchestration');
+        expect(await ask.getOverview(harness.ctx)).toMatchObject({
+            Enabled: true,
+            Mode: 'spec',
+            Scope: 'global',
+        });
+        const uninstalledAsk = createOrchAskProvider(() => ({ extensionSettings: {} }), {});
+        expect(await uninstalledAsk.readers.wb_read_orch({ part: 'summary' })).toEqual({
+            error: 'Orchestrator is not installed',
+        });
 
         const suggest = createOrchSuggestRuleProvider();
         const failedRule = suggest.rules.find(r => r.id === 'orch.failedRun');

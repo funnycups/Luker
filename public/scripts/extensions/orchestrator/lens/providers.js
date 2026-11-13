@@ -93,18 +93,18 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
         get label() { return i18n('Orchestration'); },
         tone: 'orch',
         icon: 'orch',
-        overviewKey: '编排',
+        get overviewKey() { return i18n('Orchestration'); },
         order: 20,
         getSnapshot: (ctx) => buildOrchSnapshot(ctx || getCtx(), deps),
         async getOverview(ctx) {
             const snap = await buildOrchSnapshot(ctx || getCtx(), deps);
             if (!snap) return i18n('Not present');
             return {
-                启用: snap.enabled,
-                模式: snap.mode,
-                范围: snap.scope,
-                预设: snap.presetName || '—',
-                上次耗时: snap.lastRun ? formatDuration(snap.lastRun.duration) : '—',
+                [i18n('Enabled')]: snap.enabled,
+                [i18n('Mode')]: snap.mode,
+                [i18n('Scope')]: snap.scope,
+                [i18n('Preset')]: snap.presetName || '—',
+                [i18n('Last run duration')]: snap.lastRun ? formatDuration(snap.lastRun.duration) : '—',
             };
         },
         getSideInfo(pSnap) {
@@ -153,7 +153,7 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
             wb_read_orch: async ({ part = 'summary' } = {}, ctx) => {
                 const c = ctx || getCtx();
                 const settings = deps.getSettings?.() || c?.extensionSettings?.orchestrator;
-                if (!settings) return { error: '没有安装多智能体编排' };
+                if (!settings) return { error: i18n('Orchestrator is not installed') };
                 if (part === 'capsule') {
                     const entry = deps.getLatestOrchestrationEntry?.(c);
                     return entry ? { floor: entry.anchorPlayableFloor, text: entry.injectedText } : { empty: true };

@@ -23,11 +23,11 @@ const STATUS = {
 };
 
 const MODES = {
-    spec: { label: 'Pipeline', hint: 'Executes agents along a fixed stage pipeline.' },
+    spec: { label: 'Pipeline', hint: 'Executes configured stages and agent nodes in fixed order.' },
     single: { label: 'Single assistant', hint: 'Executes one standalone agent without multi-stage orchestration.' },
-    agenda: { label: 'Dispatch', hint: 'A planner selects the next step at each stage based on current state.' },
-    loop: { label: 'Research loop', hint: 'An agent executes a multi-round tool loop until its objective is reached.' },
-    director: { label: 'Director team', hint: 'A director plans dialogue direction before handing control to the main generation.' },
+    agenda: { label: 'Dispatch', hint: 'A dispatcher agent selects which worker agents run and in what order for each turn.' },
+    loop: { label: 'Research loop', hint: 'A single agent iteratively calls read and world tools until producing a final output.' },
+    director: { label: 'Director team', hint: 'A director agent plans and invokes sub-agents as tools during generation.' },
     search: { label: 'Online search', hint: 'Looks things up online before replying' },
 };
 

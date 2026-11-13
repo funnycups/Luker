@@ -750,7 +750,7 @@ export function createIteratePage(app) {
         } else if (turn.edits || turn.failed) {
             reads = [
                 turn.edits ? i18nFormat('Edited ${0} times', turn.edits) : '',
-                turn.failed ? i18nFormat('${0} failed', turn.failed) : '',
+                turn.failed ? i18nFormat('${0} edits failed', turn.failed) : '',
             ].filter(Boolean).join(listSeparator());
         }
         const owner = session.id;

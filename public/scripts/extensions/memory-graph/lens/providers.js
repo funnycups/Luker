@@ -3,7 +3,7 @@
 // Workbench AskProvider & SuggestRuleProvider definitions for Memory Graph.
 
 import { formatTokens } from '../../../lens-shared/util.js';
-import { i18n, i18nFormat } from './i18n.js';
+import { dateLocale, i18n, i18nFormat } from './i18n.js';
 import { readEntries } from './token-stats.js';
 
 const HORIZON_KEY = 'persistentInjectionMaxSeqDistance';
@@ -106,13 +106,17 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
         get label() { return i18n('Memory graph'); },
         tone: 'memory',
         icon: 'memory',
-        overviewKey: '记忆图',
+        get overviewKey() { return i18n('Memory graph'); },
         order: 10,
         getSnapshot: (ctx) => buildMemorySnapshot(ctx || getCtx(), deps),
         async getOverview(ctx) {
             const snap = await buildMemorySnapshot(ctx || getCtx(), deps);
             if (!snap) return i18n('Not present');
-            return { 节点: snap.nodes, 常驻注入: snap.core, 本次召回: snap.focus };
+            return {
+                [i18n('Nodes')]: snap.nodes,
+                [i18n('Always on')]: snap.core,
+                [i18n('Recalled this time')]: snap.focus,
+            };
         },
         getSideInfo(pSnap) {
             return {
@@ -159,12 +163,12 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
             wb_read_memory: async ({ part = 'summary' } = {}, ctx) => {
                 const c = ctx || getCtx();
                 const mg = c?.getExtensionApi?.('memory-graph');
-                if (!mg) return { error: '没有记忆图' };
+                if (!mg) return { error: i18n('No memory graph') };
                 const proj = await mg.getLastRecallProjection?.(c);
                 if (part === 'core') return String(proj?.blocks?.corePacket || i18n('(empty)'));
                 if (part === 'focus') return String(proj?.blocks?.focusPacket || i18n('(empty)'));
                 const snap = await buildMemorySnapshot(c, deps);
-                return { ...snap, lastRecall: proj?.at ? new Date(proj.at).toLocaleString('zh-CN') : '还没召回过' };
+                return { ...snap, lastRecall: proj?.at ? new Date(proj.at).toLocaleString(dateLocale(c)) : i18n('Not recalled yet') };
             },
         },
     };

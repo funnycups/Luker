@@ -27,6 +27,12 @@ export function listSeparator() {
     return isChineseLocale() ? '\u3001' : ', ';
 }
 
+/** Locale for toLocaleString; undefined falls back to the browser's. */
+export function dateLocale(ctx = null) {
+    const loc = String(ctx?.getCurrentLocale?.() ?? globalThis.Luker?.getContext?.()?.getCurrentLocale?.() ?? '');
+    return loc || undefined;
+}
+
 /** "language_sample" -> "Language sample". */
 export function humanizeKey(key) {
     const text = String(key || '').replace(/_+/g, ' ').trim();

@@ -288,7 +288,25 @@ describe('Workbench providers for memory-graph', () => {
         expect(pSnap.unmerged).toBe(55);
         expect(pSnap.core).toBe(1000);
         expect(askProvider.tools.map(t => t.function.name)).toEqual(['wb_read_memory']);
+        expect(askProvider.overviewKey).toBe('记忆图');
+        expect(await askProvider.getOverview(fakeCtx)).toEqual({
+            节点: 55,
+            常驻: 1000,
+            本次召回: 50,
+        });
         expect(await askProvider.readers.wb_read_memory({ part: 'core' }, fakeCtx)).toBe('x'.repeat(1000));
+        expect(await askProvider.readers.wb_read_memory({ part: 'summary' }, { getExtensionApi: () => null })).toEqual({ error: '没有记忆图' });
+        const summaryWithRecall = await askProvider.readers.wb_read_memory({ part: 'summary' }, { ...fakeCtx, getCurrentLocale: () => 'en-US' });
+        expect(summaryWithRecall.lastRecall).toBe(new Date(1234).toLocaleString('en-US'));
+        const summaryNoRecall = await askProvider.readers.wb_read_memory({ part: 'summary' }, {
+            ...fakeCtx,
+            getExtensionApi: () => ({
+                getSchemaScopeInfo: () => ({ schema: [], scope: 'global' }),
+                getAdvancedScopeInfo: () => ({ settings: {}, scope: 'global' }),
+                getLastRecallProjection: async () => null,
+            }),
+        });
+        expect(summaryNoRecall.lastRecall).toBe('尚未召回');
 
         const suggestProvider = createMemorySuggestRuleProvider();
         expect(suggestProvider.rules.map(r => r.id)).toEqual(['memory.coreHigh', 'memory.unmerged', 'memory.horizon']);
