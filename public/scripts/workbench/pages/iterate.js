@@ -1348,7 +1348,7 @@ export function createIteratePage(app) {
                 o.onCancelWithoutApply
                 || (o.autoSend && seed)
                 || o.sessionId
-                || (o.ws && o.ws !== ws)
+                || o.ws
                 || (o.scope && o.scope !== scope),
             );
             if (hasLaunchReset) {

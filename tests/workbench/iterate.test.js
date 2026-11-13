@@ -1267,5 +1267,31 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
             await flushMicrotasks();
             expect(cancelSpy).toHaveBeenCalledTimes(1);
         }
+
+        // (d) Re-opening with explicit o.ws === ws and o.scope === scope (without seedPrompt or new hook) fires onCancelWithoutApply once before discarding session.
+        {
+            const { wb } = makeHarness();
+            const cancelSpy = jest.fn(async () => {});
+            await wb.open({
+                page: 'ai',
+                ws: 'card',
+                scope: 'character',
+                seedPrompt: 'SEED_REOPEN_CASE',
+                hideSeedFromUi: true,
+                autoSend: true,
+                onCancelWithoutApply: cancelSpy,
+            });
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(cancelSpy).not.toHaveBeenCalled();
+
+            await wb.open({ page: 'ai', ws: 'card', scope: 'character' });
+            await flushMicrotasks();
+            expect(cancelSpy).toHaveBeenCalledTimes(1);
+
+            wb.close();
+            await flushMicrotasks();
+            expect(cancelSpy).toHaveBeenCalledTimes(1);
+        }
     });
 });
