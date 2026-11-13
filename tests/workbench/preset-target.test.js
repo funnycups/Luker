@@ -613,4 +613,39 @@ describe('platform preset target (controls, modes, reference, proposal-bus, cust
         expect(await target.prompt(liveBody, 'preset', ctx)).not.toContain('RefPreset');
         expect((await target.tools(liveBody, 'preset', ctx)).map((t) => t.function.name)).not.toContain('preset_read_reference_fields');
     });
+
+    test('runEdit passes context into normalizeToolCallToEdit so ctx.lib.lodash is used', async () => {
+        const liveBody = {
+            temperature: 0.7,
+            prompts: [{ identifier: 'main', name: 'Main', role: 'system', content: 'Original' }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }],
+        };
+        const { ctx } = createMockPresetCtx({
+            selectedName: 'LivePreset',
+            presets: { LivePreset: liveBody },
+        });
+        const lodashGet = jest.fn((obj, path) => obj?.[path]);
+        const lodashHas = jest.fn((obj, path) => Object.prototype.hasOwnProperty.call(obj || {}, path));
+        ctx.lib = { lodash: { get: lodashGet, has: lodashHas } };
+        ctx.edits = {
+            applyEdits: jest.fn((edits, live) => ({
+                newLive: { ...live, [edits[0].path]: edits[0].newValue },
+                conflicts: [],
+            })),
+        };
+        const target = createPresetTarget({ getContext: () => ctx });
+
+        const updated = await target.runEdit({
+            id: 'e_ctx',
+            name: 'preset_set_field',
+            args: { path: 'temperature', value_json: '0.5' },
+        }, liveBody);
+
+        expect(lodashGet).toHaveBeenCalledWith(liveBody, 'temperature');
+        expect(ctx.edits.applyEdits).toHaveBeenCalledWith(
+            [{ op: 'set', path: 'temperature', oldValue: 0.7, newValue: 0.5 }],
+            liveBody,
+        );
+        expect(updated.temperature).toBe(0.5);
+    });
 });

@@ -497,6 +497,7 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
                 { function: { name, arguments: JSON.stringify(args) } },
                 {
                     live,
+                    context: ctx,
                     session: { surfaceState: { referencePresetName: state.referenceName } },
                     getReferencePresetBody: (refName) => loadReferenceBody(ctx, refName),
                 },
