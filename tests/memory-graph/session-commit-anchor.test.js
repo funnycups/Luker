@@ -83,12 +83,6 @@ jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
     registerExtensionApi: () => {},
     UNSET_VALUE: Symbol('UNSET_VALUE'),
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/config-iteration/studio.js', () => ({
-    openConfigIterationStudio: () => Promise.resolve(),
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/memory-graph/graph-iteration/studio.js', () => ({
-    openGraphIterationStudio: () => Promise.resolve(),
-}));
 jest.unstable_mockModule('../../public/scripts/power-user.js', () => ({
     performFuzzySearch: () => [],
 }));
@@ -177,5 +171,22 @@ describe('graph-iteration commit surface', () => {
         expect(typeof mod.commitGraphUiMutation).toBe('function');
         await expect(mod.commitGraphUiMutation({}, 'chat', {})).rejects.toThrow();
         await expect(mod.commitGraphUiMutation({}, '', { afterStore: { nodes: {} } })).rejects.toThrow();
+    });
+
+    test('openMemoryConfigStudio and openMemoryGraphStudio navigate to Workbench AI iteration', async () => {
+        const mod = await import(
+            '../../public/scripts/extensions/memory-graph/main.js'
+        );
+        const open = jest.fn(async () => {});
+        const globalCtx = { workbench: { open }, characters: [], characterId: -1 };
+        await mod.openMemoryConfigStudio(globalCtx);
+        expect(open).toHaveBeenCalledWith({ page: 'ai', ws: 'memory', scope: 'global' });
+
+        const charCtx = { workbench: { open }, characters: [{ avatar: 'alice.png', name: 'Alice' }], characterId: 0 };
+        await mod.openMemoryConfigStudio(charCtx);
+        expect(open).toHaveBeenCalledWith({ page: 'ai', ws: 'memory', scope: 'character' });
+
+        await mod.openMemoryGraphStudio(charCtx);
+        expect(open).toHaveBeenCalledWith({ page: 'ai', ws: 'memory_graph', scope: 'chat' });
     });
 });

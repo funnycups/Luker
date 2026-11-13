@@ -5,11 +5,35 @@
 // and token recorder unless a third-party copy is active.
 
 import { registerLensSharedLocaleData } from '../../../lens-shared/locale-data.js';
-import { getCharacterAdvancedOverrideByAvatar, persistCharacterAdvancedOverridePatch } from '../character-overrides.js';
-import { getSettings, ensureMemoryStoreLoaded, invalidateLatestRecallSnapshot } from '../main.js';
+import {
+    getCharacterAdvancedOverrideByAvatar,
+    getCharacterSchemaOverrideByAvatar,
+    getEffectiveNodeTypeSchema,
+    getEffectiveSettings,
+    getSchemaScopeInfo,
+    persistCharacterAdvancedOverridePatch,
+    persistCharacterSchemaOverride,
+    removeCharacterSchemaOverride,
+} from '../character-overrides.js';
+import {
+    commitGraphUiMutation,
+    ensureMemoryStoreLoaded,
+    ensureStoreSyncedWithChat,
+    getChatKey,
+    getDefaultNodeTypeSchema,
+    getSettings,
+    invalidateLatestRecallSnapshot,
+    normalizeNodeTypeSchema,
+    readChatRange,
+    searchGraphSimilarNodes,
+    syncGenerationVisibleHistoryRuntimeRegexScripts,
+    syncGraphVectorsAfterMutation,
+} from '../main.js';
 import { getMemoryGraphReadApi } from '../read-api.js';
+import { getMemoryGraphWriteApi } from '../write-api.js';
 import { startTagFilter } from './filter/filter-runtime.js';
 import { i18n } from './i18n.js';
+import { createMemoryConfigTarget, createMemoryGraphTarget } from './iterate-targets.js';
 import { registerLensLocaleData } from './locale-data.js';
 import { createMemoryAskProvider, createMemorySuggestRuleProvider } from './providers.js';
 import { startRecorder } from './token-stats.js';
@@ -40,11 +64,27 @@ export function initMemoryLens() {
 
     const deps = {
         getSettings,
+        getDefaultNodeTypeSchema,
+        normalizeNodeTypeSchema,
         ensureMemoryStoreLoaded,
+        ensureStoreSyncedWithChat,
+        commitGraphUiMutation,
+        getChatKey,
+        syncGraphVectorsAfterMutation,
+        readChatRange,
+        searchGraphSimilarNodes,
         getMemoryGraphReadApi,
+        getMemoryGraphWriteApi,
+        getEffectiveSettings,
+        getEffectiveNodeTypeSchema,
+        getSchemaScopeInfo,
+        getCharacterSchemaOverrideByAvatar,
         getCharacterAdvancedOverrideByAvatar,
+        persistCharacterSchemaOverride,
+        removeCharacterSchemaOverride,
         persistCharacterAdvancedOverridePatch,
         invalidateLatestRecallSnapshot,
+        syncGenerationVisibleHistoryRuntimeRegexScripts,
     };
 
     if (workbench) {
@@ -102,6 +142,8 @@ export function initMemoryLens() {
             }),
             workbench.registerAskProvider(createMemoryAskProvider(getContext, deps)),
             workbench.registerSuggestRuleProvider(createMemorySuggestRuleProvider(getContext, deps)),
+            workbench.registerIterateTarget?.(createMemoryConfigTarget(getContext, deps)),
+            workbench.registerIterateTarget?.(createMemoryGraphTarget(getContext, deps)),
         );
     }
 

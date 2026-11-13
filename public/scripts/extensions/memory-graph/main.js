@@ -39,9 +39,7 @@ import {
     getEffectiveNodeTypeSchema,
     getSchemaScopeInfo,
     getAdvancedScopeInfo,
-    persistCharacterSchemaOverride,
     persistCharacterAdvancedOverride,
-    persistCharacterAdvancedOverridePatch,
     removeCharacterAdvancedOverride,
 } from './character-overrides.js';
 import { registerMemoryGraphCardBindingSlot } from './card-binding-slot.js';
@@ -51,10 +49,8 @@ import {
     clearImportedStoreTransientState,
     bindImportedStoreToAssistantFloor,
 } from './import-export.js';
-import { openConfigIterationStudio } from './config-iteration/studio.js';
 import { DEFAULT_CONFIG_ITER_SYSTEM_PROMPT } from './config-iteration/system-prompt.js';
 import { migrateConfigIterationPrompt } from './config-iteration/prompt-migration.js';
-import { openGraphIterationStudio } from './graph-iteration/studio.js';
 import {
     DEFAULT_EXTRACT_EDGE_RULES,
     DEFAULT_EXTRACT_TEMPLATE,
@@ -454,7 +450,7 @@ function getGenerationVisibleHistoryRuntimeRegexScripts() {
     }];
 }
 
-function syncGenerationVisibleHistoryRuntimeRegexScripts(options = {}) {
+export function syncGenerationVisibleHistoryRuntimeRegexScripts(options = {}) {
     generationVisibleHistoryRegexProvider?.setScripts(getGenerationVisibleHistoryRuntimeRegexScripts(), options);
 }
 
@@ -8432,25 +8428,6 @@ export async function searchGraphSimilarNodes(context, query, { topK = 20 } = {}
     return await findSimilarNodes(String(query || ''), store, profile, getChatKey(context), { topK });
 }
 
-/** Assemble the graph-iteration studio's deps from module-scope helpers. */
-async function openGraphIterationStudioWithDeps(context) {
-    const settings = getSettings();
-    await openGraphIterationStudio({
-        context,
-        settings,
-        ensureStoreSyncedWithChat,
-        commitGraphUiMutation,
-        getChatKey,
-        getEffectiveSettings,
-        getEffectiveNodeTypeSchema,
-        syncGraphVectorsAfterMutation,
-        readChatRange,
-        searchGraphSimilarNodes,
-        i18n,
-        i18nFormat,
-    });
-}
-
 /**
  * Run the configured recall strategy and classify the outcome.
  *
@@ -9706,8 +9683,14 @@ export function getRebuildableLatestSeq(context, settings = getSettings()) {
     return getExtractableLatestSeq(buildPlayableFramesFromContext(context).length, getEffectiveSettings(context, settings));
 }
 
-export function openMemoryGraphStudio(context) {
-    return openGraphIterationStudioWithDeps(context);
+/** Routes to Workbench AI iteration for the chat memory graph. */
+export function openMemoryGraphStudio(context = getContext()) {
+    const wb = context?.workbench || getContext()?.workbench;
+    if (typeof wb?.open !== 'function') {
+        notifyError(i18n('Workbench is unavailable.'));
+        return Promise.resolve(null);
+    }
+    return wb.open({ page: 'ai', ws: 'memory_graph', scope: 'chat' });
 }
 
 const clampInt = (value, min, max, fallback) => Math.max(min, Math.min(max, Math.floor(Number(value) || fallback)));
@@ -10273,27 +10256,16 @@ export async function runFillGraph(context, settings = getSettings()) {
     }
 }
 
-/** Opens the configuration workbench. */
-export async function openMemoryConfigStudio(context, settings = getSettings()) {
-    await openConfigIterationStudio({
-        context,
-        settings,
-        normalizeNodeTypeSchema,
-        getEffectiveNodeTypeSchema,
-        getEffectiveSettings,
-        getSchemaScopeInfo,
-        getDefaultNodeTypeSchema,
-        persistCharacterSchemaOverride,
-        persistCharacterAdvancedOverridePatch,
-        syncGenerationVisibleHistoryRuntimeRegexScripts,
-        saveSettings,
-        i18n,
-        i18nFormat,
-        refreshRootUi: () => {
-            invalidateLatestRecallSnapshot();
-            try { syncGenerationVisibleHistoryRuntimeRegexScripts(); } catch { /* host refresh errors surface elsewhere */ }
-        },
-    });
+/** Routes to Workbench AI iteration for Memory Graph configuration. */
+export function openMemoryConfigStudio(context = getContext(), _settings = getSettings()) {
+    const wb = context?.workbench || getContext()?.workbench;
+    if (typeof wb?.open !== 'function') {
+        notifyError(i18n('Workbench is unavailable.'));
+        return Promise.resolve(null);
+    }
+    const info = getSchemaScopeInfo(context, getSettings());
+    const scope = info?.hasAvatar && !context?.groupId ? 'character' : 'global';
+    return wb.open({ page: 'ai', ws: 'memory', scope });
 }
 
 /** Runs manual compression with already-collected options. */

@@ -49,12 +49,20 @@ jest.unstable_mockModule('../../../public/scripts/extensions/memory-graph/main.j
     saveMemoryAdvancedSettings: async () => {},
     setMemorySetting: (_k, v) => v,
     stopMemoryExtraction: () => {},
+    syncGenerationVisibleHistoryRuntimeRegexScripts: () => {},
     syncGraphVectorsAfterMutation: syncVectorsMock,
+    readChatRange: () => [],
+    searchGraphSimilarNodes: async () => [],
 }));
 
 jest.unstable_mockModule('../../../public/scripts/extensions/memory-graph/character-overrides.js', () => ({
     getCharacterAdvancedOverrideByAvatar: () => null,
+    getCharacterSchemaOverrideByAvatar: () => null,
+    getEffectiveNodeTypeSchema: (_ctx, s) => s?.nodeTypeSchema || [],
+    getSchemaScopeInfo: () => ({ avatar: 'alice.png', hasAvatar: true, characterName: 'Alice', hasOverride: false, scope: 'global', schema: [] }),
     persistCharacterAdvancedOverridePatch: async () => true,
+    persistCharacterSchemaOverride: async () => true,
+    removeCharacterSchemaOverride: async () => true,
     getEffectiveSettings: (_ctx, s) => s,
 }));
 
@@ -108,6 +116,7 @@ describe('lens index registration & source-luker fixes', () => {
     let registeredWorkspaces;
     let registeredAsk;
     let registeredSuggest;
+    let registeredIterate;
     let toastrWarnSpy;
     let toastrErrorSpy;
 
@@ -129,6 +138,7 @@ describe('lens index registration & source-luker fixes', () => {
         registeredWorkspaces = [];
         registeredAsk = [];
         registeredSuggest = [];
+        registeredIterate = [];
         toastrWarnSpy = jest.fn();
         toastrErrorSpy = jest.fn();
         globalThis.toastr = { warning: toastrWarnSpy, error: toastrErrorSpy };
@@ -164,16 +174,18 @@ describe('lens index registration & source-luker fixes', () => {
                     registerWorkspace: (def) => { registeredWorkspaces.push(def); return () => {}; },
                     registerAskProvider: (def) => { registeredAsk.push(def); return () => {}; },
                     registerSuggestRuleProvider: (def) => { registeredSuggest.push(def); return () => {}; },
+                    registerIterateTarget: (def) => { registeredIterate.push(def); return () => {}; },
                 },
             }),
         };
     });
 
-    test('initMemoryLens registers workspace, AskProvider, SuggestRuleProvider and skips background tasks when third-party copy active', () => {
+    test('initMemoryLens registers workspace, AskProvider, SuggestRuleProvider, IterateTargets and skips background tasks when third-party copy active', () => {
         initMemoryLens();
         expect(registeredWorkspaces.map(w => w.id)).toEqual(['memory']);
         expect(registeredAsk.map(a => a.id)).toEqual(['memory']);
         expect(registeredSuggest.map(s => s.id)).toEqual(['memory']);
+        expect(registeredIterate.map(t => t.id)).toEqual(['memory', 'memory_graph']);
         expect(startTagFilterMock).toHaveBeenCalledTimes(1);
         expect(startRecorderMock).toHaveBeenCalledTimes(1);
         expect(toastrWarnSpy).not.toHaveBeenCalled();
@@ -181,10 +193,12 @@ describe('lens index registration & source-luker fixes', () => {
         startTagFilterMock.mockClear();
         startRecorderMock.mockClear();
         registeredWorkspaces = [];
+        registeredIterate = [];
         currentListExtensions = ['memory-graph', 'third-party/memory-lens'];
 
         initMemoryLens();
         expect(registeredWorkspaces.map(w => w.id)).toEqual(['memory']);
+        expect(registeredIterate.map(t => t.id)).toEqual(['memory', 'memory_graph']);
         expect(toastrWarnSpy).toHaveBeenCalledTimes(1);
         expect(startTagFilterMock).not.toHaveBeenCalled();
         expect(startRecorderMock).not.toHaveBeenCalled();

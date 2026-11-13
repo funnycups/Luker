@@ -20,7 +20,7 @@ let customTypeLabels = {};
 let customFieldLabels = {};
 
 export function isChineseLocale() {
-    return String(Luker.getContext().getCurrentLocale() || '').toLowerCase().startsWith('zh');
+    return String(globalThis.Luker?.getContext?.()?.getCurrentLocale?.() || '').toLowerCase().startsWith('zh');
 }
 
 export function listSeparator() {
