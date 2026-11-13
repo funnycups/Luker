@@ -2,7 +2,7 @@
 
 `context.skills.*` is the JavaScript surface for installing, reading, editing, and packaging skills. Extensions reach for it through `Luker.getContext()`; CardApps reach for the same shape on their `ctx.skills`.
 
-Skills are the [knowledge packs](/features/skills/) the orchestrator uses; this API is the read/write transport that backs the skill manager subpanel, the inline editor, and the iter-studio's skill tools.
+Skills are the [knowledge packs](/features/skills/) the orchestrator uses; this API is the read/write transport that backs the skill manager subpanel, the inline editor, and Workbench's AI iteration skill tools.
 
 ::: tip Read the user-facing docs first
 For the conceptual model — scopes, visibility policy, embed lifecycle — start at [Skills overview](/features/skills/). This page is the API reference.

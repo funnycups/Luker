@@ -37,7 +37,7 @@ workbench.open(opts?: {
     ws?: string;       // workspace id (navigates to ws:<id>) or iterate target id when page === 'ai'
     subview?: string;  // workspace-specific view, e.g. 'run', 'graph', 'schema'
     runKey?: string;   // e.g. 'orchestrator:<runId>' when jumping to a specific run
-    scope?: string;    // e.g. 'global' | 'character' | 'preset'
+    scope?: string;    // e.g. 'global' | 'character' | 'preset' | 'chat'
     draft?: string;    // pre-filled prompt when opening page: 'ai'
 }): Promise<WorkbenchHandle | null>
 ```
@@ -84,23 +84,28 @@ Key fields on `targetDef`:
 | Field | Purpose |
 | --- | --- |
 | `id` | Unique target id (`'memory'`, `'orch'`, `'preset'`, `'card'`, `'world'`, ...) |
-| `label` | Display label in the target switcher |
+| `label` | Display label (string or `() => string`) in the target switcher |
 | `order` / `tone` | Ordering and badge color |
-| `chips()` | Starter prompt suggestions shown in empty sessions |
-| `scopes(ctx)` | Async `{ global: boolean, character: boolean }` availability |
-| `scopeNotes` | Short descriptions shown under the scope picker |
+| `chips` | Optional starter prompt array or `() => string[]` shown in empty sessions |
+| `scopes?(ctx)` | Async `{ global?, character?, preset?, chat? }` availability flags |
+| `scopeNotes` | Function `(scope, ctx) => string` or map `{ [scope]: string \| (() => string) }` shown under the scope picker |
 | `isEnabled?(ctx)` | Optional availability check |
 | `getNativeAi?(ctx)` | Returns `{ connection, preset }` when Workbench AI settings use **Follow extension** |
-| `load(ctx, scope, opts)` | Loads the live artifact `{ data, label, context, ... }` |
-| `tools(ctx, scope, live)` | Returns OpenAI-style function tool definitions |
-| `isRead(name)` / `isControl?(name)` | Tool classification predicates |
-| `runRead(call, live, helpers)` / `runEdit(call, live, helpers)` / `runControl?(call, live, helpers)` | Tool handlers |
-| `proposalKinds` | Optional `ProposalBus` adapters (or built-in kind names such as `'skill-author'`, `'lorebook-write'`, `'custom-tool-author'`) |
-| `commit(ctx, scope, next, live, ops)` | Persists approved changes back to Luker |
-| `units(data)` / `rebuild(base, units)` | Unit projection and selective apply/undo support |
-| `systemPrompt(ctx, scope, live, opts)` | Target-specific instructions (Workbench prepends its wrapper unless disabled) |
+| `promptInfo?(ctx)` | Async `{ from, custom, text }` shown under **Settings → Prompts** |
+| `load(scope, ctx)` | Loads the live artifact `{ live, target, title }` |
+| `tools(live, scope, ctx, { target })` | Returns OpenAI-style function tool definitions (or a Promise resolving to them) |
+| `systemPrompt?(scope, live, { wrapper, ctx, target })` / `prompt?(live, scope, ctx, { wrapper, target })` | Target-specific instructions (`systemPrompt` owns the full system message; `prompt` is automatically prefixed with `wrapper` when enabled) |
+| `isRead(name)` | Returns `true` for read-only tools, `false` for edit tools |
+| `runRead(call, live, helpers)` | Executes a read tool (`call` has `{ id, name, args }`) |
+| `runEdit(call, live, helpers)` | Executes an edit tool; returns updated `live` or `{ live, proposals }`, or stages proposals via `helpers.propose(...)` |
+| `proposalKinds` | Optional `ProposalBus` adapters (or built-in kind names `'profile-edit'`, `'lorebook-write'`, `'skill-author'`, `'preset-clone'`, `'custom-tool-author'`) |
+| `units(data, targetRef)` | Projects artifact state into diffable units for the **Change list** |
+| `rebuild(base, ai, fieldKeys, targetRef)` | Rebuilds `next` from `base` + the user-selected `fieldKeys` in `ai` |
+| `commit(targetRef, base, next, fieldKeys)` | Persists approved changes back to Luker and returns `{ applied?, skipped?, failure?, undo() }` |
+| `renderControls?({ live, scope, settings, onReload })` | Optional toolbar controls Node above the chat |
+| `renderPreview?({ base, ai, target })` | Optional right-hand preview pane Node |
 
-Every `runEdit` handler operates on a cloned working copy or stages non-field proposals on the `ProposalBus`. When a round produces zero tool calls, the iteration loop stops and hands control back to the user.
+Every `runEdit` handler operates on a cloned working copy (`live`) or stages non-field proposals on the `ProposalBus` via `helpers.propose(...)`. When a round produces zero tool calls, the iteration loop stops and hands control back to the user.
 
 ## Registering a Q&A provider
 
@@ -120,26 +125,42 @@ const unregister = Luker.getContext().workbench.registerAskProvider({
     async getOverview(ctx) {
         return { enabled: true, items: 12 };
     },
-    getCard?(snap, ctx) {
-        return { status: 'All good', rows: [['Items', String(snap.items)]] };
+    getSideInfo(pSnap, snap) {
+        return {
+            label: 'My Extension',
+            countText: pSnap ? `${pSnap.items} items` : 'Not present',
+            status: pSnap ? 'ok' : 'warn',
+        };
     },
-    getTools(ctx) {
-        return [{
-            type: 'function',
-            function: {
-                name: 'my_ext_read',
-                description: 'Read read-only status from My Extension.',
-                parameters: { type: 'object', properties: {}, additionalProperties: false },
-            },
-        }];
+    renderHomeCard(pSnap, { snap, warn, status, askBtn, wsBtn, workspace }) {
+        return {
+            tone: 'other',
+            iconName: 'mark',
+            name: 'My Extension',
+            by: pSnap ? 'Enabled' : 'Not installed',
+            pill: status('my-ext', Boolean(pSnap)),
+            stats: pSnap ? [['Items', String(pSnap.items)]] : [],
+            acts: [
+                pSnap ? askBtn('my-ext') : null,
+                workspace ? wsBtn(workspace) : null,
+            ],
+        };
     },
-    async runTool(name, args, ctx) {
-        if (name === 'my_ext_read') return { items: 12 };
+    tools: [{
+        type: 'function',
+        function: {
+            name: 'wb_read_my_ext',
+            description: 'Read read-only status from My Extension.',
+            parameters: { type: 'object', properties: {}, additionalProperties: false },
+        },
+    }],
+    readers: {
+        wb_read_my_ext: async (args, ctx) => ({ items: 12 }),
     },
 });
 ```
 
-Q&A tools registered here must be strictly read-only.
+Q&A tools in `tools` / `readers` must be strictly read-only.
 
 ## Registering local suggestion rules
 
@@ -155,21 +176,31 @@ const unregister = Luker.getContext().workbench.registerSuggestRuleProvider({
             name: 'High item count',
             when: 'Item count exceeds 100',
             defaultOn: true,
-            check(snap, ctx) {
-                const count = snap.providers?.['my-ext']?.items || 0;
+            check(snap) {
+                const count = snap?.providers?.['my-ext']?.items || 0;
                 if (count <= 100) return null;
                 return {
                     text: `${count} items in My Extension`,
                     why: 'Large lists slow down processing.',
                     source: 'Based on My Extension state',
                     sig: String(count),
-                    actions: [{ kind: 'ws', ws: 'my-ext', label: 'Inspect' }],
+                    actions: [
+                        { kind: 'ai', ws: 'my-ext', label: 'Have the AI look', prompt: 'Review My Extension items.' },
+                    ],
                 };
             },
         },
     ],
 });
 ```
+
+Supported action shapes in `actions`:
+
+- `{ kind: 'ai', label, ws, prompt, primary? }` — opens **AI iteration** on target `ws` with `prompt` pre-filled
+- `{ kind: 'ask', label, question, primary? }` — opens **Q&A** with `question` pre-filled
+- `{ kind: 'session', label, sessionId, primary? }` — opens an existing **AI iteration** session
+- `{ kind: 'setHorizon', label, value, primary? }` — updates the memory persistent-injection lookback horizon
+- `{ label, run: async (app) => { ... }, primary? }` — runs a custom async handler receiving the Workbench `app` handle
 
 ## Inspection & subscriptions
 

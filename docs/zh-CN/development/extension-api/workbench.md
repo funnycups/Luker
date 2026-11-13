@@ -37,7 +37,7 @@ workbench.open(opts?: {
     ws?: string;       // 工作区 id（导航到 ws:<id>），或在 page === 'ai' 时指定迭代目标 id
     subview?: string;  // 工作区子视图，例如 'run'、'graph'、'schema'
     runKey?: string;   // 例如 'orchestrator:<runId>'，跳转到特定运行记录
-    scope?: string;    // 例如 'global' | 'character' | 'preset'
+    scope?: string;    // 例如 'global' | 'character' | 'preset' | 'chat'
     draft?: string;    // 打开 page: 'ai' 时预填的输入框文本
 }): Promise<WorkbenchHandle | null>
 ```
@@ -84,23 +84,28 @@ const unregister = Luker.getContext().workbench.registerWorkspace({
 | 字段 | 用途 |
 | --- | --- |
 | `id` | 唯一目标 id（`'memory'`、`'orch'`、`'preset'`、`'card'`、`'world'` 等） |
-| `label` | 顶部目标切换器显示的名称 |
+| `label` | 顶部目标切换器显示的名称（字符串或 `() => string`） |
 | `order` / `tone` | 排序权重与徽标色调 |
-| `chips()` | 空会话时显示的快捷示例提示词 |
-| `scopes(ctx)` | 异步返回 `{ global: boolean, character: boolean }` 可用性 |
-| `scopeNotes` | 作用域选择器下方展示的说明文案 |
+| `chips` | 可选，空会话时显示的快捷示例数组或 `() => string[]` |
+| `scopes?(ctx)` | 异步返回 `{ global?, character?, preset?, chat? }` 可用性 |
+| `scopeNotes` | 函数 `(scope, ctx) => string` 或映射 `{ [scope]: string \| (() => string) }`，显示在作用域选择器下方 |
 | `isEnabled?(ctx)` | 可选的启用条件检查 |
 | `getNativeAi?(ctx)` | 当工作台 AI 设置设为**跟随插件**时返回 `{ connection, preset }` |
-| `load(ctx, scope, opts)` | 读取实时目标数据 `{ data, label, context, ... }` |
-| `tools(ctx, scope, live)` | 返回 OpenAI 风格的函数工具定义数组 |
-| `isRead(name)` / `isControl?(name)` | 工具分类谓词 |
-| `runRead(call, live, helpers)` / `runEdit(call, live, helpers)` / `runControl?(call, live, helpers)` | 工具执行器 |
-| `proposalKinds` | 可选 `ProposalBus` 适配器或内置类型名（如 `'skill-author'`、`'lorebook-write'`、`'custom-tool-author'`） |
-| `commit(ctx, scope, next, live, ops)` | 将用户批准的修改写回 Luker |
-| `units(data)` / `rebuild(base, units)` | 单元投影与选择性应用 / 撤销支持 |
-| `systemPrompt(ctx, scope, live, opts)` | 目标专属提示词（默认由工作台前置通用说明） |
+| `promptInfo?(ctx)` | 异步返回 `{ from, custom, text }`，供**设置 → 提示词**展示 |
+| `load(scope, ctx)` | 读取实时目标数据，返回 `{ live, target, title }` |
+| `tools(live, scope, ctx, { target })` | 返回 OpenAI 风格的函数工具定义数组（或 Promise） |
+| `systemPrompt?(scope, live, { wrapper, ctx, target })` / `prompt?(live, scope, ctx, { wrapper, target })` | 目标专属提示词（`systemPrompt` 返回完整系统提示词；未提供时工作台会为 `prompt` 自动前置 `wrapper`） |
+| `isRead(name)` | 返回 `true` 表示只读工具，`false` 表示修改工具 |
+| `runRead(call, live, helpers)` | 执行只读工具（`call` 为 `{ id, name, args }`） |
+| `runEdit(call, live, helpers)` | 执行修改工具；返回更新后的 `live` 或 `{ live, proposals }`，或通过 `helpers.propose(...)` 暂存提案 |
+| `proposalKinds` | 可选 `ProposalBus` 适配器或内置类型名（`'profile-edit'`、`'lorebook-write'`、`'skill-author'`、`'preset-clone'`、`'custom-tool-author'`） |
+| `units(data, targetRef)` | 单元投影，用于生成**改动清单**的差异项 |
+| `rebuild(base, ai, fieldKeys, targetRef)` | 基于 `base` 与用户勾选的 `ai` 中 `fieldKeys` 重建待提交的 `next` |
+| `commit(targetRef, base, next, fieldKeys)` | 将批准的修改写回 Luker，返回 `{ applied?, skipped?, failure?, undo() }` |
+| `renderControls?({ live, scope, settings, onReload })` | 可选，对话区上方工具栏控件 DOM 节点 |
+| `renderPreview?({ base, ai, target })` | 可选，右侧实时预览栏 DOM 节点 |
 
-`runEdit` 作用于克隆后的工作副本或将非字段类提案暂存到 `ProposalBus`。当模型某一轮返回零次工具调用时，迭代循环自动结束并将控制权交还用户。
+`runEdit` 作用于克隆后的工作副本（`live`）或通过 `helpers.propose(...)` 将非字段类提案暂存到 `ProposalBus`。当模型某一轮返回零次工具调用时，迭代循环自动结束并将控制权交还用户。
 
 ## 注册问答数据源
 
@@ -120,26 +125,42 @@ const unregister = Luker.getContext().workbench.registerAskProvider({
     async getOverview(ctx) {
         return { enabled: true, items: 12 };
     },
-    getCard?(snap, ctx) {
-        return { status: 'All good', rows: [['Items', String(snap.items)]] };
+    getSideInfo(pSnap, snap) {
+        return {
+            label: 'My Extension',
+            countText: pSnap ? `${pSnap.items} items` : 'Not present',
+            status: pSnap ? 'ok' : 'warn',
+        };
     },
-    getTools(ctx) {
-        return [{
-            type: 'function',
-            function: {
-                name: 'my_ext_read',
-                description: 'Read read-only status from My Extension.',
-                parameters: { type: 'object', properties: {}, additionalProperties: false },
-            },
-        }];
+    renderHomeCard(pSnap, { snap, warn, status, askBtn, wsBtn, workspace }) {
+        return {
+            tone: 'other',
+            iconName: 'mark',
+            name: 'My Extension',
+            by: pSnap ? 'Enabled' : 'Not installed',
+            pill: status('my-ext', Boolean(pSnap)),
+            stats: pSnap ? [['Items', String(pSnap.items)]] : [],
+            acts: [
+                pSnap ? askBtn('my-ext') : null,
+                workspace ? wsBtn(workspace) : null,
+            ],
+        };
     },
-    async runTool(name, args, ctx) {
-        if (name === 'my_ext_read') return { items: 12 };
+    tools: [{
+        type: 'function',
+        function: {
+            name: 'wb_read_my_ext',
+            description: 'Read read-only status from My Extension.',
+            parameters: { type: 'object', properties: {}, additionalProperties: false },
+        },
+    }],
+    readers: {
+        wb_read_my_ext: async (args, ctx) => ({ items: 12 }),
     },
 });
 ```
 
-注册到**问问**的工具必须严格只读，不产生任何状态变更。
+`tools` 与 `readers` 中注册到**问问**的工具必须严格只读，不产生任何状态变更。
 
 ## 注册本地建议规则
 
@@ -155,21 +176,31 @@ const unregister = Luker.getContext().workbench.registerSuggestRuleProvider({
             name: 'High item count',
             when: 'Item count exceeds 100',
             defaultOn: true,
-            check(snap, ctx) {
-                const count = snap.providers?.['my-ext']?.items || 0;
+            check(snap) {
+                const count = snap?.providers?.['my-ext']?.items || 0;
                 if (count <= 100) return null;
                 return {
                     text: `${count} items in My Extension`,
                     why: 'Large lists slow down processing.',
                     source: 'Based on My Extension state',
                     sig: String(count),
-                    actions: [{ kind: 'ws', ws: 'my-ext', label: 'Inspect' }],
+                    actions: [
+                        { kind: 'ai', ws: 'my-ext', label: 'Have the AI look', prompt: 'Review My Extension items.' },
+                    ],
                 };
             },
         },
     ],
 });
 ```
+
+`actions` 支持的动作形态：
+
+- `{ kind: 'ai', label, ws, prompt, primary? }` —— 打开对应目标 `ws` 的 **AI 迭代**并预填 `prompt`
+- `{ kind: 'ask', label, question, primary? }` —— 打开**问问**并预填 `question`
+- `{ kind: 'session', label, sessionId, primary? }` —— 打开已有的 **AI 迭代**会话
+- `{ kind: 'setHorizon', label, value, primary? }` —— 调整记忆图常驻注入最大回溯楼层数
+- `{ label, run: async (app) => { ... }, primary? }` —— 执行接收工作台 `app` 句柄的自定义异步回调
 
 ## 查询与订阅
 

@@ -20,7 +20,7 @@ Extraction can run built in or be delegated to the memory curator agent in [Mult
 
 1. Open **Workbench** (wand menu → **Workbench**, corner pill, `Alt+W`, or **Extensions → Memory → Open in Workbench**) and switch to the **Memory graph** workspace tab.
 2. Open the **Settings** view inside **Memory graph** and turn on Memory Graph.
-3. Choose the API connection and chat-completion preset used for extraction and recall. The help button beside the preset selector explains what kind of preset the slot expects and imports a bundled one in a click. Extraction is structured bookkeeping, so a smaller model handles it well.
+3. Choose the API connection and chat-completion preset used for extraction and recall. If you need a clean tool-task preset, import the bundled `plugin-only` preset from **Workbench → Settings**. Extraction is structured bookkeeping, so a smaller model handles it well.
 4. Chat normally, then open **Memory graph** in Workbench to inspect the generated graph.
 
 ## Views in Workbench

@@ -36,7 +36,7 @@ const { applyEdits, runner, storage, textDiff, zoomOverlay, ui, tools, proposalB
 | `proposalBus` | `createProposalBus` 与内置提案适配器：`profileEdit`、`lorebookWrite`、`skillAuthor`、`presetClone`、`customToolAuthor` |
 | `tools` | 与具体插件解耦的工具定义与分发器（`lorebook-reads`、`lorebook-writes`、`character-presets-reads`、`skill-iter-studio`） |
 | `render`、`textDiff`、`zoomOverlay`、`ui` | 差异卡片、逐行并排对比浮层、消息 Markdown 渲染与可折叠思考块 |
-| `bindIterWorkspaceResizer`、`createRenderScheduler` | 分栏拖拽调整器与合并渲染调度器 |
+| `bindIterWorkspaceResizer` | 分栏拖拽调整器（Layer 1 `/scripts/iteration-library/index.js` 还额外导出 `createRenderScheduler`） |
 
 ## 参考消费方
 

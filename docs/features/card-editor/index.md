@@ -36,7 +36,7 @@ Both modes share the same set of settings on the extensions panel:
 - **Model request LLM preset** — Prompt preset used by the editor assistant (leave empty to use the current preset)
 - **Model request API preset** — API connection used by the editor assistant (leave empty to use the current connection)
 
-Both preset dropdowns have a question-mark button that explains the expected preset type and imports a bundled one in a click.
+The **Iteration AI prompt preset** dropdown has a question-mark button that explains the expected preset type and imports a bundled one in a click.
 - **Tool call retry count** — Number of retries when the AI returns an invalid tool call
 
 ## Modification History

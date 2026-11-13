@@ -36,7 +36,7 @@ const { applyEdits, runner, storage, textDiff, zoomOverlay, ui, tools, proposalB
 | `proposalBus` | `createProposalBus` plus built-in proposal adapters: `profileEdit`, `lorebookWrite`, `skillAuthor`, `presetClone`, `customToolAuthor` |
 | `tools` | Plugin-agnostic tool catalogs and dispatchers (`lorebook-reads`, `lorebook-writes`, `character-presets-reads`, `skill-iter-studio`) |
 | `render`, `textDiff`, `zoomOverlay`, `ui` | Diff cards, line-by-line side-by-side overlays, message markdown rendering, and collapsible thinking helpers |
-| `bindIterWorkspaceResizer`, `createRenderScheduler` | Split-pane drag resizer and coalesced UI render scheduler |
+| `bindIterWorkspaceResizer` | Split-pane drag resizer helper (Layer 1 `/scripts/iteration-library/index.js` also exports `createRenderScheduler`) |
 
 ## Reference consumers
 

@@ -1,6 +1,6 @@
 # Spec Mode
 
-Spec is the orchestrator's default mode. It splits preparation into a fixed sequence of stages, each containing one or more nodes, and ends by combining their output into an orchestration result for the main model. The pipeline is predictable and reusable, which makes it a solid starting point for long-form roleplay.
+Spec (**Pipeline** in Workbench) is the orchestrator's default mode. It splits preparation into a fixed sequence of stages, each containing one or more nodes, and ends by combining their output into an orchestration result for the main model. The pipeline is predictable and reusable, which makes it a solid starting point for long-form roleplay.
 
 ## How it works
 
@@ -110,15 +110,15 @@ The rerun limit controls how many times this can happen. The default is 2; at 0 
 
 | Goal | How |
 | --- | --- |
-| Plan before writing | Describe "two stages: plan the next beat, then write the orchestration result" in the Studio |
+| Plan before writing | Describe "two stages: plan the next beat, then write the orchestration result" in **AI iteration** |
 | Keep characters in voice | Keep the default data-like prose check, or ask for a node that blocks meta commentary and report-style narration |
 | Reuse one pipeline across cards | Apply it globally instead of binding it to a card |
-| Different pipelines per card | Select the card, open the Studio, and apply to the card |
+| Different pipelines per card | Select the card, open **AI iteration**, pick **Character-only** scope, and apply |
 | Reduce cost or latency | Use smaller models, remove nodes, or switch to [Single Agent mode](/features/orchestrator/single) |
 | Iterate on one pipeline | AI iteration sessions are saved and can be resumed |
 | Move to another device | Export the configuration and import it on the target |
 
-## Run Panel
+## Run panel
 
 The **Run panel** dock and **Workbench → Orchestration → Run** show execution by stage. Expand a card to inspect a node's thinking, output, and tool calls.
 

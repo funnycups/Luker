@@ -133,17 +133,17 @@ orch.applyCharacterExecutionModeForAvatar(ctx, ctx.extensionSettings?.orchestrat
 
 這些存取器只動角色卡，從來不修改全域編排器設定。
 
-## Iter-studio 技能工具目錄
+## 共享技能工具目錄
 
-編排器的 iter-studio 彈窗用一組技能管理工具（庫存查詢、創作、策略繫結、遷移 helper），其他 iter-studio 風格的彈窗可以把它們 splice 進自己的工具目錄。Extension api 上的屬性暴露這個目錄：
+`context.iterationLibrary.tools`（`public/scripts/iteration-library/tools/skill-iter-studio.js`）提供了一組共享的技能管理工具（庫存查詢、創作、策略繫結、遷移輔助），供工作台的**編排**與**預設設定檔**迭代目標共同使用：
 
-| 屬性 | 型別 | 用途 |
+| 匯出項 | 型別 | 用途 |
 | --- | --- | --- |
-| `SKILL_ITER_STUDIO_TOOL_DEFS` | `readonly array` | OpenAI 形狀的工具定義（編排器 iter-studio 暴露的 `skill_*` 工具）。按 `function.name` 過濾出彈窗想要的子集。 |
+| `SKILL_ITER_STUDIO_TOOL_DEFS` | `readonly array` | OpenAI 形狀的工具定義（`skill_*` 工具）。按 `function.name` 過濾出目標所需的子集。 |
 | `isSkillIterStudioTool(name)` | `(string) => boolean` | 判斷一個工具呼叫名是否屬於技能工具的判定式。 |
-| `runSkillIterStudioTool(call, mutationCtx)` | `async ({name, args}, {getWorkingProfile}) => result` | 單次技能工具呼叫的分發器。純庫存 / 創作 / 遷移 handler 忽略 `mutationCtx`；策略繫結類 handler（`skill_bind_to_agent` / `skill_unbind_from_agent` / `skill_set_mode_defaults` / `skill_replace_in_systemprompt`）則要求 `getWorkingProfile()` 回傳一個可變的編排器工作 profile。 |
+| `runSkillIterStudioTool(call, mutationCtx)` | `async ({name, args}, {getWorkingProfile}) => result` | 單次技能工具呼叫的分發器。純庫存 / 創作 / 遷移 handler 忽略 `mutationCtx`；策略繫結類 handler（`skill_bind_to_agent` / `skill_unbind_from_agent` / `skill_set_mode_defaults` / `skill_replace_in_systemprompt`）要求 `getWorkingProfile()` 回傳可變的編排工作 profile。 |
 
-CPA 的迭代工作台消費了這套介面，把與 profile 無關的技能工具 splice 進自己的 preset iter-studio（見 `completion-preset-assistant/cpa-iteration/tools.js`）。沒有編排器工作 profile 的兄弟彈窗傳 `{ getWorkingProfile: () => null }`，只暴露與 profile 無關的 handler。
+工作台的 `preset` 目標（`public/scripts/workbench/targets/preset-tools.js`）透過傳入 `{ getWorkingProfile: () => null }` 只暴露與 profile 無關的 handler；`orchestrator/lens/iterate-target.js` 則傳入 `getWorkingProfile: () => live`。
 
 ## 範例 —— memory-graph
 

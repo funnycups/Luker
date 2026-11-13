@@ -1,6 +1,6 @@
 # Loop Mode
 
-Loop mode gives one agent a single conversation and lets it call tools until it decides the job is done. It fits turns that need research before writing: read the recent chat, check world book entries and memory, then produce a short orchestration result for the main model.
+Loop (**Research loop** in Workbench) gives one agent a single conversation and lets it call tools until it decides the job is done. It fits turns that need research before writing: read the recent chat, check world book entries and memory, then produce a short orchestration result for the main model.
 
 ```d2
 direction: down
@@ -108,7 +108,7 @@ Use a smaller model, enable only the tool groups this turn needs, and lower the 
 
 ### The result never reaches the main model
 
-Confirm Loop is enabled and the execution mode is correct, then check the Run Panel for a final result. Cancelled or failed runs do not inject unfinished content.
+Confirm Loop is enabled and **Research loop** is selected in the mode picker, then check the **Run panel** dock or **Workbench → Orchestration → Run** for a final result. Cancelled or failed runs do not inject unfinished content.
 
 ## Related pages
 

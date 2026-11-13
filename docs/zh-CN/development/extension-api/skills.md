@@ -2,7 +2,7 @@
 
 `context.skills.*` 是用于安装、读取、编辑、打包 Skills 的 JavaScript 接口。扩展通过 `Luker.getContext()` 拿到它；CardApp 在自己的 `ctx.skills` 上拿到同样的形状。
 
-Skill 是编排器使用的[知识包](/zh-CN/features/skills/)；这套 API 是支撑 Skill 管理子面板、内嵌编辑器、迭代工作台 Skill 工具的读写传输层。
+Skill 是编排器使用的[知识包](/zh-CN/features/skills/)；这套 API 是支撑 Skill 管理子面板、内嵌编辑器与工作台 AI 迭代 Skill 工具的读写传输层。
 
 ::: tip 请先读用户文档
 关于概念模型 —— 作用域、可见性策略、嵌入生命周期 —— 从 [Skills 概览](/zh-CN/features/skills/) 开始。本页是 API 参考。

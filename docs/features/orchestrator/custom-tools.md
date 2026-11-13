@@ -15,12 +15,12 @@ Custom tools give orchestration agents operations beyond the built-in set: query
 The form asks for:
 
 - **Name**: what the agent calls. Letters, digits and underscores only, and it must not collide with an existing tool.
-- **Display name**: shown in the editor for your reference.
+- **Display name**: shown in **Setup** for your reference.
 - **Description**: tells the agent what the tool does and when to use it.
 - **Mode**: read-only tools have no side effects; write tools change state and are skipped during simulated review by default.
 - **Arguments**: the fields the agent must supply. Fill them in the form; no hand-written schema is needed.
 - **Implementation**: the logic the tool runs. This requires code and is a developer feature; see the [Orchestrator Tools API](/development/extension-api/orchestrator-tools).
-- **Simulated result**: optional. For write tools, provide a return value that does not touch real state so the Studio sees a realistic shape during review.
+- **Simulated result**: optional. For write tools, provide a return value that does not touch real state so AI iteration sees a realistic shape during review.
 
 Read-only tools always run for real in simulated review. Write tools run the simulated version only when one is provided; otherwise they return a placeholder marked unverified.
 

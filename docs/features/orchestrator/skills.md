@@ -12,7 +12,7 @@ For what a Skill is and how to write one, see [the Skills overview](/features/sk
 
 ![Director editor with the Skill list and a freshly added Skill](/images/skills/rp-demo-11-director-chip-added.png)
 
-If you are unsure which list to use, let the Studio decide.
+If you are unsure which list to use, let AI iteration decide.
 
 ## What the agent sees
 

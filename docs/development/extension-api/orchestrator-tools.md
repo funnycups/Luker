@@ -135,17 +135,17 @@ orch.applyCharacterExecutionModeForAvatar(ctx, ctx.extensionSettings?.orchestrat
 
 These accessors only touch the character card; they never mutate the global orchestration settings.
 
-## Iter-studio skill tool catalog
+## Shared skill tool catalog
 
-The orchestrator's iter-studio popup uses a set of skill-management tools (inventory inspection, authoring, policy binding, migration helpers) that other iter-studio-style popups can splice into their own tool catalogs. Properties on the published extension api expose the catalog:
+`context.iterationLibrary.tools` (`public/scripts/iteration-library/tools/skill-iter-studio.js`) provides the shared skill-management tools (inventory inspection, authoring, policy binding, migration helpers) used by Workbench's **Orchestration** and **Preset** iteration targets:
 
-| Property | Type | Purpose |
+| Export | Type | Purpose |
 | --- | --- | --- |
-| `SKILL_ITER_STUDIO_TOOL_DEFS` | `readonly array` | OpenAI-shape tool definitions (the `skill_*` tools the orchestrator iter-studio exposes). Filter by `function.name` to pick the subset your popup wants. |
+| `SKILL_ITER_STUDIO_TOOL_DEFS` | `readonly array` | OpenAI-shape tool definitions (`skill_*` tools). Filter by `function.name` to pick the subset your target needs. |
 | `isSkillIterStudioTool(name)` | `(string) => boolean` | Predicate that classifies a tool-call name as one of the skill tools. |
 | `runSkillIterStudioTool(call, mutationCtx)` | `async ({name, args}, {getWorkingProfile}) => result` | Dispatcher for one skill tool call. Pure inventory / authoring / migration handlers ignore `mutationCtx`; policy-binding handlers (`skill_bind_to_agent` / `skill_unbind_from_agent` / `skill_set_mode_defaults` / `skill_replace_in_systemprompt`) require `getWorkingProfile()` to return a mutable orchestrator working profile. |
 
-The CPA iteration studio consumes this surface to splice the profile-independent skill tools into its preset iter-studio (see `completion-preset-assistant/cpa-iteration/tools.js`). Sibling popups that don't have an orchestrator working profile pass `{ getWorkingProfile: () => null }` and only expose the profile-independent handlers.
+Workbench's `preset` target (`public/scripts/workbench/targets/preset-tools.js`) consumes this surface with `{ getWorkingProfile: () => null }` to expose the profile-independent handlers, while `orchestrator/lens/iterate-target.js` supplies `getWorkingProfile: () => live`.
 
 
 

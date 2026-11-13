@@ -92,7 +92,7 @@ runtime.catalog -> agent.tools
 
 The orchestrator can limit which Skills each agent sees. At runtime, the names and descriptions of visible Skills are injected as a short catalog; the agent reads the body by name when it needs it. It can only read Skills inside its visible set.
 
-Director's default profile binds the right Skills to each agent. Other modes show every installed Skill by default, and you can narrow that in the orchestration editor.
+Director's default profile binds the right Skills to each agent. Other modes show every installed Skill by default, and you can narrow that in **Workbench → Orchestration**.
 
 ## Bundled Skills
 

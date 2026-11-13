@@ -51,14 +51,14 @@ Any RP preset you normally use is suitable. This step only confirms that you hav
 
 ## Step 2 — Configure the Preset Assistant and derive the presets Director needs
 
-LLM calls made by Luker's plugins fall into **distinct categories** with very different preset needs. One is **plugins producing RP content** — Director's agent team drafting the body, critic sub-agents reviewing, and so on — which requires a full RP preset with jailbreak / style / anti-cliché guidance. The other is the **iteration AI** that powers various plugins — the Preset Assistant, the Memory Graph configuration studio, CardApp Studio, Director's Iteration Studio, and so on — which uses tool calls to edit configs or extract structured data; any RP instructions leaking in will interfere with the model executing the plugin's instructions, so these slots require a **stripped-down preset that retains only jailbreak**.
+LLM calls made by Luker's plugins fall into **distinct categories** with very different preset needs. One is **plugins producing RP content** — Director's agent team drafting the body, critic sub-agents reviewing, and so on — which requires a full RP preset with jailbreak / style / anti-cliché guidance. The other is the **iteration AI** that powers **Workbench AI iteration** (**Preset**, **Memory graph**, **Memory structure**, **Orchestration**, **Character card**, **World book**) and **CardApp Studio** — which uses tool calls to edit configs or extract structured data; any RP instructions leaking in will interfere with the model executing the plugin's instructions, so these slots require a **stripped-down preset that retains only jailbreak**.
 
 Director's flow touches these categories at once:
 
 | Path | Who uses it | Preset shape |
 |---|---|---|
 | **Agent path** — main agent + sub-agents producing the body | The actual drafters; their output ends up in the chat | A standard RP preset, tuned for tool calling: keeps jailbreak + style + anti-cliché, but drops placeholders / hard schemas that conflict with the orchestrator |
-| **Iteration Studio path** — the AI you talk to inside the studio when tuning your config | A tool-using config editor; never drafts story prose | A **stripped-down preset with only jailbreak left** — no style guidance, no NSFW writing rules, no narrative meta-rules |
+| **Iteration AI path** — the AI you talk to in **Workbench → AI iteration** when tuning your config | A tool-using config editor; never drafts story prose | A **stripped-down preset with only jailbreak left** — no style guidance, no NSFW writing rules, no narrative meta-rules |
 
 ::: tip Why the paths cannot share a single preset
 RP presets assume that "one LLM writes the entire reply by itself." When those instructions are placed into an agent tool loop, they:
@@ -67,7 +67,7 @@ RP presets assume that "one LLM writes the entire reply by itself." When those i
 - Force "must output schema" / "mandatory chain of thought" constraints into the drafting step, breaking tool calling
 - Re-inject placeholders (character description, persona, world info entries) that the orchestrator's main path already injects
 
-The Iteration Studio is even more sensitive — it does not write story prose at all; it edits a JSON config through tool calls. Any RP instruction that leaks in interferes with the model executing the plugin's instructions.
+Workbench AI iteration is even more sensitive — it does not write story prose at all; it edits configs and profiles through tool calls. Any RP instruction that leaks in interferes with the model executing the plugin's instructions.
 :::
 
 ### 2a — Configure Workbench AI settings
@@ -76,11 +76,11 @@ The Preset editor inside Workbench is itself an LLM-driven tool, so configure Wo
 
 1. Open **Workbench** (`Alt+W`, wand menu → **Workbench**, or the corner pill) and switch to **Settings**.
 2. Under **AI connection**, pick a working connection profile.
-3. Under **Generation preset**, leave the default or click **Import plugin-only preset** under **Bundled `plugin-only` preset** so Workbench automatically uses Luker's clean tool-task preset.
+3. Under **Generation preset**, leave the default or click **Import** under **Luker's bundled "plugin-only" preset** so Workbench automatically uses Luker's clean tool-task preset.
 
-![Preset Assistant settings panel — iteration AI preset (with ? button) + iteration AI API preset](/images/recipes/agent-onboarding/step-02a-preset-help-button.png)
+![Workbench AI connection and generation preset settings](/images/recipes/agent-onboarding/step-02a-preset-help-button.png)
 
-![? button popup — explains which preset belongs in this slot, with a button that imports plugin-only](/images/recipes/agent-onboarding/step-02a-help-popup.png)
+![Bundled plugin-only preset import in Workbench settings](/images/recipes/agent-onboarding/step-02a-help-popup.png)
 
 Every AI iteration target in Workbench (**Memory graph**, **Memory structure**, **Orchestration**, **Preset**, **Character card**, **World book**) shares this default connection and `plugin-only` preset unless overridden individually or set to **Follow extension**.
 

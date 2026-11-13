@@ -92,7 +92,7 @@ runtime.catalog -> agent.tools
 
 编排器可以限制每个 Agent 能看到哪些 Skill。运行时把可见 Skill 的名称和描述作为一份简短目录注入 Agent 的上下文，Agent 需要正文时再按名称读取。它只能读取可见范围内的 Skill，无法越过限制。
 
-Director 的默认配置已经为不同 Agent 绑定好各自的 Skill。其他模式默认让 Agent 看到全部已安装 Skill，可以在编排编辑器里收紧。
+Director 的默认配置已经为不同 Agent 绑定好各自的 Skill。其他模式默认让 Agent 看到全部已安装 Skill，可以在**工作台 → 编排**里收紧。
 
 ## 出厂 Skill
 

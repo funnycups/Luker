@@ -56,7 +56,7 @@ Embeds the full Memory Lens workspace directly inside Workbench:
 
 Embeds the full Orchestra Lens workspace directly inside Workbench:
 
-- **Flow** — visual workflow graph across Spec, Single Agent, Agenda, Loop, and Director modes; select any agent to inspect or edit its role prompt, task template, model, and tools.
+- **Flow** — visual workflow graph across **Pipeline** (Spec), **Single assistant** (Single Agent), **Dispatch** (Agenda), **Research loop** (Loop), and **Director team** (Director) modes; select any agent to inspect or edit its role prompt, task template, model, and tools.
 - **Run** — live and recent run trace with step timeline, tool arguments and results, final output, JSON trace export, and one-click AI diagnosis.
 - **History** — past runs recorded in this browser.
 - **Stats** — per-agent duration and error breakdown with one-click bottleneck diagnosis.

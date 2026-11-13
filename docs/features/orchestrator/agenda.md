@@ -1,6 +1,6 @@
 # Agenda Mode
 
-Agenda organises the flow around a planning agent. The planner keeps a todo list, decides from intermediate results which agents to call, how often and when to stop, and a finishing agent combines the result into an orchestration result.
+Agenda (**Dispatch** in Workbench) organises the flow around a planning agent. The planner keeps a todo list, decides from intermediate results which agents to call, how often and when to stop, and a finishing agent combines the result into an orchestration result.
 
 ## When to use it
 
@@ -116,7 +116,7 @@ The editor can copy the agent pool to the other mode. Only agents move; scheduli
 - Spec to Agenda loses the stage order, so the planner prompt must describe the dispatch rules again.
 - Agenda to Spec cannot map dynamic dispatch onto fixed stages; decide the stage layout by hand.
 
-## Run Panel
+## Run panel
 
 The **Run panel** dock and **Workbench → Orchestration → Run** group output by dispatch round. Each round contains the workers dispatched in that round, expandable to inspect their thinking, input, and output.
 

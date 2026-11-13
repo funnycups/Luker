@@ -1,6 +1,6 @@
 # Director Mode
 
-Director is the orchestrator's takeover mode: the reply for this turn is written by a writing team inside the orchestrator instead of by the main model. It is built for high-quality long-form roleplay — scout the context, draft, have voice and continuity reviewers challenge the draft, then revise and submit.
+Director (**Director team** in Workbench) is the orchestrator's takeover mode: the reply for this turn is written by a writing team inside the orchestrator instead of by the main model. It is built for high-quality long-form roleplay — scout the context, draft, have voice and continuity reviewers challenge the draft, then revise and submit.
 
 ## How it differs from the other modes
 
@@ -11,7 +11,7 @@ Director is the orchestrator's takeover mode: the reply for this turn is written
 | The main model this turn | Generates the reply | Not used |
 | Best for | Letting the main model keep producing on its existing context | Letting a multi-perspective team deliver a finished draft |
 
-The chat window shows only the final narrative; drafts, reviews and revisions are recorded in the Run Panel.
+The chat window shows only the final narrative; drafts, reviews, and revisions are recorded in the **Run panel** dock and **Workbench → Orchestration → Run**.
 
 ## When to use it
 
@@ -156,7 +156,7 @@ This configuration has no review safeguard; the main agent's judgment is final. 
 - No orchestration result is injected during a Director turn; the message body is the output.
 - Sub-agents cannot dispatch further sub-agents. They share the query tools enabled for the main agent and stop when a round calls no tools, returning that round's text.
 - The main agent and sub-agents follow the orchestrator's streaming setting.
-- The message updates as the main agent writes or patches it; sub-agent output streams into the Run Panel.
+- The message updates as the main agent writes or patches it; sub-agent output streams into the **Run panel** dock.
 
 ## Related pages
 

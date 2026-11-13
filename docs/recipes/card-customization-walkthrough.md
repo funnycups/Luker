@@ -1,6 +1,6 @@
 # Building a card-specific orchestration
 
-This walkthrough turns a card with strict output-format requirements into a dedicated orchestration: generate a workflow from one sentence, use a simulation to find AI clichés and improve the prompts and Skills, then have the Studio write a format-checking tool.
+This walkthrough turns a card with strict output-format requirements into a dedicated orchestration: generate a workflow from one sentence, use a simulation to find AI clichés and improve the prompts and Skills, then have **Workbench → AI iteration → Orchestration** write a format-checking tool.
 
 No prompt engineering or sub-agent plumbing is needed. The example uses a community card with strict formatting and a busy variable system; the method applies to any card with format constraints or a specific setting.
 
@@ -10,11 +10,11 @@ No prompt engineering or sub-agent plumbing is needed. The example uses a commun
 
 After importing and selecting the card, open **Workbench** (`Alt+W`, wand menu → **Workbench**, or **Extensions → Orchestrator → Open in Workbench**) and switch to **Orchestration**.
 
-![Editor open](/images/recipes-card-customization/01-editor-opened.png)
+![Orchestration workspace](/images/recipes-card-customization/01-editor-opened.png)
 
 Check **Setup** to verify which card and execution mode are active, and whether you are editing the **Global** or **Character-only** profile. Next, switch to **Workbench → AI iteration → Orchestration** (or click **AI** in the topbar) and pick **Character-only** scope — changes affect only this card and leave others untouched.
 
-![Studio just opened](/images/recipes-card-customization/02-studio-fresh.png)
+![AI iteration opened](/images/recipes-card-customization/02-studio-fresh.png)
 
 In the composer, type one sentence describing what should change:
 
@@ -32,15 +32,15 @@ For a closer look, expand the line-diff inside the card; for a quick read, the h
 To apply edits directly without confirming every item manually, toggle **Apply automatically** under the composer. You can still undo any applied change in **Workbench → Change history**.
 :::
 
-After a few iteration rounds, the Studio produces a plain-language summary describing what changed and why the changes fit this card.
+After a few iteration rounds, the AI produces a plain-language summary describing what changed and why the changes fit this card.
 
-![Studio summary at the end](/images/recipes-card-customization/05-customize-summary.png)
+![AI iteration summary at the end](/images/recipes-card-customization/05-customize-summary.png)
 
 At this point the card has a dedicated orchestration, and the next message we send to it uses this configuration.
 
 ---
 
-## Simulate, annotate clichés, let the Studio improve
+## Simulate, annotate clichés, let Workbench improve
 
 A tailored orchestration does not guarantee good prose — the LLM still falls into its own tells. The Chinese-RP community groups these tells under the term **八股**. The most common family is **numeral + classifier counting**:
 
@@ -50,21 +50,21 @@ A tailored orchestration does not guarantee good prose — the LLM still falls i
 
 A single instance is unremarkable, but once a paragraph keeps counting, the prose degrades into AI stage-direction: the reader hears the count rather than someone living through the moment.
 
-The Studio provides a **simulate** function: it runs the current orchestration once and shows the complete output without writing anything back to the chat. We use it to catch these tells.
+**Workbench → AI iteration → Orchestration** provides a **simulate** function: it runs the current orchestration once and shows the complete output without writing anything back to the chat. We use it to catch these tells.
 
 ::: tip
-The simulation inherits the full context of the current chat: the existing dialogue history, the currently active lorebook and Skills, and the currently selected preset and connection profile. In other words, what the simulation shows is "what we would get if we actually sent a message to this card right now" — not a context-free dry run. To test under a different context, switch chats or adjust the lorebook in the main UI before returning to the Studio.
+The simulation inherits the full context of the current chat: the existing dialogue history, the currently active lorebook and Skills, and the currently selected preset and connection profile. In other words, what the simulation shows is "what we would get if we actually sent a message to this card right now" — not a context-free dry run. To test under a different context, switch chats or adjust the lorebook in the main UI before returning to Workbench.
 :::
 
-Back in the Studio composer:
+Back in the AI iteration composer:
 
 > Run a simulation with "我坐起身" (I sit up) as the user input, then show me the result.
 
-The Studio invokes the simulation tool and runs one complete round of the main agent plus every sub-agent. In Director mode the full sweep takes a few minutes. When it finishes, a **Simulation Review** popup opens:
+Workbench invokes the simulation tool and runs one complete round of the lead writer plus every sub-agent. In Director mode the full sweep takes a few minutes. When it finishes, a **Simulation Review** popup opens:
 
 ![Simulation review with main agent and sub-agent trace](/images/recipes-card-customization/06-sim-baseline.png)
 
-The simulation-review popup opens with every section already expanded. We scroll down to the main agent's final reply and read it through, picking out the phrases that read "AI-flavored".
+The simulation-review popup opens with every section already expanded. We scroll down to the lead writer's final reply and read it through, picking out the phrases that read "AI-flavored".
 
 Click **Annotation mode** — once it flips on, **select any span of text with the mouse** inside the output. The selection turns yellow and a comment input appears alongside it. A word or two describing the dissatisfaction is enough.
 
@@ -76,15 +76,14 @@ In this baseline run, we annotated one representative span:
 |---|---|
 | "连闪了五下" ("flashed five times in a row", of the overhead alarm light pulsing) | "五下" / "five times" turns a visual change into a counted event — flash → count-occurrences is the canonical case of compressing a sensation into a data point |
 
-Once done, click **Submit & continue**. The Studio passes the annotation to the AI as a **symptom** — what the AI receives is not an isolated complaint but a positioned issue from which it can trace the root cause. The root cause is usually not "some sub-agent prompt was too vague" but "no prompt has yet captured this regularity."
+Once done, click **Submit & continue**. Workbench passes the annotation to the AI as a **symptom** — what the AI receives is not an isolated complaint but a positioned issue from which it can trace the root cause. The root cause is usually not "some sub-agent prompt was too vague" but "no prompt has yet captured this regularity."
 
-![Studio's root-cause diagnosis](/images/recipes-card-customization/08-improvement-thread.png)
+![Root-cause diagnosis](/images/recipes-card-customization/08-improvement-thread.png)
 
-In this iteration the Studio grouped the annotation under one umbrella — **classifier-counting cliché** (slicing lived sensation, motion, time, and body into countable "number + classifier" units). Rather than editing right away, it first confirmed with the user: is this rule absolute, or are exceptions warranted? Once the user confirmed "no exceptions", the Studio inspected which Skill the review sub-agent actually loads at runtime, rather than the closest name match, wrote the rule into the file that sub-agent genuinely reads, pinned the offending phrase as a counter-example, and added an explicit "this is an independent ban; a literal match is a finding regardless of whether the context is warm, poetic, physically realistic, or colloquial." Only then will the next simulation's review sub-agent surface these violations.
+In this iteration the AI grouped the annotation under one umbrella — **classifier-counting cliché** (slicing lived sensation, motion, time, and body into countable "number + classifier" units). Rather than editing right away, it first confirmed with the user: is this rule absolute, or are exceptions warranted? Once the user confirmed "no exceptions", the AI inspected which Skill the review sub-agent actually loads at runtime, rather than the closest name match, wrote the rule into the file that sub-agent genuinely reads, pinned the offending phrase as a counter-example, and added an explicit "this is an independent ban; a literal match is a finding regardless of whether the context is warm, poetic, physically realistic, or colloquial." Only then will the next simulation's review sub-agent surface these violations.
 
 ::: warning
-The Studio does not add literal "don't say X" lines to the main agent's prompt — that is whack-a-mole. It looks for the underlying cause that allowed the cliché to slip through (a sub-agent whose review pass was too coarse, a SKILL missing a ban clause) and fixes the source.
-
+Workbench does not add literal "don't say X" lines to the lead writer's prompt — that is whack-a-mole. It looks for the underlying cause that allowed the cliché to slip through (a sub-agent whose review pass was too coarse, a SKILL missing a ban clause) and fixes the source.
 :::
 
 After the changes apply, we **run a second simulation**:
@@ -95,28 +94,28 @@ When the new review popup opens, the previously annotated cliché phrases should
 
 ![Improved simulation](/images/recipes-card-customization/09-sim-after.png)
 
-Comparing the two runs side-by-side, the difference is plain — the baseline's repeated "flash → count-occurrences" cadence ("one beat, two beats, a pause, then three more", "flashed three times", "flashed five times in a row") is largely gone from the improved run. In the improved final-message, total classifier-counting hits (一下 / 一节 / 一刻 / 一档 / 几下 etc.) drop to 5, and none of them sit on a rhythm beat — they fall on descriptive uses like "half a degree" or "one tube" instead. If anything still remains, repeat the "annotate — simulate" loop. Two or three rounds is normally enough.
+Comparing the two runs side-by-side, the difference is plain — the baseline's repeated "flash → count-occurrences" cadence ("one beat, two beats, a pause, then three more", "flashed three times", "flashed five times in a row") is largely gone from the improved run. In the improved final message, total classifier-counting hits (一下 / 一节 / 一刻 / 一档 / 几下 etc.) drop to 5, and none of them sit on a rhythm beat — they fall on descriptive uses like "half a degree" or "one tube" instead. If anything still remains, repeat the "annotate — simulate" loop. Two or three rounds is normally enough.
 
 ---
 
-## Let the Studio write a custom verification tool
+## Let Workbench write a custom verification tool
 
-This card has a hard rule: replies must end with an `<overall>` summary block and an `<UpdateVariable>` block. When the main agent gets carried away with the prose, those trailing tags are easy to drop — and then the card's state machinery does not pick up the turn's update, distorting the next round's context.
+This card has a hard rule: replies must end with an `<overall>` summary block and an `<UpdateVariable>` block. When the lead writer gets carried away with the prose, those trailing tags are easy to drop — and then the card's state machinery does not pick up the turn's update, distorting the next round's context.
 
-For requirements like this, we do not need to write any code ourselves or hand-edit the main agent's prompt — **we describe what we want in plain natural language**:
+For requirements like this, we do not need to write any code ourselves or hand-edit the lead writer's prompt — **we describe what we want in plain natural language**:
 
 > This card has a format requirement: every reply must end with an `<overall>` tag and an `<UpdateVariable>` tag — please don't let it miss them.
 
-![Describing the format requirement to the Studio](/images/recipes-card-customization/11-tool-prompt.png)
+![Describing the format requirement](/images/recipes-card-customization/11-tool-prompt.png)
 
-The Studio decides how to fulfill the requirement on its own. This is a format check that code can verify exactly (literal string match), which makes it a fit for a **custom tool**. The party that needs to be checked, and reminded to amend, is the main agent that drafts the reply, so the tool belongs to the main agent and must be invoked at its finalization step. Based on that read, the Studio produces a coherent change set:
+The AI decides how to fulfill the requirement on its own. This is a format check that code can verify exactly (literal string match), which makes it a fit for a **custom tool**. The party that needs to be checked, and reminded to amend, is the lead writer that drafts the reply, so the tool belongs to the lead writer and must be invoked at its finalization step. Based on that read, the AI produces a coherent change set:
 
 1. **Checks the runtime interface.** It confirms the available runtime interface and data structures, reading the documentation when needed, rather than guessing.
 2. **Drafts the tool body and runs it with sample arguments** in a sandbox, so any runtime exception surfaces before you are asked to approve anything.
-3. **Writes the validated tool.** It creates a review card for a read-only tool whose body reads the in-flight draft and checks the trailing tags. The corresponding enable flag is turned on automatically, so the main agent sees the tool on the next turn.
-4. **Updates the main agent's system prompt** with a rule: the final step before producing the reply calls this tool, and missing tags are filled in before finalizing.
+3. **Writes the validated tool.** It creates a review card for a read-only tool whose body reads the in-flight draft and checks the trailing tags. The corresponding enable flag is turned on automatically, so the lead writer sees the tool on the next turn.
+4. **Updates the lead writer's prompt** with a rule: the final step before producing the reply calls this tool, and missing tags are filled in before finalizing.
 
-Decisions the user would otherwise have to spell out — which mechanism best fits, who should call it, what else needs to be updated in sync — the Studio makes on its own from a natural-language request. We do not have to phrase the ask in technical terms.
+Decisions the user would otherwise have to spell out — which mechanism best fits, who should call it, what else needs to be updated in sync — the AI makes on its own from a natural-language request. We do not have to phrase the ask in technical terms.
 
 Edits still go through a review card, green for additions and red for removals. **Because a custom tool runs JavaScript in your browser, the proposal card carries a safety banner** — expand the tool body to inspect the code, confirm that it is a read-only check with no side effects, then approve. Reject any card whose body you can't read.
 
@@ -126,19 +125,19 @@ After applying, check **Workbench → Orchestration → Setup → Custom tools**
 
 ![Tool now installed](/images/recipes-card-customization/13-tool-installed.png)
 
-We run one more simulation to confirm that the main agent actually calls it as instructed:
+We run one more simulation to confirm that the lead writer actually calls it as instructed:
 
 > One more simulation to verify.
 
 ![Simulation trace showing the tool being invoked](/images/recipes-card-customization/14-tool-invoked.png)
 
-The trace shows the tool call: the main agent runs it right after writing to the draft tail, receives the verdict, and decides whether it needs to patch in any missing tag.
+The trace shows the tool call: the lead writer runs it right after writing to the draft tail, receives the verdict, and decides whether it needs to patch in any missing tag.
 
 ---
 
 ## Next
 
-- The same loop applies to other card-specific constraints — length targets, OOC conventions, world-specific terminology. Tell the Studio in plain language what "good" looks like, and let it assemble the orchestration for us.
+- The same loop applies to other card-specific constraints — length targets, OOC conventions, world-specific terminology. Tell **Workbench → AI iteration → Orchestration** in plain language what "good" looks like, and let it assemble the orchestration for us.
 - For everything the `ctx` object exposes inside a custom tool body (`ctx.chat`, `ctx.characters`, etc.), see [Custom tools](/features/orchestrator/custom-tools).
 - To grow a new globally-shared discipline as a skill, see [Shaping RP output with skills](/recipes/rp-skills-walkthrough).
 - If we are unhappy with one of the sub-agents the AI created, **Workbench → Orchestration** (**Flow** / **Setup**) lets us edit it directly. AI iteration aims to save time; manual editing is always available.
