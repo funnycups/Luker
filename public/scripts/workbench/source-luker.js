@@ -415,14 +415,14 @@ export async function inspectorDetail(id) {
 
 /** Request list, newest first, with a guessed source. */
 export async function listRequests({ limit = 60 } = {}) {
-    const list = (await inspectorList()).sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
+    const list = (await inspectorList()).sort((a, b) => b.timestamp - a.timestamp).slice(0, limit); // cap-ok: default page limit matching wb_list_requests schema when caller omits limit
     return list.map(e => ({ ...e, attr: attribute(e) }));
 }
 
 export function frontendLogs({ limit = 60, level = 'all', search = '' } = {}) {
     const levels = level === 'error' ? ['error'] : level === 'warn' ? ['warn', 'error'] : null;
     const needle = String(search || '').toLowerCase();
-    const all = getFrontendLogsSnapshot({ limit: 3000 }).entries || [];
+    const all = getFrontendLogsSnapshot({ limit: 3000 }).entries || []; // cap-ok: snapshot read upper bound before filtering; output rows are bounded to 200 below
     return all
         .filter(e => !levels || levels.includes(String(e.level)))
         .filter(e => !needle || String(e.message || '').toLowerCase().includes(needle))
@@ -431,12 +431,12 @@ export function frontendLogs({ limit = 60, level = 'all', search = '' } = {}) {
             time: new Date(e.timestamp).toLocaleTimeString('zh-CN', { hour12: false }),
             level: e.level,
             source: e.source,
-            message: String(e.message || '').slice(0, 800),
+            message: String(e.message || '').slice(0, 800), // cap-ok: per-log-line bound so one verbose stack dump does not consume the MAX_TOOL_CHARS budget
         }));
 }
 
 export function frontendLogCount() {
-    return getFrontendLogsSnapshot({ limit: 3000 }).entries?.length ?? null;
+    return getFrontendLogsSnapshot({ limit: 3000 }).entries?.length ?? null; // cap-ok: matches frontendLogs snapshot read upper bound
 }
 
 /** Whether Luker's frontend debug logging switch is on. */
@@ -473,7 +473,7 @@ export async function serverLogs({ limit = 60, search = '' } = {}) {
     return entries.map(e => ({
         time: new Date(Number(e.timestamp) || Date.now()).toLocaleTimeString('zh-CN', { hour12: false }),
         level: e.level,
-        message: String(e.message || '').slice(0, 800),
+        message: String(e.message || '').slice(0, 800), // cap-ok: per-log-line bound so one verbose server log does not consume the MAX_TOOL_CHARS budget
     }));
 }
 
@@ -508,7 +508,7 @@ function chatMessages({ from, to, floors } = {}) {
         out.push({
             floor: i,
             who: m.is_user ? '用户' : m.is_system ? '系统' : (m.name || i18n('Character')),
-            text: String(m.mes || '').slice(0, 4000),
+            text: String(m.mes || '').slice(0, 4000), // cap-ok: per-floor message bound so one long reply does not crowd out neighboring floors within MAX_TOOL_CHARS
             model: m.extra?.model || '',
         });
     }
@@ -534,7 +534,7 @@ function characterFields({ fields } = {}) {
         world: data.extensions?.world || '',
     };
     const want = Array.isArray(fields) && fields.length ? fields : Object.keys(all);
-    return Object.fromEntries(want.filter(k => k in all).map(k => [k, String(all[k] ?? '').slice(0, 6000)]));
+    return Object.fromEntries(want.filter(k => k in all).map(k => [k, String(all[k] ?? '')]));
 }
 
 export async function boundBooks(ctx = getContext()) {
@@ -577,9 +577,9 @@ async function worldInfo({ search = '' } = {}) {
                 keys,
                 enabled: !e.disable,
                 constant: Boolean(e.constant),
-                content: needle ? String(e.content || '').slice(0, 1500) : undefined,
+                content: needle ? String(e.content || '') : undefined,
             });
-            if (out.length >= 60) break outer;
+            if (out.length >= 60) break outer; // cap-ok: bounds world-info entry list before JSON serialization and MAX_TOOL_CHARS clipping
         }
     }
     return errors.length ? { books, entries: out, errors } : { books, entries: out };
@@ -594,7 +594,7 @@ function presetDetail({ entry = '' } = {}) {
     const items = (order?.order || []).map(o => ({ ...byId.get(o.identifier), enabled: o.enabled })).filter(p => p.identifier);
     if (entry) {
         const hit = items.find(p => p.name === entry || p.identifier === entry);
-        return hit ? { name: hit.name, enabled: hit.enabled, role: hit.role, content: String(hit.content || '').slice(0, 8000) } : { error: `没有叫「${entry}」的条目` };
+        return hit ? { name: hit.name, enabled: hit.enabled, role: hit.role, content: String(hit.content || '') } : { error: `没有叫「${entry}」的条目` };
     }
     return {
         name: live?.ref?.name || '',
@@ -603,7 +603,7 @@ function presetDetail({ entry = '' } = {}) {
             name: p.name || p.identifier,
             enabled: p.enabled,
             marker: Boolean(p.marker),
-            preview: p.marker ? '（系统占位：角色卡 / 世界书 / 聊天等）' : String(p.content || '').slice(0, 120),
+            preview: p.marker ? '（系统占位：角色卡 / 世界书 / 聊天等）' : String(p.content || '').slice(0, 120), // cap-ok: short entry preview when listing all preset entries; full entry is read via entry param
         })),
     };
 }
@@ -633,11 +633,12 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
             const d = await inspectorDetail(id);
             const msgs = (d.fullMessages || []).map(m => ({
                 role: m.role,
+                // cap-ok: per-message bound in request inspector dump so later messages and reply remain visible within MAX_TOOL_CHARS
                 content: typeof m.content === 'string' ? m.content.slice(0, 3000) : JSON.stringify(m.content).slice(0, 3000),
             }));
             const out = { id: d.id, model: d.model, status: d.status, httpStatus: d.httpStatus, error: d.error, durationMs: d.durationMs, usage: d.usage, finishReason: d.finishReason };
             if (part !== 'reply') out.messages = msgs;
-            if (part !== 'messages') out.reply = String(d.responseText || '').slice(0, 6000);
+            if (part !== 'messages') out.reply = String(d.responseText || '').slice(0, 6000); // cap-ok: bounds responseText alongside messages within MAX_TOOL_CHARS
             return out;
         };
     }

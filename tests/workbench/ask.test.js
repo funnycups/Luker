@@ -188,4 +188,102 @@ describe('workbench Ask model & source readers', () => {
         expect(choices.hasPluginOnly).toBe(true);
         expect(choices.errors?.connections).toContain('Connection resolver failed');
     });
+
+    test('askTools uses AskProvider JSON Schema parameters directly and falls back for flat property maps', () => {
+        const schemaTool = {
+            name: 'wb_custom_schema',
+            description: 'Reads custom data',
+            parameters: {
+                type: 'object',
+                properties: { query: { type: 'string' } },
+                required: ['query'],
+                additionalProperties: false,
+            },
+        };
+        const propertiesOnlySchemaTool = {
+            name: 'wb_custom_props_schema',
+            description: 'Has properties object inside parameters',
+            parameters: {
+                properties: { limit: { type: 'integer' } },
+            },
+        };
+        const flatPropsTool = {
+            name: 'wb_custom_flat',
+            description: 'Flat properties map',
+            properties: { id: { type: 'string' } },
+            required: ['id'],
+        };
+        const flatParamsTool = {
+            name: 'wb_custom_flat_params',
+            description: 'Flat parameters map',
+            parameters: { key: { type: 'string' } },
+            required: ['key'],
+        };
+
+        const tools = askTools(
+            { inspector: false, frontLogs: false, serverLogs: false, content: false, plugins: true },
+            [schemaTool, propertiesOnlySchemaTool, flatPropsTool, flatParamsTool],
+        );
+
+        const byName = Object.fromEntries(tools.map(t => [t.function.name, t]));
+        expect(byName.wb_custom_schema.function.parameters).toBe(schemaTool.parameters);
+        expect(byName.wb_custom_props_schema.function.parameters).toBe(propertiesOnlySchemaTool.parameters);
+        expect(byName.wb_custom_flat.function.parameters).toEqual({
+            type: 'object',
+            properties: { id: { type: 'string' } },
+            required: ['id'],
+            additionalProperties: false,
+        });
+        expect(byName.wb_custom_flat_params.function.parameters).toEqual({
+            type: 'object',
+            properties: { key: { type: 'string' } },
+            required: ['key'],
+            additionalProperties: false,
+        });
+    });
+
+    test('wb_read_character, wb_read_preset, and wb_read_world_info do not apply inner truncation before clip()', async () => {
+        const longDesc = 'D'.repeat(7500);
+        const longPreset = 'P'.repeat(9500);
+        const longWorld = 'W'.repeat(2500);
+
+        globalThis.Luker = {
+            getContext: () => ({
+                chat: [],
+                characterId: 0,
+                characters: [{
+                    avatar: 'alice.png',
+                    name: 'Alice',
+                    description: longDesc,
+                    data: { name: 'Alice', description: longDesc, extensions: { world: 'Book1' } },
+                }],
+                chatWorldInfo: { getNames: () => ['Book1'], globalSelection: [] },
+                loadWorldInfo: async () => ({
+                    entries: {
+                        0: { uid: 0, key: ['lore'], comment: 'Long lore', content: longWorld },
+                    },
+                }),
+                presets: {
+                    getLive: () => ({
+                        ref: { name: 'MainPreset' },
+                        body: {
+                            prompt_order: [{ character_id: 100001, order: [{ identifier: 'p1', enabled: true }] }],
+                            prompts: [{ identifier: 'p1', name: 'Main Prompt', role: 'system', content: longPreset }],
+                        },
+                    }),
+                },
+                extensionSettings: {},
+            }),
+        };
+
+        const readers = askReaders({ redactText: false });
+        const charRes = await readers.wb_read_character({ fields: ['description'] });
+        expect(charRes.description).toBe(longDesc);
+
+        const presetRes = await readers.wb_read_preset({ entry: 'Main Prompt' });
+        expect(presetRes.content).toBe(longPreset);
+
+        const worldRes = await readers.wb_read_world_info({ search: 'lore' });
+        expect(worldRes.entries[0].content).toBe(longWorld);
+    });
 });

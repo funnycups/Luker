@@ -19,7 +19,17 @@ function normalizeProviderTool(def) {
     if (!def || typeof def !== 'object') return null;
     if (def.type === 'function' && def.function?.name) return def;
     if (def.name) {
-        return fn(def.name, def.description || '', def.parameters || {}, def.required || []);
+        if (def.parameters && (def.parameters.type === 'object' || def.parameters.properties)) {
+            return {
+                type: 'function',
+                function: {
+                    name: def.name,
+                    description: def.description || '',
+                    parameters: def.parameters,
+                },
+            };
+        }
+        return fn(def.name, def.description || '', def.properties || def.parameters || {}, def.required || []);
     }
     return null;
 }
