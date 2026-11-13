@@ -118,7 +118,9 @@ export function createIteratePage(app) {
     let selectionVersion = 0;
     let pendingNewSelection = -1;
     let refreshVersion = 0;
+    let snapshotVersion = 0;
     let workLoadVersion = 0;
+    let activeScopeKey = '';
     const activeRuns = new Map();
     const applying = new Set();
     const importedScopeTargets = new Set();
@@ -298,7 +300,9 @@ export function createIteratePage(app) {
                         scopeOpts: sOpts,
                         scopeName: scopeDisplayName(scope),
                     });
-                } catch { /* best effort */ }
+                } catch (err) {
+                    console.warn('[workbench/iterate] legacy import failed:', err);
+                }
             }
         }
 
@@ -498,6 +502,7 @@ export function createIteratePage(app) {
                     ws = v;
                     session = null;
                     fixScope();
+                    activeScopeKey = currentScopeKey();
                     paintAll();
                     void refreshSessions();
                 },
@@ -510,6 +515,7 @@ export function createIteratePage(app) {
                     selectionVersion++;
                     scope = v;
                     session = null;
+                    activeScopeKey = currentScopeKey();
                     paintAll();
                     void refreshSessions();
                 },
@@ -686,10 +692,43 @@ export function createIteratePage(app) {
         }
     }
 
+    function formatTracePayload(value) {
+        if (value === undefined) return '';
+        if (typeof value === 'string') return value;
+        try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+    }
+
+    function toolTraceBlock(toolCalls) {
+        if (!Array.isArray(toolCalls) || !toolCalls.length) return null;
+        return h('details', { class: 'wb-sent wb-tool-trace' },
+            h('summary', null, icon('list', { size: 12 }), h('span', { text: i18nFormat('Tool calls (${0})', toolCalls.length) })),
+            h('div', { class: 'wb-tool-trace-list' }, toolCalls.map((tc) => {
+                const name = String(tc?.name || tc?.function?.name || 'tool');
+                const rawArgs = tc?.args !== undefined ? tc.args : tc?.function?.arguments;
+                const argsText = formatTracePayload(rawArgs ?? {});
+                const hasError = tc?.error !== undefined && tc?.error !== null && tc?.error !== '';
+                const hasResult = tc?.result !== undefined;
+                return h('div', { class: 'wb-tool-entry' },
+                    h('div', { class: 'wb-tool-name', text: name }),
+                    h('div', { class: 'wb-tool-sec-label', text: i18n('Arguments') }),
+                    h('pre', { class: 'wb-prompt-text', text: argsText }),
+                    hasError ? h('div', { class: 'wb-tool-sec-label is-error', text: i18n('Error') }) : null,
+                    hasError ? h('pre', { class: 'wb-prompt-text is-error', text: String(tc.error) }) : null,
+                    !hasError && hasResult ? h('div', { class: 'wb-tool-sec-label', text: i18n('Result') }) : null,
+                    !hasError && hasResult ? h('pre', { class: 'wb-prompt-text', text: formatTracePayload(tc.result) }) : null);
+            })));
+    }
+
     function aiBlock(turn, index, busy) {
-        const reads = turn.reads
-            ? `${i18nFormat('Read ${0} times', turn.reads)}${turn.edits ? i18nFormat(', edited ${0} times', turn.edits) : ''}${turn.failed ? i18nFormat(', ${0} failed', turn.failed) : ''}`
-            : '';
+        let reads = '';
+        if (turn.reads) {
+            reads = `${i18nFormat('Read ${0} times', turn.reads)}${turn.edits ? i18nFormat(', edited ${0} times', turn.edits) : ''}${turn.failed ? i18nFormat(', ${0} failed', turn.failed) : ''}`;
+        } else if (turn.edits || turn.failed) {
+            reads = [
+                turn.edits ? i18nFormat('Edited ${0} times', turn.edits) : '',
+                turn.failed ? i18nFormat('${0} failed', turn.failed) : '',
+            ].filter(Boolean).join(listSeparator());
+        }
         const owner = session.id;
         const draft = drafts.get(owner);
         const changes = turn.state === 'pending' && draft?.changes ? draft.changes : turn.changes;
@@ -698,6 +737,7 @@ export function createIteratePage(app) {
             turn.reasoning ? h('details', { class: 'wb-sent' },
                 h('summary', null, icon('info', { size: 12 }), h('span', { text: i18n('Reasoning') })),
                 h('pre', { class: 'wb-prompt-text', text: turn.reasoning })) : null,
+            toolTraceBlock(turn.toolCalls),
             turn.error ? h('div', { class: 'wb-msg-error', text: turn.error }) : turn.text ? renderMarkdown(turn.text) : null);
 
         const last = index === session.turns.length - 1;
@@ -836,6 +876,7 @@ export function createIteratePage(app) {
             if (!m || typeof m !== 'object') continue;
             if (m.role === 'system') continue;
             if (m.role === 'user' && m.auto === true) continue;
+            if (m.role === 'assistant' && !m.tool_calls && String(m.content ?? '').trim() === '') continue;
             if ((m.role === 'user' || m.role === 'assistant') && !m.tool_calls && ('toolCalls' in m || 'reasoning' in m)) {
                 if (isReplayableIterationMessage(m)) {
                     out.push({ role: m.role, content: String(m.content ?? '') });
@@ -858,8 +899,10 @@ export function createIteratePage(app) {
         const runScope = scope;
         const runScopeOpts = sessionScopes.get(startingSession?.id) || scopeOptsFor(runScope) || { scope: 'global' };
         const runKey = keyOf(runWs, runScope);
+        const runScopeKey = currentScopeKey(runWs, runScope);
         const scopeName = scopeDisplayName(runScope);
         const stillViewingStart = () => selection === selectionVersion && runWs === ws && runScope === scope && session === startingSession;
+        const stillViewingRunScope = () => runWs === ws && runScope === scope && currentScopeKey(ws, scope) === runScopeKey;
 
         if (!startingSession) pendingNewSelection = selection;
         paintOpts();
@@ -873,11 +916,14 @@ export function createIteratePage(app) {
             try {
                 loaded = await runTargetObj.load(runScope, getCtx());
             } catch (err) {
-                loadError = String(err?.message || err);
-                app.toast(loadError || i18n('Could not read what should be edited'), { error: true });
+                const msg = String(err?.message || err);
+                if (stillViewingRunScope()) {
+                    loadError = msg;
+                    app.toast(loadError || i18n('Could not read what should be edited'), { error: true });
+                }
                 return;
             }
-            loadError = '';
+            if (stillViewingRunScope()) loadError = '';
             const w = { base: loaded.live, target: loaded.target, title: loaded.title };
             work.set(runKey, w);
             const id = targetIdFor(w.target);
@@ -914,9 +960,11 @@ export function createIteratePage(app) {
                 const updated = await store.update(ownerId, patch, runScopeOpts);
                 if (updated) {
                     if (session?.id === ownerId) session = updated;
-                    const idx = recentSessions.findIndex(r => r.id === ownerId);
-                    if (idx >= 0) recentSessions[idx] = updated;
-                    else if (runWs === ws && runScope === scope) recentSessions = [updated, ...recentSessions];
+                    if (stillViewingRunScope()) {
+                        const idx = recentSessions.findIndex(r => r.id === ownerId);
+                        if (idx >= 0) recentSessions[idx] = updated;
+                        else recentSessions = [updated, ...recentSessions];
+                    }
                 }
                 return updated;
             };
@@ -1048,6 +1096,8 @@ export function createIteratePage(app) {
             return {
                 role: 'ai',
                 text: result.text || (changes.length ? '' : i18n('(The AI made no changes)')),
+                ...(result.reasoning ? { reasoning: result.reasoning } : {}),
+                ...(result.toolCalls?.length ? { toolCalls: result.toolCalls } : {}),
                 reads: result.reads.length,
                 edits: result.edits.length,
                 failed: result.failed.length,
@@ -1223,30 +1273,44 @@ export function createIteratePage(app) {
                         out[t.id] = { disabled: true };
                         continue;
                     }
-                } catch {
+                } catch (err) {
+                    console.warn(`[workbench/iterate] isEnabled failed for "${t.id}":`, err);
                     out[t.id] = { disabled: true };
                     continue;
                 }
             }
             try {
                 out[t.id] = (await t.scopes?.(ctx)) || { global: true };
-            } catch {
+            } catch (err) {
+                console.warn(`[workbench/iterate] scopes() failed for "${t.id}":`, err);
                 out[t.id] = {};
             }
         }
         scopesByTarget = out;
     }
 
+    function evictStaleWork() {
+        const avatar = charAvatar();
+        const pName = presetName();
+        const chatKey = JSON.stringify(chatTarget() || app.snapshot()?.chat?.chatId || '');
+        for (const k of [...work.keys()]) {
+            if (k.includes(':character:') && !k.endsWith(`:${avatar}`)) work.delete(k);
+            else if (k.includes(':preset:') && !k.endsWith(`:${pName}`)) work.delete(k);
+            else if (k.includes(':chat:') && !k.endsWith(`:${chatKey}`)) work.delete(k);
+        }
+    }
+
     return {
         el,
         flush: true,
         async show(o = {}) {
-            selectionVersion++;
+            const version = ++selectionVersion;
             const targets = getTargets();
             if (!ws && targets.length) ws = targets[0].id;
             if (o.sessionId) {
-                const sOpts = sessionScopes.get(o.sessionId) || scopeOptsFor() || { scope: 'global' };
+                const sOpts = sessionScopes.get(o.sessionId) ?? null;
                 const s = store ? await store.get(o.sessionId, sOpts) : null;
+                if (version !== selectionVersion) return;
                 if (s) {
                     session = s;
                     if (s.ws) ws = s.ws;
@@ -1263,9 +1327,12 @@ export function createIteratePage(app) {
                 scope = o.scope;
             }
             await refreshScopes();
+            if (version !== selectionVersion) return;
             fixScope();
+            activeScopeKey = currentScopeKey();
             paintAll();
             await refreshSessions();
+            if (version !== selectionVersion) return;
             if (o.draft) {
                 input.value = o.draft;
                 grow();
@@ -1273,23 +1340,39 @@ export function createIteratePage(app) {
             requestAnimationFrame(() => input.focus());
         },
         onSnapshot() {
-            const avatar = charAvatar();
-            for (const k of [...work.keys()]) {
-                if (k.includes(':character:') && !k.endsWith(`:${avatar}`)) work.delete(k);
-            }
+            evictStaleWork();
+            const ver = ++snapshotVersion;
             refreshScopes().then(() => {
+                if (ver !== snapshotVersion) return;
                 fixScope();
+                const nextKey = currentScopeKey();
+                const scopeChanged = nextKey !== activeScopeKey;
+                if (scopeChanged) {
+                    activeScopeKey = nextKey;
+                    if (session) {
+                        selectionVersion++;
+                        session = null;
+                        recentSessions = [];
+                    }
+                    loadError = '';
+                }
                 if (el.isConnected && !currentBusy()) {
-                    paintHead();
-                    paintBody();
-                    paintPreview();
+                    if (scopeChanged) paintAll();
+                    else {
+                        paintHead();
+                        paintBody();
+                        paintPreview();
+                    }
                 }
                 void refreshSessions();
             });
         },
         onRegistryUpdate() {
+            const ver = ++snapshotVersion;
             refreshScopes().then(() => {
+                if (ver !== snapshotVersion) return;
                 fixScope();
+                activeScopeKey = currentScopeKey();
                 if (el.isConnected) {
                     paintAll();
                     void refreshSessions();

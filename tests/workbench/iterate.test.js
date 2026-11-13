@@ -14,6 +14,7 @@ import {
     trimMessages,
 } from '../../public/scripts/workbench/model/iterate.js';
 import { createIteratePage } from '../../public/scripts/workbench/pages/iterate.js';
+import { aiRequest } from '../../public/scripts/workbench/source-luker.js';
 
 function flushMicrotasks() {
     return new Promise(resolve => setTimeout(resolve, 0));
@@ -131,6 +132,88 @@ describe('workbench iterate engine', () => {
         const huge = 'X'.repeat(100_000);
         const trimmed = trimMessages([{ role: 'system', content: 's' }, { role: 'user', content: huge }]);
         expect(trimmed[1].content).toBe(huge);
+    });
+
+    test('captures full untruncated reasoning and tool call args/results/errors across rounds and avoids duplicate target warnings', async () => {
+        const bigArg = 'A'.repeat(20_000);
+        const bigRes = 'R'.repeat(25_000);
+        let round = 0;
+        const turnRes = await runIterateTurn({
+            messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'inspect' }],
+            live: { v: 1 },
+            tools: [
+                { type: 'function', function: { name: 'read_big' } },
+                { type: 'function', function: { name: 'edit_fail' } },
+            ],
+            isRead: (n) => n === 'read_big',
+            runRead: async (call) => ({ payload: bigRes, echoed: call.args.blob }),
+            runEdit: async () => { throw new Error('Anchor not found'); },
+            request: async () => {
+                round++;
+                if (round === 1) {
+                    return {
+                        text: '',
+                        reasoning: 'First thought',
+                        calls: [
+                            { id: 'tc1', name: 'read_big', args: { blob: bigArg } },
+                            { id: 'tc2', name: 'edit_fail', args: { target: 'x' } },
+                        ],
+                    };
+                }
+                return { text: 'Checked.', reasoning: 'Second thought', calls: [] };
+            },
+        });
+
+        expect(turnRes.reasoning).toBe('First thought\n\nSecond thought');
+        expect(turnRes.toolCalls).toHaveLength(2);
+        expect(turnRes.toolCalls[0]).toMatchObject({
+            id: 'tc1',
+            name: 'read_big',
+            args: { blob: bigArg },
+            result: { payload: bigRes, echoed: bigArg },
+        });
+        expect(turnRes.toolCalls[1]).toMatchObject({
+            id: 'tc2',
+            name: 'edit_fail',
+            args: { target: 'x' },
+            error: 'Anchor not found',
+        });
+
+        // Creating a second bus with the same targetHandler reference does not warn about overwrite
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        const sharedHandler = { read: async () => ({}), write: async () => {}, describe: () => 'x' };
+        const kinds = [{ ...skillAuthor, targetHandler: sharedHandler }];
+        createIterateBus({ proposalKinds: kinds });
+        createIterateBus({ proposalKinds: kinds });
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
+    });
+
+    test('aiRequest preserves reasoning fields returned by requestToolCallsWithRetry', async () => {
+        const runnerSpy = jest.fn(async () => ({
+            toolCalls: [],
+            assistantText: 'Answer text',
+            reasoning: 'Deep reasoning text',
+            reasoningBlocks: [{ type: 'thinking', text: 'block' }],
+            reasoningDetails: [{ id: 'd1' }],
+        }));
+        globalThis.Luker = {
+            getContext: () => ({
+                extensionSettings: { workbench: { ai: { default: { connection: 'c1', preset: 'p1' } } } },
+                iterationLibrary: { runner: { requestToolCallsWithRetry: runnerSpy } },
+            }),
+        };
+        try {
+            const res = await aiRequest('card', {
+                messages: [{ role: 'user', content: 'hi' }],
+                tools: [{ type: 'function', function: { name: 't1' } }],
+            });
+            expect(res.reasoning).toBe('Deep reasoning text');
+            expect(res.reasoningBlocks).toEqual([{ type: 'thinking', text: 'block' }]);
+            expect(res.reasoningDetails).toEqual([{ id: 'd1' }]);
+        } finally {
+            delete globalThis.Luker;
+        }
     });
 
     test('multi-kind proposal (field-diff + skill-author / preset-clone) previews, commits selectively, and rolls back field edits on commit error', async () => {
@@ -577,5 +660,212 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
         await flushMicrotasks();
         await flushMicrotasks();
         expect(diskDesc).toBe('Before');
+    });
+
+    test('renders reasoning, edits-only summary pill, expandable untruncated tool trace, and drops empty legacy assistant turns on follow-up', async () => {
+        const sessions = createMemorySessionStore();
+        const hugeLegacyArg = 'L'.repeat(15_000);
+        const hugeLiveRes = 'Z'.repeat(18_000);
+        await sessions.create({
+            kind: 'iterate',
+            ws: 'card',
+            scope: 'character',
+            title: 'Tool Trace Session',
+            messages: [
+                { role: 'user', content: 'Old Q' },
+                { role: 'assistant', content: '', toolCalls: [{ id: 'leg1', name: 'legacy_read', args: { blob: hugeLegacyArg }, result: 'leg ok' }] },
+                { role: 'assistant', content: 'Final legacy reply' },
+            ],
+            turns: [
+                { role: 'user', text: 'Old Q', at: 1 },
+                { role: 'ai', text: 'Final legacy reply', toolCalls: [{ id: 'leg1', name: 'legacy_read', args: { blob: hugeLegacyArg }, result: 'leg ok' }], at: 2 },
+            ],
+        }, { scope: 'character', avatar: 'alice.png' });
+
+        const sentPayloads = [];
+        let round = 0;
+        const cardTarget = {
+            id: 'card',
+            label: 'Character card',
+            tone: 'card',
+            scopes: async () => ({ character: true }),
+            load: async () => ({ live: { description: 'Init' }, target: { scope: 'character', avatar: 'alice.png' }, title: 'Alice' }),
+            prompt: async () => 'sys',
+            tools: async () => [{ type: 'function', function: { name: 'edit_only' } }],
+            isRead: () => false,
+            runRead: async () => ({}),
+            runEdit: async (_c, live) => ({ ...live, description: `Changed:${hugeLiveRes}` }),
+            units: (live) => new Map([['card:description', { key: 'card:description', label: 'Desc', group: 'Card', text: live.description, fields: { description: live.description } }]]),
+            rebuild: (_b, ai) => ai,
+            commit: async () => ({ applied: [], skipped: [], failure: '', undo: async () => {} }),
+        };
+
+        const app = {
+            sessions,
+            iterateTargets: () => [cardTarget],
+            snapshot: () => ({ chat: { character: { avatar: 'alice.png', name: 'Alice' } }, card: { name: 'Alice', avatar: 'alice.png' } }),
+            settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+            history: { record: jest.fn(() => 'h1'), canUndo: () => false, undo: jest.fn() },
+            toast: jest.fn(),
+            reload: jest.fn(),
+            refreshBadges: jest.fn(),
+            source: {
+                aiRequest: jest.fn(async (_r, { messages }) => {
+                    sentPayloads.push(JSON.parse(JSON.stringify(messages)));
+                    round++;
+                    if (round === 1) {
+                        return {
+                            text: '',
+                            reasoning: 'Thought step 1',
+                            calls: [{ id: 'ed1', name: 'edit_only', args: { detail: hugeLiveRes } }],
+                        };
+                    }
+                    return { text: 'Done.', reasoning: 'Thought step 2', calls: [] };
+                }),
+            },
+        };
+
+        const page = createIteratePage(app);
+        document.body.appendChild(page.el);
+        await page.show({ ws: 'card', scope: 'character' });
+        await flushMicrotasks();
+
+        const openBtn = [...page.el.querySelectorAll('.wb-sess-item')].find(b => b.textContent.includes('Tool Trace Session'));
+        openBtn.click();
+        await flushMicrotasks();
+
+        // Legacy toolCalls expandable trace displays complete untruncated args
+        const traceBefore = page.el.querySelector('.wb-tool-trace');
+        expect(traceBefore).not.toBeNull();
+        expect(traceBefore.textContent).toContain('legacy_read');
+        expect(traceBefore.textContent).toContain(hugeLegacyArg);
+
+        const textarea = page.el.querySelector('textarea.wb-input');
+        const sendBtn = page.el.querySelector('button.wb-send');
+        textarea.value = 'Edit directly without reading';
+        sendBtn.click();
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        // Empty assistant message from legacy import must NOT be sent to API
+        expect(sentPayloads[0].some(m => m.role === 'assistant' && !m.tool_calls && m.content === '')).toBe(false);
+        expect(sentPayloads[0].some(m => m.role === 'assistant' && m.content === 'Final legacy reply')).toBe(true);
+
+        // Live turn renders reasoning, edits-only pill (0 reads, 1 edit), and full untruncated tool call trace
+        expect(page.el.textContent).toContain('Thought step 1');
+        expect(page.el.textContent).toContain('Thought step 2');
+        const pills = [...page.el.querySelectorAll('.wb-reads')].map(el => el.textContent);
+        expect(pills.some(t => t.includes('Edited 1 times'))).toBe(true);
+        const traces = [...page.el.querySelectorAll('.wb-tool-trace')];
+        expect(traces.at(-1).textContent).toContain('edit_only');
+        expect(traces.at(-1).textContent).toContain(hugeLiveRes);
+        expect(traces.at(-1).textContent).toContain('pending_review');
+    });
+
+    test('guards show(sessionId), onSnapshot scope identity changes, and send scope isolation against stale async completions', async () => {
+        const byScope = new Map();
+        const scopeKey = (opts) => JSON.stringify(opts);
+        const sessions = {
+            list: jest.fn(async (_k, opts) => (byScope.get(scopeKey(opts)) || []).map(s => JSON.parse(JSON.stringify(s)))),
+            get: jest.fn(async (id, opts) => {
+                if (opts == null) {
+                    for (const list of byScope.values()) {
+                        const hit = list.find(s => s.id === id);
+                        if (hit) return JSON.parse(JSON.stringify(hit));
+                    }
+                    return null;
+                }
+                const hit = (byScope.get(scopeKey(opts)) || []).find(s => s.id === id);
+                return hit ? JSON.parse(JSON.stringify(hit)) : null;
+            }),
+            create: jest.fn(async (fields, opts) => {
+                const s = { id: 's_created', turns: [], createdAt: 1, updatedAt: 1, ...fields };
+                const k = scopeKey(opts);
+                byScope.set(k, [s, ...(byScope.get(k) || [])]);
+                return JSON.parse(JSON.stringify(s));
+            }),
+            update: jest.fn(async (id, patch, opts) => {
+                const list = byScope.get(scopeKey(opts)) || [];
+                const idx = list.findIndex(s => s.id === id);
+                if (idx < 0) return null;
+                list[idx] = { ...list[idx], ...patch, updatedAt: Date.now() };
+                return JSON.parse(JSON.stringify(list[idx]));
+            }),
+        };
+
+        byScope.set(scopeKey({ scope: 'preset', target: { collection: 'openai', name: 'P1' } }), [
+            { id: 's_p1', kind: 'iterate', ws: 'preset', scope: 'preset', title: 'P1 Chat', updatedAt: 10, turns: [{ role: 'user', text: 'Q1', at: 1 }, { role: 'ai', text: 'A1', at: 2 }] },
+        ]);
+        byScope.set(scopeKey({ scope: 'preset', target: { collection: 'openai', name: 'P2' } }), [
+            { id: 's_p2', kind: 'iterate', ws: 'preset', scope: 'preset', title: 'P2 Chat', updatedAt: 20, turns: [{ role: 'user', text: 'Q2', at: 1 }, { role: 'ai', text: 'A2', at: 2 }] },
+        ]);
+
+        let activePreset = 'P1';
+        let loadCall = 0;
+        let rejectLoadP1;
+        const presetTarget = {
+            id: 'preset',
+            label: 'Preset',
+            tone: 'preset',
+            scopes: async () => ({ preset: true }),
+            load: jest.fn(async () => {
+                loadCall++;
+                if (loadCall === 2) {
+                    return new Promise((_r, reject) => { rejectLoadP1 = reject; });
+                }
+                return { live: { name: activePreset }, target: { scope: 'preset', ref: { collection: 'openai', name: activePreset } }, title: activePreset };
+            }),
+            prompt: async () => 'sys',
+            tools: async () => [],
+            isRead: () => false,
+            runRead: async () => ({}),
+            runEdit: async (_c, l) => l,
+            units: () => new Map(),
+            rebuild: (b) => b,
+            commit: async () => ({ applied: [], skipped: [], failure: '', undo: async () => {} }),
+        };
+
+        const app = {
+            sessions,
+            iterateTargets: () => [presetTarget],
+            snapshot: () => ({ preset: { name: activePreset, ref: { collection: 'openai', name: activePreset } } }),
+            settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+            history: { record: jest.fn(), canUndo: () => false, undo: jest.fn() },
+            toast: jest.fn(),
+            reload: jest.fn(),
+            refreshBadges: jest.fn(),
+            source: { aiRequest: jest.fn() },
+        };
+
+        const page = createIteratePage(app);
+        document.body.appendChild(page.el);
+        // show(sessionId) works even when sessionScopes has not been populated (passes null so store resolves via idToScope)
+        await page.show({ sessionId: 's_p1' });
+        await flushMicrotasks();
+        expect(sessions.get).toHaveBeenCalledWith('s_p1', null);
+        expect(page.el.textContent).toContain('A1');
+
+        // Trigger a send() on P1 whose load() hangs and will reject
+        const textarea = page.el.querySelector('textarea.wb-input');
+        const sendBtn = page.el.querySelector('button.wb-send');
+        textarea.value = 'Update P1';
+        sendBtn.click();
+        await flushMicrotasks();
+
+        // Switch Luker preset P1 -> P2 via onSnapshot() while P1 load() is still pending
+        activePreset = 'P2';
+        page.onSnapshot();
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        // P1's stale session A1 must be cleared, P2's work reloaded, and P2 session list shown
+        expect(page.el.textContent).not.toContain('A1');
+        expect(page.el.textContent).toContain('P2 Chat');
+
+        // Now reject P1's stale load(): must NOT overwrite P2's view with loadError
+        rejectLoadP1(new Error('P1 read timed out'));
+        await flushMicrotasks();
+        await flushMicrotasks();
+        expect(page.el.textContent).not.toContain('P1 read timed out');
     });
 });

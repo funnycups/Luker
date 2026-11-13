@@ -20,8 +20,10 @@ import {
     presetClone,
     customToolAuthor,
 } from '../../iteration-library/proposal-bus/index.js';
-import { registerTarget } from '../../iteration-library/storage/target-registry.js';
+import { registerTarget, resolveTarget } from '../../iteration-library/storage/target-registry.js';
 import { applyOps } from '../../iteration-library/storage/patch-codec.js';
+
+const cloneValue = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
 
 const BUILTIN_PROPOSAL_KINDS = {
     'profile-edit': profileEdit,
@@ -84,7 +86,11 @@ export function createIterateBus({ proposalKinds = null, onChange = null, onComm
     });
     for (const [kindId, adapter] of adapters) {
         if (adapter.targetType && adapter.targetHandler) {
-            registerTarget(adapter.targetType, adapter.targetHandler);
+            let existingHandler = null;
+            try { existingHandler = resolveTarget({ type: adapter.targetType }); } catch { existingHandler = null; }
+            if (existingHandler !== adapter.targetHandler) {
+                registerTarget(adapter.targetType, adapter.targetHandler);
+            }
         }
         bus.registerKind(kindId, adapter);
     }
@@ -126,6 +132,8 @@ export async function runIterateTurn({
     const reads = [];
     const edits = [];
     const failed = [];
+    const toolCalls = [];
+    const reasonings = [];
     const proposalIds = [];
     const activeBus = bus || (proposalKinds ? createIterateBus({ proposalKinds }) : null);
     let text = '';
@@ -135,11 +143,13 @@ export async function runIterateTurn({
         const res = await request(msgs, tools);
         if (signal?.aborted) throw new Error(i18n('Stopped'));
         text = res?.text || text;
+        const roundReasoning = typeof res?.reasoning === 'string' ? res.reasoning.trim() : '';
+        if (roundReasoning) reasonings.push(roundReasoning);
         const calls = Array.isArray(res?.calls) ? res.calls : [];
         if (!calls.length) {
             if (res?.text) {
                 const finalMsg = { role: 'assistant', content: res.text };
-                if (typeof res?.reasoning === 'string' && res.reasoning) finalMsg.reasoning = res.reasoning;
+                if (roundReasoning) finalMsg.reasoning = roundReasoning;
                 msgs.push(finalMsg);
             }
             break;
@@ -153,12 +163,13 @@ export async function runIterateTurn({
                 function: { name: c.name, arguments: JSON.stringify(c.args || {}) },
             })),
         };
-        if (typeof res?.reasoning === 'string' && res.reasoning) assistantMsg.reasoning = res.reasoning;
+        if (roundReasoning) assistantMsg.reasoning = roundReasoning;
         msgs.push(assistantMsg);
 
         for (const call of calls) {
             if (signal?.aborted) throw new Error(i18n('Stopped'));
             let content;
+            let callError = null;
             try {
                 const helpers = {
                     bus: activeBus,
@@ -202,9 +213,16 @@ export async function runIterateTurn({
                     }
                 }
             } catch (err) {
-                failed.push({ name: call.name, error: String(err?.message || err) });
-                content = { error: String(err?.envelope ? JSON.stringify(err.envelope) : err?.message || err) };
+                callError = String(err?.message || err);
+                failed.push({ name: call.name, error: callError });
+                content = { error: String(err?.envelope ? JSON.stringify(err.envelope) : callError) };
             }
+            toolCalls.push({
+                id: call.id,
+                name: call.name,
+                args: cloneValue(call.args ?? {}),
+                ...(callError != null ? { error: callError } : { result: cloneValue(content) }),
+            });
             msgs.push({
                 role: 'tool',
                 tool_call_id: call.id,
@@ -220,7 +238,18 @@ export async function runIterateTurn({
         });
     }
 
-    return { messages: msgs, live: current, text, reads, edits, failed, bus: activeBus, proposalIds };
+    return {
+        messages: msgs,
+        live: current,
+        text,
+        reasoning: reasonings.join('\n\n'),
+        reads,
+        edits,
+        failed,
+        toolCalls,
+        bus: activeBus,
+        proposalIds,
+    };
 }
 
 function formatTextValue(val) {

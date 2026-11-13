@@ -18,6 +18,12 @@
 .wbench .wb-iter-controls { display: inline-flex; align-items: center; gap: 6px; flex: none; }
 .wbench .wb-iter-preview { flex: none; width: 280px; min-height: 0; overflow: auto; padding: 12px; border-left: 1px solid var(--wb-border); background: var(--wb-surface); }
 .wbench .wb-chg-note { margin-top: 3px; font-size: 11.5px; color: var(--wb-amber); }
+.wbench .wb-tool-trace-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 10px 10px; }
+.wbench .wb-tool-entry { padding-top: 8px; border-top: 1px solid var(--wb-border); }
+.wbench .wb-tool-entry:first-child { padding-top: 0; border-top: 0; }
+.wbench .wb-tool-name { font-family: var(--wb-mono); font-size: 12px; font-weight: 600; color: var(--wb-text); }
+.wbench .wb-tool-sec-label { margin-top: 4px; font-size: 11px; color: var(--wb-faint); }
+.wbench .wb-tool-sec-label.is-error, .wbench .wb-tool-entry .wb-prompt-text.is-error { color: var(--wb-danger); }
 
 .wbench .wb-chg { width: 100%; border: 1px solid var(--wb-border); border-radius: var(--wb-r); overflow: hidden; background: var(--wb-surface); }
 .wbench .wb-chg.is-discarded { opacity: 0.6; }

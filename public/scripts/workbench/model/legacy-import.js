@@ -7,6 +7,7 @@
 // and stale draft state (proposalBus, pendingApproval, edits, live, etc.).
 
 import { i18n } from '../i18n.js';
+import { SourceError } from './errors.js';
 import { SESSIONS_NAMESPACE, titleFrom } from './sessions.js';
 import { isReplayableIterationMessage } from '../../iteration-library/iter-message-filter.js';
 
@@ -22,6 +23,9 @@ const LEGACY_NAMESPACES = {
         chat: ['memory_graph__graph_iter'],
     },
     'memory-graph': {
+        chat: ['memory_graph__graph_iter'],
+    },
+    memory_graph: {
         chat: ['memory_graph__graph_iter'],
     },
     orch: {
@@ -64,13 +68,20 @@ function extractSessionObjects(rawState, { mode = null } = {}) {
 }
 
 function normalizeToolCalls(raw) {
-    if (Array.isArray(raw.toolCalls) && raw.toolCalls.length > 0) {
-        return clone(raw.toolCalls);
+    const list = Array.isArray(raw.toolCalls) && raw.toolCalls.length > 0
+        ? clone(raw.toolCalls)
+        : (Array.isArray(raw.tool_calls) && raw.tool_calls.length > 0 ? clone(raw.tool_calls) : null);
+    if (!list) return null;
+    if (Array.isArray(raw.toolResults) && raw.toolResults.length > 0) {
+        const byId = new Map(raw.toolResults.map(r => [String(r?.tool_call_id || r?.id || ''), r]));
+        for (const tc of list) {
+            const matched = byId.get(String(tc?.id || ''));
+            if (matched && tc.result === undefined && tc.error === undefined) {
+                tc.result = clone(matched.content ?? matched.result);
+            }
+        }
     }
-    if (Array.isArray(raw.tool_calls) && raw.tool_calls.length > 0) {
-        return clone(raw.tool_calls);
-    }
-    return null;
+    return list;
 }
 
 /**
@@ -154,7 +165,7 @@ export function normalizeLegacySession(raw, { targetId, scope, scopeName = '' } 
 
 /**
  * Best-effort read of raw legacy sessions for a (targetId, scope).
- * Never throws; returns [] on missing/corrupt/error reads.
+ * Never throws; logs warnings and returns [] on missing/corrupt/error reads.
  */
 export async function readLegacySessions({ ctx, targetId, scope, avatar = '', target = null, mode = null } = {}) {
     const spec = LEGACY_NAMESPACES[targetId];
@@ -168,8 +179,14 @@ export async function readLegacySessions({ ctx, targetId, scope, avatar = '', ta
             for (const ns of spec.character) {
                 try {
                     const res = await ctx.getCharacterState(charAvatar, ns);
-                    if (res?.ok && res.state) results.push(...extractSessionObjects(res.state, { mode }));
-                } catch { /* best effort */ }
+                    if (!res?.ok) {
+                        console.warn(`[workbench/legacy-import] character sidecar read failed (${ns}):`, res?.hint || res?.reason || 'unknown');
+                        continue;
+                    }
+                    if (res.state) results.push(...extractSessionObjects(res.state, { mode }));
+                } catch (err) {
+                    console.warn(`[workbench/legacy-import] character sidecar read threw (${ns}):`, err);
+                }
             }
         } else if (scope === 'chat' && Array.isArray(spec.chat)) {
             if (typeof ctx.getChatState !== 'function') return [];
@@ -177,8 +194,14 @@ export async function readLegacySessions({ ctx, targetId, scope, avatar = '', ta
             for (const ns of spec.chat) {
                 try {
                     const res = await ctx.getChatState(ns, opts);
-                    if (res?.ok && res.state) results.push(...extractSessionObjects(res.state, { mode }));
-                } catch { /* best effort */ }
+                    if (!res?.ok) {
+                        console.warn(`[workbench/legacy-import] chat sidecar read failed (${ns}):`, res?.hint || res?.reason || 'unknown');
+                        continue;
+                    }
+                    if (res.state) results.push(...extractSessionObjects(res.state, { mode }));
+                } catch (err) {
+                    console.warn(`[workbench/legacy-import] chat sidecar read threw (${ns}):`, err);
+                }
             }
         } else if (scope === 'preset' && Array.isArray(spec.preset)) {
             if (typeof ctx.presets?.state?.get !== 'function') return [];
@@ -186,8 +209,14 @@ export async function readLegacySessions({ ctx, targetId, scope, avatar = '', ta
             for (const ns of spec.preset) {
                 try {
                     const res = await ctx.presets.state.get(ns, opts);
-                    if (res?.ok && res.state) results.push(...extractSessionObjects(res.state, { mode }));
-                } catch { /* best effort */ }
+                    if (!res?.ok) {
+                        console.warn(`[workbench/legacy-import] preset sidecar read failed (${ns}):`, res?.hint || res?.reason || 'unknown');
+                        continue;
+                    }
+                    if (res.state) results.push(...extractSessionObjects(res.state, { mode }));
+                } catch (err) {
+                    console.warn(`[workbench/legacy-import] preset sidecar read threw (${ns}):`, err);
+                }
             }
         } else if (scope === 'global' && spec.global) {
             const bucket = ctx.extensionSettings?.[spec.global.plugin]?.[spec.global.key];
@@ -195,7 +224,8 @@ export async function readLegacySessions({ ctx, targetId, scope, avatar = '', ta
                 results.push(...extractSessionObjects(bucket, { mode }));
             }
         }
-    } catch {
+    } catch (err) {
+        console.warn('[workbench/legacy-import] readLegacySessions failed:', err);
         return [];
     }
 
@@ -268,11 +298,14 @@ export async function importLegacySessionsOnce({
     let currentRes;
     try {
         currentRes = await access.read();
-    } catch {
-        return { imported: [], alreadyImported: false };
+    } catch (err) {
+        console.warn('[workbench/legacy-import] workbench_sessions read failed:', err);
+        throw err;
     }
     if (!currentRes?.ok) {
-        return { imported: [], alreadyImported: false };
+        const detail = currentRes?.hint || currentRes?.reason || 'workbench_sessions read failed';
+        console.warn('[workbench/legacy-import] workbench_sessions read failed:', detail);
+        throw new SourceError('storage-error', String(detail));
     }
 
     const currentState = currentRes.state && typeof currentRes.state === 'object' && !Array.isArray(currentRes.state)
@@ -296,28 +329,29 @@ export async function importLegacySessionsOnce({
         .filter(Boolean);
 
     let added = [];
-    try {
-        const writeRes = await access.update((current) => {
-            const base = current && typeof current === 'object' && !Array.isArray(current) ? clone(current) : {};
-            if (base.legacyImported?.[targetId]) return null;
-            const existing = Array.isArray(base.sessions) ? base.sessions : [];
-            const seenIds = new Set(existing.flatMap(s => [s?.id, s?.legacyId].filter(Boolean)));
-            const fresh = normalized.filter(s => !seenIds.has(s.id) && !seenIds.has(s.legacyId));
-            added = fresh;
-            return {
-                ...base,
-                sessions: [...existing, ...fresh],
-                legacyImported: {
-                    ...(base.legacyImported && typeof base.legacyImported === 'object' ? base.legacyImported : {}),
-                    [targetId]: Date.now(),
-                },
-            };
-        });
-        if (!writeRes?.ok) {
-            return { imported: [], alreadyImported: false };
-        }
-    } catch {
-        return { imported: [], alreadyImported: false };
+    const writeRes = await access.update((current) => {
+        const base = current && typeof current === 'object' && !Array.isArray(current) ? clone(current) : {};
+        if (base.legacyImported?.[targetId]) return null;
+        const existing = Array.isArray(base.sessions) ? base.sessions : [];
+        const seenIds = new Set(existing.map(s => s?.id).filter(Boolean));
+        const seenScopedLegacy = new Set(
+            existing.filter(s => s?.ws && s?.legacyId).map(s => `${s.ws}:${s.legacyId}`),
+        );
+        const fresh = normalized.filter(s => !seenIds.has(s.id) && !seenScopedLegacy.has(`${s.ws}:${s.legacyId}`));
+        added = fresh;
+        return {
+            ...base,
+            sessions: [...existing, ...fresh],
+            legacyImported: {
+                ...(base.legacyImported && typeof base.legacyImported === 'object' ? base.legacyImported : {}),
+                [targetId]: Date.now(),
+            },
+        };
+    });
+    if (!writeRes?.ok) {
+        const detail = writeRes?.hint || writeRes?.reason || 'workbench_sessions update failed';
+        console.warn('[workbench/legacy-import] workbench_sessions update failed:', detail);
+        throw new SourceError('storage-error', String(detail));
     }
 
     return { imported: added, alreadyImported: false };

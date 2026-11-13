@@ -462,6 +462,9 @@ const ZH_CN = {
     'Select a chat completion preset in Luker first, then come back.': '先在 Luker 里选择一个对话补全预设，再回来改。',
     'Open a chat in Luker first, then come back.': '先在 Luker 里打开一个聊天，再回来改。',
     'Open a character\'s chat in Luker first (not a group chat), or switch to an available scope.': '先在 Luker 里打开一个角色的聊天（群聊不行），或切换到其他可用范围。',
+    'Tool calls (${0})': '工具调用（${0}）',
+    'Edited ${0} times': '改了 ${0} 次',
+    '${0} failed': '${0} 次没改成',
 };
 
 const ZH_TW = {
@@ -923,6 +926,9 @@ const ZH_TW = {
     'Select a chat completion preset in Luker first, then come back.': '先在 Luker 裡選擇一個對話補全預設，再回來改。',
     'Open a chat in Luker first, then come back.': '先在 Luker 裡開啟一個聊天，再回來改。',
     'Open a character\'s chat in Luker first (not a group chat), or switch to an available scope.': '先在 Luker 裡開啟一個角色的聊天（群聊不行），或切換到其他可用範圍。',
+    'Tool calls (${0})': '工具呼叫（${0}）',
+    'Edited ${0} times': '改了 ${0} 次',
+    '${0} failed': '${0} 次沒改成',
 };
 
 export function registerWorkbenchLocaleData(addLocaleData) {

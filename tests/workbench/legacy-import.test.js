@@ -272,9 +272,12 @@ describe('workbench legacy iter-studio import', () => {
         expect(r2.imported).toEqual([]);
         expect(wbChar.get(`alice.png::${SESSIONS_NAMESPACE}`).sessions.map(s => s.id)).toEqual(['keep_me']);
 
-        // Missing or failing preset sidecar does not throw
+        // Missing or failing preset sidecar warns and does not throw
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
         const rawPreset = await readLegacySessions({ ctx, targetId: 'preset', scope: 'preset', target: presetRef });
         expect(rawPreset).toEqual([]);
+        expect(warnSpy).toHaveBeenCalled();
+        warnSpy.mockClear();
         const r3 = await importLegacySessionsOnce({
             ctx,
             targetId: 'preset',
@@ -282,9 +285,89 @@ describe('workbench legacy iter-studio import', () => {
             scopeOpts: { scope: 'preset', target: presetRef },
         });
         expect(r3.imported).toEqual([]);
+        expect(warnSpy).toHaveBeenCalled();
+        warnSpy.mockRestore();
 
         // normalizeLegacySession ignores stale blobs and null inputs
         expect(normalizeLegacySession(null, { targetId: 'card', scope: 'character' })).toBeNull();
         expect(normalizeLegacySession({ id: 'x', messages: [] }, { targetId: 'card', scope: 'character' })).toBeNull();
+    });
+
+    test('supports memory_graph targetId, orchestrator mode-nested global bucket, cross-target same legacyId, and surfaces workbench_sessions errors', async () => {
+        const chatTarget = { is_group: false, avatar_url: 'alice.png', file_name: 'chat1.jsonl' };
+        const { ctx, wbChar, wbChat, wbGlobal } = makeMockCtx({
+            characterStates: {
+                'alice.png::character_editor_assistant_iter_sessions': {
+                    sessions: { s1: { id: 's1', title: 'Card s1', messages: [{ role: 'user', content: 'Card q' }] } },
+                },
+                'alice.png::memory_graph_schema_iter_history': {
+                    sessions: { s1: { id: 's1', title: 'Memory s1', messages: [{ role: 'user', content: 'Memory q' }] } },
+                },
+            },
+            chatStates: {
+                [`${JSON.stringify(chatTarget)}::memory_graph__graph_iter`]: {
+                    sessions: { mg1: { id: 'mg1', title: 'Graph chat', messages: [{ role: 'user', content: 'Fix node' }] } },
+                },
+            },
+            extensionSettings: {
+                orchestrator: {
+                    iter_studio_global_sessions: {
+                        spec: { o1: { id: 'o1', title: 'Orch spec', messages: [{ role: 'user', content: 'Tune spec' }] } },
+                        loop: { o2: { id: 'o2', title: 'Orch loop', messages: [{ role: 'user', content: 'Tune loop' }] } },
+                    },
+                },
+            },
+        });
+
+        // 1) memory_graph alias in chat scope
+        const mgRes = await importLegacySessionsOnce({
+            ctx,
+            targetId: 'memory_graph',
+            scope: 'chat',
+            scopeOpts: { scope: 'chat', target: chatTarget },
+        });
+        expect(mgRes.imported).toHaveLength(1);
+        expect(mgRes.imported[0].title).toBe('Graph chat');
+        expect(wbChat.get(`${JSON.stringify(chatTarget)}::${SESSIONS_NAMESPACE}`).legacyImported.memory_graph).toBeTruthy();
+
+        // 2) orchestrator mode-nested global bucket
+        const orchRes = await importLegacySessionsOnce({
+            ctx,
+            targetId: 'orch',
+            scope: 'global',
+            scopeOpts: { scope: 'global' },
+        });
+        expect(orchRes.imported.map(s => s.title).sort()).toEqual(['Orch loop', 'Orch spec']);
+        expect(wbGlobal.get(SESSIONS_NAMESPACE).legacyImported.orch).toBeTruthy();
+
+        // 3) same legacyId 's1' in both card and memory under same character scope does NOT collide
+        const cardRes = await importLegacySessionsOnce({
+            ctx,
+            targetId: 'card',
+            scope: 'character',
+            scopeOpts: { scope: 'character', avatar: 'alice.png' },
+        });
+        const memRes = await importLegacySessionsOnce({
+            ctx,
+            targetId: 'memory',
+            scope: 'character',
+            scopeOpts: { scope: 'character', avatar: 'alice.png' },
+        });
+        expect(cardRes.imported).toHaveLength(1);
+        expect(memRes.imported).toHaveLength(1);
+        const charSessions = wbChar.get(`alice.png::${SESSIONS_NAMESPACE}`).sessions;
+        expect(charSessions.map(s => s.title).sort()).toEqual(['Card s1', 'Memory s1']);
+
+        // 4) workbench_sessions read/update failure surfaces error instead of silently swallowing
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        ctx.getGlobalState.mockResolvedValueOnce({ ok: false, state: null, reason: 'http_error', hint: 'WB store down' });
+        await expect(importLegacySessionsOnce({
+            ctx,
+            targetId: 'memory',
+            scope: 'global',
+            scopeOpts: { scope: 'global' },
+        })).rejects.toThrow(/WB store down/);
+        expect(warnSpy).toHaveBeenCalled();
+        warnSpy.mockRestore();
     });
 });

@@ -356,7 +356,7 @@ export async function promptInfo(role, registry = defaultRegistry) {
 
 /**
  * One model call with tools.
- * @returns {Promise<{ text: string, calls: { id: string, name: string, args: object }[] }>}
+ * @returns {Promise<{ text: string, calls: { id: string, name: string, args: object }[], reasoning?: string, reasoningBlocks?: any[], reasoningDetails?: any[] }>}
  */
 export async function aiRequest(role, { messages, tools = [], signal = null }) {
     const ctx = getContext();
@@ -379,12 +379,20 @@ export async function aiRequest(role, { messages, tools = [], signal = null }) {
         name: String(c?.name || ''),
         args: c?.args && typeof c.args === 'object' ? c.args : {},
     }));
+    const reasoning = String(result?.reasoning || '').trim();
+    const reasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length ? result.reasoningBlocks : undefined;
+    const reasoningDetails = Array.isArray(result?.reasoningDetails) && result.reasoningDetails.length ? result.reasoningDetails : undefined;
+    const reasoningMeta = {
+        ...(reasoning ? { reasoning } : {}),
+        ...(reasoningBlocks ? { reasoningBlocks } : {}),
+        ...(reasoningDetails ? { reasoningDetails } : {}),
+    };
     const text = String(result?.assistantText || result?.text || '').trim();
     if (hasTextCalls(text)) {
         const salvaged = salvageTextCalls(text, tools.map(t => t?.function?.name).filter(Boolean));
-        return { text: salvaged.text, calls: calls.length ? calls : salvaged.calls };
+        return { text: salvaged.text, calls: calls.length ? calls : salvaged.calls, ...reasoningMeta };
     }
-    return { text, calls };
+    return { text, calls, ...reasoningMeta };
 }
 
 /** Quick connectivity test for a role. */
