@@ -1349,11 +1349,9 @@ export function createIteratePage(app) {
                 const scopeChanged = nextKey !== activeScopeKey;
                 if (scopeChanged) {
                     activeScopeKey = nextKey;
-                    if (session) {
-                        selectionVersion++;
-                        session = null;
-                        recentSessions = [];
-                    }
+                    selectionVersion++;
+                    session = null;
+                    recentSessions = [];
                     loadError = '';
                 }
                 if (el.isConnected && !currentBusy()) {

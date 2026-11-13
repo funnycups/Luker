@@ -868,4 +868,114 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
         await flushMicrotasks();
         expect(page.el.textContent).not.toContain('P1 read timed out');
     });
+
+    test('onSnapshot scopeChanged clears pendingNewSelection busy state, recentSessions, and prevents brand-new session hijack when stale load resolves', async () => {
+        const byScope = new Map();
+        const scopeKey = (opts) => JSON.stringify(opts);
+        const sessions = {
+            list: jest.fn(async (_k, opts) => (byScope.get(scopeKey(opts)) || []).map(s => JSON.parse(JSON.stringify(s)))),
+            get: jest.fn(async (id, opts) => {
+                const hit = (byScope.get(scopeKey(opts)) || []).find(s => s.id === id);
+                return hit ? JSON.parse(JSON.stringify(hit)) : null;
+            }),
+            create: jest.fn(async (fields, opts) => {
+                const s = { id: 's_p1_new', turns: [], createdAt: 1, updatedAt: 1, ...fields };
+                const k = scopeKey(opts);
+                byScope.set(k, [s, ...(byScope.get(k) || [])]);
+                return JSON.parse(JSON.stringify(s));
+            }),
+            update: jest.fn(async (id, patch, opts) => {
+                const list = byScope.get(scopeKey(opts)) || [];
+                const idx = list.findIndex(s => s.id === id);
+                if (idx < 0) return null;
+                list[idx] = { ...list[idx], ...patch, updatedAt: Date.now() };
+                return JSON.parse(JSON.stringify(list[idx]));
+            }),
+        };
+
+        byScope.set(scopeKey({ scope: 'preset', target: { collection: 'openai', name: 'P1' } }), [
+            { id: 's_p1_old', kind: 'iterate', ws: 'preset', scope: 'preset', title: 'P1 Old Chat', updatedAt: 10, turns: [{ role: 'user', text: 'Q', at: 1 }, { role: 'ai', text: 'A', at: 2 }] },
+        ]);
+
+        let activePreset = 'P1';
+        let resolveLoadP1;
+        let loadCount = 0;
+        let resolveListP2;
+        const origList = sessions.list;
+        sessions.list = jest.fn(async (k, opts) => {
+            if (opts?.target?.name === 'P2') {
+                return new Promise((r) => { resolveListP2 = r; });
+            }
+            return origList(k, opts);
+        });
+
+        const presetTarget = {
+            id: 'preset',
+            label: 'Preset',
+            tone: 'preset',
+            scopes: async () => ({ preset: true }),
+            load: jest.fn(async () => {
+                loadCount++;
+                if (loadCount === 2) {
+                    return new Promise((r) => { resolveLoadP1 = r; });
+                }
+                return { live: { name: activePreset }, target: { scope: 'preset', ref: { collection: 'openai', name: activePreset } }, title: activePreset };
+            }),
+            prompt: async () => 'sys',
+            tools: async () => [],
+            isRead: () => false,
+            runRead: async () => ({}),
+            runEdit: async (_c, l) => l,
+            units: () => new Map(),
+            rebuild: (b) => b,
+            commit: async () => ({ applied: [], skipped: [], failure: '', undo: async () => {} }),
+        };
+
+        const app = {
+            sessions,
+            iterateTargets: () => [presetTarget],
+            snapshot: () => ({ preset: { name: activePreset, ref: { collection: 'openai', name: activePreset } } }),
+            settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+            history: { record: jest.fn(), canUndo: () => false, undo: jest.fn() },
+            toast: jest.fn(),
+            reload: jest.fn(),
+            refreshBadges: jest.fn(),
+            source: { aiRequest: jest.fn(async () => ({ text: 'P1 reply', calls: [] })) },
+        };
+
+        const page = createIteratePage(app);
+        document.body.appendChild(page.el);
+        await page.show({ ws: 'preset', scope: 'preset' });
+        await flushMicrotasks();
+
+        // Starting from brand-new conversation (session === null), P1 Old Chat is in sidebar
+        expect(page.el.textContent).toContain('P1 Old Chat');
+        const textarea = page.el.querySelector('textarea.wb-input');
+        const sendBtn = page.el.querySelector('button.wb-send');
+        textarea.value = 'New chat on P1';
+        sendBtn.click();
+        await flushMicrotasks();
+        expect(textarea.disabled).toBe(true);
+
+        // Switch preset P1 -> P2 via onSnapshot() while load() for P1 is still pending (and P2 list is pending)
+        activePreset = 'P2';
+        page.onSnapshot();
+        await flushMicrotasks();
+
+        // New scope P2 must NOT stay busy from P1's pendingNewSelection and must clear P1 Old Chat from recentSessions
+        expect(textarea.disabled).toBe(false);
+        expect(sendBtn.disabled).toBe(false);
+        expect(page.el.textContent).not.toContain('P1 Old Chat');
+
+        // Resolve P2 session list
+        resolveListP2([]);
+        await flushMicrotasks();
+
+        // Now resolve stale P1 load(): must NOT hijack P2's view with P1's newly created session
+        resolveLoadP1({ live: { name: 'P1' }, target: { scope: 'preset', ref: { collection: 'openai', name: 'P1' } }, title: 'P1' });
+        await flushMicrotasks();
+        await flushMicrotasks();
+        expect(page.el.textContent).not.toContain('P1 reply');
+        expect(page.el.textContent).not.toContain('New chat on P1');
+    });
 });
