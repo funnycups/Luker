@@ -370,6 +370,7 @@ const ZH_CN = {
     'Reset to blank': '重置为空白',
     'Reset to global': '重置为全局',
     'The active character has changed.': '当前角色已切换。',
+    'Operation failed': '操作失败',
 };
 
 const ZH_TW = {
@@ -740,6 +741,7 @@ const ZH_TW = {
     'Reset to blank': '重設為空白',
     'Reset to global': '重設為全域',
     'The active character has changed.': '目前角色已切換。',
+    'Operation failed': '操作失敗',
 };
 
 export function registerLensLocaleData(addLocaleData) {
