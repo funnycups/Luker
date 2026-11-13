@@ -3,6 +3,7 @@
 
 package com.luker.app
 
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -10,39 +11,33 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.io.ByteArrayOutputStream
-import java.util.Base64
+import java.io.IOException
 
 @RunWith(RobolectricTestRunner::class)
 class LukerCdpTraceTest {
 
-    private fun ioRead(handle: String, payload: String, eof: Boolean) = """
-        {"id":99,"result":{"data":"${Base64.getEncoder().encodeToString(payload.toByteArray())}","base64Encoded":true,"eof":$eof}}
-    """.trimIndent()
-
-    /** The shape Chromium actually uses for the tracing stream: plain text. */
-    private fun ioReadText(handle: String, payload: String, eof: Boolean) = """
-        {"id":99,"result":{"data":${org.json.JSONObject.quote(payload)},"eof":$eof}}
-    """.trimIndent()
-
     @Test
-    fun begin_requests_a_stream_transfer() {
+    fun begin_requests_report_events_and_writes_json_header() {
         val channel = FakeChannel(listOf("""{"id":1,"result":{}}"""))
+        val sink = ByteArrayOutputStream()
 
-        TraceSession(channel, ByteArrayOutputStream()).begin()
+        val session = TraceSession(channel, sink)
+        session.begin()
 
         assertTrue(channel.sent[0].contains("Tracing.start"))
-        assertTrue(channel.sent[0].contains("ReturnAsStream"))
+        assertTrue(channel.sent[0].contains("ReportEvents"))
+        assertEquals("""{"traceEvents":[""", sink.toString("UTF-8"))
+        assertTrue(session.isOpen)
     }
 
     @Test
-    fun finish_writes_the_stream_then_closes_it() {
+    fun finish_streams_data_collected_events_and_seals_valid_json() {
         val channel = FakeChannel(
             listOf(
                 """{"id":1,"result":{}}""",
-                """{"method":"Tracing.tracingComplete","params":{"stream":"H1"}}""",
-                ioRead("H1", "{\"traceEvents\":[", false),
-                ioRead("H1", "]}", true),
-                """{"id":2,"result":{}}""",
+                """{"method":"Tracing.dataCollected","params":{"value":[{"name":"a","ph":"X","ts":1,"dur":2}]}}""",
+                """{"method":"Tracing.dataCollected","params":{"value":[{"name":"b","ph":"I","ts":5}]}}""",
+                """{"method":"Tracing.tracingComplete","params":{}}""",
             ),
         )
         val sink = ByteArrayOutputStream()
@@ -50,48 +45,91 @@ class LukerCdpTraceTest {
         session.begin()
 
         val written = session.finish()
+        val text = sink.toString("UTF-8")
 
-        assertEquals("""{"traceEvents":[]}""", sink.toString("UTF-8"))
+        assertTrue(text.endsWith("]}\n"))
         assertEquals(sink.size().toLong(), written)
-        assertTrue(channel.sent.last().contains("IO.close"))
-        assertTrue(channel.sent.any { it.contains("IO.read") })
+        val parsed = JSONObject(text)
+        val events = parsed.getJSONArray("traceEvents")
+        assertEquals(2, events.length())
+        assertEquals("a", events.getJSONObject(0).getString("name"))
+        assertEquals("b", events.getJSONObject(1).getString("name"))
         assertFalse(session.isOpen)
     }
 
     @Test
-    fun an_empty_stream_still_closes_and_returns_zero() {
-        val channel = FakeChannel(
-            listOf(
+    fun seal_if_open_after_unexpected_eof_preserves_partial_valid_json() {
+        val eofChannel = object : CdpChannel {
+            val sent = mutableListOf<String>()
+            private val messages = listOf(
                 """{"id":1,"result":{}}""",
-                """{"method":"Tracing.tracingComplete","params":{"stream":"H1"}}""",
-                ioRead("H1", "", true),
-                """{"id":2,"result":{}}""",
-            ),
-        )
-        val session = TraceSession(channel, ByteArrayOutputStream())
+                """{"method":"Tracing.dataCollected","params":{"value":[{"name":"partial","ph":"X","ts":10,"dur":4}]}}""",
+            )
+            private var index = 0
+
+            override fun sendText(text: String) {
+                sent.add(text)
+            }
+
+            override fun readMessage(): String {
+                if (index >= messages.size) {
+                    throw IOException("ws-read: close frame received")
+                }
+                return messages[index++]
+            }
+        }
+
+        val sink = ByteArrayOutputStream()
+        val session = TraceSession(eofChannel, sink)
         session.begin()
 
-        assertEquals(0L, session.finish())
+        // Pump until channel hits EOF, simulating renderer crash mid-trace
+        try {
+            session.pumpUntilClosed()
+        } catch (_: IOException) {
+            // expected EOF
+        }
+        val written = session.sealIfOpen()
+        val text = sink.toString("UTF-8")
+
+        assertTrue(text.endsWith("]}\n"))
+        assertEquals(sink.size().toLong(), written)
+        val parsed = JSONObject(text)
+        assertEquals(1, parsed.getJSONArray("traceEvents").length())
+        assertEquals("partial", parsed.getJSONArray("traceEvents").getJSONObject(0).getString("name"))
+        assertFalse(session.isOpen)
     }
 
     @Test
-    fun a_plain_text_chunk_is_written_as_is() {
-        val channel = FakeChannel(
-            listOf(
-                """{"id":1,"result":{}}""",
-                """{"method":"Tracing.tracingComplete","params":{"stream":"H1"}}""",
-                ioReadText("H1", "{\"traceEvents\":[", false),
-                ioReadText("H1", "]}", true),
-                """{"id":2,"result":{}}""",
-            ),
-        )
-        val sink = ByteArrayOutputStream()
-        val session = TraceSession(channel, sink)
+    fun is_active_recording_becomes_false_immediately_while_finish_is_draining() {
+        val enterFinishRead = java.util.concurrent.CountDownLatch(1)
+        val releaseComplete = java.util.concurrent.CountDownLatch(1)
+        val blockingChannel = object : CdpChannel {
+            private var sentStartAck = false
+            override fun sendText(text: String) {}
+            override fun readMessage(): String {
+                if (!sentStartAck) {
+                    sentStartAck = true
+                    return """{"id":1,"result":{}}"""
+                }
+                enterFinishRead.countDown()
+                releaseComplete.await()
+                return """{"method":"Tracing.tracingComplete","params":{}}"""
+            }
+        }
+
+        val session = TraceSession(blockingChannel, ByteArrayOutputStream())
         session.begin()
+        assertTrue(session.isActiveRecording)
 
-        val written = session.finish()
+        val worker = Thread { session.finish() }
+        worker.start()
+        enterFinishRead.await()
 
-        assertEquals("""{"traceEvents":[]}""", sink.toString("UTF-8"))
-        assertEquals(sink.size().toLong(), written)
+        assertFalse(session.isActiveRecording)
+        releaseComplete.countDown()
+        worker.join(2_000)
+        assertFalse(session.isOpen)
+        assertFalse(session.isActiveRecording)
     }
 }

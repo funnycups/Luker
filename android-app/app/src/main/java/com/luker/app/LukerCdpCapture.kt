@@ -10,7 +10,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
-import java.util.Base64
 import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONObject
 
@@ -80,13 +79,15 @@ internal const val TRACE_CATEGORIES =
         "disabled-by-default-devtools.timeline.frame," +
         "disabled-by-default-v8.cpu_profiler"
 
+private const val TRACE_HEADER = """{"traceEvents":["""
+private const val TRACE_FOOTER = "]}\n"
+private const val RETAINED_TRACE_LIMIT = 2
+private const val FINALIZE_WAIT_TIMEOUT_MS = 2_000L
+
 /**
- * One performance recording, spanning `Tracing.start` … `Tracing.end`.
- *
- * `transferMode: ReturnAsStream` makes Chromium buffer the trace and hand it
- * back through `IO.read` once the recording ends, so [begin] returns as soon
- * as the recording starts and the trace bytes arrive during [finish]. The
- * channel must stay connected for the whole session.
+ * One performance recording, spanning `Tracing.start` … `Tracing.end` using
+ * `transferMode: ReportEvents` so trace events stream straight to [sink] as
+ * `Tracing.dataCollected` notifications arrive.
  *
  * No screenshot categories are requested: the images dominate the file size
  * and add nothing to a stall investigation.
@@ -94,72 +95,209 @@ internal const val TRACE_CATEGORIES =
 internal class TraceSession(
     private val channel: CdpChannel,
     private val sink: OutputStream,
+    private val discoverTargets: Boolean = false,
+    private val trackedTargetId: String? = null,
+    private val onTargetLost: (() -> Unit)? = null,
 ) {
+    private val sinkLock = Any()
+    private val completionLock = java.lang.Object()
+
     private var nextId = 1
+    private var startId = 0
+    private var endId = 0
 
     @Volatile
     private var open = false
 
+    @Volatile
+    private var finalizing = false
+
+    @Volatile
+    private var headerWritten = false
+
+    @Volatile
+    private var sealed = false
+
+    @Volatile
+    private var readerActive = false
+
+    @Volatile
+    private var tracingComplete = false
+
+    @Volatile
+    private var readerClosed = false
+
+    @Volatile
+    private var endCommandError: IOException? = null
+
+    @Volatile
+    private var bytesWritten = 0L
+
+    @Volatile
+    private var eventCount = 0L
+
     val isOpen: Boolean get() = open
+    val isActiveRecording: Boolean get() = open && !finalizing
+    val collectedEventCount: Long get() = eventCount
+    val hasHeader: Boolean get() = headerWritten
 
     fun begin() {
         check(!open) { "cdp-trace: session already open" }
+        if (discoverTargets) {
+            channel.sendText("""{"id":${nextId++},"method":"Target.setDiscoverTargets","params":{"discover":true}}""")
+        }
+        startId = nextId++
         channel.sendText(
-            """{"id":${nextId++},"method":"Tracing.start","params":""" +
-                """{"categories":"$TRACE_CATEGORIES","transferMode":"ReturnAsStream"}}""",
+            """{"id":$startId,"method":"Tracing.start","params":""" +
+                """{"categories":"$TRACE_CATEGORIES","transferMode":"ReportEvents"}}""",
         )
+
+        while (true) {
+            val obj = JSONObject(channel.readMessage())
+            if (obj.optInt("id", -1) != startId) {
+                continue
+            }
+            failOnError(obj, "Tracing.start")
+            break
+        }
+
+        synchronized(sinkLock) {
+            val headerBytes = TRACE_HEADER.toByteArray(Charsets.UTF_8)
+            sink.write(headerBytes)
+            sink.flush()
+            headerWritten = true
+            bytesWritten += headerBytes.size
+        }
         open = true
     }
 
     /**
-     * Ends the recording, drains the returned stream into [sink] and closes
-     * the handle. Returns the number of bytes written.
-     *
-     * Throws [IOException] on a transport error or a CDP error response;
-     * `open` stays true in that case so the caller can still tear down.
+     * Reads CDP messages from [channel] until `Tracing.tracingComplete` arrives
+     * or the channel closes, streaming every `Tracing.dataCollected` batch to [sink].
      */
-    fun finish(): Long {
-        check(open) { "cdp-trace: session is not open" }
-        channel.sendText("""{"id":${nextId++},"method":"Tracing.end"}""")
-
-        var stream: String? = null
-        while (stream == null) {
-            val obj = JSONObject(channel.readMessage())
-            failOnError(obj, "Tracing.end")
-            if (obj.optString("method") != "Tracing.tracingComplete") continue
-            stream = obj.optJSONObject("params")?.optString("stream")?.takeIf { it.isNotEmpty() }
-                ?: throw IOException("cdp-trace: tracingComplete carried no stream handle")
-        }
-
-        var written = 0L
-        while (true) {
-            channel.sendText(
-                """{"id":${nextId++},"method":"IO.read","params":""" +
-                    """{"handle":"$stream","size":$TRACE_READ_CHUNK_BYTES}}""",
-            )
-            val obj = JSONObject(channel.readMessage())
-            failOnError(obj, "IO.read")
-            val result = obj.optJSONObject("result")
-                ?: throw IOException("cdp-trace: IO.read returned no result")
-            val data = result.optString("data")
-            if (data.isNotEmpty()) {
-                // IO.read hands back plain text unless the stream is binary,
-                // in which case it base64-encodes and says so.
-                val bytes = if (result.optBoolean("base64Encoded", false)) {
-                    Base64.getDecoder().decode(data)
-                } else {
-                    data.toByteArray(Charsets.UTF_8)
+    fun pumpUntilClosed() {
+        readerActive = true
+        try {
+            while (open && !tracingComplete) {
+                val raw = channel.readMessage()
+                if (processIncomingMessage(raw)) {
+                    break
                 }
-                sink.write(bytes)
-                written += bytes.size
             }
-            if (result.optBoolean("eof", false)) break
+        } finally {
+            synchronized(completionLock) {
+                readerClosed = true
+                completionLock.notifyAll()
+            }
         }
-        sink.flush()
+    }
 
-        channel.sendText("""{"id":${nextId++},"method":"IO.close","params":{"handle":"$stream"}}""")
+    /**
+     * Ends the recording, waits for trailing `Tracing.dataCollected` events up
+     * to `Tracing.tracingComplete` (bounded by [timeoutMs] when positive), and
+     * seals the JSON trace file.
+     */
+    fun finish(timeoutMs: Long = 0L): Long {
+        check(open) { "cdp-trace: session is not open" }
+        finalizing = true
+        val currentEndId = nextId++
+        endId = currentEndId
+        channel.sendText("""{"id":$currentEndId,"method":"Tracing.end"}""")
+
+        if (readerActive) {
+            val deadline = if (timeoutMs > 0L) System.currentTimeMillis() + timeoutMs else 0L
+            synchronized(completionLock) {
+                while (!tracingComplete && !readerClosed) {
+                    if (timeoutMs <= 0L) {
+                        completionLock.wait()
+                    } else {
+                        val remaining = deadline - System.currentTimeMillis()
+                        if (remaining <= 0L) break
+                        completionLock.wait(remaining)
+                    }
+                }
+            }
+            endCommandError?.let { throw it }
+        } else {
+            while (!tracingComplete) {
+                val raw = channel.readMessage()
+                if (processIncomingMessage(raw)) {
+                    break
+                }
+            }
+            endCommandError?.let { throw it }
+        }
+
+        return sealIfOpen()
+    }
+
+    /**
+     * Seals the JSON array (`]}\n`) idempotently if the header was written.
+     * Safe to call after unexpected channel EOF or timeout.
+     */
+    fun sealIfOpen(): Long = synchronized(sinkLock) {
+        if (sealed) return@synchronized bytesWritten
         open = false
-        return written
+        if (!headerWritten) return@synchronized 0L
+        val footerBytes = TRACE_FOOTER.toByteArray(Charsets.UTF_8)
+        sink.write(footerBytes)
+        sink.flush()
+        bytesWritten += footerBytes.size
+        sealed = true
+        bytesWritten
+    }
+
+    private fun processIncomingMessage(raw: String): Boolean {
+        val obj = JSONObject(raw)
+        if (endId > 0 && obj.optInt("id", -1) == endId) {
+            val error = obj.optJSONObject("error")
+            if (error != null) {
+                endCommandError = IOException("cdp-trace: Tracing.end failed: ${error.optString("message", "unknown error")}")
+                synchronized(completionLock) {
+                    tracingComplete = true
+                    completionLock.notifyAll()
+                }
+                return true
+            }
+        }
+
+        when (obj.optString("method")) {
+            "Tracing.dataCollected" -> {
+                val events = obj.optJSONObject("params")?.optJSONArray("value")
+                if (events != null && events.length() > 0) {
+                    appendEvents(events)
+                }
+            }
+            "Tracing.tracingComplete" -> {
+                synchronized(completionLock) {
+                    tracingComplete = true
+                    completionLock.notifyAll()
+                }
+                return true
+            }
+            "Target.targetCrashed", "Target.targetDestroyed" -> {
+                val targetId = obj.optJSONObject("params")?.optString("targetId", "") ?: ""
+                if (trackedTargetId.isNullOrEmpty() || targetId == trackedTargetId) {
+                    onTargetLost?.invoke()
+                }
+            }
+        }
+        return false
+    }
+
+    private fun appendEvents(events: org.json.JSONArray) = synchronized(sinkLock) {
+        if (sealed || !headerWritten) return@synchronized
+        val sb = StringBuilder()
+        for (i in 0 until events.length()) {
+            if (eventCount > 0L) sb.append(',')
+            val item = events.get(i)
+            sb.append(if (item is String) JSONObject.quote(item) else item.toString())
+            eventCount++
+        }
+        val bytes = sb.toString().toByteArray(Charsets.UTF_8)
+        sink.write(bytes)
+        sink.flush()
+        bytesWritten += bytes.size
     }
 
     private fun failOnError(obj: JSONObject, what: String) {
@@ -235,36 +373,93 @@ object LukerCdpCapture {
 
     /**
      * Opens a trace session and leaves it recording: the connection stays
-     * open until [stopTrace] or [abortTrace] ends it. Returns [target].
-     *
-     * Throws when a session is already recording, when the socket is not up
-     * yet or the target list holds no local page, or on any transport error.
+     * open until [stopTrace] or [finalizeTrace] ends it. Prefers the browser
+     * CDP target (surviving renderer exit/navigation) and falls back to the
+     * local page target when unavailable or rejected.
      */
     fun startTrace(pid: Int, target: File): File = synchronized(traceLock) {
         check(traceSession == null) { "cdp-capture: a trace is already recording" }
         val targetInfo = LukerCdpTarget.fetchTarget(pid)
             ?: throw IOException("cdp-capture: no devtools target for pid=$pid")
-        val wsPath = LukerCdpTarget.extractPath(targetInfo.optString("webSocketDebuggerUrl", ""))
-        if (wsPath.isEmpty()) throw IOException("cdp-capture: target has no websocket path pid=$pid")
+        val pagePath = LukerCdpTarget.extractPath(targetInfo.optString("webSocketDebuggerUrl", ""))
+        if (pagePath.isEmpty()) throw IOException("cdp-capture: target has no websocket path pid=$pid")
+        val trackedTargetId = targetInfo.optString("id", "").takeIf { it.isNotEmpty() }
+        val browserPath = LukerCdpTarget.fetchBrowserPath(pid)
 
-        target.parentFile?.mkdirs()
-        val sock = LocalSocket()
-        var sink: OutputStream? = null
+        target.parentFile?.let { dir ->
+            dir.mkdirs()
+            pruneOldTraces(dir)
+        }
+
+        val out = BufferedOutputStream(FileOutputStream(target))
+        var activeSock: LocalSocket? = null
+
+        fun connectEndpoint(wsPath: String, discoverTargets: Boolean): Pair<LocalSocket, TraceSession> {
+            val sock = LocalSocket()
+            try {
+                sock.connect(LocalSocketAddress(LukerCdpTarget.socketName(pid), LocalSocketAddress.Namespace.ABSTRACT))
+                val ws = LukerWebSocketClient(sock.inputStream, sock.outputStream, CAPTURE_MAX_MESSAGE_BYTES)
+                ws.handshake(wsPath)
+                val s = TraceSession(
+                    channel = LukerWebSocketChannel(ws),
+                    sink = out,
+                    discoverTargets = discoverTargets,
+                    trackedTargetId = trackedTargetId,
+                    onTargetLost = {
+                        Thread({ finalizeTrace() }, "luker-trace-target-lost").apply { isDaemon = true }.start()
+                    },
+                )
+                s.begin()
+                return sock to s
+            } catch (t: Throwable) {
+                runCatching { sock.close() }
+                throw t
+            }
+        }
+
         try {
-            sock.connect(LocalSocketAddress(LukerCdpTarget.socketName(pid), LocalSocketAddress.Namespace.ABSTRACT))
-            val ws = LukerWebSocketClient(sock.inputStream, sock.outputStream, CAPTURE_MAX_MESSAGE_BYTES)
-            ws.handshake(wsPath)
-            val out = BufferedOutputStream(FileOutputStream(target))
-            sink = out
-            val session = TraceSession(LukerWebSocketChannel(ws), out)
-            session.begin()
-            traceSession = session
-            traceSocket = sock
+            var targetMode = "page"
+            var activeSession: TraceSession? = null
+            if (browserPath != null) {
+                try {
+                    val pair = connectEndpoint(browserPath, true)
+                    activeSock = pair.first
+                    activeSession = pair.second
+                    targetMode = "browser"
+                } catch (browserError: Throwable) {
+                    LukerDebugTrail.append(
+                        "native",
+                        "cdp-capture state=trace-browser-fallback err=${browserError.message ?: browserError.javaClass.simpleName}",
+                    )
+                }
+            }
+            if (activeSession == null) {
+                val pair = connectEndpoint(pagePath, false)
+                activeSock = pair.first
+                activeSession = pair.second
+                targetMode = "page"
+            }
+
+            traceSession = activeSession
+            traceSocket = activeSock
             traceSink = out
             traceTarget = target
+            LukerDebugTrail.append("native", "cdp-capture state=trace-start targetMode=$targetMode file=${target.name}")
+
+            Thread({
+                try {
+                    activeSession.pumpUntilClosed()
+                } catch (_: Throwable) {
+                    // channel closed or read failed
+                } finally {
+                    if (activeSession.isOpen) {
+                        finalizeTrace()
+                    }
+                }
+            }, "luker-trace-reader").apply { isDaemon = true }.start()
         } catch (t: Throwable) {
-            runCatching { sink?.close() }
-            runCatching { sock.close() }
+            runCatching { out.close() }
+            runCatching { activeSock?.close() }
             target.delete()
             throw t
         }
@@ -274,10 +469,6 @@ object LukerCdpCapture {
     /**
      * Ends the recording, writes the trace to the session's target file and
      * returns it. The session is always torn down, even on failure.
-     *
-     * Throws [IllegalStateException] when nothing is recording; deletes the
-     * target and rethrows when the trace could not be drained, so an
-     * incomplete trace is never offered as a result.
      */
     fun stopTrace(): File = synchronized(traceLock) {
         val session = traceSession ?: throw IllegalStateException("cdp-capture: no trace is recording")
@@ -287,8 +478,13 @@ object LukerCdpCapture {
             LukerDebugTrail.append("native", "cdp-capture state=trace-write bytes=$written file=${target.name}")
             target
         } catch (t: Throwable) {
-            target.delete()
-            throw t
+            val sealedBytes = runCatching { session.sealIfOpen() }.getOrDefault(0L)
+            if (sealedBytes <= 0L || session.collectedEventCount == 0L) {
+                target.delete()
+                throw t
+            }
+            LukerDebugTrail.append("native", "cdp-capture state=trace-partial bytes=$sealedBytes file=${target.name}")
+            target
         } finally {
             runCatching { traceSink?.close() }
             runCatching { traceSocket?.close() }
@@ -299,7 +495,7 @@ object LukerCdpCapture {
         }
     }
 
-    fun isTraceRecording(): Boolean = traceSession?.isOpen == true
+    fun isTraceRecording(): Boolean = traceSession?.isActiveRecording == true
 
     /**
      * Claims the single heap-snapshot slot. Returns false when a capture is
@@ -313,24 +509,46 @@ object LukerCdpCapture {
     }
 
     /**
-     * Finalizes a recording that can no longer continue — the renderer is gone
-     * or the page navigated away. Flushes and closes the sink and socket and
-     * clears the session. Returns false when nothing was recording.
-     *
-     * With `transferMode: ReturnAsStream` the trace bytes are only handed over
-     * once `Tracing.end` runs, so an aborted recording has written nothing yet;
-     * whatever landed on disk stays there for a manual pull.
+     * Finalizes a recording when the renderer exits or the page navigates away.
+     * Sends `Tracing.end` if the channel is still live (bounded timeout), or
+     * seals the already-streamed partial trace on disk. Deletes the file only
+     * when zero events/bytes were captured.
      */
-    fun abortTrace(): Boolean = synchronized(traceLock) {
-        if (traceSession == null) return@synchronized false
-        val name = traceTarget?.name
-        runCatching { traceSink?.close() }
-        runCatching { traceSocket?.close() }
-        traceSession = null
-        traceSocket = null
-        traceSink = null
-        traceTarget = null
-        LukerDebugTrail.append("native", "cdp-capture state=trace-abort file=${name ?: "<none>"}")
-        true
+    fun finalizeTrace(): File? = synchronized(traceLock) {
+        val session = traceSession ?: return@synchronized null
+        val target = traceTarget ?: return@synchronized null
+        var saved: File? = null
+        try {
+            runCatching { session.finish(FINALIZE_WAIT_TIMEOUT_MS) }
+            val written = runCatching { session.sealIfOpen() }.getOrDefault(0L)
+            if (written > 0L && session.collectedEventCount > 0L) {
+                saved = target
+                LukerDebugTrail.append("native", "cdp-capture state=trace-finalize bytes=$written events=${session.collectedEventCount} file=${target.name}")
+            } else {
+                target.delete()
+                LukerDebugTrail.append("native", "cdp-capture state=trace-finalize-empty file=${target.name}")
+            }
+        } finally {
+            runCatching { traceSink?.close() }
+            runCatching { traceSocket?.close() }
+            traceSession = null
+            traceSocket = null
+            traceSink = null
+            traceTarget = null
+        }
+        saved
+    }
+
+    fun abortTrace(): Boolean = finalizeTrace() != null
+
+    private fun pruneOldTraces(dir: File) {
+        val traces = dir.listFiles { f ->
+            f.isFile && f.name.startsWith("luker-trace-") && f.name.endsWith(".json")
+        }?.sortedWith(
+            compareByDescending<File> { it.lastModified() }.thenByDescending { it.name },
+        ) ?: return
+        for (i in RETAINED_TRACE_LIMIT until traces.size) {
+            traces[i].delete()
+        }
     }
 }

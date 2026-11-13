@@ -105,6 +105,7 @@ class LukerWebSocketClient(
         writeFrame(fin = true, opcode = OPCODE_PONG, payload = payload)
     }
 
+    @Synchronized
     private fun writeFrame(fin: Boolean, opcode: Byte, payload: ByteArray) {
         val b0 = ((if (fin) 0x80 else 0x00) or (opcode.toInt() and 0x0F)).toByte()
         dout.writeByte(b0.toInt())

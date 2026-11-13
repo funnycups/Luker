@@ -88,7 +88,7 @@ object LukerDiagnosticsExporter {
                 writeFileEntry(zip, "logcat/last.log", lastLogcat)
             }
 
-            runCatching { addCdpEntries(zip) }
+            runCatching { addCdpEntries(context, zip) }
                 .onFailure {
                     writeEntry(zip, "cdp/error.txt", ("CDP snapshot error: ${it.message ?: it.javaClass.simpleName}").toByteArray(Charsets.UTF_8))
                 }
@@ -170,7 +170,19 @@ object LukerDiagnosticsExporter {
         zip.closeEntry()
     }
 
-    private fun addCdpEntries(zip: ZipOutputStream) {
+    internal fun collectLatestTraceFile(cdpDir: File): File? {
+        if (!cdpDir.isDirectory) return null
+        return cdpDir.listFiles { f ->
+            f.isFile &&
+                f.name.startsWith("luker-trace-") &&
+                f.name.endsWith(".json") &&
+                f.length() > 0L
+        }?.maxWithOrNull(
+            compareBy<File> { it.lastModified() }.thenBy { it.name },
+        )
+    }
+
+    private fun addCdpEntries(context: Context, zip: ZipOutputStream) {
         val (current, bytesLimit) = LukerCdpCollector.snapshotForExport()
         if (current != null && current.isFile && bytesLimit > 0L) {
             zip.putNextEntry(ZipEntry("cdp/current.jsonl"))
@@ -190,6 +202,10 @@ object LukerDiagnosticsExporter {
         val last = LukerCdpCollector.lastRingFile()
         if (last != null && last.isFile) {
             writeFileEntry(zip, "cdp/last.jsonl", last)
+        }
+        val latestTrace = collectLatestTraceFile(File(context.filesDir, LukerCdpCollector.CDP_DIR_NAME))
+        if (latestTrace != null && latestTrace.isFile) {
+            writeFileEntry(zip, "cdp/${latestTrace.name}", latestTrace)
         }
     }
 

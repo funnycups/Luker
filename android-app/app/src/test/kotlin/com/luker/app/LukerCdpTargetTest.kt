@@ -61,4 +61,16 @@ class LukerCdpTargetTest {
         val raw = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
         LukerCdpTarget.readHttpBody(DataInputStream(ByteArrayInputStream(raw.toByteArray())))
     }
+
+    @Test
+    fun select_browser_path_extracts_devtools_browser_websocket_path() {
+        val json = """{"Browser":"Chrome/144.0.0.0","webSocketDebuggerUrl":"ws://localhost/devtools/browser/abc-123"}"""
+        assertEquals("/devtools/browser/abc-123", LukerCdpTarget.selectBrowserPath(json))
+    }
+
+    @Test
+    fun select_browser_path_returns_empty_when_websocket_url_missing() {
+        assertEquals("", LukerCdpTarget.selectBrowserPath("""{"Browser":"Chrome/144.0.0.0"}"""))
+        assertEquals("", LukerCdpTarget.selectBrowserPath("{}"))
+    }
 }

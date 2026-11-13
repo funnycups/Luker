@@ -47,6 +47,11 @@ object LukerCdpTarget {
             }
         }
         val headers = headerBuf.toString()
+        val statusMatch = Regex("^HTTP/\\d+\\.\\d+\\s+(\\d+)").find(headers)
+        val status = statusMatch?.groupValues?.get(1)?.toIntOrNull()
+        if (status != null && status >= 400) {
+            throw IOException("http: status $status")
+        }
         val lenMatch = Regex("(?i)Content-Length:\\s*(\\d+)").find(headers)
         val len = lenMatch?.groupValues?.get(1)?.toIntOrNull() ?: throw IOException("http: no Content-Length")
         val body = ByteArray(len)
@@ -74,18 +79,40 @@ object LukerCdpTarget {
         return if (idx >= 0) url.substring(idx) else ""
     }
 
+    /** Returns the browser-level `/devtools/...` WebSocket path from `/json/version` JSON, or `""`. */
+    fun selectBrowserPath(versionJson: String): String {
+        val url = JSONObject(versionJson).optString("webSocketDebuggerUrl", "")
+        return extractPath(url)
+    }
+
+    /** Performs an HTTP GET against [path] over the abstract devtools socket for [pid]. */
+    fun fetchHttpBody(pid: Int, path: String): String {
+        LocalSocket().use { sock ->
+            sock.connect(LocalSocketAddress(socketName(pid), LocalSocketAddress.Namespace.ABSTRACT))
+            val out = sock.outputStream
+            out.write("GET $path HTTP/1.1\r\nHost: localhost\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
+            out.flush()
+            val input = DataInputStream(sock.inputStream)
+            return readHttpBody(input)
+        }
+    }
+
     /**
      * Opens the abstract devtools socket for [pid] and returns the matching
      * target, or `null` when the list holds no local page.
      */
-    fun fetchTarget(pid: Int): JSONObject? {
-        LocalSocket().use { sock ->
-            sock.connect(LocalSocketAddress(socketName(pid), LocalSocketAddress.Namespace.ABSTRACT))
-            val out = sock.outputStream
-            out.write("GET /json/list HTTP/1.1\r\nHost: localhost\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
-            out.flush()
-            val input = DataInputStream(sock.inputStream)
-            return selectTarget(readHttpBody(input))
+    fun fetchTarget(pid: Int): JSONObject? =
+        selectTarget(fetchHttpBody(pid, "/json/list"))
+
+    /**
+     * Opens the abstract devtools socket for [pid] and returns the browser-level
+     * WebSocket path advertised by `/json/version`, or `null` when unavailable.
+     */
+    fun fetchBrowserPath(pid: Int): String? =
+        try {
+            selectBrowserPath(fetchHttpBody(pid, "/json/version")).takeIf { it.isNotEmpty() }
+        } catch (t: Throwable) {
+            LukerDebugTrail.append("native", "cdp-target version-probe-fail err=${t.message ?: t.javaClass.simpleName}")
+            null
         }
-    }
 }
