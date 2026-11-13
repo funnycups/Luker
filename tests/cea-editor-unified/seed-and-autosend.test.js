@@ -82,4 +82,36 @@ describe('CEA card Workbench seed draft behavior', () => {
             globalThis.Luker = prevLuker;
         }
     });
+
+    test('seedPrompt + hideSeedFromUi + autoSend automatically dispatches turn and hides seed bubble', async () => {
+        const ctx = {
+            characterId: 0,
+            characters: [{ avatar: 'alice.png', name: 'Alice', data: { extensions: {} } }],
+            loadWorldInfo: async () => null,
+            getCharaAuxWorlds: () => [],
+            chatWorldInfo: { getNames: () => [] },
+        };
+        const prevLuker = globalThis.Luker;
+        globalThis.Luker = { getContext: () => ctx };
+        try {
+            const app = makeApp(ctx);
+            const aiSpy = jest.fn(async () => ({ text: 'Auto-send reply.', calls: [] }));
+            app.source.aiRequest = aiSpy;
+            const page = createIteratePage(app);
+            await page.show({
+                ws: 'card',
+                scope: 'character',
+                seedPrompt: 'HIDDEN_SEED_PROMPT',
+                hideSeedFromUi: true,
+                autoSend: true,
+            });
+            expect(aiSpy).toHaveBeenCalledTimes(1);
+            const sentMsgs = aiSpy.mock.calls[0][1].messages;
+            expect(sentMsgs.some(m => m.role === 'user' && m.content.includes('HIDDEN_SEED_PROMPT'))).toBe(true);
+            expect(page.el.querySelector('.wb-msg-me')).toBeNull();
+            expect(page.el.textContent).toContain('Auto-send reply.');
+        } finally {
+            globalThis.Luker = prevLuker;
+        }
+    });
 });

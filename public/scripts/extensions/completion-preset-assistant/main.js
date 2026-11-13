@@ -147,10 +147,8 @@ function registerLocaleData() {
         'working profile': '工作配置',
         '(root)': '（根）',
         '(${0}${1} bytes)': '（${0}${1} 字节）',
-        // Skill proposal cards (Bug 1 fix: skill authoring goes through
-        // per-card user review before commit). Strings consumed by
-        // cpa-iteration/studio.js's renderSkillPendingCard /
-        // commitApprovedSkillEditsForCpa / buildApplyOutcomeUserText.
+        // Skill proposal cards (skill authoring goes through per-card user
+        // review in Workbench before commit).
         'Update skill file': '更新 Skill 文件',
         'Update skill frontmatter': '更新 Skill 元信息',
         'Create skill': '新建 Skill',

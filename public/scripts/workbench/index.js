@@ -47,7 +47,7 @@ async function open(opts = null) {
     const instance = handle || mount({ collapsed: false });
     if (!instance) return null;
     if (opts && typeof opts === 'object' && Object.keys(opts).length > 0) {
-        instance.open(opts);
+        await instance.open(opts);
     } else if (instance.isCollapsed()) {
         instance.expand();
     } else {

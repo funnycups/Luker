@@ -15,10 +15,10 @@ import { defaultBox, clampBox, maxBox, sheetBox, pillPos, clampPill, isCompactWi
 import { loadPrefs, savePrefs } from '../prefs.js';
 
 /**
- * @param {{ title: string, onThemeToggle(): void, theme: () => string, startCollapsed?: boolean, pillVisible?: () => boolean, onExpand?(): void }} options
+ * @param {{ title: string, onThemeToggle(): void, theme: () => string, startCollapsed?: boolean, pillVisible?: () => boolean, onExpand?(): void, onCollapse?(): void }} options
  * @returns {{ layer: HTMLElement, body: HTMLElement, win: HTMLElement, setContext(text: string): void, setPill(...nodes: any[]): void, refresh(): void, collapse(): void, expand(): void, toggle(): void, isCollapsed(): boolean, isCompact(): boolean, paintTheme(): void, focus(): void, destroy(): void }}
  */
-export function createWindow({ title, onThemeToggle, theme, startCollapsed = false, pillVisible = () => true, onExpand = null }) {
+export function createWindow({ title, onThemeToggle, theme, startCollapsed = false, pillVisible = () => true, onExpand = null, onCollapse = null }) {
     const prefs = loadPrefs();
     let box = parseSavedBox(prefs.box);
     let maximised = Boolean(prefs.maximised);
@@ -173,8 +173,10 @@ export function createWindow({ title, onThemeToggle, theme, startCollapsed = fal
     });
 
     function collapse() {
+        const wasCollapsed = collapsed;
         collapsed = true;
         apply();
+        if (!wasCollapsed) onCollapse?.();
     }
     function expand() {
         collapsed = false;

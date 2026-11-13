@@ -14,6 +14,8 @@ import {
     trimMessages,
 } from '../../public/scripts/workbench/model/iterate.js';
 import { createIteratePage } from '../../public/scripts/workbench/pages/iterate.js';
+import { mountWorkbench } from '../../public/scripts/workbench/app.js';
+import { createWorkbenchRegistry } from '../../public/scripts/workbench/registry.js';
 import { aiRequest } from '../../public/scripts/workbench/source-luker.js';
 
 function flushMicrotasks() {
@@ -1096,5 +1098,174 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
             expect.stringContaining('This draft is no longer available'),
             expect.objectContaining({ error: true }),
         );
+    });
+
+    test('supports seedPrompt + hideSeedFromUi + autoSend + onCancelWithoutApply across collapse, close, and apply', async () => {
+        function makeHarness() {
+            const sessions = createMemorySessionStore();
+            const registry = createWorkbenchRegistry();
+            let diskDesc = 'Before';
+            let aiCallCount = 0;
+            const sentMessages = [];
+
+            const cardTarget = {
+                id: 'card',
+                label: 'Character card',
+                tone: 'card',
+                scopes: async () => ({ character: true }),
+                load: async () => ({
+                    live: { description: diskDesc },
+                    target: { scope: 'character', avatar: 'alice.png' },
+                    title: 'Alice',
+                }),
+                prompt: async () => 'card sys',
+                tools: async () => [{ type: 'function', function: { name: 'edit_desc' } }],
+                isRead: () => false,
+                runRead: async () => ({}),
+                runEdit: async (_c, live) => ({ ...live, description: 'After' }),
+                units: (live) => new Map([[
+                    'card:description',
+                    {
+                        key: 'card:description',
+                        label: 'Description',
+                        group: 'Card',
+                        text: live.description,
+                        fields: { description: live.description },
+                    },
+                ]]),
+                rebuild: (_b, ai) => ai,
+                commit: async (_t, _b, next, keys) => {
+                    const prev = diskDesc;
+                    diskDesc = next.description;
+                    return { applied: keys, skipped: [], failure: '', undo: async () => { diskDesc = prev; } };
+                },
+            };
+            registry.registerIterateTarget(cardTarget);
+
+            const source = {
+                readSettings: () => ({ builtinPrompt: false, reviewChanges: true, pill: false }),
+                writeSettings: () => {},
+                loadSnapshot: async () => ({
+                    chat: { label: 'Chat 1', character: { avatar: 'alice.png', name: 'Alice' } },
+                    card: { name: 'Alice', avatar: 'alice.png' },
+                }),
+                subscribe: () => () => {},
+                createSessions: () => sessions,
+                historyStorage: () => null,
+                runRules: () => [],
+                lastReply: async () => '',
+                aiRequest: jest.fn(async (_ws, { messages }) => {
+                    sentMessages.push(JSON.parse(JSON.stringify(messages)));
+                    aiCallCount++;
+                    if (aiCallCount === 1) {
+                        return { text: '', calls: [{ id: 'e1', name: 'edit_desc', args: {} }] };
+                    }
+                    return { text: 'Summary of diff.', calls: [] };
+                }),
+            };
+
+            const wb = mountWorkbench({ source, registry, startCollapsed: false });
+            return { wb, sessions, sentMessages, getDiskDesc: () => diskDesc };
+        }
+
+        // (a) seedPrompt + hideSeedFromUi + autoSend triggers turn automatically, hides user seed bubble,
+        // preserves seed in messages for turn 2, and invokes onCancelWithoutApply once on collapse+close.
+        {
+            const { wb, sentMessages } = makeHarness();
+            const cancelSpy = jest.fn(async () => {});
+            await wb.open({
+                page: 'ai',
+                ws: 'card',
+                scope: 'character',
+                seedPrompt: 'SEED_DIFF_FOR_AI',
+                hideSeedFromUi: true,
+                autoSend: true,
+                onCancelWithoutApply: cancelSpy,
+            });
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            expect(sentMessages.length).toBeGreaterThanOrEqual(1);
+            expect(sentMessages[0].some(m => m.role === 'user' && m.content.includes('SEED_DIFF_FOR_AI'))).toBe(true);
+            // Hidden seed user bubble must NOT render in UI, while AI reply renders.
+            const userBubbles = [...document.querySelectorAll('.wb-msg-me')].map(el => el.textContent);
+            expect(userBubbles.some(t => t.includes('SEED_DIFF_FOR_AI'))).toBe(false);
+            expect(document.body.textContent).toContain('Summary of diff.');
+
+            // Follow-up user turn still replays the hidden seed message in API history.
+            const textarea = wb.layer?.querySelector?.('textarea.wb-input') || document.querySelector('textarea.wb-input');
+            const sendBtn = document.querySelector('button.wb-send');
+            textarea.value = 'Proceed with migration';
+            sendBtn.click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(sentMessages.at(-1).some(m => m.role === 'user' && m.content.includes('SEED_DIFF_FOR_AI'))).toBe(true);
+            expect(sentMessages.at(-1).some(m => m.role === 'user' && m.content.includes('Proceed with migration'))).toBe(true);
+
+            // Collapse without applying -> fires cancelSpy once; subsequent close must NOT fire again.
+            wb.collapse();
+            await flushMicrotasks();
+            expect(cancelSpy).toHaveBeenCalledTimes(1);
+            wb.close();
+            await flushMicrotasks();
+            expect(cancelSpy).toHaveBeenCalledTimes(1);
+        }
+
+        // (b) Applying at least once suppresses onCancelWithoutApply on collapse + close.
+        {
+            const { wb, getDiskDesc } = makeHarness();
+            const cancelSpy = jest.fn(async () => {});
+            await wb.open({
+                page: 'ai',
+                ws: 'card',
+                scope: 'character',
+                seedPrompt: 'SEED_APPLY_CASE',
+                hideSeedFromUi: true,
+                autoSend: true,
+                onCancelWithoutApply: cancelSpy,
+            });
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            const applyBtn = [...document.querySelectorAll('.wb-chg-foot button')].find(b => b.textContent.includes('Apply selected'));
+            expect(applyBtn).toBeTruthy();
+            applyBtn.click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(getDiskDesc()).toBe('After');
+
+            wb.collapse();
+            await flushMicrotasks();
+            wb.close();
+            await flushMicrotasks();
+            expect(cancelSpy).not.toHaveBeenCalled();
+        }
+
+        // (c) Starting a new chat without applying invokes onCancelWithoutApply once (and not again on close).
+        {
+            const { wb } = makeHarness();
+            const cancelSpy = jest.fn(async () => {});
+            await wb.open({
+                page: 'ai',
+                ws: 'card',
+                scope: 'character',
+                seedPrompt: 'SEED_ABANDON_CASE',
+                hideSeedFromUi: true,
+                autoSend: true,
+                onCancelWithoutApply: cancelSpy,
+            });
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            const newChatBtn = [...document.querySelectorAll('.wb-sess-head button')].find(b => b.textContent.includes('New conversation'));
+            expect(newChatBtn).toBeTruthy();
+            newChatBtn.click();
+            await flushMicrotasks();
+            expect(cancelSpy).toHaveBeenCalledTimes(1);
+
+            wb.close();
+            await flushMicrotasks();
+            expect(cancelSpy).toHaveBeenCalledTimes(1);
+        }
     });
 });

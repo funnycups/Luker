@@ -176,9 +176,17 @@ describe('CEA post-replace merge action & Workbench routing', () => {
         expect(call.page).toBe('ai');
         expect(call.ws).toBe('card');
         expect(call.scope).toBe('character');
-        expect(call.draft).toContain('post-replace iteration');
+        expect(call.seedPrompt).toContain('post-replace iteration');
+        expect(call.hideSeedFromUi).toBe(true);
+        expect(call.autoSend).toBe(true);
+        expect(typeof call.onCancelWithoutApply).toBe('function');
         expect(rebindSpy).not.toHaveBeenCalled();
         expect(deleteWorldBookSpy).not.toHaveBeenCalled();
+
+        // Closing/canceling without apply triggers the forwarded rollback hook.
+        await call.onCancelWithoutApply();
+        expect(rebindSpy).toHaveBeenCalledWith(0, 'OldBook');
+        expect(deleteWorldBookSpy).toHaveBeenCalledWith('NewBook');
     });
 
     test('rolls back pre-materialized world book when Workbench is unavailable', async () => {

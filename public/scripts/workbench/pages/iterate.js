@@ -133,6 +133,18 @@ export function createIteratePage(app) {
     let withReply = true;
     let sessOpen = false;
     let loadError = '';
+    let pendingCancelHook = null;
+
+    async function firePendingCancelHook() {
+        const hook = pendingCancelHook;
+        pendingCancelHook = null;
+        if (!hook || hook.applied || typeof hook.fn !== 'function') return;
+        try {
+            await hook.fn();
+        } catch (err) {
+            console.warn('[workbench/iterate] onCancelWithoutApply failed:', err);
+        }
+    }
 
     const getCtx = () => globalThis.Luker?.getContext?.() ?? globalThis.lukerContext ?? null;
     const getTargets = () => app.iterateTargets?.() || [];
@@ -353,6 +365,7 @@ export function createIteratePage(app) {
     }
 
     function newChat() {
+        void firePendingCancelHook();
         selectionVersion++;
         session = null;
         sessOpen = false;
@@ -361,6 +374,7 @@ export function createIteratePage(app) {
     }
 
     async function openSession(id) {
+        void firePendingCancelHook();
         const version = ++selectionVersion;
         const sOpts = sessionScopes.get(id) || scopeOptsFor() || { scope: 'global' };
         let loaded = recentSessions.find(x => x.id === id) || null;
@@ -499,6 +513,7 @@ export function createIteratePage(app) {
                 })),
                 ws,
                 (v) => {
+                    void firePendingCancelHook();
                     selectionVersion++;
                     ws = v;
                     session = null;
@@ -513,6 +528,7 @@ export function createIteratePage(app) {
                 scopeOptions,
                 scope,
                 (v) => {
+                    void firePendingCancelHook();
                     selectionVersion++;
                     scope = v;
                     session = null;
@@ -584,7 +600,10 @@ export function createIteratePage(app) {
         if (session?.forkedFrom) {
             put(body, h('div', { class: 'wb-fork-note', text: i18nFormat('Branched from "${0}"', session.forkedFrom) }));
         }
-        turns.forEach((turn, i) => put(body, turn.role === 'user' ? userBlock(turn, i, busy) : aiBlock(turn, i, busy)));
+        turns.forEach((turn, i) => {
+            if (turn.role === 'user' && turn.hidden) return;
+            put(body, turn.role === 'user' ? userBlock(turn, i, busy) : aiBlock(turn, i, busy));
+        });
         if (busy) {
             put(body, h('div', { class: 'wb-msg-ai' },
                 h('div', { class: 'wb-reads is-live' },
@@ -686,8 +705,12 @@ export function createIteratePage(app) {
             }, sOpts);
             if (version !== selectionVersion || session?.id !== targetSessionId) return;
             if (updated) session = updated;
-            input.value = q.text;
-            await send();
+            if (q.hidden) {
+                await send({ promptText: q.text, hideFromUi: true });
+            } else {
+                input.value = q.text;
+                await send();
+            }
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
         }
@@ -889,8 +912,10 @@ export function createIteratePage(app) {
         return out;
     }
 
-    async function send() {
-        const text = input.value.trim();
+    async function send(sendOpts = {}) {
+        const isProgrammatic = typeof sendOpts?.promptText === 'string';
+        const text = String(isProgrammatic ? sendOpts.promptText : input.value).trim();
+        const hideFromUi = Boolean(sendOpts?.hideFromUi);
         const runTargetObj = selectDefaultTarget();
         if (!text || !runTargetObj || currentBusy() || applying.has(session?.id) || blocked() || !store) return;
 
@@ -989,7 +1014,7 @@ export function createIteratePage(app) {
             drafts.set(ownerId, draft);
 
             let userContent = current.note ? `${current.note}\n\n${text}` : text;
-            if (session?.id === ownerId && input.value.trim() === text) {
+            if (!isProgrammatic && session?.id === ownerId && input.value.trim() === text) {
                 input.value = '';
                 grow();
             }
@@ -997,7 +1022,10 @@ export function createIteratePage(app) {
                 const reply = await app.source?.lastReply?.();
                 if (reply) userContent += `\n\n<最近一条回复>\n${reply}\n</最近一条回复>`;
             }
-            current = await saveTo({ turns: [...priorTurns, { role: 'user', text, at: Date.now() }], note: '' });
+            current = await saveTo({
+                turns: [...priorTurns, { role: 'user', text, ...(hideFromUi ? { hidden: true } : {}), at: Date.now() }],
+                note: '',
+            });
 
             runId = `it_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
             controller = new AbortController();
@@ -1159,6 +1187,10 @@ export function createIteratePage(app) {
                 kindAdapters: sessionTarget.proposalKinds,
             });
             const saved = new Set(handle.applied ?? keys);
+            if (saved.size > 0 && pendingCancelHook) {
+                pendingCancelHook.applied = true;
+                pendingCancelHook = null;
+            }
             const skipped = handle.skipped ?? [];
             const failure = handle.failure ?? '';
             const labelOf = (key) => turn.changes.find(c => c.key === key)?.label ?? key;
@@ -1308,6 +1340,20 @@ export function createIteratePage(app) {
             const version = ++selectionVersion;
             const targets = getTargets();
             if (!ws && targets.length) ws = targets[0].id;
+            const seed = typeof o.seedPrompt === 'string' ? o.seedPrompt.trim() : '';
+            const hasLaunchReset = Boolean(
+                o.onCancelWithoutApply
+                || (o.autoSend && seed)
+                || o.sessionId
+                || (o.ws && o.ws !== ws)
+                || (o.scope && o.scope !== scope),
+            );
+            if (hasLaunchReset) {
+                void firePendingCancelHook();
+            }
+            if (typeof o.onCancelWithoutApply === 'function') {
+                pendingCancelHook = { fn: o.onCancelWithoutApply, applied: false };
+            }
             if (o.sessionId) {
                 const sOpts = sessionScopes.get(o.sessionId) ?? null;
                 const s = store ? await store.get(o.sessionId, sOpts) : null;
@@ -1326,6 +1372,8 @@ export function createIteratePage(app) {
                 if (o.scope) scope = o.scope;
             } else if (o.scope) {
                 scope = o.scope;
+            } else if (o.autoSend && seed) {
+                session = null;
             }
             await refreshScopes();
             if (version !== selectionVersion) return;
@@ -1334,8 +1382,12 @@ export function createIteratePage(app) {
             paintAll();
             await refreshSessions();
             if (version !== selectionVersion) return;
-            if (o.draft) {
-                input.value = o.draft;
+            if (o.autoSend && seed) {
+                await ensureWork();
+                if (version !== selectionVersion) return;
+                await send({ promptText: seed, hideFromUi: Boolean(o.hideSeedFromUi) });
+            } else if (seed || o.draft) {
+                input.value = seed || o.draft;
                 grow();
             }
             requestAnimationFrame(() => input.focus());
@@ -1389,9 +1441,13 @@ export function createIteratePage(app) {
             if (run) { run.abort?.abort(); return true; }
             return false;
         },
+        onCollapse() {
+            return firePendingCancelHook();
+        },
         destroy() {
             for (const run of activeRuns.values()) run.abort?.abort();
             activeRuns.clear();
+            return firePendingCancelHook();
         },
     };
 }

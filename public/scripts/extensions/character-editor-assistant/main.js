@@ -92,7 +92,6 @@ const CHARACTER_EDITOR_SESSION_NAMESPACE = 'character_editor_assistant_sessions'
 
 const stateCache = new Map();
 const lorebookSnapshotCache = new Map();
-const editorStudioDialogLocks = new Set();
 
 function i18n(text) {
     return translate(String(text || ''));
@@ -1103,12 +1102,9 @@ async function clearHistoryRecords(context, { avatar = '' } = {}) {
 /**
  * Read the raw legacy CEA editor session bundle for an avatar. Returns the
  * underlying `sessions[]` array exactly as it was persisted on the character
- * card (no normalization beyond what the legacy store applied at write time),
- * so the M4 migration converter can introspect every original field.
+ * card (no normalization beyond what the legacy store applied at write time).
  *
- * Used only by the unified popup's first-open migration path
- * (`editor-iteration/studio.js`). Returns `[]` on any read error so the
- * popup's session list still loads (migration is best-effort).
+ * Returns `[]` on any read error so legacy session import stays best-effort.
  *
  * @param {object} context - SillyTavern context (currently unused; reserved
  *   for symmetry with `loadCharacterEditorSessionStore`).
@@ -1341,11 +1337,8 @@ async function mergeCharacterAttributes(context, avatar, patch) {
 
 /**
  * Apply a batch of Edit ops scoped to the character card and persist via
- * `mergeCharacterAttributes`. Used by the unified CEA editor's Apply commit
- * (editor-iteration/studio.js → _internalApplyPendingEdits). Studio.js
- * pre-groups its `pendingEdits` by `target.kind === 'character'` and hands
- * the slice here together with the live character snapshot the edits were
- * authored against.
+ * `platformCommitCharacterOperations`. Thin delegation kept for external callers
+ * and tests.
  *
  * Diff-against-original guard: we only forward the per-key delta to
  * `mergeCharacterAttributes`, so a batch that no-ops (every key already
@@ -1364,10 +1357,8 @@ export async function commitCharacterEditorOperations(context, avatar, edits, op
 
 /**
  * Apply a batch of Edit ops scoped to a single lorebook and persist via
- * `context.saveWorldInfo`. Used by the unified CEA editor's Apply commit
- * (editor-iteration/studio.js → _internalApplyPendingEdits). Studio.js
- * pre-groups its `pendingEdits` by `target.kind === 'lorebook'` AND
- * `target.bookName`, then calls this helper once per book.
+ * `platformCommitLorebookOperations`. Thin delegation kept for external callers
+ * and tests.
  *
  * @param {string} bookName Target lorebook name.
  * @param {Object} liveBook Pre-edit snapshot for this book.
@@ -3281,7 +3272,16 @@ export async function openCharacterEditorPopup(context = getContext(), opts = {}
     }
     const openOpts = { page: 'ai', ws: 'card', scope: 'character' };
     if (typeof opts?.seedSystemMessage === 'string' && opts.seedSystemMessage.trim()) {
-        openOpts.draft = opts.seedSystemMessage;
+        openOpts.seedPrompt = opts.seedSystemMessage;
+    }
+    if (opts?.hideSeedFromUi !== undefined) {
+        openOpts.hideSeedFromUi = Boolean(opts.hideSeedFromUi);
+    }
+    if (opts?.autoSend !== undefined) {
+        openOpts.autoSend = Boolean(opts.autoSend);
+    }
+    if (typeof opts?.postReplaceRollback === 'function') {
+        openOpts.onCancelWithoutApply = opts.postReplaceRollback;
     }
     return wb.open(openOpts);
 }
@@ -3747,19 +3747,17 @@ function renderJournalItems(state) {
 </div>`).join('')}`;
 }
 
-function canUseToolsInCurrentContext(context) {
-    try {
-        const record = getActiveCharacterRecord(context);
-        const avatar = String(record?.avatar || '').trim();
-        return Boolean(avatar) && editorStudioDialogLocks.has(avatar);
-    } catch {
-        return false;
-    }
-}
-
 async function handleToolOperation(kind, args) {
     const context = getContext();
-    if (!canUseToolsInCurrentContext(context)) {
+    try {
+        const record = getActiveCharacterRecord(context);
+        if (!String(record?.avatar || '').trim()) {
+            return {
+                status: 'ignored',
+                reason: i18n('Current chat has no active character.'),
+            };
+        }
+    } catch {
         return {
             status: 'ignored',
             reason: i18n('Current chat has no active character.'),

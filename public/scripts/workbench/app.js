@@ -102,6 +102,9 @@ export function mountWorkbench({
             if (!shown) { shown = true; showPage(); }
             load();
         },
+        onCollapse: () => {
+            for (const p of Object.values(corePages)) p.onCollapse?.();
+        },
     });
 
     const rail = h('nav', { class: 'wb-rail', role: 'tablist', 'aria-label': i18n('Workbench') });
@@ -137,7 +140,7 @@ export function mountWorkbench({
             activeTab = id;
             if (isKnownCore(id)) savePrefs({ page: id });
             paintRail();
-            showPage(opts);
+            return showPage(opts);
         },
         open(opts = {}) {
             if (win.isCollapsed()) {
@@ -145,7 +148,7 @@ export function mountWorkbench({
                 win.expand();
             }
             const target = resolveNavigationTarget(opts);
-            app.go(target, opts);
+            return app.go(target, opts);
         },
         saveSettings(next) {
             settings = next;
@@ -314,7 +317,7 @@ export function mountWorkbench({
         main.classList.toggle('is-flush', Boolean(next.flush));
         clear(main);
         put(main, next.el);
-        next.show?.(opts);
+        return next.show?.(opts);
     }
 
     function showToast(text, { action = '', onAction = null, error = false, duration = 3500 } = {}) {
