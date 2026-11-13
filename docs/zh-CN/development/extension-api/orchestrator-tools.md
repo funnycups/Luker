@@ -4,7 +4,7 @@
 
 ## 什么时候用这个 API
 
-你的扩展提供了一项能力，让某个编排 agent 自主调用会更顺手——查数据库、调第三方 API、跑 Stable Diffusion 出图，均可。如果用户装了编排器扩展，你注册的工具会出现在他们的编排编辑器「自定义工具 → 扩展（来自其他插件）」分组里，由他们按编排粒度决定开还是关。
+你的扩展提供了一项能力，让某个编排 agent 自主调用会更顺手——查数据库、调第三方 API、跑 Stable Diffusion 出图，均可。如果用户装了编排器扩展，你注册的工具会出现在**工作台 → 编排 → 准备阶段 → 自定义工具**中，由他们按编排粒度决定开还是关。
 
 如果用户没装编排器，你的工具也不会丢——注册调用会静默 no-op。你的扩展独立使用时仍然完整可用。
 
@@ -97,7 +97,7 @@ throw Object.assign(new Error('Database is read-only.'), {
 
 ## ST function tool 桥接
 
-如果你的扩展已经在用 SillyTavern 的 `registerFunctionTool` API，用户可以在编排编辑器里通过「桥接 SillyTavern 工具……」选择器把它桥接进来。桥接出来的工具叫 `st_<你的工具名>`，默认 `mode: 'write'`。你这边不用改任何代码。
+如果你的扩展已经在用 SillyTavern 的 `registerFunctionTool` API，用户可以在**工作台 → 编排 → 准备阶段**通过「桥接 SillyTavern 工具……」选择器把它桥接进来。桥接出来的工具叫 `st_<你的工具名>`，默认 `mode: 'write'`。你这边不用改任何代码。
 
 如果你想精确控制 mode 和 simulate 语义，就用 `registerOrchestrationTool` 包一层；不在意的话桥接是零成本路径。选择器的标签和模式选项通过 `listAvailableSillyTavernTools()` / `bridgeSillyTavernTool(name, { mode })` 暴露，调用方想自己驱动桥接也行。
 
@@ -166,6 +166,6 @@ export function registerMemoryGraphOrchestrationTools() {
 
 ## 相关页面
 
-- [自定义工具（用户文档）](/zh-CN/features/orchestrator/custom-tools) —— 用户视角下多条通道（扩展 / SillyTavern 桥接 / 手写）在编排编辑器里的呈现方式
+- [自定义工具（用户文档）](/zh-CN/features/orchestrator/custom-tools) —— 用户视角下多条通道（扩展 / SillyTavern 桥接 / 手写）在**工作台 → 编排 → 准备阶段**的呈现方式
 - [插件集成](./plugin-integration.md) —— 注册 `'orchestrator'` 与其他扩展入口的扩展 API 注册表全貌
 - [记忆图扩展 API](./memory-graph.md) —— 本 API 的参考消费者

@@ -33,11 +33,9 @@ Two entry points serve different editing needs:
 Both modes share the same set of settings on the extensions panel:
 
 - **World Info sync popup** — Whether to enable the World Info sync popup after replacing/updating a character card (only triggered by the popup mode; see [Popup Mode](/features/card-editor/popup#world-info-sync))
-- **Model request LLM preset** — Prompt preset used by the editor assistant (leave empty to use the current preset)
-- **Model request API preset** — API connection used by the editor assistant (leave empty to use the current connection)
-
-The **Iteration AI prompt preset** dropdown has a question-mark button that explains the expected preset type and imports a bundled one in a click.
-- **Tool call retry count** — Number of retries when the AI returns an invalid tool call
+- **Iteration AI prompt preset (params + prompt)** — Prompt preset used by the editor assistant (leave empty to use the current preset); the question-mark button beside this dropdown explains the expected preset type and imports the bundled `plugin-only` preset in a click
+- **Iteration AI API preset (Connection profile)** — API connection used by the editor assistant (leave empty to use the current connection)
+- **Tool-call retries on invalid/missing tool call (N)** — Number of retries when the AI returns an invalid tool call
 
 ## Modification History
 

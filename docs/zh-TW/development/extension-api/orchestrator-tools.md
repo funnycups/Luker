@@ -4,7 +4,7 @@
 
 ## 什麼時候用這個 API
 
-你的擴充提供了一項能力，讓某個編排 agent 自主呼叫會更順手——查資料庫、呼叫第三方 API、跑 Stable Diffusion 出圖，均可。如果使用者裝了編排器擴充，你註冊的工具會出現在他們的編排編輯器「自訂工具 → 擴充（來自其他外掛）」分組裡，由他們按編排粒度決定開還是關。
+你的擴充提供了一項能力，讓某個編排 agent 自主呼叫會更順手——查資料庫、呼叫第三方 API、跑 Stable Diffusion 出圖，均可。如果使用者裝了編排器擴充，你註冊的工具會出現在**工作台 → 編排 → 準備階段 → 自訂工具**中，由他們按編排粒度決定開還是關。
 
 如果使用者沒裝編排器，你的工具也不會丟——註冊呼叫會靜默 no-op。你的擴充獨立使用時仍然完整可用。
 
@@ -97,7 +97,7 @@ throw Object.assign(new Error('Database is read-only.'), {
 
 ## ST function tool 橋接
 
-如果你的擴充已經在用 SillyTavern 的 `registerFunctionTool` API，使用者可以在編排編輯器裡透過「橋接 SillyTavern 工具……」選擇器把它橋接進來。橋接出來的工具叫 `st_<你的工具名>`，預設 `mode: 'write'`。你這邊不用改任何程式碼。
+如果你的擴充已經在用 SillyTavern 的 `registerFunctionTool` API，使用者可以在**工作台 → 編排 → 準備階段**透過「橋接 SillyTavern 工具……」選擇器把它橋接進來。橋接出來的工具叫 `st_<你的工具名>`，預設 `mode: 'write'`。你這邊不用改任何程式碼。
 
 如果你想精確控制 mode 和 simulate 語意，就用 `registerOrchestrationTool` 包一層；不在意的話橋接是零成本路徑。選擇器的標籤和模式選項透過 `listAvailableSillyTavernTools()` / `bridgeSillyTavernTool(name, { mode })` 暴露，呼叫方想自己驅動橋接也行。
 
@@ -166,6 +166,6 @@ export function registerMemoryGraphOrchestrationTools() {
 
 ## 相關頁面
 
-- [自訂工具（使用者文件）](/zh-TW/features/orchestrator/custom-tools) —— 使用者視角下多條通道（擴充 / SillyTavern 橋接 / 手寫）在編排編輯器裡的呈現方式
+- [自訂工具（使用者文件）](/zh-TW/features/orchestrator/custom-tools) —— 使用者視角下多條通道（擴充 / SillyTavern 橋接 / 手寫）在**工作台 → 編排 → 準備階段**的呈現方式
 - [外掛整合](./plugin-integration.md) —— 註冊 `'orchestrator'` 與其他擴充入口的擴充 API 註冊表全貌
 - [記憶圖擴充 API](./memory-graph.md) —— 本 API 的參考消費者

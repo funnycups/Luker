@@ -4,7 +4,7 @@ Register tools that any orchestrator mode (loop, spec, agenda, director) can dis
 
 ## When to use this
 
-Your extension provides a capability that an orchestration agent could benefit from calling autonomously — a database query, a 3rd-party API fetch, a Stable Diffusion image generation, anything. If the user has the orchestrator extension loaded, your tool surfaces in their orchestration editor under **Custom tools → Extension (from other plugins)** and they enable or disable it per profile.
+Your extension provides a capability that an orchestration agent could benefit from calling autonomously — a database query, a 3rd-party API fetch, a Stable Diffusion image generation, anything. If the user has the orchestrator extension loaded, your tool surfaces under **Workbench → Orchestration → Setup → Custom tools** and they enable or disable it per profile.
 
 If the user doesn't have orchestrator loaded, your tool isn't lost — the register call is a silent no-op. Your extension stays functional standalone.
 
@@ -99,7 +99,7 @@ Returns `{ name, mode, description, displayName, hasSimulate, source }` for ever
 
 ## ST function tool bridge
 
-If your extension already uses SillyTavern's `registerFunctionTool` API, the user can bridge it via the orchestration editor's **Bridge SillyTavern tools…** picker. The bridged tool takes the name `st_<your tool name>` and defaults to `mode: 'write'`. No code changes are required on your side.
+If your extension already uses SillyTavern's `registerFunctionTool` API, the user can bridge it via **Workbench → Orchestration → Setup** using the **Bridge SillyTavern tools…** picker. The bridged tool takes the name `st_<your tool name>` and defaults to `mode: 'write'`. No code changes are required on your side.
 
 Wrapping with `registerOrchestrationTool` instead gives you control over mode and simulate semantics; otherwise the bridge is the zero-effort path. Picker labels and mode pickers are exposed through `listAvailableSillyTavernTools()` / `bridgeSillyTavernTool(name, { mode })` for callers that want to drive the bridge programmatically.
 
@@ -168,6 +168,6 @@ export function registerMemoryGraphOrchestrationTools() {
 
 ## Related
 
-- [Custom Tools (user docs)](/features/orchestrator/custom-tools) — what users see and how the channels (extension / SillyTavern bridge / handwritten) are presented in the orchestration editor
+- [Custom Tools (user docs)](/features/orchestrator/custom-tools) — what users see and how the channels (extension / SillyTavern bridge / handwritten) are presented under **Workbench → Orchestration → Setup**
 - [Plugin Integration](./plugin-integration.md) — the broader extension API registry that publishes `'orchestrator'` alongside other extension entry points
 - [Memory Graph Extension API](./memory-graph.md) — reference consumer of this API

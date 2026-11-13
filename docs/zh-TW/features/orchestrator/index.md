@@ -80,7 +80,7 @@
 
 | 模式 | 工作台顯示名 | 是什麼 | 何時用 | 技能範圍 | 詳細文件 |
 |---|---|---|---|---|---|
-| **Spec**（預設） | **流程** | 固定的階段與節點流程 | 預設模式。需要可預期的流程 | 每個節點可個別選擇可見技能 | [Spec 模式](/zh-TW/features/orchestrator/spec) |
+| **Spec**（預設） | **流水線** | 固定的階段與節點流程 | 預設模式。需要可預期的流程 | 每個節點可個別選擇可見技能 | [Spec 模式](/zh-TW/features/orchestrator/spec) |
 | **單 Agent** | **單助手** | 只有一個獨立節點的精簡流程 | 成本低、速度快。不需要多 Agent 協作 | 在該節點上選擇技能 | [單 Agent 模式](/zh-TW/features/orchestrator/single) |
 | **Agenda** | **調度** | 調度員依情況動態派遣其他助手 | 流程無法預先固定 | 調度員與每個被派遣的助手分別選擇 | [Agenda 模式](/zh-TW/features/orchestrator/agenda) |
 | **Loop** | **循環** | 單 Agent 在會話中反覆呼叫工具，自行判斷何時結束 | 探索性研究、動態決策 | 在研究員上選擇 | [Loop 模式](/zh-TW/features/orchestrator/loop) |
