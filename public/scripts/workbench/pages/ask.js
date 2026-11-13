@@ -345,12 +345,15 @@ export function createAskPage(app) {
 
     async function regenerate() {
         if (!session || !store) return;
+        const version = selectionVersion;
+        const targetId = session.id;
         const turns = session.turns;
         const q = turns[turns.length - 2];
         if (currentBusy() || !q || q.role !== 'user') return;
         const scope = scopeOf(session);
         try {
-            const updated = await store.update(session.id, { turns: turns.slice(0, -2) }, scope);
+            const updated = await store.update(targetId, { turns: turns.slice(0, -2) }, scope);
+            if (version !== selectionVersion || session?.id !== targetId) return;
             if (updated) session = updated;
             input.value = q.text;
             await send();
@@ -521,6 +524,8 @@ export function createAskPage(app) {
             session = null;
             paintBody();
         }
+        recentSessions = [];
+        paintHead();
         await refreshRecent();
         if (activeScopeKey === nextKey) paintHead();
     }

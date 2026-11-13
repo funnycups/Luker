@@ -286,4 +286,130 @@ describe('Ask page runId isolation across session switch & history cleanup', () 
         expect(byChat.get('alice.png:chat2.jsonl').some(s => s.id === 's_new_c1')).toBe(false);
         expect(page.el.textContent).not.toContain('Answer for Chat 1');
     });
+
+    test('syncScopeChange clears stale recentSessions before refreshRecent resolves', async () => {
+        let activeChat = {
+            chatId: 'chat1.jsonl',
+            label: 'Chat 1',
+            floors: 1,
+            target: { is_group: false, avatar_url: 'alice.png', file_name: 'chat1.jsonl' },
+        };
+        let resolveChat2List;
+        const sessions = {
+            list: jest.fn(async (_kind, scope) => {
+                if (scope?.target?.file_name === 'chat1.jsonl') {
+                    return [{ id: 's_c1', kind: 'ask', title: 'Chat 1 Session', updatedAt: Date.now(), turns: [] }];
+                }
+                return new Promise((resolve) => { resolveChat2List = resolve; });
+            }),
+            get: jest.fn(async () => null),
+        };
+        const app = {
+            sessions,
+            snapshot: () => ({ chat: activeChat, card: { name: 'Alice', avatar: 'alice.png', books: [] }, preset: { name: 'P1' }, connection: 'OpenAI' }),
+            settings: () => ({ ask: { sources: {} } }),
+            suggestions: () => [],
+            saveSettings: jest.fn(),
+            go: jest.fn(),
+            toast: jest.fn(),
+            source: { listRequests: async () => [], frontendLogCount: async () => 0, debugLoggingOn: () => true },
+        };
+
+        const page = createAskPage(app);
+        document.body.appendChild(page.el);
+        await page.show();
+        expect(page.el.querySelector('select.wb-chat-hist')).not.toBeNull();
+        expect(page.el.textContent).toContain('Chat 1 Session');
+
+        // Switch chat while store.list for Chat 2 is still pending
+        activeChat = {
+            chatId: 'chat2.jsonl',
+            label: 'Chat 2',
+            floors: 1,
+            target: { is_group: false, avatar_url: 'alice.png', file_name: 'chat2.jsonl' },
+        };
+        page.onSnapshot();
+
+        // Stale Chat 1 dropdown options must be cleared immediately before refreshRecent settles
+        expect(page.el.querySelector('select.wb-chat-hist')).toBeNull();
+
+        resolveChat2List([{ id: 's_c2', kind: 'ask', title: 'Chat 2 Session', updatedAt: Date.now(), turns: [] }]);
+        await flushMicrotasks();
+        expect(page.el.textContent).toContain('Chat 2 Session');
+    });
+
+    test('regenerate aborts without overwriting session or calling send if user switches sessions while store.update is pending', async () => {
+        const sessions = createMemorySessionStore();
+        const sessionA = await sessions.create({
+            kind: 'ask',
+            title: 'Session A',
+            turns: [{ role: 'user', text: 'Question A', at: 1 }, { role: 'ai', answer: 'Answer A', at: 2 }],
+        });
+        const sessionB = await sessions.create({
+            kind: 'ask',
+            title: 'Session B',
+            turns: [{ role: 'user', text: 'Question B', at: 1 }, { role: 'ai', answer: 'Answer B', at: 2 }],
+        });
+
+        let resolveUpdate;
+        const origUpdate = sessions.update;
+        sessions.update = jest.fn(async (id, patch, scope) => {
+            if (id === sessionA.id) {
+                await new Promise((r) => { resolveUpdate = r; });
+            }
+            return origUpdate(id, patch, scope);
+        });
+
+        const aiRequest = jest.fn(async () => ({ text: '', calls: [{ id: 'x', name: 'wb_answer', args: { text: 'New' } }] }));
+        const app = {
+            sessions,
+            snapshot: () => ({ chat: { chatId: 'c1', label: 'Chat 1', floors: 2 }, card: { name: 'Alice', books: [] }, preset: { name: 'P1' }, connection: 'OpenAI' }),
+            settings: () => ({ ask: { sources: {}, previewBeforeSend: false, redact: true } }),
+            suggestions: () => [],
+            saveSettings: jest.fn(),
+            go: jest.fn(),
+            toast: jest.fn(),
+            source: {
+                listRequests: async () => [],
+                frontendLogCount: async () => 0,
+                debugLoggingOn: () => true,
+                askOverview: async () => ({ chat: 'Chat 1' }),
+                askReaders: () => ({}),
+                aiRequest,
+            },
+        };
+
+        const page = createAskPage(app);
+        document.body.appendChild(page.el);
+        await page.show();
+        await flushMicrotasks();
+
+        // Select Session A
+        const sel = page.el.querySelector('select.wb-chat-hist');
+        sel.value = sessionA.id;
+        sel.dispatchEvent(new Event('change'));
+        await flushMicrotasks();
+
+        // Click "Answer again" on Session A
+        const regenBtn = [...page.el.querySelectorAll('.wb-msg-acts button')].find(b => b.textContent.includes('Answer again'));
+        expect(regenBtn).toBeDefined();
+        regenBtn.click();
+        await flushMicrotasks();
+
+        // Switch to Session B while store.update is pending and type a draft
+        sel.value = sessionB.id;
+        sel.dispatchEvent(new Event('change'));
+        await flushMicrotasks();
+        const textarea = page.el.querySelector('textarea.wb-input');
+        textarea.value = 'Draft in B';
+
+        resolveUpdate();
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        // Must remain on Session B, preserve draft, and NOT call aiRequest
+        expect(page.el.textContent).toContain('Answer B');
+        expect(textarea.value).toBe('Draft in B');
+        expect(aiRequest).not.toHaveBeenCalled();
+    });
 });
