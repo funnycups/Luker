@@ -370,4 +370,35 @@ describe('workbench legacy iter-studio import', () => {
         expect(warnSpy).toHaveBeenCalled();
         warnSpy.mockRestore();
     });
+
+    test('deduplicates identical legacy sessions across multiple sidecars for the same target within one batch', async () => {
+        const { ctx, wbChar } = makeMockCtx({
+            characterStates: {
+                'alice.png::character_editor_assistant_iter_sessions': {
+                    sessions: {
+                        dup_s1: { id: 'dup_s1', title: 'First copy', updatedAt: 100, messages: [{ role: 'user', content: 'Q1' }] },
+                    },
+                },
+                'alice.png::character_editor_assistant_sessions': {
+                    sessions: {
+                        dup_s1: { id: 'dup_s1', title: 'Duplicate copy', updatedAt: 200, messages: [{ role: 'user', content: 'Q1 dup' }] },
+                        uniq_s2: { id: 'uniq_s2', title: 'Second unique', updatedAt: 300, messages: [{ role: 'user', content: 'Q2' }] },
+                    },
+                },
+            },
+        });
+
+        const res = await importLegacySessionsOnce({
+            ctx,
+            targetId: 'card',
+            scope: 'character',
+            scopeOpts: { scope: 'character', avatar: 'alice.png' },
+            scopeName: 'Alice',
+        });
+
+        expect(res.imported).toHaveLength(2);
+        expect(res.imported.map(s => s.id)).toEqual(['legacy_card_dup_s1', 'legacy_card_uniq_s2']);
+        const storedIds = wbChar.get(`alice.png::${SESSIONS_NAMESPACE}`).sessions.map(s => s.id);
+        expect(storedIds).toEqual(['legacy_card_dup_s1', 'legacy_card_uniq_s2']);
+    });
 });

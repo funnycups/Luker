@@ -337,7 +337,15 @@ export async function importLegacySessionsOnce({
         const seenScopedLegacy = new Set(
             existing.filter(s => s?.ws && s?.legacyId).map(s => `${s.ws}:${s.legacyId}`),
         );
-        const fresh = normalized.filter(s => !seenIds.has(s.id) && !seenScopedLegacy.has(`${s.ws}:${s.legacyId}`));
+        const fresh = normalized.filter((s) => {
+            const scopedKey = s?.ws && s?.legacyId ? `${s.ws}:${s.legacyId}` : '';
+            if ((s?.id && seenIds.has(s.id)) || (scopedKey && seenScopedLegacy.has(scopedKey))) {
+                return false;
+            }
+            if (s?.id) seenIds.add(s.id);
+            if (scopedKey) seenScopedLegacy.add(scopedKey);
+            return true;
+        });
         added = fresh;
         return {
             ...base,
