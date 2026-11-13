@@ -54,6 +54,9 @@
     { "name": "endpoint_failure_message", "value": "無法連線到 %s。是否切換端點？" },
     { "name": "endpoint_failure_switch", "value": "切換端點" },
     { "name": "endpoint_failure_retry", "value": "重試" },
-    { "name": "endpoint_failure_cancel", "value": "取消" }
+    { "name": "endpoint_failure_cancel", "value": "取消" },
+    { "name": "webview_crashed_title", "value": "頁面意外退出" },
+    { "name": "webview_crashed_message", "value": "網頁渲染進程已退出（錯誤碼 %s）。請重新載入頁面，或匯出診斷包回饋問題。" },
+    { "name": "webview_crashed_reload", "value": "重新載入" }
   ]
 }

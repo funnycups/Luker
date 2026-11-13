@@ -54,6 +54,9 @@
     { "name": "endpoint_failure_message", "value": "无法连接到 %s。是否切换端点？" },
     { "name": "endpoint_failure_switch", "value": "切换端点" },
     { "name": "endpoint_failure_retry", "value": "重试" },
-    { "name": "endpoint_failure_cancel", "value": "取消" }
+    { "name": "endpoint_failure_cancel", "value": "取消" },
+    { "name": "webview_crashed_title", "value": "页面意外退出" },
+    { "name": "webview_crashed_message", "value": "网页渲染进程已退出（错误码 %s）。请重新加载页面，或导出诊断包反馈问题。" },
+    { "name": "webview_crashed_reload", "value": "重新加载" }
   ]
 }

@@ -31,6 +31,12 @@ import {
   ACTION_OPEN_ENDPOINT_SETTINGS,
   ACTION_RELOAD_WEBVIEW,
 } from '../AppActions';
+import {
+  WebRecoverySnapshot,
+  onPageBeginState,
+  onRendererExitedState,
+  planReload,
+} from '../WebRecoveryState';
 
 const TAG: string = 'luker.Index';
 const DOMAIN: number = 0xE1EC;
@@ -58,6 +64,9 @@ struct Index {
   @State serverReady: boolean = false;
   @State startupFailed: boolean = false;
   @State statusMessage: string = '';
+  @State webInstanceKey: number = 0;
+  @State rendererExited: boolean = false;
+  @State rendererExitReason: number = -1;
   @StorageLink('luker.serverUrl') serverUrl: string = DEFAULT_LOCAL_BASE_URL;
   @StorageLink('luker.customEndpoint') customEndpoint: boolean = false;
   @StorageLink('luker.pendingAction') @Watch('onPendingAction') pendingAction: string = '';
@@ -315,10 +324,38 @@ struct Index {
     this.openEndpointDialog();
   }
 
+  private recoverySnapshot(): WebRecoverySnapshot {
+    return {
+      rendererExited: this.rendererExited,
+      rendererExitReason: this.rendererExitReason,
+      controllerAttached: this.controllerAttached,
+      serverReady: this.serverReady,
+      webInstanceKey: this.webInstanceKey,
+      reloadWhenReady: this.reloadWhenReady,
+    };
+  }
+
+  private applyRecoverySnapshot(next: WebRecoverySnapshot): void {
+    this.rendererExited = next.rendererExited;
+    this.rendererExitReason = next.rendererExitReason;
+    this.controllerAttached = next.controllerAttached;
+    this.webInstanceKey = next.webInstanceKey;
+    this.reloadWhenReady = next.reloadWhenReady;
+  }
+
   private reloadWeb(): void {
-    if (!this.serverReady || !this.controllerAttached) {
-      this.reloadWhenReady = true;
+    const plan = planReload(this.recoverySnapshot());
+    if (plan.strategy === 'recreate') {
+      this.controller = new webview.WebviewController();
+    }
+    this.applyRecoverySnapshot(plan.next);
+    if (plan.strategy === 'defer' || plan.strategy === 'recreate') {
       return;
+    }
+    try {
+      this.controller.stop();
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'stop before refresh failed: %{public}s', JSON.stringify(e));
     }
     try {
       this.controller.refresh();
@@ -561,6 +598,8 @@ struct Index {
     this.controller = new webview.WebviewController();
     this.serverReady = false;
     this.controllerAttached = false;
+    this.rendererExited = false;
+    this.rendererExitReason = -1;
     this.start();
     return true;
   }
@@ -569,6 +608,10 @@ struct Index {
     if (this.fsHandler !== null) {
       this.lastExitPressAt = 0;
       this.fsHandler.exitFullScreen();
+      return true;
+    }
+    if (this.rendererExited) {
+      this.confirmExit();
       return true;
     }
     try {
@@ -808,107 +851,149 @@ struct Index {
   build() {
     Stack() {
       if (this.serverReady) {
-        Web({ src: this.serverUrl, controller: this.controller })
+        ForEach([this.webInstanceKey], (_key: number) => {
+          Web({ src: this.serverUrl, controller: this.controller })
+            .width('100%')
+            .height('100%')
+            .javaScriptAccess(true)
+            .domStorageAccess(true)
+            .multiWindowAccess(true)
+            .allowWindowOpenMethod(true)
+            .javaScriptProxy({
+              object: this.bridge,
+              name: 'LukerHarmony',
+              methodList: [
+                'setGenerationActive',
+                'setImmersiveModeEnabled',
+                'setOpenExternalLinksInBrowser',
+                'openExternalUrl',
+                'openEndpointSettings',
+                'reloadWebView',
+              ],
+              controller: this.controller
+            })
+            .onLoadIntercept((event) => {
+              const request = event.data;
+              if (!request.isMainFrame() || request.isRedirect()) {
+                return false;
+              }
+              const target: string = request.getRequestUrl();
+              if (routeTopLevelNavigation(
+                target, this.controller.getUrl(), originOf(this.serverUrl),
+                ExternalLinkSettings.isOpenExternally(),
+              ) === LinkRoute.SystemBrowser) {
+                this.bridge.openExternalUrl(target);
+                return true;
+              }
+              return false;
+            })
+            .onWindowNewExt((event) => {
+              this.handleNewWindow(event);
+            })
+            .onControllerAttached(() => {
+              this.controllerAttached = true;
+              this.setupDownloads();
+              if (this.reloadWhenReady) {
+                this.reloadWhenReady = false;
+                this.reloadWeb();
+              }
+            })
+            // A reload or renderer exit drops the page's generation state and
+            // leaves any popup on top of a page that no longer opened it, so the
+            // native flags must not outlive it.
+            .onPageBegin(() => {
+              this.closePopupDialog();
+              KeepAliveManager.setGenerationActive(false);
+              this.endpointFailureShown = false;
+              this.pendingEndpointFailureUrl = '';
+              const pageBegin = onPageBeginState(this.recoverySnapshot());
+              this.applyRecoverySnapshot(pageBegin.next);
+              if (pageBegin.recoveredFromExit) {
+                acknowledge(this.crashFilesDir(), Date.now());
+              }
+            })
+            .onErrorReceive((event) => {
+              if (!event || !event.request.isMainFrame()) {
+                return;
+              }
+              if (shouldShowEndpointFailureForError(
+                event.error.getErrorInfo(),
+                true,
+              )) {
+                this.maybeShowEndpointFailure(event.request.getRequestUrl());
+              }
+            })
+            .onHttpErrorReceive((event) => {
+              if (!event || !event.request.isMainFrame()) {
+                return;
+              }
+              if (shouldShowEndpointFailureForStatus(event.response.getResponseCode(), true)) {
+                this.maybeShowEndpointFailure(event.request.getRequestUrl());
+              }
+            })
+            .onHttpAuthRequest((event) => {
+              return this.handleHttpAuthRequest(event);
+            })
+            .onPageEnd(() => {
+              // A finished page proves the accepted credentials work; the next
+              // navigation may reuse them without treating them as a failed attempt.
+              this.recentHttpAuthAttempts.clear();
+            })
+            .onRenderExited((event) => {
+              this.closePopupDialog();
+              KeepAliveManager.setGenerationActive(false);
+              const reason: number = event ? event.renderExitReason : -1;
+              this.applyRecoverySnapshot(onRendererExitedState(this.recoverySnapshot(), reason));
+              if (event && isArkWebCrashReason(reason)) {
+                writeArkWebExit(this.crashFilesDir(), reason);
+              }
+            })
+            .onFullScreenEnter((event) => {
+              this.fsHandler = event.handler;
+            })
+            .onFullScreenExit(() => {
+              this.fsHandler = null;
+            })
+            .onShowFileSelector((event) => {
+              if (event) {
+                this.resolveFileSelection(event);
+              }
+              return true;
+            })
+        }, (key: number) => String(key))
+        if (this.rendererExited) {
+          Column({ space: 16 }) {
+            Text($r('app.string.webview_crashed_title'))
+              .fontSize(20)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#cfd6e4')
+              .textAlign(TextAlign.Center)
+            Text(this.res($r('app.string.webview_crashed_message').id, String(this.rendererExitReason)))
+              .fontSize(13)
+              .fontColor('#8b93a7')
+              .textAlign(TextAlign.Center)
+              .padding({ left: 24, right: 24 })
+            Row({ space: 12 }) {
+              Button($r('app.string.webview_crashed_reload'))
+                .fontSize(13)
+                .fontColor('#ffffff')
+                .backgroundColor('#4aa3ff')
+                .onClick(() => this.reloadWeb())
+              Button($r('app.string.export_diagnostics'))
+                .fontSize(13)
+                .fontColor('#cfd6e4')
+                .backgroundColor('#2d333d')
+                .onClick(async () => {
+                  await this.doExport();
+                  acknowledge(this.crashFilesDir(), Date.now());
+                })
+            }
+          }
           .width('100%')
           .height('100%')
-          .javaScriptAccess(true)
-          .domStorageAccess(true)
-          .multiWindowAccess(true)
-          .allowWindowOpenMethod(true)
-          .javaScriptProxy({
-            object: this.bridge,
-            name: 'LukerHarmony',
-            methodList: [
-              'setGenerationActive',
-              'setImmersiveModeEnabled',
-              'setOpenExternalLinksInBrowser',
-              'openExternalUrl',
-              'openEndpointSettings',
-              'reloadWebView',
-            ],
-            controller: this.controller
-          })
-          .onLoadIntercept((event) => {
-            const request = event.data;
-            if (!request.isMainFrame() || request.isRedirect()) {
-              return false;
-            }
-            const target: string = request.getRequestUrl();
-            if (routeTopLevelNavigation(
-              target, this.controller.getUrl(), originOf(this.serverUrl),
-              ExternalLinkSettings.isOpenExternally(),
-            ) === LinkRoute.SystemBrowser) {
-              this.bridge.openExternalUrl(target);
-              return true;
-            }
-            return false;
-          })
-          .onWindowNewExt((event) => {
-            this.handleNewWindow(event);
-          })
-          .onControllerAttached(() => {
-            this.controllerAttached = true;
-            this.setupDownloads();
-            if (this.reloadWhenReady) {
-              this.reloadWhenReady = false;
-              this.reloadWeb();
-            }
-          })
-          // A reload or renderer exit drops the page's generation state and
-          // leaves any popup on top of a page that no longer opened it, so the
-          // native flags must not outlive it.
-          .onPageBegin(() => {
-            this.closePopupDialog();
-            KeepAliveManager.setGenerationActive(false);
-            this.endpointFailureShown = false;
-            this.pendingEndpointFailureUrl = '';
-          })
-          .onErrorReceive((event) => {
-            if (!event || !event.request.isMainFrame()) {
-              return;
-            }
-            if (shouldShowEndpointFailureForError(
-              event.error.getErrorInfo(),
-              true,
-            )) {
-              this.maybeShowEndpointFailure(event.request.getRequestUrl());
-            }
-          })
-          .onHttpErrorReceive((event) => {
-            if (!event || !event.request.isMainFrame()) {
-              return;
-            }
-            if (shouldShowEndpointFailureForStatus(event.response.getResponseCode(), true)) {
-              this.maybeShowEndpointFailure(event.request.getRequestUrl());
-            }
-          })
-          .onHttpAuthRequest((event) => {
-            return this.handleHttpAuthRequest(event);
-          })
-          .onPageEnd(() => {
-            // A finished page proves the accepted credentials work; the next
-            // navigation may reuse them without treating them as a failed attempt.
-            this.recentHttpAuthAttempts.clear();
-          })
-          .onRenderExited((event) => {
-            this.closePopupDialog();
-            KeepAliveManager.setGenerationActive(false);
-            if (event && isArkWebCrashReason(event.renderExitReason)) {
-              writeArkWebExit(this.crashFilesDir(), event.renderExitReason);
-            }
-          })
-          .onFullScreenEnter((event) => {
-            this.fsHandler = event.handler;
-          })
-          .onFullScreenExit(() => {
-            this.fsHandler = null;
-          })
-          .onShowFileSelector((event) => {
-            if (event) {
-              this.resolveFileSelection(event);
-            }
-            return true;
-          })
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor('#15171a')
+        }
       } else {
         Column({ space: 16 }) {
           Text('Luker').fontSize(24).fontWeight(FontWeight.Bold).fontColor('#cfd6e4')

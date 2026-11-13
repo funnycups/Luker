@@ -5,6 +5,7 @@ import externalLinkPolicyTest from './ExternalLinkPolicy.test';
 import endpointUrlTest from './EndpointUrl.test';
 import endpointFailureTest from './EndpointFailure.test';
 import httpAuthTest from './HttpAuth.test';
+import webRecoveryStateTest from './WebRecoveryState.test';
 
 export default function testsuite(): void {
   crashSummaryTest();
@@ -14,4 +15,5 @@ export default function testsuite(): void {
   endpointUrlTest();
   endpointFailureTest();
   httpAuthTest();
+  webRecoveryStateTest();
 }

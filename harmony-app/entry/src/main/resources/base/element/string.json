@@ -54,6 +54,9 @@
     { "name": "endpoint_failure_message", "value": "Could not connect to %s. Switch endpoint?" },
     { "name": "endpoint_failure_switch", "value": "Switch Endpoint" },
     { "name": "endpoint_failure_retry", "value": "Retry" },
-    { "name": "endpoint_failure_cancel", "value": "Cancel" }
+    { "name": "endpoint_failure_cancel", "value": "Cancel" },
+    { "name": "webview_crashed_title", "value": "Page Stopped Responding" },
+    { "name": "webview_crashed_message", "value": "The web renderer exited (code %s). Reload the page or export a diagnostics bundle." },
+    { "name": "webview_crashed_reload", "value": "Reload Page" }
   ]
 }
