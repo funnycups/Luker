@@ -639,4 +639,11 @@ describe('workbench boundary and locale-data contracts', () => {
             }
         }
     });
+
+    test('shell.css lifts host #toast-container above open Workbench windows across all pages, not only memory-graph settings', () => {
+        const shellCss = readFileSync(fileURLToPath(new URL('../../public/scripts/workbench/css/shell.css', import.meta.url)), 'utf8');
+        const mgSettingsCss = readFileSync(fileURLToPath(new URL('../../public/scripts/extensions/memory-graph/lens/css/settings.css', import.meta.url)), 'utf8');
+        expect(shellCss).toMatch(/body:has\(\.wbench\s+\.wb-win:not\(\[hidden\]\)\)\s+#toast-container\s*\{\s*z-index:\s*2147483000\s*;/);
+        expect(mgSettingsCss).not.toContain('#toast-container');
+    });
 });
