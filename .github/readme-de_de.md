@@ -32,11 +32,17 @@ Luker ist eine Rollenspiel-Chatplattform der nächsten Generation.
 
 ## Was ist Luker
 
-Luker ist eine eigens für Rollenspiele mit großen Sprachmodellen gebaute Umgebung. An Bord: ein graphbasiertes Langzeitgedächtnis, ein Multi-Agent-Szenenplaner mit wiederverwendbarer Skill-Bibliothek, ein KI-gestütztes Charakterkarten-Studio, ein Preset Assistant, native LAN-Sync-Unterstützung und eine echte Android-App, die das komplette Backend auf deinem Smartphone ausführt — alles in einer Installation, keine Drittanbieter-Erweiterungen nötig.
+Luker ist eine eigens für Rollenspiele mit großen Sprachmodellen gebaute Umgebung. An Bord: eine einheitliche Workbench (`Alt+W`) für Prompt-Diagnose und KI-gestützte Abstimmung, ein graphbasiertes Langzeitgedächtnis, ein Multi-Agent-Szenenplaner mit wiederverwendbarer Skill-Bibliothek und Live-Run-Panel, ein KI-gestütztes Charakterkarten-Studio, ein Preset Assistant, native LAN-Sync-Unterstützung und eine echte Android-App, die das komplette Backend auf deinem Smartphone ausführt — alles in einer Installation, keine Drittanbieter-Erweiterungen nötig.
 
 Luker baut auf [SillyTavern](https://github.com/SillyTavern/SillyTavern) auf und bleibt **100 % datenkompatibel** damit. Charakterkarten, Weltinfos, Presets und Chats lassen sich in beide Richtungen verschieben — ohne Migrationsaufwand.
 
 ## Highlights
+
+### Workbench — Prüfen, diagnostizieren und feinabstimmen in einem Fenster
+
+Öffne die **Workbench** (`Alt+W`, Zauberstab-Menü oder die Schaltfläche unten rechts) für Prompt-Token-Aufschlüsselungen, lokale Regelprüfungen ohne KI-Aufruf, schreibgeschützte Diagnose-Q&A sowie dialoggeführtes Bearbeiten von Presets, Charakterkarten, Weltbüchern, Speicherstrukturen und Orchestrator-Profilen mit Diff-Freigabe und Rücknahme.
+
+→ [Workbench-Dokumentation](https://luker.cups.moe/features/workbench)
 
 ### Memory Graph — deine Charaktere erinnern sich wirklich
 
@@ -64,7 +70,7 @@ Wiederverwendbare Wissenspakete, die ein Agent bei Bedarf liest: Schreibregeln, 
 
 ### CardApp Studio & AI Card Editor — Karten im Dialog mit einer KI bearbeiten
 
-Eine vollwertige IDE für Charakterkarten mit CodeMirror-6-Editor, KI-Chat-Panel und diff-basierter Freigabe der Änderungen, einzeln bestätigt. Normale Karten bekommen den Popup-Editor; Karten mit eingebetteter **CardApp** — einer in der Karte gehosteten Mini-Anwendung — öffnen sich im vollständigen Studio mit Dateibaum, Live-Vorschau und Verlauf.
+Bearbeite Charakterkarten und Weltbücher direkt in der **Workbench**, oder öffne **CardApp Studio** — eine vollwertige IDE für Charakterkarten mit CodeMirror-6-Editor, KI-Chat-Panel, Dateibaum, Live-Vorschau, Verlauf und diff-basierter Freigabe der Änderungen, einzeln bestätigt.
 
 ![CardApp-Studio-Demo](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/cardapp-studio-demo.gif)
 
@@ -72,7 +78,7 @@ Eine vollwertige IDE für Charakterkarten mit CodeMirror-6-Editor, KI-Chat-Panel
 
 ### Preset Assistant — ein Preset aus einer Beschreibung erstellen
 
-Sag dem Assistenten, was ein Chat-Completion-Preset tun soll. Er überarbeitet das Preset gemeinsam mit dir, Änderung für Änderung als Diff, bis es deinen Anforderungen entspricht — liest Parameter, bearbeitet Prompt-Einträge und vergleicht mit einem Referenz-Preset. Derselbe Workflow deckt auch Orchestrator-Presets ab.
+Öffne **Workbench → AI iteration → Preset** (oder das Zauberstab-Symbol in der Preset-Werkzeugleiste) und sag dem Assistenten, was ein Chat-Completion-Preset tun soll. Er überarbeitet das Preset gemeinsam mit dir als Diff — liest Parameter, bearbeitet Prompt-Einträge, vergleicht mit einem Referenz-Preset und extrahiert wiederverwendbare Skills.
 
 <img alt="Preset Assistant" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/preset-assistant/cpa-overview.png" width="720">
 

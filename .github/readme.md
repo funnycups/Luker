@@ -30,13 +30,19 @@ Luker is a next-generation roleplay chat platform.
 - Edit character cards by talking to the AI, with diffs approved item by item
 - Look up fan material and source lore on the web mid-roleplay
 
-## What is Luker
+### What is Luker
 
-Luker is a purpose-built environment for roleplay with large language models. It ships a graph-based long-term memory, a multi-agent scene planner with a reusable skill library, an AI-assisted character-card studio, a preset assistant, native LAN sync, and a real Android app that runs the whole backend on your phone — all in one install, no third-party extensions required.
+Luker is a purpose-built environment for roleplay with large language models. It ships a unified Workbench (`Alt+W`) for prompt diagnostics and AI-assisted editing, a graph-based long-term memory, a multi-agent scene planner with a reusable skill library and live Run Panel, an AI-assisted character-card studio, a preset assistant, native LAN sync, and a real Android app that runs the whole backend on your phone — all in one install, no third-party extensions required.
 
 Luker is built on [SillyTavern](https://github.com/SillyTavern/SillyTavern) and stays **100% data-compatible** with it. Character cards, world info, presets, and chats move both ways with zero migration cost.
 
 ## Highlights
+
+### Workbench — inspect, diagnose, and iterate in one window
+
+Open **Workbench** (`Alt+W`, wand menu, or the bottom-right entry pill) to break down prompt tokens, run zero-AI local health checks, ask a read-only diagnostic assistant why a reply or request behaved the way it did, and edit presets, character cards, world books, memory structures, and orchestration profiles through conversation with diff review and per-change undo.
+
+→ [Workbench documentation](https://luker.cups.moe/features/workbench)
 
 ### Memory Graph — your characters actually remember
 
@@ -64,7 +70,7 @@ Reusable knowledge packs an agent reads on demand: writing rules, voice conventi
 
 ### CardApp Studio & AI Card Editor — edit cards by talking to an AI
 
-A full IDE for character cards with a CodeMirror-6 editor, an AI chat panel, and diff-based approval of changes, item by item. Regular cards get the popup editor; cards with an embedded **CardApp** — a card-hosted mini-application — open in the full Studio with file tree, live preview, and history.
+Edit character cards and world books directly inside **Workbench**, or open **CardApp Studio** — a full IDE for character cards with a CodeMirror-6 editor, an AI chat panel, file tree, live preview, history, and item-by-item diff approval.
 
 ![CardApp Studio demo](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/cardapp-studio-demo.gif)
 
@@ -72,7 +78,7 @@ A full IDE for character cards with a CodeMirror-6 editor, an AI chat panel, and
 
 ### Preset Assistant — build a preset from a description
 
-Tell the assistant what you want a chat-completion preset to do. It iterates on the preset with you, presenting changes as diffs for review, until it matches — reading parameters, editing prompt entries, and comparing against a reference preset. The same workflow covers orchestrator presets.
+Open **Workbench → AI iteration → Preset** (or click the wand icon on the preset toolbar) and tell the assistant what you want a chat-completion preset to do. It iterates on the preset with you, presenting changes as diffs for review, until it matches — reading parameters, editing prompt entries, comparing against a reference preset, and extracting reusable skills.
 
 <img alt="Preset Assistant" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/preset-assistant/cpa-overview.png" width="720">
 
