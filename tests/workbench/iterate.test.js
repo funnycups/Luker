@@ -978,4 +978,123 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
         expect(page.el.textContent).not.toContain('P1 reply');
         expect(page.el.textContent).not.toContain('New chat on P1');
     });
+
+    test('targetById does not fall back to getTargets()[0] for unknown explicit target IDs in openSession or apply', async () => {
+        const sessions = createMemorySessionStore();
+        const orphanMeta = await sessions.create({
+            kind: 'iterate',
+            ws: 'preset',
+            scope: 'preset',
+            title: 'Orphaned Session',
+            turns: [{ role: 'user', text: 'Old', at: 1 }, { role: 'ai', text: 'Old reply', at: 2 }],
+        }, { scope: 'preset', target: { collection: 'openai', name: 'Main' } });
+
+        const origGet = sessions.get;
+        sessions.get = jest.fn(async (id, opts) => {
+            const res = await origGet(id, opts);
+            if (res && id === orphanMeta.id) {
+                return { ...res, ws: 'removed_target' };
+            }
+            return res;
+        });
+
+        const cardUnitsSpy = jest.fn((live) => new Map([
+            ['card:description', { key: 'card:description', label: 'Description', group: 'Card', text: live.description, fields: { description: live.description } }],
+        ]));
+        const cardCommitSpy = jest.fn(async () => ({ applied: ['card:description'], skipped: [], failure: '', undo: async () => {} }));
+        const cardTarget = {
+            id: 'card',
+            label: 'Character card',
+            tone: 'card',
+            scopes: async () => ({ character: true }),
+            load: async () => ({ live: { description: 'Alice' }, target: { scope: 'character', avatar: 'alice.png' }, title: 'Alice' }),
+            prompt: async () => 'card sys',
+            tools: async () => [],
+            isRead: () => false,
+            runRead: async () => ({}),
+            runEdit: async (_c, l) => l,
+            units: cardUnitsSpy,
+            rebuild: (_b, ai) => ai,
+            commit: cardCommitSpy,
+        };
+
+        const presetTarget = {
+            id: 'preset',
+            label: 'Preset',
+            tone: 'preset',
+            scopes: async () => ({ preset: true }),
+            load: async () => ({ live: { temp: 0.7 }, target: { scope: 'preset', ref: { collection: 'openai', name: 'Main' } }, title: 'Main' }),
+            prompt: async () => 'preset sys',
+            tools: async () => [{ type: 'function', function: { name: 'edit_temp' } }],
+            isRead: () => false,
+            runRead: async () => ({}),
+            runEdit: async (_c, live) => ({ ...live, temp: 1.0 }),
+            units: (live) => new Map([['preset:temp', { key: 'preset:temp', label: 'Temp', group: 'Preset', text: String(live.temp), fields: { temp: live.temp } }]]),
+            rebuild: (_b, ai) => ai,
+            commit: async () => ({ applied: ['preset:temp'], skipped: [], failure: '', undo: async () => {} }),
+        };
+
+        let targets = [cardTarget, presetTarget];
+        let round = 0;
+        const app = {
+            sessions,
+            iterateTargets: () => targets,
+            snapshot: () => ({
+                chat: { character: { avatar: 'alice.png', name: 'Alice' } },
+                card: { name: 'Alice', avatar: 'alice.png' },
+                preset: { name: 'Main', ref: { collection: 'openai', name: 'Main' } },
+            }),
+            settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+            history: { record: jest.fn(() => 'h1'), canUndo: () => false, undo: jest.fn() },
+            toast: jest.fn(),
+            reload: jest.fn(),
+            refreshBadges: jest.fn(),
+            source: {
+                aiRequest: jest.fn(async () => {
+                    round++;
+                    if (round === 1) return { text: '', calls: [{ id: 'e1', name: 'edit_temp', args: {} }] };
+                    return { text: 'Updated temp.', calls: [] };
+                }),
+            },
+        };
+
+        const page = createIteratePage(app);
+        document.body.appendChild(page.el);
+        await page.show({ ws: 'preset', scope: 'preset' });
+        await flushMicrotasks();
+
+        // 1) openSession with loaded.ws === 'removed_target' must NOT overwrite ws or flip active target to cardTarget
+        const orphanBtn = [...page.el.querySelectorAll('.wb-sess-item')].find((b) => b.textContent.includes('Orphaned Session'));
+        orphanBtn.click();
+        await flushMicrotasks();
+        expect(page.el.querySelector('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]').textContent).toContain('Preset');
+
+        // 2) Start a fresh preset session, produce a pending draft, then remove presetTarget before clicking Apply
+        const newChatBtn = [...page.el.querySelectorAll('.wb-sess-head button')].find((b) => b.textContent.includes('New conversation'));
+        newChatBtn.click();
+        await flushMicrotasks();
+
+        const textarea = page.el.querySelector('textarea.wb-input');
+        const sendBtn = page.el.querySelector('button.wb-send');
+        textarea.value = 'Raise temp';
+        sendBtn.click();
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        targets = [cardTarget];
+        cardUnitsSpy.mockClear();
+        cardCommitSpy.mockClear();
+        app.toast.mockClear();
+
+        const applyBtn = [...page.el.querySelectorAll('.wb-chg-foot button')].find((b) => b.textContent.includes('Apply selected'));
+        applyBtn.click();
+        await flushMicrotasks();
+
+        expect(cardUnitsSpy).not.toHaveBeenCalled();
+        expect(cardCommitSpy).not.toHaveBeenCalled();
+        expect(app.toast).toHaveBeenCalledWith(
+            expect.stringContaining('This draft is no longer available'),
+            expect.objectContaining({ error: true }),
+        );
+    });
 });

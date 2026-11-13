@@ -136,7 +136,8 @@ export function createIteratePage(app) {
 
     const getCtx = () => globalThis.Luker?.getContext?.() ?? globalThis.lukerContext ?? null;
     const getTargets = () => app.iterateTargets?.() || [];
-    const targetById = (id = ws) => getTargets().find(t => t.id === id) || getTargets()[0] || null;
+    const targetById = (id) => (id ? getTargets().find(t => t.id === id) || null : null);
+    const selectDefaultTarget = () => targetById(ws) || getTargets()[0] || null;
     const targetLabel = (t) => (typeof t?.label === 'function' ? t.label() : String(t?.label || t?.id || ''));
     const targetName = (id = ws) => {
         const t = targetById(id);
@@ -240,7 +241,7 @@ export function createIteratePage(app) {
     }
 
     const disabled = () => {
-        const t = targetById();
+        const t = selectDefaultTarget();
         if (!t) return true;
         if (typeof t.isEnabled === 'function') {
             try { if (!t.isEnabled(getCtx())) return true; } catch { return true; }
@@ -279,7 +280,7 @@ export function createIteratePage(app) {
 
     async function refreshSessions() {
         const ver = ++refreshVersion;
-        const t = targetById();
+        const t = selectDefaultTarget();
         const sOpts = scopeOptsFor();
         if (!store || !t || !sOpts) {
             recentSessions = [];
@@ -384,7 +385,7 @@ export function createIteratePage(app) {
     // ----- header, controls, preview -------------------------------------
     function paintControls() {
         clear(controlsSlot);
-        const t = targetById();
+        const t = selectDefaultTarget();
         if (!t || typeof t.renderControls !== 'function' || blocked() || disabled()) {
             controlsSlot.hidden = true;
             return;
@@ -413,7 +414,7 @@ export function createIteratePage(app) {
 
     function paintPreview() {
         clear(previewPane);
-        const t = targetById();
+        const t = selectDefaultTarget();
         if (!t || typeof t.renderPreview !== 'function' || blocked() || disabled()) {
             previewPane.hidden = true;
             return;
@@ -449,7 +450,7 @@ export function createIteratePage(app) {
         }
         if (!targets.some(t => t.id === ws)) ws = targets[0].id;
         fixScope();
-        const t = targetById();
+        const t = selectDefaultTarget();
         const a = allowedScopes();
         const locked = Boolean(session?.turns?.length);
         const name = charName();
@@ -530,7 +531,7 @@ export function createIteratePage(app) {
     // ----- body -----------------------------------------------------------
     function paintBody() {
         clear(body);
-        const t = targetById();
+        const t = selectDefaultTarget();
         const busy = currentBusy();
         const run = currentRun();
 
@@ -783,7 +784,7 @@ export function createIteratePage(app) {
 
     function paintOpts() {
         clear(chips);
-        const t = targetById();
+        const t = selectDefaultTarget();
         const chipList = t
             ? (typeof t.chips === 'function' ? t.chips() : (Array.isArray(t.chips) ? t.chips : (DEFAULT_CHIPS[t.id]?.() || [])))
             : [];
@@ -833,7 +834,7 @@ export function createIteratePage(app) {
     }
 
     async function ensureWork() {
-        const t = targetById();
+        const t = selectDefaultTarget();
         if (!t || blocked()) return null;
         const k = keyOf();
         if (work.has(k)) return work.get(k);
@@ -890,7 +891,7 @@ export function createIteratePage(app) {
 
     async function send() {
         const text = input.value.trim();
-        const runTargetObj = targetById();
+        const runTargetObj = selectDefaultTarget();
         if (!text || !runTargetObj || currentBusy() || applying.has(session?.id) || blocked() || !store) return;
 
         const selection = selectionVersion;
