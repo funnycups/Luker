@@ -19,8 +19,11 @@ globalThis.toastr = { error: () => {}, info: () => {}, success: () => {}, warnin
 // hydrate constants, settings handles, and the extension-API registrar.
 // Provide just enough surface for module evaluation + ensureSettings to
 // run without hitting `undefined` accessors.
+const __defaultStateErrors = globalThis.Luker?.getContext?.()?.stateErrors;
+
 globalThis.Luker = {
     getContext: () => ({
+        stateErrors: __defaultStateErrors,
         constants: {
             promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
             promptTypes: { NONE: 0, IN_PROMPT: 0, IN_CHAT: 1, BEFORE_PROMPT: 2 },

@@ -35,7 +35,14 @@
 
 import { DIRECTOR_PURE_PRESET_NAME, DIRECTOR_PURE_PRESET_BODY } from './pure-preset-body.js';
 import { i18n, i18nFormat } from './i18n.js';
-import { decodeCardBoundOptionValue } from '../../character/preset-ref-codec.js';
+
+function resolveDecodeCardBoundOptionValue(ctx) {
+    const fn = ctx?.decodeCardBoundOptionValue ?? globalThis.Luker?.getContext?.()?.decodeCardBoundOptionValue;
+    if (typeof fn !== 'function') {
+        throw new Error('Luker.getContext().decodeCardBoundOptionValue is unavailable');
+    }
+    return fn;
+}
 
 let pendingPresetSnapshot = null;
 
@@ -123,7 +130,7 @@ export async function applyDirectorPresetSwap(ctx) {
     try {
         if (typeof document !== 'undefined') {
             ghostSelectValue = String(document.getElementById('settings_preset_openai')?.value ?? '');
-            if (decodeCardBoundOptionValue(ghostSelectValue)) {
+            if (resolveDecodeCardBoundOptionValue(ctx)(ghostSelectValue)) {
                 origin = 'character';
             }
         }

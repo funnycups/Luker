@@ -156,6 +156,20 @@ import {
     rebindPreviousPrimaryBook,
 } from './character/post-replace-actions.js';
 import { decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
+import {
+    STATE_ERROR_REASONS,
+    STATE_HINT_MAX_LENGTH,
+    isValidReason,
+    makeStateError,
+    makeStateOk,
+} from './state-errors.js';
+import {
+    formatHttpErrorHint,
+    formatTransportErrorHint,
+    formatConflictHint,
+    formatValidationArgsHint,
+    formatValidationTargetHint,
+} from './state-errors/format.js';
 import { humanizedDateTime, isMobile, shouldSendOnEnter } from './RossAscends-mods.js';
 import { ScraperManager } from './scrapers.js';
 import { executeSlashCommands, executeSlashCommandsWithOptions, registerSlashCommand } from './slash-commands.js';
@@ -2855,6 +2869,19 @@ export function getContext() {
         listPostReplaceActions,
         importEmbeddedBookForCharacter,
         rebindPreviousPrimaryBook,
+        decodeCardBoundOptionValue,
+        stateErrors: Object.freeze({
+            STATE_ERROR_REASONS,
+            STATE_HINT_MAX_LENGTH,
+            isValidReason,
+            makeStateError,
+            makeStateOk,
+            formatHttpErrorHint,
+            formatTransportErrorHint,
+            formatConflictHint,
+            formatValidationArgsHint,
+            formatValidationTargetHint,
+        }),
         getCharacterState,
         setCharacterState,
         patchCharacterState,

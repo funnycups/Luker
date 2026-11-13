@@ -40,7 +40,22 @@ import {
     listLukerDocs,
     readLukerDoc,
 } from '../../iteration-library/tools/ctx-and-docs-discovery.js';
-import { STATE_ERROR_REASONS, makeStateError } from '../../state-errors.js';
+
+function getStateErrors() {
+    const se = globalThis.Luker?.getContext?.()?.stateErrors;
+    if (!se) {
+        throw new Error('Luker.getContext().stateErrors is unavailable');
+    }
+    return se;
+}
+const STATE_ERROR_REASONS = new Proxy({}, {
+    get(_target, prop) {
+        return getStateErrors().STATE_ERROR_REASONS[prop];
+    },
+});
+function makeStateError(reason, hint) {
+    return getStateErrors().makeStateError(reason, hint);
+}
 
 /**
  * Structured error thrown by the apply-time commit helper

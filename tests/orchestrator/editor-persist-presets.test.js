@@ -11,8 +11,11 @@ const writes = [];
 // `Luker.getContext().saveSettings` and `.constants.unset` at
 // module-load time. Expose stubs and the shared `extensionSettings` so
 // beforeEach() mutations propagate.
+const __defaultStateErrors = globalThis.Luker?.getContext?.()?.stateErrors;
+
 globalThis.Luker = {
     getContext: () => ({
+        stateErrors: __defaultStateErrors,
         constants: {
             promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
             wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },

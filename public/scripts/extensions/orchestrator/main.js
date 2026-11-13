@@ -8,6 +8,7 @@ const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
 const registerExtensionApi = __ctx.registerExtensionApi;
+const { STATE_ERROR_REASONS } = __ctx.stateErrors;
 import {
     buildLastUserAnchor,
     compactStageOutputs,
@@ -16,7 +17,6 @@ import {
 } from './anchors.js';
 import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
 import { ensureStyles } from './styles.js';
-import { STATE_ERROR_REASONS } from '../../state-errors.js';
 import {
     CAPSULE_INJECT_POSITION_SCHEMA_VERSION,
     DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT,

@@ -18,7 +18,7 @@
  */
 
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
-import { STATE_ERROR_REASONS } from '../../public/scripts/state-errors.js';
+import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from '../../public/scripts/state-errors.js';
 
 // Minimal Luker shim for the discovery executors that import getContext.
 globalThis.Luker = {
@@ -26,6 +26,7 @@ globalThis.Luker = {
         chat: [],
         characters: [],
         getRequestHeaders: () => ({}),
+        stateErrors: { STATE_ERROR_REASONS, makeStateError, makeStateOk },
         constants: {
             promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
             wiPosition: { before: 0, after: 1 },

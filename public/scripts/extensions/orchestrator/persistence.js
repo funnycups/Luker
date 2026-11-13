@@ -41,8 +41,15 @@ import {
 import { DEFAULT_LOOP_SYSTEM_PROMPT } from './loop-default-prompt.js';
 import { sanitizeCustomTools } from './custom-tools-sanitize.js';
 import { seedDefaultCustomToolsIfNeeded } from './seed-default-custom-tools.js';
-import { STATE_ERROR_REASONS } from '../../state-errors.js';
 import { sanitizeLorebookFilter } from './lorebook-filter.js';
+
+function getStateErrorReasons(context = null) {
+    const reasons = context?.stateErrors?.STATE_ERROR_REASONS ?? globalThis.Luker?.getContext?.()?.stateErrors?.STATE_ERROR_REASONS;
+    if (!reasons) {
+        throw new Error('Luker.getContext().stateErrors is unavailable');
+    }
+    return reasons;
+}
 
 const STATE_NAMESPACE = 'luker_orchestrator_anchors';
 const SCHEMA_NAMESPACE = `${STATE_NAMESPACE}__schema`;
@@ -790,6 +797,7 @@ async function replayLegacyAnchorsAsCommits(context, fs, legacy) {
             committed += 1;
             continue;
         }
+        const STATE_ERROR_REASONS = getStateErrorReasons(context);
         if (result.reason === STATE_ERROR_REASONS.REPLAY_BROKEN
             || result.reason === STATE_ERROR_REASONS.INSTANCE_DESTROYED
             || result.reason === STATE_ERROR_REASONS.LOG_WRITE_FAILED) {

@@ -15,6 +15,7 @@ const getStringHash = __ctx.getStringHash;
 const newWorldInfoEntryTemplate = __ctx.worldInfoEntry.template;
 const setGlobalWorldInfoSelection = __ctx.worldInfoEntry.setGlobalSelection;
 const world_info_position = __ctx.constants.wiPosition;
+const { STATE_ERROR_REASONS } = __ctx.stateErrors;
 // Register the Layer-1 session API at module load.
 import './api.js';
 // Publishes memory-graph's read + write tools into the orchestrator's
@@ -139,7 +140,6 @@ import {
     resolveInFlightAnchor,
     seqToFloor,
 } from './persistence.js';
-import { STATE_ERROR_REASONS } from '../../state-errors.js';
 import {
     LEVEL,
     normalizeText,

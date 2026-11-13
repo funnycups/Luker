@@ -152,6 +152,7 @@ function makeMainContext(chatRef) {
         saveSettings: () => {},
         saveSettingsDebounced: () => {},
         extensionSettings: { search_tools: { enabled: true, preRequestEnabled: false } },
+        stateErrors: globalThis.Luker?.getContext?.()?.stateErrors,
         secrets: { KEYS: {}, state: {} },
         escapeHtml: (s) => String(s ?? ''),
         getStringHash: (s) => String(s).length,

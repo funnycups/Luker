@@ -6,8 +6,11 @@ const saveSettingsCalls = [];
 
 // Match the shim shape used by editor-persist-presets.test.js so the
 // same module chain evaluates cleanly under jsdom-free node env.
+const __defaultStateErrors = globalThis.Luker?.getContext?.()?.stateErrors;
+
 globalThis.Luker = {
     getContext: () => ({
+        stateErrors: __defaultStateErrors,
         constants: {
             promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
             wiPosition: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
