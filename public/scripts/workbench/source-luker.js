@@ -144,6 +144,7 @@ function presetPart(ctx) {
             .map(p => ({ id: p.identifier, name: p.name || p.identifier, text: String(p.content || ''), enabled: enabledIds.has(p.identifier) }));
         return {
             name: live?.ref?.name || ctx.chatCompletionSettings?.preset_settings_openai || '',
+            ref: live?.ref ? clone(live.ref) : null,
             prompts,
             enabled: prompts.filter(p => p.enabled).length,
         };
@@ -755,6 +756,18 @@ export async function askOverview({
     });
 }
 
+/** Latest non-user, non-system reply in the active chat. */
+export function lastReply(ctx = getContext()) {
+    const chat = ctx?.chat || [];
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const m = chat[i];
+        if (m && !m.is_user && !m.is_system && m.mes) {
+            return `（第 ${i} 楼，${m.name || i18n('Character')}）\n${String(m.mes)}`;
+        }
+    }
+    return '';
+}
+
 /** Creates the source object wired into `mountWorkbench()` by default. */
 export function createLukerSource(registry = defaultRegistry) {
     return {
@@ -772,6 +785,7 @@ export function createLukerSource(registry = defaultRegistry) {
         askOverview: (opts) => askOverview({ ...opts, registry }),
         askReaders: (opts) => askReaders({ ...opts, registry }),
         askToolsForProviders: () => askToolsForProviders(registry),
+        lastReply: () => lastReply(),
         aiRequest: (role, opts) => aiRequest(role, opts),
         aiTest: (role) => aiTest(role),
         listAiChoices: () => listAiChoices(registry),

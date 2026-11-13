@@ -88,6 +88,7 @@ export function changeList({ changes, state = 'pending', target = '', onApply, o
                     },
                     h('span', { text: c.label }),
                     icon(isOpen ? 'chevronDown' : 'chevronRight', { size: 12 })),
+                    c.note ? h('div', { class: 'wb-chg-note', text: c.note }) : null,
                     isOpen ? diffView(c) : null),
                 h('span', { class: `wb-chg-tag ${cls}`, text: tag })));
         }

@@ -15,6 +15,9 @@
 .wbench .wb-scope-seg .lw-seg-btn span,
 .wbench .wb-scope-seg .wb-seg-btn span { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .wbench .wb-scope-note { flex: 1 1 0; min-width: 0; font-size: 11.5px; color: var(--wb-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wbench .wb-iter-controls { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.wbench .wb-iter-preview { flex: none; width: 280px; min-height: 0; overflow: auto; padding: 12px; border-left: 1px solid var(--wb-border); background: var(--wb-surface); }
+.wbench .wb-chg-note { margin-top: 3px; font-size: 11.5px; color: var(--wb-amber); }
 
 .wbench .wb-chg { width: 100%; border: 1px solid var(--wb-border); border-radius: var(--wb-r); overflow: hidden; background: var(--wb-surface); }
 .wbench .wb-chg.is-discarded { opacity: 0.6; }
@@ -61,3 +64,4 @@
 .wbench.is-compact .wb-scope-note { display: none; }
 .wbench.is-compact .wb-scope-seg .lw-seg-btn span,
 .wbench.is-compact .wb-scope-seg .wb-seg-btn span { max-width: 150px; }
+.wbench.is-compact .wb-iter-preview { display: none; }

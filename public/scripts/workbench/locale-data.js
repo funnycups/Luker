@@ -449,6 +449,19 @@ const ZH_CN = {
     'Change history could not be saved.': '改动记录保存失败。',
     'Not available yet': '暂未启用',
     'Workbenches': '工作台',
+    'Fork "${0}" into "${1}"': '将「${0}」另存为新预设「${1}」',
+    'Fork current preset into a new preset': '将当前预设另存为新预设',
+    'Cannot be auto-rolled back after applying': '应用后无法自动撤销',
+    'Proposal commit failed': '提议提交失败',
+    'Imported conversation': '导入的对话',
+    'Current preset "${0}"': '当前预设「${0}」',
+    'Current chat "${0}"': '当前聊天「${0}」',
+    'No chat open': '未打开聊天',
+    'No iteration targets are registered yet.': '还没有注册可迭代的目标。',
+    'Nothing selected to edit': '未选择可编辑的目标',
+    'Select a chat completion preset in Luker first, then come back.': '先在 Luker 里选择一个对话补全预设，再回来改。',
+    'Open a chat in Luker first, then come back.': '先在 Luker 里打开一个聊天，再回来改。',
+    'Open a character\'s chat in Luker first (not a group chat), or switch to an available scope.': '先在 Luker 里打开一个角色的聊天（群聊不行），或切换到其他可用范围。',
 };
 
 const ZH_TW = {
@@ -897,6 +910,19 @@ const ZH_TW = {
     'Change history could not be saved.': '改動記錄儲存失敗。',
     'Not available yet': '暫未啟用',
     'Workbenches': '工作台',
+    'Fork "${0}" into "${1}"': '將「${0}」另存為新預設「${1}」',
+    'Fork current preset into a new preset': '將目前預設另存為新預設',
+    'Cannot be auto-rolled back after applying': '套用後無法自動復原',
+    'Proposal commit failed': '提議提交失敗',
+    'Imported conversation': '匯入的對話',
+    'Current preset "${0}"': '目前預設「${0}」',
+    'Current chat "${0}"': '目前聊天「${0}」',
+    'No chat open': '未開啟聊天',
+    'No iteration targets are registered yet.': '還沒有註冊可迭代的目標。',
+    'Nothing selected to edit': '未選擇可編輯的目標',
+    'Select a chat completion preset in Luker first, then come back.': '先在 Luker 裡選擇一個對話補全預設，再回來改。',
+    'Open a chat in Luker first, then come back.': '先在 Luker 裡開啟一個聊天，再回來改。',
+    'Open a character\'s chat in Luker first (not a group chat), or switch to an available scope.': '先在 Luker 裡開啟一個角色的聊天（群聊不行），或切換到其他可用範圍。',
 };
 
 export function registerWorkbenchLocaleData(addLocaleData) {

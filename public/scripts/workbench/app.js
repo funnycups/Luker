@@ -14,6 +14,7 @@ import { defaultRegistry } from './registry.js';
 import { createLukerSource } from './source-luker.js';
 import { createHomePage } from './pages/home.js';
 import { createAskPage } from './pages/ask.js';
+import { createIteratePage } from './pages/iterate.js';
 import { createHistoryPage } from './pages/history.js';
 import { createSettingsPage } from './pages/settings.js';
 
@@ -54,6 +55,7 @@ function detectTheme() {
 const DEFAULT_PAGE_FACTORIES = {
     home: createHomePage,
     ask: createAskPage,
+    ai: createIteratePage,
     hist: createHistoryPage,
     settings: createSettingsPage,
 };
