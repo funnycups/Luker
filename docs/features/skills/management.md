@@ -1,9 +1,9 @@
 # Skill management
 
-The orchestrator panel's **Manage skills** button opens a subpanel where you install, edit, move, and remove skills. This page walks through each surface.
+The **Manage skills...** button under **Workbench → Orchestration → Setup** opens the skill manager popup where you install, edit, move, and remove skills. This page walks through each surface.
 
 ::: tip Where to find it
-Open the Extensions drawer → **Multi-Agent Orchestration** section → click **Manage skills** near the bottom of the panel. The subpanel opens in a popup over the orchestrator config.
+Open **Workbench → Orchestration → Setup** and click **Manage skills...** (or open **Extensions → Completion Preset Assistant → Bundle skills with this preset** to jump directly to the active preset's scope).
 :::
 
 ## Subpanel overview
@@ -47,7 +47,7 @@ Browse bundled compares your local copy of each shipped skill with the bundled v
 | Badge | Meaning |
 |---|---|
 | **installed (matches)** | Local copy is byte-identical to the bundled version. |
-| **installed (your version differs)** | A local copy exists but its hash doesn't match the bundled one — you (or an Iteration Studio session) edited it. |
+| **installed (your version differs)** | A local copy exists but its hash differs from the bundled one — you (or an AI iteration session) edited it. |
 | **not installed** | No local copy. Click **Install** to materialize it into `global`. |
 
 ![Browse bundled, mixed states](/images/skills/manager-bundled-tab.png)
@@ -103,7 +103,7 @@ Writes use the same staging step as installation: the new content is validated f
 `SKILL.md` is special — it can be edited but not deleted from the editor (it is the required entry point). The skill itself can be deleted from the row action.
 
 ::: tip Edit skills with AI
-The [AI Iteration Studio](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio) writes and modifies skills: describe the change, and the Studio drafts it through the same install path.
+[AI Iteration](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio) in Workbench writes and modifies skills: describe the change, and the AI drafts it through the same install path.
 :::
 
 ## Embed export — into presets and cards
@@ -112,7 +112,7 @@ Skills are most useful when they ship with the artifact that depends on them. A 
 
 ### Packing into a preset
 
-In the orchestrator panel, [Preset Assistant](/features/preset-assistant) derives an `-orchestrator` preset. Right after derivation, the assistant offers a **Bundle skills with this preset** link that opens the skill manager with multi-select mode pre-enabled. Pick the skills you want, click **Pack selected into preset…**, choose the target preset.
+In **Workbench → AI iteration → Preset**, [Preset Assistant](/features/preset-assistant) derives an `-orchestrator` preset. You can then open **Extensions → Completion Preset Assistant → Bundle skills with this preset** to launch the skill manager with multi-select enabled. Pick the skills you want, click **Pack selected into preset…**, and choose the target preset.
 
 The packer writes the skills into the preset's `extensions.luker.embedded_skills_source` field. On the next preset save the embed rides with the JSON. Other Luker users who import that preset see the embed extraction dialog described above.
 
@@ -140,7 +140,7 @@ Typical migrations:
 
 When you rename or delete a skill that an orchestration profile references, the reference keeps the old name. The runtime cannot find it, so the agent does not see the skill, without an error or a blocked dispatch.
 
-In the orchestrator config editor, stale references are greyed out and show the tooltip **"skill not installed."** A couple of clicks fix it — either rename in the profile, or re-add the skill.
+In **Workbench → Orchestration → Setup**, stale references are greyed out and show the tooltip **"skill not installed."** A couple of clicks fix it — either rename in the profile, or re-add the skill.
 
 A missing skill does not block an agent dispatch, and adding or removing skills requires no matching profile edit.
 

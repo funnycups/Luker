@@ -85,19 +85,19 @@ The planner can dispatch several workers in parallel and replan from their resul
 
 ## Getting started
 
-1. Set the execution mode to **Agenda** in the extension drawer.
-2. Open the orchestration editor and review the planner's system prompt and task template.
-3. Inspect the worker pool and adjust each agent's role, prompt and model.
-4. Set limits for planner rounds, concurrency and total worker calls.
-5. Chat normally and follow the planning process and worker output in the Run Panel.
+1. In **Workbench → Orchestration**, select **Dispatch** (Agenda) from the mode picker.
+2. In **Flow** or **Setup**, review the dispatcher's role prompt and task template.
+3. Inspect the worker pool and adjust each agent's description, prompt, and model.
+4. Set limits for planner rounds, concurrency, and total agent runs under **Settings**.
+5. Chat normally and follow the planning process and worker output in the **Run panel** dock or **Orchestration → Run**.
 
-To change the flow, describe the goal in [AI Iteration Studio](/features/orchestrator/iteration-studio) and let it revise the planner or the pool.
+To change the flow, describe the goal in [AI Iteration](/features/orchestrator/iteration-studio) and let it revise the dispatcher or worker pool.
 
 ## Editor
 
-The left side configures the planner: API connection, chat-completion preset, system prompt and task template. The right side is the worker pool; each worker has its own system prompt, user prompt template and optional model overrides.
+**Flow** and **Setup** let you configure the dispatcher's AI connection, generation preset, role prompt, and task template alongside the worker pool, where each worker has its own role prompt, task template, and optional model overrides.
 
-The planner dispatches workers through tool calls, so its connection must support function calling. OpenAI, Claude and Gemini support it.
+The dispatcher calls workers through tool calls, so its connection must support function calling. OpenAI, Claude, and Gemini support it.
 
 ## Limits
 
@@ -118,15 +118,15 @@ The editor can copy the agent pool to the other mode. Only agents move; scheduli
 
 ## Run Panel
 
-The Run Panel groups output by planner round. Each round is a card, and the workers dispatched in that round appear as sub-cards with their reasoning, input and output.
+The **Run panel** dock and **Workbench → Orchestration → Run** group output by dispatch round. Each round contains the workers dispatched in that round, expandable to inspect their thinking, input, and output.
 
 Watch for:
 
-- the planner dispatching the wrong worker or skipping a required step;
+- the dispatcher picking the wrong worker or skipping a required step;
 - repeated dispatch on the same task without reaching an end;
 - a final result that omits something this turn needs.
 
-The export button at the top saves the whole run as JSON for reporting a problem.
+Use **Export trace** to save the whole run as JSON for reporting a problem.
 
 ## Settings
 
@@ -141,7 +141,7 @@ The export button at the top saves the whole run as JSON for reporting a problem
 ## Related pages
 
 - [Orchestration overview](/features/orchestrator/) — shared settings, triggers and card binding
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — revise the planner and pool in natural language
+- [AI Iteration](/features/orchestrator/iteration-studio) — revise the planner and pool in natural language
 - [Spec mode](/features/orchestrator/spec) — the default fixed-stage mode
 - [Loop mode](/features/orchestrator/loop) — single-agent tool loop
 - [Custom tools](/features/orchestrator/custom-tools) — add capabilities beyond the built-in set

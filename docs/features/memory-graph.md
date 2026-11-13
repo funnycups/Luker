@@ -1,65 +1,64 @@
 # Memory Graph
 
-In a long conversation, the context window fills up and early events, relationship changes and world rules fall out of view. The character starts to forget. Memory Graph collects the important facts from the conversation into memory nodes in the background, then recalls the relevant ones into the prompt, so a character can remember the same things you do hundreds of turns later.
+In a long conversation, early events, relationship changes, and world rules eventually drop out of the context window. Memory Graph collects important facts from the conversation into typed memory nodes in the background and recalls the relevant ones into the prompt, keeping long-term continuity intact hundreds of turns later.
 
-Memory Graph is built for long-form roleplay, serialized stories and worlds that need stable continuity. Short chats and one-off scenes do not need it.
+Memory Graph is designed for long-form roleplay, serialized stories, and worlds that rely on stable continuity.
 
 ## How it works
 
-Memory Graph runs three jobs in the background.
+Memory Graph runs three background tasks.
 
-**Extraction.** After an AI reply, Memory Graph reviews the turn and writes the facts worth keeping into nodes. Four types are defined by default: characters (identity, relationships, goals, inventory), locations (who controls them, how dangerous they are), events, and ongoing threads. Types and fields can be adjusted per card.
+**Extraction.** After an AI reply, Memory Graph reviews the turn and records facts worth keeping into nodes. Four default types cover common roleplay: characters (identity, relationships, goals, inventory), locations (controller, danger), events, and plot threads. Types and record items can be customized globally or per character card.
 
-**Recall.** When you send a message, Memory Graph selects the nodes relevant to the current scene and injects them into the prompt. By default an LLM judges relevance; vector retrieval is also available.
+**Recall.** When you send a message, Memory Graph selects nodes relevant to the current scene and injects them into the prompt. By default an LLM judges relevance; RAG vector recall is also available.
 
-**Compression.** When events pile up, older events roll up into higher-level summaries. The details stay in the graph, can be expanded, and are recalled again when relevant.
+**Compression.** As events accumulate, older events merge automatically into higher-level summaries. Underlying details remain in the graph and can be expanded or recalled again when relevant.
 
-Extraction can run built in or be handled by the memory-curator agent in multi-agent orchestration.
+Extraction can run built in or be delegated to the memory curator agent in [Multi-Agent Orchestration](/features/orchestrator/).
 
 ## Getting started
 
-1. Open **Extensions → Memory** and turn on Memory Graph.
-2. In the same panel, choose the API connection and chat-completion preset used for recall and extraction. The question-mark button beside the preset dropdown explains what kind of preset the slot expects and imports a bundled one in a click. Memory Graph does not need the same model as the main chat; extraction is structured bookkeeping, so a smaller model can handle it.
-3. Chat normally. After a few turns, open the Memory panel to inspect the result.
+1. Open **Workbench** (wand menu → **Workbench**, corner pill, `Alt+W`, or **Extensions → Memory → Open in Workbench**) and switch to the **Memory graph** workspace tab.
+2. Open the **Settings** view inside **Memory graph** and turn on Memory Graph.
+3. Choose the API connection and chat-completion preset used for extraction and recall. The help button beside the preset selector explains what kind of preset the slot expects and imports a bundled one in a click. Extraction is structured bookkeeping, so a smaller model handles it well.
+4. Chat normally, then open **Memory graph** in Workbench to inspect the generated graph.
 
-The panel has three views: the graph view shows nodes and links, the node view lists content by type, and the recall view shows what was last injected into the prompt.
+## Views in Workbench
 
-## Reviewing and editing memories
+The **Memory graph** workspace inside Workbench provides five views:
 
-The node view lets you edit fields, titles and links directly; changes are saved to the current chat.
+- **Graph** — interactive Relationship web and Chronological layouts with node/relation filters, injected-text inspection, and a node details panel.
+- **Timeline** — chronological story view grouped by summary tiers.
+- **Data table** — tabular view of nodes with inline field editing.
+- **Memory structure** — edit memory types, record items, extraction rules, persistent injection toggles, templates, import/export, and the **Tag filter** (which strips thinking blocks or status bars before extraction and recall read AI replies).
+- **Settings** — extraction cadence and context window, LLM or RAG vector recall, compression thresholds, token usage trace, and iteration AI settings.
 
-For broader repairs, use AI revision. It opens from two places:
+## Reviewing and editing with AI
 
-- the robot button in the graph viewer toolbar
-- **Memory panel → Advanced → AI revise**
+In **Data table** or **Graph**, you can edit fields, titles, and links directly; changes are saved to the current chat.
 
-Describe the problem in plain language, for example "Eileen and Elena are the same person; merge the duplicate nodes" or "the protagonist has left the Northern Reach; update the location state." The workbench reads the current graph, consults the chat and world book when needed, and turns the changes into reviewable cards. Approve to apply, reject to discard, and roll back applied changes if needed. Sessions are saved per chat, so you can close the panel and continue later.
+For broader edits, switch to **Workbench → AI iteration** and choose:
 
-Before the first use, choose the iteration API connection and preset under **Advanced**. To replace the built-in instructions, edit the **Graph revision prompt**.
+- **Memory graph** — describe repairs in plain language, such as merging duplicate character nodes, updating outdated location states, or adding missing relationships in the current chat.
+- **Memory structure** — describe new memory types, record items, extraction instructions, or injection/compression adjustments globally or for the active character.
 
-## Fitting the graph to your world
+Proposed changes appear in the **Change list** with before/after diffs. Tick what to apply, or undo applied steps in **Change history**.
 
-The default types cover common roleplay, while fantasy, science fiction and mystery settings often need their own structure. In the **Advanced** section of the Memory panel, click **Open Schema Editor** to add types and fields.
+## Fitting the structure to your world
 
-For example:
+Under **Memory graph → Memory structure**, or via **AI iteration → Memory structure**, you can add types and record items tailored to your setting—such as magic systems, factions, or investigation clues—or start from a built-in template.
 
-- Magic system: name, source, limits
-- Faction: name, leader, goals
-- Case clue: content, points to, reliability
+Custom structures can be saved globally or only for the active character card (travelling with the card on export). Each type carries its own extraction instructions and optional extraction cadence.
 
-Custom types are saved with the character card and exported with it. Each type can carry extraction instructions describing how its information should be recorded, and an extraction interval for types that change slowly.
+### Persistent injection
 
-You can also configure the graph in natural language. Open **Advanced → AI configure Memory Graph**, describe the types, fields or extraction rules you want, and confirm each proposed change.
-
-### Keep rules in the prompt
-
-World laws, inviolable character traits and narrative prohibitions should not depend on recall. Mark the corresponding type as **persistent injection** and its nodes appear in the prompt every turn. Persistent nodes leave the recall pool, so they do not take up context twice.
+World laws, inviolable character traits, and core plot threads belong in the prompt every turn. Enable **Always visible to the AI** on those memory types so their nodes are injected persistently. Setting a lookback floor limit moves older entries back into the on-demand recall candidate pool.
 
 ## Common questions
 
 ### Memories are wrong or duplicated
 
-Describe the problem to AI revision, which merges duplicate nodes, deletes entries, and changes fields and links.
+Describe the issue in **Workbench → AI iteration → Memory graph** to merge duplicate nodes, fix fields, or update links.
 
 ### What happens when I edit or delete a message
 
@@ -67,26 +66,19 @@ Memory Graph follows the chat history. Editing or deleting a message, or switchi
 
 ### Moving to another device or sharing memories
 
-Export JSON from the Memory panel and import it into the target chat. Import can keep the original floor numbers, bind every node to the latest floor, or bind to a chosen floor. Importing a long campaign's memory into an empty chat lets you continue from floor 0 with the existing world and relationships.
+Export graph JSON from **Memory graph → Settings** and import it into the target chat. Import supports keeping original floor numbers, binding nodes to the latest floor, or binding to a chosen floor.
 
-### Does regenerating the same floor recall twice
+### Regenerating on the same floor
 
-No. Swipes and regeneration on the same floor reuse the previous recall result, keeping the context consistent and avoiding a duplicate call.
+Swipes and regenerations on the same floor reuse the previous recall result, keeping context consistent and avoiding duplicate model calls.
 
-## Settings
+## RAG vector recall
 
-The settings panel is grouped by job:
-
-- **Extraction**: enable, extraction interval, and the model used for extraction. An interval of 2 extracts every second AI reply, halving the cost.
-- **Recall**: LLM recall or RAG recall, result count, injection position and depth. RAG recall requires an embedding profile first; rerank and query rewrite improve results at the cost of extra calls and latency.
-- **Compression**: automatic compression and its frequency. Turn it on when events accumulate.
-- **Persistent injection**: configured per node type. Suited to world rules and core character facts.
-- **Advanced**: presets for AI revision and AI configuration, import and export, and vector index rebuild.
-
-RAG recall uses vector search. Before enabling it, create an embedding profile under the Embedding tab of the API connection panel, choose an embedding model and connection, then select that profile in the Memory panel and build the vector index. Once indexing finishes, switch recall to RAG.
+RAG recall uses vector search. Create an embedding profile under the Embedding tab of the API connection panel, select an embedding model and connection, then select that profile in **Memory graph → Settings** and build the vector index before switching recall to RAG.
 
 ## Related pages
 
+- [Workbench](/features/workbench) — unified workspace, Q&A, AI iteration, and change history
 - [Multi-agent orchestration](/features/orchestrator/) — hand memory curation to an orchestration agent
 - [World Info basics](/basics/world-info) — how generated memories coexist with hand-written entries
-- [Character card basics](/basics/character-cards) — custom memory types travel with the card
+- [Character card basics](/basics/character-cards) — custom memory structures travel with the card

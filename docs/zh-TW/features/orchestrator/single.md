@@ -13,12 +13,12 @@
 
 ## 開始使用
 
-在擴充功能抽屜把執行模式選為 **單 Agent**。其他模式的編輯器入口會收起，出現兩個欄位：
+在**工作台 → 編排**頂列的模式選擇器中選為**單助手**。在**流程**（或**準備階段**）中點選該助手，編輯兩個欄位：
 
-- **System Prompt**：Agent 的角色與任務。
-- **User Prompt 範本**：本輪提供給 Agent 的輸入。
+- **角色設定（系統提示詞）**：Agent 的角色與任務。
+- **任務範本**：本輪提供給 Agent 的輸入。
 
-直接填寫這兩個欄位即可，不需要開啟編排編輯器。執行時 Agent 的產出會作為編排結果注入主模型。
+執行時 Agent 的產出會作為編排結果注入主模型。
 
 ## 與 Spec 的關係
 
@@ -36,11 +36,11 @@
 
 ## 用 AI 編寫提示詞
 
-[AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) 在單 Agent 模式下同樣可用。描述希望 Agent 完成的任務，工作台會產生系統提示詞與使用者提示詞，並逐項確認。
+[編排 AI 迭代](/zh-TW/features/orchestrator/iteration-studio)在單 Agent 模式下同樣可用。描述希望 Agent 完成的任務，AI 會產生角色設定與任務範本，並逐項確認。
 
 ## 相關頁面
 
 - [多 Agent 編排概覽](/zh-TW/features/orchestrator/) —— 通用設定、觸發時機與角色卡繫結
 - [Spec 模式](/zh-TW/features/orchestrator/spec) —— 多階段流程
-- [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) —— 用自然語言編寫提示詞
+- [編排 AI 迭代](/zh-TW/features/orchestrator/iteration-studio) —— 用自然語言編寫提示詞
 - [Loop 模式](/zh-TW/features/orchestrator/loop) —— 讓 Agent 呼叫工具

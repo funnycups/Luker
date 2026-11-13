@@ -24,7 +24,7 @@ Open sparingly and close readily. Director's default flow selects the notes due 
 
 ## The Notes panel
 
-The panel sits in the Orchestrator extension and is scoped to the current chat. It has two tabs:
+Open **Workbench → Orchestration → Notes** to manage notes scoped to the current chat. It has two tabs:
 
 - **Open**: active threads, each with close, edit and delete actions.
 - **Closed**: the archive, with the reason each note was closed.

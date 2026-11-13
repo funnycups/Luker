@@ -21,7 +21,10 @@
 
 ## 入口与两种模式的切换
 
-入口在**扩展面板 → 角色卡编辑助手**。当前角色不含 CardApp 时，「打开编辑器」打开普通弹窗；含 CardApp 时自动进入 Studio。Studio 也可以通过同面板里的「&lt;/&gt; CardApp Studio」按钮主动启动。
+编辑功能提供两处入口：
+
+- **工作台 → AI 迭代**（**角色卡** / **世界书**）—— 在统一的[工作台](/zh-CN/features/workbench)中对话修改当前角色卡及绑定的世界书，并逐条审阅差异与撤销。
+- **扩展面板 → 角色卡编辑助手** —— **打开编辑器**开启独立弹窗（同时用于替换角色卡时的世界书同步合并），**&lt;/&gt; CardApp Studio** 打开面向 CardApp 的三栏开发环境。当当前角色卡内嵌了 CardApp 时，**打开编辑器**会自动进入 Studio。
 
 ![编辑助手在扩展面板的入口与配置](/images/card-editor-popup/cea-extensions-panel.png)
 

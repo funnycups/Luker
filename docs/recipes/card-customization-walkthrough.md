@@ -8,30 +8,28 @@ No prompt engineering or sub-agent plumbing is needed. The example uses a commun
 
 ## One sentence, one tailored orchestration
 
-After importing and selecting the card, open **Extensions → Orchestrator** and click **Open Orchestration Editor**.
+After importing and selecting the card, open **Workbench** (`Alt+W`, wand menu → **Workbench**, or **Extensions → Orchestrator → Open in Workbench**) and switch to **Orchestration**.
 
 ![Editor open](/images/recipes-card-customization/01-editor-opened.png)
 
-The top bar indicates which card is active, which execution mode is in use, and whether the current edit target is the **global** profile or the **character override**. The objective here is the character override — changes affect only this card and leave others untouched.
-
-Top right, click **Open AI Iteration Studio**.
+Check **Setup** to verify which card and execution mode are active, and whether you are editing the **Global** or **Character-only** profile. Next, switch to **Workbench → AI iteration → Orchestration** (or click **AI** in the topbar) and pick **Character-only** scope — changes affect only this card and leave others untouched.
 
 ![Studio just opened](/images/recipes-card-customization/02-studio-fresh.png)
 
-The Studio splits into a conversation pane on the left and a live preview of the current pipeline on the right (main agent plus all sub-agents). We type one sentence in the composer:
+In the composer, type one sentence describing what should change:
 
 > Build a dedicated orchestration for this card. Replace the global defaults wherever the card needs something different.
 
 ![Prompt typed in composer](/images/recipes-card-customization/03-prompt-typed.png)
 
-Click **Send**. The Studio reads the card and the lorebook, enumerates the currently visible skills, then begins rewriting the main agent's system prompt, adding sub-agents that make sense for this card, and adjusting the visible-skill set. Changes surface as review cards — green is additions, red is removals. A quick review followed by **Apply to character override** commits the change.
+Click **Send**. The AI reads the card and the lorebook, lists the currently visible skills, then rewrites the lead writer's prompt, adds sub-agents that make sense for this card, and adjusts the visible-skill set. Changes appear in the **Change list** with before/after diffs — green for additions, red for removals. Review and click **Apply selected** to commit the changes.
 
 ![A single change review card](/images/recipes-card-customization/04-review-card.png)
 
-For a closer look, expand the line-diff inside the card; for those who would rather not read code, the one-line headline at the top names the field that changed.
+For a closer look, expand the line-diff inside the card; for a quick read, the headline at the top names the field that changed.
 
 ::: tip
-To avoid confirming every diff manually, tick **Auto-apply changes** under the composer. The next section ("Annotating clichés") goes more smoothly with auto-apply on.
+To apply edits directly without confirming every item manually, toggle **Apply automatically** under the composer. You can still undo any applied change in **Workbench → Change history**.
 :::
 
 After a few iteration rounds, the Studio produces a plain-language summary describing what changed and why the changes fit this card.
@@ -124,7 +122,7 @@ Edits still go through a review card, green for additions and red for removals. 
 
 ![New tool's code review + security confirmation](/images/recipes-card-customization/12-tool-review.png)
 
-After applying, scroll to the main agent's **Custom tools** panel — the new tool is there, with its checkbox ticked by default.
+After applying, check **Workbench → Orchestration → Setup → Custom tools** — the new tool is listed and enabled by default.
 
 ![Tool now installed](/images/recipes-card-customization/13-tool-installed.png)
 
@@ -143,4 +141,4 @@ The trace shows the tool call: the main agent runs it right after writing to the
 - The same loop applies to other card-specific constraints — length targets, OOC conventions, world-specific terminology. Tell the Studio in plain language what "good" looks like, and let it assemble the orchestration for us.
 - For everything the `ctx` object exposes inside a custom tool body (`ctx.chat`, `ctx.characters`, etc.), see [Custom tools](/features/orchestrator/custom-tools).
 - To grow a new globally-shared discipline as a skill, see [Shaping RP output with skills](/recipes/rp-skills-walkthrough).
-- If we are unhappy with one of the sub-agents the Studio came up with, the orchestration editor lets us edit it directly. The Studio aims to save time; it is not a required path.
+- If we are unhappy with one of the sub-agents the AI created, **Workbench → Orchestration** (**Flow** / **Setup**) lets us edit it directly. AI iteration aims to save time; manual editing is always available.

@@ -2,33 +2,32 @@
 
 ## 它是什么
 
-一个可复用的内存内运行轨迹，供任何执行多步 LLM 任务的插件使用。它会在聊天区旁渲染一块滑入式面板（窄屏下改为底部抽屉），每一轮是一张可折叠的卡片，分节内容流式填充，附带停止按钮与导出动作，运行进行中还会显示一枚悬浮胶囊。
+一个可复用的内存内运行轨迹，供任何执行多步 LLM 任务的插件使用。插件把轮次、流式分节、工具调用和 token 用量写入 `RunStore`，再挂载到 Luker 共享的**运行面板**悬浮窗（`attachDock`），也可以通过 `createRunPanel` 创建独立面板。
+
+共享悬浮窗在桌面端显示为可拖动、可缩放的浮动窗口（空闲或收起时折叠为状态胶囊），窄屏下转为底部抽屉，提供轮次卡片、流式内容、停止按钮、JSON 轨迹导出，以及跳转至[工作台](/zh-CN/development/extension-api/workbench)查看详情或 AI 诊断的钩子。
 
 共享层位于 `public/scripts/run-panel/`，在 Luker context 上暴露为 `runPanel`。仓库内消费方：
 
-- 编排器 —— `public/scripts/extensions/orchestrator/run-panel/panel.js`
+- 编排器 —— `public/scripts/extensions/orchestrator/lens/index.js`
 - 搜索工具 —— `public/scripts/extensions/search-tools/run-panel.js`
 
 ![搜索 Agent 在共享面板中的运行](/images/search-tools/run-panel.png)
 
-## 快速上手
+## 快速上手（共享运行面板）
 
 ```js
-import { createRunStore, createRunPanel } from '/scripts/run-panel/index.js';
+const ctx = Luker.getContext();
+const { createRunStore, attachDock, openRunDock } = ctx.runPanel;
 
 const store = createRunStore();
-const panel = createRunPanel({
-    store,
-    t: (text, ...args) => text,   // supply your plugin's translator
-    idPrefix: 'luker-my-run-panel',
-    modeLabels: { myTask: 'My task' },
-    exportFilename: ({ runId }) => `my-run-${runId}.json`,
+attachDock(store, {
+    source: 'my-plugin',
+    getRunContext: () => ({ chatId: ctx.chatId, chatLabel: ctx.name2 }),
+    onInspect: (runKey) => ctx.workbench?.open?.({ ws: 'my-ext', subview: 'run', runKey }),
 });
-panel.init();   // call once at boot
-panel.open();   // call from a menu action
 ```
 
-这就是完整的集成方式。通过写入 store 驱动面板：
+通过写入 store 驱动面板：
 
 ```js
 const runId = store.startRun({ mode: 'myTask', stopFn: () => abortController.abort() });
@@ -42,9 +41,11 @@ store.setSectionStatus({ runId, roundId, sectionId, status: 'done' });
 store.finishRun({ runId, status: 'committed', finalText: 'Result' });
 ```
 
+在菜单项或按钮中调用 `await openRunDock()` 或 `await toggleRunDock()` 即可按需打开。
+
 ## 存储 API
 
-`createRunStore()` 返回一个隔离的 store。每次调用都会产生一个独立实例，因此两个插件绝不会共享运行状态或产生冲突。
+`createRunStore()` 返回一个隔离的 store。每次调用都会产生一个独立实例，因此两个插件不会共享运行状态或产生冲突。
 
 | 方法 | 用途 |
 | --- | --- |
@@ -61,7 +62,7 @@ store.finishRun({ runId, status: 'committed', finalText: 'Result' });
 | `setRunMeta({ runId, tokensSpent, cost })` | 设置运行级元数据。 |
 | `addTokenUsage({ runId, usage })` | 把 LLM 用量对象累加进运行中的 token 总数。 |
 
-`quiet: true` 只填充 store 而不自动打开面板；之后调用 `panel.open()` 即可显示。
+`quiet: true` 只填充 store 而不自动打开面板；之后调用 `openRunDock()`（或 `panel.open()`）即可显示。
 
 ## 事件
 
@@ -79,9 +80,20 @@ store.finishRun({ runId, status: 'committed', finalText: 'Result' });
 | `run_finished` | `runId`、`status` |
 | `run_cleared` | `runId` |
 
-## 面板选项
+## 共享悬浮窗与记录器 API
 
-`createRunPanel(options)` 返回 `{ init, open, destroy }`。
+| 函数 | 用途 |
+| --- | --- |
+| `attachDock(store, opts)` | 把 `RunStore` 挂载到共享记录器与悬浮运行面板（`{ source, getRunContext, getFlow, onInspect, onDiagnose }`）。 |
+| `openRunDock()` | 确保并打开共享运行面板。 |
+| `toggleRunDock()` | 切换共享运行面板的打开与关闭状态。 |
+| `getRunRecorder()` | 返回按账号保存近期运行历史的共享记录器。 |
+
+用户可以在悬浮窗菜单中直接切换**运行时自动打开**（默认开启；关闭后非 quiet 运行仅显示状态胶囊，不会自动展开）。
+
+## 独立 `createRunPanel` 选项
+
+若需要独立于共享悬浮窗的自定义面板，`createRunPanel(options)` 返回 `{ init, open, destroy }`：
 
 | 选项 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -110,16 +122,16 @@ store.finishRun({ runId, status: 'committed', finalText: 'Result' });
 
 ```js
 // Layer 1 —— 直接 ESM import（仓库内扩展）
-import { createRunStore, createRunPanel } from '/scripts/run-panel/index.js';
+import { createRunStore, attachDock, openRunDock } from '/scripts/run-panel/index.js';
 
 // Layer 2 —— lukerContext 属性
-const { createRunPanel } = lukerContext.runPanel;
+const { createRunStore, attachDock, openRunDock } = lukerContext.runPanel;
 
 // Layer 3 —— getContext（第三方扩展）
-const { createRunStore } = SillyTavern.getContext().runPanel;
+const { createRunStore, attachDock, openRunDock } = Luker.getContext().runPanel;
 ```
 
 ## 参考消费方
 
-- 编排器运行时写入轮次与分节，面板在每次运行时自动打开：`public/scripts/extensions/orchestrator/loop-runtime.js`、`director-runtime.js`、`agenda-runtime.js`、`spec-runtime.js`。
-- 编排器封装层配置 i18n 与导出文件名：`public/scripts/extensions/orchestrator/run-panel/panel.js`。
+- 编排器在 `public/scripts/extensions/orchestrator/lens/index.js` 将其 `RunStore` 挂载到共享运行面板，将**查看运行详情**接入工作台（`ws: 'orch', subview: 'run'`），将 **AI 诊断**接入工作台（`page: 'ai', ws: 'orch'`）。
+- 搜索工具在 `public/scripts/extensions/search-tools/run-panel.js` 将其 `RunStore` 挂载到共享运行面板（`source: 'search'`）。

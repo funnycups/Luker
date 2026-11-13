@@ -21,7 +21,10 @@ Regardless of mode, the editor assistant provides these core capabilities:
 
 ## Entry Point and Mode Switching
 
-The entry point is **Extensions Panel → Character Card Editor Assistant**. When the current character has no CardApp, "Open Editor" opens the popup; when it does, Studio opens automatically. Studio can also be launched directly via the "&lt;/&gt; CardApp Studio" button on the same panel.
+Two entry points serve different editing needs:
+
+- **Workbench → AI iteration** (**Character card** / **World book**) — conversational editing with diff cards and rollback inside the unified [Workbench](/features/workbench).
+- **Extensions Panel → Character Editor Assistant** — **Open Editor** opens the standalone popup (used for card/lorebook editing and World Info sync when replacing a card), and **&lt;/&gt; CardApp Studio** launches the three-panel IDE for cards with an embedded CardApp. When the active character contains a CardApp, **Open Editor** opens Studio automatically.
 
 ![Editor assistant entry and configuration in the extensions panel](/images/card-editor-popup/cea-extensions-panel.png)
 

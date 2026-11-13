@@ -4,11 +4,11 @@ Custom tools give orchestration agents operations beyond the built-in set: query
 
 ## Tool sources
 
-**Tools registered by other extensions.** Memory Graph, Search Tools and similar extensions register tools at startup. They appear in the orchestration editor's custom tool list and are enabled by default for a new orchestration.
+**Tools registered by other extensions.** Memory Graph, Search Tools, and similar extensions register tools at startup. They appear under **Custom tools** in **Workbench → Orchestration → Setup** and are enabled by default for a new orchestration.
 
-**Tools registered by SillyTavern plugins.** If a plugin exposes tools through SillyTavern's function-calling system, bridge them in the orchestration editor and choose read-only or writable for this orchestration. Bridged tools appear in their own group.
+**Tools registered by SillyTavern plugins.** If a plugin exposes tools through SillyTavern's function-calling system, bridge them under **Orchestration → Setup** and choose read-only or writable for this orchestration. Bridged tools appear in their own group.
 
-**Tools written for this orchestration.** When the first two sources are not enough, add a tool in the orchestration editor. It is saved with the orchestration: tools in the global configuration apply globally, and tools in a card override travel with that card.
+**Tools written for this orchestration.** When the first two sources are not enough, add a tool under **Orchestration → Setup → Custom tools**. It is saved with the orchestration: tools in the global configuration apply globally, and tools in a card override travel with that card.
 
 ## Adding a tool
 
@@ -26,9 +26,9 @@ Read-only tools always run for real in simulated review. Write tools run the sim
 
 ## Enabling and disabling
 
-The custom tool panel in the orchestration editor decides which tools the agent can use in this orchestration. Unchecking a tool does not delete it; you can re-enable it later.
+The **Custom tools** section under **Workbench → Orchestration → Setup** decides which tools the agent can use in this orchestration. Unchecking a tool does not delete it; you can re-enable it later.
 
-Nodes, workers and sub-agents can override tool toggles individually. A node's override takes precedence over the orchestration default.
+Nodes, workers, and sub-agents can override tool toggles individually inside **Flow** or **Setup**. A node's override takes precedence over the orchestration default.
 
 ## Security
 
@@ -38,14 +38,14 @@ When you import a character card that carries custom tools, Luker lists each too
 
 ## Editing tools with AI
 
-[AI Iteration Studio](/features/orchestrator/iteration-studio) can read existing tools, inspect the runtime, dry-run code in a sandbox, and submit additions or changes as review cards. Nothing is written to the orchestration until you approve it.
+[AI Iteration](/features/orchestrator/iteration-studio) in Workbench can read existing tools, inspect the runtime, dry-run code in a sandbox, and submit additions or changes in the **Change list**. Nothing is written to the orchestration until you approve it.
 
-Definitions owned by other extensions cannot be changed in the Studio; only their enabled state can be toggled. Edit the definition in the extension that registers it.
+Definitions owned by other extensions cannot be changed in AI iteration; only their enabled state can be toggled. Edit the definition in the extension that registers it.
 
 ## Related pages
 
 - [Orchestration overview](/features/orchestrator/) — shared settings and triggers
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — inspect and change tools in natural language
+- [AI Iteration](/features/orchestrator/iteration-studio) — inspect and change tools in natural language
 - [Loop mode](/features/orchestrator/loop) — the most common setting for custom tools
 - [Director mode](/features/orchestrator/director) — both the main agent and sub-agents can call custom tools
 - [Orchestrator Tools API](/development/extension-api/orchestrator-tools) — the developer interface for registering tools

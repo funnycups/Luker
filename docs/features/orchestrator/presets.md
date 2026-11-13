@@ -5,7 +5,7 @@ Each orchestration mode (spec / agenda / loop / director) keeps its own **preset
 - **Global** — presets stored in extension settings, available to every chat.
 - **Character card** — presets stored on the character card itself, travelling with the card when it is exported.
 
-A preset captures everything inside the mode's orchestration panel — system prompts, tool flags, sub-agents, planner config, run limits, orchestration-result injection. Prompt presets and API connections are referenced by name and resolved at runtime.
+A preset captures everything inside the mode's orchestration setup — role prompts, tool flags, sub-agents, planner config, run limits, orchestration-result injection. Prompt presets and API connections are referenced by name and resolved at runtime.
 
 This page covers the preset bar, the two scopes, and how presets reference each other.
 
@@ -15,20 +15,20 @@ Each mode has its own preset structure, so each keeps its own library. Switching
 
 ## The preset bar
 
-The preset bar sits at the top of each mode's editor panel:
+The preset bar sits at the top of **Workbench → Orchestration → Setup**:
 
 ![Preset bar — director mode](/images/orchestrator-presets/01-director-default.png)
 
 It exposes the standard set of operations:
 
-- **Dropdown** — list of presets in the current `(mode, scope)` library. Selecting a preset reloads the editor with that preset's contents.
+- **Dropdown** — list of presets in the current `(mode, scope)` library. Selecting a preset reloads the workspace with that preset's contents.
 - **New** — seeds a fresh preset from the factory defaults for the active mode.
 - **Duplicate** — clones the current active preset under a new name; the clone becomes active.
 - **Rename** — changes the name; configurations that reference the preset keep working.
 - **Delete** — removes the preset. If the deleted preset was active, the next preset in the list becomes active. If the library empties, `Default` is automatically re-seeded from the factory data.
 - **Import / Export** — uses the standard portable JSON format. Importing prompts for a name and adds to the current library; exporting writes the active preset to disk.
 
-Edits made in the panel write back to the **active** preset. There is no implicit save step — closing the panel or switching presets persists the current state.
+Edits made in **Flow**, **Setup**, or **Settings** apply to the **active** preset once saved.
 
 ## Global vs character-card scope
 
@@ -71,11 +71,11 @@ When an orchestration preset pins an agent to a prompt preset by name (`Sonnet �
 
 The card-first ordering matters when a card ships with its own recommended presets: the orchestration profile and the presets it references travel together, and the recipient does not need to import matching presets separately. If the recipient has a same-named local preset, the card copy wins for that character.
 
-The **Card-bound** `<optgroup>` at the top of each agent's preset picker in the orchestrator drawer surfaces the same set of card-embedded presets when a character is loaded, so you can see and pick from the card set from the same UI you use for local presets.
+The **Card-bound** `<optgroup>` at the top of each agent's preset picker inside **Workbench → Orchestration** surfaces the same set of card-embedded presets when a character is loaded, so you can see and pick from the card set from the same UI you use for local presets.
 
 ## Committing an orchestration profile to a character embeds referenced presets on demand
 
-Committing an orchestration profile to the current character card runs a preflight check on the agent prompt-preset references and looks up which of them are not yet embedded on the card. Commit here covers the entry points — **Save To Character Override** in the orchestrator drawer and **Apply to Character** in the **AI Iteration Studio** popup — both sharing the same preflight.
+Committing an orchestration profile to the current character card runs a preflight check on the agent prompt-preset references and looks up which of them are not yet embedded on the card. Commit here covers **Save To Character Override** under **Orchestration → Setup** and applying to character scope in **Workbench → AI iteration → Orchestration** — both sharing the same preflight.
 
 If any references are un-embedded, a summary popup opens listing them and offering the following actions:
 
@@ -108,5 +108,5 @@ A few common workflows:
 - [Agenda mode](/features/orchestrator/agenda) — planner-driven; each agenda preset is one planner + worker bundle.
 - [Loop mode](/features/orchestrator/loop) — single-agent loop; each loop preset is one agent profile.
 - [Director mode](/features/orchestrator/director) — takeover mode; each director preset is one main-agent + sub-agent team.
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — edits the active preset directly; switching presets in the bar swaps what the Studio is iterating on.
+- [AI Iteration](/features/orchestrator/iteration-studio) — edits the active preset directly; switching presets in the bar swaps what AI iteration edits.
 - [Card-Bound Presets and Personas](/improvements/card-bound-presets) — how character-scope settings ride along with the card on export.

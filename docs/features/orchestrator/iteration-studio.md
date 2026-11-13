@@ -1,155 +1,94 @@
-# AI Iteration Studio
+# AI Iteration for Orchestration
 
-The AI Iteration Studio is the **primary way to customize the orchestrator**. In most cases, stages and nodes do not need manual editing and Planner prompts do not need to be written by hand — describe the goal in one sentence, the AI returns a proposal, and each change is approved individually. Spec / Agenda / Loop / Director all use the same Studio; only the artifact differs.
+**Workbench → AI iteration → Orchestration** is the primary way to customize any orchestration profile. Instead of writing stage graphs, planner prompts, or custom tools by hand, describe the goal in plain language, review the proposed edits in the **Change list**, and apply them. Spec, Agenda, Loop, and Director all share the same workspace.
 
-::: tip Try the Studio first; edit manually only if it cannot reach the result
-If you are about to open the orchestration editor to add nodes manually, consider the Studio first — in most cases it can produce a workable proposal within seconds. Manual editing is reserved for corner cases the Studio cannot reach.
+::: tip Start with AI iteration
+Describe the workflow or fix you want first; manual editing under **Workbench → Orchestration** (**Flow** / **Setup**) is always available for direct fine-tuning.
 :::
 
-## Open the Studio
+## Opening it
 
-Switch to the execution mode you want (Spec / Agenda / Loop), then click **Open AI Iteration Studio** in the orchestrator panel's actions area.
+1. Open **Workbench** (`Alt+W`, wand menu → **Workbench**, or corner pill) → **AI iteration** → **Orchestration**.
+2. Or click the **AI** button in the **Orchestration** workspace topbar (or the AI button under **Setup**).
+3. To diagnose a specific run, click **Not happy with the result? AI diagnosis** in the **Run panel** dock, **Diagnose this run** in **Orchestration → Run**, or the target icon in **Orchestration → Stats**.
 
-![Quick Build and Iteration Studio buttons](/images/orchestrator/orch-quickbuild-button.png)
+![Iteration view](/images/orchestrator/orch-iteration-studio.png)
 
-A new panel opens. The left side is your conversation with the Studio's AI; the right side shows the current orchestration state.
+Choose the target scope at the top: **Global** edits the shared profile, while **Character-only** edits the active character card's profile (saving one automatically if needed, or editing the chat profile in Agenda mode).
 
-![Iteration Studio main view](/images/orchestrator/orch-iteration-studio.png)
+## Describing what you want
 
-## Describe what you want
-
-In the input box, write one sentence describing what the orchestration should do. A specific description is better than a general one.
+Write a clear sentence in the composer describing what should change:
 
 > Example: *"I want the AI to recall recent important events before each reply, keep characters consistent, and not break the fourth wall."*
 
-![Studio input with sample prompt](/images/orchestrator/orch-iter-input.png)
+![Input with sample prompt](/images/orchestrator/orch-iter-input.png)
 
-Click **Send to AI**.
+Send the message. The AI inspects the active profile, reads relevant lorebook entries or skills when needed, and stages edits via tool calls. The loop continues across rounds whenever the AI calls tools and stops as soon as it responds with plain text.
 
-## Watch the AI work
+## Reviewing and applying changes
 
-The AI replies with a short plan and a proposal showing what it intends to change. The exact form depends on the mode:
-
-- **Spec / Agenda** — the AI produces a diff: green-add / red-delete / yellow-modify entries. You can approve or reject each one, or simply wait — the Studio iterates automatically until the proposal stabilizes, showing its diff as it goes.
-- **Loop** — the AI changes the configuration directly: system prompt, tool toggles, round limit and preset routing. It tells you the result when it is done.
-- **Director** — direct profile patches via tool calls against the main agent and the sub-agent roster: prompts, tool sets, preset routing, skills. The roster view marks the rows that changed; no per-change diff approval.
+Proposed changes appear in the **Change list** with inline before/after diffs (and expandable line diffs). Tick the changes to apply and click **Apply selected**, or discard them. Enabling **Apply automatically** writes edits directly as they arrive; every applied change is recorded in **Workbench → Change history** and can be undone individually.
 
 ![Pending diff review](/images/orchestrator/orch-iter-diff-inline.png)
 
-If a change isn't obvious, click the magnifier icon next to it for a side-by-side comparison.
-
 ![Diff side-by-side detail](/images/orchestrator/orch-iter-diff-side.png)
 
-## Apply
+## What AI iteration can do
 
-When the AI reports that it has nothing more to suggest, click **Apply to Global** (use everywhere) or **Apply to Character Card** (only for this card).
-
-## What the Studio can do
-
-- **Multi-round dialogue.** You send a sentence of feedback; the AI proposes a focused change, and you review it.
-- **Per-change approval (Spec / Agenda).** Diff entries have their own Approve / Reject, so only part of a proposal can be accepted.
-- **Program-driven auto-continue.** The Studio starts another round whenever the AI emits a tool call, and stops as soon as the AI responds with plain text and no tool calls. There is no manual continue button.
-- **Simulation.** Run the workflow against the actual current chat — exactly as if a new message had just been sent, World Info activation included — but the result appears only in the Studio, *not* in the real chat. For example, asking "will the check really catch out-of-character moments?" makes the Studio run the pipeline and display each node's output.
-- **Sessions.** Each scope keeps its own sessions. Different cards or experiments each get their own thread.
-- **Rollback.** Changes can be reverted even after Apply.
-- **Foldable thinking.** Reasoning models' thinking is folded by default; long messages are folded too.
-
-## A typical iteration (Spec example)
-
-> **You:** *"Don't break the fourth wall."*
-> **AI:** "Adding a check node to the constraint stage that blocks character drift and meta commentary, and enabling the data-like prose check." Diff: a new node and a setting change. You approve.
->
-> **You:** *"Make it read the lorebook so it knows the world rules."*
-> **AI:** "Added a world book reader node to the constraint stage so the check node can see the active world rules." Diff: a new node. Approve.
->
-> **You:** *"Simulate against an obviously-meta input — does it actually catch it?"*
-> **AI:** Switches to Simulation mode, runs the pipeline against a user message that breaks character, and returns the check node's verdict.
+- **Edit any mode.** Add, remove, or reorder Spec stages and nodes; adjust Agenda's dispatcher prompt and worker pool; rewrite Loop's system prompt, tool toggles, and limits; or update Director's lead writer and sub-agents.
+- **Diagnose runs & stats.** Inspect failed or slow runs and adjust prompts, tool permissions, or model routing to fix bottlenecks.
+- **Simulate.** Run the workflow against the current chat (including World Info activation) without adding anything to the real chat, then annotate issues in the simulation review popup for root-cause fixes.
+- **Reconcile card lorebooks.** In character scope, detect lorebook entries whose formatting rules interfere with orchestration tool loops and propose surgical rewrites as reviewable cards.
+- **Author skills and custom tools.** Draft, install, and attach skills or dry-run custom JavaScript tools with code review before applying.
+- **Persistent sessions.** Conversations stay saved per scope so you can close Workbench and pick up later.
 
 ![Simulation result](/images/orchestrator/orch-iter-simulation.png)
 
-> **Stable.** You click **Apply**.
+## Typical workflow (Spec example)
 
-Every step is visible, interruptible, and reversible — that is the point. Control is never handed to a black box: the AI proposes and you decide.
-
-## What each mode produces
-
-| Mode | Studio output | What you see |
-|---|---|---|
-| **Spec** | Diff against stages / nodes: add/remove nodes, edit prompt templates, tweak execution flags, override API/preset | Green/red/yellow diff list, per-change approval |
-| **Agenda** | Diff against the Planner Prompt + Agent pool: add agents, edit Planner dispatch logic | Green/red/yellow diff list, per-change approval |
-| **Loop** | Changes the Loop configuration directly: system prompt, tool toggles, round limit, preset routing | No diff surface — the AI tells you the result after applying |
-| **Director** | Changes the main-agent and sub-agent roster directly: prompts, tools, preset routing, skills | Roster view with changed rows marked; no per-change diff surface |
-
-## Loop-mode iteration tips
-
-To avoid writing the system prompt by hand, open the Studio in Loop mode and describe the agent's behaviour in plain language:
-
-> I want this agent to read the recent floors first, then look up relevant lorebook entries, then check the memory graph for conflicts, then write the orchestration result. Don't have it take notes.
-
-The Studio's AI reads your current profile and patches it via tool calls. The Studio auto-continues whenever the AI emits any tool call this round and stops the moment the AI responds with plain text and no tool calls — so iteration continues for as long as the AI keeps making changes.
+> **You:** *"Don't break the fourth wall."*
+> **AI:** Adds a review/guard node and enables style checks. You apply the change.
+>
+> **You:** *"Make it read the lorebook so it knows the world rules."*
+> **AI:** Adds a lorebook reader node so downstream nodes see active rules. You apply the change.
+>
+> **You:** *"Simulate against an obviously-meta input — does it actually catch it?"*
+> **AI:** Runs a simulation on the current chat and returns each node's output.
 
 ## Per-card lorebook hygiene
 
-When you open the Studio scoped to a character card, the AI also reconciles the orchestration being built against the card's bound lorebooks. Format-related lorebook entries fall into two categories that require different handling:
+When editing a character-scoped profile, the AI also checks the card's bound world books for formatting rules that clash with orchestration:
 
-- **Process coercion** — entries that pin *how the model thinks during the run* (mandatory thinking templates, every-round CoT prefixes, "always check X before answering", "follow steps 1-N in order before responding"). These interfere with the agent loop in an orchestration: they fire across tool-call rounds, force narrative-shaped text where the agent needs to plan and call tools, and starve the planning channel. The Studio strips the format and extracts the underlying intent — the topics, angles, persona habits, scene anchors the author cared about — rewriting it as worldbuilding / persona / scene-anchor content the agent reads as narrative input, not as another rule.
-- **Final-output shape** — entries that describe *what the final committed reply looks like* ("all output must be markdown", "wrap the response in a tag", "end with a closing summary block", "speak in poetry"). These are legitimate stylistic preferences and the Studio keeps them. It only rewrites them so the final submission semantics are explicit, so intermediate orchestration nodes (planner, tool-callers, reviewers) stay free to use whatever form they need on the way to the final commit.
+- **Process coercion** — rules that dictate *how the model thinks on every round* (mandatory thinking templates, step-by-step checklists before answering). These interfere with tool-calling rounds, so the AI proposes extracting the underlying persona or worldbuilding intent as narrative content.
+- **Final-output shape** — rules describing *how the final reply should look* (tags, markdown structure, closing blocks). The AI scopes these clearly to the final output so intermediate planning and tool-calling agents stay unobstructed.
 
-The Studio prefers surgical clause-level rewrites that preserve the rest of an entry; whole-entry disabling happens only when the entry is pure format coercion with no salvageable content. Nothing is ever deleted.
+All lorebook proposals appear in the **Change list** for explicit approval. Global sessions never touch lorebooks.
 
-**Approval flow.** Lorebook adjustments are *proposed*, not applied immediately. Proposals appear below the assistant message that produced them as diff cards with **Approve** / **Reject** controls — the same per-change review you already have for orchestration changes. Only approved proposals are committed to the on-disk world book when **Apply** is clicked; rejected proposals are dropped, and undecided ones remain in the panel for later review. A summary row above the composer shows the running counts (pending / approved / rejected) and offers a dedicated "Commit approved lorebook edits" button when approved proposals exist but no orchestration changes are pending alongside them.
+## Authoring skills via AI iteration {#authoring-skills-via-iter-studio}
 
-Global Studio sessions never touch any lorebook — this only runs in character scope.
+Describe a new rule in plain language and tell the AI which agents should see it:
 
-## Authoring skills via iter-studio
+> Write a skill that keeps the director from using stiff translated-Chinese phrasing — no "当……的时候" stem, no "——" dash-splitting sentences, prefer "是吧" over "是吗". Add it so every agent in director mode sees it.
 
-To avoid writing a skill by hand, open the Studio and describe what is needed. It writes the SKILL.md, installs it, and (on request) attaches it in the right place — with the same per-change approval flow as every other change.
+The AI drafts `SKILL.md`, stages the skill installation proposal, and wires visibility to the requested agents in the same approval list.
 
-The prompt can be a plain sentence. For example:
+![Install round completed](/images/skills/iter-studio-05-after-llm-round.png)
 
-> Write a skill that keeps the director from using stiff translated-Chinese phrasing — no "当……的时候" stem, no "——" dash-splitting sentences, prefer "是吧" over "是吗"。Add it so every agent in director mode sees it.
-
-The Studio drafts the SKILL.md, opens the install round, and you approve. The skill is written to disk and is ready to use as soon as it is approved. If you also asked the Studio to attach it ("…so every agent sees it" / "…for the voice reviewer"), it wires it into the right place too; otherwise you can attach it yourself later from the [skill list section](/features/orchestrator/skills) of the director editor.
-
-![Studio after the install round](/images/skills/iter-studio-05-after-llm-round.png)
-
-See the [recipe](/recipes/rp-skills-walkthrough) for the full walkthrough.
+See [Shaping RP output with skills](/recipes/rp-skills-walkthrough) for a full walkthrough.
 
 ## Sessions
 
-Different cards, different experiments — each keeps its own session.
+Each scope keeps its own conversation history so experiments on one character card stay separate from global defaults.
 
 ![Session list](/images/orchestrator/orch-iter-sessions.png)
 
-Sessions persist across reloads, scoped to global or to a character card. Different scopes keep separate sessions.
-
-## Sidebar — Quick Build (Spec / Agenda)
-
-Quick Build is the one-shot version of the Iteration Studio, available for Spec and Agenda. Type a description into the **AI Generation Goal** field at the top of the orchestration editor and click **AI Quick Build**:
-
-![Quick Build button](/images/orchestrator/orch-quickbuild-input.png)
-
-After a single LLM round, a complete workflow is produced:
-
-![Quick Build result](/images/orchestrator/orch-quickbuild-result.png)
-
-Quick Build is appropriate when:
-
-1. The Studio has been used enough times that the target is clear and only the boilerplate is needed.
-2. The simplest workable path is preferred and how the AI arrived at it does not matter.
-
-In most cases, the Iteration Studio is the better choice: the extra 1–2 minutes produce a workflow that is understood and adjustable.
-
-::: info Loop mode has no Quick Build
-Loop mode iterates only through the Studio — there's no "generate a complete profile in one shot" entry point, because the loop's system prompt usually needs scenario-specific tuning, and a one-shot output tends to be off target.
-:::
-
 ## Related
 
-- [Orchestrator overview](/features/orchestrator/) — common configuration / triggers / character card binding
-- [Spec mode](/features/orchestrator/spec) — the default fixed-stage mode
-- [Single Agent mode](/features/orchestrator/single) — one-node Spec
-- [Agenda mode](/features/orchestrator/agenda) — Planner-driven dynamic dispatch
+- [Workbench](/features/workbench) — unified workspace, Q&A, and change history
+- [Orchestrator overview](/features/orchestrator/) — modes, Run panel, and card binding
+- [Spec mode](/features/orchestrator/spec) — fixed-stage pipeline
+- [Single Agent mode](/features/orchestrator/single) — single-node pipeline
+- [Agenda mode](/features/orchestrator/agenda) — dynamic dispatch
 - [Loop mode](/features/orchestrator/loop) — single-agent tool loop
-- [Skills in the orchestrator](/features/orchestrator/skills) — making a skill visible to a particular agent
-- [Character Card Editor](/features/card-editor/) — shares the diff engine with Iteration Studio
+- [Skills in the orchestrator](/features/orchestrator/skills) — making a skill visible to specific agents
