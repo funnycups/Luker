@@ -465,6 +465,12 @@ const ZH_CN = {
     'Tool calls (${0})': '工具调用（${0}）',
     'Edited ${0} times': '改了 ${0} 次',
     '${0} failed': '${0} 次没改成',
+    'Editing mode': '编辑模式',
+    'Compare with reference': '与参考预设比较',
+    'No reference preset': '无参考预设',
+    'Entry order (${0})': '条目顺序（${0}）',
+    'Skills': '技能',
+    'Preset "${0}" already exists': '预设「${0}」已存在',
 };
 
 const ZH_TW = {
@@ -929,6 +935,12 @@ const ZH_TW = {
     'Tool calls (${0})': '工具呼叫（${0}）',
     'Edited ${0} times': '改了 ${0} 次',
     '${0} failed': '${0} 次沒改成',
+    'Editing mode': '編輯模式',
+    'Compare with reference': '與參考預設比較',
+    'No reference preset': '無參考預設',
+    'Entry order (${0})': '條目順序（${0}）',
+    'Skills': '技能',
+    'Preset "${0}" already exists': '預設「${0}」已存在',
 };
 
 export function registerWorkbenchLocaleData(addLocaleData) {

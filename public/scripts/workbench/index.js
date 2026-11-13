@@ -9,6 +9,7 @@ import { i18n } from './i18n.js';
 import { registerWorkbenchLocaleData } from './locale-data.js';
 import { setOpenHandler } from './registry.js';
 import { ensureWorkbenchStyles, mountWorkbench } from './app.js';
+import { registerBuiltinTargets } from './targets/index.js';
 
 const MENU_ID = 'luker_workbench_wand_item';
 const THIRD_PARTY_COPY = /third-party\/luker-workbench$/i;
@@ -19,6 +20,7 @@ let handle = null;
 let initialized = false;
 let boundAppReady = null;
 let keydownBound = false;
+let unregisterBuiltinTargets = null;
 
 function workbenchSettings() {
     const ext = getContext()?.extensionSettings || {};
@@ -125,6 +127,8 @@ export function initWorkbench() {
     }
 
     initialized = true;
+    unregisterBuiltinTargets?.();
+    unregisterBuiltinTargets = registerBuiltinTargets();
     ensureWorkbenchStyles();
     addMenuItem();
 
@@ -155,6 +159,8 @@ export function resetWorkbenchForTest() {
         document.getElementById(MENU_ID)?.remove();
     }
     setOpenHandler(null);
+    unregisterBuiltinTargets?.();
+    unregisterBuiltinTargets = null;
     handle?.close?.();
     handle = null;
     initialized = false;
