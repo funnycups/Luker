@@ -5,8 +5,7 @@
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import { createCharacterEditorDiffUi } from './diff-ui.js';
 import { createCharacterEditorUi } from './editor-ui.js';
-import { openUnifiedCharacterEditorPopup } from './editor-iteration/studio.js';
-import { DEFAULT_SYSTEM_PROMPT as DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT } from './editor-iteration/studio.js';
+import { DEFAULT_CARD_SYSTEM_PROMPT as DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT } from '../../workbench/targets/card-prompts.js';
 import { DEFAULT_SYSTEM_PROMPT as DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT } from './studio/ai-chat.js';
 import { mdLiteral } from '../../iteration-library/markdown-escape.js';
 import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
@@ -147,6 +146,7 @@ function registerLocaleData() {
     addLocaleData('zh-cn', {
         'Character Editor Assistant': '角色卡编辑助手',
         'Open Editor': '打开编辑器',
+        'Workbench is unavailable.': '工作台当前不可用。',
         'Character Editor': '角色编辑器',
         'Regenerate aborted': '重新生成已中止',
         'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新生成已中止——无法回退 ${0} 上的提交：${1}',
@@ -489,6 +489,7 @@ function registerLocaleData() {
         'Entry changed (uid ${0}): ${1}': '條目變更（uid ${0}）：${1}',
         'Previous world book ${0} (${1} entries):': '舊世界書 ${0}（共 ${1} 條）：',
         'Next world book ${0} (${1} entries):': '新世界書 ${0}（共 ${1} 條）：',
+        'Workbench is unavailable.': '工作台目前無法使用。',
         'Cancelled — restored previous world book: ${0}': '已取消 —— 已恢復原世界書：${0}',
         // Replace-diff overview popup (topbar button + full-screen popup)
         'View full replace diff': '檢視完整替換差異',
@@ -3265,24 +3266,24 @@ export async function buildPostReplaceSeedMessage(context, detail) {
     return sections.join('\n');
 }
 
-async function openCharacterEditorPopup(context = getContext(), opts = {}) {
+export async function openCharacterEditorPopup(context = getContext(), opts = {}) {
     const character = context?.characters?.[context?.characterId] || null;
     const avatarFromCtx = String(character?.avatar || '').trim();
     const avatar = String(opts?.avatar || avatarFromCtx).trim();
     if (!avatar) {
         notifyWarning(i18n('No character selected or character has no avatar.'));
-        return;
+        return null;
     }
-    if (editorStudioDialogLocks.has(avatar)) {
-        notifyWarning(i18n('A character editor dialog is already open for this character.'));
-        return;
+    const wb = context?.workbench || getContext()?.workbench;
+    if (typeof wb?.open !== 'function') {
+        notifyError(i18n('Workbench is unavailable.'));
+        return null;
     }
-    editorStudioDialogLocks.add(avatar);
-    try {
-        await openUnifiedCharacterEditorPopup(context, { i18n, i18nFormat, ...opts, avatar });
-    } finally {
-        editorStudioDialogLocks.delete(avatar);
+    const openOpts = { page: 'ai', ws: 'card', scope: 'character' };
+    if (typeof opts?.seedSystemMessage === 'string' && opts.seedSystemMessage.trim()) {
+        openOpts.draft = opts.seedSystemMessage;
     }
+    return wb.open(openOpts);
 }
 
 const {
@@ -4012,7 +4013,7 @@ jQuery(async () => {
  * seed the diff, open the studio, roll back when the user closes without
  * applying) stays here.
  */
-function buildPostReplaceMergeAction() {
+export function buildPostReplaceMergeAction() {
     return {
         id: 'character-editor-assistant-merge',
         label: () => i18n('Merge in editor'),
@@ -4116,17 +4117,26 @@ function buildPostReplaceMergeAction() {
                     nextLorebookData: await resolvePostReplaceNextLorebookData(context, detail?.character || null),
                 }
                 : null;
-            await openCharacterEditorPopup(context, {
-                avatar,
-                seedSystemMessage,
-                // The seed message is a long prose brief for the LLM; the
-                // user gets the structured form via "View full replace diff".
-                hideSeedFromUi: true,
-                autoSend: true,
-                postReplaceRollback,
-                replaceContext,
-                renderLineDiffHtml,
-            });
+            let opened = null;
+            try {
+                opened = await openCharacterEditorPopup(context, {
+                    avatar,
+                    seedSystemMessage,
+                    hideSeedFromUi: true,
+                    autoSend: true,
+                    postReplaceRollback,
+                    replaceContext,
+                    renderLineDiffHtml,
+                });
+            } catch (err) {
+                if (typeof postReplaceRollback === 'function') {
+                    await postReplaceRollback();
+                }
+                throw err;
+            }
+            if (!opened && typeof postReplaceRollback === 'function') {
+                await postReplaceRollback();
+            }
         },
     };
 }

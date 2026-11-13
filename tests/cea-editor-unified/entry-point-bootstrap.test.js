@@ -1,165 +1,182 @@
-// Verifies that `openUnifiedCharacterEditorPopup` wires its state.live
-// snapshot and helperApis bundle through the two main.js exports:
-//
-//   - buildUnifiedCharacterEditorLiveSnapshot(context, avatar) — bootstraps
-//     state.live = { character, lorebooks } so card-field + lorebook edits
-//     apply against the real character payload.
-//   - buildCharacterEditorHelperApis(context, { avatar }) — bootstraps the
-//     helper-tool API array the popup's read tools (lorebook_query, etc.)
-//     dispatch through.
-//
-// Both bootstrap calls fire BEFORE popup mount so the test can assert on
-// them even when the popup itself fails to mount cleanly in a jsdom-free
-// Jest environment. The opts.live and opts.helperApis overrides bypass the
-// bootstrap so callers / tests can supply pre-built values directly.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 FunnyCups
 
-import { jest } from '@jest/globals';
+// Verifies CEA's Workbench entry-point routing (`openCharacterEditorPopup`),
+// live snapshot bootstrapping (`buildUnifiedCharacterEditorLiveSnapshot`),
+// helper API wiring (`buildCharacterEditorHelperApis`), and the platform
+// `card` IterateTarget bootstrap (`load` / `tools`).
 
-// public/lib.js is handled by the global moduleNameMapper (→ tests/util/lib-stub.js).
+import { describe, expect, jest, test } from '@jest/globals';
 
-// popup.js + popup-utils must be mocked BEFORE we touch lib/edits/index.js,
-// since conflict-ui.js → popup.js → power-user.js → textgen-models.js
-// touches `document` at module-load. Register popup mock first so the
-// dynamic `import('../../public/scripts/lib/edits/index.js')` below
-// (used to forward the real applyEdits into the iteration-library mock)
-// doesn't pull the SillyTavern DOM shell.
+globalThis.jQuery = (cb) => {
+    if (typeof cb === 'function') { /* swallow init handlers */ }
+    return { ready: () => {}, on: () => {}, off: () => {} };
+};
+globalThis.$ = globalThis.jQuery;
+globalThis.window = globalThis.window || globalThis;
+globalThis.document = globalThis.document || {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+};
+globalThis.toastr = globalThis.toastr || {
+    error: () => {}, warning: () => {}, success: () => {}, info: () => {},
+};
+
 jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class {
-        constructor() {}
-        show() { return Promise.resolve('ok'); }
-        completeAffirmative() {}
-        dlg = { close: () => {} };
-    },
     POPUP_TYPE: { DISPLAY: 'display' },
     POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 2, CANCELLED: 0 },
+    Popup: class { constructor() {} show() { return Promise.resolve(''); } },
 }));
 
-// Forward the REAL edits engine through the iteration-library umbrella so
-// the studio's applyEdits/inverseEdit calls do real work. Other surfaces
-// stay stubbed (they need DOM and are out of scope for this test).
 const realEdits = await import('../../public/scripts/lib/edits/index.js');
 
-// Mock the iteration-library/index umbrella. The bootstrap test doesn't
-// exercise the runner, edits, or shared UI — it only needs these to load
-// cleanly so the studio module can import.
+jest.unstable_mockModule('../../public/script.js', () => ({
+    converter: { makeHtml: (s) => s },
+    generateQuietPrompt: async () => '',
+    getCharacterDescription: () => '',
+    getCharacterFirstMessage: () => '',
+    getCharacterMesExample: () => '',
+    getCharacterName: () => '',
+    getCharacterPersonality: () => '',
+    getCharacterScenario: () => '',
+    saveSettingsDebounced: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
+    extension_settings: { character_editor_assistant: {} },
+    getContext: () => ({}),
+    getCharacterState: () => ({}),
+    setCharacterState: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
+    addLocaleData: () => {},
+    translate: (s) => s,
+}));
+jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
+    newWorldInfoEntryTemplate: {},
+    setWorldInfoButtonClass: () => {},
+    updateWorldInfoList: () => {},
+    getCharaAuxWorlds: () => [],
+    getChatWorldInfoNames: () => [],
+    selected_world_info: [],
+}));
+jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
+    getCharaFilename: () => '',
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/function-call-runtime.js', () => ({
+    TOOL_PROTOCOL_STYLE: { OPENAI: 'openai' },
+    validateParsedToolCalls: () => ({ ok: true, errors: [] }),
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/diff-ui.js', () => ({
+    createCharacterEditorDiffUi: () => ({}),
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/editor-ui.js', () => ({
+    createCharacterEditorUi: () => ({}),
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/studio/ai-chat.js', () => ({
+    DEFAULT_SYSTEM_PROMPT: '',
+}));
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
-    proposalBus: {},
     applyEdits: realEdits.applyEdits,
-    inverseEdit: realEdits.inverseEdit,
-    registerOp: realEdits.registerOp,
-    BUILT_IN_OPS: realEdits.BUILT_IN_OPS,
-    showConflictResolution: async () => ({}),
-    render: {
-        ensureMarkdownDeps: async () => true,
-        renderMessageMarkdown: (s) => `<p>${String(s ?? '')}</p>`,
-    },
-    runner: {
-        requestToolCallsWithRetry: () => Promise.resolve({ toolCalls: [], assistantText: '' }),
-    },
-    storage: {},
-    textDiff: {},
-    zoomOverlay: { attachZoomOverlay: () => () => {} },
-    ui: {
-        toolcall: { renderToolCallChip: () => '' },
-        message: { renderMessageCard: () => '' },
-        diff: { renderDiffCard: () => '' },
-        apply: { renderApplyControls: () => '' },
-        ensureUiStylesheetInjected: () => {},
-    },
-    bindIterWorkspaceResizer: () => () => {},
-    createRenderScheduler: () => ({ schedule: () => {} }),
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/index.js', () => ({
+    openSimulationReview: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/i18n/index.js', () => ({
+    ensureSimulationReviewLocaleData: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/wi-hits.js', () => ({
+    extractWorldInfoHitsFromRuntime: () => [],
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/dry-run-capture.js', () => ({
+    extractSystemFromCapturedPrompt: () => '',
+    extractNonSystemFromCapturedPrompt: () => '',
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/markdown-escape.js', () => ({
+    mdLiteral: (s) => String(s ?? ''),
 }));
 
-// Spies for the two main.js bootstrap helpers. The unified popup must call
-// each one exactly once per mount when the matching opts.* override is
-// absent, and must NOT call either when the override is provided.
-const buildHelperApisSpy = jest.fn(() => ([
-    { toolNames: { LIST: 'lorebook_list' }, isToolName: () => false, invoke: async () => ({}) },
-]));
-const buildSnapshotSpy = jest.fn(async () => ({
-    character: { description: 'snapshot description' },
-    lorebooks: {
-        'BookA': { entries: { 0: { uid: 0, content: 'a' } } },
+const sharedLukerCtx = {
+    lib: {
+        DOMPurify: { sanitize: (s) => s },
+        lodash: { get: () => undefined, set: () => {}, cloneDeep: (x) => JSON.parse(JSON.stringify(x)) },
     },
-}));
+    extensionSettings: { character_editor_assistant: {} },
+    getCharacterState: () => ({}),
+    updateCharacterState: () => {},
+    addLocaleData: () => {},
+    translate: (s) => s,
+    POPUP_TYPE: { DISPLAY: 'display' },
+    Popup: class {},
+    worldInfoEntry: { template: {}, setButtonClass: () => {} },
+    updateWorldInfoList: () => {},
+    getCharaAuxWorlds: () => [],
+    chatWorldInfo: { getNames: () => [] },
+    getCharaFilename: () => '',
+    generateQuietPrompt: async () => '',
+    saveSettingsDebounced: () => {},
+};
+globalThis.Luker = { getContext: () => sharedLukerCtx };
 
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
-    runCharacterEditorHelperToolCall: async () => ({ result: {} }),
-    commitCharacterEditorOperations: async () => ({ ok: true }),
-    commitLorebookOperations: async () => ({ ok: true }),
-    buildCharacterEditorHelperApis: buildHelperApisSpy,
-    buildUnifiedCharacterEditorLiveSnapshot: buildSnapshotSpy,
-    readLegacyCeaEditorSessions: async () => [],
-    readLegacyCharIterPopupSessions: async () => [],
-}));
+const CEA = await import('../../public/scripts/extensions/character-editor-assistant/main.js');
+const { createCardTarget } = await import('../../public/scripts/workbench/targets/card.js');
 
-let studio;
-beforeAll(async () => {
-    studio = await import('../../public/scripts/extensions/character-editor-assistant/editor-iteration/studio.js');
-});
-
-beforeEach(() => {
-    buildHelperApisSpy.mockClear();
-    buildSnapshotSpy.mockClear();
-});
-
-function makeContext() {
-    // Minimal SillyTavern context the unified popup needs to mount. We do
-    // NOT pass a `characters` array — the bootstrap helpers are mocked, so
-    // they never touch the character payload directly.
-    return {
-        extensionSettings: { character_editor_assistant: {} },
-        characterId: 0,
-        characters: [],
-        saveSettingsDebounced: () => {},
-        // The session-store factory now requires both sidecar helpers
-        // (per-character history backend). These are minimal no-ops — the
-        // bootstrap path doesn't actually read or write the sidecar, only
-        // the constructor sanity check needs them present.
-        getCharacterState: async () => null,
-        updateCharacterState: async (_a, _ns, updater) => {
-            await updater(null, { attempt: 0 });
-            return { ok: true, state: null, updated: false };
-        },
-    };
-}
-
-describe('unified CEA editor entry-point bootstrap', () => {
-    it('exports openUnifiedCharacterEditorPopup', () => {
-        expect(typeof studio.openUnifiedCharacterEditorPopup).toBe('function');
+describe('CEA Workbench entry-point & card target bootstrap', () => {
+    test('openCharacterEditorPopup routes to workbench.open({ page: "ai", ws: "card", scope: "character" })', async () => {
+        const openSpy = jest.fn(async () => ({ opened: true }));
+        const ctx = {
+            characterId: 0,
+            characters: [{ avatar: 'alice.png', name: 'Alice' }],
+            workbench: { open: openSpy },
+        };
+        await CEA.openCharacterEditorPopup(ctx);
+        expect(openSpy).toHaveBeenCalledWith({ page: 'ai', ws: 'card', scope: 'character' });
     });
 
-    it('falls back to buildUnifiedCharacterEditorLiveSnapshot when opts.live is omitted', async () => {
+    test('openCharacterEditorPopup warns when no character is active and errors when Workbench is absent', async () => {
+        const warnSpy = jest.spyOn(globalThis.toastr, 'warning').mockImplementation(() => {});
+        const errSpy = jest.spyOn(globalThis.toastr, 'error').mockImplementation(() => {});
         try {
-            await studio.openUnifiedCharacterEditorPopup(makeContext(), { avatar: 'a.png' });
-        } catch {
-            // Mount may fail without a DOM; bootstrap fires before mount.
+            expect(await CEA.openCharacterEditorPopup({ characterId: 0, characters: [] })).toBeNull();
+            expect(warnSpy).toHaveBeenCalled();
+
+            expect(await CEA.openCharacterEditorPopup({
+                characterId: 0,
+                characters: [{ avatar: 'alice.png', name: 'Alice' }],
+                workbench: null,
+            })).toBeNull();
+            expect(errSpy).toHaveBeenCalled();
+        } finally {
+            warnSpy.mockRestore();
+            errSpy.mockRestore();
         }
-        expect(buildSnapshotSpy).toHaveBeenCalledTimes(1);
-        expect(buildSnapshotSpy).toHaveBeenCalledWith(expect.anything(), 'a.png');
     });
 
-    it('falls back to buildCharacterEditorHelperApis when opts.helperApis is omitted', async () => {
-        try {
-            await studio.openUnifiedCharacterEditorPopup(makeContext(), { avatar: 'a.png' });
-        } catch {
-            // Mount may fail without a DOM; bootstrap fires before mount.
-        }
-        expect(buildHelperApisSpy).toHaveBeenCalledTimes(1);
-        expect(buildHelperApisSpy).toHaveBeenCalledWith(expect.anything(), { avatar: 'a.png' });
-    });
+    test('buildUnifiedCharacterEditorLiveSnapshot and createCardTarget.load bootstrap character + bound books', async () => {
+        const ctx = {
+            characterId: 0,
+            characters: [{
+                avatar: 'alice.png',
+                name: 'Alice',
+                description: 'snapshot description',
+                data: { name: 'Alice', description: 'snapshot description', extensions: { world: 'BookA' } },
+            }],
+            loadWorldInfo: async (name) => (name === 'BookA' ? { entries: { 0: { uid: 0, content: 'a' } } } : null),
+            getCharaAuxWorlds: () => [],
+            chatWorldInfo: { getNames: () => [] },
+        };
+        const snap = await CEA.buildUnifiedCharacterEditorLiveSnapshot(ctx, 'alice.png');
+        expect(snap.character.description).toBe('snapshot description');
+        expect(snap.lorebooks.BookA.entries[0].content).toBe('a');
 
-    it('passes through opts.live + opts.helperApis when provided (no bootstrap call)', async () => {
-        try {
-            await studio.openUnifiedCharacterEditorPopup(makeContext(), {
-                avatar: 'a.png',
-                live: { character: { description: 'pre-built' }, lorebooks: {} },
-                helperApis: [{ toolNames: { LIST: 'x' }, isToolName: () => false, invoke: async () => ({}) }],
-            });
-        } catch {
-            // Mount may fail without a DOM; bootstrap fires before mount.
-        }
-        expect(buildSnapshotSpy).not.toHaveBeenCalled();
-        expect(buildHelperApisSpy).not.toHaveBeenCalled();
+        const card = createCardTarget({ getContext: () => ctx });
+        const loaded = await card.load('character', ctx);
+        expect(loaded.live.character.description).toBe('snapshot description');
+        expect(loaded.live.lorebooks.BookA.entries[0].content).toBe('a');
+        expect(CEA.buildCharacterEditorHelperApis(ctx, { avatar: 'alice.png' }).length).toBeGreaterThan(0);
     });
 });

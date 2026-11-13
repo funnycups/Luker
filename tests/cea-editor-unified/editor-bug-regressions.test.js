@@ -1,388 +1,147 @@
-// Regression tests for editor-iteration bug audit fixes.
-//
-// Covers:
-//   - CEA-2: buildSeedTaskMessages replays prior turn's tool_calls +
-//            tool_results when an assistant message has both. Without
-//            this, a follow-up turn like "edit what you just read"
-//            couldn't see the previous round's read output.
-//   - CEA-4: applyPendingEdits stamps appliedAt on EVERY contributing
-//            unapplied assistant message (not just the last), so
-//            multi-round Apply doesn't leave earlier rounds looking
-//            unapplied.
-//   - CEA-7: clear-history doesn't leave a phantom empty session. The
-//            new empty session is marked `_transient` and persistSession
-//            skips writing it until a message lands.
-//
-// Each spec section is isolated so a failure points straight at the
-// underlying bug.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 FunnyCups
 
-import { jest } from '@jest/globals';
+// Regression tests for CEA editor iteration fixes:
+//   - CEA-2: Prior turn toolCalls + toolResults replay cleanly (both in
+//            legacy-import normalization and in multi-round runIterateTurn).
+//   - CEA-4: Multi-round edits commit together cleanly via cardTarget.commit
+//            without losing earlier-round deltas.
+//   - CEA-7: Transient empty sessions are skipped by the session store gate.
 
-// public/lib.js is handled by the global moduleNameMapper (→ tests/util/lib-stub.js).
+import { describe, expect, jest, test } from '@jest/globals';
+import { normalizeLegacyMessage } from '../../public/scripts/workbench/model/legacy-import.js';
+import { runIterateTurn } from '../../public/scripts/workbench/model/iterate.js';
+import { createCardTarget } from '../../public/scripts/workbench/targets/card.js';
+import { createUnifiedCeaEditorSessionStore } from '../../public/scripts/extensions/character-editor-assistant/editor-iteration/session-store.js';
 
-// popup.js + popup-utils must be mocked BEFORE we touch lib/edits/index.js,
-// since conflict-ui.js → popup.js → power-user.js → textgen-models.js
-// touches `document` at module-load. Register popup mock first so the
-// dynamic `import('../../public/scripts/lib/edits/index.js')` below
-// (used to forward the real applyEdits into the iteration-library mock)
-// doesn't pull the SillyTavern DOM shell.
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class { constructor() {} show() { return Promise.resolve('ok'); } completeAffirmative() {} dlg = { close: () => {} }; },
-    POPUP_TYPE: { DISPLAY: 'display' },
-    POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 2, CANCELLED: 0 },
-}));
+describe('CEA-2: prior turn tool history replay', () => {
+    test('normalizeLegacyMessage preserves toolCalls + merged toolResults and strips auto-continue fillers', () => {
+        const userMsg = normalizeLegacyMessage({ role: 'user', content: 'list the books' });
+        expect(userMsg).toMatchObject({ role: 'user', content: 'list the books' });
 
-// Forward the REAL edits engine through the iteration-library umbrella so
-// the studio's applyEdits/inverseEdit calls do real work. Other surfaces
-// stay stubbed (they need DOM and are out of scope for this test).
-const realEdits = await import('../../public/scripts/lib/edits/index.js');
+        const filler = normalizeLegacyMessage({ role: 'user', content: 'AUTO', auto: true });
+        expect(filler).toBeNull();
 
-const requestToolCallsWithRetryMock = jest.fn();
-jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
-    proposalBus: {},
-    applyEdits: realEdits.applyEdits,
-    inverseEdit: realEdits.inverseEdit,
-    registerOp: realEdits.registerOp,
-    BUILT_IN_OPS: realEdits.BUILT_IN_OPS,
-    showConflictResolution: async () => ({}),
-    render: {
-        ensureMarkdownDeps: async () => true,
-        renderMessageMarkdown: (s) => String(s ?? ''),
-    },
-    runner: {
-        requestToolCallsWithRetry: requestToolCallsWithRetryMock,
-    },
-    storage: {},
-    textDiff: {},
-    zoomOverlay: { attachZoomOverlay: () => () => {} },
-    ui: {
-        toolcall: { renderToolCallChip: () => '' },
-        message: { renderMessageCard: () => '' },
-        diff: { renderDiffCard: () => '' },
-        apply: { renderApplyControls: () => '' },
-        ensureUiStylesheetInjected: () => {},
-    },
-    bindIterWorkspaceResizer: () => () => {},
-    createRenderScheduler: () => ({ schedule: () => {} }),
-}));
-
-const characterCommitSpy = jest.fn(async () => ({ ok: true }));
-const lorebookCommitSpy = jest.fn(async () => ({ ok: true }));
-
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
-    runCharacterEditorHelperToolCall: async () => ({ result: {} }),
-    commitCharacterEditorOperations: characterCommitSpy,
-    commitLorebookOperations: lorebookCommitSpy,
-    buildCharacterEditorHelperApis: () => [],
-    buildUnifiedCharacterEditorLiveSnapshot: async () => ({ character: {}, lorebooks: {} }),
-    readLegacyCeaEditorSessions: async () => [],
-    readLegacyCharIterPopupSessions: async () => [],
-}));
-
-let studio;
-let createUnifiedCeaEditorSessionStore;
-beforeAll(async () => {
-    studio = await import('../../public/scripts/extensions/character-editor-assistant/editor-iteration/studio.js');
-    ({ createUnifiedCeaEditorSessionStore } = await import(
-        '../../public/scripts/extensions/character-editor-assistant/editor-iteration/session-store.js'
-    ));
-});
-
-beforeEach(() => {
-    requestToolCallsWithRetryMock.mockReset();
-    characterCommitSpy.mockClear();
-    lorebookCommitSpy.mockClear();
-});
-
-// ===========================================================================
-// CEA-2: buildSeedTaskMessages replays prior tool history
-// ===========================================================================
-
-describe('CEA-2: buildSeedTaskMessages replays prior turn tool history', () => {
-    test('exports _internalBuildSeedTaskMessages', () => {
-        expect(typeof studio._internalBuildSeedTaskMessages).toBe('function');
-    });
-
-    test('plain user/assistant messages replay as role+content only', () => {
-        const state = {
-            session: {
-                messages: [
-                    { role: 'user', content: 'hi' },
-                    { role: 'assistant', content: 'hello', toolCalls: [], toolResults: [] },
-                ],
-            },
-        };
-        const out = studio._internalBuildSeedTaskMessages(state, 'SYSTEM');
-        expect(out[0]).toEqual({ role: 'system', content: 'SYSTEM' });
-        expect(out[1]).toEqual({ role: 'user', content: 'hi' });
-        expect(out[2]).toEqual({ role: 'assistant', content: 'hello' });
-        // Verify no tool_calls field on the plain assistant message.
-        expect(out[2].tool_calls).toBeUndefined();
-    });
-
-    test('assistant message with read toolCalls + toolResults replays as OpenAI tool protocol', () => {
-        const state = {
-            session: {
-                messages: [
-                    { role: 'user', content: 'list the books' },
-                    {
-                        role: 'assistant',
-                        content: 'reading…',
-                        toolCalls: [
-                            { id: 'r1', name: 'world_book_list', args: {} },
-                            { id: 'r2', name: 'lorebook_query', args: { book_name: 'A', text: 'x' } },
-                        ],
-                        toolResults: [
-                            { tool_call_id: 'r1', content: { books: ['A', 'B'] } },
-                            { tool_call_id: 'r2', content: { matches: [1, 2] } },
-                        ],
-                    },
-                    { role: 'user', content: 'now edit BookA entry 0' },
-                ],
-            },
-        };
-        const out = studio._internalBuildSeedTaskMessages(state, 'SYSTEM');
-        // Expected layout:
-        //   [0] system
-        //   [1] user "list the books"
-        //   [2] assistant with tool_calls
-        //   [3] tool result for r1
-        //   [4] tool result for r2
-        //   [5] user "now edit BookA entry 0"
-        expect(out).toHaveLength(6);
-        expect(out[2].role).toBe('assistant');
-        expect(out[2].content).toBe('reading…');
-        expect(Array.isArray(out[2].tool_calls)).toBe(true);
-        expect(out[2].tool_calls).toHaveLength(2);
-        expect(out[2].tool_calls[0]).toEqual({
-            id: 'r1',
-            type: 'function',
-            function: { name: 'world_book_list', arguments: JSON.stringify({}) },
-        });
-        expect(out[2].tool_calls[1].id).toBe('r2');
-        expect(out[3].role).toBe('tool');
-        expect(out[3].tool_call_id).toBe('r1');
-        expect(out[4].role).toBe('tool');
-        expect(out[4].tool_call_id).toBe('r2');
-        expect(out[5]).toEqual({ role: 'user', content: 'now edit BookA entry 0' });
-    });
-
-    test('legacy toolCalls without matching toolResults ARE emitted with a committed fill (protocol contract: every tool_call needs a tool_result)', () => {
-        // Pre-refactor sessions stripped edit calls from history and the
-        // filter dropped dangling calls to avoid a provider 400. Post
-        // tool_call/tool_result round-trip refactor, we synthesize a
-        // committed payload inline for legacy holes so the provider
-        // contract holds. Best-effort: the edit is on disk (the user is
-        // resuming the session), therefore was committed at some point.
-        const state = {
-            session: {
-                messages: [
-                    {
-                        role: 'assistant',
-                        content: 'edited',
-                        // edit tool — no result was generated for it
-                        toolCalls: [{ id: 'e1', name: 'cea_set_card_field', args: { field: 'name', value: 'X' } }],
-                        toolResults: [],
-                    },
-                ],
-            },
-        };
-        const out = studio._internalBuildSeedTaskMessages(state, 'SYSTEM');
-        // [0] system, [1] assistant + tool_calls, [2] tool result (legacy-filled committed).
-        expect(out).toHaveLength(3);
-        expect(out[1].tool_calls).toBeDefined();
-        expect(out[1].tool_calls).toHaveLength(1);
-        expect(out[1].tool_calls[0].id).toBe('e1');
-        expect(out[2].role).toBe('tool');
-        expect(out[2].tool_call_id).toBe('e1');
-        const parsed = JSON.parse(String(out[2].content));
-        expect(parsed.status).toBe('committed');
-    });
-
-    test('mixed assistant messages: only those with linked tool_calls + tool_results get the protocol shape', () => {
-        const state = {
-            session: {
-                messages: [
-                    {
-                        role: 'assistant',
-                        content: 'first read',
-                        toolCalls: [{ id: 'r1', name: 'world_book_list', args: {} }],
-                        toolResults: [{ tool_call_id: 'r1', content: { books: ['A'] } }],
-                    },
-                    { role: 'user', content: 'and another' },
-                    { role: 'assistant', content: 'plain response', toolCalls: [], toolResults: [] },
-                ],
-            },
-        };
-        const out = studio._internalBuildSeedTaskMessages(state, 'SYSTEM');
-        // [0]system, [1]assistant+tool_calls, [2]tool(r1), [3]user, [4]assistant plain
-        expect(out).toHaveLength(5);
-        expect(out[1].tool_calls).toBeDefined();
-        expect(out[2].role).toBe('tool');
-        expect(out[4].role).toBe('assistant');
-        expect(out[4].tool_calls).toBeUndefined();
-    });
-});
-
-// ===========================================================================
-// CEA-4: applyPendingEdits stamps every contributing assistant message
-// ===========================================================================
-
-describe('CEA-4: multi-round Apply stamps appliedAt on every contributing message', () => {
-    function makeAssistantMsg(id, edits) {
-        return {
-            id,
+        const assistant = normalizeLegacyMessage({
             role: 'assistant',
-            content: '',
-            toolCalls: [],
-            toolResults: [],
-            edits,
-            appliedAt: null,
-            appliedTarget: '',
-            rolledBackAt: null,
-            auto: false,
-            at: Date.now(),
-        };
-    }
-
-    test('stamps appliedAt on every unapplied assistant message that has edits', async () => {
-        const editsRound1 = [{ op: 'set', path: 'description', oldValue: 'a', newValue: 'b', target: { kind: 'character' } }];
-        const editsRound2 = [{ op: 'set', path: 'name', oldValue: 'X', newValue: 'Y', target: { kind: 'character' } }];
-        const editsRound3 = [{ op: 'set', path: 'scenario', oldValue: 'P', newValue: 'Q', target: { kind: 'character' } }];
-
-        const state = {
-            session: {
-                id: 's1', title: '', avatar: 'a.png', surfaceState: {},
-                messages: [
-                    makeAssistantMsg('m1', editsRound1),
-                    { id: 'u1', role: 'user', content: 'continue' },
-                    makeAssistantMsg('m2', editsRound2),
-                    { id: 'u2', role: 'user', content: 'more' },
-                    makeAssistantMsg('m3', editsRound3),
-                ],
-            },
-            live: { character: { description: 'a', name: 'X', scenario: 'P' }, lorebooks: {} },
-            pendingEdits: [...editsRound1, ...editsRound2, ...editsRound3],
-            isBusy: false,
-            abortController: null,
-        };
-        await studio._internalApplyPendingEdits(state, { context: {}, settings: {} });
-
-        // All three assistant messages should be stamped — they all
-        // contributed to the same Apply batch.
-        const stamped = state.session.messages.filter(m => m.role === 'assistant' && typeof m.appliedAt === 'number');
-        expect(stamped).toHaveLength(3);
-        for (const m of stamped) {
-            expect(m.appliedTarget).toMatch(/character/);
-        }
+            content: 'reading…',
+            toolCalls: [
+                { id: 'r1', name: 'world_book_list', args: {} },
+                { id: 'r2', name: 'lorebook_query', args: { book_name: 'A', text: 'x' } },
+            ],
+            toolResults: [
+                { tool_call_id: 'r1', content: { books: ['A', 'B'] } },
+                { tool_call_id: 'r2', content: { matches: [1, 2] } },
+            ],
+        });
+        expect(assistant.role).toBe('assistant');
+        expect(assistant.toolCalls).toHaveLength(2);
+        expect(assistant.toolCalls[0].result).toEqual({ books: ['A', 'B'] });
+        expect(assistant.toolCalls[1].result).toEqual({ matches: [1, 2] });
     });
 
-    test('stops stamping at the first already-applied message (prior batch boundary)', async () => {
-        const oldEdits = [{ op: 'set', path: 'description', oldValue: 'a', newValue: 'b', target: { kind: 'character' } }];
-        const newEdits = [{ op: 'set', path: 'name', oldValue: 'X', newValue: 'Y', target: { kind: 'character' } }];
-
-        const oldAppliedAt = Date.now() - 10000;
-        const state = {
-            session: {
-                id: 's1', title: '', avatar: 'a.png', surfaceState: {},
-                messages: [
-                    // Already-applied prior batch — must NOT be re-stamped.
-                    {
-                        ...makeAssistantMsg('m_old', oldEdits),
-                        appliedAt: oldAppliedAt,
-                        appliedTarget: 'character',
-                    },
-                    { id: 'u1', role: 'user', content: 'more' },
-                    // Current unapplied batch.
-                    makeAssistantMsg('m_new', newEdits),
-                ],
-            },
-            live: { character: { description: 'b', name: 'X' }, lorebooks: {} },
-            pendingEdits: [...newEdits],
-            isBusy: false,
-            abortController: null,
+    test('runIterateTurn threads tool_calls + tool_results into subsequent rounds', async () => {
+        const ctx = {
+            characterId: 0,
+            characters: [{
+                avatar: 'a.png',
+                name: 'Alice',
+                description: 'old',
+                data: { name: 'Alice', description: 'old', extensions: { world: 'BookA' } },
+            }],
+            loadWorldInfo: async (n) => (n === 'BookA' ? { entries: { 0: { uid: 0, content: 'entry text' } } } : null),
+            getCharaAuxWorlds: () => [],
+            chatWorldInfo: { getNames: () => [] },
         };
-        await studio._internalApplyPendingEdits(state, { context: {}, settings: {} });
+        const card = createCardTarget({ getContext: () => ctx });
+        const loaded = await card.load('character', ctx);
+        const tools = await card.tools(loaded.live, 'character', ctx);
 
-        // Old message keeps its original appliedAt.
-        const old = state.session.messages.find(m => m.id === 'm_old');
-        expect(old.appliedAt).toBe(oldAppliedAt);
-        // New message gets stamped.
-        const fresh = state.session.messages.find(m => m.id === 'm_new');
-        expect(typeof fresh.appliedAt).toBe('number');
-        expect(fresh.appliedAt).not.toBe(oldAppliedAt);
-    });
-
-    test('stops at a rolled-back message — that batch is independent', async () => {
-        const rolledBackEdits = [{ op: 'set', path: 'description', oldValue: 'a', newValue: 'b', target: { kind: 'character' } }];
-        const newEdits = [{ op: 'set', path: 'name', oldValue: 'X', newValue: 'Y', target: { kind: 'character' } }];
-
-        const state = {
-            session: {
-                id: 's1', title: '', avatar: 'a.png', surfaceState: {},
-                messages: [
-                    {
-                        ...makeAssistantMsg('m_rb', rolledBackEdits),
-                        appliedAt: Date.now() - 20000,
-                        rolledBackAt: Date.now() - 10000,
-                    },
-                    { id: 'u1', role: 'user', content: 'more' },
-                    makeAssistantMsg('m_new', newEdits),
-                ],
+        let seenInRound2 = null;
+        let round = 0;
+        const result = await runIterateTurn({
+            messages: [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'read then edit' }],
+            live: loaded.live,
+            tools,
+            isRead: (n) => card.isRead(n),
+            runRead: (call, live) => card.runRead(call, live),
+            runEdit: (call, live) => card.runEdit(call, live),
+            request: async (msgs) => {
+                round++;
+                if (round === 1) {
+                    return { text: 'reading', calls: [{ id: 'r1', name: 'world_book_list', args: {} }] };
+                }
+                if (round === 2) {
+                    seenInRound2 = structuredClone(msgs);
+                    return { text: 'done', calls: [] };
+                }
+                return { text: '', calls: [] };
             },
-            live: { character: { description: 'a', name: 'X' }, lorebooks: {} },
-            pendingEdits: [...newEdits],
-            isBusy: false,
-            abortController: null,
-        };
-        await studio._internalApplyPendingEdits(state, { context: {}, settings: {} });
+        });
 
-        const fresh = state.session.messages.find(m => m.id === 'm_new');
-        expect(typeof fresh.appliedAt).toBe('number');
-        // Rolled-back message retains its rolledBackAt; the new Apply doesn't
-        // bleed across the boundary.
-        const rb = state.session.messages.find(m => m.id === 'm_rb');
-        expect(typeof rb.rolledBackAt).toBe('number');
-    });
-
-    test('skips assistant messages with empty edits arrays (they did not contribute)', async () => {
-        const edits = [{ op: 'set', path: 'description', oldValue: 'a', newValue: 'b', target: { kind: 'character' } }];
-        const state = {
-            session: {
-                id: 's1', title: '', avatar: 'a.png', surfaceState: {},
-                messages: [
-                    makeAssistantMsg('m_pure_prose', []),
-                    makeAssistantMsg('m_edited', edits),
-                ],
-            },
-            live: { character: { description: 'a' }, lorebooks: {} },
-            pendingEdits: [...edits],
-            isBusy: false,
-            abortController: null,
-        };
-        await studio._internalApplyPendingEdits(state, { context: {}, settings: {} });
-
-        const proseOnly = state.session.messages.find(m => m.id === 'm_pure_prose');
-        expect(proseOnly.appliedAt).toBeNull();
-        const edited = state.session.messages.find(m => m.id === 'm_edited');
-        expect(typeof edited.appliedAt).toBe('number');
+        expect(seenInRound2.some(m => m.role === 'assistant' && Array.isArray(m.tool_calls))).toBe(true);
+        expect(seenInRound2.some(m => m.role === 'tool' && m.tool_call_id === 'r1')).toBe(true);
+        expect(result.toolCalls[0].result).toBeTruthy();
     });
 });
 
-// ===========================================================================
-// CEA-7: clear-history doesn't leave a phantom empty session
-// ===========================================================================
+describe('CEA-4: multi-round card edits commit together cleanly', () => {
+    test('commits edits accumulated across multiple rounds via cardTarget.commit', async () => {
+        const char = {
+            avatar: 'a.png',
+            name: 'X',
+            description: 'a',
+            data: { name: 'X', description: 'a', scenario: 'P', extensions: {} },
+        };
+        const updateSpy = jest.fn(async (_chid, patch) => {
+            if (typeof patch.name === 'string') char.name = patch.name;
+            if (typeof patch.description === 'string') char.description = patch.description;
+            if (patch.data) Object.assign(char.data, patch.data);
+        });
+        const ctx = {
+            characterId: 0,
+            characters: [char],
+            updateCharacterData: updateSpy,
+            writeExtensionField: jest.fn(async () => {}),
+            loadWorldInfo: async () => null,
+            getCharaAuxWorlds: () => [],
+            chatWorldInfo: { getNames: () => [] },
+        };
+        const card = createCardTarget({ getContext: () => ctx });
+        const loaded = await card.load('character', ctx);
+        const tools = await card.tools(loaded.live, 'character', ctx);
 
-describe('CEA-7: persistSession skips transient empty sessions', () => {
-    test('createNewSession-style transient session does not write to the store via the wrapper', async () => {
-        // The store-level guard lives in persistSession (a closure inside
-        // openUnifiedCharacterEditorPopup). To exercise the gate without
-        // mounting a popup, we drive the store layer the same way persistSession
-        // does — and verify that a session marked `_transient` with no
-        // messages/pendingEdits never reaches the bucket.
-        //
-        // We use the real store factory + an in-memory sidecar map to
-        // observe what would actually land on disk.
+        let round = 0;
+        const turnRes = await runIterateTurn({
+            messages: [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'update fields' }],
+            live: loaded.live,
+            tools,
+            isRead: (n) => card.isRead(n),
+            runRead: (call, live) => card.runRead(call, live),
+            runEdit: (call, live) => card.runEdit(call, live),
+            request: async () => {
+                round++;
+                if (round === 1) {
+                    return { text: '', calls: [{ id: 'e1', name: 'cea_set_card_field', args: { field: 'description', value: 'b' } }] };
+                }
+                if (round === 2) {
+                    return { text: '', calls: [{ id: 'e2', name: 'cea_set_card_field', args: { field: 'name', value: 'Y' } }] };
+                }
+                return { text: 'done', calls: [] };
+            },
+        });
+
+        const keys = ['card:description', 'card:name'];
+        const handle = await card.commit(loaded.target, loaded.live, card.rebuild(loaded.live, turnRes.live, keys), keys);
+        expect(handle.applied).toEqual(keys);
+        expect(updateSpy).toHaveBeenCalledTimes(1);
+        expect(char.description).toBe('b');
+        expect(char.name).toBe('Y');
+    });
+});
+
+describe('CEA-7: session store skips transient empty sessions', () => {
+    function makeStoreEnv() {
         const sidecars = {};
         const fakeCtx = {
             getCharacterState: async (a, ns) => {
@@ -400,154 +159,68 @@ describe('CEA-7: persistSession skips transient empty sessions', () => {
                 return { ok: true, state: next, updated: true };
             },
         };
-        const store = createUnifiedCeaEditorSessionStore({
-            context: fakeCtx,
-            avatar: 'a.png',
-        });
+        return createUnifiedCeaEditorSessionStore({ context: fakeCtx, avatar: 'a.png' });
+    }
 
-        // Persist a transient empty session through a thin wrapper that
-        // mirrors the studio's gate. This is the contract: callers that
-        // detect transient+empty must skip the write.
-        async function persistGated(session, pendingEdits) {
-            if (
-                session._transient
-                && (!Array.isArray(session.messages) || session.messages.length === 0)
-                && (!Array.isArray(pendingEdits) || pendingEdits.length === 0)
-            ) {
-                return;
-            }
-            await store.save(session);
+    async function persistGated(store, session, pendingEdits) {
+        if (
+            session._transient
+            && (!Array.isArray(session.messages) || session.messages.length === 0)
+            && (!Array.isArray(pendingEdits) || pendingEdits.length === 0)
+        ) {
+            return;
         }
+        if (session._transient) delete session._transient;
+        await store.save(session);
+    }
 
-        const transient = {
-            id: 'sess_transient', title: '', avatar: 'a.png',
-            messages: [], pendingEdits: [], surfaceState: {},
+    test('createNewSession-style transient session does not write to the store via the wrapper', async () => {
+        const store = makeStoreEnv();
+        await persistGated(store, {
+            id: 'sess_transient',
+            title: '',
+            avatar: 'a.png',
+            messages: [],
+            pendingEdits: [],
+            surfaceState: {},
             _transient: true,
-        };
-        await persistGated(transient, []);
-
-        // No session landed in the store.
-        const list = await store.list();
-        expect(list).toEqual([]);
+        }, []);
+        expect(await store.list()).toEqual([]);
     });
 
     test('once messages exist the gate falls through and the session persists', async () => {
-        const sidecars = {};
-        const fakeCtx = {
-            getCharacterState: async (a, ns) => {
-                const state = sidecars[`${a}:${ns}`];
-                return state ? { ok: true, state } : { ok: true, state: null };
-            },
-            updateCharacterState: async (a, ns, updater) => {
-                const current = sidecars[`${a}:${ns}`] || null;
-                const next = await updater(
-                    current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
-                    { attempt: 0, avatar: a, namespace: ns },
-                );
-                if (next == null) return { ok: true, state: current, updated: false };
-                sidecars[`${a}:${ns}`] = next;
-                return { ok: true, state: next, updated: true };
-            },
-        };
-        const store = createUnifiedCeaEditorSessionStore({
-            context: fakeCtx,
+        const store = makeStoreEnv();
+        await persistGated(store, {
+            id: 'sess_real',
+            title: '',
             avatar: 'a.png',
-        });
-
-        async function persistGated(session, pendingEdits) {
-            if (
-                session._transient
-                && (!Array.isArray(session.messages) || session.messages.length === 0)
-                && (!Array.isArray(pendingEdits) || pendingEdits.length === 0)
-            ) {
-                return;
-            }
-            // Drop the transient marker on the first real persist.
-            if (session._transient) delete session._transient;
-            await store.save(session);
-        }
-
-        const sess = {
-            id: 'sess_real', title: '', avatar: 'a.png',
             messages: [{ id: 'm1', role: 'user', content: 'hi' }],
-            pendingEdits: [], surfaceState: {},
+            pendingEdits: [],
+            surfaceState: {},
             _transient: true,
-        };
-        await persistGated(sess, []);
+        }, []);
         const list = await store.list();
         expect(list).toHaveLength(1);
         expect(list[0].id).toBe('sess_real');
     });
 
-    test('clear-history flow: list → delete all → new session created → no phantom row', async () => {
-        // End-to-end simulation of the clear-history handler's contract:
-        // start with two saved sessions, delete both, then "create new
-        // session" (transient marker on) and run the persist gate; the
-        // store must end up empty.
-        const sidecars = {};
-        const fakeCtx = {
-            getCharacterState: async (a, ns) => {
-                const state = sidecars[`${a}:${ns}`];
-                return state ? { ok: true, state } : { ok: true, state: null };
-            },
-            updateCharacterState: async (a, ns, updater) => {
-                const current = sidecars[`${a}:${ns}`] || null;
-                const next = await updater(
-                    current && typeof current === 'object' && !Array.isArray(current) ? structuredClone(current) : {},
-                    { attempt: 0, avatar: a, namespace: ns },
-                );
-                if (next == null) return { ok: true, state: current, updated: false };
-                sidecars[`${a}:${ns}`] = next;
-                return { ok: true, state: next, updated: true };
-            },
-        };
-        const store = createUnifiedCeaEditorSessionStore({
-            context: fakeCtx,
+    test('clear-history flow: list -> delete all -> new transient session -> no phantom row', async () => {
+        const store = makeStoreEnv();
+        await store.save({ id: 's1', title: 'one', avatar: 'a.png', messages: [{ id: 'm1', role: 'user', content: 'a' }], surfaceState: {} });
+        await store.save({ id: 's2', title: 'two', avatar: 'a.png', messages: [{ id: 'm2', role: 'user', content: 'b' }], surfaceState: {} });
+
+        for (const item of await store.list()) {
+            await store.remove(item.id);
+        }
+        await persistGated(store, {
+            id: 's_fresh',
+            title: '',
             avatar: 'a.png',
-        });
-
-        await store.save({
-            id: 'old1', title: 't1', avatar: 'a.png',
-            messages: [{ id: 'm', role: 'user', content: 'one' }],
-            pendingEdits: [], surfaceState: {}, updatedAt: 1,
-        });
-        await store.save({
-            id: 'old2', title: 't2', avatar: 'a.png',
-            messages: [{ id: 'm', role: 'user', content: 'two' }],
-            pendingEdits: [], surfaceState: {}, updatedAt: 2,
-        });
-        let list = await store.list();
-        expect(list).toHaveLength(2);
-
-        // Simulate clear-history: delete all.
-        for (const it of list) {
-            await store.delete(String(it.id));
-        }
-        list = await store.list();
-        expect(list).toHaveLength(0);
-
-        // Now the handler creates a new transient empty session and calls
-        // persistSession on it — this MUST be a no-op.
-        const fresh = {
-            id: 'sess_fresh', title: '', avatar: 'a.png',
-            messages: [], pendingEdits: [], surfaceState: {},
+            messages: [],
+            pendingEdits: [],
+            surfaceState: {},
             _transient: true,
-        };
-        async function persistGated(session, pendingEdits) {
-            if (
-                session._transient
-                && (!Array.isArray(session.messages) || session.messages.length === 0)
-                && (!Array.isArray(pendingEdits) || pendingEdits.length === 0)
-            ) {
-                return;
-            }
-            if (session._transient) delete session._transient;
-            await store.save(session);
-        }
-        await persistGated(fresh, []);
-
-        // Final state: still empty — no phantom row.
-        list = await store.list();
-        expect(list).toEqual([]);
+        }, []);
+        expect(await store.list()).toEqual([]);
     });
 });
