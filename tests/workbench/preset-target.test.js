@@ -579,4 +579,38 @@ describe('platform preset target (controls, modes, reference, proposal-bus, cust
         await expect(target.runRead({ id: 'sim_1', name: 'preset_simulate', args: { text: 'Hi' } }, liveBody))
             .rejects.toThrow(/simulator is unavailable/i);
     });
+
+    test('renderControls clears state.referenceName when all other presets are deleted', async () => {
+        const liveBody = {
+            temperature: 0.7,
+            prompts: [{ identifier: 'main', name: 'Main', role: 'system', content: 'Live' }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }],
+        };
+        const refBody = {
+            temperature: 1.0,
+            prompts: [{ identifier: 'main', name: 'Main', role: 'system', content: 'Ref' }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }],
+        };
+        const { ctx, stored } = createMockPresetCtx({
+            selectedName: 'LivePreset',
+            presets: { LivePreset: liveBody, RefPreset: refBody },
+        });
+        const target = createPresetTarget({ getContext: () => ctx });
+
+        const controls1 = target.renderControls({ live: liveBody, scope: 'preset', settings: {}, onReload: () => {} });
+        const refSelect1 = controls1.querySelector('[data-wb-preset-control="reference"]');
+        refSelect1.value = 'RefPreset';
+        refSelect1.dispatchEvent(new Event('change', { bubbles: true }));
+
+        expect(await target.prompt(liveBody, 'preset', ctx)).toContain('RefPreset');
+        expect((await target.tools(liveBody, 'preset', ctx)).map((t) => t.function.name)).toContain('preset_read_reference_fields');
+
+        // Delete the only other preset so allNames becomes empty
+        stored.delete('RefPreset');
+        const controls2 = target.renderControls({ live: liveBody, scope: 'preset', settings: {}, onReload: () => {} });
+        const refSelect2 = controls2.querySelector('[data-wb-preset-control="reference"]');
+        expect(refSelect2.value).toBe('');
+        expect(await target.prompt(liveBody, 'preset', ctx)).not.toContain('RefPreset');
+        expect((await target.tools(liveBody, 'preset', ctx)).map((t) => t.function.name)).not.toContain('preset_read_reference_fields');
+    });
 });

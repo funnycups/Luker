@@ -288,7 +288,7 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
             const ctx = resolveCtx();
             const currentName = String(ctx?.presets?.getSelected?.('openai')?.name || '').trim();
             const allNames = listOpenAiPresetNames(ctx).filter((n) => n !== currentName);
-            if (state.referenceName && (state.referenceName === currentName || (allNames.length > 0 && !allNames.includes(state.referenceName)))) {
+            if (state.referenceName && !allNames.includes(state.referenceName)) {
                 state.referenceName = '';
             }
 
