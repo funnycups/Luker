@@ -49,9 +49,15 @@ describe('memory-graph/lens locale-data hygiene', () => {
 
         const mgI18nPath = path.join(ROOT, 'public/scripts/extensions/memory-graph/i18n.js');
         const mgI18nSource = fs.readFileSync(mgI18nPath, 'utf8');
+        const cnSectionMatch = /addLocaleData\('zh-cn',\s*\{([\s\S]*?)\n\s*\}\);/.exec(mgI18nSource);
+        const twSectionMatch = /addLocaleData\('zh-tw',\s*\{([\s\S]*?)\n\s*\}\);/.exec(mgI18nSource);
         const mgCnKeys = new Set();
-        for (const m of mgI18nSource.matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
+        const mgTwKeys = new Set();
+        for (const m of (cnSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
             mgCnKeys.add(m[1].replace(/\\'/g, '\''));
+        }
+        for (const m of (twSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
+            mgTwKeys.add(m[1].replace(/\\'/g, '\''));
         }
 
         const cnCollisions = cnKeys.filter(k =>
@@ -64,10 +70,75 @@ describe('memory-graph/lens locale-data hygiene', () => {
             Object.hasOwn(zhTwCore, k)
             || Object.hasOwn(lensShared['zh-tw'], k)
             || Object.hasOwn(workbench['zh-tw'], k)
-            || mgCnKeys.has(k),
+            || mgTwKeys.has(k),
         );
 
         expect(cnCollisions).toEqual([]);
         expect(twCollisions).toEqual([]);
+    });
+
+    test('all i18n/i18nFormat literals in memory-graph/lens/** resolve in zh-CN/zh-TW and have no unescaped semicolons', () => {
+        const zhCnCore = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/locales/zh-cn.json'), 'utf8'));
+        const zhTwCore = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/locales/zh-tw.json'), 'utf8'));
+        const lensShared = collectLocaleTables(registerLensSharedLocaleData);
+        const workbench = collectLocaleTables(registerWorkbenchLocaleData);
+
+        const mgI18nSource = fs.readFileSync(path.join(ROOT, 'public/scripts/extensions/memory-graph/i18n.js'), 'utf8');
+        const mgCn = {};
+        const mgTw = {};
+        const cnSectionMatch = /addLocaleData\('zh-cn',\s*\{([\s\S]*?)\n\s*\}\);/.exec(mgI18nSource);
+        const twSectionMatch = /addLocaleData\('zh-tw',\s*\{([\s\S]*?)\n\s*\}\);/.exec(mgI18nSource);
+        for (const m of (cnSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
+            mgCn[m[1].replace(/\\'/g, '\'')] = true;
+        }
+        for (const m of (twSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
+            mgTw[m[1].replace(/\\'/g, '\'')] = true;
+        }
+
+        const hasCn = k => (
+            Object.hasOwn(lensTables['zh-cn'], k)
+            || Object.hasOwn(zhCnCore, k)
+            || Object.hasOwn(lensShared['zh-cn'], k)
+            || Object.hasOwn(workbench['zh-cn'], k)
+            || Object.hasOwn(mgCn, k)
+        );
+        const hasTw = k => (
+            Object.hasOwn(lensTables['zh-tw'], k)
+            || Object.hasOwn(zhTwCore, k)
+            || Object.hasOwn(lensShared['zh-tw'], k)
+            || Object.hasOwn(workbench['zh-tw'], k)
+            || Object.hasOwn(mgTw, k)
+        );
+
+        const lensDir = path.join(ROOT, 'public/scripts/extensions/memory-graph/lens');
+        const jsFiles = [];
+        const walk = (dir) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) walk(full);
+                else if (entry.name.endsWith('.js')) jsFiles.push(full);
+            }
+        };
+        walk(lensDir);
+
+        const usedKeys = new Set();
+        const callRe = /\bi18n(?:Format)?\(\s*'((?:\\'|[^'])+)'|\bi18n(?:Format)?\(\s*"((?:\\"|[^"])+)"/g;
+        for (const file of jsFiles) {
+            const src = fs.readFileSync(file, 'utf8');
+            for (const m of src.matchAll(callRe)) {
+                const raw = m[1] !== undefined
+                    ? m[1].replace(/\\'/g, '\'').replace(/\\\\/g, '\\')
+                    : m[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                usedKeys.add(raw);
+            }
+        }
+
+        const semicolonKeys = [...usedKeys].filter(k => /(?<!\\);/.test(k));
+        const missingCn = [...usedKeys].filter(k => !hasCn(k));
+        const missingTw = [...usedKeys].filter(k => !hasTw(k));
+
+        expect(semicolonKeys).toEqual([]);
+        expect(missingCn).toEqual([]);
+        expect(missingTw).toEqual([]);
     });
 });

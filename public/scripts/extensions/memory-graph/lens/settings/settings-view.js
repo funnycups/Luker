@@ -202,7 +202,7 @@ export function createSettingsView(app, source) {
                 h('div', { class: 'ml-aiset-label', text: i18n('Persistent Injection') }),
                 h('p', { class: 'ml-settings-note', text: i18n('Types marked Always Visible and events are persistently injected without waiting for recall. Setting a recency horizon moves older entries back to the recall candidate pool.') }),
                 fields(
-                    advNumber('persistentInjectionMaxSeqDistance', i18n('Persistent injection recency horizon (assistant turns; 0 = no limit)'), 0),
+                    advNumber('persistentInjectionMaxSeqDistance', i18n('Persistent injection recency horizon (assistant turns, 0 = no limit)'), 0),
                     advNumber('recentRawTurns', i18n('Exclude latest N assistant turns from memory injection'), 0))),
             h('div', { class: 'ml-settings-subblock' },
                 h('div', { class: 'ml-aiset-label', text: i18n('On-Demand Recall') }),

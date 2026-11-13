@@ -645,6 +645,8 @@ const ZH_CN = {
     'Runtime': '运行参数',
     '${0} node(s), ${1} link(s)': '${0} 个节点，${1} 条关系',
     'Workbench is unavailable.': '工作台当前不可用。',
+    'Persistent injection recency horizon (assistant turns, 0 = no limit)': '常驻注入最大回溯楼层数（Assistant 回复数，0 = 不限制）',
+    'RAG Vector Recall (vector + optional rerank + optional rewrite)': 'RAG 向量召回（向量 + 可选重排 + 可选改写）',
 };
 
 const ZH_TW = {
@@ -1288,6 +1290,8 @@ const ZH_TW = {
     'Runtime': '執行參數',
     '${0} node(s), ${1} link(s)': '${0} 個節點，${1} 條關係',
     'Workbench is unavailable.': '工作台目前無法使用。',
+    'Persistent injection recency horizon (assistant turns, 0 = no limit)': '常駐注入最大回溯樓層數（Assistant 回覆數，0 = 不限制）',
+    'RAG Vector Recall (vector + optional rerank + optional rewrite)': 'RAG 向量召回（向量 + 可選重排 + 可選改寫）',
 };
 
 export function registerLensLocaleData(addLocaleData) {
