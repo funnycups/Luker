@@ -574,6 +574,15 @@ describe('workbench index bootstrap & st-context exposure', () => {
         await openWorkbench({ ws: 'memory', subview: 'nodes', focusId: 'n1' });
         expect(document.querySelector('.wb-tab[aria-selected="true"]').textContent).toContain('Memory');
         expect(memoryMountedOpts).toEqual([{ ws: 'memory', subview: 'nodes', focusId: 'n1' }]);
+
+        // openWorkbench() with no args when already expanded focuses the workbench window
+        const outsideBtn = document.createElement('button');
+        document.body.appendChild(outsideBtn);
+        outsideBtn.focus();
+        expect(document.activeElement).toBe(outsideBtn);
+        await openWorkbench();
+        expect(document.activeElement).toBe(document.querySelector('.wbench .wb-win'));
+        outsideBtn.remove();
         unreg();
     });
 });

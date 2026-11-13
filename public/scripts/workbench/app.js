@@ -405,6 +405,7 @@ export function mountWorkbench({
         expand: () => win.expand(),
         collapse: () => win.collapse(),
         open: (opts = {}) => app.open(opts),
+        focus: () => win.focus(),
         isCollapsed: () => win.isCollapsed(),
         reload: () => load(),
     };

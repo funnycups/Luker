@@ -48,6 +48,8 @@ async function open(opts = null) {
         instance.open(opts);
     } else if (instance.isCollapsed()) {
         instance.expand();
+    } else {
+        instance.focus?.();
     }
     return instance;
 }
