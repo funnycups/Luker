@@ -5,6 +5,7 @@ import { registerLensLocaleData } from '../../../public/scripts/extensions/orche
 import { registerLensSharedLocaleData } from '../../../public/scripts/lens-shared/locale-data.js';
 import { registerWorkbenchLocaleData } from '../../../public/scripts/workbench/locale-data.js';
 import { registerRunPanelLocaleData } from '../../../public/scripts/run-panel/locale-data.js';
+import { MODE_IDS, modeInfo } from '../../../public/scripts/extensions/orchestrator/lens/i18n.js';
 
 const ROOT = path.resolve(process.cwd(), '..');
 
@@ -51,9 +52,15 @@ describe('orchestrator/lens locale-data hygiene', () => {
 
         const orchI18nPath = path.join(ROOT, 'public/scripts/extensions/orchestrator/i18n.js');
         const orchI18nSource = fs.readFileSync(orchI18nPath, 'utf8');
+        const cnSectionMatch = /_addLocaleData\('zh-cn',\s*\{([\s\S]*?)\n\s*\}\);/.exec(orchI18nSource);
+        const twSectionMatch = /_addLocaleData\('zh-tw',\s*\{([\s\S]*?)\n\s*\}\);/.exec(orchI18nSource);
         const orchCnKeys = new Set();
-        for (const m of orchI18nSource.matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
+        const orchTwKeys = new Set();
+        for (const m of (cnSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
             orchCnKeys.add(m[1].replace(/\\'/g, '\''));
+        }
+        for (const m of (twSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
+            orchTwKeys.add(m[1].replace(/\\'/g, '\''));
         }
 
         const cnCollisions = cnKeys.filter(k =>
@@ -68,11 +75,27 @@ describe('orchestrator/lens locale-data hygiene', () => {
             || Object.hasOwn(lensShared['zh-tw'], k)
             || Object.hasOwn(workbench['zh-tw'], k)
             || Object.hasOwn(runPanel['zh-tw'], k)
-            || orchCnKeys.has(k),
+            || orchTwKeys.has(k),
         );
 
         expect(cnCollisions).toEqual([]);
         expect(twCollisions).toEqual([]);
+    });
+
+    test('MODES hints match Spec Section 4.2.B and resolve in zh-CN/zh-TW', () => {
+        const expectedHints = {
+            single: 'Executes one standalone agent without multi-stage orchestration.',
+            spec: 'Executes agents along a fixed stage pipeline.',
+            agenda: 'A planner selects the next step at each stage based on current state.',
+            loop: 'An agent executes a multi-round tool loop until its objective is reached.',
+            director: 'A director plans dialogue direction before handing control to the main generation.',
+        };
+        for (const id of MODE_IDS) {
+            const { hint } = modeInfo(id);
+            expect(hint).toBe(expectedHints[id]);
+            expect(Object.hasOwn(lensTables['zh-cn'], hint)).toBe(true);
+            expect(Object.hasOwn(lensTables['zh-tw'], hint)).toBe(true);
+        }
     });
 
     test('all i18n/i18nFormat literals in orchestrator/lens/** resolve in zh-CN/zh-TW and have no unescaped semicolons', () => {

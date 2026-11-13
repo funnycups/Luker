@@ -23,11 +23,11 @@ const STATUS = {
 };
 
 const MODES = {
-    spec: { label: 'Pipeline', hint: 'Fixed steps — each starts when the previous one is done' },
-    single: { label: 'Single assistant', hint: 'One agent does it all at once, fastest and cheapest' },
-    agenda: { label: 'Dispatch', hint: 'A dispatcher assigns work as things develop' },
-    loop: { label: 'Research loop', hint: 'One agent keeps looking things up until it has enough' },
-    director: { label: 'Director team', hint: 'A lead writer and a team write the reply directly' },
+    spec: { label: 'Pipeline', hint: 'Executes agents along a fixed stage pipeline.' },
+    single: { label: 'Single assistant', hint: 'Executes one standalone agent without multi-stage orchestration.' },
+    agenda: { label: 'Dispatch', hint: 'A planner selects the next step at each stage based on current state.' },
+    loop: { label: 'Research loop', hint: 'An agent executes a multi-round tool loop until its objective is reached.' },
+    director: { label: 'Director team', hint: 'A director plans dialogue direction before handing control to the main generation.' },
     search: { label: 'Online search', hint: 'Looks things up online before replying' },
 };
 
