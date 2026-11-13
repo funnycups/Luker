@@ -237,13 +237,12 @@ function applyOrderGroupOp(next, op) {
 /** Applies field changes to a preset body; the order goes last so new entries can be placed. */
 export function applyPresetOps(body, ops) {
     const next = clone(body) || {};
-    const hasExplicitGroupOps = ops.some(op => op.key.startsWith('order:'));
     const hasOrderOp = ops.some(op => op.key === 'order');
     let primaryOrder = null;
     const getPrimaryOrder = () => {
         if (!primaryOrder) {
             primaryOrder = ensurePrimaryOrder(next, {
-                createDefaultIfMissing: hasOrderOp || hasExplicitGroupOps,
+                createDefaultIfMissing: hasOrderOp,
             });
         }
         return primaryOrder;

@@ -222,6 +222,41 @@ describe('preset adapter: empty and multi-group prompt_order', () => {
         // Group 100001 remains untouched
         expect(next.prompt_order[1]).toEqual(base.prompt_order[1]);
     });
+
+    test('single non-100001 prompt_order group (e.g. 100000) touching both prompt:<id> and order:100000 modifies 100000 without synthesizing 100001', () => {
+        const base = {
+            prompts: [
+                { identifier: 'main', name: 'Main', role: 'system', content: 'M' },
+                { identifier: 'nsfw', name: 'NSFW', role: 'system', content: 'N' },
+            ],
+            prompt_order: [
+                { character_id: 100000, order: [{ identifier: 'main', enabled: true }, { identifier: 'nsfw', enabled: true }] },
+            ],
+        };
+        const ai = clone(base);
+        ai.prompts[1].content = 'N updated';
+        ai.prompt_order[0].order = [
+            { identifier: 'nsfw', enabled: false },
+            { identifier: 'main', enabled: true },
+        ];
+
+        const changes = diffUnits(presetUnits(base), presetUnits(ai));
+        const keys = changes.map((c) => c.key);
+        expect(keys).toEqual(['prompt:nsfw', 'order:100000']);
+
+        const ops = fieldPlan(presetUnits(base), presetUnits(ai), keys);
+        const next = applyPresetOps(base, ops);
+        expect(next.prompt_order).toEqual([
+            {
+                character_id: 100000,
+                order: [
+                    { identifier: 'nsfw', enabled: false },
+                    { identifier: 'main', enabled: true },
+                ],
+            },
+        ]);
+        expect(next.prompts[1].content).toBe('N updated');
+    });
 });
 
 describe('platform preset target (controls, modes, reference, proposal-bus, custom prompts)', () => {
