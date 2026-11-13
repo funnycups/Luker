@@ -315,25 +315,25 @@ export async function boundWorldBookNames(ctx) {
         const fileName = typeof ctx.getCharaFilename === 'function'
             ? ctx.getCharaFilename(null, { manualAvatarKey: full?.avatar })
             : String(full?.avatar || '').replace(/\.[^.]+$/, '');
-        if (fileName) {
-            try {
-                for (const n of ctx.getCharaAuxWorlds?.(fileName) || []) names.add(String(n));
-            } catch { /* ignore */ }
+        if (fileName && typeof ctx.getCharaAuxWorlds === 'function') {
+            for (const n of ctx.getCharaAuxWorlds(fileName) || []) names.add(String(n));
         }
     }
-    try {
-        for (const n of ctx.chatWorldInfo?.getNames?.(ctx?.chatMetadata) || []) names.add(String(n));
-    } catch { /* ignore */ }
-    try {
-        for (const n of ctx.chatWorldInfo?.globalSelection || []) names.add(String(n));
-    } catch { /* ignore */ }
+    if (typeof ctx.chatWorldInfo?.getNames === 'function') {
+        for (const n of ctx.chatWorldInfo.getNames(ctx?.chatMetadata) || []) names.add(String(n));
+    }
+    if (Array.isArray(ctx.chatWorldInfo?.globalSelection)) {
+        for (const n of ctx.chatWorldInfo.globalSelection) names.add(String(n));
+    }
     return [...names].filter(Boolean);
 }
 
 export async function worldBookNamesForScope(ctx, scope) {
     const names = new Set();
     if (scope === 'global') {
-        for (const n of ctx?.chatWorldInfo?.globalSelection || []) names.add(String(n));
+        if (Array.isArray(ctx?.chatWorldInfo?.globalSelection)) {
+            for (const n of ctx.chatWorldInfo.globalSelection) names.add(String(n));
+        }
     } else {
         const c = resolveCurrentCharacter(ctx);
         if (!c) throw new SourceError('no-character', i18n('No character card selected'));
@@ -342,14 +342,12 @@ export async function worldBookNamesForScope(ctx, scope) {
         const fileName = typeof ctx.getCharaFilename === 'function'
             ? ctx.getCharaFilename(null, { manualAvatarKey: full?.avatar })
             : String(full?.avatar || '').replace(/\.[^.]+$/, '');
-        if (fileName) {
-            try {
-                for (const n of ctx.getCharaAuxWorlds?.(fileName) || []) names.add(String(n));
-            } catch { /* ignore */ }
+        if (fileName && typeof ctx.getCharaAuxWorlds === 'function') {
+            for (const n of ctx.getCharaAuxWorlds(fileName) || []) names.add(String(n));
         }
-        try {
-            for (const n of ctx.chatWorldInfo?.getNames?.(ctx?.chatMetadata) || []) names.add(String(n));
-        } catch { /* ignore */ }
+        if (typeof ctx.chatWorldInfo?.getNames === 'function') {
+            for (const n of ctx.chatWorldInfo.getNames(ctx?.chatMetadata) || []) names.add(String(n));
+        }
     }
     return [...names].filter(Boolean);
 }
@@ -366,16 +364,24 @@ export async function buildCardLiveSnapshot(context, avatar = '', { includeBound
             bookNames.add(name);
         }
     }
+    if (bookNames.size > 0 && typeof context?.loadWorldInfo !== 'function') {
+        const firstBook = [...bookNames][0];
+        throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', firstBook));
+    }
     for (const bookName of bookNames) {
-        if (!bookName || typeof context?.loadWorldInfo !== 'function') continue;
+        let data;
         try {
-            const data = await context.loadWorldInfo(bookName);
-            if (data && typeof data === 'object') {
-                const copy = safeClone(data);
-                if (!copy.entries || typeof copy.entries !== 'object') copy.entries = {};
-                lorebooks[bookName] = copy;
-            }
-        } catch { /* skip unreadable book */ }
+            data = await context.loadWorldInfo(bookName);
+        } catch (err) {
+            if (err instanceof SourceError) throw err;
+            throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', bookName), { cause: err });
+        }
+        if (!data || typeof data !== 'object') {
+            throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', bookName));
+        }
+        const copy = safeClone(data);
+        if (!copy.entries || typeof copy.entries !== 'object') copy.entries = {};
+        lorebooks[bookName] = copy;
     }
     return { character, lorebooks };
 }
@@ -554,10 +560,8 @@ export function createWorldBookIo(getCtx) {
             const key = String(book).trim();
             let cache = ctx?.worldInfoCache instanceof Map ? ctx.worldInfoCache : null;
             if (!cache) {
-                try {
-                    const wiMod = await import('../../world-info.js');
-                    cache = wiMod?.worldInfoCache instanceof Map ? wiMod.worldInfoCache : null;
-                } catch { cache = null; }
+                const wiMod = await import('../../world-info.js');
+                cache = wiMod?.worldInfoCache instanceof Map ? wiMod.worldInfoCache : null;
             }
             const previous = cache ? cache.get(key) : undefined;
             try {
@@ -750,8 +754,8 @@ export async function runCardSimulatePrompt(context, args = {}) {
                     finalOutput = String(generated || '');
                 }
             } finally {
-                if (src && typeof src.removeListener === 'function') {
-                    try { src.removeListener(eventName, listener); } catch { /* best-effort */ }
+                if (typeof src?.removeListener === 'function') {
+                    src.removeListener(eventName, listener);
                 }
             }
 

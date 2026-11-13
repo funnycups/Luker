@@ -25,6 +25,7 @@ import {
 import {
     buildCeaEditorToolSet,
     normalizeToolCallToEdit,
+    resolveBookNameFromArgsOrSingle,
     runCeaEditorReadTool,
 } from './card-tools.js';
 
@@ -148,12 +149,34 @@ export function createCardTarget({ getContext = defaultGetContext, bookIo = null
             if (res?.ok === false) {
                 throw new SourceError('read', res.error || res.toolResultText || i18n('Read failed'));
             }
-            return res?.toolResultText ?? res?.result ?? res;
+            return res?.toolResultText !== undefined
+                ? res.toolResultText
+                : (res?.result !== undefined ? res.result : res);
         },
         async runEdit(call, live) {
             const c = resolveCtx();
+            const name = String(call?.name || '');
+            const args = call?.args && typeof call.args === 'object' ? call.args : {};
+            if (name.startsWith('cea_') && name.includes('lorebook')) {
+                const allowedBooks = Object.keys(live?.lorebooks || {});
+                const book = resolveBookNameFromArgsOrSingle(args, live);
+                if (!book) {
+                    throw new SourceError(
+                        'bad-args',
+                        allowedBooks.length
+                            ? `missing book_name: specify one of ${allowedBooks.join(', ')}`
+                            : 'missing book_name: no world books are bound to this character',
+                    );
+                }
+                if (!Object.hasOwn(live?.lorebooks || {}, book)) {
+                    throw new SourceError(
+                        'book',
+                        i18nFormat('Only these can be edited: ${0}', allowedBooks.join(listSeparator())),
+                    );
+                }
+            }
             const edits = await normalizeToolCallToEdit(
-                { id: call?.id, name: call?.name, args: call?.args || {} },
+                { id: call?.id, name, args },
                 { context: c, live },
             );
             if (!edits) throw new SourceError('bad-args', i18n('Invalid arguments'));

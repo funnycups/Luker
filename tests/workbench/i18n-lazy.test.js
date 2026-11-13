@@ -15,6 +15,7 @@ const { chips, wsName } = await import('../../public/scripts/workbench/pages/ask
 const { nameMap, formatChangeName } = await import('../../public/scripts/workbench/pages/history.js');
 const { knownRoles, sourceDefs } = await import('../../public/scripts/workbench/pages/settings.js');
 const { toneLabel, getTones } = await import('../../public/scripts/workbench/ui/components.js');
+const { cardUnits } = await import('../../public/scripts/workbench/model/adapters.js');
 const { registerWorkbenchLocaleData } = await import('../../public/scripts/workbench/locale-data.js');
 
 describe('lazy i18n evaluation after Luker locale registration', () => {
@@ -55,6 +56,14 @@ describe('lazy i18n evaluation after Luker locale registration', () => {
 
         expect(toneLabel('memory')).toBe('记忆图');
         expect(getTones().orch).toBe('编排');
+
+        const units = cardUnits({
+            character: { name: 'A', description: 'D', system_prompt: 'S', creator_notes: 'N' },
+        });
+        expect(units.get('card:name')?.label).toBe('名字');
+        expect(units.get('card:description')?.label).toBe('描述');
+        expect(units.get('card:system_prompt')?.label).toBe('系统提示');
+        expect(units.get('card:creator_notes')?.label).toBe('作者备注');
 
         delete globalThis.Luker;
     });

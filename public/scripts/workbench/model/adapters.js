@@ -289,16 +289,16 @@ export const CARD_FIELDS = [
 ];
 
 export const CARD_LABELS = {
-    name: i18n('Card name'),
-    description: i18n('Description field'),
-    personality: i18n('Personality'),
-    scenario: i18n('Card scenario'),
-    first_mes: i18n('Opening message'),
-    mes_example: i18n('Example dialogue'),
-    system_prompt: i18n('Card system prompt'),
-    post_history_instructions: i18n('Card post-history instructions'),
-    creator_notes: i18n('Card creator notes'),
-    alternate_greetings: i18n('Alternate opening messages'),
+    name: 'Card name',
+    description: 'Description field',
+    personality: 'Personality',
+    scenario: 'Card scenario',
+    first_mes: 'Opening message',
+    mes_example: 'Example dialogue',
+    system_prompt: 'Card system prompt',
+    post_history_instructions: 'Card post-history instructions',
+    creator_notes: 'Card creator notes',
+    alternate_greetings: 'Alternate opening messages',
 };
 
 function cardField(character, field) {
@@ -356,7 +356,7 @@ export function cardUnits(live) {
         if (text || f === 'description') {
             out.set(`card:${f}`, {
                 key: `card:${f}`,
-                label: CARD_LABELS[f],
+                label: i18n(CARD_LABELS[f]),
                 group: i18n('Character card'),
                 text,
                 raw: { field: f },

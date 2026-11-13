@@ -385,10 +385,17 @@ async function normalizeUnifiedToolCallToEdit(call, ctx) {
     }
 
     if (name === 'cea_set_lorebook_metadata') {
+        const key = String(args.key ?? '').trim();
+        if (!key) {
+            throw new Error(`${name}: invalid_args — key is required.`);
+        }
+        if (key === 'bookName') {
+            throw new Error(`${name}: invalid_args — renaming lorebooks via bookName is not supported. Use the world-info panel to rename a lorebook.`);
+        }
         return [{
             op: 'set',
-            path: `lorebook.${args.key}`,
-            oldValue: liveBook?.[args.key],
+            path: `lorebook.${key}`,
+            oldValue: liveBook?.[key],
             newValue: args.value,
         }];
     }
@@ -567,15 +574,9 @@ export function buildCeaEditorToolSet(_context, _settings, opts = {}) {
 function adaptCallToOpenAiShape(call) {
     const name = String(call?.name || '');
     const args = call?.args && typeof call.args === 'object' ? call.args : {};
-    let argString;
-    try {
-        argString = JSON.stringify(args);
-    } catch {
-        argString = '{}';
-    }
     return {
         id: call?.id,
-        function: { name, arguments: argString },
+        function: { name, arguments: JSON.stringify(args) },
     };
 }
 
@@ -608,7 +609,12 @@ export async function normalizeToolCallToEdit(call, opts = {}) {
             return null;
         }
     }
-    const adapted = adaptCallToOpenAiShape(call);
+    let adapted;
+    try {
+        adapted = adaptCallToOpenAiShape(call);
+    } catch {
+        return null;
+    }
     const ctx = { live: opts?.live ?? {}, context: opts?.context };
     const edits = await normalizeUnifiedToolCallToEdit(adapted, ctx);
     if (!Array.isArray(edits)) {
@@ -763,9 +769,7 @@ function listWorldBooksFromContextAndDraft(context, opts = {}) {
         }
     }
     if (typeof context?.chatWorldInfo?.getNames === 'function') {
-        try {
-            for (const name of context.chatWorldInfo.getNames(context?.chatMetadata) || []) push(name, 'chat');
-        } catch { /* ignore */ }
+        for (const name of context.chatWorldInfo.getNames(context?.chatMetadata) || []) push(name, 'chat');
     }
     const globalSelection = context?.chatWorldInfo?.globalSelection;
     if (Array.isArray(globalSelection)) {

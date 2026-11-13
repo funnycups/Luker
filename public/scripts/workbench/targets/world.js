@@ -67,12 +67,7 @@ export function createWorldTarget({ getContext = defaultGetContext, bookIo = nul
         },
         async scopes(ctx) {
             const c = resolveCtx(ctx);
-            let global = false;
-            try {
-                global = (await worldBookNamesForScope(c, 'global')).length > 0;
-            } catch {
-                global = false;
-            }
+            const global = (await worldBookNamesForScope(c, 'global')).length > 0;
             return { global, character: Boolean(resolveCurrentCharacter(c)) };
         },
         getNativeAi(ctx) {
@@ -107,16 +102,24 @@ export function createWorldTarget({ getContext = defaultGetContext, bookIo = nul
                         : i18n('This character has no world books bound (no main book, extra books or chat binding).'),
                 );
             }
+            if (typeof c?.loadWorldInfo !== 'function') {
+                throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', names[0]));
+            }
             const lorebooks = {};
             for (const name of names) {
+                let data;
                 try {
-                    const data = await c?.loadWorldInfo?.(name);
-                    if (data && typeof data === 'object') {
-                        const copy = safeClone(data);
-                        if (!copy.entries || typeof copy.entries !== 'object') copy.entries = {};
-                        lorebooks[name] = copy;
-                    }
-                } catch { /* skip unreadable book */ }
+                    data = await c.loadWorldInfo(name);
+                } catch (err) {
+                    if (err instanceof SourceError) throw err;
+                    throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', name), { cause: err });
+                }
+                if (!data || typeof data !== 'object') {
+                    throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', name));
+                }
+                const copy = safeClone(data);
+                if (!copy.entries || typeof copy.entries !== 'object') copy.entries = {};
+                lorebooks[name] = copy;
             }
             const cur = resolveCurrentCharacter(c);
             const who = scope === 'global'
@@ -163,7 +166,9 @@ export function createWorldTarget({ getContext = defaultGetContext, bookIo = nul
             if (res?.ok === false) {
                 throw new SourceError('read', res.error || res.toolResultText || i18n('Read failed'));
             }
-            return res?.toolResultText ?? res?.result ?? res;
+            return res?.toolResultText !== undefined
+                ? res.toolResultText
+                : (res?.result !== undefined ? res.result : res);
         },
         async runEdit(call, live) {
             const c = resolveCtx();

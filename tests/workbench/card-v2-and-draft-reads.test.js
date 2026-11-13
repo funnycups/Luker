@@ -440,8 +440,99 @@ describe('card.runEdit book_name validation', () => {
             args: { book_name: 'PhantomBook', entry: { uid: 2, key: ['x'], content: 'new' } },
         }, loaded.live)).rejects.toThrow(/BookOne/);
 
+        // cea_str_replace_lorebook_entry_field must validate book_name BEFORE normalizeToolCallToEdit
+        // (must throw missing book_name / allowed books, NOT not_found anchor miss)
+        await expect(card.runEdit({
+            id: 'missing_book_str_replace',
+            name: 'cea_str_replace_lorebook_entry_field',
+            args: { uid: 1, field: 'content', oldString: 'alpha', newString: 'omega' },
+        }, loaded.live)).rejects.toThrow(/missing book_name/i);
+
+        await expect(card.runEdit({
+            id: 'unknown_book_str_replace',
+            name: 'cea_str_replace_lorebook_entry_field',
+            args: { book_name: 'PhantomBook', uid: 1, field: 'content', oldString: 'alpha', newString: 'omega' },
+        }, loaded.live)).rejects.toThrow(/BookOne/);
+
         expect(Object.keys(loaded.live.lorebooks)).toEqual(['BookOne', 'BookTwo']);
         expect(loaded.live).toEqual(snapshotBefore);
+    });
+});
+
+describe('review fixes: error propagation, bookName rejection, and null read unwrapping', () => {
+    test('card.load and world.load propagate loadWorldInfo failures instead of silently skipping unreadable books', async () => {
+        const { ctx } = createMockRuntime({
+            character: {
+                avatar: 'Broken.png',
+                name: 'Broken',
+                data: { name: 'Broken', extensions: { world: 'MissingBook' } },
+            },
+            books: {},
+            globalSelection: ['MissingBook'],
+        });
+        ctx.loadWorldInfo.mockRejectedValue(new Error('disk read failure'));
+
+        const card = createCardTarget({ getContext: () => ctx });
+        await expect(card.load('character', ctx)).rejects.toMatchObject({ code: 'read-failed' });
+
+        const world = createWorldTarget({ getContext: () => ctx });
+        await expect(world.load('global', ctx)).rejects.toMatchObject({ code: 'read-failed' });
+
+        // Returning null for a bound book must also throw rather than silently omitting it
+        ctx.loadWorldInfo.mockResolvedValue(null);
+        await expect(card.load('character', ctx)).rejects.toMatchObject({ code: 'read-failed' });
+        await expect(world.load('global', ctx)).rejects.toMatchObject({ code: 'read-failed' });
+    });
+
+    test('cea_set_lorebook_metadata with key === "bookName" rejects immediately instead of returning a no-op pending_review', async () => {
+        const { ctx } = createMockRuntime({
+            character: {
+                avatar: 'Meta.png',
+                name: 'Meta',
+                data: { name: 'Meta', extensions: { world: 'BookM' } },
+            },
+            books: { BookM: { entries: {} } },
+            globalSelection: ['BookM'],
+        });
+        const card = createCardTarget({ getContext: () => ctx });
+        const cardLoaded = await card.load('character', ctx);
+        await expect(card.runEdit({
+            id: 'meta_1',
+            name: 'cea_set_lorebook_metadata',
+            args: { book_name: 'BookM', key: 'bookName', value: 'Renamed' },
+        }, cardLoaded.live)).rejects.toThrow(/bookName/i);
+
+        const world = createWorldTarget({ getContext: () => ctx });
+        const worldLoaded = await world.load('global', ctx);
+        await expect(world.runEdit({
+            id: 'meta_2',
+            name: 'cea_set_lorebook_metadata',
+            args: { book_name: 'BookM', key: 'bookName', value: 'Renamed' },
+        }, worldLoaded.live)).rejects.toThrow(/bookName/i);
+    });
+
+    test('card.runRead unwraps result: null cleanly without leaking the { ok, result } wrapper', async () => {
+        const { ctx } = createMockRuntime({
+            character: {
+                avatar: 'PresetRead.png',
+                name: 'PresetRead',
+                data: { name: 'PresetRead', extensions: {} },
+            },
+        });
+        ctx.character = {
+            presets: {
+                list: () => [],
+                get: () => null,
+            },
+        };
+        const card = createCardTarget({ getContext: () => ctx });
+        const loaded = await card.load('character', ctx);
+        const res = await card.runRead({
+            id: 'insp_1',
+            name: 'inspect_bound_preset',
+            args: { action: 'get', name: 'NonExistent' },
+        }, loaded.live);
+        expect(res).toBeNull();
     });
 });
 
