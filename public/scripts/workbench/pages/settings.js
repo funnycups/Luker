@@ -33,8 +33,10 @@ export function sourceDefs() {
 export function createSettingsPage(app) {
     const el = h('div', { class: 'wb-page' });
     let choices = null;
+    let choicesVersion = 0;
     let testing = '';
     let prompts = null;
+    let promptsVersion = 0;
 
     function activeRows() {
         const targets = app.iterateTargets?.() || [];
@@ -51,13 +53,17 @@ export function createSettingsPage(app) {
 
     async function ensureChoices() {
         if (choices) return;
+        const ver = ++choicesVersion;
         try {
-            choices = await app.source.listAiChoices();
+            const loaded = await app.source.listAiChoices();
+            if (ver !== choicesVersion) return;
+            choices = loaded;
             const errs = Object.values(choices?.errors || {}).filter(Boolean);
             if (errs.length) {
                 app.toast(errs.join(' · '), { error: true, duration: 5000 });
             }
         } catch (err) {
+            if (ver !== choicesVersion) return;
             const msg = String(err?.message || err);
             choices = { connections: [], presets: [], native: {}, hasPluginOnly: false, errors: { load: msg } };
             app.toast(msg, { error: true, duration: 5000 });
@@ -179,11 +185,20 @@ export function createSettingsPage(app) {
     }
 
     async function loadPrompts() {
+        const ver = ++promptsVersion;
         const rows = activeRows();
         const out = {};
         for (const r of rows) {
-            try { out[r.key] = await app.source.promptInfo(r.key); } catch (err) { out[r.key] = { from: i18n('Unreadable'), custom: false, text: String(err?.message || err) }; }
+            try {
+                const info = await app.source.promptInfo(r.key);
+                if (ver !== promptsVersion) return;
+                out[r.key] = info;
+            } catch (err) {
+                if (ver !== promptsVersion) return;
+                out[r.key] = { from: i18n('Unreadable'), custom: false, text: String(err?.message || err) };
+            }
         }
+        if (ver !== promptsVersion) return;
         prompts = out;
         paint();
     }
@@ -220,8 +235,12 @@ export function createSettingsPage(app) {
             if (opts.scrollTo === 'rules') requestAnimationFrame(() => el.querySelector('#wb-rules')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
         },
         onRegistryUpdate() {
+            promptsVersion++;
+            choicesVersion++;
             prompts = null;
+            choices = null;
             if (el.isConnected) {
+                ensureChoices();
                 loadPrompts();
                 paint();
             }
