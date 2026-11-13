@@ -7000,18 +7000,25 @@ body:not(.movingUI) .drawer-content.maximized {
     z-index: 3000;
     display: block;
     min-width: 220px;
+    max-width: calc(100vw - 16px);
+    box-sizing: border-box;
     padding: 4px 0;
     border: 1px solid var(--SmartThemeBorderColor);
     border-radius: 6px;
     background-color: var(--SmartThemeBlurTintColor);
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
+.debug-menu-list.debug-menu-list--align-right { left: auto; right: 0; }
 .debug-menu-list[hidden] { display: none; }
 .debug-menu-item {
     display: block;
     padding: 6px 14px;
     cursor: pointer;
     white-space: nowrap;
+}
+@media (max-width: 720px) {
+    .debug-menu-list { min-width: min(220px, calc(100vw - 16px)); }
+    .debug-menu-item { white-space: normal; overflow-wrap: anywhere; }
 }
 .debug-menu-item:hover { background-color: var(--white30a); }
 .debug-menu-item[hidden] { display: none; }

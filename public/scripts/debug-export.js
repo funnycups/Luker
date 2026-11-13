@@ -79,6 +79,42 @@ export async function downloadDebugBundle() {
 
 const debugMenuActions = new Map();
 let debugMenuOutsideClickBound = false;
+let debugMenuResizeBound = false;
+const DEBUG_MENU_VIEWPORT_MARGIN_PX = 8;
+
+/**
+ * Align the diagnostics dropdown within the viewport so it never clips past
+ * either horizontal edge when the trigger sits near the right side of the
+ * screen on narrow viewports.
+ * @param {HTMLElement} button
+ * @param {HTMLElement} list
+ * @param {number} [viewportWidth]
+ */
+export function positionDebugMenu(button, list, viewportWidth = window.innerWidth) {
+    if (!button || !list || !viewportWidth) return;
+    list.classList.remove('debug-menu-list--align-right');
+    list.style.left = '';
+
+    const buttonRect = button.getBoundingClientRect();
+    const listRect = list.getBoundingClientRect();
+    if (!listRect.width) return;
+
+    const maxRight = viewportWidth - DEBUG_MENU_VIEWPORT_MARGIN_PX;
+    if (buttonRect.left + listRect.width <= maxRight) {
+        return;
+    }
+
+    if (buttonRect.right - listRect.width >= DEBUG_MENU_VIEWPORT_MARGIN_PX) {
+        list.classList.add('debug-menu-list--align-right');
+        return;
+    }
+
+    const clampedLeft = Math.max(
+        DEBUG_MENU_VIEWPORT_MARGIN_PX,
+        maxRight - listRect.width,
+    );
+    list.style.left = `${clampedLeft - buttonRect.left}px`;
+}
 
 function closeDebugMenu() {
     const list = document.getElementById('debug-menu-list');
@@ -158,6 +194,18 @@ export function initDebugExportButton() {
     button.addEventListener('click', () => {
         if (list) {
             list.hidden = !list.hidden;
+            if (!list.hidden) {
+                positionDebugMenu(button, list);
+            }
         }
     });
+
+    if (!debugMenuResizeBound && typeof window !== 'undefined') {
+        debugMenuResizeBound = true;
+        window.addEventListener('resize', () => {
+            if (list && !list.hidden) {
+                positionDebugMenu(button, list);
+            }
+        });
+    }
 }

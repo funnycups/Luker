@@ -93,3 +93,24 @@ test('every visible menu entry is hit-testable, not clipped by the scroll contai
 
     await expect.poll(unreachable).toEqual([]);
 });
+
+test('the menu stays within viewport bounds on a narrow mobile screen', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openSettings(page);
+
+    await page.locator('#debug-export-btn').click();
+    await expect(page.locator('#debug-menu-list')).toBeVisible();
+
+    const bounds = await page.evaluate(() => {
+        const list = document.getElementById('debug-menu-list');
+        const rect = list.getBoundingClientRect();
+        return {
+            left: rect.left,
+            right: rect.right,
+            viewportWidth: window.innerWidth,
+        };
+    });
+
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth);
+});
