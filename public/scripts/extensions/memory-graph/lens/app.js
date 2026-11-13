@@ -349,6 +349,7 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
             console.warn('[memory-graph/lens] load failed', err);
             model = null;
             views.schema.invalidate?.();
+            views.settings?.invalidate?.();
             store.set({ status: 'error', error: { code: err?.code || '', message: String(err?.message || err) }, syncing: false });
             renderAll();
         }

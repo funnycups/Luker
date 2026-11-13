@@ -169,4 +169,52 @@ describe('schema-view fixes & Workbench AI navigation', () => {
         expect(openSpy).toHaveBeenCalledTimes(2);
         expect(openSpy.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 'ai', ws: 'memory' }));
     });
+
+    test('disables extractEveryN when forceUpdate is checked and reflects primaryKeyColumns fallback immediately when latestOnly is true', async () => {
+        const { view } = mountSchemaView();
+        view.render();
+        await flushMicrotasks();
+
+        // Select character_sheet (forceUpdate: false, latestOnly: true, primaryKeyColumns: ['title'])
+        const typeButtons = [...view.el.querySelectorAll('.ml-schema-type')];
+        typeButtons[1].click();
+        await flushMicrotasks();
+
+        const findNumberInput = (labelSub) => [...view.el.querySelectorAll('.ml-aiset-field')]
+            .find(el => el.querySelector('.ml-aiset-label')?.textContent.includes(labelSub))
+            ?.querySelector('input[type="number"]');
+        const findCheckbox = (labelSub) => [...view.el.querySelectorAll('[role="checkbox"]')]
+            .find(el => el.textContent.includes(labelSub));
+
+        const extractInputBefore = findNumberInput('间隔') || findNumberInput('每') || findNumberInput('Extract Every N');
+        expect(extractInputBefore).toBeTruthy();
+        expect(extractInputBefore.disabled).toBe(false);
+
+        const forceCheck = findCheckbox('强制') || findCheckbox('Force Update');
+        expect(forceCheck).toBeTruthy();
+        forceCheck.click();
+        await flushMicrotasks();
+
+        const extractInputAfter = findNumberInput('间隔') || findNumberInput('每') || findNumberInput('Extract Every N');
+        expect(extractInputAfter === null || extractInputAfter.disabled === true).toBe(true);
+
+        // Unchecking the only primaryKeyColumn ('title') while latestOnly is true immediately reflects fallback ['title', 'aliases']
+        const pkLabel = [...view.el.querySelectorAll('.ml-aiset-label')]
+            .find(el => el.textContent.includes('主键') || el.textContent.includes('Primary Key'));
+        const pkField = pkLabel.closest('.ml-aiset-field');
+        const pkBoxes = [...pkField.querySelectorAll('[role="checkbox"]')];
+        expect(pkBoxes[0].getAttribute('aria-checked')).toBe('true');
+        expect(pkBoxes[1].getAttribute('aria-checked')).toBe('false');
+
+        pkBoxes[0].click();
+        await flushMicrotasks();
+
+        const pkFieldAfter = [...view.el.querySelectorAll('.ml-aiset-label')]
+            .find(el => el.textContent.includes('主键') || el.textContent.includes('Primary Key'))
+            .closest('.ml-aiset-field');
+        const pkBoxesAfter = [...pkFieldAfter.querySelectorAll('[role="checkbox"]')];
+        expect(pkBoxesAfter[0].getAttribute('aria-checked')).toBe('true');
+        expect(pkBoxesAfter[1].getAttribute('aria-checked')).toBe('true');
+        expect(pkBoxesAfter[2].getAttribute('aria-checked')).toBe('false');
+    });
 });

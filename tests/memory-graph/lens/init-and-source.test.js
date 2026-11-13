@@ -14,6 +14,7 @@ const startTagFilterMock = jest.fn(() => () => {});
 const startRecorderMock = jest.fn(() => () => {});
 
 let currentAvatar = 'alice.png';
+let currentHasOverride = false;
 let currentListExtensions = ['memory-graph'];
 let disabledExtensions = [];
 
@@ -91,6 +92,7 @@ jest.unstable_mockModule('../../../public/scripts/extensions/memory-graph/lens/t
     countTokens: async () => 0,
     readEntries: () => [],
     clearEntries: () => {},
+    summarize: () => ({ total: 0, count: 0, average: 0, max: 0, recent: [] }),
     startRecorder: startRecorderMock,
 }));
 
@@ -111,6 +113,7 @@ jest.unstable_mockModule('../../../public/scripts/extensions/memory-graph/write-
 
 const { createLukerSource } = await import('../../../public/scripts/extensions/memory-graph/lens/source-luker.js');
 const { initMemoryLens } = await import('../../../public/scripts/extensions/memory-graph/lens/index.js');
+const { mountMemoryLens } = await import('../../../public/scripts/extensions/memory-graph/lens/app.js');
 
 describe('lens index registration & source-luker fixes', () => {
     let registeredWorkspaces;
@@ -133,6 +136,7 @@ describe('lens index registration & source-luker fixes', () => {
         startTagFilterMock.mockClear();
         startRecorderMock.mockClear();
         currentAvatar = 'alice.png';
+        currentHasOverride = false;
         currentListExtensions = ['memory-graph'];
         disabledExtensions = [];
         registeredWorkspaces = [];
@@ -159,8 +163,8 @@ describe('lens index registration & source-luker fixes', () => {
                         avatar: currentAvatar,
                         hasAvatar: Boolean(currentAvatar),
                         characterName: currentAvatar,
-                        hasOverride: false,
-                        scope: 'global',
+                        hasOverride: currentHasOverride,
+                        scope: currentHasOverride ? 'character' : 'global',
                         schema: [{ id: 'event', tableColumns: ['summary'] }],
                     }),
                     persistCharacterSchemaOverride: persistCharSchemaMock,
@@ -221,6 +225,133 @@ describe('lens index registration & source-luker fixes', () => {
             scope: 'character',
             expectedAvatar: 'alice.png',
         })).rejects.toMatchObject({ code: 'character-changed' });
+    });
+
+    test('schema.write checks expectedAvatar when switching character override back to global, and schema.restore checks avatar when previous.scope is global', async () => {
+        const source = createLukerSource();
+
+        // 1) Switching Alice's character override back to global fails if active character switched to Bob
+        currentAvatar = 'alice.png';
+        currentHasOverride = true;
+        currentAvatar = 'bob.png';
+        await expect(source.schema.write([{ id: 'event', tableColumns: ['summary'] }], {
+            scope: 'global',
+            expectedAvatar: 'alice.png',
+        })).rejects.toMatchObject({ code: 'character-changed' });
+        expect(removeCharSchemaMock).not.toHaveBeenCalled();
+
+        // 2) Write character override when Alice had no prior override -> previous.scope === 'global', previous.characterTypes === null
+        currentAvatar = 'alice.png';
+        currentHasOverride = false;
+        const previous = await source.schema.write([{ id: 'event', tableColumns: ['summary'] }], {
+            scope: 'character',
+            expectedAvatar: 'alice.png',
+        });
+        expect(previous.scope).toBe('global');
+        expect(previous.characterTypes).toBeNull();
+        expect(previous.avatar).toBe('alice.png');
+
+        // Switch to Bob (who has an override) and attempt restore -> must reject with character-changed and never delete Bob's override
+        currentAvatar = 'bob.png';
+        currentHasOverride = true;
+        await expect(source.schema.restore(previous)).rejects.toMatchObject({ code: 'character-changed' });
+        expect(removeCharSchemaMock).not.toHaveBeenCalled();
+    });
+
+    test('mountMemoryLens invalidates settings view when load() fails in catch branch', async () => {
+        if (!globalThis.requestAnimationFrame) {
+            globalThis.requestAnimationFrame = (cb) => { cb(); return 1; };
+        }
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            let shouldFailLoad = false;
+            let updateEveryValue = 2;
+            const readSettingsSpy = jest.fn(() => ({
+                values: {
+                    enabled: true,
+                    autoExtractionEnabled: true,
+                    autoCompressionEnabled: true,
+                    recallEnabled: true,
+                    recallMethod: 'llm',
+                    recallInjectPosition: 1,
+                    recallInjectDepth: 4,
+                    recallInjectRole: 0,
+                    updateEvery: updateEveryValue,
+                },
+                options: {
+                    connections: [],
+                    presets: [],
+                    embeddingProfiles: [],
+                    rerankProfiles: [],
+                    positions: { before: 0, after: 1, ANTop: 2, ANBottom: 3, EMTop: 4, EMBottom: 5, atDepth: 6 },
+                    roles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 },
+                    compressibleTypes: [],
+                },
+                advanced: {
+                    values: { extractBatchTurns: 1, extractContextTurns: 4, extractExcludeRecentTurns: 0, extractMode: 'oneshot', recentRawTurns: 2 },
+                    defaults: {},
+                    scope: 'global',
+                    hasAvatar: false,
+                    hasOverride: false,
+                    avatar: '',
+                    characterName: '',
+                },
+            }));
+
+            const fakeSource = {
+                load: jest.fn(async () => {
+                    if (shouldFailLoad) {
+                        const err = new Error('no chat');
+                        err.code = 'no-chat';
+                        throw err;
+                    }
+                    return {
+                        chatKey: 'c1',
+                        chatLabel: 'Chat 1',
+                        loadedAt: Date.now(),
+                        nodes: [],
+                        edges: [],
+                        schema: { types: [] },
+                        columnLabels: {},
+                        injection: null,
+                        lastRecall: null,
+                        tokens: { current: null, entries: [] },
+                    };
+                }),
+                settings: {
+                    read: readSettingsSpy,
+                    set: (_k, v) => v,
+                    subscribe: () => () => {},
+                },
+                ops: {
+                    status: () => '',
+                    onStatus: () => () => {},
+                    stats: () => ({ nodeCount: 0, edgeCount: 0, messageCount: 0, sourceMessageCount: 0, levelCount: { semantic: 0 } }),
+                },
+            };
+
+            const host = document.createElement('div');
+            document.body.appendChild(host);
+            const lens = mountMemoryLens({ source: fakeSource, container: host, opts: { subview: 'settings' } });
+            await new Promise(r => setTimeout(r, 0));
+            const callsBeforeFail = readSettingsSpy.mock.calls.length;
+            expect(callsBeforeFail).toBeGreaterThanOrEqual(1);
+
+            // Switch away from settings so settings.render() only reloads if invalidated
+            lens.app.setState({ view: 'table' });
+            shouldFailLoad = true;
+            updateEveryValue = 7;
+            await lens.reload();
+
+            // Switching back to settings must re-read settings because load() catch invalidated views.settings
+            lens.app.setState({ view: 'settings' });
+            expect(readSettingsSpy).toHaveBeenCalledTimes(callsBeforeFail + 1);
+            const input = host.querySelector('[data-field-key="updateEvery"] input');
+            expect(input.value).toBe('7');
+            lens.destroy();
+        } finally {
+            warnSpy.mockRestore();
+        }
     });
 
     test('edit commit surfaces vector sync errors via onError / toast', async () => {

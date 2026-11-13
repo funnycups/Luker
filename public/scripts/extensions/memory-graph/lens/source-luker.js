@@ -421,15 +421,16 @@ function createSchemaAccess(resolveApi) {
             const settings = getSettings();
             const normalized = normalizeNodeTypeSchema(types);
             const info = mg.getSchemaScopeInfo(ctx, settings);
-            if (scope === 'character') {
-                if (expectedAvatar !== undefined && String(info.avatar || '') !== String(expectedAvatar || '')) {
-                    throw new SourceError('character-changed', i18n('The active character has changed.'));
-                }
-                if (!info.hasAvatar) throw new SourceError('no-character');
+            if (expectedAvatar !== undefined && String(info.avatar || '') !== String(expectedAvatar || '')) {
+                throw new SourceError('character-changed', i18n('The active character has changed.'));
+            }
+            if (scope === 'character' && !info.hasAvatar) {
+                throw new SourceError('no-character');
             }
             const previous = {
                 scope: info.hasOverride ? 'character' : 'global',
                 avatar: String(info.avatar || ''),
+                expectedAvatar: expectedAvatar !== undefined ? String(expectedAvatar || '') : String(info.avatar || ''),
                 globalTypes: structuredClone(settings.nodeTypeSchema ?? null),
                 characterTypes: info.hasOverride ? structuredClone(info.schema) : null,
                 labels: sanitizeMemoryLensLabels(labelStore(ctx)),
@@ -459,7 +460,8 @@ function createSchemaAccess(resolveApi) {
             const { ctx, api: mg } = resolveApi();
             const settings = getSettings();
             const info = mg.getSchemaScopeInfo(ctx, settings);
-            if (previous.avatar && String(info.avatar || '') !== String(previous.avatar || '') && previous.scope === 'character') {
+            const expectedAvatar = previous?.expectedAvatar !== undefined ? previous.expectedAvatar : previous?.avatar;
+            if (expectedAvatar !== undefined && String(info.avatar || '') !== String(expectedAvatar || '')) {
                 throw new SourceError('character-changed', i18n('The active character has changed.'));
             }
             settings.nodeTypeSchema = previous.globalTypes ?? settings.nodeTypeSchema;

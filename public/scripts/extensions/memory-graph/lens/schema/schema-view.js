@@ -18,6 +18,21 @@ import { TEMPLATES, buildTemplate, templateTypeNames } from './templates.js';
 import { openFilterDialog } from '../filter/filter-panel.js';
 
 const UNDO_MS = 12000;
+const IDENTITY_CANDIDATES = ['title', 'name', 'aliases'];
+
+function resolvePrimaryKeys(draft) {
+    const raw = draft.raw || {};
+    const keys = draft.columns.map(c => c.key);
+    const keySet = new Set(keys);
+    let identity = (Array.isArray(raw.primaryKeyColumns) ? raw.primaryKeyColumns : [])
+        .map(v => String(v ?? '').trim())
+        .filter(k => k && keySet.has(k));
+    if (draft.latestOnly && !identity.length) {
+        identity = IDENTITY_CANDIDATES.filter(k => keySet.has(k));
+        if (!identity.length && keys.length) identity = [keys[0]];
+    }
+    return identity;
+}
 
 export function createSchemaView(app, source) {
     const access = source.schema || null;
@@ -211,6 +226,7 @@ export function createSchemaView(app, source) {
     }
 
     function paintEditor() {
+        const scroll = editor.scrollTop;
         clear(editor);
         const draft = selected();
         if (!draft) return;
@@ -269,6 +285,7 @@ export function createSchemaView(app, source) {
                     flag(draft, 'compression', i18n('Merge into summaries automatically'), i18n('Once there are many entries, several are merged into one summary to save space.')))),
             advancedSection(draft),
         ));
+        editor.scrollTop = scroll;
         if (draft.isNew && !draft.name) requestAnimationFrame(() => nameInput.focus());
     }
 
@@ -279,20 +296,28 @@ export function createSchemaView(app, source) {
             h(rows ? 'textarea' : 'input', { class: 'ml-schema-input', rows: rows || null, type: rows ? null : 'text', ...(rows ? { text: String(target[key] ?? '') } : { value: String(target[key] ?? '') }), onInput: (event) => { target[key] = event.target.value; touched(); } }));
         const listField = (key, label) => h('label', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: label }),
             h('input', { class: 'ml-schema-input', type: 'text', value: (raw[key] || []).join(', '), onInput: (event) => { raw[key] = event.target.value.split(',').map(s => s.trim()).filter(Boolean); touched(); } }));
-        const number = (target, key, label, min) => h('label', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: label }),
-            h('input', { class: 'ml-schema-input', type: 'number', min, step: 1, value: String(target[key] ?? ''), onInput: (event) => { target[key] = event.target.value === '' ? undefined : Number(event.target.value); touched(); } }));
-        const check = (key, label) => checkRow({ checked: raw[key], label, onChange: (value) => { raw[key] = value; touched(); } });
+        const number = (target, key, label, min, extra = {}) => h('label', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: label }),
+            h('input', { class: 'ml-schema-input', type: 'number', min, step: 1, value: String(target[key] ?? ''), ...extra, onInput: (event) => { target[key] = event.target.value === '' ? undefined : Number(event.target.value); touched(); } }));
+        const check = (key, label, onAfter = null) => checkRow({
+            checked: raw[key],
+            label,
+            onChange: (value) => {
+                raw[key] = value;
+                onAfter?.(value);
+                touched();
+            },
+        });
         const searchable = () => (Array.isArray(raw.embeddingColumns) ? raw.embeddingColumns : draft.columns.map(c => c.key));
-        const primaryKeys = () => (Array.isArray(raw.primaryKeyColumns) ? raw.primaryKeyColumns : []);
+        const primaryKeys = () => resolvePrimaryKeys(draft);
         return h('section', { class: 'ml-schema-section' },
             sectionTitle(i18n('Advanced Settings')),
             h('div', { class: 'ml-aiset' },
                 h('div', { class: 'ml-aiset-fields' },
                     text(raw, 'tableName', i18n('Table Name')),
                     listField('keywords', i18n('Keywords (comma separated)')),
-                    number(raw, 'extractEveryN', i18n('Extract Every N Floors'), 1),
+                    number(raw, 'extractEveryN', i18n('Extract Every N Floors'), 1, { disabled: Boolean(raw.forceUpdate) }),
                     number(raw, 'ragPerTypeK', i18n('RAG per-type quota override'), 0)),
-                check('forceUpdate', i18n('Force Update (must appear each extraction batch)')),
+                check('forceUpdate', i18n('Force Update (must appear each extraction batch)'), () => paintEditor()),
                 check('editable', i18n('Editable (enable edit/delete tools and graph edit context)')),
                 h('div', { class: 'ml-aiset-field' }, h('span', { class: 'ml-aiset-label', text: i18n('Primary Key Columns') }),
                     draft.columns.map(column => checkRow({
@@ -301,6 +326,8 @@ export function createSchemaView(app, source) {
                         onChange: (value) => {
                             const next = primaryKeys().filter(key => key !== column.key);
                             raw.primaryKeyColumns = value ? [...next, column.key] : next;
+                            raw.primaryKeyColumns = resolvePrimaryKeys(draft);
+                            paintEditor();
                             touched();
                         },
                     }))),
@@ -333,6 +360,10 @@ export function createSchemaView(app, source) {
             onClick: () => {
                 draft[key] = !draft[key];
                 card.setAttribute('aria-checked', String(draft[key]));
+                if (key === 'latestOnly') {
+                    draft.raw.primaryKeyColumns = resolvePrimaryKeys(draft);
+                    paintEditor();
+                }
                 touched();
             },
         },
@@ -482,6 +513,7 @@ export function createSchemaView(app, source) {
     function removeItem(draft, column) {
         if (column.locked) return;
         draft.columns = draft.columns.filter(c => c !== column);
+        draft.raw.primaryKeyColumns = resolvePrimaryKeys(draft);
         paintEditor();
         touched();
     }
