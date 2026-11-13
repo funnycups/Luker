@@ -5,7 +5,7 @@
 // Each unit's `fields` is what gets written; `hidden` is the part of it the
 // unit's text does not show.
 
-import { i18n, i18nFormat } from '../i18n.js';
+import { i18n, i18nFormat, listSeparator } from '../i18n.js';
 import { fieldPlan } from './patch.js';
 
 const json = (v) => JSON.stringify(v ?? null, null, 1);
@@ -272,3 +272,185 @@ export function applyPresetOps(body, ops) {
 export function presetRebuild(base, ai, accepted) {
     return applyPresetOps(base, fieldPlan(presetUnits(base), presetUnits(ai), accepted));
 }
+
+// ----- character card + lorebooks --------------------------------------------
+
+export const CARD_FIELDS = [
+    'name',
+    'description',
+    'personality',
+    'scenario',
+    'first_mes',
+    'mes_example',
+    'system_prompt',
+    'post_history_instructions',
+    'creator_notes',
+    'alternate_greetings',
+];
+
+export const CARD_LABELS = {
+    name: i18n('Card name'),
+    description: i18n('Description field'),
+    personality: i18n('Personality'),
+    scenario: i18n('Card scenario'),
+    first_mes: i18n('Opening message'),
+    mes_example: i18n('Example dialogue'),
+    system_prompt: i18n('Card system prompt'),
+    post_history_instructions: i18n('Card post-history instructions'),
+    creator_notes: i18n('Card creator notes'),
+    alternate_greetings: i18n('Alternate opening messages'),
+};
+
+function cardField(character, field) {
+    const v = character?.[field] ?? character?.data?.[field];
+    return Array.isArray(v) ? v.join('\n—\n') : String(v ?? '');
+}
+
+function entryText(e) {
+    const keys = [...(e.key || [])].join(listSeparator());
+    const flags = [e.disable ? i18n('Switched off') : '', e.constant ? i18n('Always on') : ''].filter(Boolean).join(listSeparator());
+    return `${i18nFormat('Keywords: ${0}', keys || i18n('(none)'))}${e.keysecondary?.length ? `\n${i18nFormat('Secondary keywords: ${0}', e.keysecondary.join(listSeparator()))}` : ''}${flags ? `\n${flags}` : ''}\n${e.content || ''}`;
+}
+
+// What entryText shows in full.
+const ENTRY_SHOWN_FIELDS = new Set(['uid', 'key', 'keysecondary', 'disable', 'constant', 'content']);
+export const BOOK_META = '__meta';
+// Renaming a book needs the world info panel, so it is never a field change.
+const BOOK_META_SKIPPED = new Set(['entries', 'bookName']);
+
+const parseBookKey = (key) => key.match(/^wi:(.*):([^:]+)$/)?.slice(1) || [];
+
+/** One unit per entry, plus one for the book's own settings. */
+export function bookUnits(book, data) {
+    const out = new Map();
+    for (const [uid, e] of Object.entries(data?.entries || {})) {
+        const key = `wi:${book}:${uid}`;
+        out.set(key, {
+            key,
+            label: e.comment || (e.key || [])[0] || i18nFormat('Entry ${0}', uid),
+            group: i18nFormat('World book "${0}"', book),
+            text: entryText(e),
+            raw: { book, uid },
+            fields: clone(e),
+            hidden: Object.fromEntries(Object.entries(e).filter(([k]) => !ENTRY_SHOWN_FIELDS.has(k))),
+        });
+    }
+    const meta = Object.fromEntries(Object.entries(data || {}).filter(([k]) => !BOOK_META_SKIPPED.has(k)));
+    const key = `wi:${book}:${BOOK_META}`;
+    out.set(key, {
+        key,
+        label: i18n('World book settings'),
+        group: i18nFormat('World book "${0}"', book),
+        text: '',
+        raw: { book, uid: BOOK_META },
+        fields: clone(meta),
+        hidden: clone(meta),
+    });
+    return out;
+}
+
+export function cardUnits(live) {
+    const out = new Map();
+    for (const f of CARD_FIELDS) {
+        const text = cardField(live?.character, f);
+        if (text || f === 'description') {
+            out.set(`card:${f}`, {
+                key: `card:${f}`,
+                label: CARD_LABELS[f],
+                group: i18n('Character card'),
+                text,
+                raw: { field: f },
+            });
+        }
+    }
+    for (const [book, data] of Object.entries(live?.lorebooks || {})) {
+        for (const [key, unit] of bookUnits(book, data)) out.set(key, unit);
+    }
+    return out;
+}
+
+/** Applies field changes to one world book; never starts from an empty book. */
+export function applyBookOps(book, ops) {
+    const next = clone(book);
+    for (const op of ops) {
+        const [, uid] = parseBookKey(op.key);
+        if (uid === BOOK_META) {
+            for (const c of op.changes) {
+                if (c.after === undefined) delete next[c.field];
+                else next[c.field] = clone(c.after);
+            }
+        } else if (op.kind === 'remove') {
+            delete next.entries[uid];
+        } else {
+            const entry = next.entries[uid] || (next.entries[uid] = {});
+            for (const c of op.changes) {
+                if (c.after === undefined) delete entry[c.field];
+                else entry[c.field] = clone(c.after);
+            }
+        }
+    }
+    return next;
+}
+
+/** Accepted keys -> card edits (iteration-library ops) and field changes per book. */
+export function cardEditsFor(base, ai, accepted) {
+    const cardEdits = [];
+    const bookOps = {};
+    const baseCounts = {};
+    const keyOf = new Map();
+    const perBook = new Map();
+    for (const key of accepted) {
+        if (key.startsWith('card:')) {
+            const f = key.slice(5);
+            const before = base.character?.[f] ?? base.character?.data?.[f];
+            const after = ai.character?.[f] ?? ai.character?.data?.[f];
+            const edit = { op: 'set', path: f, oldValue: clone(before), newValue: clone(after) };
+            cardEdits.push(edit);
+            keyOf.set(edit, key);
+        } else if (key.startsWith('wi:')) {
+            const [book] = parseBookKey(key);
+            if (!perBook.has(book)) perBook.set(book, []);
+            perBook.get(book).push(key);
+        }
+    }
+    for (const [book, keys] of perBook) {
+        bookOps[book] = fieldPlan(bookUnits(book, base.lorebooks?.[book]), bookUnits(book, ai.lorebooks?.[book]), keys);
+        baseCounts[book] = Object.keys(base.lorebooks?.[book]?.entries || {}).length;
+    }
+    return { cardEdits, bookOps, baseCounts, keyOf };
+}
+
+/** Builds the card live that results from accepting some changes (for continuing the chat). */
+export function cardRebuild(base, ai, accepted) {
+    const next = clone(base);
+    for (const key of accepted) {
+        if (key.startsWith('card:')) {
+            const f = key.slice(5);
+            const v = clone(ai.character?.[f] ?? ai.character?.data?.[f]);
+            next.character ||= {};
+            next.character[f] = v;
+            if (next.character.data) next.character.data[f] = clone(v);
+        } else if (key.startsWith('wi:')) {
+            const [, book, uid] = key.match(/^wi:(.*):([^:]+)$/) || [];
+            next.lorebooks ||= {};
+            next.lorebooks[book] ||= { entries: {} };
+            next.lorebooks[book].entries ||= {};
+            if (uid === BOOK_META) {
+                const { entries } = next.lorebooks[book];
+                const fields = bookUnits(book, ai.lorebooks?.[book]).get(key)?.fields || {};
+                const bookName = next.lorebooks[book].bookName;
+                next.lorebooks[book] = { ...clone(fields), entries, ...(bookName === undefined ? {} : { bookName }) };
+                continue;
+            }
+            const entry = ai.lorebooks?.[book]?.entries?.[uid];
+            if (entry) next.lorebooks[book].entries[uid] = clone(entry);
+            else delete next.lorebooks[book].entries[uid];
+        }
+    }
+    return next;
+}
+
+// ----- world info only (live = { lorebooks }) --------------------------------
+
+export const worldUnits = (live) => new Map([...cardUnits({ lorebooks: live?.lorebooks || {} })].filter(([k]) => k.startsWith('wi:')));
+export const worldRebuild = (base, ai, accepted) => cardRebuild(base, ai, accepted.filter(k => k.startsWith('wi:')));

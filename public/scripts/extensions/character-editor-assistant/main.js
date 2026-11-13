@@ -8,7 +8,6 @@ import { createCharacterEditorUi } from './editor-ui.js';
 import { openUnifiedCharacterEditorPopup } from './editor-iteration/studio.js';
 import { DEFAULT_SYSTEM_PROMPT as DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT } from './editor-iteration/studio.js';
 import { DEFAULT_SYSTEM_PROMPT as DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT } from './studio/ai-chat.js';
-import { applyEdits } from '../../iteration-library/index.js';
 import { mdLiteral } from '../../iteration-library/markdown-escape.js';
 import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
 import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
@@ -27,11 +26,15 @@ import {
     runCharacterPresetReadTool,
 } from '../../iteration-library/tools/character-presets-reads.js';
 import { floorRecordToTaskMessage, readPluginFloors } from '../../lib/plugin-floors.js';
+import {
+    commitCharacterOperations as platformCommitCharacterOperations,
+    commitLorebookOperations as platformCommitLorebookOperations,
+    projectCardV2Fields,
+} from '../../workbench/targets/card-world.js';
 
 const __ctx = Luker.getContext();
 const generateQuietPrompt = __ctx.generateQuietPrompt;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
-const lodash = __ctx.lib.lodash;
 const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
 const getCharacterState = __ctx.getCharacterState;
@@ -1355,70 +1358,7 @@ async function mergeCharacterAttributes(context, avatar, patch) {
  *                                       authored against. Defaults to {}.
  */
 export async function commitCharacterEditorOperations(context, avatar, edits, opts = {}) {
-    if (!Array.isArray(edits) || edits.length === 0) {
-        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
-    }
-    // Defensive: reject edits that target a field the LLM invented. The
-    // tool schemas declare `field` as an enum, but providers occasionally
-    // ignore enum constraints, and the engine would otherwise route a
-    // `str_replace` on an unknown field through `anchor_missing` — a
-    // confusing error message for "field doesn't exist." The set of
-    // accepted fields matches `CEA_CARD_FIELD_ENUM` in
-    // `editor-iteration/tools.js`; keep both in sync.
-    const KNOWN_FIELDS = new Set([
-        ...CHARACTER_EDITOR_ROOT_TEXT_FIELDS,
-        ...CHARACTER_EDITOR_DATA_TEXT_FIELDS,
-        ...CHARACTER_EDITOR_DATA_ARRAY_FIELDS,
-    ]);
-    const unknownFields = [];
-    for (const edit of edits) {
-        const path = String(edit?.path || '').trim();
-        if (!path) continue;
-        // The CEA editor's tools.js emits paths like `description` or
-        // `card.description` (the latter rebased to bare by studio.js,
-        // but defensive double-checks here in case the rebase missed).
-        const field = path.startsWith('card.') ? path.slice('card.'.length) : path;
-        // Skip nested paths (anything past the first dot) — those are
-        // valid for sub-field edits and don't map to top-level enum.
-        if (field.includes('.')) continue;
-        if (!KNOWN_FIELDS.has(field)) {
-            unknownFields.push(field);
-        }
-    }
-    // Unknown-field rejection is a hard input error — the LLM invented a
-    // schema, no edit in this batch can possibly land. Stay as a thrown
-    // exception so studio's outer try/catch routes it to the system-error
-    // path (same shape as IO failures). Only `applyEdits` conflict / drift
-    // outcomes were re-shaped to a returned result so studio can surface
-    // them on a per-edit basis to the AI.
-    if (unknownFields.length > 0) {
-        const unique = [...new Set(unknownFields)];
-        throw new Error(
-            `Apply rejected: unknown character card field(s) ${unique.map(f => `"${f}"`).join(', ')}. `
-            + `Valid fields are: ${[...KNOWN_FIELDS].join(', ')}.`,
-        );
-    }
-    const before = opts?.liveCharacter ? clone(opts.liveCharacter) : {};
-    const result = applyEdits(edits, before) || {};
-    const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
-    const alreadyDone = Array.isArray(result.alreadyDone) ? result.alreadyDone : [];
-    const clean = Array.isArray(result.clean) ? result.clean : [];
-    if (conflicts.length > 0) {
-        // eslint-disable-next-line no-console
-        console.warn(`[${MODULE_NAME}] commitCharacterEditorOperations conflicts`, conflicts);
-    }
-    const after = result.newLive || before;
-    const patch = {};
-    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-    for (const k of keys) {
-        if (!lodash.isEqual(before[k], after[k])) patch[k] = after[k];
-    }
-    let persisted = false;
-    if (clean.length > 0 && Object.keys(patch).length > 0) {
-        await mergeCharacterAttributes(context, avatar, patch);
-        persisted = true;
-    }
-    return { applied: clean.length, conflicts, alreadyDone, persisted };
+    return platformCommitCharacterOperations(context, avatar, edits, opts);
 }
 
 /**
@@ -1428,69 +1368,14 @@ export async function commitCharacterEditorOperations(context, avatar, edits, op
  * pre-groups its `pendingEdits` by `target.kind === 'lorebook'` AND
  * `target.bookName`, then calls this helper once per book.
  *
- * No-op guard: when the post-apply book is byte-identical to the pre-apply
- * snapshot we skip `saveWorldInfo` entirely. `saveWorldInfo` bumps mtime
- * even on no-op writes, so downstream consumers (notably the world-info
- * preview pane) would otherwise see spurious change events.
- *
- * @param {string} bookName Target lorebook name (first arg by design — the
- *                          per-book commit is the dominant axis; context is
- *                          a context bag).
- * @param {Object} liveBook Pre-edit snapshot for this book — typically
- *                          `state.live.lorebooks[bookName]` shaped as
- *                          `{ entries, ...meta }`.
+ * @param {string} bookName Target lorebook name.
+ * @param {Object} liveBook Pre-edit snapshot for this book.
  * @param {Array}  edits    Iter-library Edit[] scoped to this single book.
  * @param {Object} [opts]
  * @param {Object} opts.context  SillyTavern context (for saveWorldInfo).
  */
 export async function commitLorebookOperations(bookName, liveBook, edits, opts = {}) {
-    if (!Array.isArray(edits) || edits.length === 0) {
-        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
-    }
-    const safeName = String(bookName || '').trim();
-    if (!safeName) {
-        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
-    }
-    const context = opts?.context;
-    if (!context || typeof context.saveWorldInfo !== 'function') {
-        throw new TypeError('commitLorebookOperations: opts.context.saveWorldInfo is required');
-    }
-    // Detect a bookName-rename edit (cea_set_lorebook_metadata with key
-    // `bookName`). The live-state apply path can only `saveWorldInfo(name, …)`
-    // — it has no helper for the rename-then-delete-old-name dance that
-    // `renameWorldInfo` in world-info.js performs (and that helper isn't
-    // exposed on `context`). Without this guard the rename would silently
-    // save the new content under the OLD filename, leaving the user staring
-    // at unchanged data. Surface the limitation loudly so callers can route
-    // the user to the world-info panel for now.
-    const renameEdit = edits.find(e =>
-        e && e.op === 'set'
-        && (e.path === 'bookName' || e.path === 'lorebook.bookName')
-        && String(e.newValue || '').trim() !== ''
-        && String(e.newValue || '').trim() !== safeName,
-    );
-    if (renameEdit) {
-        throw new Error(
-            'Renaming lorebooks via cea_set_lorebook_metadata is not supported. '
-            + `Use the world-info panel to rename "${safeName}" → "${String(renameEdit.newValue).trim()}".`,
-        );
-    }
-    const before = liveBook ? clone(liveBook) : { entries: {} };
-    const result = applyEdits(edits, before) || {};
-    const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
-    const alreadyDone = Array.isArray(result.alreadyDone) ? result.alreadyDone : [];
-    const clean = Array.isArray(result.clean) ? result.clean : [];
-    if (conflicts.length > 0) {
-        // eslint-disable-next-line no-console
-        console.warn(`[${MODULE_NAME}] commitLorebookOperations conflicts for ${safeName}`, conflicts);
-    }
-    const after = result.newLive || before;
-    let persisted = false;
-    if (clean.length > 0 && !lodash.isEqual(before, after)) {
-        await context.saveWorldInfo(safeName, after, true, { refreshEditor: true });
-        persisted = true;
-    }
-    return { applied: clean.length, conflicts, alreadyDone, persisted };
+    return platformCommitLorebookOperations(bookName, liveBook, edits, opts);
 }
 
 async function syncWorldBindingUi(context, worldName = '') {
@@ -3022,7 +2907,7 @@ export function buildCharacterEditorHelperApis(context, opts = {}) {
  */
 export async function buildUnifiedCharacterEditorLiveSnapshot(context, avatar = '') {
     const state = await loadCharacterEditorPrimaryLorebookState(context, { avatar });
-    const character = state?.character || {};
+    const character = projectCardV2Fields(state?.character || {});
     const lorebooks = {};
     const bookName = String(state?.bookName || '').trim();
     if (bookName) {
