@@ -12,6 +12,7 @@ import {
     createRecorder,
     createDock,
     HISTORY_KEY,
+    parseRunKey,
     attachDock,
     openRunDock,
     toggleRunDock,
@@ -333,6 +334,146 @@ describe('run-panel recorder & dock', () => {
         expect(dockEl.dataset.state).toBe('closed');
         await toggleRunDock();
         expect(dockEl.dataset.state).toBe('open');
+    });
+
+    test('createDock before sign-in lazily reloads prefs on handle change and does not clobber signed-in prefs', () => {
+        // Alice previously saved autoOpen: false and a custom position
+        globalThis.localStorage.setItem('orchestraLens.dock.v1::alice', JSON.stringify({
+            autoOpen: false,
+            pos: { right: 88, bottom: 140 },
+        }));
+        globalThis.localStorage.setItem('orchestraLens.dock.v1::bob', JSON.stringify({
+            autoOpen: true,
+            pos: { right: 32, bottom: 96 },
+        }));
+
+        // Construct dock BEFORE sign-in (accountsEnabled: true, handle: null)
+        setAccountContext({ accountsEnabled: true, handle: null, settingsReady: false });
+        const store = createRunStore();
+        const recorder = createRecorder({ storage: accountLocalStorage() });
+        recorder.attach(store, 'orchestrator');
+
+        const dock = createDock({ recorder });
+
+        // Pre-sign-in toggle/save attempts must not clobber Alice's stored prefs
+        dock.open();
+        const moreBtn = document.querySelector('.rp-dock-more');
+        moreBtn?.click();
+        const autoItem = [...document.querySelectorAll('.rp-menu-item')].find(el => el.textContent.includes('Open automatically on run'));
+        autoItem?.click();
+        dock.close();
+        expect(JSON.parse(globalThis.localStorage.getItem('orchestraLens.dock.v1::alice'))).toEqual({
+            autoOpen: false,
+            pos: { right: 88, bottom: 140 },
+        });
+
+        // Sign in as Alice -> starting a run respects Alice's autoOpen: false (goes to pill, not open)
+        setAccountContext({ accountsEnabled: true, handle: 'alice', settingsReady: true });
+        const runId = store.startRun({ mode: 'spec' });
+        expect(dock.isOpen()).toBe(false);
+        expect(document.querySelector('.rp-dock').dataset.state).toBe('pill');
+
+        // Opening dock applies Alice's saved position and autoOpen: false
+        dock.open();
+        expect(document.querySelector('.rp-dock').style.right).toBe('88px');
+        expect(document.querySelector('.rp-dock').style.bottom).toBe('140px');
+        document.querySelector('.rp-dock-more').click();
+        const aliceToggle = [...document.querySelectorAll('.rp-menu-item')].find(el => el.textContent.includes('Open automatically on run'));
+        expect(aliceToggle.getAttribute('aria-checked')).toBe('false');
+        document.querySelector('.rp-dock-more').click(); // close menu
+
+        // Switch account to Bob -> refresh/open reloads Bob's prefs
+        setAccountContext({ accountsEnabled: true, handle: 'bob', settingsReady: true });
+        dock.open();
+        expect(document.querySelector('.rp-dock').style.right).toBe('32px');
+        expect(document.querySelector('.rp-dock').style.bottom).toBe('96px');
+        document.querySelector('.rp-dock-more').click();
+        const bobToggle = [...document.querySelectorAll('.rp-menu-item')].find(el => el.textContent.includes('Open automatically on run'));
+        expect(bobToggle.getAttribute('aria-checked')).toBe('true');
+
+        store.finishRun({ runId, status: 'committed', finalText: 'done' });
+        dock.destroy();
+        recorder.detach();
+    });
+
+    test('recorder resets owner, history, and storageError when signed out and reloads on re-sign-in', () => {
+        globalThis.localStorage.setItem(`${HISTORY_KEY}::alice`, '{corrupted');
+        const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const recorder = createRecorder({ storage: accountLocalStorage() });
+
+        expect(recorder.history()).toEqual([]);
+        expect(recorder.getStorageError()?.type).toBe('parse');
+
+        // Sign out: history and storageError both clear
+        setAccountContext({ accountsEnabled: true, handle: null, settingsReady: true });
+        expect(recorder.history()).toEqual([]);
+        expect(recorder.getStorageError()).toBeNull();
+
+        // Storage gets repaired and same user signs back in: must reload from storage
+        globalThis.localStorage.setItem(`${HISTORY_KEY}::alice`, JSON.stringify([
+            { source: 'orchestrator', runId: 7, status: 'committed', finalText: 'fresh' },
+        ]));
+        setAccountContext({ accountsEnabled: true, handle: 'alice', settingsReady: true });
+        expect(recorder.history()).toHaveLength(1);
+        expect(recorder.getRun('orchestrator:7')?.finalText).toBe('fresh');
+        expect(recorder.getStorageError()).toBeNull();
+        consoleSpy.mockRestore();
+    });
+
+    test('parseRunKey handles { source, runKey } without runId', () => {
+        expect(parseRunKey({ source: 'orchestrator', runKey: 'orchestrator:42' })).toEqual({
+            source: 'orchestrator',
+            runId: '42',
+            runKey: 'orchestrator:42',
+        });
+        expect(parseRunKey({ source: 'search', runKey: '7' })).toEqual({
+            source: 'search',
+            runId: '7',
+            runKey: 'search:7',
+        });
+    });
+
+    test('dock.destroy cancels pending toastTimer and renderSoon timers', async () => {
+        jest.useFakeTimers();
+        try {
+            Object.defineProperty(navigator, 'clipboard', {
+                configurable: true,
+                value: { writeText: jest.fn(async () => {}) },
+            });
+            const store = createRunStore();
+            const recorder = createRecorder({ storage: accountLocalStorage() });
+            recorder.attach(store, 'orchestrator');
+            const dock = createDock({ recorder });
+            dock.open();
+
+            const run1 = store.startRun({ mode: 'spec' });
+            store.finishRun({ runId: run1, status: 'committed', finalText: 'done' });
+            jest.advanceTimersByTime(60); // flush renderSoon so finalEl + copy button render
+
+            // Click copy button to schedule toastTimer (1600ms)
+            const copyBtn = document.querySelector('.rp-dock-final .lw-ibtn');
+            expect(copyBtn).not.toBeNull();
+            copyBtn.click();
+            await Promise.resolve();
+            await Promise.resolve();
+            const toastEl = document.querySelector('.rp-dock-toast');
+            expect(toastEl.hidden).toBe(false);
+
+            // Now schedule a fresh renderSoon (60ms) before destroy
+            const run2 = store.startRun({ mode: 'spec' });
+            store.appendRound({ runId: run2, round: { id: 'r1', label: 'R1' } });
+            jest.advanceTimersByTime(20); // flush recorder.emitSoon rAF (~16ms) -> schedules dock renderSoon (60ms)
+
+            expect(jest.getTimerCount()).toBeGreaterThanOrEqual(3); // ticker + toastTimer + renderSoon
+
+            dock.destroy();
+            expect(jest.getTimerCount()).toBe(0);
+            jest.advanceTimersByTime(5000);
+            expect(toastEl.hidden).toBe(false); // toastTimer never fired after destroy
+            recorder.detach();
+        } finally {
+            jest.useRealTimers();
+        }
     });
 });
 

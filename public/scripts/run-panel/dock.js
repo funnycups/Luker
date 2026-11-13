@@ -5,7 +5,7 @@
 // or a bottom sheet on narrow screens.
 
 import { h, clear, put, copyText, debounce } from '../lens-shared/util.js';
-import { accountLocalStorage } from '../lens-shared/current-account.js';
+import { accountLocalStorage, currentAccountHandle } from '../lens-shared/current-account.js';
 import { button, iconButton, switchControl } from '../lens-shared/ui.js';
 import { icon } from './dock-icons.js';
 import { i18n, i18nFormat, listSeparator, agentName, agentRole, statusLabel, modeInfo, toneOf, agentAvatar } from './dock-i18n.js';
@@ -127,6 +127,7 @@ function loadPrefs(prefStorage) {
 }
 
 function savePrefs(prefStorage, prefs) {
+    if (!prefStorage?.getHandle?.()) return;
     try {
         prefStorage?.setItem?.(PREF_KEY, JSON.stringify(prefs));
     } catch {
@@ -179,7 +180,8 @@ export function createDock({
 }) {
     ensureDockStyles(container?.ownerDocument || document);
     const prefStorage = accountLocalStorage();
-    const prefs = { autoOpen: true, ...loadPrefs(prefStorage) };
+    let prefsHandle = currentAccountHandle();
+    let prefs = { autoOpen: true, ...(prefsHandle ? loadPrefs(prefStorage) : {}) };
     const compactMql = globalThis.matchMedia?.(COMPACT_QUERY);
     let state = 'closed';
     let expanded = new Set();
@@ -249,6 +251,17 @@ export function createDock({
     let floatSize = { width: clampNum(wantSize.width, ...WIDTH_RANGE), height: wantSize.height };
     let floatPos = clampPos(wantPos);
 
+    function syncPrefs() {
+        const nextHandle = currentAccountHandle();
+        if (nextHandle === prefsHandle) return;
+        prefsHandle = nextHandle;
+        prefs = { autoOpen: true, ...(nextHandle ? loadPrefs(prefStorage) : {}) };
+        wantPos = { ...DEFAULT_POS, ...(prefs.pos || {}) };
+        wantSize = { ...DEFAULT_SIZE, ...(prefs.size || {}) };
+        floatSize = { width: clampNum(wantSize.width, ...WIDTH_RANGE), height: wantSize.height };
+        floatPos = clampPos(wantPos);
+    }
+
     function placeFloat() {
         if (!isFloat() || !root.isConnected) return;
         const { vw, vh } = viewportSize();
@@ -289,6 +302,11 @@ export function createDock({
         if (!sizing || event.pointerId !== sizing.id) return;
         sizing = null;
         root.classList.remove('is-resizing');
+        const nextSize = wantSize;
+        const nextPos = wantPos;
+        syncPrefs();
+        wantSize = nextSize;
+        wantPos = nextPos;
         prefs.size = wantSize;
         prefs.pos = wantPos;
         savePrefs(prefStorage, prefs);
@@ -313,6 +331,9 @@ export function createDock({
         if (!drag || event.pointerId !== drag.id) return;
         drag = null;
         root.classList.remove('is-dragging');
+        const nextPos = wantPos;
+        syncPrefs();
+        wantPos = nextPos;
         prefs.pos = wantPos;
         savePrefs(prefStorage, prefs);
     };
@@ -335,6 +356,7 @@ export function createDock({
     }
 
     function setMenu(open) {
+        syncPrefs();
         menuOpen = open;
         menu.hidden = !open;
         if (!open) { clear(menu); return; }
@@ -344,7 +366,7 @@ export function createDock({
         const data = currentView();
         const inspectFn = data ? resolveInspect(data.view.source) : null;
         put(clear(menu),
-            item(i18n('Open automatically on run'), () => { prefs.autoOpen = !prefs.autoOpen; savePrefs(prefStorage, prefs); setMenu(true); }, { role: 'menuitemcheckbox', 'aria-checked': String(prefs.autoOpen) }),
+            item(i18n('Open automatically on run'), () => { syncPrefs(); prefs.autoOpen = !prefs.autoOpen; savePrefs(prefStorage, prefs); setMenu(true); }, { role: 'menuitemcheckbox', 'aria-checked': String(prefs.autoOpen) }),
             data ? item(i18n('Export trace'), () => { setMenu(false); exportTrace(data.view); }) : null,
             inspectFn && data ? item(i18n('Inspect run'), () => { setMenu(false); inspectFn(data.view.runKey); }) : null);
     }
@@ -416,6 +438,7 @@ export function createDock({
     globalThis.addEventListener('resize', onResize);
 
     function setState(next) {
+        syncPrefs();
         if (next !== 'open') setMenu(false);
         if (next !== 'open') clearTimeout(shrinkTimer);
         state = next;
@@ -620,6 +643,7 @@ export function createDock({
 
     function render() {
         if (destroyed) return;
+        syncPrefs();
         applyTheme();
         const data = currentView();
         const pillWasHidden = pill.hidden;
@@ -699,6 +723,7 @@ export function createDock({
 
         put(clear(foot),
             switchControl(i18n('Open automatically on run'), prefs.autoOpen, (next) => {
+                syncPrefs();
                 prefs.autoOpen = next;
                 savePrefs(prefStorage, prefs);
                 render();
@@ -723,6 +748,7 @@ export function createDock({
             const run = recorder.current();
             if (run?.quiet) return;
             clearTimeout(shrinkTimer);
+            syncPrefs();
             if (prefs.autoOpen && state !== 'open') setState(compactMql?.matches && state === 'pill' ? 'pill' : 'open');
             else if (!prefs.autoOpen && state === 'closed') setState('pill');
             else render();
@@ -762,6 +788,8 @@ export function createDock({
             unsubscribe();
             clearInterval(ticker);
             clearTimeout(shrinkTimer);
+            clearTimeout(toastTimer);
+            renderSoon.cancel?.();
             document.removeEventListener('pointerdown', onOutside, true);
             compactMql?.removeEventListener?.('change', onCompact);
             viewportFit.destroy();

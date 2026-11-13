@@ -28,7 +28,14 @@ export function parseRunKey(target) {
         return { source: target.slice(0, idx), runId: target.slice(idx + 1), runKey: target };
     }
     if (typeof target === 'object') {
-        if (target.runKey && !target.source) return parseRunKey(target.runKey);
+        if (target.runKey && target.runId == null) {
+            const parsed = parseRunKey(target.runKey);
+            if (!parsed.source && target.source) {
+                const source = String(target.source);
+                return { source, runId: parsed.runId, runKey: runKeyOf(source, parsed.runId) };
+            }
+            return parsed;
+        }
         const source = String(target.source || '');
         const runId = target.runId == null ? '' : String(target.runId);
         return { source, runId, runKey: source ? runKeyOf(source, runId) : runId };
@@ -164,7 +171,12 @@ export function createRecorder({
     }
 
     const runs = () => {
-        if (isUnauthenticated()) return [];
+        if (isUnauthenticated()) {
+            owner = UNINITIALIZED;
+            history = null;
+            storageError = null;
+            return [];
+        }
         const current = hasHandleFn ? storage.getHandle() : undefined;
         if (current !== owner || history === null) {
             owner = current;
