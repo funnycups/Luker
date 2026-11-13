@@ -420,6 +420,152 @@ describe('orchestrator/lens/iterate-target.js', () => {
         expect(orchSettings.presetLibraries.loop.default.customTools.some(t => t.name === 'my_helper')).toBe(true);
     });
 
+    test('custom-tool-author in spec mode reads, dry-runs, patches, and commits to profile.spec.customTools', async () => {
+        const existingSpecTool = {
+            name: 'existing_spec_tool',
+            displayName: 'Existing',
+            description: 'Reads note',
+            mode: 'read',
+            parameters: { type: 'object', properties: {} },
+            body: 'return { v: 1 };',
+            simulateBody: '',
+        };
+        const gSpec = makeSpecProfile();
+        gSpec.spec.customTools = [existingSpecTool];
+        const { ctx, target, orchSettings } = makeHarness({ mode: 'spec', globalProfile: gSpec });
+        const loaded = await target.load('global', ctx);
+        const tools = await target.tools(loaded.live, 'global', ctx);
+        const bus = createIterateBus({ proposalKinds: target.proposalKinds });
+
+        let round = 0;
+        const result = await runIterateTurn({
+            messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'inspect and patch spec custom tools' }],
+            live: loaded.live,
+            tools,
+            bus,
+            isRead: target.isRead,
+            runRead: target.runRead,
+            runEdit: target.runEdit,
+            request: async () => {
+                round++;
+                if (round === 1) {
+                    return {
+                        text: '',
+                        calls: [
+                            { id: 'ls', name: 'luker_orch_list_custom_tools', args: {} },
+                            { id: 'gt', name: 'luker_orch_get_custom_tool', args: { name: 'existing_spec_tool' } },
+                            { id: 'dr', name: 'luker_orch_dry_run_custom_tool', args: { name: 'existing_spec_tool', args: {} } },
+                            {
+                                id: 'pb',
+                                name: 'luker_orch_patch_custom_tool_body',
+                                args: { name: 'existing_spec_tool', oldString: 'v: 1', newString: 'v: 2' },
+                            },
+                            {
+                                id: 'add',
+                                name: 'luker_orch_set_custom_tool',
+                                args: {
+                                    name: 'spec_helper',
+                                    description: 'Spec helper',
+                                    mode: 'read',
+                                    parameters: { type: 'object', properties: {} },
+                                    body: 'return { spec: true };',
+                                },
+                            },
+                        ],
+                    };
+                }
+                return { text: 'Updated spec custom tools.', calls: [] };
+            },
+        });
+
+        expect(result.failed).toEqual([]);
+        const listCall = result.toolCalls.find(c => c.id === 'ls');
+        expect(listCall.result.count).toBe(1);
+        expect(listCall.result.tools[0].name).toBe('existing_spec_tool');
+        expect(result.toolCalls.find(c => c.id === 'gt').result.body).toBe('return { v: 1 };');
+        expect(result.toolCalls.find(c => c.id === 'dr').result.dryRun.result).toEqual({ v: 1 });
+
+        const changes = buildTurnChanges({ base: loaded.live, ai: result.live, units: target.units, bus: result.bus, proposalIds: result.proposalIds, kindAdapters: target.proposalKinds });
+        await commitTurnBatch({
+            target,
+            targetRef: loaded.target,
+            base: loaded.live,
+            ai: result.live,
+            keys: changes.map(c => c.key),
+            bus: result.bus,
+            proposalIds: result.proposalIds,
+            kindAdapters: target.proposalKinds,
+        });
+
+        const savedSpec = orchSettings.presetLibraries.spec.default.spec;
+        expect(savedSpec.customTools.find(t => t.name === 'existing_spec_tool')?.body).toBe('return { v: 2 };');
+        expect(savedSpec.customTools.find(t => t.name === 'spec_helper')?.body).toBe('return { spec: true };');
+        expect(savedSpec.defaultTools?.custom?.spec_helper).toBe(true);
+        expect(orchSettings.presetLibraries.spec.default.customTools).toBeUndefined();
+    });
+
+    test('custom-tool-author in character scope without an existing override preserves seeded global profile fields', async () => {
+        const gLoop = makeLoopProfile({
+            system_prompt: 'Seeded global loop prompt',
+            max_rounds: 9,
+            wall_clock_budget_ms: 90000,
+        });
+        const { ctx, target } = makeHarness({ mode: 'loop', hasCharOverride: false, globalProfile: gLoop });
+        const loaded = await target.load('character', ctx);
+        const tools = await target.tools(loaded.live, 'character', ctx);
+        const bus = createIterateBus({ proposalKinds: target.proposalKinds });
+
+        let round = 0;
+        const result = await runIterateTurn({
+            messages: [{ role: 'system', content: 'sys' }, { role: 'user', content: 'add char custom tool' }],
+            live: loaded.live,
+            tools,
+            bus,
+            isRead: target.isRead,
+            runRead: target.runRead,
+            runEdit: target.runEdit,
+            request: async () => {
+                round++;
+                if (round === 1) {
+                    return {
+                        text: '',
+                        calls: [{
+                            id: 'ct1',
+                            name: 'luker_orch_set_custom_tool',
+                            args: {
+                                name: 'char_helper',
+                                description: 'Character helper',
+                                mode: 'read',
+                                parameters: { type: 'object', properties: {} },
+                                body: 'return { ok: true };',
+                            },
+                        }],
+                    };
+                }
+                return { text: 'Staged character custom tool.', calls: [] };
+            },
+        });
+
+        expect(result.failed).toEqual([]);
+        const changes = buildTurnChanges({ base: loaded.live, ai: result.live, units: target.units, bus: result.bus, proposalIds: result.proposalIds, kindAdapters: target.proposalKinds });
+        await commitTurnBatch({
+            target,
+            targetRef: loaded.target,
+            base: loaded.live,
+            ai: result.live,
+            keys: changes.map(c => c.key),
+            bus: result.bus,
+            proposalIds: result.proposalIds,
+            kindAdapters: target.proposalKinds,
+        });
+
+        const savedChar = ctx.characters[0].data.extensions.orchestrator.presetLibraries.loop.default;
+        expect(savedChar.customTools.some(t => t.name === 'char_helper')).toBe(true);
+        expect(savedChar.system_prompt).toBe('Seeded global loop prompt');
+        expect(savedChar.max_rounds).toBe(9);
+        expect(savedChar.wall_clock_budget_ms).toBe(90000);
+    });
+
     test('supports skill-author and lorebook-write proposals in character scope', async () => {
         const books = {
             AliceBook: { entries: { 1: { uid: 1, comment: 'Format Rule', content: 'Always use <thinking> tags.', disable: false } } },

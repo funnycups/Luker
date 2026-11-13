@@ -65,12 +65,8 @@ function chatKeyOf(ctx) {
 }
 
 function chatLabelOf(ctx) {
-    try {
-        if (ctx.groupId) return (ctx.groups || []).find(g => String(g.id) === String(ctx.groupId))?.name || '';
-        return ctx.name2 || currentCharacter(ctx)?.name || '';
-    } catch {
-        return '';
-    }
+    if (ctx.groupId) return (ctx.groups || []).find(g => String(g.id) === String(ctx.groupId))?.name || '';
+    return ctx.name2 || currentCharacter(ctx)?.name || '';
 }
 
 /** Translates the "Default" and "Default (...)" names of shipped presets. */

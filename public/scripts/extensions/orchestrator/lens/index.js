@@ -229,7 +229,8 @@ export function initOrchestraLens() {
             try {
                 const snap = await source.load();
                 cachedFlow = buildFlow(snap.profile, { mode: snap.mode, settings: snap.settings });
-            } catch {
+            } catch (err) {
+                console.warn('[orchestrator/lens] refreshFlow failed:', err);
                 cachedFlow = null;
             }
         };

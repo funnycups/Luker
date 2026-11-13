@@ -157,6 +157,14 @@ function resolveMode(settings) {
     return SUPPORTED_MODES.has(raw) ? raw : 'spec';
 }
 
+function getCustomToolContainer(profile, mode) {
+    if (mode === 'spec') {
+        profile.spec ||= {};
+        return profile.spec;
+    }
+    return profile;
+}
+
 function getCustomToolFlagBucket(profile, mode) {
     if (!profile || typeof profile !== 'object') return {};
     if (mode === 'agenda') {
@@ -728,8 +736,10 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             const m = target?._mode || activeMode;
             const sc = target?._scope || activeScope;
             const av = target?._avatar || resolveActiveAvatar(c);
-            const prof = readScopeProfile(c, settings, m, sc, av);
-            const tools = Array.isArray(prof?.customTools) ? prof.customTools : [];
+            const useChar = sc === 'character' && deps.getRuntimePresetScope?.(c, av, m) === 'character';
+            const prof = readScopeProfile(c, settings, m, useChar ? 'character' : 'global', av);
+            const container = getCustomToolContainer(prof, m);
+            const tools = Array.isArray(container?.customTools) ? container.customTools : [];
             return { name: target?.name || '', tool: tools.find(t => String(t?.name || '') === String(target?.name || '')) || null };
         },
         write: async (target) => {
@@ -739,10 +749,12 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             const m = target._mode || activeMode;
             const sc = target._scope || activeScope;
             const av = target._avatar || resolveActiveAvatar(c);
-            const prof = readScopeProfile(c, settings, m, sc, av);
+            const useChar = sc === 'character' && deps.getRuntimePresetScope?.(c, av, m) === 'character';
+            const prof = readScopeProfile(c, settings, m, useChar ? 'character' : 'global', av);
             const flagBucket = getCustomToolFlagBucket(prof, m);
-            commitApprovedCustomToolProposal(prof, flagBucket, target._op);
-            resanitizeProfileCustomTools(prof);
+            const container = getCustomToolContainer(prof, m);
+            commitApprovedCustomToolProposal(container, flagBucket, target._op);
+            resanitizeProfileCustomTools(container);
             await persistProfileToScope(c, settings, m, sc, av, prof);
         },
         describe: (target) => String(target?.name || 'custom-tool'),
@@ -1034,7 +1046,8 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                 return out.result;
             }
             if (CUSTOM_TOOL_READ_TOOLS.has(name)) {
-                const out = await executeCustomToolIterStudioCall({ name, args }, { profile: live });
+                const toolProfile = activeMode === 'spec' ? (live?.spec || {}) : live;
+                const out = await executeCustomToolIterStudioCall({ name, args }, { profile: toolProfile });
                 if (!out?.ok) {
                     const err = new SourceError('read', String(out?.hint || out?.error || i18n('Read failed')));
                     err.envelope = out;
@@ -1167,7 +1180,8 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             }
 
             if (isCustomToolIterStudioTool(name)) {
-                const out = await executeCustomToolIterStudioCall({ name, args }, { profile: live });
+                const toolProfile = activeMode === 'spec' ? (live?.spec || {}) : live;
+                const out = await executeCustomToolIterStudioCall({ name, args }, { profile: toolProfile });
                 if (!out?.ok) {
                     const err = new SourceError('custom-tool', String(out?.hint || out?.error || 'Custom tool failed'));
                     err.envelope = out;

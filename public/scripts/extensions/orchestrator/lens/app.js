@@ -464,7 +464,7 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
 
     async function ensureModelOptions() {
         if (!modelOptionsLoaded && source.edit?.options) {
-            try { modelOptions = await source.edit.options(); modelOptionsLoaded = true; } catch { /* keep empty */ }
+            try { modelOptions = await source.edit.options(); modelOptionsLoaded = true; } catch (err) { console.warn('[orchestrator/lens] ensureModelOptions failed:', err); }
         }
         return modelOptions;
     }

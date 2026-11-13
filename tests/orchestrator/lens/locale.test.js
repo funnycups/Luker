@@ -74,4 +74,72 @@ describe('orchestrator/lens locale-data hygiene', () => {
         expect(cnCollisions).toEqual([]);
         expect(twCollisions).toEqual([]);
     });
+
+    test('all i18n/i18nFormat literals in orchestrator/lens/** resolve in zh-CN/zh-TW and have no unescaped semicolons', () => {
+        const zhCnCore = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/locales/zh-cn.json'), 'utf8'));
+        const zhTwCore = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/locales/zh-tw.json'), 'utf8'));
+        const lensShared = collectLocaleTables(registerLensSharedLocaleData);
+        const workbench = collectLocaleTables(registerWorkbenchLocaleData);
+        const runPanel = collectLocaleTables(registerRunPanelLocaleData);
+
+        const orchI18nSource = fs.readFileSync(path.join(ROOT, 'public/scripts/extensions/orchestrator/i18n.js'), 'utf8');
+        const orchCn = {};
+        const orchTw = {};
+        const cnSectionMatch = /_addLocaleData\('zh-cn',\s*\{([\s\S]*?)\n\s*\}\);/.exec(orchI18nSource);
+        const twSectionMatch = /_addLocaleData\('zh-tw',\s*\{([\s\S]*?)\n\s*\}\);/.exec(orchI18nSource);
+        for (const m of (cnSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
+            orchCn[m[1].replace(/\\'/g, '\'')] = true;
+        }
+        for (const m of (twSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
+            orchTw[m[1].replace(/\\'/g, '\'')] = true;
+        }
+
+        const hasCn = k => (
+            Object.hasOwn(lensTables['zh-cn'], k)
+            || Object.hasOwn(zhCnCore, k)
+            || Object.hasOwn(lensShared['zh-cn'], k)
+            || Object.hasOwn(workbench['zh-cn'], k)
+            || Object.hasOwn(runPanel['zh-cn'], k)
+            || Object.hasOwn(orchCn, k)
+        );
+        const hasTw = k => (
+            Object.hasOwn(lensTables['zh-tw'], k)
+            || Object.hasOwn(zhTwCore, k)
+            || Object.hasOwn(lensShared['zh-tw'], k)
+            || Object.hasOwn(workbench['zh-tw'], k)
+            || Object.hasOwn(runPanel['zh-tw'], k)
+            || Object.hasOwn(orchTw, k)
+        );
+
+        const lensDir = path.join(ROOT, 'public/scripts/extensions/orchestrator/lens');
+        const jsFiles = [];
+        const walk = (dir) => {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) walk(full);
+                else if (entry.name.endsWith('.js')) jsFiles.push(full);
+            }
+        };
+        walk(lensDir);
+
+        const usedKeys = new Set();
+        const callRe = /\bi18n(?:Format)?\(\s*'((?:\\'|[^'])+)'|\bi18n(?:Format)?\(\s*"((?:\\"|[^"])+)"/g;
+        for (const file of jsFiles) {
+            const src = fs.readFileSync(file, 'utf8');
+            for (const m of src.matchAll(callRe)) {
+                const raw = m[1] !== undefined
+                    ? m[1].replace(/\\'/g, '\'').replace(/\\\\/g, '\\')
+                    : m[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                usedKeys.add(raw);
+            }
+        }
+
+        const semicolonKeys = [...usedKeys].filter(k => /(?<!\\);/.test(k));
+        const missingCn = [...usedKeys].filter(k => !hasCn(k));
+        const missingTw = [...usedKeys].filter(k => !hasTw(k));
+
+        expect(semicolonKeys).toEqual([]);
+        expect(missingCn).toEqual([]);
+        expect(missingTw).toEqual([]);
+    });
 });

@@ -363,6 +363,10 @@ const ZH_CN = {
     'Diagnose orchestration run ${0} (${1} · ${2} · ${3}${4}). Inspect the run details via luker_orch_read_run and fix what caused the problem.': '诊断编排运行 ${0}（${1} · ${2} · ${3}${4}）。请用 luker_orch_read_run 查看运行详情，并修复问题原因。',
     'Diagnose why "${0}" (${1}) is slow or failing across the recent ${2} "${3}" runs (avg ${4}, ${5} errors). Inspect recent run details via luker_orch_read_run and optimize its settings.': '诊断「${0}」（${1}）在最近 ${2} 次「${3}」运行中变慢或出错的原因（平均 ${4}，出错 ${5} 次）。请用 luker_orch_read_run 查看近期运行详情并优化设置。',
     'Diagnose the slowest and most error-prone agents across the recent ${0} "${1}" runs (avg ${2}, ${3} failed runs). Inspect recent runs via luker_orch_read_run and optimize the bottlenecks.': '诊断最近 ${0} 次「${1}」运行中最慢和最易出错的助手（平均 ${2}，失败 ${3} 次）。请用 luker_orch_read_run 查看近期运行详情并优化瓶颈。',
+    '${0} put in the draft, applied after saving': '${0} 处已放进草稿，保存后生效',
+    'Reset to blank': '重置为空白',
+    'Reset to global': '重置为全局',
+    'The active character has changed.': '当前角色已切换。',
 };
 
 const ZH_TW = {
@@ -726,6 +730,10 @@ const ZH_TW = {
     'Diagnose orchestration run ${0} (${1} · ${2} · ${3}${4}). Inspect the run details via luker_orch_read_run and fix what caused the problem.': '診斷編排執行 ${0}（${1} · ${2} · ${3}${4}）。請用 luker_orch_read_run 查看執行詳情，並修復問題原因。',
     'Diagnose why "${0}" (${1}) is slow or failing across the recent ${2} "${3}" runs (avg ${4}, ${5} errors). Inspect recent run details via luker_orch_read_run and optimize its settings.': '診斷「${0}」（${1}）在最近 ${2} 次「${3}」執行中變慢或出錯的原因（平均 ${4}，出錯 ${5} 次）。請用 luker_orch_read_run 查看近期執行詳情並優化設定。',
     'Diagnose the slowest and most error-prone agents across the recent ${0} "${1}" runs (avg ${2}, ${3} failed runs). Inspect recent runs via luker_orch_read_run and optimize the bottlenecks.': '診斷最近 ${0} 次「${1}」執行中最慢和最易出錯的助手（平均 ${2}，失敗 ${3} 次）。請用 luker_orch_read_run 查看近期執行詳情並優化瓶頸。',
+    '${0} put in the draft, applied after saving': '${0} 處已放進草稿，儲存後生效',
+    'Reset to blank': '重設為空白',
+    'Reset to global': '重設為全域',
+    'The active character has changed.': '目前角色已切換。',
 };
 
 export function registerLensLocaleData(addLocaleData) {

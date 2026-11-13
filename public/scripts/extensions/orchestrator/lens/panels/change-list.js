@@ -102,7 +102,7 @@ export function changeList(opts) {
                 button(i18n('Drop all'), () => onDiscard?.(), { className: 'ol-btn-sm ol-btn-ghost' }));
         } else if (state === 'applied') {
             put(foot,
-                h('span', { class: 'ol-changes-state', text: i18nFormat('${0} put in the draft; applied after saving', applied.size) }),
+                h('span', { class: 'ol-changes-state', text: i18nFormat('${0} put in the draft, applied after saving', applied.size) }),
                 onUndo ? button(i18n('Undo this round'), () => onUndo(), { iconName: 'undo', className: 'ol-btn-sm ol-btn-ghost' }) : null);
         } else if (state !== 'review') {
             const text = { undone: i18n('Undone'), superseded: i18n('Replaced by the next round of edits'), discarded: i18n('Discarded') }[state] || '';
