@@ -84,17 +84,51 @@ test.describe('#95 — Stable Diffusion /imagine via real send textarea + send b
         const before = sdMock.requests.length;
         const chatLenBefore = await page.evaluate(() => window.Luker.getContext().chat.length);
 
+        // Keep both the LLM prompt request and the image request in flight long
+        // enough to observe the capsule and open its run panel from the UI.
+        sdMock.setTxt2imgDelayMs(1200);
+        mock.setLatencyMs(1200);
+
         // REAL gesture: type the slash into #send_textarea, click #send_but.
+        // `you` is a portrait trigger, so the pill must appear while the LLM
+        // prompt request is still pending, before any image request exists.
         const textarea = page.locator('#send_textarea');
-        await textarea.fill('/imagine quiet=false a brass spyglass laid across a folded reef chart at dusk');
+        await textarea.fill('/imagine quiet=false you');
         await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 10_000 });
         await page.locator('#send_but').click();
+
+        const pill = page.locator('#luker-sd-run-panel-pill');
+        await expect(pill).toBeVisible({ timeout: 5000 });
+        await expect(pill.locator('.activity-pill-label')).toHaveText('Generating prompt');
+
+        // The LLM answers, then the image request starts. Open the panel from
+        // the capsule and verify the prompt and the generated image are there.
+        await expect(pill.locator('.activity-pill-label')).toHaveText('Generating image', { timeout: 15_000 });
+        await pill.click();
+
+        const panel = page.locator('#luker-sd-run-panel');
+        await expect(panel).toHaveAttribute('data-state', 'open');
+        await expect(panel.locator('[data-round-id="image-job-1"] .round-label')).toContainText('Generation #1');
+        await expect(panel.locator('[data-section-id="image-job-1-prompt"] pre')).toContainText('spyglass');
+        const resultImage = panel.locator('[data-section-id="image-job-1-image"] img.section-image');
+        await expect(resultImage).toBeVisible({ timeout: 15_000 });
+        await expect(resultImage).toHaveAttribute('src', /\/user\/images\//);
 
         // Image generation is async — wait for the new chat message to land.
         await page.waitForFunction((targetLen) => {
             const ctx = window.Luker.getContext();
             return ctx.chat.length > targetLen;
         }, chatLenBefore, { timeout: 60_000 });
+
+        // A successful run leaves no capsule once the panel is closed.
+        await panel.locator('[data-action="close"]').click();
+        await expect(pill).toBeHidden();
+
+        // The extensions menu entry reopens the finished run.
+        await page.locator('#extensionsMenuButton').click();
+        await page.locator('#sd_activity_panel').click();
+        await expect(panel).toHaveAttribute('data-state', 'open');
+        await panel.locator('[data-action="close"]').click();
 
         // ===== Assert mock saw the expected calls. =====
         const newSdReqs = sdMock.requests.slice(before);

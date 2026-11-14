@@ -78,7 +78,24 @@ test.describe('automatic illustration', () => {
         await closeAnyOpenTopSettingsDrawer(page);
 
         const before = sdMock.requests.length;
+        sdMock.setTxt2imgDelayMs(1500);
         await sendMessageAndAwaitReply(page, 'Show me the chart.');
+
+        // The capsule must appear while the illustration job is still waiting
+        // for its prompt/image, and open the shared run panel.
+        const pill = page.locator('#luker-sd-run-panel-pill');
+        await expect(pill).toBeVisible({ timeout: 10_000 });
+        await expect(pill.locator('.activity-pill-label')).toContainText(/Generating (prompt|image)/);
+        await pill.click();
+
+        const panel = page.locator('#luker-sd-run-panel');
+        await expect(panel).toHaveAttribute('data-state', 'open');
+        await expect(panel.locator('[data-round-id="image-job-1"] .round-label')).toHaveText(/Message #\d+/);
+        await expect(panel.locator('[data-section-id="image-job-1-prompt-0"] pre')).toContainText('brass spyglass');
+        const resultImage = panel.locator('[data-section-id="image-job-1-image-0"] img.section-image');
+        await expect(resultImage).toBeVisible({ timeout: 30_000 });
+        await expect(resultImage).toHaveAttribute('src', /\/user\/images\//);
+        await panel.locator('[data-action="close"]').click();
 
         await page.waitForFunction(() => {
             const ctx = window.Luker.getContext();

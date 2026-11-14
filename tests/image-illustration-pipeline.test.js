@@ -32,10 +32,10 @@ function makeMessage(extra = {}) {
     };
 }
 
-function makeHarness({ message, generate, confirmReplace } = {}) {
+function makeHarness({ message, generate, confirmReplace, activityJob } = {}) {
     const chat = [message];
     const toasts = [];
-    const calls = { generateTask: 0, confirmReplace: 0 };
+    const calls = { generateTask: 0, confirmReplace: 0, activityJobs: [] };
     const pipeline = createIllustrationPipeline({
         context: {
             chat,
@@ -63,6 +63,12 @@ function makeHarness({ message, generate, confirmReplace } = {}) {
             ensureSwipes: () => {},
             getChatId: () => 'chat-1',
             getChat: () => chat,
+            beginActivityJob: activityJob
+                ? options => {
+                    calls.activityJobs.push(options);
+                    return activityJob;
+                }
+                : undefined,
             confirmReplace: confirmReplace
                 ? async () => {
                     calls.confirmReplace += 1;
@@ -72,6 +78,27 @@ function makeHarness({ message, generate, confirmReplace } = {}) {
         },
     });
     return { pipeline, chat, toasts, calls };
+}
+
+function makeFakeActivityJob() {
+    const calls = { sections: [], updates: [], errors: [], finished: [] };
+    return {
+        calls,
+        addSection(key, { kind, title, body = '', meta = null } = {}) {
+            calls.sections.push({ key, kind, title, body, meta });
+            return key;
+        },
+        updateSection(key, { status, meta } = {}) {
+            calls.updates.push({ key, status, meta });
+        },
+        setError(message) {
+            calls.errors.push(message);
+        },
+        setRetry() {},
+        finish(status) {
+            calls.finished.push(status);
+        },
+    };
 }
 
 test('message fingerprint changes with text and send date', () => {
@@ -142,5 +169,50 @@ test('manual run leaves everything untouched when the replace prompt is declined
     expect(calls.generateTask).toBe(0);
     expect(message.mes).toBe(before.mes);
     expect(message.extra.illustrations).toBe(before.records);
+});
+
+test('illustration jobs open activity rounds before the prompt request and report prompts plus images', async () => {
+    const message = makeMessage({ mes: 'alpha beta', swipes: ['alpha beta'] });
+    const activityJob = makeFakeActivityJob();
+    const { pipeline, calls } = makeHarness({
+        message,
+        generate: async () => '/user/images/new.png',
+        activityJob,
+    });
+
+    await pipeline.runForMessage({ messageId: 0, source: 'manual' });
+
+    expect(calls.activityJobs).toHaveLength(1);
+    expect(calls.activityJobs[0]).toMatchObject({ kind: 'illustration', messageIndex: 0 });
+    expect(typeof calls.activityJobs[0].abort).toBe('function');
+    expect(activityJob.calls.sections).toEqual([
+        { key: 'prompt-0', kind: 'prompt', title: 'Prompt 1', body: 'new prompt', meta: null },
+        { key: 'image-0', kind: 'image', title: 'Image 1', body: '', meta: null },
+    ]);
+    expect(activityJob.calls.updates).toEqual([
+        { key: 'image-0', status: 'done', meta: { imageUrl: '/user/images/new.png' } },
+    ]);
+    expect(activityJob.calls.finished).toEqual(['done']);
+});
+
+test('failed illustration images keep the round open with an error section', async () => {
+    const message = makeMessage({ mes: 'alpha beta', swipes: ['alpha beta'] });
+    const activityJob = makeFakeActivityJob();
+    const { pipeline } = makeHarness({
+        message,
+        generate: async () => { throw new Error('upstream refused'); },
+        activityJob,
+    });
+
+    await pipeline.runForMessage({ messageId: 0, source: 'manual' });
+
+    expect(activityJob.calls.updates).toEqual([
+        { key: 'image-0', status: 'failed', meta: undefined },
+        { key: 'error-0', status: 'failed', meta: undefined },
+    ]);
+    expect(activityJob.calls.sections).toContainEqual({
+        key: 'error-0', kind: 'error', title: 'Error 1', body: 'upstream refused', meta: null,
+    });
+    expect(activityJob.calls.finished).toEqual(['failed']);
 });
 

@@ -64,6 +64,7 @@ import { power_user } from '/scripts/power-user.js';
 import { MacrosParser } from '/scripts/macros.js';
 import { stripIllustrationMarkup } from './illustration/message.js';
 import { initIllustration } from './illustration/index.js';
+import { initImageActivity, beginImageActivityJob, openImageActivityPanel } from './activity.js';
 
 export { MODULE_NAME };
 
@@ -73,8 +74,6 @@ const PNG_PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkY
 
 // Generation tracking for status indicator
 let activeGenerations = 0;
-/** @type {JQuery<HTMLElement>|null} */
-let generationToast = null;
 /** @type {AbortController[]} */
 const generationAbortControllers = [];
 const trackedGenerationControllers = new Set();
@@ -604,6 +603,7 @@ function applySettingsToUi() {
  */
 export function createIllustrationBridge() {
     return {
+        beginActivityJob: options => beginImageActivityJob(options),
         async generateImage(prompt, { characterName = '', signal = undefined } = {}) {
             const controller = new AbortController();
             const forwardAbort = () => controller.abort(signal?.reason);
@@ -611,6 +611,14 @@ export function createIllustrationBridge() {
                 forwardAbort();
             } else {
                 signal?.addEventListener('abort', forwardAbort, { once: true });
+            }
+            // Queued illustration jobs can be cancelled before their turn; stop
+            // them before they request an LLM prompt.
+            if (controller.signal.aborted) {
+                signal?.removeEventListener('abort', forwardAbort);
+                const error = new Error('Image generation aborted.');
+                error.name = 'AbortError';
+                throw error;
             }
 
             let capturedError = null;
@@ -2976,63 +2984,6 @@ function ensureSelectionExists(setting, selector) {
     }
 }
 
-function updateGenerationIndicator() {
-    console.debug(`SD: updateGenerationIndicator called, activeGenerations=${activeGenerations}, generationToast=${generationToast ? 'exists' : 'null'}`);
-
-    const clearGenerationToast = () => {
-        console.debug('SD: clearGenerationToast called, generationToast=', generationToast ? 'exists' : 'null');
-        if (generationToast) {
-            // Blur any focused element inside the toast to prevent toastr.clear()
-            // from silently skipping removal (toastr checks :focus before hiding)
-            const focused = $(generationToast).find(':focus');
-            if (focused.length) focused.trigger('blur');
-            toastr.clear(generationToast);
-            generationToast = null;
-            console.debug('SD: generationToast cleared and set to null');
-        }
-    };
-
-    if (activeGenerations > 0) {
-        const countText = activeGenerations > 1 ? ` (${activeGenerations})` : '';
-        const toastText = `
-<div class="sd_generation_toast_content">
-    <span class="sd_generation_toast_status"><i class="fa-solid fa-spinner fa-spin"></i> ${t`Generating image`}${countText}...</span>
-    <button type="button" class="menu_button sd_generation_abort_btn">${t`Abort`}</button>
-</div>`;
-
-        if (!generationToast) {
-            generationToast = toastr.info(
-                toastText,
-                t`Image Generation`,
-                {
-                    timeOut: 0,
-                    extendedTimeOut: 0,
-                    tapToDismiss: false,
-                    escapeHtml: false,
-                },
-            );
-        } else {
-            const toastMessage = $(generationToast).find('.toast-message');
-            if (toastMessage.length) {
-                toastMessage.html(toastText);
-            }
-        }
-
-        $(generationToast)
-            .off('click.sdAbortCurrent', '.sd_generation_abort_btn')
-            .on('click.sdAbortCurrent', '.sd_generation_abort_btn', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                abortOneActiveGeneration('Aborted by user');
-                if (activeGenerations <= 0) {
-                    clearGenerationToast();
-                }
-            });
-    } else {
-        clearGenerationToast();
-    }
-}
-
 function syncGenerationTrackingState() {
     const activeControllers = new Set();
     for (const controller of generationAbortControllers) {
@@ -3044,7 +2995,6 @@ function syncGenerationTrackingState() {
     const prevActive = activeGenerations;
     activeGenerations = activeControllers.size;
     console.debug(`SD: syncGenerationTrackingState, controllers=${generationAbortControllers.length}, activeGenerations: ${prevActive} → ${activeGenerations}`);
-    updateGenerationIndicator();
 }
 
 function startGenerationTracking(controller = null) {
@@ -3186,6 +3136,12 @@ async function generatePicture(initiator, args, trigger, message, callback) {
 
     const dimensions = setTypeSpecificDimensions(generationType);
     const abortController = new AbortController();
+    const activityJob = beginImageActivityJob({
+        kind: 'generation',
+        abort: () => {
+            if (!abortController.signal.aborted) abortController.abort('Aborted by user');
+        },
+    });
     let negativePromptPrefix = args?.negative || '';
     let imagePath = '';
     const stopListener = () => abortController.abort('Aborted by user');
@@ -3212,7 +3168,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         }
 
         // generate the image
-        imagePath = await sendGenerationRequest(generationType, prompt, negativePromptPrefix, characterName, callback, initiator, abortController.signal);
+        imagePath = await sendGenerationRequest(generationType, prompt, negativePromptPrefix, characterName, callback, initiator, abortController.signal, null, activityJob);
     } catch (err) {
         // Check if this was an intentional abort by user or a server-side
         // abort from the request inspector. Both must behave like a stop:
@@ -3222,6 +3178,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
                 abortController.abort('Aborted by server');
             }
             console.log('SD: Image generation aborted (generatePicture catch)');
+            activityJob.finish('aborted');
             return;
         }
 
@@ -3230,6 +3187,8 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         // sendGenerationRequest mostly deals with its own errors
         const reason = err.error?.message || err.message || 'Unknown error';
         const errorText = 'SD prompt text generation failed. ' + reason;
+        activityJob.setError(errorText);
+        activityJob.finish('failed');
         toastr.error(errorText, t`Image Generation`);
         throw new Error(errorText);
     } finally {
@@ -3239,6 +3198,9 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         }
         unregisterAbortController(abortController);
         endGenerationTracking(abortController);
+        if (abortController.signal.aborted) activityJob.finish('aborted');
+        else if (imagePath) activityJob.finish('done');
+        else activityJob.finish('failed');
         console.debug(`SD: generatePicture finally — unregistered controller, activeGenerations=${activeGenerations}`);
     }
 
@@ -3444,10 +3406,8 @@ function getUserAvatarUrl() {
  * @returns {Promise<string>} - A promise that resolves when the prompt generation completes.
  */
 async function generatePrompt(quietPrompt) {
-    const toast = toastr.info('Generating image prompt with an LLM...', t`Image Generation`);
     const reply = await generateQuietPrompt({ quietPrompt });
     const processedReply = processReply(reply);
-    toastr.clear(toast);
 
     if (!processedReply) {
         toastr.error('Prompt generation produced no text. Make sure you\'re using a valid instruct template and try again', t`Image Generation`);
@@ -3468,7 +3428,7 @@ async function generatePrompt(quietPrompt) {
  * @param {AbortSignal} signal Abort signal to cancel the request
  * @returns
  */
-async function sendGenerationRequest(generationType, prompt, additionalNegativePrefix, characterName, callback, initiator, signal, onError = null) {
+async function sendGenerationRequest(generationType, prompt, additionalNegativePrefix, characterName, callback, initiator, signal, onError = null, activity = null) {
     const noCharPrefix = [generationMode.FREE, generationMode.BACKGROUND, generationMode.USER, generationMode.USER_MULTIMODAL, generationMode.FREE_EXTENDED];
     const isCharChat = this_chid !== undefined && !selected_group;
     const ignoreNoCharForSwipe = initiator === initiators.swipe && isCharChat;
@@ -3485,6 +3445,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
 
     const prefixedPrompt = substituteParams(combinePrefixes(prefix, prompt, '{prompt}'));
     const negativePrompt = substituteParams(combinePrefixes(additionalNegativePrefix, negativePrefix));
+    activity?.setPrompt(prefixedPrompt);
 
     let result = { format: '', data: '' };
     const currentChatId = getCurrentChatId();
@@ -3582,6 +3543,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
             signal,
             label: 'image-generation',
             onAttempt: (attempt, _err, _delay, maxRetries) => {
+                activity?.setRetry(attempt, maxRetries);
                 toastr.info(
                     t`Retrying image generation… (${attempt}/${maxRetries})`,
                     t`Image generation failed`,
@@ -3600,6 +3562,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
         if (typeof onError === 'function') {
             onError(err);
         }
+        activity?.setError(String(err?.message || err));
         toastr.error('Image generation failed. Please try again.' + '\n\n' + String(err), t`Image Generation`);
         return;
     }
@@ -3609,6 +3572,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
         if (typeof onError === 'function') {
             onError(new Error('Chat changed, generated image discarded.'));
         }
+        activity?.setError('Chat changed, generated image discarded.');
         toastr.warning('Chat changed, generated image discarded.', t`Image Generation`);
         return;
     }
@@ -3620,6 +3584,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
         is_group: !!context.groupId,
     } : null;
     const base64Image = await saveBase64AsFile(result.data, characterName, filename, result.format, savedAttribution);
+    activity?.setImage(base64Image);
     callback
         ? await callback(prompt, base64Image, generationType, additionalNegativePrefix, initiator, prefixedPrompt, result.format)
         : await sendMessage(prompt, base64Image, generationType, additionalNegativePrefix, initiator, prefixedPrompt, result.format);
@@ -5155,9 +5120,12 @@ function getVisibilityByInitiator(initiator) {
 async function addSDGenButtons() {
     const buttonHtml = await renderExtensionTemplateAsync('stable-diffusion', 'button');
     const dropdownHtml = await renderExtensionTemplateAsync('stable-diffusion', 'dropdown');
+    const activityMenuHtml = await renderExtensionTemplateAsync('stable-diffusion', 'activity-menu');
 
     $('#sd_wand_container').append(buttonHtml);
     $(document.body).append(dropdownHtml);
+    $('#extensionsMenu').append(activityMenuHtml);
+    $('#sd_activity_panel').on('click', () => openImageActivityPanel());
 
     const button = $('#sd_gen');
     const dropdown = $('#sd_dropdown');
@@ -5415,6 +5383,13 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
         source: MEDIA_SOURCE.GENERATED,
     };
 
+    const activityJob = beginImageActivityJob({
+        kind: 'generation',
+        abort: () => {
+            if (!abortController.signal.aborted) abortController.abort('Aborted by user');
+        },
+    });
+
     try {
         registerAbortController(abortController);
         $(stopButton).show();
@@ -5434,7 +5409,7 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
             : context.characters[context.characterId]?.name;
 
         onStart();
-        result.url = await sendGenerationRequest(generationType, prompt, refineArgs.negative, characterName, callback, initiators.swipe, abortController.signal);
+        result.url = await sendGenerationRequest(generationType, prompt, refineArgs.negative, characterName, callback, initiators.swipe, abortController.signal, null, activityJob);
         result.generation_type = generationType;
         result.title = prompt;
         result.negative = refineArgs.negative;
@@ -5442,6 +5417,11 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
             result.width = mediaAttachment.width;
             result.height = mediaAttachment.height;
         }
+    } catch (error) {
+        if (!abortController.signal.aborted && error?.name !== 'AbortError') {
+            activityJob.setError(String(error?.message || error));
+        }
+        throw error;
     } finally {
         onComplete();
         $(stopButton).hide();
@@ -5449,6 +5429,9 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
         restoreOriginalDimensions(dimensions);
         extension_settings.sd.seed = extension_settings.sd.original_seed;
         delete extension_settings.sd.original_seed;
+        if (abortController.signal.aborted) activityJob.finish('aborted');
+        else if (result.url) activityJob.finish('done');
+        else activityJob.finish('failed');
     }
 
     if (!result.url) {
@@ -5610,6 +5593,7 @@ function registerFunctionTool() {
 }
 
 export async function init() {
+    initImageActivity({ translate, getChatKey: getCurrentChatId });
     await addSDGenButtons();
 
     const getSelectEnumProvider = (id, text) => () => Array.from(document.querySelectorAll(`#${id} > [value]`)).map(x => new SlashCommandEnumValue(x.getAttribute('value'), text ? x.textContent : null));

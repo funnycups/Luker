@@ -61,6 +61,7 @@ export async function initIllustration(bridge) {
         hooks: {
             toast: (message, type = 'error') => toastr[type]?.(message, t`Image Generation`),
             t,
+            beginActivityJob: typeof bridge.beginActivityJob === 'function' ? bridge.beginActivityJob : null,
             saveChat: () => context.saveChat(),
             updateMessageBlock: (messageId, message) => context.updateMessageBlock(messageId, message),
             ensureSwipes,

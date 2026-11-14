@@ -7586,4 +7586,12 @@
     ,"Recent chats settings": "最近聊天设置"
     ,"card.${0}": "角色卡：${0}"
     ,"entry.${0}.${1}": "条目 ${0}：${1}"
+    ,"sd_activity_panel": "图像生成运行面板"
+    ,"Generating prompt": "正在生成提示词"
+    ,"Generation #${0}": "生成 #${0}"
+    ,"Message #${0}": "消息 #${0}"
+    ,"No image generation yet.": "还没有图像生成记录。"
+    ,"Tasks: ${0}": "任务：${0}"
+    ,"Tasks: ${0} · ${1} failed": "任务：${0} · ${1} 失败"
+    ,"Retrying · ${0}/${1}": "重试中 · ${0}/${1}"
 }

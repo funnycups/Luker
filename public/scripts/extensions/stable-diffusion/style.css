@@ -88,29 +88,6 @@
     transform: translateX(-50%);
 }
 
-.sd_generation_toast_content {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    width: 100%;
-}
-
-.sd_generation_toast_status {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-}
-
-.sd_generation_abort_btn {
-    flex: 0 0 auto;
-    margin: 0;
-    white-space: nowrap;
-    writing-mode: horizontal-tb;
-    text-orientation: mixed;
-}
-
 .sd_illustration_block {
     margin-bottom: 8px;
 }

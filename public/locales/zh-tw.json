@@ -7576,4 +7576,12 @@
     ,"Invalid regex pattern.": "無效的正規表示式規則。"
     ,"card.${0}": "角色卡：${0}"
     ,"entry.${0}.${1}": "條目 ${0}：${1}"
+    ,"sd_activity_panel": "圖像生成運行面板"
+    ,"Generating prompt": "正在生成提示詞"
+    ,"Generation #${0}": "生成 #${0}"
+    ,"Message #${0}": "訊息 #${0}"
+    ,"No image generation yet.": "尚未有圖像生成記錄。"
+    ,"Tasks: ${0}": "任務：${0}"
+    ,"Tasks: ${0} · ${1} failed": "任務：${0} · ${1} 失敗"
+    ,"Retrying · ${0}/${1}": "重試中 · ${0}/${1}"
 }
