@@ -1,0 +1,37 @@
+/* Table view */
+.mlens .ml-tableview { display: flex; flex-direction: column; background: var(--ml-bg); }
+.mlens .ml-table-head {
+    flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 20px;
+    border-bottom: 1px solid var(--ml-border); background: var(--ml-surface); overflow-x: auto;
+}
+.mlens .ml-table-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 0 40px; }
+.mlens .ml-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.mlens .ml-table th {
+    position: sticky; top: 0; z-index: 1;
+    padding: 0 12px; height: 34px; text-align: left; white-space: nowrap;
+    background: var(--ml-surface-2); border-bottom: 1px solid var(--ml-border);
+    font-weight: 500; color: var(--ml-text-faint); font-size: 11.5px;
+}
+.mlens .ml-table th:first-child, .mlens .ml-table td:first-child { padding-left: 20px; }
+.mlens .ml-th-btn { display: inline-flex; align-items: center; gap: 4px; border: 0; padding: 0; background: none; cursor: pointer; color: inherit; font: inherit; }
+.mlens .ml-th-btn:hover { color: var(--ml-text); }
+.mlens .ml-table th[aria-sort="ascending"], .mlens .ml-table th[aria-sort="descending"] { color: var(--ml-text); }
+.mlens .ml-th-ctx { width: 1%; }
+.mlens .ml-table td {
+    padding: 9px 12px; vertical-align: top; border-bottom: 1px solid var(--ml-border);
+    color: var(--ml-text-muted); max-width: 420px; line-height: 1.5;
+}
+.mlens .ml-table td.is-empty { color: var(--ml-text-faint); }
+.mlens .ml-table tbody tr { cursor: pointer; outline: none; transition: background var(--ml-dur); }
+.mlens .ml-table tbody tr:hover { background: var(--ml-hover); }
+.mlens .ml-table tbody tr:focus-visible { box-shadow: inset 2px 0 0 var(--ml-accent); background: var(--ml-hover); }
+.mlens .ml-table tbody tr[aria-selected="true"] { background: var(--ml-accent-soft); box-shadow: inset 2px 0 0 var(--ml-accent); }
+.mlens .ml-table tr.is-archived td { opacity: 0.5; }
+.mlens .ml-td-title { color: var(--ml-text) !important; font-weight: 500; min-width: 180px; }
+.mlens .ml-td-title-inner { display: inline-flex; align-items: center; gap: 8px; }
+.mlens .ml-td-num { font-family: var(--ml-mono); font-size: 11.5px; white-space: nowrap; }
+.mlens .ml-td-ctx { white-space: nowrap; }
+.mlens .ml-table-more { margin: 16px 20px 0; }
+.mlens .ml-table-touchhint { flex: none; font-size: 12px; color: var(--ml-text-faint); white-space: nowrap; }
+.mlens.is-compact .ml-table-head:has(.ml-table-touchhint) { flex-wrap: wrap; }
+.mlens.is-compact .ml-table-touchhint { flex-basis: 100%; white-space: normal; }

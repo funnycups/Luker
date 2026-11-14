@@ -1,0 +1,41 @@
+/* Graph view */
+.mlens .ml-graph { position: relative; overflow: hidden; background: var(--ml-canvas); }
+.mlens .ml-graph-canvas {
+    position: absolute; inset: 0;
+    background-image: radial-gradient(var(--ml-grid-dot) 1px, transparent 1.2px);
+    background-size: 22px 22px;
+}
+.mlens .ml-graph-toolbar, .mlens .ml-graph-zoombar, .mlens .ml-graph-legend, .mlens .ml-graph-notice {
+    position: absolute; z-index: 2;
+    background: color-mix(in srgb, var(--ml-surface) 88%, transparent);
+    backdrop-filter: blur(10px) saturate(1.2);
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
+    box-shadow: var(--ml-shadow-2);
+    border-radius: var(--ml-radius);
+}
+.mlens .ml-graph-toolbar { top: 12px; left: 12px; padding: 0; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.mlens .ml-graph-toolbar .ml-seg { box-shadow: var(--ml-shadow-2); border-color: transparent; background: color-mix(in srgb, var(--ml-surface) 88%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.mlens .ml-graph-zoombar { right: 12px; bottom: 12px; display: flex; flex-direction: column; padding: 3px; gap: 1px; }
+.mlens .ml-graph-legend {
+    left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px;
+    max-width: calc(100% - 90px); padding: 7px 12px; font-size: 12px; color: var(--ml-text-muted);
+}
+.mlens .ml-graph-legend:empty { display: none; }
+.mlens .ml-legend-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.mlens .ml-legend-count { color: var(--ml-text-faint); font-variant-numeric: tabular-nums; }
+.mlens .ml-legend-glow { width: 10px; height: 10px; border-radius: 50%; background: var(--ml-recalled); box-shadow: 0 0 0 3px var(--ml-recalled-soft), 0 0 10px var(--ml-recalled); }
+.mlens .ml-graph-notice {
+    top: 12px; right: 12px; display: flex; align-items: center; gap: 8px;
+    max-width: min(420px, calc(100% - 220px)); padding: 7px 12px; font-size: 12px; color: var(--ml-text-muted);
+}
+.mlens .ml-graph-overlay { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; }
+.mlens .ml-graph-tip {
+    position: absolute; top: 0; left: 0; z-index: 3; pointer-events: none;
+    max-width: 260px; padding: 8px 10px; border-radius: var(--ml-radius);
+    background: var(--ml-raised); box-shadow: var(--ml-shadow-3);
+    animation: ml-tip 120ms var(--ml-ease);
+}
+@keyframes ml-tip { from { opacity: 0; } }
+.mlens .ml-graph-tip-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ml-text-faint); margin-bottom: 2px; }
+.mlens .ml-graph-tip-tag { font-family: var(--ml-mono); }
+.mlens .ml-graph-tip-title { font-weight: 600; line-height: 1.35; }

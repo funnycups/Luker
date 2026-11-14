@@ -143,14 +143,6 @@ jest.unstable_mockModule('../../public/scripts/slash-commands.js', () => ({
 // migrateLegacyCapsuleInjectPosition, normalizeCapsuleInjectPosition,
 // sanitizeLoopProfile, cloneDefault, normalizeExecutionMode) come from
 // the REAL modules — those imports are not mocked here.
-jest.unstable_mockModule('../../public/scripts/extensions/orchestrator/ui-templates.js', () => ({
-    buildOrchestrationEditorPopupPanelHtml: () => '',
-    buildOrchestratorSettingsHtml: () => '',
-    injectWorkspaceIntoTabHost: () => {},
-    refreshPresetSelectorBars: () => {},
-    renderInheritOrOverridePanel: () => '',
-    renderSkillChipsPlaceholder: () => '',
-}));
 // anchors.js is leaf-pure (no imports) and small; load the real module
 // so persistence.js (also real, transitively imported via the persistence
 // → anchors chain) finds its named exports.

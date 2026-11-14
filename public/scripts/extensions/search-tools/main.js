@@ -314,12 +314,14 @@ let loadedChatStateKey = '';
 
 let searchRunPanel = null;
 
+__ctx.registerExtensionApi?.(MODULE_NAME, { getRunStore: () => searchRunPanel?.store || null });
+
 function initSearchRunPanel() {
     if (searchRunPanel) {
         return;
     }
-    searchRunPanel = createSearchRunPanel({ t: i18nFormat });
-    searchRunPanel.init();
+    searchRunPanel = createSearchRunPanel();
+    getContext().eventSource.emit('luker.search-tools.run-store-ready');
 }
 
 function i18n(text) {
@@ -2622,7 +2624,11 @@ const {
     normalizeSafeSearch,
     normalizeWhitespace,
     saveSettingsDebounced,
-    showRunPanel: () => searchRunPanel?.open(),
+    showRunPanel: async () => {
+        const orch = getContext().getExtensionApi('orchestrator');
+        if (orch?.openRunDock) return orch.openRunDock();
+        (await searchRunPanel.standaloneDock()).open();
+    },
     syncSharedLorebookForCurrentChat,
     syncSharedLorebookForLoadedChat,
     world_info_position,
@@ -2648,6 +2654,9 @@ jQuery(() => {
     // Silent no-op when orchestrator isn't installed.
     eventSource.on(event_types.APP_READY, () => {
         registerSearchToolsOrchestrationTools();
+        if (!getContext().getExtensionApi('orchestrator')?.openRunDock) {
+            return searchRunPanel.standaloneDock();
+        }
     });
     void loadSearchToolsChatState(context, { force: true })
         .then(() => syncSharedLorebookForCurrentChat(context))

@@ -57,11 +57,10 @@
  *   `openOrchestratorIterationStudio(deps)`
  *
  * Deps shape — mirrors the bag main.js builds for
- * createOrchestratorIterationAdapter, plus `mode`, `context`, `settings`, `root`:
+ * createOrchestratorIterationAdapter, plus `mode`, `context`, `settings`:
  *   - mode                              one of ORCH_EXECUTION_MODES.{SPEC,LOOP,AGENDA,DIRECTOR}
  *   - context                           SillyTavern context
  *   - settings                          orchestrator settings root (extension_settings.orchestrator)
- *   - root                              jQuery root passed through to apply helpers' refresh callbacks
  *   - i18n, i18nFormat
  *   - getIterationDefaultScope(ctx)
  *   - syncCharacterEditorWithActiveAvatar(ctx)
@@ -71,8 +70,8 @@
  *   - executeAiIterationToolCalls(ctx, session, calls, signal)
  *   - renderAiIterationWorkingProfile(session, opts)
  *   - resolveOrchestrationRuntimeWorldInfo(ctx, settings, opts)
- *   - applyAiIterationSessionToGlobal(ctx, settings, session, root)
- *   - applyAiIterationSessionToCharacter(ctx, settings, session, root)
+ *   - applyAiIterationSessionToGlobal(ctx, settings, session)
+ *   - applyAiIterationSessionToCharacter(ctx, settings, session)
  *   - ORCH_EXECUTION_MODES                { SPEC, LOOP, AGENDA, DIRECTOR }
  */
 
@@ -1020,7 +1019,6 @@ export async function openOrchestratorIterationStudio(deps) {
         mode,
         context,
         settings,
-        root,
         i18n,
         i18nFormat,
         getIterationDefaultScope,
@@ -1811,14 +1809,14 @@ export async function openOrchestratorIterationStudio(deps) {
     // ──────────────────────────────────────────────────────────────────
     async function commitLiveToGlobal() {
         const fakeSession = buildHelperSession(sanitizeForMode(state.live));
-        await applyAiIterationSessionToGlobal(context, settings, fakeSession, root);
+        await applyAiIterationSessionToGlobal(context, settings, fakeSession);
     }
 
     async function commitLiveToCharacter() {
         if (typeof applyAiIterationSessionToCharacter !== 'function') return;
         const sanitized = sanitizeForMode(state.live);
         const fakeSession = buildHelperSession(sanitized);
-        await applyAiIterationSessionToCharacter(context, settings, fakeSession, root);
+        await applyAiIterationSessionToCharacter(context, settings, fakeSession);
     }
 
     // ──────────────────────────────────────────────────────────────────

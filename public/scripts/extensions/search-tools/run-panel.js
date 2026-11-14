@@ -1,26 +1,43 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
-import { createRunStore, createRunPanel } from '/scripts/run-panel/index.js';
+import { createRunStore } from '/scripts/run-panel/store.js';
 
 /**
- * Build the search-tools run panel. One isolated store per call; the panel
- * auto-opens on a non-quiet RUN_STARTED, matching the orchestrator.
+ * The search agent's run store. One isolated store per call; Orchestra Lens's
+ * run dock is what shows it.
  */
-export function createSearchRunPanel({ t }) {
+export function createSearchRunPanel() {
     const store = createRunStore();
-    const panel = createRunPanel({
-        store,
-        t,
-        idPrefix: 'luker-search-tools-run-panel',
-        autoOpen: true,
-        modeLabels: { search: t('Search') },
-        exportFilename: ({ runId }) => `search-agent-run-${runId}.json`,
-    });
+    let standalone;
+    async function loadDock() {
+        const [{ createRecorder }, { createDock }, { accountLocalStorage }, { registerLensLocaleData }] = await Promise.all([
+            import('../orchestrator/lens/model/recorder.js'),
+            import('../orchestrator/lens/dock/dock.js'),
+            import('../lens-shared/current-account.js'),
+            import('../orchestrator/lens/locale-data.js'),
+        ]);
+        const ctx = Luker.getContext();
+        registerLensLocaleData(ctx.addLocaleData);
+        const style = document.createElement('link');
+        style.rel = 'stylesheet';
+        style.href = new URL('../orchestrator/lens/style.css', import.meta.url).href;
+        document.head.appendChild(style);
+        const recorder = createRecorder({
+            storage: accountLocalStorage(),
+            getRunContext: () => {
+                const current = Luker.getContext();
+                return { chatId: current.chatId, chatLabel: current.name2 };
+            },
+        });
+        recorder.attach(store, 'search');
+        return createDock({ recorder });
+    }
     return {
         store,
-        init: () => panel.init(),
-        open: () => panel.open(),
-        destroy: () => panel.destroy(),
+        standaloneDock() {
+            standalone ??= loadDock().catch(error => { standalone = null; throw error; });
+            return standalone;
+        },
     };
 }

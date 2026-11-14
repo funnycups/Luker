@@ -2,10 +2,8 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
 /**
- * User-facing Notes panel for the orchestrator extension drawer.
+ * User-facing Notes panel, shown as a tab of Orchestra Lens.
  *
- * Mounts inside the second inline-drawer of the orchestrator settings
- * container (see `ui-templates.js` → `buildOrchestratorSettingsHtml`).
  * Renders the `NOTES_PANEL_TEMPLATE` from `ui-templates.js`, attaches a
  * floor-state adapter via `attachNotesFloorState`, and wires up the
  * Open/Closed tab switcher plus the per-row Close / Edit / Delete

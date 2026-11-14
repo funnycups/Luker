@@ -1,0 +1,115 @@
+/* Command palette + dialog */
+.mlens .ml-palette-backdrop, .mlens .ml-dialog-backdrop {
+    position: absolute; inset: 0; z-index: 20;
+    display: flex; justify-content: center; align-items: flex-start;
+    padding: min(14vh, 120px) 16px 16px;
+    background: var(--ml-scrim);
+    animation: ml-fade 140ms ease-out;
+}
+@keyframes ml-fade { from { opacity: 0; } }
+@keyframes ml-pop { from { opacity: 0; transform: translateY(-6px) scale(0.985); } }
+
+.mlens .ml-palette {
+    display: flex; flex-direction: column; width: min(640px, 100%); max-height: min(560px, 76vh);
+    border-radius: var(--ml-radius-lg); background: var(--ml-raised); box-shadow: var(--ml-shadow-3);
+    overflow: hidden; animation: ml-pop 160ms var(--ml-ease);
+}
+.mlens .ml-palette-field { display: flex; align-items: center; gap: 10px; padding: 0 14px; height: 52px; border-bottom: 1px solid var(--ml-border); color: var(--ml-text-faint); }
+.mlens .ml-palette-input {
+    flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; outline: none; box-shadow: none;
+    background: transparent; color: var(--ml-text); font: inherit; font-size: 15px;
+}
+.mlens .ml-palette-input::placeholder { color: var(--ml-text-faint); }
+.mlens .ml-palette-list { flex: 1 1 auto; overflow-y: auto; padding: 6px; }
+.mlens .ml-palette-group { padding: 10px 10px 4px; font-size: 11px; font-weight: 600; color: var(--ml-text-faint); text-transform: uppercase; letter-spacing: 0.05em; }
+.mlens .ml-palette-item {
+    display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 6px 10px;
+    border-radius: var(--ml-radius-sm); cursor: pointer;
+}
+.mlens .ml-palette-item[aria-selected="true"] { background: var(--ml-active); }
+.mlens .ml-palette-icon { display: grid; place-items: center; width: 20px; flex: none; color: var(--ml-text-muted); }
+.mlens .ml-palette-main { display: grid; flex: 1; min-width: 0; }
+.mlens .ml-palette-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 500; }
+.mlens .ml-palette-snippet { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--ml-text-faint); }
+.mlens .ml-palette-meta { flex: none; font-size: 11.5px; color: var(--ml-text-faint); white-space: nowrap; }
+.mlens .ml-palette-empty { padding: 28px; text-align: center; color: var(--ml-text-faint); }
+.mlens .ml-palette-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--ml-border); background: var(--ml-surface-2); }
+
+.mlens .ml-dialog {
+    display: flex; flex-direction: column; width: min(760px, 100%); max-height: 80vh;
+    border-radius: var(--ml-radius-lg); background: var(--ml-raised); box-shadow: var(--ml-shadow-3);
+    overflow: hidden; outline: none; animation: ml-pop 160ms var(--ml-ease);
+}
+.mlens .ml-dialog-head { display: flex; align-items: center; gap: 10px; padding: 12px 12px 12px 18px; border-bottom: 1px solid var(--ml-border); }
+.mlens .ml-dialog-title { flex: 1; font-size: 14px; }
+.mlens .ml-dialog-body { display: grid; gap: 18px; padding: 16px 18px 20px; overflow: auto; }
+.mlens .ml-dialog-section .ml-section-title { margin-bottom: 6px; }
+
+/* ---- Inline editing ---- */
+.mlens .ml-editable[data-editable="true"] { cursor: text; border-radius: var(--ml-radius-sm); transition: background var(--ml-dur), box-shadow var(--ml-dur); }
+.mlens .ml-editable[data-editable="true"]:not(.is-editing):hover { background: var(--ml-hover); box-shadow: 0 0 0 3px var(--ml-hover); }
+.mlens .ml-editable[data-editable="true"]:focus-visible { outline: 2px solid var(--ml-accent); outline-offset: 2px; }
+.mlens .ml-editable.is-editing { background: none; box-shadow: none; }
+.mlens dd.ml-editable.is-empty { color: var(--ml-text-faint); font-style: normal; }
+.mlens .ml-inline { display: flex; flex-direction: column; gap: 4px; width: 100%; min-width: 0; vertical-align: top; }
+.mlens .ml-inline-input {
+    display: block; width: 100%; min-width: 0;
+    border: 1px solid var(--ml-accent); border-radius: var(--ml-radius-sm);
+    background: var(--ml-surface); color: var(--ml-text);
+    font: inherit; font-size: inherit; font-weight: inherit; line-height: inherit; letter-spacing: inherit;
+    padding: 4px 8px; margin: -5px -9px 0; width: calc(100% + 18px);
+    outline: none; resize: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ml-accent) 18%, transparent);
+}
+.mlens .ml-inline-input.is-multi { overflow: auto; white-space: pre-wrap; word-break: break-word; }
+.mlens .ml-inline-hint { font-size: 11px; font-weight: 400; color: var(--ml-text-faint); white-space: nowrap; }
+
+/* ---- Shared bottom toast (edit saved / undo) ---- */
+.mlens .ml-toast {
+    position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+    z-index: 40;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: var(--ml-radius);
+    background: var(--ml-raised); border: 1px solid var(--ml-border-strong);
+    box-shadow: var(--ml-shadow-2);
+    font-size: 13px; white-space: nowrap;
+    animation: ml-enter 180ms var(--ml-ease);
+}
+.mlens .ml-toast[hidden] { display: none; }
+.mlens .ml-toast svg { color: var(--ml-accent); flex: none; }
+.mlens .ml-toast.is-error svg { color: var(--ml-danger); }
+.mlens .ml-toast-btn {
+    display: flex; align-items: center; gap: 5px;
+    border: 0; background: none; cursor: pointer;
+    color: var(--ml-accent); font-size: 13px; font-weight: 600; padding: 0 4px; margin-left: 4px;
+}
+.mlens .ml-toast-btn:hover { text-decoration: underline; }
+.mlens .ml-inline-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; }
+.mlens .ml-inline-foot .ml-inline-hint { margin-top: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mlens .ml-inline-actions { display: inline-flex; gap: 4px; margin-left: auto; }
+.mlens .ml-inline-actions .ml-btn-sm { height: 24px; padding: 0 8px; font-size: 12px; }
+.mlens.is-compact .ml-inline-actions .ml-btn-sm { height: 34px; padding: 0 14px; font-size: 13px; }
+
+/* ---- Token counter ---- */
+.mlens .ml-tok { display: flex; flex-direction: column; gap: 12px; }
+.mlens .ml-tok-when { font-size: 12px; color: var(--ml-text-faint); }
+.mlens .ml-tok-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; border: 1px solid var(--ml-border); border-radius: var(--ml-radius); overflow: hidden; background: var(--ml-border); }
+.mlens .ml-tok-cell { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--ml-surface); min-width: 0; }
+.mlens .ml-tok-label { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ml-text-faint); }
+.mlens .ml-tok-num { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.mlens .ml-tok-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--ml-text-faint); }
+.mlens [data-tone="focus"] .ml-tok-dot { background: var(--ml-recalled); }
+.mlens [data-tone="core"] .ml-tok-dot { background: var(--ml-pinned); }
+.mlens .ml-tok-sub { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin: -4px 2px 0; font-size: 12px; color: var(--ml-text-muted); }
+.mlens .ml-tok-chart { margin: 0; padding: 10px 12px 12px; border: 1px solid var(--ml-border); border-radius: var(--ml-radius); background: var(--ml-surface); }
+.mlens .ml-tok-chart-head { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; color: var(--ml-text-muted); }
+.mlens .ml-tok-legend { display: inline-flex; gap: 10px; }
+.mlens .ml-tok-legend > span { display: inline-flex; align-items: center; gap: 4px; }
+.mlens .ml-tok-bars { display: flex; align-items: flex-end; gap: 3px; height: 96px; }
+.mlens .ml-tok-bar { flex: 1 1 0; min-width: 3px; display: flex; flex-direction: column; border-radius: 3px 3px 1px 1px; overflow: hidden; }
+.mlens .ml-tok-bar-focus { background: var(--ml-recalled); min-height: 0; }
+.mlens .ml-tok-bar-core { background: var(--ml-pinned); min-height: 0; }
+.mlens .ml-tok-bar:hover { filter: brightness(1.12); }
+.mlens .ml-tok-empty, .mlens .ml-tok-note { font-size: 12px; color: var(--ml-text-faint); line-height: 1.6; }
+.mlens .ml-tok-clear { align-self: flex-start; margin-left: -6px; }
+.mlens.is-compact .ml-tok-num { font-size: 17px; }

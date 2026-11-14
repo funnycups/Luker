@@ -1,0 +1,78 @@
+/* Compact layout (≤ 860px): inspector becomes a bottom sheet. Loaded last. */
+.olens.is-compact { --ol-topbar-h: 50px; font-size: 13.5px; }
+.olens.is-compact .ol-topbar {
+    grid-template-columns: auto 1fr auto; gap: 4px; padding: 0 6px;
+    padding-top: env(safe-area-inset-top);
+    flex-basis: calc(var(--ol-topbar-h) + env(safe-area-inset-top));
+}
+.olens.is-compact .ol-brand-name, .olens.is-compact .ol-brand-chat, .olens.is-compact .ol-sync,
+.olens.is-compact .ol-hide-compact, .olens.is-compact .ol-toggle-inspector,
+.olens.is-compact .ol-topbar .ol-modebtn-label { display: none; }
+.olens.is-compact .ol-viewswitch { min-width: 0; }
+.olens.is-compact .ol-seg-compact .ol-seg-btn { height: 36px; padding: 0 12px; }
+.olens.is-compact .ol-seg-compact .ol-seg-btn[aria-pressed="false"] .ol-seg-label { display: none; }
+.olens.is-compact .ol-iconbtn { width: 36px; height: 36px; }
+.olens.is-compact .ol-modebtn { height: 36px; margin: 0 2px; padding: 0 6px 0 8px; }
+.olens.is-compact .ol-menu { position: fixed; left: 10px; right: 10px; top: calc(var(--ol-topbar-h) + env(safe-area-inset-top) + 6px); width: auto; }
+.olens.is-compact .ol-menu-item { padding: 12px; }
+
+.olens.is-compact .ol-inspector {
+    position: absolute; z-index: 8; left: 0; right: 0; bottom: 0; width: auto; height: min(80%, 700px); opacity: 1;
+    border-radius: 16px 16px 0 0; border: 1px solid var(--ol-border); border-bottom: 0;
+    box-shadow: var(--ol-shadow-3);
+    transform: translateY(102%); visibility: hidden;
+    transition: transform 260ms var(--ol-ease), visibility 0s linear 260ms;
+}
+.olens.is-compact.sheet-open .ol-inspector { transform: none; visibility: visible; transition-delay: 0s; width: auto; }
+.olens.is-compact .ol-inspector::before {
+    content: ""; position: sticky; top: 0; z-index: 2; display: block; width: 36px; height: 4px; margin: 8px auto -8px;
+    border-radius: 4px; background: var(--ol-border-strong);
+}
+.olens.is-compact .ol-insp-body { width: auto; padding: 14px 16px calc(28px + env(safe-area-inset-bottom)); }
+.olens.is-compact .ol-scrim { display: block; position: absolute; inset: 0; z-index: 7; background: var(--ol-scrim); opacity: 0; pointer-events: none; transition: opacity 220ms; }
+.olens.is-compact.sheet-open .ol-scrim { opacity: 1; pointer-events: auto; }
+
+/* Flow: stack columns vertically, wires go top → bottom */
+.olens.is-compact .ol-flow-head { padding: 14px 14px 4px; }
+.olens.is-compact .ol-flow-title { flex-direction: column; gap: 2px; }
+.olens.is-compact .ol-flow-canvas { padding: 18px 14px 48px; }
+.olens.is-compact .ol-flow-row { flex-direction: column; align-items: stretch; gap: 34px; }
+.olens.is-compact .ol-col, .olens.is-compact .ol-loop, .olens.is-compact .ol-director-main .ol-col { width: auto; }
+.olens.is-compact .ol-col-cards { display: grid; grid-template-columns: 1fr; }
+.olens.is-compact .ol-flow-inner { min-width: 0; }
+.olens.is-compact .ol-flow-scroll { overflow-x: hidden; }
+.olens.is-compact .ol-topbar .ol-enable, .olens.is-compact .ol-topbar .ol-modepick { display: none; }
+.olens.is-compact .ol-mobilebar { display: flex; }
+.olens.is-compact .ol-start, .olens.is-compact .ol-out { align-self: center; }
+.olens.is-compact .ol-director-main { align-items: stretch; gap: 34px; }
+.olens.is-compact .ol-director-team { grid-template-columns: 1fr; }
+.olens.is-compact .ol-director-team { grid-template-rows: none; }
+.olens.is-compact .ol-director-team .ol-col[data-group] { grid-column: auto; grid-row: auto; }
+.olens.is-compact .ol-card { padding: 10px; }
+.olens.is-compact .ol-card-role { -webkit-line-clamp: 3; }
+
+/* Run */
+.olens.is-compact .ol-run-head { padding: 12px 14px 0; }
+.olens.is-compact .ol-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; }
+.olens.is-compact .ol-stat-note { display: none; }
+.olens.is-compact .ol-stats .ol-spacer { display: none; }
+.olens.is-compact .ol-stats .ol-btn { grid-column: 1 / -1; }
+.olens.is-compact .ol-tl-tick:nth-child(even) { display: none; }
+.olens.is-compact .ol-run-main { padding: 12px 10px 24px; }
+.olens.is-compact .ol-tl { --ol-lane-label: 92px; }
+.olens.is-compact .ol-tl-body { padding: 0 8px 10px; max-height: none; }
+.olens.is-compact .ol-lane-sum { display: none; }
+.olens.is-compact .ol-lane-label { gap: 6px; font-size: 12px; }
+.olens.is-compact .ol-lane-track { height: 30px; }
+.olens.is-compact .ol-detail { padding: 2px 12px 14px; }
+
+/* History */
+.olens.is-compact .ol-history-head { padding: 14px 14px 6px; }
+.olens.is-compact .ol-history-body { padding: 4px 12px 32px; }
+.olens.is-compact .ol-hrow { grid-template-columns: 44px 1fr 14px; gap: 10px; }
+.olens.is-compact .ol-hrow-side { display: none; }
+
+.olens.is-compact .ol-banner { padding: 8px 14px; flex-wrap: wrap; }
+.olens.is-compact .ol-dialog-backdrop { padding: 10px; align-items: flex-end; }
+.olens.is-compact .ol-dialog { max-height: 86vh; border-radius: 16px 16px 12px 12px; }
+.olens.is-compact .ol-toast { left: 12px; right: 12px; transform: none; bottom: calc(16px + env(safe-area-inset-bottom)); white-space: normal; }

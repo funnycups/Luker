@@ -9,15 +9,6 @@ const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
 const registerExtensionApi = __ctx.registerExtensionApi;
-const world_info_position = __ctx.constants.wiPosition;
-import {
-    buildOrchestrationEditorPopupPanelHtml,
-    buildOrchestratorSettingsHtml,
-    injectWorkspaceIntoTabHost,
-    refreshPresetSelectorBars,
-    renderInheritOrOverridePanel,
-    renderSkillChipsPlaceholder,
-} from './ui-templates.js';
 import {
     buildLastUserAnchor,
     compactStageOutputs,
@@ -29,8 +20,6 @@ import { ensureStyles } from './styles.js';
 import { STATE_ERROR_REASONS } from '../../state-errors.js';
 import {
     CAPSULE_INJECT_POSITION_SCHEMA_VERSION,
-    DEFAULT_AGENDA_PLANNER_PROMPT,
-    DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT,
     DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT,
     DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE,
     ORCH_ALLOWED_GENERATION_TYPES,
@@ -42,13 +31,8 @@ import {
     ORCH_NODE_TYPE_REVIEW,
     ORCH_NODE_TYPE_WORKER,
     ORCH_REVIEW_FEEDBACK_FIELD,
-    PORTABLE_PROFILE_FORMAT_V1,
-    PORTABLE_PROFILE_FORMAT_V2,
-    PORTABLE_PROFILE_FORMAT_V3,
-    PORTABLE_PROFILE_FORMAT_V4,
     createDefaultDirectorProfile,
     sanitizeDirectorProfile,
-    defaultAgendaAgents,
     defaultLoopProfile,
     defaultSettings,
     getCriticPromptReminderLines,
@@ -104,7 +88,6 @@ import {
     getCurrentRun,
     startRun,
 } from './run-state/store.js';
-import { openRunPanel, initRunPanel } from './run-panel/panel.js';
 
 // Local no-op stubs for the legacy runtime-trace API. The trace module
 // was deleted when the run-panel store became the source of truth for
@@ -119,7 +102,6 @@ const createOrchestrationRuntimeTrace = () => ({ director: null, finalMessage: '
 const finalizeOrchestrationRuntimeTrace = () => {};
 const getLatestOrchestrationRuntimeTrace = () => null;
 const truncateOrchestrationRuntimePreview = (s) => String(s || '');
-const renderLastOrchestrationResultHtml = () => '';
 import {
     canReuseLatestOrchestrationSnapshot,
     clearCacheForChatChange,
@@ -138,27 +120,18 @@ import {
 import {
     getPresetApiPresetName,
     getPresetPromptPresetName,
-    refreshOpenAIPresetSelectors,
-    renderConnectionProfileOptions,
-    renderOpenAIPresetOptions,
     resolveOrchestrationRuntimeWorldInfo,
     sanitizeConnectionProfileName,
     sanitizePromptPresetName,
 } from './agent-resolution.js';
 import {
     applyCharacterExecutionModeForAvatar,
-    clearCharacterExtensionForMode,
     getCharacterActivePresetId,
     getCharacterDisplayNameByAvatar,
     getCharacterExtensionDataByAvatar,
     getCharacterIndexByAvatar,
-    getCharacterPresetLibrary,
     getExecutionMode,
     getRuntimePresetScope,
-    hasCharacterAgendaPresetLibrary,
-    hasCharacterDirectorPresetLibrary,
-    hasCharacterLoopPresetLibrary,
-    hasCharacterSpecPresetLibrary,
     normalizeExecutionMode,
 } from './character-overrides.js';
 import { registerOrchestratorCardBindingSlot } from './card-binding-slot.js';
@@ -183,9 +156,12 @@ import { runSpecOrchestration } from './spec-runtime.js';
 import { runLoopOrchestration, attachNotesFloorState } from './loop-runtime.js';
 import { handleDirectorDispatch, runMainAgentLoop } from './director-runtime.js';
 const createMessageEditorHandle = __ctx.createMessageEditorHandle;
-import { buildDirectorDefaultSystemPrompt } from './director-default-prompt.js';
 import { createContentPayloadCache } from './director-content-payload.js';
-import { executeLoopTool, beginSimulation, endSimulation, getBuiltinToolRegistry } from './loop-tools.js';
+import {
+    executeLoopTool,
+    beginSimulation,
+    endSimulation,
+} from './loop-tools.js';
 import {
     registerOrchestrationTool,
     unregisterOrchestrationTool,
@@ -196,8 +172,6 @@ import {
     rehydrateBridgedSillyTavernTools,
 } from './register-custom-tool.js';
 import { registerSkillOrchestrationTools } from './skill-orchestration-tools.js';
-import { openCustomToolEditor } from './custom-tool-editor.js';
-import { openBridgeStToolPicker } from './bridge-st-tool-picker.js';
 import { augmentStudioPromptWithCustomTools } from './studio-prompt-augment.js';
 import { reviewIncomingCustomTools } from './character-import-tools-review.js';
 import {
@@ -209,10 +183,8 @@ import {
     collectCustomToolsFromCardExtension,
     planImportedCardCustomToolsReview,
 } from './card-import-custom-tools.js';
-import { mountNotesPanel } from './notes-panel.js';
 const skillsApi = __ctx.skills;
 import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
-import { mountSkillChips } from '../../skills/skill-chips.js';
 import { registerSkillEmbedLifecycle } from '../../skills/embed-lifecycle.js';
 import { maybeAttachSkillsToOrchPresetExport, maybeAttachSkillsToPresetExport } from '../../skills/embed-export-hook.js';
 // Note: `ORCH_EXECUTION_MODE_LOOP` is canonically defined in defaults.js
@@ -225,27 +197,17 @@ import {
     sanitizeAgentToolFlags,
 } from './persistence.js';
 import {
-    createPreset,
-    deletePreset,
-    duplicatePreset,
     getActivePreset,
     getActivePresetId,
     getPreset,
     migrateGlobalLegacyToLibraries,
-    renamePreset,
-    setActivePresetId,
     setMigrationPersistHook,
     writeActivePreset,
     writePresetByName,
 } from './preset-library.js';
 import {
     computeActiveOrchPresetScope,
-    copyOrchPresetSkills,
-    emitOrchPresetDeleted,
-    emitOrchPresetExportReady,
-    emitOrchPresetImportReady,
     purgePromptPresetNameInLibrary,
-    renameOrchPresetSkills,
 } from './preset-lifecycle-hooks.js';
 import {
     LOOP_ITERATION_CONTRACT_LINES,
@@ -257,12 +219,9 @@ import {
 } from '../../iteration-library/system-prompt-patch.js';
 import { readIterationStringArg } from './iter-arg-validator.js';
 import {
-    createNewStage,
     ensureDirectorEditorIntegrity,
     ensureEditorIntegrity,
     ensureLoopEditorIntegrity,
-    ensureLorebookFilterOnEditor,
-    initializeUiState,
     loadCharacterAgendaEditorState,
     loadCharacterDirectorEditorState,
     loadCharacterEditorState,
@@ -271,42 +230,22 @@ import {
     loadGlobalDirectorEditorState,
     loadGlobalEditorState,
     loadGlobalLoopEditorState,
-    pickDefaultPreset,
     setDisplayedScopeForMode,
     syncCharacterEditorWithActiveAvatar,
     uiState,
 } from './editor-state.js';
 import {
     getAgendaEditorByScope,
-    getAgendaScopeFromElement,
-    getCopyScopeFromElement,
-    getDisplayedScope,
-    getDisplayedScopeForMode,
-    getDisplayedScopeLabel,
     getEditorByScope,
-    getExplicitScopeFromElement,
     getIterationDefaultScope,
     getLoopEditorByScope,
-    getPopupEditingLabel,
-    getProfileTitleForScope,
-    getScopeFromElementOrMode,
 } from './editor-display.js';
 import {
-    createPortableAgendaProfileFromEditor,
-    createPortableDirectorProfileFromEditor,
-    createPortableLoopProfileFromEditor,
-    createPortableProfileFromEditor,
     persistCharacterAgendaEditor,
     persistCharacterDirectorEditor,
     persistCharacterEditor,
     persistCharacterLoopEditor,
-    persistCustomToolsPatch,
-    persistGlobalAgendaEditorFrom,
-    persistGlobalDirectorEditorFrom,
-    persistGlobalEditorFrom,
-    persistGlobalLoopEditorFrom,
     persistOrchestratorCharacterExtension,
-    persistRuntimeLimitsPatch,
 } from './editor-persist.js';
 import { collectResolvedSkillsForOrchPreset } from './collect-active-skills.js';
 import { openOrchestratorIterationStudio } from './iter-studio/studio.js';
@@ -325,7 +264,6 @@ import { promptEmbedUnembeddedPresetsForCharacterApply } from './prompt-embed-un
 
 const MODULE_NAME = 'orchestrator';
 const ORCH_RESULT_EVENT = 'luker.orchestrator.result';
-const UI_BLOCK_ID = 'orchestrator_settings';
 
 // Expose the orchestrator custom-tool API surface to other extensions via
 // `getContext().getExtensionApi('orchestrator')`. Matches the three-layer
@@ -359,6 +297,21 @@ registerExtensionApi(MODULE_NAME, {
     // hook to bundle all "active" skills into an orch-preset export
     // (see `public/scripts/skills/embed-export-hook.js`).
     collectResolvedSkillsForOrchPreset,
+    // Used by Orchestra Lens (the workspace UI).
+    openIterationStudio: () => openAiIterationStudio(getContext(), extension_settings[MODULE_NAME]),
+    openSkillManager: () => openOrchestratorSkillManager(),
+    loadSkillInventory: () => loadChipsInventory(),
+    editLastResult: () => editLastOrchestrationResult(getContext()),
+    getLastRunSummary: () => buildLatestOrchestrationStateSummary(getContext()),
+    reapplyCapsule: () => reapplyLatestCapsuleInjection(getContext()),
+    getIterationPromptDefaults: () => ({
+        request: getDefaultRequestSystemPrompt(),
+        spec: DEFAULT_SPEC_ITERATION_MODE_BLOCK,
+        loop: DEFAULT_LOOP_ITERATION_MODE_BLOCK,
+        director: DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK,
+        agenda: DEFAULT_AGENDA_ITERATION_MODE_BLOCK,
+    }),
+    openRunDock: () => import('./lens/index.js').then(m => m.openRunDock()),
 });
 registerOrchestratorCardBindingSlot(__ctx);
 // Module-scope cache for the director content payload captured at
@@ -644,6 +597,7 @@ async function editLastOrchestrationResult(context) {
         return false;
     }
 
+    const original = getActiveSnapshot();
     const input = await context.callGenericPopup(
         i18n('Edit latest orchestration result text.'),
         context.POPUP_TYPE.INPUT,
@@ -673,7 +627,7 @@ async function editLastOrchestrationResult(context) {
         notifyError(i18n('No recent orchestration result available for this chat.'));
         return false;
     }
-    if (String(activeSnapshot.chatKey || '') !== String(chatKey || '')) {
+    if (activeSnapshot !== original || getChatKey(getContext()) !== chatKey || activeSnapshot.chatKey !== chatKey) {
         notifyError(i18n('No recent orchestration result available for this chat.'));
         return false;
     }
@@ -682,8 +636,6 @@ async function editLastOrchestrationResult(context) {
         ...activeSnapshot,
         capsuleText: nextText,
     };
-    setActiveSnapshot(updatedSnapshot);
-    clearCapsulePrompt(context);
     const persisted = await persistEditedSnapshotToFloorState(context, updatedSnapshot);
     if (!persisted.ok) {
         notifyError(i18nFormat(
@@ -692,7 +644,10 @@ async function editLastOrchestrationResult(context) {
         ));
         return false;
     }
-    ensureUi();
+    if (getActiveSnapshot() === original) {
+        setActiveSnapshot(updatedSnapshot);
+        clearCapsulePrompt(context);
+    }
     notifySuccess(i18n('Saved latest orchestration result.'));
     updateUiStatus(i18n('Saved latest orchestration result.'));
     return true;
@@ -705,33 +660,6 @@ async function editLastOrchestrationResult(context) {
  * orchestration. Returns false when the anchored user message has been
  * deleted or replaced — the caller should treat that as a soft error.
  */
-
-async function openLastOrchestrationResult(context) {
-    await loadOrchestratorChatState(context);
-    const hasEntry = Boolean(getLatestOrchestrationEntry(context));
-    const editButtonResult = context?.POPUP_RESULT?.CUSTOM1 ?? 2;
-    const popupResult = await context.callGenericPopup(
-        renderLastOrchestrationResultHtml(getLatestOrchestrationEntry(context)),
-        context.POPUP_TYPE.TEXT,
-        i18n('Latest Orchestration Result'),
-        {
-            wide: true,
-            wider: true,
-            large: true,
-            allowVerticalScrolling: true,
-            okButton: i18n('Close'),
-            customButtons: hasEntry
-                ? [{ text: i18n('Edit Result'), result: editButtonResult, appendAtEnd: true }]
-                : [],
-        },
-    );
-    if (popupResult === editButtonResult) {
-        const saved = await editLastOrchestrationResult(context);
-        if (saved) {
-            await openLastOrchestrationResult(context);
-        }
-    }
-}
 
 function shouldRunOrchestrationForPayload(payload) {
     if (!payload || typeof payload !== 'object') {
@@ -1222,7 +1150,6 @@ async function onWorldInfoFinalized(payload) {
             injectCapsuleToPayload(payload, capsuleText, settings);
         }
         await storeCompletedOrchestrationSnapshot(context, anchor, capsuleText, finalRun.stageOutputs || []);
-        ensureUi();
         finalizeOrchestrationRuntimeTrace(finalRun?.runtimeTrace || getLatestOrchestrationRuntimeTrace(context), 'completed', {
             capsuleText,
             reviewRerunCount: Number(finalRun?.reviewRerunCount || 0),
@@ -1293,7 +1220,6 @@ async function onMessageDeleted(_chatLength, _details) {
     if (activeChanged || mapChanged) {
         clearCapsulePrompt(context);
     }
-    ensureUi();
 }
 
 async function onMessageEdited(_messageId, _mutationMeta = null) {
@@ -1307,13 +1233,6 @@ async function onMessageEdited(_messageId, _mutationMeta = null) {
     const { activeChanged } = await refreshOrchestratorStateAfterStructuralEvent(context);
     if (activeChanged) {
         clearCapsulePrompt(context);
-    }
-    ensureUi();
-}
-
-function notifyInfo(message) {
-    if (typeof toastr !== 'undefined') {
-        toastr.info(String(message));
     }
 }
 
@@ -1329,48 +1248,6 @@ function notifyError(message) {
     }
 }
 
-function getSettings() {
-    return extension_settings[MODULE_NAME];
-}
-
-/**
- * Lazy accessor for the persistent director-mode profile slot. Mirrors
- * the `settings.loopProfile` pattern: a single global slot at the
- * extension-settings root (MVP — character override comes later). On
- * first access the slot is materialized from `createDefaultDirectorProfile()`,
- * so subsequent binders mutate the same object instead of stamping a
- * detached defaults clone every render.
- *
- * Note: we deliberately do NOT run the result through `sanitizeDirectorProfile`
- * here. The sanitizer drops sub-agents with empty id / systemPrompt
- * (correct for runtime safety, but it would erase in-progress rows
- * during typing). Runtime dispatch sanitizes on its way to the LLM;
- * editor reads and writes operate on the unsanitized draft.
- */
-function getDirectorProfileFromSettings(settings) {
-    const target = settings && typeof settings === 'object' ? settings : getSettings();
-    if (!target || typeof target !== 'object') {
-        return createDefaultDirectorProfile();
-    }
-    if (!target.directorProfile || typeof target.directorProfile !== 'object') {
-        target.directorProfile = createDefaultDirectorProfile();
-    }
-    const director = target.directorProfile;
-    if (!director.mainAgent || typeof director.mainAgent !== 'object') {
-        director.mainAgent = { promptPresetName: '', apiPresetName: '', systemPrompt: '' };
-    }
-    if (!Array.isArray(director.subAgents)) {
-        director.subAgents = [];
-    }
-    if (!director.tools || typeof director.tools !== 'object') {
-        // Re-materialize via the sanitizer (single source of truth for
-        // the default-all-on disposition and the finalize:false override).
-        const sanitized = sanitizeDirectorProfile(director);
-        director.tools = sanitized.tools;
-    }
-    return target.directorProfile;
-}
-
 function escapeHtml(value) {
     return String(value ?? '')
         .replaceAll('&', '&amp;')
@@ -1378,352 +1255,6 @@ function escapeHtml(value) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll('\'', '&#39;');
-}
-
-function buildBestEffortSpecFromAgendaAgents(agents, finalAgentId) {
-    const normalizedAgents = sanitizePresetMap(agents);
-    const agentIds = Object.keys(normalizedAgents);
-    const fallbackFinalAgentId = agentIds[0] || 'finalizer';
-    const resolvedFinalAgentId = normalizedAgents[finalAgentId]
-        ? String(finalAgentId)
-        : fallbackFinalAgentId;
-    const nonFinalAgentIds = agentIds.filter(id => id !== resolvedFinalAgentId);
-    const distillerId = nonFinalAgentIds.find(id => {
-        const normalizedId = String(id || '').trim().toLowerCase();
-        return normalizedId === 'distiller' || normalizedId.includes('distill');
-    }) || null;
-    const reviewAgentIds = nonFinalAgentIds.filter(id => {
-        if (id === distillerId) {
-            return false;
-        }
-        const normalizedId = String(id || '').trim().toLowerCase();
-        return normalizedId === 'critic'
-            || normalizedId.includes('critic')
-            || normalizedId.includes('review')
-            || normalizedId.includes('audit');
-    });
-    const remainingWorkerIds = nonFinalAgentIds.filter(id => id !== distillerId && !reviewAgentIds.includes(id));
-    const groundingAgentIds = remainingWorkerIds.filter(id => {
-        const normalizedId = String(id || '').trim().toLowerCase();
-        return normalizedId.includes('lore')
-            || normalizedId.includes('ground')
-            || normalizedId.includes('constraint')
-            || normalizedId.includes('recall')
-            || normalizedId.includes('memory');
-    });
-    const reasoningAgentIds = remainingWorkerIds.filter(id => {
-        if (groundingAgentIds.includes(id)) {
-            return false;
-        }
-        const normalizedId = String(id || '').trim().toLowerCase();
-        return normalizedId.includes('plan')
-            || normalizedId.includes('scene')
-            || normalizedId.includes('progress')
-            || normalizedId.includes('writer')
-            || normalizedId.includes('draft');
-    });
-    const supportAgentIds = remainingWorkerIds.filter(id => !groundingAgentIds.includes(id) && !reasoningAgentIds.includes(id));
-    const stages = [];
-
-    if (distillerId) {
-        stages.push({
-            id: 'distill',
-            mode: 'serial',
-            nodes: [distillerId],
-        });
-    }
-
-    if (groundingAgentIds.length > 0) {
-        stages.push({
-            id: 'grounding',
-            mode: groundingAgentIds.length > 1 ? 'parallel' : 'serial',
-            nodes: groundingAgentIds,
-        });
-    }
-
-    if (reasoningAgentIds.length > 0) {
-        stages.push({
-            id: 'reason',
-            mode: reasoningAgentIds.length > 1 ? 'parallel' : 'serial',
-            nodes: reasoningAgentIds,
-        });
-    }
-
-    if (supportAgentIds.length > 0) {
-        stages.push({
-            id: 'workers',
-            mode: supportAgentIds.length > 1 ? 'parallel' : 'serial',
-            nodes: supportAgentIds,
-        });
-    }
-
-    if (reviewAgentIds.length > 0) {
-        stages.push({
-            id: 'review',
-            mode: reviewAgentIds.length > 1 ? 'parallel' : 'serial',
-            nodes: reviewAgentIds.map(id => ({
-                id,
-                preset: id,
-                type: ORCH_NODE_TYPE_REVIEW,
-            })),
-        });
-    }
-
-    stages.push({
-        id: 'finalize',
-        mode: 'serial',
-        nodes: [resolvedFinalAgentId],
-    });
-
-    return sanitizeSpec({ stages });
-}
-
-function copySpecPresetsIntoAgendaEditor(sourceEditor, agendaEditor) {
-    ensureEditorIntegrity(sourceEditor);
-    ensureAgendaEditorIntegrity(agendaEditor);
-    agendaEditor.agents = sanitizePresetMap(sourceEditor.presets);
-    if (agendaEditor.agents.synthesizer) {
-        agendaEditor.agents.finalizer = structuredClone(agendaEditor.agents.synthesizer);
-        delete agendaEditor.agents.synthesizer;
-    }
-    if (Object.keys(agendaEditor.agents).length === 0) {
-        agendaEditor.agents.finalizer = structuredClone(defaultAgendaAgents.finalizer);
-    }
-    agendaEditor.finalAgentId = agendaEditor.agents.finalizer
-        ? 'finalizer'
-        : (Object.keys(agendaEditor.agents)[0] || 'finalizer');
-}
-
-function copyAgendaAgentsIntoSpecEditor(agendaEditor, specEditor) {
-    ensureAgendaEditorIntegrity(agendaEditor);
-    ensureEditorIntegrity(specEditor);
-    const copiedPresets = sanitizePresetMap(agendaEditor.agents);
-    const fallbackFinalAgentId = Object.keys(copiedPresets)[0] || 'finalizer';
-    const finalAgentId = copiedPresets[agendaEditor.finalAgentId]
-        ? sanitizeIdentifierToken(agendaEditor.finalAgentId, fallbackFinalAgentId)
-        : fallbackFinalAgentId;
-    specEditor.presets = copiedPresets;
-    specEditor.spec = buildBestEffortSpecFromAgendaAgents(copiedPresets, finalAgentId);
-    ensureEditorIntegrity(specEditor);
-}
-
-function renderPresetOptions(presets, selectedPreset) {
-    const selected = String(selectedPreset || '');
-    const ids = Object.keys(presets || {});
-    const options = [];
-
-    if (selected && !presets[selected]) {
-        options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)} ${escapeHtml(i18n('(missing)'))}</option>`);
-    }
-
-    for (const presetId of ids) {
-        options.push(`<option value="${escapeHtml(presetId)}"${presetId === selected ? ' selected' : ''}>${escapeHtml(presetId)}</option>`);
-    }
-
-    return options.join('');
-}
-
-function renderWorkflowBoard(scope, editor) {
-    const stages = Array.isArray(editor?.spec?.stages) ? editor.spec.stages : [];
-    if (stages.length === 0) {
-        return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No stages yet. Add one stage to start orchestration.'))}</div>`;
-    }
-
-    const stageBlocks = stages.map((stage, stageIndex) => {
-        const nodes = Array.isArray(stage?.nodes) ? stage.nodes : [];
-        const isParallel = stage.mode === 'parallel';
-        const modeClass = isParallel ? 'parallel' : 'serial';
-        const modeIcon = isParallel ? 'fa-solid fa-arrows-split-up-and-left' : 'fa-solid fa-arrow-down-long';
-        const modeLabel = isParallel ? i18n('Parallel') : i18n('Serial');
-        const nodeType = (type) => normalizeNodeType(type) === ORCH_NODE_TYPE_REVIEW ? 'review' : 'worker';
-        const nodeIcon = (type) => normalizeNodeType(type) === ORCH_NODE_TYPE_REVIEW ? 'fa-solid fa-magnifying-glass' : 'fa-solid fa-gear';
-
-        const nodeCards = nodes.map((node, nodeIndex) => `
-<details class="luker-studio-pipeline-node">
-    <summary>
-        <span class="luker-studio-pipeline-node-summary">
-            <i class="luker-studio-pipeline-node-icon ${nodeIcon(node.type)}" aria-hidden="true"></i>
-            <span class="luker-studio-pipeline-node-name">${escapeHtml(node.id || i18nFormat('Node ${0}', nodeIndex + 1))}</span>
-            <span class="luker-studio-pipeline-node-type">${escapeHtml(nodeType(node.type))}</span>
-        </span>
-        <span class="luker-studio-card-actions">
-            <div class="menu_button menu_button_small" data-luker-action="node-move-up" data-scope="${scope}" data-stage-index="${stageIndex}" data-node-index="${nodeIndex}" title="${escapeHtml(i18n('Up'))}"><i class="fa-solid fa-chevron-up" aria-hidden="true"></i></div>
-            <div class="menu_button menu_button_small" data-luker-action="node-move-down" data-scope="${scope}" data-stage-index="${stageIndex}" data-node-index="${nodeIndex}" title="${escapeHtml(i18n('Down'))}"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></div>
-            <div class="menu_button menu_button_small" data-luker-action="node-delete" data-scope="${scope}" data-stage-index="${stageIndex}" data-node-index="${nodeIndex}" title="${escapeHtml(i18n('Delete'))}"><i class="fa-solid fa-trash" aria-hidden="true"></i></div>
-        </span>
-        <i class="luker-studio-pipeline-node-chevron fa-solid fa-chevron-right" aria-hidden="true"></i>
-    </summary>
-    <div class="luker-studio-pipeline-node-body">
-        <label>${escapeHtml(i18n('Node ID'))}</label>
-        <input class="text_pole" data-luker-field="node-id" data-scope="${scope}" data-stage-index="${stageIndex}" data-node-index="${nodeIndex}" value="${escapeHtml(node.id)}" />
-        <label>${escapeHtml(i18n('Preset'))}</label>
-        <select class="text_pole" data-luker-field="node-preset" data-scope="${scope}" data-stage-index="${stageIndex}" data-node-index="${nodeIndex}">
-            ${renderPresetOptions(editor.presets, node.preset)}
-        </select>
-        <label>${escapeHtml(i18n('Node Type'))}</label>
-        <select class="text_pole" data-luker-field="node-type" data-scope="${scope}" data-stage-index="${stageIndex}" data-node-index="${nodeIndex}">
-            <option value="${ORCH_NODE_TYPE_WORKER}"${normalizeNodeType(node.type) === ORCH_NODE_TYPE_WORKER ? ' selected' : ''}>${escapeHtml(i18n('Worker'))}</option>
-            <option value="${ORCH_NODE_TYPE_REVIEW}"${normalizeNodeType(node.type) === ORCH_NODE_TYPE_REVIEW ? ' selected' : ''}>${escapeHtml(i18n('Review'))}</option>
-        </select>
-        <label>${escapeHtml(i18n('Node Prompt Template (optional)'))}</label>
-        <textarea class="text_pole textarea_compact" rows="4" data-luker-field="node-template" data-scope="${scope}" data-stage-index="${stageIndex}" data-node-index="${nodeIndex}" placeholder="${escapeHtml(i18n('Use {{recent_chat}}, {{last_user}}, {{distiller}}, {{previous_outputs}}. Previous orchestration result and approved review feedback are auto-injected.'))}">${escapeHtml(node.userPromptTemplate)}</textarea>
-        <details class="luker_orch_tools_section">
-            <summary>${escapeHtml(i18n('Tools'))}</summary>
-            ${renderInheritOrOverridePanel({ escapeHtml, i18n }, scope, node.tools, {
-        dataAttrName: 'luker-spec-node-tool',
-        extraAttrs: { 'stage-index': stageIndex, 'node-index': nodeIndex },
-        overrideAction: 'spec-node-tools-override',
-        resetAction: 'spec-node-tools-reset',
-        inheritedTools: editor?.spec?.defaultTools || null,
-        kind: 'node',
-        profileCustomTools: editor?.spec?.customTools || null,
-    })}
-        </details>
-        <details class="luker_orch_skills_section">
-            <summary>${escapeHtml(i18n('Skills'))}</summary>
-            ${renderSkillChipsPlaceholder({ escapeHtml, i18n }, scope, {
-        mode: 'spec',
-        level: 'agent',
-        agentRef: { kind: 'specNode', stageIndex, nodeIndex },
-    }, i18n('Per-node skill visibility. Use [+ inherit mode default] to combine.'))}
-        </details>
-    </div>
-</details>`).join('');
-
-        return `
-<div class="luker-studio-pipeline-stage" data-mode="${modeClass}">
-    <div class="luker-studio-pipeline-stage-head">
-        <div class="luker-studio-pipeline-stage-id">
-            <input class="text_pole" data-luker-field="stage-id" data-scope="${scope}" data-stage-index="${stageIndex}" value="${escapeHtml(stage.id)}" />
-        </div>
-        <span class="luker-studio-pipeline-mode-pill ${modeClass}">
-            <i class="${modeIcon}" aria-hidden="true"></i>
-            ${escapeHtml(modeLabel)}
-        </span>
-        <select class="text_pole" data-luker-field="stage-mode" data-scope="${scope}" data-stage-index="${stageIndex}" style="max-width:110px">
-            <option value="serial"${stage.mode === 'serial' ? ' selected' : ''}>${escapeHtml(i18n('Serial'))}</option>
-            <option value="parallel"${stage.mode === 'parallel' ? ' selected' : ''}>${escapeHtml(i18n('Parallel'))}</option>
-        </select>
-        <span class="luker-studio-card-actions">
-            <div class="menu_button menu_button_small" data-luker-action="stage-move-up" data-scope="${scope}" data-stage-index="${stageIndex}" title="${escapeHtml(i18n('Up'))}"><i class="fa-solid fa-chevron-up" aria-hidden="true"></i></div>
-            <div class="menu_button menu_button_small" data-luker-action="stage-move-down" data-scope="${scope}" data-stage-index="${stageIndex}" title="${escapeHtml(i18n('Down'))}"><i class="fa-solid fa-chevron-down" aria-hidden="true"></i></div>
-            <div class="menu_button menu_button_small" data-luker-action="stage-delete" data-scope="${scope}" data-stage-index="${stageIndex}" title="${escapeHtml(i18n('Delete'))}"><i class="fa-solid fa-trash" aria-hidden="true"></i></div>
-        </span>
-    </div>
-    <div class="luker-studio-pipeline-nodes">${nodeCards || `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No nodes. Add one to define this stage.'))}</div>`}</div>
-    <div class="luker-studio-pipeline-stage-footer">
-        <div class="menu_button menu_button_small" data-luker-action="node-add" data-scope="${scope}" data-stage-index="${stageIndex}">${escapeHtml(i18n('Add Node'))}</div>
-    </div>
-</div>`;
-    });
-
-    const connectorHtml = `
-<div class="luker-studio-pipeline-connector">
-    <div class="luker-studio-pipeline-connector-arrow"><i class="fa-solid fa-arrow-down" aria-hidden="true"></i></div>
-</div>`;
-
-    return `<div class="luker-studio-pipeline">${stageBlocks.join(connectorHtml)}</div>`;
-}
-
-function renderPresetBoard(scope, editor) {
-    const entries = Object.entries(editor?.presets || {}).sort((a, b) => a[0].localeCompare(b[0]));
-    if (entries.length === 0) {
-        return `<div class="luker-studio-empty-hint">${escapeHtml(i18n('No presets yet.'))}</div>`;
-    }
-
-    // Reverse index: presetId -> [nodeId, ...] so each preset card can show
-    // which spec nodes bind it. Tools attach to nodes (not presets), so this
-    // makes the identity-vs-slot split visible instead of having to hunt
-    // through the Workflow column.
-    const presetUsage = new Map();
-    const stages = Array.isArray(editor?.spec?.stages) ? editor.spec.stages : [];
-    for (const stage of stages) {
-        const nodes = Array.isArray(stage?.nodes) ? stage.nodes : [];
-        for (const node of nodes) {
-            const presetName = node?.preset;
-            const nodeId = node?.id;
-            if (!presetName || !nodeId) continue;
-            if (!presetUsage.has(presetName)) presetUsage.set(presetName, []);
-            presetUsage.get(presetName).push(nodeId);
-        }
-    }
-
-    return entries.map(([presetId, preset]) => {
-        const usedBy = presetUsage.get(presetId) || [];
-        const usageLine = usedBy.length
-            ? `<div class="luker-studio-empty-hint">${escapeHtml(i18n('Used by nodes:'))} ${escapeHtml(usedBy.join(', '))}</div>`
-            : `<div class="luker-studio-empty-hint">${escapeHtml(i18n('Not referenced by any node.'))}</div>`;
-        return `
-<div class="luker-studio-card">
-    <div class="luker-studio-card-header">
-        <b>${escapeHtml(presetId)}</b>
-        <div class="luker-studio-card-actions">
-            <div class="menu_button menu_button_small" data-luker-action="preset-delete" data-scope="${scope}" data-preset-id="${escapeHtml(presetId)}">${escapeHtml(i18n('Delete'))}</div>
-        </div>
-    </div>
-    ${usageLine}
-    <label>${escapeHtml(i18n('Agent API preset (Connection profile, empty = global orchestration API preset)'))}</label>
-    <select class="text_pole" data-luker-field="preset-api-preset" data-scope="${scope}" data-preset-id="${escapeHtml(presetId)}">
-        ${renderConnectionProfileOptions(preset?.apiPresetName, i18n('(Global orchestration API preset)'))}
-    </select>
-    <label>${escapeHtml(i18n('Agent preset (params + prompt, empty = global orchestration preset)'))}</label>
-    <select class="text_pole" data-luker-field="preset-prompt-preset" data-scope="${scope}" data-preset-id="${escapeHtml(presetId)}">
-        ${renderOpenAIPresetOptions(getContext(), preset?.promptPresetName, i18n('(Global orchestration prompt preset)'))}
-    </select>
-    <label>${escapeHtml(i18n('System Prompt'))}</label>
-    <textarea class="text_pole textarea_compact" rows="4" data-luker-field="preset-system-prompt" data-scope="${scope}" data-preset-id="${escapeHtml(presetId)}">${escapeHtml(preset.systemPrompt)}</textarea>
-    <label>${escapeHtml(i18n('User Prompt Template'))}</label>
-    <textarea class="text_pole textarea_compact" rows="5" data-luker-field="preset-user-template" data-scope="${scope}" data-preset-id="${escapeHtml(presetId)}">${escapeHtml(preset.userPromptTemplate)}</textarea>
-</div>`;
-    }).join('');
-}
-
-function getOrchestratorUiTemplateDeps() {
-    return {
-        DEFAULT_AGENDA_PLANNER_PROMPT,
-        DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT,
-        ORCH_EXECUTION_MODE_AGENDA,
-        ORCH_EXECUTION_MODE_DIRECTOR,
-        ORCH_EXECUTION_MODE_LOOP,
-        ORCH_EXECUTION_MODE_SINGLE,
-        ORCH_EXECUTION_MODE_SPEC,
-        UI_BLOCK_ID,
-        createAgendaPlannerDraft,
-        createDefaultDirectorProfile,
-        ensureAgendaEditorIntegrity,
-        escapeHtml,
-        extension_prompt_roles,
-        getAgendaEditorByScope,
-        getCharacterActivePresetId,
-        getCharacterDisplayNameByAvatar,
-        getContext,
-        getCurrentAvatar,
-        getDirectorEditorByScope,
-        getDirectorProfileFromSettings,
-        getDisplayedScope,
-        getDisplayedScopeForMode,
-        getEditorByScope,
-        getExecutionMode,
-        getLoopEditorByScope,
-        getPopupEditingLabel,
-        getProfileTitleForScope,
-        getRuntimePresetScope,
-        hasCharacterAgendaPresetLibrary,
-        hasCharacterDirectorPresetLibrary,
-        hasCharacterLoopPresetLibrary,
-        hasCharacterSpecPresetLibrary,
-        i18n,
-        initializeUiState,
-        renderConnectionProfileOptions,
-        renderOpenAIPresetOptions,
-        renderPresetBoard,
-        renderWorkflowBoard,
-        sanitizeIdentifierToken,
-        sanitizePresetMap,
-        syncCharacterEditorWithActiveAvatar,
-        uiState,
-        world_info_position,
-    };
 }
 
 function buildLatestOrchestrationStateSummary(context) {
@@ -1736,410 +1267,6 @@ function buildLatestOrchestrationStateSummary(context) {
         return i18nFormat('Last run state: none · stored anchors ${0}', anchorCount);
     }
     return i18n('Last run state: none');
-}
-
-// Apply mode-based visibility across an orchestrator UI scope. Every node
-// carrying `data-orch-mode` is shown when its value equals the current
-// executionMode and hidden otherwise; untagged nodes are not touched.
-// The capsule settings fieldset (`data-orch-mode-block="capsule"`) is
-// hidden in director mode because director writes the message body
-// directly and never emits a capsule. Called from `renderDynamicPanels`
-// (drawer) and `refreshOrchestrationEditorPopup` (popup) so both surfaces
-// share the same toggle path.
-function applyOrchestratorModeVisibility($scope, executionMode) {
-    const directorModeEnabled = executionMode === ORCH_EXECUTION_MODE_DIRECTOR;
-    $scope.find('[data-orch-mode]').each(function () {
-        const modeAttr = String(jQuery(this).attr('data-orch-mode') || '');
-        jQuery(this).toggle(modeAttr === executionMode);
-    });
-    $scope.find('[data-orch-mode-block="capsule"]').toggle(!directorModeEnabled);
-}
-
-/**
- * Hydrate General-tab fields shared by drawer and popup. Reads live
- * `settings` and the per-mode editor drafts, populating every input
- * that exists in both surfaces. Drawer callers pass `prefix=''`; popup
- * callers pass `prefix='orch-popup-'`. Uses jQuery `.find()` scoped to
- * `mount`, so callers control the surface via the DOM subtree they
- * pass in.
- *
- * Drawer-only fields (enabled / execution_mode / single_agent_*) are
- * NOT covered here — they remain in `bindUi`'s drawer-only prologue.
- */
-function hydrateGeneralTabFields(mount, context, settings, prefix = '') {
-    const p = String(prefix || '');
-    const $ = (baseId) => mount.find(`#${p}${baseId}`);
-    // Cross-mode settings-level inputs.
-    $('luker_orch_include_world_info').prop('checked', Boolean(settings.includeWorldInfoWithPreset));
-    $('luker_orch_request_system_prompt').val(String(settings.requestSystemPrompt || ''));
-    $('luker_orch_iter_mode_prompt_spec').val(String(settings.iterModePromptSpec || ''));
-    $('luker_orch_iter_mode_prompt_loop').val(String(settings.iterModePromptLoop || ''));
-    $('luker_orch_iter_mode_prompt_director').val(String(settings.iterModePromptDirector || ''));
-    $('luker_orch_iter_mode_prompt_agenda').val(String(settings.iterModePromptAgenda || ''));
-    $('luker_orch_max_recent_messages').val(String(settings.maxRecentMessages || 14));
-    $('luker_orch_node_iterations').val(String(settings.nodeIterationMaxRounds || 40));
-    $('luker_orch_review_reruns').val(String(settings.reviewRerunMaxRounds ?? 2));
-    $('luker_orch_tool_retries').val(String(settings.toolCallRetryMax ?? 2));
-    $('luker_orch_rpm_limit').val(settings.rpmLimit || 0);
-    // Capsule fields — same fieldset both surfaces.
-    $('luker_orch_capsule_position').val(String(Number(settings.capsuleInjectPosition)));
-    $('luker_orch_capsule_depth').val(String(Number(settings.capsuleInjectDepth || 0)));
-    $('luker_orch_capsule_role').val(String(Number(settings.capsuleInjectRole)));
-    $('luker_orch_capsule_custom_instruction').val(String(settings.capsuleCustomInstruction || ''));
-    updateCapsulePositionVisibility(mount);
-    // API preset dropdowns — Task 1 threaded `prefix` through.
-    refreshOpenAIPresetSelectors(mount, context, settings, p);
-    // Per-mode Runtime-limits inputs. These read from the editor draft
-    // (not from persisted state) so unsaved edits in the mode workspace
-    // stay in sync with the General-tab display.
-    {
-        const directorEditor = getDirectorEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR));
-        ensureDirectorEditorIntegrity(directorEditor);
-        $('luker_orch_director_max_rounds').val(String(Number(directorEditor.maxRounds) > 0 ? directorEditor.maxRounds : 40));
-        $('luker_orch_director_max_concurrent_subagents').val(String(Number(directorEditor.maxConcurrentSubagents) > 0 ? directorEditor.maxConcurrentSubagents : 4));
-        $('luker_orch_director_max_total_subagent_runs').val(String(Number(directorEditor.maxTotalSubagentRuns) > 0 ? directorEditor.maxTotalSubagentRuns : 16));
-        $('luker_orch_director_discard_on_abort').prop('checked', Boolean(directorEditor.discardOnAbort));
-    }
-    {
-        const agendaEditor = getAgendaEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA));
-        ensureAgendaEditorIntegrity(agendaEditor);
-        $('luker_orch_agenda_planner_max_rounds').val(String(agendaEditor.limits?.plannerMaxRounds || 6));
-        $('luker_orch_agenda_max_concurrent_agents').val(String(agendaEditor.limits?.maxConcurrentAgents || 3));
-        $('luker_orch_agenda_max_total_runs').val(String(agendaEditor.limits?.maxTotalRuns || 24));
-    }
-    {
-        const loopEditor = getLoopEditorByScope(getDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP));
-        ensureLoopEditorIntegrity(loopEditor);
-        $('luker_orch_loop_max_rounds').val(String(loopEditor.max_rounds || 40));
-        // Stored as ms, edited in seconds. Floor 10s matches
-        // LOOP_WALL_CLOCK_FLOOR_MS / 1000 in persistence.js.
-        const wallClockSeconds = Math.max(10, Math.round(Number(loopEditor.wall_clock_budget_ms || 300000) / 1000));
-        $('luker_orch_loop_wall_clock_budget').val(String(wallClockSeconds));
-    }
-    // Character-scope action buttons. Template emits them always with
-    // `display:none`; toggle here per live character presence and
-    // per-mode runtime scope (same pattern as `hydratePerModeChips` —
-    // always emit + hydrate on state change). Without this, buttons
-    // stay stuck at the render-time value from initial drawer mount,
-    // when no character is loaded. `clear-character` only matters when
-    // at least one mode actually runs the card's library.
-    const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-    const hasActiveCharacter = Boolean(activeAvatar);
-    const anyModeRunsCard = hasActiveCharacter && ['spec', 'agenda', 'loop', 'director'].some(
-        mode => getRuntimePresetScope(context, activeAvatar, mode) === 'character',
-    );
-    mount.find('[data-luker-action="save-character"]').toggle(hasActiveCharacter);
-    mount.find('[data-luker-action="clear-character"]').toggle(anyModeRunsCard);
-}
-
-/**
- * Hydrate the 4 per-mode profile-chip blocks (spec / agenda / loop /
- * director) shared by drawer and popup. Reads the active-avatar's
- * preset-library state and the per-mode displayed scope, then sets chip
- * label text. Extracted from `renderDynamicPanels` so the popup can
- * share the same source of truth without re-running the whole
- * drawer-only render (which also touches action-button state and mode
- * visibility).
- */
-function hydratePerModeChips(mount, context, settings, prefix = '') {
-    const p = String(prefix || '');
-    const $ = (baseId) => mount.find(`#${p}${baseId}`);
-    const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-    const targetLabel = activeAvatar
-        ? (getCharacterDisplayNameByAvatar(context, activeAvatar) || activeAvatar)
-        : i18n('(No character card)');
-
-    // Spec mode uses legacy `luker_orch_profile_*` (no `spec_` prefix).
-    //
-    // The label prefers the character branch whenever the card has a
-    // library: the card carries a saved preset the user can switch back
-    // to, so "Global profile" would hide that state from the user's
-    // mental model.
-    {
-        const hasLibrary = hasCharacterSpecPresetLibrary(context, activeAvatar);
-        $('luker_orch_profile_target').text(targetLabel);
-        $('luker_orch_profile_mode').text(getDisplayedScopeLabel(hasLibrary, hasLibrary));
-    }
-    {
-        const hasLibrary = hasCharacterAgendaPresetLibrary(context, activeAvatar);
-        $('luker_orch_agenda_profile_target').text(targetLabel);
-        $('luker_orch_agenda_profile_mode').text(getDisplayedScopeLabel(hasLibrary, hasLibrary));
-    }
-    {
-        const hasLibrary = hasCharacterLoopPresetLibrary(context, activeAvatar);
-        $('luker_orch_loop_profile_target').text(targetLabel);
-        $('luker_orch_loop_profile_mode').text(getDisplayedScopeLabel(hasLibrary, hasLibrary));
-    }
-    {
-        const hasLibrary = hasCharacterDirectorPresetLibrary(context, activeAvatar);
-        $('luker_orch_director_profile_target').text(targetLabel);
-        $('luker_orch_director_profile_mode').text(getDisplayedScopeLabel(hasLibrary, hasLibrary));
-    }
-}
-
-function renderDynamicPanels(root, context) {
-    const settings = getSettings();
-    const executionMode = getExecutionMode(settings);
-    syncCharacterEditorWithActiveAvatar(context);
-    hydratePerModeChips(root, context, settings, '');
-    const hasLastRun = Boolean(getLatestOrchestrationEntry(context));
-    root.find('[data-luker-action="view-last-run"]').toggleClass('luker_orch_button_disabled', !hasLastRun);
-    root.find('#luker_orch_last_run_state').text(buildLatestOrchestrationStateSummary(context));
-    // Attribute-based mode visibility (see `applyOrchestratorModeVisibility`
-    // for the toggle semantics): shows nodes matching the current mode and
-    // hides the capsule fieldset in director. Same helper is called from
-    // `refreshOrchestrationEditorPopup` so drawer + popup share the loop.
-    applyOrchestratorModeVisibility(root, executionMode);
-    root.find('#luker_orch_execution_mode').val(executionMode);
-    // Re-inject the workspace HTML into the drawer's Agents / Tools &
-    // Skills tab hosts for the new mode. Every state transition that
-    // matters (mode change, chat switch, character switch, override
-    // toggle) routes through `renderDynamicPanels`, so a single tail
-    // call here is the funnel — no need to sprinkle it at every caller.
-    // Single mode has no workspace HTML (its Agents-tab content is the
-    // two static single-agent textareas emitted at build time).
-    if (executionMode && executionMode !== ORCH_EXECUTION_MODE_SINGLE) {
-        injectWorkspaceIntoTabHost(root, executionMode, getOrchestratorUiTemplateDeps(), context, settings, '');
-    }
-    // Hydrate skill-chip mounts inside the drawer. The workspace renderers
-    // emit `[data-luker-skill-chips-mount]` placeholders whose "loading"
-    // text is only replaced when this call runs; `refreshOrchestrationEditorPopup`
-    // runs the same step for the popup mount, but the drawer needs its own
-    // pass since `renderDynamicPanels` is the drawer's re-render funnel.
-    const drawerRootEl = root.get(0);
-    if (drawerRootEl instanceof HTMLElement) {
-        void hydrateSkillChips(drawerRootEl, context, settings);
-    }
-    // Refresh the four preset selector bars in the General tab so preset
-    // CRUD (new/duplicate/rename/delete/import) and displayed-scope
-    // switches show up in the drawer's dropdown immediately. Without this
-    // targeted refresh, the General tab HTML is only ever built once at
-    // drawer mount time (via `buildOrchestratorSettingsHtml`) and stale
-    // `<option>` lists linger — see the "click a deleted preset shows
-    // another preset's content" regression this fix addresses.
-    refreshPresetSelectorBars(root, getOrchestratorUiTemplateDeps(), context);
-    refreshOrchestrationEditorPopup(context, settings);
-}
-
-// After a preset-library mutation (switch/create/duplicate/rename/delete)
-// the editor draft and the cached active-preset-id maps are stale. Re-run
-// `initializeUiState` to reload every (mode, scope) editor through the
-// active-preset lookup path and re-sync `uiState.{global,character}ActivePresetIds`,
-// then re-render the panel + popup so the dropdown reflects the new active id
-// and the workspace shows the new draft. Mirrors the post-apply sequence used
-// by `applyAiIterationSessionTo{Global,Character}` (load → ensureIntegrity →
-// renderDynamicPanels); `initializeUiState` already wraps that for all modes.
-function reloadOrchestratorEditor(root, context) {
-    initializeUiState(context);
-    renderDynamicPanels(root, context);
-}
-
-// Build the portable {format, mode, name, exportedAt, profile} envelope
-// for a single preset entry. Mirrors the legacy per-mode export shape
-// exactly: V1 for spec, V2 for agenda, V3 for director, V4 for loop. The
-// `entry` is the already-sanitized preset object as returned by
-// `getActivePreset` (which routes through `sanitizePresetEntry`), so we
-// just project its mode-specific fields back into the legacy profile
-// shape that external tooling and `parseImportedProfilePayload` already
-// understand. Envelope-level `name` is stamped for all 4 modes so
-// downstream consumers (e.g. the skill embed-export hook) can read the
-// preset identity uniformly — only director's `sanitizeDirectorProfile`
-// passes `.name` through into `profile`; agenda/loop/spec sanitizers
-// return fresh literals without it.
-function buildPortablePayloadForMode(mode, entry) {
-    const exportedAt = new Date().toISOString();
-    const name = String(entry?.name || '').trim();
-    if (mode === ORCH_EXECUTION_MODE_AGENDA) {
-        return {
-            format: PORTABLE_PROFILE_FORMAT_V2,
-            mode: ORCH_EXECUTION_MODE_AGENDA,
-            name,
-            exportedAt,
-            profile: createPortableAgendaProfileFromEditor(entry),
-        };
-    }
-    if (mode === ORCH_EXECUTION_MODE_DIRECTOR) {
-        return {
-            format: PORTABLE_PROFILE_FORMAT_V3,
-            mode: ORCH_EXECUTION_MODE_DIRECTOR,
-            name,
-            exportedAt,
-            profile: createPortableDirectorProfileFromEditor(entry),
-        };
-    }
-    if (mode === ORCH_EXECUTION_MODE_LOOP) {
-        return {
-            format: PORTABLE_PROFILE_FORMAT_V4,
-            mode: ORCH_EXECUTION_MODE_LOOP,
-            name,
-            exportedAt,
-            profile: createPortableLoopProfileFromEditor(entry),
-        };
-    }
-    // spec: editor shape mirrors the on-disk shape, so we can hand the
-    // entry straight to createPortableProfileFromEditor (which serializes
-    // `spec` + `presets`).
-    return {
-        format: PORTABLE_PROFILE_FORMAT_V1,
-        mode: ORCH_EXECUTION_MODE_SPEC,
-        name,
-        exportedAt,
-        profile: createPortableProfileFromEditor(entry),
-    };
-}
-
-// Extract the mode-specific profile-body slice from a parsed payload so
-// `writeActivePreset` (which sanitizes via `sanitizePresetEntry` for the
-// given mode) gets the same shape the editor would feed it on a normal
-// save. Mirrors the per-mode branches in the legacy import handler.
-function extractImportedProfileForMode(imported) {
-    if (imported.mode === ORCH_EXECUTION_MODE_DIRECTOR) return imported.director;
-    if (imported.mode === ORCH_EXECUTION_MODE_AGENDA) return imported.agenda;
-    if (imported.mode === ORCH_EXECUTION_MODE_LOOP) return imported.loop;
-    return { spec: imported.spec, presets: imported.presets };
-}
-
-async function triggerExportActivePreset(mode, scope) {
-    const ctx = getContext();
-    const avatar = String(getCurrentAvatar(ctx) || '').trim();
-    const settings = extension_settings[MODULE_NAME];
-    const presetResult = getActivePreset(settings, mode, { scope, context: ctx, avatar });
-    const active = presetResult.ok && presetResult.state ? presetResult.state : null;
-    if (!active) {
-        notifyError(i18n('No active preset to export.'));
-        return;
-    }
-    const payload = buildPortablePayloadForMode(mode, active);
-    // Skills subsystem may mutate `payload` in place to attach embedded
-    // skill content under `payload.extensions.luker.embedded_skills_source`
-    // BEFORE the file lands on disk. Fire-and-swallow — export proceeds
-    // even if subscriber throws.
-    await emitOrchPresetExportReady(ctx, payload);
-    const safeName = sanitizeIdentifierToken(active.name || 'preset', 'preset');
-    const fileName = `luker-orchestrator-${mode}-${scope}-${safeName}.json`;
-    downloadJsonFile(fileName, payload);
-    notifySuccess(i18n('Exported preset.'));
-}
-
-async function triggerImportPresetIntoLibrary(mode, scope, root, context) {
-    try {
-        const fileText = await pickJsonFileText();
-        if (!fileText) return;
-        const imported = parseImportedProfilePayload(fileText);
-        if (imported.mode !== mode) {
-            notifyError(i18n('Imported file does not match the current mode.'));
-            return;
-        }
-        const ctx = getContext();
-        const avatar = String(getCurrentAvatar(ctx) || '').trim();
-        const settings = extension_settings[MODULE_NAME];
-        const defaultName = String(extractImportedProfileForMode(imported)?.name || '').trim();
-        const name = await ctx.callGenericPopup(
-            i18n('Enter a name for the imported preset'),
-            ctx.POPUP_TYPE.INPUT,
-            defaultName,
-        );
-        if (!name) return;
-        // Create a fresh slot, mark it active, then overwrite via
-        // `writeActivePreset` (which sanitizes through `sanitizePresetEntry`
-        // for the target mode). Two-step keeps id allocation and active-id
-        // bookkeeping in one path, while letting the imported body land in
-        // the same slot.
-        const id = createPreset(settings, mode, scope, { name: String(name) }, { context: ctx, avatar });
-        if (!id) {
-            notifyError(i18nFormat('Import failed: ${0}', i18n('No active preset to export.')));
-            return;
-        }
-        setActivePresetId(settings, mode, scope, id, { context: ctx, avatar });
-        const importedProfile = extractImportedProfileForMode(imported);
-        const writeResult = writeActivePreset(settings, mode, scope, importedProfile,
-            { context: ctx, avatar });
-        if (!writeResult.ok) {
-            notifyError(i18nFormat('Import failed: ${0}', writeResult.hint || writeResult.reason));
-            return;
-        }
-        if (scope === 'character') {
-            const idx = getCharacterIndexByAvatar(ctx, avatar);
-            if (idx >= 0) {
-                const prev = getCharacterExtensionDataByAvatar(ctx, avatar) || {};
-                await persistOrchestratorCharacterExtension(ctx, idx, { ...prev });
-            }
-        } else {
-            await saveSettings();
-        }
-        // Fire the post-import hook AFTER the preset is persisted so the
-        // skills subsystem can prompt the extract-embed dialog against a
-        // preset that's already on disk. Mirrors OAI import semantics.
-        //
-        // Envelope extensions must be lifted onto the event data before
-        // emit. `embedded_skills_source` lives on the envelope
-        // (`payload.extensions.luker.embedded_skills_source`, attached by
-        // `maybeAttachSkillsToOrchPresetExport` at export time), not on
-        // the mode-specific profile slice — every mode's sanitizer
-        // whitelists profile fields and strips `.extensions`.
-        // Subscribers to `ORCH_PRESET_IMPORT_READY` (notably
-        // `checkOrchPresetEmbeddedSkills`) read
-        // `data.extensions.luker.embedded_skills_source` to detect an
-        // embed payload; without this lift they see stripped data and
-        // silently bail out, so imported presets never re-install their
-        // bundled skills. Re-parsing `fileText` is safe: it was already
-        // validated by `parseImportedProfilePayload` above.
-        const dataForEvent = { ...importedProfile };
-        try {
-            const rawEnvelope = JSON.parse(fileText);
-            if (rawEnvelope && typeof rawEnvelope === 'object' && rawEnvelope.extensions) {
-                dataForEvent.extensions = rawEnvelope.extensions;
-            }
-        } catch (_) { /* fileText already parsed successfully by parseImportedProfilePayload */ }
-        await emitOrchPresetImportReady(ctx, {
-            data: dataForEvent,
-            mode,
-            name: String(name).trim(),
-        });
-        reloadOrchestratorEditor(root, context);
-        notifySuccess(i18n('Imported preset.'));
-    } catch (error) {
-        notifyError(i18nFormat('Import failed: ${0}', error?.message || error));
-    }
-}
-
-function refreshOrchestrationEditorPopup(context, settings) {
-    const contentId = String(uiState.orchEditorPopupContentId || '');
-    if (!contentId) {
-        return;
-    }
-    const mount = jQuery(`#${contentId}`);
-    if (!mount.length) {
-        uiState.orchEditorPopupContentId = '';
-        return;
-    }
-    mount.html(buildOrchestrationEditorPopupPanelHtml(getOrchestratorUiTemplateDeps(), context, settings));
-    // Task 10a extracted `injectWorkspaceIntoTabHost` so the popup's
-    // Agents / Tools & Skills tabs receive the same runtime-scoped
-    // workspace HTML that the drawer gets. Without this call the popup
-    // opens with empty tab hosts — every action inside the popup that
-    // touches the workspace (preset switch, override toggle, tool
-    // flag) is broken until this call fires.
-    const currentMode = getExecutionMode(settings);
-    if (currentMode && currentMode !== ORCH_EXECUTION_MODE_SINGLE) {
-        injectWorkspaceIntoTabHost(mount, currentMode, getOrchestratorUiTemplateDeps(), context, settings, 'orch-popup-');
-    }
-    // Mirror the drawer's mode-visibility toggle so the popup topbar
-    // boards, per-mode workspace, single-mode hint, and capsule fieldset
-    // reflect the current mode. Without this the popup always shows
-    // spec-mode UI regardless of the actual execution mode.
-    applyOrchestratorModeVisibility(mount, currentMode);
-    hydrateGeneralTabFields(mount, context, settings, 'orch-popup-');
-    hydratePerModeChips(mount, context, settings, 'orch-popup-');
-    // Hydrate per-agent / mode-level skill chips. The renderers above emit
-    // `[data-luker-skill-chips-mount]` placeholders; the hydrate step loads
-    // the inventory once (with a brief cache), resolves each placeholder's
-    // target metadata to the underlying editor field, and mounts the
-    // reusable skill-chips component into the placeholder div.
-    const mountEl = mount.get(0);
-    if (mountEl instanceof HTMLElement) {
-        void hydrateSkillChips(mountEl, context, settings);
-    }
 }
 
 // ── Skill chips hydration ────────────────────────────────────────────────
@@ -2170,192 +1297,8 @@ async function loadChipsInventory() {
     return _chipInventoryPromise;
 }
 
-/**
- * Locate the live `skills: {visible, deny}` field on the editor for a
- * given target metadata. The host object (the parent that owns the
- * `skills` key) is returned so the caller can replace it atomically
- * without losing reference stability for the rest of the editor.
- *
- * @param {object} target - parsed from `data-luker-chip-target`
- * @returns {{ host: object|null, mode: string, scope: string }|null}
- */
-function resolveChipHost(target) {
-    if (!target || typeof target !== 'object') return null;
-    const scope = target.scope === 'character' ? 'character' : 'global';
-    const mode = String(target.mode || '');
-    const level = String(target.level || 'mode');
-    let host = null;
-    if (mode === 'director') {
-        const editor = getDirectorEditorByScope(scope);
-        if (!editor || typeof editor !== 'object') return null;
-        ensureDirectorEditorIntegrity(editor);
-        if (level === 'mode') {
-            host = editor;
-        } else if (target.agentRef === 'main') {
-            if (!editor.mainAgent || typeof editor.mainAgent !== 'object') {
-                editor.mainAgent = {};
-            }
-            host = editor.mainAgent;
-        } else if (target.agentRef && typeof target.agentRef === 'object'
-            && target.agentRef.kind === 'subIndex'
-            && Number.isInteger(target.agentRef.index)) {
-            const subs = Array.isArray(editor.subAgents) ? editor.subAgents : [];
-            host = subs[target.agentRef.index] || null;
-        }
-    } else if (mode === 'loop') {
-        const editor = getLoopEditorByScope(scope);
-        if (!editor || typeof editor !== 'object') return null;
-        host = editor;
-    } else if (mode === 'agenda') {
-        const editor = getAgendaEditorByScope(scope);
-        if (!editor || typeof editor !== 'object') return null;
-        ensureAgendaEditorIntegrity(editor);
-        if (level === 'mode') {
-            host = editor;
-        } else if (target.agentRef === 'planner') {
-            if (!editor.planner || typeof editor.planner !== 'object') {
-                editor.planner = {};
-            }
-            host = editor.planner;
-        } else if (target.agentRef && typeof target.agentRef === 'object'
-            && target.agentRef.kind === 'agendaAgent'
-            && typeof target.agentRef.id === 'string') {
-            const agents = editor.agents && typeof editor.agents === 'object' ? editor.agents : {};
-            host = agents[target.agentRef.id] || null;
-        }
-    } else if (mode === 'spec') {
-        const editor = getEditorByScope(scope);
-        if (!editor || typeof editor !== 'object') return null;
-        ensureEditorIntegrity(editor);
-        if (level === 'mode') {
-            if (!editor.spec || typeof editor.spec !== 'object') {
-                editor.spec = {};
-            }
-            host = editor.spec;
-        } else if (target.agentRef && typeof target.agentRef === 'object'
-            && target.agentRef.kind === 'specNode'
-            && Number.isInteger(target.agentRef.stageIndex)
-            && Number.isInteger(target.agentRef.nodeIndex)) {
-            const stages = Array.isArray(editor.spec?.stages) ? editor.spec.stages : [];
-            const stage = stages[target.agentRef.stageIndex];
-            if (!stage) return null;
-            const nodes = Array.isArray(stage.nodes) ? stage.nodes : [];
-            host = nodes[target.agentRef.nodeIndex] || null;
-        }
-    }
-    if (!host || typeof host !== 'object') return null;
-    return { host, mode, scope, level };
-}
-
-/**
- * Hydrate all `[data-luker-skill-chips-mount]` placeholders inside the
- * popup body. Loads the inventory once, then walks each placeholder and
- * mounts the chips component with the resolved value + inheritFrom +
- * onChange wiring.
- *
- * @param {HTMLElement} root - the popup content container
- * @param {object} context - SillyTavern context
- * @param {object} settings - the orchestrator's extension settings
- */
-async function hydrateSkillChips(root, context, settings) {
-    if (!(root instanceof HTMLElement)) return;
-    const mountDivs = Array.from(root.querySelectorAll('[data-luker-skill-chips-mount]'));
-    if (mountDivs.length === 0) return;
-    const inventory = await loadChipsInventory();
-    // Re-resolve the mountDivs after the await — if the popup re-rendered
-    // mid-load, the old divs are detached; skip them.
-    for (const div of mountDivs) {
-        if (!div.isConnected) continue;
-        const raw = div.getAttribute('data-luker-chip-target');
-        if (!raw) continue;
-        let target;
-        try {
-            target = JSON.parse(raw);
-        } catch (e) {
-            console.warn(`[${MODULE_NAME}] invalid chip target JSON:`, raw);
-            continue;
-        }
-        const resolved = resolveChipHost(target);
-        if (!resolved || !resolved.host) {
-            div.innerHTML = '';
-            continue;
-        }
-        // Determine inheritFrom: for agent-level chips on director / agenda /
-        // spec, look up the mode-level value on the parent editor.
-        let inheritFrom;
-        if (target.level === 'agent') {
-            const parentResolved = resolveChipHost({ scope: resolved.scope, mode: resolved.mode, level: 'mode' });
-            if (parentResolved && parentResolved.host) {
-                const v = parentResolved.host.skills;
-                if (v && typeof v === 'object') {
-                    inheritFrom = {
-                        visible: Array.isArray(v.visible) ? v.visible.slice() : [],
-                        deny: Array.isArray(v.deny) ? v.deny.slice() : [],
-                    };
-                }
-            }
-        }
-        const currentValue = resolved.host.skills && typeof resolved.host.skills === 'object'
-            ? {
-                visible: Array.isArray(resolved.host.skills.visible) ? resolved.host.skills.visible.slice() : [],
-                deny: Array.isArray(resolved.host.skills.deny) ? resolved.host.skills.deny.slice() : [],
-            }
-            : { visible: [], deny: [] };
-        mountSkillChips(div, {
-            value: currentValue,
-            inheritFrom,
-            availableSkills: inventory,
-            t: i18n,
-            onChange(next) {
-                // Re-resolve on each commit so we always write into the
-                // current editor (the user may have switched scopes).
-                const liveResolved = resolveChipHost(target);
-                if (!liveResolved || !liveResolved.host) return;
-                liveResolved.host.skills = {
-                    visible: Array.isArray(next?.visible) ? next.visible.slice() : [],
-                    deny: Array.isArray(next?.deny) ? next.deny.slice() : [],
-                };
-                // The orchestrator profile is persisted by the existing
-                // Save To Global / Save To Character Override buttons; we
-                // don't auto-save here. For safety, debounce a settings
-                // save so non-popup paths (settings panel chip mounts, if
-                // they ever exist) survive a page refresh.
-                try {
-                    saveSettingsDebounced();
-                } catch (e) {
-                    // Fallback for environments where saveSettingsDebounced
-                    // isn't available; silent.
-                }
-            },
-        });
-    }
-}
-
-async function openOrchestrationEditorPopup(context, settings) {
-    ensureStyles(UI_BLOCK_ID);
-    const contentId = `luker_orch_editor_popup_mount_${Date.now()}`;
-    uiState.orchEditorPopupContentId = contentId;
-    const popupHtml = `<div id="${contentId}"></div>`;
-    const popupPromise = context.callGenericPopup(
-        popupHtml,
-        context.POPUP_TYPE.TEXT,
-        i18n('Orchestrator'),
-        {
-            okButton: i18n('Close'),
-            wide: true,
-            large: true,
-            allowVerticalScrolling: true,
-        },
-    );
-    refreshOrchestrationEditorPopup(context, settings);
-    await popupPromise;
-    if (uiState.orchEditorPopupContentId === contentId) {
-        uiState.orchEditorPopupContentId = '';
-    }
-}
-
 function updateUiStatus(text) {
-    jQuery('#luker_orch_status').text(String(text || ''));
+    console.debug(`[${MODULE_NAME}]`, String(text || ''));
 }
 
 function showRunInfoToast(message, { stopLabel = '', onStop = null } = {}) {
@@ -2400,175 +1343,6 @@ function clearRunInfoToast() {
     }
     toastr.clear(activeRunInfoToast);
     activeRunInfoToast = null;
-}
-
-async function persistCopiedProfileTarget(context, settings, mode, scope) {
-    const normalizedMode = normalizeExecutionMode(mode);
-    const normalizedScope = scope === 'character' ? 'character' : 'global';
-    const avatar = String(getCurrentAvatar(context) || '').trim();
-
-    if (normalizedMode === ORCH_EXECUTION_MODE_AGENDA) {
-        if (normalizedScope === 'character') {
-            if (!avatar) {
-                notifyError(i18n('No character selected.'));
-                return false;
-            }
-            const ok = await persistCharacterAgendaEditor(context, settings, avatar, {
-                editor: uiState.characterAgendaEditor,
-            });
-            if (!ok) {
-                notifyError(i18n('Failed to persist character override.'));
-                return false;
-            }
-            uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, avatar);
-            ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
-            setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'character');
-            updateUiStatus(i18nFormat('Saved to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-            return true;
-        }
-        await persistGlobalAgendaEditorFrom(settings, uiState.globalAgendaEditor);
-        uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
-        ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
-        setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'global');
-        updateUiStatus(i18n('Saved to global profile.'));
-        return true;
-    }
-
-    if (normalizedScope === 'character') {
-        if (!avatar) {
-            notifyError(i18n('No character selected.'));
-            return false;
-        }
-        const ok = await persistCharacterEditor(context, settings, avatar, {
-            editor: uiState.characterEditor,
-        });
-        if (!ok) {
-            notifyError(i18n('Failed to persist character override.'));
-            return false;
-        }
-        uiState.characterEditor = loadCharacterEditorState(context, avatar);
-        ensureEditorIntegrity(uiState.characterEditor);
-        setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC, 'character');
-        updateUiStatus(i18nFormat('Saved to character override: ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-        return true;
-    }
-
-    await persistGlobalEditorFrom(settings, uiState.globalEditor);
-    uiState.globalEditor = loadGlobalEditorState();
-    ensureEditorIntegrity(uiState.globalEditor);
-    setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC, 'global');
-    updateUiStatus(i18n('Saved to global profile.'));
-    return true;
-}
-
-function parseImportedProfilePayload(rawText) {
-    let parsed = null;
-    try {
-        parsed = JSON.parse(String(rawText || ''));
-    } catch {
-        throw new Error(i18n('Invalid profile file format.'));
-    }
-    const profile = parsed && typeof parsed === 'object' && parsed.profile && typeof parsed.profile === 'object'
-        ? parsed.profile
-        : parsed;
-    const mode = normalizeExecutionMode(parsed?.mode || profile?.mode);
-
-    // Director payloads: V3 format OR a profile envelope whose mode is
-    // 'director' (some old exports may omit the format key but still set
-    // mode). Recognized before spec/agenda so the dispatcher does not
-    // misroute a director profile into the spec branch on heuristic alone.
-    const isDirectorPayload = mode === ORCH_EXECUTION_MODE_DIRECTOR
-        || String(parsed?.format || '') === PORTABLE_PROFILE_FORMAT_V3;
-    if (isDirectorPayload) {
-        if (!profile || typeof profile !== 'object') {
-            throw new Error(i18n('Invalid profile file format.'));
-        }
-        // sanitizeDirectorProfile auto-detects legacy wrapped ({director:{...}})
-        // and new flat ({mainAgent, subAgents, ...}) shapes and returns flat,
-        // so old V3 exports keep importing cleanly after the flatten.
-        return {
-            mode: ORCH_EXECUTION_MODE_DIRECTOR,
-            director: sanitizeDirectorProfile(profile),
-        };
-    }
-
-    // Loop payloads: V4 format OR an envelope whose mode is 'loop'.
-    // sanitizeLoopProfile is idempotent and tolerates the editor / on-disk
-    // shape interchangeably, so we hand the profile straight through.
-    const isLoopPayload = mode === ORCH_EXECUTION_MODE_LOOP
-        || String(parsed?.format || '') === PORTABLE_PROFILE_FORMAT_V4;
-    if (isLoopPayload) {
-        if (!profile || typeof profile !== 'object') {
-            throw new Error(i18n('Invalid profile file format.'));
-        }
-        return {
-            mode: ORCH_EXECUTION_MODE_LOOP,
-            loop: sanitizeLoopProfile(profile),
-        };
-    }
-
-    const spec = sanitizeSpec(profile?.spec);
-    const presets = sanitizePresetMap(profile?.presets);
-    if (Array.isArray(spec?.stages) && spec.stages.length > 0 && presets && Object.keys(presets).length > 0) {
-        return { mode: ORCH_EXECUTION_MODE_SPEC, spec, presets };
-    }
-
-    const agendaProfile = profile?.agenda && typeof profile.agenda === 'object'
-        ? profile.agenda
-        : profile;
-    const agents = sanitizePresetMap(agendaProfile?.agents);
-    const isAgendaPayload = mode === ORCH_EXECUTION_MODE_AGENDA
-        || String(parsed?.format || '') === PORTABLE_PROFILE_FORMAT_V2
-        || String(parsed?.format || '') === 'luker_orchestrator_agenda_profile_v1';
-    if (isAgendaPayload && Object.keys(agents).length > 0) {
-        return {
-            mode: ORCH_EXECUTION_MODE_AGENDA,
-            agenda: sanitizeAgendaWorkingProfile(agendaProfile),
-        };
-    }
-
-    throw new Error(i18n('Invalid profile file format.'));
-}
-
-function downloadJsonFile(fileName, payload) {
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = String(fileName || 'orchestration-profile.json');
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
-async function pickJsonFileText() {
-    return new Promise((resolve, reject) => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json,application/json';
-        input.style.display = 'none';
-        input.addEventListener('change', async () => {
-            const file = input.files?.[0] || null;
-            input.remove();
-            if (!file) {
-                resolve(null);
-                return;
-            }
-            try {
-                const text = await file.text();
-                resolve(text);
-            } catch (error) {
-                reject(error);
-            }
-        }, { once: true });
-        document.body.appendChild(input);
-        input.click();
-    });
-}
-
-function isPresetUsed(editor, presetId) {
-    return isPresetReferencedInSpec(editor?.spec, presetId);
 }
 
 function isPresetReferencedInSpec(spec, presetId) {
@@ -6233,7 +5007,19 @@ function resolveSaveToGlobalWriter(context, settings, mode, session) {
     };
 }
 
-async function applyAiIterationSessionToGlobal(context, settings, session, root) {
+// The Iteration Studio (and anything else that writes a profile outside the
+// lens) refreshes whichever editors are showing it.
+const ORCH_CONFIG_CHANGED_EVENT = 'luker.orchestrator.config-changed';
+function refreshOrchestratorEditors(context) {
+    context.eventSource?.emit?.(ORCH_CONFIG_CHANGED_EVENT);
+}
+
+async function openOrchestratorSkillManager() {
+    const context = getContext();
+    await openSkillManagerPanel({ context, initialScope: computeActiveOrchPresetScope(context, extension_settings[MODULE_NAME]), t: i18n });
+}
+
+async function applyAiIterationSessionToGlobal(context, settings, session) {
     // All four modes commit through writeActivePreset / writePresetByName:
     // the chosen preset slot under `presetLibraries.<mode>.<id>` is the
     // single source of truth that getActivePreset reads back. Writing the
@@ -6275,7 +5061,7 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         await saveSettings();
         uiState.globalLoopEditor = loadGlobalLoopEditorState();
         ensureLoopEditorIntegrity(uiState.globalLoopEditor);
-        renderDynamicPanels(root, context);
+        refreshOrchestratorEditors(context);
         notifyWriteOutcome(writeResult, sourceName);
         return;
     }
@@ -6289,7 +5075,7 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         await saveSettings();
         uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
         ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
-        renderDynamicPanels(root, context);
+        refreshOrchestratorEditors(context);
         notifyWriteOutcome(writeResult, sourceName);
         return;
     }
@@ -6303,7 +5089,7 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
         await saveSettings();
         uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
         ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
-        renderDynamicPanels(root, context);
+        refreshOrchestratorEditors(context);
         notifyWriteOutcome(writeResult, sourceName);
         return;
     }
@@ -6317,11 +5103,11 @@ async function applyAiIterationSessionToGlobal(context, settings, session, root)
     await saveSettings();
     uiState.globalEditor = loadGlobalEditorState();
     ensureEditorIntegrity(uiState.globalEditor);
-    renderDynamicPanels(root, context);
+    refreshOrchestratorEditors(context);
     notifyWriteOutcome(specWriteResult, sourceName);
 }
 
-async function applyAiIterationSessionToCharacter(context, settings, session, root) {
+async function applyAiIterationSessionToCharacter(context, settings, session) {
     // Apply-to-character is the path that imports a profile (and its
     // bundled customTools[]) onto a third-party character card. Custom
     // tools are executable JavaScript that runs with full session
@@ -6395,7 +5181,7 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         uiState.characterLoopEditor = loadCharacterLoopEditorState(context, avatar);
         ensureLoopEditorIntegrity(uiState.characterLoopEditor);
         setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'character');
-        renderDynamicPanels(root, context);
+        refreshOrchestratorEditors(context);
         const name = getCharacterDisplayNameByAvatar(context, avatar) || avatar;
         const successMsg = preflight.embeddedCount > 0
             ? i18nFormat('Iteration session applied to character override: ${0}. Embedded ${1} referenced preset(s).', name, preflight.embeddedCount)
@@ -6437,7 +5223,7 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         }
         uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, avatar);
         ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
-        renderDynamicPanels(root, context);
+        refreshOrchestratorEditors(context);
         const name = getCharacterDisplayNameByAvatar(context, avatar) || avatar;
         const successMsg = preflight.embeddedCount > 0
             ? i18nFormat('Iteration session applied to character override: ${0}. Embedded ${1} referenced preset(s).', name, preflight.embeddedCount)
@@ -6481,7 +5267,7 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
         uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, avatar);
         ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
         setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'character');
-        renderDynamicPanels(root, context);
+        refreshOrchestratorEditors(context);
         const name = getCharacterDisplayNameByAvatar(context, avatar) || avatar;
         const successMsg = preflight.embeddedCount > 0
             ? i18nFormat('Iteration session applied to character override: ${0}. Embedded ${1} referenced preset(s).', name, preflight.embeddedCount)
@@ -6527,7 +5313,7 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
     }
     uiState.characterEditor = loadCharacterEditorState(context, avatar);
     ensureEditorIntegrity(uiState.characterEditor);
-    renderDynamicPanels(root, context);
+    refreshOrchestratorEditors(context);
     const name = getCharacterDisplayNameByAvatar(context, avatar) || avatar;
     const successMsg = preflight.embeddedCount > 0
         ? i18nFormat('Iteration session applied to character override: ${0}. Embedded ${1} referenced preset(s).', name, preflight.embeddedCount)
@@ -6536,7 +5322,7 @@ async function applyAiIterationSessionToCharacter(context, settings, session, ro
     updateUiStatus(successMsg);
 }
 
-async function openAiIterationStudio(context, settings, root) {
+async function openAiIterationStudio(context, settings) {
     const executionMode = getExecutionMode(settings);
     const SUPPORTED_STUDIO_MODES = new Set([
         ORCH_EXECUTION_MODE_LOOP,
@@ -6569,7 +5355,6 @@ async function openAiIterationStudio(context, settings, root) {
         mode: studioMode,
         context,
         settings,
-        root,
         i18n,
         i18nFormat,
         getIterationDefaultScope,
@@ -6609,1845 +5394,14 @@ async function openAiIterationStudio(context, settings, root) {
     });
 }
 
-// Toggle capsule-injection depth/role fields based on the current
-// position select. The depth/role settings only apply when position ===
-// atDepth (`injectCapsuleToPayload` in capsule-injection.js reads them
-// only in the atDepth branch); showing them for other positions confused
-// users into thinking they had an effect. Reads position from settings
-// (source of truth) so it stays correct when triggered from either the
-// drawer or popup surface; `$root` is purely the toggle scope, and the
-// ends-with attribute selectors (`[id$="luker_orch_capsule_depth_block"]`
-// etc.) match both drawer and popup blocks — pass `jQuery(document)` to
-// toggle both surfaces in one call.
-function updateCapsulePositionVisibility($root) {
-    const settings = getSettings();
-    const positionVal = Number(settings.capsuleInjectPosition);
-    const isAtDepth = positionVal === Number(world_info_position.atDepth);
-    $root.find('[id$="luker_orch_capsule_depth_block"]').toggle(isAtDepth);
-    $root.find('[id$="luker_orch_capsule_role_block"]').toggle(isAtDepth);
-}
-
-function bindUi() {
-    const context = getContext();
-    const settings = getSettings();
-
-    const root = jQuery(`#${UI_BLOCK_ID}`);
-    if (!root.length) {
-        return;
-    }
-
-    initializeUiState(context);
-    root.find('#luker_orch_enabled').prop('checked', Boolean(settings.enabled));
-    root.find('#luker_orch_execution_mode').val(getExecutionMode(settings));
-    root.find('#luker_orch_single_agent_system_prompt').val(String(settings.singleAgentSystemPrompt || DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT));
-    root.find('#luker_orch_single_agent_user_prompt').val(String(settings.singleAgentUserPromptTemplate || DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE));
-    hydrateGeneralTabFields(root, context, settings, '');
-    // `renderDynamicPanels` runs the mode-visibility loop AND calls
-    // `injectWorkspaceIntoTabHost` at its tail for the current mode, so
-    // first-paint of the drawer's Agents / Tools & Skills tab hosts
-    // (previously done here in bindUi) is now covered by the funnel.
-    // It also calls `hydratePerModeChips` which populates the 4 per-mode
-    // profile-chip blocks — no separate call from bindUi to avoid a
-    // duplicate first-paint render.
-    renderDynamicPanels(root, context);
-
-    root.off('.lukerOrch');
-    jQuery(document).off('.lukerOrchEditor');
-
-    root.on('input.lukerOrch', '#luker_orch_enabled', function () {
-        settings.enabled = Boolean(jQuery(this).prop('checked'));
-        saveSettingsDebounced();
-    });
-
-    // ─── Preset selector bar handlers ─────────────────────────────────
-    // The selector bar (rendered by `renderPresetSelectorBar` in
-    // ui-templates.js) appears at the top of every mode's workspace board
-    // in both the inline panel (`#${UI_BLOCK_ID}`) and the popup
-    // (`.luker_orch_editor_popup`), so we delegate at the document level
-    // with the .lukerOrchEditor namespace — same pattern the per-mode
-    // form handlers below already use.
-    //
-    // Single-scope model: the dropdown IS the runtime switch. Each
-    // <option> carries `data-preset-scope` ('character' | 'global');
-    // picking a Character option writes the card's active slot, picking
-    // a Global option clears the card's slot (when it holds one) and
-    // makes that preset the global active. After any selection we go
-    // through `reloadOrchestratorEditor` (defined alongside
-    // `renderDynamicPanels`) which re-runs `initializeUiState` to refresh
-    // the (mode, scope) editor draft AND the cached active-preset-id
-    // maps, then re-renders the panel. Without that reload the dropdown
-    // would still show the old highlight and the workspace would keep
-    // editing the old preset's draft.
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-preset-select], .luker_orch_editor_popup [data-luker-preset-select]`, async function () {
-        const mode = String(jQuery(this).attr('data-mode') || '');
-        const scope = String(jQuery(this).find('option:selected').attr('data-preset-scope') || '');
-        const presetId = String(jQuery(this).val() || '');
-        if (!mode || !scope || !presetId) return;
-        const ctx = getContext();
-        const avatar = String(getCurrentAvatar(ctx) || '').trim();
-        const settings = extension_settings[MODULE_NAME];
-        // Picking a Global option means "this card runs the global active
-        // preset" — clear the card's own active slot, but only when it
-        // actually holds an id. Probing first avoids the
-        // getScopeContainer touch side-effect (creating empty containers)
-        // on cards that never had a slot.
-        const hadCardSlot = Boolean(avatar) && Boolean(getCharacterActivePresetId(ctx, avatar, mode));
-        if (scope === 'global' && hadCardSlot) {
-            setActivePresetId(settings, mode, 'character', '', { context: ctx, avatar });
-        }
-        // `setActivePresetId` silently returns false when the requested
-        // preset id doesn't exist in the scope's library (typical cause:
-        // a stale dropdown option still visible after a delete, before
-        // the selector-bar refresh has landed). Bail early with a
-        // toast + drawer re-render so the user gets a clear signal and
-        // the stale <option> is replaced instead of quietly writing a
-        // stale activeIds map back to disk.
-        const applied = setActivePresetId(settings, mode, scope, presetId,
-            { context: ctx, avatar });
-        if (!applied) {
-            notifyError(i18n('Preset no longer exists — refreshing the list.'));
-            reloadOrchestratorEditor(root, context);
-            return;
-        }
-        if (hadCardSlot || (scope === 'character' && avatar)) {
-            const idx = getCharacterIndexByAvatar(ctx, avatar);
-            if (idx >= 0) {
-                // setActivePresetId already mutated the character's
-                // ext.activePresetIds in place; persist the whole ext as-is.
-                // Guard: if the card has no orchestrator ext yet
-                // `getCharacterExtensionDataByAvatar` returns a fresh {}
-                // that is NOT wired into the character — writing it back
-                // would clobber the very ext we just tried to mutate.
-                const prev = getCharacterExtensionDataByAvatar(ctx, avatar);
-                if (prev && typeof prev === 'object' && Object.keys(prev).length > 0) {
-                    await persistOrchestratorCharacterExtension(ctx, idx, { ...prev });
-                }
-            }
-        }
-        if (scope === 'global') {
-            await saveSettings();
-        }
-        reloadOrchestratorEditor(root, context);
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-preset-action], .luker_orch_editor_popup [data-luker-preset-action]`, async function () {
-        const action = String(jQuery(this).attr('data-luker-preset-action') || '');
-        const mode = String(jQuery(this).attr('data-mode') || '');
-        const scope = String(jQuery(this).attr('data-scope') || '');
-        if (!action || !mode || !scope) return;
-        const ctx = getContext();
-        const avatar = String(getCurrentAvatar(ctx) || '').trim();
-        const settingsRef = extension_settings[MODULE_NAME];
-        if (action === 'export') {
-            triggerExportActivePreset(mode, scope);
-            return;
-        }
-        if (action === 'import') {
-            triggerImportPresetIntoLibrary(mode, scope, root, context);
-            return;
-        }
-        if (action === 'new') {
-            const name = await ctx.callGenericPopup(
-                i18n('Enter a name for the new preset'),
-                ctx.POPUP_TYPE.INPUT,
-                '',
-            );
-            if (!name) return;
-            const id = createPreset(settingsRef, mode, scope, { name: String(name) },
-                { context: ctx, avatar });
-            setActivePresetId(settingsRef, mode, scope, id, { context: ctx, avatar });
-        } else if (action === 'duplicate') {
-            const currentId = getActivePresetId(settingsRef, mode, { scope, context: ctx, avatar });
-            const lib = scope === 'character'
-                ? getCharacterPresetLibrary(ctx, avatar, mode)
-                : (settingsRef.presetLibraries?.[mode] || {});
-            const oldPresetName = String(lib[currentId]?.name || '').trim();
-            const name = await ctx.callGenericPopup(
-                i18n('Enter a name for the new preset'),
-                ctx.POPUP_TYPE.INPUT,
-                '',
-            );
-            if (!name) return;
-            const newPresetName = String(name).trim();
-            const id = duplicatePreset(settingsRef, mode, scope, currentId, { name: newPresetName },
-                { context: ctx, avatar });
-            setActivePresetId(settingsRef, mode, scope, id, { context: ctx, avatar });
-            await copyOrchPresetSkills(ctx, { mode, oldName: oldPresetName, newName: newPresetName });
-        } else if (action === 'rename') {
-            const currentId = getActivePresetId(settingsRef, mode, { scope, context: ctx, avatar });
-            const lib = scope === 'character'
-                ? getCharacterPresetLibrary(ctx, avatar, mode)
-                : (settingsRef.presetLibraries?.[mode] || {});
-            const oldPresetName = String(lib[currentId]?.name || '').trim();
-            const name = await ctx.callGenericPopup(
-                i18n('Enter a name for the new preset'),
-                ctx.POPUP_TYPE.INPUT,
-                oldPresetName,
-            );
-            if (!name) return;
-            const newPresetName = String(name).trim();
-            renamePreset(settingsRef, mode, scope, currentId, { name: newPresetName },
-                { context: ctx, avatar });
-            await renameOrchPresetSkills(ctx, { mode, oldName: oldPresetName, newName: newPresetName });
-        } else if (action === 'delete') {
-            const currentId = getActivePresetId(settingsRef, mode, { scope, context: ctx, avatar });
-            const lib = scope === 'character'
-                ? getCharacterPresetLibrary(ctx, avatar, mode)
-                : (settingsRef.presetLibraries?.[mode] || {});
-            const deletedPresetName = String(lib[currentId]?.name || '').trim();
-            const confirmed = await ctx.callGenericPopup(
-                i18nFormat('Delete preset "${0}"?', deletedPresetName),
-                ctx.POPUP_TYPE.CONFIRM,
-                '',
-                { okButton: i18n('Delete'), cancelButton: i18n('Cancel') },
-            );
-            if (!confirmed) return;
-            deletePreset(settingsRef, mode, scope, currentId, { context: ctx, avatar });
-            await emitOrchPresetDeleted(ctx, { mode, name: deletedPresetName });
-        }
-        if (scope === 'character') {
-            const idx = getCharacterIndexByAvatar(ctx, avatar);
-            if (idx >= 0) {
-                // CRUD on character scope mutated
-                // `character.data.extensions.orchestrator.{presetLibraries,
-                // activePresetIds}` in place (see getScopeContainer in
-                // preset-library.js). `getCharacterExtensionDataByAvatar`
-                // returns that already-mutated object, so we persist it
-                // as-is rather than splicing in `settingsRef.*` (which
-                // would be the global library, not the character's).
-                const prev = getCharacterExtensionDataByAvatar(ctx, avatar) || {};
-                await persistOrchestratorCharacterExtension(ctx, idx, { ...prev });
-            }
-        } else {
-            await saveSettings();
-        }
-        reloadOrchestratorEditor(root, context);
-    });
-
-    root.on('change.lukerOrch', '#luker_orch_execution_mode', function () {
-        settings.executionMode = normalizeExecutionMode(jQuery(this).val());
-        settings.singleAgentModeEnabled = settings.executionMode === ORCH_EXECUTION_MODE_SINGLE;
-        // Skill inventory cache is mode-agnostic but the visibility profile
-        // is mode-scoped. Drop the cache so the next agent dispatch under
-        // the new mode re-reads the inventory and re-resolves visibility
-        // against the new profile's `skills` field — keeps stale entries
-        // from the previous mode from leaking into the next turn.
-        import('./skill-resolution.js')
-            .then(m => m.invalidateSkillInventory())
-            .catch(() => { /* lib.js not available (test env): no-op */ });
-        saveSettingsDebounced();
-        renderDynamicPanels(root, context);
-    });
-
-    root.on('input.lukerOrch', '#luker_orch_single_agent_system_prompt', function () {
-        settings.singleAgentSystemPrompt = String(jQuery(this).val() || '');
-        saveSettingsDebounced();
-    });
-
-    root.on('input.lukerOrch', '#luker_orch_single_agent_user_prompt', function () {
-        settings.singleAgentUserPromptTemplate = String(jQuery(this).val() || '');
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_planner_api_preset, .luker_orch_editor_popup #luker_orch_agenda_planner_api_preset`, function () {
-        const scope = getAgendaScopeFromElement(this, context, settings);
-        const editor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(editor);
-        editor.planner.apiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_planner_prompt_preset, .luker_orch_editor_popup #luker_orch_agenda_planner_prompt_preset`, function () {
-        const scope = getAgendaScopeFromElement(this, context, settings);
-        const editor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(editor);
-        editor.planner.promptPresetName = sanitizePromptPresetName(jQuery(this).val());
-    });
-
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_planner_system_prompt, .luker_orch_editor_popup #luker_orch_agenda_planner_system_prompt`, function () {
-        const scope = getAgendaScopeFromElement(this, context, settings);
-        const editor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(editor);
-        editor.planner.systemPrompt = String(jQuery(this).val() || '');
-    });
-
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_planner_prompt, .luker_orch_editor_popup #luker_orch_agenda_planner_prompt`, function () {
-        const scope = getAgendaScopeFromElement(this, context, settings);
-        const editor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(editor);
-        editor.planner.userPromptTemplate = String(jQuery(this).val() || '');
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_final_agent, .luker_orch_editor_popup #luker_orch_agenda_final_agent`, function () {
-        const scope = getAgendaScopeFromElement(this, context, settings);
-        const editor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(editor);
-        editor.finalAgentId = sanitizeIdentifierToken(jQuery(this).val(), editor.finalAgentId || 'finalizer');
-        renderDynamicPanels(root, context);
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_planner_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_planner_max_rounds`, async function () {
-        const scope = getAgendaScopeFromElement(this, context, settings);
-        const editor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(editor);
-        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
-        editor.limits.plannerMaxRounds = nextValue;
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_AGENDA, scope, { plannerMaxRounds: nextValue }, { avatar });
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_concurrent_agents, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_max_concurrent_agents`, async function () {
-        const scope = getAgendaScopeFromElement(this, context, settings);
-        const editor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(editor);
-        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
-        editor.limits.maxConcurrentAgents = nextValue;
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_AGENDA, scope, { maxConcurrentAgents: nextValue }, { avatar });
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_agenda_max_total_runs, .luker_orch_editor_popup #orch-popup-luker_orch_agenda_max_total_runs`, async function () {
-        const scope = getAgendaScopeFromElement(this, context, settings);
-        const editor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(editor);
-        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
-        editor.limits.maxTotalRuns = nextValue;
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_AGENDA, scope, { maxTotalRuns: nextValue }, { avatar });
-    });
-
-    // ─── Loop-mode editor handlers ─────────────────────────────────────
-    // Loop scope follows spec/agenda: data-scope on the input is the
-    // canonical signal, falling back to the displayed-scope preference
-    // when missing. `ensureLoopEditorIntegrity` re-canonicalizes after
-    // every edit so render reads see the V3 shape (`tools.note.open`,
-    // etc.) even if mid-edit numeric clamps trip.
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_api_preset, .luker_orch_editor_popup #luker_orch_loop_api_preset`, function () {
-        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
-        const editor = getLoopEditorByScope(scope);
-        ensureLoopEditorIntegrity(editor);
-        editor.apiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_prompt_preset, .luker_orch_editor_popup #luker_orch_loop_prompt_preset`, function () {
-        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
-        const editor = getLoopEditorByScope(scope);
-        ensureLoopEditorIntegrity(editor);
-        editor.promptPresetName = sanitizePromptPresetName(jQuery(this).val());
-    });
-
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_system_prompt, .luker_orch_editor_popup #luker_orch_loop_system_prompt`, function () {
-        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
-        const editor = getLoopEditorByScope(scope);
-        ensureLoopEditorIntegrity(editor);
-        editor.system_prompt = String(jQuery(this).val() || '');
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_loop_max_rounds`, async function () {
-        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
-        const editor = getLoopEditorByScope(scope);
-        ensureLoopEditorIntegrity(editor);
-        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 40));
-        editor.max_rounds = nextValue;
-        ensureLoopEditorIntegrity(editor);
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_LOOP, scope, { max_rounds: nextValue }, { avatar });
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_loop_wall_clock_budget, .luker_orch_editor_popup #orch-popup-luker_orch_loop_wall_clock_budget`, async function () {
-        // Stored as ms but edited in seconds; the floor (10s) matches
-        // `LOOP_WALL_CLOCK_FLOOR_MS / 1000` in persistence.js.
-        const seconds = Math.max(10, Math.floor(Number(jQuery(this).val()) || 300));
-        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
-        const editor = getLoopEditorByScope(scope);
-        ensureLoopEditorIntegrity(editor);
-        const nextMs = seconds * 1000;
-        editor.wall_clock_budget_ms = nextMs;
-        ensureLoopEditorIntegrity(editor);
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_LOOP, scope, { wall_clock_budget_ms: nextMs }, { avatar });
-    });
-
-    // ─── Director drawer canonical Runtime-limits handlers ────────────
-    // The `[data-orch-director-field]` delegator further below only
-    // matches inputs carrying that attribute, and is popup-scoped. The
-    // drawer canonical inputs in the General tab have neither the
-    // attribute nor `data-scope`, so scope falls through to
-    // `getScopeFromElementOrMode`'s `getDisplayedScopeForMode(director)`
-    // fallback — the same source of truth `renderDynamicPanels` uses to
-    // pick which director editor to hydrate. Popup mirror ids are
-    // `orch-popup-` prefixed.
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_rounds, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_rounds`, async function () {
-        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
-        const editor = getDirectorEditorByScope(scope);
-        ensureDirectorEditorIntegrity(editor);
-        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
-        editor.maxRounds = nextValue;
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, scope, { maxRounds: nextValue }, { avatar });
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_concurrent_subagents, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_concurrent_subagents`, async function () {
-        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
-        const editor = getDirectorEditorByScope(scope);
-        ensureDirectorEditorIntegrity(editor);
-        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
-        editor.maxConcurrentSubagents = nextValue;
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, scope, { maxConcurrentSubagents: nextValue }, { avatar });
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_max_total_subagent_runs, .luker_orch_editor_popup #orch-popup-luker_orch_director_max_total_subagent_runs`, async function () {
-        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
-        const editor = getDirectorEditorByScope(scope);
-        ensureDirectorEditorIntegrity(editor);
-        const nextValue = Math.max(1, Math.floor(Number(jQuery(this).val()) || 1));
-        editor.maxTotalSubagentRuns = nextValue;
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, scope, { maxTotalSubagentRuns: nextValue }, { avatar });
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_director_discard_on_abort, .luker_orch_editor_popup #orch-popup-luker_orch_director_discard_on_abort`, async function () {
-        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_DIRECTOR);
-        const editor = getDirectorEditorByScope(scope);
-        ensureDirectorEditorIntegrity(editor);
-        const nextValue = Boolean(jQuery(this).prop('checked'));
-        editor.discardOnAbort = nextValue;
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistRuntimeLimitsPatch(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, scope, { discardOnAbort: nextValue }, { avatar });
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-loop-tool], .luker_orch_editor_popup [data-luker-loop-tool]`, function () {
-        // finalize is rendered disabled+checked in the workspace; the
-        // browser still fires a change event if the underlying state is
-        // set programmatically. The sanitizer forces `tools.finalize: true`
-        // unconditionally, so even if a malformed click slipped through,
-        // the persisted profile would land back at `true`.
-        const toolName = String(jQuery(this).attr('data-luker-loop-tool') || '');
-        const checked = Boolean(jQuery(this).prop('checked'));
-        const scope = getScopeFromElementOrMode(this, context, settings, ORCH_EXECUTION_MODE_LOOP);
-        const editor = getLoopEditorByScope(scope);
-        ensureLoopEditorIntegrity(editor);
-        if (toolName === 'finalize') {
-            editor.tools.finalize = true;
-            return;
-        }
-        const [namespace, verb] = toolName.split('.');
-        if (!namespace || !verb) return;
-        if (!editor.tools[namespace] || typeof editor.tools[namespace] !== 'object') {
-            editor.tools[namespace] = {};
-        }
-        editor.tools[namespace][verb] = checked;
-        ensureLoopEditorIntegrity(editor);
-    });
-
-    // ─── Custom tools (Layer-2 / Layer-3) handlers ────────────────────
-    // Custom tools live alongside the builtin tool flags but are routed
-    // by `data-orch-mode-tag` (the CT template's own routing attribute,
-    // distinct from the workspace wrapper's `data-orch-mode` visibility
-    // attribute) since each mode stores them at a different path:
-    //   loop      → editor.tools.custom        + editor.customTools[]
-    //   director  → editor.tools.custom        + editor.customTools[]
-    //   agenda    → editor.defaultTools.custom + editor.customTools[]
-    //   spec      → editor.spec.defaultTools.custom + editor.spec.customTools[]
-    // The handler mutates the in-memory editor draft only; the user
-    // commits via the existing Save To Global / Save To Character buttons.
-    function resolveCustomToolsHost(element, modeAttr) {
-        // Read routing mode from the CT template's own `data-orch-mode-tag`
-        // (renamed from `data-orch-mode` to disambiguate from the workspace
-        // wrapper's visibility attribute). Falls back to the ancestor
-        // `[data-orch-mode]` wrapper injected by `injectWorkspaceIntoTabHost`
-        // when the click originated on a nested control without the tag.
-        const explicitMode = String(modeAttr || jQuery(element).attr('data-orch-mode-tag') || '').toLowerCase();
-        const mode = explicitMode
-            || String(jQuery(element).closest('[data-orch-mode]').attr('data-orch-mode') || '').toLowerCase();
-        let executionMode = mode;
-        if (executionMode === 'loop') executionMode = ORCH_EXECUTION_MODE_LOOP;
-        else if (executionMode === 'agenda') executionMode = ORCH_EXECUTION_MODE_AGENDA;
-        else if (executionMode === 'director') executionMode = ORCH_EXECUTION_MODE_DIRECTOR;
-        else if (executionMode === 'spec') executionMode = ORCH_EXECUTION_MODE_SPEC;
-        else return null;
-        const scope = getScopeFromElementOrMode(element, context, settings, executionMode);
-        if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
-            const editor = getLoopEditorByScope(scope);
-            ensureLoopEditorIntegrity(editor);
-            if (!editor.tools || typeof editor.tools !== 'object') editor.tools = {};
-            if (!editor.tools.custom || typeof editor.tools.custom !== 'object') editor.tools.custom = {};
-            if (!Array.isArray(editor.customTools)) editor.customTools = [];
-            return { mode: 'loop', scope, editor, flagBucket: editor.tools.custom, tools: editor.customTools };
-        }
-        if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-            const editor = getDirectorEditorByScope(scope);
-            ensureDirectorEditorIntegrity(editor);
-            if (!editor.tools || typeof editor.tools !== 'object') editor.tools = {};
-            if (!editor.tools.custom || typeof editor.tools.custom !== 'object') editor.tools.custom = {};
-            if (!Array.isArray(editor.customTools)) editor.customTools = [];
-            return { mode: 'director', scope, editor, flagBucket: editor.tools.custom, tools: editor.customTools };
-        }
-        if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
-            const editor = getAgendaEditorByScope(scope);
-            ensureAgendaEditorIntegrity(editor);
-            if (!editor.defaultTools || typeof editor.defaultTools !== 'object') editor.defaultTools = {};
-            if (!editor.defaultTools.custom || typeof editor.defaultTools.custom !== 'object') editor.defaultTools.custom = {};
-            if (!Array.isArray(editor.customTools)) editor.customTools = [];
-            return { mode: 'agenda', scope, editor, flagBucket: editor.defaultTools.custom, tools: editor.customTools };
-        }
-        if (executionMode === ORCH_EXECUTION_MODE_SPEC) {
-            const editor = getEditorByScope(scope);
-            ensureEditorIntegrity(editor);
-            if (!editor.spec || typeof editor.spec !== 'object') editor.spec = {};
-            if (!editor.spec.defaultTools || typeof editor.spec.defaultTools !== 'object') editor.spec.defaultTools = {};
-            if (!editor.spec.defaultTools.custom || typeof editor.spec.defaultTools.custom !== 'object') editor.spec.defaultTools.custom = {};
-            if (!Array.isArray(editor.spec.customTools)) editor.spec.customTools = [];
-            return { mode: 'spec', scope, editor, flagBucket: editor.spec.defaultTools.custom, tools: editor.spec.customTools };
-        }
-        return null;
-    }
-
-    // Resolve the (mode, scope, host) triple for a `[data-orch-wi-filter]`
-    // textarea. The `filterHost` is the object whose `.lorebookFilter`
-    // field the sanitizer round-trips: for spec it lives under
-    // `editor.spec`, for the other three modes it lives on the editor
-    // top level (same shape the per-mode sanitizer emits — Task 2).
-    // Mirrors `resolveCustomToolsHost` above so the same closure-scoped
-    // helpers (getScopeFromElementOrMode / getXxxEditorByScope /
-    // ensureXxxEditorIntegrity) do the mode dispatch.
-    function resolveLorebookFilterHost(element) {
-        const mode = String(jQuery(element).closest('[data-orch-mode]').attr('data-orch-mode') || '').toLowerCase();
-        let executionMode = mode;
-        if (executionMode === 'loop') executionMode = ORCH_EXECUTION_MODE_LOOP;
-        else if (executionMode === 'agenda') executionMode = ORCH_EXECUTION_MODE_AGENDA;
-        else if (executionMode === 'director') executionMode = ORCH_EXECUTION_MODE_DIRECTOR;
-        else if (executionMode === 'spec') executionMode = ORCH_EXECUTION_MODE_SPEC;
-        else return null;
-        const scope = getScopeFromElementOrMode(element, context, settings, executionMode);
-        if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
-            const editor = getLoopEditorByScope(scope);
-            ensureLoopEditorIntegrity(editor);
-            ensureLorebookFilterOnEditor(editor);
-            return { mode: 'loop', scope, editor, filterHost: editor };
-        }
-        if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-            const editor = getDirectorEditorByScope(scope);
-            ensureDirectorEditorIntegrity(editor);
-            ensureLorebookFilterOnEditor(editor);
-            return { mode: 'director', scope, editor, filterHost: editor };
-        }
-        if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
-            const editor = getAgendaEditorByScope(scope);
-            ensureAgendaEditorIntegrity(editor);
-            ensureLorebookFilterOnEditor(editor);
-            return { mode: 'agenda', scope, editor, filterHost: editor };
-        }
-        if (executionMode === ORCH_EXECUTION_MODE_SPEC) {
-            const editor = getEditorByScope(scope);
-            ensureEditorIntegrity(editor);
-            if (!editor.spec || typeof editor.spec !== 'object') editor.spec = {};
-            ensureLorebookFilterOnEditor(editor.spec);
-            return { mode: 'spec', scope, editor, filterHost: editor.spec };
-        }
-        return null;
-    }
-
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-wi-filter], .luker_orch_editor_popup [data-orch-wi-filter]`, function () {
-        const $el = jQuery(this);
-        const field = String($el.attr('data-orch-wi-filter') || '');
-        if (field !== 'bookPattern' && field !== 'entryPattern') return;
-        const host = resolveLorebookFilterHost(this);
-        if (!host) return;
-        host.filterHost.lorebookFilter[field] = String($el.val() || '');
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-tool-flag], .luker_orch_editor_popup [data-orch-tool-flag]`, function () {
-        const name = String(jQuery(this).attr('data-orch-tool-flag') || '');
-        if (!name) return;
-        const host = resolveCustomToolsHost(this);
-        if (!host) return;
-        const checked = Boolean(this.checked);
-        // Only literal `false` disables. Writing the boolean directly
-        // round-trips through the sanitizer either way.
-        host.flagBucket[name] = checked;
-    });
-
-    // Add custom tool — opens the editor popup, appends to `customTools[]`
-    // on the resolved per-mode editor draft, narrow-patches the persisted
-    // preset via persistCustomToolsPatch (mainAgent / tool-flag / skill-chip
-    // edits on the same draft are NOT flushed — those still require Save),
-    // then requests a popup re-render (drawer surface stays stale until
-    // the next mode switch or reload — pre-existing behavior).
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="add-custom-tool"], .luker_orch_editor_popup [data-orch-action="add-custom-tool"]`, async function () {
-        const host = resolveCustomToolsHost(this);
-        if (!host) return;
-        const tools = host.tools;
-        const builtinNames = getBuiltinToolRegistry();
-        const entry = await openCustomToolEditor({
-            initial: null,
-            nameInUse: (n) => tools.some(t => t.name === n),
-            nameConflictsBuiltin: (n) => builtinNames.has(n),
-            t: i18n,
-        });
-        if (!entry) return;
-        tools.push(entry);
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistCustomToolsPatch(context, settings, host.mode, host.scope, tools, { avatar });
-        refreshOrchestrationEditorPopup(context, settings);
-    });
-
-    // "Import defaults" button — re-add the orchestrator's shipped default
-    // customTools (from default-custom-tools.js). Confirms with the user
-    // first so an accidental click on a profile with many handwritten
-    // tools doesn't silently rewrite anything. Default behavior is
-    // skip-on-collision so existing handwritten tools are never lost;
-    // a follow-up confirm offers overwrite for any name collision.
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="import-default-custom-tools"], .luker_orch_editor_popup [data-orch-action="import-default-custom-tools"]`, async function () {
-        const host = resolveCustomToolsHost(this);
-        if (!host) return;
-        const { importDefaultCustomTools } = await import('./seed-default-custom-tools.js');
-        const { DEFAULT_CUSTOM_TOOLS } = await import('./default-custom-tools.js');
-        const existingNames = new Set(host.tools.map(t => String(t?.name || '')));
-        const willCollide = DEFAULT_CUSTOM_TOOLS
-            .map(t => String(t.name))
-            .filter(n => existingNames.has(n));
-        let overwrite = false;
-        if (willCollide.length > 0) {
-            const choice = await context.Popup.show.confirm(
-                i18n('Import default custom tools'),
-                i18nFormat(
-                    'These default tools have the same name as tools already on this profile: ${0}. Overwrite them with the shipped defaults? Choose No to skip just those (your other defaults still import).',
-                    willCollide.join(', '),
-                ),
-            );
-            overwrite = (choice === context.POPUP_RESULT.AFFIRMATIVE);
-        }
-        // The profile-shaped object whose `customTools` is the live array
-        // is `host.editor` for loop/director/agenda, and `host.editor.spec`
-        // for spec mode (see resolveCustomToolsHost). importDefaultCustomTools
-        // mutates the array in place AND flips seededDefaultCustomTools on
-        // the same draft so future sanitizes don't re-seed.
-        const profileDraft = (host.mode === 'spec') ? host.editor.spec : host.editor;
-        const result = importDefaultCustomTools(profileDraft, { overwrite });
-        // sanitizeCustomTools rebuilds the array; rebind the host view if
-        // the reference changed.
-        host.tools.length = 0;
-        for (const t of profileDraft.customTools) host.tools.push(t);
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistCustomToolsPatch(context, settings, host.mode, host.scope, host.tools, { avatar });
-        const summary = [
-            result.added.length ? i18nFormat('added: ${0}', result.added.join(', ')) : '',
-            result.overwritten.length ? i18nFormat('overwritten: ${0}', result.overwritten.join(', ')) : '',
-            result.skipped.length ? i18nFormat('skipped (already present): ${0}', result.skipped.join(', ')) : '',
-        ].filter(Boolean).join(' · ');
-        toastr.success(summary || i18n('No default custom tools to import.'), i18n('Default custom tools'));
-        refreshOrchestrationEditorPopup(context, settings);
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="edit-custom-tool"], .luker_orch_editor_popup [data-orch-action="edit-custom-tool"]`, async function () {
-        const host = resolveCustomToolsHost(this);
-        if (!host) return;
-        const idx = Number(jQuery(this).attr('data-orch-ct-idx'));
-        if (!Number.isInteger(idx) || idx < 0) return;
-        const tools = host.tools;
-        const current = tools[idx];
-        if (!current) return;
-        const builtinNames = getBuiltinToolRegistry();
-        const entry = await openCustomToolEditor({
-            initial: current,
-            nameInUse: (n) => tools.some((t, i) => i !== idx && t.name === n),
-            nameConflictsBuiltin: (n) => builtinNames.has(n),
-            t: i18n,
-        });
-        if (!entry) return;
-        tools[idx] = entry;
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistCustomToolsPatch(context, settings, host.mode, host.scope, tools, { avatar });
-        refreshOrchestrationEditorPopup(context, settings);
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="duplicate-custom-tool"], .luker_orch_editor_popup [data-orch-action="duplicate-custom-tool"]`, async function () {
-        const host = resolveCustomToolsHost(this);
-        if (!host) return;
-        const idx = Number(jQuery(this).attr('data-orch-ct-idx'));
-        if (!Number.isInteger(idx) || idx < 0) return;
-        const tools = host.tools;
-        const src = tools[idx];
-        if (!src) return;
-        let newName = `${src.name}_copy`;
-        let n = 1;
-        while (tools.some(t => t.name === newName)) {
-            n += 1;
-            newName = `${src.name}_copy${n}`;
-        }
-        tools.push({ ...src, name: newName });
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistCustomToolsPatch(context, settings, host.mode, host.scope, tools, { avatar });
-        refreshOrchestrationEditorPopup(context, settings);
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="remove-custom-tool"], .luker_orch_editor_popup [data-orch-action="remove-custom-tool"]`, async function () {
-        const host = resolveCustomToolsHost(this);
-        if (!host) return;
-        const idx = Number(jQuery(this).attr('data-orch-ct-idx'));
-        if (!Number.isInteger(idx) || idx < 0) return;
-        const tools = host.tools;
-        if (!tools[idx]) return;
-        const confirmed = await context.callGenericPopup(
-            i18n('Remove this custom tool?'),
-            context.POPUP_TYPE.CONFIRM,
-            '',
-            { okButton: i18n('Remove'), cancelButton: i18n('Cancel') },
-        );
-        if (!confirmed) return;
-        tools.splice(idx, 1);
-        const avatar = String(getCurrentAvatar(context) || '');
-        await persistCustomToolsPatch(context, settings, host.mode, host.scope, tools, { avatar });
-        refreshOrchestrationEditorPopup(context, settings);
-    });
-
-    // ST tool bridge picker — mutates the shared Layer-2 registry so the
-    // re-render below picks up the new `st_*` entries across all four
-    // modes' Custom Tools sections regardless of which mode owned the
-    // button the user clicked.
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-action="open-bridge-st-tools"], .luker_orch_editor_popup [data-orch-action="open-bridge-st-tools"]`, async function () {
-        await openBridgeStToolPicker({
-            settings,
-            t: i18n,
-            persist: () => saveSettingsDebounced(),
-        });
-        refreshOrchestrationEditorPopup(context, settings);
-    });
-
-    // ─── Director-mode editor handlers ────────────────────────────────
-    // Director edits mutate `uiState.{global,character}DirectorEditor`
-    // (the working state) rather than `settings.directorProfile` directly.
-    // The user explicitly commits with Save To Global / Save To Character
-    // Override (or implicitly when they leave the popup — no auto-save).
-    // The scope is determined by the popup's current displayed scope
-    // (data-scope attribute on the element, or director's stored scope).
-    // We do NOT run sanitizer mid-edit: it would drop rows where the user
-    // hasn't filled `id` / `systemPrompt` yet. Save / runtime sanitize on
-    // their way out.
-    function setDirectorFieldByDotPath(director, dotPath, value) {
-        const parts = String(dotPath || '').split('.').filter(Boolean);
-        if (parts.length === 0) return;
-        let host = director;
-        for (let i = 0; i < parts.length - 1; i += 1) {
-            const key = parts[i];
-            if (!host[key] || typeof host[key] !== 'object') {
-                host[key] = {};
-            }
-            host = host[key];
-        }
-        host[parts[parts.length - 1]] = value;
-    }
-
-    function readDirectorInputValue(el) {
-        const $el = jQuery(el);
-        const type = String($el.attr('type') || '').toLowerCase();
-        if (type === 'checkbox') {
-            return Boolean($el.prop('checked'));
-        }
-        if (type === 'number') {
-            const n = Number($el.val());
-            return Number.isFinite(n) ? n : 0;
-        }
-        return String($el.val() ?? '');
-    }
-
-    function getDirectorEditorForElement(el) {
-        const scope = String(jQuery(el).attr('data-scope') || 'global') === 'character' ? 'character' : 'global';
-        return { scope, editor: getDirectorEditorByScope(scope) };
-    }
-
-    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-director-field], .luker_orch_editor_popup [data-orch-director-field]`, function (event) {
-        const $el = jQuery(this);
-        const type = String($el.attr('type') || '').toLowerCase();
-        // Avoid double-firing for checkbox: only consume `change`.
-        if (type === 'checkbox' && event.type === 'input') return;
-        // Avoid double-firing for text inputs / textareas: consume `input`
-        // for live typing, ignore the trailing `change`.
-        if (type !== 'checkbox' && type !== 'number' && event.type === 'change') return;
-        const dotPath = String($el.attr('data-orch-director-field') || '');
-        if (!dotPath) return;
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor || typeof editor !== 'object') return;
-        ensureDirectorEditorIntegrity(editor);
-        const value = readDirectorInputValue(this);
-        setDirectorFieldByDotPath(editor, dotPath, value);
-    });
-
-    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-subagent-field], .luker_orch_editor_popup [data-orch-subagent-field]`, function (event) {
-        const $el = jQuery(this);
-        const type = String($el.attr('type') || '').toLowerCase();
-        if (type === 'checkbox' && event.type === 'input') return;
-        if (type !== 'checkbox' && type !== 'number' && event.type === 'change') return;
-        const field = String($el.attr('data-orch-subagent-field') || '');
-        const index = Number($el.attr('data-subagent-index'));
-        if (!field || !Number.isInteger(index) || index < 0) return;
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        const subAgents = editor.subAgents;
-        if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') {
-            return;
-        }
-        // maxRounds is an optional number — empty input means "inherit
-        // runtime default" (null), not zero. Special-case the read so a
-        // user clearing the box restores the inherit semantics rather than
-        // pinning the cap to 1 (where the sanitizer would clamp 0).
-        let value;
-        if (field === 'maxRounds') {
-            const raw = String($el.val() ?? '').trim();
-            const n = raw === '' ? null : Number(raw);
-            value = n === null || !Number.isFinite(n) ? null : Math.floor(n);
-        } else {
-            value = readDirectorInputValue(this);
-        }
-        subAgents[index][field] = value;
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-add-subagent], .luker_orch_editor_popup [data-orch-add-subagent]`, function () {
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        if (!Array.isArray(editor.subAgents)) {
-            editor.subAgents = [];
-        }
-        editor.subAgents.push({
-            id: '',
-            description: '',
-            systemPrompt: '',
-            apiPresetName: '',
-            promptPresetName: '',
-            tools: null,
-            maxRounds: null,
-        });
-        // Re-render so the new row gets its `data-subagent-index`.
-        refreshOrchestrationEditorPopup(getContext(), getSettings());
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-orch-remove-subagent], .luker_orch_editor_popup [data-orch-remove-subagent]`, function () {
-        const $el = jQuery(this);
-        const index = Number($el.attr('data-subagent-index'));
-        if (!Number.isInteger(index) || index < 0) return;
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        const subAgents = editor.subAgents;
-        if (!Array.isArray(subAgents) || index >= subAgents.length) return;
-        subAgents.splice(index, 1);
-        // Re-render so indices below the removed row shift up correctly.
-        refreshOrchestrationEditorPopup(getContext(), getSettings());
-    });
-
-    // Director main-agent system prompt reset. Materializes the built-in
-    // default into the editor's textarea + state. User still has to
-    // Save To Global / Save To Character Override to commit. Note that
-    // runtime falls back to the same default for an empty textarea
-    // (director-runtime.js) — the button's job is purely UX (give the
-    // user something to read and modify), not behavioral.
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-reset-main-prompt"], .luker_orch_editor_popup [data-luker-action="director-reset-main-prompt"]`, function () {
-        if (!window.confirm(i18n('Reset main-agent system prompt to default? This overwrites the current text.'))) {
-            return;
-        }
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        const subAgents = Array.isArray(editor.subAgents)
-            ? editor.subAgents
-            : [];
-        const defaultText = buildDirectorDefaultSystemPrompt({ subAgents });
-        if (!editor.mainAgent || typeof editor.mainAgent !== 'object') {
-            editor.mainAgent = {};
-        }
-        editor.mainAgent.systemPrompt = defaultText;
-        // Refresh so the textarea shows the new value.
-        refreshOrchestrationEditorPopup(getContext(), getSettings());
-        notifySuccess(i18n('Reset main-agent system prompt to default'));
-    });
-
-    // Spec-mode profile-root defaultTools checkbox: toggles
-    // `editor.spec.defaultTools[ns][verb]`. The grid only renders when
-    // defaultTools is non-null, so we can assume the field exists.
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-spec-default-tool], .luker_orch_editor_popup [data-luker-spec-default-tool]`, function () {
-        const toolName = String(jQuery(this).attr('data-luker-spec-default-tool') || '');
-        const checked = Boolean(jQuery(this).prop('checked'));
-        const scope = String(jQuery(this).data('scope') || 'global');
-        const specEditor = getEditorByScope(scope);
-        ensureEditorIntegrity(specEditor);
-        if (!specEditor.spec.defaultTools || typeof specEditor.spec.defaultTools !== 'object') {
-            specEditor.spec.defaultTools = sanitizeAgentToolFlags({});
-        }
-        const [namespace, verb] = toolName.split('.');
-        if (!namespace || !verb) return;
-        if (!specEditor.spec.defaultTools[namespace] || typeof specEditor.spec.defaultTools[namespace] !== 'object') {
-            specEditor.spec.defaultTools[namespace] = {};
-        }
-        specEditor.spec.defaultTools[namespace][verb] = checked;
-    });
-
-    // Spec-mode per-node tools override checkbox.
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-spec-node-tool], .luker_orch_editor_popup [data-luker-spec-node-tool]`, function () {
-        const toolName = String(jQuery(this).attr('data-luker-spec-node-tool') || '');
-        const checked = Boolean(jQuery(this).prop('checked'));
-        const scope = String(jQuery(this).data('scope') || 'global');
-        const stageIndex = Number(jQuery(this).data('stage-index'));
-        const nodeIndex = Number(jQuery(this).data('node-index'));
-        if (!Number.isInteger(stageIndex) || !Number.isInteger(nodeIndex)) return;
-        const specEditor = getEditorByScope(scope);
-        ensureEditorIntegrity(specEditor);
-        const node = specEditor.spec?.stages?.[stageIndex]?.nodes?.[nodeIndex];
-        if (!node || typeof node !== 'object') return;
-        if (!node.tools || typeof node.tools !== 'object') {
-            node.tools = sanitizeAgentToolFlags({});
-        }
-        const [namespace, verb] = toolName.split('.');
-        if (!namespace || !verb) return;
-        if (!node.tools[namespace] || typeof node.tools[namespace] !== 'object') {
-            node.tools[namespace] = {};
-        }
-        node.tools[namespace][verb] = checked;
-    });
-
-    // Agenda-mode profile-root defaultTools checkbox.
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-agenda-default-tool], .luker_orch_editor_popup [data-luker-agenda-default-tool]`, function () {
-        const toolName = String(jQuery(this).attr('data-luker-agenda-default-tool') || '');
-        const checked = Boolean(jQuery(this).prop('checked'));
-        const scope = String(jQuery(this).data('scope') || 'global');
-        const agendaEditor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(agendaEditor);
-        if (!agendaEditor.defaultTools || typeof agendaEditor.defaultTools !== 'object') {
-            agendaEditor.defaultTools = sanitizeAgentToolFlags({});
-        }
-        const [namespace, verb] = toolName.split('.');
-        if (!namespace || !verb) return;
-        if (!agendaEditor.defaultTools[namespace] || typeof agendaEditor.defaultTools[namespace] !== 'object') {
-            agendaEditor.defaultTools[namespace] = {};
-        }
-        agendaEditor.defaultTools[namespace][verb] = checked;
-    });
-
-    // Agenda-mode per-agent tools override checkbox.
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-agenda-agent-tool], .luker_orch_editor_popup [data-luker-agenda-agent-tool]`, function () {
-        const toolName = String(jQuery(this).attr('data-luker-agenda-agent-tool') || '');
-        const checked = Boolean(jQuery(this).prop('checked'));
-        const scope = String(jQuery(this).data('scope') || 'global');
-        const agentId = sanitizeIdentifierToken(jQuery(this).data('agent-id'), '');
-        if (!agentId) return;
-        const agendaEditor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(agendaEditor);
-        const preset = agendaEditor.agents?.[agentId];
-        if (!preset || typeof preset !== 'object') return;
-        if (!preset.tools || typeof preset.tools !== 'object') {
-            preset.tools = sanitizeAgentToolFlags({});
-        }
-        const [namespace, verb] = toolName.split('.');
-        if (!namespace || !verb) return;
-        if (!preset.tools[namespace] || typeof preset.tools[namespace] !== 'object') {
-            preset.tools[namespace] = {};
-        }
-        preset.tools[namespace][verb] = checked;
-    });
-
-    // Director-mode default tools (profile-level, inherited by main agent
-    // + every sub-agent that does not have its own override).
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-director-default-tool], .luker_orch_editor_popup [data-luker-director-default-tool]`, function () {
-        const toolName = String(jQuery(this).attr('data-luker-director-default-tool') || '');
-        const checked = Boolean(jQuery(this).prop('checked'));
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        if (!editor.tools || typeof editor.tools !== 'object') {
-            editor.tools = sanitizeAgentToolFlags({});
-        }
-        const [namespace, verb] = toolName.split('.');
-        if (!namespace || !verb) return;
-        if (!editor.tools[namespace] || typeof editor.tools[namespace] !== 'object') {
-            editor.tools[namespace] = {};
-        }
-        editor.tools[namespace][verb] = checked;
-        editor.tools.finalize = false;
-    });
-
-    // Director-mode main-agent tools override (only fires when the user
-    // has flipped the main agent to "override" — otherwise mainAgent.tools
-    // is null and the grid is not rendered).
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-director-mainagent-tool], .luker_orch_editor_popup [data-luker-director-mainagent-tool]`, function () {
-        const toolName = String(jQuery(this).attr('data-luker-director-mainagent-tool') || '');
-        const checked = Boolean(jQuery(this).prop('checked'));
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        if (!editor.mainAgent || typeof editor.mainAgent !== 'object') {
-            editor.mainAgent = {};
-        }
-        if (!editor.mainAgent.tools || typeof editor.mainAgent.tools !== 'object') {
-            editor.mainAgent.tools = sanitizeAgentToolFlags({});
-        }
-        const [namespace, verb] = toolName.split('.');
-        if (!namespace || !verb) return;
-        if (!editor.mainAgent.tools[namespace] || typeof editor.mainAgent.tools[namespace] !== 'object') {
-            editor.mainAgent.tools[namespace] = {};
-        }
-        editor.mainAgent.tools[namespace][verb] = checked;
-        editor.mainAgent.tools.finalize = false;
-    });
-
-    // Director-mode per-sub-agent tools override.
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-director-subagent-tool], .luker_orch_editor_popup [data-luker-director-subagent-tool]`, function () {
-        const toolName = String(jQuery(this).attr('data-luker-director-subagent-tool') || '');
-        const checked = Boolean(jQuery(this).prop('checked'));
-        const index = Number(jQuery(this).attr('data-subagent-index'));
-        if (!Number.isInteger(index) || index < 0) return;
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        const subAgents = editor.subAgents;
-        if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') return;
-        const subAgent = subAgents[index];
-        if (!subAgent.tools || typeof subAgent.tools !== 'object') {
-            subAgent.tools = sanitizeAgentToolFlags({});
-        }
-        const [namespace, verb] = toolName.split('.');
-        if (!namespace || !verb) return;
-        if (!subAgent.tools[namespace] || typeof subAgent.tools[namespace] !== 'object') {
-            subAgent.tools[namespace] = {};
-        }
-        subAgent.tools[namespace][verb] = checked;
-        subAgent.tools.finalize = false;
-    });
-
-    // Override / reset toggles for director default / mainagent / subagent
-    // tools. "Override" copies the current default snapshot so the user
-    // starts from what they were inheriting; "reset" sets the field to
-    // null so cascade-resolver falls back to the next layer.
-    // Director tool override/reset handlers refresh BOTH surfaces: the
-    // popup (when open, via `refreshOrchestrationEditorPopup` early-returns
-    // when no popup is mounted) AND the drawer (via `renderDynamicPanels`
-    // on the drawer `root`). The selectors match both `#${UI_BLOCK_ID}`
-    // (drawer) and `.luker_orch_editor_popup` (popup), so a drawer-only
-    // click must trigger a drawer redraw — otherwise the button appears
-    // to do nothing even though `editor.*.tools` was mutated in memory.
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-default-tools-enable-all"], .luker_orch_editor_popup [data-luker-action="director-default-tools-enable-all"]`, function () {
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        editor.tools = sanitizeAgentToolFlags({}, { defaultAllOn: true, forceFinalize: false });
-        editor.tools.finalize = false;
-        renderDynamicPanels(root, context);
-        refreshOrchestrationEditorPopup(getContext(), getSettings());
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-default-tools-disable-all"], .luker_orch_editor_popup [data-luker-action="director-default-tools-disable-all"]`, function () {
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        editor.tools = sanitizeAgentToolFlags({}, { defaultAllOn: false, forceFinalize: false });
-        editor.tools.finalize = false;
-        renderDynamicPanels(root, context);
-        refreshOrchestrationEditorPopup(getContext(), getSettings());
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-mainagent-tools-override"], .luker_orch_editor_popup [data-luker-action="director-mainagent-tools-override"]`, function () {
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        if (!editor.mainAgent || typeof editor.mainAgent !== 'object') {
-            editor.mainAgent = {};
-        }
-        // Snapshot the current default so the override starts from the
-        // user's prior inherited state instead of all-off.
-        const defaultSnapshot = editor.tools && typeof editor.tools === 'object'
-            ? editor.tools
-            : {};
-        editor.mainAgent.tools = sanitizeAgentToolFlags(defaultSnapshot, { defaultAllOn: false, forceFinalize: false });
-        editor.mainAgent.tools.finalize = false;
-        renderDynamicPanels(root, context);
-        refreshOrchestrationEditorPopup(getContext(), getSettings());
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-mainagent-tools-reset"], .luker_orch_editor_popup [data-luker-action="director-mainagent-tools-reset"]`, function () {
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor?.mainAgent) return;
-        editor.mainAgent.tools = null;
-        renderDynamicPanels(root, context);
-        refreshOrchestrationEditorPopup(getContext(), getSettings());
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-subagent-tools-override"], .luker_orch_editor_popup [data-luker-action="director-subagent-tools-override"]`, function () {
-        const index = Number(jQuery(this).attr('data-subagent-index'));
-        if (!Number.isInteger(index) || index < 0) return;
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        const subAgents = editor.subAgents;
-        if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') return;
-        const defaultSnapshot = editor.tools && typeof editor.tools === 'object'
-            ? editor.tools
-            : {};
-        subAgents[index].tools = sanitizeAgentToolFlags(defaultSnapshot, { defaultAllOn: false, forceFinalize: false });
-        subAgents[index].tools.finalize = false;
-        renderDynamicPanels(root, context);
-        refreshOrchestrationEditorPopup(getContext(), getSettings());
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action="director-subagent-tools-reset"], .luker_orch_editor_popup [data-luker-action="director-subagent-tools-reset"]`, function () {
-        const index = Number(jQuery(this).attr('data-subagent-index'));
-        if (!Number.isInteger(index) || index < 0) return;
-        const { editor } = getDirectorEditorForElement(this);
-        if (!editor) return;
-        const subAgents = editor.subAgents;
-        if (!Array.isArray(subAgents) || !subAgents[index] || typeof subAgents[index] !== 'object') return;
-        subAgents[index].tools = null;
-        renderDynamicPanels(root, context);
-        refreshOrchestrationEditorPopup(getContext(), getSettings());
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_llm_api_preset, .luker_orch_editor_popup #orch-popup-luker_orch_llm_api_preset`, function () {
-        settings.llmNodeApiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_llm_preset, .luker_orch_editor_popup #orch-popup-luker_orch_llm_preset`, function () {
-        settings.llmNodePresetName = String(jQuery(this).val() || '').trim();
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_include_world_info, .luker_orch_editor_popup #orch-popup-luker_orch_include_world_info`, function () {
-        settings.includeWorldInfoWithPreset = Boolean(jQuery(this).prop('checked'));
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_request_api_preset, .luker_orch_editor_popup #orch-popup-luker_orch_request_api_preset`, function () {
-        settings.requestApiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_request_llm_preset, .luker_orch_editor_popup #orch-popup-luker_orch_request_llm_preset`, function () {
-        settings.requestLlmPresetName = String(jQuery(this).val() || '').trim();
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_request_system_prompt, .luker_orch_editor_popup #orch-popup-luker_orch_request_system_prompt`, function () {
-        settings.requestSystemPrompt = String(jQuery(this).val() || '');
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_reset_ai_prompt, .luker_orch_editor_popup #orch-popup-luker_orch_reset_ai_prompt`, function () {
-        if (!window.confirm(i18n('Reset request system prompt to default? This will overwrite the current request system prompt.'))) {
-            return;
-        }
-        settings.requestSystemPrompt = getDefaultRequestSystemPrompt();
-        // Update BOTH surfaces' textareas so drawer + popup stay in sync
-        // without waiting for the next popup rebuild.
-        jQuery(`#${UI_BLOCK_ID} #luker_orch_request_system_prompt, .luker_orch_editor_popup #orch-popup-luker_orch_request_system_prompt`).val(settings.requestSystemPrompt);
-        saveSettingsDebounced();
-        notifySuccess(i18n('Reset request system prompt'));
-    });
-
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_spec, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_spec`, function () {
-        settings.iterModePromptSpec = String(jQuery(this).val() || '');
-        saveSettingsDebounced();
-    });
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_loop, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_loop`, function () {
-        settings.iterModePromptLoop = String(jQuery(this).val() || '');
-        saveSettingsDebounced();
-    });
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_director, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_director`, function () {
-        settings.iterModePromptDirector = String(jQuery(this).val() || '');
-        saveSettingsDebounced();
-    });
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_agenda, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_agenda`, function () {
-        settings.iterModePromptAgenda = String(jQuery(this).val() || '');
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_reset_iter_mode_spec, .luker_orch_editor_popup #orch-popup-luker_orch_reset_iter_mode_spec`, function () {
-        settings.iterModePromptSpec = DEFAULT_SPEC_ITERATION_MODE_BLOCK;
-        jQuery(`#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_spec, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_spec`).val(DEFAULT_SPEC_ITERATION_MODE_BLOCK);
-        saveSettingsDebounced();
-    });
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_reset_iter_mode_loop, .luker_orch_editor_popup #orch-popup-luker_orch_reset_iter_mode_loop`, function () {
-        settings.iterModePromptLoop = DEFAULT_LOOP_ITERATION_MODE_BLOCK;
-        jQuery(`#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_loop, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_loop`).val(DEFAULT_LOOP_ITERATION_MODE_BLOCK);
-        saveSettingsDebounced();
-    });
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_reset_iter_mode_director, .luker_orch_editor_popup #orch-popup-luker_orch_reset_iter_mode_director`, function () {
-        settings.iterModePromptDirector = DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK;
-        jQuery(`#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_director, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_director`).val(DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK);
-        saveSettingsDebounced();
-    });
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_reset_iter_mode_agenda, .luker_orch_editor_popup #orch-popup-luker_orch_reset_iter_mode_agenda`, function () {
-        settings.iterModePromptAgenda = DEFAULT_AGENDA_ITERATION_MODE_BLOCK;
-        jQuery(`#${UI_BLOCK_ID} #luker_orch_iter_mode_prompt_agenda, .luker_orch_editor_popup #orch-popup-luker_orch_iter_mode_prompt_agenda`).val(DEFAULT_AGENDA_ITERATION_MODE_BLOCK);
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_max_recent_messages, .luker_orch_editor_popup #orch-popup-luker_orch_max_recent_messages`, function () {
-        settings.maxRecentMessages = Math.max(1, Math.floor(Number(jQuery(this).val()) || 14));
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_node_iterations, .luker_orch_editor_popup #orch-popup-luker_orch_node_iterations`, function () {
-        settings.nodeIterationMaxRounds = Math.max(1, Math.floor(Number(jQuery(this).val()) || 40));
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_review_reruns, .luker_orch_editor_popup #orch-popup-luker_orch_review_reruns`, function () {
-        settings.reviewRerunMaxRounds = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_tool_retries, .luker_orch_editor_popup #orch-popup-luker_orch_tool_retries`, function () {
-        settings.toolCallRetryMax = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_rpm_limit, .luker_orch_editor_popup #orch-popup-luker_orch_rpm_limit`, function () {
-        settings.rpmLimit = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_capsule_position, .luker_orch_editor_popup #orch-popup-luker_orch_capsule_position`, function () {
-        settings.capsuleInjectPosition = normalizeCapsuleInjectPosition(jQuery(this).val());
-        jQuery(this).val(String(settings.capsuleInjectPosition));
-        // `updateCapsulePositionVisibility` uses an ends-with attribute
-        // selector `[id$="luker_orch_capsule_depth_block"]`, which matches
-        // both drawer and popup blocks when scoped to `document` — so a
-        // single call keeps both surfaces in sync.
-        updateCapsulePositionVisibility(jQuery(document));
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_capsule_depth, .luker_orch_editor_popup #orch-popup-luker_orch_capsule_depth`, function () {
-        settings.capsuleInjectDepth = Math.max(0, Math.floor(Number(jQuery(this).val()) || 0));
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('change.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_capsule_role, .luker_orch_editor_popup #orch-popup-luker_orch_capsule_role`, function () {
-        const value = Number(jQuery(this).val());
-        const allowedRoles = [extension_prompt_roles.SYSTEM, extension_prompt_roles.USER, extension_prompt_roles.ASSISTANT];
-        settings.capsuleInjectRole = allowedRoles.includes(value) ? value : extension_prompt_roles.SYSTEM;
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('input.lukerOrchEditor', `#${UI_BLOCK_ID} #luker_orch_capsule_custom_instruction, .luker_orch_editor_popup #orch-popup-luker_orch_capsule_custom_instruction`, function () {
-        settings.capsuleCustomInstruction = String(jQuery(this).val() || '').trim();
-        reapplyLatestCapsuleInjection(getContext());
-        saveSettingsDebounced();
-    });
-
-    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-field], .luker_orch_editor_popup [data-luker-field]`, function () {
-        const field = String(jQuery(this).data('luker-field') || '');
-        const scope = String(jQuery(this).data('scope') || 'global');
-        const stageIndex = Number(jQuery(this).data('stage-index'));
-        const nodeIndex = Number(jQuery(this).data('node-index'));
-        const presetId = String(jQuery(this).data('preset-id') || '');
-        const editor = getEditorByScope(scope);
-        ensureEditorIntegrity(editor);
-
-        if (field.startsWith('stage-') && Number.isInteger(stageIndex) && editor.spec.stages[stageIndex]) {
-            if (field === 'stage-id') {
-                editor.spec.stages[stageIndex].id = String(jQuery(this).val() || '');
-            } else if (field === 'stage-mode') {
-                editor.spec.stages[stageIndex].mode = String(jQuery(this).val() || 'serial') === 'parallel' ? 'parallel' : 'serial';
-            }
-            return;
-        }
-
-        if (field.startsWith('node-') && Number.isInteger(stageIndex) && Number.isInteger(nodeIndex)) {
-            const stage = editor.spec.stages[stageIndex];
-            const node = stage?.nodes?.[nodeIndex];
-            if (!node) {
-                return;
-            }
-            if (field === 'node-id') {
-                node.id = String(jQuery(this).val() || '');
-            } else if (field === 'node-preset') {
-                node.preset = sanitizeIdentifierToken(jQuery(this).val(), pickDefaultPreset(editor));
-            } else if (field === 'node-type') {
-                node.type = normalizeNodeType(jQuery(this).val());
-            } else if (field === 'node-template') {
-                node.userPromptTemplate = String(jQuery(this).val() || '');
-            }
-            return;
-        }
-
-        if (field.startsWith('preset-') && presetId && editor.presets[presetId]) {
-            const preset = editor.presets[presetId];
-            if (field === 'preset-system-prompt') {
-                preset.systemPrompt = String(jQuery(this).val() || '');
-            } else if (field === 'preset-user-template') {
-                preset.userPromptTemplate = String(jQuery(this).val() || '');
-            } else if (field === 'preset-api-preset') {
-                preset.apiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
-            } else if (field === 'preset-prompt-preset') {
-                preset.promptPresetName = sanitizePromptPresetName(jQuery(this).val());
-            }
-        }
-    });
-
-    jQuery(document).on('input.lukerOrchEditor change.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-agenda-agent-field], .luker_orch_editor_popup [data-luker-agenda-agent-field]`, function () {
-        const scope = getAgendaScopeFromElement(this, context, settings);
-        const editor = getAgendaEditorByScope(scope);
-        ensureAgendaEditorIntegrity(editor);
-        const agentId = sanitizeIdentifierToken(jQuery(this).data('agent-id'), '');
-        const field = String(jQuery(this).data('luker-agenda-agent-field') || '');
-        if (!agentId || !editor.agents?.[agentId]) {
-            return;
-        }
-        if (field === 'systemPrompt') {
-            editor.agents[agentId].systemPrompt = String(jQuery(this).val() || '');
-        } else if (field === 'userPromptTemplate') {
-            editor.agents[agentId].userPromptTemplate = String(jQuery(this).val() || '');
-        } else if (field === 'apiPresetName') {
-            editor.agents[agentId].apiPresetName = sanitizeConnectionProfileName(jQuery(this).val());
-        } else if (field === 'promptPresetName') {
-            editor.agents[agentId].promptPresetName = sanitizePromptPresetName(jQuery(this).val());
-        }
-    });
-
-    jQuery(document).on('click.lukerOrchEditor', `#${UI_BLOCK_ID} [data-luker-action], .luker_orch_editor_popup [data-luker-action]`, async function () {
-        const action = String(jQuery(this).data('luker-action') || '');
-        const scope = String(jQuery(this).data('scope') || 'global');
-        const stageIndex = Number(jQuery(this).data('stage-index'));
-        const nodeIndex = Number(jQuery(this).data('node-index'));
-        const presetId = String(jQuery(this).data('preset-id') || '');
-        const editor = getEditorByScope(scope);
-        ensureEditorIntegrity(editor);
-        const explicitScope = getExplicitScopeFromElement(this);
-
-        if (action === 'agenda-copy-from-spec') {
-            const copyScope = getCopyScopeFromElement(this, context);
-            const agendaEditor = getAgendaEditorByScope(copyScope);
-            const sourceEditor = getEditorByScope(copyScope);
-            copySpecPresetsIntoAgendaEditor(sourceEditor, agendaEditor);
-            setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, copyScope);
-            if (!explicitScope) {
-                const persisted = await persistCopiedProfileTarget(context, settings, ORCH_EXECUTION_MODE_AGENDA, copyScope);
-                if (!persisted) {
-                    return;
-                }
-            }
-            notifySuccess(i18n('Copied spec agents into agenda as a starting point.'));
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'spec-copy-from-agenda') {
-            const copyScope = getCopyScopeFromElement(this, context);
-            const agendaEditor = getAgendaEditorByScope(copyScope);
-            const targetEditor = getEditorByScope(copyScope);
-            copyAgendaAgentsIntoSpecEditor(agendaEditor, targetEditor);
-            setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC, copyScope);
-            if (!explicitScope) {
-                const persisted = await persistCopiedProfileTarget(context, settings, ORCH_EXECUTION_MODE_SPEC, copyScope);
-                if (!persisted) {
-                    return;
-                }
-            }
-            notifySuccess(i18n('Copied agenda agents into spec presets and rebuilt stages as a starting point.'));
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'agenda-agent-add') {
-            const agendaScope = getAgendaScopeFromElement(this, context, settings);
-            const agendaEditor = getAgendaEditorByScope(agendaScope);
-            ensureAgendaEditorIntegrity(agendaEditor);
-            const input = jQuery(this).closest('[data-luker-scope-root]').find(`[data-luker-agenda-new-agent="${agendaScope}"]`);
-            const candidate = sanitizeIdentifierToken(input.val(), '');
-            if (!candidate) {
-                notifyError(i18n('Preset ID cannot be empty.'));
-                return;
-            }
-            if (agendaEditor.agents?.[candidate]) {
-                notifyError(i18nFormat('Preset \'${0}\' already exists.', candidate));
-                return;
-            }
-            agendaEditor.agents[candidate] = createPresetDraft();
-            input.val('');
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'agenda-agent-delete') {
-            const agendaScope = getAgendaScopeFromElement(this, context, settings);
-            const agendaEditor = getAgendaEditorByScope(agendaScope);
-            ensureAgendaEditorIntegrity(agendaEditor);
-            const agentId = sanitizeIdentifierToken(jQuery(this).data('agent-id'), '');
-            if (!agentId || !agendaEditor.agents?.[agentId]) {
-                return;
-            }
-            delete agendaEditor.agents[agentId];
-            if (Object.keys(agendaEditor.agents).length === 0) {
-                agendaEditor.agents.finalizer = structuredClone(defaultAgendaAgents.finalizer);
-            }
-            if (!agendaEditor.agents[agendaEditor.finalAgentId]) {
-                agendaEditor.finalAgentId = Object.keys(agendaEditor.agents)[0] || '';
-            }
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'spec-default-tools-enable-all') {
-            ensureEditorIntegrity(editor);
-            editor.spec.defaultTools = sanitizeAgentToolFlags({}, { defaultAllOn: true });
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'spec-default-tools-disable-all') {
-            ensureEditorIntegrity(editor);
-            editor.spec.defaultTools = null;
-            // Also clear per-node overrides so the cascade collapses to
-            // the (no-tools) built-in default everywhere. Users who want
-            // to keep a per-node override can re-set it explicitly.
-            for (const stage of Array.isArray(editor.spec?.stages) ? editor.spec.stages : []) {
-                for (const node of Array.isArray(stage?.nodes) ? stage.nodes : []) {
-                    if (node && typeof node === 'object') {
-                        node.tools = null;
-                    }
-                }
-            }
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'spec-node-tools-override' && Number.isInteger(stageIndex) && Number.isInteger(nodeIndex)) {
-            ensureEditorIntegrity(editor);
-            const node = editor.spec?.stages?.[stageIndex]?.nodes?.[nodeIndex];
-            if (node && typeof node === 'object') {
-                // Seed from current cascade defaults so the user starts
-                // with what the node would have used anyway (visible state =
-                // effective state) and can tweak from there.
-                const seed = editor.spec?.defaultTools && typeof editor.spec.defaultTools === 'object'
-                    ? structuredClone(editor.spec.defaultTools)
-                    : sanitizeAgentToolFlags({});
-                node.tools = seed;
-                renderDynamicPanels(root, context);
-            }
-            return;
-        }
-
-        if (action === 'spec-node-tools-reset' && Number.isInteger(stageIndex) && Number.isInteger(nodeIndex)) {
-            ensureEditorIntegrity(editor);
-            const node = editor.spec?.stages?.[stageIndex]?.nodes?.[nodeIndex];
-            if (node && typeof node === 'object') {
-                node.tools = null;
-                renderDynamicPanels(root, context);
-            }
-            return;
-        }
-
-        if (action === 'agenda-default-tools-enable-all') {
-            const agendaScope = getAgendaScopeFromElement(this, context, settings);
-            const agendaEditor = getAgendaEditorByScope(agendaScope);
-            ensureAgendaEditorIntegrity(agendaEditor);
-            agendaEditor.defaultTools = sanitizeAgentToolFlags({}, { defaultAllOn: true });
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'agenda-default-tools-disable-all') {
-            const agendaScope = getAgendaScopeFromElement(this, context, settings);
-            const agendaEditor = getAgendaEditorByScope(agendaScope);
-            ensureAgendaEditorIntegrity(agendaEditor);
-            agendaEditor.defaultTools = null;
-            for (const preset of Object.values(agendaEditor?.agents || {})) {
-                if (preset && typeof preset === 'object') {
-                    preset.tools = null;
-                }
-            }
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'agenda-agent-tools-override') {
-            const agendaScope = getAgendaScopeFromElement(this, context, settings);
-            const agendaEditor = getAgendaEditorByScope(agendaScope);
-            ensureAgendaEditorIntegrity(agendaEditor);
-            const agentId = sanitizeIdentifierToken(jQuery(this).data('agent-id'), '');
-            const preset = agentId ? agendaEditor.agents?.[agentId] : null;
-            if (preset && typeof preset === 'object') {
-                const seed = agendaEditor?.defaultTools && typeof agendaEditor.defaultTools === 'object'
-                    ? structuredClone(agendaEditor.defaultTools)
-                    : sanitizeAgentToolFlags({});
-                preset.tools = seed;
-                renderDynamicPanels(root, context);
-            }
-            return;
-        }
-
-        if (action === 'agenda-agent-tools-reset') {
-            const agendaScope = getAgendaScopeFromElement(this, context, settings);
-            const agendaEditor = getAgendaEditorByScope(agendaScope);
-            ensureAgendaEditorIntegrity(agendaEditor);
-            const agentId = sanitizeIdentifierToken(jQuery(this).data('agent-id'), '');
-            const preset = agentId ? agendaEditor.agents?.[agentId] : null;
-            if (preset && typeof preset === 'object') {
-                preset.tools = null;
-                renderDynamicPanels(root, context);
-            }
-            return;
-        }
-
-        if (action === 'stage-add') {
-            editor.spec.stages.push(createNewStage(editor));
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'stage-delete' && Number.isInteger(stageIndex) && editor.spec.stages[stageIndex]) {
-            editor.spec.stages.splice(stageIndex, 1);
-            if (editor.spec.stages.length === 0) {
-                editor.spec.stages.push(createNewStage(editor));
-            }
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'stage-move-up' && Number.isInteger(stageIndex) && stageIndex > 0) {
-            const [stage] = editor.spec.stages.splice(stageIndex, 1);
-            editor.spec.stages.splice(stageIndex - 1, 0, stage);
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'stage-move-down' && Number.isInteger(stageIndex) && stageIndex >= 0 && stageIndex < editor.spec.stages.length - 1) {
-            const [stage] = editor.spec.stages.splice(stageIndex, 1);
-            editor.spec.stages.splice(stageIndex + 1, 0, stage);
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'node-add' && Number.isInteger(stageIndex) && editor.spec.stages[stageIndex]) {
-            const defaultPreset = pickDefaultPreset(editor);
-            editor.spec.stages[stageIndex].nodes.push({
-                id: defaultPreset,
-                preset: defaultPreset,
-                type: ORCH_NODE_TYPE_WORKER,
-                userPromptTemplate: '',
-            });
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'node-delete' && Number.isInteger(stageIndex) && Number.isInteger(nodeIndex)) {
-            const stage = editor.spec.stages[stageIndex];
-            if (!stage?.nodes?.[nodeIndex]) {
-                return;
-            }
-            stage.nodes.splice(nodeIndex, 1);
-            if (stage.nodes.length === 0) {
-                const defaultPreset = pickDefaultPreset(editor);
-                stage.nodes.push({
-                    id: defaultPreset,
-                    preset: defaultPreset,
-                    type: ORCH_NODE_TYPE_WORKER,
-                    userPromptTemplate: '',
-                });
-            }
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'node-move-up' && Number.isInteger(stageIndex) && Number.isInteger(nodeIndex) && nodeIndex > 0) {
-            const nodes = editor.spec.stages[stageIndex]?.nodes || [];
-            const [node] = nodes.splice(nodeIndex, 1);
-            nodes.splice(nodeIndex - 1, 0, node);
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'node-move-down' && Number.isInteger(stageIndex) && Number.isInteger(nodeIndex)) {
-            const nodes = editor.spec.stages[stageIndex]?.nodes || [];
-            if (nodeIndex < 0 || nodeIndex >= nodes.length - 1) {
-                return;
-            }
-            const [node] = nodes.splice(nodeIndex, 1);
-            nodes.splice(nodeIndex + 1, 0, node);
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'preset-add') {
-            const scopeRoot = jQuery(this).closest('[data-luker-scope-root]');
-            const input = scopeRoot.find(`[data-luker-new-preset="${scope}"]`);
-            const candidate = sanitizeIdentifierToken(input.val(), '');
-            if (!candidate) {
-                notifyError(i18n('Preset ID cannot be empty.'));
-                return;
-            }
-            if (editor.presets[candidate]) {
-                notifyError(i18nFormat('Preset \'${0}\' already exists.', candidate));
-                return;
-            }
-            editor.presets[candidate] = createPresetDraft();
-            input.val('');
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'preset-delete' && presetId) {
-            if (!editor.presets[presetId]) {
-                return;
-            }
-            if (isPresetUsed(editor, presetId)) {
-                notifyError(i18nFormat('Preset \'${0}\' is still used by workflow nodes.', presetId));
-                return;
-            }
-            delete editor.presets[presetId];
-            ensureEditorIntegrity(editor);
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'reset-single') {
-            // Single mode does not participate in the preset library —
-            // its runtime profile is synthesized from `settings.singleAgentSystemPrompt`
-            // and `settings.singleAgentUserPromptTemplate` (see `getActivePreset`),
-            // so `reset-global`'s `writeActivePreset('single', ...)` path
-            // has no slot to write into. Reset for single mode restores
-            // both settings fields to their module defaults instead.
-            if (!window.confirm(i18n('Reset the single-agent system prompt and user prompt template to defaults? This will overwrite the current values.'))) {
-                return;
-            }
-            settings.singleAgentSystemPrompt = DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT;
-            settings.singleAgentUserPromptTemplate = DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE;
-            await saveSettings();
-            renderDynamicPanels(root, context);
-            notifySuccess(i18n('Single-agent prompts reset to defaults.'));
-            updateUiStatus(i18n('Single-agent prompts reset to defaults.'));
-            return;
-        }
-
-        if (action === 'save-global') {
-            syncCharacterEditorWithActiveAvatar(context);
-            const sourceScope = getDisplayedScope(context, settings);
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_LOOP) {
-                const sourceEditor = getLoopEditorByScope(sourceScope);
-                await persistGlobalLoopEditorFrom(settings, sourceEditor);
-                uiState.globalLoopEditor = loadGlobalLoopEditorState();
-                ensureLoopEditorIntegrity(uiState.globalLoopEditor);
-                notifySuccess(i18n('Global orchestration profile saved.'));
-                updateUiStatus(i18n('Saved to global profile.'));
-                renderDynamicPanels(root, context);
-                return;
-            }
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_DIRECTOR) {
-                // Persist the director editor draft to global settings,
-                // matching loop/agenda/spec's working-state → settings
-                // commit pattern. Reload editor state from the
-                // sanitized profile so the popup re-renders cleanly.
-                syncCharacterEditorWithActiveAvatar(context);
-                const sourceScope = getDisplayedScope(context, settings);
-                const sourceEditor = getDirectorEditorByScope(sourceScope);
-                await persistGlobalDirectorEditorFrom(settings, sourceEditor);
-                uiState.globalDirectorEditor = loadGlobalDirectorEditorState();
-                ensureDirectorEditorIntegrity(uiState.globalDirectorEditor);
-                renderDynamicPanels(root, context);
-                notifySuccess(i18n('Global orchestration profile saved.'));
-                updateUiStatus(i18n('Saved to global profile.'));
-                return;
-            }
-            if (getExecutionMode(settings) === ORCH_EXECUTION_MODE_AGENDA) {
-                const sourceEditor = getAgendaEditorByScope(sourceScope);
-                await persistGlobalAgendaEditorFrom(settings, sourceEditor);
-                uiState.globalAgendaEditor = loadGlobalAgendaEditorState();
-                ensureAgendaEditorIntegrity(uiState.globalAgendaEditor);
-            } else {
-                const sourceEditor = getEditorByScope(sourceScope);
-                await persistGlobalEditorFrom(settings, sourceEditor);
-                uiState.globalEditor = loadGlobalEditorState();
-                ensureEditorIntegrity(uiState.globalEditor);
-            }
-            notifySuccess(i18n('Global orchestration profile saved.'));
-            updateUiStatus(i18n('Saved to global profile.'));
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'save-character') {
-            syncCharacterEditorWithActiveAvatar(context);
-            const activeAvatar = String(getCurrentAvatar(context) || '').trim();
-            if (!activeAvatar) {
-                notifyError(i18n('No character selected.'));
-                return;
-            }
-            const sourceScope = getDisplayedScope(context, settings);
-            const executionMode = getExecutionMode(settings);
-
-            // Before persisting the orchestrator profile, detect preset
-            // names the profile references that live only in the local
-            // global set (not yet embedded on the card).  Prompt the user
-            // to embed them alongside the profile so recipients who
-            // import the card get the presets too.  Sanitizers keep
-            // preset names opaque (opaque-string contract), so reading
-            // straight from the editor draft is safe.
-            const activeCharacter = context.characters?.find(c => c?.avatar === activeAvatar) || null;
-            let editorForDetect = null;
-            if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
-                editorForDetect = { ...(getLoopEditorByScope(sourceScope) || {}), mode: 'loop' };
-            } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
-                editorForDetect = { ...(getAgendaEditorByScope(sourceScope) || {}), mode: 'agenda' };
-            } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-                editorForDetect = { ...(getDirectorEditorByScope(sourceScope) || {}), mode: 'director' };
-            } else {
-                editorForDetect = { ...(getEditorByScope(sourceScope) || {}), mode: 'spec' };
-            }
-            const preflight = await promptEmbedUnembeddedPresetsForCharacterApply({
-                context,
-                activeCharacter,
-                profile: editorForDetect,
-                i18n,
-                i18nFormat,
-                notifyError,
-                escapeHtml,
-            });
-            if (!preflight.proceed) {
-                return;
-            }
-
-            let ok;
-            if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
-                ok = await persistCharacterLoopEditor(context, settings, activeAvatar, {
-                    editor: getLoopEditorByScope(sourceScope),
-                });
-            } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
-                ok = await persistCharacterAgendaEditor(context, settings, activeAvatar, {
-                    editor: getAgendaEditorByScope(sourceScope),
-                });
-            } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-                ok = await persistCharacterDirectorEditor(context, settings, activeAvatar, {
-                    editor: getDirectorEditorByScope(sourceScope),
-                });
-            } else {
-                ok = await persistCharacterEditor(context, settings, activeAvatar, {
-                    editor: getEditorByScope(sourceScope),
-                });
-            }
-            if (!ok) {
-                notifyError(i18n('Failed to persist character override.'));
-                return;
-            }
-            if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
-                uiState.characterLoopEditor = loadCharacterLoopEditorState(context, activeAvatar);
-                ensureLoopEditorIntegrity(uiState.characterLoopEditor);
-                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'character');
-            } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
-                uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, activeAvatar);
-                ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
-                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'character');
-            } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-                uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, activeAvatar);
-                ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
-                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'character');
-            } else {
-                uiState.characterEditor = loadCharacterEditorState(context, activeAvatar);
-                ensureEditorIntegrity(uiState.characterEditor);
-                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC, 'character');
-            }
-            notifySuccess(i18n('Character orchestration override saved.'));
-            updateUiStatus(i18nFormat('Saved to character override: ${0}.', getCharacterDisplayNameByAvatar(context, activeAvatar)));
-            renderDynamicPanels(root, context);
-            return;
-        }
-
-        if (action === 'clear-character') {
-            syncCharacterEditorWithActiveAvatar(context);
-            const avatar = String(getCurrentAvatar(context) || '').trim();
-            if (!avatar) {
-                notifyError(i18n('No character selected.'));
-                return;
-            }
-            const characterIndex = getCharacterIndexByAvatar(context, avatar);
-            if (characterIndex < 0) {
-                notifyError(i18n('No character selected.'));
-                return;
-            }
-            const previous = getCharacterExtensionDataByAvatar(context, avatar);
-            const executionMode = getExecutionMode(settings);
-            const nextPayload = clearCharacterExtensionForMode(previous, executionMode);
-            const ok = await persistOrchestratorCharacterExtension(context, characterIndex, nextPayload);
-            if (!ok) {
-                notifyError(i18n('Failed to persist character override.'));
-                return;
-            }
-            applyCharacterExecutionModeForAvatar(context, settings, avatar);
-            if (executionMode === ORCH_EXECUTION_MODE_LOOP) {
-                uiState.characterLoopEditor = loadCharacterLoopEditorState(context, avatar);
-                ensureLoopEditorIntegrity(uiState.characterLoopEditor);
-                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_LOOP, 'global');
-            } else if (executionMode === ORCH_EXECUTION_MODE_AGENDA) {
-                uiState.characterAgendaEditor = loadCharacterAgendaEditorState(context, avatar);
-                ensureAgendaEditorIntegrity(uiState.characterAgendaEditor);
-                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_AGENDA, 'global');
-            } else if (executionMode === ORCH_EXECUTION_MODE_DIRECTOR) {
-                uiState.characterDirectorEditor = loadCharacterDirectorEditorState(context, avatar);
-                ensureDirectorEditorIntegrity(uiState.characterDirectorEditor);
-                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_DIRECTOR, 'global');
-            } else {
-                uiState.characterEditor = loadCharacterEditorState(context, avatar);
-                ensureEditorIntegrity(uiState.characterEditor);
-                setDisplayedScopeForMode(context, settings, ORCH_EXECUTION_MODE_SPEC, 'global');
-            }
-            renderDynamicPanels(root, context);
-            notifyInfo(i18n('Character orchestration override removed.'));
-            updateUiStatus(i18nFormat('Removed character override for ${0}.', getCharacterDisplayNameByAvatar(context, avatar)));
-            return;
-        }
-
-        if (action === 'ai-iterate-open') {
-            await openAiIterationStudio(context, settings, root);
-            return;
-        }
-
-        if (action === 'view-last-run') {
-            await openLastOrchestrationResult(context);
-            return;
-        }
-
-        if (action === 'show-run-panel') {
-            openRunPanel(context);
-            return;
-        }
-
-        if (action === 'open-orch-editor-popup') {
-            await openOrchestrationEditorPopup(context, settings);
-            return;
-        }
-
-        if (action === 'manage-skills') {
-            try {
-                const initialScope = computeActiveOrchPresetScope(context, settings);
-                await openSkillManagerPanel({ context, initialScope, t: i18n });
-            } catch (e) {
-                notifyError(i18nFormat('Skill manager failed: ${0}', e?.message || String(e)));
-            }
-            return;
-        }
-    });
-}
-
-function ensureUi() {
-    const host = jQuery('#extensions_settings2');
-    if (!host.length) {
-        return;
-    }
-
-    ensureStyles(UI_BLOCK_ID);
-
-    const needsMount = !jQuery(`#${UI_BLOCK_ID}`).length;
-    if (needsMount) {
-        const html = buildOrchestratorSettingsHtml(getOrchestratorUiTemplateDeps());
-        host.append(html);
-    }
-    bindUi();
-
-    // Notes panel mount — idempotent thanks to the dataset.luker_notes_mounted
-    // guard inside mountNotesPanel, so calling on every ensureUi invocation is
-    // safe and ensures the panel mounts even on the early-return path.
-    const notesHost = document.getElementById('orchestrator-notes-host');
-    if (notesHost) {
-        mountNotesPanel(notesHost, getContext()).catch(err => {
-            console.warn(`[${MODULE_NAME}/notes] mount failed:`, err);
-        });
-    }
-}
-
 jQuery(() => {
     const context = getContext();
     registerLocaleData();
+    ensureStyles();
+    import('./lens/index.js')
+        .then(({ initOrchestraLens }) => initOrchestraLens())
+        .catch(err => console.error(`[${MODULE_NAME}] Failed to start Orchestra Lens`, err));
     ensureSimulationReviewLocaleData();
-    initRunPanel();
     ensureSettings();
     saveSettingsDebounced();
     ensureDirectorPureSyntheticPreset(context);
@@ -8551,7 +5505,8 @@ jQuery(() => {
         });
     }
     clearCapsulePrompt(context);
-    void loadOrchestratorChatState(context).finally(() => ensureUi());
+    syncCharacterEditorWithActiveAvatar(context);
+    void loadOrchestratorChatState(context);
 
     if (context.eventTypes.GENERATION_WORLD_INFO_FINALIZED) {
         context.eventSource.on(context.eventTypes.GENERATION_WORLD_INFO_FINALIZED, onWorldInfoFinalized);
@@ -8850,25 +5805,10 @@ jQuery(() => {
     if (context.eventTypes.MESSAGE_EDITED) {
         context.eventSource.on(context.eventTypes.MESSAGE_EDITED, onMessageEdited);
     }
-    if (context.eventTypes.PRESET_CHANGED) {
-        context.eventSource.on(context.eventTypes.PRESET_CHANGED, (event) => {
-            if (String(event?.apiId || '') === 'openai') {
-                ensureUi();
-            }
-        });
-    }
-    const connectionProfileEvents = [
-        context.eventTypes.CONNECTION_PROFILE_LOADED,
-        context.eventTypes.CONNECTION_PROFILE_CREATED,
-        context.eventTypes.CONNECTION_PROFILE_DELETED,
-        context.eventTypes.CONNECTION_PROFILE_UPDATED,
-    ].filter(Boolean);
-    for (const eventName of connectionProfileEvents) {
-        context.eventSource.on(eventName, () => ensureUi());
-    }
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, () => {
         const liveContext = getContext();
         abortActiveOrchestratorRun();
+        syncCharacterEditorWithActiveAvatar(liveContext);
         clearCacheForChatChange();
         const run = getCurrentRun();
         if (run && run.status === 'running' && typeof run.abortFn === 'function') {
@@ -8879,23 +5819,8 @@ jQuery(() => {
         }
         clearCurrentRun();
         clearCapsulePrompt(liveContext);
-        void loadOrchestratorChatState(liveContext).finally(() => ensureUi());
+        void loadOrchestratorChatState(liveContext);
     });
-
-    // The panel reads per-character overrides from
-    // `character.data.extensions.orchestrator.override`. CHAT_CHANGED covers
-    // chat switches, but a card replace/update or AI-driven field write
-    // mutates the override branch in place — without these listeners the
-    // override-source label and disabled-state cues stay stuck on the
-    // previous character's data until something else triggers ensureUi.
-    const characterRefreshEvents = [
-        context.eventTypes?.CHARACTER_REPLACED,
-        context.eventTypes?.CHARACTER_FIELDS_UPDATED,
-        context.eventTypes?.CHARACTER_EDITED,
-    ].filter(Boolean);
-    for (const eventName of characterRefreshEvents) {
-        context.eventSource.on(eventName, () => ensureUi());
-    }
 
     // Imported character cards land on disk verbatim via
     // /api/characters/import — `customTools[]` embedded in the card's
