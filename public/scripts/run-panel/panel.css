@@ -220,6 +220,21 @@
     display: none;
 }
 
+.luker-run-panel .section-image-link {
+    display: block;
+    width: fit-content;
+}
+
+.luker-run-panel .section-image {
+    display: block;
+    max-width: 100%;
+    max-height: 320px;
+    margin: 4px 0 8px;
+    border-radius: 4px;
+    object-fit: contain;
+    background: color-mix(in srgb, var(--panel-fg) 6%, transparent);
+}
+
 .luker-run-panel .copy-btn {
     margin-left: auto;
     background: transparent;

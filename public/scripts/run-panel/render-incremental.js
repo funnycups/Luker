@@ -38,6 +38,9 @@ export class PanelRenderer {
             ? options.exportFilename
             : ({ runId, mode }) => `run-${runId}-${mode}.json`;
         this.onStop = typeof options.onStop === 'function' ? options.onStop : null;
+        this.summaryFormatter = typeof options.summaryFormatter === 'function' ? options.summaryFormatter : null;
+        this.keepOpenKinds = new Set(options.keepOpenKinds || []);
+        this.autoCollapseRounds = options.autoCollapseRounds !== false;
 
         this.bodyEl = rootEl.querySelector('.panel-body');
         this.roundsListEl = rootEl.querySelector('.rounds-list');
@@ -174,6 +177,10 @@ export class PanelRenderer {
     _renderHeader() {
         const run = this._run();
         if (!run) return;
+        if (this.summaryFormatter) {
+            this.summaryEl.textContent = String(this.summaryFormatter(run, this.t) ?? '');
+            return;
+        }
         const numRounds = run.rounds.length;
         const numToolCalls = run.rounds.reduce(
             (n, r) => n + r.sections.filter(s => s.kind === 'tool_call').length, 0,
@@ -275,21 +282,24 @@ export class PanelRenderer {
         const titleSpan = document.createElement('span');
         titleSpan.textContent = `${icon} ${section.title}`;
         summary.appendChild(titleSpan);
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'copy-btn';
-        copyBtn.title = this.t('Copy');
-        copyBtn.textContent = '⧉';
-        copyBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            this._copySection(roundId, sectionId, copyBtn);
-        });
-        summary.appendChild(copyBtn);
+        if (section.kind !== 'image') {
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'copy-btn';
+            copyBtn.title = this.t('Copy');
+            copyBtn.textContent = '⧉';
+            copyBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this._copySection(roundId, sectionId, copyBtn);
+            });
+            summary.appendChild(copyBtn);
+        }
         details.appendChild(summary);
 
         const pre = document.createElement('pre');
         pre.textContent = section.body;
         details.appendChild(pre);
+        this._syncSectionImage(details, section);
 
         summary.addEventListener('click', () => {
             this._manualToggles.add(`section:${roundId}:${sectionId}`);
@@ -331,12 +341,41 @@ export class PanelRenderer {
         );
         if (!li) return;
         li.dataset.status = status;
+        const run = this._run();
+        const round = run?.rounds.find(r => r.id === roundId);
+        const section = round?.sections.find(s => s.id === sectionId);
+        const details = li.querySelector(':scope > details');
+        if (section) this._syncSectionImage(details, section);
         if (status === 'done' || status === 'failed') {
-            if (!this._manualToggles.has(`section:${roundId}:${sectionId}`)) {
-                const details = li.querySelector(':scope > details');
+            if (!this._manualToggles.has(`section:${roundId}:${sectionId}`) && !this.keepOpenKinds.has(section?.kind)) {
                 this._setDetailsOpen(details, false);
             }
         }
+    }
+
+    _syncSectionImage(detailsEl, section) {
+        if (!detailsEl) return;
+        const url = typeof section?.meta?.imageUrl === 'string' ? section.meta.imageUrl : '';
+        let link = detailsEl.querySelector(':scope > .section-image-link');
+        if (!url) {
+            if (link) link.remove();
+            return;
+        }
+        if (!link) {
+            link = document.createElement('a');
+            link.className = 'section-image-link';
+            link.target = '_blank';
+            link.rel = 'noopener';
+            const image = document.createElement('img');
+            image.className = 'section-image';
+            image.loading = 'lazy';
+            link.appendChild(image);
+            detailsEl.appendChild(link);
+        }
+        const image = link.querySelector('img.section-image');
+        link.setAttribute('href', url);
+        image.alt = section.title;
+        if (image.getAttribute('src') !== url) image.setAttribute('src', url);
     }
 
     _renderRoundStatus(roundId, status) {
@@ -356,12 +395,11 @@ export class PanelRenderer {
                 }
             }
         }
-        if (status === 'done' || status === 'failed') {
+        if (status === 'done' || status === 'failed' || status === 'aborted') {
             this._stopRoundTimer(roundId);
-            if (!this._manualToggles.has(`round:${roundId}`)) {
-                const details = li.querySelector(':scope > details');
-                this._setDetailsOpen(details, false);
-            }
+            if (!this.autoCollapseRounds || this._manualToggles.has(`round:${roundId}`)) return;
+            const details = li.querySelector(':scope > details');
+            this._setDetailsOpen(details, false);
         }
     }
 
@@ -390,6 +428,7 @@ export class PanelRenderer {
             this.finalOutputEl.querySelector('pre').textContent = run.finalText;
         }
         for (const li of this.roundsListEl.querySelectorAll('.round')) {
+            if (!this.autoCollapseRounds) break;
             const roundId = li.dataset.roundId;
             if (!roundId || this._manualToggles.has(`round:${roundId}`)) continue;
             this._setDetailsOpen(li.querySelector(':scope > details'), false);
@@ -400,6 +439,9 @@ export class PanelRenderer {
             const roundId = roundLi?.dataset.roundId;
             if (!sectionId || !roundId) continue;
             if (this._manualToggles.has(`section:${roundId}:${sectionId}`)) continue;
+            const run = this._run();
+            const section = run?.rounds.find(r => r.id === roundId)?.sections.find(s => s.id === sectionId);
+            if (section && this.keepOpenKinds.has(section.kind)) continue;
             this._setDetailsOpen(sli.querySelector(':scope > details'), false);
         }
         this._renderHeader();

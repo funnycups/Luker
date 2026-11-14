@@ -240,4 +240,143 @@ describe('createRunPanel', () => {
         expect(details.open).toBe(false);
         panel.destroy();
     });
+
+    test('pillOnStart keeps a closed panel and exposes capsule state across run lifecycle', async () => {
+        const store = createRunStore();
+        const pillFormatter = (run) => {
+            const active = run.rounds.filter(r => r.status === 'running').length;
+            if (active) return { visible: true, text: `Working ${active}`, tone: 'running', loading: true };
+            const failed = run.rounds.filter(r => r.status === 'failed').length;
+            return failed
+                ? { visible: true, text: `Failed ${failed}`, tone: 'error', loading: false }
+                : { visible: false };
+        };
+        const panel = createRunPanel({ store, t, idPrefix: 'pill-start-panel', autoOpen: false, pillOnStart: true, pillFormatter });
+        try {
+            panel.init();
+            const runId = store.startRun({ mode: 'image' });
+            const roundId = store.appendRound({ runId, round: { id: 'round-1', label: 'Generation #1' } });
+            const root = document.getElementById('pill-start-panel');
+            const pill = document.getElementById('pill-start-panel-pill');
+            expect(root.dataset.state).toBe('closed');
+            expect(pill.hidden).toBe(false);
+            expect(pill.textContent).toContain('Working 1');
+            expect(pill.dataset.tone).toBe('running');
+
+            store.setRoundStatus({ runId, roundId, status: 'failed' });
+            store.finishRun({ runId, status: 'error' });
+            expect(pill.hidden).toBe(false);
+            expect(pill.textContent).toContain('Failed 1');
+            expect(pill.dataset.tone).toBe('error');
+
+            pill.click();
+            await flushActivations();
+            expect(root.dataset.state).toBe('open');
+            expect(pill.hidden).toBe(true);
+            root.querySelector('[data-action="close"]').click();
+            expect(pill.hidden).toBe(false);
+            expect(pill.textContent).toContain('Failed 1');
+        } finally {
+            panel.destroy();
+        }
+    });
+
+    test('summaryFormatter replaces the default run counters', () => {
+        const store = createRunStore();
+        const panel = createRunPanel({
+            store,
+            t,
+            idPrefix: 'summary-panel',
+            autoOpen: true,
+            summaryFormatter: (run) => `Images ${run.rounds.length}`,
+        });
+        try {
+            panel.init();
+            const runId = store.startRun({ mode: 'image' });
+            store.appendRound({ runId, round: { id: 'round-1', label: 'Generation #1' } });
+            const summary = document.querySelector('#summary-panel .panel-summary');
+            expect(summary.textContent).toBe('Images 1');
+        } finally {
+            panel.destroy();
+        }
+    });
+
+    test('image section renders meta.imageUrl and keepOpenKinds leaves it expanded', () => {
+        const store = createRunStore();
+        const panel = createRunPanel({
+            store,
+            t,
+            idPrefix: 'image-panel',
+            autoOpen: true,
+            keepOpenKinds: ['image'],
+        });
+        try {
+            panel.init();
+            const runId = store.startRun({ mode: 'image' });
+            const roundId = store.appendRound({ runId, round: { id: 'round-1', label: 'Generation #1' } });
+            const sectionId = store.ensureSection({ runId, roundId, section: { id: 'image', kind: 'image', title: 'Image' } });
+            store.setSectionStatus({ runId, roundId, sectionId, status: 'done', meta: { imageUrl: '/user/images/result.png' } });
+            const section = document.querySelector('#image-panel [data-section-id="image"]');
+            const image = section.querySelector('img.section-image');
+            expect(image).not.toBeNull();
+            expect(image.getAttribute('src')).toBe('/user/images/result.png');
+            expect(section.querySelector('a.section-image-link').getAttribute('href')).toBe('/user/images/result.png');
+            expect(section.querySelector(':scope > details').open).toBe(true);
+        } finally {
+            panel.destroy();
+        }
+    });
+
+    test('pillOnStart exposes onOpen and refreshPill for custom capsule state', () => {
+        const store = createRunStore();
+        let capsuleText = 'alpha';
+        let opened = 0;
+        const panel = createRunPanel({
+            store,
+            t,
+            idPrefix: 'refresh-pill-panel',
+            autoOpen: false,
+            pillOnStart: true,
+            pillFormatter: () => ({ visible: true, text: capsuleText, tone: 'running', loading: true }),
+            onOpen: () => { opened += 1; },
+        });
+        try {
+            panel.init();
+            store.startRun({ mode: 'image' });
+            const root = document.getElementById('refresh-pill-panel');
+            const pill = document.getElementById('refresh-pill-panel-pill');
+            expect(pill.textContent).toContain('alpha');
+
+            capsuleText = 'beta';
+            panel.refreshPill();
+            expect(pill.textContent).toContain('beta');
+
+            panel.open();
+            expect(opened).toBe(1);
+            expect(root.dataset.state).toBe('open');
+        } finally {
+            panel.destroy();
+        }
+    });
+
+    test('autoCollapseRounds false leaves completed rounds expanded', () => {
+        const store = createRunStore();
+        const panel = createRunPanel({
+            store,
+            t,
+            idPrefix: 'rounds-open-panel',
+            autoOpen: true,
+            autoCollapseRounds: false,
+        });
+        try {
+            panel.init();
+            const runId = store.startRun({ mode: 'image' });
+            store.appendRound({ runId, round: { id: 'round-1', label: 'Generation #1' } });
+            store.finishRun({ runId, status: 'committed' });
+            const roundDetails = document.querySelector('#rounds-open-panel [data-round-id="round-1"] > details');
+            expect(roundDetails.open).toBe(true);
+        } finally {
+            panel.destroy();
+        }
+    });
 });

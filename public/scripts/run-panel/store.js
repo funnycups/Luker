@@ -99,7 +99,7 @@ export function createRunStore() {
         return round.id;
     }
 
-    const TERMINAL_STEP_STATUSES = new Set(['done', 'failed']);
+    const TERMINAL_STEP_STATUSES = new Set(['done', 'failed', 'aborted']);
 
     function setRoundStatus({ runId, roundId, status }) {
         ensureRunningMatchesId(runId);

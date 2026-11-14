@@ -21,13 +21,19 @@ export function createRunPanel(options = {}) {
     const idPrefix = String(options.idPrefix || 'luker-run-panel');
     const stylesheetUrl = String(options.stylesheetUrl || DEFAULT_STYLESHEET_URL);
     const autoOpen = options.autoOpen !== false;
+    const pillOnStart = options.pillOnStart === true;
+    const pillFormatter = typeof options.pillFormatter === 'function' ? options.pillFormatter : null;
+    const onOpen = typeof options.onOpen === 'function' ? options.onOpen : null;
     const emptyStateText = options.emptyStateText || DEFAULT_EMPTY_STATE;
     const rendererOptions = {
         store,
         t,
         kindIcons: options.kindIcons || DEFAULT_KIND_ICONS,
         defaultCollapsedKinds: options.defaultCollapsedKinds || [],
+        keepOpenKinds: options.keepOpenKinds || [],
+        autoCollapseRounds: options.autoCollapseRounds !== false,
         modeLabels: options.modeLabels || {},
+        summaryFormatter: options.summaryFormatter,
         exportFilename: options.exportFilename,
         onStop: options.onStop,
     };
@@ -114,41 +120,62 @@ export function createRunPanel(options = {}) {
         layoutMql.addEventListener('change', layoutHandler);
 
         root.querySelector('[data-action="close"]').addEventListener('click', () => {
-            const run = store.getCurrentRun();
             setState('closed');
-            if (run && run.status === 'running') showPill();
+            showPill();
         });
         root.querySelector('[data-action="stop"]').addEventListener('click', () => renderer.stop());
         root.querySelector('[data-action="export"]').addEventListener('click', () => renderer.exportTrace());
         root.querySelector('[data-action="collapse-all"]').addEventListener('click', () => renderer.collapseAll());
         root.querySelector('.panel-backdrop').addEventListener('click', () => {
-            const run = store.getCurrentRun();
             setState('closed');
-            if (run && run.status === 'running') showPill();
+            showPill();
         });
 
         mounted = true;
     }
 
-    function showPill() {
+    function panelIsOpen() {
+        return document.getElementById(rootId)?.dataset.state === 'open';
+    }
+
+    function idlePillView() {
+        return { visible: false, text: '', tone: 'running', loading: false, detail: '' };
+    }
+
+    function currentPillView() {
+        const run = store.getCurrentRun();
+        if (!run) return idlePillView();
+        if (pillFormatter) {
+            return { ...idlePillView(), ...(pillFormatter(run, t) || { visible: false }) };
+        }
+        if (run.status !== 'running') return idlePillView();
+        const sec = ((performance.now() - run.startedAt) / 1000).toFixed(0);
+        return { visible: true, text: `● ${t('running')} · ${sec}s · ${t('Click to reopen')}`, tone: 'running', loading: true, detail: '' };
+    }
+
+    function renderPill() {
         if (!pill) return;
-        if (pillTimer) clearInterval(pillTimer);
-        const tick = () => {
-            const r = store.getCurrentRun();
-            if (!r || r.status !== 'running') { hidePill(); return; }
-            const sec = ((performance.now() - r.startedAt) / 1000).toFixed(0);
-            pill.update({ visible: true, text: `● ${t('running')} · ${sec}s · ${t('Click to reopen')}`, tone: 'running', loading: true });
-        };
-        tick();
-        pillTimer = setInterval(tick, 1000);
+        const view = currentPillView();
+        pill.update(view);
+        const run = store.getCurrentRun();
+        const ticking = view.visible && run?.status === 'running';
+        if (ticking && !pillTimer) pillTimer = setInterval(renderPill, 1000);
+        else if (!ticking && pillTimer) { clearInterval(pillTimer); pillTimer = null; }
+    }
+
+    function showPill() {
+        renderPill();
     }
 
     function hidePill() {
-        if (pill) pill.update({ visible: false, text: t('Click to reopen'), tone: 'running', loading: false });
+        if (pill) pill.update(idlePillView());
         if (pillTimer) { clearInterval(pillTimer); pillTimer = null; }
     }
 
     function open() {
+        if (onOpen) {
+            try { onOpen(); } catch (error) { console.error('[run-panel] onOpen threw', error); }
+        }
         mountOnce();
         hidePill();
         const run = store.getCurrentRun();
@@ -174,18 +201,28 @@ export function createRunPanel(options = {}) {
         unsubscribe = store.subscribe((event) => {
             if (event.type === EV.RUN_STARTED) {
                 if (event.quiet) return;
-                if (!autoOpen) return;
+                if (!autoOpen && !pillOnStart) return;
+                const wasOpen = mounted && panelIsOpen();
                 mountOnce();
                 renderer.handle(event);
-                setState('open');
-                hidePill();
+                if (autoOpen) {
+                    setState('open');
+                    hidePill();
+                    return;
+                }
+                setState(wasOpen ? 'open' : 'closed');
+                if (wasOpen) hidePill();
+                else showPill();
                 return;
             }
             if (!mounted) return;
             renderer.handle(event);
             if (event.type === EV.RUN_FINISHED || event.type === EV.RUN_CLEARED) {
-                hidePill();
+                if (panelIsOpen()) hidePill();
+                else showPill();
+                return;
             }
+            if (pillOnStart && !panelIsOpen()) renderPill();
         });
     }
 
@@ -207,5 +244,12 @@ export function createRunPanel(options = {}) {
         renderer = null;
     }
 
-    return { init, open, destroy };
+    return {
+        init,
+        open,
+        destroy,
+        refreshPill: () => {
+            if (!panelIsOpen()) renderPill();
+        },
+    };
 }
