@@ -17,7 +17,6 @@ export const DEFAULT_ILLUSTRATION_SETTINGS = Object.freeze({
     initialized: false,
     currentPresetId: '',
     presets: [],
-    maxPromptsPerMessage: 5,
     contextMessageCount: 10,
     maxConcurrentGenerations: 1,
     minGenerationInterval: 0,
@@ -26,7 +25,6 @@ export const DEFAULT_ILLUSTRATION_SETTINGS = Object.freeze({
 });
 
 export const ILLUSTRATION_NUMBER_RULES = Object.freeze({
-    maxPromptsPerMessage: { min: 1, max: 30, fallback: 5, integer: true },
     contextMessageCount: { min: 0, max: 50, fallback: 10, integer: true },
     maxConcurrentGenerations: { min: 1, max: 5, fallback: 1, integer: true },
     minGenerationInterval: { min: 0, max: 10000, fallback: 0, integer: true },
@@ -109,6 +107,7 @@ export function normalizeIllustrationSettings(raw, { imageConfig = {}, llm = {},
         presets: Array.isArray(source.presets) ? source.presets.map(preset => normalizePreset(preset, now)).filter(Boolean) : [],
         studioSessions: source.studioSessions && typeof source.studioSessions === 'object' ? source.studioSessions : {},
     };
+    delete settings.maxPromptsPerMessage;
 
     settings.enabled = Boolean(settings.enabled);
     settings.autoGenerate = Boolean(settings.autoGenerate);

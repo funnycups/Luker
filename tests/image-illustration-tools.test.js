@@ -18,7 +18,7 @@ test('rejects empty prompt and anchors', () => {
     expect(validateGenerateImageArgs({ prompt: '' }).ok).toBe(false);
 });
 
-test('dedupes, filters names, checks anchors and truncates', () => {
+test('dedupes, filters names and checks anchors', () => {
     const text = 'alpha beta gamma delta';
     const call = (prompt, after, before) => ({ name: 'add_image_prompt', args: { prompt, insert_after: after, insert_before: before } });
     const result = selectPromptCalls([
@@ -27,8 +27,10 @@ test('dedupes, filters names, checks anchors and truncates', () => {
         { name: 'other', args: {} },
         call('p2', 'missing', 'none'),
         call('p3', 'gamma', 'delta'),
-    ], { maxPrompts: 1, messageText: text });
-    expect(result.accepted).toEqual([{ prompt: 'p1', insertAfter: 'alpha', insertBefore: 'beta' }]);
+    ], { messageText: text });
+    expect(result.accepted).toEqual([
+        { prompt: 'p1', insertAfter: 'alpha', insertBefore: 'beta' },
+        { prompt: 'p3', insertAfter: 'gamma', insertBefore: 'delta' },
+    ]);
     expect(result.rejected).toHaveLength(2);
-    expect(result.truncated).toBe(1);
 });

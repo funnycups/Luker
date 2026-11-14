@@ -68,12 +68,10 @@ export function validateGenerateImageArgs(args) {
     return { ok: true, value: { prompt } };
 }
 
-export function selectPromptCalls(toolCalls, { maxPrompts = 5, messageText = '' } = {}) {
+export function selectPromptCalls(toolCalls, { messageText = '' } = {}) {
     const accepted = [];
     const rejected = [];
     const seen = new Set();
-    let truncated = 0;
-    const limit = Math.max(1, Number(maxPrompts) || 1);
 
     for (const call of Array.isArray(toolCalls) ? toolCalls : []) {
         if (call?.name !== ADD_IMAGE_PROMPT_TOOL.function.name) {
@@ -95,12 +93,8 @@ export function selectPromptCalls(toolCalls, { maxPrompts = 5, messageText = '' 
             continue;
         }
         seen.add(key);
-        if (accepted.length >= limit) {
-            truncated += 1;
-            continue;
-        }
         accepted.push(value);
     }
 
-    return { accepted, rejected, truncated };
+    return { accepted, rejected };
 }

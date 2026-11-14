@@ -2,7 +2,7 @@ export const DEFAULT_ILLUSTRATION_PROMPT = `You design image generation prompts 
 
 You receive optional memory recall, recent conversation context, and the current assistant message. Use the context only to keep character appearance, clothing, setting, and lighting consistent. Write prompts for the current message. Do not illustrate earlier messages.
 
-Write one prompt per distinct visual moment. A moment is a change of scene, a new subject, or a major action worth showing. A typical message needs one or two prompts. Never more than five.
+Write one prompt per distinct visual moment. A moment is a change of scene, a new subject, or a major action worth showing.
 
 Use a short, comma-separated tag list. Put the subject count first, then describe the subject, action, environment, light, style, and quality. Do not write narration, dialogue, or explanation. Do not address the viewer.
 
@@ -23,7 +23,7 @@ export const DEFAULT_NATURAL_ILLUSTRATION_PROMPT = `You design image generation 
 
 You receive optional memory recall, recent conversation context, and the current assistant message. Use the context only to keep character appearance, clothing, setting, and lighting consistent. Write prompts for the current message. Do not illustrate earlier messages.
 
-Write one prompt per distinct visual moment. A moment is a change of scene, a new subject, or a major action worth showing. A typical message needs one or two prompts. Never more than five.
+Write one prompt per distinct visual moment. A moment is a change of scene, a new subject, or a major action worth showing.
 
 Describe the scene in two or three complete sentences. Name the subject first, then the action, environment, light, and mood. Do not write dialogue or address the viewer.
 

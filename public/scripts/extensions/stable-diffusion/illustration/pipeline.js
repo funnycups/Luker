@@ -200,15 +200,11 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             }
 
             const selection = selectPromptCalls(toolCalls, {
-                maxPrompts: settings.maxPromptsPerMessage,
                 messageText: snapshotText,
             });
             if (selection.rejected.length > 0) {
                 const reasons = selection.rejected.map(entry => entry.reason).join(', ');
                 toast(`${t`Skipped image prompts`}: ${reasons}`, 'warning');
-            }
-            if (selection.truncated > 0) {
-                toast(t`Some image prompts were dropped because the message limit was reached.`, 'warning');
             }
             if (selection.accepted.length === 0) {
                 job.state = 'done';

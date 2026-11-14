@@ -11,7 +11,6 @@ const SETTINGS = {
     autoGenerate: true,
     currentPresetId: 'p',
     presets: [{ id: 'p', illustrationPrompt: 'TASK', llm: { apiPresetName: '', llmPresetName: '' } }],
-    maxPromptsPerMessage: 5,
     contextMessageCount: 0,
     maxConcurrentGenerations: 1,
     minGenerationInterval: 0,

@@ -259,7 +259,6 @@ export async function initSettingsUi({ bridge, settings, saveSettings, context, 
         });
     };
 
-    bindNumber('#sd_illustration_max_prompts', 'maxPromptsPerMessage');
     bindNumber('#sd_illustration_context_count', 'contextMessageCount');
     bindNumber('#sd_illustration_max_concurrent', 'maxConcurrentGenerations');
     bindNumber('#sd_illustration_min_interval', 'minGenerationInterval');
