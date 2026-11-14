@@ -127,6 +127,7 @@ test.describe('illustration actions', () => {
         // 1. Clicking the inline image opens the action dialog.
         await page.locator('.mes_text img[data-illustration-id]').last().click();
         await expect(page.locator('#sd_illustration_actions')).toBeVisible();
+        await expect(page.locator('#sd_illustration_actions .sd_illustration_actions_buttons')).toHaveCSS('justify-content', 'center');
 
         // 2. Regenerate creates a new child record and swaps the marker.
         await page.locator('#sd_illustration_action_regenerate').click();
@@ -157,6 +158,7 @@ test.describe('illustration actions', () => {
         const inputPopup = page.locator('dialog.popup[open]').last();
         const promptInput = inputPopup.locator('.popup-input').last();
         await promptInput.waitFor({ state: 'visible', timeout: 5000 });
+        expect(await promptInput.evaluate(element => element.rows)).toBeGreaterThanOrEqual(6);
         await promptInput.fill('1girl, edited prompt, dawn');
         await inputPopup.locator('.popup-button-ok').click();
         await page.waitForFunction(() => {
@@ -311,8 +313,10 @@ test.describe('illustration actions', () => {
         await openExtensionsDrawer(page);
         await openInlineDrawer(page, 'sd_illustration_container');
         await page.locator('#sd_illustration_enabled').check();
+        await page.locator('#sd_illustration_auto_generate').uncheck();
         await page.waitForTimeout(800);
         await closeAnyOpenTopSettingsDrawer(page);
+        await sendMessageAndAwaitReply(page, 'Show me the chart.');
 
         const clickGenerate = () => page.evaluate(() => {
             const messages = [...document.querySelectorAll('.mes:not([is_user="true"]):not([is_system="true"])')];

@@ -133,7 +133,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    justify-content: flex-end;
+    justify-content: center;
 }
 
 .sd_illustration_history_list {
