@@ -80,5 +80,9 @@ export async function requestIllustrationPrompts({ context, preset, taskMessages
         abortSignal,
     });
     const calls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-    return calls.map(call => ({ name: String(call?.name || ''), args: call?.args || {} }));
+    return {
+        toolCalls: calls.map(call => ({ name: String(call?.name || ''), args: call?.args || {} })),
+        assistantText: String(result?.assistantText || ''),
+        finishReason: String(result?.finishReason || ''),
+    };
 }

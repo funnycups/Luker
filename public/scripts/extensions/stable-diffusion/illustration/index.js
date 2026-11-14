@@ -14,6 +14,42 @@ import { openIllustrationStudio } from './studio/index.js';
 import { stripIllustrationMarkup } from './message.js';
 import { emitMessageChanged } from './message-events.js';
 
+let activeIllustrationErrorToast = null;
+
+function clearIllustrationErrorToast() {
+    if (!activeIllustrationErrorToast) {
+        return;
+    }
+    try {
+        toastr.clear(activeIllustrationErrorToast);
+    } catch (error) {
+        console.error('[sd] could not clear image generation error toast', error);
+    }
+    activeIllustrationErrorToast = null;
+}
+
+function notifyIllustrationError(message) {
+    if (typeof toastr === 'undefined') {
+        return;
+    }
+    clearIllustrationErrorToast();
+    const toast = toastr.error(String(message || ''), t`Image Generation`, {
+        timeOut: 0,
+        extendedTimeOut: 0,
+        closeButton: true,
+        tapToDismiss: true,
+        progressBar: false,
+        onHidden: () => {
+            if (activeIllustrationErrorToast === toast) {
+                activeIllustrationErrorToast = null;
+            }
+        },
+    });
+    if (toast?.length) {
+        activeIllustrationErrorToast = toast;
+    }
+}
+
 export async function initIllustration(bridge) {
     const context = getContext();
     const sdSettings = extension_settings.sd;
@@ -61,8 +97,14 @@ export async function initIllustration(bridge) {
         settings,
         hooks: {
             toast: (message, type = 'error') => toastr[type]?.(message, t`Image Generation`),
+            notifyError: notifyIllustrationError,
             t,
-            beginActivityJob: typeof bridge.beginActivityJob === 'function' ? bridge.beginActivityJob : null,
+            beginActivityJob: typeof bridge.beginActivityJob === 'function'
+                ? options => {
+                    clearIllustrationErrorToast();
+                    return bridge.beginActivityJob(options);
+                }
+                : null,
             saveChat: () => context.saveChat(),
             updateMessageBlock: (messageId, message) => context.updateMessageBlock(messageId, message),
             notifyMessageChanged: messageId => emitMessageChanged(context, messageId),
@@ -150,6 +192,7 @@ export async function initIllustration(bridge) {
         settings,
         ensureSwipes,
         toast: (message, type = 'error') => toastr[type]?.(message, t`Image Generation`),
+        notifyError: notifyIllustrationError,
         t,
     });
 }

@@ -1,5 +1,7 @@
 import { expect, test } from '@jest/globals';
-import { buildIllustrationContext, buildIllustrationTaskMessages } from '../public/scripts/extensions/stable-diffusion/illustration/task.js';
+import {
+    buildIllustrationContext, buildIllustrationTaskMessages, requestIllustrationPrompts,
+} from '../public/scripts/extensions/stable-diffusion/illustration/task.js';
 
 const chat = [
     { name: 'User', is_user: true, mes: 'hello' },
@@ -32,4 +34,24 @@ test('builds system and user task messages with optional memory', () => {
     expect(messages[1].content).toContain('=== MEMORY RECALL ===\nCORE');
     expect(messages[1].content).toContain('=== CONTEXT ===\n[User]: hi');
     expect(messages[1].content).toContain('=== CURRENT MESSAGE ===\nnow');
+});
+
+test('prompt requests keep the response metadata', async () => {
+    const result = await requestIllustrationPrompts({
+        context: {
+            generateTask: async () => ({
+                toolCalls: [{ name: 'add_image_prompt', args: { prompt: 'p', insert_after: 'a', insert_before: 'b' } }],
+                assistantText: 'reply',
+                finishReason: 'stop',
+            }),
+        },
+        preset: { llm: { apiPresetName: 'api', llmPresetName: 'llm' } },
+        taskMessages: [{ role: 'user', content: 'now' }],
+    });
+
+    expect(result).toEqual({
+        toolCalls: [{ name: 'add_image_prompt', args: { prompt: 'p', insert_after: 'a', insert_before: 'b' } }],
+        assistantText: 'reply',
+        finishReason: 'stop',
+    });
 });

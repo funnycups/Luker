@@ -27,8 +27,11 @@ function collectHistory(message, record) {
     return chain;
 }
 
-export function initIllustrationActions({ context, pipeline, imageService, settings, ensureSwipes, toast, t }) {
+export function initIllustrationActions({ context, pipeline, imageService, settings, ensureSwipes, toast, notifyError, t }) {
     const actionControllers = new Map();
+    const reportError = typeof notifyError === 'function'
+        ? notifyError
+        : message => toast(message, 'error');
 
     function cancelMatching(predicate) {
         for (const [key, controller] of [...actionControllers]) {
@@ -138,7 +141,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
     }
 
     async function requestPrompt(initialPrompt) {
-        const result = await callGenericPopup(t`Image prompt`, POPUP_TYPE.INPUT, initialPrompt);
+        const result = await callGenericPopup(t`Image prompt`, POPUP_TYPE.INPUT, initialPrompt, { rows: 6 });
         if (result === false || result === null || result === undefined) {
             return null;
         }
@@ -158,7 +161,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
                 return;
             }
             console.error('Illustration action failed.', error);
-            toast(`${t`Illustration failed`}: ${error?.message || error}`, 'error');
+            reportError(`${t`Illustration failed`}: ${error?.message || error}`);
         }
     }
 

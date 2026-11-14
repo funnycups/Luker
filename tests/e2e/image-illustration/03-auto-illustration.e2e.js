@@ -16,8 +16,18 @@ let server, mock, sdMock;
 test.beforeAll(async () => {
     sdMock = await startSdWebUiMock();
     mock = await startMockLLM();
-    mock.scriptCompletion(({ toolNames }) => {
+    mock.scriptCompletion(({ toolNames, userMessages }) => {
         if (toolNames.includes('add_image_prompt')) {
+            if (userMessages.some(text => text.includes('void'))) {
+                return {
+                    tool: 'add_image_prompt',
+                    arguments: {
+                        prompt: '1girl, void',
+                        insert_after: 'text that is not in the message',
+                        insert_before: 'another missing anchor',
+                    },
+                };
+            }
             return {
                 tool: 'add_image_prompt',
                 arguments: {
@@ -138,5 +148,31 @@ test.describe('automatic illustration', () => {
             return ctx.chat.find(message => String(message?.mes || '').includes('data-illustration-id'))?.mes || '';
         });
         expect(persisted).toContain('/user/images/');
+    });
+
+    test('reports rejected prompts instead of finishing quietly', async ({ page }) => {
+        await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
+        await page.evaluate(() => document.querySelector('#api_button_openai').click());
+        await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
+        await configureSd(page);
+
+        await openExtensionsDrawer(page);
+        await openInlineDrawer(page, 'sd_illustration_container');
+        await page.locator('#sd_illustration_enabled').check();
+        await page.locator('#sd_illustration_auto_generate').check();
+        await page.waitForTimeout(1500);
+        await closeAnyOpenTopSettingsDrawer(page);
+
+        const before = sdMock.requests.length;
+        await sendMessageAndAwaitReply(page, 'Show me the void.');
+
+        const toast = page.locator('#toast-container .toast-error').last();
+        await expect(toast).toBeVisible({ timeout: 30_000 });
+        await expect(toast).toContainText('Illustration failed');
+        await expect(toast).toContainText('quoted text not found');
+        const illustrations = await page.evaluate(() => window.Luker.getContext().chat.at(-1)?.extra?.illustrations || []);
+        expect(illustrations).toHaveLength(0);
+        expect(sdMock.requests.slice(before).filter(request => request.url === '/sdapi/v1/txt2img')).toHaveLength(0);
     });
 });

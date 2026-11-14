@@ -46,11 +46,66 @@ function abortError() {
     return error;
 }
 
+function rejectionLabel(reason, t) {
+    switch (String(reason || '')) {
+        case 'unknown tool': return t`unsupported tool`;
+        case 'anchors not found': return t`quoted text not found`;
+        case 'prompt is required': return t`missing prompt`;
+        case 'insert_after is required': return t`missing insert_after`;
+        case 'insert_before is required': return t`missing insert_before`;
+        default: return String(reason || t`unknown error`);
+    }
+}
+
+function summarizeRejections(rejected, t) {
+    const counts = new Map();
+    for (const entry of rejected) {
+        const label = rejectionLabel(entry?.reason, t);
+        counts.set(label, (counts.get(label) || 0) + 1);
+    }
+    return [...counts.entries()].map(([label, count]) => `${label} ×${count}`).join(', ');
+}
+
+function buildPromptFailure({ toolCalls, selection, assistantText, finishReason }, t) {
+    let reason;
+    if (toolCalls.length === 0) {
+        reason = assistantText.trim()
+            ? t`The model replied with text but did not call add_image_prompt.`
+            : t`The model returned no image prompts.`;
+    } else {
+        const details = summarizeRejections(selection.rejected, t);
+        reason = details
+            ? t`No image prompts could be used: ${details}.`
+            : t`No image prompts could be used.`;
+    }
+
+    const lines = [reason];
+    if (finishReason) {
+        lines.push(t`Finish reason: ${finishReason}`);
+    }
+    if (assistantText.trim()) {
+        lines.push(`${t`Model response`}:\n${assistantText.trim()}`);
+    }
+    if (selection.rejected.length > 0) {
+        lines.push(t`Rejected calls:`);
+        selection.rejected.forEach((entry, index) => {
+            const prompt = String(entry?.call?.args?.prompt || '').trim();
+            const label = rejectionLabel(entry?.reason, t);
+            lines.push(prompt ? `${index + 1}. ${label}\n${prompt}` : `${index + 1}. ${label}`);
+        });
+    }
+
+    return { reason, report: lines.join('\n\n') };
+}
+
 export function createIllustrationPipeline({ context, imageService, settings, hooks }) {
     const jobs = new Map();
     const handled = new Set();
     const t = hooks.t ?? (text => text);
     const toast = (message, type = 'error') => hooks.toast?.(message, type);
+    const notifyError = typeof hooks.notifyError === 'function'
+        ? hooks.notifyError
+        : message => toast(message, 'error');
 
     function contextMatches(job) {
         if (hooks.getChatId() !== job.chatId) {
@@ -110,11 +165,11 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
         }
         const preset = getPresetById(settings, settings.currentPresetId);
         if (!preset) {
-            toast(t`No illustration preset is selected.`);
+            notifyError(t`No illustration preset is selected.`);
             return;
         }
         if (!String(preset.illustrationPrompt || '').trim()) {
-            toast(t`The illustration prompt is empty.`);
+            notifyError(t`The illustration prompt is empty.`);
             return;
         }
 
@@ -199,7 +254,7 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             job.activityJob = activityJob;
 
             job.state = 'generating';
-            const toolCalls = await requestIllustrationPrompts({
+            const promptResult = await requestIllustrationPrompts({
                 context,
                 preset,
                 taskMessages,
@@ -209,18 +264,23 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
                 throw abortError();
             }
 
+            const { toolCalls, assistantText, finishReason } = promptResult;
             const selection = selectPromptCalls(toolCalls, {
                 messageText: snapshotText,
             });
-            if (selection.rejected.length > 0) {
-                const reasons = selection.rejected.map(entry => entry.reason).join(', ');
-                toast(`${t`Skipped image prompts`}: ${reasons}`, 'warning');
-            }
             if (selection.accepted.length === 0) {
-                job.state = 'done';
-                activityJob?.finish('done');
+                const failure = buildPromptFailure({ toolCalls, selection, assistantText, finishReason }, t);
+                job.state = 'failed';
+                activityJob?.setError(failure.report);
+                activityJob?.finish('failed');
                 releaseJob(job);
+                console.error('Illustration prompt request produced no usable prompts.', failure.reason);
+                notifyError(`${t`Illustration failed`}: ${failure.reason}`);
                 return;
+            }
+            if (selection.rejected.length > 0) {
+                const reasons = selection.rejected.map(entry => rejectionLabel(entry.reason, t)).join(', ');
+                toast(`${t`Skipped image prompts`}: ${reasons}`, 'warning');
             }
 
             selection.accepted.forEach((value, index) => {
@@ -300,7 +360,11 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             }
             const failures = records.filter(record => record.status === 'failed').length;
             if (failures > 0) {
-                toast(t`Image generation failed for ${failures} prompt(s).`, 'error');
+                const firstError = records.find(record => record.status === 'failed')?.error;
+                const message = firstError
+                    ? `${t`Image generation failed for ${failures} prompt(s).`} ${firstError}`
+                    : t`Image generation failed for ${failures} prompt(s).`;
+                notifyError(message);
             }
 
             job.state = 'done';
@@ -318,7 +382,7 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             job.activityJob?.setError(String(error?.message || error));
             job.activityJob?.finish('failed');
             console.error('Illustration task failed.', error);
-            toast(`${t`Illustration failed`}: ${error?.message || error}`, 'error');
+            notifyError(`${t`Illustration failed`}: ${error?.message || error}`);
         }
     }
 
