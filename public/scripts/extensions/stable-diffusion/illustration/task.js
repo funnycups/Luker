@@ -70,7 +70,7 @@ export async function requestIllustrationPrompts({ context, preset, taskMessages
     const result = await context.generateTask({
         taskMessages,
         includeCharacterCard: true,
-        worldInfoSource: 'task',
+        worldInfoSource: 'chat',
         apiPresetName: preset?.llm?.apiPresetName || '',
         llmPresetName: preset?.llm?.llmPresetName || '',
         tools: [ADD_IMAGE_PROMPT_TOOL],

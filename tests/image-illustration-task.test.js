@@ -55,3 +55,23 @@ test('prompt requests keep the response metadata', async () => {
         finishReason: 'stop',
     });
 });
+
+test('prompt requests activate world info from the live chat', async () => {
+    let options;
+    await requestIllustrationPrompts({
+        context: {
+            generateTask: async value => {
+                options = value;
+                return { toolCalls: [], assistantText: '', finishReason: '' };
+            },
+        },
+        preset: { llm: { apiPresetName: 'api', llmPresetName: 'llm' } },
+        taskMessages: [{ role: 'user', content: 'now' }],
+    });
+
+    expect(options).toMatchObject({
+        worldInfoSource: 'chat',
+        apiPresetName: 'api',
+        llmPresetName: 'llm',
+    });
+});
