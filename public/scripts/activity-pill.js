@@ -9,10 +9,62 @@ const ICONS = {
 };
 let host = null;
 let stylesheet = null;
+let layoutObserver = null;
+let layoutFrame = 0;
 const owners = new Set();
 
+function topBarElement() {
+    return document.querySelector('#top-settings-holder') || document.querySelector('#top-bar');
+}
+
+function applyPlacement() {
+    layoutFrame = 0;
+    if (!host || host.hidden) return;
+    const rect = topBarElement()?.getBoundingClientRect?.();
+    const top = rect && Number.isFinite(rect.bottom) ? Math.max(0, rect.bottom + 4) : 0;
+    const height = host.getBoundingClientRect?.().height || host.offsetHeight || 32;
+    const root = document.documentElement;
+    root.style.setProperty('--activity-pill-top', `${top}px`);
+    root.style.setProperty('--activity-pill-host-height', `${height}px`);
+}
+
+function schedulePlacement() {
+    if (layoutFrame) return;
+    const schedule = typeof requestAnimationFrame === 'function'
+        ? callback => requestAnimationFrame(callback)
+        : callback => setTimeout(callback, 0);
+    layoutFrame = schedule(applyPlacement);
+}
+
+function cancelPlacement() {
+    if (!layoutFrame) return;
+    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(layoutFrame);
+    else clearTimeout(layoutFrame);
+    layoutFrame = 0;
+}
+
+function releaseLayout() {
+    cancelPlacement();
+    layoutObserver?.disconnect();
+    layoutObserver = null;
+    if (typeof window !== 'undefined') {
+        window.removeEventListener('resize', schedulePlacement);
+        window.visualViewport?.removeEventListener('resize', schedulePlacement);
+    }
+    document.body?.classList.remove('activity-pill-visible');
+    const root = document.documentElement;
+    root.style.removeProperty('--activity-pill-top');
+    root.style.removeProperty('--activity-pill-host-height');
+}
+
 function updateHost() {
-    host.hidden = ![...owners].some(element => !element.hidden);
+    if (!host) return;
+    const visible = [...owners].some(element => !element.hidden);
+    host.hidden = !visible;
+    document.body?.classList.toggle('activity-pill-visible', visible);
+    if (!visible) return;
+    applyPlacement();
+    schedulePlacement();
 }
 
 export function createActivityPill({ id, className = '', onOpen, onError }) {
@@ -25,6 +77,16 @@ export function createActivityPill({ id, className = '', onOpen, onError }) {
         host.className = 'activity-pill-host';
         host.hidden = true;
         document.body.appendChild(host);
+        if (typeof window !== 'undefined') {
+            window.addEventListener('resize', schedulePlacement);
+            window.visualViewport?.addEventListener('resize', schedulePlacement);
+        }
+        if (typeof ResizeObserver === 'function') {
+            layoutObserver = new ResizeObserver(schedulePlacement);
+            layoutObserver.observe(host);
+            const topBar = topBarElement();
+            if (topBar) layoutObserver.observe(topBar);
+        }
     }
     const element = document.createElement('button');
     element.type = 'button';
@@ -91,6 +153,7 @@ export function createActivityPill({ id, className = '', onOpen, onError }) {
         owners.delete(element);
         if (owners.size) updateHost();
         else {
+            releaseLayout();
             host.remove();
             stylesheet.remove();
             host = null;

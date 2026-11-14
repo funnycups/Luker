@@ -1,6 +1,6 @@
 .activity-pill-host {
     position: fixed;
-    inset-block-start: calc(var(--topBarBlockSize, 30px) + 6px);
+    inset-block-start: var(--activity-pill-top, calc(var(--topBarBlockSize, 30px) + 6px));
     inset-inline-start: 50%;
     transform: translateX(-50%);
     z-index: 8900;
@@ -12,6 +12,18 @@
     width: max-content;
     max-width: min(760px, calc(100vw - 16px));
     pointer-events: none;
+}
+
+/* Keep transient toasts below the activity pill instead of covering it. */
+body.activity-pill-visible #toast-container.toast-top-center,
+body.activity-pill-visible #toast-container.toast-top-full-width {
+    margin-top: calc(var(--activity-pill-top, var(--topBarBlockSize, 30px)) + var(--activity-pill-host-height, 32px) + 12px);
+}
+
+body.activity-pill-visible #toast-container.toast-top-left,
+body.activity-pill-visible #toast-container.toast-top-right {
+    top: calc(var(--activity-pill-top, var(--topBarBlockSize, 30px)) + var(--activity-pill-host-height, 32px) + 12px);
+    margin-top: 0;
 }
 
 .activity-pill {

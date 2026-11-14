@@ -96,6 +96,16 @@ test.describe('automatic illustration', () => {
         const pill = page.locator('#luker-sd-run-panel-pill');
         await expect(pill).toBeVisible({ timeout: 10_000 });
         await expect(pill.locator('.activity-pill-label')).toContainText(/Generating (prompt|image)/);
+        const placement = await page.evaluate(() => {
+            const host = document.querySelector('.activity-pill-host');
+            const topBar = document.querySelector('#top-settings-holder');
+            return {
+                hostTop: host?.getBoundingClientRect().top,
+                topBarBottom: topBar?.getBoundingClientRect().bottom,
+            };
+        });
+        expect(placement.hostTop).toBeGreaterThanOrEqual(placement.topBarBottom);
+        expect(placement.hostTop - placement.topBarBottom).toBeLessThanOrEqual(8);
         await pill.click();
 
         const panel = page.locator('#luker-sd-run-panel');
