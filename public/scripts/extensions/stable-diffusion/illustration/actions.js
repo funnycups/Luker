@@ -135,6 +135,19 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         return record;
     }
 
+    async function requestPrompt(initialPrompt) {
+        const result = await callGenericPopup(t`Image prompt`, POPUP_TYPE.INPUT, initialPrompt);
+        if (result === false || result === null || result === undefined) {
+            return null;
+        }
+        const trimmed = String(result).trim();
+        if (!trimmed) {
+            toast(t`The image prompt is empty.`, 'warning');
+            return null;
+        }
+        return trimmed;
+    }
+
     async function runGeneration(action, { messageId, record, replaceRecord, prompt }) {
         try {
             await generateChildRecord({ messageId, parent: record, replaceRecord, prompt });
@@ -177,16 +190,11 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
 
         $root.on('click', '#sd_illustration_action_edit_prompt', async () => {
             await closeIfOpen(popup);
-            const prompt = await callGenericPopup(t`Image prompt`, POPUP_TYPE.INPUT, record.prompt);
-            if (prompt === null || prompt === undefined) {
+            const prompt = await requestPrompt(record.prompt);
+            if (!prompt) {
                 return;
             }
-            const trimmed = String(prompt).trim();
-            if (!trimmed) {
-                toast(t`The image prompt is empty.`, 'warning');
-                return;
-            }
-            await runGeneration('edit', { messageId, record, prompt: trimmed });
+            await runGeneration('edit', { messageId, record, prompt });
         });
 
         $root.on('click', '#sd_illustration_action_history', async () => {
@@ -218,7 +226,11 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
                     return;
                 }
                 await historyPopup.complete(POPUP_RESULT.AFFIRMATIVE);
-                await runGeneration('history', { messageId, record: selected, replaceRecord: record, prompt: selected.prompt });
+                const prompt = await requestPrompt(selected.prompt);
+                if (!prompt) {
+                    return;
+                }
+                await runGeneration('history', { messageId, record: selected, replaceRecord: record, prompt });
             });
         });
 
