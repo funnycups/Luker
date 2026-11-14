@@ -3,7 +3,7 @@ import { t } from '../../../../i18n.js';
 import { requestToolCallsWithRetry, makeRuntimeToolCallId } from '../../../../lib/iter-tool-calling.js';
 import { createExtensionSettingsSessionStorage } from '../../../../iteration-library/storage.js';
 import { GENERATE_IMAGE_TOOL, validateGenerateImageArgs } from '../tools.js';
-import { getPresetById, imageConfigFingerprint, selectPreset } from '../settings.js';
+import { getPresetById, selectPreset } from '../settings.js';
 import { makeIllustrationId } from '../presets.js';
 import { escapeHtml } from '../message.js';
 import {
@@ -46,7 +46,7 @@ function studioShellHtml() {
         </div>`;
 }
 
-export async function openIllustrationStudio({ context, settings, bridge, imageService, saveSettings }) {
+export async function openIllustrationStudio({ context, settings, imageService, saveSettings }) {
     if (document.getElementById(ROOT_ID)) {
         return;
     }
@@ -138,7 +138,7 @@ export async function openIllustrationStudio({ context, settings, bridge, imageS
         await renderSessionList();
     }
 
-    async function executeToolCalls(toolCalls, fingerprint) {
+    async function executeToolCalls(toolCalls) {
         const images = [];
         const toolResults = [];
         for (const call of toolCalls) {
@@ -154,16 +154,13 @@ export async function openIllustrationStudio({ context, settings, bridge, imageS
             }
             const prompt = validation.value.prompt;
             try {
-                const imageUrl = await imageService.generate(prompt, { expectedFingerprint: fingerprint });
+                const imageUrl = await imageService.generate(prompt);
                 images.push({ id: makeIllustrationId('img'), prompt, imageUrl, status: 'ready', error: '' });
                 toolResults.push({ tool_call_id: callId, content: JSON.stringify({ prompt, url: imageUrl, status: 'ready' }) });
             } catch (error) {
                 const reason = String(error?.message || error);
                 images.push({ id: makeIllustrationId('img'), prompt, imageUrl: '', status: 'failed', error: reason });
                 toolResults.push({ tool_call_id: callId, content: JSON.stringify({ prompt, status: 'failed', error: reason }) });
-                if (reason.includes('configuration changed')) {
-                    toastr.warning(t`Image generation configuration changed. This round produced no image.`, t`Image Generation`);
-                }
             }
         }
         return { images, toolResults };
@@ -189,7 +186,6 @@ export async function openIllustrationStudio({ context, settings, bridge, imageS
         renderAll();
 
         try {
-            const fingerprint = imageConfigFingerprint(bridge.readImageConfig());
             const history = buildStudioHistoryMessages(turnSession);
             const result = await requestToolCallsWithRetry(context, { toolCallRetryMax: 0 }, {
                 taskMessages: [{ role: 'system', content: systemPrompt }, ...history],
@@ -203,7 +199,7 @@ export async function openIllustrationStudio({ context, settings, bridge, imageS
             });
 
             const toolCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-            const { images, toolResults } = await executeToolCalls(toolCalls, fingerprint);
+            const { images, toolResults } = await executeToolCalls(toolCalls);
             appendStudioAssistantTurn(turnSession, {
                 text: result?.assistantText || '',
                 toolCalls,
@@ -274,11 +270,6 @@ export async function openIllustrationStudio({ context, settings, bridge, imageS
         selectPreset(settings, presetId);
         session.presetId = presetId;
         saveSettings();
-        try {
-            await bridge.applyImageConfig(preset.image || {});
-        } catch (error) {
-            toastr.error(String(error?.message || error), t`Image Generation`);
-        }
         await persistSession();
     });
 
@@ -354,9 +345,7 @@ export async function openIllustrationStudio({ context, settings, bridge, imageS
         }
         if (action === 'regenerate') {
             try {
-                const imageUrl = await imageService.generate(image.prompt, {
-                    expectedFingerprint: imageConfigFingerprint(bridge.readImageConfig()),
-                });
+                const imageUrl = await imageService.generate(image.prompt);
                 const record = {
                     id: makeIllustrationId('img'),
                     prompt: image.prompt,

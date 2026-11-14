@@ -26,7 +26,7 @@ function collectHistory(message, record) {
     return chain;
 }
 
-export function initIllustrationActions({ context, pipeline, imageService, settings, fingerprint, ensureSwipes, toast, t }) {
+export function initIllustrationActions({ context, pipeline, imageService, settings, ensureSwipes, toast, t }) {
     const actionControllers = new Map();
 
     function cancelMatching(predicate) {
@@ -94,7 +94,6 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         try {
             imageUrl = await imageService.generate(prompt, {
                 characterName: String(message.name || ''),
-                expectedFingerprint: fingerprint(),
                 signal: controller.signal,
             });
         } finally {

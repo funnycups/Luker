@@ -21,7 +21,7 @@ function escapeOption(value) {
     return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-export async function initSettingsUi({ bridge, settings, saveSettings, context, onEnabledChange }) {
+export async function initSettingsUi({ settings, saveSettings, context, onEnabledChange }) {
     if (document.getElementById(CONTAINER_ID)) {
         return;
     }
@@ -35,24 +35,6 @@ export async function initSettingsUi({ bridge, settings, saveSettings, context, 
     const apiPresetSelect = $('#sd_illustration_api_preset');
     const llmPresetSelect = $('#sd_illustration_llm_preset');
 
-    const refreshSummary = () => {
-        const preset = currentPreset(settings);
-        if (!preset) {
-            $('#sd_illustration_image_summary').text(t`No preset selected.`);
-            return;
-        }
-        const image = preset.image || {};
-        const parts = [
-            image.source || '?',
-            image.model || '?',
-            `${image.width || '?'}x${image.height || '?'}`,
-            `${image.steps || '?'} steps`,
-            `CFG ${image.scale ?? '?'}`,
-            image.sampler || '?',
-        ];
-        $('#sd_illustration_image_summary').text(parts.join(' | '));
-    };
-
     const refreshFields = () => {
         const preset = currentPreset(settings);
         const disabled = !preset;
@@ -60,13 +42,10 @@ export async function initSettingsUi({ bridge, settings, saveSettings, context, 
         studioField.prop('disabled', disabled);
         apiPresetSelect.prop('disabled', disabled);
         llmPresetSelect.prop('disabled', disabled);
-        $('#sd_illustration_update_image_config').toggleClass('disabled', disabled);
-        $('#sd_illustration_apply_image_config').toggleClass('disabled', disabled);
         promptField.val(preset?.illustrationPrompt || '');
         studioField.val(preset?.studioPrompt || '');
         apiPresetSelect.val(preset?.llm?.apiPresetName || '');
         llmPresetSelect.val(preset?.llm?.llmPresetName || '');
-        refreshSummary();
     };
 
     const refreshPresetOptions = () => {
@@ -105,19 +84,6 @@ export async function initSettingsUi({ bridge, settings, saveSettings, context, 
         llmPresetSelect.html(options.join('')).val(selected);
     };
 
-    const applyCurrentImageConfig = async () => {
-        const preset = currentPreset(settings);
-        if (!preset) {
-            return;
-        }
-        try {
-            await bridge.applyImageConfig(preset.image || {});
-        } catch (error) {
-            console.error('Failed to apply illustration image settings.', error);
-            toastr.error(String(error?.message || error), t`Image Generation`);
-        }
-    };
-
     $('#sd_illustration_enabled').prop('checked', settings.enabled).on('input', function () {
         settings.enabled = !!$(this).prop('checked');
         saveSettings();
@@ -128,7 +94,7 @@ export async function initSettingsUi({ bridge, settings, saveSettings, context, 
         saveSettings();
     });
 
-    presetSelect.on('change', async function () {
+    presetSelect.on('change', function () {
         const id = String($(this).val() || '');
         if (!id || !getPresetById(settings, id)) {
             return;
@@ -138,7 +104,6 @@ export async function initSettingsUi({ bridge, settings, saveSettings, context, 
         refreshFields();
         refreshConnectionOptions();
         refreshLlmPresetOptions();
-        await applyCurrentImageConfig();
     });
 
     promptField.on('input', function () {
@@ -186,7 +151,6 @@ export async function initSettingsUi({ bridge, settings, saveSettings, context, 
         const name = t`Copy of ${template?.name || t`Preset`}`;
         const preset = addPresetFromCurrent(settings, {
             name,
-            imageConfig: bridge.readImageConfig(),
             llm: template?.llm || {},
             now: Date.now(),
         });
@@ -230,21 +194,7 @@ export async function initSettingsUi({ bridge, settings, saveSettings, context, 
         refreshPresetOptions();
         refreshConnectionOptions();
         refreshLlmPresetOptions();
-        await applyCurrentImageConfig();
     });
-
-    $('#sd_illustration_update_image_config').on('click', () => {
-        const preset = currentPreset(settings);
-        if (!preset) {
-            toastr.warning(t`No preset selected.`, t`Image Generation`);
-            return;
-        }
-        updatePreset(settings, preset.id, { image: bridge.readImageConfig() }, Date.now());
-        saveSettings();
-        refreshSummary();
-    });
-
-    $('#sd_illustration_apply_image_config').on('click', applyCurrentImageConfig);
 
     const bindNumber = (selector, key) => {
         const element = $(selector);

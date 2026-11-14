@@ -45,8 +45,7 @@ export function makeIllustrationId(prefix = 'ill') {
     return `${prefix}_${random}`;
 }
 
-export function createDefaultPresets({ imageConfig = {}, llm = {}, now = Date.now(), names = {} } = {}) {
-    const sharedImage = structuredClone(imageConfig);
+export function createDefaultPresets({ llm = {}, now = Date.now(), names = {} } = {}) {
     const sharedLlm = {
         apiPresetName: String(llm?.apiPresetName || ''),
         llmPresetName: String(llm?.llmPresetName || ''),
@@ -62,7 +61,6 @@ export function createDefaultPresets({ imageConfig = {}, llm = {}, now = Date.no
             illustrationPrompt: DEFAULT_ILLUSTRATION_PROMPT,
             studioPrompt: DEFAULT_STUDIO_PROMPT,
             llm: sharedLlm,
-            image: structuredClone(sharedImage),
         },
         {
             id: makeIllustrationId('preset'),
@@ -72,7 +70,6 @@ export function createDefaultPresets({ imageConfig = {}, llm = {}, now = Date.no
             illustrationPrompt: DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
             studioPrompt: DEFAULT_NATURAL_STUDIO_PROMPT,
             llm: structuredClone(sharedLlm),
-            image: structuredClone(sharedImage),
         },
     ];
 }

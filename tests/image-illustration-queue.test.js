@@ -32,26 +32,13 @@ test('a rejected task does not stall the queue', async () => {
     await expect(queue.schedule(async () => 'ok')).resolves.toBe('ok');
 });
 
-test('rejects when the image config changed before the request', async () => {
-    const service = createImageService({
-        bridge: { generateImage: jest.fn() },
-        queue: { schedule: (fn) => fn() },
-        readImageConfig: () => ({ steps: 20 }),
-        fingerprint: () => 'new',
-    });
-    await expect(service.generate('p', { expectedFingerprint: 'old' }))
-        .rejects.toThrow('configuration changed');
-});
-
 test('schedules the bridge with prompt, character and signal', async () => {
     const bridge = { generateImage: jest.fn(async () => '/user/images/a.png') };
     const queue = { schedule: (fn) => fn() };
-    const service = createImageService({
-        bridge, queue, readImageConfig: () => ({ steps: 20 }), fingerprint: () => 'same',
-    });
+    const service = createImageService({ bridge, queue });
     const controller = new AbortController();
     await expect(service.generate('p', {
-        characterName: 'Seraphina', signal: controller.signal, expectedFingerprint: 'same',
+        characterName: 'Seraphina', signal: controller.signal,
     })).resolves.toBe('/user/images/a.png');
     expect(bridge.generateImage).toHaveBeenCalledWith('p', {
         characterName: 'Seraphina', signal: controller.signal,

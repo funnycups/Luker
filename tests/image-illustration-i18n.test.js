@@ -6,7 +6,6 @@ const zhTw = JSON.parse(readFileSync(new URL('../public/locales/zh-tw.json', imp
 
 const EXPECTED_KEYS = [
     'sd_illustration_api_preset',
-    'sd_illustration_apply_image_config',
     'sd_illustration_auto_generate',
     'sd_illustration_context_count',
     'sd_illustration_display_width',
@@ -24,7 +23,6 @@ const EXPECTED_KEYS = [
     'sd_illustration_prompt',
     'sd_illustration_studio_prompt',
     'sd_illustration_title',
-    'sd_illustration_update_image_config',
     'Also delete server image files',
     'Copy of ${0}',
     'Copy prompt',
@@ -37,7 +35,6 @@ const EXPECTED_KEYS = [
     'Edit prompt',
     'Generated',
     'Illustration failed',
-    'Image generation configuration changed. This round produced no image.',
     'Image generation failed for ${0} prompt(s).',
     'Image prompt',
     'Memory recall is unavailable',

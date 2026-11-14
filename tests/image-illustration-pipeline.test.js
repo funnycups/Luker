@@ -63,7 +63,6 @@ function makeHarness({ message, generate, confirmReplace } = {}) {
             ensureSwipes: () => {},
             getChatId: () => 'chat-1',
             getChat: () => chat,
-            imageConfigFingerprint: () => 'fp',
             confirmReplace: confirmReplace
                 ? async () => {
                     calls.confirmReplace += 1;
@@ -143,24 +142,5 @@ test('manual run leaves everything untouched when the replace prompt is declined
     expect(calls.generateTask).toBe(0);
     expect(message.mes).toBe(before.mes);
     expect(message.extra.illustrations).toBe(before.records);
-});
-
-test('a configuration change cancels the task instead of inserting a failed placeholder', async () => {
-    const message = makeMessage();
-    message.mes = 'alpha beta';
-    message.swipes = ['alpha beta'];
-    const error = new Error('Image generation configuration changed.');
-    error.code = 'image_config_changed';
-    const { pipeline, toasts } = makeHarness({
-        message,
-        generate: async () => { throw error; },
-        confirmReplace: () => true,
-    });
-
-    await pipeline.runForMessage({ messageId: 0, source: 'manual' });
-
-    expect(message.mes).not.toContain('data-illustration-id');
-    expect(message.extra?.illustrations || []).toHaveLength(0);
-    expect(toasts.join('\n')).toContain('configuration changed');
 });
 

@@ -65,19 +65,6 @@ test.describe('illustration settings', () => {
         await page.locator('#sd_illustration_preset_new').click();
         expect(await presetSelect.locator('option').count()).toBe(before + 1);
 
-        await page.evaluate(() => {
-            const ctx = window.Luker.getContext();
-            ctx.extensionSettings.sd.width = 768;
-            ctx.extensionSettings.sd.source = 'auto';
-            ctx.saveSettingsDebounced();
-        });
-        await page.locator('#sd_illustration_update_image_config').click();
-        await page.evaluate(() => {
-            window.Luker.getContext().extensionSettings.sd.width = 1024;
-        });
-        await page.locator('#sd_illustration_apply_image_config').click();
-        await expect.poll(() => page.evaluate(() => window.Luker.getContext().extensionSettings.sd.width)).toBe(768);
-
         const presetCount = await presetSelect.locator('option').count();
         await page.waitForTimeout(1500);
         await server.restart();

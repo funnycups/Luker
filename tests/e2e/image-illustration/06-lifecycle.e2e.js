@@ -106,7 +106,6 @@ test.describe.serial('illustration lifecycle', () => {
     test('feature switch hides entries while existing illustrations stay interactive', async ({ page }) => {
         await boot(page);
         await openIllustrationDrawer(page);
-        await page.locator('#sd_illustration_update_image_config').click();
         await closeAnyOpenTopSettingsDrawer(page);
         await setToggles(page, { enabled: true, auto: true });
 

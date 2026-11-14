@@ -160,7 +160,6 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             messageId,
             swipeId,
             messageFingerprint: messageFingerprint(message),
-            imageConfigFingerprint: hooks.imageConfigFingerprint(),
             source,
             presetId: preset.id,
             abortController: new AbortController(),
@@ -216,13 +215,7 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             const results = await Promise.allSettled(selection.accepted.map(value => imageService.generate(value.prompt, {
                 characterName,
                 signal: job.abortController.signal,
-                expectedFingerprint: job.imageConfigFingerprint,
             }).then(imageUrl => ({ value, imageUrl }))));
-
-            const configChange = results.find(result => result.status === 'rejected' && result.reason?.code === 'image_config_changed');
-            if (configChange) {
-                throw configChange.reason;
-            }
 
             if (job.abortController.signal.aborted) {
                 throw abortError();
@@ -284,11 +277,6 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
         } catch (error) {
             const aborted = error?.name === 'AbortError' || job.abortController.signal.aborted;
             releaseJob(job);
-            if (error?.code === 'image_config_changed') {
-                job.state = 'cancelled';
-                toast(t`Image generation configuration changed. This round produced no image.`, 'warning');
-                return;
-            }
             if (aborted) {
                 job.state = 'cancelled';
                 return;

@@ -102,7 +102,6 @@ test.describe('illustration actions', () => {
 
         await openExtensionsDrawer(page);
         await openInlineDrawer(page, 'sd_illustration_container');
-        await page.locator('#sd_illustration_update_image_config').click();
         await page.locator('#sd_illustration_enabled').check();
         await page.locator('#sd_illustration_auto_generate').check();
         await page.waitForTimeout(1500);
@@ -213,7 +212,6 @@ test.describe('illustration actions', () => {
 
         await openExtensionsDrawer(page);
         await openInlineDrawer(page, 'sd_illustration_container');
-        await page.locator('#sd_illustration_update_image_config').click();
         await page.locator('#sd_illustration_enabled').check();
         await page.locator('#sd_illustration_auto_generate').check();
         await page.waitForTimeout(1000);
@@ -308,44 +306,5 @@ test.describe('illustration actions', () => {
         expect(replaced.mes).not.toContain(`data-illustration-id="${firstRecord.id}"`);
         expect(replaced.swipes[replaced.swipeId]).toBe(replaced.mes);
         expect(replaced.swipeInfo[replaced.swipeId].extra.illustrations).toHaveLength(1);
-    });
-
-    test('changing image settings between queued prompts cancels the task', async ({ page }) => {
-        await awaitMainUI(page, server.baseURL);
-        await selectCharacterByName(page, 'Seraphina');
-        await page.evaluate(() => document.querySelector('#api_button_openai').click());
-        await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
-        await configureSd(page);
-
-        await openExtensionsDrawer(page);
-        await openInlineDrawer(page, 'sd_illustration_container');
-        await page.locator('#sd_illustration_enabled').check();
-        await page.locator('#sd_illustration_auto_generate').check();
-        await page.locator('#sd_illustration_max_concurrent').fill('1');
-        await page.waitForTimeout(800);
-        await closeAnyOpenTopSettingsDrawer(page);
-
-        const txt2imgBefore = sdMock.requests.filter(request => request.url === '/sdapi/v1/txt2img').length;
-        sdMock.setTxt2imgDelayMs(2500);
-        try {
-            await sendMessageAndAwaitReply(page, 'Two prompts please.');
-            await expect.poll(
-                () => sdMock.requests.filter(request => request.url === '/sdapi/v1/txt2img').length,
-                { timeout: 15_000 },
-            ).toBeGreaterThan(txt2imgBefore);
-
-            await page.evaluate(() => {
-                window.Luker.getContext().extensionSettings.sd.model = 'changed-model';
-            });
-            await page.waitForTimeout(3500);
-        } finally {
-            sdMock.setTxt2imgDelayMs(0);
-        }
-
-        const state = await latestMessageState(page);
-        expect(state.records).toHaveLength(0);
-        expect(state.mes).not.toContain('data-illustration-id');
-        expect(sdMock.requests.filter(request => request.url === '/sdapi/v1/txt2img').length).toBe(txt2imgBefore + 1);
-        await expect(page.locator('#toast-container')).toContainText('Image generation configuration changed. This round produced no image.');
     });
 });

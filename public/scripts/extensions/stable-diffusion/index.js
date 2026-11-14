@@ -62,7 +62,6 @@ import { withProfileRetry } from '../connection-manager/profile-retry.js';
 import { oai_settings } from '../../openai.js';
 import { power_user } from '/scripts/power-user.js';
 import { MacrosParser } from '/scripts/macros.js';
-import { applyImageConfig as applyIllustrationImageConfig, readImageConfig as readIllustrationImageConfig } from './illustration/settings.js';
 import { stripIllustrationMarkup } from './illustration/message.js';
 import { initIllustration } from './illustration/index.js';
 
@@ -605,19 +604,6 @@ function applySettingsToUi() {
  */
 export function createIllustrationBridge() {
     return {
-        readImageConfig() {
-            return readIllustrationImageConfig(extension_settings.sd);
-        },
-        refreshSettingsUi() {
-            applySettingsToUi();
-        },
-        async applyImageConfig(config) {
-            applyIllustrationImageConfig(extension_settings.sd, config);
-            saveSettingsDebounced();
-            applySettingsToUi();
-            await loadSettingOptions();
-            applySettingsToUi();
-        },
         async generateImage(prompt, { characterName = '', signal = undefined } = {}) {
             const controller = new AbortController();
             const forwardAbort = () => controller.abort(signal?.reason);

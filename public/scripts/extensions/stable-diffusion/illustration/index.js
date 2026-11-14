@@ -2,7 +2,7 @@ import { extension_settings, getContext } from '../../../extensions.js';
 import { ensureSwipes, eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
 import { t } from '../../../i18n.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
-import { normalizeIllustrationSettings, imageConfigFingerprint } from './settings.js';
+import { normalizeIllustrationSettings } from './settings.js';
 import { initSettingsUi } from './settings-ui.js';
 import { initMenus, setIllustrationEnabled } from './menus.js';
 import { GenerationQueue } from './queue.js';
@@ -23,7 +23,6 @@ export async function initIllustration(bridge) {
     const currentLlmPreset = context.getPresetManager?.('openai')?.getSelectedPresetName?.() || '';
 
     sdSettings.illustration = normalizeIllustrationSettings(sdSettings.illustration, {
-        imageConfig: bridge.readImageConfig(),
         llm: {
             apiPresetName: String(currentProfile?.name || ''),
             llmPresetName: String(currentLlmPreset || ''),
@@ -36,7 +35,6 @@ export async function initIllustration(bridge) {
     const settings = sdSettings.illustration;
 
     const settingsUi = await initSettingsUi({
-        bridge,
         settings,
         saveSettings: () => saveSettingsDebounced(),
         context,
@@ -50,8 +48,6 @@ export async function initIllustration(bridge) {
     const imageService = createImageService({
         bridge,
         queue,
-        readImageConfig: () => bridge.readImageConfig(),
-        fingerprint: config => imageConfigFingerprint(config),
         getQueueConfig: () => ({
             maxConcurrent: settings.maxConcurrentGenerations,
             minInterval: settings.minGenerationInterval,
@@ -70,7 +66,6 @@ export async function initIllustration(bridge) {
             ensureSwipes,
             getChatId: () => context.chatId,
             getChat: () => context.chat,
-            imageConfigFingerprint: () => imageConfigFingerprint(bridge.readImageConfig()),
             confirmReplace: async () => {
                 const result = await callGenericPopup(
                     t`This message already has illustrations. Replace them?`,
@@ -139,7 +134,6 @@ export async function initIllustration(bridge) {
             void openIllustrationStudio({
                 context,
                 settings,
-                bridge,
                 imageService,
                 saveSettings: () => saveSettingsDebounced(),
             });
@@ -151,7 +145,6 @@ export async function initIllustration(bridge) {
         pipeline,
         imageService,
         settings,
-        fingerprint: () => imageConfigFingerprint(bridge.readImageConfig()),
         ensureSwipes,
         toast: (message, type = 'error') => toastr[type]?.(message, t`Image Generation`),
         t,

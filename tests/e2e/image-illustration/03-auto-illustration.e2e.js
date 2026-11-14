@@ -72,7 +72,6 @@ test.describe('automatic illustration', () => {
 
         await openExtensionsDrawer(page);
         await openInlineDrawer(page, 'sd_illustration_container');
-        await page.locator('#sd_illustration_update_image_config').click();
         await page.locator('#sd_illustration_enabled').check();
         await page.locator('#sd_illustration_auto_generate').check();
         await page.waitForTimeout(1500);
