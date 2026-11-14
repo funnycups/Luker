@@ -4,21 +4,21 @@ export const ADD_IMAGE_PROMPT_TOOL = Object.freeze({
     type: 'function',
     function: {
         name: 'add_image_prompt',
-        description: 'Add one image prompt for a distinct visual moment in the current message. Call this once per visual moment.',
+        description: 'Add an image prompt to the current message.',
         parameters: {
             type: 'object',
             properties: {
                 prompt: {
                     type: 'string',
-                    description: 'The complete image generation prompt. Follow the active prompt style guidance.',
+                    description: 'Image generation prompt.',
                 },
                 insert_after: {
                     type: 'string',
-                    description: 'A verbatim snippet from the current message that ends immediately before the insertion point. Use 10 to 40 characters.',
+                    description: 'Text from the current message that ends immediately before the insertion point.',
                 },
                 insert_before: {
                     type: 'string',
-                    description: 'A verbatim snippet from the current message that starts immediately after the insertion point. Use 10 to 40 characters.',
+                    description: 'Text from the current message that starts immediately after the insertion point.',
                 },
             },
             required: ['prompt', 'insert_after', 'insert_before'],
@@ -30,13 +30,13 @@ export const GENERATE_IMAGE_TOOL = Object.freeze({
     type: 'function',
     function: {
         name: 'generate_image',
-        description: 'Generate an image from the complete prompt and add it to the studio gallery.',
+        description: 'Generate an image and add it to the studio gallery.',
         parameters: {
             type: 'object',
             properties: {
                 prompt: {
                     type: 'string',
-                    description: 'The complete image generation prompt. Follow the active prompt style guidance.',
+                    description: 'Image generation prompt.',
                 },
             },
             required: ['prompt'],
