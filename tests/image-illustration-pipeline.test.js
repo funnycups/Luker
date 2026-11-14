@@ -35,7 +35,7 @@ function makeMessage(extra = {}) {
 function makeHarness({ message, generate, confirmReplace, activityJob } = {}) {
     const chat = [message];
     const toasts = [];
-    const calls = { generateTask: 0, confirmReplace: 0, activityJobs: [] };
+    const calls = { generateTask: 0, confirmReplace: 0, activityJobs: [], messageChanges: [] };
     const pipeline = createIllustrationPipeline({
         context: {
             chat,
@@ -63,6 +63,7 @@ function makeHarness({ message, generate, confirmReplace, activityJob } = {}) {
             ensureSwipes: () => {},
             getChatId: () => 'chat-1',
             getChat: () => chat,
+            notifyMessageChanged: messageId => calls.messageChanges.push(messageId),
             beginActivityJob: activityJob
                 ? options => {
                     calls.activityJobs.push(options);
@@ -145,6 +146,7 @@ test('manual run confirms, then replaces existing illustrations', async () => {
     expect(message.extra.illustrations).toHaveLength(1);
     expect(message.extra.illustrations[0].prompt).toBe('new prompt');
     expect(message.swipes[0]).toBe(message.mes);
+    expect(calls.messageChanges).toEqual([0, 0]);
 });
 
 test('manual run leaves everything untouched when the replace prompt is declined', async () => {
@@ -193,6 +195,7 @@ test('illustration jobs open activity rounds before the prompt request and repor
         { key: 'image-0', status: 'done', meta: { imageUrl: '/user/images/new.png' } },
     ]);
     expect(activityJob.calls.finished).toEqual(['done']);
+    expect(calls.messageChanges).toEqual([0]);
 });
 
 test('failed illustration images keep the round open with an error section', async () => {

@@ -148,6 +148,7 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             syncMessageSwipeData(message, hooks.ensureSwipes);
             hooks.updateMessageBlock?.(messageId, message);
             await hooks.saveChat();
+            await hooks.notifyMessageChanged?.(messageId);
         }
 
         if (existing) {
@@ -292,6 +293,7 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             });
             hooks.updateMessageBlock?.(messageId, latestMessage);
             await hooks.saveChat();
+            await hooks.notifyMessageChanged?.(messageId);
 
             if (applied.missing.length > 0) {
                 toast(t`Some illustrations were appended because their anchors were not found.`, 'warning');

@@ -116,6 +116,13 @@ test.describe('illustration actions', () => {
         const first = await latestMessageState(page);
         expect(first.records).toHaveLength(1);
         const originalRecord = first.records[0];
+        const messageId = await page.evaluate(() => window.Luker.getContext().chat.length - 1);
+        await page.evaluate(() => {
+            const ctx = window.Luker.getContext();
+            window.__sdMessageEvents = [];
+            ctx.eventSource.on(ctx.eventTypes.MESSAGE_EDITED, id => window.__sdMessageEvents.push(['edited', id]));
+            ctx.eventSource.on(ctx.eventTypes.MESSAGE_UPDATED, id => window.__sdMessageEvents.push(['updated', id]));
+        });
 
         // 1. Clicking the inline image opens the action dialog.
         await page.locator('.mes_text img[data-illustration-id]').last().click();
@@ -127,6 +134,12 @@ test.describe('illustration actions', () => {
             const message = window.Luker.getContext().chat.at(-1);
             return (message?.extra?.illustrations || []).length === 2;
         }, null, { timeout: 60_000 });
+
+        const regenerateEvents = await page.evaluate(() => window.__sdMessageEvents);
+        const editedIndex = regenerateEvents.findIndex(event => event[0] === 'edited' && event[1] === messageId);
+        const updatedIndex = regenerateEvents.findIndex(event => event[0] === 'updated' && event[1] === messageId);
+        expect(editedIndex).toBeGreaterThanOrEqual(0);
+        expect(updatedIndex).toBeGreaterThan(editedIndex);
 
         const regenerated = await latestMessageState(page);
         const childRecord = regenerated.records[1];
@@ -158,6 +171,20 @@ test.describe('illustration actions', () => {
         expect(edited.records[1]).toEqual(childRecord);
         expect(edited.mes).toContain(`data-illustration-id="${editedRecord.id}"`);
 
+        // 3b. Cancelling the edit prompt discards the typed prompt and generates nothing.
+        const txt2imgBeforeCancel = sdMock.requests.filter(request => request.url === '/sdapi/v1/txt2img').length;
+        await page.locator('.mes_text img[data-illustration-id]').last().click();
+        await expect(page.locator('#sd_illustration_actions')).toBeVisible();
+        await page.locator('#sd_illustration_action_edit_prompt').click();
+        const cancelPopup = page.locator('dialog.popup[open]').last();
+        await cancelPopup.locator('.popup-input').last().fill('1girl, must not be used, midnight');
+        await cancelPopup.locator('.popup-button-cancel').click();
+        await page.waitForTimeout(1000);
+        const afterCancel = await latestMessageState(page);
+        expect(afterCancel.records).toHaveLength(3);
+        expect(afterCancel.mes).toBe(edited.mes);
+        expect(sdMock.requests.filter(request => request.url === '/sdapi/v1/txt2img')).toHaveLength(txt2imgBeforeCancel);
+
         // 4. History lists earlier prompts for the current chain.
         await page.locator('.mes_text img[data-illustration-id]').last().click();
         await expect(page.locator('#sd_illustration_actions')).toBeVisible();
@@ -188,10 +215,24 @@ test.describe('illustration actions', () => {
         expect(deleted.swipes[deleted.swipeId]).toBe(deleted.mes);
         expect(deleted.swipeInfo[deleted.swipeId].extra.illustrations).toHaveLength(2);
 
-        // 6. Picking a history entry regenerates from its prompt.
+        // 6. Picking a history entry asks for the prompt before regenerating.
         await page.locator('.mes_text img[data-illustration-id]').last().click();
         await page.locator('#sd_illustration_action_history').click();
         await page.locator('#sd_illustration_history_list [data-illustration-history-id]').first().click();
+        const historyPopup = page.locator('dialog.popup[open]').last();
+        const historyInput = historyPopup.locator('.popup-input').last();
+        await historyInput.waitFor({ state: 'visible', timeout: 5000 });
+        await expect(historyInput).toHaveValue(IMAGE_PROMPT);
+        const txt2imgBeforeHistory = sdMock.requests.filter(request => request.url === '/sdapi/v1/txt2img').length;
+        await historyPopup.locator('.popup-button-cancel').click();
+        await page.waitForTimeout(1000);
+        expect(sdMock.requests.filter(request => request.url === '/sdapi/v1/txt2img')).toHaveLength(txt2imgBeforeHistory);
+
+        await page.locator('.mes_text img[data-illustration-id]').last().click();
+        await page.locator('#sd_illustration_action_history').click();
+        await page.locator('#sd_illustration_history_list [data-illustration-history-id]').first().click();
+        const confirmPopup = page.locator('dialog.popup[open]').last();
+        await confirmPopup.locator('.popup-button-ok').click();
         await page.waitForFunction(() => {
             const message = window.Luker.getContext().chat.at(-1);
             return (message?.extra?.illustrations || []).length === 3;

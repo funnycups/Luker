@@ -7,6 +7,7 @@ import {
     syncMessageSwipeData,
 } from './records.js';
 import { buildImageTag, escapeHtml, replaceIllustrationMarkup } from './message.js';
+import { emitMessageChanged } from './message-events.js';
 import { makeIllustrationId } from './presets.js';
 import { messageFingerprint } from './pipeline.js';
 import { deleteMediaFromServer } from '../../../chats.js';
@@ -132,6 +133,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         syncMessageSwipeData(currentMessage, ensureSwipes);
         context.updateMessageBlock(messageId, currentMessage);
         await context.saveChat();
+        await emitMessageChanged(context, messageId);
         return record;
     }
 
@@ -297,6 +299,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         syncMessageSwipeData(message, ensureSwipes);
         context.updateMessageBlock(messageId, message);
         await context.saveChat();
+        await emitMessageChanged(context, messageId);
 
         if (deleteFiles) {
             const files = removed.map(entry => entry.imageUrl).filter(Boolean);

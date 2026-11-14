@@ -12,6 +12,7 @@ import { initIllustrationActions } from './actions.js';
 import { clearSwipeIllustrationRecords } from './records.js';
 import { openIllustrationStudio } from './studio/index.js';
 import { stripIllustrationMarkup } from './message.js';
+import { emitMessageChanged } from './message-events.js';
 
 export async function initIllustration(bridge) {
     const context = getContext();
@@ -64,6 +65,7 @@ export async function initIllustration(bridge) {
             beginActivityJob: typeof bridge.beginActivityJob === 'function' ? bridge.beginActivityJob : null,
             saveChat: () => context.saveChat(),
             updateMessageBlock: (messageId, message) => context.updateMessageBlock(messageId, message),
+            notifyMessageChanged: messageId => emitMessageChanged(context, messageId),
             ensureSwipes,
             getChatId: () => context.chatId,
             getChat: () => context.chat,
