@@ -19527,6 +19527,38 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
 }
 
 /**
+ * Server reasons for a refused chat rename. Every one of them has to reach the
+ * user in readable form: the popup is the only feedback they get.
+ * @type {Record<string, () => string>}
+ */
+const CHAT_RENAME_FAILURE_REASONS = {
+    target_name_exists: () => t`A chat with this name already exists.`,
+    chat_not_found: () => t`This chat no longer exists. Reload the chat list and try again.`,
+    invalid_name: () => t`The new name is empty.`,
+    invalid_request: () => t`The server rejected the rename request.`,
+    source_changed: () => t`The chat changed while it was being renamed. Try again.`,
+    storage_read_only: () => t`Storage is read-only right now.`,
+};
+
+/**
+ * Readable explanation for a failed chat rename.
+ * @param {number} status HTTP status; 0 when the request never reached the server
+ * @param {{error?: string, detail?: string, message?: string}|null} payload Parsed response body
+ * @returns {string}
+ */
+function describeChatRenameFailure(status, payload) {
+    const code = payload && typeof payload.error === 'string' ? payload.error : '';
+    const describe = CHAT_RENAME_FAILURE_REASONS[code];
+    if (describe) {
+        return describe();
+    }
+    if (!status) {
+        return t`Could not reach the server.`;
+    }
+    return t`The server refused the rename.`;
+}
+
+/**
  * Renames a group or character chat.
  * @param {object} param Parameters for renaming chat
  * @param {string} [param.characterId] Character ID to rename chat for
@@ -19534,6 +19566,7 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
  * @param {string} param.oldFileName Old name of the chat (no JSONL extension)
  * @param {string} param.newFileName New name for the chat (no JSONL extension)
  * @param {boolean} [param.loader=true] Whether to show loader during the operation
+ * @returns {Promise<{ok: boolean, error?: string}>} Outcome; `error` carries the server reason code or `unchanged`.
  */
 export async function renameGroupOrCharacterChat({ characterId, groupId, oldFileName, newFileName, loader: showLoader }) {
     const currentChatId = getCurrentChatId();
@@ -19546,11 +19579,11 @@ export async function renameGroupOrCharacterChat({ characterId, groupId, oldFile
 
     if (body.original_file === body.renamed_file) {
         console.debug('Chat rename cancelled, old and new names are the same');
-        return;
+        return { ok: false, error: 'unchanged' };
     }
     if (equalsIgnoreCaseAndAccents(body.original_file, body.renamed_file)) {
         toastr.warning(t`Name not accepted, as it is the same as before (ignoring case and accents).`, t`Rename Chat`);
-        return;
+        return { ok: false, error: 'unchanged' };
     }
 
     const loaderHandle = showLoader ? loader.show({
@@ -19567,18 +19600,22 @@ export async function renameGroupOrCharacterChat({ characterId, groupId, oldFile
             headers: getRequestHeaders(),
         });
 
-        if (!response.ok) {
-            throw new Error('Unsuccessful request.');
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch {
+            payload = null;
         }
 
-        const data = await response.json();
-
-        if (data.error) {
-            throw new Error('Server returned an error.');
+        if (!response.ok || payload?.error) {
+            throw Object.assign(new Error(`Chat rename request failed with HTTP ${response.status}`), {
+                status: response.status,
+                payload,
+            });
         }
 
-        if (data.sanitizedFileName) {
-            newFileName = data.sanitizedFileName;
+        if (payload?.sanitizedFileName) {
+            newFileName = payload.sanitizedFileName;
         }
 
         if (groupId) {
@@ -19596,9 +19633,23 @@ export async function renameGroupOrCharacterChat({ characterId, groupId, oldFile
 
         const eventData = { avatarId: body.avatar_url, groupId, oldFileName: body.original_file, newFileName: `${newFileName}.jsonl` };
         await eventSource.emit(event_types.CHAT_RENAMED, eventData);
-    } catch {
+        return { ok: true };
+    } catch (rawError) {
+        // The server knows why it refused; show that reason instead of a
+        // blanket failure sentence the user cannot act on.
+        console.error('Chat rename error:', rawError);
+        const status = Number(rawError?.status) || 0;
+        const payload = rawError?.payload || null;
+        const detail = [payload?.detail ?? payload?.message, status ? `HTTP ${status}` : ''].filter(Boolean).join('\n');
+        await loaderHandle?.hide();
         await delay(500);
-        await callGenericPopup('An error has occurred. Chat was not renamed.', POPUP_TYPE.TEXT);
+        await callGenericPopup(
+            `<p>${t`Chat was not renamed.`}</p>`
+            + `<p>${escapeHtml(describeChatRenameFailure(status, payload))}</p>`
+            + (detail ? `<pre style="white-space:pre-wrap;text-align:left;font-size:0.85em;opacity:0.85;max-height:40vh;overflow:auto">${escapeHtml(detail)}</pre>` : ''),
+            POPUP_TYPE.TEXT,
+        );
+        return { ok: false, error: payload && typeof payload.error === 'string' ? payload.error : 'request_failed' };
     } finally {
         await loaderHandle?.hide();
     }
@@ -19608,6 +19659,7 @@ export async function renameGroupOrCharacterChat({ characterId, groupId, oldFile
  * Renames the currently selected chat.
  * @param {string} oldFileName Old name of the chat (no JSONL extension)
  * @param {string} newName New name for the chat (no JSONL extension)
+ * @returns {Promise<{ok: boolean, error?: string}>} Outcome reported by {@link renameGroupOrCharacterChat}.
  */
 export async function renameChat(oldFileName, newName) {
     return await renameGroupOrCharacterChat({

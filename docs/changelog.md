@@ -23,6 +23,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed Memory Graph LLM recall not drilling into always-inject event rollups.
 - Fixed Memory Graph RAG recall filtering always-inject nodes after the per-type quota.
 - Fixed the Diagnostics menu overflowing the right edge on narrow screens.
+- Fixed chat rename failures not showing the server's reason.
 
 ### Storage & Sync
 

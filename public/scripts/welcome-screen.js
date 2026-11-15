@@ -653,12 +653,15 @@ async function renameRecentCharacterChat(avatarId, fileName) {
             console.log('No new name provided, aborting');
             return;
         }
-        await renameGroupOrCharacterChat({
+        const result = await renameGroupOrCharacterChat({
             characterId: String(characterId),
             oldFileName: fileName,
             newFileName: newName,
             loader: false,
         });
+        if (!result?.ok) {
+            return;
+        }
         // Follow the rename with a pointer update only when the renamed
         // file WAS the character's active chat. Unconditionally writing the
         // pointer here hijacks the card onto whatever chat the user chose
@@ -694,12 +697,15 @@ async function renameRecentGroupChat(groupId, fileName) {
             console.log('No new name provided, aborting');
             return;
         }
-        await renameGroupOrCharacterChat({
+        const result = await renameGroupOrCharacterChat({
             groupId: String(groupId),
             oldFileName: fileName,
             newFileName: String(newName),
             loader: false,
         });
+        if (!result?.ok) {
+            return;
+        }
         await refreshWelcomeScreen();
         toastr.success(t`Group chat renamed.`);
     } catch (error) {

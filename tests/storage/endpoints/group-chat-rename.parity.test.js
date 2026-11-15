@@ -115,12 +115,14 @@ describe.each(ENDPOINT_HARNESSES)('group rename route on $name', ({ mode }) => {
     test.each(['old.jsonl', 'o?ld.jsonl', 'occupied.jsonl'])('refused %s preserves complete source/destination and namespaces', async destination => {
         await seed(getChatRepo(), h); await seed(getChatRepo(), h, 'occupied');
         const before = await capture(getChatRepo(), h, 'old'), other = await capture(getChatRepo(), h, 'occupied'), bytes = disk(h);
-        await rename('old.jsonl', destination).expect(400);
+        const refusal = await rename('old.jsonl', destination).expect(400);
+        expect(refusal.body.error).toBe('target_name_exists');
         expect(await capture(getChatRepo(), h, 'old')).toEqual(before); expect(await capture(getChatRepo(), h, 'occupied')).toEqual(other); expect(disk(h)).toEqual(bytes);
     });
 
     test('missing source remains the existing missing contract', async () => {
-        await rename().expect(400);
+        const refusal = await rename().expect(400);
+        expect(refusal.body.error).toBe('chat_not_found');
         expect(await getChatRepo().listAllGroupChats(h.handle)).toEqual([]);
     });
 
@@ -133,7 +135,8 @@ describe.each(ENDPOINT_HARNESSES)('group rename route on $name', ({ mode }) => {
 
     test('malformed source is explicit HTTP500 rather than missing or successful copy', async () => {
         await seed(getChatRepo(), h); await corruptDocument(h, 'old'); const bytes = await rawResources(h);
-        await rename().expect(500);
+        const refusal = await rename().expect(500);
+        expect(refusal.body.error).toBe('write_failed');
         expect((await getChatRepo().listAllGroupChats(h.handle)).map(e => e.key.name)).toEqual(['old']); expect(await rawResources(h)).toEqual(bytes);
     });
 
@@ -141,7 +144,10 @@ describe.each(ENDPOINT_HARNESSES)('group rename route on $name', ({ mode }) => {
         const original = await seed(getChatRepo(), h);
         // No core method is mocked: observe entry and issue a real concurrent engine write.
         const settle = onAsyncEntry('ChatRepo.rename', () => getChatRepo().save(h.handle, '', 'new', { ...HEADER, competing: true }, MESSAGES, null, opts('new')));
-        try { await rename().expect(409); } finally { await settle(); }
+        try {
+            const refusal = await rename().expect(409);
+            expect(refusal.body.error).toBe('target_name_exists');
+        } finally { await settle(); }
         expect(await capture(getChatRepo(), h, 'old')).toEqual(original);
         const target = await getChatRepo().get(h.handle, '', 'new', opts('new'));
         expect(target.header).toEqual({ ...HEADER, competing: true, chat_metadata: { ...HEADER.chat_metadata, integrity: target.integrity } });

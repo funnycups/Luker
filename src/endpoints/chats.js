@@ -26,7 +26,7 @@ import {
 } from '../util.js';
 import { applyPatch as applyJsonPatch } from '../../public/scripts/util/fast-json-patch.js';
 import { getChatRepo, getGroupRepo, getStorageEngine } from '../storage/index.js';
-import { ConflictError, InvalidArgumentError, NotFoundError } from '../storage/errors.js';
+import { ConflictError, InvalidArgumentError, NotFoundError, StorageReadOnlyError } from '../storage/errors.js';
 import { assertSafeRepoName, stripJsonlExt } from '../storage/name-validation.js';
 import { sendJsonResource, sendResourceReadError } from '../http-resource-cache.js';
 
@@ -2973,10 +2973,28 @@ router.post('/state/delete', async function (request, response) {
     }
 });
 
+// Reasons the rename route reports to the client. The frontend turns them into
+// a visible explanation instead of a blanket "not renamed" popup, so each
+// refusal at this route must name its cause.
+const RENAME_CONFLICT_REASONS = {
+    rename_target_exists: 'target_name_exists',
+    rename_source_changed: 'source_changed',
+};
+
+/**
+ * Maps a storage ConflictError code onto the rename reason vocabulary.
+ * Unknown codes pass through so the client can still print them verbatim.
+ * @param {string} code
+ * @returns {string}
+ */
+function chatRenameConflictReason(code) {
+    return RENAME_CONFLICT_REASONS[code] || String(code || 'conflict');
+}
+
 router.post('/rename', validateAvatarUrlMiddleware, async function (request, response) {
     try {
         if (!request.body || !request.body.original_file || !request.body.renamed_file) {
-            return response.sendStatus(400);
+            return response.status(400).send({ error: 'invalid_request' });
         }
 
         const handle = request.user.profile.handle;
@@ -2986,12 +3004,12 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
             ? request.user.directories.groupChats
             : path.join(request.user.directories.chats, charDir);
         if (!isGroup && !isPathUnderParent(request.user.directories.chats, pathToFolder)) {
-            return response.sendStatus(400);
+            return response.status(400).send({ error: 'invalid_request' });
         }
         const originalBase = stripJsonlExt(String(request.body.original_file));
         const renamedBase = stripJsonlExt(String(request.body.renamed_file));
         if (!originalBase || !renamedBase) {
-            return response.sendStatus(400);
+            return response.status(400).send({ error: 'invalid_name' });
         }
         const safeOriginal = sanitize(`${originalBase}.jsonl`);
         const safeRenamed = sanitize(`${renamedBase}.jsonl`);
@@ -3017,23 +3035,23 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         const existing = await repo.exists(handle, charDir, oldName, { isGroup, groupId });
         if (!existing) {
             console.error(`/rename: chat not found in Repo: charDir=${charDir} name=${oldName} isGroup=${isGroup}`);
-            return response.status(400).send({ error: true });
+            return response.status(400).send({ error: 'chat_not_found' });
         }
         const newGroupId = isGroup ? newName : undefined;
         const collision = await repo.exists(handle, charDir, newName, { isGroup, groupId: newGroupId });
         if (collision) {
             console.error(`/rename: destination already exists: charDir=${charDir} name=${newName}`);
-            return response.status(400).send({ error: true });
+            return response.status(400).send({ error: 'target_name_exists' });
         }
 
         try {
             await repo.rename(handle, charDir, oldName, newName, { isGroup, groupId });
         } catch (err) {
             if (err instanceof NotFoundError) {
-                return response.status(400).send({ error: true });
+                return response.status(400).send({ error: 'chat_not_found' });
             }
             if (err instanceof ConflictError) {
-                return response.status(409).send({ error: err.code });
+                return response.status(409).send({ error: chatRenameConflictReason(err.code) });
             }
             throw err;
         }
@@ -3047,7 +3065,10 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         return response.send({ ok: true, sanitizedFileName });
     } catch (error) {
         console.error('Error renaming chat file:', error);
-        return response.status(500).send({ error: true });
+        if (error instanceof StorageReadOnlyError) {
+            return response.status(503).send({ error: 'storage_read_only', message: error.message });
+        }
+        return response.status(500).send({ error: 'write_failed', detail: String(error?.message || error || '') });
     }
 });
 

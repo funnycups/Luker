@@ -7607,4 +7607,13 @@
     ,"Tasks: ${0}": "任务：${0}"
     ,"Tasks: ${0} · ${1} failed": "任务：${0} · ${1} 失败"
     ,"Retrying · ${0}/${1}": "重试中 · ${0}/${1}"
+    ,"Chat was not renamed.": "聊天未改名。"
+    ,"A chat with this name already exists.": "已有同名聊天。"
+    ,"This chat no longer exists. Reload the chat list and try again.": "该聊天已不存在，请刷新聊天列表后重试。"
+    ,"The new name is empty.": "新名称为空。"
+    ,"The server rejected the rename request.": "服务器拒绝了改名请求。"
+    ,"The chat changed while it was being renamed. Try again.": "改名过程中聊天发生了变化，请重试。"
+    ,"Storage is read-only right now.": "存储当前为只读状态。"
+    ,"Could not reach the server.": "无法连接服务器。"
+    ,"The server refused the rename.": "服务器拒绝了改名。"
 }
