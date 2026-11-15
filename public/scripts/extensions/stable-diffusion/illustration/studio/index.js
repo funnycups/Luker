@@ -2,7 +2,8 @@ import { Popup, POPUP_TYPE } from '../../../../popup.js';
 import { t } from '../../../../i18n.js';
 import { requestToolCallsWithRetry, makeRuntimeToolCallId } from '../../../../lib/iter-tool-calling.js';
 import { createExtensionSettingsSessionStorage } from '../../../../iteration-library/storage.js';
-import { GENERATE_IMAGE_TOOL, validateGenerateImageArgs } from '../tools.js';
+import { GENERATE_IMAGE_TOOL, buildGenerateImageTool, validateGenerateImageArgs } from '../tools.js';
+import { resolveReplayLoras } from '../../lora/tool.js';
 import { getPresetById, selectPreset } from '../settings.js';
 import { makeIllustrationId } from '../presets.js';
 import { escapeHtml } from '../message.js';
@@ -138,7 +139,7 @@ export async function openIllustrationStudio({ context, settings, imageService, 
         await renderSessionList();
     }
 
-    async function executeToolCalls(toolCalls) {
+    async function executeToolCalls(toolCalls, loraState) {
         const images = [];
         const toolResults = [];
         for (const call of toolCalls) {
@@ -147,19 +148,22 @@ export async function openIllustrationStudio({ context, settings, imageService, 
                 toolResults.push({ tool_call_id: callId, content: JSON.stringify({ status: 'failed', error: 'Unknown tool.' }) });
                 continue;
             }
-            const validation = validateGenerateImageArgs(call?.args);
+            const validation = validateGenerateImageArgs(call?.args, {
+                availableLoras: loraState.names,
+                includeWeight: loraState.includeWeight,
+            });
             if (!validation.ok) {
                 toolResults.push({ tool_call_id: callId, content: JSON.stringify({ status: 'failed', error: validation.error }) });
                 continue;
             }
-            const prompt = validation.value.prompt;
+            const { prompt, loras } = validation.value;
             try {
-                const imageUrl = await imageService.generate(prompt);
-                images.push({ id: makeIllustrationId('img'), prompt, imageUrl, status: 'ready', error: '' });
+                const imageUrl = await imageService.generate(prompt, { loras });
+                images.push({ id: makeIllustrationId('img'), prompt, loras, imageUrl, status: 'ready', error: '' });
                 toolResults.push({ tool_call_id: callId, content: JSON.stringify({ prompt, url: imageUrl, status: 'ready' }) });
             } catch (error) {
                 const reason = String(error?.message || error);
-                images.push({ id: makeIllustrationId('img'), prompt, imageUrl: '', status: 'failed', error: reason });
+                images.push({ id: makeIllustrationId('img'), prompt, loras, imageUrl: '', status: 'failed', error: reason });
                 toolResults.push({ tool_call_id: callId, content: JSON.stringify({ prompt, status: 'failed', error: reason }) });
             }
         }
@@ -186,12 +190,13 @@ export async function openIllustrationStudio({ context, settings, imageService, 
         renderAll();
 
         try {
+            const loraState = await imageService.getAvailableLoras();
             const history = buildStudioHistoryMessages(turnSession);
             const result = await requestToolCallsWithRetry(context, { toolCallRetryMax: 0 }, {
                 taskMessages: [{ role: 'system', content: systemPrompt }, ...history],
                 apiPresetName: preset.llm?.apiPresetName || '',
                 llmPresetName: preset.llm?.llmPresetName || '',
-                tools: [GENERATE_IMAGE_TOOL],
+                tools: [buildGenerateImageTool(loraState.names, { includeWeight: loraState.includeWeight })],
                 allowNoToolCalls: true,
                 includeAssistantText: true,
                 substituteMacros: true,
@@ -199,7 +204,7 @@ export async function openIllustrationStudio({ context, settings, imageService, 
             });
 
             const toolCalls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-            const { images, toolResults } = await executeToolCalls(toolCalls);
+            const { images, toolResults } = await executeToolCalls(toolCalls, loraState);
             appendStudioAssistantTurn(turnSession, {
                 text: result?.assistantText || '',
                 toolCalls,
@@ -345,7 +350,15 @@ export async function openIllustrationStudio({ context, settings, imageService, 
         }
         if (action === 'regenerate') {
             try {
-                const imageUrl = await imageService.generate(image.prompt);
+                const savedLoras = Array.isArray(image.loras) ? image.loras : [];
+                let loras = [];
+                if (savedLoras.length > 0) {
+                    const loraState = await imageService.getAvailableLoras();
+                    loras = resolveReplayLoras(savedLoras, loraState.names, dropped => {
+                        toastr.warning(t`Some LoRAs are unavailable and were skipped: ${dropped.join(', ')}`, t`Image Generation`);
+                    }).loras;
+                }
+                const imageUrl = await imageService.generate(image.prompt, { loras });
                 const record = {
                     id: makeIllustrationId('img'),
                     prompt: image.prompt,
@@ -353,6 +366,7 @@ export async function openIllustrationStudio({ context, settings, imageService, 
                     status: 'ready',
                     error: '',
                     createdAt: Date.now(),
+                    loras,
                 };
                 session.images.push(record);
                 selectedImageId = record.id;

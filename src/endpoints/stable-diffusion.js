@@ -412,6 +412,31 @@ comfy.post('/models', async (request, response) => {
     }
 });
 
+comfy.post('/loras', async (request, response) => {
+    try {
+        const url = new URL(urlJoin(request.body.url, '/object_info'));
+
+        const result = await fetch(url);
+        if (!result.ok) {
+            throw new Error('ComfyUI returned an error.');
+        }
+
+        /** @type {any} */
+        const data = await result.json();
+        const loraNames = data.LoraLoader?.input?.required?.lora_name?.[0];
+        if (loraNames === undefined) {
+            return response.send([]);
+        }
+        if (!Array.isArray(loraNames)) {
+            throw new TypeError(`Expected LoraLoader.input.required.lora_name[0] to be an array, received ${typeof loraNames}`);
+        }
+        return response.send(loraNames);
+    } catch (error) {
+        console.error(error);
+        return response.sendStatus(500);
+    }
+});
+
 comfy.post('/schedulers', async (request, response) => {
     try {
         const url = new URL(urlJoin(request.body.url, '/object_info'));

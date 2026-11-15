@@ -10,6 +10,18 @@
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
+            <div class="sd_generation_preset_block">
+                <div class="sd_generation_preset_row">
+                    <label for="sd_generation_preset" data-i18n="sd_generation_preset">Generation preset</label>
+                    <select id="sd_generation_preset" class="text_pole"></select>
+                </div>
+                <div class="sd_generation_preset_actions">
+                    <div id="sd_generation_preset_new" class="menu_button menu_button_icon" data-i18n="New">New</div>
+                    <div id="sd_generation_preset_rename" class="menu_button menu_button_icon" data-i18n="Rename">Rename</div>
+                    <div id="sd_generation_preset_delete" class="menu_button menu_button_icon" data-i18n="Delete">Delete</div>
+                </div>
+            </div>
+            <hr />
             <label for="sd_refine_mode" class="checkbox_label" data-i18n="[title]sd_refine_mode" title="Allow to edit prompts manually before sending them to generation API">
                 <input id="sd_refine_mode" type="checkbox" />
                 <span data-i18n="sd_refine_mode_txt">Edit prompts before generation</span>

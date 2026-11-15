@@ -254,11 +254,14 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             job.activityJob = activityJob;
 
             job.state = 'generating';
+            const loraState = await imageService.getAvailableLoras();
             const promptResult = await requestIllustrationPrompts({
                 context,
                 preset,
                 taskMessages,
                 abortSignal: job.abortController.signal,
+                availableLoras: loraState.names,
+                includeWeight: loraState.includeWeight,
             });
             if (!contextMatches(job)) {
                 throw abortError();
@@ -267,6 +270,8 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             const { toolCalls, assistantText, finishReason } = promptResult;
             const selection = selectPromptCalls(toolCalls, {
                 messageText: snapshotText,
+                availableLoras: loraState.names,
+                includeWeight: loraState.includeWeight,
             });
             if (selection.accepted.length === 0) {
                 const failure = buildPromptFailure({ toolCalls, selection, assistantText, finishReason }, t);
@@ -292,6 +297,7 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             const results = await Promise.allSettled(selection.accepted.map(value => imageService.generate(value.prompt, {
                 characterName,
                 signal: job.abortController.signal,
+                loras: value.loras,
             }).then(imageUrl => ({ value, imageUrl }))));
 
             if (job.abortController.signal.aborted) {
@@ -324,6 +330,7 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
                         status: 'ready',
                         anchorAfter: value.insertAfter,
                         anchorBefore: value.insertBefore,
+                        loras: value.loras,
                     });
                 }
                 if (result.reason?.name === 'AbortError') {
@@ -336,6 +343,7 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
                     error: String(result.reason?.message || result.reason),
                     anchorAfter: value.insertAfter,
                     anchorBefore: value.insertBefore,
+                    loras: value.loras,
                 });
             });
 

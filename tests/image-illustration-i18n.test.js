@@ -5,6 +5,7 @@ const zhCn = JSON.parse(readFileSync(new URL('../public/locales/zh-cn.json', imp
 const zhTw = JSON.parse(readFileSync(new URL('../public/locales/zh-tw.json', import.meta.url), 'utf8'));
 
 const EXPECTED_KEYS = [
+    'sd_generation_preset',
     'sd_illustration_api_preset',
     'sd_illustration_auto_generate',
     'sd_illustration_context_count',
@@ -28,10 +29,12 @@ const EXPECTED_KEYS = [
     'Copy prompt',
     'Could not delete server image files',
     'Delete session',
+    'Delete this generation preset?',
     'Delete this illustration?',
     'Delete this prompt preset?',
     'Describe an image to start.',
     'Describe the image or give feedback',
+    'Dynamic LoRA is only available for the standard ComfyUI server type.',
     'Edit prompt',
     'Generated',
     'Illustration failed',
@@ -50,8 +53,11 @@ const EXPECTED_KEYS = [
     'Rejected calls:',
     'Skipped image prompts',
     'Some illustrations were appended because their anchors were not found.',
+    'Some LoRAs are unavailable and were skipped: ${0}',
     'Studio request failed',
     'Tag style',
+    'The ComfyUI server reports no available LoRAs.',
+    'The current ComfyUI workflow has no %lora_name% template node.',
     'The illustration prompt is empty.',
     'The image prompt is empty.',
     'The model replied with text but did not call add_image_prompt.',

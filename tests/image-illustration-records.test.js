@@ -8,6 +8,10 @@ import {
     clearSwipeIllustrationRecords,
 } from '../public/scripts/extensions/stable-diffusion/illustration/records.js';
 
+// The jsdom environment used by this suite predates the platform clone helper
+// the illustration modules call; the values cloned here are plain data.
+globalThis.structuredClone ??= value => JSON.parse(JSON.stringify(value));
+
 function makeMessage() {
     return {
         mes: 'alpha beta gamma delta',
@@ -107,4 +111,22 @@ test('swipe sync clones extra into the current swipe info', () => {
     syncMessageSwipeData(message, () => {});
     expect(message.swipes[0]).toBe('changed');
     expect(message.swipe_info[0].extra).toEqual(message.extra);
+});
+
+test('records keep their own copy of the LoRA selection', () => {
+    const loras = [{ name: 'a.safetensors', weight: 0.8 }];
+    const record = createIllustrationRecord({ id: 'ill_1', prompt: 'p', loras });
+
+    expect(record.loras).toEqual([{ name: 'a.safetensors', weight: 0.8 }]);
+    expect(record.loras).not.toBe(loras);
+    expect(record.loras[0]).not.toBe(loras[0]);
+
+    loras[0].weight = 2;
+    loras.push({ name: 'b.safetensors', weight: 1 });
+    expect(record.loras).toEqual([{ name: 'a.safetensors', weight: 0.8 }]);
+});
+
+test('records default to an empty LoRA selection', () => {
+    expect(createIllustrationRecord({ id: 'ill_1', prompt: 'p' }).loras).toEqual([]);
+    expect(createIllustrationRecord({ id: 'ill_2', prompt: 'p', loras: null }).loras).toEqual([]);
 });

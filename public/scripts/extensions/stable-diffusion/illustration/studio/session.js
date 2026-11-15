@@ -76,6 +76,7 @@ export function appendStudioAssistantTurn(session, {
             messageId: message.id,
             prompt: String(image?.prompt || ''),
             imageUrl: String(image?.imageUrl || ''),
+            loras: Array.isArray(image?.loras) ? structuredClone(image.loras) : [],
             status: image?.status === 'failed' ? 'failed' : 'ready',
             error: String(image?.error || ''),
             createdAt: Number(image?.createdAt ?? now),

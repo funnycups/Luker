@@ -30,4 +30,17 @@ test('assistant tool turn produces assistant and tool history messages', () => {
         content: '{"status":"ready","url":"/user/images/a.png"}',
     });
     expect(session.images).toHaveLength(1);
+    expect(session.images[0].loras).toEqual([]);
+});
+
+test('assistant tool turn copies the LoRA selection into the image record', () => {
+    const session = createStudioSession({ presetId: 'p', now: 1 });
+    const loras = [{ name: 'a.safetensors', weight: 0.5 }];
+    appendStudioAssistantTurn(session, {
+        images: [{ id: 'img_1', prompt: 'lighthouse', imageUrl: '/user/images/a.png', loras }],
+        now: 2,
+    });
+    expect(session.images[0].loras).toEqual(loras);
+    expect(session.images[0].loras).not.toBe(loras);
+    expect(session.images[0].loras[0]).not.toBe(loras[0]);
 });

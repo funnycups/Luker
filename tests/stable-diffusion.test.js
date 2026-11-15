@@ -195,3 +195,104 @@ describe('ComfyUI generation', () => {
         expect(errorEvent.data.data.message).toContain('did not return any recognizable outputs');
     });
 });
+
+describe('ComfyUI LoRA catalog', () => {
+    /** @type {import('node:http').Server} */
+    let server;
+    let baseUrl;
+
+    beforeAll(async () => {
+        const { default: express } = await import('express');
+        const { router } = await import('../src/endpoints/stable-diffusion.js');
+
+        const app = express();
+        app.use(express.json());
+        app.use((request, _response, next) => {
+            request.user = {
+                profile: { handle: 'test-user' },
+                directories: {},
+            };
+            next();
+        });
+        app.use(router);
+        server = app.listen(0, '127.0.0.1');
+        await new Promise(resolve => server.once('listening', resolve));
+        const address = server.address();
+        baseUrl = `http://127.0.0.1:${address.port}`;
+    });
+
+    afterAll(async () => {
+        await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    });
+
+    beforeEach(() => {
+        fetchMock.mockReset();
+    });
+
+    async function postLoras(url = 'http://127.0.0.1:8188') {
+        return fetch(`${baseUrl}/comfy/loras`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url }),
+        });
+    }
+
+    test('returns the lora_name options from the upstream object info', async () => {
+        fetchMock.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({
+                LoraLoader: {
+                    input: { required: { lora_name: [['a.safetensors', 'b.safetensors']] } },
+                },
+            }),
+        });
+
+        const response = await postLoras();
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual(['a.safetensors', 'b.safetensors']);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(String(fetchMock.mock.calls[0][0])).toBe('http://127.0.0.1:8188/object_info');
+    });
+
+    test('returns an empty list when the LoRA loader node is absent', async () => {
+        fetchMock.mockResolvedValueOnce({
+            ok: true,
+            json: async () => ({ KSampler: { input: { required: {} } } }),
+        });
+
+        const response = await postLoras();
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual([]);
+    });
+
+    test('reports a server error for a malformed lora_name option list', async () => {
+        const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            fetchMock.mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({
+                    LoraLoader: {
+                        input: { required: { lora_name: ['a.safetensors'] } },
+                    },
+                }),
+            });
+
+            const response = await postLoras();
+            expect(response.status).toBe(500);
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
+    test('reports a server error when the upstream request fails', async () => {
+        const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            fetchMock.mockResolvedValueOnce({ ok: false });
+
+            const response = await postLoras();
+            expect(response.status).toBe(500);
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+});

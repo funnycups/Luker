@@ -214,7 +214,9 @@ export async function closeRightNavDrawer(page) {
         return i && i.classList.contains('openIcon');
     });
     if (isOpen) {
-        await page.locator('#rightNavHolder > .drawer-toggle').click();
+        // The character editor covers the drawer toggle while it opens; a
+        // DOM click closes the drawer without depending on hit-testing.
+        await page.evaluate(() => document.querySelector('#rightNavHolder > .drawer-toggle')?.click());
         await page.waitForFunction(() => {
             const i = document.querySelector('#rightNavDrawerIcon');
             return i && i.classList.contains('closedIcon');

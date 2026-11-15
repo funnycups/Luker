@@ -10,6 +10,7 @@ import { buildImageTag, escapeHtml, replaceIllustrationMarkup } from './message.
 import { emitMessageChanged } from './message-events.js';
 import { makeIllustrationId } from './presets.js';
 import { messageFingerprint } from './pipeline.js';
+import { resolveReplayLoras } from '../lora/tool.js';
 import { deleteMediaFromServer } from '../../../chats.js';
 
 function collectHistory(message, record) {
@@ -86,6 +87,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         if (!message) {
             throw new Error('Message not found.');
         }
+        const savedLoras = Array.isArray(parent?.loras) ? parent.loras : [];
         const swipeId = message.swipe_id ?? 0;
         const beforeFingerprint = messageFingerprint(message);
         pipeline.cancelForMessage?.(messageId, swipeId);
@@ -94,11 +96,19 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         const controllerKey = `${messageId}:${swipeId}`;
         actionControllers.set(controllerKey, controller);
 
+        let loras = [];
         let imageUrl;
         try {
+            if (savedLoras.length > 0) {
+                const loraState = await imageService.getAvailableLoras();
+                loras = resolveReplayLoras(savedLoras, loraState.names, dropped => {
+                    toast(t`Some LoRAs are unavailable and were skipped: ${dropped.join(', ')}`, 'warning');
+                }).loras;
+            }
             imageUrl = await imageService.generate(prompt, {
                 characterName: String(message.name || ''),
                 signal: controller.signal,
+                loras,
             });
         } finally {
             if (actionControllers.get(controllerKey) === controller) {
@@ -125,6 +135,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             parentId: parent.id,
             anchorAfter: replaceRecord.anchorAfter,
             anchorBefore: replaceRecord.anchorBefore,
+            loras,
         });
         currentMessage.mes = replaceIllustrationMarkup(currentMessage.mes, replaceRecord.id, buildImageTag({
             id: record.id,

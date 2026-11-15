@@ -9,6 +9,7 @@ export function createIllustrationRecord({
     parentId = null,
     anchorAfter = '',
     anchorBefore = '',
+    loras = [],
     createdAt = Date.now(),
 }) {
     return {
@@ -20,6 +21,7 @@ export function createIllustrationRecord({
         parentId: parentId ? String(parentId) : null,
         anchorAfter: String(anchorAfter || ''),
         anchorBefore: String(anchorBefore || ''),
+        loras: Array.isArray(loras) ? structuredClone(loras) : [],
         createdAt,
     };
 }

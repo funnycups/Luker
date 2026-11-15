@@ -1,3 +1,4 @@
+import { buildLorasProperty, validateLorasArg } from '../lora/tool.js';
 import { findInsertionPoint } from './message.js';
 
 export const ADD_IMAGE_PROMPT_TOOL = Object.freeze({
@@ -44,7 +45,39 @@ export const GENERATE_IMAGE_TOOL = Object.freeze({
     },
 });
 
-export function validateAddImagePromptArgs(args) {
+/**
+ * Builds a copy of the prompt tool with the optional LoRA parameter.
+ *
+ * @param {string[]} loras Selectable LoRA names.
+ * @param {{ includeWeight?: boolean }} [options] Whether each entry offers a weight.
+ * @returns {object} Tool definition for the prompt request.
+ */
+export function buildAddImagePromptTool(loras, { includeWeight = false } = {}) {
+    const tool = structuredClone(ADD_IMAGE_PROMPT_TOOL);
+    const lorasProperty = buildLorasProperty(loras, { includeWeight });
+    if (lorasProperty) {
+        tool.function.parameters.properties.loras = lorasProperty;
+    }
+    return tool;
+}
+
+/**
+ * Builds a copy of the image tool with the optional LoRA parameter.
+ *
+ * @param {string[]} loras Selectable LoRA names.
+ * @param {{ includeWeight?: boolean }} [options] Whether each entry offers a weight.
+ * @returns {object} Tool definition for the image request.
+ */
+export function buildGenerateImageTool(loras, { includeWeight = false } = {}) {
+    const tool = structuredClone(GENERATE_IMAGE_TOOL);
+    const lorasProperty = buildLorasProperty(loras, { includeWeight });
+    if (lorasProperty) {
+        tool.function.parameters.properties.loras = lorasProperty;
+    }
+    return tool;
+}
+
+export function validateAddImagePromptArgs(args, { availableLoras, includeWeight = false } = {}) {
     const prompt = String(args?.prompt ?? '').trim();
     const insertAfter = String(args?.insert_after ?? '').trim();
     const insertBefore = String(args?.insert_before ?? '').trim();
@@ -57,18 +90,26 @@ export function validateAddImagePromptArgs(args) {
     if (!insertBefore) {
         return { ok: false, error: 'insert_before is required' };
     }
-    return { ok: true, value: { prompt, insertAfter, insertBefore } };
+    const loras = validateLorasArg(args?.loras, { available: availableLoras, includeWeight });
+    if (!loras.ok) {
+        return { ok: false, error: loras.error };
+    }
+    return { ok: true, value: { prompt, insertAfter, insertBefore, loras: loras.value } };
 }
 
-export function validateGenerateImageArgs(args) {
+export function validateGenerateImageArgs(args, { availableLoras, includeWeight = false } = {}) {
     const prompt = String(args?.prompt ?? '').trim();
     if (!prompt) {
         return { ok: false, error: 'prompt is required' };
     }
-    return { ok: true, value: { prompt } };
+    const loras = validateLorasArg(args?.loras, { available: availableLoras, includeWeight });
+    if (!loras.ok) {
+        return { ok: false, error: loras.error };
+    }
+    return { ok: true, value: { prompt, loras: loras.value } };
 }
 
-export function selectPromptCalls(toolCalls, { messageText = '' } = {}) {
+export function selectPromptCalls(toolCalls, { messageText = '', availableLoras, includeWeight = false } = {}) {
     const accepted = [];
     const rejected = [];
     const seen = new Set();
@@ -78,7 +119,7 @@ export function selectPromptCalls(toolCalls, { messageText = '' } = {}) {
             rejected.push({ reason: 'unknown tool', call });
             continue;
         }
-        const validation = validateAddImagePromptArgs(call.args);
+        const validation = validateAddImagePromptArgs(call.args, { availableLoras, includeWeight });
         if (!validation.ok) {
             rejected.push({ reason: validation.error, call });
             continue;
@@ -88,7 +129,7 @@ export function selectPromptCalls(toolCalls, { messageText = '' } = {}) {
             rejected.push({ reason: 'anchors not found', call });
             continue;
         }
-        const key = JSON.stringify([value.prompt, value.insertAfter, value.insertBefore]);
+        const key = JSON.stringify([value.prompt, value.insertAfter, value.insertBefore, value.loras]);
         if (seen.has(key)) {
             continue;
         }

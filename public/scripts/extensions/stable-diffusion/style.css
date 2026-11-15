@@ -112,6 +112,20 @@
     margin: 6px 0;
 }
 
+.sd_generation_preset_row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    margin: 4px 0;
+}
+
+.sd_generation_preset_actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 6px 0;
+}
+
 .sd_illustration_summary {
     opacity: 0.8;
     font-size: calc(var(--mainFontSize) * 0.9);

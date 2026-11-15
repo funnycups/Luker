@@ -1,4 +1,4 @@
-import { ADD_IMAGE_PROMPT_TOOL } from './tools.js';
+import { buildAddImagePromptTool } from './tools.js';
 
 function speakerName(message) {
     const name = String(message?.name || '').trim();
@@ -63,7 +63,14 @@ export function buildIllustrationTaskMessages({ preset, context, current, memory
     ];
 }
 
-export async function requestIllustrationPrompts({ context, preset, taskMessages, abortSignal }) {
+export async function requestIllustrationPrompts({
+    context,
+    preset,
+    taskMessages,
+    abortSignal,
+    availableLoras = [],
+    includeWeight = false,
+}) {
     if (typeof context?.generateTask !== 'function') {
         throw new Error('generateTask is not available.');
     }
@@ -73,7 +80,7 @@ export async function requestIllustrationPrompts({ context, preset, taskMessages
         worldInfoSource: 'chat',
         apiPresetName: preset?.llm?.apiPresetName || '',
         llmPresetName: preset?.llm?.llmPresetName || '',
-        tools: [ADD_IMAGE_PROMPT_TOOL],
+        tools: [buildAddImagePromptTool(availableLoras, { includeWeight })],
         toolChoice: 'auto',
         functionCallMode: 'auto',
         substituteMacros: true,

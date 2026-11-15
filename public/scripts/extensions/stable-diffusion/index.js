@@ -65,6 +65,21 @@ import { MacrosParser } from '/scripts/macros.js';
 import { stripIllustrationMarkup } from './illustration/message.js';
 import { initIllustration } from './illustration/index.js';
 import { initImageActivity, beginImageActivityJob, openImageActivityPanel } from './activity.js';
+import {
+    applyGenerationConfig,
+    createGenerationPreset,
+    deleteGenerationPreset,
+    getGenerationPreset,
+    normalizeGenerationPresets,
+    patchGenerationPresetConfig,
+    pickGenerationConfig,
+    renameGenerationPreset,
+    selectGenerationPreset,
+    syncGenerationPresetFromSettings,
+} from './generation-presets.js';
+import { createLoraCatalog } from './lora/catalog.js';
+import { applyLorasToWorkflow, LORA_NAME_PLACEHOLDER } from './lora/workflow.js';
+import { buildLorasProperty, parseSlashLoras, validateLorasArg } from './lora/tool.js';
 
 export { MODULE_NAME };
 
@@ -107,6 +122,55 @@ const comfyTypes = {
     standard: 'standard',
     runpod_serverless: 'runpod_serverless',
 };
+
+const loraCatalog = createLoraCatalog({
+    readConfig: () => ({
+        source: extension_settings.sd.source,
+        comfyType: extension_settings.sd.comfy_type,
+        url: extension_settings.sd.comfy_url,
+        workflow: extension_settings.sd.comfy_workflow,
+    }),
+    requestWorkflow: async (name) => {
+        const response = await fetch('/api/sd/comfy/workflow', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ file_name: name }),
+        });
+        if (!response.ok) {
+            throw new Error(await response.text());
+        }
+        return JSON.parse(await response.json());
+    },
+    requestLoras: async (url) => {
+        const response = await fetch('/api/sd/comfy/loras', {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify({ url }),
+        });
+        if (!response.ok) {
+            throw new Error(await response.text());
+        }
+        return await response.json();
+    },
+});
+
+/**
+ * Reload the LoRA catalog for the current settings and rebuild the tool
+ * schema. A forced refresh drops the cached names for the current backend
+ * URL. A failed refresh leaves the catalog empty instead of blocking the
+ * settings panel, which stays usable while the backend is offline.
+ *
+ * @param {{ force?: boolean }} [options]
+ */
+async function refreshLoraCatalog({ force = false } = {}) {
+    try {
+        await loraCatalog.refresh({ force });
+    } catch (error) {
+        loraCatalog.invalidate();
+        console.warn('[sd] could not refresh the LoRA catalog', error);
+    }
+    registerFunctionTool();
+}
 
 const initiators = {
     command: 'command',
@@ -466,6 +530,195 @@ function toggleSourceControls() {
     });
 }
 
+const generationPresetState = { bucket: null, suppressSync: 0 };
+
+const GENERATION_PRESET_CONTROL_IDS = Object.freeze([
+    'sd_generation_preset',
+    'sd_generation_preset_new',
+    'sd_generation_preset_rename',
+    'sd_generation_preset_delete',
+    'sd_source',
+    'sd_comfy_type',
+]);
+
+const DERIVED_GENERATION_OPTION_KEYS = Object.freeze(['model', 'sampler', 'scheduler', 'vae']);
+
+function getGenerationPresetBucket() {
+    return extension_settings.sd.generationPresets;
+}
+
+function initializeGenerationPresets() {
+    const bucket = normalizeGenerationPresets(getGenerationPresetBucket(), {
+        currentConfig: pickGenerationConfig(extension_settings.sd),
+        defaultName: t`Default`,
+        now: Date.now(),
+    });
+    extension_settings.sd.generationPresets = bucket;
+    saveSettingsDebounced();
+    return bucket;
+}
+
+function requireGenerationPresetBucket() {
+    if (!generationPresetState.bucket) {
+        throw new Error('Generation presets are not ready yet. Try again in a moment.');
+    }
+    return generationPresetState.bucket;
+}
+
+function refreshGenerationPresetOptions() {
+    const select = $('#sd_generation_preset');
+    select.empty();
+    const bucket = getGenerationPresetBucket();
+    if (bucket.presets.length === 0) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.text = t`No presets`;
+        select.append(option);
+    }
+    for (const preset of bucket.presets) {
+        const option = document.createElement('option');
+        option.value = preset.id;
+        option.text = preset.name;
+        select.append(option);
+    }
+    select.val(bucket.currentId);
+}
+
+/**
+ * Run a programmatic settings refresh without writing it back into the current preset.
+ * The suppression counter is raised before the callback runs so events triggered
+ * synchronously inside it are already covered.
+ * @param {() => unknown} fn
+ */
+function withSuppressedGenerationPresetSync(fn) {
+    generationPresetState.suppressSync += 1;
+    let result;
+    try {
+        result = fn();
+    } catch (error) {
+        generationPresetState.suppressSync -= 1;
+        throw error;
+    }
+    return Promise.resolve(result).finally(() => {
+        generationPresetState.suppressSync -= 1;
+    });
+}
+
+function syncGenerationPresetFromUi(changedKey = '') {
+    if (generationPresetState.suppressSync > 0) {
+        return;
+    }
+    const bucket = generationPresetState.bucket;
+    if (!getGenerationPreset(bucket, bucket.currentId)) {
+        return;
+    }
+    const omitKeys = DERIVED_GENERATION_OPTION_KEYS.filter(key => key !== changedKey);
+    syncGenerationPresetFromSettings(bucket, extension_settings.sd, { now: Date.now(), omitKeys });
+    saveSettingsDebounced();
+}
+
+async function switchGenerationPreset(id) {
+    await withSuppressedGenerationPresetSync(async () => {
+        const bucket = generationPresetState.bucket;
+        const preset = getGenerationPreset(bucket, id);
+        if (!preset) {
+            throw new Error(`Generation preset not found: ${id}`);
+        }
+        applyGenerationConfig(extension_settings.sd, preset.config);
+        bucket.currentId = preset.id;
+        saveSettingsDebounced();
+        applySettingsToUi();
+        toggleSourceControls();
+        await loadSettingOptions();
+        applySettingsToUi();
+    });
+    await refreshLoraCatalog();
+    refreshGenerationPresetOptions();
+}
+
+async function onGenerationPresetNewClick() {
+    const bucket = generationPresetState.bucket;
+    const current = getGenerationPreset(bucket, bucket.currentId);
+    const input = await callGenericPopup(t`Preset name`, POPUP_TYPE.INPUT, t`Copy of ${current?.name || t`Preset`}`);
+    const name = input ? String(input).trim() : '';
+    if (!name) {
+        return;
+    }
+    try {
+        const preset = createGenerationPreset(bucket, {
+            name,
+            config: pickGenerationConfig(extension_settings.sd),
+            now: Date.now(),
+        });
+        selectGenerationPreset(bucket, preset.id);
+        refreshGenerationPresetOptions();
+        saveSettingsDebounced();
+        await switchGenerationPreset(preset.id);
+    } catch (error) {
+        toastr.error(String(error?.message || error), t`Image Generation`);
+    }
+}
+
+async function onGenerationPresetRenameClick() {
+    const bucket = generationPresetState.bucket;
+    const preset = getGenerationPreset(bucket, bucket.currentId);
+    if (!preset) {
+        toastr.warning(t`No preset selected.`, t`Image Generation`);
+        return;
+    }
+    const input = await callGenericPopup(t`Preset name`, POPUP_TYPE.INPUT, preset.name);
+    const name = input ? String(input).trim() : '';
+    if (!name || name === preset.name) {
+        return;
+    }
+    try {
+        renameGenerationPreset(bucket, preset.id, name, Date.now());
+        refreshGenerationPresetOptions();
+        saveSettingsDebounced();
+    } catch (error) {
+        toastr.error(String(error?.message || error), t`Image Generation`);
+    }
+}
+
+async function onGenerationPresetDeleteClick() {
+    const bucket = generationPresetState.bucket;
+    const preset = getGenerationPreset(bucket, bucket.currentId);
+    if (!preset) {
+        toastr.warning(t`No preset selected.`, t`Image Generation`);
+        return;
+    }
+    const confirmed = await callGenericPopup(t`Delete this generation preset?`, POPUP_TYPE.CONFIRM);
+    if (!confirmed) {
+        return;
+    }
+    try {
+        deleteGenerationPreset(bucket, preset.id);
+        refreshGenerationPresetOptions();
+        saveSettingsDebounced();
+        if (getGenerationPreset(bucket, bucket.currentId)) {
+            await switchGenerationPreset(bucket.currentId);
+        }
+    } catch (error) {
+        toastr.error(String(error?.message || error), t`Image Generation`);
+    }
+}
+
+function bindGenerationPresetControls() {
+    $('#sd_generation_preset').on('change', async function () {
+        await switchGenerationPreset(String($(this).val() || ''));
+    });
+    $('#sd_generation_preset_new').on('click', onGenerationPresetNewClick);
+    $('#sd_generation_preset_rename').on('click', onGenerationPresetRenameClick);
+    $('#sd_generation_preset_delete').on('click', onGenerationPresetDeleteClick);
+    $('#sd_container').on('input change', '.sd_settings input, .sd_settings select, .sd_settings textarea', function (event) {
+        const id = String(event.target?.id || '');
+        if (GENERATION_PRESET_CONTROL_IDS.includes(id)) {
+            return;
+        }
+        syncGenerationPresetFromUi(id.startsWith('sd_') ? id.slice(3) : '');
+    });
+}
+
 async function loadSettings() {
     // Initialize settings
     if (Object.keys(extension_settings.sd).length === 0) {
@@ -519,12 +772,18 @@ async function loadSettings() {
     registerFunctionTool();
 
     await loadSettingOptions();
+    await refreshLoraCatalog();
 }
 
 /**
  * Push the current image generation settings into the settings panel controls.
+ * Programmatic control refreshes never write back into the current preset.
  */
 function applySettingsToUi() {
+    withSuppressedGenerationPresetSync(() => applySettingsToUiInner());
+}
+
+function applySettingsToUiInner() {
     $('#sd_source').val(extension_settings.sd.source);
     $('#sd_scale').val(extension_settings.sd.scale).trigger('input');
     $('#sd_steps').val(extension_settings.sd.steps).trigger('input');
@@ -604,7 +863,12 @@ function applySettingsToUi() {
 export function createIllustrationBridge() {
     return {
         beginActivityJob: options => beginImageActivityJob(options),
-        async generateImage(prompt, { characterName = '', signal = undefined } = {}) {
+        async getAvailableLoras() {
+            const state = await loraCatalog.refresh({ force: true });
+            registerFunctionTool();
+            return { names: state.names, includeWeight: state.includeWeight };
+        },
+        async generateImage(prompt, { characterName = '', signal = undefined, loras = [] } = {}) {
             const controller = new AbortController();
             const forwardAbort = () => controller.abort(signal?.reason);
             if (signal?.aborted) {
@@ -635,6 +899,8 @@ export function createIllustrationBridge() {
                     initiators.tool,
                     controller.signal,
                     error => { capturedError = error; },
+                    null,
+                    loras,
                 );
                 if (capturedError) {
                     throw capturedError;
@@ -684,13 +950,13 @@ function getClosestKnownResolution() {
 }
 
 async function loadSettingOptions() {
-    return Promise.all([
+    return withSuppressedGenerationPresetSync(() => Promise.all([
         loadSamplers(),
         loadModels(),
         loadSchedulers(),
         loadVaes(),
         loadComfyWorkflows(),
-    ]);
+    ]));
 }
 
 function addPromptTemplates() {
@@ -1218,7 +1484,16 @@ async function onSourceChange() {
     extension_settings.sd.vae = null;
     toggleSourceControls();
     saveSettingsDebounced();
-    await loadSettingOptions();
+    try {
+        await loadSettingOptions();
+        await refreshLoraCatalog();
+    } finally {
+        patchGenerationPresetConfig(generationPresetState.bucket, generationPresetState.bucket?.currentId, {
+            source: extension_settings.sd.source,
+            comfy_type: extension_settings.sd.comfy_type,
+        });
+        saveSettingsDebounced();
+    }
 }
 
 async function onComfyTypeChange() {
@@ -1385,6 +1660,10 @@ function onComfyUrlInput() {
     saveSettingsDebounced();
 }
 
+async function onComfyUrlChange() {
+    await refreshLoraCatalog();
+}
+
 function onComfyRunPodUrlInput() {
     extension_settings.sd.comfy_runpod_url = String($('#sd_comfy_runpod_url').val());
     saveSettingsDebounced();
@@ -1395,9 +1674,10 @@ function onHFModelInput() {
     saveSettingsDebounced();
 }
 
-function onComfyWorkflowChange() {
+async function onComfyWorkflowChange() {
     extension_settings.sd.comfy_workflow = $('#sd_comfy_workflow').find(':selected').val();
     saveSettingsDebounced();
+    await refreshLoraCatalog();
 }
 
 function onBflUpsamplingInput() {
@@ -1416,6 +1696,8 @@ async function changeComfyWorkflow(_, name) {
         extension_settings.sd.comfy_workflow = name;
         $('#sd_comfy_workflow').val(extension_settings.sd.comfy_workflow);
         saveSettingsDebounced();
+        syncGenerationPresetFromUi();
+        await refreshLoraCatalog();
     } else {
         toastr.error(`ComfyUI Workflow "${name}" does not exist.`);
     }
@@ -1532,6 +1814,7 @@ async function validateComfyUrl() {
         }
 
         await loadSettingOptions();
+        await refreshLoraCatalog({ force: true });
         toastr.success('ComfyUI API connected.');
     } catch (error) {
         toastr.error(`Could not validate ComfyUI API: ${error.message}`);
@@ -3168,7 +3451,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         }
 
         // generate the image
-        imagePath = await sendGenerationRequest(generationType, prompt, negativePromptPrefix, characterName, callback, initiator, abortController.signal, null, activityJob);
+        imagePath = await sendGenerationRequest(generationType, prompt, negativePromptPrefix, characterName, callback, initiator, abortController.signal, null, activityJob, args?.loras);
     } catch (err) {
         // Check if this was an intentional abort by user or a server-side
         // abort from the request inspector. Both must behave like a stop:
@@ -3186,7 +3469,8 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         // errors here are most likely due to text generation failure
         // sendGenerationRequest mostly deals with its own errors
         const reason = err.error?.message || err.message || 'Unknown error';
-        const errorText = 'SD prompt text generation failed. ' + reason;
+        const isLoraError = typeof err?.code === 'string' && err.code.startsWith('lora_');
+        const errorText = isLoraError ? reason : 'SD prompt text generation failed. ' + reason;
         activityJob.setError(errorText);
         activityJob.finish('failed');
         toastr.error(errorText, t`Image Generation`);
@@ -3426,9 +3710,18 @@ async function generatePrompt(quietPrompt) {
  * @param {function} callback Callback function to be called after image generation
  * @param {string} initiator The initiator of the image generation
  * @param {AbortSignal} signal Abort signal to cancel the request
+ * @param {(error: Error) => void} [onError] Receives the error of a failed request
+ * @param {object} [activity] Image activity job
+ * @param {Array<{ name: string, weight: number }>} [loras] LoRAs to apply in order
  * @returns
  */
-async function sendGenerationRequest(generationType, prompt, additionalNegativePrefix, characterName, callback, initiator, signal, onError = null, activity = null) {
+async function sendGenerationRequest(generationType, prompt, additionalNegativePrefix, characterName, callback, initiator, signal, onError = null, activity = null, loras = []) {
+    if (loras.length > 0 && (extension_settings.sd.source !== sources.comfy || extension_settings.sd.comfy_type !== comfyTypes.standard)) {
+        const error = new Error(t`Dynamic LoRA is only available for the standard ComfyUI server type.`);
+        error.code = 'lora_source_unsupported';
+        throw error;
+    }
+
     const noCharPrefix = [generationMode.FREE, generationMode.BACKGROUND, generationMode.USER, generationMode.USER_MULTIMODAL, generationMode.FREE_EXTENDED];
     const isCharChat = this_chid !== undefined && !selected_group;
     const ignoreNoCharForSwipe = initiator === initiators.swipe && isCharChat;
@@ -3485,7 +3778,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
                             inner = await generateComfyRunPodImage(prefixedPrompt, negativePrompt, signal);
                             break;
                         case comfyTypes.standard:
-                            inner = await generateComfyImage(prefixedPrompt, negativePrompt, signal);
+                            inner = await generateComfyImage(prefixedPrompt, negativePrompt, signal, loras);
                             break;
                         default:
                             throw new Error('Unknown comfyUI server type.');
@@ -4312,9 +4605,10 @@ async function generateAimlapiImage(prompt, signal) {
  * @param {string} basePath - ST server endpoint for the service. '/api/sd/comfy' for local, '/api/sd/comfyrunpod' for serverless.
  * @param {string[]} placeholders - Array of substitutions to apply to the workflow.
  * @param {string} url - The url of the service to call. Passed to ST server.
+ * @param {Array<{ name: string, weight: number }>} [loras] - LoRAs to expand from the workflow template, in application order.
  * @returns {Promise<{format: string, data: string}>} - A promise that resolves when the image generation and processing are complete.
  */
-async function generateComfyImageCommon(prompt, negativePrompt, signal, basePath, placeholders, url) {
+async function generateComfyImageCommon(prompt, negativePrompt, signal, basePath, placeholders, url, loras = []) {
     const workflowResponse = await fetch('/api/sd/comfy/workflow', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -4369,15 +4663,18 @@ async function generateComfyImageCommon(prompt, negativePrompt, signal, basePath
     console.log(`{
         "prompt": ${workflow}
     }`);
+    const workflowPrompt = workflow.includes(LORA_NAME_PLACEHOLDER) || loras.length > 0
+        ? JSON.stringify({ prompt: applyLorasToWorkflow(JSON.parse(workflow), loras) })
+        : `{
+                "prompt": ${workflow}
+            }`;
     const promptResult = await fetch(`${basePath}/generate`, {
         method: 'POST',
         headers: getRequestHeaders(),
         signal: signal,
         body: JSON.stringify({
             url,
-            prompt: `{
-                "prompt": ${workflow}
-            }`,
+            prompt: workflowPrompt,
         }),
     });
     if (!promptResult.ok) {
@@ -4394,9 +4691,10 @@ async function generateComfyImageCommon(prompt, negativePrompt, signal, basePath
  * @param {string} prompt - The main instruction used to guide the image generation.
  * @param {string} negativePrompt - The instruction used to restrict the image generation.
  * @param {AbortSignal} signal - An AbortSignal object that can be used to cancel the request.
+ * @param {Array<{ name: string, weight: number }>} [loras] - LoRAs to apply to this image.
  * @returns {Promise<{format: string, data: string}>} - A promise that resolves when the image generation and processing are complete.
  */
-async function generateComfyImage(prompt, negativePrompt, signal) {
+async function generateComfyImage(prompt, negativePrompt, signal, loras = []) {
     const placeholders = [
         'model',
         'vae',
@@ -4407,7 +4705,7 @@ async function generateComfyImage(prompt, negativePrompt, signal) {
         'width',
         'height',
     ];
-    return generateComfyImageCommon(prompt, negativePrompt, signal, '/api/sd/comfy', placeholders, extension_settings.sd.comfy_url);
+    return generateComfyImageCommon(prompt, negativePrompt, signal, '/api/sd/comfy', placeholders, extension_settings.sd.comfy_url, loras);
 }
 
 /**
@@ -4902,6 +5200,7 @@ async function onComfyOpenWorkflowEditorClick() {
             el.attr('data-placeholder', `${this.value}`);
             checkPlaceholders();
             saveSettingsDebounced();
+            syncGenerationPresetFromUi('comfy_placeholders');
         });
         el.find('.sd_comfy_workflow_editor_custom_replace').val(placeholder.replace);
         el.find('.sd_comfy_workflow_editor_custom_replace').on('input', function () {
@@ -4910,11 +5209,13 @@ async function onComfyOpenWorkflowEditorClick() {
             }
             placeholder.replace = this.value;
             saveSettingsDebounced();
+            syncGenerationPresetFromUi('comfy_placeholders');
         });
         el.find('.sd_comfy_workflow_editor_custom_remove').on('click', () => {
             el.remove();
             extension_settings.sd.comfy_placeholders.splice(extension_settings.sd.comfy_placeholders.indexOf(placeholder));
             saveSettingsDebounced();
+            syncGenerationPresetFromUi('comfy_placeholders');
         });
     };
     $('#sd_comfy_workflow_editor_placeholder_add').on('click', () => {
@@ -4928,6 +5229,7 @@ async function onComfyOpenWorkflowEditorClick() {
         extension_settings.sd.comfy_placeholders.push(placeholder);
         addPlaceholderDom(placeholder);
         saveSettingsDebounced();
+        syncGenerationPresetFromUi('comfy_placeholders');
     });
     (extension_settings.sd.comfy_placeholders ?? []).forEach(placeholder => {
         addPlaceholderDom(placeholder);
@@ -4946,6 +5248,8 @@ async function onComfyOpenWorkflowEditorClick() {
         if (!response.ok) {
             const text = await response.text();
             toastr.error(`Failed to save workflow.\n\n${text}`);
+        } else {
+            await refreshLoraCatalog();
         }
     }
 }
@@ -4973,6 +5277,9 @@ async function onComfyNewWorkflowClick() {
     }
     saveSettingsDebounced();
     await loadComfyWorkflows();
+    if (response.ok) {
+        await refreshLoraCatalog();
+    }
     await delay(200);
     await onComfyOpenWorkflowEditorClick();
 }
@@ -4992,9 +5299,10 @@ async function onComfyDeleteWorkflowClick() {
     if (!response.ok) {
         const text = await response.text();
         toastr.error(`Failed to save workflow.\n\n${text}`);
+        return;
     }
     await loadComfyWorkflows();
-    onComfyWorkflowChange();
+    await onComfyWorkflowChange();
 }
 
 async function onComfyRenameWorkflowClick() {
@@ -5047,6 +5355,7 @@ async function onComfyRenameWorkflowClick() {
     extension_settings.sd.comfy_workflow = newName;
     saveSettingsDebounced();
     await loadComfyWorkflows();
+    await refreshLoraCatalog();
 }
 
 /**
@@ -5562,6 +5871,19 @@ function registerFunctionTool() {
         return ToolManager.unregisterFunctionTool('GenerateImage');
     }
 
+    const { names, includeWeight } = loraCatalog.getCached();
+    const lorasProperty = buildLorasProperty(names, { includeWeight });
+    const properties = {
+        prompt: {
+            type: 'string',
+            description: extension_settings.sd.prompts[generationMode.TOOL] || promptTemplates[generationMode.TOOL],
+        },
+    };
+    if (lorasProperty) {
+        properties.loras = lorasProperty;
+    }
+
+    ToolManager.unregisterFunctionTool('GenerateImage');
     ToolManager.registerFunctionTool({
         name: 'GenerateImage',
         displayName: 'Generate Image',
@@ -5572,12 +5894,7 @@ function registerFunctionTool() {
         parameters: Object.freeze({
             $schema: 'http://json-schema.org/draft-04/schema#',
             type: 'object',
-            properties: {
-                prompt: {
-                    type: 'string',
-                    description: extension_settings.sd.prompts[generationMode.TOOL] || promptTemplates[generationMode.TOOL],
-                },
-            },
+            properties,
             required: [
                 'prompt',
             ],
@@ -5586,7 +5903,9 @@ function registerFunctionTool() {
             if (!isValidState()) throw new Error('Image generation is not configured.');
             if (!args) throw new Error('Missing arguments');
             if (!args.prompt) throw new Error('Missing prompt');
-            const url = await generatePicture(initiators.tool, {}, args.prompt);
+            const loras = validateLorasArg(args.loras, { available: names, includeWeight });
+            if (!loras.ok) throw new Error(loras.error);
+            const url = await generatePicture(initiators.tool, { loras: loras.value }, args.prompt);
             return encodeURI(url);
         },
     });
@@ -5602,6 +5921,37 @@ export async function init() {
         name: 'imagine',
         returns: 'URL of the generated image, or an empty string if the generation failed',
         callback: async (args, trigger) => {
+            if (args?.loras !== undefined) {
+                try {
+                    const state = await loraCatalog.refresh({ force: true });
+                    registerFunctionTool();
+                    if (extension_settings.sd.source !== sources.comfy || extension_settings.sd.comfy_type !== comfyTypes.standard) {
+                        throw new Error(t`Dynamic LoRA is only available for the standard ComfyUI server type.`);
+                    }
+                    if (!state.template) {
+                        throw new Error(t`The current ComfyUI workflow has no %lora_name% template node.`);
+                    }
+                    if (state.names.length === 0) {
+                        throw new Error(t`The ComfyUI server reports no available LoRAs.`);
+                    }
+                    const parsed = parseSlashLoras(args.loras);
+                    if (!parsed.ok) {
+                        throw new Error(parsed.error);
+                    }
+                    const validated = validateLorasArg(parsed.value, { available: state.names, includeWeight: state.includeWeight });
+                    if (!validated.ok) {
+                        throw new Error(validated.error);
+                    }
+                    args.loras = validated.value;
+                } catch (error) {
+                    // The command callback swallows thrown errors, so a rejected
+                    // selection has to surface here and stop before the
+                    // arguments are applied.
+                    toastr.error(String(error?.message || error), t`Image Generation`);
+                    return '';
+                }
+            }
+
             const currentSettings = applyCommandArguments(args);
 
             try {
@@ -5646,6 +5996,14 @@ export async function init() {
                 typeList: [ARGUMENT_TYPE.STRING],
                 isRequired: false,
                 acceptsMultiple: false,
+            }),
+            SlashCommandNamedArgument.fromProps({
+                name: 'loras',
+                description: 'LoRAs to apply to this image, as name or name:weight',
+                typeList: [ARGUMENT_TYPE.STRING],
+                isRequired: false,
+                acceptsMultiple: true,
+                enumProvider: () => loraCatalog.getCached().names.map(name => new SlashCommandEnumValue(name)),
             }),
             SlashCommandNamedArgument.fromProps({
                 name: 'extend',
@@ -5889,6 +6247,7 @@ export async function init() {
             }
             option.selected = true;
             onStyleSelect();
+            syncGenerationPresetFromUi();
             return extension_settings.sd.style;
         },
     }));
@@ -5908,6 +6267,32 @@ export async function init() {
         helpString: '(workflowName) - change the workflow to be used for image generation with ComfyUI, e.g. <pre><code>/imagine-comfy-workflow MyWorkflow</code></pre>',
     }));
 
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name: 'imagine-preset',
+        aliases: ['sd-preset', 'img-preset'],
+        returns: 'a name of the current generation preset',
+        unnamedArgumentList: [
+            SlashCommandArgument.fromProps({
+                description: 'preset name',
+                typeList: [ARGUMENT_TYPE.STRING],
+                isRequired: false,
+                enumProvider: () => requireGenerationPresetBucket().presets.map(preset => new SlashCommandEnumValue(preset.name)),
+            }),
+        ],
+        callback: async (_args, name) => {
+            const bucket = requireGenerationPresetBucket();
+            if (!name) {
+                return getGenerationPreset(bucket, bucket.currentId)?.name || '';
+            }
+            const preset = bucket.presets.find(entry => entry.name === String(name));
+            if (!preset) {
+                const available = bucket.presets.length === 0 ? '(none)' : bucket.presets.map(entry => entry.name).join(', ');
+                throw new Error(`Generation preset not found: ${name}. Available: ${available}`);
+            }
+            await switchGenerationPreset(preset.id);
+            return preset.name;
+        },
+    }));
 
     const template = await renderExtensionTemplateAsync('stable-diffusion', 'settings', defaultSettings);
     $('#sd_container').append(template);
@@ -5958,6 +6343,7 @@ export async function init() {
     $('#sd_comfy_validate').on('click', validateComfyUrl);
     $('#sd_comfy_runpod_validate').on('click', validateComfyRunPodUrl);
     $('#sd_comfy_url').on('input', onComfyUrlInput);
+    $('#sd_comfy_url').on('change', onComfyUrlChange);
     $('#sd_comfy_runpod_url').on('input', onComfyRunPodUrlInput);
     $('#sd_comfy_workflow').on('change', onComfyWorkflowChange);
     $('#sd_comfy_open_workflow_editor').on('click', onComfyOpenWorkflowEditorClick);
@@ -6003,7 +6389,7 @@ export async function init() {
         saveSettingsDebounced();
     });
     $('#sd_models_refresh').on('click', async () => {
-        await loadModels();
+        await withSuppressedGenerationPresetSync(() => loadModels());
     });
     $('#sd_electronhub_quality').on('change', function () {
         extension_settings.sd.electronhub_quality = String($(this).val());
@@ -6053,6 +6439,9 @@ export async function init() {
     });
 
     await loadSettings();
+    generationPresetState.bucket = initializeGenerationPresets();
+    refreshGenerationPresetOptions();
+    bindGenerationPresetControls();
     $('body').addClass('sd');
     await initIllustration(createIllustrationBridge());
 
