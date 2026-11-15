@@ -88,6 +88,12 @@
     transform: translateX(-50%);
 }
 
+.luker-illustration-image {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+}
+
 .sd_illustration_block {
     margin-bottom: 8px;
 }
