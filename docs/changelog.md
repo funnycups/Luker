@@ -43,7 +43,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Client Apps
 
-- Optimized first-launch startup speed and storage usage in the iOS, HarmonyOS, and Android apps.
+- Optimized first-launch startup speed and storage usage in the iOS and Android apps.
 - Fixed the app failing to start when local service preparation was interrupted in the iOS and Android apps.
 - Fixed app updates wiping installed server plugins and third-party extensions in the HarmonyOS app.
 - Added retry and diagnostics export actions to the startup failure screen in the HarmonyOS app.

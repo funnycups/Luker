@@ -16,6 +16,7 @@ echo "==> Staging Luker project into resfile"
 node "${REPO_ROOT}/scripts/stage-mobile-runtime.mjs" \
   --repo-root "${REPO_ROOT}" \
   --output-dir "${RESFILE_DIR}" \
-  --bootstrap "${PROJECT_ROOT}/resfile-src/bootstrap.js"
+  --bootstrap "${PROJECT_ROOT}/resfile-src/bootstrap.js" \
+  --version-file "${RESFILE_DIR}/runtime-tree-version.txt"
 
 echo "==> resfile ready: ${RESFILE_DIR} ($(du -sh "${RESFILE_DIR}" | cut -f1))"

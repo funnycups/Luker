@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 export const RUNTIME_TREE_VERSION_FILE = '.runtime-tree-version';
+export const PACKAGED_RUNTIME_TREE_VERSION_FILE = 'runtime-tree-version.txt';
 
 const TOP_LEVEL_ITEMS = [
     'server.js',
@@ -261,7 +262,8 @@ export function computeRuntimeTreeVersion(rootDir) {
 
     function walk(currentDir, relativePrefix) {
         const entries = fs.readdirSync(currentDir, { withFileTypes: true })
-            .filter(entry => !(relativePrefix === '' && entry.name === RUNTIME_TREE_VERSION_FILE))
+            .filter(entry => !(relativePrefix === ''
+                && (entry.name === RUNTIME_TREE_VERSION_FILE || entry.name === PACKAGED_RUNTIME_TREE_VERSION_FILE)))
             .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
         for (const entry of entries) {

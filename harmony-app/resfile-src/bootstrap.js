@@ -2,17 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const RUNTIME_LAYOUT_VERSION = '5';
-const RUNTIME_VERSION_FILE = '.runtime-version';
 const RUNTIME_TREE_VERSION_FILE = '.runtime-tree-version';
+const PACKAGED_RUNTIME_TREE_VERSION_FILE = 'runtime-tree-version.txt';
+const RUNTIME_TREE_MARKER_FILE = '.bundle-tree-version';
 const SERVER_PLUGINS_ALIAS = '_server-plugins';
-const RUNTIME_ROOT_LOCAL_NAMES = new Set([
-    RUNTIME_VERSION_FILE,
-    'whitelist.txt',
-    'bootstrap.log',
-    SERVER_PLUGINS_ALIAS,
-    'data',
-]);
 
 function isSymbolicLink(targetPath) {
     try {
@@ -31,88 +24,91 @@ function pathExistsOrSymlink(targetPath) {
     }
 }
 
-function detachServerPluginsAlias(runtimeRoot) {
-    const aliasPath = path.join(runtimeRoot, SERVER_PLUGINS_ALIAS);
-    if (!pathExistsOrSymlink(aliasPath)) {
-        return;
-    }
-    if (isSymbolicLink(aliasPath)) {
-        fs.unlinkSync(aliasPath);
-        return;
-    }
-    throw new Error(`Server plugin runtime alias is occupied by a non-symlink: ${aliasPath}`);
-}
-
-function prepareServerPluginsAlias(runtimeRoot, serverPluginsRoot) {
-    detachServerPluginsAlias(runtimeRoot);
-    fs.mkdirSync(runtimeRoot, { recursive: true });
-    fs.mkdirSync(serverPluginsRoot, { recursive: true });
-    const pkgPath = path.join(serverPluginsRoot, 'package.json');
-    if (!fs.existsSync(pkgPath)) {
-        fs.writeFileSync(
-            pkgPath,
-            JSON.stringify({ name: 'sillytavern-plugins', type: 'commonjs' }),
-            'utf8',
-        );
-    }
-    fs.symlinkSync(serverPluginsRoot, path.join(runtimeRoot, SERVER_PLUGINS_ALIAS), 'dir');
-}
-
-function copyDirectoryChildrenIfMissing(sourceDir, targetDir) {
+/**
+ * Copies children that do not exist in the target directory. Used for the
+ * one-time migration from the dataRoot plugin and extension directories that
+ * the zero-copy layout introduced, without overwriting files already present
+ * in the runtime tree.
+ */
+function copyMissingChildren(sourceDir, targetDir) {
     if (!fs.existsSync(sourceDir)) {
-        return;
+        return 0;
     }
     fs.mkdirSync(targetDir, { recursive: true });
+    let copied = 0;
     for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
-        const srcChild = path.join(sourceDir, entry.name);
-        const dstChild = path.join(targetDir, entry.name);
-        if (fs.existsSync(dstChild)) {
+        const sourceChild = path.join(sourceDir, entry.name);
+        const targetChild = path.join(targetDir, entry.name);
+        if (pathExistsOrSymlink(targetChild)) {
             continue;
         }
-        fs.cpSync(srcChild, dstChild, { recursive: true, dereference: false });
+        fs.cpSync(sourceChild, targetChild, { recursive: true, dereference: true, force: false });
+        copied += 1;
     }
+    return copied;
 }
 
-function migrateLegacyHarmonyPaths({ runtimeRoot, dataRoot, serverPluginsRoot, globalExtensionsRoot, configPath }) {
+/**
+ * Removes top-level symlinks left by the zero-copy runtime layout. Copying
+ * over a symlink would write through it into the read-only bundle.
+ */
+function detachRuntimeSymlinks(runtimeRoot) {
     if (!fs.existsSync(runtimeRoot)) {
         return;
     }
+    for (const entry of fs.readdirSync(runtimeRoot, { withFileTypes: true })) {
+        if (entry.isSymbolicLink()) {
+            fs.unlinkSync(path.join(runtimeRoot, entry.name));
+        }
+    }
+}
 
+function migrateLegacyConfig({ runtimeRoot, configPath }) {
     const legacyConfig = path.join(runtimeRoot, 'config.yaml');
     if (!fs.existsSync(configPath) && !isSymbolicLink(legacyConfig) && fs.existsSync(legacyConfig)) {
         fs.mkdirSync(path.dirname(configPath), { recursive: true });
         fs.copyFileSync(legacyConfig, configPath);
     }
+}
 
-    const legacyPluginsDir = path.join(runtimeRoot, 'plugins');
-    if (!isSymbolicLink(legacyPluginsDir) && fs.existsSync(legacyPluginsDir)) {
-        copyDirectoryChildrenIfMissing(legacyPluginsDir, serverPluginsRoot);
+function migrateLegacyServerPlugins({ runtimeRoot, dataRoot, serverPluginsRoot }) {
+    const aliasPath = path.join(runtimeRoot, SERVER_PLUGINS_ALIAS);
+    if (pathExistsOrSymlink(aliasPath) && !isSymbolicLink(aliasPath)) {
+        copyMissingChildren(aliasPath, serverPluginsRoot);
+        fs.rmSync(aliasPath, { recursive: true, force: true });
     }
+    copyMissingChildren(path.join(dataRoot, 'plugins'), serverPluginsRoot);
+}
 
-    const legacyPublicDir = path.join(runtimeRoot, 'public');
-    const legacyExtensionsDir = path.join(runtimeRoot, 'public', 'scripts', 'extensions', 'third-party');
-    if (!isSymbolicLink(legacyPublicDir) && fs.existsSync(legacyExtensionsDir)) {
-        copyDirectoryChildrenIfMissing(legacyExtensionsDir, globalExtensionsRoot);
-    }
+function migrateLegacyGlobalExtensions({ dataRoot, globalExtensionsRoot }) {
+    copyMissingChildren(path.join(dataRoot, 'extensions', 'third-party'), globalExtensionsRoot);
 }
 
 function readRuntimeTreeVersion(sourceRoot) {
-    const versionFile = path.join(sourceRoot, RUNTIME_TREE_VERSION_FILE);
-    try {
-        const value = fs.readFileSync(versionFile, 'utf8').trim();
-        if (value) {
-            return value;
+    // The packaged HAP drops dotfiles, so the HarmonyOS build writes the same
+    // version to a plain file name as well.
+    for (const name of [PACKAGED_RUNTIME_TREE_VERSION_FILE, RUNTIME_TREE_VERSION_FILE]) {
+        try {
+            const value = fs.readFileSync(path.join(sourceRoot, name), 'utf8').trim();
+            if (value) {
+                return value;
+            }
+        } catch {
+            // try the next marker; fall back when running from an unstaged checkout
         }
-    } catch {
-        // Fallback when running from an unstaged checkout
     }
     return 'unstaged';
 }
 
 /**
- * Prepare the HarmonyOS writable `luker-runtime` directory using zero-copy
- * top-level symlinks into `sourceRoot` (`resfile/luker`) and persistent user
- * directories under `dataRoot`.
+ * Prepare the HarmonyOS writable runtime directory by copying the read-only
+ * bundle into it. HarmonyOS app sandboxes reject symlink creation, so the
+ * runtime cannot use the zero-copy layout that works on iOS and Android.
+ *
+ * The copy is a merge, never a wipe: server plugins, global third-party
+ * extensions, whitelist.txt, and any other user-created files stay in the
+ * runtime tree across app updates. The bundle tree version marker skips the
+ * copy on subsequent launches.
  *
  * @param {object} options
  * @param {string} options.sourceRoot
@@ -131,73 +127,76 @@ export function prepareHarmonyRuntime({
     const resolvedSource = path.resolve(sourceRoot);
     const resolvedRuntime = path.resolve(runtimeRoot);
     const resolvedData = path.resolve(dataRoot);
-    const serverPluginsRoot = path.join(resolvedData, 'plugins');
-    const globalExtensionsRoot = path.join(resolvedData, 'extensions', 'third-party');
+    const serverPluginsRoot = path.join(resolvedRuntime, 'plugins');
+    const globalExtensionsRoot = path.join(resolvedRuntime, 'public', 'scripts', 'extensions', 'third-party');
     const backupsRoot = path.join(resolvedData, 'backups');
     const configPath = path.join(resolvedData, 'config.yaml');
 
     fs.mkdirSync(resolvedData, { recursive: true });
     fs.mkdirSync(path.dirname(resolvedRuntime), { recursive: true });
-
-    detachServerPluginsAlias(resolvedRuntime);
-    migrateLegacyHarmonyPaths({
-        runtimeRoot: resolvedRuntime,
-        dataRoot: resolvedData,
-        serverPluginsRoot,
-        globalExtensionsRoot,
-        configPath,
-    });
-
     fs.mkdirSync(resolvedRuntime, { recursive: true });
+
+    // Preserve a config written by the previous copied runtime before the
+    // bundle copy can overwrite it. The server reads the dataRoot config.
+    migrateLegacyConfig({ runtimeRoot: resolvedRuntime, configPath });
+
+    // Detach any symlinks from the zero-copy layout before copying.
+    detachRuntimeSymlinks(resolvedRuntime);
+
+    const treeVersion = readRuntimeTreeVersion(resolvedSource);
+    const markerPath = path.join(resolvedRuntime, RUNTIME_TREE_MARKER_FILE);
+    let currentMarker = '';
+    try {
+        currentMarker = fs.readFileSync(markerPath, 'utf8').trim();
+    } catch {
+        // no marker yet — first launch or an update from the copied layout
+    }
+
+    const serverEntry = path.join(resolvedRuntime, 'server.js');
+    const copyNeeded = currentMarker !== treeVersion || !fs.existsSync(serverEntry);
+    const copiedAt = Date.now();
+    if (copyNeeded) {
+        log('BOOT', `staging runtime copy ${resolvedSource} -> ${resolvedRuntime} (tree=${treeVersion})`);
+        let copiedEntries = 0;
+        for (const entry of fs.readdirSync(resolvedSource, { withFileTypes: true })) {
+            if (entry.name === RUNTIME_TREE_VERSION_FILE || entry.name === PACKAGED_RUNTIME_TREE_VERSION_FILE) {
+                continue;
+            }
+            const sourceEntry = path.join(resolvedSource, entry.name);
+            const targetEntry = path.join(resolvedRuntime, entry.name);
+            if (entry.name === 'whitelist.txt' && pathExistsOrSymlink(targetEntry)) {
+                continue;
+            }
+            fs.cpSync(sourceEntry, targetEntry, {
+                recursive: true,
+                force: true,
+                dereference: true,
+            });
+            copiedEntries += 1;
+        }
+        fs.writeFileSync(markerPath, `${treeVersion}\n`, 'utf8');
+        log('BOOT', `runtime copy done in ${Date.now() - copiedAt}ms entries=${copiedEntries}`);
+    } else {
+        log('BOOT', 'runtime copy up to date; skipping');
+    }
+
     fs.mkdirSync(serverPluginsRoot, { recursive: true });
     fs.mkdirSync(globalExtensionsRoot, { recursive: true });
     fs.mkdirSync(backupsRoot, { recursive: true });
 
-    const treeVersion = readRuntimeTreeVersion(resolvedSource);
-    const markerValue = `layout=${RUNTIME_LAYOUT_VERSION};tree=${treeVersion};source=${resolvedSource}`;
-    const sourceEntries = fs.readdirSync(resolvedSource, { withFileTypes: true })
-        .filter(entry => entry.name !== RUNTIME_TREE_VERSION_FILE);
+    // The zero-copy build kept these under dataRoot. Move them into the
+    // runtime tree once so the server plugin loader sees the runtime layout.
+    migrateLegacyServerPlugins({ runtimeRoot: resolvedRuntime, dataRoot: resolvedData, serverPluginsRoot });
+    migrateLegacyGlobalExtensions({ dataRoot: resolvedData, globalExtensionsRoot });
 
-    const sourceNames = new Set();
-    let linkedCount = 0;
-    let skippedCount = 0;
-
-    for (const entry of sourceEntries) {
-        sourceNames.add(entry.name);
-        const srcPath = path.join(resolvedSource, entry.name);
-        const dstPath = path.join(resolvedRuntime, entry.name);
-
-        if (isSymbolicLink(dstPath)) {
-            const currentTarget = fs.readlinkSync(dstPath);
-            if (currentTarget === srcPath && fs.existsSync(dstPath)) {
-                skippedCount += 1;
-                continue;
-            }
-            fs.unlinkSync(dstPath);
-        } else if (pathExistsOrSymlink(dstPath)) {
-            fs.rmSync(dstPath, { recursive: true, force: true });
-        }
-
-        const srcStat = fs.statSync(srcPath);
-        fs.symlinkSync(srcPath, dstPath, srcStat.isDirectory() ? 'dir' : 'file');
-        linkedCount += 1;
+    const pkgPath = path.join(serverPluginsRoot, 'package.json');
+    if (!fs.existsSync(pkgPath)) {
+        fs.writeFileSync(
+            pkgPath,
+            JSON.stringify({ name: 'sillytavern-plugins', type: 'commonjs' }),
+            'utf8',
+        );
     }
-
-    for (const existing of fs.readdirSync(resolvedRuntime, { withFileTypes: true })) {
-        if (RUNTIME_ROOT_LOCAL_NAMES.has(existing.name) || sourceNames.has(existing.name)) {
-            continue;
-        }
-        const fullExisting = path.join(resolvedRuntime, existing.name);
-        if (isSymbolicLink(fullExisting)) {
-            fs.unlinkSync(fullExisting);
-        } else {
-            fs.rmSync(fullExisting, { recursive: true, force: true });
-        }
-    }
-
-    fs.writeFileSync(path.join(resolvedRuntime, RUNTIME_VERSION_FILE), `${markerValue}\n`, 'utf8');
-    prepareServerPluginsAlias(resolvedRuntime, serverPluginsRoot);
-    log('BOOT', `runtime links ready linked=${linkedCount} skipped=${skippedCount} marker=${markerValue}`);
 
     const prebuiltCandidate = path.join(resolvedRuntime, '_prebuilt-bundles');
     const prebuiltBundlesDir = fs.existsSync(prebuiltCandidate) ? prebuiltCandidate : null;
@@ -262,7 +261,6 @@ async function runMain() {
     if (prepared.prebuiltBundlesDir && !process.env.LUKER_PREBUILT_BUNDLES_DIR) {
         process.env.LUKER_PREBUILT_BUNDLES_DIR = prepared.prebuiltBundlesDir;
     }
-    process.env.LUKER_SERVER_PLUGINS_LOAD_PATH = path.join(prepared.runtimeRoot, SERVER_PLUGINS_ALIAS);
 
     process.chdir(prepared.runtimeRoot);
     appendLog('BOOT', `sourceRoot=${sourceRoot}`);

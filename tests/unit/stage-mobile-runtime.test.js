@@ -151,6 +151,56 @@ describe('stage-mobile-runtime', () => {
         expect(fs.existsSync(path.join(outputDir, 'node_modules', '@types'))).toBe(false);
     });
 
+    test('writes the packaged version file without feeding it back into repeated staging', () => {
+        const repoRoot = makeTempDir('luker-stage-idem-repo-');
+        const outputDir = makeTempDir('luker-stage-idem-out-');
+        tempDirs.push(repoRoot, outputDir);
+
+        fs.writeFileSync(path.join(repoRoot, 'server.js'), 'console.log("server");\n');
+        fs.writeFileSync(path.join(repoRoot, 'package.json'), JSON.stringify({ name: 'luker' }));
+        fs.writeFileSync(path.join(repoRoot, 'package-lock.json'), JSON.stringify({ name: 'luker', lockfileVersion: 3 }));
+        fs.writeFileSync(path.join(repoRoot, 'webpack.config.js'), 'export default {};\n');
+        fs.writeFileSync(path.join(repoRoot, 'plugins.js'), 'export default {};\n');
+        fs.mkdirSync(path.join(repoRoot, 'public', 'scripts'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'public', 'scripts', 'app.js'), 'console.log("app");\n');
+        fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'src', 'index.js'), 'export const ok = true;\n');
+        fs.mkdirSync(path.join(repoRoot, 'node_modules'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'default'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'default', 'config.yaml'), 'port: 8000\n');
+        fs.mkdirSync(path.join(repoRoot, 'plugins'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'plugins', 'keep.txt'), 'plugin\n');
+        fs.mkdirSync(path.join(repoRoot, 'dist'), { recursive: true });
+        for (const bundle of ['lib.core.bundle.js', 'lib.optional.bundle.js', 'codemirror.bundle.js']) {
+            fs.writeFileSync(path.join(repoRoot, 'dist', bundle), `// ${bundle}\n`);
+        }
+
+        const versionFile = path.join(outputDir, 'runtime-tree-version.txt');
+        const fakeGitExec = (_cmd, args) => {
+            const target = args[args.length - 1];
+            if (target === 'public') return 'public/scripts/app.js\0';
+            if (target === 'default') return 'default/config.yaml\0';
+            if (target === 'plugins') return 'plugins/keep.txt\0';
+            return '';
+        };
+
+        const first = stageMobileRuntime({
+            repoRoot,
+            outputDir,
+            versionFilePath: versionFile,
+            execFileSyncImpl: fakeGitExec,
+        });
+        expect(fs.readFileSync(versionFile, 'utf8').trim()).toBe(first.treeVersion);
+
+        const second = stageMobileRuntime({
+            repoRoot,
+            outputDir,
+            versionFilePath: versionFile,
+            execFileSyncImpl: fakeGitExec,
+        });
+        expect(second.treeVersion).toBe(first.treeVersion);
+    });
+
     test('writeDeterministicTar creates a POSIX USTAR/PAX tar archive that preserves short and >100 char paths', () => {
         const srcDir = makeTempDir('luker-tar-src-');
         const extractDir = makeTempDir('luker-tar-extract-');
