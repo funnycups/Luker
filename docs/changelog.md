@@ -22,6 +22,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Allowed Memory Graph crawl candidate limit to be set to 0 for no limit.
 - Changed Memory Graph read API view fields to snake_case.
+- Aligned Memory Graph extraction, crawl, and compression prompts with the fields the runtime provides.
 
 ### Fixes
 

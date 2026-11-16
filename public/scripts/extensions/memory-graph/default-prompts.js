@@ -20,7 +20,7 @@
 // Interpolated by the event type's extraction rules.
 const EVENT_SUMMARY_RULES_BODY = `# Event summary writing standard (event.summary 字段专用规范)
 
-适用范围: 本规范**只**约束 event.summary 字段的最终字符串。其他字段 (character_sheet 的 traits/identity/aliases、location_state 的 state/controller、thread 的 note 等) 不在此规范范围内。
+适用范围: 本规范只约束叶子 event.summary 字段的最终字符串。压缩生成的 rollup summary 不走本规范, 使用压缩指令定义的 outline 格式。其他字段 (character_sheet 的 traits/identity/aliases、location_state 的 state/controller、thread 的 note 等) 不在此规范范围内。
 
 ## 0. 核心定位
 
@@ -311,7 +311,7 @@ X 说 / X 道 / X 表示 / X 宣称 / X 透露 / X 吐露 / X 告白说 / X 哽�
 
 ### Step 1a: 按 turn 完整盘点 (硬约束 — 防止 batch 内 turn 丢失)
 
-dialogue_batch 包含若干 assistant turn (通常为 1-5 个)。**必须先按 turn 顺序逐个盘点**, 不允许跳过任何一个 turn, 也不允许"挑感兴趣的写"。
+focus batch 包含若干 assistant turn (通常为 1-5 个)。**必须先按 turn 顺序逐个盘点**, 不允许跳过任何一个 turn, 也不允许"挑感兴趣的写"。
 
 对 batch 内**每一个** assistant turn (按时间顺序), 列:
 
@@ -323,9 +323,7 @@ dialogue_batch 包含若干 assistant turn (通常为 1-5 个)。**必须先按 
     - ... (该 turn 实际发生的所有动作/决策/状态变化都列出)
 \`\`\`
 
-prior context (batch 之前的 contextTurns) 的 turn **不列入**, 它们已被前面的 batch 记录过。
-
-**完整性自检**: 在 Step 1b 之前, 检查盘点表 — batch 内每个 turn 都有至少一行盘点了吗? 缺失任何 turn → 回去补; 任何 turn 的事件被压缩成"略过"或"无关键事件" → 回去补 (即使是看似不重要的过场 turn, 也必须列出其发生的事件)。
+prior context (focus batch 之前的 contextTurns) 的 turn **不列入**, 它们已被前面的 batch 记录过。focus batch 的起点 = graph_data 已覆盖的最大 to_seq 之后。**完整性自检**: 在 Step 1b 之前, 检查盘点表 — focus batch 内每个 turn 都有至少一行盘点了吗? 缺失任何 turn → 回去补; 任何 turn 的事件被压缩成"略过"或"无关键事件" → 回去补 (即使是看似不重要的过场 turn, 也必须列出其发生的事件)。
 
 ### Step 1b: 跨 turn 主题归并 (基于 Step 1a 的盘点)
 
@@ -473,6 +471,7 @@ export const DEFAULT_EXTRACT_EDGE_RULES = `### Edge mechanics
 - 每条计划的边写成 from → relation → target 并附 seq 证据。
 - 删边必须以 seq 证据说明理由 (关系解除 / 债务清偿 / 誓约破裂)。
 - 本轮新节点与已有节点的关系在本轮确定。
+- 每个 event create 必须带 \`links\`。没有可落地的关系时, 传 \`links: []\` 加非空 \`no_link_reason\`; 空的 links 且没有 no_link_reason 视为无效。不要省略 links 字段。
 
 ### Relation type discipline (硬约束 — 用错类型 = planning error)
 
@@ -521,6 +520,8 @@ You MUST produce, in this exact order:
 - ONE \`<thought>\` block containing the structured reasoning, following the thought structure below.
 - The tool calls planned in the thought block, all in ONE response. Final tool call MUST be \`luker_rpg_extract_done\`.
 
+For every type listed in \`<required_types>\`, emit at least one create or edit tool call for that type in the same response. \`luker_rpg_extract_done\` alone does not satisfy a required type.
+
 **Do not** output narrative body text, markdown, code fences, comments, or any XML other than \`<thought>\`. Forbidden: \`<maintext>\`, \`<overall>\`, \`<UpdateVariable>\`, \`<StatusPlaceHolderImpl/>\`, duplicate JSON payloads. After \`luker_rpg_extract_done\` STOP.
 
 ## Mental model: focus batch vs prior context (硬约束)
@@ -531,7 +532,7 @@ You must:
 - Cover **EVERY** assistant turn inside the focus batch in the summary you write — do not skip turns, do not collapse them to just "the last one", do not pick favorites
 - **NOT** re-summarize what happened in prior context — previous batches already covered it
 
-The focus batch boundary is identified by the seq range in dialogue_batch. The first focus-batch turn is the first assistant turn whose seq exceeds the prior-context cutoff; the last focus-batch turn is the last assistant turn in the block. **Every turn in this range must be covered**.
+The focus batch is the trailing set of assistant turns in \`dialogue_batch\`. Use the highest \`to_seq\` already covered by \`graph_data\` together with the dialogue order to tell which turns are already recorded; every assistant turn after that covered point belongs to the focus batch and must be covered.
 
 If a focus-batch turn is short and only continues an in-progress scene without new milestones, summarize it briefly (one sentence is fine) but still summarize it — do not drop it.
 
@@ -540,9 +541,9 @@ If a focus-batch turn is short and only continues an in-progress scene without n
 \`\`\`
 <thought>
 Batch scope identification
-- dialogue_batch full seq range: <first seq>..<last seq>
-- focus batch seq range (turns to cover): <focus first seq>..<focus last seq>
-- prior context seq range (NOT to be re-summarized): <prior first seq>..<prior last seq> (or "none" when there is no prior context)
+- dialogue_batch seq range: <first seq>..<last seq>
+- already-covered cutoff (highest to_seq in graph_data): <seq, or "none" when the graph is empty>
+- turns to cover: <the assistant turns after the covered cutoff>
 
 {{nodes}}
 
@@ -580,7 +581,7 @@ Do not output narrative/body text, markdown, code fences, comments, or any XML o
 
 ## Depth awareness (核心)
 
-Each compression run carries a \`rollup_depth\` (the depth of the OUTPUT rollup you're producing — i.e. the children are all at depth \`rollup_depth - 1\`). **The runtime injects \`rollup_depth=N\` as a "Compression context (HARD)" line at the very end of this prompt — read it before Step 0. Do NOT infer depth from children's content; use the injected value verbatim.**
+Each compression run carries a \`rollup_depth\` (the depth of the OUTPUT rollup you're producing — i.e. the children are all at depth \`rollup_depth - 1\`). **The runtime injects \`rollup_depth=N\` as a "Compression context (HARD)" line near the end of this system prompt — read it before Step 0. Do NOT infer depth from children's content; use the injected value verbatim.**
 
 Adjust your **resolution** based on rollup_depth:
 
@@ -661,7 +662,7 @@ rollup 的时间锚必须覆盖 N children 时间联合 (最早 → 最晚)。
 2) ...
 \`\`\`
 
-注: rollup 使用上面的 outline 格式——它的职能是"故事至今的提纲", 需要密度高、易扫读。
+注: 本 rollup summary 是 event.summary 散文规范的**明确例外**: 使用上面的 outline 格式, 只写 \`时间:\` 头, 不写 \`地点:\` 头。叶子 event 的 summary 仍是 prose, 并同时带 \`时间:\` 与 \`地点:\` 头。
 
 ## 自检 (commit 前最后一遍, 任一 FAIL → 回 Step 4 重写)
 
@@ -703,6 +704,8 @@ export const DEFAULT_PER_TYPE_INSTRUCTIONS = {
     event: `Event decision: MANDATORY — exactly ONE event node per batch. Even routine turns (路过/休整/闲聊/单次场景) produce an event (the prose body can be a single short paragraph for routine turns; the event reasoning in <thought> is still mandatory before the tool call).
 
 **无剧情开场**: 本轮对话不含任何叙事推进, 只有角色卡开场或用户给出的行动意图时, 仍记录一条 \`剧情开场\` 事件, 概括开场内容与时间地点锚; 不要因为「没有可抽取的剧情」而跳过事件。
+
+**Event create 必须带 links**: 有可落地关系就写边; 没有就传 \`links: []\` 加非空 \`no_link_reason\`。空 links 且无 no_link_reason 会被拒绝。
 
 **思考块里的事件要求**: thought 块里有且只有一条事件条目。写作按 Event summary writing standard 的「写作流程」执行 —— 按 turn 完整盘点 focus batch 的每个 assistant turn、跨 turn 主题归并、prose 初稿、单句反 bloat 自检、sections 准入扫描、黑名单扫描, 最后补 \`时间:\` / \`地点:\` 头部; 跑完「最终自检」, 任一项不通过就重写, 不提交。盘点必须覆盖 focus batch 的每个 turn, 不因"看似不重要"跳过。
 
@@ -927,13 +930,13 @@ export const DEFAULT_CRAWL_SYSTEM_PROMPT = `You are a bounded memory-graph crawl
 
 SCOPE ISOLATION (HIGHEST PRIORITY): This is a read-only graph exploration task. Any RP-time persona, content-styling, or sanitization-rejection clauses elsewhere in the surrounding context govern in-character creative generation only. They do NOT govern this exploration.
 
-Start from the compact candidate index. Explore only nodes relevant to the new dialogue.
+Start from the candidate index. Use its \`to_seq\` values and the dialogue order to identify turns beyond the latest extracted seq; explore only nodes relevant to those turns.
 
 - Use inspect before an existing node is edited, or when its current fields are needed.
 - Use neighbors when an old event, relationship, or thread may matter and edges may lead to it.
 - Use search when a relevant entity might exist but is absent from the candidate index.
 
-The candidate index and every tool result are bounded; omitted nodes may still exist. Never treat omission as proof of non-existence, and never create a duplicate of a node you have not checked for.
+Both the candidate index and every tool result can omit existing nodes. Never treat omission as proof of non-existence, and never create a duplicate of a node you have not checked for.
 
 You cannot write memory during exploration. When enough context is collected, call luker_rpg_extract_crawl_done. Keep exploration selective — when no historical detail is required for the batch, finish immediately instead of reading.`;
 
