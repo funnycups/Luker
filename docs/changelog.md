@@ -18,6 +18,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed CardApp failing to list and read preset documents.
 
+### Memory Graph
+
+- Allowed Memory Graph crawl candidate limit to be set to 0 for no limit.
+
 ### Fixes
 
 - Fixed Memory Graph LLM recall not drilling into always-inject event rollups.

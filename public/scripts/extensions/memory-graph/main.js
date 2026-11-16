@@ -75,12 +75,14 @@ import {
     ADVANCED_SETTING_DEFAULTS,
     applyAdvancedSettings,
     normalizeAdvancedSettings,
+    normalizeCrawlCandidateLimit,
     normalizeExtractExcludeRecentTurns,
     sanitizeRecallQueryMessages,
 } from './config-iteration/advanced-settings.js';
 export {
     applyAdvancedSettings,
     normalizeAdvancedSettings,
+    normalizeCrawlCandidateLimit,
     normalizeExtractExcludeRecentTurns,
     sanitizeRecallQueryMessages,
 };
@@ -5564,7 +5566,7 @@ function buildCrawlBriefRow(node) {
 async function buildExtractionCrawlGraph(context, store, settings, schema, messageBatch, options = {}) {
     const { getMemoryGraphReadApi } = await import('./read-api.js');
     const readApi = getMemoryGraphReadApi(store, context);
-    const limit = Math.max(10, Math.min(100, Math.floor(Number(settings?.extractCrawlCandidateLimit) || 40)));
+    const limit = normalizeCrawlCandidateLimit(settings?.extractCrawlCandidateLimit);
     const maxReads = Math.max(1, Math.min(30, Math.floor(Number(settings?.extractCrawlMaxReads) || 12)));
     const maxRounds = Math.max(1, Math.min(5, Math.floor(Number(settings?.extractCrawlMaxRounds) || 3)));
     // as-of cutoff: the rebuild-from-seq replay path calls this against a live
@@ -5587,9 +5589,9 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
         // short clause of content to be worth prompt tokens.
         .filter(item => item.trim().length > 8)
         .join('\n');
-    const visibleCandidates = Array.from(readApi.listVisibleCandidates({ excludeRecentMessages: 0, seqWindow: maxSeq === null ? undefined : { to: maxSeq } }) || [])
-        .filter(isAsOfNode)
-        .slice(0, limit);
+    const candidatePool = Array.from(readApi.listVisibleCandidates({ excludeRecentMessages: 0, seqWindow: maxSeq === null ? undefined : { to: maxSeq } }) || [])
+        .filter(isAsOfNode);
+    const visibleCandidates = limit > 0 ? candidatePool.slice(0, limit) : candidatePool;
     const candidates = visibleCandidates
         .map(node => extractCrawlBrief({ id: node?.id }, readApi, undefined) || buildCrawlBriefRow(node))
         .filter(node => node && node.id);
@@ -5730,7 +5732,8 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
     for (const value of selected.values()) {
         if (value && value.id) nodeMap.set(String(value.id), value);
     }
-    const nodes = Array.from(nodeMap.values()).slice(0, limit + maxReads * 2);
+    const allNodes = Array.from(nodeMap.values());
+    const nodes = limit > 0 ? allNodes.slice(0, limit + maxReads * 2) : allNodes;
     const ids = new Set(nodes.map(node => String(node.id || '')).filter(Boolean));
     const edges = readApi.projectEdges({ visibleNodeIds: ids, excludeInternal: false });
     // True as-of graph total, not the crawl slice size. The extraction prompt
@@ -14634,7 +14637,7 @@ function hydrateAdvancedTabFields(root, source) {
     root.find('#luker_rpg_memory_advanced_extract_mode').val(String(source.extractMode || defaultSettings.extractMode));
     root.find('#luker_rpg_memory_advanced_extract_concurrent').prop('checked', source.extractConcurrent === true);
     root.find('#luker_rpg_memory_advanced_extract_crawl_rounds').val(String(Math.max(1, Math.min(5, Number(source.extractCrawlMaxRounds ?? defaultSettings.extractCrawlMaxRounds)))));
-    root.find('#luker_rpg_memory_advanced_extract_crawl_candidates').val(String(Math.max(10, Math.min(100, Number(source.extractCrawlCandidateLimit ?? defaultSettings.extractCrawlCandidateLimit)))));
+    root.find('#luker_rpg_memory_advanced_extract_crawl_candidates').val(String(normalizeCrawlCandidateLimit(source.extractCrawlCandidateLimit ?? defaultSettings.extractCrawlCandidateLimit)));
     root.find('#luker_rpg_memory_advanced_extract_crawl_reads').val(String(Math.max(1, Math.min(30, Number(source.extractCrawlMaxReads ?? defaultSettings.extractCrawlMaxReads)))));
     root.find('#luker_rpg_memory_advanced_extract_system_prompt').val(String(source.extractTemplate || DEFAULT_EXTRACT_TEMPLATE));
     root.find('#luker_rpg_memory_advanced_extract_edge_rules').val(String(source.extractEdgeRules || DEFAULT_EXTRACT_EDGE_RULES));
@@ -14650,6 +14653,7 @@ function hydrateAdvancedTabFields(root, source) {
 
 function readAdvancedTabFields(root) {
     if (!root?.length) return null;
+    const crawlCandidateLimitRaw = String(root.find('#luker_rpg_memory_advanced_extract_crawl_candidates').val() ?? '').trim();
     return {
         includeWorldInfoWithPreset: Boolean(root.find('#luker_rpg_memory_advanced_include_world_info').prop('checked')),
         recentRawTurns: Number(root.find('#luker_rpg_memory_advanced_recent_raw_turns').val()),
@@ -14665,7 +14669,9 @@ function readAdvancedTabFields(root) {
         extractMode: String(root.find('#luker_rpg_memory_advanced_extract_mode').val() || defaultSettings.extractMode),
         extractConcurrent: Boolean(root.find('#luker_rpg_memory_advanced_extract_concurrent').prop('checked')),
         extractCrawlMaxRounds: Number(root.find('#luker_rpg_memory_advanced_extract_crawl_rounds').val()),
-        extractCrawlCandidateLimit: Number(root.find('#luker_rpg_memory_advanced_extract_crawl_candidates').val()),
+        extractCrawlCandidateLimit: crawlCandidateLimitRaw === ''
+            ? defaultSettings.extractCrawlCandidateLimit
+            : normalizeCrawlCandidateLimit(crawlCandidateLimitRaw),
         extractCrawlMaxReads: Number(root.find('#luker_rpg_memory_advanced_extract_crawl_reads').val()),
         extractTemplate: String(root.find('#luker_rpg_memory_advanced_extract_system_prompt').val() || '').trim(),
         extractEdgeRules: String(root.find('#luker_rpg_memory_advanced_extract_edge_rules').val() || '').trim(),

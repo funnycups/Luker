@@ -281,7 +281,7 @@ function buildAdvancedTabHtml(deps) {
                 <input id="luker_rpg_memory_advanced_extract_crawl_rounds" class="text_pole" type="number" min="1" max="5" step="1" />
             </label>
             <label>${escapeHtml(i18n('Crawl candidate limit'))}${fh('About Crawl candidate limit', 'Crawl candidate limit help body')}
-                <input id="luker_rpg_memory_advanced_extract_crawl_candidates" class="text_pole" type="number" min="10" max="100" step="1" />
+                <input id="luker_rpg_memory_advanced_extract_crawl_candidates" class="text_pole" type="number" min="0" max="100" step="1" />
             </label>
             <label>${escapeHtml(i18n('Crawl read budget'))}${fh('About Crawl read budget', 'Crawl read budget help body')}
                 <input id="luker_rpg_memory_advanced_extract_crawl_reads" class="text_pole" type="number" min="1" max="30" step="1" />

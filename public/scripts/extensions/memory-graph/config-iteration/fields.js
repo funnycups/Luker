@@ -57,7 +57,7 @@ const REGISTRY = [
     intField('extractExcludeRecentTurns', 'extraction', 'Exclude latest N assistant turns from graph extraction', 'Number of newest assistant turns withheld from extraction.', 0, { min: 0 }),
     boolField('extractConcurrent', 'extraction', 'Concurrent extraction', 'Run extraction for different node types concurrently instead of sequentially.', false),
     intField('extractCrawlMaxRounds', 'extraction', 'Crawl max rounds', 'Maximum number of crawl read rounds before extraction starts.', 3, { min: 1, max: 5 }),
-    intField('extractCrawlCandidateLimit', 'extraction', 'Crawl candidate limit', 'Maximum number of candidate nodes listed per crawl round.', 40, { min: 10, max: 100 }),
+    intField('extractCrawlCandidateLimit', 'extraction', 'Crawl candidate limit', 'Maximum number of candidate nodes listed per crawl round. 0 means unlimited.', 40, { min: 0, max: 100 }),
     intField('extractCrawlMaxReads', 'extraction', 'Crawl read budget', 'Maximum number of node reads allowed in one crawl extraction.', 12, { min: 1, max: 30 }),
     textField('extractTemplate', 'extraction', 'Extraction Template', 'System template for the extraction request. Must keep the {{nodes}} and {{edges}} markers.', DEFAULT_EXTRACT_TEMPLATE, { markers: ['{{nodes}}', '{{edges}}'] }),
     textField('extractEdgeRules', 'extraction', 'Edge Rules', 'Edge rules appended to the extraction request.', DEFAULT_EXTRACT_EDGE_RULES),

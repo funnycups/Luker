@@ -83,6 +83,22 @@ function normalizeText(def, input, base) {
 }
 
 /**
+ * Normalize the crawl candidate limit. 0 means unlimited; positive values
+ * clamp to the registry bounds. Empty, non-numeric, and negative values fall
+ * back instead of silently turning into the unlimited sentinel.
+ */
+export function normalizeCrawlCandidateLimit(value, fallback = 40) {
+    const def = CONFIG_FIELDS['settings.extractCrawlCandidateLimit'];
+    const rawText = value === null || value === undefined ? '' : String(value).trim();
+    const raw = rawText === '' ? NaN : Number(rawText);
+    const fallbackNum = Number(fallback);
+    const candidate = Number.isFinite(raw) && raw >= 0
+        ? raw
+        : (Number.isFinite(fallbackNum) && fallbackNum >= 0 ? fallbackNum : def.defaultValue);
+    return Math.max(def.min, Math.min(def.max, Math.floor(candidate)));
+}
+
+/**
  * Normalize a settings snapshot against a fallback source. Returns every
  * registered key; text slots that only repeat a default stay empty unless
  * the field is explicitly seeded from the default.
@@ -94,7 +110,9 @@ export function normalizeAdvancedSettings(source = null, fallbackSource = null) 
     for (const def of Object.values(CONFIG_FIELDS)) {
         switch (def.kind) {
             case 'int':
-                normalized[def.key] = normalizeInt(def, input, base);
+                normalized[def.key] = def.key === 'extractCrawlCandidateLimit'
+                    ? normalizeCrawlCandidateLimit(input[def.key], base[def.key] ?? def.defaultValue)
+                    : normalizeInt(def, input, base);
                 break;
             case 'bool':
                 normalized[def.key] = normalizeBool(def, input, base);
