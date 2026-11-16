@@ -5,6 +5,7 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { getConfigValue } from './util.js';
 import { ByteBudgetLedger } from './util/byte-budget.js';
+import { getGlobalProxyInfo } from './request-proxy.js';
 import { joinReasoningDetailsText, mergeReasoningDetails } from '../public/scripts/util/reasoning-details.js';
 
 const RING_BUFFER_SIZE = 200;
@@ -301,6 +302,43 @@ export function attachInspectionEndpoint(request, endpoint, apiKey, wirePayload)
 }
 
 /**
+ * Remove credentials from a proxy URL. Inspector entries are user-exportable
+ * (JSON export, diagnostics bundles), so a proxy password must never reach the
+ * stored payload.
+ * @param {string} raw Proxy URL
+ * @returns {string} URL without userinfo, or '' when it cannot be parsed
+ */
+function maskProxyUrl(raw) {
+    try {
+        const parsed = new URL(raw);
+        parsed.username = '';
+        parsed.password = '';
+        return parsed.toString().replace(/\/$/, '');
+    } catch {
+        return '';
+    }
+}
+
+/**
+ * Describe the proxy a generation request is routed through.
+ * @param {import('express').Request} request
+ * @returns {{ scope: 'profile' | 'global' | 'direct', url: string }}
+ */
+export function describeNetworkProxy(request) {
+    const profileProxyUrl = String(request?.body?.network_proxy || '').trim();
+    if (profileProxyUrl) {
+        return { scope: 'profile', url: maskProxyUrl(profileProxyUrl) };
+    }
+
+    const globalProxy = getGlobalProxyInfo();
+    if (globalProxy.enabled && globalProxy.url) {
+        return { scope: 'global', url: maskProxyUrl(globalProxy.url) };
+    }
+
+    return { scope: 'direct', url: '' };
+}
+
+/**
  * Start tracking a generation request. Call at the top of /generate.
  * Attaches `request.__inspectorId` for later completion.
  * @param {import('express').Request} request
@@ -326,6 +364,9 @@ export function startInspection(request) {
         stream: Boolean(body.stream),
         endpoint: '',
         apiKeyFingerprint: '',
+        // Which proxy carries this request. Credentials are stripped at
+        // capture time because the entry is exported and bundled verbatim.
+        networkProxy: describeNetworkProxy(request),
         messageCount: messages.length,
         messageRoles: messages.map(m => String(m?.role || '?')),
         promptCharLength: messages.reduce((sum, m) => {

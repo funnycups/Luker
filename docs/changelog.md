@@ -28,6 +28,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Changed Memory Graph read API view fields to snake_case.
 - Aligned Memory Graph extraction, crawl, and compression prompts with the fields the runtime provides.
 
+### Request Inspector
+
+- Added the network proxy used by a chat request to the request detail view.
+
 ### Fixes
 
 - Fixed Memory Graph LLM recall not drilling into always-inject event rollups.

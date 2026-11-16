@@ -11,6 +11,16 @@ const LOG_HEADER = '[Request Proxy]';
 /** @type {Map<string, ProxyAgent>} */
 const requestProxyAgents = new Map();
 let requestProxyKeepAlive = false;
+let globalProxyUrl = '';
+
+/**
+ * The global proxy configured at startup. The inspector reports it so a
+ * request's route can be explained after the fact.
+ * @returns {{ enabled: boolean, url: string }}
+ */
+export function getGlobalProxyInfo() {
+    return { enabled: Boolean(globalProxyUrl), url: globalProxyUrl };
+}
 
 /**
  * Create an agent bound to one proxy URL. Returns undefined when no URL is
@@ -75,6 +85,7 @@ export function createProxyBoundFetch(fetchImpl, agent) {
  */
 export default function initRequestProxy({ enabled, url, bypass, enableKeepAlive, privateRequestFilterEnabled }) {
     requestProxyKeepAlive = Boolean(enableKeepAlive);
+    globalProxyUrl = enabled ? String(url || '').trim() : '';
 
     try {
         // No proxy is enabled, so return

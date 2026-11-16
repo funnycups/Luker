@@ -683,11 +683,28 @@ function buildAbortButton(detail) {
     return `<button class="ri-abort menu_button" data-id="${escapeHtml(detail.id)}" data-job-id="${escapeHtml(detail.generationJobId || '')}" data-abort-kind="${escapeHtml(detail.abortKind)}">${escapeHtml(t`Abort Request`)}</button>`;
 }
 
+function formatNetworkProxy(networkProxy) {
+    const scope = networkProxy?.scope;
+    if (scope !== 'profile' && scope !== 'global' && scope !== 'direct') {
+        return '';
+    }
+    const label = scope === 'profile'
+        ? t`Profile proxy`
+        : scope === 'global'
+            ? t`Global proxy`
+            : t`Direct connection`;
+    return networkProxy.url ? `${label} \u00B7 ${networkProxy.url}` : label;
+}
+
 function buildChatDetailHtml(detail) {
     const usage = detail.usage || {};
     const wireReasoningEffort = extractWireReasoningEffort(detail.wireRequest);
     const reasoningEffortRow = wireReasoningEffort != null
         ? `<tr><td>${t`Reasoning Effort`}</td><td class="ri-mono">${escapeHtml(wireReasoningEffort)}</td></tr>`
+        : '';
+    const networkProxyText = formatNetworkProxy(detail.networkProxy);
+    const networkProxyRow = networkProxyText
+        ? `<tr><td>${t`Network Proxy`}</td><td class="ri-mono" title="${escapeHtml(networkProxyText)}">${escapeHtml(networkProxyText)}</td></tr>`
         : '';
     const cacheInfo = (usage.cache_read != null || usage.cache_write != null)
         ? `<tr><td>${t`Cache Read`}</td><td>${formatTokens(usage.cache_read)}</td></tr>
@@ -731,6 +748,7 @@ function buildChatDetailHtml(detail) {
  <tr><td>${t`Model`}</td><td>${escapeHtml(detail.model)}</td></tr>
  ${endpointRow}
  ${keyRow}
+ ${networkProxyRow}
  <tr><td>${t`Stream`}</td><td>${detail.stream ? t`Yes` : t`No`}</td></tr>
  <tr><td>${t`Messages`}</td><td>${detail.messageCount}</td></tr>
  <tr><td>${t`Prompt Chars`}</td><td>${(detail.promptCharLength || 0).toLocaleString()}</td></tr>
