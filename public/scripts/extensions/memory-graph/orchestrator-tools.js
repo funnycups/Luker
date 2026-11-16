@@ -165,9 +165,9 @@ function normalizeStringArrayArg(value) {
  */
 function hasValidFloorRange(obj) {
     return Boolean(
-        obj?.floorRange
-        && typeof obj.floorRange.start === 'number' && Number.isFinite(obj.floorRange.start)
-        && typeof obj.floorRange.end === 'number' && Number.isFinite(obj.floorRange.end),
+        obj?.floor_range
+        && typeof obj.floor_range.start === 'number' && Number.isFinite(obj.floor_range.start)
+        && typeof obj.floor_range.end === 'number' && Number.isFinite(obj.floor_range.end),
     );
 }
 
@@ -241,14 +241,14 @@ function trimCandidatePreview(node, context = null) {
         type: String(node.type || ''),
         level: node.level === 'semantic' ? 'semantic' : 'episodic',
         title: String(node.title || ''),
-        semanticDepth: Number.isFinite(Number(node.semanticDepth)) ? Number(node.semanticDepth) : 0,
+        semantic_depth: Number.isFinite(Number(node.semantic_depth)) ? Number(node.semantic_depth) : 0,
     };
     if (hasValidFloorRange(node)) {
         // null when the referenced messages have been deleted; the LLM
         // sees an explicit null so it can decide whether to drop the node.
-        out.floorRange = assistantSeqRangeToChatRange(node.floorRange, context);
+        out.floor_range = assistantSeqRangeToChatRange(node.floor_range, context);
     } else {
-        out.seqTo = Number.isFinite(Number(node.seqTo)) ? Number(node.seqTo) : -1;
+        out.seq_to = Number.isFinite(Number(node.seq_to)) ? Number(node.seq_to) : -1;
     }
     return out;
 }
@@ -262,9 +262,9 @@ function trimExpandPreview(node, context = null) {
         title: String(node.title || ''),
     };
     if (hasValidFloorRange(node)) {
-        out.floorRange = assistantSeqRangeToChatRange(node.floorRange, context);
+        out.floor_range = assistantSeqRangeToChatRange(node.floor_range, context);
     } else {
-        out.seqTo = Number.isFinite(Number(node.seqTo)) ? Number(node.seqTo) : -1;
+        out.seq_to = Number.isFinite(Number(node.seq_to)) ? Number(node.seq_to) : -1;
     }
     return out;
 }
@@ -276,12 +276,12 @@ function trimRankedPreview(entry, context = null) {
         type: String(entry.type || ''),
         title: String(entry.title || ''),
         score: Number.isFinite(Number(entry.score)) ? Number(entry.score) : 0,
-        scoreMode: String(entry.scoreMode || ''),
+        score_mode: String(entry.score_mode || ''),
     };
     if (hasValidFloorRange(entry)) {
-        out.floorRange = assistantSeqRangeToChatRange(entry.floorRange, context);
+        out.floor_range = assistantSeqRangeToChatRange(entry.floor_range, context);
     } else {
-        out.seqTo = Number.isFinite(Number(entry.seqTo)) ? Number(entry.seqTo) : -1;
+        out.seq_to = Number.isFinite(Number(entry.seq_to)) ? Number(entry.seq_to) : -1;
     }
     return out;
 }
@@ -344,19 +344,19 @@ async function execMemoryNodeBrief(args, context) {
         // brief is a frozen view from freezeNodeBriefView; spread into a
         // mutable object before adjusting. Translate the internal seq
         // range to chat[] coords (or null if the chat slice no longer
-        // exists). When floorRange is present we drop the legacy `toSeq`
+        // exists). When floor_range is present we drop the legacy `to_seq`
         // watermark so the agent has exactly one positional signal —
         // matching the trimmer behaviour for list/search results.
-        const translated = assistantSeqRangeToChatRange(brief.floorRange, context);
-        // brief.toSeq is the legacy watermark we drop in favour of floorRange.
+        const translated = assistantSeqRangeToChatRange(brief.floor_range, context);
+        // brief.to_seq is the legacy watermark we drop in favour of floor_range.
         // Manual property pluck is cleaner than a destructure with an unused
         // sink variable (which trips no-unused-vars in eslint).
         const next = {};
         for (const key of Object.keys(brief)) {
-            if (key === 'toSeq') continue;
+            if (key === 'to_seq') continue;
             next[key] = brief[key];
         }
-        next.floorRange = translated;
+        next.floor_range = translated;
         return { brief: next };
     }
     return { brief };
@@ -698,7 +698,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryListCandidates,
         simulate: null,
-        description: 'Enumerate the visible memory-graph candidate pool — the same pool the memory-graph\'s own recall LLM sees. Returns { candidates: [{ id, type, level, title, semanticDepth, <positionField> }] } in recency-first order, where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seqTo: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Use this as the FIRST step of a recall pipeline.',
+        description: 'Enumerate the visible memory-graph candidate pool — the same pool the memory-graph\'s own recall LLM sees. Returns { candidates: [{ id, type, level, title, semantic_depth, <positionField> }] } in recency-first order, where <positionField> is either `floor_range: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seq_to: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Use this as the FIRST step of a recall pipeline.',
         parameters: {
             type: 'object',
             properties: {
@@ -749,7 +749,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryNodeBrief,
         simulate: null,
-        description: 'Get the canonical recall-side brief for one node: { id, title, summary, keyValues, rowValues, childCount, exposure, edgeSummary, alwaysInject, <positionField> }, where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `toSeq: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). This is the SAME per-row format the memory-graph recall LLM sees. Returns { brief: null } when the node does not exist or is archived.',
+        description: 'Get the canonical recall-side brief for one node: { id, title, summary, key_values, row_values, child_count, semantic_depth, parent_id, exposure, edge_summary, always_inject, <positionField> }, where <positionField> is either `floor_range: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `to_seq: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). This is the SAME per-row format the memory-graph recall LLM sees. Returns { brief: null } when the node does not exist or is archived.',
         parameters: {
             type: 'object',
             properties: {
@@ -776,7 +776,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryExpandSeeds,
         simulate: null,
-        description: 'BFS-expand from seed ids along children + projected edges (default 1 hop). Returns { nodes: [{ id, type, level, title, <positionField> }] } for the union of seeds + reachable nodes, where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seqTo: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Use SPARINGLY: when a brief is on-topic but compressed (high_only exposure, large childCount) and you need to surface specific children.',
+        description: 'BFS-expand from seed ids along children + projected edges (default 1 hop). Returns { nodes: [{ id, type, level, title, <positionField> }] } for the union of seeds + reachable nodes, where <positionField> is either `floor_range: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seq_to: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Use SPARINGLY: when a brief is on-topic but compressed (high_only exposure, large child_count) and you need to surface specific children.',
         parameters: {
             type: 'object',
             properties: {
@@ -813,7 +813,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemorySchema,
         simulate: null,
-        description: 'Return the active node-type schema: { types: [{ type, tableName, tableColumns, requiredColumns, primaryKeyColumns, forceUpdate, extractEveryN, alwaysInject, editable, compressionMode }] }. extractEveryN is the effective per-type extraction cadence; force-update types report 1 and run every round. This carries the same schema information the native recall LLM sees. Read once at the start of a recall pass to understand which fields are key vs detail and which types use hierarchical compression.',
+        description: 'Return the active node-type schema: { types: [{ type, table_name, table_columns, required_columns, primary_key_columns, force_update, extract_every_n, always_inject, editable, compression_mode }] }. extract_every_n is the effective per-type extraction cadence; force-update types report 1 and run every round. This carries the same schema information the native recall LLM sees. Read once at the start of a recall pass to understand which fields are key vs detail and which types use hierarchical compression.',
         parameters: {
             type: 'object',
             properties: {},
@@ -825,7 +825,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryKeywordSearch,
         simulate: null,
-        description: 'Token-intersection search across node title + projected columns. Always available (no profile required). Returns { results: [{ id, type, title, score, scoreMode: "keyword", <positionField> }] } sorted by score desc, where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seqTo: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Use to locate existing nodes by name / keyword for dedup or relevance.',
+        description: 'Token-intersection search across node title + projected columns. Always available (no profile required). Returns { results: [{ id, type, title, score, score_mode: "keyword", <positionField> }] } sorted by score desc, where <positionField> is either `floor_range: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seq_to: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Use to locate existing nodes by name / keyword for dedup or relevance.',
         parameters: {
             type: 'object',
             properties: {
@@ -842,7 +842,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryVectorSearch,
         simulate: null,
-        description: 'Semantic vector search. REQUIRES an embedding profile configured in memory-graph settings. Throws NO_EMBEDDING_PROFILE error when not configured — fall back to memory_keyword_search in that case. Returns { results: [{ id, type, title, score, scoreMode: "vector", <positionField> }] }, where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seqTo: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Returns ONLY leaf nodes (semantic_depth = 0) across all types. Rollup nodes (compressed L1/L2/... summaries produced by hierarchical/flat compression on any type) are NOT in the vector index — reachable only via `memory_node_brief` / `memory_compaction_candidates` lookups by id. For macro / arc-level intent ("how did this storyline evolve overall?"), enumerate rollups with `memory_compaction_candidates` then read them with `memory_node_brief`.',
+        description: 'Semantic vector search. REQUIRES an embedding profile configured in memory-graph settings. Throws NO_EMBEDDING_PROFILE error when not configured — fall back to memory_keyword_search in that case. Returns { results: [{ id, type, title, score, score_mode: "vector", <positionField> }] }, where <positionField> is either `floor_range: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seq_to: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only). Returns ONLY leaf nodes (semantic_depth = 0) across all types. Rollup nodes (compressed L1/L2/... summaries produced by hierarchical/flat compression on any type) are NOT in the vector index — reachable only via `memory_node_brief` / `memory_compaction_candidates` lookups by id. For macro / arc-level intent ("how did this storyline evolve overall?"), enumerate rollups with `memory_compaction_candidates` then read them with `memory_node_brief`.',
         parameters: {
             type: 'object',
             properties: {
@@ -859,7 +859,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryFindByName,
         simulate: null,
-        description: 'Find existing nodes by name (case-insensitive substring match on title + primary key columns including aliases). Use BEFORE creating a character_sheet or location_state to verify the entity is not already in the graph. Returns { matches: [{ id, type, title, <positionField>, ... }] } — empty array if no match — where <positionField> is either `floorRange: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seqTo: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only).',
+        description: 'Find existing nodes by name (case-insensitive substring match on title + primary key columns including aliases). Use BEFORE creating a character_sheet or location_state to verify the entity is not already in the graph. Returns { matches: [{ id, type, title, <positionField>, ... }] } — empty array if no match — where <positionField> is either `floor_range: {start, end}` — a chat-floor span in chat[] index coords when the node was written with floor anchoring enabled in its type schema; pass that range directly to `chat_read_range` to inspect the source dialogue — or `seq_to: <int>` for legacy nodes / types without floor anchoring (last-touched watermark only).',
         parameters: {
             type: 'object',
             properties: {
@@ -875,7 +875,7 @@ const SCHEMAS = [
         mode: 'read',
         exec: execMemoryCompactionCandidates,
         simulate: null,
-        description: 'Returns the set of node groups currently eligible for hierarchical compaction at the given depth. { groups: [{ depth, childIds, fanIn }] }. Empty groups means no compaction warranted right now. Returns empty for types with compression.mode === "none".',
+        description: 'Returns the set of node groups currently eligible for hierarchical compaction at the given depth. { groups: [{ depth, child_ids, fan_in }] }. Empty groups means no compaction warranted right now. Returns empty for types with compression.mode === "none".',
         parameters: {
             type: 'object',
             properties: {

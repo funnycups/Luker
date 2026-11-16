@@ -326,11 +326,11 @@ describe('read-api type freeze (spec §8.1)', () => {
         expect(view.fields.title).toBe('Alice');
     });
 
-    test('NodeView childrenIds array is frozen', () => {
+    test('NodeView children_ids array is frozen', () => {
         const view = api.getNode('char_root');
-        expect(Object.isFrozen(view.childrenIds)).toBe(true);
-        try { view.childrenIds.push('mutated'); } catch (_) { /* strict throw acceptable */ }
-        expect(view.childrenIds.includes('mutated')).toBe(false);
+        expect(Object.isFrozen(view.children_ids)).toBe(true);
+        try { view.children_ids.push('mutated'); } catch (_) { /* strict throw acceptable */ }
+        expect(view.children_ids.includes('mutated')).toBe(false);
     });
 
     test('EdgeView from listEdges is frozen', () => {
@@ -353,19 +353,19 @@ describe('read-api type freeze (spec §8.1)', () => {
         try { Object.assign(first, { type: 'mutated' }); } catch (_) { /* */ }
         expect(first.type).not.toBe('mutated');
         // Nested array fields frozen too.
-        expect(Object.isFrozen(first.tableColumns)).toBe(true);
-        try { first.tableColumns.push('hax'); } catch (_) { /* */ }
-        expect(first.tableColumns.includes('hax')).toBe(false);
+        expect(Object.isFrozen(first.table_columns)).toBe(true);
+        try { first.table_columns.push('hax'); } catch (_) { /* */ }
+        expect(first.table_columns.includes('hax')).toBe(false);
     });
 
     test('NodeBriefView is frozen and nested records are frozen', () => {
         const brief = api.getNodeBrief('char_alice', { includeEdgeSummary: false });
         expect(brief).toBeTruthy();
         expect(Object.isFrozen(brief)).toBe(true);
-        expect(Object.isFrozen(brief.keyValues)).toBe(true);
-        expect(Object.isFrozen(brief.rowValues)).toBe(true);
-        try { brief.keyValues.title = 'Hacked'; } catch (_) { /* */ }
-        expect(brief.keyValues.title).toBe('Alice');
+        expect(Object.isFrozen(brief.key_values)).toBe(true);
+        expect(Object.isFrozen(brief.row_values)).toBe(true);
+        try { brief.key_values.title = 'Hacked'; } catch (_) { /* */ }
+        expect(brief.key_values.title).toBe('Alice');
     });
 
     test('EdgeSummaryView from getEdgeSummary is frozen with frozen relations/sample_neighbors', () => {
@@ -382,9 +382,9 @@ describe('read-api type freeze (spec §8.1)', () => {
         const state = api.getInjectionState();
         expect(Object.isFrozen(state)).toBe(true);
         // The three id Sets are frozen wrappers (their contents are by-contract immutable).
-        expect(Object.isFrozen(state.alwaysInjectIds)).toBe(true);
-        expect(Object.isFrozen(state.recallSelectedIds)).toBe(true);
-        expect(Object.isFrozen(state.visibleIds)).toBe(true);
+        expect(Object.isFrozen(state.always_inject_ids)).toBe(true);
+        expect(Object.isFrozen(state.recall_selected_ids)).toBe(true);
+        expect(Object.isFrozen(state.visible_ids)).toBe(true);
     });
 });
 
@@ -492,25 +492,25 @@ describe('Layer A: data access (spec §4.2)', () => {
         const event = schema.types.find(t => t.type === 'event');
         expect(event).toBeTruthy();
         // Spec §4.1 SchemaSpecView fields:
-        const requiredFields = ['type', 'tableName', 'tableColumns', 'requiredColumns',
-            'primaryKeyColumns', 'forceUpdate', 'extractEveryN', 'alwaysInject', 'editable', 'compressionMode'];
+        const requiredFields = ['type', 'table_name', 'table_columns', 'required_columns',
+            'primary_key_columns', 'force_update', 'extract_every_n', 'always_inject', 'editable', 'compression_mode'];
         for (const f of requiredFields) {
             expect(Object.prototype.hasOwnProperty.call(event, f)).toBe(true);
         }
-        expect(event.compressionMode).toBe('hierarchical');
-        expect(event.tableName).toBe('event_table');
-        expect(event.forceUpdate).toBe(true);
+        expect(event.compression_mode).toBe('hierarchical');
+        expect(event.table_name).toBe('event_table');
+        expect(event.force_update).toBe(true);
         // Force-update types extract every pass, so the reported cadence is 1
-        // even when the stored schema entry carries no extractEveryN key.
-        expect(event.extractEveryN).toBe(1);
-        expect(event.alwaysInject).toBe(true);
+        // even when the stored schema entry carries no extract_every_n key.
+        expect(event.extract_every_n).toBe(1);
+        expect(event.always_inject).toBe(true);
         expect(event.editable).toBe(false);
         const char = schema.types.find(t => t.type === 'character_sheet');
-        expect(char.compressionMode).toBe('none');
+        expect(char.compression_mode).toBe('none');
         expect(char.editable).toBe(true);
-        expect(char.alwaysInject).toBe(false);
+        expect(char.always_inject).toBe(false);
         // A non-force type with no stored cadence reports the effective 1.
-        expect(char.extractEveryN).toBe(1);
+        expect(char.extract_every_n).toBe(1);
     });
 });
 
@@ -784,29 +784,29 @@ describe('Layer C: recall primitives (spec §4.4)', () => {
         const brief = api.getNodeBrief('char_alice');
         expect(brief).toBeTruthy();
         // Spec §4.1 NodeBriefView fields.
-        for (const f of ['id', 'level', 'type', 'tableName', 'title', 'summary', 'keyValues',
-            'rowValues', 'toSeq', 'childCount', 'exposure', 'edgeSummary', 'alwaysInject']) {
+        for (const f of ['id', 'level', 'type', 'table_name', 'title', 'summary', 'key_values',
+            'row_values', 'to_seq', 'child_count', 'semantic_depth', 'parent_id', 'exposure', 'edge_summary', 'always_inject']) {
             expect(Object.prototype.hasOwnProperty.call(brief, f)).toBe(true);
         }
         expect(brief.id).toBe('char_alice');
         expect(brief.level).toBe('semantic');
         expect(brief.type).toBe('character_sheet');
-        expect(brief.tableName).toBe('character_table');
+        expect(brief.table_name).toBe('character_table');
         expect(brief.title).toBe('Alice');
-        expect(brief.toSeq).toBe(7);
+        expect(brief.to_seq).toBe(7);
         expect(brief.exposure).toBe('full');
-        expect(brief.alwaysInject).toBe(false);
-        expect(brief.edgeSummary).not.toBeNull();
+        expect(brief.always_inject).toBe(false);
+        expect(brief.edge_summary).not.toBeNull();
     });
 
-    test('getNodeBrief: hierarchical-rollup node has exposure:"high_only" and childCount > 0', () => {
+    test('getNodeBrief: hierarchical-rollup node has exposure:"high_only" and child_count > 0', () => {
         const brief = api.getNodeBrief('evt_rollup1');
         expect(brief).toBeTruthy();
         expect(brief.exposure).toBe('high_only');
-        expect(brief.childCount).toBeGreaterThan(0);
+        expect(brief.child_count).toBeGreaterThan(0);
     });
 
-    test('getNodeBrief: always-inject node reflects alwaysInject:true', () => {
+    test('getNodeBrief: always-inject node reflects always_inject:true', () => {
         __setInjectedForTest({
             alwaysInjectIds: ['char_alice'],
             recallSelectedIds: [],
@@ -814,7 +814,7 @@ describe('Layer C: recall primitives (spec §4.4)', () => {
         });
         const brief = api.getNodeBrief('char_alice');
         expect(brief).toBeTruthy();
-        expect(brief.alwaysInject).toBe(true);
+        expect(brief.always_inject).toBe(true);
     });
 
     test('getNodeBrief: missing / archived id returns null', () => {
@@ -822,10 +822,10 @@ describe('Layer C: recall primitives (spec §4.4)', () => {
         expect(api.getNodeBrief('evt_archived')).toBeNull();
     });
 
-    test('getNodeBrief({includeEdgeSummary:false}) sets edgeSummary=null', () => {
+    test('getNodeBrief({includeEdgeSummary:false}) sets edge_summary=null', () => {
         const brief = api.getNodeBrief('char_alice', { includeEdgeSummary: false });
         expect(brief).toBeTruthy();
-        expect(brief.edgeSummary).toBeNull();
+        expect(brief.edge_summary).toBeNull();
     });
 
     test('expandFromSeeds([seed], {hops:2, includeChildren:true}) returns children and edge-projected neighbors', () => {
@@ -1025,8 +1025,8 @@ describe('compactionCandidates', () => {
         const result = api.compactionCandidates({ type: 'event', depth: 0 });
         expect(result.groups.length).toBeGreaterThan(0);
         expect(result.groups[0].depth).toBe(0);
-        expect(result.groups[0].childIds.length).toBe(3); // fanIn
-        expect(result.groups[0].fanIn).toBe(3);
+        expect(result.groups[0].child_ids.length).toBe(3); // fan_in
+        expect(result.groups[0].fan_in).toBe(3);
     });
 });
 
@@ -1046,12 +1046,12 @@ describe('Layer D: injection observation (spec §4.5)', () => {
         __setInjectedForTest({ alwaysInjectIds: ['a'], recallSelectedIds: ['b'], visibleIds: ['c'] });
         const state = api.getInjectionState();
         expect(Object.isFrozen(state)).toBe(true);
-        expect(state.alwaysInjectIds).toBeInstanceOf(Set);
-        expect(state.recallSelectedIds).toBeInstanceOf(Set);
-        expect(state.visibleIds).toBeInstanceOf(Set);
-        expect(state.alwaysInjectIds.has('a')).toBe(true);
-        expect(state.recallSelectedIds.has('b')).toBe(true);
-        expect(state.visibleIds.has('c')).toBe(true);
+        expect(state.always_inject_ids).toBeInstanceOf(Set);
+        expect(state.recall_selected_ids).toBeInstanceOf(Set);
+        expect(state.visible_ids).toBeInstanceOf(Set);
+        expect(state.always_inject_ids.has('a')).toBe(true);
+        expect(state.recall_selected_ids.has('b')).toBe(true);
+        expect(state.visible_ids.has('c')).toBe(true);
     });
 
     test('onInjectionChanged(cb) returns a function; calling it twice is idempotent', () => {
@@ -1066,9 +1066,9 @@ describe('Layer D: injection observation (spec §4.5)', () => {
         const calls = [];
         const unsubscribe = api.onInjectionChanged((state) => {
             calls.push({
-                always: Array.from(state.alwaysInjectIds).sort(),
-                recall: Array.from(state.recallSelectedIds).sort(),
-                visible: Array.from(state.visibleIds).sort(),
+                always: Array.from(state.always_inject_ids).sort(),
+                recall: Array.from(state.recall_selected_ids).sort(),
+                visible: Array.from(state.visible_ids).sort(),
             });
         });
         __recordInjectedNodeIds({

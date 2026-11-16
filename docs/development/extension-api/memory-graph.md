@@ -20,7 +20,7 @@ if (!session) {
 }
 
 // Read
-const candidates = session.listVisibleCandidates({ types: ['character_sheet'], limit: 20 });
+const candidates = session.listVisibleCandidates({ types: ['character_sheet'] });
 const brief = session.getNodeBrief('node_42');
 const edges = session.getEdgeSummary('node_42');
 const matches = session.findByName({ query: 'Alice' });
@@ -137,7 +137,7 @@ const projection = await mg.getLastRecallProjection(ctx);
 | --- | --- | --- |
 | `getNodeById(ctx, id)` | `Promise<NodeView \| null>` | Resolve a single node by id. |
 | `getNodesByIds(ctx, ids)` | `Promise<Array<NodeView \| null>>` | Batch resolve; result is aligned to input order, `null` entries mark missing / invalid ids. |
-| `findEventBySeq(ctx, seq)` | `Promise<NodeView \| null>` | Find the non-archived `event` node whose `floorRange` covers `seq`. Highest `seqTo` wins on overlap. |
+| `findEventBySeq(ctx, seq)` | `Promise<NodeView \| null>` | Find the non-archived `event` node whose `floor_range` covers `seq`. Highest `seq_to` wins on overlap. |
 | `findEventBundleBySeq(ctx, seq)` | `Promise<{ event: NodeView, location: NodeView \| null, characters: NodeView[] } \| null>` | Same lookup as `findEventBySeq`, plus the `location_state` linked via `occurred_at` and the `character_sheet` nodes linked via `involved_in`. |
 | `getAssistantSeqForMessageIndex(ctx, messageIndex)` | `number \| null` | Translate a chat message index into the 1-based count of extractable assistant messages up to and including that index. `null` when no extractable assistant message exists at/before `messageIndex`. |
 | `getCurrentInjection(ctx)` | `InjectionState \| null` | Defensive copy of the current main-flow injection state. See [InjectionState](#injectionstate). |
@@ -175,7 +175,7 @@ const offCommit = mg.onStoreCommit(({ chatKey }) => {
 });
 
 const offInjection = mg.onInjectionChanged(state => {
-    console.log('injection settled', state.alwaysInjectIds.size, state.recallSelectedIds.size);
+    console.log('injection settled', state.always_inject_ids.size, state.recall_selected_ids.size);
 });
 
 // Later:
@@ -232,7 +232,7 @@ const api = getMemoryGraphReadApi(store, context);
 const candidates = api.listVisibleCandidates();
 // ... onInjectionChanged, listNodes, projectEdges, etc. live here.
 const unsubscribe = api.onInjectionChanged(state => {
-    console.log('injection changed', state.alwaysInjectIds.size, state.recallSelectedIds.size);
+    console.log('injection changed', state.always_inject_ids.size, state.recall_selected_ids.size);
 });
 ```
 
@@ -248,17 +248,18 @@ interface NodeView {
     type: string;                     // 'event' / 'character_sheet' / ...
     level: 'episodic' | 'semantic';
     title: string;
-    fields: Readonly<Record<string, unknown>>; // tableColumns row payload
-    seqTo: number;
-    parentId: string;                 // '' when no parent
-    childrenIds: ReadonlyArray<string>;
+    fields: Readonly<Record<string, unknown>>; // table_columns row payload
+    seq_to: number;
+    parent_id: string;                // '' when no parent
+    children_ids: ReadonlyArray<string>;
     archived: boolean;
-    semanticRollup: boolean;
-    semanticDepth: number;
+    semantic_rollup: boolean;
+    semantic_depth: number;
+    floor_range?: { start: number; end: number };
 }
 ```
 
-The canonical view of a single node. `fields` is the row payload aligned with the schema's `tableColumns`; values can be strings, numbers, or arrays depending on the column definition.
+The canonical view of a single node. `fields` is the row payload aligned with the schema's `table_columns`; values can be strings, numbers, or arrays depending on the column definition. `floor_range` is present only for types whose schema records floor anchoring.
 
 ### EdgeView
 
@@ -278,7 +279,7 @@ A directed relation between two nodes. Raw edges (`listEdges`, `getNeighbors`) n
 ```ts
 interface NeighborView {
     node: NodeView;
-    edgeType: string;
+    edge_type: string;
     direction: 'in' | 'out';
 }
 ```
@@ -301,13 +302,13 @@ The compact edge view the native recall LLM sees per candidate row. Counts are a
 
 ```ts
 interface InjectionState {
-    alwaysInjectIds: ReadonlySet<string>;
-    recallSelectedIds: ReadonlySet<string>;
-    visibleIds: ReadonlySet<string>;
+    always_inject_ids: ReadonlySet<string>;
+    recall_selected_ids: ReadonlySet<string>;
+    visible_ids: ReadonlySet<string>;
 }
 ```
 
-The injection-side observation surface. `alwaysInjectIds` are nodes pinned by their type's `alwaysInject` flag. `recallSelectedIds` are nodes the route LLM picked for the last turn. `visibleIds` is the candidate pool the route LLM saw — *empty until the recall pipeline has run at least once*.
+The injection-side observation surface. `always_inject_ids` are nodes pinned by their type's `always_inject` flag. `recall_selected_ids` are nodes the route LLM picked for the last turn. `visible_ids` is the candidate pool the route LLM saw — *empty until the recall pipeline has run at least once*.
 
 ### LastRecallProjection
 
@@ -328,18 +329,19 @@ The pre-rendered text memory-graph actually injected into the main chat's prompt
 ```ts
 interface SchemaSpecView {
     type: string;
-    tableName: string;
-    tableColumns: ReadonlyArray<string>;
-    requiredColumns: ReadonlyArray<string>;
-    primaryKeyColumns: ReadonlyArray<string>;
-    forceUpdate: boolean;
-    alwaysInject: boolean;
+    table_name: string;
+    table_columns: ReadonlyArray<string>;
+    required_columns: ReadonlyArray<string>;
+    primary_key_columns: ReadonlyArray<string>;
+    force_update: boolean;
+    extract_every_n: number;
+    always_inject: boolean;
     editable: boolean;
-    compressionMode: 'none' | 'hierarchical' | string;
+    compression_mode: 'none' | 'hierarchical' | string;
 }
 ```
 
-The character-effective schema spec for one node type. Identical to what `getEffectiveNodeTypeSchema` returns internally; character overrides (if any) are already applied. Used to build the `schema_overview` LLM prompt block.
+The character-effective schema spec for one node type. Identical to what `getEffectiveNodeTypeSchema` returns internally; character overrides (if any) are already applied. `extract_every_n` is the effective cadence: force-update types report 1. Used to build the `schema_overview` LLM prompt block.
 
 ### SchemaView
 
@@ -358,20 +360,24 @@ interface NodeBriefView {
     id: string;
     level: 'episodic' | 'semantic';
     type: string;
-    tableName: string;
+    table_name: string;
     title: string;
     summary: string;
-    keyValues: Readonly<Record<string, unknown>>;  // primaryKeyColumns projection
-    rowValues: Readonly<Record<string, unknown>>;  // remaining projection columns
-    toSeq: number;
-    childCount: number;                            // active (non-archived) children
+    key_values: Readonly<Record<string, unknown>>;  // primary_key_columns projection
+    row_values: Readonly<Record<string, unknown>>;  // remaining projection columns
+    to_seq: number;
+    semantic_depth: number;
+    parent_id: string;
+    child_count: number;                            // active (non-archived) children
+    editable: boolean;
     exposure: 'high_only' | 'full';
-    edgeSummary: EdgeSummaryView | null;
-    alwaysInject: boolean;
+    edge_summary: EdgeSummaryView | null;
+    always_inject: boolean;
+    floor_range?: { start: number; end: number };
 }
 ```
 
-The single-node "brief" the native recall LLM sees per candidate row. Equivalent to `formatNodeBrief` output plus the recall-side fields (`exposure`, `edgeSummary`, `alwaysInject`) the router attaches before serialising. This is the unit a plugin assembles into a `candidateRows` block when replicating native recall input.
+The single-node "brief" the native recall LLM sees per candidate row. It carries the same field names as a `graph_data` row, plus the recall-side fields (`exposure`, `edge_summary`, `always_inject`) the router attaches before serialising. This is the unit a plugin assembles into a `candidate_nodes` block when replicating native recall input.
 
 ## Layer A: Data Access
 
@@ -382,8 +388,8 @@ The single-node "brief" the native recall LLM sees per candidate row. Equivalent
 **Contract:**
 
 - Default `activeOnly: true` — excludes archived nodes and recall-diagnostic nodes (same filter as the native `collectAlwaysInjectNodes`).
-- Sorted by `compareNodesByTimeline` (seqTo ascending, id tiebreak) — the stable timeline order used for offline analysis. This is **different** from `listVisibleCandidates`, which sorts by `compareNodesByRecency` (seqTo desc, depth desc, id lex).
-- Returns a frozen array of frozen `NodeView` objects. The array itself, every view, every `fields` record, and every `childrenIds` array are frozen.
+- Sorted by `compareNodesByTimeline` (seq_to ascending, id tiebreak) — the stable timeline order used for offline analysis. This is **different** from `listVisibleCandidates`, which sorts by `compareNodesByRecency` (seq_to desc, depth desc, id lex).
+- Returns a frozen array of frozen `NodeView` objects. The array itself, every view, every `fields` record, and every `children_ids` array are frozen.
 
 **When to use:** offline scanning of the full store — debugging, one-shot statistics, exhaustive iteration. Hot-path callers replicating recall should use `listVisibleCandidates` instead, which is order-aligned with the route LLM input and applies the recall-side filters.
 
@@ -439,7 +445,7 @@ console.log(mentions.length, 'semantic mention edges');
 **Contract:**
 
 - Returns the character-effective schema (i.e. `getEffectiveNodeTypeSchema(context, settings)`). Character overrides — if any — are already applied.
-- Each `SchemaSpecView` is frozen, and arrays inside (`tableColumns`, `requiredColumns`, `primaryKeyColumns`) are frozen.
+- Each `SchemaSpecView` is frozen, and arrays inside (`table_columns`, `required_columns`, `primary_key_columns`) are frozen.
 - This is the source data for the `schema_overview` block of the native recall LLM input.
 
 **When to use:** when building a `schema_overview` prompt block, or when reflecting on schema-derived projections (which columns are primary-key, which are required, etc.).
@@ -449,7 +455,7 @@ console.log(mentions.length, 'semantic mention edges');
 ```js
 const schema = api.getSchema();
 for (const spec of schema.types) {
-    console.log(spec.type, spec.tableName, [...spec.tableColumns]);
+    console.log(spec.type, spec.table_name, [...spec.table_columns]);
 }
 ```
 
@@ -463,10 +469,10 @@ for (const spec of schema.types) {
 
 - Default `direction: 'both'`, default `projectTo: 'raw'`.
 - With `projectTo: 'raw'`, returns neighbours as stored (no rollup substitution).
-- With `projectTo: 'visible'`, every raw neighbour id is passed through `getNearestVisibleAncestorId` against the current `visibleIds`; neighbours that don't roll up into the visible set are dropped.
+- With `projectTo: 'visible'`, every raw neighbour id is passed through `getNearestVisibleAncestorId` against the current `visible_ids`; neighbours that don't roll up into the visible set are dropped.
 - With `projectTo: string[]`, the same substitution runs against the caller-supplied visible set.
 - Archived neighbours are always filtered.
-- Deduplicates by `(neighborId, edgeType, direction)`.
+- Deduplicates by (`neighborId, edge_type, direction`).
 
 **When to use:** building a neighbour ring around a focus node when assembling a custom LLM prompt block. Use `projectTo: 'visible'` to align with what the route LLM sees.
 
@@ -478,8 +484,8 @@ const ring = api.getNeighbors('node_42', {
     direction: 'both',
     projectTo: 'visible',
 });
-for (const { node, edgeType, direction } of ring) {
-    console.log(`${direction}-${edgeType}: ${node.title}`);
+for (const { node, edge_type, direction } of ring) {
+    console.log(`${direction}-${edge_type}: ${node.title}`);
 }
 ```
 
@@ -489,7 +495,7 @@ for (const { node, edgeType, direction } of ring) {
 
 **Contract:**
 
-- Walks `parentId` upward strictly above the input node. The input node itself is never a result.
+- Walks `parent_id` upward strictly above the input node. The input node itself is never a result.
 - Default `activeOnly: true` — encountering an archived ancestor returns `null` (treated as no-match).
 - With `predicate`, returns the first ancestor for which `predicate(view)` is truthy. Without `predicate`, returns the direct parent (if any).
 - Cycle-safe: visited ids are tracked.
@@ -510,7 +516,7 @@ const rollup = api.getAncestor('event_99', {
 
 **Contract:**
 
-- BFS over `childrenIds`.
+- BFS over `children_ids`.
 - Default `activeOnly: true` filters archived children. Default `maxDepth: Infinity`.
 - Returns descendants in BFS order (level 1 first, then level 2, ...).
 - Excludes the root node itself.
@@ -580,9 +586,9 @@ console.log(projected.length, 'projected semantic edges');
 - Returns the same candidate pool `chooseRecallRoute` constructs via `collectRootCandidates` — but as deep-frozen `NodeView`.
 - `excludeRecentMessages` matches the native `isNodeInRecentExcludeWindow` semantics: nodes within the last N user messages are filtered. Default 0.
 - `seqWindow` and `types` apply *after* the native candidate construction, narrowing the pool.
-- **Sorted by `compareNodesByRecency`** (seqTo desc → semanticDepth desc → id lex) — this is the order the route LLM sees, *different* from `listNodes`.
+- **Sorted by `compareNodesByRecency`** (seq_to desc → semantic_depth desc → id lex) — this is the order the route LLM sees, *different* from `listNodes`.
 
-**When to use:** the hot-path entry point for any custom recall plugin. Pair with `getNodeBrief` per id to construct a `candidateRows` block.
+**When to use:** the hot-path entry point for any custom recall plugin. Pair with `getNodeBrief` per id to construct a `candidate_nodes` block.
 
 **Minimal example:**
 
@@ -621,7 +627,7 @@ if (exposure === 'high_only') {
 **Contract:**
 
 - Wraps the internal `buildEdgeSummary` directly — no behaviour drift.
-- Default `visibleNodeIds` is the current injection-state `visibleIds`. **Empty until the recall pipeline has run at least once.** Pass an explicit set if you need guaranteed coverage.
+- Default `visibleNodeIds` is the current injection-state `visible_ids`. **Empty until the recall pipeline has run at least once.** Pass an explicit set if you need guaranteed coverage.
 - Default `limit: 8` matches the native router.
 - Always returns a frozen `EdgeSummaryView`; missing / unknown nodes get a zero-degree summary, never `null`.
 
@@ -640,11 +646,11 @@ console.log(summary.degree, summary.sample_neighbors.length);
 
 **Contract:**
 
-- Equivalent to a single row of the route LLM's `candidateRows` block: `formatNodeBrief` projection plus the recall-side fields (`exposure`, `edgeSummary`, `alwaysInject`).
+- Equivalent to a single row of the route LLM's `candidate_nodes` block: `formatNodeBrief` projection plus the recall-side fields (`exposure`, `edge_summary`, `always_inject`).
 - `null` if the node doesn't exist or is archived.
 - Default `includeEdgeSummary: true`, default `edgeSummaryLimit: 8`.
-- Default `visibleNodeIds` is the current injection-state `visibleIds`. Pass an explicit set if you need a deterministic projection.
-- `alwaysInject` reflects the current injection state's `alwaysInjectIds`.
+- Default `visibleNodeIds` is the current injection-state `visible_ids`. Pass an explicit set if you need a deterministic projection.
+- `always_inject` reflects the current injection state's `always_inject_ids`.
 
 **When to use:** the canonical building block for a custom recall LLM input — one call per candidate id.
 
@@ -656,7 +662,7 @@ const brief = api.getNodeBrief('character_sheet_alice', {
     visibleNodeIds: visibleIds,
     edgeSummaryLimit: 8,
 });
-console.log(brief.summary, brief.exposure, brief.alwaysInject);
+console.log(brief.summary, brief.exposure, brief.always_inject);
 ```
 
 ### expandFromSeeds(seedIds, options?)
@@ -667,7 +673,7 @@ console.log(brief.summary, brief.exposure, brief.alwaysInject);
 
 - Wraps the internal `expandRouteCandidates` — the BFS drill expansion the route LLM triggers when it decides to dig deeper into a seed.
 - Default `hops: 1`, `includeChildren: true`, `projectTo: 'visible'`, **`excludeInternal: false`** (to match native `expandRouteCandidates`, where `contains` / `semantic_contains` participate in drill).
-- With `projectTo: 'visible'`, the drill expands inside the current `visibleIds` pool (the seed itself is always admitted).
+- With `projectTo: 'visible'`, the drill expands inside the current `visible_ids` pool (the seed itself is always admitted).
 - With `projectTo: 'raw'`, the drill expands across the full store.
 - With `projectTo: string[]`, the drill expands inside the supplied set.
 - Setting `excludeInternal: true` aligns the behaviour with `projectEdges`' default (no `contains` / `semantic_contains` participation).
@@ -686,7 +692,7 @@ console.log(expanded.length, 'nodes reachable');
 
 ### keywordSearch(options)
 
-**Signature:** `keywordSearch(options: { query: string, types?: string[], k?: number }): ReadonlyArray<NodeView & { score: number, scoreMode: 'keyword' }>`
+**Signature:** `keywordSearch(options: { query: string, types?: string[], k?: number }): ReadonlyArray<NodeView & { score: number, score_mode: 'keyword' }>`
 
 **Contract:**
 
@@ -704,12 +710,12 @@ const hits = api.keywordSearch({
     query: 'Eileen',
     types: ['character_sheet'],
 });
-// hits: [{ id, title, ..., score: 0.5, scoreMode: 'keyword' }, ...]
+// hits: [{ id, title, ..., score: 0.5, score_mode: 'keyword' }, ...]
 ```
 
 ### vectorSearch(options)
 
-**Signature:** `vectorSearch(options: { query: string, types?: string[], k?: number }): Promise<ReadonlyArray<NodeView & { score: number, scoreMode: 'vector' }>>`
+**Signature:** `vectorSearch(options: { query: string, types?: string[], k?: number }): Promise<ReadonlyArray<NodeView & { score: number, score_mode: 'vector' }>>`
 
 **Contract:**
 
@@ -728,7 +734,7 @@ try {
         query: 'the woman who healed me',
         types: ['character_sheet'],
     });
-    // hits: [{ id, title, ..., score: 0.83, scoreMode: 'vector' }, ...]
+    // hits: [{ id, title, ..., score: 0.83, score_mode: 'vector' }, ...]
 } catch (err) {
     if (err.code === 'NO_EMBEDDING_PROFILE') {
         const fallback = api.keywordSearch({ query: 'the woman who healed me' });
@@ -743,7 +749,7 @@ try {
 **Contract:**
 
 - Case-insensitive substring matching against each candidate's `title` and primary-key columns (which typically include `aliases`).
-- Returns `{ matches: ReadonlyArray<NodeView> }` with no `score` field; matches are sorted by timeline (seqTo ascending).
+- Returns `{ matches: ReadonlyArray<NodeView> }` with no `score` field; matches are sorted by timeline (seq_to ascending).
 - Empty / whitespace-only `query` returns `{ matches: [] }` (no throw).
 
 **When to use:** the entity-identity probe — call **before** creating a `character_sheet` or `location_state` so the consumer can detect that the entity is already in the graph and edit it instead of duplicating.
@@ -760,7 +766,7 @@ const { matches } = api.findByName({
 
 ### compactionCandidates(options)
 
-**Signature:** `compactionCandidates(options: { type: string, depth?: number }): { groups: ReadonlyArray<{ depth: number, childIds: ReadonlyArray<string>, fanIn: number }> }`
+**Signature:** `compactionCandidates(options: { type: string, depth?: number }): { groups: ReadonlyArray<{ depth: number, child_ids: ReadonlyArray<string>, fan_in: number }> }`
 
 **Contract:**
 
@@ -770,7 +776,7 @@ const { matches } = api.findByName({
     - The type's `compression.mode` is `'none'` (or anything other than `'hierarchical'`).
     - The number of available candidates is below `compression.threshold` (after applying `keepRecentLeaves`).
     - The requested `depth` is at or above `compression.maxDepth`.
-- Each group's `childIds` are the candidate child node ids; `fanIn` is the group size; `depth` is the rollup tier that would be produced.
+- Each group's `child_ids` are the candidate child node ids; `fan_in` is the group size; `depth` is the rollup tier that would be produced.
 
 **When to use:** driving an agent-side compaction workflow — enumerate groups, build a summary per group via your own LLM, then call `writeApi.compactNodes` with the same `type` / `childIds`.
 
@@ -779,8 +785,8 @@ const { matches } = api.findByName({
 ```js
 const { groups } = api.compactionCandidates({ type: 'event' });
 for (const group of groups) {
-    const briefs = group.childIds.map(id => api.getNodeBrief(id));
-    // summarise briefs via your LLM, then writeApi.compactNodes({ type: 'event', childIds: group.childIds, summary })
+    const briefs = group.child_ids.map(id => api.getNodeBrief(id));
+    // summarise briefs via your LLM, then writeApi.compactNodes({ type: 'event', childIds: group.child_ids, summary })
 }
 ```
 
@@ -792,8 +798,8 @@ for (const group of groups) {
 
 **Contract:**
 
-- Returns a frozen `InjectionState` containing the current `alwaysInjectIds`, `recallSelectedIds`, and `visibleIds`.
-- `visibleIds` is **empty until the recall pipeline has run at least once** — methods that default to "current visibleIds" therefore see an empty set on first use. If you need a guaranteed candidate pool, call `listVisibleCandidates()` first or pass an explicit `visibleNodeIds` argument.
+- Returns a frozen `InjectionState` containing the current `always_inject_ids`, `recall_selected_ids`, and `visible_ids`.
+- `visible_ids` is **empty until the recall pipeline has run at least once** — methods that default to "current visible_ids" therefore see an empty set on first use. If you need a guaranteed candidate pool, call `listVisibleCandidates()` first or pass an explicit `visibleNodeIds` argument.
 - Wraps the underlying Sets in `Object.freeze` (Set contents are not technically immutable in JS, but the API documents them as read-only; do not mutate them).
 
 **When to use:** querying current injection state synchronously — e.g. when rendering a UI badge for "this node is currently injected."
@@ -802,7 +808,7 @@ for (const group of groups) {
 
 ```js
 const state = api.getInjectionState();
-console.log(state.alwaysInjectIds.size, state.recallSelectedIds.size, state.visibleIds.size);
+console.log(state.always_inject_ids.size, state.recall_selected_ids.size, state.visible_ids.size);
 ```
 
 ### onInjectionChanged(callback)
@@ -822,7 +828,7 @@ console.log(state.alwaysInjectIds.size, state.recallSelectedIds.size, state.visi
 
 ```js
 const unsubscribe = api.onInjectionChanged(state => {
-    refreshInjectionUI(state.recallSelectedIds);
+    refreshInjectionUI(state.recall_selected_ids);
 });
 // Later:
 unsubscribe();
@@ -830,7 +836,7 @@ unsubscribe();
 
 ## Worked Example: replicate the native recall LLM input
 
-The LLM-input blocks that `chooseRecallRoute` constructs are `schema_overview` and `candidateRows`. With the API, replicating them is direct:
+The LLM-input blocks that `chooseRecallRoute` constructs are `schema_overview` and `candidate_nodes`. With the API, replicating them is direct:
 
 ```js
 import { getExtensionApi } from '/scripts/extensions.js';
@@ -841,27 +847,27 @@ if (!api) return;
 // schema_overview block (the LLM prompt segment that describes each node type).
 const schemaOverview = api.getSchema().types.map(spec => ({
     id: spec.type,
-    table_name: spec.tableName,
-    table_columns: [...spec.tableColumns],
-    required_columns: [...spec.requiredColumns],
-    force_update: spec.forceUpdate,
-    always_inject: spec.alwaysInject,
+    table_name: spec.table_name,
+    table_columns: [...spec.table_columns],
+    required_columns: [...spec.required_columns],
+    force_update: spec.force_update,
+    always_inject: spec.always_inject,
     editable: spec.editable,
-    compression_mode: spec.compressionMode,
+    compression_mode: spec.compression_mode,
 }));
 
-// candidateRows block (one brief per visible candidate).
+// candidate_nodes block (one brief per visible candidate).
 const candidates = api.listVisibleCandidates();
-const candidateRows = candidates.map(view => api.getNodeBrief(view.id, {
+const candidateNodes = candidates.map(view => api.getNodeBrief(view.id, {
     includeEdgeSummary: true,
     edgeSummaryLimit: 8,
 }));
 
-// You can now feed schemaOverview + candidateRows + always_inject_node_ids + your own
+// You can now feed schemaOverview + candidateNodes + always_inject_node_ids + your own
 // recall_query_context to your own recall LLM (with whatever model / preset you prefer).
 ```
 
-The full equivalence guarantee — `candidateRows` field-by-field and order-by-order matching the native router's input — is enforced by the dogfood test (`tests/memory-graph/read-api-dogfood.test.js`), which constructs the same blocks via the API and asserts structural equality against the native `chooseRecallRoute` internal state.
+The field contracts above are asserted by `tests/memory-graph/read-api.test.js`, which covers every view these calls return.
 
 ## Write API
 
@@ -1041,7 +1047,7 @@ const { removed } = await writeApi.deleteLinks({
 const { groups } = readApi.compactionCandidates({ type: 'event' });
 if (groups.length > 0) {
     const group = groups[0];
-    const briefs = group.childIds.map(id => readApi.getNodeBrief(id));
+    const briefs = group.child_ids.map(id => readApi.getNodeBrief(id));
     const summary = await myLLM.summarize(briefs);
     const { rollupNodeId } = await writeApi.compactNodes({
         type: 'event',
@@ -1054,7 +1060,7 @@ if (groups.length > 0) {
 ## Compatibility
 
 - `external-api.js` legacy exports (`getCurrentlyInjectedNodeIds`, `__recordInjectedNodeIds`, `applyMemoryGraphInjectionUpdate`, `createEmptyInjectionState`) remain in place — existing plugins do not need to change.
-- `getMemoryGraphInjectionState(context)` is re-exported from `read-api.js` for symmetry: it returns the same shape (`alwaysInjectIds`, `recallSelectedIds`, `visibleIds`) as `getInjectionState()`.
+- `getMemoryGraphInjectionState(context)` is re-exported from `read-api.js` for symmetry. It returns the internal camelCase state (`alwaysInjectIds`, `recallSelectedIds`, `visibleIds`) — use `toInjectionStateView(state)` when you need the snake_case `InjectionState` view.
 - The factories `getMemoryGraphReadApi(store, context)` and `getMemoryGraphWriteApi(store, context, options?)` do not pollute the legacy namespace; importing them has no side effects beyond loading the respective module.
 
 ## Performance

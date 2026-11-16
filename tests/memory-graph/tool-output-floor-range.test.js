@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // A5: orchestrator-tools translates a node's internal assistant-seq
-// `floorRange` to chat[] indices for LLM-facing output so agents can
+// `floor_range` to chat[] indices for LLM-facing output so agents can
 // pass it directly to `chat_read_range`.
 //
 // We import orchestrator-tools.js directly because it has no static
@@ -110,7 +110,7 @@ describe('assistantSeqRangeToChatRange', () => {
     });
 });
 
-describe('trimmers: floorRange replaces seqTo when present', () => {
+describe('trimmers: floor_range replaces seq_to when present', () => {
     const ctx = makeContext([
         { is_user: true, mes: 'u0' },
         { is_user: false, mes: 'a0' }, // ord 1
@@ -118,106 +118,106 @@ describe('trimmers: floorRange replaces seqTo when present', () => {
         { is_user: false, mes: 'a1' }, // ord 2
     ]);
 
-    test('trimCandidatePreview: floorRange present → output has chat[] floorRange, no seqTo', () => {
+    test('trimCandidatePreview: floor_range present → output has chat[] floor_range, no seq_to', () => {
         const node = {
             id: 'n1',
             type: 'event',
             level: 'semantic',
             title: 'T',
-            seqTo: 2,
-            semanticDepth: 0,
-            floorRange: { start: 1, end: 2 },
+            seq_to: 2,
+            semantic_depth: 0,
+            floor_range: { start: 1, end: 2 },
         };
         const out = trimCandidatePreview(node, ctx);
-        expect(out.floorRange).toEqual({ start: 0, end: 3 });
-        expect(out.seqTo).toBeUndefined();
+        expect(out.floor_range).toEqual({ start: 0, end: 3 });
+        expect(out.seq_to).toBeUndefined();
     });
 
-    test('trimCandidatePreview: floorRange absent → output has seqTo, no floorRange', () => {
+    test('trimCandidatePreview: floor_range absent → output has seq_to, no floor_range', () => {
         const node = {
             id: 'n2',
             type: 'character_sheet',
             level: 'semantic',
             title: 'Alice',
-            seqTo: 5,
-            semanticDepth: 0,
+            seq_to: 5,
+            semantic_depth: 0,
         };
         const out = trimCandidatePreview(node, ctx);
-        expect(out.seqTo).toBe(5);
-        expect(out.floorRange).toBeUndefined();
+        expect(out.seq_to).toBe(5);
+        expect(out.floor_range).toBeUndefined();
     });
 
-    test('trimCandidatePreview: floorRange refs deleted chat → output has floorRange:null, no seqTo', () => {
+    test('trimCandidatePreview: floor_range refs deleted chat → output has floor_range:null, no seq_to', () => {
         const node = {
             id: 'n3',
             type: 'event',
             level: 'semantic',
             title: 'T',
-            seqTo: 99,
-            semanticDepth: 0,
-            floorRange: { start: 1, end: 99 },
+            seq_to: 99,
+            semantic_depth: 0,
+            floor_range: { start: 1, end: 99 },
         };
         const out = trimCandidatePreview(node, ctx);
-        expect(out.floorRange).toBeNull();
-        expect(out.seqTo).toBeUndefined();
+        expect(out.floor_range).toBeNull();
+        expect(out.seq_to).toBeUndefined();
     });
 
-    test('trimRankedPreview: floorRange present → translates, drops seqTo, keeps score/scoreMode', () => {
+    test('trimRankedPreview: floor_range present → translates, drops seq_to, keeps score/score_mode', () => {
         const entry = {
             id: 'n1',
             type: 'event',
             title: 'T',
-            seqTo: 2,
+            seq_to: 2,
             score: 0.7,
-            scoreMode: 'keyword',
-            floorRange: { start: 1, end: 2 },
+            score_mode: 'keyword',
+            floor_range: { start: 1, end: 2 },
         };
         const out = trimRankedPreview(entry, ctx);
-        expect(out.floorRange).toEqual({ start: 0, end: 3 });
-        expect(out.seqTo).toBeUndefined();
+        expect(out.floor_range).toEqual({ start: 0, end: 3 });
+        expect(out.seq_to).toBeUndefined();
         expect(out.score).toBe(0.7);
-        expect(out.scoreMode).toBe('keyword');
+        expect(out.score_mode).toBe('keyword');
     });
 
-    test('trimRankedPreview: floorRange absent → keeps seqTo', () => {
+    test('trimRankedPreview: floor_range absent → keeps seq_to', () => {
         const entry = {
             id: 'n1',
             type: 'character_sheet',
             title: 'Alice',
-            seqTo: 5,
+            seq_to: 5,
             score: 0.4,
-            scoreMode: 'vector',
+            score_mode: 'vector',
         };
         const out = trimRankedPreview(entry, ctx);
-        expect(out.seqTo).toBe(5);
-        expect(out.floorRange).toBeUndefined();
+        expect(out.seq_to).toBe(5);
+        expect(out.floor_range).toBeUndefined();
     });
 
-    test('trimExpandPreview: floorRange present → translates, drops seqTo', () => {
+    test('trimExpandPreview: floor_range present → translates, drops seq_to', () => {
         const node = {
             id: 'n1',
             type: 'event',
             level: 'semantic',
             title: 'T',
-            seqTo: 2,
-            floorRange: { start: 1, end: 2 },
+            seq_to: 2,
+            floor_range: { start: 1, end: 2 },
         };
         const out = trimExpandPreview(node, ctx);
-        expect(out.floorRange).toEqual({ start: 0, end: 3 });
-        expect(out.seqTo).toBeUndefined();
+        expect(out.floor_range).toEqual({ start: 0, end: 3 });
+        expect(out.seq_to).toBeUndefined();
     });
 
-    test('trimExpandPreview: floorRange absent → keeps seqTo', () => {
+    test('trimExpandPreview: floor_range absent → keeps seq_to', () => {
         const node = {
             id: 'n2',
             type: 'character_sheet',
             level: 'semantic',
             title: 'Alice',
-            seqTo: 5,
+            seq_to: 5,
         };
         const out = trimExpandPreview(node, ctx);
-        expect(out.seqTo).toBe(5);
-        expect(out.floorRange).toBeUndefined();
+        expect(out.seq_to).toBe(5);
+        expect(out.floor_range).toBeUndefined();
     });
 
     test('trimmers all return null for non-object input (unchanged contract)', () => {
@@ -227,37 +227,37 @@ describe('trimmers: floorRange replaces seqTo when present', () => {
     });
 
     test('trimmers: missing context still works (legacy callers omit it)', () => {
-        // When context is omitted but floorRange is present, translation
-        // can't succeed (no chat), so floorRange comes through as null.
+        // When context is omitted but floor_range is present, translation
+        // can't succeed (no chat), so floor_range comes through as null.
         const node = {
             id: 'n1',
             type: 'event',
             level: 'semantic',
             title: 'T',
-            seqTo: 2,
-            semanticDepth: 0,
-            floorRange: { start: 1, end: 2 },
+            seq_to: 2,
+            semantic_depth: 0,
+            floor_range: { start: 1, end: 2 },
         };
         const out = trimCandidatePreview(node);
-        expect(out.floorRange).toBeNull();
-        expect(out.seqTo).toBeUndefined();
+        expect(out.floor_range).toBeNull();
+        expect(out.seq_to).toBeUndefined();
     });
 
     test('trimmers: partial-range (only start) treated as malformed → null', () => {
         // The schema requires both start and end as numbers; partial
         // ranges should be rejected by hasValidFloorRange and fall
-        // through to the seqTo branch.
+        // through to the seq_to branch.
         const node = {
             id: 'n1',
             type: 'event',
             level: 'semantic',
             title: 'T',
-            seqTo: 2,
-            semanticDepth: 0,
-            floorRange: { start: 1 },
+            seq_to: 2,
+            semantic_depth: 0,
+            floor_range: { start: 1 },
         };
         const out = trimCandidatePreview(node, ctx);
-        expect(out.seqTo).toBe(2);
-        expect(out.floorRange).toBeUndefined();
+        expect(out.seq_to).toBe(2);
+        expect(out.floor_range).toBeUndefined();
     });
 });

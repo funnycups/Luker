@@ -137,7 +137,7 @@ const projection = await mg.getLastRecallProjection(ctx);
 | --- | --- | --- |
 | `getNodeById(ctx, id)` | `Promise<NodeView \| null>` | 按 id 解析单个节点。 |
 | `getNodesByIds(ctx, ids)` | `Promise<Array<NodeView \| null>>` | 批量解析；返回数组与输入顺序对齐，`null` 表示该 id 缺失或非法。 |
-| `findEventBySeq(ctx, seq)` | `Promise<NodeView \| null>` | 找到 `floorRange` 覆盖 `seq` 的非归档 `event` 节点；多个范围在 `seq` 上重叠时，取 `seqTo` 最大者。 |
+| `findEventBySeq(ctx, seq)` | `Promise<NodeView \| null>` | 找到 `floorRange` 覆盖 `seq` 的非归档 `event` 节点；多个范围在 `seq` 上重叠时，取 `seq_to` 最大者。 |
 | `findEventBundleBySeq(ctx, seq)` | `Promise<{ event: NodeView, location: NodeView \| null, characters: NodeView[] } \| null>` | 与 `findEventBySeq` 同一次查找，并把通过 `occurred_at` 关联的 `location_state` 与通过 `involved_in` 关联的 `character_sheet` 一起取回。 |
 | `getAssistantSeqForMessageIndex(ctx, messageIndex)` | `number \| null` | 把聊天消息索引翻译为"到 `messageIndex` 为止可抽取 assistant 消息的 1-based 计数"；`messageIndex` 之前没有可抽取的 assistant 消息时返回 `null`。 |
 | `getCurrentInjection(ctx)` | `InjectionState \| null` | 当前主流注入状态的防御性拷贝；见 [InjectionState](#injectionstate)。 |
@@ -175,7 +175,7 @@ const offCommit = mg.onStoreCommit(({ chatKey }) => {
 });
 
 const offInjection = mg.onInjectionChanged(state => {
-    console.log('injection settled', state.alwaysInjectIds.size, state.recallSelectedIds.size);
+    console.log('injection settled', state.always_inject_ids.size, state.recall_selected_ids.size);
 });
 
 // 之后：
@@ -232,7 +232,7 @@ const api = getMemoryGraphReadApi(store, context);
 const candidates = api.listVisibleCandidates();
 // ... onInjectionChanged、listNodes、projectEdges 等方法均挂在这里。
 const unsubscribe = api.onInjectionChanged(state => {
-    console.log('injection changed', state.alwaysInjectIds.size, state.recallSelectedIds.size);
+    console.log('injection changed', state.always_inject_ids.size, state.recall_selected_ids.size);
 });
 ```
 
@@ -248,17 +248,18 @@ interface NodeView {
     type: string;                     // 'event' / 'character_sheet' / ...
     level: 'episodic' | 'semantic';
     title: string;
-    fields: Readonly<Record<string, unknown>>; // tableColumns row payload
-    seqTo: number;
-    parentId: string;                 // '' when no parent
-    childrenIds: ReadonlyArray<string>;
+    fields: Readonly<Record<string, unknown>>; // table_columns row payload
+    seq_to: number;
+    parent_id: string;                 // '' when no parent
+    children_ids: ReadonlyArray<string>;
     archived: boolean;
-    semanticRollup: boolean;
-    semanticDepth: number;
+    semantic_rollup: boolean;
+    semantic_depth: number;
+    floor_range?: { start: number; end: number };
 }
 ```
 
-单个节点的标准视图。`fields` 是对齐 schema `tableColumns` 的行 payload；取值可以是字符串、数字或数组，取决于列定义。
+单个节点的标准视图。`fields` 是对齐 schema `table_columns` 的行 payload；取值可以是字符串、数字或数组，取决于列定义。`floor_range` 仅在节点类型启用了楼层锚定时出现。
 
 ### EdgeView
 
@@ -278,7 +279,7 @@ interface EdgeView {
 ```ts
 interface NeighborView {
     node: NodeView;
-    edgeType: string;
+    edge_type: string;
     direction: 'in' | 'out';
 }
 ```
@@ -301,13 +302,13 @@ interface EdgeSummaryView {
 
 ```ts
 interface InjectionState {
-    alwaysInjectIds: ReadonlySet<string>;
-    recallSelectedIds: ReadonlySet<string>;
-    visibleIds: ReadonlySet<string>;
+    always_inject_ids: ReadonlySet<string>;
+    recall_selected_ids: ReadonlySet<string>;
+    visible_ids: ReadonlySet<string>;
 }
 ```
 
-注入侧的观察面。`alwaysInjectIds` 是被节点类型 `alwaysInject` 标志固定下来的节点。`recallSelectedIds` 是路由 LLM 为上一轮选中的节点。`visibleIds` 是路由 LLM 看到的候选池 —— *在召回流水线至少执行过一次之前为空*。
+注入侧的观察面。`always_inject_ids` 是被节点类型 `always_inject` 标志固定下来的节点。`recall_selected_ids` 是路由 LLM 为上一轮选中的节点。`visible_ids` 是路由 LLM 看到的候选池 —— *在召回流水线至少执行过一次之前为空*。
 
 ### LastRecallProjection
 
@@ -328,18 +329,19 @@ interface LastRecallProjection {
 ```ts
 interface SchemaSpecView {
     type: string;
-    tableName: string;
-    tableColumns: ReadonlyArray<string>;
-    requiredColumns: ReadonlyArray<string>;
-    primaryKeyColumns: ReadonlyArray<string>;
-    forceUpdate: boolean;
-    alwaysInject: boolean;
+    table_name: string;
+    table_columns: ReadonlyArray<string>;
+    required_columns: ReadonlyArray<string>;
+    primary_key_columns: ReadonlyArray<string>;
+    force_update: boolean;
+    extract_every_n: number;
+    always_inject: boolean;
     editable: boolean;
-    compressionMode: 'none' | 'hierarchical' | string;
+    compression_mode: 'none' | 'hierarchical' | string;
 }
 ```
 
-某个节点类型的角色卡生效后 schema 规格。与内部 `getEffectiveNodeTypeSchema` 返回的内容完全一致；角色卡 override（若有）已经应用。用来组装 `schema_overview` LLM prompt 区块。
+某个节点类型的角色卡生效后 schema 规格。与内部 `getEffectiveNodeTypeSchema` 返回的内容完全一致；角色卡 override（若有）已经应用。`extract_every_n` 是生效的抽取节奏：force-update 类型报 1。用来组装 `schema_overview` LLM prompt 区块。
 
 ### SchemaView
 
@@ -358,20 +360,24 @@ interface NodeBriefView {
     id: string;
     level: 'episodic' | 'semantic';
     type: string;
-    tableName: string;
+    table_name: string;
     title: string;
     summary: string;
-    keyValues: Readonly<Record<string, unknown>>;  // primaryKeyColumns projection
-    rowValues: Readonly<Record<string, unknown>>;  // remaining projection columns
-    toSeq: number;
-    childCount: number;                            // active (non-archived) children
+    key_values: Readonly<Record<string, unknown>>;  // primary_key_columns projection
+    row_values: Readonly<Record<string, unknown>>;  // remaining projection columns
+    to_seq: number;
+    semantic_depth: number;
+    parent_id: string;
+    child_count: number;                            // active (non-archived) children
+    editable: boolean;
     exposure: 'high_only' | 'full';
-    edgeSummary: EdgeSummaryView | null;
-    alwaysInject: boolean;
+    edge_summary: EdgeSummaryView | null;
+    always_inject: boolean;
+    floor_range?: { start: number; end: number };
 }
 ```
 
-原生召回 LLM 每行候选看到的单节点"brief"。等价于 `formatNodeBrief` 的输出，加上路由器在序列化前补的几个召回侧字段（`exposure`、`edgeSummary`、`alwaysInject`）。插件复刻原生召回输入时，就是把它当作 `candidateRows` 块的最小单元来组装。
+原生召回 LLM 每行候选看到的单节点"brief"。字段名与 `graph_data` 行一致，另外带上路由器在序列化前补的召回侧字段（`exposure`、`edge_summary`、`always_inject`）。插件复刻原生召回输入时，就是把它当作 `candidate_nodes` 块的最小单元来组装。
 
 ## Layer A： 数据访问
 
@@ -382,8 +388,8 @@ interface NodeBriefView {
 **契约：**
 
 - 默认 `activeOnly: true` —— 排除归档节点和召回诊断节点（过滤规则与原生 `collectAlwaysInjectNodes` 一致）。
-- 按 `compareNodesByTimeline` 排序（seqTo 升序，id 平手）—— 用于离线分析的稳定时间线顺序。这与 `listVisibleCandidates` **不同**，后者按 `compareNodesByRecency` 排序（seqTo 降序、depth 降序、id 字典序）。
-- 返回冻结的 `NodeView` 对象的冻结数组。数组本身、每个视图、每个 `fields` record、每个 `childrenIds` 数组均为冻结的。
+- 按 `compareNodesByTimeline` 排序（seq_to 升序，id 平手）—— 用于离线分析的稳定时间线顺序。这与 `listVisibleCandidates` **不同**，后者按 `compareNodesByRecency` 排序（seq_to 降序、depth 降序、id 字典序）。
+- 返回冻结的 `NodeView` 对象的冻结数组。数组本身、每个视图、每个 `fields` record、每个 `children_ids` 数组均为冻结的。
 
 **何时使用：** 对整个 store 做离线扫描 —— 调试、一次性统计、穷举遍历。复刻召回的热路径调用方应改用 `listVisibleCandidates`，它的顺序跟路由 LLM 输入对齐，且已经应用了召回侧过滤。
 
@@ -439,7 +445,7 @@ console.log(mentions.length, 'semantic mention edges');
 **契约：**
 
 - 返回角色卡生效后的 schema（即 `getEffectiveNodeTypeSchema(context, settings)`）。角色卡 override（若有）已经应用。
-- 每个 `SchemaSpecView` 均为冻结的，内部数组（`tableColumns`、`requiredColumns`、`primaryKeyColumns`）同样冻结。
+- 每个 `SchemaSpecView` 均为冻结的，内部数组（`table_columns`、`required_columns`、`primary_key_columns`）同样冻结。
 - 这是原生召回 LLM 输入中 `schema_overview` 区块的源数据。
 
 **何时使用：** 构造 `schema_overview` prompt 区块时，或基于 schema 派生信息（哪些列是主键、哪些是必填等）做反射时。
@@ -449,7 +455,7 @@ console.log(mentions.length, 'semantic mention edges');
 ```js
 const schema = api.getSchema();
 for (const spec of schema.types) {
-    console.log(spec.type, spec.tableName, [...spec.tableColumns]);
+    console.log(spec.type, spec.table_name, [...spec.table_columns]);
 }
 ```
 
@@ -463,10 +469,10 @@ for (const spec of schema.types) {
 
 - 默认 `direction: 'both'`，默认 `projectTo: 'raw'`。
 - `projectTo: 'raw'` 时返回存储原貌的邻居（不做 rollup 替换）。
-- `projectTo: 'visible'` 时，每个原始邻居 id 均会用当前 `visibleIds` 执行一次 `getNearestVisibleAncestorId`；不能 rollup 到可见集合内的邻居会被丢弃。
+- `projectTo: 'visible'` 时，每个原始邻居 id 均会用当前 `visible_ids` 执行一次 `getNearestVisibleAncestorId`；不能 rollup 到可见集合内的邻居会被丢弃。
 - `projectTo: string[]` 时，用调用方提供的 visible 集合做同样的替换。
 - 归档邻居总是被过滤。
-- 按 `(neighborId, edgeType, direction)` 去重。
+- 按 (`neighborId, edge_type, direction`) 去重。
 
 **何时使用：** 给自定义 LLM prompt 区块构造一个围绕焦点节点的邻居环。用 `projectTo: 'visible'` 与路由 LLM 看到的视图对齐。
 
@@ -478,8 +484,8 @@ const ring = api.getNeighbors('node_42', {
     direction: 'both',
     projectTo: 'visible',
 });
-for (const { node, edgeType, direction } of ring) {
-    console.log(`${direction}-${edgeType}: ${node.title}`);
+for (const { node, edge_type, direction } of ring) {
+    console.log(`${direction}-${edge_type}: ${node.title}`);
 }
 ```
 
@@ -489,7 +495,7 @@ for (const { node, edgeType, direction } of ring) {
 
 **契约：**
 
-- 沿 `parentId` 严格向上行走（高于输入节点），输入节点自身永远不会成为结果。
+- 沿 `parent_id` 严格向上行走（高于输入节点），输入节点自身永远不会成为结果。
 - 默认 `activeOnly: true` —— 遇到归档祖先时返回 `null`（视为未匹配）。
 - 提供 `predicate` 时，返回第一个让 `predicate(view)` 为 truthy 的祖先。未提供 `predicate` 时，返回直接父节点（若有）。
 - 防环：已访问 id 会被记录。
@@ -510,7 +516,7 @@ const rollup = api.getAncestor('event_99', {
 
 **契约：**
 
-- 对 `childrenIds` 做 BFS。
+- 对 `children_ids` 做 BFS。
 - 默认 `activeOnly: true` 过滤归档子节点。默认 `maxDepth: Infinity`。
 - 按 BFS 顺序返回后代（第 1 层在前，然后第 2 层……）。
 - 不包含根节点自身。
@@ -580,9 +586,9 @@ console.log(projected.length, 'projected semantic edges');
 - 返回与 `chooseRecallRoute` 通过 `collectRootCandidates` 构造的同一份候选池 —— 但形式是深冻结的 `NodeView`。
 - `excludeRecentMessages` 与原生 `isNodeInRecentExcludeWindow` 语义一致：过滤掉最近 N 条用户消息窗口内的节点。默认 0。
 - `seqWindow` 与 `types` 在原生候选构造**之后**生效，用来收窄结果池。
-- **按 `compareNodesByRecency` 排序**（seqTo 降序 → semanticDepth 降序 → id 字典序）—— 这是路由 LLM 看到的顺序，与 `listNodes` **不同**。
+- **按 `compareNodesByRecency` 排序**（seq_to 降序 → semantic_depth 降序 → id 字典序）—— 这是路由 LLM 看到的顺序，与 `listNodes` **不同**。
 
-**何时使用：** 任何自定义召回插件的热路径入口。配合 `getNodeBrief` 按 id 调用来组装 `candidateRows` 区块。
+**何时使用：** 任何自定义召回插件的热路径入口。配合 `getNodeBrief` 按 id 调用来组装 `candidate_nodes` 区块。
 
 **最小示例：**
 
@@ -621,7 +627,7 @@ if (exposure === 'high_only') {
 **契约：**
 
 - 直接包装内部的 `buildEdgeSummary` —— 行为没有偏移。
-- 默认 `visibleNodeIds` 取当前 injection-state 的 `visibleIds`。**在召回流水线至少执行过一次之前为空。** 需要保证覆盖时显式传一个集合进来。
+- 默认 `visibleNodeIds` 取当前 injection-state 的 `visible_ids`。**在召回流水线至少执行过一次之前为空。** 需要保证覆盖时显式传一个集合进来。
 - 默认 `limit: 8`，与原生路由器一致。
 - 总是返回冻结的 `EdgeSummaryView`；缺失 / 未知节点返回零度数 summary，绝不返回 `null`。
 
@@ -640,11 +646,11 @@ console.log(summary.degree, summary.sample_neighbors.length);
 
 **契约：**
 
-- 等价于路由 LLM `candidateRows` 区块中的一行：`formatNodeBrief` 投影，加上召回侧的几个字段（`exposure`、`edgeSummary`、`alwaysInject`）。
+- 等价于路由 LLM `candidate_nodes` 区块中的一行：`formatNodeBrief` 投影，加上召回侧的几个字段（`exposure`、`edge_summary`、`always_inject`）。
 - 节点不存在或已归档时返回 `null`。
 - 默认 `includeEdgeSummary: true`，默认 `edgeSummaryLimit: 8`。
-- 默认 `visibleNodeIds` 取当前 injection-state 的 `visibleIds`。需要确定性投影时显式传集合。
-- `alwaysInject` 反映当前 injection state 的 `alwaysInjectIds`。
+- 默认 `visibleNodeIds` 取当前 injection-state 的 `visible_ids`。需要确定性投影时显式传集合。
+- `always_inject` 反映当前 injection state 的 `always_inject_ids`。
 
 **何时使用：** 自定义召回 LLM 输入的标准构件 —— 每个候选 id 调一次。
 
@@ -656,7 +662,7 @@ const brief = api.getNodeBrief('character_sheet_alice', {
     visibleNodeIds: visibleIds,
     edgeSummaryLimit: 8,
 });
-console.log(brief.summary, brief.exposure, brief.alwaysInject);
+console.log(brief.summary, brief.exposure, brief.always_inject);
 ```
 
 ### expandFromSeeds(seedIds， options?)
@@ -667,7 +673,7 @@ console.log(brief.summary, brief.exposure, brief.alwaysInject);
 
 - 包装内部的 `expandRouteCandidates` —— 路由 LLM 决定继续深挖某个 seed 时触发的 BFS drill 扩张。
 - 默认 `hops: 1`、`includeChildren: true`、`projectTo: 'visible'`，**`excludeInternal: false`**（与原生 `expandRouteCandidates` 对齐，在 drill 中 `contains` / `semantic_contains` 也会参与）。
-- `projectTo: 'visible'` 时，drill 在当前 `visibleIds` 池内扩张（seed 自身永远准入）。
+- `projectTo: 'visible'` 时，drill 在当前 `visible_ids` 池内扩张（seed 自身永远准入）。
 - `projectTo: 'raw'` 时，drill 跨整个 store 扩张。
 - `projectTo: string[]` 时，drill 在调用方提供的集合内扩张。
 - 设置 `excludeInternal: true` 会让行为对齐 `projectEdges` 的默认值（`contains` / `semantic_contains` 不参与）。
@@ -686,7 +692,7 @@ console.log(expanded.length, 'nodes reachable');
 
 ### keywordSearch(options)
 
-**签名：** `keywordSearch(options: { query: string, types?: string[], k?: number }): ReadonlyArray<NodeView & { score: number, scoreMode: 'keyword' }>`
+**签名：** `keywordSearch(options: { query: string, types?: string[], k?: number }): ReadonlyArray<NodeView & { score: number, score_mode: 'keyword' }>`
 
 **契约：**
 
@@ -704,12 +710,12 @@ const hits = api.keywordSearch({
     query: 'Eileen',
     types: ['character_sheet'],
 });
-// hits: [{ id, title, ..., score: 0.5, scoreMode: 'keyword' }, ...]
+// hits: [{ id, title, ..., score: 0.5, score_mode: 'keyword' }, ...]
 ```
 
 ### vectorSearch(options)
 
-**签名：** `vectorSearch(options: { query: string, types?: string[], k?: number }): Promise<ReadonlyArray<NodeView & { score: number, scoreMode: 'vector' }>>`
+**签名：** `vectorSearch(options: { query: string, types?: string[], k?: number }): Promise<ReadonlyArray<NodeView & { score: number, score_mode: 'vector' }>>`
 
 **契约：**
 
@@ -728,7 +734,7 @@ try {
         query: 'the woman who healed me',
         types: ['character_sheet'],
     });
-    // hits: [{ id, title, ..., score: 0.83, scoreMode: 'vector' }, ...]
+    // hits: [{ id, title, ..., score: 0.83, score_mode: 'vector' }, ...]
 } catch (err) {
     if (err.code === 'NO_EMBEDDING_PROFILE') {
         const fallback = api.keywordSearch({ query: 'the woman who healed me' });
@@ -743,7 +749,7 @@ try {
 **契约：**
 
 - 在每个候选的 `title` 与主键列（通常包含 `aliases`）上做大小写不敏感的子串匹配。
-- 返回 `{ matches: ReadonlyArray<NodeView> }`，不带 `score` 字段；匹配按时间线（seqTo 升序）排序。
+- 返回 `{ matches: ReadonlyArray<NodeView> }`，不带 `score` 字段；匹配按时间线（seq_to 升序）排序。
 - `query` 为空 / 仅含空白时返回 `{ matches: [] }`（不抛错）。
 
 **何时使用：** 实体身份探针 —— 在创建 `character_sheet` 或 `location_state` **之前**调用，这样消费方就能发现该实体已经在图里，直接编辑而不是重复创建。
@@ -760,7 +766,7 @@ const { matches } = api.findByName({
 
 ### compactionCandidates(options)
 
-**签名：** `compactionCandidates(options: { type: string, depth?: number }): { groups: ReadonlyArray<{ depth: number, childIds: ReadonlyArray<string>, fanIn: number }> }`
+**签名：** `compactionCandidates(options: { type: string, depth?: number }): { groups: ReadonlyArray<{ depth: number, childIds: ReadonlyArray<string>, fan_in: number }> }`
 
 **契约：**
 
@@ -770,7 +776,7 @@ const { matches } = api.findByName({
     - 该类型的 `compression.mode` 是 `'none'`（或除 `'hierarchical'` 之外的任何值）。
     - 可用候选数（在应用 `keepRecentLeaves` 之后）低于 `compression.threshold`。
     - 请求的 `depth` 大于等于 `compression.maxDepth`。
-- 每个 group 的 `childIds` 是候选子节点 id;`fanIn` 是分组大小；`depth` 是会产出的 rollup 层级。
+- 每个 group 的 `childIds` 是候选子节点 id;`fan_in` 是分组大小；`depth` 是会产出的 rollup 层级。
 
 **何时使用：** 驱动 agent 侧的压缩工作流 —— 枚举分组，用你自己的 LLM 为每组生成 summary，然后用相同的 `type` / `childIds` 调用 `writeApi.compactNodes`。
 
@@ -792,8 +798,8 @@ for (const group of groups) {
 
 **契约：**
 
-- 返回一个冻结的 `InjectionState`，包含当前的 `alwaysInjectIds`、`recallSelectedIds`、`visibleIds`。
-- `visibleIds` **在召回流水线至少执行过一次之前为空** —— 因此默认取"当前 visibleIds"的方法在首次使用时得到的会是空集合。如果需要确保有候选池，先调用 `listVisibleCandidates()`，或显式传 `visibleNodeIds` 参数。
+- 返回一个冻结的 `InjectionState`，包含当前的 `always_inject_ids`、`recall_selected_ids`、`visible_ids`。
+- `visible_ids` **在召回流水线至少执行过一次之前为空** —— 因此默认取"当前 visible_ids"的方法在首次使用时得到的会是空集合。如果需要确保有候选池，先调用 `listVisibleCandidates()`，或显式传 `visibleNodeIds` 参数。
 - 底层用 `Object.freeze` 包了 Set（JS 里 Set 内容严格说不是不可变的，但 API 文档把它视为只读；不要 mutate）。
 
 **何时使用：** 同步查询当前注入状态 —— 例如渲染一个"该节点当前已注入"的 UI 徽章。
@@ -802,7 +808,7 @@ for (const group of groups) {
 
 ```js
 const state = api.getInjectionState();
-console.log(state.alwaysInjectIds.size, state.recallSelectedIds.size, state.visibleIds.size);
+console.log(state.always_inject_ids.size, state.recall_selected_ids.size, state.visible_ids.size);
 ```
 
 ### onInjectionChanged(callback)
@@ -822,7 +828,7 @@ console.log(state.alwaysInjectIds.size, state.recallSelectedIds.size, state.visi
 
 ```js
 const unsubscribe = api.onInjectionChanged(state => {
-    refreshInjectionUI(state.recallSelectedIds);
+    refreshInjectionUI(state.recall_selected_ids);
 });
 // Later:
 unsubscribe();
@@ -830,7 +836,7 @@ unsubscribe();
 
 ## 实战示例：复刻原生召回 LLM 输入
 
-`chooseRecallRoute` 构造的 LLM 输入区块是 `schema_overview` 和 `candidateRows`。用本 API 复刻它们非常直接：
+`chooseRecallRoute` 构造的 LLM 输入区块是 `schema_overview` 和 `candidate_nodes`。用本 API 复刻它们非常直接：
 
 ```js
 import { getExtensionApi } from '/scripts/extensions.js';
@@ -841,27 +847,27 @@ if (!api) return;
 // schema_overview block (the LLM prompt segment that describes each node type).
 const schemaOverview = api.getSchema().types.map(spec => ({
     id: spec.type,
-    table_name: spec.tableName,
-    table_columns: [...spec.tableColumns],
-    required_columns: [...spec.requiredColumns],
-    force_update: spec.forceUpdate,
-    always_inject: spec.alwaysInject,
+    table_name: spec.table_name,
+    table_columns: [...spec.table_columns],
+    required_columns: [...spec.required_columns],
+    force_update: spec.force_update,
+    always_inject: spec.always_inject,
     editable: spec.editable,
-    compression_mode: spec.compressionMode,
+    compression_mode: spec.compression_mode,
 }));
 
-// candidateRows block (one brief per visible candidate).
+// candidate_nodes block (one brief per visible candidate).
 const candidates = api.listVisibleCandidates();
-const candidateRows = candidates.map(view => api.getNodeBrief(view.id, {
+const candidateNodes = candidates.map(view => api.getNodeBrief(view.id, {
     includeEdgeSummary: true,
     edgeSummaryLimit: 8,
 }));
 
-// You can now feed schemaOverview + candidateRows + always_inject_node_ids + your own
+// You can now feed schemaOverview + candidateNodes + always_inject_node_ids + your own
 // recall_query_context to your own recall LLM (with whatever model / preset you prefer).
 ```
 
-完整的等价性保证 —— `candidateRows` 在字段层面和顺序层面均与原生路由器的输入一致 —— 由 dogfood 测试（`tests/memory-graph/read-api-dogfood.test.js`）强制保证，它通过 API 构造出相同的区块，并对原生 `chooseRecallRoute` 的内部状态断言结构相等。
+上述字段契约由 `tests/memory-graph/read-api.test.js` 断言，覆盖这些调用返回的每一种视图。
 
 ## Write API
 
@@ -1054,7 +1060,7 @@ if (groups.length > 0) {
 ## 兼容性
 
 - `external-api.js` 的旧导出（`getCurrentlyInjectedNodeIds`、`__recordInjectedNodeIds`、`applyMemoryGraphInjectionUpdate`、`createEmptyInjectionState`）仍然保留 —— 现有插件无需改动。
-- `getMemoryGraphInjectionState(context)` 也从 `read-api.js` 重新导出以保持对称：它返回与 `getInjectionState()` 同形态（`alwaysInjectIds`、`recallSelectedIds`、`visibleIds`）的结果。
+- `getMemoryGraphInjectionState(context)` 也从 `read-api.js` 重新导出以保持对称。它返回内部 camelCase 状态（`alwaysInjectIds`、`recallSelectedIds`、`visibleIds`）；需要 snake_case 的 `InjectionState` 视图时用 `toInjectionStateView(state)`。
 - 工厂 `getMemoryGraphReadApi(store, context)` 与 `getMemoryGraphWriteApi(store, context, options?)` 不污染旧命名空间；import 它们除了加载对应模块之外没有任何副作用。
 
 ## 性能

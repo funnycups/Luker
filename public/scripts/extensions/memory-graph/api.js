@@ -34,7 +34,7 @@ import {
     removeStoreCommitListener,
     findAffectedAssistantSeqFromMessageIndex,
 } from './main.js';
-import { getMemoryGraphReadApi } from './read-api.js';
+import { getMemoryGraphReadApi, toInjectionStateView } from './read-api.js';
 import { getMemoryGraphWriteApi } from './write-api.js';
 import {
     getSchemaScopeInfo,
@@ -158,7 +158,7 @@ registerExtensionApi('memory-graph', {
     /**
      * Find the non-archived `event` node whose floor/seq range covers `seq`.
      * When multiple ranges overlap on `seq`, prefers the node with the highest
-     * seqTo (most recent). Returns `NodeView | null`.
+     * seq_to (most recent). Returns `NodeView | null`.
      */
     findEventBySeq: async (context, seq) => {
         const target = Number(seq);
@@ -220,7 +220,7 @@ registerExtensionApi('memory-graph', {
      */
     getCurrentInjection: (context) => {
         if (!context || typeof context !== 'object') return null;
-        return getCurrentlyInjectedNodeIds(context);
+        return toInjectionStateView(getCurrentlyInjectedNodeIds(context));
     },
 
     /**
@@ -272,7 +272,9 @@ registerExtensionApi('memory-graph', {
      * Subscribe to main-flow injection-decision changes. The callback receives
      * a frozen `InjectionState` snapshot. Returns an idempotent unsubscribe.
      */
-    onInjectionChanged: (cb) => addInjectionChangedListener(cb),
+    onInjectionChanged: (cb) => addInjectionChangedListener((snapshot) => {
+        cb(toInjectionStateView(snapshot));
+    }),
 });
 
 function pickEventCoveringSeq(events, target) {
@@ -281,15 +283,15 @@ function pickEventCoveringSeq(events, target) {
     for (const n of events) {
         if (!n || n.type !== 'event' || n.archived) continue;
         let covers = false;
-        if (n.floorRange
-            && typeof n.floorRange.start === 'number' && typeof n.floorRange.end === 'number') {
-            covers = target >= n.floorRange.start && target <= n.floorRange.end;
-        } else if (Number.isFinite(Number(n.seqTo))) {
-            covers = target === Number(n.seqTo);
+        if (n.floor_range
+            && typeof n.floor_range.start === 'number' && typeof n.floor_range.end === 'number') {
+            covers = target >= n.floor_range.start && target <= n.floor_range.end;
+        } else if (Number.isFinite(Number(n.seq_to))) {
+            covers = target === Number(n.seq_to);
         }
         if (!covers) continue;
-        const nodeSeqTo = Number.isFinite(Number(n.seqTo)) ? Number(n.seqTo)
-            : (n.floorRange ? Number(n.floorRange.end) : -Infinity);
+        const nodeSeqTo = Number.isFinite(Number(n.seq_to)) ? Number(n.seq_to)
+            : (n.floor_range ? Number(n.floor_range.end) : -Infinity);
         if (nodeSeqTo > bestSeqTo) {
             best = n;
             bestSeqTo = nodeSeqTo;

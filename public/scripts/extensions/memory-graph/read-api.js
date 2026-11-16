@@ -153,18 +153,18 @@ function freezeNodeView(node) {
         level: node.level === 'semantic' ? 'semantic' : 'episodic',
         title: String(node.title || ''),
         fields: freezeFieldsRecord(node.fields),
-        seqTo: Number.isFinite(Number(node.seqTo)) ? Number(node.seqTo) : -1,
-        parentId: String(node.parentId || ''),
-        childrenIds: Object.freeze(
+        seq_to: Number.isFinite(Number(node.seqTo)) ? Number(node.seqTo) : -1,
+        parent_id: String(node.parentId || ''),
+        children_ids: Object.freeze(
             (Array.isArray(node.childrenIds) ? node.childrenIds : [])
                 .map(id => String(id || ''))
                 .filter(Boolean),
         ),
         archived: Boolean(node.archived),
-        semanticRollup: Boolean(node.semanticRollup),
-        semanticDepth: Number.isFinite(Number(node.semanticDepth)) ? Number(node.semanticDepth) : 0,
+        semantic_rollup: Boolean(node.semanticRollup),
+        semantic_depth: Number.isFinite(Number(node.semanticDepth)) ? Number(node.semanticDepth) : 0,
     };
-    if (floorRangeView) out.floorRange = floorRangeView;
+    if (floorRangeView) out.floor_range = floorRangeView;
     return Object.freeze(out);
 }
 
@@ -223,21 +223,21 @@ function freezeSchemaSpecView(spec) {
         // Schema items use `id` as the type identifier (e.g. 'event',
         // 'character_sheet'); view-side field name is `type`.
         type: String(spec?.id || spec?.type || ''),
-        tableName: String(spec?.tableName || ''),
-        tableColumns: Object.freeze((Array.isArray(spec?.tableColumns) ? spec.tableColumns : [])
+        table_name: String(spec?.tableName || ''),
+        table_columns: Object.freeze((Array.isArray(spec?.tableColumns) ? spec.tableColumns : [])
             .map(c => String(c || ''))
             .filter(Boolean)),
-        requiredColumns: Object.freeze((Array.isArray(spec?.requiredColumns) ? spec.requiredColumns : [])
+        required_columns: Object.freeze((Array.isArray(spec?.requiredColumns) ? spec.requiredColumns : [])
             .map(c => String(c || ''))
             .filter(Boolean)),
-        primaryKeyColumns: Object.freeze((Array.isArray(spec?.primaryKeyColumns) ? spec.primaryKeyColumns : [])
+        primary_key_columns: Object.freeze((Array.isArray(spec?.primaryKeyColumns) ? spec.primaryKeyColumns : [])
             .map(c => String(c || ''))
             .filter(Boolean)),
-        forceUpdate: Boolean(spec?.forceUpdate),
-        extractEveryN,
-        alwaysInject: Boolean(spec?.alwaysInject),
+        force_update: Boolean(spec?.forceUpdate),
+        extract_every_n: extractEveryN,
+        always_inject: Boolean(spec?.alwaysInject),
         editable: Boolean(spec?.editable),
-        compressionMode,
+        compression_mode: compressionMode,
     });
 }
 
@@ -255,50 +255,56 @@ function freezeInjectionState({ alwaysInjectIds, recallSelectedIds, visibleIds }
     return Object.freeze({
         // Set contents are not enforced read-only by Object.freeze; consumers
         // are contractually required to treat these as immutable.
-        alwaysInjectIds: Object.freeze(a),
-        recallSelectedIds: Object.freeze(r),
-        visibleIds: Object.freeze(v),
+        always_inject_ids: Object.freeze(a),
+        recall_selected_ids: Object.freeze(r),
+        visible_ids: Object.freeze(v),
     });
 }
 
 function freezeNodeBriefView(brief) {
     if (!brief || typeof brief !== 'object') return null;
-    // formatNodeBrief returns snake_case; the view shape we return is camelCase.
-    // We map both directions so the contract is forgiving if either shape is
-    // supplied.
-    const keyValues = (brief.keyValues && typeof brief.keyValues === 'object')
-        ? brief.keyValues
-        : (brief.key_values && typeof brief.key_values === 'object' ? brief.key_values : {});
-    const rowValues = (brief.rowValues && typeof brief.rowValues === 'object')
-        ? brief.rowValues
-        : (brief.row_values && typeof brief.row_values === 'object' ? brief.row_values : {});
-    const edgeSummaryRaw = (brief.edgeSummary !== undefined ? brief.edgeSummary : brief.edge_summary);
-    // Carry floorRange through verbatim — same shape rule as freezeNodeView.
-    // The brief is built via formatNodeBrief which (after this task) spreads
-    // node.floorRange into its output so getNodeBrief reaches us here.
-    const rawFloorRange = brief.floorRange;
+    // formatNodeBrief already emits the snake_case graph-row shape; map the
+    // legacy camelCase aliases too so a caller passing an older brief shape
+    // still produces a valid view.
+    const keyValues = (brief.key_values && typeof brief.key_values === 'object')
+        ? brief.key_values
+        : (brief.keyValues && typeof brief.keyValues === 'object' ? brief.keyValues : {});
+    const rowValues = (brief.row_values && typeof brief.row_values === 'object')
+        ? brief.row_values
+        : (brief.rowValues && typeof brief.rowValues === 'object' ? brief.rowValues : {});
+    const edgeSummaryRaw = (brief.edge_summary !== undefined ? brief.edge_summary : brief.edgeSummary);
+    // Carry floor range through verbatim — same shape rule as freezeNodeView.
+    // The brief is built via formatNodeBrief which emits `floor_range`.
+    const rawFloorRange = brief.floor_range ?? brief.floorRange;
     const floorRangeView = (rawFloorRange
         && typeof rawFloorRange === 'object'
         && typeof rawFloorRange.start === 'number' && Number.isFinite(rawFloorRange.start)
         && typeof rawFloorRange.end === 'number' && Number.isFinite(rawFloorRange.end))
         ? Object.freeze({ start: rawFloorRange.start, end: rawFloorRange.end })
         : null;
+    const toSeq = brief.to_seq ?? brief.toSeq;
+    const childCount = brief.child_count ?? brief.childCount;
+    const semanticDepth = brief.semantic_depth ?? brief.semanticDepth;
+    const parentId = brief.parent_id ?? brief.parentId;
     const out = {
         id: String(brief.id || ''),
         level: brief.level === 'semantic' ? 'semantic' : 'episodic',
         type: String(brief.type || ''),
-        tableName: String(brief.tableName || brief.table_name || ''),
+        table_name: String(brief.table_name || brief.tableName || ''),
         title: String(brief.title || ''),
         summary: String(brief.summary || ''),
-        keyValues: Object.freeze({ ...keyValues }),
-        rowValues: Object.freeze({ ...rowValues }),
-        toSeq: Number.isFinite(Number(brief.toSeq ?? brief.to_seq)) ? Number(brief.toSeq ?? brief.to_seq) : -1,
-        childCount: Number.isFinite(Number(brief.childCount ?? brief.child_count)) ? Number(brief.childCount ?? brief.child_count) : 0,
+        key_values: Object.freeze({ ...keyValues }),
+        row_values: Object.freeze({ ...rowValues }),
+        to_seq: Number.isFinite(Number(toSeq)) ? Number(toSeq) : -1,
+        child_count: Number.isFinite(Number(childCount)) ? Number(childCount) : 0,
+        semantic_depth: Number.isFinite(Number(semanticDepth)) ? Number(semanticDepth) : 0,
+        parent_id: String(parentId || ''),
+        editable: Boolean(brief.editable),
         exposure: brief.exposure === 'high_only' ? 'high_only' : 'full',
-        edgeSummary: edgeSummaryRaw ? freezeEdgeSummaryView(edgeSummaryRaw) : null,
-        alwaysInject: Boolean(brief.alwaysInject ?? brief.always_inject),
+        edge_summary: edgeSummaryRaw ? freezeEdgeSummaryView(edgeSummaryRaw) : null,
+        always_inject: Boolean(brief.always_inject ?? brief.alwaysInject),
     };
-    if (floorRangeView) out.floorRange = floorRangeView;
+    if (floorRangeView) out.floor_range = floorRangeView;
     return Object.freeze(out);
 }
 
@@ -524,7 +530,7 @@ export function getMemoryGraphReadApi(store, context = null) {
 
             out.push(Object.freeze({
                 node: freezeNodeView(neighborNode),
-                edgeType,
+                edge_type: edgeType,
                 direction: neighborDirection,
             }));
         }
@@ -745,9 +751,9 @@ export function getMemoryGraphReadApi(store, context = null) {
             : null;
         const alwaysInjectSet = currentAlwaysInjectSet();
 
-        // Schema-derived tableName for callers that read just `tableName`
-        // (formatNodeBrief already fills `table_name`, but read it back via
-        // spec lookup as a fallback for older fixtures).
+        // Schema-derived table name for callers that read just `table_name`
+        // (formatNodeBrief already fills it, but read it back via spec lookup
+        // as a fallback for older fixtures).
         let tableName = String(briefRaw.table_name || '').trim();
         if (!tableName) {
             try {
@@ -760,7 +766,7 @@ export function getMemoryGraphReadApi(store, context = null) {
 
         return freezeNodeBriefView({
             ...briefRaw,
-            tableName,
+            table_name: tableName,
             exposure,
             edge_summary: edgeSummary,
             always_inject: alwaysInjectSet.has(String(node.id || '')),
@@ -936,7 +942,7 @@ export function getMemoryGraphReadApi(store, context = null) {
         return Object.freeze(sliced.map(({ node, score }) => Object.freeze({
             ...freezeNodeView(node),
             score,
-            scoreMode: 'keyword',
+            score_mode: 'keyword',
         })));
     }
 
@@ -973,7 +979,7 @@ export function getMemoryGraphReadApi(store, context = null) {
         return Object.freeze(scored.map(({ node, score }) => Object.freeze({
             ...freezeNodeView(node),
             score,
-            scoreMode: 'vector',
+            score_mode: 'vector',
         })));
     }
 
@@ -1067,7 +1073,7 @@ export function getMemoryGraphReadApi(store, context = null) {
         const groups = [];
         for (let i = 0; i + fanIn <= candidates.length; i += fanIn) {
             const childIds = candidates.slice(i, i + fanIn).map(n => String(n.id));
-            groups.push(Object.freeze({ depth: requestedDepth, childIds: Object.freeze(childIds), fanIn }));
+            groups.push(Object.freeze({ depth: requestedDepth, child_ids: Object.freeze(childIds), fan_in: fanIn }));
         }
         return Object.freeze({ groups: Object.freeze(groups) });
     }
@@ -1146,3 +1152,8 @@ export function getMemoryGraphReadApi(store, context = null) {
 // `external-api.js` can switch to `read-api.js` without changing import paths
 // beyond the factory.
 export { getMemoryGraphInjectionState } from './external-api.js';
+
+// InjectionState is part of this module's public view contract, so the
+// extension API surface reuses the same freeze/rename path instead of
+// exposing the internal camelCase state object.
+export { freezeInjectionState as toInjectionStateView };

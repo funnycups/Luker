@@ -5550,16 +5550,20 @@ function extractCrawlBrief(node, readApi, visibleIds) {
 }
 
 // Fallback row builder when getNodeBrief can't serve a node (missing spec,
-// diagnostic nodes, etc). Kept to the same 5-field compact shape so crawl
-// graph_data rows stay uniform even on the degraded path.
+// diagnostic nodes, etc). Emits the minimal subset of the brief row shape so
+// a degraded crawl still contributes valid rows to graph_data.nodes.
 function buildCrawlBriefRow(node) {
     if (!node?.id) return null;
+    // Callers pass either a read-api NodeView (snake_case) or a raw store node
+    // (camelCase); accept both so the degraded path keeps real coordinates.
+    const seqTo = node.seq_to ?? node.seqTo;
+    const depth = node.semantic_depth ?? node.semanticDepth;
     return {
         id: String(node.id || ''),
         type: String(node.type || ''),
         title: String(node.title || ''),
-        seqTo: Number(node.seqTo || 0),
-        semanticDepth: Number(node.semanticDepth || 0),
+        seq_to: Number(seqTo || 0),
+        semantic_depth: Number(depth || 0),
     };
 }
 
@@ -5579,7 +5583,7 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
     const isAsOfNode = (node) => {
         if (!node || node.archived || isRecallDiagnosticNode(node)) return false;
         if (maxSeq === null) return true;
-        const seq = Number(node?.seqTo ?? NaN);
+        const seq = Number(node?.seq_to ?? NaN);
         return !Number.isFinite(seq) || seq <= maxSeq;
     };
     const messageText = (Array.isArray(messageBatch) ? messageBatch : [])
@@ -5662,10 +5666,10 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
                             type: node.type,
                             title: node.title,
                             fields: node.fields,
-                            seqTo: node.seqTo,
-                            semanticDepth: node.semanticDepth,
-                            parentId: node.parentId,
-                            childrenIds: node.childrenIds,
+                            seq_to: node.seq_to,
+                            semantic_depth: node.semantic_depth,
+                            parent_id: node.parent_id,
+                            children_ids: node.children_ids,
                         };
                         const brief = readApi.getNodeBrief(id, { visibleNodeIds: undefined, edgeSummaryLimit: 8 });
                         if (brief) selected.set(`node:${id}`, brief);
@@ -5686,7 +5690,7 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
                     } else {
                         result = asOfNeighbors.slice(0, Math.max(1, Math.min(20, Number(args.limit) || 10))).map(item => ({ // cap-ok: neighbor briefs feed the crawl prompt verbatim; bounded rows keep one tool result inside typical tool-output context limits
                             id: item?.node?.id, type: item?.node?.type, title: item?.node?.title,
-                            edge_type: item?.edgeType, direction: item?.direction,
+                            edge_type: item?.edge_type, direction: item?.direction,
                         }));
                         readKeys.add(`neighbors:${id}`);
                     }
@@ -5704,7 +5708,7 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
                         error = 'not_found: no nodes match this query. Try different keywords or proceed without it.';
                         result = null;
                     } else {
-                        result = asOfHits.map(node => ({ id: node.id, type: node.type, title: node.title, seqTo: node.seqTo }));
+                        result = asOfHits.map(node => ({ id: node.id, type: node.type, title: node.title, seq_to: node.seq_to }));
                         readKeys.add(`search:${query.toLowerCase()}`);
                     }
                 }
@@ -6441,22 +6445,24 @@ export function formatNodeBrief(node, settings = null, context = null, extra = {
     const spec = settings ? getSemanticTypeSpec(settings, node?.type, context) : null;
     const out = {
         ...buildLlmFriendlyNodeProjection(node, spec),
+        semantic_depth: Number(node?.semanticDepth ?? node?.metadata?.semantic_depth ?? 0),
+        parent_id: String(node?.parentId || ''),
         child_count: Array.isArray(node?.childrenIds) ? node.childrenIds.length : 0,
+        editable: Boolean(spec?.editable),
         ...extra,
     };
-    // Carry node.floorRange through to the brief view so the read-api's
-    // freezeNodeBriefView can preserve it for the orchestrator-tools layer
-    // (which translates the seq range to chat[] coords for the LLM).
-    // Stamped by A3 extraction; only present for types whose schema sets
-    // `recordsFloorRange: true`. Spread comes after `extra` to win when a
-    // caller overrides explicitly.
+    // Carry node.floorRange through as `floor_range` so every brief row is
+    // snake_case end to end and orchestrator-tools can translate the seq range
+    // to chat[] coords for the LLM. Stamped by A3 extraction; only present for
+    // types whose schema sets `recordsFloorRange: true`. Spread comes after
+    // `extra` to win when a caller overrides explicitly.
     const rawFloorRange = node?.floorRange;
     if (rawFloorRange
         && typeof rawFloorRange === 'object'
         && typeof rawFloorRange.start === 'number' && Number.isFinite(rawFloorRange.start)
         && typeof rawFloorRange.end === 'number' && Number.isFinite(rawFloorRange.end)) {
-        if (out.floorRange === undefined) {
-            out.floorRange = { start: rawFloorRange.start, end: rawFloorRange.end };
+        if (out.floor_range === undefined) {
+            out.floor_range = { start: rawFloorRange.start, end: rawFloorRange.end };
         }
     }
     return out;
@@ -6468,7 +6474,10 @@ function formatNodeDetail(node, settings = null, context = null, extra = {}) {
         ...buildLlmFriendlyNodeProjection(node, spec),
         semantic_depth: Number(node?.semanticDepth || 0),
         semantic_rollup: Boolean(node?.semanticRollup),
+        parent_id: String(node?.parentId || ''),
+        child_count: Array.isArray(node?.childrenIds) ? node.childrenIds.length : 0,
         children: Array.isArray(node?.childrenIds) ? node.childrenIds : [],
+        editable: Boolean(spec?.editable),
         ...extra,
     };
 }
@@ -7095,14 +7104,14 @@ async function chooseRecallRoute(context, settings, recallState) {
 
     const schemaOverview = readApi.getSchema().types.map(spec => ({
         id: spec.type,
-        table_name: spec.tableName,
-        table_columns: spec.tableColumns,
-        required_columns: spec.requiredColumns,
-        force_update: Boolean(spec.forceUpdate),
-        extract_every_n: Number(spec.extractEveryN),
-        always_inject: Boolean(spec.alwaysInject),
+        table_name: spec.table_name,
+        table_columns: spec.table_columns,
+        required_columns: spec.required_columns,
+        force_update: Boolean(spec.force_update),
+        extract_every_n: Number(spec.extract_every_n),
+        always_inject: Boolean(spec.always_inject),
         editable: Boolean(spec.editable),
-        compression_mode: String(spec.compressionMode || 'none'),
+        compression_mode: String(spec.compression_mode || 'none'),
     }));
 
     try {
