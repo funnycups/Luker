@@ -107,6 +107,10 @@ If you need to access APIs through a reverse proxy, you can configure it in the 
 
 Proxy settings are part of the connection profile — different profiles can use different proxies.
 
+### Network Proxy
+
+Chat completion connection profiles have a **Network Proxy** field under **Advanced**. When set, chat completion requests and model list requests for that profile use this proxy. Leave it empty to use the global proxy.
+
 ## Relationship with Preset Decoupling
 
 In Luker, API connections and chat completion presets are **completely independent** concepts:

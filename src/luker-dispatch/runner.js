@@ -15,6 +15,7 @@ import {
     findEntry,
 } from '../request-inspector.js';
 import { createDispatchContext } from './context.js';
+import { createRequestProxyAgent } from '../request-proxy.js';
 
 export async function runLukerDispatch(request, response, { endpoint, select }) {
     // Prefer the client-supplied job_id (from body.luker_generation.job_id)
@@ -34,6 +35,16 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
     }
     if (typeof dispatchFn !== 'function') {
         response.status(400).json({ error: 'dispatch function not provided' });
+        return;
+    }
+
+    // Validate before creating a job: createDispatchContext also builds the
+    // per-request proxy agent, and a malformed URL must fail the HTTP request
+    // instead of throwing inside the background dispatch.
+    try {
+        createRequestProxyAgent(request.body?.network_proxy);
+    } catch (error) {
+        response.status(400).json({ error: error.message });
         return;
     }
 

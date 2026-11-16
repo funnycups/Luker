@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import fetch from 'node-fetch';
+import { createProxyBoundFetch, createRequestProxyAgent } from '../request-proxy.js';
 import { readSecret, getRequestedSecretId } from '../endpoints/secrets.js';
 import {
     createGenerationJob,
@@ -111,7 +112,7 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
         abort() {
             try { abortController.abort(); } catch { /* ignore */ }
         },
-        fetch,
+        fetch: createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy)),
 
         // Register a callback that fires when the underlying HTTP request
         // socket closes (client disconnected — tab close, network drop,

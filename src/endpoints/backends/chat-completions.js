@@ -19,6 +19,7 @@ import {
     uuidv4,
 } from '../../util.js';
 import { normalizeProviderBaseUrl } from '../../util/base-url.js';
+import { createProxyBoundFetch, createRequestProxyAgent } from '../../request-proxy.js';
 import {
     getPromptNames,
     postProcessPrompt,
@@ -551,6 +552,13 @@ router.post('/status', async function (request, statusResponse) {
     try {
         if (!request.body) return statusResponse.sendStatus(400);
 
+        let fetchImpl = fetch;
+        try {
+            fetchImpl = createProxyBoundFetch(fetch, createRequestProxyAgent(request.body.network_proxy));
+        } catch (error) {
+            return statusResponse.status(400).send({ error: true, message: error.message });
+        }
+
         let apiUrl = '';
         let apiKey = '';
         let headers = {};
@@ -632,7 +640,7 @@ router.post('/status', async function (request, statusResponse) {
             const modelsUrl = 'https://api.fireworks.ai/v1/accounts/fireworks/models?filter=supports_serverless%3Dtrue&pageSize=200';
 
             try {
-                const response = await fetch(modelsUrl, {
+                const response = await fetchImpl(modelsUrl, {
                     method: 'GET',
                     headers: {
                         'Authorization': 'Bearer ' + apiKey,
@@ -695,7 +703,7 @@ router.post('/status', async function (request, statusResponse) {
             }
 
             try {
-                const response = await fetch(`${trimTrailingSlash(apiUrl)}/models`, {
+                const response = await fetchImpl(`${trimTrailingSlash(apiUrl)}/models`, {
                     method: 'GET',
                     headers: {
                         'anthropic-version': '2023-06-01',
@@ -744,7 +752,7 @@ router.post('/status', async function (request, statusResponse) {
                     modelHeaders['Authorization'] = authHeader;
                 }
 
-                const models = await fetchVertexModels(modelsUrl, { headers: modelHeaders });
+                const models = await fetchVertexModels(modelsUrl, { headers: modelHeaders, fetchImpl });
                 console.info('Available Vertex AI models:', models.map(m => m.id));
                 return statusResponse.send({ data: models });
             } catch (error) {
@@ -770,7 +778,7 @@ router.post('/status', async function (request, statusResponse) {
             }
 
             try {
-                const models = await fetchGoogleModels(modelsUrl);
+                const models = await fetchGoogleModels(modelsUrl, fetchImpl);
                 console.info('Available Google AI Studio models:', models.map(m => m.id));
                 return statusResponse.send({ data: models });
             } catch (error) {
@@ -808,7 +816,7 @@ router.post('/status', async function (request, statusResponse) {
 
             try {
                 // ---- A) GET /models: fast sanity check for endpoint + api key + api version ----
-                const apiConfigTest = await fetch(modelsUrl, {
+                const apiConfigTest = await fetchImpl(modelsUrl, {
                     method: 'GET',
                     headers: { 'api-key': apiKey, 'Accept': 'application/json' },
                 });
@@ -832,7 +840,7 @@ router.post('/status', async function (request, statusResponse) {
                     max_completion_tokens: 5,
                 };
 
-                const modelRequest = await fetch(chatUrl, {
+                const modelRequest = await fetchImpl(chatUrl, {
                     method: 'POST',
                     headers: { 'api-key': apiKey, 'Content-Type': 'application/json', 'Accept': 'application/json' },
                     body: JSON.stringify(modelPayload),
@@ -886,7 +894,7 @@ router.post('/status', async function (request, statusResponse) {
                 modelsUrl.searchParams.set('task', 'Text Generation');
                 modelsUrl.searchParams.set('per_page', '1000');
 
-                const response = await fetch(modelsUrl, {
+                const response = await fetchImpl(modelsUrl, {
                     method: 'GET',
                     headers: {
                         'Authorization': 'Bearer ' + apiKey,
@@ -924,7 +932,7 @@ router.post('/status', async function (request, statusResponse) {
         Object.keys(queryParams).forEach(key => {
             modelsUrl.searchParams.append(key, queryParams[key]);
         });
-        const response = await fetch(modelsUrl, {
+        const response = await fetchImpl(modelsUrl, {
             method: 'GET',
             headers: {
                 'Authorization': 'Bearer ' + apiKey,

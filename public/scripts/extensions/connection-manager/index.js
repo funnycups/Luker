@@ -25,6 +25,7 @@ import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
 import { clampMaxRetries, formatRetryStatusWhitelist, parseRetryStatusWhitelist } from './max-retries.js';
 import { clampRequestTimeout } from './request-timeout.js';
+import { normalizeNetworkProxyUrl } from './network-proxy.js';
 import { clampAutoContinueMaxAttempts } from './auto-continue-truncated.js';
 import { resolveChatSourceFromApiAlias } from './profile-resolver.js';
 import {
@@ -180,6 +181,7 @@ const FANCY_NAMES = {
     'max-request-retries': 'Max request retries',
     'request-timeout': 'Request timeout',
     'retry-status-whitelist': 'Retry status whitelist',
+    'network-proxy': 'Network Proxy',
     'auto-continue-on-truncated': 'Auto-continue on truncated',
     'auto-continue-on-truncated-max-attempts': 'Max auto-continue attempts',
 };
@@ -1336,6 +1338,7 @@ export async function init() {
     const maxRequestRetriesInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_max_request_retries'));
     const requestTimeoutInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_request_timeout'));
     const retryStatusWhitelistInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_retry_status_whitelist'));
+    const networkProxyInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_network_proxy'));
     const autoContinueOnTruncatedToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_auto_continue_on_truncated'));
     const autoContinueOnTruncatedMaxAttemptsInput = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_auto_continue_on_truncated_max_attempts'));
     const claudeEnableSystemPromptCacheToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('connection_profile_claude_enable_system_prompt_cache'));
@@ -1464,6 +1467,14 @@ export async function init() {
             retryStatusWhitelistInput.disabled = !supportedForWhitelist;
             if (document.activeElement !== retryStatusWhitelistInput) {
                 retryStatusWhitelistInput.value = formatRetryStatusWhitelist(whitelistValue);
+            }
+        }
+
+        if (networkProxyInput) {
+            const supportedForNetworkProxy = !!profile && profileMode === 'cc';
+            networkProxyInput.disabled = !supportedForNetworkProxy;
+            if (document.activeElement !== networkProxyInput) {
+                networkProxyInput.value = supportedForNetworkProxy ? String(profile['network-proxy'] ?? '') : '';
             }
         }
 
@@ -1777,6 +1788,41 @@ export async function init() {
                 delete profile['request-timeout'];
             } else {
                 profile['request-timeout'] = value;
+            }
+            saveSettingsDebounced();
+            await renderDetailsContent(detailsContent);
+            await eventSource.emit(event_types.CONNECTION_PROFILE_UPDATED, oldProfile, profile);
+            syncProfileEditorControls();
+        });
+    }
+
+    if (networkProxyInput) {
+        networkProxyInput.addEventListener('change', async () => {
+            const profile = getSelectedProfile();
+            if (!profile || resolveProfileMode(profile) !== 'cc') {
+                syncProfileEditorControls();
+                return;
+            }
+
+            let value;
+            try {
+                value = normalizeNetworkProxyUrl(networkProxyInput.value);
+            } catch (error) {
+                const detail = String(error?.message || '');
+                console.warn('[connection-manager] Invalid network proxy:', detail);
+                toastr.error(detail.startsWith('Unsupported proxy protocol')
+                    ? t`Unsupported network proxy protocol. Use HTTP, HTTPS, SOCKS, or PAC.`
+                    : t`Invalid network proxy URL.`);
+                syncProfileEditorControls();
+                return;
+            }
+
+            networkProxyInput.value = value;
+            const oldProfile = structuredClone(profile);
+            if (value) {
+                profile['network-proxy'] = value;
+            } else {
+                delete profile['network-proxy'];
             }
             saveSettingsDebounced();
             await renderDetailsContent(detailsContent);

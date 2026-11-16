@@ -1,10 +1,67 @@
 import process from 'node:process';
 import http from 'node:http';
 import https from 'node:https';
-import { ProxyAgent } from 'proxy-agent';
+import { ProxyAgent, proxies } from 'proxy-agent';
 import { isValidUrl, color } from './util.js';
 
 const LOG_HEADER = '[Request Proxy]';
+
+// Every cached agent owns a socket pool, so the same proxy URL reuses one
+// agent across requests instead of building a new pool each time.
+/** @type {Map<string, ProxyAgent>} */
+const requestProxyAgents = new Map();
+let requestProxyKeepAlive = false;
+
+/**
+ * Create an agent bound to one proxy URL. Returns undefined when no URL is
+ * configured. Explicit agents override the global agents installed by
+ * initRequestProxy, which is what makes a per-profile proxy take precedence.
+ * @param {unknown} url
+ * @returns {ProxyAgent | undefined}
+ */
+export function createRequestProxyAgent(url) {
+    const raw = String(url ?? '').trim();
+    if (!raw) {
+        return undefined;
+    }
+
+    let parsed;
+    try {
+        parsed = new URL(raw);
+    } catch {
+        throw new Error(`Invalid proxy URL: ${raw}`);
+    }
+
+    const protocol = parsed.protocol.replace(/:$/, '');
+    if (!Object.hasOwn(proxies, protocol)) {
+        throw new Error(`Unsupported proxy protocol: ${parsed.protocol}`);
+    }
+
+    const cached = requestProxyAgents.get(raw);
+    if (cached) {
+        return cached;
+    }
+
+    const agent = new ProxyAgent({
+        getProxyForUrl: () => raw,
+        keepAlive: requestProxyKeepAlive,
+    });
+    requestProxyAgents.set(raw, agent);
+    return agent;
+}
+
+/**
+ * Bind a fetch implementation to an explicit agent.
+ * @param {typeof fetch} fetchImpl
+ * @param {import('node:http').Agent | undefined} agent
+ * @returns {typeof fetch}
+ */
+export function createProxyBoundFetch(fetchImpl, agent) {
+    if (!agent) {
+        return fetchImpl;
+    }
+    return (url, options = {}) => fetchImpl(url, { ...options, agent });
+}
 
 /**
  * Initialize request proxy.
@@ -17,6 +74,8 @@ const LOG_HEADER = '[Request Proxy]';
  * @property {boolean} privateRequestFilterEnabled Whether the private request filter is enabled.
  */
 export default function initRequestProxy({ enabled, url, bypass, enableKeepAlive, privateRequestFilterEnabled }) {
+    requestProxyKeepAlive = Boolean(enableKeepAlive);
+
     try {
         // No proxy is enabled, so return
         if (!enabled) {

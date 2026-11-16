@@ -58,6 +58,7 @@ import { extension_settings } from './extensions.js';
 import { acquire as acquireRequestSlot } from './extensions/connection-manager/request-throttler.js';
 import { getMaxRequestRetries } from './extensions/connection-manager/max-retries.js';
 import { getRequestTimeoutMs } from './extensions/connection-manager/request-timeout.js';
+import { getNetworkProxy } from './extensions/connection-manager/network-proxy.js';
 import { withProfileRetry } from './extensions/connection-manager/profile-retry.js';
 import { normalizeStreamingFinishReason } from './extensions/connection-manager/auto-continue-truncated.js';
 
@@ -4352,10 +4353,15 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
         }
         : requestBody;
 
+    const networkProxy = getNetworkProxy(apiPresetName);
+    const requestBodyWithProxy = networkProxy
+        ? { ...requestBodyWithTimeout, network_proxy: networkProxy }
+        : requestBodyWithTimeout;
+
     const response = await withProfileRetry(async () => {
         const r = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
-            body: JSON.stringify(unescapeMacroBracesInRequestData(requestBodyWithTimeout)),
+            body: JSON.stringify(unescapeMacroBracesInRequestData(requestBodyWithProxy)),
             headers: getRequestHeaders(),
             signal,
         });
@@ -7010,6 +7016,11 @@ async function getStatusOpenInner() {
         base_url: oai_settings.base_url,
         chat_completion_source: oai_settings.chat_completion_source,
     };
+
+    const networkProxy = getNetworkProxy();
+    if (networkProxy) {
+        data.network_proxy = networkProxy;
+    }
 
     const validateProxySources = [
         chat_completion_sources.CLAUDE,

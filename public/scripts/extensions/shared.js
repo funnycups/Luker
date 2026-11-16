@@ -8,6 +8,7 @@ import { getTokenCountAsync } from '../tokenizers.js';
 import { createThumbnail, isValidUrl } from '../utils.js';
 import { acquire as acquireRequestSlot } from './connection-manager/request-throttler.js';
 import { getProfileRequestTimeoutMs } from './connection-manager/request-timeout.js';
+import { getProfileNetworkProxy } from './connection-manager/network-proxy.js';
 
 function parseProfileBoolean(value) {
     if (typeof value === 'boolean') {
@@ -538,6 +539,7 @@ export class ConnectionManagerRequestService {
                         pollinations_endpoint: profile['api-url'],
                         reverse_proxy: proxyPreset?.url,
                         proxy_password: proxyPreset?.password,
+                        network_proxy: getProfileNetworkProxy(profile) || undefined,
                         custom_prompt_post_processing: profile['prompt-post-processing'],
                         ...(plainTextFunctionCalling !== null ? { function_calling_plain_text: plainTextFunctionCalling } : {}),
                         ...(plainTextFunctionCallingErrorRetry !== null ? { function_calling_plain_text_error_retry: plainTextFunctionCallingErrorRetry } : {}),

@@ -77,6 +77,13 @@
                 <div id="connection_profile_request_timeout_hint_block" class="marginTop5">
                     <small class="opacity50p" data-i18n="Streaming: maximum silence between chunks. Non-streaming: maximum wait for the reply. Timed-out requests are cancelled.">Streaming: maximum silence between chunks. Non-streaming: maximum wait for the reply. Timed-out requests are cancelled.</small>
                 </div>
+                <div id="connection_profile_network_proxy_block" class="flex-container alignItemsCenter gap10 marginTop10">
+                    <label for="connection_profile_network_proxy" data-i18n="Network Proxy">Network Proxy</label>
+                    <input id="connection_profile_network_proxy" class="text_pole flex1" type="text" placeholder="http://127.0.0.1:7890" />
+                </div>
+                <div id="connection_profile_network_proxy_hint_block" class="marginTop5">
+                    <small class="opacity50p" data-i18n="Applied to chat completion requests for this profile. Leave empty to use the global proxy from config.yaml.">Applied to chat completion requests for this profile. Leave empty to use the global proxy from config.yaml.</small>
+                </div>
                 <div id="connection_profile_auto_continue_truncated_block" class="marginTop10">
                     <label class="checkbox_label" for="connection_profile_auto_continue_on_truncated">
                         <input id="connection_profile_auto_continue_on_truncated" type="checkbox" />

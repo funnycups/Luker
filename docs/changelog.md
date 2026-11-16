@@ -4,6 +4,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Connections & Models
+
+- Added a network proxy setting to chat completion connection profiles, taking precedence over the global proxy.
+
 ### Image generation
 
 - Fixed AI Illustration settings labels being squeezed into vertical text.
