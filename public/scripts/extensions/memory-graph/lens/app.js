@@ -311,7 +311,7 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
             put(stateLayer, emptyState('graph', i18n(ERROR_TEXT[code] || 'Failed to read'), code ? '' : String(state.error?.message || ''),
                 button(i18n('Refresh'), () => load({ manual: true }), { iconName: 'refresh' })));
         }
-        if (isFullView(state.view) && state.error?.code === 'no-chat') stateLayer.hidden = true;
+        if (isFullView(state.view)) stateLayer.hidden = true;
     }
 
     function renderAll() {
@@ -347,10 +347,17 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
         } catch (err) {
             if (token !== loadToken || destroyed) return;
             console.warn('[memory-graph/lens] load failed', err);
-            model = null;
             views.schema.invalidate?.();
             views.settings?.invalidate?.();
-            store.set({ status: 'error', error: { code: err?.code || '', message: String(err?.message || err) }, syncing: false });
+            const code = err?.code || '';
+            const message = String(err?.message || err);
+            if (code === 'no-chat' || !model) {
+                model = null;
+                store.set({ status: 'error', error: { code, message }, syncing: false });
+            } else {
+                store.set({ syncing: false, error: { code, message } });
+                showToast(message || i18n(ERROR_TEXT[code] || 'Failed to read'), { error: true });
+            }
             renderAll();
         }
     }

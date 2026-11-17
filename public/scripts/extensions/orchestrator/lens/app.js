@@ -540,9 +540,15 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
         } catch (err) {
             if (token !== loadToken || destroyed) return;
             console.warn('[orchestrator/lens] load failed', err);
-            snapshot = null;
-            flow = null;
-            store.set({ status: 'error', error: { code: err?.code || '', message: String(err?.message || err) } });
+            const code = err?.code || '';
+            const message = String(err?.message || err);
+            if (!snapshot) {
+                flow = null;
+                store.set({ status: 'error', error: { code, message } });
+            } else {
+                store.set({ error: { code, message } });
+                showToast(message || i18n('Failed to read'), { error: true });
+            }
             renderAll();
         }
     }

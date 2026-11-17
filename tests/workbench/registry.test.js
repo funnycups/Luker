@@ -507,30 +507,12 @@ describe('workbench index bootstrap & st-context exposure', () => {
         expect(getWorkspaces().some(w => w.id === 'ctx-runtime-ws')).toBe(false);
     });
 
-    test('initWorkbench mounts corner pill on APP_READY, adds wand item, supports Alt+W, and detects third-party copy via listExtensionNames()', async () => {
+    test('initWorkbench mounts corner pill on APP_READY, adds wand item, and supports Alt+W', async () => {
         const menu = document.createElement('div');
         menu.id = 'extensionsMenu';
         document.body.appendChild(menu);
 
-        // Active third-party copy suppresses built-in workbench
-        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-        const blockedCtx = createMockLukerContext({
-            extensionNames: ['third-party/luker-workbench'],
-            disabledExtensions: [],
-        });
-        globalThis.Luker = { getContext: () => blockedCtx };
-        initWorkbench();
-        await blockedCtx.eventSource.emit('APP_READY');
-        expect(warnSpy).toHaveBeenCalled();
-        expect(document.getElementById('luker_workbench_wand_item')).toBeNull();
-        expect(document.querySelector('.wbench')).toBeNull();
-        resetWorkbenchForTest();
-        warnSpy.mockRestore();
-
-        // Disabled third-party copy allows built-in workbench to boot cleanly
         const ctx = createMockLukerContext({
-            extensionNames: ['third-party/luker-workbench'],
-            disabledExtensions: ['third-party/luker-workbench'],
             extensionSettings: { workbench: { pill: true, hotkey: 'alt+w' } },
         });
         globalThis.Luker = { getContext: () => ctx };

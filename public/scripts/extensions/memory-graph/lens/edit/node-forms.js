@@ -55,7 +55,8 @@ export function openCreateNode(app) {
             const title = titleInput ? titleInput.value.trim() : String(fields.title || '');
             if (!title && !Object.keys(fields).length) { app.notify(i18n('Fill in at least one item')); return false; }
             const snapshot = await app.applyEdit(edit => edit.createNode({ type: typeSelect.value, title, fields }), i18n('Created'), model.chatKey);
-            if (snapshot?.result) app.select(snapshot.result);
+            if (!snapshot) return false;
+            if (snapshot.result) app.select(snapshot.result);
             return true;
         },
     });
@@ -127,7 +128,10 @@ export function openNodeProperties(app, node) {
             if ((seq ?? -1) !== node.seqTo) patch.seqTo = seq;
             if (archived !== node.archived) patch.archived = archived;
             if (parentSelect.value !== node.parentId) patch.parentId = parentSelect.value;
-            if (Object.keys(patch).length) await app.applyEdit(edit => edit.updateNode(node, patch), i18n('Modified'), model.chatKey);
+            if (Object.keys(patch).length) {
+                const res = await app.applyEdit(edit => edit.updateNode(node, patch), i18n('Modified'), model.chatKey);
+                return Boolean(res);
+            }
             return true;
         },
     });
@@ -167,9 +171,10 @@ function openEdgeForm(app, model, node, edge = null) {
         async onOk() {
             const next = { from: fromSelect.value, to: toSelect.value, type: typeSelect.value };
             if (!next.to) { app.notify(i18n('Choose both memories')); return false; }
-            if (edge) await app.applyEdit(item => item.updateEdge(edge, next), i18n('Modified'), model.chatKey);
-            else await app.applyEdit(item => item.addEdge(next), i18n('Created'), model.chatKey);
-            return true;
+            const res = edge
+                ? await app.applyEdit(item => item.updateEdge(edge, next), i18n('Modified'), model.chatKey)
+                : await app.applyEdit(item => item.addEdge(next), i18n('Created'), model.chatKey);
+            return Boolean(res);
         },
     });
 }

@@ -126,17 +126,6 @@ describe('orchestrator/lens/index.js & source-luker.js', () => {
         }));
     });
 
-    test('initOrchestraLens skips runPanel.attachDock when third-party orchestra-lens is active', () => {
-        currentListExtensions = ['orchestrator', 'third-party/orchestra-lens'];
-        const harness = makeContext();
-        globalThis.Luker.getContext = () => harness.ctx;
-
-        initOrchestraLens();
-
-        expect(harness.workspaces.map(w => w.id)).toEqual(['orch']);
-        expect(harness.attachDockMock).not.toHaveBeenCalled();
-    });
-
     test('source-luker load() invokes getRuntimePresetScope for lazy character card migration', async () => {
         const harness = makeContext({
             characters: [{ avatar: 'alice.png', name: 'Alice', data: { extensions: { orchestrator: {} } } }],

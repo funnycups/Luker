@@ -4,7 +4,6 @@
 //   - registers the embedded 'orch' workspace, AskProvider, SuggestRuleProvider,
 //     and 'orch' IterateTarget with Workbench
 //   - attaches the orchestrator's RunStore to the shared Run Panel Dock
-//     (unless a third-party copy of orchestra-lens is active)
 //   - wand-menu item for toggling the shared Run Panel Dock
 
 import { registerLensSharedLocaleData } from '../../../lens-shared/locale-data.js';
@@ -50,18 +49,9 @@ import { createOrchAskProvider, createOrchSuggestRuleProvider } from './provider
 import { createLukerSource } from './source-luker.js';
 
 const DOCK_MENU_ID = 'orchestra_lens_dock_item';
-const THIRD_PARTY_COPY = /third-party\/orchestra-lens$/i;
 const getContext = () => Luker.getContext();
 
 let unregisters = [];
-let warnedThirdParty = false;
-
-/** The former third-party copy would wrap the run panel and record every run a second time. */
-function thirdPartyCopyActive(ctx) {
-    const names = ctx?.listExtensionNames?.() || [];
-    const disabled = ctx?.extensionSettings?.disabledExtensions || [];
-    return names.some(name => THIRD_PARTY_COPY.test(name) && !disabled.includes(name));
-}
 
 function menuItem(id, iconClass, label, onActivate) {
     const item = document.createElement('div');
@@ -209,18 +199,6 @@ export function initOrchestraLens() {
     }
 
     addMenuItems(ctx);
-
-    if (thirdPartyCopyActive(ctx)) {
-        if (!warnedThirdParty) {
-            warnedThirdParty = true;
-            console.warn('[orchestrator/lens] the third-party copy is still enabled; remove it to use the built-in one');
-            globalThis.toastr?.warning?.(
-                i18n('The third-party Orchestra Lens is still enabled. Remove it to use the built-in one.'),
-                i18n('Orchestra Lens'),
-            );
-        }
-        return;
-    }
 
     if (runPanel?.attachDock) {
         const source = createLukerSource();

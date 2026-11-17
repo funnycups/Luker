@@ -2,7 +2,7 @@
 //
 // Memory Lens entry point: registers the embedded 'memory' workspace, AskProvider,
 // and SuggestRuleProvider with Workbench, and starts the background tag filter
-// and token recorder unless a third-party copy is active.
+// and token recorder.
 
 import { registerLensSharedLocaleData } from '../../../lens-shared/locale-data.js';
 import {
@@ -38,19 +38,10 @@ import { registerLensLocaleData } from './locale-data.js';
 import { createMemoryAskProvider, createMemorySuggestRuleProvider } from './providers.js';
 import { startRecorder } from './token-stats.js';
 
-const THIRD_PARTY_COPY = /third-party\/memory-lens$/i;
 const getContext = () => Luker.getContext();
 
 let unregisters = [];
 let stopBackground = null;
-let warnedThirdParty = false;
-
-/** The former third-party copy would run the tag filter and token recorder a second time. */
-function thirdPartyCopyActive(ctx) {
-    const names = ctx?.listExtensionNames?.() || [];
-    const disabled = ctx?.extensionSettings?.disabledExtensions || [];
-    return names.some(name => THIRD_PARTY_COPY.test(name) && !disabled.includes(name));
-}
 
 export function initMemoryLens() {
     const ctx = getContext();
@@ -149,17 +140,6 @@ export function initMemoryLens() {
 
     stopBackground?.();
     stopBackground = null;
-
-    if (thirdPartyCopyActive(ctx)) {
-        if (!warnedThirdParty) {
-            warnedThirdParty = true;
-            globalThis.toastr?.warning?.(
-                i18n('Please remove the third-party Memory Lens, the built-in one replaces it'),
-                i18n('Memory Lens'),
-            );
-        }
-        return;
-    }
 
     const cleanups = [];
     try {

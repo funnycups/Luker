@@ -12,7 +12,6 @@ import { ensureWorkbenchStyles, mountWorkbench } from './app.js';
 import { registerBuiltinTargets } from './targets/index.js';
 
 const MENU_ID = 'luker_workbench_wand_item';
-const THIRD_PARTY_COPY = /third-party\/luker-workbench$/i;
 
 const getContext = () => globalThis.Luker?.getContext?.() ?? globalThis.lukerContext ?? null;
 
@@ -103,14 +102,6 @@ function mountPill() {
     if (!handle) mount({ collapsed: true });
 }
 
-/** The former third-party copy would open a second window on every shortcut press. */
-function thirdPartyCopyActive() {
-    const ctx = getContext();
-    const names = ctx?.listExtensionNames?.() || [];
-    const disabled = ctx?.extensionSettings?.disabledExtensions || [];
-    return names.some(name => THIRD_PARTY_COPY.test(name) && !disabled.includes(name));
-}
-
 export function initWorkbench() {
     if (initialized) return;
     const ctx = getContext();
@@ -120,10 +111,6 @@ export function initWorkbench() {
     if (typeof addLocaleData === 'function') {
         registerLensSharedLocaleData(addLocaleData);
         registerWorkbenchLocaleData(addLocaleData);
-    }
-    if (thirdPartyCopyActive()) {
-        console.warn('[workbench] the third-party copy is still enabled; remove it to use the built-in one');
-        return;
     }
 
     initialized = true;

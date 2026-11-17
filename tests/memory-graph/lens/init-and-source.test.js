@@ -184,7 +184,7 @@ describe('lens index registration & source-luker fixes', () => {
         };
     });
 
-    test('initMemoryLens registers workspace, AskProvider, SuggestRuleProvider, IterateTargets and skips background tasks when third-party copy active', () => {
+    test('initMemoryLens registers workspace, AskProvider, SuggestRuleProvider, IterateTargets and starts background tasks', () => {
         initMemoryLens();
         expect(registeredWorkspaces.map(w => w.id)).toEqual(['memory']);
         expect(registeredAsk.map(a => a.id)).toEqual(['memory']);
@@ -193,19 +193,6 @@ describe('lens index registration & source-luker fixes', () => {
         expect(startTagFilterMock).toHaveBeenCalledTimes(1);
         expect(startRecorderMock).toHaveBeenCalledTimes(1);
         expect(toastrWarnSpy).not.toHaveBeenCalled();
-
-        startTagFilterMock.mockClear();
-        startRecorderMock.mockClear();
-        registeredWorkspaces = [];
-        registeredIterate = [];
-        currentListExtensions = ['memory-graph', 'third-party/memory-lens'];
-
-        initMemoryLens();
-        expect(registeredWorkspaces.map(w => w.id)).toEqual(['memory']);
-        expect(registeredIterate.map(t => t.id)).toEqual(['memory', 'memory_graph']);
-        expect(toastrWarnSpy).toHaveBeenCalledTimes(1);
-        expect(startTagFilterMock).not.toHaveBeenCalled();
-        expect(startRecorderMock).not.toHaveBeenCalled();
     });
 
     test('schema.write checks expectedAvatar and calls invalidateLatestRecallSnapshot', async () => {
@@ -360,5 +347,52 @@ describe('lens index registration & source-luker fixes', () => {
         const edit = source.edit.forChat('char:alice.png:chat1');
         await edit.createNode({ type: 'event', title: 'Test', fields: { summary: 'Hello' } });
         expect(onError).toHaveBeenCalledWith(expect.stringContaining('vector down'));
+    });
+
+    test('mountMemoryLens preserves cached model and surfaces toast on transient reload error', async () => {
+        if (!globalThis.requestAnimationFrame) {
+            globalThis.requestAnimationFrame = (cb) => { cb(); return 1; };
+        }
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        const hostToast = jest.fn();
+        try {
+            let failTransient = false;
+            const fakeSource = {
+                load: jest.fn(async () => {
+                    if (failTransient) {
+                        const err = new Error('temporary IO error');
+                        err.code = 'read-failed';
+                        throw err;
+                    }
+                    return {
+                        chatKey: 'c1',
+                        chatLabel: 'Chat 1',
+                        loadedAt: Date.now(),
+                        nodes: [{ id: 'n1', type: 'event', level: 'semantic', title: 'Kept node', fields: { summary: 'Still here' }, seq_to: 1, semantic_depth: 0 }],
+                        edges: [],
+                        schema: { types: [{ id: 'event', tableColumns: ['summary'] }] },
+                        columnLabels: {},
+                        injection: null,
+                        lastRecall: null,
+                        tokens: { current: null, entries: [] },
+                    };
+                }),
+                settings: { read: () => ({ values: {}, options: { connections: [], presets: [], positions: {}, roles: {}, compressibleTypes: [] }, advanced: { values: {}, defaults: {} } }), subscribe: () => () => {} },
+                ops: { status: () => '', onStatus: () => () => {}, stats: () => ({ nodeCount: 1, edgeCount: 0 }) },
+            };
+            const host = document.createElement('div');
+            document.body.appendChild(host);
+            const lens = mountMemoryLens({ source: fakeSource, container: host, hostApp: { toast: hostToast } });
+            await new Promise(r => setTimeout(r, 0));
+            expect(lens.app.model()?.nodes.has('n1')).toBe(true);
+
+            failTransient = true;
+            await lens.reload();
+            expect(lens.app.model()?.nodes.has('n1')).toBe(true);
+            expect(hostToast).toHaveBeenCalledWith(expect.stringContaining('temporary IO error'), expect.objectContaining({ error: true }));
+            lens.destroy();
+        } finally {
+            warnSpy.mockRestore();
+        }
     });
 });
