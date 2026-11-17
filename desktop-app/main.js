@@ -21,7 +21,7 @@ import {
 } from './data-location.js';
 import { createHttpAuthController, HttpAuthStore } from './http-auth.js';
 import { detectInstallFlavour } from './install-flavour.js';
-import { hidesOnClose, usesTray, devtoolsShortcutFor } from './window-behaviour.js';
+import { hidesOnClose, usesTray, devtoolsShortcutFor, reloadShortcutFor } from './window-behaviour.js';
 
 // Electron's main process exposes V8's WebAssembly but not the streaming
 // compile helpers, which live at the Blink layer in Chromium. Emscripten-built
@@ -1351,13 +1351,22 @@ if (hasSingleInstanceLock) {
         });
         win.webContents.on('did-finish-load', () => httpAuth.resetAttempts());
 
-        // macOS keeps an application menu that already binds the devtools toggle,
-        // so the handler would race it. Only the menu-less platforms get one.
+        // macOS keeps an application menu that already binds devtools and page
+        // reload, so the handler would race it. Only the menu-less platforms get one.
         if (process.platform !== 'darwin') {
             win.webContents.on('before-input-event', (event, input) => {
                 if (devtoolsShortcutFor(process.platform, input) === 'toggle') {
                     event.preventDefault();
                     win.webContents.toggleDevTools();
+                    return;
+                }
+                const reloadAction = reloadShortcutFor(process.platform, input);
+                if (reloadAction === 'reload') {
+                    event.preventDefault();
+                    win.webContents.reload();
+                } else if (reloadAction === 'force-reload') {
+                    event.preventDefault();
+                    win.webContents.reloadIgnoringCache();
                 }
             });
         }

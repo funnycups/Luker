@@ -19,8 +19,21 @@ test('the application menu matches what the platform needs', async () => {
 
         if (process.platform === 'darwin') {
             expect(hasApplicationMenu).toBe(true);
+            const hasReloadRole = await desktop.electronApp.evaluate(({ Menu }) => {
+                const roles = Menu.getApplicationMenu().items
+                    .flatMap(item => item.submenu ? item.submenu.items : [])
+                    .map(item => item.role);
+                return roles.includes('reload') && roles.includes('forcereload');
+            });
+            expect(hasReloadRole).toBe(true);
         } else {
             expect(hasApplicationMenu).toBe(false);
+            const before = await desktop.page.evaluate(() => performance.timeOrigin);
+            await desktop.page.keyboard.press('F5');
+            await expect.poll(
+                () => desktop.page.evaluate(() => performance.timeOrigin).catch(() => before),
+                { timeout: 15_000 },
+            ).not.toBe(before);
         }
     } finally {
         await desktop.close();
