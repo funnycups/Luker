@@ -56,6 +56,7 @@ beforeEach(async () => {
         ConflictError: class ConflictError extends Error { constructor(...a) { super(...a); this.code = 'ConflictError'; } },
         NotFoundError: class NotFoundError extends Error {},
         InvalidArgumentError: class InvalidArgumentError extends Error { constructor(m) { super(m); this.code = 'invalid_argument'; } },
+        StorageReadOnlyError: class StorageReadOnlyError extends Error {},
     }));
     jest.unstable_mockModule('../../src/middleware/validateFileName.js', () => ({
         default: (req, res, next) => next(),
