@@ -64,6 +64,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed third-party extension version checks clearing local branch and commit information when the remote repository cannot be reached.
 - Fixed narrow screens truncating third-party extension version and branch details in Manage extensions and non-Git extension folders appending an empty branch suffix.
 - Fixed third-party extensions failing to read and save chat completion presets and losing request message references across generation events.
+- Fixed non-streaming generation responses carrying an event-stream content-type header and character-bound preset switches failing to update the active preset name.
 
 ### Fixes
 
@@ -74,6 +75,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed renaming chats failing in the Android app and on filesystems without hard link support.
 - Fixed background Prompt Manager refreshes interrupting an active prompt drag.
 - Fixed prompt assembly failures showing a generic token-counting error, dispatching an empty context, and omitting cross-frame error details from diagnostics logs.
+- Fixed preset switching and background preset loading overwriting another preset's regex rules and settings.
 
 ### Storage & Sync
 
