@@ -4,6 +4,21 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Workbench
+
+- Added the floating Workbench window with prompt token breakdown, local configuration suggestions, and read-only AI Q&A.
+- Unified AI iteration for Memory Graph, Memory Structure, Multi-Agent Orchestrator, presets, character cards, and world books inside Workbench, with diff review, Change history undo, and automatic migration of historical iteration sessions.
+
+### Multi-Agent Orchestrator
+
+- Embedded the orchestration flow editor, run inspector, run history, timing statistics, presets, skills, custom tools, and plot notes into Workbench.
+- Added a shared floating Run panel for live orchestration and pre-request search runs.
+- Fixed spec mode AI iteration failing to edit stage nodes written in string shorthand.
+
+### Documentation
+
+- Added the [Workbench guide](/features/workbench), [Workbench API reference](/development/extension-api/workbench), and [Run Panel API reference](/development/extension-api/run-panel), and updated the Memory Graph, Multi-Agent Orchestrator, Preset Assistant, Character Card Editor Assistant, and State System guides.
+
 ### Connections & Models
 
 - Added a network proxy setting to chat completion connection profiles, taking precedence over the global proxy.
@@ -17,6 +32,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed character card replacement failing when importing tags.
 - Fixed reading and editing character cards whose filenames retain leading spaces or punctuation.
 - Fixed reading empty-named root properties from character cards.
+- Fixed deleting nested character card extension fields leaving internal sentinel objects behind.
 
 ### CardApp
 
@@ -24,6 +40,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Memory Graph
 
+- Embedded the Memory Graph network, timeline, data table, schema editor, and settings workspace into Workbench.
 - Allowed Memory Graph crawl candidate limit to be set to 0 for no limit.
 - Changed Memory Graph read API view fields to snake_case.
 - Aligned Memory Graph extraction, crawl, and compression prompts with the fields the runtime provides.
@@ -48,6 +65,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Storage & Sync
 
+- Added per-namespace global state storage across account storage quotas, settings backups, storage migrations, and LAN and S3 sync.
 - Fixed character card field edits bypassing sync locking and account storage quotas.
 - Fixed reading SQL settings strings starting with quotes and extension keys containing control characters.
 - Fixed sync status checks failing immediately on an interrupted request or alerting accounts without configured sync backends.
@@ -67,6 +85,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed full-screen pages and custom themes overlapping the status bar and bottom area in the iOS app.
 - Synced the iOS status bar and bottom area separately to the rendered top and bottom bar colors.
+
+### Extension API
+
+- Added Workbench registration APIs for embedded workspaces, AI iteration targets, Q&A read providers, and local suggestion rules, alongside global state read and patch helpers.
 
 ## v2.9.0-rc.2 (2026-11-11)
 
