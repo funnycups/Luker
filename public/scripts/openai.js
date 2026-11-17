@@ -63,9 +63,9 @@ import { withProfileRetry } from './extensions/connection-manager/profile-retry.
 import { normalizeStreamingFinishReason } from './extensions/connection-manager/auto-continue-truncated.js';
 
 import { getEventSourceStream } from './sse-stream.js';
+import { hydrateIndexedPresetEntries } from './util/preset-hydration.js';
 import {
     areLookupNamesEqual,
-    buildPresetNameIndexMap,
     findCanonicalNameInList,
     clamp,
     createThumbnail,
@@ -6181,17 +6181,16 @@ function migrateChatCompletionSettings(settings) {
  * @param {any} data Settings data from backend
  * @param {ChatCompletionSettings} settings Saved settings from backend
  */
-export function hydrateOpenAIPresetData(data = {}) {
-    openai_setting_names = buildPresetNameIndexMap(data.openai_setting_names ?? openai_setting_names);
-    openai_settings = Array.isArray(data.openai_settings)
-        ? data.openai_settings.map((item) => {
-            if (typeof item !== 'string') {
-                return null;
-            }
-            const parsed = JSON.parse(item);
-            return structuredClone(parsed);
-        })
-        : [];
+export function hydrateOpenAIPresetData(data = {}, options = {}) {
+    const hydrated = hydrateIndexedPresetEntries({
+        currentNames: openai_setting_names,
+        currentBodies: openai_settings,
+        nextNamesInput: data.openai_setting_names,
+        nextBodiesInput: data.openai_settings,
+        preserveExisting: options?.preserveExisting === true,
+    });
+    openai_setting_names = hydrated.names;
+    openai_settings = hydrated.bodies;
 }
 
 function loadOpenAISettings(data, settings) {

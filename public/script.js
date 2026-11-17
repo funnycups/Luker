@@ -28,6 +28,8 @@ import {
 import {
     hydrateTextGenPresetData,
     textgenerationwebui_settings as textgen_settings,
+    textgenerationwebui_presets,
+    textgenerationwebui_preset_names,
     loadTextGenSettings,
     generateTextGenWithStreaming,
     getTextGenGenerationData,
@@ -117,6 +119,8 @@ import {
     hydrateOpenAIPresetData,
     loadOpenAISettings,
     oai_settings,
+    openai_settings,
+    openai_setting_names,
     openai_messages_count,
     chat_completion_sources,
     getChatCompletionModel,
@@ -359,6 +363,7 @@ import { createLukerDelivery, installFetchProxy, installFetchProxyForAllIframes,
 import { loadSettingsEnvelope } from './scripts/settings-resource-read.js';
 import { listPresetDocuments, loadPresetResources, readPresetDocument } from './scripts/named-resource-read.js';
 import { initWorkbench } from './scripts/workbench/index.js';
+import { listHydratedIndexedPresetNames, listHydratedOrderedPresetNames } from './scripts/util/preset-hydration.js';
 
 installFrontendLogCapture();
 initAndroidDebugTrail();
@@ -2336,6 +2341,8 @@ async function firstLoadInit() {
         console.debug('[init] openWelcomeScreen done');
         await yieldToBrowser();
     }
+
+    void warmPreloadFullSettings();
 
     console.debug('[init] startup tasks batch 2 start (extensions)');
     await runStartupTasks([
@@ -15925,12 +15932,21 @@ async function fetchBootstrapSnapshot() {
     }
 }
 
-function hydrateFullSettingsPresetData(data) {
-    hydrateKoboldPresetData(data);
-    hydrateNovelPresetData(data);
-    hydrateTextGenPresetData(data);
-    hydrateOpenAIPresetData(data);
+function hydrateFullSettingsPresetData(data, options = {}) {
+    hydrateKoboldPresetData(data, options);
+    hydrateNovelPresetData(data, options);
+    hydrateTextGenPresetData(data, options);
+    hydrateOpenAIPresetData(data, options);
     fullSettingsLoaded = true;
+}
+
+function collectHydratedPresetNamesByApi() {
+    return {
+        novel: listHydratedIndexedPresetNames(novelai_setting_names, novelai_settings),
+        openai: listHydratedIndexedPresetNames(openai_setting_names, openai_settings),
+        textgenerationwebui: listHydratedOrderedPresetNames(textgenerationwebui_preset_names, textgenerationwebui_presets),
+        kobold: listHydratedIndexedPresetNames(koboldai_setting_names, koboldai_settings),
+    };
 }
 
 async function warmPreloadFullSettings() {
@@ -15944,8 +15960,9 @@ async function warmPreloadFullSettings() {
 
     fullSettingsLoadPromise = (async () => {
         try {
-            const data = await loadPresetResources({ complete: true });
-            hydrateFullSettingsPresetData(data);
+            const skipNames = collectHydratedPresetNamesByApi();
+            const data = await loadPresetResources({ complete: true, skipNames });
+            hydrateFullSettingsPresetData(data, { preserveExisting: true });
             return true;
         } catch (error) {
             console.warn('Deferred settings preload failed', error);
@@ -15972,7 +15989,9 @@ export async function getSettings(options = {}) {
     const useBootstrap = options?.bootstrap === true;
     const data = options?.payload ?? await fetchSettingsPayload(useBootstrap ? '/api/settings/bootstrap' : '/api/settings/get');
 
-    if (!useBootstrap) {
+    if (useBootstrap) {
+        fullSettingsLoaded = false;
+    } else {
         hydrateFullSettingsPresetData(data);
     }
 
@@ -16126,10 +16145,6 @@ export async function getSettings(options = {}) {
     // persistence of `firstRun = false`. Keeping a reference prevents the
     // unhandled-rejection warning if doOnboarding throws.
     void onboardingTask;
-
-    if (useBootstrap) {
-        void warmPreloadFullSettings();
-    }
 }
 
 function primeCharactersSnapshot(snapshot) {

@@ -144,12 +144,13 @@ export function stampNamedDocuments(entries) {
     });
 }
 
-export async function loadPresetResources({ selected = {}, complete = false, signal } = {}) {
+export async function loadPresetResources({ selected = {}, complete = false, skipNames = {}, signal } = {}) {
     const byApi = {};
     await Promise.all(PRESET_API_IDS.map(async (apiId) => {
         const selectedName = selected?.[apiId];
+        const skipped = new Set(Array.isArray(skipNames?.[apiId]) ? skipNames[apiId] : []);
         const readEntries = async (names) => Promise.all(names.map(async (name) => {
-            if (!complete && name !== selectedName) {
+            if ((!complete && name !== selectedName) || skipped.has(name)) {
                 return { name, body: null };
             }
             try {

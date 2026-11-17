@@ -30,6 +30,7 @@ import { getEventSourceStream } from './sse-stream.js';
 import { getCurrentDreamGenModelTokenizer, getCurrentOpenRouterModelTokenizer, loadAphroditeModels, loadDreamGenModels, loadFeatherlessModels, loadGenericModels, loadInfermaticAIModels, loadLlamaCppModels, loadMancerModels, loadOllamaModels, loadOpenRouterModels, loadTabbyModels, loadTogetherAIModels, loadVllmModels, updateOpenRouterProvidersWarning } from './textgen-models.js';
 import { TOKENIZER_SUPPORTED_KEY, getEncodingTokenizerType, getTextTokens, getTokenizerBestMatch, tokenizers } from './tokenizers.js';
 import { AbortReason } from './util/AbortReason.js';
+import { hydrateOrderedPresetEntries } from './util/preset-hydration.js';
 import { getSortableDelay, onlyUnique, arraysEqual, isObject } from './utils.js';
 
 export const textgen_types = {
@@ -328,9 +329,16 @@ export const setting_names = [
 
 const DYNATEMP_BLOCK = document.getElementById('dynatemp_block_ooba');
 
-export function hydrateTextGenPresetData(data = {}) {
-    textgenerationwebui_presets = convertPresets(data.textgenerationwebui_presets ?? []);
-    textgenerationwebui_preset_names = Array.isArray(data.textgenerationwebui_preset_names) ? [...data.textgenerationwebui_preset_names] : [];
+export function hydrateTextGenPresetData(data = {}, options = {}) {
+    const hydrated = hydrateOrderedPresetEntries({
+        currentNames: textgenerationwebui_preset_names,
+        currentBodies: textgenerationwebui_presets,
+        nextNamesInput: data.textgenerationwebui_preset_names,
+        nextBodiesInput: data.textgenerationwebui_presets,
+        preserveExisting: options?.preserveExisting === true,
+    });
+    textgenerationwebui_preset_names = hydrated.names;
+    textgenerationwebui_presets = hydrated.bodies;
 }
 
 export function validateTextGenUrl() {
@@ -413,10 +421,6 @@ export function formatTextGenURL(value) {
         // Just using URL as a validation check
     }
     return null;
-}
-
-function convertPresets(presets) {
-    return Array.isArray(presets) ? presets.map((preset) => typeof preset === 'string' ? JSON.parse(preset) : null) : [];
 }
 
 function getTokenizerForTokenIds() {

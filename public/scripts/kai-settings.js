@@ -22,7 +22,8 @@ import {
     power_user,
 } from './power-user.js';
 import { getEventSourceStream } from './sse-stream.js';
-import { buildPresetNameIndexMap, getOrderedPresetNames, getSortableDelay, versionCompare } from './utils.js';
+import { hydrateIndexedPresetEntries } from './util/preset-hydration.js';
+import { getOrderedPresetNames, getSortableDelay, versionCompare } from './utils.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 
 export let koboldai_settings;
@@ -97,11 +98,16 @@ function selectKoboldGuiPreset() {
         .trigger('change');
 }
 
-export function hydrateKoboldPresetData(data = {}) {
-    koboldai_setting_names = buildPresetNameIndexMap(data.koboldai_setting_names ?? koboldai_setting_names);
-    koboldai_settings = Array.isArray(data.koboldai_settings)
-        ? data.koboldai_settings.map((item) => typeof item === 'string' ? JSON.parse(item) : null)
-        : [];
+export function hydrateKoboldPresetData(data = {}, options = {}) {
+    const hydrated = hydrateIndexedPresetEntries({
+        currentNames: koboldai_setting_names,
+        currentBodies: koboldai_settings,
+        nextNamesInput: data.koboldai_setting_names,
+        nextBodiesInput: data.koboldai_settings,
+        preserveExisting: options?.preserveExisting === true,
+    });
+    koboldai_setting_names = hydrated.names;
+    koboldai_settings = hydrated.bodies;
 }
 
 export function loadKoboldSettings(data, preset, settings) {

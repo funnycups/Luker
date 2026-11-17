@@ -33,7 +33,7 @@ jest.unstable_mockModule('../../public/scripts/kai-settings.js', () => stubExpor
 jest.unstable_mockModule('../../public/scripts/textgen-settings.js', () => stubExports([
     'hydrateTextGenPresetData', 'loadTextGenSettings', 'generateTextGenWithStreaming',
     'getTextGenGenerationData', 'parseTextgenLogprobs', 'parseTabbyLogprobs', 'initTextGenSettings',
-], { textgenerationwebui_settings: {}, textgen_types: {} }));
+], { textgenerationwebui_settings: {}, textgenerationwebui_presets: [], textgenerationwebui_preset_names: [], textgen_types: {} }));
 jest.unstable_mockModule('../../public/scripts/world-info.js', () => stubExports([
     'getWorldInfoPrompt', 'setWorldInfoSettings', 'importEmbeddedWorldInfo',
     'checkEmbeddedWorld', 'setWorldInfoButtonClass', 'initWorldInfo',
@@ -73,6 +73,8 @@ jest.unstable_mockModule('../../public/scripts/openai.js', () => stubExports([
     'clearCharacterBoundChatCompletionPreset', 'maybeApplyCharacterBoundPreset', 'initOpenAI',
 ], {
     oai_settings: {},
+    openai_settings: [],
+    openai_setting_names: {},
     openai_messages_count: 0,
     chat_completion_sources: {},
     proxies: [],

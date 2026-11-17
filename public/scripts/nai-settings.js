@@ -14,8 +14,8 @@ import {
 import { MAX_CONTEXT_DEFAULT, MAX_RESPONSE_DEFAULT, power_user } from './power-user.js';
 import { getTextTokens, tokenizers } from './tokenizers.js';
 import { getEventSourceStream } from './sse-stream.js';
+import { hydrateIndexedPresetEntries } from './util/preset-hydration.js';
 import {
-    buildPresetNameIndexMap,
     getSortableDelay,
     getOrderedPresetNames,
     getStringHash,
@@ -217,11 +217,16 @@ export function loadNovelPreset(preset) {
     loadNovelSettingsUi(nai_settings);
 }
 
-export function hydrateNovelPresetData(data = {}) {
-    novelai_setting_names = buildPresetNameIndexMap(data.novelai_setting_names ?? novelai_setting_names);
-    novelai_settings = Array.isArray(data.novelai_settings)
-        ? data.novelai_settings.map((item) => typeof item === 'string' ? JSON.parse(item) : null)
-        : [];
+export function hydrateNovelPresetData(data = {}, options = {}) {
+    const hydrated = hydrateIndexedPresetEntries({
+        currentNames: novelai_setting_names,
+        currentBodies: novelai_settings,
+        nextNamesInput: data.novelai_setting_names,
+        nextBodiesInput: data.novelai_settings,
+        preserveExisting: options?.preserveExisting === true,
+    });
+    novelai_setting_names = hydrated.names;
+    novelai_settings = hydrated.bodies;
 }
 
 export function loadNovelSettings(data, settings) {
