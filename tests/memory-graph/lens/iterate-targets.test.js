@@ -21,6 +21,7 @@ import { DEFAULT_GRAPH_ITER_SYSTEM_PROMPT } from '../../../public/scripts/extens
 import { normalizeStoreForRuntime } from '../../../public/scripts/extensions/memory-graph/persistence.js';
 import { createMemoryGraphTarget, createMemoryConfigTarget } from '../../../public/scripts/extensions/memory-graph/lens/iterate-targets.js';
 
+const mockZhLuker = globalThis.Luker;
 const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
 
 const DEFAULT_SCHEMA = [
@@ -279,7 +280,7 @@ beforeEach(() => {
     }
     document.body.innerHTML = '';
     clearRegistry();
-    globalThis.Luker = undefined;
+    globalThis.Luker = mockZhLuker;
 });
 
 afterEach(() => {

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, test, expect } from '@jest/globals';
-import { registerLensLocaleData } from '../../../public/scripts/extensions/orchestrator/lens/locale-data.js';
+import { registerLocaleData } from '../../../public/scripts/extensions/orchestrator/i18n.js';
 import { registerLensSharedLocaleData } from '../../../public/scripts/lens-shared/locale-data.js';
 import { registerWorkbenchLocaleData } from '../../../public/scripts/workbench/locale-data.js';
 import { registerRunPanelLocaleData } from '../../../public/scripts/run-panel/locale-data.js';
@@ -19,67 +19,27 @@ function collectLocaleTables(registerFn) {
     return tables;
 }
 
-describe('orchestrator/lens locale-data hygiene', () => {
-    const lensTables = collectLocaleTables(registerLensLocaleData);
-    const cnKeys = Object.keys(lensTables['zh-cn']);
-    const twKeys = Object.keys(lensTables['zh-tw']);
+describe('orchestrator unified i18n hygiene', () => {
+    const orchTables = collectLocaleTables(registerLocaleData);
+    const cnKeys = Object.keys(orchTables['zh-cn']);
+    const twKeys = Object.keys(orchTables['zh-tw']);
+
+    test('split lens/locale-data.js is removed in favor of single orchestrator/i18n.js', () => {
+        expect(fs.existsSync(path.join(ROOT, 'public/scripts/extensions/orchestrator/lens/locale-data.js'))).toBe(false);
+    });
 
     test('100% EN / zh-CN / zh-TW key parity', () => {
         expect(cnKeys.length).toBeGreaterThan(0);
-        expect(twKeys.filter(k => !(k in lensTables['zh-cn']))).toEqual([]);
-        expect(cnKeys.filter(k => !(k in lensTables['zh-tw']))).toEqual([]);
-    });
-
-    test('0 unescaped semicolons in English keys', () => {
-        const bad = cnKeys.filter(k => /(?<!\\);/.test(k));
-        expect(bad).toEqual([]);
+        expect(twKeys.filter(k => !Object.hasOwn(orchTables['zh-cn'], k))).toEqual([]);
+        expect(cnKeys.filter(k => !Object.hasOwn(orchTables['zh-tw'], k))).toEqual([]);
     });
 
     test('zh-CN and zh-TW values use full-width CJK punctuation', () => {
         const halfWidthCjk = /[\u3400-\u9fff][,.;:!?()]|[,.;:!?()][\u3400-\u9fff]/;
-        const badCn = cnKeys.filter(k => halfWidthCjk.test(lensTables['zh-cn'][k])).map(k => [k, lensTables['zh-cn'][k]]);
-        const badTw = twKeys.filter(k => halfWidthCjk.test(lensTables['zh-tw'][k])).map(k => [k, lensTables['zh-tw'][k]]);
+        const badCn = cnKeys.filter(k => halfWidthCjk.test(orchTables['zh-cn'][k])).map(k => [k, orchTables['zh-cn'][k]]);
+        const badTw = twKeys.filter(k => halfWidthCjk.test(orchTables['zh-tw'][k])).map(k => [k, orchTables['zh-tw'][k]]);
         expect(badCn).toEqual([]);
         expect(badTw).toEqual([]);
-    });
-
-    test('0 key collisions with core locales, orchestrator/i18n.js, lens-shared, workbench, and run-panel', () => {
-        const zhCnCore = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/locales/zh-cn.json'), 'utf8'));
-        const zhTwCore = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/locales/zh-tw.json'), 'utf8'));
-        const lensShared = collectLocaleTables(registerLensSharedLocaleData);
-        const workbench = collectLocaleTables(registerWorkbenchLocaleData);
-        const runPanel = collectLocaleTables(registerRunPanelLocaleData);
-
-        const orchI18nPath = path.join(ROOT, 'public/scripts/extensions/orchestrator/i18n.js');
-        const orchI18nSource = fs.readFileSync(orchI18nPath, 'utf8');
-        const cnSectionMatch = /_addLocaleData\('zh-cn',\s*\{([\s\S]*?)\n\s*\}\);/.exec(orchI18nSource);
-        const twSectionMatch = /_addLocaleData\('zh-tw',\s*\{([\s\S]*?)\n\s*\}\);/.exec(orchI18nSource);
-        const orchCnKeys = new Set();
-        const orchTwKeys = new Set();
-        for (const m of (cnSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
-            orchCnKeys.add(m[1].replace(/\\'/g, '\''));
-        }
-        for (const m of (twSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
-            orchTwKeys.add(m[1].replace(/\\'/g, '\''));
-        }
-
-        const cnCollisions = cnKeys.filter(k =>
-            Object.hasOwn(zhCnCore, k)
-            || Object.hasOwn(lensShared['zh-cn'], k)
-            || Object.hasOwn(workbench['zh-cn'], k)
-            || Object.hasOwn(runPanel['zh-cn'], k)
-            || orchCnKeys.has(k),
-        );
-        const twCollisions = twKeys.filter(k =>
-            Object.hasOwn(zhTwCore, k)
-            || Object.hasOwn(lensShared['zh-tw'], k)
-            || Object.hasOwn(workbench['zh-tw'], k)
-            || Object.hasOwn(runPanel['zh-tw'], k)
-            || orchTwKeys.has(k),
-        );
-
-        expect(cnCollisions).toEqual([]);
-        expect(twCollisions).toEqual([]);
     });
 
     test('MODES hints match Spec Section 4.2.B and resolve in zh-CN/zh-TW', () => {
@@ -93,8 +53,8 @@ describe('orchestrator/lens locale-data hygiene', () => {
         for (const id of MODE_IDS) {
             const { hint } = modeInfo(id);
             expect(hint).toBe(expectedHints[id]);
-            expect(Object.hasOwn(lensTables['zh-cn'], hint)).toBe(true);
-            expect(Object.hasOwn(lensTables['zh-tw'], hint)).toBe(true);
+            expect(Object.hasOwn(orchTables['zh-cn'], hint)).toBe(true);
+            expect(Object.hasOwn(orchTables['zh-tw'], hint)).toBe(true);
         }
     });
 
@@ -105,33 +65,19 @@ describe('orchestrator/lens locale-data hygiene', () => {
         const workbench = collectLocaleTables(registerWorkbenchLocaleData);
         const runPanel = collectLocaleTables(registerRunPanelLocaleData);
 
-        const orchI18nSource = fs.readFileSync(path.join(ROOT, 'public/scripts/extensions/orchestrator/i18n.js'), 'utf8');
-        const orchCn = {};
-        const orchTw = {};
-        const cnSectionMatch = /_addLocaleData\('zh-cn',\s*\{([\s\S]*?)\n\s*\}\);/.exec(orchI18nSource);
-        const twSectionMatch = /_addLocaleData\('zh-tw',\s*\{([\s\S]*?)\n\s*\}\);/.exec(orchI18nSource);
-        for (const m of (cnSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
-            orchCn[m[1].replace(/\\'/g, '\'')] = true;
-        }
-        for (const m of (twSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
-            orchTw[m[1].replace(/\\'/g, '\'')] = true;
-        }
-
         const hasCn = k => (
-            Object.hasOwn(lensTables['zh-cn'], k)
+            Object.hasOwn(orchTables['zh-cn'], k)
             || Object.hasOwn(zhCnCore, k)
             || Object.hasOwn(lensShared['zh-cn'], k)
             || Object.hasOwn(workbench['zh-cn'], k)
             || Object.hasOwn(runPanel['zh-cn'], k)
-            || Object.hasOwn(orchCn, k)
         );
         const hasTw = k => (
-            Object.hasOwn(lensTables['zh-tw'], k)
+            Object.hasOwn(orchTables['zh-tw'], k)
             || Object.hasOwn(zhTwCore, k)
             || Object.hasOwn(lensShared['zh-tw'], k)
             || Object.hasOwn(workbench['zh-tw'], k)
             || Object.hasOwn(runPanel['zh-tw'], k)
-            || Object.hasOwn(orchTw, k)
         );
 
         const lensDir = path.join(ROOT, 'public/scripts/extensions/orchestrator/lens');

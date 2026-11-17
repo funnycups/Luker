@@ -188,6 +188,17 @@ const ZH_CN = {
     'Submit result': '提交结果',
     'Search the draft': '搜索草稿',
     'Read the draft': '读取草稿',
+    'No active run yet. Start a conversation to see orchestration progress here.': '还没有运行中的编排。发起对话后这里会显示编排过程。',
+    'Collapse all': '全部收起',
+    'Jump to latest': '跳到最新',
+    'Final output': '最终输出',
+    'running': '进行中',
+    'committed': '已提交',
+    'aborted': '已中止',
+    'error': '错误',
+    '${0} rounds · ${1} tool calls · ${2} tokens': '${0} 轮 · ${1} 次工具调用 · ${2} tokens',
+    'Click to reopen': '点击重新打开',
+    'A run is already in progress.': '已有运行中的编排。',
 };
 
 const ZH_TW = {
@@ -375,6 +386,17 @@ const ZH_TW = {
     'Submit result': '提交結果',
     'Search the draft': '搜尋草稿',
     'Read the draft': '讀取草稿',
+    'No active run yet. Start a conversation to see orchestration progress here.': '還沒有運行中的編排。發起對話後這裡會顯示編排過程。',
+    'Collapse all': '全部收起',
+    'Jump to latest': '跳到最新',
+    'Final output': '最終輸出',
+    'running': '進行中',
+    'committed': '已提交',
+    'aborted': '已中止',
+    'error': '錯誤',
+    '${0} rounds · ${1} tool calls · ${2} tokens': '${0} 輪 · ${1} 次工具呼叫 · ${2} tokens',
+    'Click to reopen': '點擊重新打開',
+    'A run is already in progress.': '已有運行中的編排。',
 };
 
 export function registerRunPanelLocaleData(addLocaleData) {

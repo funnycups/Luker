@@ -4,8 +4,8 @@ import { describe, test, expect } from '@jest/globals';
 import { registerLensSharedLocaleData } from '../public/scripts/lens-shared/locale-data.js';
 import { registerRunPanelLocaleData } from '../public/scripts/run-panel/locale-data.js';
 import { registerWorkbenchLocaleData } from '../public/scripts/workbench/locale-data.js';
-import { registerLensLocaleData as registerMgLensLocaleData } from '../public/scripts/extensions/memory-graph/lens/locale-data.js';
-import { registerLensLocaleData as registerOrchLensLocaleData } from '../public/scripts/extensions/orchestrator/lens/locale-data.js';
+import { registerLocaleData as registerMgLocaleData } from '../public/scripts/extensions/memory-graph/i18n.js';
+import { registerLocaleData as registerOrchLocaleData } from '../public/scripts/extensions/orchestrator/i18n.js';
 import { MODE_IDS, modeInfo } from '../public/scripts/extensions/orchestrator/lens/i18n.js';
 
 const ROOT = path.resolve(process.cwd(), '..');
@@ -17,32 +17,6 @@ function collectLocaleTables(registerFn) {
             Object.assign(tables[locale], map);
         }
     });
-    return tables;
-}
-
-async function loadPluginLocaleTables(relativePath) {
-    const tables = { 'zh-cn': {}, 'zh-tw': {} };
-    const prevLuker = globalThis.Luker;
-    globalThis.Luker = {
-        getContext: () => ({
-            addLocaleData: (locale, map) => {
-                if (locale === 'zh-cn' || locale === 'zh-tw') {
-                    Object.assign(tables[locale], map);
-                }
-            },
-            translate: (s) => String(s || ''),
-        }),
-    };
-    try {
-        const mod = await import(`${path.join(ROOT, relativePath)}?audit=${Date.now()}`);
-        mod.registerLocaleData();
-    } finally {
-        if (prevLuker === undefined) {
-            delete globalThis.Luker;
-        } else {
-            globalThis.Luker = prevLuker;
-        }
-    }
     return tables;
 }
 
@@ -75,28 +49,45 @@ function extractI18nCalls(filePath) {
     return keys;
 }
 
-const MODULES = [
+const CORE_LOCALE_MODULES = [
     { name: 'lens-shared', register: registerLensSharedLocaleData, dir: 'public/scripts/lens-shared' },
     { name: 'run-panel', register: registerRunPanelLocaleData, dir: 'public/scripts/run-panel' },
     { name: 'workbench', register: registerWorkbenchLocaleData, dir: 'public/scripts/workbench' },
-    { name: 'memory-graph/lens', register: registerMgLensLocaleData, dir: 'public/scripts/extensions/memory-graph/lens' },
-    { name: 'orchestrator/lens', register: registerOrchLensLocaleData, dir: 'public/scripts/extensions/orchestrator/lens' },
+];
+
+const EXTENSION_MODULES = [
+    { name: 'memory-graph/i18n', register: registerMgLocaleData, lensDir: 'public/scripts/extensions/memory-graph/lens' },
+    { name: 'orchestrator/i18n', register: registerOrchLocaleData, lensDir: 'public/scripts/extensions/orchestrator/lens' },
 ];
 
 const zhCnCore = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/locales/zh-cn.json'), 'utf8'));
 const zhTwCore = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/locales/zh-tw.json'), 'utf8'));
-const mgTables = await loadPluginLocaleTables('public/scripts/extensions/memory-graph/i18n.js');
-const orchTables = await loadPluginLocaleTables('public/scripts/extensions/orchestrator/i18n.js');
 
-const moduleTables = MODULES.map((m) => ({
+const coreModuleTables = CORE_LOCALE_MODULES.map((m) => ({
     ...m,
     tables: collectLocaleTables(m.register),
 }));
 
+const extensionModuleTables = EXTENSION_MODULES.map((m) => ({
+    ...m,
+    tables: collectLocaleTables(m.register),
+}));
+
+const allModuleTables = [...coreModuleTables, ...extensionModuleTables];
+
 describe('i18n lens & workbench unified audit', () => {
-    test('100% EN / zh-CN / zh-TW key parity across all 5 locale-data modules', () => {
+    test('zero split extension lens/locale-data.js files remain on disk', () => {
+        const splitFiles = [
+            'public/scripts/extensions/memory-graph/lens/locale-data.js',
+            'public/scripts/extensions/orchestrator/lens/locale-data.js',
+            'public/scripts/extensions/stable-diffusion/lens/locale-data.js',
+        ].filter((rel) => fs.existsSync(path.join(ROOT, rel)));
+        expect(splitFiles).toEqual([]);
+    });
+
+    test('100% EN / zh-CN / zh-TW key parity across all core and extension i18n modules', () => {
         const parityErrors = {};
-        for (const mod of moduleTables) {
+        for (const mod of allModuleTables) {
             const cnKeys = Object.keys(mod.tables['zh-cn']);
             const twKeys = Object.keys(mod.tables['zh-tw']);
             const missingInTw = cnKeys.filter((k) => !Object.hasOwn(mod.tables['zh-tw'], k));
@@ -108,9 +99,9 @@ describe('i18n lens & workbench unified audit', () => {
         expect(parityErrors).toEqual({});
     });
 
-    test('zero English keys contain semicolons across all 5 locale-data modules', () => {
+    test('zero English keys contain semicolons across core locale-data modules', () => {
         const bad = {};
-        for (const mod of moduleTables) {
+        for (const mod of coreModuleTables) {
             const cnBad = Object.keys(mod.tables['zh-cn']).filter((k) => k.includes(';'));
             const twBad = Object.keys(mod.tables['zh-tw']).filter((k) => k.includes(';'));
             if (cnBad.length || twBad.length) {
@@ -120,14 +111,13 @@ describe('i18n lens & workbench unified audit', () => {
         expect(bad).toEqual({});
     });
 
-    test('zero key conflicts overwriting core locales, memory-graph/i18n.js, or orchestrator/i18n.js with differing translations', () => {
+    test('zero key conflicts in core locale-data modules overwriting core JSONs or extension i18n with differing translations', () => {
         const baselines = [
             { name: 'core', tables: { 'zh-cn': zhCnCore, 'zh-tw': zhTwCore } },
-            { name: 'memory-graph/i18n.js', tables: mgTables },
-            { name: 'orchestrator/i18n.js', tables: orchTables },
+            ...extensionModuleTables,
         ];
         const conflicts = [];
-        for (const mod of moduleTables) {
+        for (const mod of coreModuleTables) {
             for (const loc of ['zh-cn', 'zh-tw']) {
                 for (const [k, v] of Object.entries(mod.tables[loc])) {
                     for (const base of baselines) {
@@ -141,12 +131,12 @@ describe('i18n lens & workbench unified audit', () => {
         expect(conflicts).toEqual([]);
     });
 
-    test('zero cross-module collisions with differing translations across the 5 locale-data modules', () => {
+    test('zero cross-module collisions with differing translations across core locale-data modules', () => {
         const conflicts = [];
-        for (let i = 0; i < moduleTables.length; i++) {
-            for (let j = i + 1; j < moduleTables.length; j++) {
-                const a = moduleTables[i];
-                const b = moduleTables[j];
+        for (let i = 0; i < coreModuleTables.length; i++) {
+            for (let j = i + 1; j < coreModuleTables.length; j++) {
+                const a = coreModuleTables[i];
+                const b = coreModuleTables[j];
                 for (const loc of ['zh-cn', 'zh-tw']) {
                     for (const [k, va] of Object.entries(a.tables[loc])) {
                         if (Object.hasOwn(b.tables[loc], k) && b.tables[loc][k] !== va) {
@@ -159,10 +149,10 @@ describe('i18n lens & workbench unified audit', () => {
         expect(conflicts).toEqual([]);
     });
 
-    test('zero half-width CJK punctuation in zh-CN and zh-TW values across all 5 locale-data modules', () => {
+    test('zero half-width CJK punctuation in zh-CN and zh-TW values across all core and extension i18n modules', () => {
         const halfWidthCjk = /[\u3400-\u9fff][,.;:!?()]|[,.;:!?()][\u3400-\u9fff]/;
         const bad = [];
-        for (const mod of moduleTables) {
+        for (const mod of allModuleTables) {
             for (const loc of ['zh-cn', 'zh-tw']) {
                 for (const [k, v] of Object.entries(mod.tables[loc])) {
                     if (halfWidthCjk.test(v)) {
@@ -174,26 +164,33 @@ describe('i18n lens & workbench unified audit', () => {
         expect(bad).toEqual([]);
     });
 
-    test('zero missing i18n/i18nFormat string literals or semicolons across all 5 source trees', () => {
-        const allCn = { ...zhCnCore, ...mgTables['zh-cn'], ...orchTables['zh-cn'] };
-        const allTw = { ...zhTwCore, ...mgTables['zh-tw'], ...orchTables['zh-tw'] };
-        for (const mod of moduleTables) {
+    test('zero missing i18n/i18nFormat string literals or semicolons across all 6 lens & workbench source trees', () => {
+        const allCn = { ...zhCnCore };
+        const allTw = { ...zhTwCore };
+        for (const mod of allModuleTables) {
             Object.assign(allCn, mod.tables['zh-cn']);
             Object.assign(allTw, mod.tables['zh-tw']);
         }
+
+        const sourceTrees = [
+            ...CORE_LOCALE_MODULES.map((m) => ({ name: m.name, dir: m.dir })),
+            { name: 'memory-graph/lens', dir: 'public/scripts/extensions/memory-graph/lens' },
+            { name: 'orchestrator/lens', dir: 'public/scripts/extensions/orchestrator/lens' },
+            { name: 'stable-diffusion/lens', dir: 'public/scripts/extensions/stable-diffusion/lens' },
+        ];
 
         const missingCn = [];
         const missingTw = [];
         const semicolonKeys = [];
 
-        for (const mod of moduleTables) {
-            const files = walkJsFiles(path.join(ROOT, mod.dir));
+        for (const tree of sourceTrees) {
+            const files = walkJsFiles(path.join(ROOT, tree.dir));
             for (const file of files) {
                 const rel = path.relative(ROOT, file);
                 for (const key of extractI18nCalls(file)) {
-                    if (key.includes(';')) semicolonKeys.push({ module: mod.name, file: rel, key });
-                    if (!Object.hasOwn(allCn, key)) missingCn.push({ module: mod.name, file: rel, key });
-                    if (!Object.hasOwn(allTw, key)) missingTw.push({ module: mod.name, file: rel, key });
+                    if (key.includes(';')) semicolonKeys.push({ module: tree.name, file: rel, key });
+                    if (!Object.hasOwn(allCn, key)) missingCn.push({ module: tree.name, file: rel, key });
+                    if (!Object.hasOwn(allTw, key)) missingTw.push({ module: tree.name, file: rel, key });
                 }
             }
         }
@@ -221,12 +218,12 @@ describe('i18n lens & workbench unified audit', () => {
             director: 'A director agent plans and invokes sub-agents as tools during generation.',
             single: 'Executes one standalone agent without multi-stage orchestration.',
         };
-        const orchLens = moduleTables.find((m) => m.name === 'orchestrator/lens').tables;
+        const orchTables = extensionModuleTables.find((m) => m.name === 'orchestrator/i18n').tables;
         for (const id of MODE_IDS) {
             const { hint } = modeInfo(id);
             expect(hint).toBe(expectedHints[id]);
-            expect(Object.hasOwn(orchLens['zh-cn'], hint)).toBe(true);
-            expect(Object.hasOwn(orchLens['zh-tw'], hint)).toBe(true);
+            expect(Object.hasOwn(orchTables['zh-cn'], hint)).toBe(true);
+            expect(Object.hasOwn(orchTables['zh-tw'], hint)).toBe(true);
         }
     });
 });

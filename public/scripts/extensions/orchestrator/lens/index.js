@@ -40,9 +40,9 @@ import { promptEmbedUnembeddedPresetsForCharacterApply } from '../prompt-embed-u
 import { getLatestOrchestrationEntry } from '../snapshot-cache.js';
 import { sanitizeSpec } from '../spec-schema.js';
 import { buildDiagnoseDraft } from './app.js';
+import { registerLocaleData } from '../i18n.js';
 import { i18n } from './i18n.js';
 import { createOrchIterateTarget } from './iterate-target.js';
-import { registerLensLocaleData } from './locale-data.js';
 import { buildFlow } from './model/profile.js';
 import { buildRunView } from './model/run.js';
 import { createOrchAskProvider, createOrchSuggestRuleProvider } from './providers.js';
@@ -104,7 +104,7 @@ export function initOrchestraLens() {
     const { addLocaleData, workbench, runPanel } = ctx || {};
     if (typeof addLocaleData === 'function') {
         registerLensSharedLocaleData(addLocaleData);
-        registerLensLocaleData(addLocaleData);
+        registerLocaleData(addLocaleData);
     }
 
     for (const unreg of unregisters.splice(0)) unreg?.();

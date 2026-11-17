@@ -3,7 +3,6 @@
 import { registerLensSharedLocaleData } from '../../../lens-shared/locale-data.js';
 import { getImageActivityStore } from '../activity.js';
 import { i18n } from './i18n.js';
-import { registerSdLensLocaleData } from './locale-data.js';
 import { mountSdLens } from './app.js';
 import { createSdIterateTarget } from './iterate-target.js';
 import { createSdAskProvider, createSdSuggestRuleProvider } from './providers.js';
@@ -20,7 +19,6 @@ export function initSdLens({
 
     if (typeof addLocaleData === 'function') {
         registerLensSharedLocaleData(addLocaleData);
-        registerSdLensLocaleData(addLocaleData);
     }
 
     for (const unreg of activeUnregisters.splice(0)) {

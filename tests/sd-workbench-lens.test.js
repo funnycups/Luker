@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import { icon } from '../public/scripts/workbench/icons.js';
@@ -11,7 +11,7 @@ import { createWorkbenchRegistry } from '../public/scripts/workbench/registry.js
 import { createRunStore } from '../public/scripts/run-panel/store.js';
 import { createRecorder, createMemoryStorage } from '../public/scripts/run-panel/recorder.js';
 import { createCharacterProfileStore } from '../public/scripts/extensions/stable-diffusion/character-archive/store.js';
-import { registerSdLensLocaleData } from '../public/scripts/extensions/stable-diffusion/lens/locale-data.js';
+import { registerWorkbenchLocaleData } from '../public/scripts/workbench/locale-data.js';
 import { initSdLens } from '../public/scripts/extensions/stable-diffusion/lens/index.js';
 import { mountSdLens } from '../public/scripts/extensions/stable-diffusion/lens/app.js';
 import { buildSdDiagnoseDraft } from '../public/scripts/extensions/stable-diffusion/activity.js';
@@ -149,15 +149,9 @@ describe('workbench sd tone, image icon, and locale contracts', () => {
         expect(knownRoles().some(r => r.key === 'sd' && r.tone === 'sd')).toBe(true);
     });
 
-    test('sd lens locale-data has matching ZH_CN/ZH_TW keys, fullwidth CJK punctuation, and zero core locale overlap', () => {
-        const captured = {};
-        registerSdLensLocaleData((loc, data) => {
-            captured[loc] = data;
-        });
-        expect(Object.keys(captured)).toEqual(['zh-cn', 'zh-tw']);
-        const cnKeys = Object.keys(captured['zh-cn']).sort();
-        const twKeys = Object.keys(captured['zh-tw']).sort();
-        expect(cnKeys).toEqual(twKeys);
+    test('sd lens resolves all i18n literals directly from core locale JSONs with fullwidth CJK punctuation and no split locale-data.js', () => {
+        const splitPath = fileURLToPath(new URL('../public/scripts/extensions/stable-diffusion/lens/locale-data.js', import.meta.url));
+        expect(existsSync(splitPath)).toBe(false);
 
         const zhCnCore = JSON.parse(
             readFileSync(fileURLToPath(new URL('../public/locales/zh-cn.json', import.meta.url)), 'utf8'),
@@ -165,15 +159,43 @@ describe('workbench sd tone, image icon, and locale contracts', () => {
         const zhTwCore = JSON.parse(
             readFileSync(fileURLToPath(new URL('../public/locales/zh-tw.json', import.meta.url)), 'utf8'),
         );
-        for (const key of cnKeys) {
-            expect(key.replace(/\\;/g, '')).not.toContain(';');
-            expect(Object.hasOwn(zhCnCore, key)).toBe(false);
-            expect(Object.hasOwn(zhTwCore, key)).toBe(false);
-        }
-        for (const loc of ['zh-cn', 'zh-tw']) {
-            for (const val of Object.values(captured[loc])) {
-                expect(val).not.toMatch(/[\u4e00-\u9fff][,;:!?()]|[,;:!?()][\u4e00-\u9fff]/);
+        const wbLocale = { 'zh-cn': {}, 'zh-tw': {} };
+        registerWorkbenchLocaleData((loc, data) => {
+            if (loc === 'zh-cn' || loc === 'zh-tw') Object.assign(wbLocale[loc], data);
+        });
+        const allCn = { ...zhCnCore, ...wbLocale['zh-cn'] };
+        const allTw = { ...zhTwCore, ...wbLocale['zh-tw'] };
+
+        const lensDir = fileURLToPath(new URL('../public/scripts/extensions/stable-diffusion/lens', import.meta.url));
+        const jsFiles = [];
+        const walk = dir => {
+            for (const ent of readdirSync(dir, { withFileTypes: true })) {
+                const full = `${dir}/${ent.name}`;
+                if (ent.isDirectory()) walk(full);
+                else if (ent.name.endsWith('.js')) jsFiles.push(full);
             }
+        };
+        walk(lensDir);
+
+        const usedKeys = new Set();
+        const callRe = /\bi18n(?:Format)?\(\s*'((?:\\'|[^'])+)'|\bi18n(?:Format)?\(\s*"((?:\\"|[^"])+)"/g;
+        for (const file of jsFiles) {
+            const src = readFileSync(file, 'utf8');
+            for (const m of src.matchAll(callRe)) {
+                const raw = m[1] !== undefined
+                    ? m[1].replace(/\\'/g, '\'').replace(/\\\\/g, '\\')
+                    : m[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                usedKeys.add(raw);
+            }
+        }
+        expect(usedKeys.size).toBeGreaterThan(20);
+
+        for (const key of usedKeys) {
+            expect(key.replace(/\\;/g, '')).not.toContain(';');
+            expect(Object.hasOwn(allCn, key)).toBe(true);
+            expect(Object.hasOwn(allTw, key)).toBe(true);
+            expect(allCn[key]).not.toMatch(/[\u4e00-\u9fff][,;:!?()]|[,;:!?()][\u4e00-\u9fff]/);
+            expect(allTw[key]).not.toMatch(/[\u4e00-\u9fff][,;:!?()]|[,;:!?()][\u4e00-\u9fff]/);
         }
     });
 });
@@ -866,12 +888,9 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
         }));
 
         // Important 8: Also verify zh-cn translation table resolves every visible string with zero untranslated leaks
-        const zhCnCore = JSON.parse(
+        const zhTable = JSON.parse(
             readFileSync(fileURLToPath(new URL('../public/locales/zh-cn.json', import.meta.url)), 'utf8'),
         );
-        const lensLocale = {};
-        registerSdLensLocaleData((loc, data) => { lensLocale[loc] = data; });
-        const zhTable = { ...zhCnCore, ...(lensLocale['zh-cn'] || {}) };
         ctx.getCurrentLocale = () => 'zh-cn';
         ctx.translate = text => zhTable[text] ?? `UNTRANSLATED:${text}`;
 

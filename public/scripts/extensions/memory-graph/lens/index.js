@@ -32,9 +32,9 @@ import {
 import { getMemoryGraphReadApi } from '../read-api.js';
 import { getMemoryGraphWriteApi } from '../write-api.js';
 import { startTagFilter } from './filter/filter-runtime.js';
+import { registerLocaleData } from '../i18n.js';
 import { i18n } from './i18n.js';
 import { createMemoryConfigTarget, createMemoryGraphTarget } from './iterate-targets.js';
-import { registerLensLocaleData } from './locale-data.js';
 import { createMemoryAskProvider, createMemorySuggestRuleProvider } from './providers.js';
 import { startRecorder } from './token-stats.js';
 
@@ -48,7 +48,7 @@ export function initMemoryLens() {
     const { addLocaleData, workbench } = ctx;
     if (typeof addLocaleData === 'function') {
         registerLensSharedLocaleData(addLocaleData);
-        registerLensLocaleData(addLocaleData);
+        registerLocaleData(addLocaleData);
     }
 
     for (const unreg of unregisters.splice(0)) unreg?.();
