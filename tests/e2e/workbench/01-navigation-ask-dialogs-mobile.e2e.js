@@ -12,6 +12,7 @@ import {
     appendConnectionProfile,
     bootstrapVectorsBackend,
     markOnboarded,
+    writeWorldBook,
 } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 import { writeEmbeddedCharacter, disableTagImportPopup } from '../character/_helpers.js';
@@ -46,11 +47,18 @@ test.beforeAll(async () => {
     bootstrapVectorsBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     normalizeIterStudioSettings(server.dataRoot);
     disableTagImportPopup({ dataRoot: server.dataRoot });
+    const LONG_WORLD_BOOK = 'chronicle-of-the-northern-archipelago-and-sunken-beacon-routes-vol-1';
+    writeWorldBook({
+        dataRoot: server.dataRoot,
+        name: LONG_WORLD_BOOK,
+        entries: [{ comment: 'Beacon route', key: ['beacon'], content: 'Northern lantern markers.' }],
+    });
     writeEmbeddedCharacter({
         dataRoot: server.dataRoot,
         avatarFile: 'ash-the-cartographer.png',
         overrides: {
             creator_notes: `Ledger note carries ${SECRET_KEY} and mirror ${SECRET_URL}.`,
+            extensions: { world: LONG_WORLD_BOOK },
         },
     });
 });
@@ -79,7 +87,7 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
         // 2. Desktop navigation across Overview, Q&A, AI iteration, Change history, Memory graph, Orchestration, Settings.
         await switchWorkbenchTab(page, 'home');
         await expect(win.locator('.wb-h2')).toHaveText(/^(Overview|总览|總覽)$/);
-        await expect(win.locator('.wb-cards .wb-card')).toHaveCount(5);
+        await expect(win.locator('.wb-cards .wb-card')).toHaveCount(6);
 
         await switchWorkbenchTab(page, 'ai');
         await expect(win.locator('.wb-ws-seg .lw-seg-btn').first()).toBeVisible();
@@ -208,6 +216,8 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Ash the Cartographer');
 
+        const baselineDocScrollHeight = await page.evaluate(() => document.documentElement.scrollHeight);
+
         await openWorkbench(page, { via: 'pill' });
         const layer = workbenchLayer(page);
         const win = workbenchWindow(page);
@@ -221,6 +231,49 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
 
         await switchWorkbenchTab(page, 'home');
         await expect(win.locator('.wb-h2')).toHaveText(/^(Overview|总览|總覽)$/);
+        await expect(win.locator('.wb-cards .wb-card')).toHaveCount(6);
+
+        const homeLayout = await page.evaluate(() => {
+            const main = document.querySelector('.wbench .wb-main');
+            const mainStyle = main ? getComputedStyle(main) : null;
+            const cards = Array.from(document.querySelectorAll('.wbench .wb-cards .wb-card')).map((el) => {
+                const r = el.getBoundingClientRect();
+                return { width: Math.round(r.width), right: Math.round(r.right) };
+            });
+            return {
+                scrollY: window.scrollY,
+                docScrollHeight: document.documentElement.scrollHeight,
+                topBarTop: Math.round(document.getElementById('top-bar')?.getBoundingClientRect().top ?? 0),
+                mainClientW: main?.clientWidth ?? 0,
+                mainScrollW: main?.scrollWidth ?? 0,
+                mainOverflowX: mainStyle?.overflowX ?? '',
+                mainBg: mainStyle?.backgroundColor ?? '',
+                cards,
+            };
+        });
+        expect(homeLayout.scrollY).toBe(0);
+        expect(homeLayout.docScrollHeight).toBeLessThanOrEqual(baselineDocScrollHeight);
+        expect(homeLayout.topBarTop).toBe(0);
+        expect(homeLayout.mainOverflowX).toBe('hidden');
+        expect(homeLayout.mainBg).not.toBe('rgba(0, 0, 0, 0)');
+        expect(homeLayout.mainScrollW).toBeLessThanOrEqual(homeLayout.mainClientW);
+        for (const c of homeLayout.cards) {
+            expect(c.width).toBeLessThanOrEqual(390);
+            expect(c.right).toBeLessThanOrEqual(390);
+        }
+
+        await switchWorkbenchTab(page, 'settings');
+        const settingsLayout = await page.evaluate(() => {
+            const main = document.querySelector('.wbench .wb-main');
+            const api = document.querySelector('.wbench .wb-api');
+            return {
+                mainClientW: main?.clientWidth ?? 0,
+                mainScrollW: main?.scrollWidth ?? 0,
+                apiRight: api ? Math.round(api.getBoundingClientRect().right) : 0,
+            };
+        });
+        expect(settingsLayout.mainScrollW).toBeLessThanOrEqual(settingsLayout.mainClientW);
+        expect(settingsLayout.apiRight).toBeLessThanOrEqual(390);
 
         await switchWorkbenchTab(page, 'ask');
         await expect(win.locator('.wb-chat .wb-input')).toBeVisible();
@@ -239,5 +292,13 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
         await expect(win.locator('.olens')).toHaveClass(/is-compact/);
 
         await closeWorkbench(page);
+        const afterClose = await page.evaluate(() => ({
+            scrollY: window.scrollY,
+            docScrollHeight: document.documentElement.scrollHeight,
+            topBarTop: Math.round(document.getElementById('top-bar')?.getBoundingClientRect().top ?? 0),
+        }));
+        expect(afterClose.scrollY).toBe(0);
+        expect(afterClose.docScrollHeight).toBeLessThanOrEqual(baselineDocScrollHeight);
+        expect(afterClose.topBarTop).toBe(0);
     });
 });

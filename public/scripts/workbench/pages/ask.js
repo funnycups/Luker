@@ -65,7 +65,7 @@ export function createAskPage(app) {
 
     function paintChips() {
         clear(chipsRow);
-        put(chipsRow, chips().map(c => h('button', { type: 'button', class: 'wb-chip', onClick: () => { input.value = c; grow(); input.focus(); } }, c)));
+        put(chipsRow, chips().map(c => h('button', { type: 'button', class: 'wb-chip', onClick: () => { input.value = c; grow(); input.focus({ preventScroll: true }); } }, c)));
     }
     paintChips();
 
@@ -237,7 +237,7 @@ export function createAskPage(app) {
                 session = null;
                 paintHead();
                 paintBody();
-                input.focus();
+                input.focus({ preventScroll: true });
             }, { iconName: 'plus', className: 'is-ghost wb-chat-new', title: i18n('New conversation') }));
     }
 
@@ -341,7 +341,7 @@ export function createAskPage(app) {
         if (!created) return;
         input.value = text;
         grow();
-        input.focus();
+        input.focus({ preventScroll: true });
     }
 
     async function regenerate() {
@@ -372,7 +372,7 @@ export function createAskPage(app) {
                 const forked = await forkAt(i + 1);
                 if (forked) {
                     app.toast(i18n('Branched into a new chat — the original is still in Earlier chats'));
-                    input.focus();
+                    input.focus({ preventScroll: true });
                 }
             } },
         ]);
@@ -544,7 +544,7 @@ export function createAskPage(app) {
             if (o.draft) { input.value = o.draft; grow(); }
             await refreshRecent();
             paintHead();
-            requestAnimationFrame(() => input.focus());
+            requestAnimationFrame(() => input.focus({ preventScroll: true }));
         },
         onSnapshot() {
             paintSide();

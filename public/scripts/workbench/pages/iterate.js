@@ -372,7 +372,7 @@ export function createIteratePage(app) {
         session = null;
         sessOpen = false;
         paintAll();
-        input.focus();
+        input.focus({ preventScroll: true });
     }
 
     async function openSession(id) {
@@ -689,7 +689,7 @@ export function createIteratePage(app) {
         if (!created) return;
         input.value = text;
         grow();
-        input.focus();
+        input.focus({ preventScroll: true });
     }
 
     const canRegen = (t) => !t.changes?.length || t.state === 'pending' || t.state === 'discarded';
@@ -790,7 +790,7 @@ export function createIteratePage(app) {
                     const forked = await forkAt(index + 1);
                     if (forked) {
                         app.toast(i18n('Branched into a new chat — the original is still in the chat list'));
-                        input.focus();
+                        input.focus({ preventScroll: true });
                     }
                 },
             },
@@ -818,7 +818,7 @@ export function createIteratePage(app) {
         const chipList = t
             ? (typeof t.chips === 'function' ? t.chips() : (Array.isArray(t.chips) ? t.chips : (DEFAULT_CHIPS[t.id]?.() || [])))
             : [];
-        put(chips, chipList.map(c => h('button', { type: 'button', class: 'wb-chip', onClick: () => { input.value = c; grow(); input.focus(); } }, c)));
+        put(chips, chipList.map(c => h('button', { type: 'button', class: 'wb-chip', onClick: () => { input.value = c; grow(); input.focus({ preventScroll: true }); } }, c)));
         clear(opts);
         const s = app.settings();
         const busy = currentBusy();
@@ -1418,7 +1418,7 @@ export function createIteratePage(app) {
                 input.value = seed || o.draft;
                 grow();
             }
-            requestAnimationFrame(() => input.focus());
+            requestAnimationFrame(() => input.focus({ preventScroll: true }));
         },
         onSnapshot() {
             evictStaleWork();

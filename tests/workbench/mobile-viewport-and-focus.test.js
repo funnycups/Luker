@@ -1,0 +1,150 @@
+/**
+ * @jest-environment jsdom
+ */
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import { describe, test, expect, beforeAll, beforeEach, jest } from '@jest/globals';
+import { fitToViewport } from '../../public/scripts/workbench/viewport.js';
+import { createWindow } from '../../public/scripts/workbench/ui/window.js';
+import { createAskPage } from '../../public/scripts/workbench/pages/ask.js';
+import { createHomePage } from '../../public/scripts/workbench/pages/home.js';
+
+beforeAll(() => {
+    if (!globalThis.requestAnimationFrame) {
+        globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+    }
+    if (!globalThis.cancelAnimationFrame) {
+        globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+    }
+});
+
+beforeEach(() => {
+    document.body.innerHTML = '';
+    localStorage.clear();
+});
+
+describe('workbench mobile viewport & preventScroll focus', () => {
+    test('fitToViewport zeroes root width and height before measuring getBoundingClientRect origin', () => {
+        const root = document.createElement('div');
+        document.body.appendChild(root);
+        root.style.width = '400px';
+        root.style.height = '900px';
+
+        const observedDuringMeasure = [];
+        const origGetBCR = root.getBoundingClientRect.bind(root);
+        root.getBoundingClientRect = () => {
+            observedDuringMeasure.push({
+                width: root.style.width,
+                height: root.style.height,
+            });
+            // Simulate a root document that stays scrolled by -30px only when root itself still overflows.
+            const stillTall = parseInt(root.style.height || '0', 10) > 800;
+            return {
+                ...origGetBCR(),
+                left: 0,
+                top: stillTall ? -30 : 0,
+                width: 0,
+                height: 0,
+            };
+        };
+
+        Object.defineProperty(window, 'innerWidth', { value: 400, configurable: true });
+        Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true });
+
+        const handle = fitToViewport(root);
+        expect(observedDuringMeasure.length).toBeGreaterThanOrEqual(1);
+        expect(observedDuringMeasure[0]).toEqual({ width: '0px', height: '0px' });
+        expect(root.style.top).toBe('0px');
+        expect(root.style.width).toBe('400px');
+        expect(root.style.height).toBe('800px');
+        handle.destroy();
+    });
+
+    test('createWindow.expand and focus pass preventScroll: true so sheet animation does not scroll documentElement', () => {
+        Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+        Object.defineProperty(window, 'innerHeight', { value: 844, configurable: true });
+
+        const win = createWindow({
+            title: 'Workbench',
+            theme: () => 'light',
+            onThemeToggle: () => {},
+            startCollapsed: true,
+        });
+        document.body.appendChild(win.layer);
+
+        const focusSpy = jest.spyOn(win.win, 'focus');
+        win.expand();
+        expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+
+        focusSpy.mockClear();
+        win.focus();
+        expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+
+        win.destroy();
+    });
+
+    test('Ask page show() focuses composer input with preventScroll: true', async () => {
+        const app = {
+            settings: () => ({ ask: { sources: {} } }),
+            saveSettings: jest.fn(),
+            snapshot: () => null,
+            suggestions: () => [],
+            askProviders: () => [],
+            toast: jest.fn(),
+            go: jest.fn(),
+            source: {},
+        };
+        const askPage = createAskPage(app);
+        document.body.appendChild(askPage.el);
+        const input = askPage.el.querySelector('textarea.wb-input');
+        const focusSpy = jest.spyOn(input, 'focus');
+
+        await askPage.show();
+        await new Promise((r) => requestAnimationFrame(r));
+
+        expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    });
+
+    test('Home page onSnapshot skips redundant DOM teardown when snapshot and suggestions are unchanged', () => {
+        let currentSnap = {
+            chat: { chatId: 'c1', label: 'Ash', floors: 4 },
+            providers: {},
+            budget: { total: 1200, max: 8000, parts: [{ key: 'preset', label: 'Preset', tokens: 1200 }] },
+            preset: { name: 'p1', prompts: [{ enabled: true }] },
+            card: { name: 'Ash', books: [] },
+            world: { character: [], global: [] },
+            at: 1000,
+        };
+        let currentSuggestions = [];
+        const app = {
+            snapshot: () => currentSnap,
+            suggestions: () => currentSuggestions,
+            loadError: () => '',
+            workspaces: () => [],
+            askProviders: () => [],
+            settings: () => ({ dismissed: {} }),
+            saveSettings: jest.fn(),
+            reload: jest.fn(),
+            go: jest.fn(),
+            open: jest.fn(),
+            toast: jest.fn(),
+        };
+
+        const home = createHomePage(app);
+        document.body.appendChild(home.el);
+        home.show();
+        const firstCard = home.el.querySelector('.wb-card');
+        expect(firstCard).toBeTruthy();
+
+        // Identical snapshot + suggestions (even with a newer `at` timestamp when load() finishes after expand()) keeps live DOM intact.
+        currentSnap = { ...currentSnap, at: 1500 };
+        home.onSnapshot();
+        expect(home.el.querySelector('.wb-card')).toBe(firstCard);
+
+        // Changed snapshot triggers a fresh paint.
+        currentSnap = { ...currentSnap, preset: { name: 'p2', prompts: [{ enabled: true }, { enabled: true }] }, at: 2000 };
+        home.onSnapshot();
+        expect(home.el.querySelector('.wb-card')).not.toBe(firstCard);
+        expect(home.el.textContent).toContain('p2');
+    });
+});

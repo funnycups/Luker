@@ -181,7 +181,7 @@ export function createWindow({ title, onThemeToggle, theme, startCollapsed = fal
     function expand() {
         collapsed = false;
         apply();
-        win.focus();
+        win.focus({ preventScroll: true });
         onExpand?.();
     }
 
@@ -212,7 +212,7 @@ export function createWindow({ title, onThemeToggle, theme, startCollapsed = fal
         isCollapsed: () => collapsed,
         isCompact: () => compact,
         paintTheme,
-        focus: () => win.focus(),
+        focus: () => win.focus({ preventScroll: true }),
         destroy() {
             fit.destroy();
             layer.remove();
