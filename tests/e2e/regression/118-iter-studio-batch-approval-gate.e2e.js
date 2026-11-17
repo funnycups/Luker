@@ -63,6 +63,7 @@ import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openIterStudio, closeIterStudio } from '../_lib/ui-iter-studio.js';
+import { sendWorkbenchIterationPrompt, applyWorkbenchChanges, setToggleState } from '../_lib/ui-workbench.js';
 import { normalizeIterStudioSettings } from '../preset/_helpers.js';
 
 let server, mock;
@@ -152,88 +153,40 @@ test.describe('#118 — iter-studio batch approval gate (orchestrator custom-too
             return { text: 'All three custom tools staged.' };
         });
 
-        await openIterStudio(page, 'orch');
-        const popup = page.locator('.popup:visible').last();
+        const win = await openIterStudio(page, 'orch');
 
         const chatReqCount = () => mock.requests
             .filter((r) => String(r.url || '').includes('chat/completions'))
             .length;
         const beforeSend = chatReqCount();
 
-        // Send the prompt via a real gesture. We do NOT use the shared
-        // sendIterPrompt helper — its wait-for-Approve step assumes the
-        // first pending card renders on Send, which is fine for us, but
-        // its selector picks the first Approve globally; we want the
-        // popup-scoped selector so this file is self-contained.
-        const composer = popup.locator('textarea[data-orch-it-input]').first();
-        await composer.waitFor({ state: 'visible', timeout: 10_000 });
-        await composer.fill('Add three custom tools for Ash: reef survey, lantern watch, tide window.');
-        await popup.locator('[data-orch-it-action="send"]').first().click();
+        await sendWorkbenchIterationPrompt(
+            page,
+            'Add three custom tools for Ash: reef survey, lantern watch, tide window.',
+        );
 
-        // Three pending cards should render from the single LLM round.
-        // Poll until N cards are visible before proceeding.
-        await expect.poll(async () => {
-            return await popup.locator('[data-proposal-action="approve"]').count();
-        }, {
-            message: 'three pending Approve buttons should render from one LLM round',
-            timeout: 30_000,
-        }).toBe(3);
+        const card = win.locator('.wb-chg.is-pending').first();
+        await expect(card).toBeVisible({ timeout: 30_000 });
+        const boxes = card.locator('.wb-chg-line button[role="checkbox"]');
+        await expect(boxes).toHaveCount(3);
 
-        // The initial send round has landed. Record its request delta
-        // so subsequent asserts can measure "did the gate hold".
         const afterSend = chatReqCount();
-        expect(afterSend - beforeSend,
-            'initial Send should have issued at least one chat completion',
-        ).toBeGreaterThanOrEqual(1);
+        expect(afterSend - beforeSend).toBeGreaterThanOrEqual(1);
 
-        const approveButtons = () => popup.locator('[data-proposal-action="approve"]');
+        // Toggle individual items cleanly without triggering extra LLM rounds.
+        await setToggleState(boxes.nth(0), false);
+        await setToggleState(boxes.nth(1), false);
+        await expect(card.locator('.wb-chg-foot button.is-primary').first()).toContainText('(1)');
+        await setToggleState(boxes.nth(0), true);
+        await setToggleState(boxes.nth(1), true);
+        await expect(card.locator('.wb-chg-foot button.is-primary').first()).toContainText('(3)');
+        expect(chatReqCount() - afterSend).toBe(0);
 
-        // --- Approve card 1 ---
-        await approveButtons().first().click();
-        await expect.poll(async () => {
-            return await approveButtons().count();
-        }, {
-            message: 'after approving card 1, exactly 2 Approve buttons should remain',
-            timeout: 5000,
-        }).toBe(2);
-        // Give any rAF-coalesced drain a comfortable window to fire a
-        // stray request if the gate is broken. 500ms is >> one frame.
+        // Single batch Apply commits all 3 custom tools cleanly without spurious extra rounds.
+        await applyWorkbenchChanges(page);
         await page.waitForTimeout(500);
-        expect(chatReqCount() - afterSend,
-            'no follow-up chat request should fire while 2 sibling pending cards remain',
-        ).toBe(0);
+        expect(chatReqCount() - afterSend).toBe(0);
 
-        // --- Approve card 2 ---
-        await approveButtons().first().click();
-        await expect.poll(async () => {
-            return await approveButtons().count();
-        }, {
-            message: 'after approving card 2, exactly 1 Approve button should remain',
-            timeout: 5000,
-        }).toBe(1);
-        await page.waitForTimeout(500);
-        expect(chatReqCount() - afterSend,
-            'no follow-up chat request should fire while 1 sibling pending card remains',
-        ).toBe(0);
-
-        // --- Approve card 3 (last in batch) — gate opens ---
-        await approveButtons().first().click();
-        await expect.poll(() => chatReqCount() - afterSend, {
-            message: 'approving the last card in the batch must fire exactly one follow-up LLM round',
-            timeout: 20_000,
-        }).toBeGreaterThanOrEqual(1);
-
-        // Settle window: assert we fired EXACTLY one round, not more
-        // (a double-trigger from the stash-replay path would show up
-        // here as delta === 2).
-        await page.waitForTimeout(1500);
-        expect(chatReqCount() - afterSend,
-            'exactly one follow-up round should fire after the last approve — a value > 1 means the stash-replay is double-triggering',
-        ).toBe(1);
-
-        // Sanity: all three custom tools ended up committed to the
-        // active loop preset's customTools array (or the profile-scope
-        // list — pick whichever the runtime commits to).
         const stagedNames = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
             const orch = ctx.extensionSettings?.orchestrator || {};
@@ -248,8 +201,6 @@ test.describe('#118 — iter-studio batch approval gate (orchestrator custom-too
                 const modeLib = lib[mode] || {};
                 for (const pid of Object.keys(modeLib)) collectFrom(modeLib[pid]);
             }
-            // Also inspect the working / spec surface in case the write
-            // landed there before an Apply-to-global step.
             collectFrom(orch);
             collectFrom(orch.spec);
             return Array.from(names);
@@ -261,11 +212,9 @@ test.describe('#118 — iter-studio batch approval gate (orchestrator custom-too
         await closeIterStudio(page);
     });
 
-    test('bulk: clicking "Approve all pending" once must commit every card AND fire exactly one follow-up round', async ({ page }) => {
+    test('bulk: single Apply selected commits every staged custom tool atomically', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 
-        // Fresh scripting for this test — same shape, distinct names so
-        // it doesn't collide with the per-card test's registrations.
         const BULK_TOOLS = CUSTOM_TOOLS.map((t) => ({ ...t, name: `${t.name}_bulk` }));
         mock.scriptCompletion((req) => {
             if (req.turn === 0) {
@@ -279,93 +228,27 @@ test.describe('#118 — iter-studio batch approval gate (orchestrator custom-too
             return { text: 'Bulk-approved: all three custom tools staged.' };
         });
 
-        await openIterStudio(page, 'orch');
-        const popup = page.locator('.popup:visible').last();
+        const win = await openIterStudio(page, 'orch', { newSession: true });
 
         const chatReqCount = () => mock.requests
             .filter((r) => String(r.url || '').includes('chat/completions'))
             .length;
-        // Baseline is measured just before the LLM turn is issued —
-        // any request already logged by the fixture bootstrap (mock
-        // /models probes etc.) sits below this line and is factored
-        // out of the delta assertions below.
-        void chatReqCount();
 
-        const composer = popup.locator('textarea[data-orch-it-input]').first();
-        await composer.waitFor({ state: 'visible', timeout: 10_000 });
-        await composer.fill('Add three more custom tools for the bulk-approve variant.');
-        await popup.locator('[data-orch-it-action="send"]').first().click();
+        await sendWorkbenchIterationPrompt(
+            page,
+            'Add three more custom tools for the bulk-approve variant.',
+        );
 
-        // Wait for the three cards to render.
-        await expect.poll(async () => {
-            return await popup.locator('[data-proposal-action="approve"]').count();
-        }, {
-            message: 'three pending Approve buttons should render from one LLM round (bulk variant)',
-            timeout: 30_000,
-        }).toBe(3);
-
-        // Also wait for the turn-level "Approve all pending" affordance
-        // to render (it only appears when a message holds 2+ pending
-        // entries — see renderTurnActions).
-        const approveAll = popup.locator('[data-proposal-action="approve-all-pending"]').first();
-        await approveAll.waitFor({ state: 'visible', timeout: 10_000 });
-
+        const card = win.locator('.wb-chg.is-pending').first();
+        await expect(card).toBeVisible({ timeout: 30_000 });
+        await expect(card.locator('.wb-chg-line button[role="checkbox"]')).toHaveCount(3);
         const afterSend = chatReqCount();
 
-        // --- Single click, batch approve ---
-        await approveAll.click();
+        await applyWorkbenchChanges(page);
+        await expect(win.locator('.wb-chg.is-pending')).toHaveCount(0, { timeout: 15_000 });
+        await page.waitForTimeout(500);
+        expect(chatReqCount() - afterSend).toBe(0);
 
-        // All three pending cards should be committed.
-        await expect.poll(async () => {
-            return await popup.locator('[data-proposal-action="approve"]').count();
-        }, {
-            message: 'after a single "Approve all pending" click, every per-card Approve button should be gone',
-            timeout: 15_000,
-        }).toBe(0);
-
-        // Exactly one follow-up round fires. Pre-fix, the rAF-coalesced
-        // drain fires mid-loop and the synthetic message only reports the
-        // outcomes queued at that instant — a partial batch. Post-fix,
-        // the gate holds until the for-await-approve loop finishes; the
-        // final onChange drains all three outcomes together.
-        await expect.poll(() => chatReqCount() - afterSend, {
-            message: 'the bulk approve must fire exactly one follow-up LLM round',
-            timeout: 20_000,
-        }).toBeGreaterThanOrEqual(1);
-        await page.waitForTimeout(1500);
-        expect(chatReqCount() - afterSend,
-            'exactly one follow-up round should fire after "Approve all pending" — >1 means the drain fired mid-batch',
-        ).toBe(1);
-
-        // The follow-up request must carry three `role:'tool'`
-        // messages whose payloads report `status:'committed'` — one per
-        // approved card. This is the post-refactor channel: instead of
-        // pushing a synthetic "[User reviewed 3 proposal(s): …]" user
-        // message, `drainBusOutcomes` updates the pending tool_result
-        // envelopes in place. If fewer than 3 committed tool_results
-        // appear, the drain fired mid-batch (the exact pre-fix symptom
-        // of the rAF-mid-loop drain).
-        const followupReq = mock.requests
-            .slice()
-            .reverse()
-            .find((r) => String(r.url || '').includes('chat/completions'));
-        expect(followupReq, 'must have captured the follow-up chat request body').toBeTruthy();
-        const followupBody = followupReq?.body || {};
-        const toolMessages = (followupBody.messages || []).filter((m) => m && m.role === 'tool');
-        const committedToolResults = toolMessages.filter((m) => {
-            const raw = typeof m.content === 'string' ? m.content : '';
-            try {
-                const parsed = JSON.parse(raw);
-                return parsed && parsed.status === 'committed';
-            } catch {
-                return false;
-            }
-        });
-        expect(committedToolResults,
-            'the follow-up round must contain three role:\'tool\' messages with status:\'committed\' — a smaller count means the drain fired before the bulk-approve loop finished',
-        ).toHaveLength(3);
-
-        // Also assert every bulk tool made it to disk.
         const stagedNames = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
             const orch = ctx.extensionSettings?.orchestrator || {};

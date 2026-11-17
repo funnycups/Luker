@@ -1,32 +1,10 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * UI-driven full adapter smoke. For each of the four iter-studio
- * consumers (orchestrator, memory-graph, CEA Character, CPA), opens the
- * plugin's iter-studio popup via the host UI, clicks "New session", and
- * verifies the shell renders without shell-side errors.
- *
- * Adapter contracts and popup shell behavior are unchanged by the
- * library extraction refactor. This smoke catches accidental shell or
- * adapter wiring breakage that the unit suites might miss.
- *
- * Selector discovery notes (see iteration-studio/template.js + each
- * plugin's main.js / ui-templates.js):
- *
- * - All four adapters render into a `div.luker-studio` popup; the adapter-
- *   specific class (`luker_cpa_popup`, `luker_mg_schema_iter_popup`,
- *   `luker_orch_iter_popup`) is concatenated by the shell template, so a
- *   stable per-adapter root selector is `.luker-studio.<popupClassName>`.
- * - `data-iter-action="new-session"` is rendered by renderHistoryList()
- *   unconditionally inside the history details panel (open by default).
- * - CPA / MG / Orchestrator open buttons all live in inline-drawers under
- *   `#extensions_settings2`, which itself is inside the right-side
- *   `#extensions-settings-button` drawer. Drawer toggles use SillyTavern's
- *   `.inline-drawer-toggle` slideToggle delegated handler.
- * - CEA Character has NO UI button: the studio opens from the "Merge in
- *   editor" action CEA registers with the core post-replace registry, so it
- *   cannot be driven from a clean Playwright smoke without a card replace.
- *   This sub-test soft-skips with that reason.
+ * UI-driven full Workbench target smoke. Opens Unified Workbench from its entry
+ * surfaces, switches across every registered AI Iteration target (`preset`, `card`,
+ * `world`, `memory`, `orch`), starts a new session (`New conversation`), and verifies
+ * zero Workbench / Lens / Iteration shell console or uncaught errors.
  */
 
 async function awaitMainUI(page) {
@@ -38,11 +16,7 @@ async function awaitMainUI(page) {
         await page.waitForURL('http://127.0.0.1:8000');
     } catch { /* auto-login path */ }
     await page.waitForFunction('document.getElementById("preloader") === null', { timeout: 0 });
-    // First-run on a fresh data dir surfaces a "Welcome to Luker!"
-    // persona-setup popup that intercepts pointer events on the
-    // navbar's drawer toggles. The Save button is wired to persist a
-    // default persona and close the dialog. Best-effort dismissal:
-    // present → Save; absent → skip.
+
     try {
         const welcomeSave = page.locator('dialog.popup .popup-button-ok').first();
         await welcomeSave.waitFor({ state: 'visible', timeout: 1500 });
@@ -54,15 +28,9 @@ async function awaitMainUI(page) {
     } catch { /* already configured */ }
 }
 
-// Errors we capture as "shell errors" must be related to the iter-studio
-// shell, the new iteration-library, or behaviours around adapter
-// open/close (structured-clone failures). Page-wide
-// pageerrors from unrelated pre-existing issues (e.g. the known
-// `Duplicate export of 'applyPatch'` in character-editor-assistant/
-// studio/ai-chat.js on `release`) are out of scope for this smoke.
-const SHELL_ERROR_RX = /iter[-_]?(library|studio)|luker[-_]?studio|cloned|applyEdits|inverseEdit/i;
+const SHELL_ERROR_RX = /workbench|iter[-_]?(library|studio)|lens|cloned|applyEdits|inverseEdit/i;
 
-async function captureShellErrors(page, sink) {
+function captureShellErrors(page, sink) {
     page.on('console', (msg) => {
         if (msg.type() !== 'error') return;
         const text = msg.text();
@@ -78,11 +46,6 @@ async function captureShellErrors(page, sink) {
     });
 }
 
-/**
- * Open the right-side "Extensions" drawer (the panel that contains
- * `#extensions_settings2` and every plugin's inline-drawer). Idempotent:
- * if already open, leave it open.
- */
 async function ensureExtensionsDrawerOpen(page) {
     const block = page.locator('#rm_extensions_block');
     const isOpen = await block.evaluate(el => el && !el.classList.contains('closedDrawer')).catch(() => false);
@@ -91,29 +54,17 @@ async function ensureExtensionsDrawerOpen(page) {
     await block.waitFor({ state: 'visible', timeout: 5000 });
 }
 
-/**
- * Open a specific plugin's inline-drawer inside the extensions panel by its
- * `#<UI_BLOCK_ID>` host. Idempotent: only clicks the toggle if the content
- * is currently hidden (slideToggle would otherwise close an open drawer).
- *
- * Some plugin hosts contain multiple top-level inline-drawers (e.g.
- * `#orchestrator_settings` has both "Orchestrator" and "Notes"). We always
- * target the first one — that's the primary settings drawer that contains
- * the iter-studio open buttons.
- */
 async function ensureInlineDrawerOpen(page, hostId) {
     const host = page.locator(`#${hostId}`);
     await host.waitFor({ state: 'attached', timeout: 5000 });
     const drawer = host.locator('> .inline-drawer').first();
     const content = drawer.locator('> .inline-drawer-content');
-    // slideToggle leaves display:none in the inline style when collapsed.
     const isHidden = await content.evaluate(el => {
         if (!el) return true;
         const style = el.style.display;
         if (style === 'none') return true;
         if (style === 'block' || style === '') {
-            const computed = window.getComputedStyle(el);
-            return computed.display === 'none';
+            return window.getComputedStyle(el).display === 'none';
         }
         return false;
     }).catch(() => true);
@@ -122,127 +73,116 @@ async function ensureInlineDrawerOpen(page, hostId) {
     await content.waitFor({ state: 'visible', timeout: 5000 });
 }
 
-async function openAdapterAndSmoke(page, { name, openButton, popupRoot, newSessionSelector }) {
-    const button = page.locator(openButton);
-    if (!(await button.count()) || !(await button.first().isVisible().catch(() => false))) {
-        return { skipped: true, reason: 'open button not visible after drawer prerequisites' };
+async function closeWorkbench(page) {
+    const win = page.locator('.wbench .wb-win').first();
+    if (!(await win.isVisible().catch(() => false))) return;
+    const closeBtn = win.locator('.wb-titlebar .is-close').first();
+    if (await closeBtn.isVisible().catch(() => false)) {
+        await closeBtn.click();
+    } else {
+        await page.keyboard.press('Alt+w');
     }
-    await button.first().click();
-    const popup = page.locator(popupRoot).first();
-    await popup.waitFor({ state: 'visible', timeout: 10000 });
-
-    const newSession = popup.locator(newSessionSelector).first();
-    if (await newSession.isVisible().catch(() => false)) {
-        await newSession.click();
-        // give the rerender() pass a moment to repaint the chat panel.
-        await page.waitForTimeout(500);
-    }
-    // close via Escape (works for popups using the Popup class which listens
-    // for Escape as a "cancel" affordance). Fall back to clicking the in-
-    // popup [data-iter-action="close"] button if Escape doesn't dismiss.
-    await page.keyboard.press('Escape');
-    try {
-        await popup.waitFor({ state: 'hidden', timeout: 2000 });
-    } catch {
-        const closeBtn = popup.locator('[data-iter-action="close"]').first();
-        if (await closeBtn.isVisible().catch(() => false)) await closeBtn.click();
-        await popup.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
-    }
-    return { skipped: false };
+    await expect(win).toBeHidden({ timeout: 5000 });
 }
 
-test.describe('UI-driven iter-studio adapter smoke', () => {
-    test('open + new-session smoke for each of 4 adapters', async ({ page }) => {
-        const shellErrors = [];
-        await captureShellErrors(page, shellErrors);
-        await awaitMainUI(page);
-        await ensureExtensionsDrawerOpen(page);
+async function ensureAnyCharacterSelected(page) {
+    const hasChar = await page.evaluate(() => {
+        const ctx = window.Luker?.getContext?.();
+        return Boolean(ctx?.characters?.[ctx?.characterId]?.avatar);
+    });
+    if (hasChar) return;
+    const drawer = page.locator('#rightNavDrawerIcon');
+    if (await drawer.evaluate(el => el.classList.contains('closedIcon')).catch(() => true)) {
+        await drawer.click();
+    }
+    const listVisible = await page.locator('#rm_print_characters_block:visible').count().catch(() => 0);
+    if (!listVisible) {
+        await page.locator('#rm_button_characters').click();
+    }
+    const firstCard = page.locator('#rm_print_characters_block .character_select').first();
+    await firstCard.waitFor({ state: 'visible', timeout: 10_000 });
+    await firstCard.click();
+    await page.waitForFunction(() => {
+        const ctx = window.Luker?.getContext?.();
+        return Boolean(ctx?.characters?.[ctx?.characterId]?.avatar);
+    }, { timeout: 10_000 });
+    await page.evaluate(() => document.querySelector('#rightNavHolder > .drawer-toggle')?.click());
+}
 
-        const adapters = [
+test.describe('UI-driven Workbench iterate-target smoke', () => {
+    test('open + switch + new-session smoke across Workbench targets', async ({ page }) => {
+        const shellErrors = [];
+        captureShellErrors(page, shellErrors);
+        await awaitMainUI(page);
+        await ensureAnyCharacterSelected(page);
+
+        const win = page.locator('.wbench .wb-win').first();
+
+        // 1. Entry bridge buttons from CPA & CEA drawers open the corresponding target inside Workbench.
+        const drawerBridges = [
             {
-                name: 'cpa',
+                name: 'cpa-bridge',
                 drawerHostId: 'completion_preset_assistant_settings',
                 openButton: '#completion_preset_assistant_open',
-                // CPA migrated off the shared iter-studio shell to a
-                // plugin-owned popup (`cpa-iteration/studio.js`). The popup
-                // root no longer carries `.luker-studio` — it's a top-level
-                // `.cpa_it_popup` div mounted inside ST's `Popup` wrapper,
-                // and the new-session button uses `data-cpa-it-action="…"`
-                // rather than the shell's `data-iter-action="…"`.
-                popupRoot: '.cpa_it_popup',
-                newSessionSelector: '[data-cpa-it-action="new-session"]',
+                expectedLabel: /^(Preset|预设|預設)$/i,
             },
             {
-                name: 'memory-graph',
-                drawerHostId: 'memory_graph_settings',
-                openButton: '#luker_rpg_memory_open_schema_studio',
-                // MG schema iteration migrated off the shared iter-
-                // studio shell to a plugin-owned popup
-                // (`config-iteration/studio.js`). The popup root no longer
-                // carries `.luker-studio` — it's a top-level
-                // `.mg_schema_it_popup` div mounted inside ST's `Popup`
-                // wrapper, and the new-session button uses
-                // `data-mg-schema-it-action="…"` rather than the shell's
-                // `data-iter-action="…"`.
-                popupRoot: '.mg_schema_it_popup',
-                newSessionSelector: '[data-mg-schema-it-action="new-session"]',
-            },
-            {
-                name: 'cea-character',
-                // The studio opens from the "Merge in editor" action that CEA
-                // registers with the core post-replace registry.
-                skipReason: 'no UI button — only opens from the post-replace "Merge in editor" action',
-            },
-            {
-                name: 'orchestrator',
-                drawerHostId: 'orchestrator_settings',
-                // The same data-luker-action button appears in 4 boards
-                // (spec/agenda/loop/director) but only the active-mode board
-                // is visible. `:visible` resolves to the one rendered for
-                // the user's current executionMode setting.
-                openButton: '#orchestrator_settings [data-luker-action="ai-iterate-open"]:visible',
-                // Post-Stage-5: plugin-owned popup root.
-                popupRoot: '.orch_it_popup',
-                newSessionSelector: '[data-orch-it-action="new-session"]',
+                name: 'cea-bridge',
+                drawerHostId: 'character_editor_assistant_settings',
+                openButton: '#cea_open_editor_popup',
+                expectedLabel: /^(Character card|角色卡)$/i,
             },
         ];
 
-        let exercised = 0;
-        const results = [];
-
-        for (const adapter of adapters) {
-            await test.step(`adapter: ${adapter.name}`, async () => {
-                if (adapter.skipReason) {
-                    test.info().annotations.push({ type: 'skip', description: `[${adapter.name}] ${adapter.skipReason}` });
-                    results.push({ name: adapter.name, status: 'skipped', reason: adapter.skipReason });
-                    return;
-                }
-                try {
-                    await ensureInlineDrawerOpen(page, adapter.drawerHostId);
-                } catch (e) {
-                    test.info().annotations.push({ type: 'skip', description: `[${adapter.name}] drawer #${adapter.drawerHostId} unreachable: ${e?.message}` });
-                    results.push({ name: adapter.name, status: 'skipped', reason: `drawer unreachable: ${e?.message}` });
-                    return;
-                }
-                const outcome = await openAdapterAndSmoke(page, adapter);
-                if (outcome.skipped) {
-                    test.info().annotations.push({ type: 'skip', description: `[${adapter.name}] ${outcome.reason}` });
-                    results.push({ name: adapter.name, status: 'skipped', reason: outcome.reason });
-                } else {
-                    results.push({ name: adapter.name, status: 'passed' });
-                    exercised += 1;
-                }
+        for (const bridge of drawerBridges) {
+            await test.step(`bridge: ${bridge.name}`, async () => {
+                await ensureExtensionsDrawerOpen(page);
+                await ensureInlineDrawerOpen(page, bridge.drawerHostId);
+                const btn = page.locator(bridge.openButton).first();
+                await expect(btn).toBeVisible({ timeout: 10000 });
+                await btn.click();
+                await expect(win).toBeVisible({ timeout: 10000 });
+                await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]').filter({ hasText: bridge.expectedLabel })).toBeVisible({ timeout: 5000 });
+                await closeWorkbench(page);
             });
         }
 
-        // Attach a structured per-adapter summary so the test report shows
-        // what was actually exercised vs skipped.
-        test.info().annotations.push({ type: 'summary', description: JSON.stringify(results) });
+        // 2. Open Workbench via floating `.wb-pill`, switch to AI iteration, and exercise all registered `.wb-ws-seg` targets + New conversation.
+        const pill = page.locator('.wbench > button.wb-pill').first();
+        await expect(pill).toBeVisible({ timeout: 10000 });
+        await pill.click();
+        await expect(win).toBeVisible({ timeout: 10000 });
 
-        // Refuse to silently no-op: if ALL four sub-tests skip, the smoke
-        // provides no signal and should be treated as a failure.
-        expect(exercised, `no adapter sub-test actually exercised (all skipped): ${JSON.stringify(results)}`).toBeGreaterThanOrEqual(1);
+        const aiTab = win.locator('.wb-rail button.wb-tab').filter({ hasText: /AI iteration|AI 迭代/i }).first();
+        await aiTab.click();
 
-        expect(shellErrors, `shell errors during adapter smoke: ${shellErrors.join(' | ')}`).toEqual([]);
+        const targetButtons = win.locator('.wb-ws-seg button.lw-seg-btn');
+        const targetCount = await targetButtons.count();
+        expect(targetCount, 'Workbench AI Iteration must register multiple workspace targets').toBeGreaterThanOrEqual(3);
+
+        for (let i = 0; i < targetCount; i++) {
+            const btn = targetButtons.nth(i);
+            const label = ((await btn.textContent()) || `target-${i}`).trim();
+            await test.step(`workbench-target: ${label}`, async () => {
+                await btn.click();
+                await expect(btn).toHaveAttribute('aria-pressed', 'true', { timeout: 5000 });
+                const newConv = win.locator('aside.wb-sess .wb-sess-head button').first();
+                if (await newConv.isVisible().catch(() => false) && await newConv.isEnabled().catch(() => false)) {
+                    await newConv.click();
+                }
+                await page.waitForTimeout(200);
+            });
+        }
+
+        // 3. Also verify embedded Memory Graph and Orchestration workspaces mount cleanly without errors.
+        for (const tabRx of [/Memory graph|记忆图|記憶圖/i, /Orchestration|编排/i]) {
+            const tab = win.locator('.wb-rail button.wb-tab').filter({ hasText: tabRx }).first();
+            await expect(tab).toBeVisible({ timeout: 5000 });
+            await tab.click();
+            await page.waitForTimeout(200);
+        }
+
+        await closeWorkbench(page);
+        expect(shellErrors, `shell errors during Workbench target smoke: ${shellErrors.join(' | ')}`).toEqual([]);
     });
 });

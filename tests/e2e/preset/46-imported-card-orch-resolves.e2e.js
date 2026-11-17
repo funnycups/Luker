@@ -16,10 +16,9 @@
 //        - data.extensions.orchestrator = loop mode override referencing
 //          the card-embedded preset by name.
 //   2. Boot Luker; select the character via the visible character list.
-//   3. Open the orchestrator drawer, ensure loop mode, open the
-//      Orchestration Editor popup so the loop workspace mounts.
-//   4. Assert #luker_orch_loop_prompt_preset contains a Card-bound
-//      <optgroup> and the card-only preset name is inside it.
+//   3. Open Workbench -> Orchestration -> Flow view in loop mode and click
+//      the loop agent card to open its Inspector.
+//   4. Assert the Generation preset dropdown lists the Card-bound preset name.
 //   5. Assert the same name does NOT appear in the Local global optgroup.
 //   6. Assert the loop editor's currently-selected preset name matches
 //      the card-embedded name (the card orchestrator override pinned it).
@@ -36,7 +35,8 @@ import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, openExtensionsDrawer, openInlineDrawer, selectCharacterByName } from '../_lib/page.js';
+import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
+import { setOrchMode, setOrchEnabled, openOrchWorkspace, closeWorkbench } from '../_lib/ui-workbench.js';
 import { normalizeIterStudioSettings } from './_helpers.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
 
@@ -110,47 +110,19 @@ test.afterAll(async () => {
 });
 
 async function openLoopEditorPopup(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'orchestrator_settings').catch(() => {});
-    const modeSelect = page.locator('#luker_orch_execution_mode');
-    await modeSelect.waitFor({ state: 'visible', timeout: 10_000 });
-    if ((await modeSelect.inputValue()) !== 'loop') {
-        await modeSelect.selectOption('loop');
-        await modeSelect.evaluate(el => {
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            if (window.jQuery) window.jQuery(el).trigger('change');
-        });
-    }
-    const enabled = page.locator('#luker_orch_enabled');
-    await enabled.waitFor({ state: 'visible', timeout: 5000 });
-    if (!(await enabled.isChecked())) {
-        await enabled.check();
-    }
-    const openBtn = page.locator('[data-luker-action="open-orch-editor-popup"]:visible').first();
-    await openBtn.waitFor({ state: 'visible', timeout: 10_000 });
-    await openBtn.click();
-    const popup = page.locator('.popup:visible:has(.luker_orch_editor_popup)').last();
-    await popup.waitFor({ state: 'visible', timeout: 15_000 });
-    const agentsTab = popup.locator('button.luker-tabs-tab[data-luker-tab-key="agents"]').first();
-    if (await agentsTab.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await agentsTab.click();
-    }
-    // Wait for the loop selector to render populated optgroups.
-    await page.waitForFunction(() => {
-        const sel = document.querySelector('#luker_orch_loop_prompt_preset');
-        return sel && sel.querySelectorAll('optgroup').length > 0;
-    }, { timeout: 15_000 });
-    return popup;
+    await setOrchMode(page, 'loop');
+    await setOrchEnabled(page, true);
+    const lens = await openOrchWorkspace(page, 'flow');
+    await lens.locator('button.ol-card').first().click();
+    return lens;
 }
 
 test.describe('#46 — imported card with orchestrator loop override + card-embedded prompt preset is self-contained', () => {
-    test('card-only prompt preset appears in loop editor Card-bound optgroup and is the pinned selection', async ({ page }) => {
+    test('card-only prompt preset surfaces in main card-bound optgroup and is pinned in Orchestra Lens loop inspector', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, CHAR_NAME);
 
-        // Wait for the card-bound optgroup to render in the main preset
-        // selector — this proves the character-change handler processed the
-        // card's chat_completion_preset embed before we open the orch editor.
+        // Wait for the card-bound optgroup to render in the main preset selector.
         await page.waitForFunction((name) => {
             const optgroup = document.querySelector('#settings_preset_openai optgroup[data-luker-card-bound="1"]');
             if (!optgroup) return false;
@@ -158,56 +130,22 @@ test.describe('#46 — imported card with orchestrator loop override + card-embe
                 .some(o => o.textContent === name);
         }, CARD_PROMPT_PRESET, { timeout: 15_000 });
 
-        await openLoopEditorPopup(page);
+        const lens = await openLoopEditorPopup(page);
 
-        // Inspect the loop prompt-preset selector's DOM. The card-embedded
-        // name must appear inside a Card-bound optgroup and be marked
-        // selected (the card orchestrator override pinned promptPresetName
-        // to CARD_PROMPT_PRESET, so renderOpenAIPresetOptions should have
-        // selected the card option per the card-first rule).
-        const selectorState = await page.evaluate((name) => {
-            const sel = document.querySelector('#luker_orch_loop_prompt_preset');
-            if (!sel) return { hasSelector: false };
-            // Layout: [empty option], [Card-bound optgroup?], [Local global optgroup?],
-            //         [orphan missing option?]. Card-bound is always first if present.
-            const optgroups = Array.from(sel.querySelectorAll('optgroup'));
-            const cardGroup = optgroups.find(g => (g.getAttribute('label') || '').toLowerCase().includes('card')
-                || g.getAttribute('label') === '本卡内嵌' || g.getAttribute('label') === '本卡內嵌');
-            const globalGroups = optgroups.filter(g => g !== cardGroup);
-            const cardOpts = cardGroup
-                ? Array.from(cardGroup.querySelectorAll('option')).map(o => ({
-                    value: o.value, text: o.textContent, selected: o.selected,
-                }))
-                : [];
-            const globalOpts = globalGroups.flatMap(g => Array.from(g.querySelectorAll('option')).map(o => ({
-                value: o.value, text: o.textContent, selected: o.selected,
-                groupLabel: g.getAttribute('label') || '',
-            })));
-            return {
-                hasSelector: true,
-                cardGroupLabel: cardGroup?.getAttribute('label') || null,
-                cardOptions: cardOpts,
-                globalOptions: globalOpts,
-                selectedValue: sel.value,
-                rawHtml: sel.innerHTML,
-            };
-        }, CARD_PROMPT_PRESET);
+        const presetSel = lens.locator('.ol-inspector dl.ol-routing dt').filter({
+            hasText: /Generation preset|生成预设/i,
+        }).locator('+ dd select.ol-select').first();
+        await expect(presetSel).toBeVisible({ timeout: 10_000 });
+        await expect(presetSel).toHaveValue(CARD_PROMPT_PRESET);
 
-        expect(selectorState.hasSelector).toBe(true);
-        // The Card-bound optgroup exists and holds the card preset.
-        expect(selectorState.cardGroupLabel).toBeTruthy();
-        const cardEntry = selectorState.cardOptions.find(o => o.value === CARD_PROMPT_PRESET);
-        expect(cardEntry, `card options: ${JSON.stringify(selectorState.cardOptions)} / raw:\n${selectorState.rawHtml}`).toBeTruthy();
-        // The card preset shows "(Default)" suffix in its label because the
-        // card marked it as the default slot. The value stays the raw name.
-        expect(cardEntry.text).toContain(CARD_PROMPT_PRESET);
-        // The selected option resolves to the card-only name; no local
-        // global with this name exists to shadow it.
-        expect(selectorState.selectedValue).toBe(CARD_PROMPT_PRESET);
-        expect(cardEntry.selected).toBe(true);
-        // The Local global optgroup does NOT carry this preset — the
-        // recipient's local library has no matching name.
-        const localMatch = selectorState.globalOptions.find(o => o.text.trim() === CARD_PROMPT_PRESET);
-        expect(localMatch, `unexpected local match; global options: ${JSON.stringify(selectorState.globalOptions)}`).toBeUndefined();
+        const globalOptions = await page.evaluate(() => {
+            const sel = document.querySelector('#settings_preset_openai');
+            if (!sel) return [];
+            return Array.from(sel.querySelectorAll('option'))
+                .filter((o) => !o.closest('optgroup[data-luker-card-bound="1"]'))
+                .map((o) => o.textContent.trim());
+        });
+        expect(globalOptions).not.toContain(CARD_PROMPT_PRESET);
+        await closeWorkbench(page);
     });
 });

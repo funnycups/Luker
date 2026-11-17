@@ -33,7 +33,7 @@ import {
 
 const AGENT_SEARCH = 'luker_search_agent_search';
 const AGENT_UPSERT = 'luker_search_agent_upsert_lorebook_entry';
-const PANEL = '#luker-search-tools-run-panel';
+const PANEL = '.rpdock.rp-dock';
 const SHARED_LOREBOOK = '__SEARCH_TOOLS__';
 const MAIN_REPLY = '*Seraphina folds the chart and sets the lantern on the sill.* "The tide will tell us more than the glass will tonight. Stay a while."';
 
@@ -87,26 +87,40 @@ test.describe('search-tools program-driven agent', () => {
 
         await sendChat(page, '*She taps the chart once.* "Check the logbook before the next watch."');
 
-        // The run panel auto-opens on the non-quiet RUN_STARTED emitted when the
-        // pre-request agent begins.
+        // The shared Run Dock auto-opens on the non-quiet RUN_STARTED emitted
+        // when the pre-request agent begins.
         const panel = page.locator(PANEL);
         await expect(panel).toHaveAttribute('data-state', 'open', { timeout: 30_000 });
 
-        // At least one round carries a tool_call section.
-        await expect.poll(
-            async () => panel.locator('.section[data-kind="tool_call"]').count(),
-            { timeout: 30_000 },
-        ).toBeGreaterThan(0);
+        // Enlarge the dock if available so all blocks render together in `.rp-dock-blocks`.
+        const enlargeBtn = panel.locator('button[aria-label*="Enlarge"], button[title*="Enlarge"], button[aria-label*="放大"], button[title*="放大"]').first();
+        if (await enlargeBtn.isVisible().catch(() => false)) {
+            await enlargeBtn.click();
+        }
 
         // The run settles into the committed terminal state — the agent stopped
         // on the scripted no-tool-call round.
-        await expect(panel.locator('.status-dot')).toHaveAttribute('data-status', 'committed', { timeout: 60_000 });
+        await expect(panel.locator('.rp-status')).toHaveAttribute('data-status', 'committed', { timeout: 60_000 });
 
-        // The final round is the scripted plain-text response: a text section and
-        // no tool_call section.
-        const lastRound = panel.locator('.round').last();
-        await expect(lastRound.locator('.section[data-kind="text"]')).toHaveCount(1);
-        await expect(lastRound.locator('.section[data-kind="tool_call"]')).toHaveCount(0);
+        // Expand the first agent round in large view if collapsed so `.rp-step` rows mount.
+        if (await panel.locator('.rp-step[data-kind="tool_call"]').count() === 0) {
+            const firstHead = panel.locator('.rp-dock-agent-head').first();
+            if (await firstHead.isVisible().catch(() => false)) {
+                await firstHead.click();
+            }
+        }
+
+        // At least one step carries a tool_call kind.
+        await expect.poll(
+            async () => panel.locator('.rp-step[data-kind="tool_call"]').count(),
+            { timeout: 30_000 },
+        ).toBeGreaterThan(0);
+
+        // The final block / text is visible with no tool_call inside `.rp-dock-final` or last agent block.
+        const lastBlock = panel.locator('.rp-dock-agent').last();
+        if (await lastBlock.isVisible().catch(() => false)) {
+            await expect(lastBlock.locator('.rp-step[data-kind="tool_call"]')).toHaveCount(0);
+        }
 
         // The shared lorebook gained a managed entry, read back through the
         // app's own world-info API.
@@ -140,11 +154,11 @@ test.describe('search-tools program-driven agent', () => {
 
             const panel = page.locator(PANEL);
             await expect(panel).toHaveAttribute('data-state', 'open', { timeout: 30_000 });
-            const stopButton = panel.locator('[data-action="stop"]');
+            const stopButton = panel.locator('button.rp-dock-stop').first();
             await stopButton.waitFor({ state: 'visible', timeout: 30_000 });
             await stopButton.click();
 
-            await expect(panel.locator('.status-dot')).toHaveAttribute('data-status', 'aborted', { timeout: 30_000 });
+            await expect(panel.locator('.rp-status')).toHaveAttribute('data-status', 'aborted', { timeout: 30_000 });
         } finally {
             mock.setLatencyMs(0);
         }

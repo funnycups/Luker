@@ -17,6 +17,7 @@ import { startMockLLM } from '../_lib/mockLLM.js';
 import { awaitMainUI, selectCharacterByName, openExtensionsDrawer, openInlineDrawer, openUserSettingsDrawer, openTopDrawer, closeTopDrawer } from '../_lib/page.js';
 import { createWorldBook, addWorldEntry } from '../_lib/ui-worldinfo.js';
 import { importCharacterFile, openCharacterList } from '../_lib/ui-character.js';
+import { openOrchWorkspace, closeWorkbench } from '../_lib/ui-workbench.js';
 import { writeCharacterPng } from '../groups/_helpers.js';
 import { read as readPngCard, write as writePngCard } from '../../../src/character-card-parser.js';
 import {
@@ -106,9 +107,11 @@ test('a UI edit in each covered category reaches the other device after the idle
     expect(await acceptPairingLink(pageB, link, { categories: CATEGORIES, localLabel: 'A device' })).toBe('success');
     await setSyncSchedule(pageB, { idleSeconds: 3600, pollSeconds: 3600 });
     await closeAllPopups(pageA);
+    await closeWorkbench(pageA);
     await openLanSyncPanel(pageA);
     await setSyncSchedule(pageA, { idleSeconds: IDLE_SECONDS, pollSeconds: 3600 });
     await closeAllPopups(pageA);
+    await closeWorkbench(pageA);
     await closeAllPopups(pageB);
     await waitForBackgroundSync(pageA, { since: pairedSince });
     await waitForBackgroundSync(pageB, { since: pairedSince });
@@ -197,15 +200,15 @@ test('a UI edit in each covered category reaches the other device after the idle
         },
     });
     await closeAllPopups(pageA);
+    await closeWorkbench(pageA);
 
     // Both installs hold the bundled skills from first use, so a new skill is the edit.
     const skillPrompt = text => pageA.locator('dialog.popup[open]', { hasText: text });
     await step('skills', {
         ownRoute: /^\/api\/skills\/global\/?$/,
         prepare: async () => {
-            await openExtensionsDrawer(pageA);
-            await openInlineDrawer(pageA, 'orchestrator_settings');
-            await pageA.locator('#orchestrator_settings [data-luker-action="manage-skills"]:visible').first().click();
+            const lens = await openOrchWorkspace(pageA, 'setup');
+            await lens.locator('.ol-setup-bar button').filter({ hasText: /^(Manage skills\.\.\.|管理技能.*)$/i }).first().click();
             await pageA.locator('.popup .luker_skill_manager [data-skill-toolbar="create"]').click();
             await skillPrompt('Skill name').locator('.popup-input').fill('dawn-watch');
             await skillPrompt('Skill name').locator('.popup-button-ok').click();
@@ -217,6 +220,7 @@ test('a UI edit in each covered category reaches the other device after the idle
         arrived: () => readUserFile(B, 'skills/global/dawn-watch/SKILL.md') !== null,
     });
     await closeAllPopups(pageA);
+    await closeWorkbench(pageA);
 
     const v2 = {
         name: 'Wren', description: 'A tidewright who reads the western channel.', first_mes: 'The tide is turning.', tags: [],

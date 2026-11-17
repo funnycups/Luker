@@ -91,15 +91,13 @@ test.describe('#68 — Run Panel: stream → final commit 1:1', () => {
             btn.click();
         }, '*She steps to the rail, lantern raised against the salt-spray.* "What did the courier see?"');
 
-        // Panel auto-opens on RUN_STARTED.
-        const panel = page.locator('#luker-orch-run-panel');
+        // Shared Run Dock auto-opens on RUN_STARTED.
+        const panel = page.locator('.rpdock.rp-dock');
         await expect(panel).toHaveAttribute('data-state', 'open', { timeout: 30_000 });
 
-        // At least one section <pre> should accumulate bytes. With our
-        // router emitting text alongside write_message, the round's
-        // `text` section gets the announcement string.
+        // At least one rendered textblock or final text should accumulate bytes.
         await expect.poll(async () => {
-            const lens = await panel.locator('.section pre').evaluateAll(
+            const lens = await panel.locator('.rp-textblock, .rp-final-text').evaluateAll(
                 els => els.map(e => (e.textContent || '').length),
             );
             return lens.reduce((s, n) => s + n, 0);

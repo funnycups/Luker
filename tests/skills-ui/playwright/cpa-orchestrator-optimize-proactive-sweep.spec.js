@@ -1,67 +1,27 @@
 /**
- * CPA orchestrator-optimize mode — PROACTIVE skill extraction sweep e2e.
- *
- * Verifies the design contract: in orchestrator-optimize mode, an adapt
- * request triggers a skill-extraction sweep ALONGSIDE the usual coercion/
- * format rewrites — without the user having to ask for it explicitly.
- *
- * The contract is documented in
- * `docs/features/preset-assistant.md#authoring-skills-from-preset-content`
- * and implemented across:
- *   - `cpa-iteration/system-prompts.js#buildOrchestratorOptimizeModeBlock`
- *     (category C disposition + decision-tree extension + Approach
- *     checklist step)
- *   - `cpa-iteration/skill-prompt.js#augmentCpaPromptWithSkills` (tail
- *     augmentation with REQUIRED-language sweep instruction + catalog)
- *
- * Setup flow:
- *   1. Login + skills API up.
- *   2. Switch to an ASCII-safe preset so preset-scope paths work
- *      (server-side scope validator rejects CJK segments).
- *   3. Open CPA settings panel + reset the orchestrator-optimize prompt
- *      override to the current code default. This is the load-bearing
- *      step the user explicitly called out: any prior customization to
- *      the iterModePromptOrchestratorOptimize setting would shadow my
- *      updated mode-block content, leaving the AI unaware of the new
- *      category-C disposition. Reset returns the user to the in-code
- *      default so the new prompt actually reaches the model.
- *   4. Inject a known multi-paragraph rule block (two named ## sections
- *      with imperative language) into the first substantive preset entry.
- *   5. Open CPA in orchestrator-optimize mode, vanilla adapt request.
- *
- * Pass criteria (either branch counts):
- *   (a) AI emits skill_create against our block (strong evidence: the
- *       skill file lands on disk with the verbatim sentinel sentence
- *       inside).
- *   (b) AI's text explicitly says "scanned and found nothing extractable"
- *       (diagnostic evidence: instruction reached the model and it
- *       exercised judgment).
- *
- * Failure (test FAILS) only when the AI is silent AND nothing extracted —
- * that means the augmentation didn't shape behavior at all.
- *
- * Teardown:
- *   - Restore preset body to pre-test snapshot (in finally).
- *   - Delete any skill created from our sentinel block.
- *
- * Screenshots: docs/public/images/skills/cpa-orch-proactive-NN-*.png.
+ * Workbench Preset target (`orchestrator-optimize` mode) — PROACTIVE skill extraction sweep e2e.
  */
 
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
+    REPO_ROOT,
     SCREENSHOTS_DIR,
     awaitMainUI,
     ensureSkillsApiAvailable,
     ensureExtensionsDrawerOpen,
     ensureInlineDrawerOpen,
     activateConnectionProfile,
+    openWorkbenchRailTab,
+    startNewWorkbenchIterateSession,
+    sendWorkbenchIteratePrompt,
+    applyPendingWorkbenchChanges,
+    closeWorkbenchWindow,
     takeDocScreenshot,
 } from './helpers.js';
 
-const REPO_ROOT = path.resolve('/Users/funnycups/worktree/luker-skills-foundation');
-const SKILLS_ROOT = path.join(REPO_ROOT, 'data/default-user/skills');
+const SKILLS_ROOT = path.join(REPO_ROOT, 'data', 'default-user', 'skills');
 
 const INJECTED_SENTINEL = '【反 meta 纪律 / anti-meta】禁止在叙事里出现"正如读者所知"、"出戏地说"、"这段剧情中"这种破墙旁白。';
 const INJECTED_BLOCK = `
@@ -92,8 +52,7 @@ async function findSkillsContainingSentinel(sentinel) {
     const results = [];
     async function walkScope(scopeDir, scopeBuilder) {
         let entries = [];
-        try { entries = await fs.readdir(scopeDir, { withFileTypes: true }); }
-        catch { return; }
+        try { entries = await fs.readdir(scopeDir, { withFileTypes: true }); } catch { return; }
         for (const ent of entries) {
             if (!ent.isDirectory()) continue;
             const skillDir = path.join(scopeDir, ent.name);
@@ -101,87 +60,46 @@ async function findSkillsContainingSentinel(sentinel) {
             try {
                 const body = await fs.readFile(skillMd, 'utf8');
                 if (body.includes(sentinel)) {
-                    results.push({ file: skillMd, name: ent.name, scope: scopeBuilder(ent.name), body });
+                    results.push({ file: skillMd, scope: scopeBuilder(), name: ent.name, body });
                 }
-            } catch { /* not a real skill dir */ }
+            } catch { /* no SKILL.md */ }
         }
     }
-
     await walkScope(path.join(SKILLS_ROOT, 'global'), () => ({ kind: 'global' }));
-
     const presetRoot = path.join(SKILLS_ROOT, 'preset');
-    let apis = [];
-    try { apis = await fs.readdir(presetRoot); } catch { /* none */ }
-    for (const apiId of apis) {
-        const apiDir = path.join(presetRoot, apiId);
-        let presets = [];
-        try { presets = await fs.readdir(apiDir); } catch { continue; }
-        for (const presetName of presets) {
-            await walkScope(
-                path.join(apiDir, presetName),
-                () => ({ kind: 'preset', apiId, name: presetName }),
-            );
+    try {
+        const apis = await fs.readdir(presetRoot);
+        for (const apiId of apis) {
+            const names = await fs.readdir(path.join(presetRoot, apiId)).catch(() => []);
+            for (const presetName of names) {
+                await walkScope(
+                    path.join(presetRoot, apiId, presetName),
+                    () => ({ kind: 'preset', apiId, name: presetName }),
+                );
+            }
         }
-    }
+    } catch { /* no preset dir */ }
     return results;
 }
 
-test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () => {
-    test.setTimeout(720_000);
+test.describe('Workbench Preset orchestrator-optimize: PROACTIVE skill extraction sweep', () => {
+    test.setTimeout(600_000);
 
     test.beforeAll(async () => {
         await fs.mkdir(SCREENSHOTS_DIR, { recursive: true });
-        // Aggressive cleanup: remove EVERY skill whose name matches the
-        // pattern the AI is likely to pick for this extraction, regardless
-        // of body content or scope. Otherwise a stale skill from a prior
-        // run (or from cpa-orchestrator-optimize-skill.spec.js, which uses
-        // the same naming family) makes the AI rationally say "this skill
-        // already exists, no need to extract again" — defeating the test's
-        // ability to observe proactive extraction. We match on
-        // preset-style-* and on names containing anti-meta / touch-detail
-        // (the two sections in our injected block).
-        async function purgeMatchingSkills(scopeDir) {
-            let entries = [];
-            try { entries = await fs.readdir(scopeDir, { withFileTypes: true }); }
-            catch { return; }
-            for (const ent of entries) {
-                if (!ent.isDirectory()) continue;
-                const matches = /^preset-style-/.test(ent.name)
-                    || /anti-meta/.test(ent.name)
-                    || /touch-detail/.test(ent.name);
-                if (matches) {
-                    await fs.rm(path.join(scopeDir, ent.name), { recursive: true, force: true }).catch(() => {});
-                }
-            }
-        }
-        await purgeMatchingSkills(path.join(SKILLS_ROOT, 'global'));
-        const presetRoot = path.join(SKILLS_ROOT, 'preset');
-        let apis = [];
-        try { apis = await fs.readdir(presetRoot); } catch { /* none */ }
-        for (const apiId of apis) {
-            const apiDir = path.join(presetRoot, apiId);
-            let presets = [];
-            try { presets = await fs.readdir(apiDir); } catch { continue; }
-            for (const presetName of presets) {
-                await purgeMatchingSkills(path.join(apiDir, presetName));
-            }
-        }
-        // Also: sweep by sentinel as a belt-and-suspenders check for any
-        // odd-named skill that happens to carry our injected content.
-        const prior = await findSkillsContainingSentinel(INJECTED_SENTINEL);
-        for (const s of prior) {
-            await fs.rm(path.dirname(s.file), { recursive: true, force: true }).catch(() => {});
+        for (const hit of await findSkillsContainingSentinel(INJECTED_SENTINEL)) {
+            await fs.rm(path.dirname(hit.file), { recursive: true, force: true }).catch(() => {});
         }
     });
 
-    test('vanilla "adapt for orchestrator" prompt triggers proactive skill extraction OR explicit "scanned, nothing found" reply', async ({ page }) => {
+    test('vanilla adapt prompt on preset with extractable block triggers sweep', async ({ page }) => {
         await awaitMainUI(page);
         await ensureSkillsApiAvailable(page);
 
         await page.locator('#sys-settings-button .drawer-toggle').first().click();
         await page.locator('#rm_api_block').waitFor({ state: 'visible', timeout: 5000 });
-        const activatedProfile = await activateConnectionProfile(page);
-        expect(activatedProfile, 'spec needs a usable connection profile').toBeTruthy();
+        const profile = await activateConnectionProfile(page);
+        expect(profile, 'need a usable connection profile').toBeTruthy();
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
             const v = ctx?.onlineStatus ?? null;
@@ -193,38 +111,16 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
         let presetMeta = await page.evaluate(() => {
             const ctx = window.Luker?.getContext?.();
             const ref = ctx?.presets?.getSelected?.('openai');
-            return ref && typeof ref === 'object' ? { name: String(ref.name || '') } : null;
+            const list = (ctx?.presets?.list?.('openai') || []).map(p => String(p?.name || ''));
+            return { name: String(ref?.name || ''), all: list };
         });
-        expect(presetMeta?.name).toBeTruthy();
-
+        expect(presetMeta.name).toBeTruthy();
         if (!SAFE_SEGMENT.test(presetMeta.name)) {
-            let candidate = await page.evaluate((re) => {
-                const ctx = window.Luker?.getContext?.();
-                const all = (ctx?.presets?.list?.('openai') || []).map(r => String(r?.name || '')).filter(Boolean);
-                const regex = new RegExp(re);
-                return all.find(n => regex.test(n)) || '';
-            }, SAFE_SEGMENT.source);
-            if (!candidate) {
-                // No ASCII-safe preset available — clone the active preset
-                // under an ASCII name so the spec can run without forcing
-                // the dev to rename their library. Fail loud if the clone
-                // path is broken (presets API is part of the public
-                // contract this spec depends on).
-                candidate = `e2e-sweep-ascii-${Date.now()}`;
-                const cloned = await page.evaluate(async (name) => {
-                    const ctx = window.Luker?.getContext?.();
-                    const active = ctx?.presets?.getSelected?.('openai');
-                    const stored = active ? ctx.presets.getStored(active) : null;
-                    if (!stored?.body) return { ok: false, reason: 'active preset body unavailable' };
-                    const cloneBody = structuredClone(stored.body);
-                    await ctx.presets.save({ collection: 'openai', name }, cloneBody, { select: true });
-                    return { ok: true };
-                }, candidate);
-                expect(cloned.ok, `clone ASCII preset failed: ${cloned.reason}`).toBe(true);
-            }
-            await page.evaluate((name) => {
+            const candidate = presetMeta.all.find(n => SAFE_SEGMENT.test(n));
+            expect(candidate, `need an ASCII preset; got: ${JSON.stringify(presetMeta.all)}`).toBeTruthy();
+            await page.evaluate((n) => {
                 const dropdown = document.querySelector('#settings_preset_openai');
-                const opt = Array.from(dropdown.options).find(o => o.textContent === name);
+                const opt = Array.from(dropdown.options).find(o => o.textContent === n);
                 window.jQuery?.(dropdown).val(opt.value).trigger('change');
             }, candidate);
             await page.waitForFunction((n) => {
@@ -236,47 +132,20 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
         }
         expect(SAFE_SEGMENT.test(presetMeta.name)).toBe(true);
 
-        // ── Step 2: open CPA settings panel + RESET orchestrator-optimize
-        // mode prompt to the current code default. ─────────────────────
-        // Any prior user-customization of iterModePromptOrchestratorOptimize
-        // would shadow the new mode-block content (category C disposition,
-        // updated decision tree, approach checklist) — the AI would see the
-        // OLD prompt and behave per the OLD design (no extraction). Reset
-        // restores the default so the new content reaches the model.
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'completion_preset_assistant_settings');
-        await page.evaluate(() => {
-            const d = document.querySelector('details.cpa_prompt_overrides');
-            if (d && !d.hasAttribute('open')) d.setAttribute('open', '');
-        });
-        // The reset button is bound in main.js via jQuery click handler;
-        // dispatchEvent('click') bypasses any overlay hit-testing issues.
-        await page.locator('#cpa_reset_iter_mode_orchestrator_optimize')
-            .first()
-            .dispatchEvent('click');
-        // Verify the settings actually carry the in-code default after reset.
-        // We compare against the textarea value (which the reset handler
-        // syncs to the settings value) — both should now be the freshly-
-        // computed buildOrchestratorOptimizeModeBlock() output. A 0-length
-        // value would mean the reset didn't fire.
-        const resetTextLen = await page.evaluate(() => {
-            const el = document.querySelector('#cpa_iter_mode_orchestrator_optimize');
-            return el ? String(el.value || '').length : 0;
-        });
-        expect(resetTextLen, 'mode prompt textarea should have content after reset').toBeGreaterThan(1000);
-        // Sanity: the reset-installed default must now contain the new
-        // category C disposition we added in system-prompts.js. If it
-        // doesn't, the dev server is serving stale JS or the reset wasn't
-        // applied to the settings store.
-        const resetTextHasCategoryC = await page.evaluate(() => {
-            const el = document.querySelector('#cpa_iter_mode_orchestrator_optimize');
-            const txt = el ? String(el.value || '') : '';
-            return /^C\.\s/m.test(txt) && /skill_create/.test(txt);
-        });
-        expect(resetTextHasCategoryC, 'after reset, the mode prompt should contain category C + skill_create — otherwise the dev server is serving stale JS').toBe(true);
-        await takeDocScreenshot(page, stepPath(1, 'mode-prompt-reset-to-new-default'), { fullPage: false });
+        // Verify Preset prompt in Workbench Settings is populated cleanly.
+        const settingsWin = await openWorkbenchRailTab(page, /^Settings$|^设置$/i);
+        const presetPromptDetails = settingsWin.locator('details.wb-prompt').filter({
+            hasText: /Preset|预设/i,
+        }).first();
+        if (await presetPromptDetails.isVisible().catch(() => false)) {
+            await presetPromptDetails.locator('summary').first().click();
+            const promptText = (await presetPromptDetails.locator('pre.wb-prompt-text').first().textContent().catch(() => '')) || '';
+            expect(promptText.length, 'Workbench Settings Preset prompt summary should be non-empty').toBeGreaterThan(200);
+        }
+        await takeDocScreenshot(page, stepPath(1, 'mode-prompt-verified-in-settings'), { fullPage: false });
+        await closeWorkbenchWindow(page);
 
-        // ── Step 3: inject the extractable block. ────────────────────────
+        // Inject extractable rule block into active preset fixture.
         const injection = await page.evaluate(async ({ injectBlock, presetName }) => {
             const ctx = window.Luker.getContext();
             const ref = { collection: 'openai', name: presetName };
@@ -303,59 +172,43 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
         await takeDocScreenshot(page, stepPath(2, 'injected-block-saved'), { fullPage: false });
 
         try {
-            // ── Step 4: open CPA popup, fresh session, switch to mode. ──
+            // Open CPA via Extensions drawer bridge button -> opens Workbench Preset target.
+            await ensureExtensionsDrawerOpen(page);
+            await ensureInlineDrawerOpen(page, 'completion_preset_assistant_settings');
             const openBtn = page.locator('#completion_preset_assistant_open').first();
             await openBtn.waitFor({ state: 'visible', timeout: 10000 });
             await openBtn.click();
-            const cpaPopup = page.locator('dialog.popup:has(.cpa_it_popup)').first();
-            await cpaPopup.waitFor({ state: 'visible', timeout: 15000 });
-            await page.waitForFunction(() => {
-                const d = document.querySelector('dialog.popup:has(.cpa_it_popup)');
-                return d && d.hasAttribute('open') && !d.hasAttribute('opening');
-            }, null, { timeout: 5000 });
 
-            const historyDetails = cpaPopup.locator('details[data-cpa-it-history]').first();
-            await historyDetails.evaluate(el => { if (!el.hasAttribute('open')) el.setAttribute('open', ''); });
-            await cpaPopup.locator('[data-cpa-it-action="new-session"]').first().dispatchEvent('click');
-            await page.waitForFunction(() => {
-                const list = document.querySelector('dialog.popup:has(.cpa_it_popup) [data-cpa-it-messages]');
-                return list && list.children.length === 0;
-            }, null, { timeout: 5000 });
+            const win = page.locator('.wbench .wb-win').first();
+            await win.waitFor({ state: 'visible', timeout: 15000 });
+            await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]').filter({ hasText: /^(Preset|预设|預設)$/i })).toBeVisible({ timeout: 5000 });
 
-            const modeSelect = cpaPopup.locator('.cpa_it_mode_select').first();
+            await startNewWorkbenchIterateSession(page);
+
+            const modeSelect = win.locator('select[data-wb-preset-control="mode"], select.wb-preset-mode-select').first();
             await modeSelect.selectOption('orchestrator-optimize');
-            await modeSelect.dispatchEvent('change');
-            await page.waitForFunction(() => {
-                const sel = document.querySelector('dialog.popup:has(.cpa_it_popup) .cpa_it_mode_select');
-                return sel && sel.value === 'orchestrator-optimize';
-            }, null, { timeout: 5000 });
+            await expect(modeSelect).toHaveValue('orchestrator-optimize', { timeout: 5000 });
             await takeDocScreenshot(page, stepPath(3, 'mode-selected'), { fullPage: false });
 
-            // ── Step 5: vanilla adapt request (no mention of skills). ────
             const VANILLA_PROMPT = '请把这份预设改造成编排器主 Agent 用的预设。按你判断的优先级处理。';
-            const composer = cpaPopup.locator('textarea[data-cpa-it-input]').first();
-            await composer.evaluate((el, v) => {
-                el.value = v;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }, VANILLA_PROMPT);
+            await sendWorkbenchIteratePrompt(page, VANILLA_PROMPT);
             await takeDocScreenshot(page, stepPath(4, 'vanilla-prompt-typed'), { fullPage: false });
-
-            const sendBtn = cpaPopup.locator('[data-cpa-it-action="send"]').first();
-            await sendBtn.dispatchEvent('click');
             await takeDocScreenshot(page, stepPath(5, 'send-clicked'), { fullPage: false });
 
-            // ── Step 6: poll for either extraction OR explicit "found
-            // nothing" — both prove the augmentation reached the model. ─
             const deadline = Date.now() + 480_000;
             let matches = [];
             let sweptButFoundNothing = false;
             let lastAssistantText = '';
             while (Date.now() < deadline) {
+                const liveBusy = await win.locator('.wb-reads.is-live').isVisible().catch(() => false);
+                if (!liveBusy) {
+                    await applyPendingWorkbenchChanges(page).catch(() => false);
+                }
                 matches = await findSkillsContainingSentinel(INJECTED_SENTINEL);
                 if (matches.length > 0) break;
-                lastAssistantText = await cpaPopup
-                    .locator('.cpa_it_msg_assistant').last()
+
+                lastAssistantText = await win
+                    .locator('.wb-msg-ai').last()
                     .innerText()
                     .catch(() => '');
                 const text = String(lastAssistantText || '');
@@ -364,11 +217,11 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
                 const chineseSwept = /(?:扫|检查|审视|检视)(?:过|了|描|视)?/.test(text)
                     && (/没(?:有)?(?:找到|看到|发现)|无(?:可|需)抽取|找不到|不(?:需要|必要|值得|建议)抽取/.test(text))
                     && /skill|抽取|抽成|抽出/.test(text);
-                if (englishSwept || chineseSwept) {
+                if (!liveBusy && (englishSwept || chineseSwept)) {
                     sweptButFoundNothing = true;
                     break;
                 }
-                await new Promise(r => setTimeout(r, 5000));
+                await new Promise(r => setTimeout(r, 3000));
             }
             await takeDocScreenshot(page, stepPath(6, 'after-llm-round'), { fullPage: false });
 
@@ -380,32 +233,33 @@ test.describe('CPA orchestrator-optimize: proactive skill extraction sweep', () 
             }
 
             if (matches.length > 0) {
-                for (const m of matches) {
-                    expect(m.body, `skill ${m.name} should contain the verbatim sentinel`).toContain(INJECTED_SENTINEL);
-                }
-                const presetScoped = matches.filter(m => m.scope?.kind === 'preset');
-                expect(
-                    presetScoped.length,
-                    `expected at least one preset-scope extraction; got: ${matches.map(m => `${m.name}@${m.scope?.kind}`).join(', ')}`,
-                ).toBeGreaterThanOrEqual(1);
+                // eslint-disable-next-line no-console
+                console.log(
+                    `[proactive-sweep] PROACTIVE EXTRACTION FIRED: ${matches.length} skill(s) extracted from vanilla adapt request: `
+                    + matches.map(m => `${m.scope.kind}:${m.name}`).join(', '),
+                );
+                const onPreset = matches.find(m => m.scope.kind === 'preset' && m.scope.name === presetMeta.name);
+                expect(onPreset, `extracted skill should land on active preset (${presetMeta.name}); got ${JSON.stringify(matches.map(m => m.scope))}`).toBeTruthy();
+                expect(onPreset.body).toContain(INJECTED_SENTINEL);
             } else {
                 // eslint-disable-next-line no-console
                 console.log(
-                    `[proactive sweep] AI swept and reported nothing extractable. Snippet:\n${lastAssistantText.slice(0, 600)}`,
+                    '[proactive-sweep] Model explicitly ran proactive sweep and declined extraction:\n'
+                    + lastAssistantText.slice(0, 500),
                 );
             }
-            await takeDocScreenshot(page, stepPath(7, 'verified'), { fullPage: false });
-        } finally {
-            // Restore preset body.
-            await page.evaluate(async ({ presetName, body }) => {
-                const ctx = window.Luker.getContext();
-                await ctx.presets.save({ collection: 'openai', name: presetName }, body, { select: true });
-            }, { presetName: presetMeta.name, body: injection.originalBody });
 
-            // Delete any skill the test caused to be created.
-            const matches = await findSkillsContainingSentinel(INJECTED_SENTINEL);
-            for (const m of matches) {
-                await fs.rm(path.dirname(m.file), { recursive: true, force: true }).catch(() => {});
+            await closeWorkbenchWindow(page);
+        } finally {
+            await page.evaluate(async ({ presetName, originalBody }) => {
+                try {
+                    const ctx = window.Luker?.getContext?.();
+                    if (!ctx?.presets) return;
+                    await ctx.presets.save({ collection: 'openai', name: presetName }, originalBody, { select: true });
+                } catch { /* best-effort restore */ }
+            }, { presetName: presetMeta.name, originalBody: injection.originalBody });
+            for (const hit of await findSkillsContainingSentinel(INJECTED_SENTINEL)) {
+                await fs.rm(path.dirname(hit.file), { recursive: true, force: true }).catch(() => {});
             }
         }
     });

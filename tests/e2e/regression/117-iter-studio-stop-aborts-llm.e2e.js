@@ -17,45 +17,19 @@ import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
+import { awaitMainUI } from '../_lib/page.js';
+import { openIterStudio } from '../_lib/ui-iter-studio.js';
+import { setOrchMode, setOrchEnabled } from '../_lib/ui-workbench.js';
 
 let server, mock;
 
 async function setOrchModeToDirector(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'orchestrator_settings').catch(() => {});
-    const modeSelect = page.locator('#luker_orch_execution_mode');
-    await modeSelect.waitFor({ state: 'visible', timeout: 10_000 });
-    if ((await modeSelect.inputValue()) !== 'director') {
-        await modeSelect.selectOption('director');
-        await modeSelect.evaluate(el => {
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            if (window.jQuery) window.jQuery(el).trigger('change');
-        });
-        await page.waitForFunction(() => {
-            const board = document.querySelector('#luker_orch_director_board');
-            return board && board.offsetParent !== null;
-        }, { timeout: 5000 });
-    }
-    // Flip the Enabled checkbox via the real settings panel — no
-    // internal-state mutation. The drawer is already open (we just
-    // toggled execution mode above), so the checkbox is visible.
-    // bootstrapCustomBackend already cleared requestApi/LlmPresetName
-    // and set oai_settings.stream_openai = true, so the streaming
-    // dispatcher path the bug requires is already armed.
-    const enabled = page.locator('#luker_orch_enabled');
-    await enabled.waitFor({ state: 'visible', timeout: 5000 });
-    if (!(await enabled.isChecked())) {
-        await enabled.check();
-    }
+    await setOrchMode(page, 'director');
+    await setOrchEnabled(page, true);
 }
 
 async function openOrchIterStudio(page) {
-    const openBtn = page.locator('#luker_orch_director_board [data-luker-action="ai-iterate-open"]:visible').first();
-    await openBtn.waitFor({ state: 'visible', timeout: 15_000 });
-    await openBtn.click();
-    const sendBtn = page.locator('[data-orch-it-action="send"]').last();
-    await sendBtn.waitFor({ state: 'visible', timeout: 15_000 });
+    await openIterStudio(page, 'orch', { scope: 'global' });
 }
 
 test.beforeAll(async () => {
@@ -79,39 +53,31 @@ test.describe('#117 — iter-studio Stop aborts the in-flight LLM request', () =
         await setOrchModeToDirector(page);
 
         await openOrchIterStudio(page);
-        const popup = page.locator('.popup:visible:has(.orch_it_popup)').last();
+        const win = page.locator('.wbench .wb-win').first();
 
-        const composer = popup.locator('textarea[data-orch-it-input]').first();
+        const composer = win.locator('.wb-composer textarea.wb-input').first();
         await composer.waitFor({ state: 'attached', timeout: 5000 });
         await composer.fill('Author a sub-agent that handles post-draft image insertion. Think carefully before recommending.');
 
-        const sendBtn = popup.locator('button[data-orch-it-action="send"]').first();
+        const sendBtn = win.locator('.wb-composer button.wb-send').first();
         await sendBtn.click();
 
-        // Wait for the label to flip to Stop so we know the request is
-        // in flight (otherwise Stop is testing a no-op).
-        await expect.poll(async () => await sendBtn.textContent(), {
-            message: 'Send button should switch to "Stop" once the request is in flight',
-            timeout: 10_000,
-        }).toMatch(/Stop|停止/);
+        // Wait for the live Stop button inside `.wb-reads.is-live` so we know
+        // the request is in flight.
+        const stopBtn = win.locator('.wb-msg-ai:has(.wb-reads.is-live) button').first();
+        await expect(stopBtn).toBeVisible({ timeout: 10_000 });
 
         const tStopClicked = Date.now();
-        await sendBtn.click();
+        await stopBtn.click();
 
-        // The fix: AbortSignal propagates from state.abortController →
-        // generateTask → sendOpenAIRequest → fetch. We allow 6s — well
-        // below the 30s mock latency, so a missed abort blocks until the
-        // assertion fires rather than masquerading as a slow success.
-        await expect.poll(async () => await sendBtn.textContent(), {
-            message: 'Send button must return to "Send" within 6s of Stop click — if Stop does not propagate the abort, this assertion blocks until the 30s mock latency expires',
-            timeout: 6_000,
-        }).toMatch(/Send|发送|送出/);
+        // AbortSignal propagates to fetch — well below 30s mock latency.
+        await expect(win.locator('.wb-reads.is-live')).toHaveCount(0, { timeout: 6_000 });
+        await expect(sendBtn).toBeEnabled({ timeout: 6_000 });
         const tElapsed = Date.now() - tStopClicked;
 
-        // The button isn't stuck disabled — `aborting` cleared via catch+finally.
         const stillDisabled = await sendBtn.evaluate(el => el.hasAttribute('disabled'));
         expect(stillDisabled,
-            `Send button still disabled after ${tElapsed}ms — aborting flag never cleared, suggests the catch+finally in handleSendMessage never ran`,
+            `Send button still disabled after ${tElapsed}ms — aborting never cleared`,
         ).toBeFalsy();
     });
 });

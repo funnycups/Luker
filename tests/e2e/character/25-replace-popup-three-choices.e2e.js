@@ -344,18 +344,15 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             await editorBtn.click();
             await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
 
-            // Wait for the iter-studio popup to open.
-            const studioDialog = page.locator('dialog.popup[open]', {
-                hasText: /Character Editor — AI iteration|角色编辑器 - AI 迭代|角色編輯器 - AI 迭代/,
-            }).first();
-            await studioDialog.waitFor({ state: 'visible', timeout: 30_000 });
-            const studioRoot = studioDialog.locator('[id^="cea_editor_"]').first();
-            await expect(studioRoot).toBeVisible({ timeout: 5000 });
+            // Wait for unified Workbench AI Iteration (`card` target) to open.
+            const win = page.locator('.wbench .wb-win').first();
+            await expect(win).toBeVisible({ timeout: 30_000 });
+            await expect(
+                win.locator('.wb-ws-seg button.lw-seg-btn:has(.lw-dot[style*="--lw-t-card"])'),
+            ).toHaveAttribute('aria-pressed', 'true', { timeout: 10_000 });
 
-            // REGRESSION 1: by the time the studio is visible, the new card's
-            // embedded book MUST already be on disk. Without this, the AI
-            // session opens against a "the new world book is empty" diff —
-            // which then makes the AI think every old entry was just deleted.
+            // REGRESSION 1: by the time Workbench is visible, the new card's
+            // embedded book MUST already be on disk.
             await page.waitForFunction(({ name }) => {
                 const ctx = window.Luker?.getContext?.();
                 const names = typeof ctx?.getWorldInfoNames === 'function' ? ctx.getWorldInfoNames() : [];
@@ -363,36 +360,24 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             }, { name: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
             expect(existsSync(newBookPath), `${BRIALLEN_BOOK_NAME}.json present on disk AFTER OPEN_EDITOR fires`).toBe(true);
 
-            // REGRESSION 2: the structured replace-diff overview
-            // (surfaced via the topbar "View full replace diff" button)
-            // must carry BOTH the prev-side rename half AND a
-            // description-changed field card — proving the diff computed
-            // against the materialized new book (not an empty stub).
-            // Previously this check read `[data-cea-editor-messages]`,
-            // but the post-replace seed message is now hidden from the
-            // chat pane (hiddenFromUi) and the same information moved
-            // into the topbar button's popup.
-            const openDiffBtn = page.locator('[data-cea-editor-action="open-replace-diff"]').first();
-            await expect(openDiffBtn).toBeVisible();
-            await openDiffBtn.click();
-            const diffPopup = page.locator('dialog.popup[open]', {
-                hasText: /Replace diff — previous vs current|替换差异|替換差異/,
-            }).first();
-            await diffPopup.waitFor({ state: 'visible', timeout: 10_000 });
-            const overviewText = (await diffPopup.locator('.cea_replace_diff_overview').textContent()) || '';
-            // The card-field diff carries description: Briallen vs Ash.
-            expect(overviewText).toContain('description');
-            // Close the diff popup before closing the studio.
-            await diffPopup.locator('.popup-button-ok').first().click({ timeout: 3000 }).catch(() => {});
-            await diffPopup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+            // REGRESSION 2: the hidden autoSend seed brief sent to the AI
+            // carries the structured replace diff (prev vs current card
+            // description + book rename), without cluttering the user chat pane.
+            await expect.poll(() => {
+                return mock.requests.some((r) => {
+                    const text = JSON.stringify(r?.body?.messages || []);
+                    return text.includes('description') && text.includes(BRIALLEN_BOOK_NAME);
+                });
+            }, { timeout: 30_000 }).toBe(true);
+            await expect(win.locator('.wb-msg-user')).toHaveCount(0);
 
-            // Close the studio.
-            await page.keyboard.press('Escape').catch(() => {});
-            await page.locator('dialog.popup[open]').last()
-                .locator('.popup-button-cancel, .popup-button-close')
-                .first()
-                .click({ timeout: 3000 })
-                .catch(() => {});
+            // Wait for auto-turn to settle, then collapse Workbench.
+            await expect(win.locator('.wb-reads.is-live')).toHaveCount(0, { timeout: 30_000 });
+            const closeBtn = win.locator('.wb-titlebar .is-close').first();
+            if (await closeBtn.isVisible().catch(() => false)) {
+                await closeBtn.click();
+                await expect(win).toBeHidden({ timeout: 10_000 });
+            }
         } finally {
             await tearDownServer(server);
         }
@@ -481,24 +466,22 @@ test.describe('#25 — post-replace popup three-choice flow', () => {
             await editorBtn.click();
             await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
 
-            // Studio appears with the new book materialized.
-            const studioDialog = page.locator('dialog.popup[open]', {
-                hasText: /Character Editor — AI iteration|角色编辑器 - AI 迭代|角色編輯器 - AI 迭代/,
-            }).first();
-            await studioDialog.waitFor({ state: 'visible', timeout: 30_000 });
+            // Workbench appears with the new book materialized.
+            const win = page.locator('.wbench .wb-win').first();
+            await expect(win).toBeVisible({ timeout: 30_000 });
             // Wait for materialize to complete before we close.
             await page.waitForFunction(({ name }) => {
                 const ctx = window.Luker?.getContext?.();
                 const names = typeof ctx?.getWorldInfoNames === 'function' ? ctx.getWorldInfoNames() : [];
                 return Array.isArray(names) && names.includes(name);
             }, { name: BRIALLEN_BOOK_NAME }, { timeout: 10_000 });
-            expect(existsSync(newBookPath), 'new book file present on disk while studio is open').toBe(true);
+            expect(existsSync(newBookPath), 'new book file present on disk while Workbench is open').toBe(true);
 
-            // Close the studio WITHOUT interacting with it. The dialog's
-            // own cancel button is disabled; Escape triggers the onClosing
-            // gate which allows close since state.isBusy is false.
-            await page.keyboard.press('Escape');
-            await studioDialog.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
+            // Let the autoSend seed review turn settle, then collapse Workbench
+            // WITHOUT applying changes — triggers `onCancelWithoutApply` rollback.
+            await expect(win.locator('.wb-reads.is-live')).toHaveCount(0, { timeout: 30_000 }).catch(() => {});
+            await win.locator('.wb-titlebar .is-close').first().click();
+            await expect(win).toBeHidden({ timeout: 10_000 });
 
             // Rollback: new book file must be deleted from disk AND the
             // character's binding restored to the previous book.

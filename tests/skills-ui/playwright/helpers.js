@@ -1,27 +1,16 @@
 /**
  * Shared helpers for the skills-UI Playwright smoke specs.
  *
- * Mirrors the inline-helper pattern used by other Luker e2e suites
- * (`tests/frontend/IterWorkspaceSplit.e2e.js`, etc.) but lifts the
- * three load-bearing helpers into a module: the smoke suite has
- * three spec files and each needs `awaitMainUI`, the extensions
- * drawer open routine, and the orchestrator inline-drawer routine.
- *
  * Suite-wide conventions:
  *   - Tests rely on a running Luker dev server. The Playwright config
  *     resolves `PLAYWRIGHT_BASE_URL` (defaulting to 127.0.0.1:8000); if
  *     no server responds, Playwright surfaces a connection error
- *     immediately rather than masking the failure. The smoke spec must
- *     never silently pass when the server is unreachable.
+ *     immediately rather than masking the failure.
  *   - All screenshots are saved under `docs/public/images/skills/`
- *     (created on demand) so docs can reference them by stable
- *     paths (`/images/skills/<name>.png`). The `public/`
- *     subdirectory is Vitepress's static-asset root, so the same files
- *     also resolve under `npm run docs:dev` and the production build.
- *     Use `screenshotPath(scenario, step)` to generate filenames.
- *   - We never invoke real LLMs from these specs — they are pure
- *     UI-state assertions plus screenshot collection. LLM-driven
- *     end-to-end coverage lives in companion specs.
+ *     (created on demand) when `LUKER_UPDATE_DOC_SCREENSHOTS=1`.
+ *   - Workbench / Orchestra Lens / CPA / Shared Run Dock interactions drive
+ *     real DOM controls (`.wb-pill`, `.wb-win`, `.wb-rail`, `.wb-ws-seg`,
+ *     `.olens.ol-lens`, `.rpdock.rp-dock`).
  */
 
 import path from 'node:path';
@@ -31,27 +20,14 @@ import { expect } from '@playwright/test';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Resolve the repo's docs/public/images/skills/ directory once.
-// The path is rooted relative to this file so the screenshots land in a
-// stable location regardless of where `playwright test` is launched
-// from. Playwright runs tests with cwd = the playwright.config.js
-// directory by default, but we want absolute paths to be unambiguous
-// across worktree boundaries (Luker tests live in `tests/`, the docs
-// folder is at repo root). We write under `docs/public/images/` so
-// Vitepress's static-asset pipeline serves them at /images/... — both
-// `npm run dev` and the production build pick them up automatically.
-//
-// __dirname is .../tests/skills-ui/playwright; go up three to repo root.
-const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
+export const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 export const SCREENSHOTS_DIR = path.join(REPO_ROOT, 'docs', 'public', 'images', 'skills');
 
 /**
  * Compose a stable screenshot path under docs/public/images/skills/.
- * Example: screenshotPath('manager', 'initial-view') →
- *   <repo>/docs/public/images/skills/manager-initial-view.png
  *
- * @param {string} scenario - prefix for grouping (e.g. 'manager', 'chips', 'import')
- * @param {string} step - sub-identifier for the screenshot
+ * @param {string} scenario
+ * @param {string} step
  * @returns {string} absolute path
  */
 export function screenshotPath(scenario, step) {
@@ -63,21 +39,12 @@ export function screenshotPath(scenario, step) {
 export const DOC_SCREENSHOTS_ENABLED = !!process.env.LUKER_UPDATE_DOC_SCREENSHOTS;
 
 /**
- * Screenshot a Playwright Page or Locator into a docs path, when doc
- * screenshot regeneration was explicitly requested.
- *
- * No-op (returns null) on a plain regression run — writing into docs/ on
- * every run leaves the working tree dirty and lets a partial / failing
- * run overwrite the committed images the docs reference. Parent
- * directories are created on demand.
- *
- * To rebuild the docs images deliberately:
- *   PW_INCLUDE_INTEGRATION=1 LUKER_UPDATE_DOC_SCREENSHOTS=1 npx playwright test --project=skills-ui
+ * Screenshot a Playwright Page or Locator into a docs path when explicitly enabled.
  *
  * @param {import('@playwright/test').Page | import('@playwright/test').Locator} target
- * @param {string} filePath  absolute path under docs/public/
- * @param {object} [options]  forwarded to target.screenshot()
- * @returns {Promise<string|null>} the written path, or null when gated off
+ * @param {string} filePath
+ * @param {object} [options]
+ * @returns {Promise<string|null>}
  */
 export async function takeDocScreenshot(target, filePath, options = {}) {
     if (!DOC_SCREENSHOTS_ENABLED) return null;
@@ -87,9 +54,7 @@ export async function takeDocScreenshot(target, filePath, options = {}) {
 }
 
 /**
- * Wait for the main Luker UI to be interactive. Mirrors the pattern
- * used by every Luker e2e file: hit "/", possibly click a userSelect
- * tile, then wait for the preloader element to be removed.
+ * Wait for the main Luker UI to be interactive.
  *
  * @param {import('@playwright/test').Page} page
  */
@@ -100,15 +65,13 @@ export async function awaitMainUI(page) {
         await gate.waitFor({ state: 'visible', timeout: 2000 });
         await gate.click();
     } catch {
-        // auto-login or no userList — skip the click and rely on the
-        // preloader check below to gate readiness.
+        // auto-login or no userList
     }
     await page.waitForFunction('document.getElementById("preloader") === null', { timeout: 0 });
 }
 
 /**
  * Open the right-side extensions drawer if it isn't already open.
- * Necessary because the orchestrator settings live inside that drawer.
  *
  * @param {import('@playwright/test').Page} page
  */
@@ -116,11 +79,6 @@ export async function ensureExtensionsDrawerOpen(page) {
     const block = page.locator('#rm_extensions_block');
     const isOpen = await block.evaluate(el => el && !el.classList.contains('closedDrawer')).catch(() => false);
     if (isOpen) return;
-    // SillyTavern binds drawer toggle handlers on .drawer-toggle with jQuery's
-    // .on('click', doNavbarIconClick). Other open drawers (e.g. right-nav)
-    // can z-index overlap the navbar icons, which makes a real mouse click
-    // miss the toggle. dispatchEvent fires the click directly on the toggle
-    // element, the same path the SillyTavern handler ultimately consumes.
     const toggle = page.locator('#extensions-settings-button .drawer-toggle').first();
     await toggle.waitFor({ state: 'attached', timeout: 5000 });
     await toggle.dispatchEvent('click');
@@ -128,11 +86,10 @@ export async function ensureExtensionsDrawerOpen(page) {
 }
 
 /**
- * Expand the orchestrator's `<details>`-like inline drawer if its
- * content is currently hidden. Idempotent.
+ * Expand a plugin inline drawer inside extensions settings if hidden.
  *
  * @param {import('@playwright/test').Page} page
- * @param {string} hostId - container id (e.g. 'orchestrator_settings')
+ * @param {string} hostId
  */
 export async function ensureInlineDrawerOpen(page, hostId) {
     const host = page.locator(`#${hostId}`);
@@ -144,8 +101,7 @@ export async function ensureInlineDrawerOpen(page, hostId) {
         const style = el.style.display;
         if (style === 'none') return true;
         if (style === 'block' || style === '') {
-            const computed = window.getComputedStyle(el);
-            return computed.display === 'none';
+            return window.getComputedStyle(el).display === 'none';
         }
         return false;
     }).catch(() => true);
@@ -155,21 +111,237 @@ export async function ensureInlineDrawerOpen(page, hostId) {
 }
 
 /**
- * Open the orchestrator drawer + Manage skills panel in one shot.
- * The Manage skills button surfaces inside whichever board is
- * currently visible (spec / loop / director / agenda / single), so we
- * click the first `:visible` instance to stay agnostic about the active
- * execution mode.
+ * Open Unified Workbench window via `.wb-pill` (falls back to `Alt+w`).
+ *
+ * @param {import('@playwright/test').Page} page
+ * @returns {Promise<import('@playwright/test').Locator>}
+ */
+export async function openWorkbenchWindow(page) {
+    const win = page.locator('.wbench .wb-win').first();
+    if (!(await win.isVisible().catch(() => false))) {
+        const pill = page.locator('.wbench > button.wb-pill').first();
+        if (await pill.isVisible().catch(() => false)) {
+            await pill.click();
+        } else {
+            await page.keyboard.press('Alt+w');
+        }
+        await win.waitFor({ state: 'visible', timeout: 15_000 });
+    }
+    return win;
+}
+
+/**
+ * Close Unified Workbench window if visible.
+ *
+ * @param {import('@playwright/test').Page} page
+ */
+export async function closeWorkbenchWindow(page) {
+    const win = page.locator('.wbench .wb-win').first();
+    if (!(await win.isVisible().catch(() => false))) return;
+    const closeBtn = win.locator('.wb-titlebar .is-close').first();
+    if (await closeBtn.isVisible().catch(() => false)) {
+        await closeBtn.click();
+    } else {
+        await page.keyboard.press('Alt+w');
+    }
+    await win.waitFor({ state: 'hidden', timeout: 10_000 }).catch(() => {});
+}
+
+/**
+ * Switch Unified Workbench rail tab by text matcher.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {RegExp} tabMatcher
+ * @returns {Promise<import('@playwright/test').Locator>}
+ */
+export async function openWorkbenchRailTab(page, tabMatcher) {
+    const win = await openWorkbenchWindow(page);
+    const tab = win.locator('.wb-rail button.wb-tab').filter({ hasText: tabMatcher }).first();
+    await expect(tab).toBeVisible({ timeout: 10_000 });
+    await tab.click();
+    return win;
+}
+
+/**
+ * Open Workbench -> Orchestration workspace (`.olens.ol-lens`) and optionally switch view.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {RegExp} [viewMatcher]
+ * @returns {Promise<import('@playwright/test').Locator>}
+ */
+export async function openWorkbenchOrchView(page, viewMatcher) {
+    const win = await openWorkbenchRailTab(page, /Orchestration|编排/i);
+    const lens = win.locator('.olens.ol-lens').first();
+    await expect(lens).toBeVisible({ timeout: 15_000 });
+    if (viewMatcher) {
+        const btn = lens.locator('.ol-viewswitch .lw-seg-btn').filter({ hasText: viewMatcher }).first();
+        await expect(btn).toBeVisible({ timeout: 10_000 });
+        await btn.click();
+    }
+    return lens;
+}
+
+/**
+ * Switch orchestrator execution mode inside Workbench Orchestration workspace.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {RegExp} modeLabelMatcher
+ */
+export async function setWorkbenchOrchMode(page, modeLabelMatcher) {
+    const lens = await openWorkbenchOrchView(page);
+    const modeBtn = lens.locator('.ol-modebtn:visible').first();
+    await expect(modeBtn).toBeVisible({ timeout: 10_000 });
+    await modeBtn.click();
+    const item = lens.locator('.ol-menu:visible [role="menuitemradio"]').filter({ has: page.locator('.ol-menu-title', { hasText: modeLabelMatcher }) }).first();
+    await expect(item).toBeVisible({ timeout: 10_000 });
+    await item.click();
+    return lens;
+}
+
+/**
+ * Toggle orchestrator enable switch inside Workbench Orchestration workspace.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {boolean} desired
+ */
+export async function setWorkbenchOrchEnabled(page, desired) {
+    const lens = await openWorkbenchOrchView(page);
+    const sw = lens.locator('.ol-enable button[role="switch"]:visible').first();
+    await expect(sw).toBeVisible({ timeout: 10_000 });
+    const checked = (await sw.getAttribute('aria-checked')) === 'true';
+    if (checked !== Boolean(desired)) {
+        await sw.click();
+        await expect(sw).toHaveAttribute('aria-checked', String(Boolean(desired)), { timeout: 5000 });
+    }
+    return sw;
+}
+
+/**
+ * Save pending changes inside Orchestra Lens `.ol-savebar` if visible.
+ *
+ * @param {import('@playwright/test').Page} page
+ */
+export async function saveWorkbenchOrchDraftIfVisible(page) {
+    const lens = page.locator('.wbench .olens.ol-lens').first();
+    const saveBar = lens.locator('.ol-savebar').first();
+    if (await saveBar.isVisible().catch(() => false)) {
+        const sheetOpen = await lens.evaluate(el => el.classList.contains('is-compact') && el.classList.contains('sheet-open')).catch(() => false);
+        if (sheetOpen) {
+            await lens.locator('.ol-scrim').click({ force: true }).catch(() => {});
+        }
+        const saveBtn = saveBar.locator('button').filter({ hasText: /^(Save|保存)$/i }).first();
+        if (await saveBtn.isVisible().catch(() => false)) {
+            await saveBtn.click();
+            await expect(saveBar).toBeHidden({ timeout: 10_000 });
+        }
+    }
+}
+
+/**
+ * Open Workbench AI Iteration page and switch to the given target dot class
+ * (`wb-t-preset`, `wb-t-card`, `wb-t-world`, `wb-t-memory`, `wb-t-orch`).
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} [wsDotClass]
+ * @returns {Promise<import('@playwright/test').Locator>}
+ */
+export async function openWorkbenchIterateTarget(page, wsDotClass = '') {
+    const win = await openWorkbenchRailTab(page, /AI iteration|AI 迭代/i);
+    const TARGET_RX = {
+        preset: /^(Preset|预设|預設)$/i,
+        'wb-t-preset': /^(Preset|预设|預設)$/i,
+        card: /^(Character card|角色卡)$/i,
+        'wb-t-card': /^(Character card|角色卡)$/i,
+        world: /^(World book|世界书|世界書)$/i,
+        'wb-t-world': /^(World book|世界书|世界書)$/i,
+        memory: /^(Memory graph|记忆图|記憶圖)$/i,
+        'wb-t-memory': /^(Memory graph|记忆图|記憶圖)$/i,
+        orch: /^(Orchestration|编排|編排)$/i,
+        'wb-t-orch': /^(Orchestration|编排|編排)$/i,
+    };
+    if (wsDotClass) {
+        const btn = win.locator('.wb-ws-seg button.lw-seg-btn').filter({
+            hasText: TARGET_RX[wsDotClass],
+        }).first();
+        await expect(btn).toBeVisible({ timeout: 10_000 });
+        await btn.click();
+        await expect(btn).toHaveAttribute('aria-pressed', 'true', { timeout: 5000 });
+    }
+    return win;
+}
+
+/**
+ * Start a fresh AI Iteration session in Workbench (`New conversation`).
+ *
+ * @param {import('@playwright/test').Page} page
+ */
+export async function startNewWorkbenchIterateSession(page) {
+    const win = page.locator('.wbench .wb-win').first();
+    const sess = win.locator('aside.wb-sess').first();
+    if (!(await sess.isVisible().catch(() => false))) {
+        const toggle = win.locator('.wb-chat-head button.wb-src-toggle').first();
+        if (await toggle.isVisible().catch(() => false)) {
+            await toggle.click();
+        }
+    }
+    const newBtn = sess.locator('.wb-sess-head button').filter({
+        hasText: /New conversation|新建对话|新对话/i,
+    }).first();
+    await expect(newBtn).toBeVisible({ timeout: 10_000 });
+    if (await newBtn.isEnabled().catch(() => false)) {
+        await newBtn.click();
+    }
+}
+
+/**
+ * Type prompt into Workbench AI Iteration composer and send it.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} prompt
+ */
+export async function sendWorkbenchIteratePrompt(page, prompt) {
+    const win = page.locator('.wbench .wb-win').first();
+    const input = win.locator('.wb-composer textarea.wb-input').first();
+    await expect(input).toBeVisible({ timeout: 10_000 });
+    await input.fill(prompt);
+    const sendBtn = win.locator('.wb-composer button.wb-send').first();
+    await expect(sendBtn).toBeEnabled({ timeout: 10_000 });
+    await sendBtn.click();
+}
+
+/**
+ * Apply pending change cards in Workbench AI Iteration if `.wb-chg.is-pending` appears.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {{ timeout?: number }} [opts]
+ * @returns {Promise<boolean>} true if a pending card was applied
+ */
+export async function applyPendingWorkbenchChanges(page, opts = {}) {
+    const win = page.locator('.wbench .wb-win').first();
+    const pending = win.locator('.wb-chg.is-pending').last();
+    if (!(await pending.isVisible().catch(() => false))) return false;
+    const applyBtn = pending.locator('.wb-chg-foot button.is-primary').first();
+    await expect(applyBtn).toBeEnabled({ timeout: opts.timeout ?? 10_000 });
+    await applyBtn.click();
+    await expect.poll(async () => {
+        const cls = (await pending.getAttribute('class')) || '';
+        return /\bis-(applied|partial)\b/.test(cls);
+    }, { timeout: opts.timeout ?? 25_000 }).toBe(true);
+    return true;
+}
+
+/**
+ * Open Workbench -> Orchestration -> Setup view -> Manage skills panel.
  *
  * @param {import('@playwright/test').Page} page
  */
 export async function openSkillManagerPanel(page) {
     await awaitMainUI(page);
-    await ensureExtensionsDrawerOpen(page);
-    await ensureInlineDrawerOpen(page, 'orchestrator_settings');
-
-    const openBtn = page.locator('#orchestrator_settings [data-luker-action="manage-skills"]:visible').first();
-    await openBtn.waitFor({ state: 'visible', timeout: 10_000 });
+    const lens = await openWorkbenchOrchView(page, /^(Setup|准备阶段|準備階段|配置)$/i);
+    const openBtn = lens.locator('.ol-setup-bar button').filter({
+        hasText: /Manage skills|管理技能/i,
+    }).first();
+    await expect(openBtn).toBeVisible({ timeout: 10_000 });
     await openBtn.click();
 
     const popup = page.locator('.popup .luker_skill_manager').first();
@@ -179,10 +351,6 @@ export async function openSkillManagerPanel(page) {
 
 /**
  * Hard-assert the dev server exposes the JS skills API on the context.
- * The Skills API is a load-bearing surface for the skill UI smokes — if
- * it's missing, the build under test is broken, not the environment.
- * Fail loud instead of skipping; silent skips here have masked real
- * regressions (`feedback_no_test_fail_without_authorization`).
  *
  * @param {import('@playwright/test').Page} page
  */
@@ -198,25 +366,10 @@ export async function ensureSkillsApiAvailable(page) {
  * Activate a real connection profile if one is configured. Returns the
  * profile name on success or '' when none usable.
  *
- * The picker honors `LUKER_PLAYWRIGHT_PROFILE` (case-insensitive name
- * match) before falling back to a /claude|openai|gpt|gemini|anthropic/i
- * heuristic and finally the first profile in the list. Activation goes
- * through the documented `/profile <name>` slash command path — the
- * same path the Connection Manager dropdown wires through — and the
- * function returns the activated name only when `ctx.onlineStatus`
- * settles off `no_connection` within the 1s grace.
- *
- * Mirrors the inline helper used by critic-regex-search.spec.js (and
- * the now-deleted _local-orch-presets.spec.js); promoted here so live
- * specs can share it instead of each copying the 30-line block.
- *
  * @param {import('@playwright/test').Page} page
- * @returns {Promise<string>} profile name on success, '' on failure
+ * @returns {Promise<string>}
  */
 export async function activateConnectionProfile(page) {
-    // Short-circuit: if there are no connection-manager profiles in
-    // settings at all, the dropdown waitForFunction below burns 30s for
-    // nothing. Probe the settings shape first (no DOM access).
     const hasAnyProfile = await page.evaluate(() => {
         const ctx = window.Luker?.getContext?.();
         const profiles = ctx?.extensionSettings?.connectionManager?.profiles;
@@ -224,17 +377,13 @@ export async function activateConnectionProfile(page) {
     }).catch(() => false);
     if (!hasAnyProfile) return '';
 
-    // The connection-manager extension initializes asynchronously after
-    // awaitMainUI returns. Without this wait, /profile activation would
-    // operate on an empty dropdown and never trigger the load.
     try {
         await page.waitForFunction(
             () => Boolean(document.getElementById('connection_profiles')?.options?.length),
             { timeout: 30000 },
         );
     } catch {
-        // Extension didn't initialize — fall through; the next probe
-        // returns '' which the caller treats as "skip".
+        // fallback below
     }
     return await page.evaluate(async () => {
         const ctx = window.Luker?.getContext?.();
@@ -261,13 +410,7 @@ export async function activateConnectionProfile(page) {
 }
 
 /**
- * Ensure a character card is loaded. If one is already selected we
- * return its avatar; otherwise we activate the first available
- * character via the `/char <name>` slash command (the DOM-click path
- * is unreliable in headless Chromium since the tiles wire jQuery
- * handlers that don't always fire from a synthetic `.click()`).
- *
- * Returns the avatar id on success, '' if no character could be loaded.
+ * Ensure a character card is loaded.
  *
  * @param {import('@playwright/test').Page} page
  * @returns {Promise<string>} avatar id, or '' when none
@@ -299,12 +442,7 @@ export async function ensureCharacterLoaded(page) {
 }
 
 /**
- * Read the avatar id of the currently-loaded character. Returns '' when no
- * character is loaded (caller should treat that as fatal — assert on it).
- *
- * Kept separate from ensureCharacterLoaded because some specs only want to
- * snapshot whatever the spec runner left selected, without trying to fall
- * back to "any character with an avatar".
+ * Read the avatar id of the currently-loaded character.
  */
 export async function getActiveCharacterAvatar(page) {
     return await page.evaluate(() => {
@@ -316,30 +454,15 @@ export async function getActiveCharacterAvatar(page) {
 
 /**
  * Ensure the orchestrator extension's director profile is initialized.
- * Waits for `extension_settings.orchestrator` to exist (the extension's
- * bootstrap creates it on init), then forces the lazy initialization
- * of `directorProfile` by reading the orchestrator status from the
- * context (any path that calls `getDirectorProfileFromSettings`
- * populates the default profile).
- *
- * The active extension namespace is `extension_settings.orchestrator`
- * (MODULE_NAME = 'orchestrator' in main.js). The unrelated
- * `extension_settings.luker_orchestrator` is the iter-studio session
- * store bucket; specs should not write director state there.
  *
  * @param {import('@playwright/test').Page} page
  */
 export async function ensureDirectorProfileInitialized(page) {
-    // Step 1: wait for the orchestrator settings bucket to exist.
     await page.waitForFunction(() => {
         const ctx = window.Luker?.getContext?.();
         const settings = ctx?.extensionSettings?.orchestrator;
         return Boolean(settings && typeof settings === 'object');
     }, null, { timeout: 30000 });
-    // Step 2: force the lazy default to materialize. The director
-    // profile is created on first access via createDefaultDirectorProfile;
-    // setting it inline (idempotently — only when absent) is faster
-    // and less brittle than driving a UI path that triggers the lazy.
     await page.evaluate(async () => {
         const ctx = window.Luker?.getContext?.();
         const settings = ctx.extensionSettings.orchestrator;
@@ -351,8 +474,6 @@ export async function ensureDirectorProfileInitialized(page) {
                 ctx.saveSettingsDebounced();
             }
         } catch (e) {
-            // If the defaults module can't be loaded the spec has a
-            // bigger problem; surface it as a thrown error.
             throw new Error(`ensureDirectorProfileInitialized: failed to load director-defaults (${e.message})`);
         }
     });
@@ -360,23 +481,10 @@ export async function ensureDirectorProfileInitialized(page) {
 
 /**
  * Build a synthetic inline-files-v1 embed payload for a single SKILL.md.
- * Shape mirrors `tests/skills-ui/playwright/fixtures/embed-payload.json`
- * but parameterized by name / description / body so each spec can plant
- * its own marker phrases without disturbing the shared fixture file.
- *
- * @param {object} args
- * @param {string} args.name           — skill name (becomes `name:` in frontmatter)
- * @param {string} args.description    — skill description (becomes `description:` in frontmatter)
- * @param {string} [args.bodyTail='']  — markdown body appended after frontmatter
- * @returns {object} embed payload ready for ctx.skills.executeExtractEmbed
  */
 export function buildSyntheticEmbed({ name, description, bodyTail = '' }) {
     if (!name) throw new Error('buildSyntheticEmbed: name is required');
     if (!description) throw new Error('buildSyntheticEmbed: description is required');
-    // YAML quoting: any colon/dash/hash in the value confuses the
-    // bare-scalar parser; wrap the string and escape internal double
-    // quotes. The name is a kebab/underscore identifier so it's safe
-    // bare; the description is free-form prose.
     const yamlString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
     const content = [
         '---',
@@ -401,17 +509,7 @@ export function buildSyntheticEmbed({ name, description, bodyTail = '' }) {
 }
 
 /**
- * Delete a skill by name from a given scope, swallowing failures
- * (e.g. when the skill never existed). Used as both pre-test
- * cleanup (so a leftover fixture from a crashed run can't poison
- * the install path) and post-test teardown.
- *
- * Scope shape mirrors the public skills API: `{ kind: 'global' }` /
- * `{ kind: 'character', avatar }` / `{ kind: 'preset', name }`.
- *
- * @param {import('@playwright/test').Page} page
- * @param {object} scope
- * @param {string} name
+ * Delete a skill by name from a given scope via HTTP API (best-effort).
  */
 export async function cleanupSkill(page, scope, name) {
     await page.evaluate(async ({ scope, name }) => {

@@ -31,10 +31,15 @@ import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import {
     awaitMainUI,
-    openExtensionsDrawer,
-    openInlineDrawer,
     selectCharacterByName,
 } from '../_lib/page.js';
+import {
+    setOrchMode,
+    setOrchEnabled,
+    openOrchWorkspace,
+    saveOrchDraftIfVisible,
+    closeWorkbench,
+} from '../_lib/ui-workbench.js';
 import {
     normalizeIterStudioSettings,
     selectPresetByName,
@@ -120,97 +125,37 @@ async function resetCharacterOnDisk({ dataRoot, avatarFile }) {
     writeFileSync(path, writePngCard(png, JSON.stringify(card)));
 }
 
-/** Switch execution mode to loop via the orchestrator drawer, then open
- *  the Orchestration Editor popup so the loop workspace's preset
- *  selector is present in the DOM (drawer view hides it under a tab
- *  host that hydrates on-demand). */
 async function setOrchModeToLoopAndOpenEditor(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'orchestrator_settings').catch(() => {});
-    const modeSelect = page.locator('#luker_orch_execution_mode');
-    await modeSelect.waitFor({ state: 'visible', timeout: 10_000 });
-    if ((await modeSelect.inputValue()) !== 'loop') {
-        await modeSelect.selectOption('loop');
-        await modeSelect.evaluate(el => {
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            if (window.jQuery) window.jQuery(el).trigger('change');
-        });
-    }
-    const enabled = page.locator('#luker_orch_enabled');
-    await enabled.waitFor({ state: 'visible', timeout: 5000 });
-    if (!(await enabled.isChecked())) {
-        await enabled.check();
-    }
-    // Open the popup — the drawer's tab hosts hydrate lazily and the
-    // Agents tab does not render the loop workspace until activated.
-    // The popup emits the full workspace synchronously across all tabs
-    // (per injectWorkspaceIntoTabHost), so the loop selector becomes
-    // accessible without further UI dance.
-    const openBtn = page.locator('[data-luker-action="open-orch-editor-popup"]:visible').first();
-    await openBtn.waitFor({ state: 'visible', timeout: 10_000 });
-    await openBtn.click();
-    const popup = page.locator('.popup:visible:has(.luker_orch_editor_popup)').last();
-    await popup.waitFor({ state: 'visible', timeout: 15_000 });
-    // Switch to the Agents tab so the loop workspace's preset selector
-    // becomes visible to Playwright locators (the tab injection puts
-    // renderLoopWorkspace output into the Agents-tab host).
-    const agentsTab = popup.locator('button.luker-tabs-tab[data-luker-tab-key="agents"]').first();
-    if (await agentsTab.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await agentsTab.click();
-    }
-    await page.waitForFunction(() => {
-        const sel = document.querySelector('#luker_orch_loop_prompt_preset');
-        // Native <select> is hidden by select2 (display:none), so
-        // offsetParent-based visibility checks would false-negative.
-        // Populated <optgroup> presence is the load-bearing signal.
-        return sel && sel.querySelectorAll('optgroup').length > 0;
-    }, { timeout: 15_000 });
-    return popup;
+    await setOrchMode(page, 'loop');
+    await setOrchEnabled(page, true);
+    const lens = await openOrchWorkspace(page, 'flow');
+    const card = lens.locator('button.ol-card').first();
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    await card.click();
+    return lens;
 }
 
-/** Drive the loop mode prompt-preset selector to the given name.  The
- *  <select> is hidden by select2, so we drive the native element via
- *  jQuery `.val(...).trigger('change')` (mirrors the pattern used by
- *  the existing preset e2e helpers).  We deliberately pick the option
- *  from the Local global optgroup — if a card-bound optgroup exists
- *  with a same-named entry, we still want the global one so the save
- *  flow's detection sees an unembedded name. */
 async function selectLoopPromptPresetGlobal(page, name) {
-    await page.evaluate(({ target }) => {
-        const $sel = window.jQuery?.('#luker_orch_loop_prompt_preset');
-        if (!$sel?.length) throw new Error('#luker_orch_loop_prompt_preset not found');
-        const nativeSel = $sel[0];
-        // Find the option whose ancestor optgroup is NOT the card-bound
-        // group (Card-bound optgroup renders first).  When there is no
-        // card group at all, every option qualifies.
-        const options = Array.from(nativeSel.querySelectorAll('optgroup > option'));
-        const opt = options.find((el) => {
-            if (el.textContent.trim() !== target) return false;
-            const grp = el.closest('optgroup');
-            // The card-bound optgroup renders first in DOM order; the
-            // local global is the next sibling.  A single-optgroup DOM
-            // (no card entries yet) means "global" by definition.
-            const isFirstOptgroup = grp && grp === nativeSel.querySelector('optgroup');
-            const hasSecondOptgroup = !!grp?.nextElementSibling && grp.nextElementSibling.tagName === 'OPTGROUP';
-            return !(isFirstOptgroup && hasSecondOptgroup);
-        });
-        if (!opt) throw new Error(`loop prompt preset (global) option not found: ${target}`);
-        $sel.val(String(opt.value)).trigger('change');
-    }, { target: name });
-    await page.waitForTimeout(200);
+    const lens = await openOrchWorkspace(page, 'flow');
+    const presetSel = lens.locator('.ol-inspector dl.ol-routing dt').filter({
+        hasText: /Generation preset|生成预设/i,
+    }).locator('+ dd select.ol-select').first();
+    if (!(await presetSel.isVisible().catch(() => false))) {
+        await lens.locator('button.ol-card').first().click();
+    }
+    await expect(presetSel).toBeVisible({ timeout: 10_000 });
+    if ((await presetSel.inputValue()) !== name) {
+        await presetSel.selectOption(name);
+    }
+    await saveOrchDraftIfVisible(page);
 }
 
-/** Click the currently-visible Save To Character Override button in the
- *  General tab of the orchestration editor popup. Switches tabs first
- *  if necessary — the Save button lives in the mode-row action bar,
- *  which is inside the General tab. */
-async function clickSaveToCharacterOverride(page, popup) {
-    const generalTab = popup.locator('button.luker-tabs-tab[data-luker-tab-key="general"]').first();
-    if (await generalTab.isVisible({ timeout: 1000 }).catch(() => false)) {
-        await generalTab.click();
-    }
-    const btn = popup.locator('[data-luker-action="save-character"]:visible').first();
-    await btn.waitFor({ state: 'visible', timeout: 10_000 });
+async function clickSaveToCharacterOverride(page) {
+    const lens = await openOrchWorkspace(page, 'setup');
+    const btn = lens.locator('.ol-setup-bar button').filter({
+        hasText: /^(Save To Character Override|保存为当前角色卡覆盖)$/i,
+    }).first();
+    await expect(btn).toBeVisible({ timeout: 10_000 });
     await btn.click();
 }
 
@@ -241,10 +186,10 @@ test.describe('#44 — Save To Character Override embed-summary popup', () => {
         await savePresetAsViaButton(page, EMBED_PRESET_NAME);
 
         await selectCharacterByName(page, CHAR_NAME);
-        const popup = await setOrchModeToLoopAndOpenEditor(page);
+        await setOrchModeToLoopAndOpenEditor(page);
         await selectLoopPromptPresetGlobal(page, EMBED_PRESET_NAME);
 
-        await clickSaveToCharacterOverride(page, popup);
+        await clickSaveToCharacterOverride(page);
 
         const dialog = await awaitSummaryPopup(page);
         // Click "Embed all" — the OK button hosts the primary action.
@@ -265,6 +210,7 @@ test.describe('#44 — Save To Character Override embed-summary popup', () => {
         // Orchestrator character override was also persisted.
         const override = await readCharacterOrchestratorOverride(page);
         expect(override).not.toBeNull();
+        await closeWorkbench(page);
     });
 
     test('Save names only: orchestrator persisted without embedding preset body', async ({ page }) => {
@@ -285,10 +231,10 @@ test.describe('#44 — Save To Character Override embed-summary popup', () => {
         }
 
         await selectCharacterByName(page, CHAR_NAME);
-        const popup = await setOrchModeToLoopAndOpenEditor(page);
+        await setOrchModeToLoopAndOpenEditor(page);
         await selectLoopPromptPresetGlobal(page, EMBED_PRESET_NAME);
 
-        await clickSaveToCharacterOverride(page, popup);
+        await clickSaveToCharacterOverride(page);
 
         const dialog = await awaitSummaryPopup(page);
         // "Save names only" is the customButton — ST tags custom popup
@@ -307,6 +253,7 @@ test.describe('#44 — Save To Character Override embed-summary popup', () => {
             const override = await readCharacterOrchestratorOverride(page);
             return override !== null;
         }, { timeout: 15_000 }).toBe(true);
+        await closeWorkbench(page);
     });
 
     test('Cancel: nothing persisted (no card presets, no orchestrator override)', async ({ page }) => {
@@ -325,10 +272,10 @@ test.describe('#44 — Save To Character Override embed-summary popup', () => {
         }
 
         await selectCharacterByName(page, CHAR_NAME);
-        const popup = await setOrchModeToLoopAndOpenEditor(page);
+        await setOrchModeToLoopAndOpenEditor(page);
         await selectLoopPromptPresetGlobal(page, EMBED_PRESET_NAME);
 
-        await clickSaveToCharacterOverride(page, popup);
+        await clickSaveToCharacterOverride(page);
 
         const dialog = await awaitSummaryPopup(page);
         // The preflight popup's Cancel is a trailing custom button
@@ -343,5 +290,6 @@ test.describe('#44 — Save To Character Override embed-summary popup', () => {
         expect(cardState.presets).toEqual([]);
         const override = await readCharacterOrchestratorOverride(page);
         expect(override).toBeNull();
+        await closeWorkbench(page);
     });
 });

@@ -34,7 +34,8 @@ import { resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply, openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
+import { awaitMainUI, selectCharacterByName, sendMessageAndAwaitReply } from '../_lib/page.js';
+import { openOrchWorkspace, setOrchMode, selectOrchPreset, closeWorkbench } from '../_lib/ui-workbench.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
 
 let server, mock;
@@ -121,40 +122,18 @@ test.afterAll(async () => {
 });
 
 async function openOrchDrawerInLoopMode(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'orchestrator_settings').catch(() => {});
-    const modeSelect = page.locator('#luker_orch_execution_mode');
-    await modeSelect.waitFor({ state: 'visible', timeout: 10_000 });
-    if ((await modeSelect.inputValue()) !== 'loop') {
-        await modeSelect.selectOption('loop');
-        await modeSelect.evaluate(el => {
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            if (window.jQuery) window.jQuery(el).trigger('change');
-        });
-    }
-    const generalTabButton = page.locator('button[data-luker-tabs-target="luker_orch_tabs"][data-luker-tab-key="general"]');
-    if (await generalTabButton.count()) await generalTabButton.first().click();
+    await setOrchMode(page, 'loop');
+    await openOrchWorkspace(page, 'setup');
 }
 
 function loopSelector(page) {
-    return page.locator('[data-luker-preset-bar-host="loop"] [data-luker-preset-select][data-mode="loop"]');
+    return page.locator('.wbench .olens.ol-lens .ol-setup-bar select.ol-select').first();
 }
 
 async function pickPreset(page, scope, id) {
-    // After every send the top drawer gets closed, so re-open the
-    // orchestrator drawer before each pick — the preset select lives
-    // inside it and is invisible (display:none subtree) otherwise.
     await openOrchDrawerInLoopMode(page);
-    const select = loopSelector(page);
-    await select.waitFor({ state: 'attached', timeout: 10_000 });
-    // Option values are raw preset ids; scope rides on data-preset-scope.
-    const option = select.locator(`option[data-preset-scope="${scope}"][value="${id}"]`);
-    await option.waitFor({ state: 'attached', timeout: 10_000 });
-    await select.selectOption(id);
-    await select.evaluate(el => {
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        if (window.jQuery) window.jQuery(el).trigger('change');
-    });
+    await selectOrchPreset(page, id, { scope });
+    await closeWorkbench(page);
 }
 
 function requestSystemPrompts(record) {
@@ -194,17 +173,21 @@ test.describe('#82 — orchestrator preset dropdown selection drives the runtime
         await selectCharacterByName(page, CHARACTER_NAME);
         await openOrchDrawerInLoopMode(page);
 
-        // The dropdown's initial selection must be the card preset (card
-        // slot non-empty = card runs).
+        // The dropdown's initial selection must be the card preset (`character:CARD_A_ID`).
         const select = loopSelector(page);
-        await select.waitFor({ state: 'attached', timeout: 10_000 });
-        const initialSelected = await select.evaluate(el => el.value);
-        expect(initialSelected).toBe(CARD_A_ID);
-        const initialScope = await select.evaluate(el => {
+        await expect(select).toBeVisible({ timeout: 10_000 });
+        const initialSelected = await select.evaluate(el => {
             const opt = el.selectedOptions[0];
-            return opt ? opt.getAttribute('data-preset-scope') : null;
+            if (!opt) return null;
+            const val = String(opt.value || '');
+            const sep = val.indexOf(':');
+            return {
+                presetId: opt.dataset.presetId || (sep >= 0 ? val.slice(sep + 1) : val),
+                scope: opt.dataset.scope || (sep >= 0 ? val.slice(0, sep) : ''),
+            };
         });
-        expect(initialScope).toBe('character');
+        expect(initialSelected).toEqual({ presetId: CARD_A_ID, scope: 'character' });
+        await closeWorkbench(page);
 
         // ── Leg 1: card slot active → loop agent prompt = CARD marker.
         await sendMessageAndAwaitReply(page, 'Start the first sweep.');

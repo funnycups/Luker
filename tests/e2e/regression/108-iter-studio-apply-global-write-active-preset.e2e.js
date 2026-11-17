@@ -31,9 +31,9 @@ import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '
 import {
     awaitMainUI,
     reloadAndAwait,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { openIterStudio, sendIterPrompt, applyIterBatch, closeIterStudio } from '../_lib/ui-iter-studio.js';
+import { setOrchMode, setOrchEnabled, openOrchWorkspace, closeWorkbench } from '../_lib/ui-workbench.js';
 
 let server, mock;
 
@@ -52,93 +52,39 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-// Local inline helpers — `tests/e2e/_lib/ui-iter-studio.js`'s
-// openIterStudio + sendIterPrompt + applyIterBatch are stale: they assume
-// the legacy apply-batch / discard-batch action attrs (iter-library was
-// refactored to a proposal-bus model with `data-proposal-action="approve"
-// | "reject"`). The brief forbids editing _lib/, so we inline the
-// up-to-date flow here.
-
 async function setOrchModeToDirector(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'orchestrator_settings').catch(() => {});
-    const modeSelect = page.locator('#luker_orch_execution_mode');
-    await modeSelect.waitFor({ state: 'visible', timeout: 10_000 });
-    if ((await modeSelect.inputValue()) !== 'director') {
-        await modeSelect.selectOption('director');
-        await modeSelect.evaluate(el => {
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            if (window.jQuery) window.jQuery(el).trigger('change');
-        });
-        await page.waitForFunction(() => {
-            const board = document.querySelector('#luker_orch_director_board');
-            return board && board.offsetParent !== null;
-        }, { timeout: 5000 });
-    }
-    // Flip the Enabled checkbox via the real settings panel — no
-    // internal-state mutation. The drawer is already open (we just
-    // toggled execution mode above), so the checkbox is visible.
-    // bootstrapCustomBackend already cleared requestApi/LlmPresetName.
-    const enabled = page.locator('#luker_orch_enabled');
-    await enabled.waitFor({ state: 'visible', timeout: 5000 });
-    if (!(await enabled.isChecked())) {
-        await enabled.check();
-    }
+    await setOrchMode(page, 'director');
+    await setOrchEnabled(page, true);
 }
 
 async function openOrchIterStudio(page) {
-    const openBtn = page.locator('#luker_orch_director_board [data-luker-action="ai-iterate-open"]:visible').first();
-    await openBtn.waitFor({ state: 'visible', timeout: 15_000 });
-    await openBtn.click();
-    const sendBtn = page.locator('[data-orch-it-action="send"]').last();
-    await sendBtn.waitFor({ state: 'visible', timeout: 15_000 });
+    await openIterStudio(page, 'orch', { scope: 'global' });
 }
 
 async function sendOrchIterPromptAndAwaitProposal(page, text) {
-    const popup = page.locator('.popup:visible').last();
-    const composer = popup.locator('textarea[data-orch-it-input]').first();
-    await composer.waitFor({ state: 'visible', timeout: 10_000 });
-    await composer.fill(text);
-    const sendBtn = popup.locator('button[data-orch-it-action="send"]').first();
-    await sendBtn.click();
-    const approveBtn = popup.locator('[data-proposal-action="approve"]').first();
-    await approveBtn.waitFor({ state: 'visible', timeout: 60_000 });
+    await sendIterPrompt(page, 'orch', text);
 }
 
 async function approveTopProposal(page) {
-    const popup = page.locator('.popup:visible').last();
-    const approveBtn = popup.locator('[data-proposal-action="approve"]').first();
-    await approveBtn.waitFor({ state: 'visible', timeout: 10_000 });
-    await approveBtn.click();
-    await approveBtn.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
+    await applyIterBatch(page, 'orch');
 }
 
 async function closeIterStudioPopup(page) {
-    const popup = page.locator('.popup:visible:has(.orch_it_popup)').last();
-    const close = popup.locator('.popup-button-close').first();
-    if (await close.isVisible({ timeout: 500 }).catch(() => false)) {
-        await close.click();
-    } else {
-        await page.keyboard.press('Escape');
-    }
-    await popup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    await closeIterStudio(page);
 }
 
-async function openOrchEditor(page) {
-    const openBtn = page.locator('#luker_orch_director_board [data-luker-action="open-orch-editor"]:visible').first();
-    await openBtn.waitFor({ state: 'visible', timeout: 15_000 });
-    await openBtn.click();
-    const popup = page.locator('.popup:visible:has(.luker_orch_editor_popup)').last();
-    await popup.waitFor({ state: 'visible', timeout: 15_000 });
-    return popup;
+async function readMainAgentPromptInOrchLens(page) {
+    const lens = await openOrchWorkspace(page, 'flow');
+    const mainCard = lens.locator('button.ol-card').first();
+    await expect(mainCard).toBeVisible({ timeout: 15_000 });
+    await mainCard.click();
+    const insp = lens.locator('.ol-inspector').first();
+    await expect(insp).toBeVisible({ timeout: 10_000 });
+    return insp.innerText();
 }
 
 async function closeOrchEditor(page) {
-    const popup = page.locator('.popup:visible:has(.luker_orch_editor_popup)').last();
-    const closeBtn = popup.locator('.popup-button-ok').first();
-    await closeBtn.waitFor({ state: 'visible', timeout: 5000 });
-    await closeBtn.click();
-    await popup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    await closeWorkbench(page);
 }
 
 test.describe('#108 — iter-studio Apply→Global persists across reload', () => {
@@ -160,14 +106,10 @@ test.describe('#108 — iter-studio Apply→Global persists across reload', () =
 
         await closeIterStudioPopup(page);
 
-        // Pre-reload sanity: open the editor and confirm the textarea
-        // already shows the marker.
-        let editor = await openOrchEditor(page);
-        const sysPromptBefore = editor.locator('[data-orch-director-field="mainAgent.systemPrompt"]').first();
-        await sysPromptBefore.waitFor({ state: 'visible', timeout: 10_000 });
-        const valueBefore = await sysPromptBefore.inputValue();
+        // Pre-reload sanity: inspect mainAgent prompt in Orchestra Lens Flow view.
+        const valueBefore = await readMainAgentPromptInOrchLens(page);
         expect(valueBefore,
-            'Approve must update the in-memory active preset; if the editor textarea is empty here, the apply pipeline never reached the preset library',
+            'Apply must update the in-memory active preset; if Orchestra Lens inspector lacks the marker, the apply pipeline never reached the preset library',
         ).toContain(MARKER);
 
         await closeOrchEditor(page);
@@ -176,15 +118,10 @@ test.describe('#108 — iter-studio Apply→Global persists across reload', () =
         await reloadAndAwait(page, server.baseURL);
         await setOrchModeToDirector(page);
 
-        editor = await openOrchEditor(page);
-        const sysPromptAfter = editor.locator('[data-orch-director-field="mainAgent.systemPrompt"]').first();
-        await sysPromptAfter.waitFor({ state: 'visible', timeout: 10_000 });
-        const valueAfter = await sysPromptAfter.inputValue();
+        const valueAfter = await readMainAgentPromptInOrchLens(page);
 
         expect(valueAfter,
-            'after reload, the director main agent systemPrompt textarea must STILL show the marker; ' +
-            'a regression in writeActivePreset routing surfaces here as an empty/default textarea ' +
-            '(migration strips the legacy field on next boot)',
+            'after reload, the director main agent systemPrompt in Orchestra Lens must STILL show the marker',
         ).toContain(MARKER);
     });
 });

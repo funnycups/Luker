@@ -29,8 +29,9 @@ import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, openExtensionsDrawer, openInlineDrawer, selectCharacterByName } from '../_lib/page.js';
+import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 import { openIterStudio, closeIterStudio } from '../_lib/ui-iter-studio.js';
+import { setOrchEnabled, sendWorkbenchIterationPrompt } from '../_lib/ui-workbench.js';
 import { normalizeIterStudioSettings } from './_helpers.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
 
@@ -80,94 +81,42 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-/**
- * Enable the orchestrator (its "Open AI Iteration Studio" button is
- * gated on the extension being enabled). Idempotent — no-op when
- * already enabled.
- */
 async function enableOrchestrator(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'orchestrator_settings').catch(() => {});
-    const enabled = page.locator('#luker_orch_enabled');
-    await enabled.waitFor({ state: 'visible', timeout: 5000 });
-    if (!(await enabled.isChecked())) {
-        await enabled.check();
-    }
+    await setOrchEnabled(page, true);
 }
 
-/**
- * Read the last `inspect_bound_preset` tool-result payload out of the
- * visible iter-studio popup. renderResultDetails emits the payload as
- * JSON via `<pre class="luker_lib_toolcall_result_pre">`; primitive
- * `null` / `undefined` come through as bare `String(...)` text.
- */
-async function readLastToolResultPayload(page, toolLabel) {
-    return page.evaluate((name) => {
-        const popups = Array.from(document.querySelectorAll('dialog.popup[open]'));
-        let root = null;
-        for (let i = popups.length - 1; i >= 0; i--) {
-            if (popups[i].querySelector('.luker_lib_message_assistant')) {
-                root = popups[i];
-                break;
-            }
-        }
-        if (!root) return null;
-        const chips = Array.from(root.querySelectorAll('.luker_lib_toolcall'));
-        const matching = chips.filter((chip) => {
-            const label = chip.querySelector('.luker_lib_toolcall_label');
-            return label && label.textContent.trim() === name;
-        });
-        if (matching.length === 0) return null;
-        const last = matching[matching.length - 1];
-        const pre = last.querySelector('.luker_lib_toolcall_result_pre');
-        if (!pre) return null;
-        const text = pre.textContent || '';
-        const trimmed = text.trim();
-        if (trimmed === 'null') return { __primitive: null };
-        if (trimmed === 'undefined') return { __primitive: undefined };
-        try { return JSON.parse(trimmed); } catch { return { __raw: text }; }
-    }, toolLabel);
+let lastToolPayload = null;
+
+async function readLastToolResultPayload() {
+    return lastToolPayload;
 }
 
-/**
- * Read-only send helper.
- *
- * The shared `sendIterPrompt` waits for a proposal-bus Approve button,
- * which read tools never produce. This variant instead waits for:
- *   1. A new `.luker_lib_toolcall` chip carrying the given tool label
- *      to appear inside the visible iter popup.
- *   2. The Send button's text to toggle back from "Stop" to "Send" (the
- *      isBusy flag flips false — see studio.js:2104 — when the loop
- *      stalls, which for read-only turns happens once the next round
- *      returns no more tool_calls and the mockLLM's fallback echo lands
- *      as a text-only assistant turn).
- */
-async function sendReadOnlyPrompt(page, prompt, { expectedToolLabel = 'inspect_bound_preset', timeoutMs = 60_000 } = {}) {
-    const popup = page.locator('.popup:visible').last();
-    const input = popup.locator('[data-orch-it-input], .orch_it_composer_input textarea, .orch_it_composer_input [contenteditable="true"]').first();
-    await input.waitFor({ state: 'visible', timeout: 10_000 });
-    const priorChipCount = await popup.locator('.luker_lib_toolcall .luker_lib_toolcall_label', { hasText: expectedToolLabel }).count().catch(() => 0);
-    const tag = await input.evaluate(el => el.tagName.toLowerCase());
-    if (tag === 'textarea' || tag === 'input') {
-        await input.fill(prompt);
-    } else {
-        await input.click();
-        await input.press('ControlOrMeta+a');
-        await input.press('Delete');
-        await input.type(prompt);
+async function sendReadOnlyPrompt(page, prompt) {
+    const reqBefore = mock.requests.length;
+    await sendWorkbenchIterationPrompt(page, prompt);
+    const toolMsgs = mock.requests
+        .slice(reqBefore)
+        .flatMap((r) => (Array.isArray(r.body?.messages) ? r.body.messages : []))
+        .filter((m) => m?.role === 'tool');
+    const last = toolMsgs[toolMsgs.length - 1];
+    if (!last) {
+        lastToolPayload = null;
+        return;
     }
-    const sendBtn = popup.locator('[data-orch-it-action="send"]').first();
-    await sendBtn.click();
-    await expect.poll(async () => {
-        return popup.locator('.luker_lib_toolcall .luker_lib_toolcall_label', { hasText: expectedToolLabel }).count();
-    }, { timeout: timeoutMs }).toBeGreaterThan(priorChipCount);
-    // Then wait for the busy flag to clear (Send button text back to
-    // its send-string). Using `not.toMatch(/^stop$/i)` — the send-string
-    // is either "Send" or the localised variant, but the busy-state
-    // label is deterministic ("Stop").
-    await expect.poll(async () => {
-        return (await sendBtn.textContent().catch(() => ''))?.trim() || '';
-    }, { timeout: timeoutMs }).not.toMatch(/^stop$/i);
+    const text = String(last.content ?? '').trim();
+    if (text === 'null') {
+        lastToolPayload = { __primitive: null };
+        return;
+    }
+    if (text === 'undefined') {
+        lastToolPayload = { __primitive: undefined };
+        return;
+    }
+    try {
+        lastToolPayload = JSON.parse(text);
+    } catch {
+        lastToolPayload = { __raw: text };
+    }
 }
 
 test.describe.configure({ mode: 'serial' });

@@ -1,31 +1,28 @@
-// #124 — orchestrator preset rename → skill scope rename
+// #124 — orchestrator preset rename -> skill scope rename
 //
-// Verifies Task 6 wiring: renaming an orchestrator preset triggers
-// renameOrchPresetSkills → context.skills.renameScope → server renames
-// the on-disk scope directory.
+// Verifies wiring: renaming an orchestrator preset triggers renameOrchPresetSkills
+// -> context.skills.renameScope -> server renames the on-disk scope directory.
 //
-// REAL USER FLOW:
-//   1. Load app, open orchestrator drawer, switch mode to agenda.
-//   2. Create preset "RP124-Old" via selector bar (real DOM + real popup).
-//   3. Install a skill in orch-preset/agenda/RP124-Old scope. Setup uses
-//      the real skills API (ctx.skills.install) — writes to the same
-//      server endpoint the scope-picker UI would.
-//   4. Verify old scope dir exists.
-//   5. Rename preset to "RP124-New" via the selector bar's Rename button
-//      (real DOM click + real INPUT popup with pre-filled old name).
-//   6. Verify old scope dir gone AND new scope dir present AND skill files
-//      survived the rename.
+// REAL USER FLOW (Unified Workbench / Orchestra Lens):
+//   1. Load app, open Workbench -> Orchestration, switch mode to agenda, enable.
+//   2. In Setup view, create preset "RP124-Old" via `.ol-setup-bar` New button.
+//   3. Install a skill in `orch-preset/agenda/RP124-Old` scope via `/api/skills/...`.
+//   4. Verify old scope directory exists on disk.
+//   5. Click Rename in `.ol-setup-bar`, enter "RP124-New" in `.ol-dialog`, click OK.
+//   6. Verify old directory is gone, new directory exists with intact SKILL.md, and
+//      Setup select shows "RP124-New" active.
 
 import { test, expect } from '@playwright/test';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { markOnboarded } from '../_lib/fixtures.js';
+import { awaitMainUI } from '../_lib/page.js';
 import {
-    awaitMainUI,
-    openExtensionsDrawer,
-    openInlineDrawer,
-} from '../_lib/page.js';
+    openOrchWorkspace,
+    setOrchEnabled,
+    setOrchMode,
+} from '../_lib/ui-workbench.js';
 
 let server;
 
@@ -38,29 +35,6 @@ test.afterAll(async () => {
     await tearDownServer(server);
 });
 
-async function openOrchDrawerAgenda(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'orchestrator_settings').catch(() => {});
-    const modeSelect = page.locator('#luker_orch_execution_mode');
-    await modeSelect.waitFor({ state: 'visible', timeout: 10_000 });
-    if ((await modeSelect.inputValue()) !== 'agenda') {
-        await modeSelect.selectOption('agenda');
-        await modeSelect.evaluate(el => {
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            if (window.jQuery) window.jQuery(el).trigger('change');
-        });
-    }
-    const enabled = page.locator('#luker_orch_enabled');
-    await enabled.waitFor({ state: 'visible', timeout: 5000 });
-    if (!(await enabled.isChecked())) await enabled.check();
-    await page.locator('#orchestrator_settings [data-orch-mode="agenda"] [data-luker-preset-action="new"][data-mode="agenda"][data-scope="global"]')
-        .first().waitFor({ state: 'visible', timeout: 10_000 });
-}
-
-// Server writes skills under `<dataRoot>/<userHandle>/skills/` because
-// createSkillRepository uses `req.user.directories.root` — which is
-// `<dataRoot>/default-user/` for a single-user config. See
-// src/server-startup.js:167 + src/skills/repository.js:48.
 function skillsRootFor(dataRoot) {
     return path.join(dataRoot, 'default-user', 'skills');
 }
@@ -81,99 +55,94 @@ async function readSkillMd(dataRoot, mode, name, skillName) {
     return await fs.readFile(p, 'utf-8');
 }
 
-async function createPresetViaUI(page, mode, name) {
-    await page.locator(`#orchestrator_settings [data-orch-mode="${mode}"] [data-luker-preset-action="new"][data-mode="${mode}"][data-scope="global"]`)
-        .first().click();
-    const popup = page.locator('dialog.popup[open]').last();
-    const popupInput = popup.locator('.popup-input').last();
-    await popupInput.waitFor({ state: 'visible', timeout: 5000 });
-    await popupInput.fill(name);
-    await popup.locator('.popup-button-ok').first().click();
-    await popup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+async function createPresetViaSetup(lens, name) {
+    const newBtn = lens.locator('.ol-setup-bar button[aria-label="New"], .ol-setup-bar button[title="New"]').first();
+    await expect(newBtn).toBeVisible({ timeout: 10_000 });
+    await newBtn.click();
+
+    const dialog = lens.locator('.ol-dialog-backdrop:not([hidden]) .ol-dialog').last();
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await dialog.locator('input.ol-input').first().fill(name);
+    await dialog.locator('.ol-dialog-foot button.is-primary').first().click();
+    await dialog.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+
+    const select = lens.locator('.ol-setup-bar select.ol-select').first();
     await expect.poll(async () => {
-        return await page.evaluate((m) => {
-            const ext = window.Luker?.getContext()?.extensionSettings?.orchestrator;
-            const activeId = ext?.activePresetIds?.[m] || '';
-            return ext?.presetLibraries?.[m]?.[activeId]?.name || '';
-        }, mode);
+        return await select.evaluate(sel => sel.selectedOptions[0]?.textContent?.trim() || '');
     }, { message: `preset "${name}" must become active after create`, timeout: 10_000 }).toBe(name);
 }
 
-test.describe('#124 — orchestrator preset rename → skill scope rename', () => {
-    test.setTimeout(120_000);
-
-    test('renaming a preset renames its skill scope directory on disk', async ({ page }) => {
-        await awaitMainUI(page, server.baseURL);
-        await openOrchDrawerAgenda(page);
-
-        // Create preset "RP124-Old" via selector bar.
-        await createPresetViaUI(page, 'agenda', 'RP124-Old');
-
-        // Install a skill in orch-preset/agenda/RP124-Old scope. Payload
-        // shape follows repository.validatePayloadFiles: file at root
-        // path `SKILL.md`; the skill directory takes the frontmatter name.
-        const SKILL_MD_CONTENT = '---\nname: test-skill-124\ndescription: rename fixture\n---\n\nRename-me body.\n';
-        await page.evaluate(async (content) => {
-            const ctx = window.Luker.getContext();
-            await ctx.skills.install({
-                scope: { kind: 'orch-preset', mode: 'agenda', name: 'RP124-Old' },
+async function installPresetSkillViaHttp(page, { mode, presetName, skillName }) {
+    await page.evaluate(async (arg) => {
+        const csrfRes = await fetch('/csrf-token', { credentials: 'same-origin' });
+        const csrfData = await csrfRes.json();
+        const scopeUrl = `orch-preset/${arg.mode}/${arg.presetName}`;
+        const res = await fetch(`/api/skills/${encodeURIComponent(scopeUrl)}`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-Token': csrfData.token,
+            },
+            body: JSON.stringify({
                 payload: {
                     files: [{
                         path: 'SKILL.md',
                         encoding: 'utf-8',
-                        content,
+                        content: `---\nname: ${arg.skillName}\ndescription: rename fixture\n---\n\nRename-me body.\n`,
                     }],
                 },
-            });
-        }, SKILL_MD_CONTENT);
+            }),
+        });
+        if (!res.ok) throw new Error(`Skill install failed: ${res.status}`);
+    }, { mode, presetName, skillName });
+}
+
+test.describe('#124 — orchestrator preset rename -> skill scope rename', () => {
+    test.setTimeout(120_000);
+
+    test('renaming a preset renames its skill scope directory on disk', async ({ page }) => {
+        await awaitMainUI(page, server.baseURL);
+        await setOrchMode(page, 'agenda');
+        await setOrchEnabled(page, true);
+        const lens = await openOrchWorkspace(page, 'setup');
+
+        await createPresetViaSetup(lens, 'RP124-Old');
+        await installPresetSkillViaHttp(page, {
+            mode: 'agenda',
+            presetName: 'RP124-Old',
+            skillName: 'test-skill-124',
+        });
         expect(await skillsDirExists(server.dataRoot, 'agenda', 'RP124-Old')).toBe(true);
 
-        // Rename preset via selector bar. The rename handler opens an
-        // INPUT popup pre-filled with the current name; .fill() replaces
-        // the value with the new name.
-        await page.locator('#orchestrator_settings [data-orch-mode="agenda"] [data-luker-preset-action="rename"][data-mode="agenda"][data-scope="global"]')
-            .first().click();
-        const renamePopup = page.locator('dialog.popup[open]').last();
-        const renameInput = renamePopup.locator('.popup-input').last();
-        await renameInput.waitFor({ state: 'visible', timeout: 5000 });
-        // Sanity: the pre-filled value should be the old name.
+        const renameBtn = lens.locator('.ol-setup-bar button[aria-label="Rename"], .ol-setup-bar button[title="Rename"]').first();
+        await expect(renameBtn).toBeVisible({ timeout: 10_000 });
+        await renameBtn.click();
+
+        const renameDialog = lens.locator('.ol-dialog-backdrop:not([hidden]) .ol-dialog').last();
+        await expect(renameDialog).toBeVisible({ timeout: 5000 });
+        const renameInput = renameDialog.locator('input.ol-input').first();
         await expect(renameInput).toHaveValue('RP124-Old');
         await renameInput.fill('RP124-New');
-        await renamePopup.locator('.popup-button-ok').first().click();
-        await renamePopup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+        await renameDialog.locator('.ol-dialog-foot button.is-primary').first().click();
+        await renameDialog.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
 
-        // Poll for the rename to complete on disk. renameOrchPresetSkills
-        // calls context.skills.renameScope, which the server implements as
-        // an atomic fs.rename — so both `old absent` and `new present`
-        // land in the same tick once the HTTP round-trip completes.
         await expect.poll(
             async () => skillsDirExists(server.dataRoot, 'agenda', 'RP124-Old'),
-            {
-                message: 'old scope dir must be gone after rename; renameScope moves '
-                    + 'the directory rather than copying',
-                timeout: 15_000,
-            },
+            { message: 'old scope dir must be gone after rename', timeout: 15_000 },
         ).toBe(false);
         await expect.poll(
             async () => skillsDirExists(server.dataRoot, 'agenda', 'RP124-New'),
-            {
-                message: 'new scope dir must exist after rename; if '
-                    + 'renameOrchPresetSkills did not fire or the client renameScope '
-                    + 'call failed, the new dir stays absent',
-                timeout: 15_000,
-            },
+            { message: 'new scope dir must exist after rename', timeout: 15_000 },
         ).toBe(true);
 
         const md = await readSkillMd(server.dataRoot, 'agenda', 'RP124-New', 'test-skill-124');
         expect(md).toContain('name: test-skill-124');
         expect(md).toContain('Rename-me body');
 
-        // Verify orchestrator settings reflect the new preset name.
-        const activeName = await page.evaluate(() => {
-            const ext = window.Luker?.getContext()?.extensionSettings?.orchestrator;
-            const activeId = ext?.activePresetIds?.agenda || '';
-            return ext?.presetLibraries?.agenda?.[activeId]?.name || '';
-        });
-        expect(activeName).toBe('RP124-New');
+        const select = lens.locator('.ol-setup-bar select.ol-select').first();
+        await expect.poll(async () => {
+            return await select.evaluate(sel => sel.selectedOptions[0]?.textContent?.trim() || '');
+        }, { timeout: 10_000 }).toBe('RP124-New');
     });
 });
