@@ -23,9 +23,37 @@ function shouldEmitConsoleLevel(level) {
     return ALWAYS_VISIBLE_LEVELS.has(level) || frontendConsoleDebugLoggingEnabled;
 }
 
-function serializeFrontendLogValue(value) {
+function isErrorLikeObject(value) {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+
     if (value instanceof Error) {
-        return value.stack || `${value.name}: ${value.message}`;
+        return true;
+    }
+
+    if (typeof Error.isError === 'function' && Error.isError(value)) {
+        return true;
+    }
+
+    const tag = Object.prototype.toString.call(value);
+    return tag === '[object Error]' || tag === '[object DOMException]';
+}
+
+function formatErrorForLog(value) {
+    const stack = typeof value.stack === 'string' ? value.stack.trim() : '';
+    if (stack) {
+        return stack;
+    }
+
+    const name = typeof value.name === 'string' && value.name.trim() ? value.name.trim() : 'Error';
+    const message = typeof value.message === 'string' ? value.message.trim() : '';
+    return message ? `${name}: ${message}` : name;
+}
+
+function serializeFrontendLogValue(value) {
+    if (isErrorLikeObject(value)) {
+        return formatErrorForLog(value);
     }
 
     if (typeof value === 'string') {
@@ -46,8 +74,8 @@ function serializeFrontendLogValue(value) {
 
     try {
         return JSON.stringify(value, (_, nestedValue) => {
-            if (nestedValue instanceof Error) {
-                return nestedValue.stack || `${nestedValue.name}: ${nestedValue.message}`;
+            if (isErrorLikeObject(nestedValue)) {
+                return formatErrorForLog(nestedValue);
             }
             if (typeof nestedValue === 'bigint') {
                 return `${nestedValue}n`;
