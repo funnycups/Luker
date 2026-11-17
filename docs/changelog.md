@@ -61,6 +61,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Added a crash recovery screen with reload and diagnostics export actions when the HarmonyOS app web page exits abnormally.
 - Preserved partial performance recordings when the renderer exits or reloads in the HarmonyOS and Android apps.
 - Included the newest performance trace in HarmonyOS and Android diagnostics bundles.
+- Fixed automatic browser launch and external npm probing running during startup and server plugin dependency installation in the iOS and HarmonyOS apps.
 
 ### iOS App
 

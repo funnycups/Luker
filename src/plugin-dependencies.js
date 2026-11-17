@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { sync as commandExistsSync } from 'command-exists';
 
 import { sanitizeServerPluginFolderName, resolveServerPluginPath } from './plugin-loader.js';
+import { IS_MOBILE_RUNTIME } from './runtime-capabilities.js';
 
 /**
  * @param {string} pluginPath
@@ -113,7 +114,7 @@ export async function installPluginDependencies(pluginsPath, directory, options 
     }
 
     try {
-        const useNpm = options.forceManager !== 'arborist' && process.platform !== 'android' && commandExistsSync('npm');
+        const useNpm = options.forceManager !== 'arborist' && !IS_MOBILE_RUNTIME && commandExistsSync('npm');
         if (useNpm) {
             try {
                 await installWithNpm(targetPath);

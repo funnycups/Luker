@@ -89,6 +89,7 @@ try {
 
 // local library imports
 import './fetch-patch.js';
+import { maybeLaunchBrowser } from './browser-launch.js';
 import { HAS_WASM } from './runtime-capabilities.js';
 import { serverDirectory } from './server-directory.js';
 
@@ -819,35 +820,12 @@ async function postSetupTasks(result) {
     const browserLaunchHostname = await cliArgs.getBrowserLaunchHostname(result);
     const browserLaunchUrl = cliArgs.getBrowserLaunchUrl(browserLaunchHostname);
     const browserLaunchApp = String(getConfigValue('browserLaunch.browser', 'default') ?? '');
-    const isAndroid = process.platform === 'android';
 
-    if (cliArgs.browserLaunchEnabled && !isAndroid) {
-        try {
-            // TODO: This should be converted to a regular import when support for Node 18 is dropped
-            const openModule = await import('open');
-            const { default: open, apps } = openModule;
-
-            function getBrowsers() {
-                return {
-                    'firefox': apps.firefox,
-                    'chrome': apps.chrome,
-                    'edge': apps.edge,
-                    'brave': apps.brave,
-                };
-            }
-
-            const validBrowsers = getBrowsers();
-            const appName = validBrowsers[browserLaunchApp.trim().toLowerCase()];
-            const openOptions = appName ? { app: { name: appName } } : {};
-
-            console.log(`Launching in a browser: ${browserLaunchApp}...`);
-            await open(browserLaunchUrl.toString(), openOptions);
-        } catch (error) {
-            console.error('Failed to launch the browser. Open the URL manually.', error);
-        }
-    } else if (cliArgs.browserLaunchEnabled && isAndroid) {
-        console.log('Skipping automatic browser launch on Android runtime.');
-    }
+    await maybeLaunchBrowser({
+        enabled: cliArgs.browserLaunchEnabled,
+        url: browserLaunchUrl,
+        browser: browserLaunchApp,
+    });
 
     if (cliArgs.heartbeatInterval > 0) {
         // Convert seconds to milliseconds for the timer

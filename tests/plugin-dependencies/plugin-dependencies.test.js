@@ -1,13 +1,19 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, test } from '@jest/globals';
 
 import { getPluginDependencyStatus, installPluginDependencies } from '../../src/plugin-dependencies.js';
 
 const require = createRequire(import.meta.url);
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const DEFAULT_CONFIG_PATH = path.join(REPO_ROOT, 'default/config.yaml');
+const UTIL_URL = pathToFileURL(path.join(REPO_ROOT, 'src/util.js')).href;
+const PLUGIN_DEPS_URL = pathToFileURL(path.join(REPO_ROOT, 'src/plugin-dependencies.js')).href;
 const roots = [];
 
 function makePlugin(packageJson) {
@@ -157,4 +163,54 @@ describe('installPluginDependencies', () => {
         roots.push(pluginsPath);
         await expect(installPluginDependencies(pluginsPath, '   ')).rejects.toMatchObject({ statusCode: 400 });
     });
+
+    test.each(['ios', 'openharmony', 'android'])(
+        'skips external npm probing and installs via arborist on mobile runtime (%s)',
+        async (platform) => {
+            const pluginsPath = makeInstalledFixture();
+            const resultFile = path.join(pluginsPath, 'mobile-result.json');
+            const child = await new Promise((resolve) => {
+                const proc = spawn(process.execPath, ['--input-type=module', '-e', `
+                    import childProcess from 'node:child_process';
+                    import fs from 'node:fs';
+                    import { syncBuiltinESMExports } from 'node:module';
+
+                    const spawnCalls = [];
+                    const deny = (cmd) => {
+                        spawnCalls.push(String(cmd));
+                        throw Object.assign(new Error(\`spawn \${cmd} EPERM\`), { code: 'EPERM', syscall: \`spawn \${cmd}\` });
+                    };
+                    Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
+                    childProcess.spawn = deny;
+                    childProcess.spawnSync = deny;
+                    childProcess.exec = deny;
+                    childProcess.execSync = deny;
+                    childProcess.execFile = deny;
+                    childProcess.execFileSync = deny;
+                    syncBuiltinESMExports();
+
+                    globalThis.DATA_ROOT = ${JSON.stringify(pluginsPath)};
+                    const { setConfigFilePath } = await import(${JSON.stringify(UTIL_URL)});
+                    setConfigFilePath(${JSON.stringify(DEFAULT_CONFIG_PATH)});
+                    const { installPluginDependencies } = await import(${JSON.stringify(PLUGIN_DEPS_URL)});
+                    const res = await installPluginDependencies(${JSON.stringify(pluginsPath)}, 'demo-plugin');
+                    fs.writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ spawnCalls, res }));
+                `], { cwd: REPO_ROOT });
+                let stderr = '';
+                proc.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+                proc.on('close', (status) => resolve({ status, stderr }));
+            });
+
+            expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: '' });
+            const payload = JSON.parse(fs.readFileSync(resultFile, 'utf8'));
+            expect(payload.spawnCalls).toEqual([]);
+            expect(payload.res).toMatchObject({
+                directory: 'demo-plugin',
+                manager: 'arborist',
+                installed: true,
+            });
+            expect(require(path.join(payload.res.path, 'node_modules', 'tiny-dep', 'index.js')).value).toBe(42);
+        },
+        120000,
+    );
 });
