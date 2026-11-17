@@ -6,3 +6,11 @@
 export const HAS_WASM = typeof WebAssembly !== 'undefined'
     && typeof WebAssembly.Module === 'function'
     && process.env.LUKER_FORCE_JITLESS !== '1';
+
+// Embedded mobile hosts (Android, iOS NodeMobile, HarmonyOS NEXT libnode) run
+// inside sandboxed app containers without external CLI toolchains (`git`,
+// `npm`, `xdg-open`) and where spawning child processes is either blocked by
+// the kernel sandbox (EPERM/EACCES) or forks the host UI process.
+export const IS_MOBILE_RUNTIME = process.platform === 'android'
+    || process.platform === 'ios'
+    || process.platform === 'openharmony';

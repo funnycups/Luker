@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import git from 'isomorphic-git';
 
-import { createGitClient } from '../src/git/client.js';
+import { canFallbackToBuiltinGit, createGitClient, isGitUnavailableError } from '../src/git/client.js';
 
 /**
  * These tests pin down the change-detection contract of the git client wrapper
@@ -148,4 +148,27 @@ function runRaceContract(backendLabel, makeClient) {
 
 runRaceContract('builtin', () => createGitClient({ backend: 'builtin' }));
 runRaceContract('system', () => createGitClient({ backend: 'system' }));
+
+describe('git spawn error classification and backend policy', () => {
+    test.each(['ENOENT', 'EACCES', 'EPERM', 'ENOSYS'])(
+        'recognizes child_process spawn failure %s and simple-git wrapped messages',
+        (code) => {
+            const direct = Object.assign(new Error(`spawn git ${code}`), { code, syscall: 'spawn git' });
+            const wrapped = new Error(`Error: spawn git ${code}`);
+            expect(isGitUnavailableError(direct)).toBe(true);
+            expect(isGitUnavailableError(wrapped)).toBe(true);
+            expect(canFallbackToBuiltinGit('auto', direct)).toBe(true);
+            expect(canFallbackToBuiltinGit('system', direct)).toBe(false);
+        },
+    );
+
+    test.each([
+        Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES', syscall: 'rename' }),
+        Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM', syscall: 'connect' }),
+        Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT', syscall: 'open' }),
+    ])('rejects non-spawn filesystem and socket errors ($syscall)', (err) => {
+        expect(isGitUnavailableError(err)).toBe(false);
+        expect(canFallbackToBuiltinGit('auto', err)).toBe(false);
+    });
+});
 

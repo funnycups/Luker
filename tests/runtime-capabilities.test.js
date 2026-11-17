@@ -30,3 +30,27 @@ test('HAS_WASM is false under --jitless', () => {
 test('HAS_WASM is false when LUKER_FORCE_JITLESS=1', () => {
     expect(hasWasm([], { LUKER_FORCE_JITLESS: '1' })).toBe('false');
 });
+
+function isMobileForPlatform(platform) {
+    const code = `
+        Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
+        const m = await import(${JSON.stringify(MODULE_URL)});
+        console.log(String(m.IS_MOBILE_RUNTIME));
+    `;
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', code], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+    });
+    return out.trim().split('\n').pop();
+}
+
+test.each([
+    ['android', 'true'],
+    ['ios', 'true'],
+    ['openharmony', 'true'],
+    ['darwin', 'false'],
+    ['linux', 'false'],
+    ['win32', 'false'],
+])('IS_MOBILE_RUNTIME for platform %s is %s', (platform, expected) => {
+    expect(isMobileForPlatform(platform)).toBe(expected);
+});

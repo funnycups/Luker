@@ -6,6 +6,8 @@ import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/node';
 import simpleGit from 'simple-git';
 
+import { IS_MOBILE_RUNTIME } from '../runtime-capabilities.js';
+
 /** @type {{ AUTO: 'auto', SYSTEM: 'system', BUILTIN: 'builtin' }} */
 export const GIT_BACKENDS = {
     AUTO: 'auto',
@@ -13,28 +15,93 @@ export const GIT_BACKENDS = {
     BUILTIN: 'builtin',
 };
 
+const GIT_UNAVAILABLE_CODES = new Set(['ENOENT', 'EACCES', 'EPERM', 'ENOSYS']);
+
+/**
+ * @returns {boolean}
+ */
+export function isSystemGitAvailable() {
+    if (IS_MOBILE_RUNTIME) {
+        return false;
+    }
+
+    return commandExistsSync('git');
+}
+
+/**
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isGitUnavailableError(error) {
+    if (!error) {
+        return false;
+    }
+
+    const raw = /** @type {any} */ (error);
+    const cause = raw.cause && typeof raw.cause === 'object' ? raw.cause : null;
+    const syscall = String(raw.syscall || cause?.syscall || '').trim().toLowerCase();
+    if (syscall && !syscall.startsWith('spawn')) {
+        return false;
+    }
+
+    const code = String(raw.code || cause?.code || '').trim().toUpperCase();
+    if (GIT_UNAVAILABLE_CODES.has(code)) {
+        return true;
+    }
+
+    const message = String(raw.message || raw || '').toLowerCase();
+    return message.includes('spawn git enoent')
+        || message.includes('spawn git eacces')
+        || message.includes('spawn git eperm')
+        || message.includes('spawn git enosys')
+        || message.includes('git is not installed');
+}
+
 /**
  * @param {string | undefined | null} preferredBackend
  * @returns {'system' | 'builtin'}
  */
-function resolveBackend(preferredBackend) {
+export function resolveGitBackend(preferredBackend) {
     const normalized = typeof preferredBackend === 'string' ? preferredBackend.trim().toLowerCase() : GIT_BACKENDS.AUTO;
     const backend = normalized === GIT_BACKENDS.SYSTEM
         ? GIT_BACKENDS.SYSTEM
         : normalized === GIT_BACKENDS.BUILTIN
             ? GIT_BACKENDS.BUILTIN
             : GIT_BACKENDS.AUTO;
-    const systemGitAvailable = commandExistsSync('git');
+
+    if (backend === GIT_BACKENDS.BUILTIN) {
+        return GIT_BACKENDS.BUILTIN;
+    }
+
+    const systemGitAvailable = isSystemGitAvailable();
 
     if (backend === GIT_BACKENDS.SYSTEM && !systemGitAvailable) {
         throw new Error('System git backend is configured, but no git binary was found in PATH.');
     }
 
-    if (backend === GIT_BACKENDS.SYSTEM || (backend === GIT_BACKENDS.AUTO && systemGitAvailable)) {
-        return GIT_BACKENDS.SYSTEM;
+    return systemGitAvailable ? GIT_BACKENDS.SYSTEM : GIT_BACKENDS.BUILTIN;
+}
+
+/**
+ * @param {string | undefined | null} [preferredBackend]
+ * @returns {boolean}
+ */
+export function shouldUseSystemGit(preferredBackend = GIT_BACKENDS.AUTO) {
+    return resolveGitBackend(preferredBackend) === GIT_BACKENDS.SYSTEM;
+}
+
+/**
+ * @param {string | undefined | null} [preferredBackend]
+ * @param {unknown} [error]
+ * @returns {boolean}
+ */
+export function canFallbackToBuiltinGit(preferredBackend = GIT_BACKENDS.AUTO, error = null) {
+    const normalized = typeof preferredBackend === 'string' ? preferredBackend.trim().toLowerCase() : GIT_BACKENDS.AUTO;
+    if (normalized === GIT_BACKENDS.SYSTEM) {
+        return false;
     }
 
-    return GIT_BACKENDS.BUILTIN;
+    return isGitUnavailableError(error);
 }
 
 /**
@@ -124,7 +191,7 @@ async function resolveHeadOidOrNull(dir) {
  * @returns {GitClient}
  */
 export function createGitClient(options = {}) {
-    const backend = resolveBackend(options.backend);
+    const backend = resolveGitBackend(options.backend);
     if (backend === GIT_BACKENDS.SYSTEM) {
         return new SimpleGitClient();
     }

@@ -6,8 +6,10 @@ import express from 'express';
 import * as isomorphicGit from 'isomorphic-git';
 import http from 'isomorphic-git/http/node';
 import { default as git, CheckRepoActions } from 'simple-git';
-import { sync as commandExistsSync } from 'command-exists';
+import { canFallbackToBuiltinGit, shouldUseSystemGit } from './git/client.js';
 import { getConfigValue, color } from './util.js';
+
+const getConfiguredGitBackend = () => getConfigValue('git.backend', 'auto');
 
 const enableServerPlugins = !!getConfigValue('enableServerPlugins', false, 'boolean');
 const enableServerPluginsAutoUpdate = !!getConfigValue('enableServerPluginsAutoUpdate', true, 'boolean');
@@ -60,26 +62,6 @@ export function resolveServerPluginPath(pluginsPath, folderName) {
     }
 
     return target;
-}
-
-function getErrorCode(error) {
-    if (!error) {
-        return '';
-    }
-
-    return String(error.code || error?.cause?.code || '').toUpperCase();
-}
-
-function isGitUnavailableError(error) {
-    const code = getErrorCode(error);
-    if (code === 'EACCES' || code === 'ENOENT') {
-        return true;
-    }
-
-    const message = String(error?.message || error || '').toLowerCase();
-    return message.includes('spawn git eacces')
-        || message.includes('spawn git enoent')
-        || message.includes('git is not installed');
 }
 
 function isUnprocessableHttpError(error) {
@@ -216,29 +198,23 @@ async function getPluginUpdateStatusWithIsomorphic(pluginPath) {
         ref: 'HEAD',
     }).catch(() => '');
 
-    if (!currentBranchName) {
+    if (!currentBranchName || !remoteUrl) {
         return {
             isUpToDate: true,
-            currentBranchName: '',
+            currentBranchName: currentBranchName || '',
             currentCommitHash,
             remoteUrl,
         };
     }
 
-    await isomorphicGit.fetch({
-        fs,
+    const targetRef = `refs/heads/${currentBranchName}`;
+    const refs = await isomorphicGit.listServerRefs({
         http,
-        dir: pluginPath,
-        remote: 'origin',
-        ref: currentBranchName,
-        singleBranch: true,
+        url: remoteUrl,
+        prefix: targetRef,
     });
-
-    const remoteCommitHash = await isomorphicGit.resolveRef({
-        fs,
-        dir: pluginPath,
-        ref: `refs/remotes/origin/${currentBranchName}`,
-    }).catch(() => '');
+    const match = refs.find(ref => ref.ref === targetRef);
+    const remoteCommitHash = match ? match.oid : '';
 
     return {
         isUpToDate: !remoteCommitHash || currentCommitHash === remoteCommitHash,
@@ -301,14 +277,23 @@ async function updateServerPluginWithIsomorphic(pluginPath) {
  */
 async function getPluginRemoteUrl(pluginPath) {
     try {
-        if (commandExistsSync('git')) {
-            const pluginRepo = git(pluginPath);
-            const isRepo = await pluginRepo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
+        const configuredBackend = getConfiguredGitBackend();
+        if (shouldUseSystemGit(configuredBackend)) {
+            try {
+                const pluginRepo = git(pluginPath);
+                const isRepo = await pluginRepo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
 
-            if (isRepo) {
-                const remotes = await pluginRepo.getRemotes(true);
-                const origin = remotes.find(remote => remote.name === 'origin');
-                return origin?.refs?.fetch || origin?.refs?.push || '';
+                if (isRepo) {
+                    const remotes = await pluginRepo.getRemotes(true);
+                    const origin = remotes.find(remote => remote.name === 'origin');
+                    return origin?.refs?.fetch || origin?.refs?.push || '';
+                }
+
+                return '';
+            } catch (error) {
+                if (!canFallbackToBuiltinGit(configuredBackend, error)) {
+                    return '';
+                }
             }
         }
 
@@ -401,21 +386,25 @@ export async function installServerPlugin(pluginsPath, pluginUrl) {
     }
 
     try {
-        try {
-            if (!commandExistsSync('git')) {
-                throw new Error('Git is not installed on the server');
-            }
-
-            await git().clone(remoteUrl, targetPath, { '--depth': 1 });
-        } catch (error) {
-            if (!isGitUnavailableError(error)) {
-                throw error;
-            }
-
+        const configuredBackend = getConfiguredGitBackend();
+        if (!shouldUseSystemGit(configuredBackend)) {
             await cloneWithIsomorphic({
                 pluginUrl: remoteUrl,
                 pluginPath: targetPath,
             });
+        } else {
+            try {
+                await git().clone(remoteUrl, targetPath, { '--depth': 1 });
+            } catch (error) {
+                if (!canFallbackToBuiltinGit(configuredBackend, error)) {
+                    throw error;
+                }
+
+                await cloneWithIsomorphic({
+                    pluginUrl: remoteUrl,
+                    pluginPath: targetPath,
+                });
+            }
         }
 
         const metadata = getPluginPackageMetadata(targetPath);
@@ -460,62 +449,67 @@ export async function updateServerPlugin(pluginsPath, directory) {
     let currentCommitHash = '';
     let isUpToDate = true;
 
-    try {
-        if (!commandExistsSync('git')) {
-            throw new Error('Git is not installed on the server');
-        }
-
-        const pluginRepo = git(targetPath);
-        const isRepo = await pluginRepo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
-        if (!isRepo) {
-            const error = new Error(`Directory is not a Git repository at ${folderName}`);
-            // @ts-ignore
-            error.statusCode = 409;
-            throw error;
-        }
-
-        remoteUrl = await getPluginRemoteUrl(targetPath);
-        if (!remoteUrl) {
-            const error = new Error(`No git remote detected for ${folderName}`);
-            // @ts-ignore
-            error.statusCode = 409;
-            throw error;
-        }
-
-        await pluginRepo.fetch();
-        const previousCommitHash = await pluginRepo.revparse(['HEAD']);
-
-        let trackingBranch = '';
-        try {
-            trackingBranch = await pluginRepo.revparse(['--abbrev-ref', '@{u}']);
-        } catch {
-            const error = new Error(`Plugin repository does not track an upstream branch at ${folderName}`);
-            // @ts-ignore
-            error.statusCode = 409;
-            throw error;
-        }
-
-        const log = await pluginRepo.log({
-            from: previousCommitHash,
-            to: trackingBranch,
-        });
-
-        isUpToDate = log.total === 0;
-        if (!isUpToDate) {
-            const currentBranch = await pluginRepo.branch();
-            await pluginRepo.pull('origin', currentBranch.current);
-        }
-
-        currentCommitHash = await pluginRepo.revparse(['HEAD']);
-    } catch (error) {
-        if (!isGitUnavailableError(error)) {
-            throw error;
-        }
-
+    const configuredBackend = getConfiguredGitBackend();
+    const runIsomorphicPluginUpdate = async () => {
         const result = await updateServerPluginWithIsomorphic(targetPath);
         remoteUrl = String(result.remoteUrl || '').trim();
         currentCommitHash = String(result.currentCommitHash || '').trim();
         isUpToDate = result.isUpToDate;
+    };
+
+    if (!shouldUseSystemGit(configuredBackend)) {
+        await runIsomorphicPluginUpdate();
+    } else {
+        try {
+            const pluginRepo = git(targetPath);
+            const isRepo = await pluginRepo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
+            if (!isRepo) {
+                const error = new Error(`Directory is not a Git repository at ${folderName}`);
+                // @ts-ignore
+                error.statusCode = 409;
+                throw error;
+            }
+
+            remoteUrl = await getPluginRemoteUrl(targetPath);
+            if (!remoteUrl) {
+                const error = new Error(`No git remote detected for ${folderName}`);
+                // @ts-ignore
+                error.statusCode = 409;
+                throw error;
+            }
+
+            await pluginRepo.fetch();
+            const previousCommitHash = await pluginRepo.revparse(['HEAD']);
+
+            let trackingBranch = '';
+            try {
+                trackingBranch = await pluginRepo.revparse(['--abbrev-ref', '@{u}']);
+            } catch {
+                const error = new Error(`Plugin repository does not track an upstream branch at ${folderName}`);
+                // @ts-ignore
+                error.statusCode = 409;
+                throw error;
+            }
+
+            const log = await pluginRepo.log({
+                from: previousCommitHash,
+                to: trackingBranch,
+            });
+
+            isUpToDate = log.total === 0;
+            if (!isUpToDate) {
+                const currentBranch = await pluginRepo.branch();
+                await pluginRepo.pull('origin', currentBranch.current);
+            }
+
+            currentCommitHash = await pluginRepo.revparse(['HEAD']);
+        } catch (error) {
+            if (!canFallbackToBuiltinGit(configuredBackend, error)) {
+                throw error;
+            }
+
+            await runIsomorphicPluginUpdate();
+        }
     }
 
     const metadata = getPluginPackageMetadata(targetPath);
@@ -809,15 +803,32 @@ async function updatePlugins(pluginsPath) {
     console.log(color.blue('Auto-updating server plugins... Set'), color.yellow('enableServerPluginsAutoUpdate: false'), color.blue('in config.yaml to disable this feature.'));
 
     let pluginsToUpdate = 0;
+    const configuredBackend = getConfiguredGitBackend();
+    const useSystemGit = shouldUseSystemGit(configuredBackend);
 
     for (const directory of directories) {
         try {
             const pluginPath = path.join(pluginsPath, directory);
-            try {
-                if (!commandExistsSync('git')) {
-                    throw new Error('Git is not installed on the server');
+            const runIsomorphicAutoUpdate = async () => {
+                if (!fs.existsSync(path.join(pluginPath, '.git'))) {
+                    return;
                 }
 
+                const result = await updateServerPluginWithIsomorphic(pluginPath);
+                if (result.isUpToDate) {
+                    return;
+                }
+
+                pluginsToUpdate++;
+                console.log(`Plugin ${color.green(directory)} updated with isomorphic-git to commit ${color.cyan(result.currentCommitHash)}`);
+            };
+
+            if (!useSystemGit) {
+                await runIsomorphicAutoUpdate();
+                continue;
+            }
+
+            try {
                 const pluginRepo = git(pluginPath);
                 const isRepo = await pluginRepo.checkIsRepo(CheckRepoActions.IS_REPO_ROOT);
                 if (!isRepo) {
@@ -841,17 +852,11 @@ async function updatePlugins(pluginsPath) {
                 const latestCommit = await pluginRepo.revparse(['HEAD']);
                 console.log(`Plugin ${color.green(directory)} updated to commit ${color.cyan(latestCommit)}`);
             } catch (error) {
-                if (!isGitUnavailableError(error)) {
+                if (!canFallbackToBuiltinGit(configuredBackend, error)) {
                     throw error;
                 }
 
-                const result = await updateServerPluginWithIsomorphic(pluginPath);
-                if (result.isUpToDate) {
-                    continue;
-                }
-
-                pluginsToUpdate++;
-                console.log(`Plugin ${color.green(directory)} updated with isomorphic-git to commit ${color.cyan(result.currentCommitHash)}`);
+                await runIsomorphicAutoUpdate();
             }
         } catch (error) {
             console.error(color.red(`Failed to update plugin ${directory}: ${error.message}`));
