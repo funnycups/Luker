@@ -2108,6 +2108,19 @@ export async function runGenerationInterceptors(chat, contextSize, type) {
  */
 export const UNSET_VALUE = '__@@UNSET@@__';
 
+function stripUnsetSentinels(node) {
+    if (!node || typeof node !== 'object') return node;
+    if (Array.isArray(node)) {
+        return node.map(item => stripUnsetSentinels(item));
+    }
+    const out = {};
+    for (const [k, v] of Object.entries(node)) {
+        if (v === UNSET_VALUE) continue;
+        out[k] = stripUnsetSentinels(v);
+    }
+    return out;
+}
+
 /**
  * Writes `data.extensions[key]` on a character card and persists.
  *
@@ -2163,10 +2176,13 @@ export async function writeExtensionField(characterId, key, value, { requireSave
         isUnset,
     });
     function updateLocalCharacter() {
+        const cleanValue = !isUnset && value && typeof value === 'object'
+            ? stripUnsetSentinels(value)
+            : value;
         if (isUnset) {
             deleteValueByPath(character, extensionPath);
         } else {
-            setValueByPath(character, extensionPath, value);
+            setValueByPath(character, extensionPath, cleanValue);
         }
 
         // Process JSON data
@@ -2175,7 +2191,7 @@ export async function writeExtensionField(characterId, key, value, { requireSave
             if (isUnset) {
                 deleteValueByPath(jsonData, extensionPath);
             } else {
-                setValueByPath(jsonData, extensionPath, value);
+                setValueByPath(jsonData, extensionPath, cleanValue);
             }
             character.json_data = JSON.stringify(jsonData);
 
@@ -2959,10 +2975,14 @@ export async function writeExtensionFieldBulk(avatars, key, value, { filterPath 
     for (const character of context.characters) {
         if (!character || !updatedSet.has(character.avatar)) continue;
 
+        const cleanValue = !isUnset && value && typeof value === 'object'
+            ? stripUnsetSentinels(value)
+            : value;
+
         if (isUnset) {
             deleteValueByPath(character, extensionPath);
         } else {
-            setValueByPath(character, extensionPath, value);
+            setValueByPath(character, extensionPath, cleanValue);
         }
 
         // Keep json_data in sync
@@ -2971,7 +2991,7 @@ export async function writeExtensionFieldBulk(avatars, key, value, { filterPath 
             if (isUnset) {
                 deleteValueByPath(jsonData, extensionPath);
             } else {
-                setValueByPath(jsonData, extensionPath, value);
+                setValueByPath(jsonData, extensionPath, cleanValue);
             }
             character.json_data = JSON.stringify(jsonData);
         }

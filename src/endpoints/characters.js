@@ -1788,10 +1788,18 @@ const BULK_MERGE_CONCURRENCY = 10;
  * @param {object} source The original update payload (pre-merge clone)
  */
 function processUnsetSentinels(target, source) {
+    if (Array.isArray(source) && Array.isArray(target)) {
+        for (let i = 0; i < source.length && i < target.length; i++) {
+            if (source[i] && typeof source[i] === 'object' && target[i] && typeof target[i] === 'object') {
+                processUnsetSentinels(target[i], source[i]);
+            }
+        }
+        return;
+    }
     for (const key of Object.keys(source)) {
         if (source[key] === UNSET_SENTINEL) {
-            _.unset(target, key);
-        } else if (_.isPlainObject(source[key]) && _.isPlainObject(target[key])) {
+            delete target[key];
+        } else if (source[key] && typeof source[key] === 'object' && target[key] && typeof target[key] === 'object') {
             processUnsetSentinels(target[key], source[key]);
         }
     }
@@ -1868,7 +1876,11 @@ export function applyReplacePaths(target, update, replacePaths) {
         if (value === UNSET_SENTINEL) {
             _.unset(target, dotPath);
         } else {
-            _.set(target, dotPath, value);
+            const nextValue = _.cloneDeep(value);
+            if (nextValue && typeof nextValue === 'object') {
+                processUnsetSentinels(nextValue, value);
+            }
+            _.set(target, dotPath, nextValue);
         }
         _.unset(update, dotPath);
     }

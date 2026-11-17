@@ -261,8 +261,9 @@ test('writeExtensionField with requireSaved keeps in-memory character unmutated 
         };
         mockContext.characters = [avatarless];
         jsonInput.value = 'untouched';
-        await writeExtensionField(0, 'wb_test', { count: 3 }, { requireSaved: true });
-        expect(avatarless.data.extensions.wb_test).toEqual({ count: 3 });
+        await writeExtensionField(0, 'wb_test', { count: 3, gone: '__@@UNSET@@__', items: [{ id: 1, stale: '__@@UNSET@@__' }] }, { requireSaved: true });
+        expect(avatarless.data.extensions.wb_test).toEqual({ count: 3, items: [{ id: 1 }] });
+        expect(JSON.parse(avatarless.json_data).data.extensions.wb_test).toEqual({ count: 3, items: [{ id: 1 }] });
         expect(jsonInput.value).toBe('untouched');
     } finally {
         globalThis.fetch = prevFetch;
