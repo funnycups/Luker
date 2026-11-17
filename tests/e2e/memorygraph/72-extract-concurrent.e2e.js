@@ -24,9 +24,8 @@ import { disableTagImportPopup, writeEmbeddedCharacter } from '../character/_hel
 import {
     awaitMainUI,
     selectCharacterByName,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { fillMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 import { DEFAULT_EXTRACT_TEMPLATE } from '../../../public/scripts/extensions/memory-graph/default-prompts.js';
 import {
     EDGES_BLOCK_HEADING,
@@ -164,18 +163,14 @@ function installConcurrentRouter(mock, { failEdge = false } = {}) {
     });
 }
 
-// Enable MG and auto extraction, flip the concurrent setting through the real
-// Advanced control, then drive one round from the real Fill Graph button.
 async function enableConcurrentAndFill(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings');
-    await page.locator('#luker_rpg_memory_enabled').check();
-    await page.locator('#luker_rpg_memory_auto_extraction_enabled').check();
-    await page.locator('#luker_rpg_memory_auto_compression_enabled').uncheck();
-    await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="advanced"]').click();
-    await page.locator('#luker_rpg_memory_advanced_extract_concurrent').check();
-    await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="graph"]').click();
-    await page.locator('#luker_rpg_memory_fill').click();
+    await setMgSettings(page, {
+        enabled: true,
+        autoExtractionEnabled: true,
+        autoCompressionEnabled: false,
+        extractConcurrent: true,
+    });
+    await fillMgGraph(page, { closeAfter: true });
 }
 
 // Record every distinct toast text the DOM ever renders. The in-round progress

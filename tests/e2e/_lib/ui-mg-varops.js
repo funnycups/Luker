@@ -1,122 +1,287 @@
-// Real-UI helpers for Memory-Graph and Variable-Op-Log flows.
+// Real-UI helpers for embedded Memory Lens (inside Workbench) and
+// Variable-Op-Log flows.
 //
-// MG:
-//   - openMgGraphView: click #luker_rpg_memory_view_graph, assert cytoscape canvas
-//   - openMgSchemaEditor: click #luker_rpg_memory_open_schema_editor
-//   - importMgGraph: click #luker_rpg_memory_import → setInputFiles
-//   - exportMgGraph: click #luker_rpg_memory_export → waitForEvent('download')
-//   - rebuildMgIndex: click #luker_rpg_memory_rebuild + accept confirm
+// MG (Workbench → Memory graph workspace `.mlens`):
+//   - openMemoryWorkspace(page, { subview })
+//   - setMgSettings(page, settings, { saveScope })
+//   - openMgGraphView(page)
+//   - openMgSchemaEditor(page)
+//   - importMgGraph(page, filePath, { mode })
+//   - exportMgGraph(page)
+//   - fillMgGraph(page)
+//   - rebuildMgIndex(page)
 //
 // var-ops:
-//   - openVarOpsPanel(page, mesid): click the flask icon
-//   - getRenderedVarOpsRows: read .var-ops-panel__row from DOM
-//   - addVarOpRow / deleteVarOpRow / saveVarOpsPanel
+//   - openVarOpsPanel(page, mesid)
+//   - getRenderedVarOpsRows(page)
+//   - addVarOpRow / saveVarOpsPanel
 
-import { openExtensionsDrawer, openInlineDrawer } from './page.js';
+import { closeWorkbench, openWorkbench, switchWorkbenchTab, workbenchWindow } from './ui-workbench.js';
 
-async function openMgSettingsPanel(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => { /* may already be open */ });
+const SUBVIEW_LABELS = {
+    graph: /^(Graph|图谱|圖譜)$/,
+    timeline: /^(Timeline|时间线|時間線)$/,
+    table: /^(Data table|数据表|資料表)$/,
+    schema: /^(Memory structure|记忆结构|記憶結構)$/,
+    settings: /^(Settings|设置|設定)$/,
+};
+
+const ADVANCED_SAVE_KEYS = new Set([
+    'extractBatchTurns',
+    'extractContextTurns',
+    'extractExcludeRecentTurns',
+    'extractMode',
+    'extractCrawlMaxRounds',
+    'extractCrawlCandidateLimit',
+    'extractCrawlMaxReads',
+    'persistentInjectionMaxSeqDistance',
+    'recentRawTurns',
+    'includeWorldInfoWithPreset',
+    'recallMaxIterations',
+    'toolCallRetryMax',
+    'rpmLimit',
+    'recallQueryMessages',
+    'llmVisibleRecentMessages',
+    'extractConcurrent',
+    'extractCrawlSystemPrompt',
+    'extractTemplate',
+    'extractEdgeRules',
+    'recallRouteSystemPrompt',
+    'recallFinalizeSystemPrompt',
+    'ragRewriteSystemPrompt',
+    'configIterSystemPrompt',
+    'graphIterSystemPrompt',
+]);
+
+const TECHNICAL_KEYS = new Set([
+    'recallMaxIterations',
+    'toolCallRetryMax',
+    'rpmLimit',
+    'recallQueryMessages',
+    'llmVisibleRecentMessages',
+    'extractConcurrent',
+    'extractCrawlSystemPrompt',
+    'extractTemplate',
+    'extractEdgeRules',
+    'recallRouteSystemPrompt',
+    'recallFinalizeSystemPrompt',
+    'ragRewriteSystemPrompt',
+    'configIterSystemPrompt',
+    'graphIterSystemPrompt',
+]);
+
+/**
+ * Open Workbench, switch to the Memory graph workspace, and activate `subview`.
+ */
+export async function openMemoryWorkspace(page, { subview = 'graph', timeoutMs = 15_000 } = {}) {
+    await openWorkbench(page, { timeoutMs });
+    await switchWorkbenchTab(page, 'ws:memory', { timeoutMs });
+    const lens = workbenchWindow(page).locator('.mlens').first();
+    await lens.waitFor({ state: 'visible', timeout: timeoutMs });
+
+    if (subview) {
+        const pattern = SUBVIEW_LABELS[subview];
+        if (!pattern) throw new Error(`unknown memory lens subview: ${subview}`);
+        const btn = lens.locator('.ml-viewswitch .lw-seg-btn').filter({ hasText: pattern }).first();
+        await btn.waitFor({ state: 'visible', timeout: timeoutMs });
+        if ((await btn.getAttribute('aria-pressed')) !== 'true') {
+            await btn.click();
+        }
+        const viewEl = lens.locator(`.ml-view[data-view="${subview}"]`).first();
+        await viewEl.waitFor({ state: 'visible', timeout: timeoutMs });
+    }
+    return lens;
 }
 
 /**
- * Open the View Graph popup via the real button and assert the cytoscape
- * canvas (`.luker-rpg-memory-graph-cy`) renders.
+ * Configure Memory Graph settings via the real `.ml-settings` controls in
+ * Workbench → Memory graph → Settings. Handles switches, selects, inputs,
+ * expanding the Technical Tuning section when needed, and saving advanced
+ * settings if any advanced/technical key is modified.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {Record<string, boolean|string|number>} settings
+ * @param {{ saveScope?: 'global'|'character', closeAfter?: boolean, timeoutMs?: number }} [opts]
+ */
+export async function setMgSettings(page, settings, { saveScope = 'global', closeAfter = false, timeoutMs = 15_000 } = {}) {
+    const lens = await openMemoryWorkspace(page, { subview: 'settings', timeoutMs });
+    const panel = lens.locator('.ml-settings').first();
+    await panel.locator('[data-field-key="enabled"]').waitFor({ state: 'visible', timeout: timeoutMs });
+
+    let needsTechnical = false;
+    for (const key of Object.keys(settings)) {
+        if (TECHNICAL_KEYS.has(key)) {
+            needsTechnical = true;
+            break;
+        }
+    }
+    if (needsTechnical) {
+        const details = panel.locator('[data-settings-section="technical"]').first();
+        await details.waitFor({ state: 'visible', timeout: timeoutMs });
+        const isOpen = await details.evaluate((el) => el.hasAttribute('open'));
+        if (!isOpen) {
+            await details.locator('summary.ml-settings-summary').first().click();
+        }
+    }
+
+    let touchedAdvanced = false;
+    for (const [key, value] of Object.entries(settings)) {
+        if (ADVANCED_SAVE_KEYS.has(key)) touchedAdvanced = true;
+        const field = panel.locator(`[data-field-key="${key}"]`).first();
+        await field.waitFor({ state: 'visible', timeout: timeoutMs });
+        const role = await field.getAttribute('role');
+        if (role === 'switch' || role === 'checkbox') {
+            const want = Boolean(value);
+            const cur = (await field.getAttribute('aria-checked')) === 'true';
+            if (cur !== want) {
+                await field.click();
+            }
+            continue;
+        }
+        const checkInside = field.locator('[role="checkbox"]').first();
+        if ((await checkInside.count()) > 0) {
+            const want = Boolean(value);
+            const cur = (await checkInside.getAttribute('aria-checked')) === 'true';
+            if (cur !== want) {
+                await checkInside.click();
+            }
+            continue;
+        }
+        const selectEl = field.locator('select').first();
+        if ((await selectEl.count()) > 0) {
+            await selectEl.selectOption(String(value));
+            continue;
+        }
+        const inputEl = field.locator('input, textarea').first();
+        await inputEl.fill(String(value));
+    }
+
+    if (touchedAdvanced) {
+        const saveLabel = saveScope === 'character'
+            ? /^(Save Advanced to Character|保存高级到当前角色|儲存進階到目前角色)$/
+            : /^(Save Advanced to Global|保存高级到全局|儲存進階到全域)$/;
+        const saveBtn = panel.locator('.ml-settings-sticky button').filter({ hasText: saveLabel }).first();
+        await saveBtn.waitFor({ state: 'visible', timeout: timeoutMs });
+        await saveBtn.click();
+        await panel.locator('.ml-settings-error').waitFor({ state: 'hidden', timeout: timeoutMs }).catch(() => {});
+    }
+
+    if (closeAfter) {
+        await closeWorkbench(page);
+    }
+}
+
+/**
+ * Open the embedded Memory Lens Graph view and wait for `.ml-graph-canvas`.
  */
 export async function openMgGraphView(page, { timeoutMs = 15_000 } = {}) {
-    await openMgSettingsPanel(page);
-    await page.locator('#luker_rpg_memory_view_graph').click();
-    const cy = page.locator('.luker-rpg-memory-graph-cy').first();
-    await cy.waitFor({ state: 'visible', timeout: timeoutMs });
-    return cy;
+    const lens = await openMemoryWorkspace(page, { subview: 'graph', timeoutMs });
+    const canvas = lens.locator('.ml-graph-canvas').first();
+    await canvas.waitFor({ state: 'visible', timeout: timeoutMs });
+    return canvas;
 }
 
 /**
- * Open the Schema Editor popup via the real button.
+ * Open the embedded Memory Lens Schema editor (`Memory structure` subview).
  */
 export async function openMgSchemaEditor(page, { timeoutMs = 15_000 } = {}) {
-    await openMgSettingsPanel(page);
-    await page.locator('#luker_rpg_memory_open_schema_editor').click();
-    // Schema editor mounts inside a Luker popup; wait for at least one
-    // schema field row to render or the popup to be visible.
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: timeoutMs });
-    return popup;
+    const lens = await openMemoryWorkspace(page, { subview: 'schema', timeoutMs });
+    const schema = lens.locator('.ml-schema').first();
+    await schema.locator('.ml-schema-list .ml-schema-type').first().waitFor({ state: 'visible', timeout: timeoutMs });
+    return schema;
 }
 
 /**
- * Import a graph store JSON via the real #luker_rpg_memory_import button +
- * its hidden file input. The import flow prompts the user with a custom
- * 3-button popup: "Restore Exported Floor" / "Bind Latest Floor" /
- * "Bind Specific Floor" — `mode` selects which to click (default
- * 'bind-latest' is the safe choice when seeding into a fresh chat).
+ * Import a graph store JSON via the real `Import Graph` button in
+ * Memory Lens → Settings → Operations, handling the file chooser and the
+ * import-mode popup ("Restore Exported Floor" / "Bind Latest Floor" /
+ * "Bind Specific Floor").
  *
+ * @param {import('@playwright/test').Page} page
  * @param {string} filePath
- * @param {object} [opts]
- * @param {'restore'|'bind-latest'|'bind-specific'} [opts.mode='bind-latest']
+ * @param {{ mode?: 'restore'|'bind-latest'|'bind-specific', closeAfter?: boolean, timeoutMs?: number }} [opts]
  */
-export async function importMgGraph(page, filePath, { mode = 'bind-latest' } = {}) {
-    await openMgSettingsPanel(page);
-    await page.locator('#luker_rpg_memory_import').click().catch(() => { /* visible icon */ });
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    // Wait for the custom-button popup to render, then click the chosen
-    // button by its visible text (i18n stable text).
+export async function importMgGraph(page, filePath, { mode = 'bind-latest', closeAfter = false, timeoutMs = 15_000 } = {}) {
+    const lens = await openMemoryWorkspace(page, { subview: 'settings', timeoutMs });
+    const importBtn = lens.locator('[data-settings-section="operations"] button').filter({ hasText: /^(Import Graph|导入图谱|導入圖譜)$/ }).first();
+    await importBtn.waitFor({ state: 'visible', timeout: timeoutMs });
+
+    const chooserPromise = page.waitForEvent('filechooser', { timeout: timeoutMs });
+    await importBtn.click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles(filePath);
+
     const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 5000 });
+    await popup.waitFor({ state: 'visible', timeout: 10_000 });
     const labelMap = {
-        restore: 'Restore Exported Floor',
-        'bind-latest': 'Bind Latest Floor',
-        'bind-specific': 'Bind Specific Floor',
+        restore: /Restore Exported Floor|恢复导出时楼层|恢復導出時樓層/,
+        'bind-latest': /Bind Latest Floor|绑定到当前最新楼层|綁定到目前最新樓層/,
+        'bind-specific': /Bind Specific Floor|绑定到指定楼层|綁定到指定樓層/,
     };
-    const label = labelMap[mode] || labelMap['bind-latest'];
-    await popup.locator('button, .popup-button, [role="button"]', { hasText: label }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
+    const pattern = labelMap[mode] || labelMap['bind-latest'];
+    await popup.locator('.popup-button-custom, button, .popup-button, [role="button"]', { hasText: pattern }).first().click();
+    await popup.waitFor({ state: 'detached', timeout: timeoutMs }).catch(() => {});
+
+    if (closeAfter) {
+        await closeWorkbench(page);
+    }
 }
 
 /**
- * Trigger a graph export via the real #luker_rpg_memory_export button and
- * await the download.
+ * Trigger a graph export via the real `Export Graph` button and await download.
  */
 export async function exportMgGraph(page, { timeoutMs = 15_000 } = {}) {
-    await openMgSettingsPanel(page);
+    const lens = await openMemoryWorkspace(page, { subview: 'settings', timeoutMs });
+    const exportBtn = lens.locator('[data-settings-section="operations"] button').filter({ hasText: /^(Export Graph|导出图谱|導出圖譜)$/ }).first();
+    await exportBtn.waitFor({ state: 'visible', timeout: timeoutMs });
     const dl = page.waitForEvent('download', { timeout: timeoutMs });
-    await page.locator('#luker_rpg_memory_export').click();
+    await exportBtn.click();
     return dl;
 }
 
 /**
- * Trigger a full rebuild via the real #luker_rpg_memory_rebuild button.
- * Accepts the confirm popup.
+ * Click `Fill Graph` in Memory Lens → Settings → Operations.
  */
-export async function rebuildMgIndex(page, { timeoutMs = 60_000 } = {}) {
-    await openMgSettingsPanel(page);
-    await page.locator('#luker_rpg_memory_rebuild').click();
-    const popup = page.locator('.popup:visible').last();
-    if (await popup.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await popup.locator('.popup-button-ok').first().click();
+export async function fillMgGraph(page, { closeAfter = false, timeoutMs = 15_000 } = {}) {
+    const lens = await openMemoryWorkspace(page, { subview: 'settings', timeoutMs });
+    const fillBtn = lens.locator('[data-settings-section="operations"] button').filter({ hasText: /^(Fill Graph|补全图谱|補全圖譜)$/ }).first();
+    await fillBtn.waitFor({ state: 'visible', timeout: timeoutMs });
+    await fillBtn.click();
+    if (closeAfter) {
+        await closeWorkbench(page);
     }
-    // Rebuild progress shows via toastr; wait for it to settle. Conservative
-    // wait — chat-derived rebuilds with many turns can take several seconds.
-    await page.waitForTimeout(2000);
+}
+
+/**
+ * Click `Rebuild Graph` in Memory Lens → Settings → Operations and accept the
+ * confirmation modal.
+ */
+export async function rebuildMgIndex(page, { closeAfter = false, timeoutMs = 60_000 } = {}) {
+    const lens = await openMemoryWorkspace(page, { subview: 'settings', timeoutMs });
+    const rebuildBtn = lens.locator('[data-settings-section="operations"] button').filter({ hasText: /^(Rebuild Graph|重建图谱|重建圖譜)$/ }).first();
+    await rebuildBtn.waitFor({ state: 'visible', timeout: 15_000 });
+    await rebuildBtn.click();
+
+    const modal = lens.locator('.ml-dialog-backdrop').last();
+    await modal.waitFor({ state: 'visible', timeout: 5000 });
+    await modal.locator('.ml-schema-modal-foot button').filter({ hasText: /^(Rebuild Graph|重建图谱|重建圖譜)$/ }).first().click();
+    await modal.waitFor({ state: 'detached', timeout: timeoutMs }).catch(() => {});
+
+    if (closeAfter) {
+        await closeWorkbench(page);
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Variable-op-log panel
+// Variable-op-log panel (unchanged)
 // ──────────────────────────────────────────────────────────────────────────
 
 /**
- * Click the flask icon on a message to open the var-ops panel. The flask
- * is hidden by default (display:none) on messages with no ops, so this
- * forces the click after asserting the icon is in the DOM.
- *
- * Returns the panel locator.
+ * Click the flask icon on a message to open the var-ops panel.
  */
 export async function openVarOpsPanel(page, mesid) {
     const flask = page.locator(`.mes[mesid="${mesid}"] .mes_var_ops`).first();
     await flask.waitFor({ state: 'attached', timeout: 5000 });
-    // The icon is hidden when var_ops is empty/absent on the message, but
-    // tests typically open it on a message with ops — flip the display
-    // inline if needed so click() works regardless of the visibility race.
     await flask.dispatchEvent('click');
     const panel = page.locator('.var-ops-panel').last();
     await panel.waitFor({ state: 'visible', timeout: 10_000 });
@@ -146,13 +311,11 @@ export async function getRenderedVarOpsRows(page) {
 }
 
 /**
- * Click "Add operation" + populate a row. Suitable for testing manual
- * additions via the panel.
+ * Click "Add operation" + populate a row.
  */
 export async function addVarOpRow(page, { op = 'setvar', key, value = '' }) {
     const panel = page.locator('.var-ops-panel').last();
     await panel.locator('.var-ops-panel__add-button').first().click();
-    // The new row is appended last; populate its fields.
     const row = panel.locator('.var-ops-panel__row').last();
     await row.waitFor({ state: 'visible', timeout: 5000 });
     if (op !== 'setvar') {
@@ -165,7 +328,6 @@ export async function addVarOpRow(page, { op = 'setvar', key, value = '' }) {
     }
     if (value != null && (op === 'setvar' || op === 'addvar' || op === 'pushvar')) {
         const vi = row.locator('.var-ops-panel__value').first();
-        // Value textarea renders only for value-bearing ops.
         if (await vi.isVisible({ timeout: 500 }).catch(() => false)) {
             await vi.fill(String(value));
             await vi.dispatchEvent('change');

@@ -26,9 +26,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -116,71 +115,26 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function enableMgAndSelectRag(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        const enableCb = document.getElementById('luker_rpg_memory_enabled');
-        if (enableCb && !enableCb.checked) {
-            enableCb.checked = true;
-            enableCb.dispatchEvent(new Event('input', { bubbles: true }));
-            enableCb.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        // Auto-extraction OFF — this test seeds the graph via Import, no LLM
-        // extraction needed. Keeping it on causes the extract path to hit the
-        // mock with a tool-call-shaped request the mock can't satisfy.
-        const autoCb = document.getElementById('luker_rpg_memory_auto_extraction_enabled');
-        if (autoCb && autoCb.checked) {
-            autoCb.checked = false;
-            autoCb.dispatchEvent(new Event('input', { bubbles: true }));
-            autoCb.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        const method = document.getElementById('luker_rpg_memory_recall_method');
-        if (method) {
-            method.value = 'rag';
-            method.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        // Imported nodes get seqTo=1..N which lands inside the
-        // `recentRawTurns` (default 2) exclude window after a couple of
-        // user turns, suppressing them from the recall selection. Turn the
-        // window off so the assertion exercises the RAG ranker itself, not
-        // the post-filter.
-        const ctx = window.Luker.getContext();
-        const s = ctx.extensionSettings?.memory_graph;
-        if (s) s.recentRawTurns = 0;
-    });
-}
-
-async function importBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    // The tabs component persists the last-selected tab in settings, so a
-    // cloned data root may open on any pane. Click through the real tab bar
-    // instead of assuming the Graph pane is already showing.
-    await page.locator('#luker_rpg_memory_tabs button[data-luker-tab-key="graph"]').click();
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-    await page.waitForTimeout(500);
-}
-
 test.describe('#61 — RAG recall mode reaches the seeded graph via real chat send', () => {
     test.setTimeout(180_000);
 
     test('after switching to RAG and importing, a matching user turn surfaces the seeded node in the recall trace', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgAndSelectRag(page);
+        await setMgSettings(page, {
+            enabled: true,
+            autoExtractionEnabled: false,
+            recallMethod: 'rag',
+            recentRawTurns: 0,
+        }, { closeAfter: true });
 
         // 2 RP turns to give MG a real chat tail.
         await sendMessageAndAwaitReply(page, 'I walked the cliff path. The wind is cold but the lantern holds.');
         await sendMessageAndAwaitReply(page, 'The drifters were silent tonight. I think they passed north.');
 
         // Seed MG with the 4 distinctive nodes.
-        await importBindLatest(page, importPath);
+        await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
+        await page.waitForTimeout(500);
 
         // Force vector index sync so the imported nodes have embeddings, then
         // send a message whose tokens uniquely match the "Summary 1" event

@@ -29,10 +29,9 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
 import { openIterStudio, sendIterPrompt, applyIterBatch, closeIterStudio } from '../_lib/ui-iter-studio.js';
+import { fillMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 import { normalizeIterStudioSettings } from '../preset/_helpers.js';
 
 const SETUP_TURN = 'The reef line shifted overnight; the third buoy drags its mooring.';
@@ -95,24 +94,17 @@ function extractionBatchSeq(request) {
     return seqs.length > 0 ? Math.max(...seqs) : null;
 }
 
-// The Schema Iteration Studio trigger sits in the Advanced pane of the MG
-// tab strip, which stays hidden until its tab is active. openIterStudio's
-// 'mg' variant does not click that tab, so do it here as a real gesture.
 async function openMgSchemaStudio(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings');
-    await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="advanced"]').click();
     await openIterStudio(page, 'mg');
 }
 
 async function enableMgAndFillGraph(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings');
-    await page.locator('#luker_rpg_memory_enabled').check();
-    await page.locator('#luker_rpg_memory_auto_extraction_enabled').check();
-    await page.locator('#luker_rpg_memory_auto_compression_enabled').uncheck();
-    await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="graph"]').click();
-    await page.locator('#luker_rpg_memory_fill').click();
+    await setMgSettings(page, {
+        enabled: true,
+        autoExtractionEnabled: true,
+        autoCompressionEnabled: false,
+    });
+    await fillMgGraph(page, { closeAfter: true });
 }
 
 // Record every retry-toast text the DOM ever renders. Installed before MG is

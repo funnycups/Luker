@@ -31,9 +31,9 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
     regenerateViaUI,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { closeWorkbench } from '../_lib/ui-workbench.js';
+import { fillMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 const SETUP_TURN = 'The reef line shifted overnight; the third buoy drags its mooring.';
 const LAST_FLOOR_TURN = 'The tide gauge at the mole reads higher than last night.';
@@ -72,18 +72,6 @@ function requestText(request) {
             return '';
         })
         .join('\n');
-}
-
-async function setCheckbox(page, id, checked) {
-    await page.evaluate(({ id, checked }) => {
-        const el = document.getElementById(id);
-        if (!el) throw new Error(`missing checkbox #${id}`);
-        if (el.checked !== checked) {
-            el.checked = checked;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    }, { id, checked });
 }
 
 test.beforeAll(async () => {
@@ -144,23 +132,39 @@ test.describe('regenerating the last turn aborts the extraction pass covering it
         // One real turn while MG is off, so the graph has floors to cover.
         await sendMessageAndAwaitReply(page, SETUP_TURN);
 
-        // Enable MG through the real checkboxes. Recall and compression stay
+        // Enable MG through Memory Lens Settings. Recall and compression stay
         // off so the only extraction traffic is the pass under test.
-        await openExtensionsDrawer(page);
-        await openInlineDrawer(page, 'memory_graph_settings');
-        await setCheckbox(page, 'luker_rpg_memory_enabled', true);
-        await setCheckbox(page, 'luker_rpg_memory_auto_extraction_enabled', true);
-        await setCheckbox(page, 'luker_rpg_memory_auto_compression_enabled', false);
-        await setCheckbox(page, 'luker_rpg_memory_recall_enabled', false);
+        await setMgSettings(page, {
+            enabled: true,
+            autoExtractionEnabled: true,
+            autoCompressionEnabled: false,
+            recallEnabled: false,
+        });
 
         // Cover the floors that predate MG, so the next automatic pass starts
         // exactly at the last turn instead of replaying the backlog.
-        await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="graph"]').click();
-        await page.locator('#luker_rpg_memory_fill').click();
-        await expect.poll(async () => page.locator('#luker_rpg_memory_stats').innerText(), {
+        await fillMgGraph(page);
+        await expect.poll(async () => page.locator('.wbench .mlens .ml-settings-stats').first().innerText(), {
             timeout: 120_000,
             intervals: [200, 300, 500, 1000],
         }).toMatch(/messages=2\b/);
+
+        // Record every status line the Memory Lens Settings view renders from
+        // here on (the element stays in DOM even after folding Workbench).
+        await page.evaluate(() => {
+            window.__mgStatusLog = [];
+            const el = document.querySelector('.wbench .mlens .ml-settings-status');
+            if (!el) throw new Error('memory status element missing');
+            const capture = () => {
+                const text = String(el.textContent || '').trim();
+                if (text && window.__mgStatusLog[window.__mgStatusLog.length - 1] !== text) {
+                    window.__mgStatusLog.push(text);
+                }
+            };
+            capture();
+            new MutationObserver(capture).observe(el, { childList: true, characterData: true, subtree: true });
+        });
+        await closeWorkbench(page);
 
         // The next extraction request is the one for the turn we regenerate.
         stallNextExtract = true;
@@ -173,22 +177,6 @@ test.describe('regenerating the last turn aborts the extraction pass covering it
         // The stalled request must be the pass that includes the last floor.
         const stalled = extractionRequests()[2];
         expect(requestText(stalled), 'the in-flight pass covers the last floor').toContain(LAST_FLOOR_TURN);
-
-        // Record every status line the memory drawer renders from here on.
-        // The status element exists because the drawer was opened above.
-        await page.evaluate(() => {
-            window.__mgStatusLog = [];
-            const el = document.getElementById('luker_rpg_memory_status');
-            if (!el) throw new Error('memory status element missing');
-            const capture = () => {
-                const text = String(el.textContent || '').trim();
-                if (text && window.__mgStatusLog[window.__mgStatusLog.length - 1] !== text) {
-                    window.__mgStatusLog.push(text);
-                }
-            };
-            capture();
-            new MutationObserver(capture).observe(el, { childList: true, characterData: true, subtree: true });
-        });
 
         // Real user gesture: the options dropdown's Regenerate item.
         const extractCountBeforeRegenerate = extractionRequests().length;

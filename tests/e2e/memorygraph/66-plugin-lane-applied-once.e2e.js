@@ -35,9 +35,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { fillMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 const FIRST_MES = '*Ash unrolls a fresh survey chart across the table, weighting its corners with brass fixtures.* "Look here — along the old reef line my predecessor inked two marks I cannot account for: SENTINEL-P SENTINEL-D, side by side where the kelp shelf meets the deep channel. Help me decide which of them to keep before the tide turns."';
 
@@ -126,13 +125,6 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function fillGraphViaUi(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings');
-    await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="graph"]').click();
-    await page.locator('#luker_rpg_memory_fill').click();
-}
-
 // Memory Graph issues more than one request shape: the extraction pass, and —
 // when `extractMode` is `crawl` — a bounded exploration pass ahead of it. Both
 // are plugin requests, so neither belongs to the main-lane bucket. The crawl
@@ -164,22 +156,9 @@ test.describe('#66 — plugin lane applied exactly once, lanes never bleed', () 
             await sendMessageAndAwaitReply(page, t);
         }
 
-        // Enable MG through the real checkboxes only.
-        await openExtensionsDrawer(page);
-        await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-        await page.evaluate(() => {
-            for (const id of ['luker_rpg_memory_enabled', 'luker_rpg_memory_auto_extraction_enabled']) {
-                const el = document.getElementById(id);
-                if (!el) continue;
-                if (!el.checked) {
-                    el.checked = true;
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            }
-        });
-
-        await fillGraphViaUi(page);
+        // Enable MG through Memory Lens Settings only, then Fill Graph.
+        await setMgSettings(page, { enabled: true, autoExtractionEnabled: true });
+        await fillMgGraph(page, { closeAfter: true });
         await expect.poll(() => {
             const bodies = mock.requests
                 .map(r => r.body)

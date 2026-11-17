@@ -31,9 +31,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { fillMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 const TURNS = [
     'The tide chart shows a false bottom past the third buoy tonight.',
@@ -92,14 +91,6 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function fillGraphViaUi(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings');
-    // Fill Graph lives in the Graph tab pane of the MG tab strip.
-    await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="graph"]').click();
-    await page.locator('#luker_rpg_memory_fill').click();
-}
-
 function collectRoleContents(body, asstContents, userContents) {
     for (const m of body?.messages ?? []) {
         const content = String(m.content ?? '');
@@ -127,27 +118,11 @@ test.describe('#65 — extraction payload keeps old floors despite visible-windo
             await sendMessageAndAwaitReply(page, t);
         }
 
-        // Enable MG via the real checkboxes only AFTER the chat exists.
-        await openExtensionsDrawer(page);
-        await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-        await page.evaluate(() => {
-            for (const id of ['luker_rpg_memory_enabled', 'luker_rpg_memory_auto_extraction_enabled']) {
-                const el = document.getElementById(id);
-                if (!el) continue;
-                if (!el.checked) {
-                    el.checked = true;
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            }
-        });
+        // Enable MG via Memory Lens Settings only AFTER the chat exists.
+        await setMgSettings(page, { enabled: true, autoExtractionEnabled: true });
 
-        // Auto-extraction may already cover every floor during the turns;
-        // Fill Graph is still driven through the real UI, but the payload
-        // assertions accept extraction requests from either path. Wait
-        // until the pass reaches the NEWEST floor so late batches aren't
-        // missed by the assertions below.
-        await fillGraphViaUi(page);
+        // Drive Fill Graph via Memory Lens Settings Operations.
+        await fillMgGraph(page, { closeAfter: true });
         await expect.poll(() => {
             const bodies = mock.requests
                 .map(r => r.body)

@@ -139,19 +139,7 @@ test.describe('#90 — Orchestrator iter-studio: anchor drift → whitespace_dri
         // drain continues → Turn 2 (correct patch → proposal → Approve
         // clicked) → drain → Turn 3 emits no tool call → loop exits.
         await sendIterPrompt(page, 'orch', 'Update analyst_b line two.');
-        // Approve loop covers ALL pending proposals across the multi-round
-        // drain: Turn 0 (create-subagent) approve → drain fires Turn 1
-        // (patch with dedented anchor, fails → tool_result with
-        // match_diagnosis, no proposal) → Turn 2 (patch with correct
-        // anchor, succeeds → proposal → approve) → drain → Turn 3 (text)
-        // exits. Between-pass poll catches late-arriving Approves after
-        // a drain settles.
-        for (let pass = 0; pass < 3; pass++) {
-            await applyIterBatch(page, 'orch');
-            const popup2 = page.locator('.popup:visible').last();
-            const next = popup2.locator('[data-proposal-action="approve"]').first();
-            if (!(await next.isVisible({ timeout: 5000 }).catch(() => false))) break;
-        }
+        await applyIterBatch(page, 'orch');
 
         // Assertion 1 — inspect the request bodies. The Turn-2 request
         // should carry a tool message with

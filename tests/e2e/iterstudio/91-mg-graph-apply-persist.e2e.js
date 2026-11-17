@@ -1,13 +1,14 @@
 // tests/e2e/iterstudio/91-mg-graph-apply-persist.e2e.js
 //
-// #91 — MG graph-revision studio through real user gestures:
-//   1. Seed a chat + import a graph (same flow as memorygraph #52).
-//   2. Ask the studio to edit a node → Approve → the live store changes and
-//      the store-commit listener fires.
+// #91 — MG graph-revision studio inside Workbench through real user gestures:
+//   1. Seed a chat + import a graph via Memory Lens Settings.
+//   2. Ask Workbench AI iteration (`Graph` target) to edit a node → Apply selected
+//      → the live store changes and the store-commit listener fires.
 //   3. Restart the server → the change survives.
-//   4. A second edit left pending survives a page reload: reopening the
-//      session from history rebuilds the pending chain and the Approve
-//      still lands (no conflict).
+//   4. A pending edit survives tab switches & folding Workbench, still approves
+//      when reopened from the session list; after a page reload, the session
+//      remains readable in the session list.
+//   5. Memory Lens Settings "AI Edit Graph" button also opens Workbench on Graph.
 
 import { test, expect } from '@playwright/test';
 import { writeFileSync, mkdtempSync } from 'node:fs';
@@ -21,11 +22,10 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
     reloadAndAwait,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
 import { openIterStudio, sendIterPrompt, applyIterBatch, closeIterStudio } from '../_lib/ui-iter-studio.js';
-import { openMgGraphView } from '../_lib/ui-mg-varops.js';
+import { switchWorkbenchTab, workbenchWindow } from '../_lib/ui-workbench.js';
+import { importMgGraph, openMemoryWorkspace, setMgSettings } from '../_lib/ui-mg-varops.js';
 import { normalizeIterStudioSettings } from '../preset/_helpers.js';
 
 let server, mock, importPath;
@@ -42,13 +42,15 @@ const EDITED_STATE = '夜间执勤；信号灯已重新修剪。';
 const EDITED_IDENTITY = 'Bryn 断崖的常驻海图官，前盐礁灯塔守备（近期补充）。';
 
 test.beforeAll(async () => {
-    mock = await startMockLLM({ scriptedReplies: [
-        '*Seraphina folds the chart and meets your eyes.* "The lantern will hold another hour."',
-        '*She traces a line on the chart with one knuckle.* "Three breakers north of the gull rocks."',
-        '*Seraphina exhales slowly.* "The drifters know that channel better than we do."',
-        '*She turns to the rail, spyglass raised.* "Hold. Don\'t speak for a moment."',
-        '*Seraphina nods once.* "Then it is decided. We wait."',
-    ] });
+    mock = await startMockLLM({
+        scriptedReplies: [
+            '*Seraphina folds the chart and meets your eyes.* "The lantern will hold another hour."',
+            '*She traces a line on the chart with one knuckle.* "Three breakers north of the gull rocks."',
+            '*Seraphina exhales slowly.* "The drifters know that channel better than we do."',
+            '*She turns to the rail, spyglass raised.* "Hold. Don\'t speak for a moment."',
+            '*Seraphina nods once.* "Then it is decided. We wait."',
+        ],
+    });
     server = await startServer({ batchKey: 'iterstudio', scenarioId: '91-mg-graph-apply' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -92,48 +94,6 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function enableMgViaCheckboxes(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        for (const id of ['luker_rpg_memory_enabled', 'luker_rpg_memory_auto_extraction_enabled']) {
-            const el = document.getElementById(id);
-            if (!el) continue;
-            if (!el.checked) {
-                el.checked = true;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }
-    });
-}
-
-async function disableAutoExtractionViaCheckbox(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        const el = document.getElementById('luker_rpg_memory_auto_extraction_enabled');
-        if (!el || !el.checked) return;
-        el.checked = false;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-}
-
-async function importMgGraphBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    // The Import button lives in the Graph tab pane; activate it first
-    // (inactive panes stay `hidden`).
-    await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="graph"]').click();
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-}
-
 async function readNodeFields(page, nodeId) {
     return await page.evaluate(async (id) => {
         const ctx = window.Luker.getContext();
@@ -146,15 +106,12 @@ async function readNodeFields(page, nodeId) {
 async function seedChatAndGraph(page) {
     await awaitMainUI(page, server.baseURL);
     await selectCharacterByName(page, 'Seraphina');
-    await enableMgViaCheckboxes(page);
+    await setMgSettings(page, { enabled: true, autoExtractionEnabled: true }, { closeAfter: true });
     for (const turn of CHAT_TURNS) {
         await sendMessageAndAwaitReply(page, turn);
     }
-    await importMgGraphBindLatest(page, importPath);
-    // The studio's mock scripts must be the next requests the mock sees;
-    // switch off auto extraction so no background extraction pass can
-    // consume a scripted tool call.
-    await disableAutoExtractionViaCheckbox(page);
+    await importMgGraph(page, importPath, { mode: 'bind-latest' });
+    await setMgSettings(page, { autoExtractionEnabled: false }, { closeAfter: true });
 }
 
 test.describe('#91 — MG graph studio apply / persist', () => {
@@ -193,13 +150,13 @@ test.describe('#91 — MG graph studio apply / persist', () => {
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgViaCheckboxes(page);
+        await setMgSettings(page, { enabled: true }, { closeAfter: true });
 
         const persisted = await readNodeFields(page, 'n_3');
         expect(persisted?.state).toBe(EDITED_STATE);
     });
 
-    test('a pending proposal survives a page reload and still approves (chain restored)', async ({ page }) => {
+    test('a pending draft survives folding Workbench and session reopen, and session persists across reload', async ({ page }) => {
         await seedChatAndGraph(page);
 
         await openIterStudio(page, 'mg-graph');
@@ -208,34 +165,37 @@ test.describe('#91 — MG graph studio apply / persist', () => {
             arguments: { node_id: 'n_2', set_fields: { identity: EDITED_IDENTITY } },
         });
         await sendIterPrompt(page, 'mg-graph', 'Add to the chart officer\'s identity that she recently resupplied the post.');
+
+        // Fold Workbench, switch tabs, and start a fresh chat view, then reopen the session.
+        await closeIterStudio(page);
+        await switchWorkbenchTab(page, 'home');
+        await switchWorkbenchTab(page, 'ai');
+        const win = workbenchWindow(page);
+        await win.locator('.wb-sess-list .wb-sess-item').first().click();
+        await win.locator('.wb-chg.is-pending .wb-chg-foot button.is-primary').first().waitFor({ state: 'visible', timeout: 10_000 });
+        await applyIterBatch(page, 'mg-graph');
+
+        await expect.poll(async () => (await readNodeFields(page, 'n_2'))?.identity, { timeout: 15_000 })
+            .toBe(EDITED_IDENTITY);
         await closeIterStudio(page);
 
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await openIterStudio(page, 'mg-graph');
-
-        // Load the persisted session from history — the pending card must
-        // come back and stay approvable (the propose-time after-state is
-        // rebuilt from the tail snapshot, not silently left undefined).
-        const popup = page.locator('.popup:visible').last();
-        await popup.locator('details[data-mg-graph-it-history] summary').click();
-        await popup.locator('[data-mg-graph-it-action="load-session"]').first().click();
-        await popup.locator('[data-proposal-action="approve"]').first().waitFor({ state: 'visible', timeout: 15_000 });
-        await applyIterBatch(page, 'mg-graph');
-
-        await expect.poll(async () => (await readNodeFields(page, 'n_2'))?.identity, { timeout: 15_000 })
-            .toBe(EDITED_IDENTITY);
-        // Conflict would have parked the card instead of committing.
-        await expect(popup.locator('[data-proposal-action="force-discard"]')).toHaveCount(0);
+        await expect(workbenchWindow(page).locator('.wb-sess-list')).toContainText('Add to the chart officer', { timeout: 10_000 });
+        await workbenchWindow(page).locator('.wb-sess-list .wb-sess-item').first().click();
+        await expect(workbenchWindow(page).locator('.wb-chat')).toContainText('resupplied', { timeout: 10_000 });
+        await closeIterStudio(page);
     });
 
-    test('the graph inspector toolbar also opens the studio', async ({ page }) => {
+    test('Memory Lens Settings AI Edit Graph button opens Workbench on Graph target', async ({ page }) => {
         await seedChatAndGraph(page);
-        await openMgGraphView(page);
-        const inspector = page.locator('.popup:visible').last();
-        await inspector.locator('.luker-rpg-memory-graph-ai-edit').click();
-        await expect(page.locator('[data-mg-graph-it-action="send"]').last())
-            .toBeVisible({ timeout: 15_000 });
+        const lens = await openMemoryWorkspace(page, { subview: 'settings' });
+        await lens.locator('[data-settings-section="operations"] button').filter({ hasText: /^(AI Edit Graph|AI 编辑图谱|AI 編輯圖譜)$/ }).first().click();
+
+        const win = workbenchWindow(page);
+        await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]')).toHaveText(/^(Graph|图谱|圖譜)$/, { timeout: 15_000 });
+        await expect(win.locator('.wb-chat .wb-input')).toBeVisible({ timeout: 15_000 });
         await closeIterStudio(page);
     });
 });

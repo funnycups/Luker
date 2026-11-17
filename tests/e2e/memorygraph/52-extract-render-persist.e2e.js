@@ -4,9 +4,8 @@
 // real "View Graph" inspector → persist across a server restart.
 //
 // What this case pins (entirely through real-user gestures):
-//   1. Enable MG via the real `#luker_rpg_memory_enabled` checkbox + the
-//      real `#luker_rpg_memory_auto_extraction_enabled` checkbox in the
-//      MG settings panel.
+//   1. Enable MG via the real Memory Lens Settings switches (`enabled` +
+//      `autoExtractionEnabled`) inside Workbench.
 //   2. Send 5 user turns via the textarea + send button so there's a real
 //      chat tail for MG to anchor against.
 //   3. Click the real Import button + select a pre-built store JSON via
@@ -30,10 +29,9 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
     reloadAndAwait,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
-import { openMgGraphView } from '../_lib/ui-mg-varops.js';
+import { closeWorkbench } from '../_lib/ui-workbench.js';
+import { importMgGraph, openMgGraphView, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -100,57 +98,13 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-/**
- * Flip both MG enable checkboxes on via real DOM. The MG settings panel
- * lives inside an inline-drawer whose host id is `memory_graph_settings`
- * (per the extension's `UI_BLOCK_ID` constant). We dispatch `input` and
- * `change` events the same way jQuery wires them so the underlying
- * settings.enabled handler runs.
- */
-async function enableMgViaCheckboxes(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        for (const id of ['luker_rpg_memory_enabled', 'luker_rpg_memory_auto_extraction_enabled']) {
-            const el = document.getElementById(id);
-            if (!el) continue;
-            if (!el.checked) {
-                el.checked = true;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }
-    });
-}
-
-/**
- * Drive the Import button + hidden file input, then accept the import-
- * mode popup by clicking the "Bind Latest Floor" custom button.
- */
-async function importMgGraphBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    // promptMemoryGraphImportMode uses custom buttons (no OK/Cancel).
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-}
-
-async function closeAnyVisiblePopup(page) {
-    await page.locator('.popup:visible .popup-button-ok, .popup:visible .popup-button-close, .popup:visible .popup-button-cancel').first().click().catch(() => {});
-    await page.waitForTimeout(300);
-}
-
 test.describe('#52 — Seed via real Import button → View Graph renders cytoscape → persist across restart', () => {
     test.setTimeout(180_000);
 
     test('import store, View Graph renders nodes, kill+restart keeps them', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgViaCheckboxes(page);
+        await setMgSettings(page, { enabled: true, autoExtractionEnabled: true }, { closeAfter: true });
 
         // 5 RP turns so MG's chat-key resolver has a real chat to anchor.
         for (const t of [
@@ -163,18 +117,17 @@ test.describe('#52 — Seed via real Import button → View Graph renders cytosc
             await sendMessageAndAwaitReply(page, t);
         }
 
-        await importMgGraphBindLatest(page, importPath);
+        await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
 
         // ── Render assertion: View Graph → cytoscape mounts with nodes ─
         await openMgGraphView(page);
         await page.waitForFunction(() => {
-            const cy = document.querySelector('.luker-rpg-memory-graph-cy');
-            if (!cy) return false;
-            const inst = window.cy || cy.__cytoscape__ || null;
-            if (inst && typeof inst.nodes === 'function') return inst.nodes().length > 0;
-            return !!cy.querySelector('canvas');
+            const canvas = document.querySelector('.wbench .mlens .ml-graph-canvas canvas');
+            const counts = Array.from(document.querySelectorAll('.wbench .mlens .ml-legend-count'))
+                .reduce((sum, el) => sum + Number(el.textContent || 0), 0);
+            return Boolean(canvas) && counts >= 3;
         }, null, { timeout: 15_000 });
-        await closeAnyVisiblePopup(page);
+        await closeWorkbench(page);
 
         // Cross-check via Layer-1 read API: 3 nodes seeded → visible.
         const preRestartNodes = await page.evaluate(async () => {
@@ -191,17 +144,16 @@ test.describe('#52 — Seed via real Import button → View Graph renders cytosc
         await server.restart();
         await reloadAndAwait(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgViaCheckboxes(page);
+        await setMgSettings(page, { enabled: true }, { closeAfter: true });
 
         await openMgGraphView(page);
         await page.waitForFunction(() => {
-            const cy = document.querySelector('.luker-rpg-memory-graph-cy');
-            if (!cy) return false;
-            const inst = window.cy || cy.__cytoscape__ || null;
-            if (inst && typeof inst.nodes === 'function') return inst.nodes().length > 0;
-            return !!cy.querySelector('canvas');
+            const canvas = document.querySelector('.wbench .mlens .ml-graph-canvas canvas');
+            const counts = Array.from(document.querySelectorAll('.wbench .mlens .ml-legend-count'))
+                .reduce((sum, el) => sum + Number(el.textContent || 0), 0);
+            return Boolean(canvas) && counts >= 3;
         }, null, { timeout: 15_000 });
-        await closeAnyVisiblePopup(page);
+        await closeWorkbench(page);
 
         const postRestartNodes = await page.evaluate(async () => {
             const ctx = window.Luker.getContext();

@@ -171,7 +171,7 @@ test.describe('#83 — All 4 iter-studio Apply paths route through canonical wri
         }
     });
 
-    test('CEA Character Apply (real click) → /api/characters/edit', async ({ page }) => {
+    test('CEA Character Apply (real click) → /api/characters/patch or /api/characters/edit', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
         await installFetchRecorder(page);
@@ -189,8 +189,8 @@ test.describe('#83 — All 4 iter-studio Apply paths route through canonical wri
         await closeIterStudio(page);
 
         const reqs = await readFetchLogSince(page, before);
-        const editCall = reqs.find(r => /\/api\/characters\/edit\b/.test(r.url));
-        expect(editCall, `CEA Apply must hit /api/characters/edit; saw ${JSON.stringify(reqs.map(r => r.url))}`).toBeTruthy();
+        const editCall = reqs.find(r => /\/api\/characters\/(edit|patch)\b/.test(r.url));
+        expect(editCall, `CEA Apply must hit /api/characters/edit or /api/characters/patch; saw ${JSON.stringify(reqs.map(r => r.url))}`).toBeTruthy();
         expect(editCall.method).toBe('POST');
     });
 });

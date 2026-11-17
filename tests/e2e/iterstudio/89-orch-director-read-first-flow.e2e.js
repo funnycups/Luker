@@ -155,20 +155,7 @@ test.describe('#89 — Orchestrator iter-studio: read-first flow with per-mode r
         // Turn 3 (done). applyIterBatch loops through every Approve so
         // it drives all of them.
         await sendIterPrompt(page, 'orch', 'Add analyst_a, read its prompt, then update to also cite the chart legend.');
-
-        // Approve loop covers ALL pending proposals across the multi-round
-        // drain: Turn 0 (create-subagent) approve → drain fires Turn 1
-        // (read, inline) → Turn 2 (patch → proposal) approve → drain →
-        // Turn 3 (text) exits. Each drain re-invokes the LLM, so we
-        // give ample poll time by re-calling applyIterBatch several times
-        // if new Approves surface between passes.
-        for (let pass = 0; pass < 3; pass++) {
-            await applyIterBatch(page, 'orch');
-            // If a new Approve surfaces within 5s (post-drain), catch it.
-            const popup = page.locator('.popup:visible').last();
-            const next = popup.locator('[data-proposal-action="approve"]').first();
-            if (!(await next.isVisible({ timeout: 5000 }).catch(() => false))) break;
-        }
+        await applyIterBatch(page, 'orch');
 
         // Assertion 1 — after the full loop, the read tool was actually
         // offered in the tool catalog for at least one chat request.

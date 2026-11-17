@@ -25,9 +25,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { fillMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 import {
     DEFAULT_EXTRACT_EDGE_RULES,
     DEFAULT_EXTRACT_TEMPLATE,
@@ -93,13 +92,12 @@ function openingLine(text) {
 }
 
 async function enableMgAndFillGraph(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings');
-    await page.locator('#luker_rpg_memory_enabled').check();
-    await page.locator('#luker_rpg_memory_auto_extraction_enabled').check();
-    await page.locator('#luker_rpg_memory_auto_compression_enabled').uncheck();
-    await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="graph"]').click();
-    await page.locator('#luker_rpg_memory_fill').click();
+    await setMgSettings(page, {
+        enabled: true,
+        autoExtractionEnabled: true,
+        autoCompressionEnabled: false,
+    });
+    await fillMgGraph(page, { closeAfter: true });
 }
 
 test.describe('#71 — the extraction request carries the rendered template', () => {

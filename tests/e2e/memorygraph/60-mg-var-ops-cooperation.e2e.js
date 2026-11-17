@@ -34,10 +34,15 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
-import { openVarOpsPanel, getRenderedVarOpsRows, openMgGraphView } from '../_lib/ui-mg-varops.js';
+import { closeWorkbench } from '../_lib/ui-workbench.js';
+import {
+    openVarOpsPanel,
+    getRenderedVarOpsRows,
+    openMgGraphView,
+    importMgGraph,
+    setMgSettings,
+} from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -81,38 +86,13 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function enableMgViaCheckbox(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        const el = document.getElementById('luker_rpg_memory_enabled');
-        if (el && !el.checked) {
-            el.checked = true;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    });
-}
-
-async function importBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-    await page.waitForTimeout(500);
-}
-
 test.describe('#60 — MG + var_ops co-operation via macro expansion', () => {
     test.setTimeout(180_000);
 
     test('setvar from reply lands in flask panel; MG field expands {{getvar::*}} via substituteParams', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgViaCheckbox(page);
+        await setMgSettings(page, { enabled: true }, { closeAfter: true });
 
         await page.waitForFunction(() => {
             const ctx = window.Luker.getContext();
@@ -145,18 +125,18 @@ test.describe('#60 — MG + var_ops co-operation via macro expansion', () => {
         expect(varSeen).toBe('7.5');
 
         // Import the MG node carrying the macro token in its identity field.
-        await importBindLatest(page, importPath);
+        await importMgGraph(page, importPath, { mode: 'bind-latest' });
+        await page.waitForTimeout(500);
 
-        // Open the real View Graph popup — confirms the node renders.
+        // Open the embedded Memory Lens Graph view — confirms the node renders.
         await openMgGraphView(page);
         await page.waitForFunction(() => {
-            const cy = document.querySelector('.luker-rpg-memory-graph-cy');
-            if (!cy) return false;
-            const inst = window.cy || cy.__cytoscape__ || null;
-            if (inst && typeof inst.nodes === 'function') return inst.nodes().length > 0;
-            return !!cy.querySelector('canvas');
+            const canvas = document.querySelector('.wbench .mlens .ml-graph-canvas canvas');
+            const counts = Array.from(document.querySelectorAll('.wbench .mlens .ml-legend-count'))
+                .reduce((sum, el) => sum + Number(el.textContent || 0), 0);
+            return Boolean(canvas) && counts >= 1;
         }, null, { timeout: 15_000 });
-        await page.locator('.popup:visible .popup-button-ok, .popup:visible .popup-button-close, .popup:visible .popup-button-cancel').first().click().catch(() => {});
+        await closeWorkbench(page);
 
         // Read the imported node via Layer-1 — fields are stored
         // verbatim; the raw text must still contain the macro token.

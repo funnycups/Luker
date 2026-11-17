@@ -38,9 +38,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -116,58 +115,6 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function enableMgAndSelectRag(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        const enableCb = document.getElementById('luker_rpg_memory_enabled');
-        if (enableCb && !enableCb.checked) {
-            enableCb.checked = true;
-            enableCb.dispatchEvent(new Event('input', { bubbles: true }));
-            enableCb.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        // Auto-extraction OFF — this test seeds the graph via Import; a live
-        // extraction pass would hit the mock with tool-call-shaped requests.
-        const autoCb = document.getElementById('luker_rpg_memory_auto_extraction_enabled');
-        if (autoCb && autoCb.checked) {
-            autoCb.checked = false;
-            autoCb.dispatchEvent(new Event('input', { bubbles: true }));
-            autoCb.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        const method = document.getElementById('luker_rpg_memory_recall_method');
-        if (method) {
-            method.value = 'rag';
-            method.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        // Imported nodes (seqTo 1..N) must stay recallable: disable the
-        // raw-recent-turns exclude window like #61 does.
-        const ctx = window.Luker.getContext();
-        const s = ctx.extensionSettings?.memory_graph;
-        if (s) s.recentRawTurns = 0;
-    });
-}
-
-async function importBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    // The Import button lives in the Graph pane. The tabs component
-    // persists the last-selected tab in settings, so a dataRoot cloned
-    // from a dev env may open on any pane — click through the real tab
-    // bar like a user would instead of assuming the default pane.
-    await page.evaluate(() => {
-        const tab = document.querySelector('#luker_rpg_memory_tabs [data-luker-tab-key="graph"]');
-        if (!tab) throw new Error('memory-graph Graph tab not in DOM');
-        tab.click();
-    });
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-    await page.waitForTimeout(500);
-}
-
 async function readRecallState(page) {
     return await page.evaluate(async () => {
         const ctx = window.Luker.getContext();
@@ -200,13 +147,19 @@ test.describe('#68 — overswipe regenerate reuses the recall snapshot', () => {
     test('swipe to a new variant does not re-run RAG recall when the anchor user message is unchanged', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgAndSelectRag(page);
+        await setMgSettings(page, {
+            enabled: true,
+            autoExtractionEnabled: false,
+            recallMethod: 'rag',
+            recentRawTurns: 0,
+        }, { closeAfter: true });
 
         // Two RP turns for a real chat tail.
         await sendMessageAndAwaitReply(page, 'I walked the cliff path tonight.');
         await sendMessageAndAwaitReply(page, 'The brass signal lantern was trimmed and lit before tide-rise.');
 
-        await importBindLatest(page, importPath);
+        await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
+        await page.waitForTimeout(500);
 
         // Sync the vector index so the imported nodes are searchable, then
         // count embeddings baseline (index sync embeds nodes once).
