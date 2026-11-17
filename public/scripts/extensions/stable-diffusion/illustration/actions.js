@@ -1,9 +1,11 @@
 import { Popup, POPUP_TYPE, POPUP_RESULT, callGenericPopup } from '../../../popup.js';
 import {
     appendIllustrationRecords,
+    collectVersionTree,
     createIllustrationRecord,
     getIllustrationRecord,
     removeIllustrationRecord,
+    switchMessageIllustrationVersion,
     syncMessageSwipeData,
 } from './records.js';
 import { buildImageTag, escapeHtml, replaceIllustrationMarkup } from './message.js';
@@ -12,21 +14,6 @@ import { makeIllustrationId } from './presets.js';
 import { messageFingerprint } from './pipeline.js';
 import { resolveReplayLoras } from '../lora/tool.js';
 import { deleteMediaFromServer } from '../../../chats.js';
-
-function collectHistory(message, record) {
-    const chain = [];
-    const seen = new Set();
-    let current = record;
-    while (current) {
-        chain.unshift(current);
-        if (!current.parentId || seen.has(current.parentId)) {
-            break;
-        }
-        seen.add(current.id);
-        current = getIllustrationRecord(message, current.parentId);
-    }
-    return chain;
-}
 
 export function initIllustrationActions({ context, pipeline, imageService, settings, ensureSwipes, toast, notifyError, t }) {
     const actionControllers = new Map();
@@ -81,13 +68,25 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         return popup.complete(POPUP_RESULT.AFFIRMATIVE).catch(() => {});
     }
 
-    async function generateChildRecord({ messageId, parent, replaceRecord = parent, prompt }) {
+    async function generateChildRecord({
+        messageId,
+        parent,
+        replaceRecord = parent,
+        prompt,
+        overrideReferences = undefined,
+    }) {
         const chatId = context.chatId;
         const message = context.chat?.[messageId];
         if (!message) {
             throw new Error('Message not found.');
         }
         const savedLoras = Array.isArray(parent?.loras) ? parent.loras : [];
+        const savedReferences = overrideReferences !== undefined
+            ? overrideReferences
+            : (Array.isArray(parent?.references) ? parent.references : []);
+        const savedNegative = String(parent?.negativePrompt || '');
+        const savedAspectRatio = String(parent?.aspectRatio || '');
+        const savedCharPrompts = Array.isArray(parent?.characterPrompts) ? parent.characterPrompts : [];
         const swipeId = message.swipe_id ?? 0;
         const beforeFingerprint = messageFingerprint(message);
         pipeline.cancelForMessage?.(messageId, swipeId);
@@ -107,6 +106,10 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             }
             imageUrl = await imageService.generate(prompt, {
                 characterName: String(message.name || ''),
+                negativePrompt: savedNegative,
+                aspectRatio: savedAspectRatio || undefined,
+                references: savedReferences.length > 0 ? savedReferences : undefined,
+                characterPrompts: savedCharPrompts.length > 0 ? savedCharPrompts : undefined,
                 signal: controller.signal,
                 loras,
             });
@@ -130,6 +133,11 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         const record = createIllustrationRecord({
             id: makeIllustrationId(),
             prompt,
+            negativePrompt: savedNegative,
+            aspectRatio: savedAspectRatio,
+            references: savedReferences,
+            characterPrompts: savedCharPrompts,
+            locked: Boolean(replaceRecord.locked),
             imageUrl,
             status: 'ready',
             parentId: parent.id,
@@ -146,13 +154,13 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         appendIllustrationRecords(currentMessage, [record]);
         syncMessageSwipeData(currentMessage, ensureSwipes);
         context.updateMessageBlock(messageId, currentMessage);
-        await context.saveChat();
         await emitMessageChanged(context, messageId);
+        await context.saveChat();
         return record;
     }
 
-    async function requestPrompt(initialPrompt) {
-        const result = await callGenericPopup(t`Image prompt`, POPUP_TYPE.INPUT, initialPrompt, { rows: 6 });
+    async function requestPrompt(initialPrompt, titleLabel = t`Image prompt`) {
+        const result = await callGenericPopup(titleLabel, POPUP_TYPE.INPUT, initialPrompt, { rows: 6 });
         if (result === false || result === null || result === undefined) {
             return null;
         }
@@ -164,9 +172,9 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         return trimmed;
     }
 
-    async function runGeneration(action, { messageId, record, replaceRecord, prompt }) {
+    async function runGeneration(action, { messageId, record, replaceRecord, prompt, overrideReferences }) {
         try {
-            await generateChildRecord({ messageId, parent: record, replaceRecord, prompt });
+            await generateChildRecord({ messageId, parent: record, replaceRecord, prompt, overrideReferences });
         } catch (error) {
             if (error?.name === 'AbortError') {
                 return;
@@ -182,12 +190,29 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             return false;
         }
         const { messageId, record } = resolved;
+        let supportsSourceImage = false;
+        if (record.status === 'ready' && record.imageUrl && typeof imageService.getCapabilities === 'function') {
+            try {
+                const caps = await imageService.getCapabilities();
+                supportsSourceImage = Boolean(caps?.supportsSourceImage);
+            } catch {
+                supportsSourceImage = false;
+            }
+        }
+
+        const lockLabel = record.locked ? t`Unlock illustration` : t`Lock illustration`;
+        const editFromImageBtn = supportsSourceImage
+            ? `<div id="sd_illustration_action_edit_from_image" class="menu_button">${escapeHtml(t`Edit from this image`)}</div>`
+            : '';
+
         const html = `
             <div id="sd_illustration_actions" class="sd_illustration_actions">
                 <div id="sd_illustration_actions_prompt" class="sd_illustration_actions_prompt" title="${escapeHtml(record.prompt)}">${escapeHtml(record.prompt)}</div>
                 <div class="sd_illustration_actions_buttons">
                     <div id="sd_illustration_action_regenerate" class="menu_button">${escapeHtml(t`Regenerate`)}</div>
                     <div id="sd_illustration_action_edit_prompt" class="menu_button">${escapeHtml(t`Edit prompt`)}</div>
+                    ${editFromImageBtn}
+                    <div id="sd_illustration_action_toggle_lock" class="menu_button">${escapeHtml(lockLabel)}</div>
                     <div id="sd_illustration_action_history" class="menu_button">${escapeHtml(t`History`)}</div>
                     <div id="sd_illustration_action_delete" class="menu_button">${escapeHtml(t`Delete`)}</div>
                 </div>
@@ -213,6 +238,34 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             await runGeneration('edit', { messageId, record, prompt });
         });
 
+        $root.on('click', '#sd_illustration_action_edit_from_image', async () => {
+            await closeIfOpen(popup);
+            const instruction = await requestPrompt('', t`Edit instruction`);
+            if (!instruction) {
+                return;
+            }
+            await runGeneration('source_edit', {
+                messageId,
+                record,
+                prompt: instruction,
+                overrideReferences: [{ imagePath: record.imageUrl, role: 'source' }],
+            });
+        });
+
+        $root.on('click', '#sd_illustration_action_toggle_lock', async () => {
+            await closeIfOpen(popup);
+            const message = context.chat?.[messageId];
+            const liveRecord = getIllustrationRecord(message, record.id);
+            if (!message || !liveRecord) {
+                return;
+            }
+            liveRecord.locked = !liveRecord.locked;
+            syncMessageSwipeData(message, ensureSwipes);
+            context.updateMessageBlock(messageId, message);
+            await emitMessageChanged(context, messageId);
+            await context.saveChat();
+        });
+
         $root.on('click', '#sd_illustration_action_history', async () => {
             await closeIfOpen(popup);
             const message = context.chat?.[messageId];
@@ -220,8 +273,24 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             if (!current) {
                 return;
             }
-            const history = collectHistory(message, current);
-            const items = history.map((entry, index) => `<div class="sd_illustration_history_prompt" data-illustration-history-id="${escapeHtml(entry.id)}"><span class="sd_illustration_history_index">${index + 1}</span>${escapeHtml(entry.prompt)}</div>`);
+            const history = collectVersionTree(message, current);
+            const items = history.map((entry, index) => {
+                const isActive = entry.id === current.id;
+                const thumbHtml = entry.imageUrl
+                    ? `<img class="sd_illustration_history_thumb" src="${escapeHtml(entry.imageUrl)}" alt="${escapeHtml(entry.prompt)}" data-illustration-switch-id="${escapeHtml(entry.id)}" style="max-width:72px;max-height:72px;object-fit:cover;border-radius:4px;cursor:pointer;" />`
+                    : '';
+                const switchBtnHtml = isActive
+                    ? `<span class="sd_illustration_history_active_badge">${escapeHtml(t`Current version`)}</span>`
+                    : `<div class="menu_button sd_illustration_history_switch" data-illustration-switch-id="${escapeHtml(entry.id)}">${escapeHtml(t`Use this version`)}</div>`;
+                return `
+                    <div class="sd_illustration_history_row flex-container alignItemsCenter gap10 marginTopBot5" data-version-id="${escapeHtml(entry.id)}">
+                        ${thumbHtml}
+                        <div class="sd_illustration_history_prompt flex1" data-illustration-history-id="${escapeHtml(entry.id)}">
+                            <span class="sd_illustration_history_index">${index + 1}</span>${escapeHtml(entry.prompt)}
+                        </div>
+                        ${switchBtnHtml}
+                    </div>`;
+            });
             const historyHtml = `
                 <div id="sd_illustration_history" class="sd_illustration_history">
                     <div id="sd_illustration_history_list" class="sd_illustration_history_list">${items.join('')}</div>
@@ -235,6 +304,30 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             });
             historyPopup.show();
             $('#sd_illustration_history_close').on('click', () => historyPopup.complete(POPUP_RESULT.AFFIRMATIVE));
+
+            $('#sd_illustration_history_list').on('click', '[data-illustration-switch-id]', async function (e) {
+                e.stopPropagation();
+                const targetId = String($(this).attr('data-illustration-switch-id') || '');
+                const liveMessage = context.chat?.[messageId];
+                if (!liveMessage || !targetId || targetId === current.id) {
+                    return;
+                }
+                const switched = switchMessageIllustrationVersion({
+                    message: liveMessage,
+                    fromId: current.id,
+                    toId: targetId,
+                    imageDisplayWidth: settings.imageDisplayWidth,
+                    ensureSwipes,
+                    failedLabel: t`Image generation failed`,
+                });
+                await historyPopup.complete(POPUP_RESULT.AFFIRMATIVE);
+                if (switched) {
+                    context.updateMessageBlock(messageId, liveMessage);
+                    await emitMessageChanged(context, messageId);
+                    await context.saveChat();
+                }
+            });
+
             $('#sd_illustration_history_list').on('click', '[data-illustration-history-id]', async function () {
                 const selectedId = String($(this).attr('data-illustration-history-id') || '');
                 const selected = history.find(entry => entry.id === selectedId);
@@ -312,8 +405,8 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         message.mes = text;
         syncMessageSwipeData(message, ensureSwipes);
         context.updateMessageBlock(messageId, message);
-        await context.saveChat();
         await emitMessageChanged(context, messageId);
+        await context.saveChat();
 
         if (deleteFiles) {
             const files = removed.map(entry => entry.imageUrl).filter(Boolean);

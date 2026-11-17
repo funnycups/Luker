@@ -32,8 +32,14 @@
 import { AIMLAPI_HEADERS } from '../../../constants.js';
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { extractImageMeta } from '../../../request-inspector.js';
+import {
+    normalizeImagesBaseUrl,
+    rejectUnsupportedReferences,
+    resolveSdSecret,
+    stripInternalSdDispatchFields,
+} from './sd-auth.js';
 
-const API_URL = 'https://api.aimlapi.com/v1/images/generations';
+const DEFAULT_BASE_URL = 'https://api.aimlapi.com/v1';
 
 /**
  * @param {object} ctx DispatchContext
@@ -43,27 +49,38 @@ export async function dispatchSdAimlapi(ctx) {
     const body = ctx.body || {};
     ctx.inspection.startImage(extractImageMeta('aimlapi', body));
 
-    const key = ctx.secrets.read(SECRET_KEYS.AIMLAPI);
-    if (!key) {
+    try {
+        rejectUnsupportedReferences('AI/ML API', body.references);
+    } catch (err) {
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
+        return;
+    }
+
+    let key;
+    try {
+        key = resolveSdSecret(ctx, [SECRET_KEYS.AIMLAPI]);
+    } catch (err) {
         console.warn('AI/ML API key not found.');
-        const err = new Error('AI/ML API key not found');
         ctx.inspection.failImage(err, 400);
         ctx.emit.error(err);
         return;
     }
 
     try {
-        console.debug('AI/ML API image request:', body);
+        const apiUrl = `${normalizeImagesBaseUrl(body.api_url, DEFAULT_BASE_URL)}/images/generations`;
+        const outgoing = stripInternalSdDispatchFields(body);
+        console.debug('AI/ML API image request:', outgoing);
 
-        ctx.inspection.attach(API_URL, key);
-        const apiRes = await ctx.fetch(API_URL, {
+        ctx.inspection.attach(apiUrl, key);
+        const apiRes = await ctx.fetch(apiUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${key}`,
                 ...AIMLAPI_HEADERS,
             },
-            body: JSON.stringify(body),
+            body: JSON.stringify(outgoing),
             signal: ctx.signal,
         });
 

@@ -56,4 +56,31 @@ describe('illustration settings', () => {
         expect(getPresetById(settings, added.id)).toBeNull();
         expect(settings.currentPresetId).toBe(settings.presets[0].id);
     });
+
+    test('does not recreate studioSessions on fresh or migrated settings while preserving characterDesignPrompt across normalize, copy, and update', () => {
+        const fresh = normalizeIllustrationSettings(undefined, { llm: {} });
+        expect(Object.hasOwn(fresh, 'studioSessions')).toBe(false);
+
+        const withLegacy = normalizeIllustrationSettings({
+            initialized: true,
+            currentPresetId: 'p1',
+            studioSessions: { s1: { id: 's1', title: 'Old' } },
+            presets: [{
+                id: 'p1',
+                name: 'P1',
+                illustrationPrompt: 'ill',
+                studioPrompt: 'stu',
+                characterDesignPrompt: 'Custom OC sheet prompt',
+                llm: { apiPresetName: '', llmPresetName: '' },
+            }],
+        }, { llm: {} });
+        expect(Object.hasOwn(withLegacy, 'studioSessions')).toBe(true);
+        expect(getPresetById(withLegacy, 'p1').characterDesignPrompt).toBe('Custom OC sheet prompt');
+
+        const copied = addPresetFromCurrent(withLegacy, { name: 'P2', llm: {}, now: 100 });
+        expect(copied.characterDesignPrompt).toBe('Custom OC sheet prompt');
+
+        updatePreset(withLegacy, copied.id, { characterDesignPrompt: 'Updated OC prompt' }, 200);
+        expect(getPresetById(withLegacy, copied.id).characterDesignPrompt).toBe('Updated OC prompt');
+    });
 });

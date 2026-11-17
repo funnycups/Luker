@@ -26,13 +26,16 @@
                     <li data-placeholder="lora_name" class="sd_comfy_workflow_editor_not_found">"%lora_name%"</li>
                     <li data-placeholder="lora_strength_model" class="sd_comfy_workflow_editor_not_found">"%lora_strength_model%"</li>
                     <li data-placeholder="lora_strength_clip" class="sd_comfy_workflow_editor_not_found">"%lora_strength_clip%"</li>
+                    <li data-placeholder="ref_image" class="sd_comfy_workflow_editor_not_found">"%ref_image%"</li>
+                    <li data-placeholder="ref_image_1" class="sd_comfy_workflow_editor_not_found">"%ref_image_1%"</li>
+                    <li data-placeholder="ref_image_2" class="sd_comfy_workflow_editor_not_found">"%ref_image_2%"</li>
                     <li><hr></li>
                     <li data-placeholder="seed" class="sd_comfy_workflow_editor_not_found">
                         "%seed%"
                         <a href="javascript:;" class="notes-link"><span class="note-link-span" title="Will generate a new random seed in SillyTavern that is then used in the ComfyUI workflow.">?</span></a>
                     </li>
                 </ul>
-                <div>The LoRA placeholders belong in a LoraLoader node.</div>
+                <div>The LoRA placeholders belong in a LoraLoader node; "%ref_image%" / "%ref_image_1%"..N belong in LoadImage nodes.</div>
                 <div>Custom</div>
                 <div class="sd_comfy_workflow_editor_placeholder_actions">
                     <span id="sd_comfy_workflow_editor_placeholder_add" title="Add custom placeholder">+</span>

@@ -2,6 +2,8 @@ export const ILLUSTRATION_ATTRIBUTE = 'data-illustration-id';
 export const ILLUSTRATION_IMAGE_CLASS = 'luker-illustration-image';
 export const ILLUSTRATION_FAILED_CLASS = 'luker-illustration-failed';
 
+export const ILLUSTRATION_STRIP_FIND_REGEX = '/(?:<img\\b[^>]*\\bdata-illustration-id=(?:"[^"]*"|\'[^\']*\')[^>]*>[ \\t]?|<span\\b[^>]*\\bdata-illustration-id=(?:"[^"]*"|\'[^\']*\')[^>]*>[\\s\\S]*?<\\/span>[ \\t]?)/gi';
+
 const HTML_ESCAPES = Object.freeze({
     '&': '&amp;',
     '<': '&lt;',
@@ -123,32 +125,84 @@ export function buildImageTag({ id, imageUrl, prompt, width }) {
         throw new Error(`Illustration display width is out of range: ${width}`);
     }
     const safePrompt = escapeHtml(prompt);
-    return `<img src="${escapeHtml(imageUrl)}" alt="${safePrompt}" title="${safePrompt}" `
+    return `<img src="${escapeHtml(imageUrl)}" alt="${safePrompt}" `
         + `class="${ILLUSTRATION_IMAGE_CLASS}" ${ILLUSTRATION_ATTRIBUTE}="${escapeHtml(id)}" `
         + `style="width: ${numericWidth}%;">`;
 }
 
 export function buildFailedTag({ id, prompt, error, label = 'Image generation failed' }) {
-    const preview = String(prompt || '').slice(0, 60);
+    const preview = String(prompt || '').slice(0, 60); // cap-ok: compact inline failure badge inside chat bubble; full prompt stays on record
     const text = `${label}: ${preview}`;
     return `<span class="${ILLUSTRATION_FAILED_CLASS}" ${ILLUSTRATION_ATTRIBUTE}="${escapeHtml(id)}" `
         + `title="${escapeHtml(error)}">${escapeHtml(text)}</span>`;
 }
 
+export function buildIllustrationStripRegexScript({ placement } = {}) {
+    const userInput = placement?.USER_INPUT ?? 1;
+    const aiOutput = placement?.AI_OUTPUT ?? 2;
+    return {
+        id: 'sd-illustration-prompt-strip',
+        scriptName: 'AI Illustration · Strip inline image markup from main prompt',
+        findRegex: ILLUSTRATION_STRIP_FIND_REGEX,
+        replaceString: '',
+        trimStrings: [],
+        placement: [userInput, aiOutput],
+        disabled: false,
+        markdownOnly: false,
+        promptOnly: true,
+        pluginLanes: [],
+        runOnEdit: false,
+        substituteRegex: 0,
+        minDepth: null,
+        maxDepth: null,
+    };
+}
+
+function removeIllustrationNodeCleanly(node) {
+    const prev = node.previousSibling;
+    const next = node.nextSibling;
+    if (
+        prev?.nodeType === 3
+        && next?.nodeType === 3
+        && /[ \t]$/.test(prev.nodeValue || '')
+        && /^[ \t]/.test(next.nodeValue || '')
+    ) {
+        next.nodeValue = (next.nodeValue || '').slice(1);
+    }
+    node.remove();
+}
+
 /**
  * Remove illustration image tags and failed placeholders from message text.
+ * Note: preserves exact non-whitespace concatenation when adjacent text nodes have no padding,
+ * and collapses the extra single space inserted by insertTagsAtAnchors when surrounded by spaces.
  * @param {string} text
  * @returns {string}
  */
 export function stripIllustrationMarkup(text) {
+    return stripUnlockedIllustrationMarkup(text, new Set());
+}
+
+/**
+ * Remove unlocked illustration tags while keeping locked `<img data-illustration-id>` elements intact.
+ * @param {string} text
+ * @param {Set<string>} [lockedIds]
+ * @returns {string}
+ */
+export function stripUnlockedIllustrationMarkup(text, lockedIds = new Set()) {
     const source = String(text ?? '');
     if (!source.includes(ILLUSTRATION_ATTRIBUTE)) {
         return source;
     }
+    const keepSet = lockedIds instanceof Set ? lockedIds : new Set(lockedIds || []);
     const template = document.createElement('template');
     template.innerHTML = source;
     for (const node of template.content.querySelectorAll(`[${ILLUSTRATION_ATTRIBUTE}]`)) {
-        node.remove();
+        const id = node.getAttribute(ILLUSTRATION_ATTRIBUTE) || '';
+        if (keepSet.has(id)) {
+            continue;
+        }
+        removeIllustrationNodeCleanly(node);
     }
     return template.innerHTML;
 }

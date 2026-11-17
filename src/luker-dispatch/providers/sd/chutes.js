@@ -20,8 +20,18 @@
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { extractImageMeta } from '../../../request-inspector.js';
+import { rejectUnsupportedReferences, resolveSdSecret } from './sd-auth.js';
 
-const API_URL = 'https://image.chutes.ai/generate';
+const DEFAULT_API_URL = 'https://image.chutes.ai/generate';
+
+function resolveChutesUrl(rawApiUrl) {
+    const trimmed = String(rawApiUrl || '').trim().replace(/\/+$/, '');
+    if (!trimmed) return DEFAULT_API_URL;
+    if (/https?:\/\/llm\.chutes\.ai\b/i.test(trimmed)) {
+        return DEFAULT_API_URL;
+    }
+    return trimmed.endsWith('/generate') ? trimmed : `${trimmed}/generate`;
+}
 
 /**
  * @param {object} ctx DispatchContext
@@ -31,16 +41,26 @@ export async function dispatchSdChutes(ctx) {
     const body = ctx.body || {};
     ctx.inspection.startImage(extractImageMeta('chutes', body));
 
-    const key = ctx.secrets.read(SECRET_KEYS.CHUTES);
-    if (!key) {
+    try {
+        rejectUnsupportedReferences('Chutes', body.references);
+    } catch (err) {
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
+        return;
+    }
+
+    let key;
+    try {
+        key = resolveSdSecret(ctx, [SECRET_KEYS.CHUTES]);
+    } catch (err) {
         console.warn('Chutes key not found.');
-        const err = new Error('Chutes key not found');
         ctx.inspection.failImage(err, 400);
         ctx.emit.error(err);
         return;
     }
 
     try {
+        const apiUrl = resolveChutesUrl(body.api_url);
         const bodyParams = {
             model: body.model,
             prompt: body.prompt,
@@ -53,8 +73,8 @@ export async function dispatchSdChutes(ctx) {
 
         console.debug('Chutes request:', bodyParams);
 
-        ctx.inspection.attach(API_URL, key);
-        const result = await ctx.fetch(API_URL, {
+        ctx.inspection.attach(apiUrl, key);
+        const result = await ctx.fetch(apiUrl, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${key}`,

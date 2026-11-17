@@ -21,9 +21,12 @@
 //     base64-encode, and emit `{format, data}` JSON.
 
 import crypto from 'node:crypto';
+import FormData from 'form-data';
+import mime from 'mime-types';
 import urlJoin from 'url-join';
 import WebSocketLib from 'ws';
 import { delay, getBasicAuthHeader, tryParse } from '../../../util.js';
+import { loadReferenceInputs } from '../../../media-input-loader.js';
 import { extractImageMeta } from '../../../request-inspector.js';
 import path from 'node:path';
 
@@ -34,6 +37,58 @@ import path from 'node:path';
 let WebSocket = WebSocketLib;
 export function __setWebSocketForTest(ctor) { WebSocket = ctor || WebSocketLib; }
 export function __resetWebSocketForTest() { WebSocket = WebSocketLib; }
+
+export async function uploadComfyReferences({ directories, baseUrl, auth, references, fetchFn, signal }) {
+    const loadedRefs = await loadReferenceInputs(directories, references);
+    if (loadedRefs.length === 0) {
+        return [];
+    }
+    const cleanBase = String(baseUrl || '').trim();
+    if (!cleanBase) {
+        throw new Error('ComfyUI server URL is required to upload reference images.');
+    }
+    const uploadUrl = new URL(urlJoin(cleanBase, '/upload/image'));
+    const authHeader = auth ? getBasicAuthHeader(auth) : '';
+    const filenames = [];
+
+    for (let i = 0; i < loadedRefs.length; i++) {
+        const ref = loadedRefs[i];
+        const ext = mime.extension(ref.mimeType) || 'png';
+        const safeExt = ext === 'jpeg' ? 'jpg' : ext;
+        const hashPrefix = String(ref.sha256 || i).slice(0, 12);
+        const form = new FormData();
+        form.append('overwrite', 'true');
+        form.append('image', ref.buffer, {
+            filename: `luker_ref_${hashPrefix}.${safeExt}`,
+            contentType: ref.mimeType,
+        });
+
+        const headers = { ...form.getHeaders() };
+        if (authHeader) {
+            headers['Authorization'] = authHeader;
+        }
+
+        const resp = await fetchFn(uploadUrl, {
+            method: 'POST',
+            headers,
+            body: form.getBuffer(),
+            signal,
+        });
+        if (!resp.ok) {
+            const errText = await resp.text().catch(() => '');
+            throw new Error(`ComfyUI /upload/image failed (${resp.status}): ${errText}`);
+        }
+        const data = await resp.json();
+        const remoteName = String(data?.name || '').trim();
+        if (!remoteName) {
+            throw new Error('ComfyUI /upload/image did not return a filename.');
+        }
+        const subfolder = String(data?.subfolder || '').trim().replace(/^\/+|\/+$/g, '');
+        filenames.push(subfolder ? `${subfolder}/${remoteName}` : remoteName);
+    }
+
+    return filenames;
+}
 
 const TIMEOUT_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 2000;

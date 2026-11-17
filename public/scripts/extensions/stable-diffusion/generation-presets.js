@@ -52,10 +52,20 @@ export const GENERATION_CONFIG_KEYS = Object.freeze([
     'horde_nsfw',
     'horde_karras',
     'horde_sanitize',
+    'connection_profile',
+    'novel_url',
+    'chat_image_url',
+    'style_references',
 ]);
 
 function cloneConfigValue(key, value) {
-    return key === 'comfy_placeholders' ? structuredClone(value) : value;
+    if (key === 'comfy_placeholders') {
+        return structuredClone(value);
+    }
+    if (key === 'style_references') {
+        return Array.isArray(value) ? JSON.parse(JSON.stringify(value)) : [];
+    }
+    return value;
 }
 
 function requireObject(value, label) {

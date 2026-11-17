@@ -6,6 +6,7 @@ In-tree reference implementations:
 
 - `public/scripts/extensions/memory-graph/lens/index.js` — workspace (`'memory'`), Ask provider, SuggestRule provider, and `'memory'` / `'memory_graph'` iterate targets
 - `public/scripts/extensions/orchestrator/lens/index.js` — workspace (`'orch'`), Ask provider, SuggestRule provider, and `'orch'` iterate target
+- `public/scripts/extensions/stable-diffusion/lens/index.js` — workspace (`'sd'`), Ask provider, SuggestRule provider, and `'sd'` iterate target
 - `public/scripts/workbench/targets/{preset,card,world}.js` — built-in `'preset'`, `'card'`, and `'world'` iterate targets
 
 ## Three-layer API exposure

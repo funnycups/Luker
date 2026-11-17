@@ -20,8 +20,13 @@
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { extractImageMeta } from '../../../request-inspector.js';
+import {
+    normalizeImagesBaseUrl,
+    rejectUnsupportedReferences,
+    resolveSdSecret,
+} from './sd-auth.js';
 
-const API_URL = 'https://api.electronhub.ai/v1/images/generations';
+const DEFAULT_BASE_URL = 'https://api.electronhub.ai/v1';
 
 /**
  * @param {object} ctx DispatchContext
@@ -31,16 +36,26 @@ export async function dispatchSdElectronHub(ctx) {
     const body = ctx.body || {};
     ctx.inspection.startImage(extractImageMeta('electronhub', body));
 
-    const key = ctx.secrets.read(SECRET_KEYS.ELECTRONHUB);
-    if (!key) {
+    try {
+        rejectUnsupportedReferences('Electron Hub', body.references);
+    } catch (err) {
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
+        return;
+    }
+
+    let key;
+    try {
+        key = resolveSdSecret(ctx, [SECRET_KEYS.ELECTRONHUB]);
+    } catch (err) {
         console.warn('Electron Hub key not found.');
-        const err = new Error('Electron Hub key not found');
         ctx.inspection.failImage(err, 400);
         ctx.emit.error(err);
         return;
     }
 
     try {
+        const apiUrl = `${normalizeImagesBaseUrl(body.api_url, DEFAULT_BASE_URL)}/images/generations`;
         const bodyParams = {
             model: body.model,
             prompt: body.prompt,
@@ -51,8 +66,8 @@ export async function dispatchSdElectronHub(ctx) {
 
         console.debug('Electron Hub request:', bodyParams);
 
-        ctx.inspection.attach(API_URL, key);
-        const result = await ctx.fetch(API_URL, {
+        ctx.inspection.attach(apiUrl, key);
+        const result = await ctx.fetch(apiUrl, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${key}`,

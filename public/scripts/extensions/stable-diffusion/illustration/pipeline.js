@@ -1,9 +1,17 @@
+import {
+    appendStandardToolRoundMessages,
+    makeRuntimeToolCallId,
+} from '../../../lib/iter-tool-calling.js';
+import { createCharacterProfileStore } from '../character-archive/store.js';
+import { runExplorationAgent } from '../exploration/agent.js';
 import { buildIllustrationContext, buildIllustrationTaskMessages, requestIllustrationPrompts } from './task.js';
-import { selectPromptCalls } from './tools.js';
-import { applyIllustrationResult, createIllustrationRecord, syncMessageSwipeData } from './records.js';
+import { ILLUSTRATION_AGENT_TOOL_NAMES, selectPromptCalls } from './tools.js';
+import { applyIllustrationResult, collectVersionTree, createIllustrationRecord, syncMessageSwipeData } from './records.js';
 import { getPresetById } from './settings.js';
 import { makeIllustrationId } from './presets.js';
-import { stripIllustrationMarkup } from './message.js';
+import { stripIllustrationMarkup, stripUnlockedIllustrationMarkup } from './message.js';
+
+const MAX_VALIDATION_SELF_HEAL_RETRIES = 2; // cap-ok: bounds consecutive anchor or reference validation retries when model repeats invalid add_image_prompt arguments
 
 function hashText(text) {
     let hash = 2166136261;
@@ -98,10 +106,48 @@ function buildPromptFailure({ toolCalls, selection, assistantText, finishReason 
     return { reason, report: lines.join('\n\n') };
 }
 
+function formatProfileDetailForIllustration(profile) {
+    const lines = [
+        `id: ${profile.id}`,
+        `name: ${profile.name}`,
+    ];
+    if (profile.aliases?.length) lines.push(`aliases: ${profile.aliases.join(', ')}`);
+    if (profile.sourceWork) lines.push(`work: ${profile.sourceWork}`);
+    if (profile.canonicalTags?.length) lines.push(`canonical_tags: ${profile.canonicalTags.join(', ')}`);
+    if (profile.negativeTags?.length) lines.push(`negative_tags: ${profile.negativeTags.join(', ')}`);
+    if (profile.proseDescription) lines.push(`prose_description: ${profile.proseDescription}`);
+    if (profile.defaultOutfitId) lines.push(`default_outfit_id: ${profile.defaultOutfitId}`);
+    if (Array.isArray(profile.outfits) && profile.outfits.length > 0) {
+        lines.push('outfits:');
+        for (const outfit of profile.outfits) {
+            const parts = [`  - id=${outfit.id} name="${outfit.name}"`];
+            if (outfit.tags?.length) parts.push(`tags=[${outfit.tags.join(', ')}]`);
+            if (outfit.prose) parts.push(`prose="${outfit.prose}"`);
+            parts.push(`reference_images=${outfit.referenceImages?.length || 0}`);
+            lines.push(parts.join(' | '));
+        }
+    }
+    return lines.join('\n');
+}
+
+function formatActionableRejectionError(reason) {
+    if (reason === 'anchors not found') {
+        return 'Anchor mismatch: insert_after and insert_before must be adjacent verbatim substrings copied directly from === CURRENT MESSAGE ===.';
+    }
+    return String(reason || 'Invalid add_image_prompt arguments.');
+}
+
+function defaultTranslate(strings, ...values) {
+    if (Array.isArray(strings)) {
+        return strings.reduce((out, str, index) => out + str + (values[index] ?? ''), '');
+    }
+    return String(strings ?? '');
+}
+
 export function createIllustrationPipeline({ context, imageService, settings, hooks }) {
     const jobs = new Map();
     const handled = new Set();
-    const t = hooks.t ?? (text => text);
+    const t = hooks.t ?? defaultTranslate;
     const toast = (message, type = 'error') => hooks.toast?.(message, type);
     const notifyError = typeof hooks.notifyError === 'function'
         ? hooks.notifyError
@@ -198,12 +244,30 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             if (!confirmed) {
                 return;
             }
-            message.mes = stripIllustrationMarkup(message.mes);
-            message.extra.illustrations = [];
+            const currentRecords = Array.isArray(message.extra?.illustrations) ? message.extra.illustrations : [];
+            const lockedActiveIds = new Set(
+                currentRecords
+                    .filter(r => r?.locked && String(message.mes || '').includes(`data-illustration-id="${r.id}"`))
+                    .map(r => r.id),
+            );
+            if (lockedActiveIds.size > 0) {
+                const keepRecordIds = new Set();
+                for (const lockedId of lockedActiveIds) {
+                    const rec = currentRecords.find(r => r.id === lockedId);
+                    for (const treeMember of collectVersionTree(message, rec)) {
+                        keepRecordIds.add(treeMember.id);
+                    }
+                }
+                message.mes = stripUnlockedIllustrationMarkup(message.mes, lockedActiveIds);
+                message.extra.illustrations = currentRecords.filter(r => keepRecordIds.has(r.id));
+            } else {
+                message.mes = stripIllustrationMarkup(message.mes);
+                message.extra.illustrations = [];
+            }
             syncMessageSwipeData(message, hooks.ensureSwipes);
             hooks.updateMessageBlock?.(messageId, message);
-            await hooks.saveChat();
             await hooks.notifyMessageChanged?.(messageId);
+            await hooks.saveChat();
         }
 
         if (existing) {
@@ -225,24 +289,37 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
         jobs.set(key, job);
 
         try {
-            const snapshotText = String(message.mes || '');
+            const lockedIds = new Set(
+                (Array.isArray(message.extra?.illustrations) ? message.extra.illustrations : [])
+                    .filter(r => r?.locked)
+                    .map(r => r.id),
+            );
+            const snapshotText = lockedIds.size > 0
+                ? stripUnlockedIllustrationMarkup(String(message.mes || ''), lockedIds)
+                : stripIllustrationMarkup(String(message.mes || ''));
             const built = buildIllustrationContext({
                 chat,
+                context,
                 messageId,
                 contextMessageCount: settings.contextMessageCount,
                 stripMarkup: stripIllustrationMarkup,
+                lockedIds,
             });
             const memoryRecall = await readMemoryRecall();
             if (!contextMatches(job)) {
                 throw abortError();
             }
 
-            const taskMessages = buildIllustrationTaskMessages({
-                preset,
-                context: built.context,
-                current: built.current,
-                memoryRecall,
-            });
+            const hasGlobalArchive = typeof context?.getGlobalState === 'function'
+                && typeof context?.updateGlobalState === 'function';
+            const profileStore = hasGlobalArchive ? createCharacterProfileStore(context) : null;
+            let profileMap = null;
+            let characterArchiveIndex;
+            if (profileStore) {
+                const existingProfiles = await profileStore.listProfiles();
+                profileMap = new Map(existingProfiles.map(p => [p.id, p]));
+                characterArchiveIndex = profileStore.buildCompactProfileIndex(existingProfiles);
+            }
 
             const activityJob = typeof hooks.beginActivityJob === 'function'
                 ? hooks.beginActivityJob({
@@ -255,26 +332,225 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
 
             job.state = 'generating';
             const loraState = await imageService.getAvailableLoras();
-            const promptResult = await requestIllustrationPrompts({
-                context,
-                preset,
-                taskMessages,
-                abortSignal: job.abortController.signal,
-                availableLoras: loraState.names,
-                includeWeight: loraState.includeWeight,
-            });
-            if (!contextMatches(job)) {
-                throw abortError();
-            }
+            const capabilities = typeof imageService?.getCapabilities === 'function'
+                ? await imageService.getCapabilities()
+                : null;
 
-            const { toolCalls, assistantText, finishReason } = promptResult;
-            const selection = selectPromptCalls(toolCalls, {
-                messageText: snapshotText,
-                availableLoras: loraState.names,
-                includeWeight: loraState.includeWeight,
+            const taskMessages = buildIllustrationTaskMessages({
+                preset,
+                context: built.context,
+                current: built.current,
+                memoryRecall,
+                ...(profileStore ? { characterArchiveIndex } : {}),
+                capabilities,
             });
-            if (selection.accepted.length === 0) {
-                const failure = buildPromptFailure({ toolCalls, selection, assistantText, finishReason }, t);
+
+            const acceptedPrompts = [];
+            const seenPromptKeys = new Set();
+            let validationRetries = 0;
+
+            while (true) {
+                const promptResult = await requestIllustrationPrompts({
+                    context,
+                    preset,
+                    taskMessages,
+                    abortSignal: job.abortController.signal,
+                    availableLoras: loraState.names,
+                    includeWeight: loraState.includeWeight,
+                    capabilities,
+                    includeArchiveTools: Boolean(profileStore),
+                });
+                if (!contextMatches(job)) {
+                    throw abortError();
+                }
+
+                const { toolCalls, assistantText, finishReason } = promptResult;
+                if (toolCalls.length === 0) {
+                    if (acceptedPrompts.length > 0) {
+                        break;
+                    }
+                    const failure = buildPromptFailure({
+                        toolCalls: [],
+                        selection: { accepted: [], rejected: [] },
+                        assistantText,
+                        finishReason,
+                    }, t);
+                    job.state = 'failed';
+                    activityJob?.setError(failure.report);
+                    activityJob?.finish('failed');
+                    releaseJob(job);
+                    console.error('Illustration prompt request produced no usable prompts.', failure.reason);
+                    notifyError(`${t`Illustration failed`}: ${failure.reason}`);
+                    return;
+                }
+
+                let hasQueryOrExplore = false;
+                const roundRejected = [];
+                const executedCalls = [];
+
+                for (const rawCall of toolCalls) {
+                    const callId = String(rawCall?.id || '').trim() || makeRuntimeToolCallId();
+                    if (profileStore && rawCall.name === ILLUSTRATION_AGENT_TOOL_NAMES.READ_CHARACTER_PROFILES) {
+                        hasQueryOrExplore = true;
+                        const ids = Array.isArray(rawCall.args?.ids) ? rawCall.args.ids : [];
+                        const secKey = `read-profiles-${callId}`;
+                        activityJob?.addSection(secKey, {
+                            kind: 'tool',
+                            title: `read_character_profiles (${ids.join(', ')})`,
+                            body: JSON.stringify(rawCall.args ?? {}),
+                        });
+                        const profiles = await profileStore.getProfilesByIds(ids);
+                        for (const p of profiles) {
+                            profileMap.set(p.id, p);
+                        }
+                        const body = profiles.length > 0
+                            ? profiles.map(formatProfileDetailForIllustration).join('\n\n---\n\n')
+                            : `No character profiles found for ids: ${ids.join(', ')}`;
+                        activityJob?.updateSection(secKey, { status: 'done', meta: { matched: profiles.length } });
+                        executedCalls.push({
+                            id: callId,
+                            name: rawCall.name,
+                            args: rawCall.args,
+                            result: body,
+                        });
+                        continue;
+                    }
+
+                    if (profileStore && rawCall.name === ILLUSTRATION_AGENT_TOOL_NAMES.EXPLORE_CHARACTERS) {
+                        hasQueryOrExplore = true;
+                        const targets = Array.isArray(rawCall.args?.targets) ? rawCall.args.targets : [];
+                        const targetLabel = targets.map(item => String(item?.name || '').trim()).filter(Boolean).join(', ');
+                        const secKey = `explore-characters-${callId}`;
+                        activityJob?.addSection(secKey, {
+                            kind: 'tool',
+                            title: targetLabel ? `explore_characters (${targetLabel})` : 'explore_characters',
+                            body: JSON.stringify(rawCall.args ?? {}),
+                        });
+                        const cardAvatar = (!context?.groupId && context?.characterId !== undefined && context?.characterId !== null)
+                            ? String(context?.characters?.[context.characterId]?.avatar || '')
+                            : '';
+                        const expResult = await runExplorationAgent({
+                            context,
+                            profileStore,
+                            targets,
+                            cardAvatar,
+                            preset,
+                            abortSignal: job.abortController.signal,
+                        });
+                        activityJob?.updateSection(secKey, {
+                            status: 'done',
+                            meta: { savedIds: expResult.savedProfiles.map(p => p.id) },
+                        });
+                        const refreshed = await profileStore.listProfiles();
+                        profileMap = new Map(refreshed.map(p => [p.id, p]));
+                        const savedSummaries = expResult.savedProfiles.map(formatProfileDetailForIllustration).join('\n\n---\n\n');
+                        executedCalls.push({
+                            id: callId,
+                            name: rawCall.name,
+                            args: rawCall.args,
+                            result: savedSummaries
+                                ? `Saved character profiles:\n\n${savedSummaries}`
+                                : (expResult.finalText || 'Exploration finished with no new character profiles saved.'),
+                        });
+                        continue;
+                    }
+
+                    if (rawCall.name === ILLUSTRATION_AGENT_TOOL_NAMES.ADD_IMAGE_PROMPT) {
+                        const selection = selectPromptCalls([rawCall], {
+                            messageText: snapshotText,
+                            availableLoras: loraState.names,
+                            includeWeight: loraState.includeWeight,
+                            capabilities,
+                            profileMap,
+                        });
+                        if (selection.accepted.length > 0) {
+                            const accepted = selection.accepted[0];
+                            const dedupeKey = JSON.stringify([
+                                accepted.prompt,
+                                accepted.insertAfter,
+                                accepted.insertBefore,
+                                accepted.loras,
+                                accepted.aspectRatio || '',
+                                accepted.references || [],
+                            ]);
+                            if (!seenPromptKeys.has(dedupeKey)) {
+                                seenPromptKeys.add(dedupeKey);
+                                acceptedPrompts.push(accepted);
+                            }
+                            executedCalls.push({
+                                id: callId,
+                                name: rawCall.name,
+                                args: rawCall.args,
+                                result: {
+                                    ok: true,
+                                    queued: true,
+                                    insert_after: accepted.insertAfter,
+                                    insert_before: accepted.insertBefore,
+                                },
+                            });
+                        } else if (selection.rejected.length > 0) {
+                            const rej = selection.rejected[0];
+                            roundRejected.push(rej);
+                            executedCalls.push({
+                                id: callId,
+                                name: rawCall.name,
+                                args: rawCall.args,
+                                result: {
+                                    ok: false,
+                                    error: formatActionableRejectionError(rej.reason),
+                                },
+                            });
+                        }
+                        continue;
+                    }
+
+                    roundRejected.push({ reason: 'unknown tool', call: rawCall });
+                    executedCalls.push({
+                        id: callId,
+                        name: rawCall.name,
+                        args: rawCall.args,
+                        result: { ok: false, error: `Unsupported tool "${rawCall.name}".` },
+                    });
+                }
+
+                if (!hasQueryOrExplore && roundRejected.length === 0 && acceptedPrompts.length > 0) {
+                    break;
+                }
+
+                if (hasQueryOrExplore) {
+                    validationRetries = 0;
+                    appendStandardToolRoundMessages(taskMessages, executedCalls, assistantText, {
+                        reasoning: promptResult.reasoning,
+                        reasoningBlocks: promptResult.reasoningBlocks,
+                        reasoningDetails: promptResult.reasoningDetails,
+                    });
+                    continue;
+                }
+
+                if (profileStore && roundRejected.length > 0 && validationRetries < MAX_VALIDATION_SELF_HEAL_RETRIES) {
+                    validationRetries += 1;
+                    appendStandardToolRoundMessages(taskMessages, executedCalls, assistantText, {
+                        reasoning: promptResult.reasoning,
+                        reasoningBlocks: promptResult.reasoningBlocks,
+                        reasoningDetails: promptResult.reasoningDetails,
+                    });
+                    continue;
+                }
+
+                if (acceptedPrompts.length > 0) {
+                    if (roundRejected.length > 0) {
+                        const reasons = roundRejected.map(entry => rejectionLabel(entry.reason, t)).join(', ');
+                        toast(`${t`Skipped image prompts`}: ${reasons}`, 'warning');
+                    }
+                    break;
+                }
+
+                const failure = buildPromptFailure({
+                    toolCalls,
+                    selection: { accepted: [], rejected: roundRejected },
+                    assistantText,
+                    finishReason,
+                }, t);
                 job.state = 'failed';
                 activityJob?.setError(failure.report);
                 activityJob?.finish('failed');
@@ -283,22 +559,25 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
                 notifyError(`${t`Illustration failed`}: ${failure.reason}`);
                 return;
             }
-            if (selection.rejected.length > 0) {
-                const reasons = selection.rejected.map(entry => rejectionLabel(entry.reason, t)).join(', ');
-                toast(`${t`Skipped image prompts`}: ${reasons}`, 'warning');
-            }
 
-            selection.accepted.forEach((value, index) => {
+            acceptedPrompts.forEach((value, index) => {
                 activityJob?.addSection(`prompt-${index}`, { kind: 'prompt', title: `${t`Prompt`} ${index + 1}`, body: value.prompt });
                 activityJob?.addSection(`image-${index}`, { kind: 'image', title: `${t`Image`} ${index + 1}` });
             });
 
             const characterName = String(message.name || '');
-            const results = await Promise.allSettled(selection.accepted.map(value => imageService.generate(value.prompt, {
-                characterName,
-                signal: job.abortController.signal,
-                loras: value.loras,
-            }).then(imageUrl => ({ value, imageUrl }))));
+            const results = await Promise.allSettled(acceptedPrompts.map(value => {
+                const genOptions = {
+                    characterName,
+                    signal: job.abortController.signal,
+                    loras: value.loras,
+                };
+                if (value.negativePrompt) genOptions.negativePrompt = value.negativePrompt;
+                if (value.aspectRatio) genOptions.aspectRatio = value.aspectRatio;
+                if (Array.isArray(value.references) && value.references.length > 0) genOptions.references = value.references;
+                if (Array.isArray(value.characterPrompts) && value.characterPrompts.length > 0) genOptions.characterPrompts = value.characterPrompts;
+                return imageService.generate(value.prompt, genOptions).then(imageUrl => ({ value, imageUrl }));
+            }));
 
             if (job.abortController.signal.aborted) {
                 throw abortError();
@@ -321,11 +600,15 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             });
 
             const records = results.map((result, index) => {
-                const value = selection.accepted[index];
+                const value = acceptedPrompts[index];
                 if (result.status === 'fulfilled') {
                     return createIllustrationRecord({
                         id: makeIllustrationId(),
                         prompt: value.prompt,
+                        negativePrompt: value.negativePrompt || '',
+                        aspectRatio: value.aspectRatio || '',
+                        references: value.references || [],
+                        characterPrompts: value.characterPrompts || [],
                         imageUrl: result.value.imageUrl,
                         status: 'ready',
                         anchorAfter: value.insertAfter,
@@ -339,6 +622,10 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
                 return createIllustrationRecord({
                     id: makeIllustrationId(),
                     prompt: value.prompt,
+                    negativePrompt: value.negativePrompt || '',
+                    aspectRatio: value.aspectRatio || '',
+                    references: value.references || [],
+                    characterPrompts: value.characterPrompts || [],
                     status: 'failed',
                     error: String(result.reason?.message || result.reason),
                     anchorAfter: value.insertAfter,
@@ -360,8 +647,8 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
                 failedLabel: t`Image generation failed`,
             });
             hooks.updateMessageBlock?.(messageId, latestMessage);
-            await hooks.saveChat();
             await hooks.notifyMessageChanged?.(messageId);
+            await hooks.saveChat();
 
             if (applied.missing.length > 0) {
                 toast(t`Some illustrations were appended because their anchors were not found.`, 'warning');

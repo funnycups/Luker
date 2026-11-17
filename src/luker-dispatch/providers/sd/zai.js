@@ -34,10 +34,19 @@ import path from 'node:path';
 import { delay, isValidUrl } from '../../../util.js';
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { extractImageMeta } from '../../../request-inspector.js';
+import { rejectUnsupportedReferences, resolveSdSecret } from './sd-auth.js';
 
-const API_URL = 'https://api.z.ai/api/paas/v4/images/generations';
+const DEFAULT_API_URL = 'https://api.z.ai/api/paas/v4/images/generations';
 const IMAGE_FETCH_MAX_ATTEMPTS = 5;
 const IMAGE_FETCH_RETRY_MS = 1000;
+
+function resolveZaiImageUrl(rawApiUrl) {
+    const trimmed = String(rawApiUrl || '').trim().replace(/\/+$/, '');
+    if (!trimmed) return DEFAULT_API_URL;
+    if (trimmed.endsWith('/images/generations')) return trimmed;
+    const stripped = trimmed.replace(/\/chat\/completions$/i, '');
+    return `${stripped}/images/generations`;
+}
 
 /**
  * @param {object} ctx DispatchContext
@@ -47,20 +56,30 @@ export async function dispatchSdZai(ctx) {
     const body = ctx.body || {};
     ctx.inspection.startImage(extractImageMeta('zai', body));
 
-    const key = ctx.secrets.read(SECRET_KEYS.ZAI);
-    if (!key) {
+    try {
+        rejectUnsupportedReferences('Z.AI', body.references);
+    } catch (err) {
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
+        return;
+    }
+
+    let key;
+    try {
+        key = resolveSdSecret(ctx, [SECRET_KEYS.ZAI]);
+    } catch (err) {
         console.warn('Z.AI key not found.');
-        const err = new Error('Z.AI key not found');
         ctx.inspection.failImage(err, 400);
         ctx.emit.error(err);
         return;
     }
 
     try {
+        const apiUrl = resolveZaiImageUrl(body.api_url);
         console.debug('Z.AI image request:', body);
 
-        ctx.inspection.attach(API_URL, key);
-        const generateResponse = await ctx.fetch(API_URL, {
+        ctx.inspection.attach(apiUrl, key);
+        const generateResponse = await ctx.fetch(apiUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

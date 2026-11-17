@@ -1,4 +1,11 @@
-import { createDefaultPresets, makeIllustrationId } from './presets.js';
+import {
+    DEFAULT_ILLUSTRATION_PROMPT,
+    DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
+    LEGACY_DEFAULT_ILLUSTRATION_PROMPT,
+    LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
+    createDefaultPresets,
+    makeIllustrationId,
+} from './presets.js';
 
 export const DEFAULT_ILLUSTRATION_SETTINGS = Object.freeze({
     enabled: false,
@@ -10,7 +17,6 @@ export const DEFAULT_ILLUSTRATION_SETTINGS = Object.freeze({
     maxConcurrentGenerations: 1,
     minGenerationInterval: 0,
     imageDisplayWidth: 100,
-    studioSessions: {},
 });
 
 export const ILLUSTRATION_NUMBER_RULES = Object.freeze({
@@ -45,17 +51,31 @@ function normalizePreset(raw, now) {
     if (!id) {
         return null;
     }
+    let illustrationPrompt = String(raw.illustrationPrompt || '');
+    if (illustrationPrompt === LEGACY_DEFAULT_ILLUSTRATION_PROMPT) {
+        illustrationPrompt = DEFAULT_ILLUSTRATION_PROMPT;
+    } else if (illustrationPrompt === LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT) {
+        illustrationPrompt = DEFAULT_NATURAL_ILLUSTRATION_PROMPT;
+    }
+
     return {
         id,
         name: String(raw.name || ''),
         createdAt: Number.isFinite(Number(raw.createdAt)) ? Number(raw.createdAt) : now,
         updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : now,
-        illustrationPrompt: String(raw.illustrationPrompt || ''),
+        illustrationPrompt,
         studioPrompt: String(raw.studioPrompt || ''),
+        characterDesignPrompt: String(raw.characterDesignPrompt || ''),
+        explorationPrompt: String(raw.explorationPrompt || ''),
         llm: {
             apiPresetName: String(raw.llm?.apiPresetName || ''),
             llmPresetName: String(raw.llm?.llmPresetName || ''),
         },
+        explorationLlm: {
+            apiPresetName: String(raw.explorationLlm?.apiPresetName || ''),
+            llmPresetName: String(raw.explorationLlm?.llmPresetName || ''),
+        },
+        visualInspection: Boolean(raw.visualInspection),
     };
 }
 
@@ -65,8 +85,12 @@ export function normalizeIllustrationSettings(raw, { llm = {}, now = Date.now(),
         ...DEFAULT_ILLUSTRATION_SETTINGS,
         ...source,
         presets: Array.isArray(source.presets) ? source.presets.map(preset => normalizePreset(preset, now)).filter(Boolean) : [],
-        studioSessions: source.studioSessions && typeof source.studioSessions === 'object' ? source.studioSessions : {},
     };
+    if (Object.hasOwn(source, 'studioSessions') && source.studioSessions && typeof source.studioSessions === 'object') {
+        settings.studioSessions = source.studioSessions;
+    } else {
+        delete settings.studioSessions;
+    }
     delete settings.maxPromptsPerMessage;
 
     settings.enabled = Boolean(settings.enabled);
@@ -96,10 +120,17 @@ export function addPresetFromCurrent(settings, { name, llm = {}, now = Date.now(
         updatedAt: now,
         illustrationPrompt: String(template?.illustrationPrompt || ''),
         studioPrompt: String(template?.studioPrompt || ''),
+        characterDesignPrompt: String(template?.characterDesignPrompt || ''),
+        explorationPrompt: String(template?.explorationPrompt || ''),
         llm: {
             apiPresetName: String(llm?.apiPresetName || ''),
             llmPresetName: String(llm?.llmPresetName || ''),
         },
+        explorationLlm: {
+            apiPresetName: String(template?.explorationLlm?.apiPresetName || ''),
+            llmPresetName: String(template?.explorationLlm?.llmPresetName || ''),
+        },
+        visualInspection: Boolean(template?.visualInspection),
     };
     settings.presets.push(preset);
     return preset;
@@ -110,16 +141,27 @@ export function updatePreset(settings, id, patch, now = Date.now()) {
     if (!preset) {
         throw new Error(`Preset not found: ${id}`);
     }
-    const allowed = ['name', 'illustrationPrompt', 'studioPrompt', 'llm'];
+    const allowed = [
+        'name',
+        'illustrationPrompt',
+        'studioPrompt',
+        'characterDesignPrompt',
+        'explorationPrompt',
+        'llm',
+        'explorationLlm',
+        'visualInspection',
+    ];
     for (const key of allowed) {
         if (!Object.hasOwn(patch || {}, key)) {
             continue;
         }
-        if (key === 'llm') {
-            preset.llm = {
-                apiPresetName: String(patch.llm?.apiPresetName || ''),
-                llmPresetName: String(patch.llm?.llmPresetName || ''),
+        if (key === 'llm' || key === 'explorationLlm') {
+            preset[key] = {
+                apiPresetName: String(patch[key]?.apiPresetName || ''),
+                llmPresetName: String(patch[key]?.llmPresetName || ''),
             };
+        } else if (key === 'visualInspection') {
+            preset.visualInspection = Boolean(patch.visualInspection);
         } else {
             preset[key] = String(patch[key] ?? '');
         }

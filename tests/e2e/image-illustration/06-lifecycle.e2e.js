@@ -218,20 +218,22 @@ test.describe.serial('illustration lifecycle', () => {
 
         const taskRequests = chatRequests.filter(isIllustrationTaskRequest);
         expect(taskRequests.length).toBeGreaterThan(0);
-        for (const request of taskRequests) {
-            expect(JSON.stringify(request.body.messages)).not.toContain('data-illustration-id');
-        }
+        const latestTaskUserContent = String(
+            taskRequests.at(-1)?.body?.messages?.find(m => m.role === 'user')?.content || '',
+        );
+        const [contextPart, currentPart] = latestTaskUserContent.split('=== CURRENT MESSAGE ===');
+        expect(contextPart).toContain(`alt="${IMAGE_PROMPT}"`);
+        expect(currentPart || '').not.toContain('data-illustration-id');
 
-        const cleanedPrompt = await page.evaluate(async () => {
+        const cleanedPrompt = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
-            const eventData = {
-                prompt: 'before <img src="/user/images/a.png" data-illustration-id="ill_1"> after',
-                dryRun: false,
-            };
-            await ctx.eventSource.emit(ctx.eventTypes.GENERATE_AFTER_COMBINE_PROMPTS, eventData);
-            return eventData.prompt;
+            return ctx.regex.applyRegex(
+                'before <img src="/user/images/a.png" data-illustration-id="ill_1"> after',
+                ctx.regex.placement.AI_OUTPUT,
+                { isPrompt: true },
+            );
         });
-        expect(cleanedPrompt).toBe('before  after');
+        expect(cleanedPrompt).toBe('before after');
     });
 
     test('an old chat with illustrations renders and stays clickable after a restart', async ({ page }) => {

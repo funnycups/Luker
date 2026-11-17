@@ -221,8 +221,18 @@ function writeScenarioConfig(targetPath, extraConfig) {
                 }
                 throw new Error(`writeScenarioConfig: nested key "${key}" not found in seed config.yaml`);
             }
-            // Match an indented "leaf: <scalar>" line (under a parent
-            // block). Preserve original indentation via the capture group.
+            // Match an indented "leaf: <scalar>" line anchored inside its
+            // top-level parent block. Preserve original indentation via the
+            // capture group.
+            const parent = segments[0];
+            const anchoredRe = new RegExp(
+                `^(${parent}:(?:\\n(?:[ \\t]+.*|#.*))*?\\n)([ \\t]+${leaf}\\s*):\\s*[^\\n]*$`,
+                'm',
+            );
+            if (anchoredRe.test(out)) {
+                out = out.replace(anchoredRe, `$1$2: ${yamlValue}`);
+                continue;
+            }
             const re = new RegExp(`^(\\s+${leaf}\\s*):\\s*[^\\n]*$`, 'm');
             if (re.test(out)) {
                 out = out.replace(re, `$1: ${yamlValue}`);

@@ -7,7 +7,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Workbench
 
 - Added the floating Workbench window with prompt token breakdown, local configuration suggestions, and read-only AI Q&A.
-- Unified AI iteration for Memory Graph, Memory Structure, Multi-Agent Orchestrator, presets, character cards, and world books inside Workbench, with diff review, Change history undo, and automatic migration of historical iteration sessions.
+- Unified AI iteration for Memory Graph, Memory Structure, Multi-Agent Orchestrator, Image Generation, presets, character cards, and world books inside Workbench, with diff review, Change history undo, and automatic migration of historical iteration sessions.
 
 ### Multi-Agent Orchestrator
 
@@ -17,7 +17,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Documentation
 
-- Added the [Workbench guide](/features/workbench), [Workbench API reference](/development/extension-api/workbench), and [Run Panel API reference](/development/extension-api/run-panel), and updated the Memory Graph, Multi-Agent Orchestrator, Preset Assistant, Character Card Editor Assistant, and State System guides.
+- Added the [Workbench guide](/features/workbench), [Image Generation & AI Illustration guide](/features/image-generation), [Workbench API reference](/development/extension-api/workbench), [Image Generation API reference](/development/extension-api/image-generation), and [Run Panel API reference](/development/extension-api/run-panel), and updated the Memory Graph, Multi-Agent Orchestrator, Search Tools, Preset Assistant, Character Card Editor Assistant, and State System guides.
 
 ### Connections & Models
 
@@ -25,7 +25,15 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Image generation
 
+- Added connection profile binding and OpenAI-compatible multimodal chat image generation to Image Generation.
+- Added character reference image, style reference image, and source image editing support across supported image backends.
+- Embedded Image Studio, the global Character Archive, and illustration run traces into Workbench, supporting fanwork character exploration and original character reference design.
+- Added inline illustration locking, version switching, and source image editing to AI Illustration.
 - Fixed AI Illustration settings labels being squeezed into vertical text.
+
+### Search Tools
+
+- Added image search and webpage image extraction tools and cross-plugin search APIs to Search Tools.
 
 ### Character Cards
 
@@ -99,6 +107,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Extension API
 
 - Added Workbench registration APIs for embedded workspaces, AI iteration targets, Q&A read providers, and local suggestion rules, alongside global state read and patch helpers.
+- Exposed structured image generation on `context.imageGeneration` and CardApp `ctx.imageGeneration`.
 
 ### Performance
 

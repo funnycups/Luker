@@ -102,6 +102,10 @@ export function getStatsRepo() {
     return _statsRepo;
 }
 
+export function isStorageInitialized() {
+    return Boolean(_namedDocRepo);
+}
+
 export function getStorageEngine() {
     if (!_engine) throw new Error('storage not initialized; call initStorage() first');
     return _engine;

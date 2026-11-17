@@ -124,6 +124,30 @@ export function buildContext(container, charId, config) {
          */
         get skills() { return getContext().skills; },
 
+        /**
+         * Structured Image Generation API namespace. Mirrors `getContext().imageGeneration`
+         * and defaults `attribution` to `'active_chat'` when invoked from a CardApp unless
+         * explicitly overridden (`attribution: 'none'`).
+         */
+        get imageGeneration() {
+            const base = getContext().imageGeneration;
+            if (!base) return undefined;
+            return {
+                isAvailable: () => base.isAvailable(),
+                generate: (requestOrPrompt, options = {}) => {
+                    if (typeof requestOrPrompt === 'string') {
+                        return base.generate(requestOrPrompt, { attribution: 'active_chat', ...options });
+                    }
+                    return base.generate({ attribution: 'active_chat', ...options, ...(requestOrPrompt || {}) });
+                },
+                getCapabilities: () => base.getCapabilities(),
+                listPresets: () => base.listPresets(),
+                getCurrentPreset: () => base.getCurrentPreset(),
+                switchPreset: (idOrName) => base.switchPreset(idOrName),
+                getAvailableLoras: () => base.getAvailableLoras(),
+            };
+        },
+
         // ==================== Renderer ====================
 
         /**

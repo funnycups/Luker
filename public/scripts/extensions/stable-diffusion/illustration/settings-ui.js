@@ -32,20 +32,35 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
     const presetSelect = $('#sd_illustration_preset');
     const promptField = $('#sd_illustration_prompt');
     const studioField = $('#sd_illustration_studio_prompt');
+    const charDesignField = $('#sd_illustration_character_design_prompt');
+    const explorationField = $('#sd_illustration_exploration_prompt');
+    const visualInspectionCheck = $('#sd_illustration_visual_inspection');
     const apiPresetSelect = $('#sd_illustration_api_preset');
     const llmPresetSelect = $('#sd_illustration_llm_preset');
+    const expApiPresetSelect = $('#sd_illustration_exploration_api_preset');
+    const expLlmPresetSelect = $('#sd_illustration_exploration_llm_preset');
 
     const refreshFields = () => {
         const preset = currentPreset(settings);
         const disabled = !preset;
         promptField.prop('disabled', disabled);
         studioField.prop('disabled', disabled);
+        charDesignField.prop('disabled', disabled);
+        explorationField.prop('disabled', disabled);
+        visualInspectionCheck.prop('disabled', disabled);
         apiPresetSelect.prop('disabled', disabled);
         llmPresetSelect.prop('disabled', disabled);
+        expApiPresetSelect.prop('disabled', disabled);
+        expLlmPresetSelect.prop('disabled', disabled);
         promptField.val(preset?.illustrationPrompt || '');
         studioField.val(preset?.studioPrompt || '');
+        charDesignField.val(preset?.characterDesignPrompt || '');
+        explorationField.val(preset?.explorationPrompt || '');
+        visualInspectionCheck.prop('checked', Boolean(preset?.visualInspection));
         apiPresetSelect.val(preset?.llm?.apiPresetName || '');
         llmPresetSelect.val(preset?.llm?.llmPresetName || '');
+        expApiPresetSelect.val(preset?.explorationLlm?.apiPresetName || '');
+        expLlmPresetSelect.val(preset?.explorationLlm?.llmPresetName || '');
     };
 
     const refreshPresetOptions = () => {
@@ -57,31 +72,41 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
 
     const refreshConnectionOptions = () => {
         const selected = currentPreset(settings)?.llm?.apiPresetName || '';
+        const expSelected = currentPreset(settings)?.explorationLlm?.apiPresetName || '';
         const profiles = context.connectionProfiles?.list?.() || [];
         const names = profiles.map(profile => profile.name);
-        const options = [`<option value="">${escapeOption(t`(Current API config)`)}</option>`];
-        for (const name of names) {
-            options.push(`<option value="${escapeOption(name)}">${escapeOption(name)}</option>`);
-        }
-        if (selected && !names.includes(selected)) {
-            options.push(`<option value="${escapeOption(selected)}">${escapeOption(selected)} ${escapeOption(t`(missing)`)}</option>`);
-        }
-        apiPresetSelect.html(options.join('')).val(selected);
+        const buildOpts = (sel, emptyLabel) => {
+            const opts = [`<option value="">${escapeOption(emptyLabel)}</option>`];
+            for (const name of names) {
+                opts.push(`<option value="${escapeOption(name)}">${escapeOption(name)}</option>`);
+            }
+            if (sel && !names.includes(sel)) {
+                opts.push(`<option value="${escapeOption(sel)}">${escapeOption(sel)} ${escapeOption(t`(missing)`)}</option>`);
+            }
+            return opts.join('');
+        };
+        apiPresetSelect.html(buildOpts(selected, t`(Current API config)`)).val(selected);
+        expApiPresetSelect.html(buildOpts(expSelected, t`(Inherit illustration connection)`)).val(expSelected);
     };
 
     const refreshLlmPresetOptions = () => {
         const selected = currentPreset(settings)?.llm?.llmPresetName || '';
+        const expSelected = currentPreset(settings)?.explorationLlm?.llmPresetName || '';
         const manager = context.getPresetManager?.('openai');
         const presets = Array.isArray(manager?.getAllPresets?.()) ? manager.getAllPresets() : [];
         const names = [...new Set(presets.map(name => String(name || '').trim()).filter(Boolean))];
-        const options = [`<option value="">${escapeOption(t`(Current preset)`)}</option>`];
-        for (const name of names) {
-            options.push(`<option value="${escapeOption(name)}">${escapeOption(name)}</option>`);
-        }
-        if (selected && !names.includes(selected)) {
-            options.push(`<option value="${escapeOption(selected)}">${escapeOption(selected)} ${escapeOption(t`(missing)`)}</option>`);
-        }
-        llmPresetSelect.html(options.join('')).val(selected);
+        const buildOpts = (sel, emptyLabel) => {
+            const opts = [`<option value="">${escapeOption(emptyLabel)}</option>`];
+            for (const name of names) {
+                opts.push(`<option value="${escapeOption(name)}">${escapeOption(name)}</option>`);
+            }
+            if (sel && !names.includes(sel)) {
+                opts.push(`<option value="${escapeOption(sel)}">${escapeOption(sel)} ${escapeOption(t`(missing)`)}</option>`);
+            }
+            return opts.join('');
+        };
+        llmPresetSelect.html(buildOpts(selected, t`(Current preset)`)).val(selected);
+        expLlmPresetSelect.html(buildOpts(expSelected, t`(Inherit illustration preset)`)).val(expSelected);
     };
 
     $('#sd_illustration_enabled').prop('checked', settings.enabled).on('input', function () {
@@ -121,6 +146,61 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
             return;
         }
         updatePreset(settings, preset.id, { studioPrompt: String($(this).val() || '') }, Date.now());
+        saveSettings();
+    });
+
+    charDesignField.on('input', function () {
+        const preset = currentPreset(settings);
+        if (!preset) {
+            return;
+        }
+        updatePreset(settings, preset.id, { characterDesignPrompt: String($(this).val() || '') }, Date.now());
+        saveSettings();
+    });
+
+    explorationField.on('input', function () {
+        const preset = currentPreset(settings);
+        if (!preset) {
+            return;
+        }
+        updatePreset(settings, preset.id, { explorationPrompt: String($(this).val() || '') }, Date.now());
+        saveSettings();
+    });
+
+    visualInspectionCheck.on('input', function () {
+        const preset = currentPreset(settings);
+        if (!preset) {
+            return;
+        }
+        updatePreset(settings, preset.id, { visualInspection: !!$(this).prop('checked') }, Date.now());
+        saveSettings();
+    });
+
+    expApiPresetSelect.on('change', function () {
+        const preset = currentPreset(settings);
+        if (!preset) {
+            return;
+        }
+        updatePreset(settings, preset.id, {
+            explorationLlm: {
+                apiPresetName: String($(this).val() || ''),
+                llmPresetName: preset.explorationLlm?.llmPresetName || '',
+            },
+        }, Date.now());
+        saveSettings();
+    });
+
+    expLlmPresetSelect.on('change', function () {
+        const preset = currentPreset(settings);
+        if (!preset) {
+            return;
+        }
+        updatePreset(settings, preset.id, {
+            explorationLlm: {
+                apiPresetName: preset.explorationLlm?.apiPresetName || '',
+                llmPresetName: String($(this).val() || ''),
+            },
+        }, Date.now());
         saveSettings();
     });
 

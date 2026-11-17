@@ -9,6 +9,8 @@ import { getConfigValue, mergeObjectWithYaml, excludeKeysByYaml, trimV1, delay }
 import { setAdditionalHeaders } from '../additional-headers.js';
 import { readSecret, SECRET_KEYS, readProviderSecret } from './secrets.js';
 import { AIMLAPI_HEADERS, OPENROUTER_HEADERS, SILICONFLOW_ENDPOINT, ZAI_ENDPOINT, POLLINATIONS_ENDPOINT } from '../constants.js';
+import { runLukerDispatch } from '../luker-dispatch/runner.js';
+import { dispatchSdOpenaiImage } from '../luker-dispatch/providers/sd/openai-image.js';
 
 export const router = express.Router();
 
@@ -616,39 +618,10 @@ router.post('/workers-ai/models/embedding', async (request, response) => {
     }
 });
 
-router.post('/generate-image', async (request, response) => {
-    try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.OPENAI);
-
-        if (!key) {
-            console.warn('No OpenAI key found');
-            return response.sendStatus(400);
-        }
-
-        console.debug('OpenAI request', request.body);
-
-        const result = await fetch('https://api.openai.com/v1/images/generations', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${key}`,
-            },
-            body: JSON.stringify(request.body),
-        });
-
-        if (!result.ok) {
-            const text = await result.text();
-            console.warn('OpenAI request failed', result.statusText, text);
-            return response.status(500).send(text);
-        }
-
-        const data = await result.json();
-        return response.json(data);
-    } catch (error) {
-        console.error(error);
-        response.status(500).send('Internal server error');
-    }
-});
+router.post('/generate-image', (request, response) => runLukerDispatch(request, response, {
+    endpoint: 'sd/openai',
+    select: () => dispatchSdOpenaiImage,
+}));
 
 router.post('/generate-video', async (request, response) => {
     try {

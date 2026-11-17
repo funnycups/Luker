@@ -1,8 +1,17 @@
-import { buildFailedTag, buildImageTag, insertTagsAtAnchors } from './message.js';
+import { buildFailedTag, buildImageTag, insertTagsAtAnchors, replaceIllustrationMarkup } from './message.js';
+
+function clonePlainArray(value) {
+    return Array.isArray(value) ? JSON.parse(JSON.stringify(value)) : [];
+}
 
 export function createIllustrationRecord({
     id,
     prompt,
+    negativePrompt = '',
+    aspectRatio = '',
+    references = [],
+    characterPrompts = [],
+    locked = false,
     imageUrl = '',
     status = 'ready',
     error = '',
@@ -15,13 +24,18 @@ export function createIllustrationRecord({
     return {
         id: String(id),
         prompt: String(prompt || ''),
+        negativePrompt: String(negativePrompt || ''),
+        aspectRatio: String(aspectRatio || ''),
+        references: clonePlainArray(references),
+        characterPrompts: clonePlainArray(characterPrompts),
+        locked: Boolean(locked),
         imageUrl: String(imageUrl || ''),
         status: status === 'failed' ? 'failed' : 'ready',
         error: String(error || ''),
         parentId: parentId ? String(parentId) : null,
         anchorAfter: String(anchorAfter || ''),
         anchorBefore: String(anchorBefore || ''),
-        loras: Array.isArray(loras) ? structuredClone(loras) : [],
+        loras: clonePlainArray(loras),
         createdAt,
     };
 }
@@ -33,6 +47,72 @@ function listRecords(message) {
 export function getIllustrationRecord(message, id) {
     const target = String(id || '');
     return listRecords(message).find(record => record.id === target) || null;
+}
+
+/**
+ * Collects the full version tree (ancestors + descendants) belonging to the same slot root as `record`.
+ * Ordered chronologically so switching to an earlier version never hides newer versions.
+ */
+export function collectVersionTree(message, record) {
+    const records = listRecords(message);
+    if (!record || records.length === 0) {
+        return [];
+    }
+    const byId = new Map(records.map(r => [r.id, r]));
+    let root = record;
+    const climbSeen = new Set([root.id]);
+    while (root.parentId && byId.has(root.parentId) && !climbSeen.has(root.parentId)) {
+        climbSeen.add(root.parentId);
+        root = byId.get(root.parentId);
+    }
+
+    const collected = [];
+    const queue = [root];
+    const visited = new Set([root.id]);
+    while (queue.length > 0) {
+        const current = queue.shift();
+        collected.push(current);
+        for (const candidate of records) {
+            if (candidate.parentId === current.id && !visited.has(candidate.id)) {
+                visited.add(candidate.id);
+                queue.push(candidate);
+            }
+        }
+    }
+
+    return collected.sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
+}
+
+export function switchMessageIllustrationVersion({
+    message,
+    fromId,
+    toId,
+    imageDisplayWidth,
+    ensureSwipes,
+    failedLabel = 'Image generation failed',
+}) {
+    if (!message || !fromId || !toId) {
+        return false;
+    }
+    const target = getIllustrationRecord(message, toId);
+    if (!target) {
+        return false;
+    }
+    const html = target.status === 'failed'
+        ? buildFailedTag({ id: target.id, prompt: target.prompt, error: target.error, label: failedLabel })
+        : buildImageTag({
+            id: target.id,
+            imageUrl: target.imageUrl,
+            prompt: target.prompt,
+            width: imageDisplayWidth,
+        });
+    const nextMes = replaceIllustrationMarkup(String(message.mes || ''), fromId, html);
+    if (nextMes === message.mes && fromId !== toId) {
+        return false;
+    }
+    message.mes = nextMes;
+    syncMessageSwipeData(message, ensureSwipes);
+    return true;
 }
 
 export function appendIllustrationRecords(message, records) {
@@ -85,10 +165,7 @@ export function syncMessageSwipeData(message, ensureSwipes) {
 }
 
 /**
- * Drop records copied into a freshly generated swipe slot. Core seeds a new
- * swipe's extra from the active one, so the previous swipe's records would
- * otherwise suppress illustration work on the new swipe. The pending swipe
- * slot is not materialized yet, so this must not write into the swipes array.
+ * Drop records copied into a freshly generated swipe slot.
  * @param {object} message
  * @returns {Array<object>} removed records
  */

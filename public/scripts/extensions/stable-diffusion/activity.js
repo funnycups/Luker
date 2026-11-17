@@ -213,10 +213,67 @@ export function createImageActivity({ translate = identity, getChatKey = () => n
 }
 
 let defaultActivity = null;
+let defaultDockAttached = false;
+
+export function buildSdDiagnoseDraft(runKey, context) {
+    const recorder = context?.runPanel?.getRunRecorder?.();
+    const raw = recorder?.history?.()?.find(item => `${item.source || 'sd'}:${item.runId}` === runKey || item.runId === runKey)
+        || recorder?.currents?.()?.find(item => `${item.source || 'sd'}:${item.runId}` === runKey || item.runId === runKey)
+        || null;
+    if (!raw) {
+        return `Diagnose image generation run ${runKey}. Call sd_read_run with run_key "${runKey}", along with sd_list_presets and sd_list_characters as needed, and identify why the run failed or produced unexpected results.`;
+    }
+    const roundSummaries = (raw.rounds || []).map(round => {
+        const errors = (round.sections || [])
+            .filter(sec => sec.kind === 'error' || sec.status === 'failed')
+            .map(sec => `${sec.title}: ${sec.body || sec.status}`)
+            .join('; ');
+        return errors ? `${round.label} (${round.status}): ${errors}` : `${round.label} (${round.status})`;
+    }).join('\n');
+    return `Diagnose image generation run ${runKey} (status: ${raw.status}).\n${roundSummaries}\nInspect the trace via sd_read_run (run_key: "${runKey}") and check sd_list_presets / sd_list_characters to explain the root cause and propose a fix.`;
+}
+
+export function attachImageActivityDock(store, context = globalThis.Luker?.getContext?.()) {
+    if (!store || typeof context?.runPanel?.attachDock !== 'function') {
+        return false;
+    }
+    context.runPanel.attachDock(store, {
+        source: 'sd',
+        autoOpen: false,
+        getRunContext: () => {
+            let chatLabel = '';
+            if (context?.groupId) {
+                const group = (context.groups || []).find(g => String(g?.id) === String(context.groupId));
+                chatLabel = String(group?.name || '');
+            } else {
+                chatLabel = String(context?.name2 || context?.characters?.[context?.characterId]?.name || '');
+            }
+            return {
+                chatId: String(context?.chatId || context?.getCurrentChatId?.() || ''),
+                chatLabel,
+            };
+        },
+        onInspect: (runKey) => {
+            void context?.workbench?.open?.({ ws: 'sd', subview: 'run', runKey });
+        },
+        onDiagnose: (runKey) => {
+            const draft = buildSdDiagnoseDraft(runKey, context);
+            void context?.workbench?.open?.({ page: 'ai', ws: 'sd', draft });
+        },
+    });
+    return true;
+}
 
 export function initImageActivity(options) {
     if (!defaultActivity) defaultActivity = createImageActivity(options);
+    if (!defaultDockAttached) {
+        defaultDockAttached = attachImageActivityDock(defaultActivity.store);
+    }
     return defaultActivity;
+}
+
+export function getImageActivityStore() {
+    return initImageActivity().store;
 }
 
 export function beginImageActivityJob(options) {

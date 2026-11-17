@@ -18,6 +18,7 @@
 //     socket poking — dispatch layer uses ctx.signal instead).
 
 import _ from 'lodash';
+import { loadReferenceInputs } from '../../../media-input-loader.js';
 import { getBasicAuthHeader } from '../../../util.js';
 import { extractImageMeta } from '../../../request-inspector.js';
 
@@ -61,10 +62,31 @@ export async function dispatchSdWebui(ctx) {
     const authHeader = getBasicAuthHeader(body.auth);
 
     try {
+        const loadedRefs = await loadReferenceInputs(ctx.user?.directories, body.references);
+        const unsupportedRef = loadedRefs.find(ref => ref.role !== 'source');
+        if (unsupportedRef) {
+            const err = new Error(`SD WebUI only supports 'source' (img2img) reference images; does not support role "${unsupportedRef.role}".`);
+            ctx.inspection.failImage(err, 400);
+            ctx.emit.error(err);
+            return;
+        }
+
         // Forge probe — copy body so we don't mutate the caller's version
         // (legacy handler mutates ctx.body directly; dispatch clones).
         /** @type {any} */
         const outgoing = { ...body };
+        delete outgoing.references;
+        const isImg2Img = loadedRefs.length > 0;
+        if (isImg2Img) {
+            outgoing.init_images = loadedRefs.map(ref => ref.base64);
+            outgoing.denoising_strength = loadedRefs[0].strength ?? outgoing.denoising_strength ?? 0.7;
+            delete outgoing.enable_hr;
+            delete outgoing.hr_upscaler;
+            delete outgoing.hr_scale;
+            delete outgoing.hr_second_pass_steps;
+            delete outgoing.hr_additional_modules;
+        }
+
         const isForge = await tryDetectForge(ctx, body.url, authHeader);
         if (isForge === false) {
             // Deep-clone override_settings before unsetting to preserve
@@ -84,12 +106,12 @@ export async function dispatchSdWebui(ctx) {
             ctx.signal.addEventListener('abort', onAbort, { once: true });
         }
 
-        const txt2imgUrl = new URL(body.url);
-        txt2imgUrl.pathname = '/sdapi/v1/txt2img';
-        ctx.inspection.attach(txt2imgUrl, body.auth || '');
+        const targetUrl = new URL(body.url);
+        targetUrl.pathname = isImg2Img ? '/sdapi/v1/img2img' : '/sdapi/v1/txt2img';
+        ctx.inspection.attach(targetUrl, body.auth || '');
 
         console.debug('SD WebUI request:', outgoing);
-        const result = await ctx.fetch(txt2imgUrl, {
+        const result = await ctx.fetch(targetUrl, {
             method: 'POST',
             body: JSON.stringify(outgoing),
             headers: {

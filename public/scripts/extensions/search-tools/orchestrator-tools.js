@@ -134,6 +134,70 @@ async function execSearchVisit(args, context) {
     }
 }
 
+async function execImageSearch(args, context) {
+    const queryRaw = String(args?.query ?? '');
+    if (!queryRaw.trim()) {
+        throw new ToolError(
+            'luker_web_image_search: query must be non-empty.',
+            'SEARCH_QUERY_EMPTY',
+            'Provide a non-empty image search query string.',
+        );
+    }
+    const adapter = resolveAdapter(context);
+    assertAdapterReady(adapter);
+    if (typeof adapter.searchImages !== 'function') {
+        throw new ToolError(
+            'luker_web_image_search: search-tools adapter is missing a `searchImages` function.',
+            'SEARCH_UNAVAILABLE',
+            'Ensure the search-tools extension is up to date.',
+        );
+    }
+    try {
+        return await adapter.searchImages(args || {}, buildOpts(context));
+    } catch (error) {
+        if (error && error.name === 'ToolError' && typeof error.code === 'string') {
+            throw error;
+        }
+        throw new ToolError(
+            `luker_web_image_search failed: ${String(error?.message || error)}`,
+            error?.code || 'SEARCH_FAILED',
+            'The image search provider returned an error. Switch provider or inspect a specific page URL instead.',
+        );
+    }
+}
+
+async function execPageImages(args, context) {
+    const urlRaw = String(args?.url ?? '');
+    if (!urlRaw.trim()) {
+        throw new ToolError(
+            'luker_web_page_images: url must be a non-empty HTTP/HTTPS URL.',
+            'SEARCH_URL_INVALID',
+            'Pass an http:// or https:// webpage URL.',
+        );
+    }
+    const adapter = resolveAdapter(context);
+    assertAdapterReady(adapter);
+    if (typeof adapter.extractPageImages !== 'function') {
+        throw new ToolError(
+            'luker_web_page_images: search-tools adapter is missing an `extractPageImages` function.',
+            'SEARCH_UNAVAILABLE',
+            'Ensure the search-tools extension is up to date.',
+        );
+    }
+    try {
+        return await adapter.extractPageImages(args || {}, buildOpts(context));
+    } catch (error) {
+        if (error && error.name === 'ToolError' && typeof error.code === 'string') {
+            throw error;
+        }
+        throw new ToolError(
+            `luker_web_page_images failed: ${String(error?.message || error)}`,
+            'SEARCH_FAILED',
+            'The webpage images could not be extracted. Try another URL.',
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Schemas (copied verbatim from orchestrator/loop-tools.js's
 // registerTool('search_*', ...) calls — only the `parameters` blob
@@ -203,11 +267,64 @@ const SCHEMAS = [
     },
 ];
 
+const IMAGE_SCHEMAS = [
+    {
+        name: 'luker_web_image_search',
+        mode: 'read',
+        exec: execImageSearch,
+        description: 'Search the web for candidate images using the active search-tools provider.',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: {
+                    type: 'string',
+                    description: 'Non-empty image search query.',
+                },
+                max_results: {
+                    type: 'integer',
+                    description: 'Maximum number of results (1-20).',
+                    minimum: 1,
+                    maximum: 20,
+                },
+                safe_search: {
+                    type: 'string',
+                    enum: ['off', 'moderate', 'strict'],
+                    description: 'Safe-search level.',
+                },
+                region: {
+                    type: 'string',
+                    description: 'Optional locale or region hint.',
+                },
+            },
+            required: ['query'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'luker_web_page_images',
+        mode: 'read',
+        exec: execPageImages,
+        description: 'Extract candidate high-resolution image URLs and captions from a webpage.',
+        parameters: {
+            type: 'object',
+            properties: {
+                url: {
+                    type: 'string',
+                    description: 'HTTP/HTTPS webpage URL.',
+                },
+            },
+            required: ['url'],
+            additionalProperties: false,
+        },
+    },
+];
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 export const SEARCH_TOOL_NAMES = Object.freeze(SCHEMAS.map(s => s.name));
+export const SEARCH_IMAGE_TOOL_NAMES = Object.freeze(IMAGE_SCHEMAS.map(s => s.name));
 
 /**
  * Resolve the orchestrator's published extension API. Silent null when
@@ -221,8 +338,8 @@ function loadOrchestratorRegistrar() {
 }
 
 /**
- * Publish search-tools' 2 read tools into the orchestrator's Layer-2
- * extension registry. Both tools are stateless adapters that resolve
+ * Publish search-tools' read tools into the orchestrator's Layer-2
+ * extension registry. Tools are stateless adapters that resolve
  * `Luker.searchTools` (installed by main.js) at call time, so no per-ctx
  * session wrapping is needed.
  *
@@ -232,7 +349,7 @@ function loadOrchestratorRegistrar() {
 export function registerSearchToolsOrchestrationTools() {
     const orch = loadOrchestratorRegistrar();
     if (!orch) return;
-    for (const s of SCHEMAS) {
+    for (const s of [...SCHEMAS, ...IMAGE_SCHEMAS]) {
         orch.registerOrchestrationTool({
             name: s.name,
             description: s.description,
@@ -244,13 +361,13 @@ export function registerSearchToolsOrchestrationTools() {
 }
 
 /**
- * Remove search-tools' 2 tools from the orchestrator's Layer-2
+ * Remove search-tools' tools from the orchestrator's Layer-2
  * registry. Silent no-op when orchestrator isn't loaded.
  */
 export function unregisterSearchToolsOrchestrationTools() {
     const orch = loadOrchestratorRegistrar();
     if (!orch || typeof orch.unregisterOrchestrationTool !== 'function') return;
-    for (const name of SEARCH_TOOL_NAMES) {
+    for (const name of [...SEARCH_TOOL_NAMES, ...SEARCH_IMAGE_TOOL_NAMES]) {
         orch.unregisterOrchestrationTool(name);
     }
 }

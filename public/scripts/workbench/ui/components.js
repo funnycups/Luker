@@ -19,6 +19,7 @@ const TONE_KEYS = {
     preset: 'Preset',
     card: 'Character card',
     world: 'World book',
+    sd: 'Image Generation',
 };
 
 export function toneLabel(tone) {

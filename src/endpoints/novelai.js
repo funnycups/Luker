@@ -4,28 +4,13 @@ import fetch from 'node-fetch';
 import express from 'express';
 
 import { readSecret, SECRET_KEYS } from './secrets.js';
-import { readAllChunks, extractFileFromZipBuffer } from '../util.js';
+import { readAllChunks, trimTrailingSlash } from '../util.js';
 import { runLukerDispatch } from '../luker-dispatch/runner.js';
 import { dispatchNovelAI } from '../luker-dispatch/providers/novelai.js';
+import { dispatchSdNovelImage, importNovelVibeFile } from '../luker-dispatch/providers/sd/novel-image.js';
 
 const API_NOVELAI = 'https://api.novelai.net';
 const IMAGE_NOVELAI = 'https://image.novelai.net';
-
-// Constants for skip_cfg_above_sigma (Variety+) calculation
-const REFERENCE_PIXEL_COUNT = 1011712;   // 832 * 1216 reference image size
-const SIGMA_MAGIC_NUMBER = 19;           // Base sigma multiplier for V3 and V4 models
-const SIGMA_MAGIC_NUMBER_V4_5 = 58;      // Base sigma multiplier for V4.5 models
-
-function calculateSkipCfgAboveSigma(width, height, modelName) {
-    const magicConstant = modelName?.includes('nai-diffusion-4-5')
-        ? SIGMA_MAGIC_NUMBER_V4_5
-        : SIGMA_MAGIC_NUMBER;
-
-    const pixelCount = width * height;
-    const ratio = pixelCount / REFERENCE_PIXEL_COUNT;
-
-    return Math.pow(ratio, 0.5) * magicConstant;
-}
 
 export const router = express.Router();
 
@@ -39,7 +24,8 @@ router.post('/status', async function (req, res) {
     }
 
     try {
-        const response = await fetch(IMAGE_NOVELAI + '/user/subscription', {
+        const baseHost = trimTrailingSlash(String(req.body.novel_url || IMAGE_NOVELAI).trim()) || IMAGE_NOVELAI;
+        const response = await fetch(baseHost + '/user/subscription', {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json',
@@ -68,145 +54,22 @@ router.post('/generate', (req, res) => runLukerDispatch(req, res, {
     select: () => dispatchNovelAI,
 }));
 
-router.post('/generate-image', async (request, response) => {
-    if (!request.body) {
-        return response.sendStatus(400);
-    }
+router.post('/generate-image', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/novel',
+    select: () => dispatchSdNovelImage,
+}));
 
-    const key = readSecret(request.user.directories, SECRET_KEYS.NOVEL);
-
-    if (!key) {
-        console.warn('NovelAI Access Token is missing.');
-        return response.sendStatus(400);
-    }
-
+router.post('/import-vibe', async (req, res) => {
     try {
-        console.debug('NAI Diffusion request:', request.body);
-        const generateUrl = `${IMAGE_NOVELAI}/ai/generate-image`;
-        const generateResult = await fetch(generateUrl, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${key}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                action: 'generate',
-                input: request.body.prompt ?? '',
-                model: request.body.model ?? 'nai-diffusion',
-                parameters: {
-                    params_version: 3,
-                    prefer_brownian: true,
-                    negative_prompt: request.body.negative_prompt ?? '',
-                    height: request.body.height ?? 512,
-                    width: request.body.width ?? 512,
-                    scale: request.body.scale ?? 9,
-                    seed: request.body.seed >= 0 ? request.body.seed : Math.floor(Math.random() * 9999999999),
-                    sampler: request.body.sampler ?? 'k_dpmpp_2m',
-                    noise_schedule: request.body.scheduler ?? 'karras',
-                    steps: request.body.steps ?? 28,
-                    n_samples: 1,
-                    // NAI handholding for prompts
-                    ucPreset: 0,
-                    qualityToggle: false,
-                    add_original_image: false,
-                    controlnet_strength: 1,
-                    deliberate_euler_ancestral_bug: false,
-                    dynamic_thresholding: request.body.decrisper ?? false,
-                    legacy: false,
-                    legacy_v3_extend: false,
-                    sm: request.body.sm ?? false,
-                    sm_dyn: request.body.sm_dyn ?? false,
-                    uncond_scale: 1,
-                    skip_cfg_above_sigma: request.body.variety_boost
-                        ? calculateSkipCfgAboveSigma(
-                            request.body.width ?? 512,
-                            request.body.height ?? 512,
-                            request.body.model ?? 'nai-diffusion',
-                        )
-                        : null,
-                    use_coords: false,
-                    characterPrompts: [],
-                    reference_image_multiple: [],
-                    reference_information_extracted_multiple: [],
-                    reference_strength_multiple: [],
-                    v4_negative_prompt: {
-                        caption: {
-                            base_caption: request.body.negative_prompt ?? '',
-                            char_captions: [],
-                        },
-                    },
-                    v4_prompt: {
-                        caption: {
-                            base_caption: request.body.prompt ?? '',
-                            char_captions: [],
-                        },
-                        use_coords: false,
-                        use_order: true,
-                    },
-                },
-            }),
+        const imported = await importNovelVibeFile({
+            directories: req.user?.directories,
+            fileName: req.body?.fileName,
+            content: req.body?.content,
         });
-
-        if (!generateResult.ok) {
-            const text = await generateResult.text();
-            console.warn('NovelAI returned an error.', generateResult.statusText, text);
-            return response.sendStatus(500);
-        }
-
-        const archiveBuffer = await generateResult.arrayBuffer();
-        const imageBuffer = await extractFileFromZipBuffer(archiveBuffer, '.png');
-
-        if (!imageBuffer) {
-            console.error('NovelAI generated an image, but the PNG file was not found.');
-            return response.sendStatus(500);
-        }
-
-        const originalBase64 = imageBuffer.toString('base64');
-
-        // No upscaling
-        if (isNaN(request.body.upscale_ratio) || request.body.upscale_ratio <= 1) {
-            return response.send(originalBase64);
-        }
-
-        try {
-            console.info('Upscaling image...');
-            const upscaleUrl = `${API_NOVELAI}/ai/upscale`;
-            const upscaleResult = await fetch(upscaleUrl, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${key}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    image: originalBase64,
-                    height: request.body.height,
-                    width: request.body.width,
-                    scale: request.body.upscale_ratio,
-                }),
-            });
-
-            if (!upscaleResult.ok) {
-                const text = await upscaleResult.text();
-                throw new Error('NovelAI returned an error.', { cause: text });
-            }
-
-            const upscaledArchiveBuffer = await upscaleResult.arrayBuffer();
-            const upscaledImageBuffer = await extractFileFromZipBuffer(upscaledArchiveBuffer, '.png');
-
-            if (!upscaledImageBuffer) {
-                throw new Error('NovelAI upscaled an image, but the PNG file was not found.');
-            }
-
-            const upscaledBase64 = upscaledImageBuffer.toString('base64');
-
-            return response.send(upscaledBase64);
-        } catch (error) {
-            console.warn('NovelAI generated an image, but upscaling failed. Returning original image.', error);
-            return response.send(originalBase64);
-        }
+        return res.json(imported);
     } catch (error) {
-        console.error(error);
-        return response.sendStatus(500);
+        console.error('NovelAI import-vibe failed:', error);
+        return res.status(400).send(String(error?.message || error));
     }
 });
 

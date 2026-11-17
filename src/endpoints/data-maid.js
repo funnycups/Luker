@@ -8,6 +8,7 @@ import { CHAT_BACKUPS_PREFIX } from './chats.js';
 import { isPathUnderParent, tryParse } from '../util.js';
 import { extractLocalMediaPaths, resolveUserImagePath } from '../media-references.js';
 import { SETTINGS_FILE } from '../constants.js';
+import { getNamedDocRepo, getSettingsRepo, isStorageInitialized } from '../storage/index.js';
 
 const sha256 = str => crypto.createHash('sha256').update(str).digest('hex');
 
@@ -657,15 +658,22 @@ export class DataMaidService {
     async #collectBodyReferencedImagePaths() {
         const diskPaths = new Set();
 
+        const collectFromText = (rawText) => {
+            if (typeof rawText !== 'string' || !rawText) {
+                return;
+            }
+            for (const clientPath of extractLocalMediaPaths(rawText)) {
+                const diskPath = resolveUserImagePath(this.directories.root, clientPath);
+                if (diskPath) {
+                    diskPaths.add(diskPath);
+                }
+            }
+        };
+
         const scanFile = async (filePath) => {
             try {
                 const raw = await fs.promises.readFile(filePath, 'utf-8');
-                for (const clientPath of extractLocalMediaPaths(raw)) {
-                    const diskPath = resolveUserImagePath(this.directories.root, clientPath);
-                    if (diskPath) {
-                        diskPaths.add(diskPath);
-                    }
-                }
+                collectFromText(raw);
             } catch (error) {
                 console.error(`[Data Maid] Error scanning body references in ${filePath}:`, error);
             }
@@ -690,6 +698,40 @@ export class DataMaidService {
                     if (file.isFile() && path.parse(file.name).ext === '.jsonl') {
                         await scanFile(path.join(directoryPath, file.name));
                     }
+                }
+            }
+
+            const settingsPath = path.join(this.directories.root, SETTINGS_FILE);
+            if (fs.existsSync(settingsPath)) {
+                await scanFile(settingsPath);
+            }
+
+            const statesDir = path.join(this.directories.root, 'states');
+            if (fs.existsSync(statesDir)) {
+                const stateEntries = await fs.promises.readdir(statesDir, { withFileTypes: true });
+                for (const entry of stateEntries) {
+                    if (entry.isFile() && path.parse(entry.name).ext === '.json') {
+                        await scanFile(path.join(statesDir, entry.name));
+                    }
+                }
+            }
+
+            if (isStorageInitialized()) {
+                try {
+                    const settingsDoc = await getSettingsRepo().get(this.handle);
+                    if (settingsDoc) {
+                        collectFromText(JSON.stringify(settingsDoc));
+                    }
+                    const globalStateDocs = await getNamedDocRepo().listWithDocs(this.handle, 'globalStates');
+                    if (Array.isArray(globalStateDocs)) {
+                        for (const item of globalStateDocs) {
+                            if (item?.doc) {
+                                collectFromText(JSON.stringify(item.doc));
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error('[Data Maid] Error scanning storage repository image references:', error);
                 }
             }
         } catch (error) {

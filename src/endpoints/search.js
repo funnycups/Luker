@@ -1260,7 +1260,460 @@ router.post('/visit', async (request, response) => {
     }
 });
 
+const IMAGE_SEARCH_UNSUPPORTED_PROVIDER_IDS = new Set(['exa', 'zai', 'deepseek']);
+
+function isValidHttpUrl(rawUrl) {
+    try {
+        const parsed = new URL(String(rawUrl || '').trim());
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+        return false;
+    }
+}
+
+function normalizeImageSearchRows(rawRows = [], accessors = {}, maxResults = 8, source = '') {
+    if (!Array.isArray(rawRows)) {
+        return [];
+    }
+    const pick = (row, accessor) => (typeof accessor === 'function' ? accessor(row) : row?.[accessor]);
+    const results = [];
+    const seen = new Set();
+
+    for (const row of rawRows) {
+        if (results.length >= maxResults) {
+            break;
+        }
+        const imageUrl = normalizeWhitespace(pick(row, accessors.imageUrl) || '');
+        if (!imageUrl || seen.has(imageUrl) || !isValidHttpUrl(imageUrl)) {
+            continue;
+        }
+        const thumbnailCandidate = normalizeWhitespace(pick(row, accessors.thumbnailUrl) || '');
+        const thumbnailUrl = isValidHttpUrl(thumbnailCandidate) ? thumbnailCandidate : imageUrl;
+        const pageCandidate = normalizeWhitespace(pick(row, accessors.pageUrl) || '');
+        const pageUrl = isValidHttpUrl(pageCandidate) ? pageCandidate : '';
+        const title = normalizeWhitespace(pick(row, accessors.title) || '') || imageUrl;
+        const rawW = Number(pick(row, accessors.width));
+        const rawH = Number(pick(row, accessors.height));
+
+        seen.add(imageUrl);
+        results.push({
+            title,
+            imageUrl,
+            thumbnailUrl,
+            pageUrl,
+            ...(Number.isFinite(rawW) && rawW > 0 ? { width: Math.round(rawW) } : {}),
+            ...(Number.isFinite(rawH) && rawH > 0 ? { height: Math.round(rawH) } : {}),
+            ...(source ? { source } : {}),
+        });
+    }
+    return results;
+}
+
+async function fetchDdgImageResults({ query, maxResults, safeSearch, region }) {
+    const landingUrl = new URL('https://duckduckgo.com/');
+    landingUrl.searchParams.set('q', query);
+    landingUrl.searchParams.set('iax', 'images');
+    landingUrl.searchParams.set('ia', 'images');
+    const landingRes = await fetch(landingUrl, { headers: visitHeaders });
+    if (!landingRes.ok) {
+        throw new HttpError(502, `DuckDuckGo image token request failed (${landingRes.status}).`);
+    }
+    const landingHtml = await landingRes.text();
+    const vqdMatch = /vqd=['"]?([0-9]+-[0-9a-zA-Z_-]+)['"]?/.exec(landingHtml);
+    if (!vqdMatch) {
+        throw new HttpError(502, 'DuckDuckGo image search did not return a query token.');
+    }
+
+    const safeMap = { off: '-1', moderate: '1', strict: '1' };
+    const imageApiUrl = new URL('https://duckduckgo.com/i.js');
+    imageApiUrl.searchParams.set('l', region || 'us-en');
+    imageApiUrl.searchParams.set('o', 'json');
+    imageApiUrl.searchParams.set('q', query);
+    imageApiUrl.searchParams.set('vqd', vqdMatch[1]);
+    imageApiUrl.searchParams.set('p', safeMap[safeSearch] || '1');
+
+    const raw = await fetchProviderJson(imageApiUrl, {
+        headers: { ...visitHeaders, 'Accept': 'application/json', 'Referer': 'https://duckduckgo.com/' },
+    }, 'DuckDuckGo Images');
+
+    return normalizeImageSearchRows(raw?.results, {
+        title: 'title',
+        imageUrl: 'image',
+        thumbnailUrl: 'thumbnail',
+        pageUrl: 'url',
+        width: 'width',
+        height: 'height',
+    }, maxResults, 'ddg');
+}
+
+async function fetchBraveImageResults({ query, maxResults, safeSearch, apiKey }) {
+    const safeSearchMap = { off: 'off', moderate: 'strict', strict: 'strict' };
+    const searchUrl = new URL('https://api.search.brave.com/res/v1/images/search');
+    searchUrl.searchParams.set('q', query);
+    searchUrl.searchParams.set('count', String(maxResults));
+    searchUrl.searchParams.set('safesearch', safeSearchMap[safeSearch] || 'strict');
+    const raw = await fetchProviderJson(searchUrl, {
+        headers: { 'Accept': 'application/json', 'Accept-Encoding': 'gzip', 'X-Subscription-Token': apiKey },
+    }, 'Brave Images');
+
+    return normalizeImageSearchRows(raw?.results, {
+        title: 'title',
+        imageUrl: row => row?.properties?.url || row?.thumbnail?.src,
+        thumbnailUrl: row => row?.thumbnail?.src || row?.properties?.url,
+        pageUrl: 'url',
+        width: row => row?.properties?.width,
+        height: row => row?.properties?.height,
+    }, maxResults, 'brave');
+}
+
+async function fetchSearxngImageResults({ query, maxResults, safeSearch, options = {} }) {
+    const baseUrl = normalizeWhitespace(options.baseUrl || '');
+    if (!baseUrl) {
+        throw new HttpError(400, 'SearXNG instance URL is required.');
+    }
+    let normalizedBaseUrl = '';
+    try {
+        normalizedBaseUrl = new URL(baseUrl).toString();
+    } catch {
+        throw new HttpError(400, 'Invalid SearXNG instance URL.');
+    }
+    const safeSearchMap = { off: '0', moderate: '1', strict: '2' };
+    const url = new URL('/search', normalizedBaseUrl);
+    url.searchParams.set('q', query);
+    url.searchParams.set('categories', 'images');
+    url.searchParams.set('format', 'json');
+    if (safeSearchMap[safeSearch]) {
+        url.searchParams.set('safesearch', safeSearchMap[safeSearch]);
+    }
+    const raw = await fetchProviderJson(url, {
+        headers: { ...visitHeaders, 'Accept': 'application/json' },
+    }, 'SearXNG Images');
+
+    return normalizeImageSearchRows(raw?.results, {
+        title: 'title',
+        imageUrl: row => resolveRelativeResultUrl(row?.img_src || row?.thumbnail_src || '', normalizedBaseUrl),
+        thumbnailUrl: row => resolveRelativeResultUrl(row?.thumbnail_src || row?.img_src || '', normalizedBaseUrl),
+        pageUrl: row => resolveRelativeResultUrl(row?.url || '', normalizedBaseUrl),
+        width: row => {
+            const m = /^(\d+)\s*x\s*(\d+)$/i.exec(String(row?.resolution || '').trim());
+            return m ? Number(m[1]) : row?.width;
+        },
+        height: row => {
+            const m = /^(\d+)\s*x\s*(\d+)$/i.exec(String(row?.resolution || '').trim());
+            return m ? Number(m[2]) : row?.height;
+        },
+    }, maxResults, 'searxng');
+}
+
+const IMAGE_SEARCH_ADAPTERS = {
+    ddg: {
+        async execute(ctx) {
+            return await fetchDdgImageResults(ctx);
+        },
+    },
+    searxng: {
+        async execute(ctx) {
+            return await fetchSearxngImageResults(ctx);
+        },
+    },
+    brave: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.BRAVE_SEARCH, ctx.secretId);
+            if (!apiKey) {
+                throw new HttpError(400, 'No Brave Search key found');
+            }
+            return await fetchBraveImageResults({ ...ctx, apiKey });
+        },
+    },
+    tavily: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.TAVILY, ctx.secretId);
+            if (!apiKey) {
+                throw new HttpError(400, 'No Tavily key found');
+            }
+            const { url, init } = buildTavilyRequest({
+                ...ctx,
+                apiKey,
+                options: { ...ctx.options, includeImages: true },
+            });
+            const parsedBody = JSON.parse(init.body);
+            parsedBody.include_images = true;
+            parsedBody.include_image_descriptions = true;
+            init.body = JSON.stringify(parsedBody);
+            const raw = await fetchProviderJson(url, init, 'Tavily Images');
+            const fallbackPageUrl = raw?.results?.[0]?.url || '';
+            const rawImages = Array.isArray(raw?.images) ? raw.images : [];
+            return normalizeImageSearchRows(rawImages, {
+                title: item => (typeof item === 'object' && item?.description ? item.description : ctx.query),
+                imageUrl: item => (typeof item === 'string' ? item : item?.url),
+                thumbnailUrl: item => (typeof item === 'string' ? item : item?.url),
+                pageUrl: () => fallbackPageUrl,
+            }, ctx.maxResults, 'tavily');
+        },
+    },
+    serper: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.SERPER, ctx.secretId);
+            if (!apiKey) {
+                throw new HttpError(400, 'No Serper key found');
+            }
+            const { url, init } = buildSerperRequest({
+                ...ctx,
+                apiKey,
+                hasExplicitMaxResults: true,
+                options: { ...ctx.options, resultType: 'images' },
+            });
+            const raw = await fetchProviderJson(url, init, 'Serper Images');
+            return normalizeImageSearchRows(raw?.images, {
+                title: 'title',
+                imageUrl: 'imageUrl',
+                thumbnailUrl: 'thumbnailUrl',
+                pageUrl: 'link',
+                width: 'imageWidth',
+                height: 'imageHeight',
+            }, ctx.maxResults, 'serper');
+        },
+    },
+    serpapi: {
+        async execute(ctx) {
+            const apiKey = readSecret(ctx.directories, SECRET_KEYS.SERPAPI, ctx.secretId);
+            if (!apiKey) {
+                throw new HttpError(400, 'No SerpApi key found');
+            }
+            const reqSpec = buildSerpapiRequest({ ...ctx, apiKey });
+            const parsedUrl = new URL(reqSpec.url);
+            parsedUrl.searchParams.set('engine', 'google_images');
+            parsedUrl.searchParams.delete('tbm');
+            const raw = await fetchProviderJson(parsedUrl.toString(), reqSpec.init, 'SerpApi Images');
+            return normalizeImageSearchRows(raw?.images_results, {
+                title: 'title',
+                imageUrl: row => row?.original || row?.thumbnail,
+                thumbnailUrl: row => row?.thumbnail || row?.original,
+                pageUrl: 'link',
+                width: 'original_width',
+                height: 'original_height',
+            }, ctx.maxResults, 'serpapi');
+        },
+    },
+};
+
+const MIN_CANDIDATE_IMAGE_DIMENSION_PX = 64; // cap-ok: filters <64px UI badges and emoticons from portrait candidate extraction
+
+function pickBestSrcsetCandidate(srcsetRaw) {
+    const entries = String(srcsetRaw || '')
+        .split(',')
+        .map(part => part.trim())
+        .filter(Boolean);
+    let bestUrl = '';
+    let bestScore = -1;
+    for (const entry of entries) {
+        const tokens = entry.split(/\s+/);
+        const candidateUrl = tokens[0] || '';
+        if (!candidateUrl || candidateUrl.startsWith('data:')) {
+            continue;
+        }
+        const descriptor = tokens[1] || '1x';
+        let score = 1;
+        const wMatch = /^(\d+(?:\.\d+)?)w$/i.exec(descriptor);
+        const xMatch = /^(\d+(?:\.\d+)?)x$/i.exec(descriptor);
+        if (wMatch) {
+            score = Number(wMatch[1]) * 100;
+        } else if (xMatch) {
+            score = Number(xMatch[1]) * 1000;
+        }
+        if (score >= bestScore) {
+            bestScore = score;
+            bestUrl = candidateUrl;
+        }
+    }
+    return bestUrl;
+}
+
+function upgradeWikiThumbnailUrl(rawUrl) {
+    // Convert Fandom/Wikia scaled revision URLs (.../revision/latest/scale-to-width-down/300?cb=...) to full revision URL.
+    return String(rawUrl || '').replace(/(\/revision\/latest)\/scale-to-width-down\/\d+/i, '$1');
+}
+
+function extractCandidateImagesFromHtml(html, pageUrl) {
+    const $ = load(String(html || ''));
+    const pageTitle = normalizeWhitespace(
+        $('title').first().text()
+        || $('meta[property="og:title"]').attr('content')
+        || '',
+    );
+
+    const images = [];
+    const seen = new Set();
+
+    const pushCandidate = ({ rawUrl, alt = '', caption = '', width, height }) => {
+        const trimmed = String(rawUrl || '').trim();
+        if (!trimmed || trimmed.startsWith('data:') || trimmed.startsWith('blob:') || trimmed.startsWith('javascript:')) {
+            return;
+        }
+        const resolved = upgradeWikiThumbnailUrl(resolveRelativeResultUrl(trimmed, pageUrl));
+        if (!isValidHttpUrl(resolved) || seen.has(resolved)) {
+            return;
+        }
+        const w = Number(width);
+        const h = Number(height);
+        if ((Number.isFinite(w) && w > 0 && w < MIN_CANDIDATE_IMAGE_DIMENSION_PX)
+            || (Number.isFinite(h) && h > 0 && h < MIN_CANDIDATE_IMAGE_DIMENSION_PX)) {
+            return;
+        }
+        seen.add(resolved);
+        images.push({
+            imageUrl: resolved,
+            alt: normalizeWhitespace(alt),
+            caption: normalizeWhitespace(caption),
+            ...(Number.isFinite(w) && w >= MIN_CANDIDATE_IMAGE_DIMENSION_PX ? { width: Math.round(w) } : {}),
+            ...(Number.isFinite(h) && h >= MIN_CANDIDATE_IMAGE_DIMENSION_PX ? { height: Math.round(h) } : {}),
+        });
+    };
+
+    for (const [selector, label] of [
+        ['meta[property="og:image"]', 'og:image'],
+        ['meta[name="twitter:image"]', 'twitter:image'],
+        ['meta[property="twitter:image"]', 'twitter:image'],
+    ]) {
+        const metaVal = $(selector).first().attr('content');
+        if (metaVal) {
+            pushCandidate({ rawUrl: metaVal, alt: '', caption: label });
+        }
+    }
+
+    const imgElements = [
+        ...$('.portable-infobox img, .infobox img, .pi-image img, .thumbinner img').toArray(),
+        ...$('img').toArray(),
+    ];
+
+    for (const el of imgElements) {
+        const $img = $(el);
+        const srcsetBest = pickBestSrcsetCandidate($img.attr('srcset') || $img.attr('data-srcset') || '');
+        const dataSrc = $img.attr('data-src') || $img.attr('data-original') || '';
+        const plainSrc = $img.attr('src') || '';
+        const chosenRaw = srcsetBest
+            || (plainSrc && !plainSrc.startsWith('data:') ? plainSrc : '')
+            || dataSrc;
+        if (!chosenRaw) {
+            continue;
+        }
+
+        const captionText = $img.closest('figure, .pi-item, .thumbinner')
+            .find('figcaption, .pi-caption, .thumbcaption')
+            .first()
+            .text() || '';
+
+        pushCandidate({
+            rawUrl: chosenRaw,
+            alt: $img.attr('alt') || '',
+            caption: captionText,
+            width: $img.attr('width'),
+            height: $img.attr('height'),
+        });
+    }
+
+    return {
+        pageTitle,
+        pageUrl,
+        images,
+    };
+}
+
+router.post('/images', async (request, response) => {
+    try {
+        const provider = String(request.body?.provider || '').trim().toLowerCase();
+        if (IMAGE_SEARCH_UNSUPPORTED_PROVIDER_IDS.has(provider)) {
+            return response.status(400).json({
+                error: `Image search is not supported by provider "${provider}".`,
+                code: 'IMAGE_SEARCH_UNSUPPORTED_BY_PROVIDER',
+                provider,
+            });
+        }
+        const adapter = IMAGE_SEARCH_ADAPTERS[provider];
+        if (!adapter) {
+            return response.status(400).json({
+                error: `Unknown image search provider: ${provider}`,
+                code: 'UNKNOWN_SEARCH_PROVIDER',
+            });
+        }
+        const query = String(request.body?.query || '').trim();
+        if (!query) {
+            return response.status(400).json({
+                error: 'Query is required.',
+                code: 'SEARCH_QUERY_REQUIRED',
+            });
+        }
+
+        const ctx = buildSearchContext(request, { query, provider });
+        ctx.secretId = String(request.body?.secret_id || request.body?.secretId || '').trim() || undefined;
+        if (request.body?.baseUrl && !ctx.options.baseUrl) {
+            ctx.options = { ...ctx.options, baseUrl: String(request.body.baseUrl).trim() };
+        }
+
+        const results = await adapter.execute(ctx);
+        return response.json({
+            provider,
+            query,
+            result_count: results.length,
+            results,
+        });
+    } catch (error) {
+        console.error('Image search failed', error);
+        return response.status(error?.status || 500).json({
+            error: error?.message || 'Image search failed',
+        });
+    }
+});
+
+router.post('/page-images', async (request, response) => {
+    try {
+        const url = String(request.body?.url || '').trim();
+        if (!url) {
+            return response.status(400).json({ error: 'URL is required.' });
+        }
+
+        try {
+            validateVisitUrl(url);
+        } catch (error) {
+            const reason = summarizeVisitErrorBody(error?.message || '') || 'Invalid URL';
+            return response.status(400).json({ error: `Invalid URL: ${reason}` });
+        }
+
+        const result = await fetch(url, {
+            headers: visitHeaders,
+            agent: getUntrustedRequestAgent(),
+        });
+
+        if (!result.ok) {
+            const bodyText = await result.text().catch(() => '');
+            const summary = summarizeVisitErrorBody(bodyText);
+            const status = result.status >= 500 ? 502 : result.status;
+            return response.status(status).json({
+                error: summary
+                    ? `Page fetch failed (${result.status} ${result.statusText}): ${summary}`
+                    : `Page fetch failed (${result.status} ${result.statusText}).`,
+            });
+        }
+
+        const contentType = String(result.headers.get('content-type') || '');
+        if (!isHtmlLikeContentType(contentType)) {
+            return response.status(415).json({
+                error: `Expected HTML content-type, received ${contentType || 'unknown'}.`,
+            });
+        }
+
+        const html = await result.text();
+        return response.json(extractCandidateImagesFromHtml(html, url));
+    } catch (error) {
+        console.error('Page image extraction failed', error);
+        const message = summarizeVisitErrorBody(error?.message || '') || 'Page image extraction failed.';
+        return response.status(502).json({ error: message });
+    }
+});
+
 export {
+    validateVisitUrl,
+    extractCandidateImagesFromHtml,
     normalizeApiResults,
     buildTavilyRequest,
     normalizeTavilyResults,

@@ -6,11 +6,29 @@ export function createImageService({ bridge, queue, getQueueConfig }) {
         async getAvailableLoras() {
             return bridge.getAvailableLoras();
         },
-        async generate(prompt, { characterName = '', signal = undefined, loras } = {}) {
+        async getCapabilities() {
+            if (typeof bridge.getCapabilities === 'function') {
+                return await bridge.getCapabilities();
+            }
+            const availableLoras = await bridge.getAvailableLoras();
+            return {
+                source: '',
+                model: '',
+                supportsCharacterReference: false,
+                maxCharacterReferences: 0,
+                supportsStyleReference: false,
+                maxStyleReferences: 0,
+                supportsSourceImage: false,
+                supportsMultiCharacterPrompts: false,
+                supportsDynamicAspectRatio: true,
+                availableLoras,
+            };
+        },
+        async generate(prompt, options = {}) {
             if (typeof getQueueConfig === 'function') {
                 queue.configure?.(getQueueConfig());
             }
-            return queue.schedule(() => bridge.generateImage(prompt, { characterName, signal, loras }));
+            return queue.schedule(() => bridge.generateImage(prompt, options));
         },
     };
 }

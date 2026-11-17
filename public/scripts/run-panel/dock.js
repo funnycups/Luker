@@ -479,14 +479,32 @@ export function createDock({
         return modeInfo(view.displayMode || view.mode).label;
     }
 
+    function sourceIconName(source) {
+        if (source === 'search') return 'search';
+        if (source === 'sd') return 'image';
+        return 'conductor';
+    }
+
+    function sourceTitle(view, separator = ' · ') {
+        if (view.source === 'search') return i18n('Online search');
+        if (view.source === 'sd') return i18n('Image Generation');
+        return `${i18n('Orchestration')}${separator}${modeLabel(view)}`;
+    }
+
+    function sourceShortLabel(source) {
+        if (source === 'search') return i18n('Online search');
+        if (source === 'sd') return i18n('Image Generation');
+        return i18n('Orchestration');
+    }
+
     function renderHead(view, counts) {
         const running = view.status === 'running';
         const inspectFn = resolveInspect(view.source);
         if (isFloat()) { renderFloatHead(view, counts); return; }
         put(clear(head),
             h('div', { class: 'rp-dock-title' },
-                h('span', { class: 'rp-dock-mark', dataset: { source: view.source } }, icon(view.source === 'search' ? 'search' : 'conductor', { size: 15 })),
-                h('span', { class: 'rp-dock-name', text: view.source === 'search' ? i18n('Online search') : `${i18n('Orchestration')} · ${modeLabel(view)}` }),
+                h('span', { class: 'rp-dock-mark', dataset: { source: view.source } }, icon(sourceIconName(view.source), { size: 15 })),
+                h('span', { class: 'rp-dock-name', text: sourceTitle(view, ' · ') }),
                 h('span', { class: 'rp-status', dataset: { status: running ? 'running' : view.status } },
                     h('span', { class: 'rp-status-dot', 'aria-hidden': 'true' }),
                     h('span', { text: statusLabel(view.status) })),
@@ -507,8 +525,8 @@ export function createDock({
         if (!large) {
             put(clear(head),
                 h('div', { class: 'rp-dock-title rp-dock-oneline' },
-                    h('span', { class: 'rp-dock-mark', dataset: { source: view.source } }, icon(view.source === 'search' ? 'search' : 'conductor', { size: 14 })),
-                    h('span', { class: 'rp-dock-name', text: view.source === 'search' ? i18n('Online search') : `${i18n('Orchestration')}·${modeLabel(view)}` }),
+                    h('span', { class: 'rp-dock-mark', dataset: { source: view.source } }, icon(sourceIconName(view.source), { size: 14 })),
+                    h('span', { class: 'rp-dock-name', text: sourceTitle(view, '·') }),
                     h('span', { class: 'rp-status', dataset: { status: running ? 'running' : view.status }, title: statusLabel(view.status) },
                         h('span', { class: 'rp-status-dot', 'aria-label': statusLabel(view.status) })),
                     h('span', { class: 'rp-dock-mini-stat', title: i18n('Time used'), text: formatDuration(view.duration) }),
@@ -522,8 +540,8 @@ export function createDock({
         }
         put(clear(head),
             h('div', { class: 'rp-dock-title' },
-                h('span', { class: 'rp-dock-mark', dataset: { source: view.source } }, icon(view.source === 'search' ? 'search' : 'conductor', { size: 15 })),
-                h('span', { class: 'rp-dock-name', text: view.source === 'search' ? i18n('Online search') : `${i18n('Orchestration')} · ${modeLabel(view)}` }),
+                h('span', { class: 'rp-dock-mark', dataset: { source: view.source } }, icon(sourceIconName(view.source), { size: 15 })),
+                h('span', { class: 'rp-dock-name', text: sourceTitle(view, ' · ') }),
                 h('span', { class: 'rp-status', dataset: { status: running ? 'running' : view.status } },
                     h('span', { class: 'rp-status-dot', 'aria-hidden': 'true' }),
                     h('span', { text: statusLabel(view.status) })),
@@ -672,12 +690,17 @@ export function createDock({
         }
         if (state === 'pill') {
             const summary = liveSummary(view, flow);
-            const source = view.source === 'search' ? i18n('Search') : i18n('Orchestration');
+            const source = view.source === 'search' ? i18n('Search') : view.source === 'sd' ? i18n('Image Generation') : i18n('Orchestration');
+            const liveLabel = view.source === 'search'
+                ? i18n('Searching')
+                : view.source === 'sd'
+                    ? i18n('Generating image')
+                    : `${i18n('Orchestrating')}${summary ? ` · ${summary}` : ''}`;
             pill.dataset.status = liveRun ? 'running' : view.status;
             pillClose.hidden = liveRun;
             put(clear(pillMain), liveRun ? h('span', { class: 'rp-pulse' }) : h('span', { class: 'rp-dock-pill-dot', 'aria-hidden': 'true' }),
                 h('span', { class: 'rp-dock-pill-text', text: liveRun
-                    ? `${view.source === 'search' ? i18n('Searching') : `${i18n('Orchestrating')}${summary ? ` · ${summary}` : ''}`} · ${formatDuration(view.duration)}`
+                    ? `${liveLabel} · ${formatDuration(view.duration)}`
                     : `${i18nFormat('${0} ${1}', source, statusLabel(view.status))} · ${formatDuration(view.duration)}` }));
             if (pillWasHidden || pill.dataset.len !== String(pill.textContent.length)) {
                 pill.dataset.len = String(pill.textContent.length);
@@ -702,7 +725,7 @@ export function createDock({
             const cur = currentBlock(blocks);
             put(clear(body),
                 storageErrorBanner(),
-                others.length ? h('div', { class: 'rp-dock-also' }, icon('play', { size: 12 }), h('span', { text: i18nFormat('${0} also running', others.map(r => (r.source === 'search' ? i18n('Online search') : i18n('Orchestration'))).join(listSeparator())) })) : null,
+                others.length ? h('div', { class: 'rp-dock-also' }, icon('play', { size: 12 }), h('span', { text: i18nFormat('${0} also running', others.map(r => sourceShortLabel(r.source)).join(listSeparator())) })) : null,
                 view.error && view.status !== 'committed' ? h('div', { class: 'rp-run-error' }, icon('alert', { size: 13 }), h('span', { text: humanError(view.error) })) : null,
                 cur ? roundEl(cur, view) : h('p', { class: 'rp-dock-empty', text: i18n('Getting ready…') }),
                 view.status !== 'running' ? finalEl(view) : null,
@@ -749,8 +772,10 @@ export function createDock({
             if (run?.quiet) return;
             clearTimeout(shrinkTimer);
             syncPrefs();
-            if (prefs.autoOpen && state !== 'open') setState(compactMql?.matches && state === 'pill' ? 'pill' : 'open');
-            else if (!prefs.autoOpen && state === 'closed') setState('pill');
+            const sourceAutoOpen = sourceConfigs.get(payload)?.autoOpen;
+            const shouldAutoOpen = sourceAutoOpen === undefined ? prefs.autoOpen : (prefs.autoOpen && sourceAutoOpen);
+            if (shouldAutoOpen && state !== 'open') setState(compactMql?.matches && state === 'pill' ? 'pill' : 'open');
+            else if (!shouldAutoOpen && state === 'closed' && sourceAutoOpen !== false) setState('pill');
             else render();
             return;
         }
@@ -848,6 +873,7 @@ export function attachDock(store, opts = {}) {
     }
     const source = String(opts.source || 'orchestrator');
     sourceConfigs.set(source, {
+        autoOpen: typeof opts.autoOpen === 'boolean' ? opts.autoOpen : undefined,
         getRunContext: typeof opts.getRunContext === 'function' ? opts.getRunContext : null,
         getFlow: typeof opts.getFlow === 'function' ? opts.getFlow : null,
         onInspect: typeof opts.onInspect === 'function' ? opts.onInspect : null,

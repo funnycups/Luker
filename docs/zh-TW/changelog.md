@@ -7,7 +7,7 @@
 ### 工作台
 
 - 新增浮動工作台視窗，提供提示詞 token 佔用分解、本機排查建議與唯讀 AI 問答。
-- 統一了記憶圖、記憶結構、多 agent 編排、預設、角色卡與世界書的 AI 迭代工作區，支援差異審閱、改動記錄復原與歷史會話自動遷移。
+- 統一了記憶圖、記憶結構、多 agent 編排、圖像生成、預設、角色卡與世界書的 AI 迭代工作區，支援差異審閱、改動記錄復原與歷史會話自動遷移。
 
 ### 多 agent 編排
 
@@ -17,7 +17,7 @@
 
 ### 說明文件
 
-- 新增[工作台指南](/zh-TW/features/workbench)、[工作台 API 參考](/zh-TW/development/extension-api/workbench)與[執行面板 API 參考](/zh-TW/development/extension-api/run-panel)，並更新記憶圖、多 agent 編排、補全預設助手、角色卡編輯助手與狀態系統說明文件。
+- 新增[工作台指南](/zh-TW/features/workbench)、[圖像生成與 AI 插圖指南](/zh-TW/features/image-generation)、[工作台 API 參考](/zh-TW/development/extension-api/workbench)、[圖像生成 API 參考](/zh-TW/development/extension-api/image-generation)與[執行面板 API 參考](/zh-TW/development/extension-api/run-panel)，並更新記憶圖、多 agent 編排、搜尋外掛、補全預設助手、角色卡編輯助手與狀態系統說明文件。
 
 ### 連線與模型
 
@@ -25,7 +25,15 @@
 
 ### 圖像生成
 
+- 新增圖像生成綁定 API 連線設定與 OpenAI 相容多模態對話生圖後端。
+- 新增跨後端角色參考圖、畫風與氛圍參考圖以及基於底圖的圖像修改能力。
+- 將畫室、全域角色庫與執行軌跡嵌入工作台，支援同人角色自動探索建檔與原創角色多輪定妝。
+- 新增正文插圖鎖定、歷史版本直接切換與基於目前插圖修改的功能。
 - 修復了 AI 插圖設定標籤被擠成直排的問題。
+
+### 搜尋外掛
+
+- 新增圖片搜尋、網頁圖片擷取工具及跨外掛圖片檢索介面。
 
 ### 角色卡
 
@@ -99,6 +107,7 @@
 ### 擴充功能 API
 
 - 新增工作台註冊介面，支援擴充功能接入嵌入式工作區、AI 迭代目標、問答唯讀資料來源與本機排查規則，並提供全域狀態的讀取與更新介面。
+- 在 `context.imageGeneration` 與 CardApp `ctx.imageGeneration` 上暴露結構化生圖介面。
 
 ### 效能
 

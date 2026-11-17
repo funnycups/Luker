@@ -19,6 +19,10 @@
                     <div id="sd_generation_preset_new" class="menu_button menu_button_icon" data-i18n="New">New</div>
                     <div id="sd_generation_preset_rename" class="menu_button menu_button_icon" data-i18n="Rename">Rename</div>
                     <div id="sd_generation_preset_delete" class="menu_button menu_button_icon" data-i18n="Delete">Delete</div>
+                    <div id="sd_open_workbench_studio" class="menu_button menu_button_icon">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        <span data-i18n="sd_open_workbench_studio">Open in Workbench</span>
+                    </div>
                 </div>
             </div>
             <hr />
@@ -55,6 +59,7 @@
             <select id="sd_source" class="text_pole">
                 <option value="aimlapi">AI/ML API</option>
                 <option value="bfl">BFL (Black Forest Labs)</option>
+                <option value="chat_image" data-i18n="sd_source_chat_image">OpenAI-compatible Chat Multimodal</option>
                 <option value="chutes">Chutes</option>
                 <option value="workersai">Cloudflare Workers AI</option>
                 <option value="comfy">ComfyUI</option>
@@ -135,25 +140,52 @@
                 <!-- (Original Text)<b>Important:</b> run DrawThings app with HTTP API switch enabled in the UI! The server must be accessible from the Luker host machine. -->
                 <i><b data-i18n="Important:">Important:</b></i><i data-i18n="sd_drawthings_auth_txt"> run DrawThings app with HTTP API switch enabled in the UI! The server must be accessible from the Luker host machine.</i>
             </div>
+            <div data-sd-source="google,openai,openrouter,xai,zai,nanogpt,chutes,electronhub,aimlapi,pollinations,chat_image">
+                <label for="sd_connection_profile" data-i18n="sd_connection_profile_label">Connection profile</label>
+                <select id="sd_connection_profile" class="text_pole"></select>
+                <div id="sd_direct_api_key_row" class="flex-container flexnowrap alignItemsBaseline marginBot5">
+                    <strong class="flex1" data-i18n="API Key">API Key</strong>
+                    <div id="sd_direct_api_key_btn" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_openai">
+                        <i class="fa-fw fa-solid fa-key"></i>
+                        <span data-i18n="Click to set">Click to set</span>
+                    </div>
+                </div>
+            </div>
+            <div data-sd-source="chat_image">
+                <div id="sd_chat_image_url_row">
+                    <label for="sd_chat_image_url" data-i18n="sd_chat_image_url_label">API Endpoint URL</label>
+                    <input id="sd_chat_image_url" type="text" class="text_pole" placeholder="https://api.example.com/v1" value="" />
+                </div>
+                <label for="sd_chat_image_custom_model" data-i18n="sd_chat_image_custom_model">Custom Model ID</label>
+                <input id="sd_chat_image_custom_model" type="text" class="text_pole" placeholder="gemini-2.5-flash-image" value="" />
+            </div>
             <div data-sd-source="huggingface">
-                <i data-i18n="Hint: Save an API key in the Hugging Face (Text Completion) API settings to use it here.">Hint: Save an API key in the Hugging Face (Text Completion) API settings to use it here.</i>
+                <div class="flex-container flexnowrap alignItemsBaseline marginBot5">
+                    <strong class="flex1" data-i18n="API Key">API Key</strong>
+                    <div id="sd_huggingface_key" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_huggingface">
+                        <i class="fa-fw fa-solid fa-key"></i>
+                        <span data-i18n="Click to set">Click to set</span>
+                    </div>
+                </div>
                 <label for="sd_huggingface_model_id" data-i18n="Model ID">Model ID</label>
                 <input id="sd_huggingface_model_id" type="text" class="text_pole"  data-i18n="[placeholder]e.g. black-forest-labs/FLUX.1-dev" placeholder="e.g. black-forest-labs/FLUX.1-dev" value="" />
             </div>
-            <div data-sd-source="chutes">
-                <i data-i18n="Hint: Save an API key in the Chutes (Chat Completion) API settings to use it here.">Hint: Save an API key in the Chutes (Chat Completion) API settings to use it here.</i>
+            <div data-sd-source="togetherai">
+                <div class="flex-container flexnowrap alignItemsBaseline marginBot5">
+                    <strong class="flex1" data-i18n="API Key">API Key</strong>
+                    <div id="sd_togetherai_key" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_togetherai">
+                        <i class="fa-fw fa-solid fa-key"></i>
+                        <span data-i18n="Click to set">Click to set</span>
+                    </div>
+                </div>
             </div>
             <div data-sd-source="electronhub">
-                <i data-i18n="Hint: Save an API key in the Electron Hub (Chat Completion) API settings to use it here.">Hint: Save an API key in the Electron Hub (Chat Completion) API settings to use it here.</i>
                 <div class="flex-container" id="sd_electronhub_quality_row">
                     <div class="flex1">
                         <label for="sd_electronhub_quality" data-i18n="Image Quality">Image Quality</label>
                         <select id="sd_electronhub_quality" class="text_pole"></select>
                     </div>
                 </div>
-            </div>
-            <div data-sd-source="nanogpt">
-                <i data-i18n="Hint: Save an API key in the NanoGPT (Chat Completion) API settings to use it here.">Hint: Save an API key in the NanoGPT (Chat Completion) API settings to use it here.</i>
             </div>
             <div data-sd-source="vlad">
                 <label for="sd_vlad_url">SD.Next API URL</label>
@@ -171,7 +203,13 @@
                 <i data-i18n="The server must be accessible from the Luker host machine.">The server must be accessible from the Luker host machine.</i>
             </div>
             <div data-sd-source="horde">
-                <i data-i18n="Hint: Save an API key in AI Horde API settings to use it here.">Hint: Save an API key in AI Horde API settings to use it here.</i>
+                <div class="flex-container flexnowrap alignItemsBaseline marginBot5">
+                    <strong class="flex1" data-i18n="API Key">API Key</strong>
+                    <div id="sd_horde_key" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_horde">
+                        <i class="fa-fw fa-solid fa-key"></i>
+                        <span data-i18n="Click to set">Click to set</span>
+                    </div>
+                </div>
                 <label for="sd_horde_nsfw" class="checkbox_label">
                     <input id="sd_horde_nsfw" type="checkbox" />
                     <span data-i18n="Allow NSFW images from Horde">
@@ -186,6 +224,15 @@
                 </label>
             </div>
             <div data-sd-source="novel">
+                <div class="flex-container flexnowrap alignItemsBaseline marginBot5">
+                    <strong class="flex1" data-i18n="API Key">API Key</strong>
+                    <div id="sd_novel_key" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_novel">
+                        <i class="fa-fw fa-solid fa-key"></i>
+                        <span data-i18n="Click to set">Click to set</span>
+                    </div>
+                </div>
+                <label for="sd_novel_url" data-i18n="sd_novel_url_label">NovelAI Endpoint URL (optional)</label>
+                <input id="sd_novel_url" type="text" class="text_pole" placeholder="https://image.novelai.net" value="" />
                 <div class="flex-container flexFlowColumn">
                     <label for="sd_novel_anlas_guard" class="checkbox_label flex1" data-i18n="[title]Automatically adjust generation parameters to ensure free image generations." title="Automatically adjust generation parameters to ensure free image generations.">
                         <input id="sd_novel_anlas_guard" type="checkbox" />
@@ -196,16 +243,6 @@
                     </label>
                     <div id="sd_novel_view_anlas" class="menu_button menu_button_icon" data-i18n="View my Anlas">
                         View my Anlas
-                    </div>
-                </div>
-                <i data-i18n="Hint: Save an API key in the NovelAI API settings to use it here.">Hint: Save an API key in the NovelAI API settings to use it here.</i>
-            </div>
-            <div data-sd-source="aimlapi">
-                <div class="flex-container flexnowrap alignItemsBaseline marginBot5">
-                    <strong class="flex1" data-i18n="API Key">API Key</strong>
-                    <div id="sd_aimlapi_key" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_aimlapi">
-                        <i class="fa-fw fa-solid fa-key"></i>
-                        <span data-i18n="Click to set">Click to set</span>
                     </div>
                 </div>
             </div>
@@ -310,13 +347,6 @@
             </div>
             <div data-sd-source="pollinations">
                 <a href="https://enter.pollinations.ai">Pollinations.ai</a>
-                <div class="flex-container flexnowrap alignItemsBaseline marginBot5">
-                    <strong class="flex1" data-i18n="API Key">API Key</strong>
-                    <div id="sd_pollinations_key" class="menu_button menu_button_icon manage-api-keys" data-key="api_key_pollinations">
-                        <i class="fa-fw fa-solid fa-key"></i>
-                        <span data-i18n="Click to set">Click to set</span>
-                    </div>
-                </div>
                 <div class="flex-container">
                     <label class="flex1 checkbox_label" for="sd_pollinations_enhance" data-i18n="[title]Enables prompt enhancing (passes prompts through an LLM to add detail)." title="Enables prompt enhancing (passes prompts through an LLM to add detail).">
                         <input id="sd_pollinations_enhance" type="checkbox" />
@@ -630,6 +660,17 @@
             <textarea id="sd_prompt_prefix" class="text_pole textarea_compact autoSetHeight" data-i18n="[placeholder]sd_prompt_prefix_placeholder" placeholder="Use {prompt} to specify where the generated prompt will be inserted"></textarea>
             <label for="sd_negative_prompt" data-i18n="Negative common prompt prefix">Negative common prompt prefix</label>
             <textarea id="sd_negative_prompt" class="text_pole textarea_compact autoSetHeight"></textarea>
+            <div id="sd_style_references_block" data-sd-source="google,chat_image,openrouter,openai,xai,novel,comfy" class="marginTopBot5">
+                <div class="flex-container alignItemsCenter justifySpaceBetween">
+                    <label data-i18n="sd_style_references_title">Style & Vibe References</label>
+                    <div id="sd_style_ref_upload" class="menu_button menu_button_icon">
+                        <i class="fa-solid fa-upload"></i>
+                        <span data-i18n="sd_style_ref_upload">Add style reference</span>
+                    </div>
+                    <input id="sd_style_ref_file" type="file" accept="image/*,.naiv4vibe" hidden />
+                </div>
+                <div id="sd_style_ref_list" class="flex-container flexFlowColumn flexGap5 marginTop5"></div>
+            </div>
             <div id="sd_character_prompt_block">
                 <label for="sd_character_prompt" data-i18n="Character-specific prompt prefix">Character-specific prompt prefix</label>
                 <small data-i18n="Won't be used in groups.">Won't be used in groups.</small>

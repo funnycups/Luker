@@ -48,7 +48,7 @@ AGENT: "Pre-request agent mode" {
 
 ### Tool Mode
 
-Search functionality is registered as a callable tool for the creative LLM in the [Function Call Runtime](/improvements/function-call-runtime). When the AI determines it needs to search for information, it initiates a web search or page visit tool call and receives the results directly in context.
+Search functionality is registered as callable tools for the creative LLM in the [Function Call Runtime](/improvements/function-call-runtime), covering web search, page reading, image search, and webpage image extraction. When the AI determines it needs external information or visual references, it initiates a tool call and receives the results directly in context.
 
 ### Pre-request Agent Mode
 
@@ -93,13 +93,19 @@ The top toggles map to the two modes (**Expose tools to main model** = Tool Mode
 
 Safe search is available for DuckDuckGo, SearXNG, Brave Search, Tavily, Exa, and SerpApi.
 
+## Image Search and Webpage Image Extraction
+
+DuckDuckGo, SearXNG, Brave Search, Tavily, Serper, and SerpApi support structured image search returning full-size image URLs, thumbnails, titles, source page URLs, and dimensions. Text-only engines such as Exa, Z.AI, and DeepSeek return an explicit unsupported error when image search is requested.
+
+Webpage image extraction parses `og:image`, `twitter:image`, and content `<img>` candidates from a public URL while filtering tracking pixels and tiny icons.
+
 ## World Info Entry Management
 
 In Pre-request Agent Mode, search results are created as World Info entries. You can configure **Injection position**, **Injection depth**, **Injection role**, and **Injection order** directly in the Search Tools panel, and inspect or clear stored entries via **Manage stored search entries**.
 
 ## Use from other features
 
-Search is also available to Workbench AI iteration (character card and world book editing), CardApp Studio, and the Character Editor Assistant popup, allowing the editing AI to look up references online. The developer interface is documented in the [Extension API](/development/extension-api/).
+Search is also available to Image Generation character exploration, Workbench AI iteration, CardApp Studio, and the Character Editor Assistant popup, allowing agents to look up text and reference images online. The developer interface is documented in the [Extension API](/development/extension-api/).
 
 ## Result Reuse
 
@@ -133,6 +139,7 @@ The plugin keeps the shared lorebook aligned with stored search results as the c
 | **Agent preset** | Generation preset for the pre-request Agent (empty uses main preset). The help button beside the dropdown explains the expected preset type |
 
 ::: info Related Pages
+- [Image Generation & AI Illustration](/features/image-generation) — character visual exploration with image search
 - [Workbench](/features/workbench) — AI editing with web search access
 - [Character Card Editor Assistant](/features/card-editor/) — editor assistant overview
 - [CardApp Studio](/features/card-editor/studio) — web search inside Studio

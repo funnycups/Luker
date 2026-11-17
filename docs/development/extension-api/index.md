@@ -9,6 +9,7 @@ This is the complete reference for the Luker Extension API, intended for plugin 
 | [World Info](/development/extension-api/world-info) | Lorebook CRUD, activation scanning, character auxiliary world books |
 | [Presets & Prompts](/development/extension-api/presets-and-prompts) | `context.presets.*`, `buildPresetAwarePromptMessages`, `resolveWorldInfoForMessages`, prompt structure inspection, reasoning helpers, settings views |
 | [Generation](/development/extension-api/generation) | `generateTask`, tool registration, `generateRaw` / `generateQuietPrompt`, service classes, connection profiles |
+| [Image Generation](/development/extension-api/image-generation) | `context.imageGeneration.*`, `getExtensionApi('sd')`, CardApp `ctx.imageGeneration`, reference image roles, capabilities, and attribution |
 | [Slash Commands](/development/extension-api/slash-commands) | Registering and executing slash commands, named/unnamed arguments, enums |
 | [Macros & Variables](/development/extension-api/macros-and-variables) | Macro registration, built-in macro reference, `substituteParams`, local & global variables |
 | [Skills](/development/extension-api/skills) | `context.skills.*` — install, read, write, search, scope migration, embed pack/extract; CardApp ctx parity |
@@ -53,6 +54,7 @@ For quickly finding where an API lives, the context object groups related APIs i
 | `context.runPanel` | `createRunStore`, `createRunPanel`, `attachDock`, `openRunDock`, `toggleRunDock`, `getRunRecorder`, `events`, `withRound`, `withStreamingSection` |
 | `context.iterationLibrary` | `applyEdits`, `inverseEdit`, `registerOp`, `runner`, `storage`, `proposalBus`, `tools`, `render`, `textDiff`, `zoomOverlay`, `ui` |
 | `context.skills` | `list`, `get`, `readFile`, `listFiles`, `search`, `writeFile`, `editFile`, `deleteFile`, `install`, `delete`, `rename`, `moveScope`, `importBundled`, `listBundledManifest`, `packForEmbed`, `previewExtractEmbed`, `executeExtractEmbed`, `importFromUrl` |
+| `context.imageGeneration` | `isAvailable`, `generate`, `getCapabilities`, `listPresets`, `getCurrentPreset`, `switchPreset`, `getAvailableLoras` |
 | `context.worldInfoEntry` | `template`, `create`, `delete`, `setButtonClass`, `setGlobalSelection`, `getSorted` |
 | `context.chatWorldInfo` | `getNames`, `setSelection`, `globalSelection` |
 | `context.openai` | `proxies`, `ZAI_ENDPOINT`, `stripPresetConnectionFields` |

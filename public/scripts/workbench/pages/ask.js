@@ -26,6 +26,7 @@ const CHIP_KEYS = [
 const WS_NAME_KEYS = {
     memory: 'Memory graph',
     orch: 'Orchestration',
+    sd: 'Image Generation',
     preset: 'Preset',
     card: 'Character card',
     world: 'World book',

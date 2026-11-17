@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
-import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import { createSearchToolsSettingsUi } from './settings-ui.js';
 import { createSearchRunPanel } from './run-panel.js';
 import {
@@ -61,6 +60,8 @@ const REUSE_GENERATION_TYPES = new Set(['continue', 'regenerate', 'swipe']);
 const TOOL_NAMES = Object.freeze({
     SEARCH: 'luker_web_search',
     VISIT: 'luker_web_visit',
+    IMAGE_SEARCH: 'luker_web_image_search',
+    PAGE_IMAGES: 'luker_web_page_images',
     AGENT_SEARCH: 'luker_search_agent_search',
     AGENT_VISIT: 'luker_search_agent_visit',
     AGENT_UPSERT: 'luker_search_agent_upsert_lorebook_entry',
@@ -70,6 +71,8 @@ const TOOL_NAMES = Object.freeze({
 const EXPORTED_TOOL_NAMES = Object.freeze({
     SEARCH: TOOL_NAMES.SEARCH,
     VISIT: TOOL_NAMES.VISIT,
+    IMAGE_SEARCH: TOOL_NAMES.IMAGE_SEARCH,
+    PAGE_IMAGES: TOOL_NAMES.PAGE_IMAGES,
 });
 const DEFAULT_LOREBOOK_CONTENT_TEMPLATE_GUIDANCE = [
     'When you write lorebook content, the content field must be exactly one fenced yaml code block.',
@@ -639,7 +642,7 @@ function renderOpenAIPresetOptions(context, selectedName = '') {
 
 function renderConnectionProfileOptions(selectedName = '') {
     const selected = String(selectedName || '').trim();
-    const names = getChatCompletionConnectionProfiles()
+    const names = (getContext()?.connectionProfiles?.list?.() || [])
         .map(profile => String(profile?.name || '').trim())
         .filter(Boolean);
     const options = [`<option value="">${escapeHtml(i18n('(Current API config)'))}</option>`];
@@ -732,7 +735,7 @@ async function searchWeb(args = {}, { abortSignal = null } = {}) {
     }
 
     const maxResults = clampInteger(
-        args?.max_results ?? settings.defaultMaxResults,
+        args?.max_results ?? args?.maxResults ?? settings.defaultMaxResults,
         1,
         20,
         settings.defaultMaxResults,
@@ -796,6 +799,115 @@ async function visitWebPage(args = {}, { abortSignal = null } = {}) {
     };
 }
 
+function getActiveProviderCapabilities() {
+    const settings = getSettings();
+    const provider = normalizeProvider(settings.provider);
+    const definition = getProviderDefinition(provider);
+    return {
+        provider,
+        supportsWebSearch: true,
+        supportsImageSearch: Boolean(definition?.supportsImageSearch),
+    };
+}
+
+async function searchImages(args = {}, { abortSignal = null } = {}) {
+    const settings = getSettings();
+    const query = normalizeWhitespace(args?.query || '');
+    if (!query) {
+        throw new Error('query is required.');
+    }
+
+    const provider = normalizeProvider(args?.provider || settings.provider);
+    const definition = getProviderDefinition(provider);
+    if (!definition?.supportsImageSearch) {
+        const err = new Error(`Image search is not supported by provider "${provider}".`);
+        err.code = 'IMAGE_SEARCH_UNSUPPORTED_BY_PROVIDER';
+        throw err;
+    }
+
+    const maxResults = clampInteger(
+        args?.max_results ?? args?.maxResults ?? settings.defaultMaxResults,
+        1,
+        20,
+        settings.defaultMaxResults,
+    );
+    const providerSettings = getProviderSettings(settings, provider);
+    const safeSearch = normalizeSafeSearch(args?.safe_search || providerSettings.safeSearch || settings.safeSearch);
+    const region = normalizeWhitespace(args?.region || providerSettings.region || '');
+
+    const response = await fetch('/api/search/images', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        signal: isAbortSignalLike(abortSignal) ? abortSignal : null,
+        body: JSON.stringify({
+            provider,
+            query,
+            max_results: maxResults,
+            safe_search: safeSearch,
+            region: region || '',
+            options: providerSettings || {},
+        }),
+    });
+
+    if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        let detail = text || response.statusText;
+        let code = '';
+        try {
+            const parsed = JSON.parse(text);
+            if (parsed?.error) detail = parsed.error;
+            if (parsed?.code) code = parsed.code;
+        } catch {
+            // plain text body
+        }
+        const err = new Error(`Image search failed (${response.status}): ${detail}`);
+        if (code) err.code = code;
+        throw err;
+    }
+
+    const payload = await response.json();
+    const results = Array.isArray(payload?.results) ? payload.results : [];
+    return {
+        provider: String(payload?.provider || provider),
+        query: String(payload?.query || query),
+        result_count: Number(payload?.result_count ?? results.length),
+        results,
+    };
+}
+
+async function extractPageImages(args = {}, { abortSignal = null } = {}) {
+    const url = normalizeWhitespace(args?.url || '');
+    if (!url) {
+        throw new Error('url is required.');
+    }
+
+    const response = await fetch('/api/search/page-images', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        signal: isAbortSignalLike(abortSignal) ? abortSignal : null,
+        body: JSON.stringify({ url }),
+    });
+
+    if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        let detail = text || response.statusText;
+        try {
+            const parsed = JSON.parse(text);
+            if (parsed?.error) detail = parsed.error;
+        } catch {
+            // plain text body
+        }
+        throw new Error(`Page image extraction failed (${response.status}): ${detail}`);
+    }
+
+    const payload = await response.json();
+    return {
+        pageTitle: String(payload?.pageTitle || ''),
+        pageUrl: String(payload?.pageUrl || url),
+        images: Array.isArray(payload?.images) ? payload.images : [],
+    };
+}
+
 function getSharedSearchToolSpecs() {
     return [
         {
@@ -843,6 +955,49 @@ function getSharedSearchToolSpecs() {
             formatMessage: 'Fetching webpage...',
             action: visitWebPage,
         },
+        {
+            tool: {
+                type: 'function',
+                function: {
+                    name: EXPORTED_TOOL_NAMES.IMAGE_SEARCH,
+                    description: 'Search the web for candidate images matching a query.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            query: { type: 'string', description: 'Image search query text.' },
+                            max_results: { type: 'integer', description: 'Maximum number of image results (1-20).' },
+                            safe_search: { type: 'string', enum: ['off', 'moderate', 'strict'] },
+                            region: { type: 'string', description: 'Optional locale or region hint.' },
+                        },
+                        required: ['query'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            displayName: 'Image Search',
+            formatMessage: 'Searching images...',
+            action: searchImages,
+        },
+        {
+            tool: {
+                type: 'function',
+                function: {
+                    name: EXPORTED_TOOL_NAMES.PAGE_IMAGES,
+                    description: 'Extract candidate high-resolution image URLs and captions from a webpage.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            url: { type: 'string', description: 'HTTP/HTTPS webpage URL.' },
+                        },
+                        required: ['url'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            displayName: 'Extract Page Images',
+            formatMessage: 'Extracting page images...',
+            action: extractPageImages,
+        },
     ];
 }
 
@@ -852,7 +1007,10 @@ function getSharedSearchToolDefs() {
 
 function isSharedSearchToolName(name = '') {
     const normalizedName = String(name || '').trim();
-    return normalizedName === EXPORTED_TOOL_NAMES.SEARCH || normalizedName === EXPORTED_TOOL_NAMES.VISIT;
+    return normalizedName === EXPORTED_TOOL_NAMES.SEARCH
+        || normalizedName === EXPORTED_TOOL_NAMES.VISIT
+        || normalizedName === EXPORTED_TOOL_NAMES.IMAGE_SEARCH
+        || normalizedName === EXPORTED_TOOL_NAMES.PAGE_IMAGES;
 }
 
 async function invokeSharedSearchToolCall(call, { abortSignal = null } = {}) {
@@ -867,7 +1025,26 @@ async function invokeSharedSearchToolCall(call, { abortSignal = null } = {}) {
         return await visitWebPage(args, { abortSignal });
     }
 
+    if (name === EXPORTED_TOOL_NAMES.IMAGE_SEARCH) {
+        return await searchImages(args, { abortSignal });
+    }
+
+    if (name === EXPORTED_TOOL_NAMES.PAGE_IMAGES) {
+        return await extractPageImages(args, { abortSignal });
+    }
+
     throw new Error(`Unsupported search tool: ${name}`);
+}
+
+function publishSearchToolsExtensionApi() {
+    const context = getContext();
+    context?.registerExtensionApi?.('search-tools', {
+        search: searchWeb,
+        visit: visitWebPage,
+        searchImages,
+        extractPageImages,
+        getActiveProviderCapabilities,
+    });
 }
 
 function installGlobalApi() {
@@ -882,6 +1059,9 @@ function installGlobalApi() {
         invoke: async (call, options = {}) => await invokeSharedSearchToolCall(call, options),
         search: searchWeb,
         visit: visitWebPage,
+        searchImages,
+        extractPageImages,
+        getActiveProviderCapabilities,
         getSettings: () => {
             const settings = getSettings();
             const activeProviderSettings = getProviderSettings(settings, settings.provider);
@@ -2633,6 +2813,7 @@ jQuery(() => {
     registerLocaleData();
     initSearchRunPanel();
     installGlobalApi();
+    publishSearchToolsExtensionApi();
 
     const context = getContext();
     registerTools(context);

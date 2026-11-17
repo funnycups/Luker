@@ -23,9 +23,21 @@
 
 import mime from 'mime-types';
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
+import { loadReferenceInputs } from '../../../media-input-loader.js';
 import { extractImageMeta } from '../../../request-inspector.js';
+import {
+    buildMultipartImageEditsPayload,
+    normalizeImagesBaseUrl,
+    resolveSdSecret,
+} from './sd-auth.js';
 
-const API_URL = 'https://api.x.ai/v1/images/generations';
+const DEFAULT_XAI_BASE = 'https://api.x.ai/v1';
+
+function detectBase64MimeType(raw) {
+    if (raw.startsWith('iVBORw0KGgo')) return 'image/png';
+    if (raw.startsWith('UklGR')) return 'image/webp';
+    return 'image/jpeg';
+}
 
 /**
  * @param {object} ctx DispatchContext
@@ -35,36 +47,67 @@ export async function dispatchSdXai(ctx) {
     const body = ctx.body || {};
     ctx.inspection.startImage(extractImageMeta('xai', body));
 
-    const key = ctx.secrets.read(SECRET_KEYS.XAI);
-    if (!key) {
+    let key;
+    try {
+        key = resolveSdSecret(ctx, [SECRET_KEYS.XAI]);
+    } catch (err) {
         console.warn('xAI key not found.');
-        const err = new Error('xAI key not found');
         ctx.inspection.failImage(err, 400);
         ctx.emit.error(err);
         return;
     }
 
     try {
-        const requestBody = {
-            prompt: body.prompt,
-            model: body.model,
-            aspect_ratio: body.aspect_ratio,
-            resolution: body.resolution,
-            response_format: 'b64_json',
-        };
+        const loadedRefs = await loadReferenceInputs(ctx.user?.directories, body.references);
+        const baseUrl = normalizeImagesBaseUrl(body.api_url, DEFAULT_XAI_BASE);
 
-        console.debug('xAI request:', requestBody);
+        let targetUrl;
+        let fetchOptions;
 
-        ctx.inspection.attach(API_URL, key);
-        const result = await ctx.fetch(API_URL, {
-            method: 'POST',
-            body: JSON.stringify(requestBody),
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${key}`,
-            },
-            signal: ctx.signal,
-        });
+        if (loadedRefs.length > 0) {
+            targetUrl = `${baseUrl}/images/edits`;
+            const multipart = buildMultipartImageEditsPayload({
+                fields: {
+                    prompt: body.prompt,
+                    model: body.model,
+                    aspect_ratio: body.aspect_ratio,
+                    resolution: body.resolution,
+                    response_format: 'b64_json',
+                },
+                loadedRefs,
+            });
+            fetchOptions = {
+                method: 'POST',
+                body: multipart.body,
+                headers: {
+                    ...multipart.headers,
+                    'Authorization': `Bearer ${key}`,
+                },
+                signal: ctx.signal,
+            };
+        } else {
+            targetUrl = `${baseUrl}/images/generations`;
+            const requestBody = {
+                prompt: body.prompt,
+                model: body.model,
+                aspect_ratio: body.aspect_ratio,
+                resolution: body.resolution,
+                response_format: 'b64_json',
+            };
+            console.debug('xAI request:', requestBody);
+            fetchOptions = {
+                method: 'POST',
+                body: JSON.stringify(requestBody),
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${key}`,
+                },
+                signal: ctx.signal,
+            };
+        }
+
+        ctx.inspection.attach(targetUrl, key);
+        const result = await ctx.fetch(targetUrl, fetchOptions);
 
         // Architectural contract: every dispatch emits a single head frame
         // immediately after the upstream fetch resolves, regardless of
@@ -98,9 +141,9 @@ export async function dispatchSdXai(ctx) {
         }
 
         const dataUrlMatch = encodedImage.match(/^data:(.+);base64,(.+)$/);
-        const mimeType = dataUrlMatch?.[1] || 'image/jpeg';
-        const format = mime.extension(mimeType) || 'jpg';
         const image = dataUrlMatch?.[2] || encodedImage;
+        const mimeType = dataUrlMatch?.[1] || detectBase64MimeType(image);
+        const format = mime.extension(mimeType) || 'jpg';
 
         ctx.inspection.completeImage({ format, data: image });
 

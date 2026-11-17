@@ -81,21 +81,27 @@ handle.unregister();
 
 ## Search Tools API
 
-The search plugin exposes its API through the `Luker.searchTools` global object so other plugins can leverage search capabilities:
+The search plugin publishes a cross-extension service via `context.registerExtensionApi('search-tools', ...)` and also exposes `Luker.searchTools` for function-calling tool metadata:
 
 ```js
-// Check whether the search plugin is available
+const searchApi = Luker.getContext().getExtensionApi('search-tools');
+if (searchApi) {
+  const caps = searchApi.getActiveProviderCapabilities();
+  const webResults = await searchApi.search({ query: 'character setting' });
+  if (caps.supportsImageSearch) {
+    const images = await searchApi.searchImages({ query: 'character reference sheet' });
+  }
+  const pageImages = await searchApi.extractPageImages({ url: 'https://example.com/wiki/Character' });
+}
+
 if (globalThis?.Luker?.searchTools) {
-  // Get the list of available search tool names
   const toolNames = Luker.searchTools.toolNames;
-  // Get tool definitions (for function calling)
   const toolDefs = Luker.searchTools.getToolDefs();
-  // Check whether a tool name belongs to search tools
-  const isSearchTool = Luker.searchTools.isToolName('web_search');
+  const isSearchTool = Luker.searchTools.isToolName('luker_web_image_search');
 }
 ```
 
-`Luker.searchTools` exposes tool definition metadata; actual search execution happens via the internal tool-calling loop. See [Search Tools](/features/search-tools) for details.
+See [Search Tools](/features/search-tools) and [Image Generation API](/development/extension-api/image-generation) for full method signatures.
 
 ## Inter-Extension Communication
 

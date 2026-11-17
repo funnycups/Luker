@@ -28,34 +28,23 @@ test.afterAll(async () => {
 });
 
 async function configureSd(page) {
-    await page.evaluate((baseURL) => {
-        const ctx = window.Luker.getContext();
-        const sd = ctx.extensionSettings.sd;
-        sd.source = 'auto';
-        sd.auto_url = baseURL;
-        sd.auto_auth = '';
-        sd.model = 'mock-model';
-        sd.sampler = 'DDIM';
-        sd.scheduler = 'normal';
-        sd.steps = 20;
-        sd.scale = 7;
-        sd.vae = '';
-        sd.width = 64;
-        sd.height = 64;
-        sd.prompt_prefix = '';
-        sd.negative_prompt = '';
-        ctx.saveSettingsDebounced();
-    }, sdMock.baseURL);
+    await openExtensionsDrawer(page);
+    await openInlineDrawer(page, 'sd_container');
+    await page.locator('#sd_source').selectOption('auto');
+    await page.locator('#sd_auto_url').fill(sdMock.baseURL);
+    await page.locator('#sd_auto_validate').click();
+    await expect(page.locator('#sd_model option').first()).toBeAttached({ timeout: 15_000 });
+    await closeAnyOpenTopSettingsDrawer(page);
 }
 
 async function openStudio(page) {
     await page.locator('#extensionsMenuButton').click();
     await page.locator('#sd_illustration_open_studio').click();
-    await expect(page.locator('#sd_studio')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.wbench .wb-win:not([hidden]) [data-sd-view="studio"]')).toBeVisible({ timeout: 10_000 });
 }
 
-test.describe('image iteration studio', () => {
-    test('keeps tool history and persists sessions across restarts', async ({ page }) => {
+test.describe('Workbench embedded image studio', () => {
+    test('keeps tool history with attribution:none and persists sessions in GlobalState across restarts', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await configureSd(page);
         await openExtensionsDrawer(page);
@@ -64,54 +53,62 @@ test.describe('image iteration studio', () => {
         await closeAnyOpenTopSettingsDrawer(page);
 
         await openStudio(page);
+        const studioRoot = page.locator('.wbench .wb-win:not([hidden]) [data-sd-view="studio"]');
 
-        // First round: the model calls generate_image.
-        await page.locator('#sd_studio_input').fill('画一座海边的灯塔');
-        await page.locator('#sd_studio_send').click();
+        // First round: the model calls generate_image; output saved under _studio with attribution:none.
+        await studioRoot.locator('[data-sd-role="studio-input"]').fill('画一座海边的灯塔');
+        await studioRoot.locator('[data-sd-role="studio-send"]').click();
 
-        const imageCard = page.locator('#sd_studio [data-studio-image-id]').first();
+        const imageCard = studioRoot.locator('[data-studio-image-id]').first();
         await expect(imageCard).toBeVisible({ timeout: 60_000 });
+        const imgSrc = await imageCard.locator('img').getAttribute('src');
+        expect(imgSrc).toContain('/user/images/_studio/');
+
         const txt2img = sdMock.requests.find(request => request.url === '/sdapi/v1/txt2img');
         expect(txt2img, 'SD mock should receive one image generation request').toBeTruthy();
         expect(String(txt2img.body.prompt)).toContain('lighthouse');
 
-        // Second round: plain text reply, but its history must carry the
-        // previous assistant tool call and the tool result.
-        await page.locator('#sd_studio_input').fill('改成夜晚');
-        await page.locator('#sd_studio_send').click();
-        await expect(page.locator('#sd_studio_messages')).toContainText('已按你的反馈调整。', { timeout: 60_000 });
+        // Second round: plain text reply, carrying previous assistant tool_calls and tool result.
+        await studioRoot.locator('[data-sd-role="studio-input"]').fill('改成夜晚');
+        await studioRoot.locator('[data-sd-role="studio-send"]').click();
+        await expect(studioRoot.locator('.sdlens-studio-messages')).toContainText('已按你的反馈调整。', { timeout: 60_000 });
 
         const chatRequests = mock.requests.filter(request => String(request.url).includes('/chat/completions'));
         expect(chatRequests.length).toBeGreaterThanOrEqual(2);
         const secondHistory = chatRequests.at(-1).body.messages;
         const toolMessage = secondHistory.find(message => message.role === 'tool');
         expect(toolMessage, 'second round must replay the tool result').toBeTruthy();
-        expect(toolMessage.content).toContain('/user/images/');
+        expect(toolMessage.content).toContain('/user/images/_studio/');
         expect(secondHistory.some(message => message.role === 'assistant'
             && Array.isArray(message.tool_calls) && message.tool_calls.length > 0)).toBe(true);
 
-        // Session is on disk before the restart.
+        // Session is stored in states/sd_studio_sessions.json, NOT settings.json.
+        const stateFile = resolve(server.dataRoot, 'default-user', 'states', 'sd_studio_sessions.json');
         const settingsFile = resolve(server.dataRoot, 'default-user', 'settings.json');
         await expect.poll(() => {
             try {
-                const stored = JSON.parse(readFileSync(settingsFile, 'utf8'));
-                return Object.keys(stored.extension_settings?.sd?.illustration?.studioSessions || {}).length;
+                const stored = JSON.parse(readFileSync(stateFile, 'utf8'));
+                return Object.keys(stored.sessions || {}).length;
             } catch {
                 return 0;
             }
-        }, { timeout: 15_000 }).toBeGreaterThan(0);
+        }, { timeout: 15_000 }).toBe(1);
 
-        await page.locator('dialog.popup[open] .popup-button-close').last().click();
-        await expect(page.locator('#sd_studio')).toHaveCount(0, { timeout: 10_000 });
+        const settingsJson = JSON.parse(readFileSync(settingsFile, 'utf8'));
+        expect(settingsJson.extension_settings?.sd?.illustration?.studioSessions).toBeUndefined();
+
+        await page.locator('.wbench .wb-titlebar .lw-ibtn.is-close').click();
+        await expect(page.locator('.wbench .wb-win')).toBeHidden({ timeout: 10_000 });
 
         await server.restart();
         await awaitMainUI(page, server.baseURL);
         await openStudio(page);
 
-        await expect(page.locator('#sd_studio .sd_studio_session')).toHaveCount(1);
-        await page.locator('#sd_studio .sd_studio_session').first().click();
-        await expect(page.locator('#sd_studio [data-studio-image-id]')).toHaveCount(1);
-        await expect(page.locator('#sd_studio_messages')).toContainText('画一座海边的灯塔');
-        await expect(page.locator('#sd_studio_messages')).toContainText('改成夜晚');
+        const reopenedStudio = page.locator('.wbench .wb-win:not([hidden]) [data-sd-view="studio"]');
+        await expect(reopenedStudio.locator('[data-studio-session-id]')).toHaveCount(1);
+        await reopenedStudio.locator('[data-studio-session-id]').first().click();
+        await expect(reopenedStudio.locator('[data-studio-image-id]')).toHaveCount(1);
+        await expect(reopenedStudio.locator('.sdlens-studio-messages')).toContainText('画一座海边的灯塔');
+        await expect(reopenedStudio.locator('.sdlens-studio-messages')).toContainText('改成夜晚');
     });
 });

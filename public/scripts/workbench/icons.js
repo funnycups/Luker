@@ -43,6 +43,7 @@ const PATHS = {
     copy: 'M9 9h10v11H9zM15 9V4H5v11h4',
     fork: `${circle(6, 5, 2)}${circle(18, 5, 2)}${circle(12, 19, 2)}M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7M12 12v5`,
     edit: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
+    image: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 19',
 };
 
 export function icon(name, { size = 16, className = '' } = {}) {

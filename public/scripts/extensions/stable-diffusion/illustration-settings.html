@@ -34,6 +34,9 @@
             <label for="sd_illustration_studio_prompt" data-i18n="sd_illustration_studio_prompt">Studio prompt</label>
             <textarea id="sd_illustration_studio_prompt" class="textarea_compact text_pole" rows="5"></textarea>
 
+            <label for="sd_illustration_character_design_prompt" data-i18n="sd_illustration_character_design_prompt">OC character design prompt override</label>
+            <textarea id="sd_illustration_character_design_prompt" class="textarea_compact text_pole" rows="4"></textarea>
+
             <div class="sd_illustration_row">
                 <label for="sd_illustration_api_preset" data-i18n="sd_illustration_api_preset">Connection profile</label>
                 <select id="sd_illustration_api_preset" class="text_pole"></select>
@@ -41,6 +44,29 @@
             <div class="sd_illustration_row">
                 <label for="sd_illustration_llm_preset" data-i18n="sd_illustration_llm_preset">Completion preset</label>
                 <select id="sd_illustration_llm_preset" class="text_pole"></select>
+            </div>
+
+            <div class="inline-drawer marginTop5">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <span data-i18n="sd_illustration_exploration_section">Character exploration agent</span>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <label for="sd_illustration_visual_inspection" class="checkbox_label">
+                        <input id="sd_illustration_visual_inspection" type="checkbox" />
+                        <span data-i18n="sd_illustration_visual_inspection">Send downloaded reference previews to multimodal LLM for inspection</span>
+                    </label>
+                    <div class="sd_illustration_row">
+                        <label for="sd_illustration_exploration_api_preset" data-i18n="sd_illustration_exploration_api_preset">Exploration connection profile</label>
+                        <select id="sd_illustration_exploration_api_preset" class="text_pole"></select>
+                    </div>
+                    <div class="sd_illustration_row">
+                        <label for="sd_illustration_exploration_llm_preset" data-i18n="sd_illustration_exploration_llm_preset">Exploration completion preset</label>
+                        <select id="sd_illustration_exploration_llm_preset" class="text_pole"></select>
+                    </div>
+                    <label for="sd_illustration_exploration_prompt" data-i18n="sd_illustration_exploration_prompt">Exploration prompt override</label>
+                    <textarea id="sd_illustration_exploration_prompt" class="textarea_compact text_pole" rows="5"></textarea>
+                </div>
             </div>
 
             <hr />

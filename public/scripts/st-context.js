@@ -192,7 +192,8 @@ import { updateReasoningUI, parseReasoningFromString, getReasoningTemplateByName
 import { IGNORE_SYMBOL, inject_ids } from './constants.js';
 import { macros } from './macros/macro-system.js';
 import { MessageFormatter } from './message-formatter.js';
-import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
+import * as regexEngine from './extensions/regex/engine.js';
+const { getRegexedString, regex_placement } = regexEngine;
 import { addMessages, updateMessages, deleteMessages, getMessage, getMessageCount } from './messages.js';
 import { createFloorState } from './floor-state.js';
 import { generateTask, generateTaskStream, GenerateTaskError, resolveOpenAiStreamFlag } from './generate-task.js';
@@ -207,6 +208,7 @@ import * as ITERATION_LIBRARY_API_NS from './iteration-library/index.js';
 import * as LUKER_TABS_API from './extensions/luker-tabs.js';
 import * as FIELD_HELP_API from './extensions/field-help.js';
 import { skillsApi } from './skills/api.js';
+import { imageGenerationApi } from './image-generation/registry.js';
 import * as RUN_PANEL_API_NS from './run-panel/index.js';
 import * as WORKBENCH_REGISTRY from './workbench/registry.js';
 import { SECRET_KEYS, secret_state } from './secrets.js';
@@ -2535,8 +2537,10 @@ export function getContext() {
         // `readPluginFloors` below over hand-rolling a chat walk — it
         // already routes every floor through this lane with real depths.
         regex: {
-            applyRegex: getRegexedString,
-            placement: regex_placement,
+            applyRegex: regexEngine.getRegexedString,
+            placement: regexEngine.regex_placement,
+            registerRegexProvider: regexEngine.registerRegexProvider,
+            unregisterRegexProvider: regexEngine.unregisterRegexProvider,
         },
         // Chat floor accessor for plugin LLM requests (lib/plugin-floors.js):
         // walks the current chat once, cooks each floor through the plugin
@@ -2555,6 +2559,7 @@ export function getContext() {
         renderLukerTabs: LUKER_TABS_API.renderLukerTabs,
         renderFieldHelpButton: FIELD_HELP_API.renderFieldHelpButton,
         skills: skillsApi,
+        imageGeneration: imageGenerationApi,
         get onlineStatus() { return online_status; },
         get maxContext() { return Number(max_context); },
         get chatMetadata() { return chat_metadata; },

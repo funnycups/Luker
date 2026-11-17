@@ -1,4 +1,5 @@
-import { buildAddImagePromptTool } from './tools.js';
+import { buildAddImagePromptTool, buildIllustrationAgentTools } from './tools.js';
+import { stripUnlockedIllustrationMarkup } from './message.js';
 
 function speakerName(message) {
     const name = String(message?.name || '').trim();
@@ -15,21 +16,73 @@ function isUsableContextMessage(message) {
     return String(message.mes || '').trim().length > 0;
 }
 
-export function buildIllustrationContext({ chat, messageId, contextMessageCount, stripMarkup }) {
-    const list = Array.isArray(chat) ? chat : [];
+export function formatBackendCapabilitiesBlock(capabilities) {
+    if (!capabilities || typeof capabilities !== 'object') {
+        return '';
+    }
+    const charRefInfo = capabilities.supportsCharacterReference
+        ? (capabilities.maxCharacterReferences !== null && capabilities.maxCharacterReferences !== undefined
+            ? `supported (max ${capabilities.maxCharacterReferences} per prompt)`
+            : 'supported (unlimited)')
+        : 'unsupported';
+    const lines = [
+        `source: ${capabilities.source || 'unknown'}`,
+        `model: ${capabilities.model || 'default'}`,
+        `character_refs: ${charRefInfo}`,
+        `character_captions: ${capabilities.supportsMultiCharacterPrompts ? 'supported' : 'unsupported'}`,
+        `dynamic_aspect_ratio: ${capabilities.supportsDynamicAspectRatio !== false ? 'supported' : 'unsupported'}`,
+    ];
+    return `<backend_capabilities>\n${lines.join('\n')}\n</backend_capabilities>`;
+}
+
+export function buildIllustrationContext({
+    chat,
+    context,
+    messageId,
+    contextMessageCount,
+    stripMarkup,
+    lockedIds,
+}) {
+    const list = Array.isArray(chat) ? chat : (Array.isArray(context?.chat) ? context.chat : []);
     const currentMessage = list[messageId];
     if (!currentMessage) {
         throw new Error(`Message not found at index ${messageId}`);
     }
-    const strip = typeof stripMarkup === 'function' ? stripMarkup : (text => text);
-    const current = strip(String(currentMessage.mes || '')).trim();
+
+    const keepIds = lockedIds instanceof Set ? lockedIds : new Set(lockedIds || []);
+    let current;
+    if (keepIds.size > 0) {
+        current = stripUnlockedIllustrationMarkup(String(currentMessage.mes || ''), keepIds).trim();
+    } else if (typeof stripMarkup === 'function') {
+        current = stripMarkup(String(currentMessage.mes || '')).trim();
+    } else {
+        current = String(currentMessage.mes || '').trim();
+    }
 
     const count = Math.max(0, Number(contextMessageCount) || 0);
-    const history = count === 0 ? [] : list
-        .slice(0, messageId)
-        .filter(isUsableContextMessage)
-        .slice(-count)
-        .map(message => `[${speakerName(message)}]: ${strip(String(message.mes || '')).trim()}`);
+    let history = [];
+
+    if (count > 0) {
+        if (typeof context?.readPluginFloors === 'function' && messageId > 0) {
+            const floorRecords = context.readPluginFloors({
+                toSeq: messageId,
+                roles: ['user', 'assistant'],
+            });
+            history = (Array.isArray(floorRecords) ? floorRecords : [])
+                .filter(rec => !rec.is_system && String(rec.mesCooked || '').trim().length > 0)
+                .slice(-count)
+                .map(rec => {
+                    const sourceMsg = list[rec.sourceIndex] || { is_user: rec.is_user };
+                    return `[${speakerName(sourceMsg)}]: ${String(rec.mesCooked || '').trim()}`;
+                });
+        } else {
+            history = list
+                .slice(0, messageId)
+                .filter(isUsableContextMessage)
+                .slice(-count)
+                .map(message => `[${speakerName(message)}]: ${String(message.mes || '').trim()}`);
+        }
+    }
 
     return {
         context: history.join('\n'),
@@ -37,7 +90,14 @@ export function buildIllustrationContext({ chat, messageId, contextMessageCount,
     };
 }
 
-export function buildIllustrationTaskMessages({ preset, context, current, memoryRecall }) {
+export function buildIllustrationTaskMessages({
+    preset,
+    context,
+    current,
+    memoryRecall,
+    characterArchiveIndex,
+    capabilities,
+}) {
     const systemPrompt = String(preset?.illustrationPrompt || '').trim();
     if (!systemPrompt) {
         throw new Error('Illustration prompt is empty.');
@@ -47,6 +107,14 @@ export function buildIllustrationTaskMessages({ preset, context, current, memory
     }
 
     const sections = [];
+    const capsBlock = formatBackendCapabilitiesBlock(capabilities);
+    if (capsBlock) {
+        sections.push(capsBlock);
+    }
+    if (characterArchiveIndex !== undefined && characterArchiveIndex !== null) {
+        const archiveText = String(characterArchiveIndex).trim() || '(empty)';
+        sections.push(`<character_archive>\n${archiveText}\n</character_archive>`);
+    }
     const recall = String(memoryRecall || '').trim();
     if (recall) {
         sections.push(`=== MEMORY RECALL ===\n${recall}`);
@@ -70,26 +138,50 @@ export async function requestIllustrationPrompts({
     abortSignal,
     availableLoras = [],
     includeWeight = false,
+    capabilities = null,
+    includeArchiveTools = false,
+    tools = null,
 }) {
     if (typeof context?.generateTask !== 'function') {
         throw new Error('generateTask is not available.');
     }
+    const resolvedTools = Array.isArray(tools) && tools.length > 0
+        ? tools
+        : (capabilities || includeArchiveTools
+            ? buildIllustrationAgentTools({
+                loras: availableLoras,
+                includeWeight,
+                capabilities,
+                includeArchiveTools,
+            })
+            : [buildAddImagePromptTool(availableLoras, { includeWeight })]);
+
     const result = await context.generateTask({
         taskMessages,
         includeCharacterCard: true,
         worldInfoSource: 'chat',
         apiPresetName: preset?.llm?.apiPresetName || '',
         llmPresetName: preset?.llm?.llmPresetName || '',
-        tools: [buildAddImagePromptTool(availableLoras, { includeWeight })],
+        tools: resolvedTools,
         toolChoice: 'auto',
         functionCallMode: 'auto',
         substituteMacros: true,
         abortSignal,
     });
     const calls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-    return {
-        toolCalls: calls.map(call => ({ name: String(call?.name || ''), args: call?.args || {} })),
+    const mapped = {
+        toolCalls: calls.map(call => {
+            const item = { name: String(call?.name || ''), args: call?.args || {} };
+            if (call?.id) {
+                item.id = String(call.id);
+            }
+            return item;
+        }),
         assistantText: String(result?.assistantText || ''),
         finishReason: String(result?.finishReason || ''),
     };
+    if (result?.reasoning) mapped.reasoning = String(result.reasoning);
+    if (result?.reasoningBlocks) mapped.reasoningBlocks = result.reasoningBlocks;
+    if (result?.reasoningDetails) mapped.reasoningDetails = result.reasoningDetails;
+    return mapped;
 }

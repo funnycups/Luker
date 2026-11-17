@@ -88,7 +88,7 @@ export function askTools(sources = {}, extraPluginTools = []) {
         text: { type: 'string', description: 'The answer in Chinese, plain and concrete. Markdown tables allowed.' },
         suggest: {
             type: 'string',
-            enum: ['', 'memory', 'orch', 'preset', 'card', 'world'],
+            enum: ['', 'memory', 'orch', 'sd', 'preset', 'card', 'world'],
             description: 'If fixing this needs editing one workbench, name it so the user can jump there.',
         },
         fix_prompt: { type: 'string', description: 'If suggest is set: what to ask that workbench\'s AI to change, in Chinese.' },
@@ -236,6 +236,7 @@ const READ_LABEL_KEYS = {
     wb_read_last_prompt: 'Prompt breakdown',
     wb_read_memory: 'Memory graph',
     wb_read_orchestrator: 'Orchestration',
+    wb_read_sd: 'Image Generation',
     wb_read_suggestions: 'Suggestions',
 };
 

@@ -10,6 +10,8 @@ import lodash from 'lodash';
 import { readSecret, SECRET_KEYS, readProviderSecret } from './secrets.js';
 import { GEMINI_SAFETY, VERTEX_SAFETY } from '../constants.js';
 import { delay, getConfigValue, trimTrailingSlash } from '../util.js';
+import { runLukerDispatch } from '../luker-dispatch/runner.js';
+import { dispatchSdGoogleImage } from '../luker-dispatch/providers/sd/google-image.js';
 
 const API_MAKERSUITE = 'https://generativelanguage.googleapis.com';
 const API_VERTEX_AI = 'https://us-central1-aiplatform.googleapis.com';
@@ -429,71 +431,10 @@ router.post('/generate-native-tts', async (request, response) => {
     }
 });
 
-router.post('/generate-image', async (request, response) => {
-    try {
-        const model = request.body.model || 'imagen-3.0-generate-002';
-        const { url, headers, apiName } = await getGoogleApiConfig(request, model, 'predict');
-
-        // AI Studio is stricter than Vertex AI.
-        const isVertex = request.body.api === 'vertexai';
-        // Is it even worth it?
-        const isDeprecated = model.startsWith('imagegeneration');
-        // Get person generation setting from config
-        const personGeneration = getConfigValue('gemini.image.personGeneration', 'allow_adult');
-
-        const requestBody = {
-            instances: [{
-                prompt: request.body.prompt || '',
-            }],
-            parameters: {
-                sampleCount: 1,
-                seed: isVertex ? Number(request.body.seed ?? Math.floor(Math.random() * 1000000)) : undefined,
-                enhancePrompt: isVertex ? Boolean(request.body.enhance ?? false) : undefined,
-                negativePrompt: isVertex ? (request.body.negative_prompt || undefined) : undefined,
-                aspectRatio: String(request.body.aspect_ratio || '1:1'),
-                personGeneration: !isDeprecated && personGeneration ? personGeneration : undefined,
-                language: isVertex ? 'auto' : undefined,
-                safetySetting: !isDeprecated ? (isVertex ? 'block_only_high' : 'block_low_and_above') : undefined,
-                addWatermark: isVertex ? false : undefined,
-                outputOptions: {
-                    mimeType: 'image/jpeg',
-                    compressionQuality: 100,
-                },
-            },
-        };
-
-        console.debug(`${apiName} image generation request:`, model, requestBody);
-
-        const result = await fetch(url, {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify(requestBody),
-        });
-
-        if (!result.ok) {
-            const errorText = await result.text();
-            console.warn(`${apiName} image generation error: ${result.status} ${result.statusText}`, errorText);
-            return response.status(500).send('Image generation request failed');
-        }
-
-        /** @type {any} */
-        const data = await result.json();
-        const imagePart = data?.predictions?.[0]?.bytesBase64Encoded;
-
-        if (!imagePart) {
-            console.warn(`${apiName} image generation error: No image data found in response`);
-            return response.status(500).send('No image data found in response');
-        }
-
-        return response.send({ image: imagePart });
-    } catch (error) {
-        console.error('Google Image generation failed:', error);
-        if (!response.headersSent) {
-            return response.sendStatus(500);
-        }
-        return response.end();
-    }
-});
+router.post('/generate-image', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/google',
+    select: () => dispatchSdGoogleImage,
+}));
 
 router.post('/generate-video', async (request, response) => {
     try {

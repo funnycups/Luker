@@ -81,21 +81,27 @@ handle.unregister();
 
 ## 搜索工具 API
 
-搜索插件通过 `Luker.searchTools` 全局对象暴露 API，供其他插件调用搜索能力：
+搜索插件通过 `context.registerExtensionApi('search-tools', ...)` 发布跨插件服务，并通过 `Luker.searchTools` 暴露函数调用工具定义与执行入口：
 
 ```js
-// 检查搜索插件是否可用
+const searchApi = Luker.getContext().getExtensionApi('search-tools');
+if (searchApi) {
+  const caps = searchApi.getActiveProviderCapabilities();
+  const webResults = await searchApi.search({ query: '角色设定' });
+  if (caps.supportsImageSearch) {
+    const images = await searchApi.searchImages({ query: '角色设定图' });
+  }
+  const pageImages = await searchApi.extractPageImages({ url: 'https://example.com/wiki/Character' });
+}
+
 if (globalThis?.Luker?.searchTools) {
-  // 获取可用的搜索工具名称列表
   const toolNames = Luker.searchTools.toolNames;
-  // 获取工具定义（用于函数调用）
   const toolDefs = Luker.searchTools.getToolDefs();
-  // 检查某个工具名是否属于搜索工具
-  const isSearchTool = Luker.searchTools.isToolName('web_search');
+  const isSearchTool = Luker.searchTools.isToolName('luker_web_image_search');
 }
 ```
 
-`Luker.searchTools` 暴露的是工具定义元数据，实际的搜索执行通过内部的工具调用循环完成。详见[搜索插件](/zh-CN/features/search-tools)。
+完整签名参见[搜索插件](/zh-CN/features/search-tools)与[图像生成 API](/zh-CN/development/extension-api/image-generation)。
 
 ## 扩展间通信
 

@@ -17,6 +17,7 @@ export function knownRoles() {
         { key: 'preset', label: i18n('Preset'), tone: 'preset' },
         { key: 'card', label: i18n('Character card'), tone: 'card' },
         { key: 'world', label: i18n('World book'), tone: 'world' },
+        { key: 'sd', label: i18n('Image Generation'), tone: 'sd' },
     ];
 }
 

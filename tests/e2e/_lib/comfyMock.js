@@ -19,6 +19,8 @@ import { ONE_PX_PNG_BASE64 } from './sdMock.js';
 export async function startComfyMock({ loraNames = [] } = {}) {
     /** Parsed /prompt bodies, in arrival order. */
     const requests = [];
+    /** Uploaded files from POST /upload/image, in arrival order. */
+    const uploads = [];
     let loras = [...loraNames];
     let lastPromptId = '';
     let promptCounter = 0;
@@ -51,6 +53,13 @@ export async function startComfyMock({ loraNames = [] } = {}) {
             input: {
                 required: {
                     vae_name: [['mock-vae.safetensors'], {}],
+                },
+            },
+        },
+        LoadImage: {
+            input: {
+                required: {
+                    image: [['example.png'], {}],
                 },
             },
         },
@@ -89,8 +98,10 @@ export async function startComfyMock({ loraNames = [] } = {}) {
     });
 
     const httpServer = http.createServer(async (req, res) => {
-        let raw = '';
-        for await (const chunk of req) raw += chunk;
+        const chunks = [];
+        for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        const rawBuffer = Buffer.concat(chunks);
+        const raw = rawBuffer.toString('utf8');
         const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
 
         const respondJson = (status, payload) => {
@@ -104,6 +115,23 @@ export async function startComfyMock({ loraNames = [] } = {}) {
         }
         if (pathname === '/object_info' && req.method === 'GET') {
             respondJson(200, objectInfo());
+            return;
+        }
+        if (pathname === '/upload/image' && req.method === 'POST') {
+            const filenameMatch = /filename="([^"]+)"/.exec(rawBuffer.toString('latin1'));
+            const originalFilename = filenameMatch ? filenameMatch[1] : `ref_${uploads.length + 1}.png`;
+            const returnedName = `uploaded_${uploads.length + 1}_${originalFilename}`;
+            uploads.push({
+                originalFilename,
+                returnedName,
+                size: rawBuffer.length,
+                contentType: String(req.headers['content-type'] || ''),
+            });
+            respondJson(200, {
+                name: returnedName,
+                subfolder: '',
+                type: 'input',
+            });
             return;
         }
         if (pathname === '/prompt' && req.method === 'POST') {
@@ -154,6 +182,7 @@ export async function startComfyMock({ loraNames = [] } = {}) {
     return {
         baseURL: `http://127.0.0.1:${port}`,
         requests,
+        uploads,
         setLoras(names) {
             loras = [...names];
         },

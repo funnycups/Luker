@@ -20,8 +20,21 @@
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { extractImageMeta } from '../../../request-inspector.js';
+import {
+    rejectUnsupportedReferences,
+    resolveSdSecret,
+    stripInternalSdDispatchFields,
+} from './sd-auth.js';
 
-const API_URL = 'https://nano-gpt.com/api/generate-image';
+const DEFAULT_API_URL = 'https://nano-gpt.com/api/generate-image';
+
+function resolveNanoGptUrl(rawApiUrl) {
+    const trimmed = String(rawApiUrl || '').trim().replace(/\/+$/, '');
+    if (!trimmed) return DEFAULT_API_URL;
+    if (trimmed.endsWith('/generate-image')) return trimmed;
+    const base = trimmed.replace(/\/v1(?:\/chat\/completions)?$/i, '');
+    return base.endsWith('/api') ? `${base}/generate-image` : `${base}/api/generate-image`;
+}
 
 /**
  * @param {object} ctx DispatchContext
@@ -31,22 +44,33 @@ export async function dispatchSdNanoGpt(ctx) {
     const body = ctx.body || {};
     ctx.inspection.startImage(extractImageMeta('nanogpt', body));
 
-    const key = ctx.secrets.read(SECRET_KEYS.NANOGPT);
-    if (!key) {
+    try {
+        rejectUnsupportedReferences('NanoGPT', body.references);
+    } catch (err) {
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
+        return;
+    }
+
+    let key;
+    try {
+        key = resolveSdSecret(ctx, [SECRET_KEYS.NANOGPT]);
+    } catch (err) {
         console.warn('NanoGPT key not found.');
-        const err = new Error('NanoGPT key not found');
         ctx.inspection.failImage(err, 400);
         ctx.emit.error(err);
         return;
     }
 
     try {
-        console.debug('NanoGPT request:', body);
+        const apiUrl = resolveNanoGptUrl(body.api_url);
+        const outgoing = stripInternalSdDispatchFields(body);
+        console.debug('NanoGPT request:', outgoing);
 
-        ctx.inspection.attach(API_URL, key);
-        const result = await ctx.fetch(API_URL, {
+        ctx.inspection.attach(apiUrl, key);
+        const result = await ctx.fetch(apiUrl, {
             method: 'POST',
-            body: JSON.stringify(body),
+            body: JSON.stringify(outgoing),
             headers: {
                 'x-api-key': key,
                 'Content-Type': 'application/json',

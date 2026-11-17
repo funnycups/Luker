@@ -9,6 +9,7 @@
 | [世界書](/zh-TW/development/extension-api/world-info) | 世界書 CRUD、啟動掃描、角色輔助世界書 |
 | [預設與提示詞](/zh-TW/development/extension-api/presets-and-prompts) | `context.presets.*`、`buildPresetAwarePromptMessages`、`resolveWorldInfoForMessages`、提示詞結構檢視、推理輔助函式、設定視圖 |
 | [生成請求](/zh-TW/development/extension-api/generation) | `generateTask`、工具註冊、`generateRaw` / `generateQuietPrompt`、Service 類別、connection profile |
+| [圖像生成 API](/zh-TW/development/extension-api/image-generation) | `context.imageGeneration.*`、`getExtensionApi('sd')`、CardApp `ctx.imageGeneration`、參考圖角色、後端能力探測與歸屬控制 |
 | [斜線指令](/zh-TW/development/extension-api/slash-commands) | 註冊與執行斜線指令、具名 / 不具名引數、列舉 |
 | [巨集與變數](/zh-TW/development/extension-api/macros-and-variables) | 巨集註冊、內建巨集參考、`substituteParams`、本地與全域變數 |
 | [Skill](/zh-TW/development/extension-api/skills) | `context.skills.*` —— 安裝、讀取、寫入、搜尋、遷移作用域、嵌入打包 / 抽取；CardApp ctx 對等 |
@@ -53,6 +54,7 @@ const context = Luker.getContext();
 | `context.runPanel` | `createRunStore`、`createRunPanel`、`attachDock`、`openRunDock`、`toggleRunDock`、`getRunRecorder`、`events`、`withRound`、`withStreamingSection` |
 | `context.iterationLibrary` | `applyEdits`、`inverseEdit`、`registerOp`、`runner`、`storage`、`proposalBus`、`tools`、`render`、`textDiff`、`zoomOverlay`、`ui` |
 | `context.skills` | `list`、`get`、`readFile`、`listFiles`、`search`、`writeFile`、`editFile`、`deleteFile`、`install`、`delete`、`rename`、`moveScope`、`importBundled`、`listBundledManifest`、`packForEmbed`、`previewExtractEmbed`、`executeExtractEmbed`、`importFromUrl` |
+| `context.imageGeneration` | `isAvailable`、`generate`、`getCapabilities`、`listPresets`、`getCurrentPreset`、`switchPreset`、`getAvailableLoras` |
 | `context.worldInfoEntry` | `template`、`create`、`delete`、`setButtonClass`、`setGlobalSelection`、`getSorted` |
 | `context.chatWorldInfo` | `getNames`、`setSelection`、`globalSelection` |
 | `context.openai` | `proxies`、`ZAI_ENDPOINT`、`stripPresetConnectionFields` |

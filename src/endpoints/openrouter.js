@@ -1,8 +1,10 @@
 import express from 'express';
 import fetch from 'node-fetch';
-import mime from 'mime-types';
 import { readSecret, SECRET_KEYS } from './secrets.js';
-import { OPENROUTER_HEADERS } from '../constants.js';
+import { runLukerDispatch } from '../luker-dispatch/runner.js';
+import { dispatchSdOpenrouterImage } from '../luker-dispatch/providers/sd/openrouter-image.js';
+import { normalizeModelsUrl, resolveSdSecret } from '../luker-dispatch/providers/sd/sd-auth.js';
+import { createProxyBoundFetch, createRequestProxyAgent } from '../request-proxy.js';
 
 export const router = express.Router();
 const API_OPENROUTER = 'https://openrouter.ai/api/v1';
@@ -90,13 +92,39 @@ router.post('/models/embedding', async (_req, res) => {
     }
 });
 
-router.post('/models/image', async (_req, res) => {
+router.post('/models/image', async (req, res) => {
     try {
-        const models = await fetchModelsByModality('/models', 'text', 'image', m => ({ value: m.id, text: m.name || m.id }));
-        return res.json(models);
+        const customBase = String(req.body?.api_url || '').trim();
+        const key = resolveSdSecret({ body: req.body, user: req.user }, [SECRET_KEYS.OPENROUTER], { allowEmpty: true });
+        if (!customBase && !req.body?.network_proxy && !key) {
+            const models = await fetchModelsByModality('/models', 'text', 'image', m => ({ value: m.id, text: m.name || m.id }));
+            return res.json(models);
+        }
+        const proxyFetch = createProxyBoundFetch(fetch, createRequestProxyAgent(req.body?.network_proxy));
+        const modelsBase = normalizeModelsUrl(customBase || API_OPENROUTER);
+        const url = `${modelsBase}?output_modalities=${encodeURIComponent('image')}`;
+        const headers = { 'Accept': 'application/json' };
+        if (key) {
+            headers['Authorization'] = `Bearer ${key}`;
+        }
+        const response = await proxyFetch(url, { method: 'GET', headers });
+        if (!response.ok) {
+            console.warn('OpenRouter API request failed', response.statusText);
+            return res.json([]);
+        }
+        /** @type {any} */
+        const data = await response.json();
+        if (!Array.isArray(data?.data)) {
+            return res.json([]);
+        }
+        const filtered = data.data
+            .filter(m => !Array.isArray(m?.architecture?.output_modalities) || m.architecture.output_modalities.includes('image'))
+            .sort((a, b) => a?.id && b?.id ? a.id.localeCompare(b.id) : 0)
+            .map(m => ({ value: m.id, text: m.name || m.id }));
+        return res.json(filtered);
     } catch (error) {
         console.error(error);
-        return res.sendStatus(500);
+        return res.status(400).json({ error: String(error?.message || error) });
     }
 });
 
@@ -135,75 +163,7 @@ router.post('/credits', async (req, res) => {
     }
 });
 
-router.post('/image/generate', async (req, res) => {
-    try {
-        const key = readSecret(req.user.directories, SECRET_KEYS.OPENROUTER);
-
-        if (!key) {
-            console.warn('OpenRouter API key not found');
-            return res.status(400).json({ error: 'OpenRouter API key not found' });
-        }
-
-        console.debug('OpenRouter image generation request', req.body);
-
-        const { model, prompt } = req.body;
-
-        if (!model || !prompt) {
-            return res.status(400).json({ error: 'Model and prompt are required' });
-        }
-
-        const response = await fetch(`${API_OPENROUTER}/chat/completions`, {
-            method: 'POST',
-            headers: {
-                ...OPENROUTER_HEADERS,
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${key}`,
-            },
-            body: JSON.stringify({
-                model: model,
-                messages: [
-                    {
-                        role: 'user',
-                        content: prompt,
-                    },
-                ],
-                modalities: ['image'],
-                image_config: {
-                    aspect_ratio: req.body.aspect_ratio || '1:1',
-                },
-            }),
-        });
-
-        if (!response.ok) {
-            console.warn('OpenRouter image generation failed', await response.text());
-            return res.sendStatus(500);
-        }
-
-        /** @type {any} */
-        const data = await response.json();
-
-        const imageUrl = data?.choices?.[0]?.message?.images?.[0]?.image_url?.url;
-
-        if (!imageUrl) {
-            console.warn('No image URL found in OpenRouter response', data);
-            return res.sendStatus(500);
-        }
-
-        const [mimeType, base64Data] = /^data:(.*);base64,(.*)$/.exec(imageUrl)?.slice(1) || [];
-
-        if (!mimeType || !base64Data) {
-            console.warn('Invalid image data format', imageUrl);
-            return res.sendStatus(500);
-        }
-
-        const result = {
-            format: mime.extension(mimeType) || 'png',
-            image: base64Data,
-        };
-
-        return res.json(result);
-    } catch (error) {
-        console.error(error);
-        return res.sendStatus(500);
-    }
-});
+router.post('/image/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/openrouter',
+    select: () => dispatchSdOpenrouterImage,
+}));

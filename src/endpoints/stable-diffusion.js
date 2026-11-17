@@ -12,7 +12,7 @@ import { readSecret, SECRET_KEYS } from './secrets.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { runLukerDispatch } from '../luker-dispatch/runner.js';
 import { dispatchSdWebui } from '../luker-dispatch/providers/sd/webui.js';
-import { dispatchSdComfy } from '../luker-dispatch/providers/sd/comfy.js';
+import { dispatchSdComfy, uploadComfyReferences } from '../luker-dispatch/providers/sd/comfy.js';
 import { dispatchSdTogether } from '../luker-dispatch/providers/sd/together.js';
 import { dispatchSdDrawthings } from '../luker-dispatch/providers/sd/drawthings.js';
 import { dispatchSdPollinations } from '../luker-dispatch/providers/sd/pollinations.js';
@@ -29,6 +29,9 @@ import { dispatchSdXai } from '../luker-dispatch/providers/sd/xai.js';
 import { dispatchSdAimlapi } from '../luker-dispatch/providers/sd/aimlapi.js';
 import { dispatchSdZai } from '../luker-dispatch/providers/sd/zai.js';
 import { dispatchSdWorkersai } from '../luker-dispatch/providers/sd/workersai.js';
+import { dispatchSdChatImage } from '../luker-dispatch/providers/sd/chat-image.js';
+import { normalizeModelsUrl, resolveSdSecret } from '../luker-dispatch/providers/sd/sd-auth.js';
+import { createProxyBoundFetch, createRequestProxyAgent } from '../request-proxy.js';
 
 /**
  * Gets the comfy workflows.
@@ -550,6 +553,23 @@ comfy.post('/rename-workflow', getFileNameValidationFunction('old_name'), getFil
     }
 });
 
+comfy.post('/upload-references', async (request, response) => {
+    try {
+        const proxyFetch = createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy));
+        const filenames = await uploadComfyReferences({
+            directories: request.user?.directories,
+            baseUrl: request.body?.url,
+            auth: request.body?.auth,
+            references: request.body?.references,
+            fetchFn: proxyFetch,
+        });
+        return response.json({ filenames });
+    } catch (error) {
+        console.error('ComfyUI reference upload failed:', error);
+        return response.status(400).send(String(error?.message || error));
+    }
+});
+
 comfy.post('/generate', (req, res) => runLukerDispatch(req, res, {
     endpoint: 'sd/comfy',
     select: () => dispatchSdComfy,
@@ -746,10 +766,11 @@ drawthings.post('/generate', (req, res) => runLukerDispatch(req, res, {
 
 const pollinations = express.Router();
 
-pollinations.post('/models', async (_request, response) => {
+pollinations.post('/models', async (request, response) => {
     try {
+        const proxyFetch = createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy));
         const modelsUrl = new URL('https://gen.pollinations.ai/image/models');
-        const result = await fetch(modelsUrl);
+        const result = await proxyFetch(modelsUrl);
 
         if (!result.ok) {
             console.warn('Pollinations returned an error.', result.status, result.statusText);
@@ -794,14 +815,11 @@ const electronhub = express.Router();
 
 electronhub.post('/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
+        const key = resolveSdSecret({ body: request.body, user: request.user }, [SECRET_KEYS.ELECTRONHUB]);
+        const proxyFetch = createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy));
+        const modelsUrl = normalizeModelsUrl(request.body?.api_url || 'https://api.electronhub.ai/v1');
 
-        if (!key) {
-            console.warn('Electron Hub key not found.');
-            return response.sendStatus(400);
-        }
-
-        const modelsResponse = await fetch('https://api.electronhub.ai/v1/models', {
+        const modelsResponse = await proxyFetch(modelsUrl, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${key}`,
@@ -828,7 +846,7 @@ electronhub.post('/models', async (request, response) => {
         return response.send(models);
     } catch (error) {
         console.error(error);
-        return response.sendStatus(500);
+        return response.status(400).send(String(error?.message || error));
     }
 });
 
@@ -838,43 +856,46 @@ electronhub.post('/generate', (req, res) => runLukerDispatch(req, res, {
 }));
 
 electronhub.post('/sizes', async (request, response) => {
-    const result = await fetch(`https://api.electronhub.ai/v1/models/${request.body.model}`, {
-        method: 'GET',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-    });
+    try {
+        const proxyFetch = createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy));
+        const modelsUrl = normalizeModelsUrl(request.body?.api_url || 'https://api.electronhub.ai/v1');
+        const result = await proxyFetch(`${modelsUrl}/${request.body.model}`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
 
-    if (!result.ok) {
-        console.warn('Electron Hub returned an error.');
+        if (!result.ok) {
+            console.warn('Electron Hub returned an error.');
+            return response.sendStatus(500);
+        }
+
+        /** @type {any} */
+        const data = await result.json();
+
+        const sizes = data.sizes;
+
+        if (!sizes) {
+            console.warn('Electron Hub returned invalid data.');
+            return response.sendStatus(500);
+        }
+
+        return response.send({ sizes });
+    } catch (error) {
+        console.error(error);
         return response.sendStatus(500);
     }
-
-    /** @type {any} */
-    const data = await result.json();
-
-    const sizes = data.sizes;
-
-    if (!sizes) {
-        console.warn('Electron Hub returned invalid data.');
-        return response.sendStatus(500);
-    }
-
-    return response.send({ sizes });
 });
 
 const chutes = express.Router();
 
 chutes.post('/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
+        const key = resolveSdSecret({ body: request.body, user: request.user }, [SECRET_KEYS.CHUTES]);
+        const proxyFetch = createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy));
 
-        if (!key) {
-            console.warn('Chutes key not found.');
-            return response.sendStatus(400);
-        }
-
-        const modelsResponse = await fetch('https://api.chutes.ai/chutes/?template=diffusion&include_public=true&limit=999', {
+        const modelsResponse = await proxyFetch('https://api.chutes.ai/chutes/?template=diffusion&include_public=true&limit=999', {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${key}`,
@@ -894,7 +915,7 @@ chutes.post('/models', async (request, response) => {
         return response.send(models);
     } catch (error) {
         console.error(error);
-        return response.sendStatus(500);
+        return response.status(400).send(String(error?.message || error));
     }
 });
 
@@ -907,14 +928,12 @@ const nanogpt = express.Router();
 
 nanogpt.post('/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
+        const key = resolveSdSecret({ body: request.body, user: request.user }, [SECRET_KEYS.NANOGPT]);
+        const proxyFetch = createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy));
+        const rawBase = String(request.body?.api_url || '').trim().replace(/\/+$/, '').replace(/\/v1(?:\/chat\/completions)?$/i, '');
+        const modelsUrl = rawBase ? (rawBase.endsWith('/api') ? `${rawBase}/models` : `${rawBase}/api/models`) : 'https://nano-gpt.com/api/models';
 
-        if (!key) {
-            console.warn('NanoGPT key not found.');
-            return response.sendStatus(400);
-        }
-
-        const modelsResponse = await fetch('https://nano-gpt.com/api/models', {
+        const modelsResponse = await proxyFetch(modelsUrl, {
             method: 'GET',
             headers: {
                 'x-api-key': key,
@@ -940,7 +959,7 @@ nanogpt.post('/models', async (request, response) => {
         return response.send(models);
     } catch (error) {
         console.error(error);
-        return response.sendStatus(500);
+        return response.status(400).send(String(error?.message || error));
     }
 });
 
@@ -1022,14 +1041,11 @@ const aimlapi = express.Router();
 
 aimlapi.post('/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.AIMLAPI);
+        const key = resolveSdSecret({ body: request.body, user: request.user }, [SECRET_KEYS.AIMLAPI]);
+        const proxyFetch = createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy));
+        const modelsUrl = normalizeModelsUrl(request.body?.api_url || 'https://api.aimlapi.com/v1');
 
-        if (!key) {
-            console.warn('AI/ML API key not found.');
-            return response.sendStatus(400);
-        }
-
-        const modelsResponse = await fetch('https://api.aimlapi.com/v1/models', {
+        const modelsResponse = await proxyFetch(modelsUrl, {
             method: 'GET',
             headers: {
                 Authorization: `Bearer ${key}`,
@@ -1057,7 +1073,7 @@ aimlapi.post('/models', async (request, response) => {
         return response.send({ data: models });
     } catch (error) {
         console.error(error);
-        return response.sendStatus(500);
+        return response.status(400).send(String(error?.message || error));
     }
 });
 
@@ -1229,6 +1245,42 @@ workersai.post('/generate', (req, res) => runLukerDispatch(req, res, {
     select: () => dispatchSdWorkersai,
 }));
 
+const chatImage = express.Router();
+
+chatImage.post('/models', async (request, response) => {
+    try {
+        const key = resolveSdSecret({ body: request.body, user: request.user }, [SECRET_KEYS.CUSTOM], {
+            allowEmpty: true,
+            includeAllChatKeys: true,
+        });
+        const modelsUrl = normalizeModelsUrl(request.body?.api_url || 'https://api.openai.com/v1');
+        const proxyFetch = createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy));
+        const headers = {};
+        if (key) {
+            headers['Authorization'] = `Bearer ${key}`;
+        }
+        const result = await proxyFetch(modelsUrl, { method: 'GET', headers });
+        if (!result.ok) {
+            return response.status(result.status).send(await result.text());
+        }
+        const data = await result.json();
+        const items = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+        const models = items
+            .map(entry => String(entry?.id || entry?.name || '').trim())
+            .filter(Boolean)
+            .map(id => ({ value: id, text: id }));
+        return response.send(models);
+    } catch (error) {
+        console.error('Chat image models fetch failed:', error);
+        return response.status(400).send(String(error?.message || error));
+    }
+});
+
+chatImage.post('/generate', (req, res) => runLukerDispatch(req, res, {
+    endpoint: 'sd/chat_image',
+    select: () => dispatchSdChatImage,
+}));
+
 router.use('/comfy', comfy);
 router.use('/comfyrunpod', comfyRunPod);
 router.use('/together', together);
@@ -1246,3 +1298,4 @@ router.use('/xai', xai);
 router.use('/aimlapi', aimlapi);
 router.use('/zai', zai);
 router.use('/workersai', workersai);
+router.use('/chat-image', chatImage);

@@ -6,6 +6,7 @@
 
 - `public/scripts/extensions/memory-graph/lens/index.js` —— 工作區（`'memory'`）、AskProvider、SuggestRuleProvider，以及 `'memory'` / `'memory_graph'` 迭代目標
 - `public/scripts/extensions/orchestrator/lens/index.js` —— 工作區（`'orch'`）、AskProvider、SuggestRuleProvider，以及 `'orch'` 迭代目標
+- `public/scripts/extensions/stable-diffusion/lens/index.js` —— 工作區（`'sd'`）、AskProvider、SuggestRuleProvider，以及 `'sd'` 迭代目標
 - `public/scripts/workbench/targets/{preset,card,world}.js` —— 內建 `'preset'`、`'card'` 與 `'world'` 迭代目標
 
 ## 三層 API 暴露

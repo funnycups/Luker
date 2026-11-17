@@ -28,6 +28,7 @@ const MODES = {
     loop: { label: 'Research loop', hint: 'One agent keeps looking things up until it has enough' },
     director: { label: 'Director team', hint: 'A lead writer and a team write the reply directly' },
     search: { label: 'Online search', hint: 'Looks things up online before replying' },
+    image: { label: 'Image Generation', hint: 'Image Generation' },
 };
 
 const AGENTS = {

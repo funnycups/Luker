@@ -24,6 +24,17 @@
 import mime from 'mime-types';
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { extractImageMeta } from '../../../request-inspector.js';
+import { rejectUnsupportedReferences, resolveSdSecret } from './sd-auth.js';
+
+const DEFAULT_IMAGE_BASE = 'https://gen.pollinations.ai/image';
+
+function resolvePollinationsImageBase(rawApiUrl) {
+    const trimmed = String(rawApiUrl || '').trim().replace(/\/+$/, '');
+    if (!trimmed || /https?:\/\/(?:text|gen)\.pollinations\.ai\/v1/i.test(trimmed)) {
+        return DEFAULT_IMAGE_BASE;
+    }
+    return trimmed.endsWith('/image') ? trimmed : `${trimmed}/image`;
+}
 
 /**
  * @param {object} ctx DispatchContext
@@ -33,17 +44,27 @@ export async function dispatchSdPollinations(ctx) {
     const body = ctx.body || {};
     ctx.inspection.startImage(extractImageMeta('pollinations', body));
 
-    const key = ctx.secrets.read(SECRET_KEYS.POLLINATIONS);
-    if (!key) {
+    try {
+        rejectUnsupportedReferences('Pollinations', body.references);
+    } catch (err) {
+        ctx.inspection.failImage(err, 400);
+        ctx.emit.error(err);
+        return;
+    }
+
+    let key;
+    try {
+        key = resolveSdSecret(ctx, [SECRET_KEYS.POLLINATIONS]);
+    } catch (err) {
         console.warn('Pollinations API key not found.');
-        const err = new Error('Pollinations API key not found');
         ctx.inspection.failImage(err, 400);
         ctx.emit.error(err);
         return;
     }
 
     try {
-        const promptUrl = new URL(`https://gen.pollinations.ai/image/${encodeURIComponent(body.prompt)}`);
+        const imageBase = resolvePollinationsImageBase(body.api_url);
+        const promptUrl = new URL(`${imageBase}/${encodeURIComponent(body.prompt)}`);
         const params = new URLSearchParams({
             model: String(body.model),
             negative_prompt: String(body.negative_prompt),

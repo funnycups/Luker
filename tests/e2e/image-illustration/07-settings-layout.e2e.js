@@ -28,6 +28,8 @@ for (const locale of ['en', 'zh-cn', 'zh-tw']) {
         await expect(page.locator('html')).toHaveAttribute('lang', locale);
         await openExtensionsDrawer(page);
         await openInlineDrawer(page, 'sd_illustration_container');
+        await page.locator('#sd_illustration_container .inline-drawer .inline-drawer > .inline-drawer-toggle').click();
+        await expect(page.locator('#sd_illustration_exploration_api_preset')).toBeVisible();
 
         // Cover a narrow phone, a standard phone, and the desktop settings drawer.
         for (const width of [320, 390, 1280]) {
@@ -43,7 +45,7 @@ for (const locale of ['en', 'zh-cn', 'zh-tw']) {
                 };
             }));
 
-            expect(rows).toHaveLength(7);
+            expect(rows).toHaveLength(9);
             for (const { id, row, label, control } of rows) {
                 const context = `${locale}, ${width}px, ${id}`;
                 // Allow one CSS pixel for subpixel layout rounding.

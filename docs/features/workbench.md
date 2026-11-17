@@ -1,13 +1,13 @@
 # Workbench
 
-Workbench is Luker's unified workspace for inspecting prompts, diagnosing issues, visualizing Memory Graph and Orchestrator activity, and tuning presets, character cards, world books, memory structures, and orchestration profiles with AI.
+Workbench is Luker's unified workspace for inspecting prompts, diagnosing issues, visualizing Memory Graph, Orchestrator, and Image Generation activity, and tuning presets, character cards, world books, memory structures, orchestration profiles, and image generation profiles with AI.
 
 ## Opening Workbench
 
 - Click the wand menu next to the message input box and select **Workbench**.
 - Click the corner entry pill in the bottom-right corner, which displays the current prompt token count and pending suggestion count.
 - Press `Alt+W` to open or collapse the window.
-- Click **Open in Workbench** inside **Extensions → Memory** or **Extensions → Orchestrator**.
+- Click **Open in Workbench** inside **Extensions → Memory**, **Extensions → Orchestrator**, or **Extensions → Image Generation**, or select **Image iteration studio** in the wand menu.
 
 Drag the title bar to move the floating window, drag the bottom-right corner to resize, or double-click the title bar to maximize.
 
@@ -39,6 +39,7 @@ A single conversational workspace for editing Luker artifacts with diff review a
 - **Preset** — edit the active Chat Completion preset's parameters and prompt entries, compare against a reference preset, adapt a preset for orchestration or tool tasks, and extract reusable skills.
 - **Character card** — edit the active character card's fields and bound world books.
 - **World book** — edit globally active world books or the books bound to the current character and chat.
+- **Image Generation** — edit illustration prompt presets, exploration prompts, and archived character visual profiles.
 
 Proposed changes appear in a **Change list** with before/after diffs. Tick the changes to apply, discard them, or enable **Apply automatically** to apply edits immediately while keeping every step undoable.
 
@@ -72,6 +73,14 @@ Embeds the full Orchestra Lens workspace directly inside Workbench:
 - **Settings** — execution mode, shared runtime limits, injection position and depth, and iteration AI selection.
 - **Notes** — open and closed plot threads for the current chat.
 
+### Image Generation
+
+Embeds the Image Generation workspace directly inside Workbench:
+
+- **Image Studio** — conversational workspace for **Free image generation** and **Character reference design**, with session branching, gallery history, single-image regeneration, and staged character profile review.
+- **Character Archive** — global library of character appearance tags, outfits, and reference sheets, with a per-launch choice between **Fanwork exploration** and **OC design in studio**.
+- **Run Traces** — live and recent illustration and exploration run traces with round timelines, prompts, JSON export, and one-click AI diagnosis.
+
 ### Settings
 
 Configure one default **AI connection** and **Generation preset** shared by Q&A and all AI iteration targets, or override them individually.
@@ -91,4 +100,5 @@ Configure one default **AI connection** and **Generation preset** shared by Q&A 
 - [Multi-Agent Orchestration](/features/orchestrator/) — workflow modes, presets, and skills
 - [Completion Preset Assistant](/features/preset-assistant) — preset editing modes and skill extraction
 - [Character Card Editor Assistant](/features/card-editor/) — character card editing and CardApp Studio
+- [Image Generation & AI Illustration](/features/image-generation) — image backends, reference images, character archive, and Studio workflows
 - [Workbench Extension API](/development/extension-api/workbench) — register custom workspaces, iteration targets, Q&A providers, and suggestion rules

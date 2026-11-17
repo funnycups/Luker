@@ -48,7 +48,7 @@ AGENT: "預請求 Agent 模式" {
 
 ### 工具模式
 
-搜尋功能作為創作 LLM 的可呼叫工具註冊到[函式呼叫執行時](/zh-TW/improvements/function-call-runtime)中。當 AI 判斷需要搜尋資訊時，主動發起聯網搜尋或網頁讀取呼叫，並將結果作為工具回傳值送入上下文。
+搜尋功能作為創作 LLM 的可呼叫工具註冊到[函式呼叫執行時](/zh-TW/improvements/function-call-runtime)中，涵蓋網頁搜尋、網頁正文擷取、圖片搜尋與網頁圖片擷取。當 AI 判斷需要檢索資料或視覺參考時，主動發起工具呼叫，並將結果送入上下文。
 
 ### 預請求 Agent 模式
 
@@ -93,13 +93,19 @@ AGENT: "預請求 Agent 模式" {
 
 DuckDuckGo、SearXNG、Brave Search、Tavily、Exa 和 SerpApi 支援安全搜尋過濾。
 
+## 圖片搜尋與網頁圖片擷取
+
+DuckDuckGo、SearXNG、Brave Search、Tavily、Serper 與 SerpApi 支援圖片搜尋，回傳原圖連結、縮圖、標題、來源頁面與尺寸資訊。Exa、Z.AI 與 DeepSeek 屬於純文字檢索後端，發起圖片搜尋時會直接報錯提示目前引擎不支援圖片搜尋。
+
+網頁圖片擷取從公開網頁解析社群卡片封面與正文圖片候選連結，並自動過濾追蹤像素與微小裝飾圖示。
+
 ## 世界書條目管理
 
 在預請求 Agent 模式下，搜尋結果自動寫入世界書條目。可以在設定面板中調整**注入位置**、**注入深度**、**注入角色**與**注入順序**，並透過**管理已儲存的搜尋條目**檢視或清理記錄。
 
 ## 供其他功能使用
 
-工作台 AI 迭代（角色卡與世界書編輯）、CardApp Studio 與角色卡編輯助手彈窗同樣支援呼叫搜尋能力，在編輯設定時聯網查閱資料。開發者介面見[擴充 API](/zh-TW/development/extension-api/)。
+圖像生成角色探索 agent、工作台 AI 迭代、CardApp Studio 與角色卡編輯助手彈窗同樣支援呼叫搜尋能力，用於聯網查閱設定資料與角色參考圖。開發者介面見[擴充 API](/zh-TW/development/extension-api/)。
 
 ## 結果複用
 
@@ -133,6 +139,7 @@ DuckDuckGo、SearXNG、Brave Search、Tavily、Exa 和 SerpApi 支援安全搜�
 | **Agent 預設** | 預請求 Agent 使用的預設（留空使用主預設），下拉框旁的說明按鈕介紹所需預設類型 |
 
 ::: info 相關頁面
+- [圖像生成與 AI 插圖](/zh-TW/features/image-generation) —— 結合圖片搜尋自動探索同人角色設定與參考圖
 - [工作台](/zh-TW/features/workbench) —— 在工作台 AI 迭代中結合聯網搜尋
 - [角色卡編輯助手](/zh-TW/features/card-editor/) —— 編輯助手概覽
 - [CardApp Studio](/zh-TW/features/card-editor/studio) —— Studio 中的聯網搜尋能力

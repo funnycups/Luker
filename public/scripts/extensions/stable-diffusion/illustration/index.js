@@ -10,9 +10,11 @@ import { createImageService } from './image-service.js';
 import { createIllustrationPipeline } from './pipeline.js';
 import { initIllustrationActions } from './actions.js';
 import { clearSwipeIllustrationRecords } from './records.js';
-import { openIllustrationStudio } from './studio/index.js';
-import { stripIllustrationMarkup } from './message.js';
+import { buildIllustrationStripRegexScript } from './message.js';
 import { emitMessageChanged } from './message-events.js';
+import { createStudioSessionStore } from '../lens/studio-store.js';
+import { initSdLens } from '../lens/index.js';
+import { attachImageActivityDock, getImageActivityStore } from '../activity.js';
 
 let activeIllustrationErrorToast = null;
 
@@ -71,11 +73,37 @@ export async function initIllustration(bridge) {
     });
     const settings = sdSettings.illustration;
 
+    if (typeof context.updateGlobalState === 'function') {
+        try {
+            await createStudioSessionStore(context).migrateLegacySettingsSessionsOnce(
+                settings,
+                () => saveSettingsDebounced(),
+            );
+        } catch (error) {
+            console.error('[sd] failed to migrate legacy studio sessions to GlobalState:', error);
+            notifyIllustrationError(String(error?.message || error));
+        }
+    }
+
+    attachImageActivityDock(getImageActivityStore(), context);
+
+    let regexRegistration = null;
+    if (typeof context.regex?.registerRegexProvider === 'function') {
+        regexRegistration = context.regex.registerRegexProvider('sd-illustration', () => (
+            settings.enabled
+                ? [buildIllustrationStripRegexScript({ placement: context.regex?.placement })]
+                : []
+        ));
+    }
+
     const settingsUi = await initSettingsUi({
         settings,
         saveSettings: () => saveSettingsDebounced(),
         context,
-        onEnabledChange: setIllustrationEnabled,
+        onEnabledChange: enabled => {
+            setIllustrationEnabled(enabled);
+            regexRegistration?.refresh?.();
+        },
     });
 
     const queue = new GenerationQueue({
@@ -89,6 +117,12 @@ export async function initIllustration(bridge) {
             maxConcurrent: settings.maxConcurrentGenerations,
             minInterval: settings.minGenerationInterval,
         }),
+    });
+
+    initSdLens({
+        getContext: () => context,
+        imageService,
+        getRunStore: () => getImageActivityStore(),
     });
     let actions = null;
     const pipeline = createIllustrationPipeline({
@@ -143,23 +177,6 @@ export async function initIllustration(bridge) {
         actions?.cancelAll();
     });
 
-    eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, eventData => {
-        if (!Array.isArray(eventData?.chat)) {
-            return;
-        }
-        for (const message of eventData.chat) {
-            if (typeof message?.content === 'string' && message.content.includes('data-illustration-id')) {
-                message.content = stripIllustrationMarkup(message.content);
-            }
-        }
-    });
-
-    eventSource.on(event_types.GENERATE_AFTER_COMBINE_PROMPTS, eventData => {
-        if (typeof eventData?.prompt === 'string' && eventData.prompt.includes('data-illustration-id')) {
-            eventData.prompt = stripIllustrationMarkup(eventData.prompt);
-        }
-    });
-
     for (const event of [event_types.PRESET_CHANGED, event_types.PRESET_RENAMED, event_types.PRESET_DELETED]) {
         eventSource.on(event, () => {
             settingsUi.refreshLlmPresetOptions();
@@ -171,18 +188,17 @@ export async function initIllustration(bridge) {
         });
     }
 
+    const openWorkbenchStudio = () => {
+        void context.workbench?.open?.({ ws: 'sd', subview: 'studio' });
+    };
+
+    $('#sd_open_workbench_studio').off('click.sdWorkbench').on('click.sdWorkbench', openWorkbenchStudio);
+
     await initMenus({
         settings,
         onGenerateLast: () => { void pipeline.runForLastAssistantMessage(); },
         onGenerateMessage: messageId => { void pipeline.runForMessage({ messageId, source: 'manual' }); },
-        onOpenStudio: () => {
-            void openIllustrationStudio({
-                context,
-                settings,
-                imageService,
-                saveSettings: () => saveSettingsDebounced(),
-            });
-        },
+        onOpenStudio: openWorkbenchStudio,
     });
 
     actions = initIllustrationActions({

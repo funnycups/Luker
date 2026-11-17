@@ -48,7 +48,7 @@ export async function startSdWebUiMock({ txt2imgDelayMs = 0 } = {}) {
             respondJson(200, [{ name: 'Latent' }]);
             return;
         }
-        if (req.url === '/sdapi/v1/txt2img' && req.method === 'POST') {
+        if ((req.url === '/sdapi/v1/txt2img' || req.url === '/sdapi/v1/img2img') && req.method === 'POST') {
             if (txt2imgDelay > 0) {
                 await new Promise(resolve => setTimeout(resolve, txt2imgDelay));
             }

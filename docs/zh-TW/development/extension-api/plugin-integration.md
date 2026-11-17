@@ -81,21 +81,27 @@ handle.unregister();
 
 ## 搜尋工具 API
 
-搜尋外掛透過 `Luker.searchTools` 全域物件暴露 API，供其他外掛呼叫搜尋能力：
+搜尋外掛透過 `context.registerExtensionApi('search-tools', ...)` 發布跨外掛服務，並透過 `Luker.searchTools` 暴露函式呼叫工具定義與執行入口：
 
 ```js
-// 檢查搜尋外掛是否可用
+const searchApi = Luker.getContext().getExtensionApi('search-tools');
+if (searchApi) {
+  const caps = searchApi.getActiveProviderCapabilities();
+  const webResults = await searchApi.search({ query: '角色設定' });
+  if (caps.supportsImageSearch) {
+    const images = await searchApi.searchImages({ query: '角色設定圖' });
+  }
+  const pageImages = await searchApi.extractPageImages({ url: 'https://example.com/wiki/Character' });
+}
+
 if (globalThis?.Luker?.searchTools) {
-  // 取得可用的搜尋工具名稱列表
   const toolNames = Luker.searchTools.toolNames;
-  // 取得工具定義（用於函數呼叫）
   const toolDefs = Luker.searchTools.getToolDefs();
-  // 檢查某個工具名是否屬於搜尋工具
-  const isSearchTool = Luker.searchTools.isToolName('web_search');
+  const isSearchTool = Luker.searchTools.isToolName('luker_web_image_search');
 }
 ```
 
-`Luker.searchTools` 暴露的是工具定義中繼資料，實際的搜尋執行透過內部的工具呼叫迴圈完成。詳見[搜尋外掛](/zh-TW/features/search-tools)。
+完整簽章參見[搜尋外掛](/zh-TW/features/search-tools)與[圖像生成 API](/zh-TW/development/extension-api/image-generation)。
 
 ## 擴充功能間通訊
 

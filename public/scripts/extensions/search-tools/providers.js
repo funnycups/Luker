@@ -20,12 +20,14 @@ export const SEARCH_PROVIDERS = [
         id: 'ddg',
         label: 'DuckDuckGo (no login)',
         secretKey: null,
+        supportsImageSearch: true,
         fields: [SAFE_SEARCH_FIELD],
     },
     {
         id: 'searxng',
         label: 'SearXNG (custom instance)',
         secretKey: null,
+        supportsImageSearch: true,
         fields: [
             { key: 'baseUrl', type: 'text', label: 'SearXNG instance URL', placeholder: 'https://your-searxng.example', default: '' },
             SAFE_SEARCH_FIELD,
@@ -35,12 +37,14 @@ export const SEARCH_PROVIDERS = [
         id: 'brave',
         label: 'Brave Search (API key)',
         secretKey: 'api_key_brave_search',
+        supportsImageSearch: true,
         fields: [SAFE_SEARCH_FIELD],
     },
     {
         id: 'tavily',
         label: 'Tavily (API key)',
         secretKey: 'api_key_tavily',
+        supportsImageSearch: true,
         fields: [
             {
                 key: 'searchDepth',
@@ -70,6 +74,7 @@ export const SEARCH_PROVIDERS = [
         id: 'exa',
         label: 'Exa (API key)',
         secretKey: 'api_key_exa',
+        supportsImageSearch: false,
         fields: [
             {
                 key: 'searchType',
@@ -105,6 +110,7 @@ export const SEARCH_PROVIDERS = [
         id: 'serper',
         label: 'Serper (API key)',
         secretKey: 'api_key_serper',
+        supportsImageSearch: true,
         fields: [
             {
                 key: 'resultType',
@@ -121,6 +127,7 @@ export const SEARCH_PROVIDERS = [
         id: 'serpapi',
         label: 'SerpApi (API key)',
         secretKey: 'api_key_serpapi',
+        supportsImageSearch: true,
         fields: [
             {
                 key: 'resultType',
@@ -138,6 +145,7 @@ export const SEARCH_PROVIDERS = [
         id: 'zai',
         label: 'Z.AI (API key)',
         secretKey: 'api_key_zai_search',
+        supportsImageSearch: false,
         fields: [
             {
                 key: 'recency',
@@ -155,6 +163,7 @@ export const SEARCH_PROVIDERS = [
         id: 'deepseek',
         label: 'DeepSeek (API key)',
         secretKey: 'api_key_deepseek_search',
+        supportsImageSearch: false,
         fields: [],
     },
 ];

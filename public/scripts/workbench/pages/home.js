@@ -57,6 +57,7 @@ export function createHomePage(app) {
         const domainLabels = {
             memory: i18n('Memory graph'),
             orch: i18n('Orchestration'),
+            sd: i18n('Image Generation'),
             preset: i18n('Preset'),
             card: i18n('Character card'),
             world: i18n('World book'),

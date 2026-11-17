@@ -52,6 +52,7 @@
     --lw-t-preset: #6fb3f2;
     --lw-t-card: #ff8f6b;
     --lw-t-world: #d4cf6f;
+    --lw-t-sd: #e879a0;
     --lw-t-chat: rgba(157, 161, 171, 0.45);
     --lw-t-other: #5dc3d8;
 
@@ -85,6 +86,7 @@
     --wb-t-preset: var(--lw-t-preset);
     --wb-t-card: var(--lw-t-card);
     --wb-t-world: var(--lw-t-world);
+    --wb-t-sd: var(--lw-t-sd);
     --wb-t-chat: var(--lw-t-chat);
     --wb-t-other: var(--lw-t-other);
     --wb-shadow: var(--lw-shadow);
@@ -127,6 +129,7 @@
     --lw-t-preset: #2f7fd0;
     --lw-t-card: #e0643f;
     --lw-t-world: #a8a23a;
+    --lw-t-sd: #c94676;
     --lw-t-chat: rgba(93, 98, 109, 0.3);
     --lw-t-other: #1d97ad;
 }

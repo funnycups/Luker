@@ -149,12 +149,13 @@ async function openStudio(page) {
     await closeAnyOpenTopSettingsDrawer(page);
     await page.locator('#extensionsMenuButton').click();
     await page.locator('#sd_illustration_open_studio').click();
-    await expect(page.locator('#sd_studio')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.wbench .wb-win:not([hidden]) [data-sd-view="studio"]')).toBeVisible({ timeout: 10_000 });
 }
 
 function studioImages(page) {
-    return page.evaluate(() => {
-        const bucket = window.Luker.getContext().extensionSettings?.sd?.illustration?.studioSessions || {};
+    return page.evaluate(async () => {
+        const res = await window.Luker.getContext().getGlobalState('sd_studio_sessions');
+        const bucket = res?.state?.sessions || {};
         return Object.values(bucket).flatMap(session => session.images || []);
     });
 }
@@ -296,8 +297,8 @@ test.describe('studio LoRAs', () => {
         const promptCount = comfy.requests.length;
 
         await openStudio(page);
-        await page.locator('#sd_studio_input').fill('A lighthouse at dusk');
-        await page.locator('#sd_studio_send').click();
+        await page.locator('[data-sd-role="studio-input"]').fill('A lighthouse at dusk');
+        await page.locator('[data-sd-role="studio-send"]').click();
 
         // The tool schema the studio sends offers the backend's LoRA list, so
         // the model can only name a LoRA the workflow can apply.
@@ -312,7 +313,8 @@ test.describe('studio LoRAs', () => {
         expect(lorasProperty?.items?.properties?.weight).toBeTruthy();
 
         // The selection reaches the workflow graph as a concrete LoraLoader.
-        const imageCard = page.locator('#sd_studio [data-studio-image-id]').first();
+        const studioRoot = page.locator('.wbench .wb-win:not([hidden]) [data-sd-view="studio"]');
+        const imageCard = studioRoot.locator('[data-studio-image-id]').first();
         await expect(imageCard).toBeVisible({ timeout: 60_000 });
         await expect.poll(() => comfy.requests.length).toBeGreaterThan(promptCount);
         const generatedGraph = comfy.requests.at(-1).prompt;
@@ -327,14 +329,14 @@ test.describe('studio LoRAs', () => {
         expect(recordedImages[0].prompt).toBe('1girl, lighthouse');
         expect(recordedImages[0].loras).toEqual([{ name: 'lora_a.safetensors', weight: 0.8 }]);
 
-        // Close the studio so the session is flushed to disk before the reload.
-        await page.locator('dialog.popup[open] .popup-button-close').last().click();
-        await expect(page.locator('#sd_studio')).toHaveCount(0, { timeout: 10_000 });
-        const settingsFile = resolve(server.dataRoot, 'default-user', 'settings.json');
+        // Collapse Workbench and confirm GlobalState session file is persisted on disk.
+        await page.locator('.wbench .wb-titlebar .lw-ibtn.is-close').click();
+        await expect(page.locator('.wbench .wb-win')).toBeHidden({ timeout: 10_000 });
+        const stateFile = resolve(server.dataRoot, 'default-user', 'states', 'sd_studio_sessions.json');
         await expect.poll(() => {
             try {
-                const stored = JSON.parse(readFileSync(settingsFile, 'utf8'));
-                const sessions = Object.values(stored.extension_settings?.sd?.illustration?.studioSessions || {});
+                const stored = JSON.parse(readFileSync(stateFile, 'utf8'));
+                const sessions = Object.values(stored.sessions || {});
                 return sessions.some(session => (session.images || []).some(image => image.loras?.length === 1));
             } catch {
                 return false;
@@ -354,10 +356,10 @@ test.describe('studio LoRAs', () => {
         // Rebuilding the workflow options keeps the selected workflow.
         await expect(page.locator('#sd_comfy_workflow')).toHaveValue('LoraTest.json');
         await openStudio(page);
-        await expect(page.locator('#sd_studio [data-studio-image-id]')).toHaveCount(1);
+        await expect(studioRoot.locator('[data-studio-image-id]')).toHaveCount(1);
 
         const regenerateCount = comfy.requests.length;
-        await page.locator('#sd_studio [data-studio-action="regenerate"]').click();
+        await studioRoot.locator('[data-studio-action="regenerate"]').click();
         await expect(page.locator('#toast-container .toast', {
             hasText: 'Some LoRAs are unavailable and were skipped: lora_a.safetensors',
         })).toHaveCount(1);
@@ -374,12 +376,12 @@ test.describe('studio LoRAs', () => {
         // A record without LoRAs regenerates without a catalog refresh. The
         // image request reads the workflow once for itself; a refresh would
         // read it a second time and ask for the LoRA list as well.
+        await studioRoot.locator('[data-studio-image-id]').nth(1).click();
         const requestPaths = [];
         const collectRequestPath = request => requestPaths.push(new URL(request.url()).pathname);
         page.on('request', collectRequestPath);
         const plainCount = comfy.requests.length;
-        await page.locator('#sd_studio [data-studio-image-id]').nth(1)
-            .locator('[data-studio-action="regenerate"]').click();
+        await studioRoot.locator('[data-studio-action="regenerate"]').click();
         await expect.poll(() => comfy.requests.length, { timeout: 60_000 }).toBeGreaterThan(plainCount);
         page.off('request', collectRequestPath);
         const catalogReads = requestPaths.filter(path => path === '/api/sd/comfy/workflow' || path === '/api/sd/comfy/loras');
