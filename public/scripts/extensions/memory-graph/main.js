@@ -51,6 +51,7 @@ import {
     bindImportedStoreToAssistantFloor,
 } from './import-export.js';
 import { DEFAULT_CONFIG_ITER_SYSTEM_PROMPT } from './config-iteration/system-prompt.js';
+import { DEFAULT_GRAPH_ITER_SYSTEM_PROMPT } from './graph-iteration/system-prompt.js';
 import { migrateConfigIterationPrompt } from './config-iteration/prompt-migration.js';
 import {
     DEFAULT_EXTRACT_EDGE_RULES,
@@ -9720,6 +9721,7 @@ const MEMORY_SETTING_RULES = {
     vectorTopK: { read: (v) => clampInt(v, 5, 100, 20), recall: true },
     hybridMaxResults: { read: (v) => clampInt(v, 3, 50, 15), recall: true },
     ragDefaultPerTypeK: {
+        // cap-ok: bounded by hybridMaxResults ceiling (50) in RAG retrieval
         read: (v) => Math.max(0, Math.min(50, Math.floor(Number.isFinite(Number(v)) ? Number(v) : defaultSettings.ragDefaultPerTypeK))),
         recall: true,
     },
@@ -9763,6 +9765,7 @@ function withAdvancedPromptDefaults(source) {
         recallRouteSystemPrompt: source.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
         recallFinalizeSystemPrompt: source.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
         ragRewriteSystemPrompt: source.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT,
+        graphIterSystemPrompt: source.graphIterSystemPrompt || DEFAULT_GRAPH_ITER_SYSTEM_PROMPT,
         configIterSystemPrompt: source.configIterSystemPrompt || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT,
     };
 }
@@ -10111,6 +10114,24 @@ export async function runRecallDebug(context, query = '') {
         const rerankProfile = useRerank ? getRerankProfileFromSettings(effectiveSettings) : null;
         const { perTypeK, defaultPerTypeK } = buildRagPerTypeQuotas(context, effectiveSettings);
 
+        const alwaysInjectNodes = collectAlwaysInjectNodes(
+            store,
+            context,
+            effectiveSettings,
+            computeRecallAlwaysInjectOptions(store, effectiveSettings),
+        );
+        const alwaysInjectSet = new Set(alwaysInjectNodes.map(n => n?.id).filter(Boolean));
+        const latestSeqIndex = getLatestSeqIndex(store);
+        const excludeMessages = Math.max(0, Number(effectiveSettings.recentRawTurns ?? defaultSettings.recentRawTurns));
+        const excludeNodeIds = new Set(alwaysInjectSet);
+        if (excludeMessages > 0) {
+            for (const node of Object.values(store.nodes || {})) {
+                if (isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages)) {
+                    excludeNodeIds.add(node.id);
+                }
+            }
+        }
+
         const ragResult = await runRagRecall(store, queryText, chatKey, effectiveSettings, {
             maxResults: Number(effectiveSettings.hybridMaxResults) || 15,
             vectorTopK: Number(effectiveSettings.vectorTopK) || 20,
@@ -10119,15 +10140,13 @@ export async function runRecallDebug(context, query = '') {
             rewrittenQuery,
             perTypeK,
             defaultPerTypeK,
+            excludeNodeIds,
             signal: null,
         });
 
-        const latestSeqIndex = getLatestSeqIndex(store);
-        const excludeMessages = Math.max(0, Number(effectiveSettings.recentRawTurns ?? defaultSettings.recentRawTurns));
-
         selectedNodes = ragResult.candidates
             .map(c => store.nodes?.[c.nodeId])
-            .filter(node => node && !node.archived)
+            .filter(node => node && !node.archived && !alwaysInjectSet.has(node.id))
             .filter(node => !isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages))
             .sort(compareNodesByTimeline);
 

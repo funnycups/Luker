@@ -355,7 +355,7 @@ describe('memory IterateTarget (config + schema)', () => {
         expect(globalTools).toContain('mg_config_read_fields');
         expect(globalTools).toContain('mg_schema_set_node_type');
         for (const lbTool of LOREBOOK_READ_TOOL_NAMES) {
-            expect(globalTools).not.toContain(lbTool);
+            expect(globalTools).toContain(lbTool);
         }
 
         const charTools = (await target.tools({}, 'character', h.ctx)).map(t => t.function.name);

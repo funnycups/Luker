@@ -59,8 +59,8 @@ const REGISTRY = [
     intField('extractCrawlMaxRounds', 'extraction', 'Crawl max rounds', 'Maximum number of crawl read rounds before extraction starts.', 3, { min: 1, max: 5 }),
     intField('extractCrawlCandidateLimit', 'extraction', 'Crawl candidate limit', 'Maximum number of candidate nodes listed per crawl round. 0 means unlimited.', 40, { min: 0, max: 100 }),
     intField('extractCrawlMaxReads', 'extraction', 'Crawl read budget', 'Maximum number of node reads allowed in one crawl extraction.', 12, { min: 1, max: 30 }),
-    textField('extractTemplate', 'extraction', 'Extraction Template', 'System template for the extraction request. Must keep the {{nodes}} and {{edges}} markers.', DEFAULT_EXTRACT_TEMPLATE, { markers: ['{{nodes}}', '{{edges}}'] }),
-    textField('extractEdgeRules', 'extraction', 'Edge Rules', 'Edge rules appended to the extraction request.', DEFAULT_EXTRACT_EDGE_RULES),
+    textField('extractTemplate', 'extraction', 'Extraction Template', 'System template for the extraction request. Must keep the {{nodes}} and {{edges}} markers.', DEFAULT_EXTRACT_TEMPLATE, { markers: ['{{nodes}}', '{{edges}}'], clearWhenDefault: true }),
+    textField('extractEdgeRules', 'extraction', 'Edge Rules', 'Edge rules appended to the extraction request.', DEFAULT_EXTRACT_EDGE_RULES, { clearWhenDefault: true }),
     textField('extractCrawlSystemPrompt', 'extraction', 'Extraction Crawl Prompt', 'System prompt for the crawl-stage explorer that runs before extraction.', DEFAULT_CRAWL_SYSTEM_PROMPT, { fillDefaultOnNormalize: true }),
 
     // ---- recall -----------------------------------------------------------
@@ -76,7 +76,7 @@ const REGISTRY = [
     textField('ragRewriteSystemPrompt', 'query_rewrite', 'Query rewrite system prompt', 'System prompt for rewriting the recall query; used only by RAG recall with query rewrite enabled.', DEFAULT_RAG_REWRITE_SYSTEM_PROMPT, { fillDefaultOnNormalize: true }),
 
     // ---- iteration --------------------------------------------------------
-    textField('graphIterSystemPrompt', 'iteration', 'Graph Revision Prompt (graph-editor AI)', 'System prompt for the graph revision workbench.', DEFAULT_GRAPH_ITER_SYSTEM_PROMPT),
+    textField('graphIterSystemPrompt', 'iteration', 'Graph Revision Prompt (graph-editor AI)', 'System prompt for the graph revision workbench.', DEFAULT_GRAPH_ITER_SYSTEM_PROMPT, { clearWhenDefault: true }),
     textField('configIterSystemPrompt', 'iteration', 'Configuration Iteration Prompt (configuration-editor AI)', 'System prompt for this configuration workbench.', DEFAULT_CONFIG_ITER_SYSTEM_PROMPT, { clearWhenDefault: true }),
 
     // ---- runtime ----------------------------------------------------------

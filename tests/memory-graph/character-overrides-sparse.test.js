@@ -223,4 +223,18 @@ describe('persistCharacterAdvancedOverride', () => {
         expect(written.advancedOverride.recallMaxIterations).toBe(6);
         expect(written.schemaOverride).toEqual([{ id: 'event' }]);
     });
+
+    test('normalizeAdvancedSettings clears unseeded prompt fields when equal to code defaults', () => {
+        const defaults = {
+            extractTemplate: CONFIG_FIELDS['settings.extractTemplate'].defaultValue,
+            extractEdgeRules: CONFIG_FIELDS['settings.extractEdgeRules'].defaultValue,
+            graphIterSystemPrompt: CONFIG_FIELDS['settings.graphIterSystemPrompt'].defaultValue,
+            configIterSystemPrompt: CONFIG_FIELDS['settings.configIterSystemPrompt'].defaultValue,
+        };
+        const normalized = normalizeAdvancedSettings(defaults, {});
+        expect(normalized.extractTemplate).toBe('');
+        expect(normalized.extractEdgeRules).toBe('');
+        expect(normalized.graphIterSystemPrompt).toBe('');
+        expect(normalized.configIterSystemPrompt).toBe('');
+    });
 });

@@ -643,7 +643,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                 });
                 return [...catalog, ...LOREBOOK_READ_TOOL_DEFS];
             }
-            return [...CONFIG_TOOL_DEFS];
+            return [...CONFIG_TOOL_DEFS, ...LOREBOOK_READ_TOOL_DEFS];
         },
         isRead: (name) => isMgConfigReadTool({ name }) || isLorebookReadTool(name),
         async runRead(call, live, helpers = {}) {
