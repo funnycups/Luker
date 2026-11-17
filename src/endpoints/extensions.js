@@ -208,6 +208,56 @@ async function cloneWithIsomorphicRetry({ url, extensionPath, branch }) {
     throw lastError;
 }
 
+async function listServerRefsWithCandidates({ remoteUrl, prefix }) {
+    const candidates = buildCloneUrlCandidates(remoteUrl);
+    let lastError;
+
+    for (const candidate of candidates) {
+        try {
+            const refs = await isomorphicGit.listServerRefs({
+                http,
+                url: candidate,
+                prefix,
+            });
+            return { refs, resolvedUrl: candidate };
+        } catch (error) {
+            lastError = error;
+            if (!isUnprocessableHttpError(error)) {
+                break;
+            }
+        }
+    }
+
+    throw lastError;
+}
+
+async function fetchWithIsomorphicCandidates(extensionPath, options) {
+    const remoteUrl = await getRemoteUrlWithIsomorphic(extensionPath);
+    const candidates = remoteUrl ? buildCloneUrlCandidates(remoteUrl) : [''];
+    let lastError;
+
+    for (const candidate of candidates) {
+        try {
+            await isomorphicGit.fetch({
+                fs,
+                http,
+                dir: extensionPath,
+                remote: 'origin',
+                ...(candidate ? { url: candidate } : {}),
+                ...options,
+            });
+            return candidate;
+        } catch (error) {
+            lastError = error;
+            if (!isUnprocessableHttpError(error)) {
+                break;
+            }
+        }
+    }
+
+    throw lastError;
+}
+
 async function checkIfRepoIsUpToDateWithIsomorphic(extensionPath) {
     const remoteUrl = await getRemoteUrlWithIsomorphic(extensionPath);
     const currentBranch = await isomorphicGit.currentBranch({
@@ -220,6 +270,7 @@ async function checkIfRepoIsUpToDateWithIsomorphic(extensionPath) {
         return {
             isUpToDate: true,
             remoteUrl,
+            resolvedRemoteUrl: remoteUrl,
             currentBranchName: '',
             currentCommitHash: '',
             remoteCommitHash: '',
@@ -236,6 +287,7 @@ async function checkIfRepoIsUpToDateWithIsomorphic(extensionPath) {
         return {
             isUpToDate: true,
             remoteUrl: '',
+            resolvedRemoteUrl: '',
             currentBranchName: currentBranch,
             currentCommitHash,
             remoteCommitHash: '',
@@ -243,9 +295,8 @@ async function checkIfRepoIsUpToDateWithIsomorphic(extensionPath) {
     }
 
     const targetRef = `refs/heads/${currentBranch}`;
-    const refs = await isomorphicGit.listServerRefs({
-        http,
-        url: remoteUrl,
+    const { refs, resolvedUrl } = await listServerRefsWithCandidates({
+        remoteUrl,
         prefix: targetRef,
     });
     const match = refs.find(ref => ref.ref === targetRef);
@@ -254,6 +305,7 @@ async function checkIfRepoIsUpToDateWithIsomorphic(extensionPath) {
     return {
         isUpToDate: !remoteCommitHash || currentCommitHash === remoteCommitHash,
         remoteUrl,
+        resolvedRemoteUrl: resolvedUrl || remoteUrl,
         currentBranchName: currentBranch,
         currentCommitHash,
         remoteCommitHash,
@@ -303,9 +355,8 @@ async function getVersionWithIsomorphic(extensionPath) {
 
     try {
         const targetRef = `refs/heads/${currentBranchName}`;
-        const refs = await isomorphicGit.listServerRefs({
-            http,
-            url: remoteUrl,
+        const { refs } = await listServerRefsWithCandidates({
+            remoteUrl,
             prefix: targetRef,
         });
         const match = refs.find(ref => ref.ref === targetRef);
@@ -348,12 +399,14 @@ async function updateWithIsomorphic(extensionPath) {
     }
 
     const author = await getIsomorphicGitAuthor(extensionPath);
+    const pullUrl = status.resolvedRemoteUrl || status.remoteUrl;
     try {
         await isomorphicGit.pull({
             fs,
             http,
             dir: extensionPath,
             remote: 'origin',
+            ...(pullUrl ? { url: pullUrl } : {}),
             ref: status.currentBranchName,
             remoteRef: status.currentBranchName,
             singleBranch: true,
@@ -429,11 +482,7 @@ async function forceUpdateWithIsomorphic(extensionPath) {
 }
 
 async function listBranchesWithIsomorphic(extensionPath) {
-    await isomorphicGit.fetch({
-        fs,
-        http,
-        dir: extensionPath,
-        remote: 'origin',
+    await fetchWithIsomorphicCandidates(extensionPath, {
         singleBranch: false,
         depth: 1,
     });

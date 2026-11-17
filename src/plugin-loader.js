@@ -184,6 +184,29 @@ async function cloneWithIsomorphic({ pluginUrl, pluginPath }) {
     throw lastError;
 }
 
+async function listServerRefsWithCandidates({ remoteUrl, prefix }) {
+    const candidates = buildCloneUrlCandidates(remoteUrl);
+    let lastError;
+
+    for (const candidate of candidates) {
+        try {
+            const refs = await isomorphicGit.listServerRefs({
+                http,
+                url: candidate,
+                prefix,
+            });
+            return { refs, resolvedUrl: candidate };
+        } catch (error) {
+            lastError = error;
+            if (!isUnprocessableHttpError(error)) {
+                break;
+            }
+        }
+    }
+
+    throw lastError;
+}
+
 async function getPluginUpdateStatusWithIsomorphic(pluginPath) {
     const remoteUrl = await getPluginRemoteUrlWithIsomorphic(pluginPath);
     const currentBranchName = await isomorphicGit.currentBranch({
@@ -204,13 +227,13 @@ async function getPluginUpdateStatusWithIsomorphic(pluginPath) {
             currentBranchName: currentBranchName || '',
             currentCommitHash,
             remoteUrl,
+            resolvedRemoteUrl: remoteUrl,
         };
     }
 
     const targetRef = `refs/heads/${currentBranchName}`;
-    const refs = await isomorphicGit.listServerRefs({
-        http,
-        url: remoteUrl,
+    const { refs, resolvedUrl } = await listServerRefsWithCandidates({
+        remoteUrl,
         prefix: targetRef,
     });
     const match = refs.find(ref => ref.ref === targetRef);
@@ -221,6 +244,7 @@ async function getPluginUpdateStatusWithIsomorphic(pluginPath) {
         currentBranchName,
         currentCommitHash,
         remoteUrl,
+        resolvedRemoteUrl: resolvedUrl || remoteUrl,
     };
 }
 
@@ -246,11 +270,13 @@ async function updateServerPluginWithIsomorphic(pluginPath) {
     }
 
     const author = await getIsomorphicGitAuthor(pluginPath);
+    const pullUrl = status.resolvedRemoteUrl || status.remoteUrl;
     await isomorphicGit.pull({
         fs,
         http,
         dir: pluginPath,
         remote: 'origin',
+        ...(pullUrl ? { url: pullUrl } : {}),
         ref: status.currentBranchName,
         remoteRef: status.currentBranchName,
         singleBranch: true,

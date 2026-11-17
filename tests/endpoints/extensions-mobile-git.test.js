@@ -18,6 +18,16 @@ const IDENTITY = ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid
 function startGitHttpServer(projectRoot, emptyGitConfig) {
     const server = http.createServer((req, res) => {
         const url = new URL(req.url, 'http://127.0.0.1');
+        // Emulate hosts such as GitLab that return 422 Unprocessable Entity
+        // when smart-HTTP Git endpoints are queried without a `.git` suffix.
+        if (url.pathname.startsWith('/strict-host/') && !url.pathname.includes('.git/')) {
+            res.statusCode = 422;
+            res.end('Unprocessable Entity');
+            return;
+        }
+        const effectivePath = url.pathname.startsWith('/strict-host/')
+            ? url.pathname.slice('/strict-host'.length)
+            : url.pathname;
         const child = spawn('git', ['http-backend'], {
             env: {
                 ...process.env,
@@ -25,7 +35,7 @@ function startGitHttpServer(projectRoot, emptyGitConfig) {
                 GIT_CONFIG_NOSYSTEM: '1',
                 GIT_PROJECT_ROOT: projectRoot,
                 GIT_HTTP_EXPORT_ALL: '1',
-                PATH_INFO: url.pathname,
+                PATH_INFO: effectivePath,
                 QUERY_STRING: url.search.slice(1),
                 REQUEST_METHOD: req.method,
                 CONTENT_TYPE: req.headers['content-type'] || '',
@@ -430,6 +440,65 @@ describe('third-party extensions and server plugins git operations under mobile 
                 remoteUrl: 'http://127.0.0.1:1/unreachable-repo.git',
                 remoteCommitHash: '',
             },
+        });
+    });
+
+    test('resolves .git candidate URL on /version, /branches, and /update when stored remote.origin.url lacks .git on a strict 422 host', async () => {
+        const previousHead = gitRun(bareDir, 'rev-parse', 'refs/heads/main');
+        const bareWebUrl = `http://127.0.0.1:${server.address().port}/strict-host/demo-ext`;
+        const nextHead = addUpstreamMainCommit('1.2.0-strict');
+
+        const child = await runInIsolatedRuntime(
+            { platform: 'ios', forbidAllSpawns: true },
+            `
+            await postJson('/install', { url: ${JSON.stringify(bareWebUrl)} });
+            const { default: isoGit } = await import('isomorphic-git');
+            const httpClient = (await import('isomorphic-git/http/node')).default;
+            const extPath = path.join(extensionsDir, 'demo-ext');
+            await isoGit.fetch({ fs, http: httpClient, dir: extPath, url: ${JSON.stringify(`${bareWebUrl}.git`)}, ref: 'main', depth: 2, singleBranch: true });
+            await isoGit.writeRef({ fs, dir: extPath, ref: 'refs/heads/main', value: ${JSON.stringify(previousHead)}, force: true });
+            await isoGit.checkout({ fs, dir: extPath, ref: 'main', force: true });
+            // Simulate a repo whose remote.origin.url was stored without .git (e.g. cloned on desktop or pre-existing checkout)
+            await isoGit.setConfig({ fs, dir: extPath, path: 'remote.origin.url', value: ${JSON.stringify(bareWebUrl)} });
+
+            const pluginInfo = await installServerPlugin(pluginsDir, ${JSON.stringify(bareWebUrl)});
+            const pluginDir = path.join(pluginsDir, pluginInfo.directory);
+            await isoGit.fetch({ fs, http: httpClient, dir: pluginDir, url: ${JSON.stringify(`${bareWebUrl}.git`)}, ref: 'main', depth: 2, singleBranch: true });
+            await isoGit.writeRef({ fs, dir: pluginDir, ref: 'refs/heads/main', value: ${JSON.stringify(previousHead)}, force: true });
+            await isoGit.checkout({ fs, dir: pluginDir, ref: 'main', force: true });
+            await isoGit.setConfig({ fs, dir: pluginDir, path: 'remote.origin.url', value: ${JSON.stringify(bareWebUrl)} });
+
+            const versionBefore = await postJson('/version', { extensionName: 'demo-ext', global: false });
+            const branchesRes = await postJson('/branches', { extensionName: 'demo-ext', global: false });
+            const updateRes = await postJson('/update', { extensionName: 'demo-ext', global: false });
+            const pluginUpdate = await updateServerPlugin(pluginsDir, pluginInfo.directory);
+
+            writeResult({
+                versionBefore: versionBefore.json,
+                branchesStatus: branchesRes.status,
+                updateStatus: updateRes.status,
+                updatedShortHash: updateRes.json?.shortCommitHash,
+                pluginUpdatedCommit: pluginUpdate.currentCommitHash,
+                pluginWasUpToDate: pluginUpdate.isUpToDate,
+            });
+            `,
+        );
+
+        expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: '' });
+        expect(child.result).toEqual({
+            spawnCalls: [],
+            versionBefore: {
+                currentBranchName: 'main',
+                currentCommitHash: previousHead,
+                isUpToDate: false,
+                remoteUrl: bareWebUrl,
+                remoteCommitHash: nextHead,
+            },
+            branchesStatus: 200,
+            updateStatus: 200,
+            updatedShortHash: nextHead.slice(0, 7),
+            pluginUpdatedCommit: nextHead,
+            pluginWasUpToDate: false,
         });
     });
 });
