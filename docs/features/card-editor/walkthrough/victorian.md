@@ -131,7 +131,7 @@ Two layers of constraint are at work in this reply: the world book entries set t
 
 ### b. Inspect the orchestration
 
-Open the **Run Panel** beside the chat, or the bottom drawer on narrow screens. It lists each round of this agent's reasoning, the tools it calls and their results:
+Open the **Run panel** dock (or **Workbench → Orchestration → Run**). It lists each round of this agent's reasoning, the tools it calls and their results:
 
 ![Multi-agent orchestration run panel](/images/walkthrough/victorian/step-07b-stage-output.png)
 
@@ -139,7 +139,7 @@ This is where to look when a round consults the wrong book, misses a memory, or 
 
 ### c. Inspect the Memory Graph
 
-In the Extensions panel, open the Memory section → "View Graph" to see the nodes and relationships accumulated by the conversation:
+Open **Workbench** (`Alt+W` or wand menu → **Workbench**) and switch to **Memory graph** to see the nodes and relationships accumulated by the conversation:
 
 ![Memory Graph visualization](/images/walkthrough/victorian/step-07c-memory-graph.png)
 

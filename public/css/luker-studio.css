@@ -2641,3 +2641,69 @@ not a wall of unlabeled inputs.
     width: 100%;
 }
 
+/* Shared proposal-bus diff-body classes (lorebook-write / skill / custom-tool-author) */
+.orch_it_lbk_nochange,
+.orch_it_skl_nochange {
+    font-style: italic;
+    opacity: 0.6;
+    font-size: 0.9em;
+}
+.orch_it_skl_meta_row,
+.orch_it_ct_meta_row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: baseline;
+    font-size: 0.9em;
+}
+.orch_it_skl_meta_label,
+.orch_it_ct_meta_label {
+    font-weight: 600;
+    opacity: 0.8;
+}
+.orch_it_skl_meta_was {
+    text-decoration: line-through;
+    opacity: 0.7;
+    font-family: var(--monoFontFamily, monospace);
+}
+.orch_it_skl_meta_arrow {
+    opacity: 0.6;
+}
+.orch_it_skl_meta_now,
+.orch_it_ct_meta_value {
+    font-family: var(--monoFontFamily, monospace);
+}
+.orch_it_skl_meta_destructive,
+.orch_it_ct_destructive {
+    color: #d04848;
+    font-style: italic;
+}
+.orch_it_skl_extras {
+    font-size: 0.85em;
+    opacity: 0.75;
+    margin-top: 0.25rem;
+}
+.orch_it_ct_warning {
+    padding: 0.45rem 0.65rem;
+    border-radius: 6px;
+    border: 1px solid color-mix(in oklab, #d99b26 45%, transparent);
+    background: color-mix(in oklab, #d99b26 10%, transparent);
+    font-size: 0.88em;
+    margin-bottom: 0.35rem;
+}
+.orch_it_ct_body_details {
+    margin-top: 0.35rem;
+}
+.orch_it_ct_body_pre {
+    margin: 0.25rem 0 0;
+    padding: 0.5rem;
+    border-radius: 6px;
+    overflow: auto;
+    font-size: 0.85em;
+}
+.orch_it_ct_unknown {
+    opacity: 0.75;
+    font-style: italic;
+}
+
+

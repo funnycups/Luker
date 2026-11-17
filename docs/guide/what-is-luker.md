@@ -24,6 +24,12 @@ Luker ships with several professional tools designed for roleplay scenarios — 
 
 ## Core Features Overview
 
+### Workbench
+
+Luker's unified workspace (`Alt+W`, wand menu → **Workbench**, or the corner entry pill) brings together prompt token breakdowns, local health suggestions, read-only diagnostic Q&A, embedded Memory Graph and Orchestrator views, and AI-assisted editing for presets, character cards, world books, memory structures, and orchestration profiles—with diff review and per-change undo.
+
+→ [Workbench Documentation](/features/workbench)
+
 ### Memory Graph
 
 A character memory system built on a knowledge graph. Events, characters, locations, and plotlines from roleplay sessions are distilled into typed nodes connected to each other. Before a reply is written, a recall pass finds the nodes most relevant to the current scene and injects them into the creative context — when the protagonist returns to a place they visited earlier, an early character who has long been off-stage is recalled. Recall methods include: **LLM Recall** (the default — the model selects relevant nodes from the store, with multi-round exploration) and **RAG Recall** (vector retrieval and reranking). Extraction runs on its own after a reply, either through the built-in pipeline or through an orchestrator sub-agent.
@@ -32,7 +38,7 @@ A character memory system built on a knowledge graph. Events, characters, locati
 
 ### Orchestrator
 
-Before the creative LLM generates a response, a team of agents plans the scene: one distills the recent context, another drafts what this turn should accomplish, a reviewer checks the plan, and the result is packaged into a short briefing for the writer. Execution modes are available: **Spec** (a fixed stage sequence, the default), **Single Agent**, **Agenda** (a planner dispatches agents through tool calls), **Loop** (one agent runs an iterative tool loop until it finalizes), and **Director** (a main agent and a sub-agent team explore the context and draft the message body). All agent actions are recorded in the Run Panel, where you can expand them. Orchestration configurations can be bound to character cards and imported/exported along with them.
+Before the creative LLM generates a response, a team of agents plans the scene: one distills the recent context, another drafts what this turn should accomplish, a reviewer checks the plan, and the result is packaged into a short briefing for the writer. Execution modes are available: **Spec** (a fixed stage sequence, the default), **Single Agent**, **Agenda** (a planner dispatches agents through tool calls), **Loop** (one agent runs an iterative tool loop until it finalizes), and **Director** (a main agent and a sub-agent team explore the context and draft the message body). All agent actions stream live into the **Run panel** dock and are recorded in **Workbench → Orchestration**. Orchestration configurations can be bound to character cards and imported/exported along with them.
 
 → [Orchestrator Documentation](/features/orchestrator/)
 
@@ -44,7 +50,7 @@ Reusable knowledge packs that agents read on demand, instead of one giant system
 
 ### Character Card Editing Assistant (CEA / CardApp Studio)
 
-An AI-assisted character card editing tool with an integrated code editor. It edits character cards, world info, and CardApp code through natural language conversation, committing real changes via structured tool calls, with side-by-side approval — rejected changes never take effect. When you replace or update a card, it detects world info changes and offers to import the new book, keep the old one, or merge them with AI help. Regular cards use the popup editor; cards with an embedded CardApp open in the more capable Studio.
+An AI-assisted character card editing tool with an integrated code editor. Edit character cards and bound world books directly inside **Workbench → AI iteration**, or use the standalone popup and **CardApp Studio** IDE with file tree, live preview, and version history. When you replace or update a card, it detects world info changes and offers to import the new book, keep the old one, or merge them with AI help.
 
 → [CEA Overview](/features/card-editor/)　·　[Popup](/features/card-editor/popup)　·　[CardApp Studio](/features/card-editor/studio)
 

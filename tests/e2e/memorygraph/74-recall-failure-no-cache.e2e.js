@@ -37,9 +37,8 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
     regenerateViaUI,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -130,59 +129,17 @@ test.afterAll(async () => {
 });
 
 async function enableMgAndTune(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        const enableCb = document.getElementById('luker_rpg_memory_enabled');
-        if (enableCb && !enableCb.checked) {
-            enableCb.checked = true;
-            enableCb.dispatchEvent(new Event('input', { bubbles: true }));
-            enableCb.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        // Auto-extraction OFF — this test seeds the graph via Import.
-        const autoCb = document.getElementById('luker_rpg_memory_auto_extraction_enabled');
-        if (autoCb && autoCb.checked) {
-            autoCb.checked = false;
-            autoCb.dispatchEvent(new Event('input', { bubbles: true }));
-            autoCb.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        const method = document.getElementById('luker_rpg_memory_recall_method');
-        if (method) {
-            method.value = 'llm';
-            method.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        // Imported nodes sit at seqTo 1..N. Disable the raw-recent-turns
-        // exclude window so both the event and the character stay recallable.
-        const recent = document.getElementById('luker_rpg_memory_advanced_recent_raw_turns');
-        if (recent) {
-            recent.value = '0';
-            recent.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-        // No retries: a failed recall should fail on the first upstream error,
-        // and the test must not wait out the retry budget three times.
-        const retries = document.getElementById('luker_rpg_memory_advanced_tool_retries');
-        if (retries) {
-            retries.value = '0';
-            retries.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-    });
-    await page.waitForTimeout(300);
+    await setMgSettings(page, {
+        enabled: true,
+        autoExtractionEnabled: false,
+        recallMethod: 'llm',
+        recentRawTurns: 0,
+        toolCallRetryMax: 0,
+    }, { closeAfter: true });
 }
 
 async function importBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        const tab = document.querySelector('#luker_rpg_memory_tabs [data-luker-tab-key="graph"]');
-        if (!tab) throw new Error('memory-graph Graph tab not in DOM');
-        tab.click();
-    });
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
+    await importMgGraph(page, filePath, { mode: 'bind-latest', closeAfter: true });
     await page.waitForTimeout(500);
 }
 

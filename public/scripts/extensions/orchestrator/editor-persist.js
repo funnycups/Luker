@@ -318,7 +318,7 @@ export async function persistOrchestratorCharacterExtension(context, characterIn
         const value = (modulePayload && typeof modulePayload === 'object')
             ? modulePayload
             : UNSET_VALUE;
-        await context.writeExtensionField(id, MODULE_NAME, value);
+        await context.writeExtensionField(id, MODULE_NAME, value, { requireSaved: true });
         return true;
     } catch (error) {
         console.error('Failed to persist orchestrator extension data to character card', error);
@@ -361,6 +361,29 @@ export function createPortableLoopProfileFromEditor(editor) {
     return sanitizeLoopProfile(editor);
 }
 
+async function persistPresetPatch(context, settings, mode, scope, id, merged, avatar, saveGlobal) {
+    const owner = scope === 'global' ? settings : getCharacterExtensionDataByAvatar(context, avatar);
+    const library = owner?.presetLibraries?.[mode];
+    if (!library?.[id]) return false;
+    const previous = library[id];
+    const result = writeActivePreset(settings, mode, scope, merged, { context, avatar });
+    if (!result.ok) return false;
+    const next = library[id];
+    let saved = false;
+    try {
+        if (scope === 'global') {
+            await saveGlobal();
+            saved = true;
+        } else {
+            const index = getCharacterIndexByAvatar(context, avatar);
+            saved = await persistOrchestratorCharacterExtension(context, index, owner);
+        }
+        return saved;
+    } finally {
+        if (!saved && library[id] === next) library[id] = previous;
+    }
+}
+
 /**
  * Narrowly persist a Runtime-limits patch to the active preset for `mode`.
  * Reads the currently persisted preset, overlays only the fields present
@@ -388,7 +411,7 @@ export function createPortableLoopProfileFromEditor(editor) {
  * @param {string} [opts.avatar] — required when scope='character'
  * @returns {Promise<boolean>} true when the patch landed, false on failure
  */
-export async function persistRuntimeLimitsPatch(context, settings, mode, scope, limitsPatch, { avatar } = {}) {
+export async function persistRuntimeLimitsPatch(context, settings, mode, scope, limitsPatch, { avatar, saveGlobal = saveSettings } = {}) {
     if (!limitsPatch || typeof limitsPatch !== 'object') return false;
     if (mode !== ORCH_EXECUTION_MODE_LOOP
         && mode !== ORCH_EXECUTION_MODE_DIRECTOR
@@ -413,24 +436,7 @@ export async function persistRuntimeLimitsPatch(context, settings, mode, scope, 
         merged = { ...currentFields, ...limitsPatch };
     }
 
-    const writeResult = writeActivePreset(settings, mode, scope, merged, { context, avatar });
-    if (!writeResult.ok) {
-        console.warn('[orchestrator] persistRuntimeLimitsPatch: writeActivePreset failed',
-            writeResult.reason, writeResult.hint);
-        return false;
-    }
-
-    if (scope === 'global') {
-        await saveSettings();
-        return true;
-    }
-    // scope === 'character' — writeActivePreset mutated character.data.extensions.orchestrator
-    // in place; now flush the whole ext to the card on disk.
-    const characterIndex = getCharacterIndexByAvatar(context, String(avatar || ''));
-    if (characterIndex < 0) return false;
-    const ext = getCharacterExtensionDataByAvatar(context, String(avatar || ''));
-    if (!ext || typeof ext !== 'object') return false;
-    return await persistOrchestratorCharacterExtension(context, characterIndex, ext);
+    return persistPresetPatch(context, settings, mode, scope, activePresetId, merged, avatar, saveGlobal);
 }
 
 /**
@@ -453,7 +459,7 @@ export async function persistRuntimeLimitsPatch(context, settings, mode, scope, 
  * @param {string} [opts.avatar] — required when scope='character'
  * @returns {Promise<boolean>}
  */
-export async function persistCustomToolsPatch(context, settings, mode, scope, customTools, { avatar } = {}) {
+export async function persistCustomToolsPatch(context, settings, mode, scope, customTools, { avatar, saveGlobal = saveSettings } = {}) {
     if (!Array.isArray(customTools)) return false;
     if (mode !== ORCH_EXECUTION_MODE_LOOP
         && mode !== ORCH_EXECUTION_MODE_DIRECTOR
@@ -483,20 +489,5 @@ export async function persistCustomToolsPatch(context, settings, mode, scope, cu
         merged = { ...currentFields, customTools: clonedTools };
     }
 
-    const writeResult = writeActivePreset(settings, mode, scope, merged, { context, avatar });
-    if (!writeResult.ok) {
-        console.warn('[orchestrator] persistCustomToolsPatch: writeActivePreset failed',
-            writeResult.reason, writeResult.hint);
-        return false;
-    }
-
-    if (scope === 'global') {
-        await saveSettings();
-        return true;
-    }
-    const characterIndex = getCharacterIndexByAvatar(context, String(avatar || ''));
-    if (characterIndex < 0) return false;
-    const ext = getCharacterExtensionDataByAvatar(context, String(avatar || ''));
-    if (!ext || typeof ext !== 'object') return false;
-    return await persistOrchestratorCharacterExtension(context, characterIndex, ext);
+    return persistPresetPatch(context, settings, mode, scope, activePresetId, merged, avatar, saveGlobal);
 }

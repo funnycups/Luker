@@ -108,8 +108,10 @@ import {
     converter,
     sendTextareaMessage,
     buildObjectPatchOperationsAsync,
+    settingsReady,
 } from '../script.js';
 import {
+    extensionNames,
     extension_settings,
     getExtensionManifest,
     ModuleWorkerWrapper,
@@ -122,6 +124,12 @@ import {
     updateCharacterState,
     getCharacterStateBatch,
     deleteCharacterState,
+    getGlobalState,
+    setGlobalState,
+    patchGlobalState,
+    updateGlobalState,
+    getGlobalStateBatch,
+    deleteGlobalState,
     renderExtensionTemplate,
     renderExtensionTemplateAsync,
     saveMetadataDebounced,
@@ -148,6 +156,20 @@ import {
     rebindPreviousPrimaryBook,
 } from './character/post-replace-actions.js';
 import { decodeCardBoundOptionValue } from './character/preset-ref-codec.js';
+import {
+    STATE_ERROR_REASONS,
+    STATE_HINT_MAX_LENGTH,
+    isValidReason,
+    makeStateError,
+    makeStateOk,
+} from './state-errors.js';
+import {
+    formatHttpErrorHint,
+    formatTransportErrorHint,
+    formatConflictHint,
+    formatValidationArgsHint,
+    formatValidationTargetHint,
+} from './state-errors/format.js';
 import { humanizedDateTime, isMobile, shouldSendOnEnter } from './RossAscends-mods.js';
 import { ScraperManager } from './scrapers.js';
 import { executeSlashCommands, executeSlashCommandsWithOptions, registerSlashCommand } from './slash-commands.js';
@@ -186,8 +208,10 @@ import * as LUKER_TABS_API from './extensions/luker-tabs.js';
 import * as FIELD_HELP_API from './extensions/field-help.js';
 import { skillsApi } from './skills/api.js';
 import * as RUN_PANEL_API_NS from './run-panel/index.js';
+import * as WORKBENCH_REGISTRY from './workbench/registry.js';
 import { SECRET_KEYS, secret_state } from './secrets.js';
 import { EmbeddingService } from './embedding-service.js';
+import { accountsEnabled, currentUser } from './user.js';
 import * as LIB_BUNDLE from '../lib.js';
 
 /**
@@ -221,6 +245,24 @@ const RUN_PANEL_API = Object.freeze({
     events: RUN_PANEL_API_NS.events,
     withRound: RUN_PANEL_API_NS.withRound,
     withStreamingSection: RUN_PANEL_API_NS.withStreamingSection,
+    attachDock: RUN_PANEL_API_NS.attachDock,
+    openRunDock: RUN_PANEL_API_NS.openRunDock,
+    toggleRunDock: RUN_PANEL_API_NS.toggleRunDock,
+    getRunRecorder: RUN_PANEL_API_NS.getRunRecorder,
+});
+
+const WORKBENCH_API = Object.freeze({
+    registerWorkspace: WORKBENCH_REGISTRY.registerWorkspace,
+    registerIterateTarget: WORKBENCH_REGISTRY.registerIterateTarget,
+    registerAskProvider: WORKBENCH_REGISTRY.registerAskProvider,
+    registerSuggestRuleProvider: WORKBENCH_REGISTRY.registerSuggestRuleProvider,
+    open: WORKBENCH_REGISTRY.open,
+    saveSettingsChecked: WORKBENCH_REGISTRY.saveSettingsChecked,
+    getWorkspaces: WORKBENCH_REGISTRY.getWorkspaces,
+    getIterateTargets: WORKBENCH_REGISTRY.getIterateTargets,
+    getAskProviders: WORKBENCH_REGISTRY.getAskProviders,
+    getSuggestRuleProviders: WORKBENCH_REGISTRY.getSuggestRuleProviders,
+    subscribe: WORKBENCH_REGISTRY.subscribe,
 });
 
 function safeClone(value, fallback = {}) {
@@ -2508,6 +2550,7 @@ export function getContext() {
         floorRecordToTaskMessage,
         iterationLibrary: ITERATION_LIBRARY_API,
         runPanel: RUN_PANEL_API,
+        workbench: WORKBENCH_API,
         edits: EDITS_API,
         renderLukerTabs: LUKER_TABS_API.renderLukerTabs,
         renderFieldHelpButton: FIELD_HELP_API.renderFieldHelpButton,
@@ -2826,12 +2869,31 @@ export function getContext() {
         listPostReplaceActions,
         importEmbeddedBookForCharacter,
         rebindPreviousPrimaryBook,
+        decodeCardBoundOptionValue,
+        stateErrors: Object.freeze({
+            STATE_ERROR_REASONS,
+            STATE_HINT_MAX_LENGTH,
+            isValidReason,
+            makeStateError,
+            makeStateOk,
+            formatHttpErrorHint,
+            formatTransportErrorHint,
+            formatConflictHint,
+            formatValidationArgsHint,
+            formatValidationTargetHint,
+        }),
         getCharacterState,
         setCharacterState,
         patchCharacterState,
         updateCharacterState,
         getCharacterStateBatch,
         deleteCharacterState,
+        getGlobalState,
+        setGlobalState,
+        patchGlobalState,
+        updateGlobalState,
+        getGlobalStateBatch,
+        deleteGlobalState,
         updateCharacterData,
         persistCharacterData,
         persistCharacterDataDebounced,
@@ -2898,6 +2960,10 @@ export function getContext() {
         textCompletion: {
             types: textgen_types,
         },
+        get accountsEnabled() { return Boolean(accountsEnabled); },
+        get currentUser() { return currentUser ? Object.freeze({ ...currentUser }) : null; },
+        get settingsReady() { return Boolean(settingsReady); },
+        listExtensionNames: () => Array.isArray(extensionNames) ? [...extensionNames] : [],
     };
 }
 

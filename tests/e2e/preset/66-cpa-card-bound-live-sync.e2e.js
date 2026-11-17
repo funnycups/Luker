@@ -10,8 +10,8 @@ import { join, resolve } from 'node:path';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { writePreset } from '../_lib/fixtures.js';
-import { openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
 import { openIterStudio, sendIterPrompt, applyIterBatch, closeIterStudio } from '../_lib/ui-iter-studio.js';
+import { selectWorkbenchTab, closeWorkbench } from '../_lib/ui-workbench.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
 import { read as readPngCard } from '../../../src/character-card-parser.js';
 
@@ -136,10 +136,14 @@ test.describe('#66 — CPA Apply on a card-bound preset updates live state immed
         await profilePopup.locator('.popup-button-ok').click();
         await page.locator('#API-status-top').click();
 
-        await openExtensionsDrawer(page);
-        await openInlineDrawer(page, 'completion_preset_assistant_settings');
-        await page.locator('#cpa_request_llm_preset').selectOption({ label: 'Default' });
-        await page.locator('#cpa_request_api_preset').selectOption({ label: PROFILE_NAME });
+        const wbSettings = await selectWorkbenchTab(page, 'settings');
+        const presetRow = wbSettings.locator('table.wb-api tbody tr').filter({
+            has: page.locator('td:first-child span', { hasText: /^(Preset|预设|預設)$/i }),
+        }).first();
+        await expect(presetRow).toBeVisible({ timeout: 10_000 });
+        await presetRow.locator('select.lw-select').nth(0).selectOption({ label: PROFILE_NAME });
+        await presetRow.locator('select.lw-select').nth(1).selectOption({ label: 'Default' });
+        await closeWorkbench(page);
 
         await selectPreset(page, GLOBAL_PRESET);
         await expect.poll(async () => (await readLiveState(page)).activeTemperature).toBe(GLOBAL_TEMPERATURE);

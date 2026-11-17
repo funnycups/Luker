@@ -7,8 +7,8 @@
 //   2. Send 2 RP turns via the textarea so MG has a real chat to anchor.
 //   3. Import a pre-seeded graph store (5 distinctive nodes) via the real
 //      Import button + file picker.
-//   4. Click the real `#luker_rpg_memory_rebuild` button (via the helper
-//      `rebuildMgIndex`). The rebuild routes through `syncVectorIndex`
+//   4. Click the real `Rebuild Graph` button in Memory Lens Settings (via the
+//      helper `rebuildMgIndex`). The rebuild routes through `syncVectorIndex`
 //      under the hood — the same path the auto-extractor uses post-batch.
 //   5. After rebuild, query the graph via the Layer-1 `vectorSearch` read
 //      API with a paraphrased query for each seed; assert the matching
@@ -30,10 +30,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
-import { rebuildMgIndex } from '../_lib/ui-mg-varops.js';
+import { importMgGraph, rebuildMgIndex, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -131,40 +129,13 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function enableMgViaCheckboxes(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        for (const id of ['luker_rpg_memory_enabled', 'luker_rpg_memory_auto_extraction_enabled']) {
-            const el = document.getElementById(id);
-            if (el && !el.checked) {
-                el.checked = true;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }
-    });
-}
-
-async function importBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-    await page.waitForTimeout(500);
-}
-
 test.describe('#58 — MG vector-index rebuild via real button → semantic recall ranks seeds first', () => {
     test.setTimeout(180_000);
 
-    test('import seeds, click Rebuild From Chat, vectorSearch ranks each seed first for its paraphrased query', async ({ page }) => {
+    test('import seeds, click Rebuild Graph, vectorSearch ranks each seed first for its paraphrased query', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgViaCheckboxes(page);
+        await setMgSettings(page, { enabled: true, autoExtractionEnabled: true }, { closeAfter: true });
 
         // 2 RP turns so MG has a real chat tail.
         for (const t of [
@@ -175,14 +146,11 @@ test.describe('#58 — MG vector-index rebuild via real button → semantic reca
         }
 
         // Seed MG via the real Import button.
-        await importBindLatest(page, importPath);
+        await importMgGraph(page, importPath, { mode: 'bind-latest' });
+        await page.waitForTimeout(500);
 
-        // Click the real "Rebuild From Chat" button. Internally this
-        // calls `rebuildStoreFromCurrentChat` → which runs the
-        // `syncVectorIndex` step after each extraction batch — even
-        // when no extraction LLM is wired, the post-rebuild vector
-        // index is synced against the loaded store.
-        await rebuildMgIndex(page);
+        // Click the real "Rebuild Graph" button inside Memory Lens Settings.
+        await rebuildMgIndex(page, { closeAfter: true });
 
         // After the rebuild, we need to also explicitly sync the vector
         // index via the public path the rebuild button uses (it gates on

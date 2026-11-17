@@ -4,27 +4,27 @@ Skills are knowledge packs your agents read on demand. The Director hands each d
 
 The hard part is writing a skill that actually changes how the agents write. Luker ships a bundled set as a starting point. One of the voice rules states that every character, including cold archetypes such as androids and three-no types, must be written as a living being first; it bans observation and analysis at emotional moments, such as *"she noted that his pupils dilated"*. The rule is already part of the default Director configuration, so every dispatched sub-agent sees it.
 
-When the bundled set doesn't cover a discipline you care about, you add your own: let the AI Iteration Studio write one for you (recommended), or write it by hand.
+When the bundled set doesn't cover a discipline you care about, you add your own: let **Workbench → AI iteration → Orchestration** write one for you (recommended), or write it by hand.
 
 ---
 
-## Let the Studio write it
+## Let AI iteration write it
 
-Open the AI Iteration Studio from the orchestrator panel.
+Open **Workbench** (`Alt+W` or wand menu → **Workbench**) → **AI iteration** → **Orchestration** (or click **AI** in **Orchestration**).
 
-![Studio just opened, composer ready](/images/skills/iter-studio-02-iter-studio-opened.png)
+![AI iteration opened, composer ready](/images/skills/iter-studio-02-iter-studio-opened.png)
 
 Type what you want in the composer — a plain sentence:
 
 > Write a skill that keeps the director from stiff translated-Chinese phrasing — no "当……的时候" stem, no "——" dash-splitting sentences, prefer "是吧" over "是吗"。Make sure every agent in director mode sees it.
 
-Hit **Send**. The Studio drafts the SKILL.md, installs it, and (because you mentioned it) attaches it where every agent will see it. Actions show up as green ✅ chips you can expand:
+Hit **Send**. The AI drafts the `SKILL.md`, stages the skill installation proposal, and (because you mentioned it) attaches it where every agent sees it. Review and apply the items in the **Change list**:
 
-![Studio after the install round](/images/skills/iter-studio-05-after-llm-round.png)
+![Install round completed](/images/skills/iter-studio-05-after-llm-round.png)
 
 The next time you send a roleplay message, the relevant sub-agent, in this case the voice reviewer, sees the new rule in its visible list and consults it during the run.
 
-To refine the skill (add a rule, loosen a constraint, rename), keep talking in the same session. Changes still go through approval — nothing lands until you accept it.
+To refine the skill (add a rule, loosen a constraint, rename), keep talking in the same session. Changes still go through the **Change list** — nothing lands until you apply it.
 
 ---
 
@@ -32,11 +32,11 @@ To refine the skill (add a rule, loosen a constraint, rename), keep talking in t
 
 Useful when you already know which sections you want, prefer typing the Markdown yourself, and don't want an LLM padding it.
 
-In the orchestrator panel click **Manage skills…**, then **Create new**. Fill in name / description / scope and the flow lays down a template SKILL.md and opens the inline editor:
+In **Workbench → Orchestration → Setup**, click **Manage skills...**, then **Create new**. Fill in name / description / scope and the flow lays down a template `SKILL.md` and opens the inline editor:
 
 ![Inline skill editor — file tree + body pane](/images/skills/rp-demo-8.5-editor-body-pasted.png)
 
-Replace the template body with what you want. For shape, open any bundled skill as a reference — they use bilingual sections, `✗` / `✓` example contrasts, and a Self-check block at the end. Save, then go back to the director editor and add the new skill to its visible list.
+Replace the template body with what you want. For shape, open any bundled skill as a reference — they use bilingual sections, `✗` / `✓` example contrasts, and a Self-check block at the end. Save, then return to **Orchestration → Flow** or **Setup** and add the new skill to its visible list.
 
 Full UI walkthrough lives in [skill management](/features/skills/management).
 
@@ -46,5 +46,5 @@ Full UI walkthrough lives in [skill management](/features/skills/management).
 
 - [Skills overview](/features/skills/) — what a skill is, scopes, how agents read them
 - [Skills in the orchestrator](/features/orchestrator/skills) — making a skill visible to a particular agent
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — full Studio capabilities
+- [AI Iteration for Orchestration](/features/orchestrator/iteration-studio) — full AI iteration capabilities
 - [Authoring skills](/features/skills/authoring) — SKILL.md format, frontmatter, multi-file

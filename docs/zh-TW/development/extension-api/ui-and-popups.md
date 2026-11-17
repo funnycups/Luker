@@ -282,7 +282,7 @@ toastr.error('Import failed: ' + error.message);
 
 ## 共享元件
 
-用於常見擴充抽屜 / 彈窗 UI 模式的可重用 HTML 字串產生器。每個元件均在各層 API 上暴露。
+用於常見擴充面板 / 彈窗 UI 模式的可重用 HTML 字串產生器。每個元件均在各層 API 上暴露。
 
 ### renderLukerTabs
 
@@ -296,7 +296,7 @@ renderLukerTabs(options: {
 }): string
 ```
 
-為擴充抽屜或彈窗 UI 渲染一個分頁面板。回傳完整的 HTML 字串；顯隱由模組載入時掛載的委派點擊處理器負責切換，呼叫方只需把回傳的標記插入 DOM 即可。分頁選擇會持久化到 `extension_settings[moduleName].tabState[scope]`——同一個模組下不同的 `scope` 各自保存獨立的選擇。
+為擴充面板或彈窗 UI 渲染一個分頁面板。回傳完整的 HTML 字串；顯隱由模組載入時掛載的委派點擊處理器負責切換，呼叫方只需把回傳的標記插入 DOM 即可。分頁選擇會持久化到 `extension_settings[moduleName].tabState[scope]`——同一個模組下不同的 `scope` 各自保存獨立的選擇。
 
 各層暴露同一個函式：
 

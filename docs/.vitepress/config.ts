@@ -122,6 +122,7 @@ const zhCNSidebar = [
   {
   text: '独有功能',
   items: [
+  { text: '工作台', link: '/zh-CN/features/workbench' },
   { text: '记忆图', link: '/zh-CN/features/memory-graph' },
   {
     text: '多Agent编排',
@@ -134,7 +135,7 @@ const zhCNSidebar = [
       { text: 'Loop 模式', link: '/zh-CN/features/orchestrator/loop' },
       { text: '导演模式', link: '/zh-CN/features/orchestrator/director' },
       { text: '预设', link: '/zh-CN/features/orchestrator/presets' },
-      { text: 'AI 迭代工作台', link: '/zh-CN/features/orchestrator/iteration-studio' },
+      { text: 'AI 迭代', link: '/zh-CN/features/orchestrator/iteration-studio' },
       { text: 'Skills 集成', link: '/zh-CN/features/orchestrator/skills' },
       { text: '笔记', link: '/zh-CN/features/orchestrator/notes' },
       { text: '自定义工具', link: '/zh-CN/features/orchestrator/custom-tools' },
@@ -217,7 +218,8 @@ const zhCNSidebar = [
               { text: '底层端点', link: '/zh-CN/development/extension-api/low-level-endpoints' },
               { text: '记忆图只读 API', link: '/zh-CN/development/extension-api/memory-graph' },
               { text: 'Edits 库', link: '/zh-CN/development/extension-api/edits-lib' },
-              { text: '迭代工作台框架', link: '/zh-CN/development/extension-api/iteration-studio' },
+              { text: '工作台 API', link: '/zh-CN/development/extension-api/workbench' },
+              { text: '迭代工具库', link: '/zh-CN/development/extension-api/iteration-studio' },
               { text: '运行面板', link: '/zh-CN/development/extension-api/run-panel' },
               { text: '编排器工具 API', link: '/zh-CN/development/extension-api/orchestrator-tools' },
               { text: '角色卡编辑助手 API', link: '/zh-CN/development/extension-api/character-editor-assistant' },
@@ -287,6 +289,7 @@ const zhTWSidebar = [
   {
     text: '獨有功能',
     items: [
+      { text: '工作台', link: '/zh-TW/features/workbench' },
       { text: '記憶圖', link: '/zh-TW/features/memory-graph' },
       {
         text: '多Agent編排',
@@ -299,7 +302,7 @@ const zhTWSidebar = [
           { text: 'Loop 模式', link: '/zh-TW/features/orchestrator/loop' },
           { text: '導演模式', link: '/zh-TW/features/orchestrator/director' },
           { text: '預設', link: '/zh-TW/features/orchestrator/presets' },
-          { text: 'AI 迭代工作台', link: '/zh-TW/features/orchestrator/iteration-studio' },
+          { text: 'AI 迭代', link: '/zh-TW/features/orchestrator/iteration-studio' },
           { text: 'Skills 整合', link: '/zh-TW/features/orchestrator/skills' },
           { text: '便箋', link: '/zh-TW/features/orchestrator/notes' },
           { text: '自訂工具', link: '/zh-TW/features/orchestrator/custom-tools' },
@@ -382,7 +385,8 @@ const zhTWSidebar = [
                   { text: '底層端點', link: '/zh-TW/development/extension-api/low-level-endpoints' },
                   { text: '記憶圖唯讀 API', link: '/zh-TW/development/extension-api/memory-graph' },
                   { text: 'Edits 函式庫', link: '/zh-TW/development/extension-api/edits-lib' },
-                  { text: '迭代工作台框架', link: '/zh-TW/development/extension-api/iteration-studio' },
+                  { text: '工作台 API', link: '/zh-TW/development/extension-api/workbench' },
+                  { text: '迭代工具函式庫', link: '/zh-TW/development/extension-api/iteration-studio' },
                   { text: '執行面板', link: '/zh-TW/development/extension-api/run-panel' },
                   { text: '編排器工具 API', link: '/zh-TW/development/extension-api/orchestrator-tools' },
                   { text: '角色卡編輯助手 API', link: '/zh-TW/development/extension-api/character-editor-assistant' },
@@ -452,6 +456,7 @@ const enSidebar = [
   {
     text: 'Unique Features',
     items: [
+      { text: 'Workbench', link: '/features/workbench' },
       { text: 'Memory Graph', link: '/features/memory-graph' },
       {
         text: 'Multi-Agent Orchestrator',
@@ -464,7 +469,7 @@ const enSidebar = [
           { text: 'Loop Mode', link: '/features/orchestrator/loop' },
           { text: 'Director Mode', link: '/features/orchestrator/director' },
           { text: 'Presets', link: '/features/orchestrator/presets' },
-          { text: 'AI Iteration Studio', link: '/features/orchestrator/iteration-studio' },
+          { text: 'AI Iteration', link: '/features/orchestrator/iteration-studio' },
           { text: 'Skills', link: '/features/orchestrator/skills' },
           { text: 'Notes', link: '/features/orchestrator/notes' },
           { text: 'Custom Tools', link: '/features/orchestrator/custom-tools' },
@@ -547,7 +552,8 @@ const enSidebar = [
                   { text: 'Low-Level Endpoints', link: '/development/extension-api/low-level-endpoints' },
                   { text: 'Memory Graph Read-Only API', link: '/development/extension-api/memory-graph' },
                   { text: 'Edits Library', link: '/development/extension-api/edits-lib' },
-                  { text: 'Iteration Studio Framework', link: '/development/extension-api/iteration-studio' },
+                  { text: 'Workbench API', link: '/development/extension-api/workbench' },
+                  { text: 'Iteration Library', link: '/development/extension-api/iteration-studio' },
                   { text: 'Run Panel', link: '/development/extension-api/run-panel' },
                   { text: 'Orchestrator Tools', link: '/development/extension-api/orchestrator-tools' },
                   { text: 'Character Editor Assistant', link: '/development/extension-api/character-editor-assistant' },

@@ -147,7 +147,7 @@ Each lookup opens a short-lived read-api factory against the active store. Calle
 
 ### Reading the last recall projection
 
-`getLastRecallProjection(ctx)` returns the same data the "View Last Injection" UI button visualises — the exact text memory-graph handed to the main chat's prompt during the previous recall pass. Useful for third-party extensions that want to reuse the same memory context (e.g. an inline-illustration generator that wants the image-prompt LLM to see the same world state the main LLM saw).
+`getLastRecallProjection(ctx)` returns the same data the **View injected text** action in Workbench's Memory graph workspace visualises — the exact text memory-graph handed to the main chat's prompt during the previous recall pass. Useful for third-party extensions that want to reuse the same memory context (e.g. an inline-illustration generator that wants the image-prompt LLM to see the same world state the main LLM saw).
 
 ```js
 const mg = ctx.getExtensionApi('memory-graph');

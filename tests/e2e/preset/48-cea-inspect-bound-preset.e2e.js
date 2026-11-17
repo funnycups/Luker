@@ -32,6 +32,7 @@ import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
 import { awaitMainUI, selectCharacterByName } from '../_lib/page.js';
 import { openIterStudio, closeIterStudio } from '../_lib/ui-iter-studio.js';
+import { sendWorkbenchIterationPrompt } from '../_lib/ui-workbench.js';
 import { normalizeIterStudioSettings } from './_helpers.js';
 import { writeEmbeddedCharacter } from '../character/_helpers.js';
 
@@ -87,61 +88,38 @@ test.afterAll(async () => {
  * message renderer emits the tool_result as JSON via
  * `<pre class="luker_lib_toolcall_result_pre">`.
  */
-async function readLastToolResultPayload(page, toolLabel) {
-    return page.evaluate((name) => {
-        const popups = Array.from(document.querySelectorAll('dialog.popup[open]'));
-        let root = null;
-        for (let i = popups.length - 1; i >= 0; i--) {
-            if (popups[i].querySelector('.luker_lib_message_assistant')) {
-                root = popups[i];
-                break;
-            }
-        }
-        if (!root) return null;
-        const chips = Array.from(root.querySelectorAll('.luker_lib_toolcall'));
-        const matching = chips.filter((chip) => {
-            const label = chip.querySelector('.luker_lib_toolcall_label');
-            return label && label.textContent.trim() === name;
-        });
-        if (matching.length === 0) return null;
-        const last = matching[matching.length - 1];
-        const pre = last.querySelector('.luker_lib_toolcall_result_pre');
-        if (!pre) return null;
-        const text = pre.textContent || '';
-        const trimmed = text.trim();
-        if (trimmed === 'null') return { __primitive: null };
-        if (trimmed === 'undefined') return { __primitive: undefined };
-        try { return JSON.parse(trimmed); } catch { return { __raw: text }; }
-    }, toolLabel);
+let lastToolPayload = null;
+
+async function readLastToolResultPayload() {
+    return lastToolPayload;
 }
 
-/**
- * CEA editor iter-studio composer send helper. Same shape as the
- * orchestrator version in #47 but with CEA-specific selectors
- * (data-cea-editor-action, data-cea-editor-input).
- */
-async function sendReadOnlyPrompt(page, prompt, { expectedToolLabel = 'inspect_bound_preset', timeoutMs = 60_000 } = {}) {
-    const popup = page.locator('.popup:visible').last();
-    const input = popup.locator('[data-cea-editor-input], .cea_editor_composer_input textarea, .cea_editor_composer_input [contenteditable="true"]').first();
-    await input.waitFor({ state: 'visible', timeout: 10_000 });
-    const priorChipCount = await popup.locator('.luker_lib_toolcall .luker_lib_toolcall_label', { hasText: expectedToolLabel }).count().catch(() => 0);
-    const tag = await input.evaluate(el => el.tagName.toLowerCase());
-    if (tag === 'textarea' || tag === 'input') {
-        await input.fill(prompt);
-    } else {
-        await input.click();
-        await input.press('ControlOrMeta+a');
-        await input.press('Delete');
-        await input.type(prompt);
+async function sendReadOnlyPrompt(page, prompt) {
+    const reqBefore = mock.requests.length;
+    await sendWorkbenchIterationPrompt(page, prompt);
+    const toolMsgs = mock.requests
+        .slice(reqBefore)
+        .flatMap((r) => (Array.isArray(r.body?.messages) ? r.body.messages : []))
+        .filter((m) => m?.role === 'tool');
+    const last = toolMsgs[toolMsgs.length - 1];
+    if (!last) {
+        lastToolPayload = null;
+        return;
     }
-    const sendBtn = popup.locator('[data-cea-editor-action="send"]').first();
-    await sendBtn.click();
-    await expect.poll(async () => {
-        return popup.locator('.luker_lib_toolcall .luker_lib_toolcall_label', { hasText: expectedToolLabel }).count();
-    }, { timeout: timeoutMs }).toBeGreaterThan(priorChipCount);
-    await expect.poll(async () => {
-        return (await sendBtn.textContent().catch(() => ''))?.trim() || '';
-    }, { timeout: timeoutMs }).not.toMatch(/^stop$/i);
+    const text = String(last.content ?? '').trim();
+    if (text === 'null') {
+        lastToolPayload = { __primitive: null };
+        return;
+    }
+    if (text === 'undefined') {
+        lastToolPayload = { __primitive: undefined };
+        return;
+    }
+    try {
+        lastToolPayload = JSON.parse(text);
+    } catch {
+        lastToolPayload = { __raw: text };
+    }
 }
 
 test.describe.configure({ mode: 'serial' });

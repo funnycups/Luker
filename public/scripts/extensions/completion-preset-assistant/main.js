@@ -2,7 +2,6 @@
 // Copyright (C) 2026 FunnyCups
 
 const __ctx = Luker.getContext();
-const saveSettingsDebounced = __ctx.saveSettingsDebounced;
 const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
 const addLocaleData = __ctx.addLocaleData;
@@ -10,10 +9,7 @@ const translate = __ctx.translate;
 const Popup = __ctx.Popup;
 const escapeHtml = __ctx.escapeHtml;
 import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
-import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import { cloneJsonValue, isPlainObject } from '../json-state-journal.js';
-import { renderPresetHelpButton } from '../preset-help.js';
-import { openCpaIterationStudio } from './cpa-iteration/studio.js';
 import {
     buildBaseSystemPrompt,
     buildOrchestratorOptimizeModeBlock,
@@ -80,16 +76,13 @@ function ensureSettings() {
     settings.iterModePromptJailbreakOnly = String(settings.iterModePromptJailbreakOnly || '').trim() || DEFAULT_CPA_MODE_JAILBREAK_ONLY;
 }
 
-function getSettings() {
-    ensureSettings();
-    return extension_settings[MODULE_NAME];
-}
-
 function registerLocaleData() {
     addLocaleData('zh-cn', {
         // Live UI strings owned by main.js
         'Completion Preset Assistant': '聊天补全预设助手',
         'Open Assistant': '打开助手',
+        'Open in Workbench': '在工作台中打开',
+        'Workbench is unavailable.': '工作台当前不可用。',
         'Regenerate aborted': '重新生成已中止',
         'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新生成已中止——无法回退 ${0} 上的提交：${1}',
         'Edit': '编辑',
@@ -154,10 +147,8 @@ function registerLocaleData() {
         'working profile': '工作配置',
         '(root)': '（根）',
         '(${0}${1} bytes)': '（${0}${1} 字节）',
-        // Skill proposal cards (Bug 1 fix: skill authoring goes through
-        // per-card user review before commit). Strings consumed by
-        // cpa-iteration/studio.js's renderSkillPendingCard /
-        // commitApprovedSkillEditsForCpa / buildApplyOutcomeUserText.
+        // Skill proposal cards (skill authoring goes through per-card user
+        // review in Workbench before commit).
         'Update skill file': '更新 Skill 文件',
         'Update skill frontmatter': '更新 Skill 元信息',
         'Create skill': '新建 Skill',
@@ -218,6 +209,8 @@ function registerLocaleData() {
     addLocaleData('zh-tw', {
         'Completion Preset Assistant': '聊天補全預設助手',
         'Open Assistant': '開啟助手',
+        'Open in Workbench': '在工作台中開啟',
+        'Workbench is unavailable.': '工作台目前無法使用。',
         'Regenerate aborted': '重新產生已中止',
         'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新產生已中止——無法回退 ${0} 上的提交：${1}',
         'Edit': '編輯',
@@ -336,31 +329,12 @@ function registerLocaleData() {
     });
 }
 
-function getConnectionProfileNames() {
-    return getChatCompletionConnectionProfiles()
-        .map(profile => String(profile?.name || '').trim())
-        .filter(Boolean)
-        .sort((left, right) => left.localeCompare(right));
-}
-
 function getOpenAIPresetNames(context = getContext()) {
     const refs = Array.isArray(context?.presets?.list?.('openai')) ? context.presets.list('openai') : [];
     return refs
         .map(ref => String(ref?.name || '').trim())
         .filter(Boolean)
         .sort((left, right) => left.localeCompare(right));
-}
-
-function renderSelectOptions(names, selectedName = '', includeBlank = true, blankLabel = '(none)') {
-    const options = [];
-    if (includeBlank) {
-        options.push(`<option value="">${escapeHtml(i18n(blankLabel))}</option>`);
-    }
-    for (const name of names) {
-        const selected = String(name || '') === String(selectedName || '') ? ' selected' : '';
-        options.push(`<option value="${escapeHtml(String(name || ''))}"${selected}>${escapeHtml(String(name || ''))}</option>`);
-    }
-    return options.join('');
 }
 
 function getCurrentTargetRef(context = getContext()) {
@@ -471,106 +445,16 @@ async function openCpaIteration() {
     const targetRef = getCurrentTargetRef(context);
     if (!targetRef) {
         toastr.warning(i18n('No preset is currently selected.'));
-        return;
-    }
-    function getTargetRef() {
-        const current = getCurrentTargetRef(context);
-        return current || { collection: 'openai', name: targetRef.name };
+        return null;
     }
 
-    await openCpaIterationStudio({
-        i18n,
-        i18nFormat,
-        escapeHtml,
-        context,
-        getContext: () => context,
-        getTargetRef,
-        getReferencePresets: () => {
-            const names = getOpenAIPresetNames(context);
-            return names.map(name => ({ name }));
-        },
-        getReferencePresetBody: async (name) => {
-            const ref = { collection: 'openai', name };
-            const stored = context?.presets?.getStored?.(ref);
-            if (stored?.body) return clone(stored.body, null);
-            return await context.presets.get(ref);
-        },
-        shouldIncludeWorldInfo: () => Boolean(getSettings()?.includeWorldInfo),
-        getSettings,
-        saveSettingsDebounced,
-        getRequestPresetOptions: () => ({
-            llmPresetName: String(getSettings()?.requestLlmPresetName || '').trim(),
-            apiPresetName: String(getSettings()?.requestApiPresetName || '').trim(),
-        }),
-        // `preset_clone_to_new` tool wiring. Snapshots the popup's current
-        // target body (stored on disk, not the sandbox), saves it under
-        // `newName`, and `select: true` flips the popup's target so the
-        // studio's commitApprovedCloneEditsForCpa can migrate the session
-        // into the clone's bucket. Triggered at Apply time after the user
-        // approves the pending clone card — not inline on the AI's tool
-        // call.
-        cloneAndSwitchTarget: async (newName) => {
-            const trimmedName = String(newName || '').trim();
-            if (!trimmedName) {
-                return { ok: false, error: 'New preset name is required.' };
-            }
-            const ctx = getContext();
-            const existing = findCanonicalPresetName(getOpenAIPresetNames(ctx), trimmedName);
-            if (existing) {
-                return { ok: false, error: `Preset already exists: ${existing}` };
-            }
-            const sourceRef = getTargetRef();
-            if (!sourceRef) {
-                return { ok: false, error: 'No source preset to clone.' };
-            }
-            const stored = ctx?.presets?.getStored?.(sourceRef);
-            const sourceBody = isPlainObject(stored?.body)
-                ? stored.body
-                : await ctx.presets.get(sourceRef);
-            if (!isPlainObject(sourceBody)) {
-                return { ok: false, error: 'No source preset body to clone.' };
-            }
-            try {
-                const result = await ctx.presets.save(
-                    { collection: 'openai', name: trimmedName },
-                    clone(sourceBody, {}),
-                    { select: true },
-                );
-                if (!result?.ok || !result?.ref) {
-                    return { ok: false, error: 'Save returned no ref.' };
-                }
-                return { ok: true };
-            } catch (err) {
-                return { ok: false, error: String(err?.message || err || 'clone failed') };
-            }
-        },
-        // Synchronous duplicate-name pre-check exposed to the dispatcher
-        // so `preset_clone_to_new` can reject a doomed clone BEFORE
-        // pushing a pending card the user would just have to discard.
-        // Returns `{ exists: bool, canonical?: string }`. The dispatcher
-        // never relies on this — if absent, the duplicate is caught when
-        // cloneAndSwitchTarget runs at Apply time.
-        checkPresetNameAvailable: (name) => {
-            const trimmed = String(name || '').trim();
-            if (!trimmed) return { exists: false };
-            const canonical = findCanonicalPresetName(getOpenAIPresetNames(getContext()), trimmed);
-            return canonical
-                ? { exists: true, canonical }
-                : { exists: false };
-        },
-        // Skill tool wiring. Provides the active preset name so the
-        // studio's skill-prompt augmentation can tell the AI to default
-        // new skills to this preset's scope — they then ride with the
-        // preset on export. Mirrors `openBundleSkillsForCurrentPreset`'s
-        // scope resolution so an AI-authored skill is visible to the same
-        // skill manager view the user opens via "Bundle skills with this
-        // preset".
-        getSkillScopeHint: () => {
-            const ref = getTargetRef();
-            const presetName = String(ref?.name || '').trim();
-            return { presetName };
-        },
-    });
+    const wb = context?.workbench;
+    if (typeof wb?.open !== 'function') {
+        toastr.error(i18n('Workbench is unavailable.'));
+        return null;
+    }
+
+    return wb.open({ page: 'ai', ws: 'preset', scope: 'preset' });
 }
 
 function ensureOpenAiToolbarButton() {
@@ -583,20 +467,9 @@ function ensureOpenAiToolbarButton() {
 </div>`);
 }
 
-function refreshUiState(context = getContext()) {
+function refreshUiState() {
     ensureSettings();
     ensureOpenAiToolbarButton();
-    const root = jQuery(`#${UI_BLOCK_ID}`);
-    if (!root.length) return;
-
-    const settings = getSettings();
-    root.find('#cpa_request_llm_preset').html(renderSelectOptions(getOpenAIPresetNames(context), settings.requestLlmPresetName, true, '(current)'));
-    root.find('#cpa_request_api_preset').html(renderSelectOptions(getConnectionProfileNames(), settings.requestApiPresetName, true, '(current)'));
-    root.find('#cpa_include_world_info').prop('checked', settings.includeWorldInfo === true);
-    root.find('#cpa_tool_retries').val(String(settings.toolCallRetryMax));
-    root.find('#cpa_iter_base_system_prompt').val(String(settings.iterBaseSystemPrompt || ''));
-    root.find('#cpa_iter_mode_orchestrator_optimize').val(String(settings.iterModePromptOrchestratorOptimize || ''));
-    root.find('#cpa_iter_mode_jailbreak_only').val(String(settings.iterModePromptJailbreakOnly || ''));
 }
 
 function bindUi() {
@@ -614,56 +487,6 @@ function bindUi() {
     });
     root.on('click.cpa', `#${SKILLS_BUTTON_ID}`, async function () {
         await openBundleSkillsForCurrentPreset();
-    });
-    root.on('change.cpa', '#cpa_request_llm_preset', function () {
-        getSettings().requestLlmPresetName = String(jQuery(this).val() || '').trim();
-        saveSettingsDebounced();
-    });
-    root.on('change.cpa', '#cpa_request_api_preset', function () {
-        getSettings().requestApiPresetName = String(jQuery(this).val() || '').trim();
-        saveSettingsDebounced();
-    });
-    root.on('change.cpa', '#cpa_include_world_info', function () {
-        getSettings().includeWorldInfo = jQuery(this).prop('checked') === true;
-        saveSettingsDebounced();
-    });
-    root.on('change.cpa', '#cpa_tool_retries', function () {
-        getSettings().toolCallRetryMax = Math.max(0, Math.min(TOOL_CALL_RETRY_MAX, toInteger(jQuery(this).val(), defaultSettings.toolCallRetryMax)));
-        saveSettingsDebounced();
-        refreshUiState();
-    });
-
-    root.on('input.cpa change.cpa', '#cpa_iter_base_system_prompt', function () {
-        getSettings().iterBaseSystemPrompt = String(jQuery(this).val() || '');
-        saveSettingsDebounced();
-    });
-
-    root.on('input.cpa change.cpa', '#cpa_iter_mode_orchestrator_optimize', function () {
-        getSettings().iterModePromptOrchestratorOptimize = String(jQuery(this).val() || '');
-        saveSettingsDebounced();
-    });
-
-    root.on('input.cpa change.cpa', '#cpa_iter_mode_jailbreak_only', function () {
-        getSettings().iterModePromptJailbreakOnly = String(jQuery(this).val() || '');
-        saveSettingsDebounced();
-    });
-
-    root.on('click.cpa', '#cpa_reset_iter_base_system_prompt', function () {
-        getSettings().iterBaseSystemPrompt = DEFAULT_CPA_BASE_SYSTEM_PROMPT;
-        root.find('#cpa_iter_base_system_prompt').val(DEFAULT_CPA_BASE_SYSTEM_PROMPT);
-        saveSettingsDebounced();
-    });
-
-    root.on('click.cpa', '#cpa_reset_iter_mode_orchestrator_optimize', function () {
-        getSettings().iterModePromptOrchestratorOptimize = DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE;
-        root.find('#cpa_iter_mode_orchestrator_optimize').val(DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE);
-        saveSettingsDebounced();
-    });
-
-    root.on('click.cpa', '#cpa_reset_iter_mode_jailbreak_only', function () {
-        getSettings().iterModePromptJailbreakOnly = DEFAULT_CPA_MODE_JAILBREAK_ONLY;
-        root.find('#cpa_iter_mode_jailbreak_only').val(DEFAULT_CPA_MODE_JAILBREAK_ONLY);
-        saveSettingsDebounced();
     });
 
     jQuery(document).on('click.cpaOpen', `#${OPENAI_BUTTON_ID}`, async function () {
@@ -691,37 +514,12 @@ function ensureUi(context = getContext()) {
         </div>
         <div class="inline-drawer-content">
             <div class="cpa_row">
-                <div id="${OPEN_BUTTON_ID}" class="menu_button">${escapeHtml(i18n('Open Assistant'))}</div>
+                <div id="${OPEN_BUTTON_ID}" class="menu_button">${escapeHtml(i18n('Open in Workbench'))}</div>
                 <div id="${CREATE_BUTTON_ID}" class="menu_button">${escapeHtml(i18n('Create New Preset'))}</div>
                 <div id="${SKILLS_BUTTON_ID}" class="menu_button" title="${escapeHtml(i18n('Bundle skills with this preset'))}">
                     <i class="fa-fw fa-solid fa-cubes"></i> ${escapeHtml(i18n('Bundle skills with this preset'))}
                 </div>
             </div>
-            <label for="cpa_request_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'cpa_request_llm_preset' })}</label>
-            <select id="cpa_request_llm_preset" class="text_pole"></select>
-            <label for="cpa_request_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
-            <select id="cpa_request_api_preset" class="text_pole"></select>
-            <label class="checkbox_label"><input id="cpa_include_world_info" type="checkbox"/> ${escapeHtml(i18n('Include world info (simulate current chat)'))}</label>
-            <label for="cpa_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
-            <input id="cpa_tool_retries" class="text_pole" type="number" min="0" max="${TOOL_CALL_RETRY_MAX}" step="1"/>
-            <details class="cpa_prompt_overrides">
-                <summary>${escapeHtml(i18n('Iteration System Prompts (advanced)'))}</summary>
-                <label for="cpa_iter_base_system_prompt">${escapeHtml(i18n('Base prompt (sent in every mode)'))}</label>
-                <textarea id="cpa_iter_base_system_prompt" class="text_pole textarea_compact" rows="10"></textarea>
-                <div class="cpa_row">
-                    <div class="menu_button" id="cpa_reset_iter_base_system_prompt">${escapeHtml(i18n('Reset to default'))}</div>
-                </div>
-                <label for="cpa_iter_mode_orchestrator_optimize">${escapeHtml(i18n('Mode addition — orchestrator-optimize'))}</label>
-                <textarea id="cpa_iter_mode_orchestrator_optimize" class="text_pole textarea_compact" rows="8"></textarea>
-                <div class="cpa_row">
-                    <div class="menu_button" id="cpa_reset_iter_mode_orchestrator_optimize">${escapeHtml(i18n('Reset to default'))}</div>
-                </div>
-                <label for="cpa_iter_mode_jailbreak_only">${escapeHtml(i18n('Mode addition — jailbreak-only'))}</label>
-                <textarea id="cpa_iter_mode_jailbreak_only" class="text_pole textarea_compact" rows="8"></textarea>
-                <div class="cpa_row">
-                    <div class="menu_button" id="cpa_reset_iter_mode_jailbreak_only">${escapeHtml(i18n('Reset to default'))}</div>
-                </div>
-            </details>
         </div>
     </div>
 </div>`);

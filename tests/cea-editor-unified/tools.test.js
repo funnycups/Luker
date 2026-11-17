@@ -114,13 +114,20 @@ describe('unified CEA editor tools.js', () => {
 
     it('normalizeToolCallToEdit annotates lorebook target for cea_set_lorebook_metadata', async () => {
         const edits = await tools.normalizeToolCallToEdit(
-            { id: 'c5', name: 'cea_set_lorebook_metadata', args: { book_name: 'BookD', key: 'bookName', value: 'Renamed' } },
+            { id: 'c5', name: 'cea_set_lorebook_metadata', args: { book_name: 'BookD', key: 'scan_depth', value: 12 } },
             { context: {}, live: { lorebooks: { BookD: {} } } },
         );
         expect(Array.isArray(edits)).toBe(true);
         expect(edits.length).toBeGreaterThan(0);
         expect(edits[0].target?.kind).toBe('lorebook');
         expect(edits[0].target?.bookName).toBe('BookD');
+    });
+
+    it('normalizeToolCallToEdit rejects cea_set_lorebook_metadata with key === bookName immediately', async () => {
+        await expect(tools.normalizeToolCallToEdit(
+            { id: 'c5b', name: 'cea_set_lorebook_metadata', args: { book_name: 'BookD', key: 'bookName', value: 'Renamed' } },
+            { context: {}, live: { lorebooks: { BookD: {} } } },
+        )).rejects.toThrow(/bookName/);
     });
 
     it('normalizeToolCallToEdit falls back to target.kind=lorebook without bookName when arg missing', async () => {

@@ -4,7 +4,7 @@
 
 ## 什麼時候用這個 API
 
-你的擴充提供了一項能力，讓某個編排 agent 自主呼叫會更順手——查資料庫、呼叫第三方 API、跑 Stable Diffusion 出圖，均可。如果使用者裝了編排器擴充，你註冊的工具會出現在他們的編排編輯器「自訂工具 → 擴充（來自其他外掛）」分組裡，由他們按編排粒度決定開還是關。
+你的擴充提供了一項能力，讓某個編排 agent 自主呼叫會更順手——查資料庫、呼叫第三方 API、跑 Stable Diffusion 出圖，均可。如果使用者裝了編排器擴充，你註冊的工具會出現在**工作台 → 編排 → 準備階段 → 自訂工具**中，由他們按編排粒度決定開還是關。
 
 如果使用者沒裝編排器，你的工具也不會丟——註冊呼叫會靜默 no-op。你的擴充獨立使用時仍然完整可用。
 
@@ -97,7 +97,7 @@ throw Object.assign(new Error('Database is read-only.'), {
 
 ## ST function tool 橋接
 
-如果你的擴充已經在用 SillyTavern 的 `registerFunctionTool` API，使用者可以在編排編輯器裡透過「橋接 SillyTavern 工具……」選擇器把它橋接進來。橋接出來的工具叫 `st_<你的工具名>`，預設 `mode: 'write'`。你這邊不用改任何程式碼。
+如果你的擴充已經在用 SillyTavern 的 `registerFunctionTool` API，使用者可以在**工作台 → 編排 → 準備階段**透過「橋接 SillyTavern 工具……」選擇器把它橋接進來。橋接出來的工具叫 `st_<你的工具名>`，預設 `mode: 'write'`。你這邊不用改任何程式碼。
 
 如果你想精確控制 mode 和 simulate 語意，就用 `registerOrchestrationTool` 包一層；不在意的話橋接是零成本路徑。選擇器的標籤和模式選項透過 `listAvailableSillyTavernTools()` / `bridgeSillyTavernTool(name, { mode })` 暴露，呼叫方想自己驅動橋接也行。
 
@@ -133,17 +133,17 @@ orch.applyCharacterExecutionModeForAvatar(ctx, ctx.extensionSettings?.orchestrat
 
 這些存取器只動角色卡，從來不修改全域編排器設定。
 
-## Iter-studio 技能工具目錄
+## 共享技能工具目錄
 
-編排器的 iter-studio 彈窗用一組技能管理工具（庫存查詢、創作、策略繫結、遷移 helper），其他 iter-studio 風格的彈窗可以把它們 splice 進自己的工具目錄。Extension api 上的屬性暴露這個目錄：
+`context.iterationLibrary.tools`（`public/scripts/iteration-library/tools/skill-iter-studio.js`）提供了一組共享的技能管理工具（庫存查詢、創作、策略繫結、遷移輔助），供工作台的**編排**與**預設設定檔**迭代目標共同使用：
 
-| 屬性 | 型別 | 用途 |
+| 匯出項 | 型別 | 用途 |
 | --- | --- | --- |
-| `SKILL_ITER_STUDIO_TOOL_DEFS` | `readonly array` | OpenAI 形狀的工具定義（編排器 iter-studio 暴露的 `skill_*` 工具）。按 `function.name` 過濾出彈窗想要的子集。 |
+| `SKILL_ITER_STUDIO_TOOL_DEFS` | `readonly array` | OpenAI 形狀的工具定義（`skill_*` 工具）。按 `function.name` 過濾出目標所需的子集。 |
 | `isSkillIterStudioTool(name)` | `(string) => boolean` | 判斷一個工具呼叫名是否屬於技能工具的判定式。 |
-| `runSkillIterStudioTool(call, mutationCtx)` | `async ({name, args}, {getWorkingProfile}) => result` | 單次技能工具呼叫的分發器。純庫存 / 創作 / 遷移 handler 忽略 `mutationCtx`；策略繫結類 handler（`skill_bind_to_agent` / `skill_unbind_from_agent` / `skill_set_mode_defaults` / `skill_replace_in_systemprompt`）則要求 `getWorkingProfile()` 回傳一個可變的編排器工作 profile。 |
+| `runSkillIterStudioTool(call, mutationCtx)` | `async ({name, args}, {getWorkingProfile}) => result` | 單次技能工具呼叫的分發器。純庫存 / 創作 / 遷移 handler 忽略 `mutationCtx`；策略繫結類 handler（`skill_bind_to_agent` / `skill_unbind_from_agent` / `skill_set_mode_defaults` / `skill_replace_in_systemprompt`）要求 `getWorkingProfile()` 回傳可變的編排工作 profile。 |
 
-CPA 的迭代工作台消費了這套介面，把與 profile 無關的技能工具 splice 進自己的 preset iter-studio（見 `completion-preset-assistant/cpa-iteration/tools.js`）。沒有編排器工作 profile 的兄弟彈窗傳 `{ getWorkingProfile: () => null }`，只暴露與 profile 無關的 handler。
+工作台的 `preset` 目標（`public/scripts/workbench/targets/preset-tools.js`）透過傳入 `{ getWorkingProfile: () => null }` 只暴露與 profile 無關的 handler；`orchestrator/lens/iterate-target.js` 則傳入 `getWorkingProfile: () => live`。
 
 ## 範例 —— memory-graph
 
@@ -166,6 +166,6 @@ export function registerMemoryGraphOrchestrationTools() {
 
 ## 相關頁面
 
-- [自訂工具（使用者文件）](/zh-TW/features/orchestrator/custom-tools) —— 使用者視角下多條通道（擴充 / SillyTavern 橋接 / 手寫）在編排編輯器裡的呈現方式
+- [自訂工具（使用者文件）](/zh-TW/features/orchestrator/custom-tools) —— 使用者視角下多條通道（擴充 / SillyTavern 橋接 / 手寫）在**工作台 → 編排 → 準備階段**的呈現方式
 - [外掛整合](./plugin-integration.md) —— 註冊 `'orchestrator'` 與其他擴充入口的擴充 API 註冊表全貌
 - [記憶圖擴充 API](./memory-graph.md) —— 本 API 的參考消費者

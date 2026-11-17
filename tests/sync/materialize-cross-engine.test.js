@@ -46,7 +46,7 @@ const SQL_OWNED_CATEGORIES = [
     'chats', 'worlds',
     'openai-presets', 'novelai-presets', 'koboldai-presets', 'textgen-presets',
     'instruct', 'context', 'sysprompt', 'reasoning',
-    'themes', 'movingUI', 'quickreplies',
+    'themes', 'movingUI', 'quickreplies', 'global-states',
     'settings', 'stats',
 ];
 
@@ -63,7 +63,7 @@ function mkTmpWorkdir() {
  */
 async function seedPayload(harness) {
     const { engine, handle, dirs } = harness;
-    for (const k of ['worlds', 'groups', 'groupChats', 'themes', 'movingUI', 'quickreplies']) {
+    for (const k of ['worlds', 'groups', 'groupChats', 'themes', 'movingUI', 'quickreplies', 'states']) {
         fs.mkdirSync(dirs[k], { recursive: true });
     }
 
@@ -154,9 +154,11 @@ async function seedPayload(harness) {
     const themeDoc = { name: 'midnight', vars: { '--bg': '#000', '--fg': '#fff' } };
     const movingDoc = { left: 10, top: 20, width: 400 };
     const qrDoc = { sets: [{ name: 'greetings', items: ['hi', 'hello'] }] };
+    const globalStateDoc = { activeLens: 'memory', splitRatio: 0.4 };
     await named.save(handle, 'themes', 'midnight', themeDoc);
     await named.save(handle, 'movingUI', 'panel', movingDoc);
     await named.save(handle, 'quickReplies', 'qrset', qrDoc);
+    await named.save(handle, 'globalStates', 'workbench_ui', globalStateDoc);
 
     const statsDoc = {
         'alice.png': { user_msg_count: 7, total_tokens: 1234 },
@@ -179,6 +181,7 @@ async function seedPayload(harness) {
         themes: { midnight: themeDoc },
         moving: { panel: movingDoc },
         quickReplies: { qrset: qrDoc },
+        globalStates: { workbench_ui: globalStateDoc },
         stats: statsDoc,
     };
 }
@@ -263,6 +266,7 @@ async function assertReadback(dst, expected) {
     expect(await dstNamed.get(dst.handle, 'themes', 'midnight')).toEqual(expected.themes.midnight);
     expect(await dstNamed.get(dst.handle, 'movingUI', 'panel')).toEqual(expected.moving.panel);
     expect(await dstNamed.get(dst.handle, 'quickReplies', 'qrset')).toEqual(expected.quickReplies.qrset);
+    expect(await dstNamed.get(dst.handle, 'globalStates', 'workbench_ui')).toEqual(expected.globalStates.workbench_ui);
 
     const aliceC1 = await dstChat.get(dst.handle, 'Alice', 'c1');
     expect(recordsEqual('chat', aliceC1, expected.chatAliceC1)).toBe(true);

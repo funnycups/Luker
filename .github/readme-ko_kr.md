@@ -32,11 +32,17 @@ Luker는 차세대 롤플레이 채팅 플랫폼입니다.
 
 ## Luker란 무엇인가
 
-Luker는 대규모 언어 모델과의 롤플레이를 위해 처음부터 설계된 환경입니다. 그래프 기반 장기 기억, 재사용 가능한 스킬 라이브러리를 갖춘 멀티 에이전트 장면 플래너, AI 지원 캐릭터 카드 스튜디오, Preset Assistant, 네이티브 LAN Sync, 그리고 백엔드 전체를 휴대폰에서 돌리는 진짜 Android 앱까지 — 하나의 설치본에 전부 들어 있어서 서드파티 확장이 필요 없습니다.
+Luker는 대규모 언어 모델과의 롤플레이를 위해 처음부터 설계된 환경입니다. 통합 Workbench(`Alt+W`), 그래프 기반 장기 기억, 재사용 가능한 스킬 라이브러리와 실시간 실행 패널을 갖춘 멀티 에이전트 장면 플래너, AI 지원 캐릭터 카드 스튜디오, Preset Assistant, 네이티브 LAN Sync, 그리고 백엔드 전체를 휴대폰에서 돌리는 진짜 Android 앱까지 — 하나의 설치본에 전부 들어 있어서 서드파티 확장이 필요 없습니다.
 
 Luker는 [SillyTavern](https://github.com/SillyTavern/SillyTavern)을 기반으로 만들어졌으며, SillyTavern과 **100% 데이터 호환**을 유지합니다. 캐릭터 카드, 월드 인포, 프리셋, 채팅이 양방향으로 오가며, 마이그레이션 비용이 전혀 들지 않습니다.
 
 ## 주요 기능
+
+### Workbench — 한 창에서 진단과 AI 반복 튜닝까지
+
+`Alt+W`, 요술봉 메뉴 또는 오른쪽 아래 진입 알약 버튼으로 **Workbench**를 열면 프롬프트 토큰 분포 확인, 로컬 상태 점검 제안, 읽기 전용 Q&A 진단뿐만 아니라 프리셋, 캐릭터 카드, 월드 인포, 메모리 구조, Orchestrator 프로필까지 diff 검토와 되돌리기 기능을 갖춘 AI 대화로 편집할 수 있습니다.
+
+→ [Workbench 문서](https://luker.cups.moe/features/workbench)
 
 ### Memory Graph — 캐릭터가 진짜로 기억하는 법
 
@@ -64,7 +70,7 @@ Luker는 [SillyTavern](https://github.com/SillyTavern/SillyTavern)을 기반으�
 
 ### CardApp Studio & AI Card Editor — AI와 대화하며 카드 편집
 
-CodeMirror-6 에디터, AI 채팅 패널, 그리고 변경 사항을 diff로 하나씩 승인하는 절차를 갖춘 캐릭터 카드용 통합 IDE입니다. 일반 카드는 팝업 에디터로 열리고, **CardApp**(카드에 내장된 미니 애플리케이션)이 들어 있는 카드는 파일 트리, 라이브 프리뷰, 히스토리를 갖춘 완전한 Studio에서 열립니다.
+**Workbench** 안에서 AI와 대화하며 캐릭터 카드와 월드 인포를 바로 편집하거나, **CardApp**(카드에 내장된 미니 애플리케이션)이 포함된 카드용 통합 IDE인 **CardApp Studio**에서 CodeMirror-6 에디터, AI 채팅 패널, 파일 트리, 라이브 프리뷰, 히스토리와 항목별 diff 승인을 활용해 작업할 수 있습니다.
 
 ![CardApp Studio 데모](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/cardapp-studio-demo.gif)
 
@@ -72,7 +78,7 @@ CodeMirror-6 에디터, AI 채팅 패널, 그리고 변경 사항을 diff로 하
 
 ### Preset Assistant — 설명을 바탕으로 프리셋 작성
 
-채팅 완성 프리셋이 어떤 일을 하길 원하는지 어시스턴트에게 알려 주세요. 어시스턴트는 변경 사항을 diff로 보여 주며 원하는 모습이 될 때까지 여러분과 함께 프리셋을 다듬어 갑니다 — 파라미터를 읽고, 프롬프트 항목을 편집하고, 참조 프리셋과 비교하면서요. 같은 워크플로가 Orchestrator 프리셋에도 적용됩니다.
+**Workbench → AI iteration → Preset**(또는 프리셋 도구 모음의 요술봉 아이콘)에서 채팅 완성 프리셋이 어떤 일을 하길 원하는지 어시스턴트에게 알려 주세요. 파라미터를 읽고, 프롬프트 항목을 편집하고, 참조 프리셋과 비교하며, 재사용 가능한 스킬까지 추출해 diff로 보여 주며 함께 프리셋을 다듬어 갑니다.
 
 <img alt="Preset Assistant" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/preset-assistant/cpa-overview.png" width="720">
 

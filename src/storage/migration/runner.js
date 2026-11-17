@@ -320,7 +320,8 @@ export class MigrationRunner {
     // --------------------------------------------------------------------
 
     async _copyAll(srcHandle, dstHandle, stats, onProgress) {
-        // Settings
+        // Settings + globalStates (per-namespace global state documents travel
+        // with settings in backups and restores).
         if (this._categories.settings) {
             const settings = await this._src.settings.get(srcHandle);
             if (settings != null) {
@@ -332,6 +333,20 @@ export class MigrationRunner {
                     }
                 }
                 stats.settings = 1;
+            }
+            const globalStateList = await this._src.namedDoc.list(srcHandle, 'globalStates');
+            for (const item of globalStateList) {
+                const name = item.key.name;
+                const doc = await this._src.namedDoc.get(srcHandle, 'globalStates', name);
+                if (doc == null) continue;
+                if (!this._dryRun) {
+                    await this._dst.namedDoc.save(dstHandle, 'globalStates', name, doc);
+                    const dstDoc = await this._dst.namedDoc.get(dstHandle, 'globalStates', name);
+                    if (!recordsEqual('named-doc', doc, dstDoc)) {
+                        throw new Error(`named-doc verify mismatch for globalStates/${name}`);
+                    }
+                }
+                stats.named_docs++;
             }
             onProgress({ stage: 'settings-copied', handle: srcHandle, counts: snapshotCounts(stats) });
         }
@@ -520,9 +535,11 @@ export class MigrationRunner {
             onProgress({ stage: 'chats-copied', handle: srcHandle, counts: snapshotCounts(stats) });
         }
 
-        // Named-docs — iterate all known buckets.
+        // Named-docs — iterate preset-affiliated buckets (globalStates is
+        // handled under `settings` above).
         if (this._categories.namedDocs) {
             for (const bucket of Object.keys(BUCKET_TO_DIR)) {
+                if (bucket === 'globalStates') continue;
                 const list = await this._src.namedDoc.list(srcHandle, bucket);
                 for (const item of list) {
                     const name = item.key.name;

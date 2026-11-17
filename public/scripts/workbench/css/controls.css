@@ -1,0 +1,15 @@
+/* Workbench typography, lists, and message action rows.
+ * Core buttons, selects, checkboxes, switches, and segmented controls come from lens-shared/tokens.css (.lw-*). */
+.wbench .wb-h2 { font-size: 15px; font-weight: 650; }
+.wbench .wb-sub { margin-top: 2px; color: var(--wb-muted); font-size: 12.5px; line-height: 1.6; }
+.wbench .wb-sec-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; font-size: 12px; color: var(--wb-faint); }
+.wbench .wb-list { border: 1px solid var(--wb-border); border-radius: var(--wb-r); overflow: hidden; }
+.wbench .wb-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; flex: 1; padding: 30px; text-align: center; color: var(--wb-muted); }
+.wbench .wb-empty b { color: var(--wb-text); font-size: 14px; }
+.wbench .wb-note { font-size: 11.5px; color: var(--wb-faint); line-height: 1.6; }
+.wbench .wb-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 3px; background: var(--tone, var(--wb-faint)); }
+.wbench .wb-link { border: 0; background: none; padding: 0; color: var(--wb-accent); font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; }
+.wbench .wb-link:hover { text-decoration: underline; }
+.wbench .wb-loading { display: flex; align-items: center; gap: 8px; color: var(--wb-muted); font-size: 12.5px; }
+.wbench .wb-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--wb-border-strong); border-top-color: var(--wb-accent); animation: wb-spin 0.8s linear infinite; }
+@keyframes wb-spin { to { transform: rotate(360deg); } }

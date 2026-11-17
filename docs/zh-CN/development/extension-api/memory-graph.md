@@ -147,7 +147,7 @@ const projection = await mg.getLastRecallProjection(ctx);
 
 ### 读取上一轮召回投影
 
-`getLastRecallProjection(ctx)` 返回的数据与"查看最近注入"UI 按钮显示的一致 —— 就是上一轮召回时记忆图交给主聊天 prompt 的那段文本。第三方扩展想要复用与主 LLM 相同的记忆上下文时非常有用（例如内联插图生成器希望图像 prompt LLM 看到与主 LLM 相同的世界状态）。
+`getLastRecallProjection(ctx)` 返回的数据与工作台「记忆图」页面中**查看注入文本**显示的一致 —— 就是上一轮召回时记忆图交给主聊天 prompt 的那段文本。第三方扩展想要复用与主 LLM 相同的记忆上下文时非常有用（例如内联插图生成器希望图像 prompt LLM 看到与主 LLM 相同的世界状态）。
 
 ```js
 const mg = ctx.getExtensionApi('memory-graph');

@@ -4,13 +4,13 @@
 
 ## 编辑 Agent 的 Skill
 
-在编排编辑器里，每个 Agent 的设置卡都有 **Skill** 一行：
+在**工作台 → 编排**的**流程**中点选助手（或在**准备阶段**展开配置），即可编辑它的 **Skill** 列表：
 
 - **继承标记**：沿用该模式的默认列表。
-- **具名条目**：这个 Agent 额外可见的 Skill。点条目可以移除，点 **添加** 从已安装的 Skill 里选择。
+- **具名条目**：这个 Agent 额外可见的 Skill。点条目可以移除，也可以从已安装的 Skill 里添加。
 - **禁用列表**：明确不让这个 Agent 看到的 Skill，优先级高于可见列表。
 
-面板顶部的 **Skill** 行是模式级默认值，作用于该模式下的所有 Agent。编辑单个 Agent 只改它自己的覆写。
+**准备阶段**中的共享 **Skill** 行是模式级默认值，作用于该模式下的所有 Agent。编辑单个 Agent 只改它自己的覆写。
 
 切换执行模式时，Skill 行按该模式的配置重新显示。每种模式各自保存一份策略。
 
@@ -33,7 +33,7 @@ Skill 按名称引用。改名、删除或尚未安装时，运行时在派遣�
 
 ## 用 AI 编辑
 
-[AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) 可以按自然语言修改绑定关系。描述要让哪个 Agent 看到哪些 Skill，工作台会提交待审改动。
+[编排 AI 迭代](/zh-CN/features/orchestrator/iteration-studio)可以按自然语言修改绑定关系。描述要让哪个 Agent 看到哪些 Skill，改动会进入**改动清单**供审阅。
 
 ## 相关页面
 
@@ -41,4 +41,4 @@ Skill 按名称引用。改名、删除或尚未安装时，运行时在派遣�
 - [创作 Skill](/zh-CN/features/skills/authoring) —— 写自己的 Skill
 - [Skill 管理](/zh-CN/features/skills/management) —— 安装、迁移、删除
 - [Director 模式](/zh-CN/features/orchestrator/director) —— 出厂自带完整 Skill 集成的多 Agent 配置
-- [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio) —— 用自然语言修改策略
+- [编排 AI 迭代](/zh-CN/features/orchestrator/iteration-studio) —— 用自然语言修改策略

@@ -14,8 +14,9 @@ This is the complete reference for the Luker Extension API, intended for plugin 
 | [Skills](/development/extension-api/skills) | `context.skills.*` — install, read, write, search, scope migration, embed pack/extract; CardApp ctx parity |
 | [Character Card Replace Flow](/development/extension-api/character-replace-flow) | The registries that run when a character card is replaced: card binding preservation slots and post-replace world book actions |
 | [UI & Popups](/development/extension-api/ui-and-popups) | Popups, loaders, templates, message formatting |
-| [IterationStudio](/development/extension-api/iteration-studio) | Shared popup framework for AI-driven iterative editing — conversation, sessions, diff preview, approve/reject lifecycle. Adapters supply the artifact shape + tools |
-| [Run Panel](/development/extension-api/run-panel) | Shared in-memory run trace for multi-step LLM tasks — rounds, streaming sections, Stop, export. Plugins drive it through a factory store and panel |
+| [Workbench API](/development/extension-api/workbench) | Unified Workbench platform — embedded workspaces, AI iteration targets, Q&A providers, local suggestion rules |
+| [Iteration Library](/development/extension-api/iteration-studio) | Shared `iterationLibrary` helpers — runner, storage, diffs, proposal bus, and lorebook/skill/preset tools |
+| [Run Panel](/development/extension-api/run-panel) | Shared in-memory run trace and floating Run Dock for multi-step LLM tasks — rounds, streaming sections, Stop, export |
 | [Plugin Integration](/development/extension-api/plugin-integration) | Regex runtime, search tools, extension API registry, event system, i18n, settings storage, debug & scraper registration, tokenization, utilities, symbols & constants |
 | [Low-Level Endpoints](/development/extension-api/low-level-endpoints) | Raw HTTP routes (advanced / debugging only) |
 
@@ -48,6 +49,9 @@ For quickly finding where an API lives, the context object groups related APIs i
 | `context.constants` | `unset`, `promptRoles`, `promptTypes`, `wiAnchor`, `wiPosition` |
 | `context.macros` | `register`, `registerAlias`, `registry`, `engine`, `category`, `envBuilder` |
 | `context.loader` | `show`, `hide`, `active`, `get`, `isBlocking`, `ToastMode`, `Handle` |
+| `context.workbench` | `registerWorkspace`, `registerIterateTarget`, `registerAskProvider`, `registerSuggestRuleProvider`, `open`, `saveSettingsChecked`, `getWorkspaces`, `getIterateTargets`, `getAskProviders`, `getSuggestRuleProviders`, `subscribe` |
+| `context.runPanel` | `createRunStore`, `createRunPanel`, `attachDock`, `openRunDock`, `toggleRunDock`, `getRunRecorder`, `events`, `withRound`, `withStreamingSection` |
+| `context.iterationLibrary` | `applyEdits`, `inverseEdit`, `registerOp`, `runner`, `storage`, `proposalBus`, `tools`, `render`, `textDiff`, `zoomOverlay`, `ui` |
 | `context.skills` | `list`, `get`, `readFile`, `listFiles`, `search`, `writeFile`, `editFile`, `deleteFile`, `install`, `delete`, `rename`, `moveScope`, `importBundled`, `listBundledManifest`, `packForEmbed`, `previewExtractEmbed`, `executeExtractEmbed`, `importFromUrl` |
 | `context.worldInfoEntry` | `template`, `create`, `delete`, `setButtonClass`, `setGlobalSelection`, `getSorted` |
 | `context.chatWorldInfo` | `getNames`, `setSelection`, `globalSelection` |

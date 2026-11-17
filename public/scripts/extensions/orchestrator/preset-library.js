@@ -30,8 +30,14 @@ import {
 import { sanitizeAgendaWorkingProfile } from './agenda-profile.js';
 import { sanitizeLoopProfile } from './persistence.js';
 import { sanitizeSpec } from './spec-schema.js';
-import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from '../../state-errors.js';
-import { formatValidationTargetHint } from '../../state-errors/format.js';
+
+function getStateErrors(context = null) {
+    const se = context?.stateErrors ?? globalThis.Luker?.getContext?.()?.stateErrors;
+    if (!se) {
+        throw new Error('Luker.getContext().stateErrors is unavailable');
+    }
+    return se;
+}
 
 const MODULE_NAME = 'orchestrator';
 const DEFAULT_PRESET_ID = 'default';
@@ -92,7 +98,7 @@ function seedFactoryEntries(c, mode) {
     c.activeIds[mode] = rawEntries[0]?.id || DEFAULT_PRESET_ID;
 }
 
-function sanitizePresetEntry(mode, entry) {
+export function sanitizePresetEntry(mode, entry) {
     const raw = entry && typeof entry === 'object' ? entry : {};
     const name = String(raw.name || DEFAULT_PRESET_NAME).trim() || DEFAULT_PRESET_NAME;
     if (mode === ORCH_EXECUTION_MODE_LOOP) {
@@ -403,6 +409,7 @@ export function duplicatePreset(settings, mode, scope, sourceId, { name }, { con
  * the name should use `renamePreset`).
  */
 export function writeActivePreset(settings, mode, scope, payload, { context, avatar } = {}) {
+    const { STATE_ERROR_REASONS, makeStateError, makeStateOk, formatValidationTargetHint } = getStateErrors(context);
     const c = getScopeContainer(settings, scope, { context, avatar });
     if (!c) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,
@@ -442,6 +449,7 @@ export function writeActivePreset(settings, mode, scope, payload, { context, ava
  *     warning rather than silently picking one.
  */
 export function writePresetByName(settings, mode, scope, name, payload, { context, avatar } = {}) {
+    const { STATE_ERROR_REASONS, makeStateError, formatValidationTargetHint } = getStateErrors(context);
     const c = getScopeContainer(settings, scope, { context, avatar });
     if (!c) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_TARGET,

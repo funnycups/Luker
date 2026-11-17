@@ -1,165 +1,243 @@
-// Verifies the CEA post-replace OPEN_EDITOR rollback contract:
-//   - When the popup opens after OPEN_EDITOR pre-materialized a new
-//     world book, the caller passes `opts.postReplaceRollback`.
-//   - If the user closes the popup WITHOUT applying any edit (state
-//     stays `hasEverApplied === false`), the callback fires so the
-//     pre-materialize step can be undone (rebind previous book, delete
-//     newly materialized file).
-//   - If ANY edit lands on disk (`state.hasEverApplied === true`) the
-//     callback must NOT fire — the user chose to iterate on the new
-//     book and rolling back would delete their curated changes.
-//   - When no callback is provided (non-post-replace open path), the
-//     finally block stays inert.
-//
-// This lives outside `openUnifiedCharacterEditorPopup`'s giant mount
-// path by exercising the same finally block via a Popup stub that
-// resolves immediately; the popup mount body can throw on missing
-// DOM but the try/finally still evaluates our rollback branch.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 FunnyCups
 
-import { jest } from '@jest/globals';
+// Verifies CEA's post-replace merge action and Workbench routing in main.js:
+//   - buildPostReplaceMergeAction materializes a new embedded world book,
+//     builds the diff seed message, and opens Workbench AI iteration
+//     (`{ page: 'ai', ws: 'card', scope: 'character', draft }`).
+//   - If Workbench is unavailable or throws during open, postReplaceRollback
+//     re-binds the previous primary book and deletes the newly materialized
+//     world book so disk state stays clean.
+//   - commitCharacterEditorOperations delegates cleanly and skips no-ops.
+
+import { describe, expect, jest, test } from '@jest/globals';
+
+globalThis.jQuery = (cb) => {
+    if (typeof cb === 'function') { /* swallow init handlers */ }
+    return { ready: () => {}, on: () => {}, off: () => {} };
+};
+globalThis.$ = globalThis.jQuery;
+globalThis.window = globalThis.window || globalThis;
+globalThis.document = globalThis.document || {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+};
+globalThis.toastr = globalThis.toastr || {
+    error: () => {}, warning: () => {}, success: () => {}, info: () => {},
+};
 
 jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class {
-        constructor() {}
-        // Resolve immediately so `await popupPromise` in the studio
-        // returns before we get a chance to touch state — perfect for
-        // exercising the "closed without applying" branch.
-        show() { return Promise.resolve('ok'); }
-        completeAffirmative() {}
-        dlg = { close: () => {} };
-    },
     POPUP_TYPE: { DISPLAY: 'display' },
     POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 2, CANCELLED: 0 },
+    Popup: class { constructor() {} show() { return Promise.resolve(''); } },
 }));
 
 const realEdits = await import('../../public/scripts/lib/edits/index.js');
 
+jest.unstable_mockModule('../../public/script.js', () => ({
+    converter: { makeHtml: (s) => s },
+    generateQuietPrompt: async () => '',
+    getCharacterDescription: () => '',
+    getCharacterFirstMessage: () => '',
+    getCharacterMesExample: () => '',
+    getCharacterName: () => '',
+    getCharacterPersonality: () => '',
+    getCharacterScenario: () => '',
+    saveSettingsDebounced: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
+    extension_settings: { character_editor_assistant: {} },
+    getContext: () => ({}),
+    getCharacterState: () => ({}),
+    setCharacterState: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
+    addLocaleData: () => {},
+    translate: (s) => s,
+}));
+jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
+    newWorldInfoEntryTemplate: {},
+    setWorldInfoButtonClass: () => {},
+    updateWorldInfoList: () => {},
+    getCharaAuxWorlds: () => [],
+    getChatWorldInfoNames: () => [],
+    selected_world_info: [],
+}));
+jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
+    getCharaFilename: () => '',
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/function-call-runtime.js', () => ({
+    TOOL_PROTOCOL_STYLE: { OPENAI: 'openai' },
+    validateParsedToolCalls: () => ({ ok: true, errors: [] }),
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/diff-ui.js', () => ({
+    createCharacterEditorDiffUi: () => ({}),
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/editor-ui.js', () => ({
+    createCharacterEditorUi: () => ({}),
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/studio/ai-chat.js', () => ({
+    DEFAULT_SYSTEM_PROMPT: '',
+}));
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
-    proposalBus: {
-        createProposalBus: () => ({
-            hydrate: () => {},
-            serialize: () => ({}),
-            hasOutstanding: () => false,
-            onChange: () => () => {},
-            drainStagedEdits: () => [],
-            targetKeys: () => [],
-            listProposals: () => [],
-            stageProposals: () => {},
-        }),
-    },
     applyEdits: realEdits.applyEdits,
-    inverseEdit: realEdits.inverseEdit,
-    registerOp: realEdits.registerOp,
-    BUILT_IN_OPS: realEdits.BUILT_IN_OPS,
-    showConflictResolution: async () => ({}),
-    render: {
-        ensureMarkdownDeps: async () => true,
-        renderMessageMarkdown: (s) => `<p>${String(s ?? '')}</p>`,
-    },
-    runner: {
-        requestToolCallsWithRetry: () => Promise.resolve({ toolCalls: [], assistantText: '' }),
-    },
-    storage: {},
-    textDiff: {},
-    zoomOverlay: { attachZoomOverlay: () => () => {} },
-    ui: {
-        toolcall: { renderToolCallChip: () => '' },
-        message: { renderMessageCard: () => '' },
-        diff: { renderDiffCard: () => '' },
-        apply: { renderApplyControls: () => '' },
-        ensureUiStylesheetInjected: () => {},
-    },
-    bindIterWorkspaceResizer: () => () => {},
-    createRenderScheduler: () => ({ schedule: () => {}, dispose: () => {} }),
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/index.js', () => ({
+    openSimulationReview: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/i18n/index.js', () => ({
+    ensureSimulationReviewLocaleData: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/wi-hits.js', () => ({
+    extractWorldInfoHitsFromRuntime: () => [],
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/dry-run-capture.js', () => ({
+    extractSystemFromCapturedPrompt: () => '',
+    extractNonSystemFromCapturedPrompt: () => '',
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/markdown-escape.js', () => ({
+    mdLiteral: (s) => String(s ?? ''),
 }));
 
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
-    runCharacterEditorHelperToolCall: async () => ({ result: {} }),
-    commitCharacterEditorOperations: async () => ({ ok: true }),
-    commitLorebookOperations: async () => ({ ok: true }),
-    buildCharacterEditorHelperApis: () => [],
-    buildUnifiedCharacterEditorLiveSnapshot: async () => ({ character: {}, lorebooks: {} }),
-    readLegacyCeaEditorSessions: async () => [],
-    readLegacyCharIterPopupSessions: async () => [],
-}));
+const deleteWorldBookSpy = jest.fn(async () => {});
+const rebindSpy = jest.fn(async () => {});
+const workbenchOpenSpy = jest.fn(async () => ({}));
+const updateCharacterDataSpy = jest.fn(async () => {});
 
-let studio;
-beforeAll(async () => {
-    studio = await import('../../public/scripts/extensions/character-editor-assistant/editor-iteration/studio.js');
-});
+const sharedLukerCtx = {
+    lib: {
+        DOMPurify: { sanitize: (s) => s },
+        lodash: { get: () => undefined, set: () => {}, cloneDeep: (x) => JSON.parse(JSON.stringify(x)) },
+    },
+    extensionSettings: { character_editor_assistant: {} },
+    getCharacterState: () => ({}),
+    updateCharacterState: () => {},
+    addLocaleData: () => {},
+    translate: (s) => s,
+    POPUP_TYPE: { DISPLAY: 'display' },
+    Popup: class {},
+    worldInfoEntry: { template: {}, setButtonClass: () => {} },
+    updateWorldInfoList: () => {},
+    getCharaAuxWorlds: () => [],
+    chatWorldInfo: { getNames: () => [] },
+    getCharaFilename: () => '',
+    generateQuietPrompt: async () => '',
+    saveSettingsDebounced: () => {},
+    deleteWorldBook: deleteWorldBookSpy,
+    rebindPreviousPrimaryBook: rebindSpy,
+    workbench: { open: workbenchOpenSpy },
+    characters: [],
+    characterId: 0,
+    loadWorldInfo: async () => ({ entries: {} }),
+    getWorldInfoNames: () => [],
+    updateCharacterData: updateCharacterDataSpy,
+};
 
-function makeContext() {
-    return {
-        extensionSettings: { character_editor_assistant: {} },
-        characterId: 0,
-        characters: [],
-        saveSettingsDebounced: () => {},
-        getCharacterState: async () => null,
-        updateCharacterState: async (_a, _ns, updater) => {
-            await updater(null, { attempt: 0 });
-            return { ok: true, state: null, updated: false };
-        },
-    };
-}
+globalThis.Luker = { getContext: () => sharedLukerCtx };
 
-describe('CEA post-replace rollback', () => {
-    it('invokes postReplaceRollback when popup closes without any applied edit', async () => {
-        const rollback = jest.fn(async () => {});
-        try {
-            await studio.openUnifiedCharacterEditorPopup(makeContext(), {
-                avatar: 'a.png',
-                postReplaceRollback: rollback,
-            });
-        } catch {
-            // Mount can throw without a DOM; the finally block still runs.
-        }
-        expect(rollback).toHaveBeenCalledTimes(1);
-    });
+const CEA = await import('../../public/scripts/extensions/character-editor-assistant/main.js');
 
-    it('skips postReplaceRollback once any edit has been applied', async () => {
-        const rollback = jest.fn(async () => {});
-        // Flip the shared rollbackEnvelope BEFORE the popup mount runs
-        // to simulate "user applied at least one edit this session".
-        // Production flips this flag on every successful commit: the
-        // bus onCommitted hook (proposal-card / approve-all / auto-
-        // apply) and the batch applyPendingEdits path. Mirroring here
-        // exercises the finally-block branch without driving the popup
-        // UI to completion — the real commit-to-latch wiring is covered
-        // by the #28 MERGE happy-path e2e (close after apply).
-        try {
-            await studio.openUnifiedCharacterEditorPopup(makeContext(), {
-                avatar: 'a.png',
-                postReplaceRollback: rollback,
-                _testOnly_onRollbackEnvelopeReady: (env) => {
-                    env.hasEverApplied = true;
-                },
-            });
-        } catch {
-            // Mount can throw without a DOM.
-        }
-        expect(rollback).not.toHaveBeenCalled();
-    });
+describe('CEA post-replace merge action & Workbench routing', () => {
+    test('routes post-replace merge to Workbench card AI iteration with seed draft', async () => {
+        workbenchOpenSpy.mockClear().mockResolvedValue({ opened: true });
+        deleteWorldBookSpy.mockClear();
+        rebindSpy.mockClear();
 
-    it('is a no-op when no postReplaceRollback callback is provided (regular open path)', async () => {
-        // Just proves nothing throws when the option is absent, which is
-        // the common case (the character editor UI button doesn't wire
-        // a rollback — only the post-replace flow does).
-        await expect(studio.openUnifiedCharacterEditorPopup(makeContext(), {
+        const nextChar = {
             avatar: 'a.png',
-        }).catch(() => {})).resolves.not.toThrow();
+            name: 'Alice',
+            description: 'Next desc',
+            data: {
+                extensions: { world: 'NewBook' },
+                character_book: { name: 'NewBook', entries: [{ keys: ['k'], content: 'c' }] },
+            },
+        };
+        sharedLukerCtx.characters = [nextChar];
+        sharedLukerCtx.characterId = 0;
+        sharedLukerCtx.importEmbeddedBookForCharacter = jest.fn(async () => {});
+        sharedLukerCtx.workbench = { open: workbenchOpenSpy };
+
+        const action = CEA.buildPostReplaceMergeAction();
+        await action.run({
+            characterId: 0,
+            character: nextChar,
+            previousCharacter: { avatar: 'a.png', name: 'Alice', description: 'Prev desc', data: { extensions: { world: 'OldBook' } } },
+            previousLorebookSnapshot: { bookName: 'OldBook', entries: {} },
+        });
+
+        expect(sharedLukerCtx.importEmbeddedBookForCharacter).toHaveBeenCalledWith(0);
+        expect(workbenchOpenSpy).toHaveBeenCalledTimes(1);
+        const call = workbenchOpenSpy.mock.calls[0][0];
+        expect(call.page).toBe('ai');
+        expect(call.ws).toBe('card');
+        expect(call.scope).toBe('character');
+        expect(call.seedPrompt).toContain('post-replace iteration');
+        expect(call.hideSeedFromUi).toBe(true);
+        expect(call.autoSend).toBe(true);
+        expect(typeof call.onCancelWithoutApply).toBe('function');
+        expect(rebindSpy).not.toHaveBeenCalled();
+        expect(deleteWorldBookSpy).not.toHaveBeenCalled();
+
+        // Closing/canceling without apply triggers the forwarded rollback hook.
+        await call.onCancelWithoutApply();
+        expect(rebindSpy).toHaveBeenCalledWith(0, 'OldBook');
+        expect(deleteWorldBookSpy).toHaveBeenCalledWith('NewBook');
     });
 
-    it('swallows errors thrown from the rollback callback (teardown must not propagate)', async () => {
-        const rollback = jest.fn(async () => { throw new Error('rollback boom'); });
-        // If teardown propagated, this would reject; the studio explicitly
-        // wraps postReplaceRollback in try/catch because it fires in the
-        // finally block after `await popupPromise` — a throw here would
-        // otherwise mask the real popup close outcome and stall the
-        // caller.
-        await expect(studio.openUnifiedCharacterEditorPopup(makeContext(), {
+    test('rolls back pre-materialized world book when Workbench is unavailable', async () => {
+        deleteWorldBookSpy.mockClear();
+        rebindSpy.mockClear();
+
+        const nextChar = {
             avatar: 'a.png',
-            postReplaceRollback: rollback,
-        }).catch(() => {})).resolves.not.toThrow();
-        expect(rollback).toHaveBeenCalledTimes(1);
+            name: 'Alice',
+            data: {
+                extensions: { world: 'NewBook' },
+                character_book: { name: 'NewBook', entries: [{ keys: ['k'], content: 'c' }] },
+            },
+        };
+        sharedLukerCtx.characters = [nextChar];
+        sharedLukerCtx.characterId = 0;
+        sharedLukerCtx.importEmbeddedBookForCharacter = jest.fn(async () => {});
+        sharedLukerCtx.workbench = null;
+
+        const action = CEA.buildPostReplaceMergeAction();
+        await action.run({
+            characterId: 0,
+            character: nextChar,
+            previousCharacter: { avatar: 'a.png', name: 'Alice', data: { extensions: { world: 'OldBook' } } },
+            previousLorebookSnapshot: { bookName: 'OldBook', entries: {} },
+        });
+
+        expect(rebindSpy).toHaveBeenCalledWith(0, 'OldBook');
+        expect(deleteWorldBookSpy).toHaveBeenCalledWith('NewBook');
+    });
+
+    test('commitCharacterEditorOperations persists character deltas and skips no-ops', async () => {
+        updateCharacterDataSpy.mockClear();
+        sharedLukerCtx.characters = [{ avatar: 'a.png', name: 'Alice', description: 'old', data: { description: 'old' } }];
+        sharedLukerCtx.characterId = 0;
+
+        await CEA.commitCharacterEditorOperations(
+            sharedLukerCtx,
+            'a.png',
+            [{ op: 'set', path: 'description', oldValue: 'old', newValue: 'new' }],
+            { liveCharacter: { description: 'old' } },
+        );
+        expect(updateCharacterDataSpy).toHaveBeenCalledTimes(1);
+
+        updateCharacterDataSpy.mockClear();
+        await CEA.commitCharacterEditorOperations(
+            sharedLukerCtx,
+            'a.png',
+            [{ op: 'set', path: 'description', oldValue: 'old', newValue: 'old' }],
+            { liveCharacter: { description: 'old' } },
+        );
+        expect(updateCharacterDataSpy).not.toHaveBeenCalled();
     });
 });

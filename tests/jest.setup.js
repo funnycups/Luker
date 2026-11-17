@@ -133,6 +133,21 @@ if (typeof globalThis.Luker === 'undefined') {
     // mutation past `await register*OrchestrationTools()` and the test
     // would read an empty registry.
     const orchestratorMod = await import('../public/scripts/extensions/orchestrator/register-custom-tool.js');
+    const stateErrorsMod = await import('../public/scripts/state-errors.js');
+    const stateErrorsFormatMod = await import('../public/scripts/state-errors/format.js');
+    const presetRefCodecMod = await import('../public/scripts/character/preset-ref-codec.js');
+    const stateErrors = Object.freeze({
+        STATE_ERROR_REASONS: stateErrorsMod.STATE_ERROR_REASONS,
+        STATE_HINT_MAX_LENGTH: stateErrorsMod.STATE_HINT_MAX_LENGTH,
+        isValidReason: stateErrorsMod.isValidReason,
+        makeStateError: stateErrorsMod.makeStateError,
+        makeStateOk: stateErrorsMod.makeStateOk,
+        formatHttpErrorHint: stateErrorsFormatMod.formatHttpErrorHint,
+        formatTransportErrorHint: stateErrorsFormatMod.formatTransportErrorHint,
+        formatConflictHint: stateErrorsFormatMod.formatConflictHint,
+        formatValidationArgsHint: stateErrorsFormatMod.formatValidationArgsHint,
+        formatValidationTargetHint: stateErrorsFormatMod.formatValidationTargetHint,
+    });
     const extensionApis = {
         orchestrator: {
             registerOrchestrationTool: orchestratorMod.registerOrchestrationTool,
@@ -161,6 +176,8 @@ if (typeof globalThis.Luker === 'undefined') {
             // capability detection sentinels
             createMessageEditorHandle: null,
             registerExtensionApi: () => {},
+            stateErrors,
+            decodeCardBoundOptionValue: presetRefCodecMod.decodeCardBoundOptionValue,
         };
         return new Proxy(base, {
             get(t, prop) {

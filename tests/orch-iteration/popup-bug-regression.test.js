@@ -52,19 +52,10 @@ describe('ORCH-1: luker_orch_simulate is classified as a read tool', () => {
         expect(ORCH_TOOL_DISPLAY.luker_orch_simulate?.type).toBe('read');
     });
 
-    test('iter-studio recognizes simulate via isInlineExecutedTool / isSimulateTool', async () => {
-        const src = await readOrch('iter-studio/studio.js');
-        // The popup needs to recognize simulate as inline-executed so it
-        // routes to the read-path execution that persists results to
-        // assistantMsg.toolResults. Bare-string grep is enough: a
-        // future refactor that drops this name would have to also
-        // re-introduce some other read-routing path explicitly.
+    test('iterate-target recognizes simulate via isRead / SIMULATE_TOOL_NAME', async () => {
+        const src = await readOrch('lens/iterate-target.js');
         expect(src).toMatch(/SIMULATE_TOOL_NAME\s*=\s*['"]luker_orch_simulate['"]/);
-        // The read/edit split uses isInlineExecutedTool, the umbrella
-        // predicate that covers reads + writes + simulate. Lorebook
-        // writes share the same inline execution path because they
-        // mutate real data directly (no sandbox-diff proposal step).
-        expect(src).toMatch(/isInlineExecutedTool\s*\(/);
+        expect(src).toMatch(/isRead\s*\(/);
     });
 
     test('persisted assistant message round-trips simulate toolResults', () => {
@@ -204,15 +195,10 @@ describe('ORCH-5: reset rejection produces a system + tool error result', () => 
         expect(String(msg.toolResults[0].content?.error || '')).toMatch(/Reset rejected/);
     });
 
-    test('iter-studio rejection branches push system + tool result', async () => {
-        const src = await readOrch('iter-studio/studio.js');
-        // Locks in the rejection path: each rejection appends to
-        // rejectedResets, which then pushes both a system message and a
-        // fail-status tool result.
-        expect(src).toMatch(/rejectedResets\.push/);
+    test('iterate-target rejection branches surface Reset rejected error', async () => {
+        const src = await readOrch('lens/iterate-target.js');
         expect(src).toMatch(/Reset rejected/);
-        // Tool result entries are added to persistedToolResults with status:'fail'.
-        expect(src).toMatch(/status:\s*['"]fail['"]/);
+        expect(src).toMatch(/not_allowed/);
     });
 });
 
@@ -233,88 +219,17 @@ describe('ORCH-16: lorebook guidance pulled into a separate exported constant', 
     });
 });
 
-describe('iter-studio Stop button: race + immediate feedback', () => {
-    // The previous shape created the AbortController inside runIterationTurn
-    // and only flipped state visibly in the post-await finally. That left
-    // two latent gaps:
-    //   1. A Stop click during the pre-flight (persistSession + render,
-    //      before runIterationTurn fires) hit a null abortController and
-    //      was silently dropped.
-    //   2. Even when the click landed, the button kept saying "Stop" with
-    //      no spinner change until the network actually dropped — which on
-    //      a slow connection looked like the button was broken.
-    // This block locks in: state.aborting flag, pre-seeded AbortController
-    // in handleSendMessage + continueAfterReviewDecision, and runIterationTurn
-    // reusing the caller-owned controller.
-
-    test('state includes the aborting flag', async () => {
-        const src = await readOrch('iter-studio/studio.js');
-        expect(src).toMatch(/aborting:\s*false/);
-    });
-
-    test('busy branch sets aborting and triggers a render before returning', async () => {
-        const src = await readOrch('iter-studio/studio.js');
-        // The whole busy branch should: guard re-entry, set aborting,
-        // call abort, and fire a best-effort render. Match the shape
-        // rather than exact whitespace so future cosmetic edits don't
-        // trip the regression.
-        expect(src).toMatch(/if\s*\(!state\.aborting\)\s*\{[\s\S]*?state\.aborting\s*=\s*true[\s\S]*?state\.abortController\?\.abort\(\)[\s\S]*?render\(\)\.catch/);
-    });
-
-    test('handleSendMessage seeds AbortController before pre-flight awaits', async () => {
-        const src = await readOrch('iter-studio/studio.js');
-        // The fix lifts AC creation above the first await so a Stop
-        // click during persistSession / render isn't dropped.
-        expect(src).toMatch(/state\.isBusy\s*=\s*true;\s*\n\s*\/\/[^\n]*\n[\s\S]*?state\.abortController\s*=\s*new AbortController\(\);[\s\S]*?await\s+persistSession\(\);[\s\S]*?await\s+render\(\);/);
-    });
-
-    test('runIterationTurn reuses the caller-owned AbortController', async () => {
-        const src = await readOrch('iter-studio/studio.js');
-        // The `||` fallback keeps the function safe for callers that
-        // forget to seed, but the production paths now always do.
-        expect(src).toMatch(/state\.abortController\s*\|\|\s*new AbortController\(\)/);
-    });
-
-    test('render disables the Send/Stop button while aborting', async () => {
-        const src = await readOrch('iter-studio/studio.js');
-        expect(src).toMatch(/prop\(['"]disabled['"]\s*,\s*Boolean\(state\.aborting\)\)/);
-    });
-
-    test('finally blocks clear state.aborting alongside isBusy', async () => {
-        const src = await readOrch('iter-studio/studio.js');
-        // Both handleSendMessage and continueAfterReviewDecision share
-        // the same finally pattern; lock in that the new flag is reset
-        // in every spot the existing flags are.
-        const finallyResets = src.match(/state\.aborting\s*=\s*false/g) || [];
-        expect(finallyResets.length).toBeGreaterThanOrEqual(2);
-    });
-});
-
 describe('director-mode iteration: luker_orch_simulate is wired through', () => {
-    // Pins the wiring landed when director-mode simulate was enabled. The
-    // earlier shape had `simulations = []  // director skips simulate for v1`
-    // in `executeDirectorIterationToolCalls` and the director tool
-    // catalog had no `luker_orch_simulate` entry, so the workbench-LLM
-    // could not test director profiles via the iteration popup. Each
-    // assertion catches one piece of that wiring regressing.
-
     let mainSrc;
     beforeAll(async () => {
         mainSrc = await readOrch('main.js');
     });
 
     test('director executor no longer carries the v1-skip comment', () => {
-        // The old shape was `const simulations = [];  // director skips
-        // simulate for v1`. Catching the comment (rather than the empty
-        // initializer) keeps the assertion robust against legitimate
-        // formatting changes.
         expect(mainSrc).not.toMatch(/director\s+skips\s+simulate/i);
     });
 
     test('director executor routes luker_orch_simulate through runAiIterationSimulation', () => {
-        // The block lives between the director-specific tools and the
-        // shared continue/finalize handlers; verify the dispatch shape
-        // matches what loop/agenda/spec already do.
         const directorExecBlock = mainSrc.match(
             /async\s+function\s+executeDirectorIterationToolCalls[\s\S]+?\n}/,
         );
@@ -324,9 +239,6 @@ describe('director-mode iteration: luker_orch_simulate is wired through', () => 
     });
 
     test('director iteration tool catalog registers luker_orch_simulate', () => {
-        // The catalog is the per-mode array returned from getAiIterationTools
-        // when isDirectorIterationSession(session) is true. The simulate
-        // entry must sit alongside the other luker_orch_set_director_* tools.
         const directorCatalogBlock = mainSrc.match(
             /isDirectorIterationSession\(session\)\)\s*\{\s*return\s*\[[\s\S]+?\];\s*\}/,
         );
@@ -335,10 +247,6 @@ describe('director-mode iteration: luker_orch_simulate is wired through', () => 
     });
 
     test('director iteration system prompt explains the annotation envelope', () => {
-        // Shared contract paragraph spec/agenda/loop already carry.
-        // The director block must teach the workbench-LLM how to read
-        // <simulation_chain> / <annotations> / <status submitted="..."/>
-        // so it can act on user annotations after a simulate call.
         const directorPromptBlock = mainSrc.match(
             /DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK\s*=\s*\[[\s\S]+?\]\.join\('\\n'\);/,
         );
@@ -350,67 +258,30 @@ describe('director-mode iteration: luker_orch_simulate is wired through', () => 
     });
 
     test('runAiIterationSimulation has a director branch that invokes runMainAgentLoop', () => {
-        // Director can't go through `runOrchestration` because production
-        // director runs claim SillyTavern's takeover handle from the
-        // kernel — there is no callable runDirectorOrchestration. The
-        // simulation path mints a throwaway editor handle and calls
-        // runMainAgentLoop directly. Lock in that wiring.
         expect(mainSrc).toMatch(/runMainAgentLoop/);
         expect(mainSrc).toMatch(/createMessageEditorHandle/);
-        // The director branch flows the trace it built into the existing
-        // exportDirectorPayload adapter via the same `trace` accumulator
-        // the agenda/loop/spec branches already use.
         expect(mainSrc).toMatch(/isDirectorIterationSession\(session\)\s*\)\s*\{[\s\S]+?runDirectorSimulationLoop/);
     });
 });
 
 // ORCH-Post-Refactor: `luker_orch_read_<mode>_fields` tool calls must
-// reach `dispatchReadFields` in the popup executor. The tool schema
-// existed and the AI could see + call it, but the executor's
-// if/else-if dispatch chain missed the `isProfileReadTool` branch,
-// so calls fell through to `runLorebookReadTool` which returned
-// `{error: 'Not a lorebook read tool: <name>'}`. AI wasted rounds
-// pattern-matching around a dead tool. Locked here as a code-shape
-// contract on the popup's executor: (1) `isProfileReadTool` is imported
-// and exported for the umbrella predicate, (2) `dispatchReadFields`
-// is imported from the sibling module, (3) the dispatch chain has
-// an `else if (isProfileReadTool(call?.name))` branch that awaits
-// `dispatchReadFields`. Sibling studios (MG / CEA / CPA) have their
-// own read-tool routes; this test covers only the orchestrator popup.
+// reach `dispatchReadFields` in the iterate-target executor.
 describe('ORCH-post-refactor: profile read tool dispatch is wired to dispatchReadFields', () => {
-    let studioSrc;
+    let targetSrc;
 
     beforeAll(async () => {
-        studioSrc = await readOrch('iter-studio/studio.js');
+        targetSrc = await readOrch('lens/iterate-target.js');
     });
 
-    test('studio.js imports dispatchReadFields from the sibling read-fields-dispatcher module', () => {
-        expect(studioSrc).toMatch(
-            /import\s*\{\s*dispatchReadFields\s*\}\s*from\s*['"]\.\/read-fields-dispatcher\.js['"]/,
+    test('iterate-target.js imports dispatchReadFields from iter-studio/read-fields-dispatcher', () => {
+        expect(targetSrc).toMatch(
+            /import\s*\{\s*dispatchReadFields\s*\}\s*from\s*['"]\.\.\/iter-studio\/read-fields-dispatcher\.js['"]/,
         );
     });
 
-    test('studio.js dispatch chain routes isProfileReadTool calls to dispatchReadFields', () => {
-        // The bug: profile-read calls (luker_orch_read_<mode>_fields)
-        // fell into the terminal `else { runLorebookReadTool(...) }`
-        // branch and got "Not a lorebook read tool" back.
-        // Fix: add `else if (isProfileReadTool(call?.name)) { ... await
-        // dispatchReadFields(...) }` before the terminal else. This
-        // shape check locks in that both the predicate AND the executor
-        // call co-occur in the dispatch chain in that order.
-        expect(studioSrc).toMatch(
-            /else\s+if\s*\(\s*isProfileReadTool\s*\(\s*call\?\.name\s*\)\s*\)\s*\{[\s\S]+?dispatchReadFields\s*\(/,
-        );
-    });
-
-    test('studio.js sanitizes the live profile per-mode before dispatchReadFields sees it', () => {
-        // The dispatcher takes a pre-sanitized profile (see the
-        // read-fields.test.js contract). The popup call site must
-        // route state.live through `sanitizeForMode` so any future
-        // scratch/debug field on the working profile cannot leak
-        // to the LLM through the read tool.
-        expect(studioSrc).toMatch(
-            /else\s+if\s*\(\s*isProfileReadTool\s*\(\s*call\?\.name\s*\)\s*\)\s*\{[\s\S]+?sanitizeForMode\s*\(\s*state\.live\s*\)[\s\S]+?dispatchReadFields\s*\(/,
+    test('iterate-target.js routes PROFILE_READ_TOOLS calls to dispatchReadFields with sanitized profile', () => {
+        expect(targetSrc).toMatch(
+            /if\s*\(\s*PROFILE_READ_TOOLS\.has\s*\(\s*name\s*\)\s*\)\s*\{[\s\S]+?dispatchReadFields\s*\(\s*\{\s*sanitizedProfile:\s*sanitizeForMode\s*\(/,
         );
     });
 });

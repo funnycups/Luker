@@ -253,32 +253,27 @@ async function waitForReplaceChoicePopup(page) {
  * what we care about.
  */
 async function sendStudioPromptAndWait(page, prompt, { expect: expectKind, timeoutMs = 90_000, retries = 2 } = {}) {
-    const studio = page.locator('dialog.popup[open]', {
-        hasText: /Character Editor — AI iteration|角色编辑器 - AI 迭代|角色編輯器 - AI 迭代/,
-    }).first();
+    const win = page.locator('.wbench .wb-win').first();
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
-            const input = studio.locator('[data-cea-editor-input], .cea_editor_composer_input textarea').first();
+            const input = win.locator('.wb-composer textarea.wb-input').first();
             await input.waitFor({ state: 'visible', timeout: 5000 });
             await input.fill(prompt);
-            // Snapshot the pre-send assistant-bubble count so we can
-            // wait for a NEW bubble (the generated reply) rather than any
-            // bubble (which is instantly true because of the seeded
-            // system bubble).
-            const bubbleCountBefore = await studio.locator('[data-cea-editor-messages] .luker_lib_message_assistant, [data-cea-editor-messages] .luker_lib_message').count();
-            await studio.locator('[data-cea-editor-action="send"]').first().click();
+            const aiCountBefore = await win.locator('.wb-msg-ai').count();
+            const sendBtn = win.locator('.wb-composer button.wb-send').first();
+            await expect(sendBtn).toBeEnabled({ timeout: 10_000 });
+            await sendBtn.click();
             if (expectKind === 'assistant') {
-                // Wait for a new assistant bubble to appear.
-                await page.waitForFunction(({ before }) => {
-                    const root = document.querySelector('[data-cea-editor-messages]');
-                    if (!root) return false;
-                    const bubbles = root.querySelectorAll('.luker_lib_message_assistant, .luker_lib_message');
-                    if (bubbles.length <= before) return false;
-                    const last = bubbles[bubbles.length - 1];
-                    return last && (last.textContent || '').trim().length > 20;
-                }, { before: bubbleCountBefore }, { timeout: timeoutMs, polling: 500 });
+                await expect.poll(async () => {
+                    const liveCount = await win.locator('.wb-reads.is-live').count();
+                    if (liveCount > 0) return false;
+                    const count = await win.locator('.wb-msg-ai').count();
+                    if (count <= aiCountBefore) return false;
+                    const lastText = (await win.locator('.wb-msg-ai').last().textContent()) || '';
+                    return lastText.trim().length > 20;
+                }, { timeout: timeoutMs, intervals: [200, 500] }).toBe(true);
             } else if (expectKind === 'proposal') {
-                await studio.locator('[data-proposal-action="approve"], [data-proposal-action="approve-all-pending"]').first()
+                await win.locator('.wb-chg.is-pending').first()
                     .waitFor({ state: 'visible', timeout: timeoutMs });
             } else {
                 throw new Error(`sendStudioPromptAndWait: unknown expectKind ${expectKind}`);
@@ -286,14 +281,8 @@ async function sendStudioPromptAndWait(page, prompt, { expect: expectKind, timeo
             return; // success
         } catch (err) {
             if (attempt >= retries) throw err;
-            // Backoff. Real providers usually recover from a transient
-            // rate limit within a few seconds.
             const delayMs = 5000 * (attempt + 1);
-            // Best-effort: try to abort any in-flight round so the next
-            // attempt can start clean.
-            await page.evaluate(() => {
-                try { window.Luker?.__testAbortCurrentIterRound?.(); } catch { /* best effort */ }
-            }).catch(() => {});
+            await win.locator('.wb-reads.is-live button').first().click().catch(() => {});
             await page.waitForTimeout(delayMs);
         }
     }
@@ -483,10 +472,11 @@ test.describe('#28 — post-replace world-book sweep', () => {
             await mergeBtn.click();
             await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
 
-            const studio = page.locator('dialog.popup[open]', {
-                hasText: /Character Editor — AI iteration|角色编辑器 - AI 迭代|角色編輯器 - AI 迭代/,
-            }).first();
-            await studio.waitFor({ state: 'visible', timeout: 30_000 });
+            const studio = page.locator('.wbench .wb-win').first();
+            await expect(studio).toBeVisible({ timeout: 30_000 });
+            await expect(
+                studio.locator('.wb-ws-seg button.lw-seg-btn:has(.lw-dot[style*="--lw-t-card"])'),
+            ).toHaveAttribute('aria-pressed', 'true', { timeout: 10_000 });
             await snap(page, slug, 'studio-opened');
 
             // --- Assertion A: pre-materialize wrote the new book -----
@@ -496,115 +486,39 @@ test.describe('#28 — post-replace world-book sweep', () => {
                 return Array.isArray(names) && names.includes(name);
             }, { name: CARD_B_BOOK }, { timeout: 15_000 });
 
-            // --- Assertion B: seed message hidden from chat + "View
-            // full replace diff" topbar button opens a popup carrying
-            // the same information in structured form ---------------
-            //
-            // Previously the post-replace flow dumped the entire prev/
-            // next diff prose into a chat bubble labeled "system". That
-            // bubble was written for the LLM to read as its first-turn
-            // brief; showing it verbatim to the user was pure noise.
-            // Now the studio hides the system bubble via hiddenFromUi
-            // and instead surfaces a topbar "View full replace diff"
-            // button that opens a full-screen structured diff popup.
-            //
-            // Contract we exercise here:
-            //   1. The chat pane contains NO system bubble.
-            //   2. The topbar button is visible when replaceContext is
-            //      attached (post-replace flow).
-            //   3. Clicking it opens a popup whose body carries the
-            //      structured diff — book names, per-entry cards, and
-            //      the verbatim entry content the seed used to dump.
-            const messagesRoot = studio.locator('[data-cea-editor-messages]');
-            const systemBubbles = messagesRoot.locator('.luker_lib_message_system');
-            await expect(systemBubbles).toHaveCount(0);
+            // --- Assertion B: hidden autoSend brief carries the full
+            // verbatim diff to the LLM without cluttering the user chat pane ---
+            await expect(studio.locator('.wb-msg-user')).toHaveCount(0);
 
-            const openDiffBtn = studio.locator('[data-cea-editor-action="open-replace-diff"]').first();
-            await expect(openDiffBtn).toBeVisible();
-            await openDiffBtn.click();
+            await expect.poll(() => {
+                const payload = mock.requests
+                    .filter((r) => String(r?.url || '').includes('chat/completions'))
+                    .map((r) => JSON.stringify(r?.body?.messages || []))
+                    .join('\n');
+                return {
+                    hasOldBook: payload.includes(CARD_A_BOOK),
+                    hasNewBook: payload.includes(CARD_B_BOOK),
+                    hasOldEntry: payload.includes('The Watchtower stands on the third promontory'),
+                    hasNewEntry: payload.includes('The Long River runs 900 leagues from the Cinderpines'),
+                };
+            }, { timeout: 30_000 }).toEqual({
+                hasOldBook: true,
+                hasNewBook: true,
+                hasOldEntry: true,
+                hasNewEntry: true,
+            });
+            await snap(page, slug, 'replace-diff-seed-verified');
 
-            const diffPopup = page.locator('dialog.popup[open]', {
-                hasText: /Replace diff — previous vs current|替换差异|替換差異/,
-            }).first();
-            await diffPopup.waitFor({ state: 'visible', timeout: 10_000 });
-            await snap(page, slug, 'replace-diff-popup-open');
-
-            const overviewText = (await diffPopup.locator('.cea_replace_diff_overview').textContent()) || '';
-            // Book rename banner (previous → current).
-            expect(overviewText).toContain(CARD_A_BOOK);
-            expect(overviewText).toContain(CARD_B_BOOK);
-            // Full verbatim content from BOTH sides is visible (the
-            // structured overview never truncates — same guarantee the
-            // old prose seed offered, now with UI affordances).
-            expect(overviewText).toContain('The Watchtower stands on the third promontory');
-            expect(overviewText).toContain('The Long River runs 900 leagues from the Cinderpines');
-            expect(overviewText).not.toContain('…');
-            await snap(page, slug, 'replace-diff-popup-body-verified');
-
-            // Close the diff popup — the studio should be uncovered
-            // and functional afterwards.
-            const closeDiffBtn = diffPopup.locator('.popup-button-ok, [data-result="1"]').first();
-            if (await closeDiffBtn.isVisible({ timeout: 500 }).catch(() => false)) {
-                await closeDiffBtn.click();
-            } else {
-                await page.keyboard.press('Escape');
-            }
-            await diffPopup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
-
-            // --- Assertion C: world-book preview shows FULL content --
-            // Switch to the preview pane (mobile-tabbed layout on
-            // narrower viewports; on wide viewports both are visible).
-            const previewTab = studio.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]').first();
-            if (await previewTab.isVisible({ timeout: 500 }).catch(() => false)) {
-                await previewTab.click();
-            }
-            // Open the first entry's <details> in the preview and
-            // confirm the full content is rendered — no 320-char cap.
-            const previewPane = studio.locator('[data-iter-preview-pane]').first();
-            await previewPane.waitFor({ state: 'visible', timeout: 5000 });
-            await snap(page, slug, 'preview-pane-open');
-            const firstDetails = previewPane.locator('.cea_editor_preview_card details').first();
-            await firstDetails.waitFor({ state: 'attached', timeout: 5000 });
-            await firstDetails.evaluate(el => { el.open = true; });
-            await snap(page, slug, 'preview-entry-details-expanded');
-            // The river-geography entry is 172 chars; still, the
-            // structural assertion is that no ellipsis follows the
-            // content. Guard against Bug 2 regression.
-            const detailsInner = await firstDetails.locator('div').first().textContent();
-            expect(detailsInner || '').not.toContain('…');
-
-            // Switch back to chat tab for the AI turn.
-            const chatTab = studio.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]').first();
-            if (await chatTab.isVisible({ timeout: 500 }).catch(() => false)) {
-                await chatTab.click();
-            }
-
-            // --- Assertion D: the review turn produces a reply --------
-            // The seed message triggers autoSend on open, so the first
-            // assistant turn should already be in-flight. Wait for it.
-            await page.waitForFunction(() => {
-                const root = document.querySelector('[data-cea-editor-messages]');
-                if (!root) return false;
-                // Find any assistant bubble whose text is non-trivially
-                // long. The system seed is a fixed body — a real reply
-                // has to add MORE content.
-                const bubbles = root.querySelectorAll('.luker_lib_message');
-                for (const b of bubbles) {
-                    const cls = b.className || '';
-                    if (cls.includes('luker_lib_message_system')) continue;
-                    if (cls.includes('luker_lib_message_user')) continue;
-                    const text = (b.textContent || '').trim();
-                    if (text.length > 80) return true;
-                }
-                return false;
-            }, null, { timeout: 180_000, polling: 1000 });
+            // --- Assertion D: the auto-sent review turn produces a reply ---
+            await expect.poll(async () => {
+                const liveCount = await studio.locator('.wb-reads.is-live').count();
+                if (liveCount > 0) return false;
+                const text = (await studio.locator('.wb-msg-ai').last().textContent().catch(() => '')) || '';
+                return text.trim().length > 80;
+            }, { timeout: 180_000, intervals: [500, 1000] }).toBe(true);
             await snap(page, slug, 'real-llm-review-turn-visible');
 
             // --- Assertion E: follow-up edit proposal + apply --------
-            // Ask the AI to migrate one specific entry. We pick a very
-            // safe migration ("add the storm-code entry into the new
-            // book") so any competent model produces an add_entry tool
-            // call.
             mock.scriptToolCall({
                 name: 'cea_add_lorebook_entry',
                 arguments: {
@@ -624,16 +538,14 @@ test.describe('#28 — post-replace world-book sweep', () => {
                 { expect: 'proposal', timeoutMs: 180_000 });
             await snap(page, slug, 'proposal-visible');
 
-            // Approve the proposal.
-            const approveBtn = studio.locator('[data-proposal-action="approve"], [data-proposal-action="approve-all-pending"]').first();
+            // Apply the staged change card.
+            const pendingBefore = await studio.locator('.wb-chg.is-pending').count();
+            const approveBtn = studio.locator('.wb-chg.is-pending .wb-chg-foot button.is-primary').last();
             await approveBtn.click();
-            // Wait for the applied badge or for the approve button to
-            // detach (both signal commit).
-            await approveBtn.waitFor({ state: 'detached', timeout: 30_000 }).catch(() => {});
+            await expect(studio.locator('.wb-chg.is-pending')).toHaveCount(Math.max(0, pendingBefore - 1), { timeout: 30_000 });
             await snap(page, slug, 'proposal-approved');
 
             // --- Assertion F: edit actually landed on disk -----------
-            // Poll the book file for the migrated entry.
             await page.waitForFunction(async ({ bookName }) => {
                 const ctx = window.Luker?.getContext?.();
                 if (!ctx?.loadWorldInfo) return false;
@@ -648,37 +560,10 @@ test.describe('#28 — post-replace world-book sweep', () => {
             }, { bookName: CARD_B_BOOK }, { timeout: 15_000 });
             await snap(page, slug, 'edit-landed-on-disk');
 
-            // --- Assertion G: close after an applied edit keeps the
-            // new book + binding ---------------------------------------
-            // The postReplaceRollback teardown is scoped to "closed
-            // without applying anything". Once any edit commits (here
-            // via the proposal card's Approve), closing the studio must
-            // NOT delete the materialized book or rebind the old one —
-            // otherwise the user's just-applied merge vanishes.
-            //
-            // Wait for the auto-continue round triggered by the commit
-            // outcome to settle before closing; onClosing blocks on an
-            // abort handshake while a round is in flight. The send
-            // button toggles between 'Send' and 'Stop' as state.isBusy
-            // flips, so a non-'Stop' label is the idle proxy.
-            await page.waitForFunction(() => {
-                const btn = document.querySelector('[data-cea-editor-action="send"]');
-                if (!btn) return false;
-                const label = (btn.textContent || '').trim();
-                return !/^(Stop|终止|終止)$/.test(label);
-            }, null, { timeout: 180_000, polling: 500 }).catch(() => { /* fall through; abort path still works */ });
-
-            const closeBtn = studio.locator('.popup-button-close, [data-popup-close]').first();
-            if (await closeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-                await closeBtn.click().catch(() => {});
-            } else {
-                await page.keyboard.press('Escape');
-            }
-            const closedFirst = await studio.waitFor({ state: 'detached', timeout: 8000 }).then(() => true).catch(() => false);
-            if (!closedFirst) {
-                await page.keyboard.press('Escape').catch(() => {});
-                await studio.waitFor({ state: 'detached', timeout: 30_000 });
-            }
+            // --- Assertion G: close after an applied edit keeps the new book ---
+            await expect(studio.locator('.wb-reads.is-live')).toHaveCount(0, { timeout: 30_000 });
+            await studio.locator('.wb-titlebar .is-close').first().click();
+            await expect(studio).toBeHidden({ timeout: 15_000 });
             // Give a (buggy) rollback a beat to land so the regression
             // fails visibly instead of racing the assertion.
             await page.waitForTimeout(1500);
@@ -742,10 +627,8 @@ test.describe('#28 — post-replace world-book sweep', () => {
             await mergeBtn.click();
             await popup.waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
 
-            const studio = page.locator('dialog.popup[open]', {
-                hasText: /Character Editor — AI iteration|角色编辑器 - AI 迭代|角色編輯器 - AI 迭代/,
-            }).first();
-            await studio.waitFor({ state: 'visible', timeout: 30_000 });
+            const studio = page.locator('.wbench .wb-win').first();
+            await expect(studio).toBeVisible({ timeout: 30_000 });
             // Pre-materialize completed.
             await page.waitForFunction(({ name }) => {
                 const ctx = window.Luker?.getContext?.();
@@ -755,38 +638,14 @@ test.describe('#28 — post-replace world-book sweep', () => {
             expect(existsSync(newBookPath)).toBe(true);
             await snap(page, slug, 'studio-opened-book-materialized');
 
-            // Close studio without applying anything. The seed's
-            // autoSend fires an in-flight LLM turn — we must let that
-            // settle before Escape, otherwise onClosing blocks the
-            // close with an abort handshake. The send button's text
-            // toggles between 'Send' and 'Stop' as state.isBusy flips;
-            // wait for it to return to a non-'Stop' label as a proxy
-            // for state.isBusy === false.
-            await page.waitForFunction(() => {
-                const btn = document.querySelector('[data-cea-editor-action="send"]');
-                if (!btn) return false;
-                const label = (btn.textContent || '').trim();
-                // 'Stop' (or its zh translations) means still busy.
-                return !/^(Stop|终止|終止)$/.test(label);
-            }, null, { timeout: 180_000, polling: 500 }).catch(() => { /* fall through; abort path still works */ });
+            // Let the autoSend seed turn finish before collapsing Workbench;
+            // collapsing without Apply runs `onCancelWithoutApply` rollback.
+            await expect(studio.locator('.wb-reads.is-live')).toHaveCount(0, { timeout: 60_000 }).catch(() => {});
+            await expect(studio.locator('.wb-msg-ai').first()).toBeVisible({ timeout: 60_000 }).catch(() => {});
             await snap(page, slug, 'studio-idle-ready-to-close');
 
-            // Try close via the popup's built-in close button first
-            // (dialog cancel keys can be delayed by the dialog polyfill).
-            const closeBtn = studio.locator('.popup-button-close, [data-popup-close]').first();
-            if (await closeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-                await closeBtn.click().catch(() => {});
-            } else {
-                await page.keyboard.press('Escape');
-            }
-            // The abort handshake path may still be pending on the
-            // first Escape press (if we squeezed the click in before
-            // isBusy cleared); allow a second try after a beat.
-            const detachedFirst = await studio.waitFor({ state: 'detached', timeout: 8000 }).then(() => true).catch(() => false);
-            if (!detachedFirst) {
-                await page.keyboard.press('Escape').catch(() => {});
-                await studio.waitFor({ state: 'detached', timeout: 30_000 });
-            }
+            await studio.locator('.wb-titlebar .is-close').first().click();
+            await expect(studio).toBeHidden({ timeout: 15_000 });
 
             // Rollback: new book file deleted, old book unchanged,
             // binding restored to card A book.

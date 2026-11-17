@@ -78,6 +78,7 @@ async function seedAllRepos(handle) {
     await getSettingsRepo().save(handle, { user_name: 'roundtrip', custom: 'A' });
     await getWorldInfoRepo().save(handle, 'w1', { entries: {} });
     await getNamedDocRepo().save(handle, 'themes', 't1', { accent: '#abc' });
+    await getNamedDocRepo().save(handle, 'globalStates', 'gs1', { active: true });
     await getPresetRepo().save(handle, 'openai', 'p1', { temperature: 0.5 });
     await getPresetRepo().save(handle, 'openai', 'A.luker-state.n', { prompts: [{ content: 'BACKUP_PRESET' }] });
     await getPresetRepo().setState(handle, 'openai', 'A', 'n', { notes: ['BACKUP_ORPHAN'] });
@@ -91,6 +92,7 @@ async function probeAllRepos(handle) {
         settings: await getSettingsRepo().get(handle),
         world: await getWorldInfoRepo().get(handle, 'w1'),
         theme: await getNamedDocRepo().get(handle, 'themes', 't1'),
+        globalState: await getNamedDocRepo().get(handle, 'globalStates', 'gs1'),
         preset: await getPresetRepo().get(handle, 'openai', 'p1'),
         delimiterPreset: await getPresetRepo().get(handle, 'openai', 'A.luker-state.n'),
         orphanPresetState: await getPresetRepo().getState(handle, 'openai', 'A', 'n'),

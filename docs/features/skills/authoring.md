@@ -8,7 +8,7 @@ This page covers the directory conventions, frontmatter fields, body structure, 
 
 You do not have to write everything by hand:
 
-- **Let AI draft it**: describe the result in [AI Iteration Studio](/features/orchestrator/iteration-studio#writing-skills-with-ai). It drafts `SKILL.md`, installs it, and attaches it to the right agents when you ask.
+- **Let AI draft it**: describe the result in [AI Iteration](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio). It drafts `SKILL.md`, installs it, and attaches it to the right agents when you ask.
 - **Write it yourself**: create it in the [Skill management panel](/features/skills/management) when you want full control over wording and structure.
 
 ## Directory layout

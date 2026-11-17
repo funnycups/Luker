@@ -16,7 +16,9 @@
  *   - `chats`     gates the chats repo PLUS group docs (group chats are
  *                 chats) PLUS stats (derived from chats).
  *   - `lorebooks` gates only the world-info repo.
- *   - `settings`  gates only the settings repo.
+ *   - `settings`  gates the settings repo PLUS the `globalStates` bucket
+ *                 in named-docs (matching `directories.states` under
+ *                 `selection.settings` in `getUserBackupTargets`).
  *
  * The other 6 categories (secrets, characters, assets, extensions,
  * globalExtensions, vectors) are pure fs-tree categories — they live

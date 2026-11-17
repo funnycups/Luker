@@ -33,9 +33,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -122,44 +121,18 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function enableMgViaCheckboxes(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        for (const id of ['luker_rpg_memory_enabled', 'luker_rpg_memory_auto_extraction_enabled']) {
-            const el = document.getElementById(id);
-            if (el && !el.checked) {
-                el.checked = true;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }
-    });
-}
-
-async function importBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-    await page.waitForTimeout(500);
-}
-
 test.describe('#59 — MG seeded corpus surfaces in real recall flow (real send)', () => {
     test.setTimeout(180_000);
 
     test('after import, sending a real user turn drives recall that surfaces the seeded nodes', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgViaCheckboxes(page);
+        await setMgSettings(page, { enabled: true, autoExtractionEnabled: true }, { closeAfter: true });
 
         // 1 turn so MG has a chat tail; then import the corpus.
         await sendMessageAndAwaitReply(page, 'The first watch begins. The lantern is steady.');
-        await importBindLatest(page, importPath);
+        await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
+        await page.waitForTimeout(500);
 
         // Visible candidates from the Layer-1 read API — these are what
         // the recall path picks from. The 10 imported nodes should all

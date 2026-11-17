@@ -5,7 +5,8 @@ import { s3Fixture, backendRow, createReadyWorldBook, selectReadyWorldBook } fro
 import { addWorldEntry } from '../_lib/ui-worldinfo.js';
 import { addS3Backend, waitForBackendSync, closeAllPopups, openLanSyncPanel, clickSyncNow, waitForSyncPopup, closeSyncPopup, syncPopup, chooseConflictVersion, applyConflictChoices, waitForStatusChecks } from '../_lib/sync.js';
 import { accountWindow, closeAccountWindow } from '../_lib/account-window.js';
-import { selectCharacterByName, closeAnyOpenTopSettingsDrawer, openTopDrawer, closeTopDrawer, openExtensionsDrawer, openInlineDrawer, closeExtensionsDrawer } from '../_lib/page.js';
+import { selectCharacterByName, closeAnyOpenTopSettingsDrawer, openTopDrawer, closeTopDrawer } from '../_lib/page.js';
+import { setOrchEnabled, setOrchMode, openOrchWorkspace, closeWorkbench } from '../_lib/ui-workbench.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { importCharacterFile } from '../_lib/ui-character.js';
 
@@ -302,30 +303,36 @@ test('real orchestration and Sync share desktop and narrow placement with long l
         await page.locator('#api_button_openai').click();
         await expect(page.locator('#sys-settings-button .online_status_text:visible')).not.toHaveText('No connection...');
         await closeTopDrawer(page, 'sys-settings-button');
-        await openExtensionsDrawer(page);
-        await openInlineDrawer(page, 'orchestrator_settings');
-        await page.locator('#luker_orch_enabled').check();
-        await page.locator('#luker_orch_execution_mode').selectOption('director');
-        await page.locator('#orchestrator_settings .luker-tabs-tab[data-luker-tab-key="general"]').click();
-        await page.locator('#luker_orch_llm_api_preset').selectOption('');
-        await page.locator('#luker_orch_llm_preset').selectOption('');
+        await setOrchEnabled(page, true);
+        await setOrchMode(page, 'director');
+        const olSettings = await openOrchWorkspace(page, 'settings');
+        await olSettings.locator('.ol-setup-section').first().locator('label.ol-form-row').filter({
+            hasText: /Connection profile|连接配置/i,
+        }).locator('select').first().selectOption('');
+        await olSettings.locator('.ol-setup-section').first().locator('label.ol-form-row').filter({
+            hasText: /Generation preset|生成预设/i,
+        }).locator('select').first().selectOption('');
+
+        const olSetup = await openOrchWorkspace(page, 'setup');
         const chooser = page.waitForEvent('filechooser');
-        await page.locator('#orchestrator_settings [data-luker-preset-action="import"][data-mode="director"]').click();
+        await olSetup.locator('.ol-setup-bar button').filter({ hasText: /^(Import|导入)$/i }).first().click();
         await (await chooser).setFiles({ name: 'lighthouse-director.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ mode: 'director', profile: { mode: 'director', name: 'Lighthouse watch', mainAgent: { systemPrompt: 'Guide Seraphina through the harbor watch. Use write_message for her reply and finalize when it is ready.', apiPresetName: '', promptPresetName: '', skills: { visible: [], deny: [] } }, subAgents: [], tools: {}, maxRounds: 4, skills: { visible: [], deny: [] } } })) });
-        const imported = page.locator('dialog.popup[open]').last();
-        await imported.locator('.popup-input').fill('Lighthouse watch');
-        await imported.locator('.popup-button-ok').click();
-        await expect(page.locator('#orchestrator_settings [data-luker-preset-select][data-mode="director"] option:checked')).toHaveText('Lighthouse watch');
-        await closeExtensionsDrawer(page);
+        const imported = olSetup.locator('.ol-dialog-backdrop .ol-dialog').last();
+        await expect(imported).toBeVisible({ timeout: 10_000 });
+        await imported.locator('input').first().fill('Lighthouse watch');
+        await imported.locator('button').last().click();
+        await expect(olSetup.locator('.ol-setup-bar select.ol-select option:checked')).toHaveText('Lighthouse watch');
+        await closeWorkbench(page);
         mock.scriptDirectorRun({ route: ({ role, turn }) => role === 'director-main' ? turn === 0 ? { text: '*She studies the green lanterns beyond the reef.*', tool: 'write_message', arguments: { text: final, mode: 'replace' } } : { tool: 'finalize', arguments: {} } : null });
         upstream.arm();
         await page.locator('#send_textarea').fill('*I steady the lantern against the rain.* "Has the lighthouse answered us?"');
         await page.locator('#send_but').click();
         await page.getByRole('button', { name: 'Save and continue', exact: true }).click();
         await reached(upstream.reached);
-        const run = page.locator('#luker-orch-run-panel');
+        const run = page.locator('.rpdock.rp-dock');
         await expect(run).toHaveAttribute('data-state', 'open');
-        await run.locator('[data-action="close"]').click();
+        const collapseBtn = run.locator('button[aria-label*="Collapse"], button[title*="Collapse"], button[aria-label*="收起"], button[title*="收起"]').first();
+        await collapseBtn.click();
         await openLanSyncPanel(page);
         storage = proxy.addFault({ match: { method: 'GET', keySuffix: '/head' }, hold: 'before-forward' });
         response = syncResponse(page, id);
@@ -334,7 +341,8 @@ test('real orchestration and Sync share desktop and narrow placement with long l
         await closePopupButtons(page);
         await closeAnyOpenTopSettingsDrawer(page);
         expect(abortRequests).toEqual([]);
-        await expect(page.locator('#luker-orch-run-panel-pill')).toBeVisible();
+        const runPill = page.locator('.rpdock.rp-dock-pill .rp-dock-pill-main');
+        await expect(runPill).toBeVisible();
         await expect(page.locator('#chat .mes_text').first()).not.toBeEmpty();
         for (const [name, viewport, reducedMotion] of [
             ['desktop', { width: 1440, height: 1000 }, 'no-preference'],
@@ -344,7 +352,7 @@ test('real orchestration and Sync share desktop and narrow placement with long l
             await page.emulateMedia({ reducedMotion });
             await pill(page).focus();
             await page.keyboard.press('Tab');
-            await expect(page.locator('#luker-orch-run-panel-pill')).toBeFocused();
+            await expect(runPill).toBeFocused();
             await page.keyboard.press('Shift+Tab');
             await expect(pill(page)).toBeFocused();
             await assertPlacement(page);
@@ -353,13 +361,13 @@ test('real orchestration and Sync share desktop and narrow placement with long l
             if (reducedMotion === 'reduce') expect(await pill(page).locator('.activity-pill-progress').evaluate(element => getComputedStyle(element, '::after').animationName)).toBe('none');
             await page.screenshot({ path: testInfo.outputPath(`sync-run-${name}.png`), fullPage: true });
         }
-        await page.locator('#luker-orch-run-panel-pill').click();
+        await runPill.click();
         await expect(run).toHaveAttribute('data-state', 'open');
-        await expect(page.locator('#luker-orch-run-panel-pill')).toBeHidden();
-        await run.locator('[data-action="close"]').click();
+        await expect(runPill).toBeHidden();
+        await collapseBtn.click();
         upstream.release();
         await expect(page.locator('#chat .last_mes .mes_text')).toContainText('The lighthouse has answered', { timeout: 60_000 });
-        await expect(page.locator('#luker-orch-run-panel-pill')).toBeHidden();
+        await expect(runPill).toBeHidden();
         await expect(pill(page)).toBeVisible();
         storage.release();
         expect((await result(response)).body.ok).toBe(true);

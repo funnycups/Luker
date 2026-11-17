@@ -1,11 +1,6 @@
 // tests/frontend/IterWorkspaceSplit.e2e.js
 import { test, expect } from '@playwright/test';
 
-// Each existing Iter*.e2e.js redefines `awaitMainUI` inline — there's no
-// shared helper module. Follow that pattern. Selector pattern below
-// mirrors tests/frontend/IterationStudioAdapterSmoke.e2e.js so a future
-// regression in either file is easy to spot.
-
 async function awaitMainUI(page) {
     await page.goto('/');
     const gate = page.locator('#userList .userSelect:last-child');
@@ -34,8 +29,7 @@ async function ensureInlineDrawerOpen(page, hostId) {
         const style = el.style.display;
         if (style === 'none') return true;
         if (style === 'block' || style === '') {
-            const computed = window.getComputedStyle(el);
-            return computed.display === 'none';
+            return window.getComputedStyle(el).display === 'none';
         }
         return false;
     }).catch(() => true);
@@ -44,340 +38,211 @@ async function ensureInlineDrawerOpen(page, hostId) {
     await content.waitFor({ state: 'visible', timeout: 5000 });
 }
 
-// Soft-skip when the test environment has no configured connection profile —
-// the iteration popup needs one to send a turn, and the smoke profile won't
-// always have one. The structural assertions (split mounted, preview rendered,
-// auto-apply checkbox present) run unconditionally.
-async function ensureConnectionProfile(page) {
-    const hasProfile = await page.evaluate(() => {
-        const ctx = window.Luker?.getContext?.();
-        const profiles = ctx?.extensionSettings?.connectionManager?.profiles || [];
-        return Array.isArray(profiles) && profiles.length > 0;
-    });
-    expect(hasProfile, 'PW_INCLUDE_INTEGRATION run requires a connection profile in the integration data dir').toBe(true);
+async function closeWorkbenchIfOpen(page) {
+    const win = page.locator('.wbench .wb-win').first();
+    if (await win.isVisible().catch(() => false)) {
+        const closeBtn = win.locator('.wb-titlebar .is-close').first();
+        if (await closeBtn.isVisible().catch(() => false)) {
+            await closeBtn.click();
+        } else {
+            await page.keyboard.press('Alt+w');
+        }
+        await expect(win).toBeHidden({ timeout: 10_000 });
+    }
 }
 
-test.describe('Iter-studio workspace split — CPA', () => {
-    test.setTimeout(90000);
-
-    test('CPA: workspace mounts with split layout + preview + auto-apply control', async ({ page }) => {
-        await awaitMainUI(page);
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'completion_preset_assistant_settings');
-
-        const openBtn = page.locator('#completion_preset_assistant_open');
-        await expect(openBtn).toBeVisible({ timeout: 10000 });
-        await openBtn.click();
-
-        const popup = page.locator('.cpa_it_popup.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 10000 });
-
-        // Structural assertions: split grid + chat pane + preview pane + resizer.
-        await expect(popup.locator('.luker-iter-workspace-grid')).toBeVisible();
-        await expect(popup.locator('.luker-iter-workspace-chat')).toBeVisible();
-        await expect(popup.locator('[data-iter-preview-pane]')).toBeVisible();
-        await expect(popup.locator('.luker-iter-workspace-resizer')).toHaveCount(1);
-
-        // Auto-apply control is mounted in the composer row, unchecked by default.
-        const autoApply = popup.locator('[data-cpa-it-action="toggle-auto-apply"]');
-        await expect(autoApply).toHaveCount(1);
-        await expect(autoApply).not.toBeChecked();
-
-        // Tab bar exists (display: none on desktop, but the elements are mounted).
-        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]')).toHaveCount(1);
-        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]')).toHaveCount(1);
-
-        // Preview pane has content — at minimum the Prompts heading (or the
-        // 'No preset loaded' fallback). The active locale may be en/zh-cn/zh-tw.
-        const previewText = await popup.locator('[data-iter-preview-pane]').textContent();
-        expect(previewText || '').toMatch(/Prompts|提示词|提示|No preset loaded|未加载|未載入/);
-
-        // Toggle auto-apply, confirm the checkbox tracks state.
-        await autoApply.check();
-        await expect(autoApply).toBeChecked();
-        await autoApply.uncheck();
-        await expect(autoApply).not.toBeChecked();
-
-        await page.keyboard.press('Escape');
+async function ensureAnyCharacterSelected(page) {
+    const hasChar = await page.evaluate(() => {
+        const ctx = window.Luker?.getContext?.();
+        return Boolean(ctx?.characters?.[ctx?.characterId]?.avatar);
     });
+    if (hasChar) return;
+    const drawer = page.locator('#rightNavDrawerIcon');
+    if (await drawer.evaluate(el => el.classList.contains('closedIcon')).catch(() => true)) {
+        await drawer.click();
+    }
+    const listVisible = await page.locator('#rm_print_characters_block:visible').count().catch(() => 0);
+    if (!listVisible) {
+        await page.locator('#rm_button_characters').click();
+    }
+    const firstCard = page.locator('#rm_print_characters_block .character_select').first();
+    await firstCard.waitFor({ state: 'visible', timeout: 10_000 });
+    await firstCard.click();
+    await page.waitForFunction(() => {
+        const ctx = window.Luker?.getContext?.();
+        return Boolean(ctx?.characters?.[ctx?.characterId]?.avatar);
+    }, { timeout: 10_000 });
+    await page.evaluate(() => document.querySelector('#rightNavHolder > .drawer-toggle')?.click());
+}
 
-    test('CPA: send a turn, preview reflects pending change (requires connection profile)', async ({ page }) => {
-        await awaitMainUI(page);
-        await ensureConnectionProfile(page);
-
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'completion_preset_assistant_settings');
-
-        const openBtn = page.locator('#completion_preset_assistant_open');
-        await openBtn.click();
-
-        const popup = page.locator('.cpa_it_popup.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 10000 });
-
-        await popup.locator('[data-cpa-it-input]').fill('Set temperature to 0.85');
-        await popup.locator('[data-cpa-it-action="send"]').click();
-
-        // Wait for either pending edits to surface OR the assistant to push a
-        // text-only reply. Either way the preview should refresh and show some
-        // signal — pending-change row, or at least the updated rendering.
-        await expect(popup.locator('.cpa_it_pending')).toBeVisible({ timeout: 60000 });
-        await expect(popup.locator('[data-iter-preview-pane] .pending-change')).toBeVisible({ timeout: 5000 });
-
-        await page.keyboard.press('Escape');
-    });
-});
-
-test.describe('Iter-studio workspace split — MG Schema', () => {
-    test.setTimeout(90000);
-
-    test('MG Schema: workspace mounts with split layout + preview + auto-apply control', async ({ page }) => {
-        await awaitMainUI(page);
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'memory_graph_settings');
-
-        const openBtn = page.locator('#luker_rpg_memory_open_schema_studio');
-        await expect(openBtn).toBeVisible({ timeout: 10000 });
-        await openBtn.click();
-
-        const popup = page.locator('.mg_schema_it_popup.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 10000 });
-
-        // Structural assertions: split grid + chat pane + preview pane + resizer.
-        await expect(popup.locator('.luker-iter-workspace-grid')).toBeVisible();
-        await expect(popup.locator('.luker-iter-workspace-chat')).toBeVisible();
-        await expect(popup.locator('[data-iter-preview-pane]')).toBeVisible();
-        await expect(popup.locator('.luker-iter-workspace-resizer')).toHaveCount(1);
-
-        // Auto-apply control is mounted in the composer row, unchecked by default.
-        const autoApply = popup.locator('[data-mg-schema-it-action="toggle-auto-apply"]');
-        await expect(autoApply).toHaveCount(1);
-        await expect(autoApply).not.toBeChecked();
-
-        // Tab bar exists (display: none on desktop, but the elements are mounted).
-        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]')).toHaveCount(1);
-        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]')).toHaveCount(1);
-
-        // Preview pane has content — at minimum the Schema heading (or the
-        // 'No schema loaded' fallback). The active locale may be en/zh-cn/zh-tw.
-        const previewText = await popup.locator('[data-iter-preview-pane]').textContent();
-        expect(previewText || '').toMatch(/Schema|分类|分類|No schema loaded|未加载|未載入/);
-
-        // Toggle auto-apply, confirm the checkbox tracks state.
-        await autoApply.check();
-        await expect(autoApply).toBeChecked();
-        await autoApply.uncheck();
-        await expect(autoApply).not.toBeChecked();
-
-        await page.keyboard.press('Escape');
-    });
-
-    test('MG Schema: send a turn, preview reflects pending change (requires connection profile)', async ({ page }) => {
-        await awaitMainUI(page);
-        await ensureConnectionProfile(page);
-
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'memory_graph_settings');
-
-        const openBtn = page.locator('#luker_rpg_memory_open_schema_studio');
-        await openBtn.click();
-
-        const popup = page.locator('.mg_schema_it_popup.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 10000 });
-
-        await popup.locator('[data-mg-schema-it-input]').fill('Add a new column called "mood" of type string to the character category');
-        await popup.locator('[data-mg-schema-it-action="send"]').click();
-
-        // Wait for pending edits to surface. The MG sandbox-diff emits a single
-        // coarse set('', newSchema) so the preview's per-category change
-        // detection runs against the JSON-equality fallback path.
-        await expect(popup.locator('.mg_schema_it_pending')).toBeVisible({ timeout: 60000 });
-        await expect(popup.locator('[data-iter-preview-pane] .pending-change')).toBeVisible({ timeout: 5000 });
-
-        await page.keyboard.press('Escape');
-    });
-});
-
-test.describe('Iter-studio workspace split — Orchestrator', () => {
-    test.setTimeout(90000);
-
-    test('Orch: workspace mounts with split layout + composer-row auto-apply (orch_it_toolbar removed)', async ({ page }) => {
-        await awaitMainUI(page);
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'orchestrator_settings');
-
-        // The orchestrator surfaces 4 mode-specific boards; whichever is
-        // visible owns the working "Open AI Iteration Studio" button. Use the
-        // first visible one to stay agnostic about the current execution mode.
-        const openBtn = page.locator('#orchestrator_settings [data-luker-action="ai-iterate-open"]:visible').first();
-        await expect(openBtn).toBeVisible({ timeout: 10000 });
-        await openBtn.click();
-
-        const popup = page.locator('.orch_it_popup.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 10000 });
-
-        // Structural assertions: split grid + chat pane + preview pane + resizer.
-        await expect(popup.locator('.luker-iter-workspace-grid')).toBeVisible();
-        await expect(popup.locator('.luker-iter-workspace-chat')).toBeVisible();
-        await expect(popup.locator('[data-iter-preview-pane]')).toBeVisible();
-        await expect(popup.locator('.luker-iter-workspace-resizer')).toHaveCount(1);
-
-        // The legacy `orch_it_toolbar` block (which housed the auto-apply
-        // checkbox in its own row) is gone — replaced by the composer-row
-        // auto-apply label.
-        await expect(popup.locator('.orch_it_toolbar')).toHaveCount(0);
-
-        // Auto-apply control is mounted in the composer row, unchecked by default.
-        const autoApply = popup.locator('.orch_it_composer [data-orch-it-action="toggle-auto-apply"]');
-        await expect(autoApply).toHaveCount(1);
-        await expect(autoApply).not.toBeChecked();
-
-        // Tab bar exists (display: none on desktop, but the elements are mounted).
-        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]')).toHaveCount(1);
-        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]')).toHaveCount(1);
-
-        // Preview pane has content — at minimum a Pipeline / Loop / Agents
-        // section title (depending on the active execution mode) or the
-        // 'No profile loaded' fallback. The active locale may be en/zh-cn/zh-tw.
-        const previewText = await popup.locator('[data-iter-preview-pane]').textContent();
-        expect(previewText || '').toMatch(/Pipeline|Loop|Agents|Main|流水线|流水線|循环|循環|代理|主代理|No profile loaded|未加载|未載入/);
-
-        // Toggle auto-apply, confirm the checkbox tracks state.
-        await autoApply.check();
-        await expect(autoApply).toBeChecked();
-        await autoApply.uncheck();
-        await expect(autoApply).not.toBeChecked();
-
-        await page.keyboard.press('Escape');
-    });
-
-    test('Orch: send a turn, pending block surfaces (requires connection profile)', async ({ page }) => {
-        await awaitMainUI(page);
-        await ensureConnectionProfile(page);
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'orchestrator_settings');
-
-        const openBtn = page.locator('#orchestrator_settings [data-luker-action="ai-iterate-open"]:visible').first();
-        await openBtn.click();
-
-        const popup = page.locator('.orch_it_popup.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 10000 });
-
-        await popup.locator('[data-orch-it-input]').fill('Add a new stage named "review" to the pipeline');
-        await popup.locator('[data-orch-it-action="send"]').click();
-
-        await expect(popup.locator('.orch_it_pending')).toBeVisible({ timeout: 60000 });
-
-        await page.keyboard.press('Escape');
-    });
-});
-
-test.describe('Iter-studio workspace split — CEA Character Iteration', () => {
-    test.setTimeout(90000);
-
-    // The CEA character iteration studio has no direct "open studio"
-    // button — it opens from the "Merge in editor" action that CEA
-    // registers with the core post-replace registry. This test invokes
-    // that registered action directly with the active character.
-    // Fails fast when no character is loaded — PW_INCLUDE_INTEGRATION runs need seed data.
-    async function ensureActiveCharacter(page) {
-        const avatar = await page.evaluate(() => {
-            const ctx = window.Luker?.getContext?.();
-            return String(ctx?.characters?.[ctx?.characterId]?.avatar || '').trim();
-        });
-        expect(avatar, 'PW_INCLUDE_INTEGRATION run requires an active character in the integration data dir').toBeTruthy();
-        return avatar;
+async function openWorkbenchIterate(page, targetDotClass) {
+    const pill = page.locator('.wbench > button.wb-pill').first();
+    const win = page.locator('.wbench .wb-win').first();
+    if (!(await win.isVisible().catch(() => false))) {
+        await expect(pill).toBeVisible({ timeout: 15_000 });
+        await pill.click();
+        await expect(win).toBeVisible({ timeout: 15_000 });
     }
 
-    test('CEA Char: workspace mounts with split layout + preview + auto-apply control', async ({ page }) => {
+    const aiTab = win.locator('.wb-rail button.wb-tab').filter({ hasText: /AI iteration|AI 迭代/i }).first();
+    await expect(aiTab).toBeVisible({ timeout: 10_000 });
+    await aiTab.click();
+
+    const TARGET_RX = {
+        preset: /^(Preset|预设|預設)$/i,
+        'wb-t-preset': /^(Preset|预设|預設)$/i,
+        memory: /^(Memory graph|记忆图|記憶圖)$/i,
+        'wb-t-memory': /^(Memory graph|记忆图|記憶圖)$/i,
+        orch: /^(Orchestration|编排|編排)$/i,
+        'wb-t-orch': /^(Orchestration|编排|編排)$/i,
+        card: /^(Character card|角色卡)$/i,
+        'wb-t-card': /^(Character card|角色卡)$/i,
+    };
+    if (targetDotClass) {
+        const targetBtn = win.locator('.wb-ws-seg button.lw-seg-btn').filter({
+            hasText: TARGET_RX[targetDotClass],
+        }).first();
+        await expect(targetBtn).toBeVisible({ timeout: 10_000 });
+        await targetBtn.click();
+        await expect(targetBtn).toHaveAttribute('aria-pressed', 'true', { timeout: 5000 });
+    }
+    return win;
+}
+
+async function ensureConnectionProfileConfiguredInSettings(page) {
+    const win = await openWorkbenchIterate(page);
+    const settingsTab = win.locator('.wb-rail button.wb-tab').filter({ hasText: /^Settings$|^设置$/i }).first();
+    await expect(settingsTab).toBeVisible({ timeout: 10_000 });
+    await settingsTab.click();
+
+    const apiSelect = win.locator('table.wb-api tbody tr').first().locator('select').first();
+    await expect(apiSelect).toBeVisible({ timeout: 10_000 });
+    const optCount = await apiSelect.locator('option').count();
+    expect(optCount, 'PW_INCLUDE_INTEGRATION run requires at least one connection profile in the integration data dir').toBeGreaterThan(1);
+}
+
+test.describe('Unified Workbench split workspace — CPA (preset target)', () => {
+    test.setTimeout(90000);
+
+    test('CPA: bridge button opens Workbench preset workspace with split layout + composer + suggestions', async ({ page }) => {
         await awaitMainUI(page);
-        const avatar = await ensureActiveCharacter(page);
+        await ensureExtensionsDrawerOpen(page);
+        await ensureInlineDrawerOpen(page, 'completion_preset_assistant_settings');
 
-        // Drive the same action the replace popup would run. The studio
-        // mounts asynchronously, so this is fire-and-forget — awaiting the
-        // call would deadlock because the page step never returns control
-        // to Playwright while the popup is open.
-        await page.evaluate((avatarId) => {
-            const ctx = window.Luker?.getContext?.();
-            const action = ctx?.listPostReplaceActions?.().find(a => a?.id === 'character-editor-assistant-merge');
-            if (!action) throw new Error('CEA merge post-replace action is not registered');
-            const character = ctx?.characters?.find(c => String(c?.avatar) === avatarId) || { avatar: avatarId };
-            void action.run({ character, previousCharacter: null, previousLorebookSnapshot: null });
-        }, avatar);
+        const openBtn = page.locator('#completion_preset_assistant_open');
+        await expect(openBtn).toBeVisible({ timeout: 10000 });
+        await openBtn.click();
 
-        // Unified editor popup — `.cea_editor_studio.luker-iter-workspace`.
-        // The older `.cea_charit_popup` class never existed for this surface.
-        const popup = page.locator('.cea_editor_studio.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 15000 });
+        const win = page.locator('.wbench .wb-win').first();
+        await expect(win).toBeVisible({ timeout: 10000 });
 
-        // Structural assertions: split grid + chat pane + preview pane + resizer.
-        await expect(popup.locator('.luker-iter-workspace-grid')).toBeVisible();
-        await expect(popup.locator('.luker-iter-workspace-chat')).toBeVisible();
-        await expect(popup.locator('[data-iter-preview-pane]')).toBeVisible();
-        await expect(popup.locator('.luker-iter-workspace-resizer')).toHaveCount(1);
+        await expect(win.locator('.wb-page.is-split')).toBeVisible();
+        await expect(win.locator('aside.wb-sess')).toBeVisible();
+        await expect(win.locator('section.wb-chat')).toBeVisible();
+        await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]').filter({ hasText: /^(Preset|预设|預設)$/i })).toBeVisible();
+        await expect(win.locator('.wb-scope-seg')).toBeVisible();
 
-        // Auto-apply control is mounted in the composer row, unchecked by default.
-        const autoApply = popup.locator('[data-cea-editor-action="toggle-auto-apply"]');
-        await expect(autoApply).toHaveCount(1);
-        await expect(autoApply).not.toBeChecked();
+        const chatText = await win.locator('.wb-chat-body').textContent();
+        expect(chatText || '').toMatch(/Preset|预设|Edit|修改|No edit target|Open a preset/i);
 
-        // Tab bar exists (display: none on desktop, but the elements are mounted).
-        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]')).toHaveCount(1);
-        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]')).toHaveCount(1);
-
-        // Preview pane has content — at minimum the Character fields heading
-        // (or the 'No character loaded' fallback). Active locale may be en/zh-cn/zh-tw.
-        const previewText = await popup.locator('[data-iter-preview-pane]').textContent();
-        expect(previewText || '').toMatch(/Character fields|角色字段|角色欄位|No character loaded|未加载|未載入/);
-
-        // Toggle auto-apply, confirm the checkbox tracks state.
-        await autoApply.check();
-        await expect(autoApply).toBeChecked();
-        await autoApply.uncheck();
-        await expect(autoApply).not.toBeChecked();
-
-        await page.keyboard.press('Escape');
+        await closeWorkbenchIfOpen(page);
     });
 
-    test('CEA Char: send a turn, preview reflects pending change (requires connection profile)', async ({ page }) => {
+    test('CPA: send a turn in preset target surfaces assistant reply or pending change list', async ({ page }) => {
         await awaitMainUI(page);
-        await ensureConnectionProfile(page);
-        const avatar = await ensureActiveCharacter(page);
+        await ensureConnectionProfileConfiguredInSettings(page);
 
-        // Drive the same action the replace popup would run. The studio
-        // mounts asynchronously, so this is fire-and-forget — awaiting the
-        // call would deadlock because the page step never returns control
-        // to Playwright while the popup is open.
-        await page.evaluate((avatarId) => {
-            const ctx = window.Luker?.getContext?.();
-            const action = ctx?.listPostReplaceActions?.().find(a => a?.id === 'character-editor-assistant-merge');
-            if (!action) throw new Error('CEA merge post-replace action is not registered');
-            const character = ctx?.characters?.find(c => String(c?.avatar) === avatarId) || { avatar: avatarId };
-            void action.run({ character, previousCharacter: null, previousLorebookSnapshot: null });
-        }, avatar);
+        const win = await openWorkbenchIterate(page, 'wb-t-preset');
+        const input = win.locator('.wb-composer textarea.wb-input').first();
+        await expect(input).toBeVisible({ timeout: 10000 });
+        await input.fill('Set temperature to 0.85');
+        await win.locator('.wb-composer button.wb-send').first().click();
 
-        const popup = page.locator('.cea_editor_studio.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 15000 });
-
-        await popup.locator('[data-cea-editor-input]').fill('Add to the character description that she has bright green eyes.');
-        await popup.locator('[data-cea-editor-action="send"]').click();
-
-        // Wait for pending edits to surface — CEA editor emits fine-grained
-        // `card.<field>` edits, so the preview's per-field change detection
-        // runs against applyEdits directly (no empty-path fallback needed).
-        // The pending banner uses the `hidden` attribute (not display:none),
-        // so we wait on `:not([hidden])` rather than visibility.
-        await expect(popup.locator('.cea_editor_pending:not([hidden])')).toBeVisible({ timeout: 60000 });
-        await expect(popup.locator('[data-iter-preview-pane] .pending-change')).toBeVisible({ timeout: 5000 });
-
-        await page.keyboard.press('Escape');
+        await expect(win.locator('.wb-chg.is-pending, .wb-msg-ai').first()).toBeVisible({ timeout: 60000 });
+        await closeWorkbenchIfOpen(page);
     });
 });
 
-test.describe('Iter-studio workspace split — CEA Editor', () => {
+test.describe('Unified Workbench split workspace — MG Schema (memory target)', () => {
     test.setTimeout(90000);
 
-    test('CEA Editor: workspace mounts with split layout + world book viewer + composer-row auto-apply', async ({ page }) => {
+    test('MG Schema: Workbench memory target mounts split layout + scope selector + composer', async ({ page }) => {
         await awaitMainUI(page);
+        const win = await openWorkbenchIterate(page, 'wb-t-memory');
+
+        await expect(win.locator('.wb-page.is-split')).toBeVisible();
+        await expect(win.locator('aside.wb-sess')).toBeVisible();
+        await expect(win.locator('section.wb-chat')).toBeVisible();
+        await expect(win.locator('.wb-scope-seg')).toBeVisible();
+
+        const chatText = await win.locator('.wb-chat-body').textContent();
+        expect(chatText || '').toMatch(/Memory graph|记忆图|記憶圖/i);
+
+        await closeWorkbenchIfOpen(page);
+    });
+
+    test('MG Schema: send a turn in memory target surfaces assistant reply or pending change list', async ({ page }) => {
+        await awaitMainUI(page);
+        await ensureConnectionProfileConfiguredInSettings(page);
+
+        const win = await openWorkbenchIterate(page, 'wb-t-memory');
+        const input = win.locator('.wb-composer textarea.wb-input').first();
+        await expect(input).toBeVisible({ timeout: 10000 });
+        await input.fill('Add a new column called "mood" of type string to the character category');
+        await win.locator('.wb-composer button.wb-send').first().click();
+
+        await expect(win.locator('.wb-chg.is-pending, .wb-msg-ai').first()).toBeVisible({ timeout: 60000 });
+        await closeWorkbenchIfOpen(page);
+    });
+});
+
+test.describe('Unified Workbench split workspace — Orchestrator (orch target)', () => {
+    test.setTimeout(90000);
+
+    test('Orch: Orchestra Lens AI button opens Workbench orch target with split layout', async ({ page }) => {
+        await awaitMainUI(page);
+        const win = await openWorkbenchIterate(page);
+
+        const orchTab = win.locator('.wb-rail button.wb-tab').filter({ hasText: /Orchestration|编排/i }).first();
+        await expect(orchTab).toBeVisible({ timeout: 10000 });
+        await orchTab.click();
+
+        const lens = win.locator('.olens.ol-lens').first();
+        await expect(lens).toBeVisible({ timeout: 10000 });
+        const setupBtn = lens.locator('.ol-viewswitch .lw-seg-btn').filter({ hasText: /^(Setup|准备阶段|準備階段|配置)$/i }).first();
+        await setupBtn.click();
+
+        const openAiBtn = lens.locator('.ol-setup-bar button').filter({ hasText: /Open AI Iteration Studio|打开 AI 迭代/i }).first();
+        await expect(openAiBtn).toBeVisible({ timeout: 10000 });
+        await openAiBtn.click();
+
+        await expect(win.locator('.wb-page.is-split')).toBeVisible();
+        await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]').filter({ hasText: /^(Orchestration|编排|編排)$/i })).toBeVisible({ timeout: 10000 });
+
+        await closeWorkbenchIfOpen(page);
+    });
+
+    test('Orch: send a turn in orch target surfaces assistant reply or pending change list', async ({ page }) => {
+        await awaitMainUI(page);
+        await ensureConnectionProfileConfiguredInSettings(page);
+
+        const win = await openWorkbenchIterate(page, 'wb-t-orch');
+        const input = win.locator('.wb-composer textarea.wb-input').first();
+        await expect(input).toBeVisible({ timeout: 10000 });
+        await input.fill('Add a new stage named "review" to the pipeline');
+        await win.locator('.wb-composer button.wb-send').first().click();
+
+        await expect(win.locator('.wb-chg.is-pending, .wb-msg-ai').first()).toBeVisible({ timeout: 60000 });
+        await closeWorkbenchIfOpen(page);
+    });
+});
+
+test.describe('Unified Workbench split workspace — CEA Card (card target)', () => {
+    test.setTimeout(90000);
+
+    test('CEA Card: bridge button opens Workbench card target and handles character state', async ({ page }) => {
+        await awaitMainUI(page);
+        await ensureAnyCharacterSelected(page);
         await ensureExtensionsDrawerOpen(page);
         await ensureInlineDrawerOpen(page, 'character_editor_assistant_settings');
 
@@ -385,70 +250,19 @@ test.describe('Iter-studio workspace split — CEA Editor', () => {
         await expect(openBtn).toBeVisible({ timeout: 10000 });
         await openBtn.click();
 
-        const popup = page.locator('.cea_sync_popup.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 15000 });
+        const win = page.locator('.wbench .wb-win').first();
+        await expect(win).toBeVisible({ timeout: 10000 });
+        await expect(win.locator('.wb-page.is-split')).toBeVisible();
+        await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]').filter({ hasText: /^(Character card|角色卡)$/i })).toBeVisible({ timeout: 10000 });
+        await expect(win.locator('.wb-composer textarea.wb-input')).toBeVisible();
+        await expect(win.locator('.wb-composer button.wb-send')).toBeVisible();
 
-        // Structural assertions: split grid + chat pane + preview pane + resizer.
-        await expect(popup.locator('.luker-iter-workspace-grid')).toBeVisible();
-        await expect(popup.locator('.luker-iter-workspace-chat')).toBeVisible();
-        await expect(popup.locator('[data-iter-preview-pane]')).toBeVisible();
-        await expect(popup.locator('.luker-iter-workspace-resizer')).toHaveCount(1);
-
-        // Auto-apply control is mounted in the composer row, unchecked by default.
-        // The CEA editor uses its own naming convention (`-auto-approve` instead
-        // of `-action="toggle-auto-apply"`) because the underlying flow approves
-        // a *batch* of operations, not edits.
-        const autoApply = popup.locator('[data-cea-editor-auto-approve]');
-        await expect(autoApply).toHaveCount(1);
-
-        // Tab bar exists (display: none on desktop, but the elements are mounted).
-        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]')).toHaveCount(1);
-        await expect(popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]')).toHaveCount(1);
-
-        // Preview pane content — either the World book section header (if the
-        // active character has a bound lorebook) or the unbound fallback.
-        // Active locale may be en/zh-cn/zh-tw.
-        const previewText = await popup.locator('[data-iter-preview-pane]').textContent();
-        expect(previewText || '').toMatch(/World book|世界书|世界書|No world book|未绑定|未綁定/);
-
-        // Toggle auto-apply, confirm the checkbox tracks state.
-        await autoApply.check();
-        await expect(autoApply).toBeChecked();
-        await autoApply.uncheck();
-        await expect(autoApply).not.toBeChecked();
-
-        await page.keyboard.press('Escape');
-    });
-
-    test('CEA Editor: send a turn, pending block surfaces (requires connection profile)', async ({ page }) => {
-        await awaitMainUI(page);
-        await ensureConnectionProfile(page);
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'character_editor_assistant_settings');
-
-        const openBtn = page.locator('#cea_open_editor_popup');
-        await openBtn.click();
-
-        const popup = page.locator('.cea_sync_popup.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 15000 });
-
-        await popup.locator('[data-cea-editor-input]').fill('Add a brief lorebook entry about a forest.');
-        await popup.locator('[data-cea-editor-send]').click();
-
-        // The pending block appears when the LLM responds with operations
-        // ready for approval. Use a wide timeout because the editor calls
-        // tools sequentially per round.
-        await expect(popup.locator('[data-cea-editor-pending]')).not.toBeEmpty({ timeout: 60000 });
-
-        await page.keyboard.press('Escape');
+        await closeWorkbenchIfOpen(page);
     });
 });
 
-test.describe('Iter-studio workspace — mobile tab layout', () => {
-    // Pure layout test — uses CPA because it always mounts the workspace
-    // shell and the only dependency is opening the popup. No LLM, no
-    // connection profile, no character — runs on any env with Playwright.
-    test('CPA at 360px viewport: tab bar visible, Chat default, switch to Preview works', async ({ page }) => {
+test.describe('Unified Workbench — mobile compact layout', () => {
+    test('at 360px viewport: .is-compact applies, session drawer toggles over split chat', async ({ page }) => {
         await page.setViewportSize({ width: 360, height: 740 });
         await awaitMainUI(page);
 
@@ -459,47 +273,27 @@ test.describe('Iter-studio workspace — mobile tab layout', () => {
         await expect(openBtn).toBeVisible({ timeout: 10000 });
         await openBtn.click();
 
-        const popup = page.locator('.cpa_it_popup.luker-iter-workspace').first();
-        await expect(popup).toBeVisible({ timeout: 10000 });
+        const root = page.locator('.wbench').first();
+        await expect(root).toHaveClass(/\bis-compact\b/, { timeout: 10000 });
 
-        // Tab bar surfaces only on viewports < 900px.
-        const tabBar = popup.locator('.luker-iter-workspace-tabs');
-        await expect(tabBar).toBeVisible();
+        const win = root.locator('.wb-win').first();
+        await expect(win).toBeVisible();
 
-        // Initial state: data-iter-active-tab="chat", chat tab marked active.
-        await expect(popup).toHaveAttribute('data-iter-active-tab', 'chat');
-        const chatTab = popup.locator('[data-iter-action="switch-tab"][data-iter-tab="chat"]');
-        const previewTab = popup.locator('[data-iter-action="switch-tab"][data-iter-tab="preview"]');
-        await expect(chatTab).toHaveClass(/active/);
-        await expect(previewTab).not.toHaveClass(/active/);
+        // Session list drawer is collapsed on mobile by default; toggle button opens it.
+        const sessDrawer = win.locator('aside.wb-sess');
+        await expect(sessDrawer).toBeHidden();
 
-        await expect(popup.locator('[data-iter-pane="chat"]')).toBeVisible();
-        await expect(popup.locator('[data-iter-pane="preview"]')).toBeHidden();
+        const sessToggle = win.locator('.wb-chat-head button.wb-src-toggle').first();
+        await expect(sessToggle).toBeVisible();
+        await sessToggle.click();
+        await expect(sessDrawer).toHaveClass(/\bis-open\b/);
+        await expect(sessDrawer).toBeVisible();
 
-        // Resizer is desktop-only — hidden on mobile via @media (max-width: 900px).
-        await expect(popup.locator('.luker-iter-workspace-resizer')).toBeHidden();
+        // Close session drawer overlay and verify main chat body + composer stay usable.
+        await sessDrawer.locator('.wb-sess-head button[aria-label="Off"], .wb-sess-head button[title="Off"], .wb-sess-head button').last().click();
+        await expect(sessDrawer).toBeHidden();
+        await expect(win.locator('.wb-chat-body')).toBeVisible();
 
-        // Touch target for the auto-apply label must be at least 44x44 px
-        // (the CSS in section 24 enforces min-height: 44px on the label).
-        const autoApply = popup.locator('[data-cpa-it-action="toggle-auto-apply"]');
-        await expect(autoApply).toBeVisible();
-        const autoApplyLabel = popup.locator('.cpa_it_composer_auto_apply');
-        const labelBox = await autoApplyLabel.boundingBox();
-        expect(labelBox).not.toBeNull();
-        expect(labelBox.height).toBeGreaterThanOrEqual(44);
-
-        // Switch to Preview: dataset attr updates, classes flip, panes swap.
-        await previewTab.click();
-        await expect(popup).toHaveAttribute('data-iter-active-tab', 'preview');
-        await expect(previewTab).toHaveClass(/active/);
-        await expect(chatTab).not.toHaveClass(/active/);
-        await expect(popup.locator('[data-iter-pane="preview"]')).toBeVisible();
-        await expect(popup.locator('[data-iter-pane="chat"]')).toBeHidden();
-
-        // Switch back.
-        await chatTab.click();
-        await expect(popup.locator('[data-iter-pane="chat"]')).toBeVisible();
-
-        await page.keyboard.press('Escape');
+        await closeWorkbenchIfOpen(page);
     });
 });

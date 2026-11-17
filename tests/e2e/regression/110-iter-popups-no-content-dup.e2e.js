@@ -14,67 +14,27 @@ import { test, expect } from '@playwright/test';
 import { startServer, tearDownServer } from '../_lib/server.js';
 import { startMockLLM } from '../_lib/mockLLM.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded } from '../_lib/fixtures.js';
-import { awaitMainUI, openExtensionsDrawer, openInlineDrawer } from '../_lib/page.js';
+import { awaitMainUI } from '../_lib/page.js';
+import { openIterStudio, sendIterPrompt, closeIterStudio } from '../_lib/ui-iter-studio.js';
+import { setOrchMode, setOrchEnabled } from '../_lib/ui-workbench.js';
 
 let server, mock;
 
-// Local inline helpers — iter-studio helpers in _lib/ are stale (see #109).
-
 async function setOrchModeToDirector(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'orchestrator_settings').catch(() => {});
-    const modeSelect = page.locator('#luker_orch_execution_mode');
-    await modeSelect.waitFor({ state: 'visible', timeout: 10_000 });
-    if ((await modeSelect.inputValue()) !== 'director') {
-        await modeSelect.selectOption('director');
-        await modeSelect.evaluate(el => {
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            if (window.jQuery) window.jQuery(el).trigger('change');
-        });
-        await page.waitForFunction(() => {
-            const board = document.querySelector('#luker_orch_director_board');
-            return board && board.offsetParent !== null;
-        }, { timeout: 5000 });
-    }
-    // Flip the Enabled checkbox via the real settings panel — no
-    // internal-state mutation. The drawer is already open (we just
-    // toggled execution mode above), so the checkbox is visible.
-    // bootstrapCustomBackend already cleared requestApi/LlmPresetName.
-    const enabled = page.locator('#luker_orch_enabled');
-    await enabled.waitFor({ state: 'visible', timeout: 5000 });
-    if (!(await enabled.isChecked())) {
-        await enabled.check();
-    }
+    await setOrchMode(page, 'director');
+    await setOrchEnabled(page, true);
 }
 
 async function openOrchIterStudio(page) {
-    const openBtn = page.locator('#luker_orch_director_board [data-luker-action="ai-iterate-open"]:visible').first();
-    await openBtn.waitFor({ state: 'visible', timeout: 15_000 });
-    await openBtn.click();
-    const sendBtn = page.locator('[data-orch-it-action="send"]').last();
-    await sendBtn.waitFor({ state: 'visible', timeout: 15_000 });
+    await openIterStudio(page, 'orch', { scope: 'global' });
 }
 
 async function sendOrchIterPromptAndAwaitProposal(page, text) {
-    const popup = page.locator('.popup:visible').last();
-    const composer = popup.locator('textarea[data-orch-it-input]').first();
-    await composer.waitFor({ state: 'visible', timeout: 10_000 });
-    await composer.fill(text);
-    const sendBtn = popup.locator('button[data-orch-it-action="send"]').first();
-    await sendBtn.click();
-    const approveBtn = popup.locator('[data-proposal-action="approve"]').first();
-    await approveBtn.waitFor({ state: 'visible', timeout: 60_000 });
+    await sendIterPrompt(page, 'orch', text);
 }
 
 async function closeIterStudioPopup(page) {
-    const popup = page.locator('.popup:visible:has(.orch_it_popup)').last();
-    const close = popup.locator('.popup-button-close').first();
-    if (await close.isVisible({ timeout: 500 }).catch(() => false)) {
-        await close.click();
-    } else {
-        await page.keyboard.press('Escape');
-    }
-    await popup.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    await closeIterStudio(page);
 }
 
 test.beforeAll(async () => {
@@ -108,56 +68,45 @@ test.describe('#110 — re-opening iter-studio does not duplicate session-histor
         await sendOrchIterPromptAndAwaitProposal(page,
             'Update the director main agent to the cartographer voice.');
 
-        // Open the history details so the items render.
-        const popup1 = page.locator('.popup:visible').last();
-        const history1 = popup1.locator('[data-orch-it-history]').first();
-        if (!(await history1.evaluate(el => el.open).catch(() => false))) {
-            await history1.locator('summary').first().click().catch(() => {});
-        }
-
+        const win1 = page.locator('.wbench .wb-win').first();
         await expect.poll(async () => {
-            return await popup1.locator('.orch_it_history_item').count();
+            return await win1.locator('aside.wb-sess .wb-sess-item').count();
         }, {
-            message: 'first session should land in history after the send',
+            message: 'first session should land in Workbench sidebar after the send',
             timeout: 15_000,
         }).toBeGreaterThanOrEqual(1);
 
-        const firstOpenCount = await popup1.locator('.orch_it_history_item').count();
+        const firstOpenCount = await win1.locator('aside.wb-sess .wb-sess-item').count();
 
         await closeIterStudioPopup(page);
 
-        // Round 2: re-open the SAME studio.
+        // Round 2: re-open Workbench AI Iteration (`orch`).
         await openOrchIterStudio(page);
 
-        const popup2 = page.locator('.popup:visible').last();
-        const history2 = popup2.locator('[data-orch-it-history]').first();
-        if (!(await history2.evaluate(el => el.open).catch(() => false))) {
-            await history2.locator('summary').first().click().catch(() => {});
-        }
-
+        const win2 = page.locator('.wbench .wb-win').first();
         await expect.poll(async () => {
-            return await popup2.locator('.orch_it_history_item').count();
+            return await win2.locator('aside.wb-sess .wb-sess-item').count();
         }, {
             message: 'second open should rehydrate the same history',
             timeout: 10_000,
         }).toBeGreaterThanOrEqual(firstOpenCount);
 
-        const secondOpenCount = popup2.locator('.orch_it_history_item');
+        const secondOpenItems = win2.locator('aside.wb-sess .wb-sess-item');
 
-        await expect(secondOpenCount,
-            `re-opening the iter-studio must not duplicate history items; first=${firstOpenCount} second=${secondOpenCount}`,
+        await expect(secondOpenItems,
+            `re-opening Workbench must not duplicate session items; first=${firstOpenCount}`,
         ).toHaveCount(firstOpenCount);
 
-        const idCounts = await popup2.locator('.orch_it_history_item').evaluateAll((items) => {
+        const titleCounts = await secondOpenItems.evaluateAll((items) => {
             const counts = new Map();
             for (const it of items) {
-                const id = it.getAttribute('data-orch-it-id') || '';
-                counts.set(id, (counts.get(id) || 0) + 1);
+                const label = (it.querySelector('.wb-sess-t')?.textContent || it.textContent || '').trim();
+                counts.set(label, (counts.get(label) || 0) + 1);
             }
             return Array.from(counts.entries());
         });
-        for (const [id, count] of idCounts) {
-            expect(count, `history item id="${id}" rendered ${count} times — must be exactly 1`).toBe(1);
+        for (const [label, count] of titleCounts) {
+            expect(count, `session item "${label}" rendered ${count} times — must be exactly 1`).toBe(1);
         }
     });
 });

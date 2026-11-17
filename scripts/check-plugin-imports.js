@@ -21,11 +21,16 @@
  *   1. A core file (escapes `extensions/` and is not Luker platform), or
  *   2. A sibling Luker-new plugin directory
  * is a violation. Luker self-platform layer (`iteration-library/`,
- * `skills/`, `lib/edits/`, `vendor/`) is the only whitelisted escape.
+ * `lens-shared/`, `run-panel/`, `workbench/`, `skills/`, `lib/`,
+ * `vendor/`) is the only whitelisted escape.
  *
- * For the reverse direction, scan `public/script.js` plus every
- * `public/scripts/*.js` (non-extensions) plus `src/**\/*.js`, and flag
- * any import whose specifier resolves into a Luker-new plugin directory.
+ * For the reverse direction, scan `public/script.js`, every
+ * `public/scripts/*.js` (non-extensions), and `src/**\/*.js` for imports
+ * resolving into a Luker-new plugin directory, and recursively scan
+ * platform modules (`public/scripts/workbench/**`,
+ * `public/scripts/lens-shared/**`, `public/scripts/run-panel/**`) for
+ * any import resolving into `public/scripts/extensions/` (Luker-new or
+ * upstream).
  *
  * Output is grouped by plugin; exit code is non-zero when any violation
  * is detected so CI can fail the run.
@@ -36,9 +41,8 @@ import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const EXT_DIR = resolve(REPO_ROOT, 'public/scripts/extensions');
 
-const LUKER_PLUGIN_DIRS = new Set([
+export const LUKER_PLUGIN_DIRS = new Set([
     'card-app',
     'character-editor-assistant',
     'completion-preset-assistant',
@@ -47,13 +51,21 @@ const LUKER_PLUGIN_DIRS = new Set([
     'search-tools',
 ]);
 
-const LUKER_PLATFORM_DIRS = new Set([
+export const LUKER_PLATFORM_DIRS = new Set([
     'iteration-library',
+    'lens-shared',
+    'run-panel',
     'skills',
     'lib',
     'vendor',
-    'run-panel',
+    'workbench',
 ]);
+
+export const PLATFORM_REVERSE_SCAN_DIRS = [
+    'workbench',
+    'lens-shared',
+    'run-panel',
+];
 
 const IMPORT_RE = /(?:^|[\s;])import(?:\s+(?:[^'"]+from\s+)?)?['"]([^'"]+)['"]/g;
 const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
@@ -115,33 +127,45 @@ function offsetToLine(source, offset) {
     return line;
 }
 
-function classifyForPlugin(specifier, fromFile, pluginDir) {
-    if (!specifier.startsWith('.')) return null;
-    const resolved = resolve(fromFile, '..', specifier);
-    const relFromExt = relative(EXT_DIR, resolved).split(sep);
+function resolveSpecifier(specifier, fromFile, repoRoot) {
+    if (specifier.startsWith('.')) {
+        return resolve(fromFile, '..', specifier);
+    }
+    if (specifier.startsWith('/scripts/') || specifier === '/script.js') {
+        return resolve(repoRoot, 'public', specifier.slice(1));
+    }
+    return null;
+}
+
+export function classifyForPlugin(specifier, fromFile, pluginDir, repoRoot = REPO_ROOT) {
+    const resolved = resolveSpecifier(specifier, fromFile, repoRoot);
+    if (!resolved) return null;
+    const extDir = resolve(repoRoot, 'public/scripts/extensions');
+    const relFromExt = relative(extDir, resolved).split(sep);
 
     if (relFromExt[0] === '..') {
         // Escapes extensions/. Either core or Luker platform layer.
-        const rel = relative(resolve(EXT_DIR, '..'), resolved).split(sep);
-        if (rel[0] === '..') return { kind: 'core', target: relative(REPO_ROOT, resolved) };
+        const rel = relative(resolve(extDir, '..'), resolved).split(sep);
+        if (rel[0] === '..') return { kind: 'core', target: relative(repoRoot, resolved) };
         if (LUKER_PLATFORM_DIRS.has(rel[0])) return null;
-        return { kind: 'core', target: relative(REPO_ROOT, resolved) };
+        return { kind: 'core', target: relative(repoRoot, resolved) };
     }
 
     if (relFromExt[0] === pluginDir) return null;
 
     if (LUKER_PLUGIN_DIRS.has(relFromExt[0])) {
-        return { kind: 'plugin', target: relative(REPO_ROOT, resolved), peer: relFromExt[0] };
+        return { kind: 'plugin', target: relative(repoRoot, resolved), peer: relFromExt[0] };
     }
 
     return null;
 }
 
-function findPluginViolations() {
+export function findPluginViolations(repoRoot = REPO_ROOT) {
+    const extDir = resolve(repoRoot, 'public/scripts/extensions');
     const coreViolations = new Map();
     const pluginViolations = new Map();
     for (const pluginDir of LUKER_PLUGIN_DIRS) {
-        const pluginRoot = join(EXT_DIR, pluginDir);
+        const pluginRoot = join(extDir, pluginDir);
         try { statSync(pluginRoot); } catch { continue; }
         const files = listJsFilesRecursive(pluginRoot);
         const coreHits = [];
@@ -149,10 +173,10 @@ function findPluginViolations() {
         for (const file of files) {
             const source = readFileSync(file, 'utf8');
             for (const { spec, offset } of extractSpecifiers(source)) {
-                const verdict = classifyForPlugin(spec, file, pluginDir);
+                const verdict = classifyForPlugin(spec, file, pluginDir, repoRoot);
                 if (!verdict) continue;
                 const hit = {
-                    file: relative(REPO_ROOT, file),
+                    file: relative(repoRoot, file),
                     line: offsetToLine(source, offset),
                     spec,
                     target: verdict.target,
@@ -170,32 +194,52 @@ function findPluginViolations() {
     return { coreViolations, pluginViolations };
 }
 
-function findReverseViolations() {
+export function findReverseViolations(repoRoot = REPO_ROOT) {
+    const extDir = resolve(repoRoot, 'public/scripts/extensions');
     const sources = [];
-    sources.push(resolve(REPO_ROOT, 'public/script.js'));
-    sources.push(...listJsFilesShallow(resolve(REPO_ROOT, 'public/scripts')));
+    sources.push({ file: resolve(repoRoot, 'public/script.js'), banAllExtensions: false });
 
-    const srcDir = resolve(REPO_ROOT, 'src');
+    const scriptsDir = resolve(repoRoot, 'public/scripts');
+    try {
+        statSync(scriptsDir);
+        for (const file of listJsFilesShallow(scriptsDir)) {
+            sources.push({ file, banAllExtensions: false });
+        }
+    } catch { /* public/scripts missing — skip */ }
+
+    for (const platformDir of PLATFORM_REVERSE_SCAN_DIRS) {
+        const dirPath = resolve(repoRoot, 'public/scripts', platformDir);
+        try {
+            statSync(dirPath);
+            for (const file of listJsFilesRecursive(dirPath)) {
+                sources.push({ file, banAllExtensions: true });
+            }
+        } catch { /* platform dir missing — skip */ }
+    }
+
+    const srcDir = resolve(repoRoot, 'src');
     try {
         statSync(srcDir);
-        sources.push(...listJsFilesRecursive(srcDir));
+        for (const file of listJsFilesRecursive(srcDir)) {
+            sources.push({ file, banAllExtensions: false });
+        }
     } catch { /* src missing — skip */ }
 
     const hits = [];
-    for (const file of sources) {
+    for (const { file, banAllExtensions } of sources) {
         let source;
         try { source = readFileSync(file, 'utf8'); } catch { continue; }
         for (const { spec, offset } of extractSpecifiers(source)) {
-            if (!spec.startsWith('.')) continue;
-            const resolved = resolve(file, '..', spec);
-            const relFromExt = relative(EXT_DIR, resolved).split(sep);
+            const resolved = resolveSpecifier(spec, file, repoRoot);
+            if (!resolved) continue;
+            const relFromExt = relative(extDir, resolved).split(sep);
             if (relFromExt[0] === '..' || relFromExt[0] === '') continue;
-            if (LUKER_PLUGIN_DIRS.has(relFromExt[0])) {
+            if (banAllExtensions || LUKER_PLUGIN_DIRS.has(relFromExt[0])) {
                 hits.push({
-                    file: relative(REPO_ROOT, file),
+                    file: relative(repoRoot, file),
                     line: offsetToLine(source, offset),
                     spec,
-                    target: relative(REPO_ROOT, resolved),
+                    target: relative(repoRoot, resolved),
                 });
             }
         }
@@ -251,4 +295,6 @@ function main() {
     process.exit(1);
 }
 
-main();
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    main();
+}

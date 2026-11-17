@@ -35,10 +35,8 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
     branchFromMessageViaUI,
-    openExtensionsDrawer,
-    openInlineDrawer,
-    closeExtensionsDrawer,
 } from '../_lib/page.js';
+import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, sourceImportPath, branchImportPath;
 
@@ -132,38 +130,13 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function enableMgViaCheckbox(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        const el = document.getElementById('luker_rpg_memory_enabled');
-        if (el && !el.checked) {
-            el.checked = true;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    });
-}
-
-async function importMgGraphBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-    await page.waitForTimeout(500);
-}
-
 test.describe('#55 — Branch chat keeps source MG intact (real branch UI)', () => {
     test.setTimeout(240_000);
 
     test('5 turns + sentinels → branch via UI → branch sees its own sentinel, not source late sentinels', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgViaCheckbox(page);
+        await setMgSettings(page, { enabled: true }, { closeAfter: true });
 
         await page.waitForFunction(() => {
             const ctx = window.Luker?.getContext?.();
@@ -183,7 +156,7 @@ test.describe('#55 — Branch chat keeps source MG intact (real branch UI)', () 
         }
 
         // Seed source MG with sentinels anchored to the source chat tail.
-        await importMgGraphBindLatest(page, sourceImportPath);
+        await importMgGraph(page, sourceImportPath, { mode: 'bind-latest', closeAfter: true });
 
         const sourceSnapshot = await page.evaluate(async () => {
             const ctx = window.Luker.getContext();
@@ -200,19 +173,8 @@ test.describe('#55 — Branch chat keeps source MG intact (real branch UI)', () 
             'SOURCE-S3 Seraphina latest',
         ]);
 
-        // The Extensions drawer is still open from enableMgViaCheckbox +
-        // importMgGraphBindLatest — it covers the chat area where the
-        // .mes_create_branch button lives. Close it before branching.
-        await closeExtensionsDrawer(page);
-
-        // Branch from an early message via the real branch button. The
-        // greeting is at index 0; the first user turn at 1; the first
-        // assistant turn at 2. Branching from mesId=2 forks off "after
-        // the first user/asst pair" — all 3 source sentinels were
-        // anchored to mesId > 2, so they MUST NOT appear in the branch.
+        // Branch from an early message via the real branch button.
         await branchFromMessageViaUI(page, 2);
-        // ST's branch path renames + switches chat; let the listeners
-        // settle.
         await page.waitForTimeout(1500);
 
         const branchChatId = await page.evaluate(() => window.Luker.getContext().getCurrentChatId?.() || '');
@@ -221,7 +183,7 @@ test.describe('#55 — Branch chat keeps source MG intact (real branch UI)', () 
         // Send one turn in the branch so it has its own tail.
         await sendMessageAndAwaitReply(page, 'Chart toward the headland instead — let me see the south reef.');
         // Import the branch-only sentinel.
-        await importMgGraphBindLatest(page, branchImportPath);
+        await importMgGraph(page, branchImportPath, { mode: 'bind-latest', closeAfter: true });
 
         const branchSnapshot = await page.evaluate(async () => {
             const ctx = window.Luker.getContext();

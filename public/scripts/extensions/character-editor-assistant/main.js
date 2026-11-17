@@ -5,10 +5,8 @@
 import { getChatCompletionConnectionProfiles } from '../connection-manager/profile-resolver.js';
 import { createCharacterEditorDiffUi } from './diff-ui.js';
 import { createCharacterEditorUi } from './editor-ui.js';
-import { openUnifiedCharacterEditorPopup } from './editor-iteration/studio.js';
-import { DEFAULT_SYSTEM_PROMPT as DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT } from './editor-iteration/studio.js';
+import { DEFAULT_CARD_SYSTEM_PROMPT as DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT } from '../../workbench/targets/card-prompts.js';
 import { DEFAULT_SYSTEM_PROMPT as DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT } from './studio/ai-chat.js';
-import { applyEdits } from '../../iteration-library/index.js';
 import { mdLiteral } from '../../iteration-library/markdown-escape.js';
 import { openSimulationReview } from '../../iteration-library/simulation-review/index.js';
 import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
@@ -27,11 +25,15 @@ import {
     runCharacterPresetReadTool,
 } from '../../iteration-library/tools/character-presets-reads.js';
 import { floorRecordToTaskMessage, readPluginFloors } from '../../lib/plugin-floors.js';
+import {
+    commitCharacterOperations as platformCommitCharacterOperations,
+    commitLorebookOperations as platformCommitLorebookOperations,
+    projectCardV2Fields,
+} from '../../workbench/targets/card-world.js';
 
 const __ctx = Luker.getContext();
 const generateQuietPrompt = __ctx.generateQuietPrompt;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
-const lodash = __ctx.lib.lodash;
 const extension_settings = __ctx.extensionSettings;
 const getContext = Luker.getContext;
 const getCharacterState = __ctx.getCharacterState;
@@ -90,7 +92,6 @@ const CHARACTER_EDITOR_SESSION_NAMESPACE = 'character_editor_assistant_sessions'
 
 const stateCache = new Map();
 const lorebookSnapshotCache = new Map();
-const editorStudioDialogLocks = new Set();
 
 function i18n(text) {
     return translate(String(text || ''));
@@ -144,6 +145,7 @@ function registerLocaleData() {
     addLocaleData('zh-cn', {
         'Character Editor Assistant': '角色卡编辑助手',
         'Open Editor': '打开编辑器',
+        'Workbench is unavailable.': '工作台当前不可用。',
         'Character Editor': '角色编辑器',
         'Regenerate aborted': '重新生成已中止',
         'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新生成已中止——无法回退 ${0} 上的提交：${1}',
@@ -486,6 +488,7 @@ function registerLocaleData() {
         'Entry changed (uid ${0}): ${1}': '條目變更（uid ${0}）：${1}',
         'Previous world book ${0} (${1} entries):': '舊世界書 ${0}（共 ${1} 條）：',
         'Next world book ${0} (${1} entries):': '新世界書 ${0}（共 ${1} 條）：',
+        'Workbench is unavailable.': '工作台目前無法使用。',
         'Cancelled — restored previous world book: ${0}': '已取消 —— 已恢復原世界書：${0}',
         // Replace-diff overview popup (topbar button + full-screen popup)
         'View full replace diff': '檢視完整替換差異',
@@ -1099,12 +1102,9 @@ async function clearHistoryRecords(context, { avatar = '' } = {}) {
 /**
  * Read the raw legacy CEA editor session bundle for an avatar. Returns the
  * underlying `sessions[]` array exactly as it was persisted on the character
- * card (no normalization beyond what the legacy store applied at write time),
- * so the M4 migration converter can introspect every original field.
+ * card (no normalization beyond what the legacy store applied at write time).
  *
- * Used only by the unified popup's first-open migration path
- * (`editor-iteration/studio.js`). Returns `[]` on any read error so the
- * popup's session list still loads (migration is best-effort).
+ * Returns `[]` on any read error so legacy session import stays best-effort.
  *
  * @param {object} context - SillyTavern context (currently unused; reserved
  *   for symmetry with `loadCharacterEditorSessionStore`).
@@ -1337,11 +1337,8 @@ async function mergeCharacterAttributes(context, avatar, patch) {
 
 /**
  * Apply a batch of Edit ops scoped to the character card and persist via
- * `mergeCharacterAttributes`. Used by the unified CEA editor's Apply commit
- * (editor-iteration/studio.js → _internalApplyPendingEdits). Studio.js
- * pre-groups its `pendingEdits` by `target.kind === 'character'` and hands
- * the slice here together with the live character snapshot the edits were
- * authored against.
+ * `platformCommitCharacterOperations`. Thin delegation kept for external callers
+ * and tests.
  *
  * Diff-against-original guard: we only forward the per-key delta to
  * `mergeCharacterAttributes`, so a batch that no-ops (every key already
@@ -1355,142 +1352,22 @@ async function mergeCharacterAttributes(context, avatar, patch) {
  *                                       authored against. Defaults to {}.
  */
 export async function commitCharacterEditorOperations(context, avatar, edits, opts = {}) {
-    if (!Array.isArray(edits) || edits.length === 0) {
-        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
-    }
-    // Defensive: reject edits that target a field the LLM invented. The
-    // tool schemas declare `field` as an enum, but providers occasionally
-    // ignore enum constraints, and the engine would otherwise route a
-    // `str_replace` on an unknown field through `anchor_missing` — a
-    // confusing error message for "field doesn't exist." The set of
-    // accepted fields matches `CEA_CARD_FIELD_ENUM` in
-    // `editor-iteration/tools.js`; keep both in sync.
-    const KNOWN_FIELDS = new Set([
-        ...CHARACTER_EDITOR_ROOT_TEXT_FIELDS,
-        ...CHARACTER_EDITOR_DATA_TEXT_FIELDS,
-        ...CHARACTER_EDITOR_DATA_ARRAY_FIELDS,
-    ]);
-    const unknownFields = [];
-    for (const edit of edits) {
-        const path = String(edit?.path || '').trim();
-        if (!path) continue;
-        // The CEA editor's tools.js emits paths like `description` or
-        // `card.description` (the latter rebased to bare by studio.js,
-        // but defensive double-checks here in case the rebase missed).
-        const field = path.startsWith('card.') ? path.slice('card.'.length) : path;
-        // Skip nested paths (anything past the first dot) — those are
-        // valid for sub-field edits and don't map to top-level enum.
-        if (field.includes('.')) continue;
-        if (!KNOWN_FIELDS.has(field)) {
-            unknownFields.push(field);
-        }
-    }
-    // Unknown-field rejection is a hard input error — the LLM invented a
-    // schema, no edit in this batch can possibly land. Stay as a thrown
-    // exception so studio's outer try/catch routes it to the system-error
-    // path (same shape as IO failures). Only `applyEdits` conflict / drift
-    // outcomes were re-shaped to a returned result so studio can surface
-    // them on a per-edit basis to the AI.
-    if (unknownFields.length > 0) {
-        const unique = [...new Set(unknownFields)];
-        throw new Error(
-            `Apply rejected: unknown character card field(s) ${unique.map(f => `"${f}"`).join(', ')}. `
-            + `Valid fields are: ${[...KNOWN_FIELDS].join(', ')}.`,
-        );
-    }
-    const before = opts?.liveCharacter ? clone(opts.liveCharacter) : {};
-    const result = applyEdits(edits, before) || {};
-    const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
-    const alreadyDone = Array.isArray(result.alreadyDone) ? result.alreadyDone : [];
-    const clean = Array.isArray(result.clean) ? result.clean : [];
-    if (conflicts.length > 0) {
-        // eslint-disable-next-line no-console
-        console.warn(`[${MODULE_NAME}] commitCharacterEditorOperations conflicts`, conflicts);
-    }
-    const after = result.newLive || before;
-    const patch = {};
-    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-    for (const k of keys) {
-        if (!lodash.isEqual(before[k], after[k])) patch[k] = after[k];
-    }
-    let persisted = false;
-    if (clean.length > 0 && Object.keys(patch).length > 0) {
-        await mergeCharacterAttributes(context, avatar, patch);
-        persisted = true;
-    }
-    return { applied: clean.length, conflicts, alreadyDone, persisted };
+    return platformCommitCharacterOperations(context, avatar, edits, opts);
 }
 
 /**
  * Apply a batch of Edit ops scoped to a single lorebook and persist via
- * `context.saveWorldInfo`. Used by the unified CEA editor's Apply commit
- * (editor-iteration/studio.js → _internalApplyPendingEdits). Studio.js
- * pre-groups its `pendingEdits` by `target.kind === 'lorebook'` AND
- * `target.bookName`, then calls this helper once per book.
+ * `platformCommitLorebookOperations`. Thin delegation kept for external callers
+ * and tests.
  *
- * No-op guard: when the post-apply book is byte-identical to the pre-apply
- * snapshot we skip `saveWorldInfo` entirely. `saveWorldInfo` bumps mtime
- * even on no-op writes, so downstream consumers (notably the world-info
- * preview pane) would otherwise see spurious change events.
- *
- * @param {string} bookName Target lorebook name (first arg by design — the
- *                          per-book commit is the dominant axis; context is
- *                          a context bag).
- * @param {Object} liveBook Pre-edit snapshot for this book — typically
- *                          `state.live.lorebooks[bookName]` shaped as
- *                          `{ entries, ...meta }`.
+ * @param {string} bookName Target lorebook name.
+ * @param {Object} liveBook Pre-edit snapshot for this book.
  * @param {Array}  edits    Iter-library Edit[] scoped to this single book.
  * @param {Object} [opts]
  * @param {Object} opts.context  SillyTavern context (for saveWorldInfo).
  */
 export async function commitLorebookOperations(bookName, liveBook, edits, opts = {}) {
-    if (!Array.isArray(edits) || edits.length === 0) {
-        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
-    }
-    const safeName = String(bookName || '').trim();
-    if (!safeName) {
-        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
-    }
-    const context = opts?.context;
-    if (!context || typeof context.saveWorldInfo !== 'function') {
-        throw new TypeError('commitLorebookOperations: opts.context.saveWorldInfo is required');
-    }
-    // Detect a bookName-rename edit (cea_set_lorebook_metadata with key
-    // `bookName`). The live-state apply path can only `saveWorldInfo(name, …)`
-    // — it has no helper for the rename-then-delete-old-name dance that
-    // `renameWorldInfo` in world-info.js performs (and that helper isn't
-    // exposed on `context`). Without this guard the rename would silently
-    // save the new content under the OLD filename, leaving the user staring
-    // at unchanged data. Surface the limitation loudly so callers can route
-    // the user to the world-info panel for now.
-    const renameEdit = edits.find(e =>
-        e && e.op === 'set'
-        && (e.path === 'bookName' || e.path === 'lorebook.bookName')
-        && String(e.newValue || '').trim() !== ''
-        && String(e.newValue || '').trim() !== safeName,
-    );
-    if (renameEdit) {
-        throw new Error(
-            'Renaming lorebooks via cea_set_lorebook_metadata is not supported. '
-            + `Use the world-info panel to rename "${safeName}" → "${String(renameEdit.newValue).trim()}".`,
-        );
-    }
-    const before = liveBook ? clone(liveBook) : { entries: {} };
-    const result = applyEdits(edits, before) || {};
-    const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
-    const alreadyDone = Array.isArray(result.alreadyDone) ? result.alreadyDone : [];
-    const clean = Array.isArray(result.clean) ? result.clean : [];
-    if (conflicts.length > 0) {
-        // eslint-disable-next-line no-console
-        console.warn(`[${MODULE_NAME}] commitLorebookOperations conflicts for ${safeName}`, conflicts);
-    }
-    const after = result.newLive || before;
-    let persisted = false;
-    if (clean.length > 0 && !lodash.isEqual(before, after)) {
-        await context.saveWorldInfo(safeName, after, true, { refreshEditor: true });
-        persisted = true;
-    }
-    return { applied: clean.length, conflicts, alreadyDone, persisted };
+    return platformCommitLorebookOperations(bookName, liveBook, edits, opts);
 }
 
 async function syncWorldBindingUi(context, worldName = '') {
@@ -3022,7 +2899,7 @@ export function buildCharacterEditorHelperApis(context, opts = {}) {
  */
 export async function buildUnifiedCharacterEditorLiveSnapshot(context, avatar = '') {
     const state = await loadCharacterEditorPrimaryLorebookState(context, { avatar });
-    const character = state?.character || {};
+    const character = projectCardV2Fields(state?.character || {});
     const lorebooks = {};
     const bookName = String(state?.bookName || '').trim();
     if (bookName) {
@@ -3380,24 +3257,33 @@ export async function buildPostReplaceSeedMessage(context, detail) {
     return sections.join('\n');
 }
 
-async function openCharacterEditorPopup(context = getContext(), opts = {}) {
+export async function openCharacterEditorPopup(context = getContext(), opts = {}) {
     const character = context?.characters?.[context?.characterId] || null;
     const avatarFromCtx = String(character?.avatar || '').trim();
     const avatar = String(opts?.avatar || avatarFromCtx).trim();
     if (!avatar) {
         notifyWarning(i18n('No character selected or character has no avatar.'));
-        return;
+        return null;
     }
-    if (editorStudioDialogLocks.has(avatar)) {
-        notifyWarning(i18n('A character editor dialog is already open for this character.'));
-        return;
+    const wb = context?.workbench || getContext()?.workbench;
+    if (typeof wb?.open !== 'function') {
+        notifyError(i18n('Workbench is unavailable.'));
+        return null;
     }
-    editorStudioDialogLocks.add(avatar);
-    try {
-        await openUnifiedCharacterEditorPopup(context, { i18n, i18nFormat, ...opts, avatar });
-    } finally {
-        editorStudioDialogLocks.delete(avatar);
+    const openOpts = { page: 'ai', ws: 'card', scope: 'character' };
+    if (typeof opts?.seedSystemMessage === 'string' && opts.seedSystemMessage.trim()) {
+        openOpts.seedPrompt = opts.seedSystemMessage;
     }
+    if (opts?.hideSeedFromUi !== undefined) {
+        openOpts.hideSeedFromUi = Boolean(opts.hideSeedFromUi);
+    }
+    if (opts?.autoSend !== undefined) {
+        openOpts.autoSend = Boolean(opts.autoSend);
+    }
+    if (typeof opts?.postReplaceRollback === 'function') {
+        openOpts.onCancelWithoutApply = opts.postReplaceRollback;
+    }
+    return wb.open(openOpts);
 }
 
 const {
@@ -3861,19 +3747,17 @@ function renderJournalItems(state) {
 </div>`).join('')}`;
 }
 
-function canUseToolsInCurrentContext(context) {
-    try {
-        const record = getActiveCharacterRecord(context);
-        const avatar = String(record?.avatar || '').trim();
-        return Boolean(avatar) && editorStudioDialogLocks.has(avatar);
-    } catch {
-        return false;
-    }
-}
-
 async function handleToolOperation(kind, args) {
     const context = getContext();
-    if (!canUseToolsInCurrentContext(context)) {
+    try {
+        const record = getActiveCharacterRecord(context);
+        if (!String(record?.avatar || '').trim()) {
+            return {
+                status: 'ignored',
+                reason: i18n('Current chat has no active character.'),
+            };
+        }
+    } catch {
         return {
             status: 'ignored',
             reason: i18n('Current chat has no active character.'),
@@ -4127,7 +4011,7 @@ jQuery(async () => {
  * seed the diff, open the studio, roll back when the user closes without
  * applying) stays here.
  */
-function buildPostReplaceMergeAction() {
+export function buildPostReplaceMergeAction() {
     return {
         id: 'character-editor-assistant-merge',
         label: () => i18n('Merge in editor'),
@@ -4231,17 +4115,26 @@ function buildPostReplaceMergeAction() {
                     nextLorebookData: await resolvePostReplaceNextLorebookData(context, detail?.character || null),
                 }
                 : null;
-            await openCharacterEditorPopup(context, {
-                avatar,
-                seedSystemMessage,
-                // The seed message is a long prose brief for the LLM; the
-                // user gets the structured form via "View full replace diff".
-                hideSeedFromUi: true,
-                autoSend: true,
-                postReplaceRollback,
-                replaceContext,
-                renderLineDiffHtml,
-            });
+            let opened = null;
+            try {
+                opened = await openCharacterEditorPopup(context, {
+                    avatar,
+                    seedSystemMessage,
+                    hideSeedFromUi: true,
+                    autoSend: true,
+                    postReplaceRollback,
+                    replaceContext,
+                    renderLineDiffHtml,
+                });
+            } catch (err) {
+                if (typeof postReplaceRollback === 'function') {
+                    await postReplaceRollback();
+                }
+                throw err;
+            }
+            if (!opened && typeof postReplaceRollback === 'function') {
+                await postReplaceRollback();
+            }
         },
     };
 }

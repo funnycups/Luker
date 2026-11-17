@@ -6146,6 +6146,8 @@
     ,"sync.category.stats.desc": "stats.json，由聊天記錄派生；衝突時可在本機重新計算。"
     ,"sync.category.settings": "設定"
     ,"sync.category.settings.desc": "settings.json，完整的 Luker 設定。"
+    ,"sync.category.global-states": "全域狀態"
+    ,"sync.category.global-states.desc": "依命名空間儲存的擴充功能與工作台全域狀態檔案。"
     ,"sync.category.secrets": "API 金鑰與憑證"
     ,"sync.category.secrets.desc": "secrets.json，API 金鑰、權杖與密碼。"
     ,"sync.category.extensions": "擴充功能"

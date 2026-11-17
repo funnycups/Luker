@@ -1,0 +1,91 @@
+/* Command palette + dialog */
+.olens .ol-palette-backdrop, .olens .ol-dialog-backdrop {
+    position: absolute; inset: 0; z-index: 20;
+    display: flex; justify-content: center; align-items: flex-start;
+    padding: min(14vh, 120px) 16px 16px;
+    background: var(--ol-scrim);
+    animation: ol-fade 140ms ease-out;
+}
+@keyframes ol-fade { from { opacity: 0; } }
+@keyframes ol-pop { from { opacity: 0; transform: translateY(-6px) scale(0.985); } }
+
+.olens .ol-palette {
+    display: flex; flex-direction: column; width: min(640px, 100%); max-height: min(560px, 76vh);
+    border-radius: var(--ol-radius-lg); background: var(--ol-raised); box-shadow: var(--ol-shadow-3);
+    overflow: hidden; animation: ol-pop 160ms var(--ol-ease);
+}
+.olens .ol-palette-field { display: flex; align-items: center; gap: 10px; padding: 0 14px; height: 52px; border-bottom: 1px solid var(--ol-border); color: var(--ol-text-faint); }
+.olens .ol-palette-input {
+    flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; outline: none; box-shadow: none;
+    background: transparent; color: var(--ol-text); font: inherit; font-size: 15px;
+}
+.olens .ol-palette-input::placeholder { color: var(--ol-text-faint); }
+.olens .ol-palette-list { flex: 1 1 auto; overflow-y: auto; padding: 6px; }
+.olens .ol-palette-group { padding: 10px 10px 4px; font-size: 11px; font-weight: 600; color: var(--ol-text-faint); text-transform: uppercase; letter-spacing: 0.05em; }
+.olens .ol-palette-item {
+    display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 6px 10px;
+    border-radius: var(--ol-radius-sm); cursor: pointer;
+}
+.olens .ol-palette-item[aria-selected="true"] { background: var(--ol-active); }
+.olens .ol-palette-icon { display: grid; place-items: center; width: 20px; flex: none; color: var(--ol-text-muted); }
+.olens .ol-palette-main { display: grid; flex: 1; min-width: 0; }
+.olens .ol-palette-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: 500; }
+.olens .ol-palette-snippet { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--ol-text-faint); }
+.olens .ol-palette-meta { flex: none; font-size: 11.5px; color: var(--ol-text-faint); white-space: nowrap; }
+.olens .ol-palette-empty { padding: 28px; text-align: center; color: var(--ol-text-faint); }
+.olens .ol-palette-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--ol-border); background: var(--ol-surface-2); }
+
+.olens .ol-dialog {
+    display: flex; flex-direction: column; width: min(760px, 100%); max-height: 80vh;
+    border-radius: var(--ol-radius-lg); background: var(--ol-raised); box-shadow: var(--ol-shadow-3);
+    overflow: hidden; outline: none; animation: ol-pop 160ms var(--ol-ease);
+}
+.olens .ol-dialog-head { display: flex; align-items: center; gap: 10px; padding: 12px 12px 12px 18px; border-bottom: 1px solid var(--ol-border); }
+.olens .ol-dialog-title { flex: 1; font-size: 14px; }
+.olens .ol-dialog-body { display: grid; gap: 18px; padding: 16px 18px 20px; overflow: auto; }
+.olens .ol-dialog-section .ol-section-title { margin-bottom: 6px; }
+
+/* ---- Inline editing ---- */
+.olens .ol-editable[data-editable="true"] { cursor: text; border-radius: var(--ol-radius-sm); transition: background var(--ol-dur), box-shadow var(--ol-dur); }
+.olens .ol-editable[data-editable="true"]:not(.is-editing):hover { background: var(--ol-hover); box-shadow: 0 0 0 3px var(--ol-hover); }
+.olens .ol-editable[data-editable="true"]:focus-visible { outline: 2px solid var(--ol-accent); outline-offset: 2px; }
+.olens .ol-editable.is-editing { background: none; box-shadow: none; }
+.olens dd.ol-editable.is-empty { color: var(--ol-text-faint); font-style: normal; }
+.olens .ol-inline { display: flex; flex-direction: column; gap: 4px; width: 100%; min-width: 0; vertical-align: top; }
+.olens .ol-inline-input {
+    display: block; width: 100%; min-width: 0;
+    border: 1px solid var(--ol-accent); border-radius: var(--ol-radius-sm);
+    background: var(--ol-surface); color: var(--ol-text);
+    font: inherit; font-size: inherit; font-weight: inherit; line-height: inherit; letter-spacing: inherit;
+    padding: 4px 8px; margin: -5px -9px 0; width: calc(100% + 18px);
+    outline: none; resize: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ol-accent) 18%, transparent);
+}
+.olens .ol-inline-input.is-multi { overflow: auto; white-space: pre-wrap; word-break: break-word; }
+.olens .ol-inline-hint { font-size: 11px; font-weight: 400; color: var(--ol-text-faint); white-space: nowrap; }
+
+/* ---- Shared bottom toast (edit saved / undo) ---- */
+.olens .ol-toast {
+    position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+    z-index: 40;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: var(--ol-radius);
+    background: var(--ol-raised); border: 1px solid var(--ol-border-strong);
+    box-shadow: var(--ol-shadow-2);
+    font-size: 13px; white-space: nowrap;
+    animation: ol-enter 180ms var(--ol-ease);
+}
+.olens .ol-toast[hidden] { display: none; }
+.olens .ol-toast svg { color: var(--ol-accent); flex: none; }
+.olens .ol-toast.is-error svg { color: var(--ol-danger); }
+.olens .ol-toast-btn {
+    display: flex; align-items: center; gap: 5px;
+    border: 0; background: none; cursor: pointer;
+    color: var(--ol-accent); font-size: 13px; font-weight: 600; padding: 0 4px; margin-left: 4px;
+}
+.olens .ol-toast-btn:hover { text-decoration: underline; }
+.olens .ol-inline-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 4px; }
+.olens .ol-inline-foot .ol-inline-hint { margin-top: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.olens .ol-inline-actions { display: inline-flex; gap: 4px; margin-left: auto; }
+.olens .ol-inline-actions .ol-btn-sm { height: 24px; padding: 0 8px; font-size: 12px; }
+.olens.is-compact .ol-inline-actions .ol-btn-sm { height: 34px; padding: 0 14px; font-size: 13px; }

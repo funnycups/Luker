@@ -1,257 +1,50 @@
-# Iteration Studio Framework
+# Iteration Library
 
-A shared popup shell for **AI-driven iterative editing of an adapter-supplied artifact**. The shell drives the conversation, tool dispatch, drift-aware apply, history list, and approve/reject UI; the plugin (via an adapter) supplies what is being edited, which tools propose changes, and where sessions are stored.
+`context.iterationLibrary` provides shared building blocks for AI-driven iterative editing surfaces: LLM tool-call runners, scoped session storage, word/line text diffs, zoom overlays, shared proposal types, and plugin-agnostic lorebook/skill/preset read-write tool helpers.
 
-Reference adapters live in-tree:
-
-- `public/scripts/extensions/orchestrator/iteration-adapter.js` — edits orchestrator profiles (spec / agenda / loop)
-- `public/scripts/extensions/memory-graph/schema-adapter.js` — edits memory-graph node-type schema
-
-This page is the contract and walkthrough for building your own adapter.
-
-## What it is
-
-An Iteration Studio session is a popup chat between the user and an LLM that emits **tool calls describing edits**. Each turn:
-
-1. User types a request and clicks Send.
-2. Shell asks the LLM with the adapter's tool catalog (plus any shell-injected control tools the adapter declares).
-3. For each tool call returned, the adapter normalizes it to a list of op-typed `Edit`s (see [edits-lib](./edits-lib.md)).
-4. Shell applies the edits to `adapter.live()` via the edits library, detecting drift per-edit at apply time.
-5. Approved changes are committed back through `adapter.commit(newLive)`.
-6. The shell auto-continues whenever the round emitted any tool call (program-driven by tool-call presence). A plain-text response with no tool calls ends the iteration and returns control to the user.
-
-The shell does not carry a working copy of the artifact. `adapter.live()` is the single authority, called fresh whenever the shell needs the current value.
-
-**When iteration-studio doesn't fit:** if your surface needs viewport ownership (fullscreen IDE, mobile takeover) or already has a mature standalone UI you want to preserve, use [edits-lib](./edits-lib.md) directly — import `applyEdits` / `inverseEdit` / `showConflictResolution` from `/scripts/lib/edits/index.js` and own the UI yourself. CardApp Studio (`extensions/character-editor-assistant/studio/`) is the in-tree reference.
-
-## Quick start: minimal adapter
-
-```js
-import { defineAdapter, openIterationStudio } from '/scripts/iteration-studio/index.js';
-
-const TOOL_SET = 'mything_set_value';
-
-export function createMyThingAdapter({ readValue, writeValue, listMetas, loadMeta, saveMeta, deleteMeta }) {
-    return defineAdapter({
-        id: 'mything',
-        title: 'My Thing Studio',
-        mode: 'mything',
-        layout: 'popup',
-        i18n: (s) => s,
-        i18nFormat: (s, ...args) => args.reduce((out, v, i) => out.split('${' + i + '}').join(String(v)), s),
-
-        live: () => readValue(),
-        commit: async (newLive) => { await writeValue(newLive); },
-        sessionScope: () => 'global',
-
-        listSessions: async () => listMetas(),
-        loadSession: async (_scope, id) => loadMeta(id),
-        saveSession: async (_scope, session) => saveMeta(session),
-        deleteSession: async (_scope, id) => deleteMeta(id),
-
-        buildSystemPrompt: () => 'You edit a single string. Call mything_set_value with the new value.',
-        buildUserPrompt: (session, userText) => `[Current]\n${readValue()}\n\n[Request]\n${userText}`,
-
-        buildToolCatalog: () => [{
-            type: 'function',
-            function: {
-                name: TOOL_SET,
-                description: 'Set the value.',
-                parameters: {
-                    type: 'object',
-                    properties: { next: { type: 'string' } },
-                    required: ['next'],
-                    additionalProperties: false,
-                },
-            },
-        }],
-        normalizeToolCallToEdit: (call) => {
-            if (call?.name !== TOOL_SET) return null;
-            const next = String(call?.args?.next ?? '');
-            return [{ op: 'set', path: '', oldValue: readValue(), newValue: next }];
-        },
-
-        renderMessageCard: (message) => `<div>${message.role}: ${message.content}</div>`,
-        renderHistoryItem: (meta) => `<div>${meta.title}</div>`,
-    });
-}
-
-await openIterationStudio(adapter, SillyTavern.getContext(), settings, document.body);
-```
-
-That is the entire adapter. The shell handles popup chrome, conversation rendering, history list, auto-continue, abort plumbing, LLM retry / timeout, drift-aware apply, conflict UI, and rollback.
-
-## Authority model
-
-`adapter.live()` is the single source of truth.
-
-- The shell never caches a working profile. Every render and every apply re-reads `live()`.
-- `adapter.commit(newLive)` is the only write path. The adapter decides where that goes (extension settings, character state, IndexedDB, remote API).
-- Drift detection happens **per-edit at apply time** via the edits library. If the user edits the artifact externally between the LLM proposal and the user clicking Approve, conflicts surface through the standard conflict UI from `edits-lib`.
-- Rollback uses `inverseEdit(edit)` over the message's `appliedEdits` array in reverse, then re-commits.
-
-This means the artifact stays editable outside the studio at all times. The studio is one editor among many.
-
-## Tool dispatch
-
-`buildToolCatalog(session)` returns the adapter's editable + custom control tools. The shell does not inject any continue / finalize control tools — the multi-round auto-continue loop is program-driven by tool-call presence (any tool call → next round, plain text + no tool calls → stop). If your adapter needs popup-side control tools (e.g. reset-state affordances), declare them in your catalog and route them through `classifyToolCall` / `executeControlToolCall` like any other adapter-specific control tool.
-
-Each LLM tool call routes through `classifyToolCall(call)` (default: anything not matching the adapter's declared control names is editable). Editable calls go to:
-
-```ts
-normalizeToolCallToEdit(call, { session, live }): Edit[] | null | Promise<Edit[] | null>
-```
-
-Return the op-typed edits (see [edits-lib](./edits-lib.md) for op shapes). Return `null` to skip the call.
-
-**Sandbox-diff pattern** — quick bootstrap when you already have a working in-place mutator:
-
-1. `clone live` into a sandbox profile.
-2. Run the existing mutator against the sandbox.
-3. Emit one coarse `{ op: 'set', path: '', oldValue: live, newValue: sandbox }` edit.
-
-The reference adapters use this pattern. It is good enough to ship but produces profile-level conflicts (any concurrent change collides with the whole batch). For production-grade conflict resolution, normalize each tool call into per-field ops (`set` / `str_replace` / `list_insert` etc).
-
-Adapter-declared control tools (reset-state, mode-switch, etc) route through the runner's `isControlCall` predicate to your `onControlCall` handler rather than the normalize-to-edit path. The shell counts them as tool calls for auto-continue purposes — any control-tool emission still triggers the next round.
-
-## Runner settings
-
-The runner has knobs that affect every LLM round-trip — retries, requests-per-minute cap, and streaming transport. Adapters opt in via `getRunnerSettings`:
-
-```ts
-getRunnerSettings(settings): RunnerSettings | null
-```
-
-`settings` is the same blob you passed to `openIterationStudio`. The return shape:
-
-```ts
-type RunnerSettings = {
-    toolCallRetryMax?: number;       // default 0 — retries for malformed / missing tool calls
-    rpmLimit?: number;               // default 0 — per-iteration-studio shared RPM cap (0 = unbounded)
-};
-```
-
-Returning `null` / `undefined` / `{}` keeps the defaults. The shell does not read raw fields from your settings blob — this hook is the only path. That lets each adapter expose its own settings UI (CPA surfaces them; CardApp Studio currently exposes neither) without the shell having to know your storage path. Transport selection (SSE vs one-shot POST) is handled by `generateTask` based on the resolved preset's `stream_openai`; adapters do not need to expose a toggle for it.
-
-## Session storage
-
-The adapter owns session persistence. Four hooks:
-
-```ts
-listSessions(scope): Promise<SessionMeta[]>           // newest first
-loadSession(scope, id): Promise<Session | null>
-saveSession(scope, session): Promise<void>
-deleteSession(scope, id): Promise<void>
-```
-
-`scope` is whatever `sessionScope()` returns. Common patterns: `'global'`, `'character_<avatar>'`, `'chat_<chatId>'`.
-
-Where you store sessions is entirely up to you. Typical patterns:
-
-- Global → an extension-settings bucket: `extension_settings.my_extension.iterStudioSessions`
-- Per-character → `context.getCharacterState(avatar, 'my_ext_iter_sessions')`
-- Per-chat → chat metadata
-
-Session shape is shell-defined (see `public/scripts/iteration-studio/adapter.js` for the JSDoc typedef). The adapter can stash arbitrary blob data in `session.surfaceState`.
-
-## Layout choice
-
-`layout: 'popup' | 'split'`.
-
-- `'popup'` — single-column conversation. The composer + history are stacked. Use for adapters where the artifact preview is short or the diff already lives inside message cards.
-- `'split'` — two-column conversation + preview pane. The right pane is rendered by `renderPreviewPane(state)`. Use when the artifact has a meaningful canonical view (graph schema, profile tree, character card) that the user wants visible alongside the chat.
-
-Slot hooks the shell calls into:
-
-| Hook | When | Required |
-|---|---|---|
-| `renderMessageCard(message, state)` | Every conversation message | yes |
-| `renderHistoryItem(meta)` | Each session in the history list | yes |
-| `renderPreviewPane(state)` | Right pane of `split` layout | required for `split` |
-| `renderToolbarSlots(state)` | Extra `{start, end}` HTML for the toolbar | optional |
-| `handleAction(actionId, ctx)` | Any click / change on `[data-iter-custom-action="<id>"]` inside the popup | optional |
-
-## Preview pane
-
-`renderPreviewPane(state) => string` returns HTML for the right pane in `split` layout. The shell wholesale-replaces the preview pane on every rerender (every chat tick, busy-state toggle, AI tool call, etc.). Good fit: field summaries, tab placeholders, read-only diff lists. Adapters that hold widget state needing to survive rerenders (CodeMirror, charts, etc.) should keep that surface outside the iteration-studio shell — use [edits-lib](./edits-lib.md) directly.
-
-## Reference
-
-Adapters can offer a "Compare with..." selector that pulls a snapshot from elsewhere and renders it next to live. Two hooks:
-
-```ts
-listReferences(session): { id: string, label: string }[]
-loadReference(id): Promise<any>
-```
-
-The shell shows the dropdown in the toolbar, calls `loadReference(id)` when the user picks one, and passes the result through `state.reference` to render hooks. Omit both to hide the selector entirely.
-
-## Custom ops
-
-The shell calls `adapter.registerCustomOps?.(registry)` once per `openIterationStudio()` invocation. The `registry` is a facade that wraps the edits-lib engine's `registerOp` with a `getRegisteredOp` guard, so re-opening the popup never re-registers (or fails on duplicate). Adapters that introduce schema-specific ops register them here.
-
-Example — CEA's lorebook-entry custom ops:
-
-```js
-import {
-    createLorebookEntryAddOp,
-    createLorebookEntryUpdateOp,
-    createLorebookEntryRemoveOp,
-} from './lorebook-ops.js';
-
-registerCustomOps: (registry) => {
-    registry.registerOp('lorebook_entry_add', createLorebookEntryAddOp());
-    registry.registerOp('lorebook_entry_update', createLorebookEntryUpdateOp());
-    registry.registerOp('lorebook_entry_remove', createLorebookEntryRemoveOp());
-},
-```
-
-Each handler implements `{ apply, inverse, detectConflict }` — see [edits-lib](./edits-lib.md) for the full op contract. Use a custom op when an entry shape is keyed by something other than array index (e.g. lorebook `uid`s), where built-in `list_*` ops would silently drift across reorderings.
-
-## Migration: clearObsoleteSessions
-
-```ts
-clearObsoleteSessions?(scope): Promise<void>
-```
-
-A one-shot hook the shell calls once per adapter on first open after upgrade. Use it to wipe legacy v1 storage keys (the shell tracks a per-adapter wipe flag in localStorage so this only runs once). The reference adapters implement it to drop their v1 history buckets:
-
-```js
-clearObsoleteSessions: async () => {
-    const root = getMySettings();
-    if (root && Object.prototype.hasOwnProperty.call(root, LEGACY_GLOBAL_HISTORY_KEY)) {
-        delete root[LEGACY_GLOBAL_HISTORY_KEY];
-        persistSettings();
-    }
-}
-```
-
-If nothing needs migrating, omit the hook.
+To integrate an AI-editable target directly into Luker's unified **Workbench → AI iteration** tab, register an `IterateTarget` through [`context.workbench.registerIterateTarget`](/development/extension-api/workbench#registering-an-ai-iteration-target). Use `context.iterationLibrary` directly when you own a standalone popup or full-viewport editor (such as Character Card Editor's popup or CardApp Studio).
 
 ## Three-layer API exposure
 
-Per the Luker API convention, every shell capability is exposed at three layers — same as `edits-lib`:
-
 ```js
 // Layer 1 — direct ESM import (in-tree extensions)
-import { openIterationStudio, defineAdapter } from '/scripts/iteration-studio/index.js';
+import {
+    applyEdits,
+    inverseEdit,
+    registerOp,
+    runner,
+    storage,
+    proposalBus,
+    tools,
+} from '/scripts/iteration-library/index.js';
 
-// Layer 2 — lukerContext property (CardApp / extension code with a context handle)
-const { openIterationStudio, defineAdapter } = lukerContext.iterationStudio;
+// Layer 2 — lukerContext property
+const { runner, storage, proposalBus } = lukerContext.iterationLibrary;
 
-// Layer 3 — getContext (third-party extensions)
-const { open, defineAdapter } = SillyTavern.getContext().iterationStudio;
+// Layer 3 — Luker.getContext() (third-party extensions)
+const { applyEdits, runner, storage, textDiff, zoomOverlay, ui, tools, proposalBus } =
+    Luker.getContext().iterationLibrary;
 ```
 
-The Layer 3 surface re-exports the same functions as Layer 1; `open` is a short alias for `openIterationStudio`.
+## Core modules
 
-## Reference adapters
+| Export | Purpose |
+| --- | --- |
+| `applyEdits`, `inverseEdit`, `registerOp`, `BUILT_IN_OPS`, `showConflictResolution` | Re-exports from [edits-lib](/development/extension-api/edits-lib) for drift-aware apply, rollback, and conflict resolution |
+| `runner` | `requestToolCallsWithRetry` and shared LLM round execution helpers |
+| `storage` | Scoped session persistence helpers, safe cloning, and per-character/global state helpers |
+| `proposalBus` | `createProposalBus` plus built-in proposal adapters: `profileEdit`, `lorebookWrite`, `skillAuthor`, `presetClone`, `customToolAuthor` |
+| `tools` | Plugin-agnostic tool catalogs and dispatchers (`lorebook-reads`, `lorebook-writes`, `character-presets-reads`, `skill-iter-studio`) |
+| `render`, `textDiff`, `zoomOverlay`, `ui` | Diff cards, line-by-line side-by-side overlays, message markdown rendering, and collapsible thinking helpers |
+| `bindIterWorkspaceResizer` | Split-pane drag resizer helper (Layer 1 `/scripts/iteration-library/index.js` also exports `createRenderScheduler`) |
 
-Read these for working end-to-end examples of the contract:
+## Reference consumers
 
-- `public/scripts/extensions/orchestrator/iteration-adapter.js` — wraps the orchestrator's pre-existing mutator with the sandbox-diff pattern. Layout `split`, per-mode session buckets, runtime world-info resolution, custom control tool names.
-- `public/scripts/extensions/memory-graph/schema-adapter.js` — node-type schema editor built directly on the v2 contract. Layout `split`, global-only sessions, apply-to-global / apply-to-character action buttons in the preview pane.
-- **CEA Character Editor** — `public/scripts/extensions/character-editor-assistant/character-editor-adapter.js`, layout `split`, per-character session scope `char_<avatar>`. Live shape is `{ card, lorebook: { bookName, entries: { [uid]: entry } } }`. Edits character card fields via `mergeCharacterAttributes` and lorebooks via `context.saveWorldInfo`. Registers custom ops (`lorebook_entry_add / update / remove`) keyed by entry uid.
-- **CPA (Completion Preset Assistant)** — `public/scripts/extensions/completion-preset-assistant/cpa-iteration/` (the studio mounts itself as a popup via `openCpaIterationStudio`, separate from the layered `iterationStudio` open / defineAdapter contract). Per-preset session scope `preset_<name>`. The live target is the user's currently-selected OpenAI preset (via `context.presets.get`); `commit()` writes back via `context.presets.save(..., { select: true })`. Tool catalog covers editable preset-edit ops, read-only inspection tools, and Skills authoring tools (inventory + write + verbatim extract, exposed when session mode is `orchestrator-optimize` and pulled directly from the orchestrator's `skill-iter-studio-tools.js` registry). No preview pane — the per-message edit summary in the chat is the diff.
+- **Workbench targets** (`public/scripts/workbench/targets/` and `orchestrator/lens/iterate-target.js`, `memory-graph/lens/iterate-targets.js`) — consume `proposalBus`, `tools`, and `storage` helpers while delegating window chrome, target switching, and change history to Workbench.
+- **CardApp Studio & CEA Popup** (`public/scripts/extensions/character-editor-assistant/`) — own their standalone UIs while using `iterationLibrary` for runner retries, lorebook tools, diff rendering, and `edits-lib` apply/rollback.
 
-The adapter contract JSDoc lives in `public/scripts/iteration-studio/adapter.js` — that file is the canonical source for required vs optional fields and exact signatures.
+## Related pages
+
+- [Workbench API](/development/extension-api/workbench) — register AI iteration targets inside Workbench
+- [Edits Library](/development/extension-api/edits-lib) — op-typed patch engine and conflict resolution
+- [Character Editor Assistant API](/development/extension-api/character-editor-assistant) — helper tools for card and world book mutations

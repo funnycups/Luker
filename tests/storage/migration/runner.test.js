@@ -679,6 +679,45 @@ describe('MigrationRunner: categories filter', () => {
             await dstHarness.cleanup();
         }
     });
+
+    test('settings category gates globalStates independently of namedDocs', async () => {
+        const srcHarness = await CONTRACT_HARNESSES[0].make();
+        const dstSettingsOnly = await CONTRACT_HARNESSES[0].make();
+        const dstPresetsOnly = await CONTRACT_HARNESSES[0].make();
+        try {
+            const srcRepos = buildReposForTest(srcHarness.engine);
+            const dstSettingsRepos = buildReposForTest(dstSettingsOnly.engine);
+            const dstPresetsRepos = buildReposForTest(dstPresetsOnly.engine);
+
+            await srcRepos.settings.save(srcHarness.handle, { foo: 'bar' });
+            await srcRepos.namedDoc.save(srcHarness.handle, 'globalStates', 'wb_prefs', { zoom: 1.2 });
+            await srcRepos.namedDoc.save(srcHarness.handle, 'themes', 'midnight', { accent: '#123' });
+
+            await new MigrationRunner({
+                sourceRepos: srcRepos,
+                destRepos: dstSettingsRepos,
+                snapshotPaths: { backupRoot: srcHarness.backupRoot, getUserRoot: () => srcHarness.dirs.root },
+                categories: { settings: true, presets: false, namedDocs: false, worlds: false, chats: false, groups: false, stats: false },
+            }).migrateUser(srcHarness.handle);
+
+            expect(await dstSettingsRepos.namedDoc.get(srcHarness.handle, 'globalStates', 'wb_prefs')).toEqual({ zoom: 1.2 });
+            expect(await dstSettingsRepos.namedDoc.get(srcHarness.handle, 'themes', 'midnight')).toBeNull();
+
+            await new MigrationRunner({
+                sourceRepos: srcRepos,
+                destRepos: dstPresetsRepos,
+                snapshotPaths: { backupRoot: srcHarness.backupRoot, getUserRoot: () => srcHarness.dirs.root },
+                categories: { settings: false, presets: true, namedDocs: true, worlds: false, chats: false, groups: false, stats: false },
+            }).migrateUser(srcHarness.handle);
+
+            expect(await dstPresetsRepos.namedDoc.get(srcHarness.handle, 'globalStates', 'wb_prefs')).toBeNull();
+            expect(await dstPresetsRepos.namedDoc.get(srcHarness.handle, 'themes', 'midnight')).toEqual({ accent: '#123' });
+        } finally {
+            await srcHarness.cleanup();
+            await dstSettingsOnly.cleanup();
+            await dstPresetsOnly.cleanup();
+        }
+    });
 });
 
 describe('MigrationRunner: destHandle', () => {

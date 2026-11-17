@@ -14,8 +14,9 @@
 | [Skill](/zh-CN/development/extension-api/skills) | `context.skills.*` —— 安装、读取、写入、搜索、迁移作用域、嵌入打包 / 抽取；CardApp ctx 对等 |
 | [角色卡替换流程](/zh-CN/development/extension-api/character-replace-flow) | 替换角色卡时运行的注册表：卡绑定保护槽位与替换后世界书动作 |
 | [UI 与弹窗](/zh-CN/development/extension-api/ui-and-popups) | 弹窗、加载器、模板、消息格式化 |
-| [IterationStudio](/zh-CN/development/extension-api/iteration-studio) | AI 驱动迭代编辑的共享弹窗框架 —— 对话、会话、diff 预览、批准 / 拒绝生命周期。adapter 提供工件形状和工具 |
-| [运行面板](/zh-CN/development/extension-api/run-panel) | 多步 LLM 任务的共享内存内运行轨迹 —— 轮次、流式分节、停止、导出。插件通过工厂式 store 与面板驱动它 |
+| [工作台 API](/zh-CN/development/extension-api/workbench) | 统一工作台平台 —— 嵌入式工作区、AI 迭代目标、问答数据源、本地建议规则 |
+| [迭代工具库](/zh-CN/development/extension-api/iteration-studio) | 共享 `iterationLibrary` 模块 —— runner、存储、差异对比、提案总线与世界书 / 技能 / 预设工具 |
+| [运行面板](/zh-CN/development/extension-api/run-panel) | 多步 LLM 任务的共享内存运行轨迹与悬浮运行面板 —— 轮次、流式分节、停止、导出 |
 | [插件集成](/zh-CN/development/extension-api/plugin-integration) | 正则运行时、搜索工具、扩展 API 注册表、事件系统、i18n、设置存储、调试与抓取器注册、tokenization、工具函数、符号与常量 |
 | [底层端点](/zh-CN/development/extension-api/low-level-endpoints) | 原始 HTTP 路由（仅供高级 / 调试场景使用） |
 
@@ -48,6 +49,9 @@ const context = Luker.getContext();
 | `context.constants` | `unset`、`promptRoles`、`promptTypes`、`wiAnchor`、`wiPosition` |
 | `context.macros` | `register`、`registerAlias`、`registry`、`engine`、`category`、`envBuilder` |
 | `context.loader` | `show`、`hide`、`active`、`get`、`isBlocking`、`ToastMode`、`Handle` |
+| `context.workbench` | `registerWorkspace`、`registerIterateTarget`、`registerAskProvider`、`registerSuggestRuleProvider`、`open`、`saveSettingsChecked`、`getWorkspaces`、`getIterateTargets`、`getAskProviders`、`getSuggestRuleProviders`、`subscribe` |
+| `context.runPanel` | `createRunStore`、`createRunPanel`、`attachDock`、`openRunDock`、`toggleRunDock`、`getRunRecorder`、`events`、`withRound`、`withStreamingSection` |
+| `context.iterationLibrary` | `applyEdits`、`inverseEdit`、`registerOp`、`runner`、`storage`、`proposalBus`、`tools`、`render`、`textDiff`、`zoomOverlay`、`ui` |
 | `context.skills` | `list`、`get`、`readFile`、`listFiles`、`search`、`writeFile`、`editFile`、`deleteFile`、`install`、`delete`、`rename`、`moveScope`、`importBundled`、`listBundledManifest`、`packForEmbed`、`previewExtractEmbed`、`executeExtractEmbed`、`importFromUrl` |
 | `context.worldInfoEntry` | `template`、`create`、`delete`、`setButtonClass`、`setGlobalSelection`、`getSorted` |
 | `context.chatWorldInfo` | `getNames`、`setSelection`、`globalSelection` |

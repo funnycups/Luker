@@ -328,6 +328,7 @@ describe('isGatedPath', () => {
             '/api/themes/save', '/api/themes/delete', '/api/quick-replies/save', '/api/moving-ui/save',
             '/api/worldinfo/edit', '/api/worldinfo/import', '/api/characters/edit', '/api/characters/create',
             '/api/characters/delete', '/api/users/me/settings/save',
+            '/api/state/set', '/api/state/patch', '/api/state/delete',
         ];
         for (const p of gated) expect(isGatedPath(p)).toBe(true);
     });
@@ -338,6 +339,7 @@ describe('isGatedPath', () => {
             '/api/chats/state/get', '/api/chats/state/get-batch', '/api/settings/get', '/api/settings/bootstrap',
             '/api/settings/get-snapshots', '/api/presets/state/get', '/api/presets/state/get-batch',
             '/api/worldinfo/get', '/api/worldinfo/list', '/api/characters/all', '/api/characters/get', '/api/characters/chats',
+            '/api/state/get', '/api/state/get-batch',
         ];
         for (const p of allowed) expect(isGatedPath(p)).toBe(false);
     });

@@ -76,7 +76,7 @@ function normalizeText(def, input, base) {
         const baseValue = String(base[def.key] ?? '').trim();
         value = def.fillDefaultOnNormalize ? (baseValue || def.defaultValue) : baseValue;
     }
-    if (def.clearWhenDefault && value === def.defaultValue) {
+    if (def.clearWhenDefault && value === String(def.defaultValue ?? '').trim()) {
         return '';
     }
     return value;

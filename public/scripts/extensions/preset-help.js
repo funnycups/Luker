@@ -16,12 +16,11 @@
  *                          context is injected by director itself)
  *       - `non-director` — recommends `agent-non-director` (marker-bearing,
  *                          mirrors plugin-only's RP/task separation)
- *       - `dynamic`      — popup reads `#luker_orch_execution_mode` at click
- *                          time and renders the matching variant. Used by
- *                          the orchestrator inline-drawer's global "LLM node
- *                          preset" slot, which is both single-mode's only
- *                          agent slot and the cross-mode fallback for
- *                          per-agent empties.
+ *       - `dynamic`      — popup reads `extensionSettings.orchestrator.executionMode`
+ *                          at click time and renders the matching variant.
+ *                          Used by the global "LLM node preset" slot, which is
+ *                          both single-mode's only agent slot and the cross-mode
+ *                          fallback for per-agent empties.
  *       - omitted        — legacy doc-link-only popup (back-compat)
  *
  * Plugin usage:
@@ -157,17 +156,18 @@ function buildLegacyAgentHelpHtml() {
 /**
  * Resolve the actually-effective agent mode at click time.
  * - 'director' / 'non-director' → returned as-is
- * - 'dynamic' → reads the orchestrator inline-drawer's execution mode
- *   selector and maps `director` → 'director', anything else → 'non-director'.
- *   When the selector is missing (e.g. used in a future caller that lives
- *   outside the orchestrator UI), falls back to 'non-director' as the
+ * - 'dynamic' → reads `extensionSettings.orchestrator.executionMode` from
+ *   context and maps `director` → 'director', anything else → 'non-director'.
+ *   When the setting is missing, falls back to 'non-director' as the
  *   safer-for-more-callers default.
  */
-function resolveAgentMode(agentMode) {
+export function resolveAgentMode(agentMode) {
     if (agentMode === 'director' || agentMode === 'non-director') return agentMode;
     if (agentMode === 'dynamic') {
-        const $select = window.jQuery && window.jQuery('#luker_orch_execution_mode');
-        const value = String($select && $select.length ? $select.val() || '' : '').trim();
+        const context = typeof getContext === 'function'
+            ? getContext()
+            : globalThis.Luker?.getContext?.();
+        const value = String(context?.extensionSettings?.orchestrator?.executionMode || '').trim();
         return value === 'director' ? 'director' : 'non-director';
     }
     return '';

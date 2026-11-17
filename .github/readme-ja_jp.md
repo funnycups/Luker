@@ -32,11 +32,17 @@ Luker は次世代のロールプレイチャットプラットフォームで�
 
 ## Luker とは
 
-Luker は大規模言語モデルとのロールプレイのために専用設計された環境です。グラフベースの長期記憶、再利用できるスキルライブラリを備えたマルチエージェント場面プランナー、AI 支援のキャラクターカードスタジオ、Preset Assistant、ネイティブな LAN Sync、そしてバックエンド全体をスマートフォン上で動かせる本物の Android アプリを搭載。すべてが 1 回のインストールに収まっており、サードパーティの拡張機能は必要ありません。
+Luker は大規模言語モデルとのロールプレイのために専用設計された環境です。統合ワークベンチ（`Alt+W`）、グラフベースの長期記憶、再利用できるスキルライブラリとライブ実行パネルを備えたマルチエージェント場面プランナー、AI 支援のキャラクターカードスタジオ、Preset Assistant、ネイティブな LAN Sync、そしてバックエンド全体をスマートフォン上で動かせる本物の Android アプリを搭載。すべてが 1 回のインストールに収まっており、サードパーティの拡張機能は必要ありません。
 
 Luker は [SillyTavern](https://github.com/SillyTavern/SillyTavern) をベースに構築されており、SillyTavern との **100% のデータ互換性**を保っています。キャラクターカード、ワールド情報、プリセット、チャットは双方向にそのまま移行でき、移行コストはゼロです。
 
 ## ハイライト
+
+### Workbench — 1 つのウィンドウで診断と対話型チューニング
+
+`Alt+W`、ワンドメニュー、または右下のエントリーピルから **Workbench** を開くと、プロンプトのトークン内訳やローカルの健全性チェック、読み取り専用の診断 Q&A を確認できるほか、プリセット・キャラクターカード・ワールド情報・記憶構造・オーケストレーター構成を diff レビューとロールバック付きで対話的に調整できます。
+
+→ [Workbench のドキュメント](https://luker.cups.moe/features/workbench)
 
 ### Memory Graph — キャラクターが本当に覚えている
 
@@ -64,7 +70,7 @@ Luker は [SillyTavern](https://github.com/SillyTavern/SillyTavern) をベース
 
 ### CardApp Studio と AI Card Editor — AI と話しながらカードを編集する
 
-CodeMirror-6 エディター、AI チャットパネル、そして変更を diff で一つずつ承認できる仕組みを備えた、キャラクターカード用のフル IDE です。通常のカードはポップアップエディターで開きますが、**CardApp**（カード内に埋め込まれたミニアプリ）を持つカードは、ファイルツリー、ライブプレビュー、履歴を備えたフル機能の Studio で開きます。
+**Workbench** 内でキャラクターカードやワールド情報を AI と対話しながら直接編集できるほか、**CardApp**（カード内に埋め込まれたミニアプリ）を含むカード向けには CodeMirror-6 エディター、AI チャットパネル、ファイルツリー、ライブプレビュー、履歴を備えたフル IDE の **CardApp Studio** を利用できます。変更はすべて diff で一つずつ承認できます。
 
 ![CardApp Studio のデモ](https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/branding/cardapp-studio-demo.gif)
 
@@ -72,7 +78,7 @@ CodeMirror-6 エディター、AI チャットパネル、そして変更を dif
 
 ### Preset Assistant — 説明からプリセットを構築する
 
-チャット補完プリセットに何をさせたいかをアシスタントに伝えてください。あとは diff を重ねながら、納得のいくまであなたと一緒にプリセットを練り上げます — パラメータを読み、プロンプト項目を編集し、参照プリセットと比較しながら進みます。同じワークフローはオーケストレーターのプリセットにも使えます。
+**Workbench → AI iteration → Preset**（またはプリセットツールバーのワンドアイコン）から、チャット補完プリセットに何をさせたいかをアシスタントに伝えてください。パラメータの読み取り、プロンプト項目の編集、参照プリセットとの比較、再利用可能なスキルの抽出まで、diff を確認しながらあなたと一緒にプリセットを練り上げます。
 
 <img alt="Preset Assistant" src="https://raw.githubusercontent.com/funnycups/Luker/release/docs/public/images/preset-assistant/cpa-overview.png" width="720">
 

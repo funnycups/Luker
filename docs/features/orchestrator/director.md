@@ -1,6 +1,6 @@
 # Director Mode
 
-Director is the orchestrator's takeover mode: the reply for this turn is written by a writing team inside the orchestrator instead of by the main model. It is built for high-quality long-form roleplay — scout the context, draft, have voice and continuity reviewers challenge the draft, then revise and submit.
+Director (**Director team** in Workbench) is the orchestrator's takeover mode: the reply for this turn is written by a writing team inside the orchestrator instead of by the main model. It is built for high-quality long-form roleplay — scout the context, draft, have voice and continuity reviewers challenge the draft, then revise and submit.
 
 ## How it differs from the other modes
 
@@ -11,7 +11,7 @@ Director is the orchestrator's takeover mode: the reply for this turn is written
 | The main model this turn | Generates the reply | Not used |
 | Best for | Letting the main model keep producing on its existing context | Letting a multi-perspective team deliver a finished draft |
 
-The chat window shows only the final narrative; drafts, reviews and revisions are recorded in the Run Panel.
+The chat window shows only the final narrative; drafts, reviews, and revisions are recorded in the **Run panel** dock and **Workbench → Orchestration → Run**.
 
 ## When to use it
 
@@ -108,10 +108,10 @@ Sub-agents start only when needed. The main agent decides who to dispatch from t
 
 ## Getting started
 
-1. Set the execution mode to **Director (multi-agent)** in the extension drawer.
-2. Choose API connections and chat-completion presets for the main agent and sub-agents. The question-mark button beside a preset dropdown imports `agent-director` in a click. Main agent and sub-agents can differ, so scouting can use a lower-cost model and review a stronger one.
-3. Run the default system prompt for a couple of turns first. It already encodes scouting, drafting, review and revision; when you need changes, use [AI Iteration Studio](/features/orchestrator/iteration-studio).
-4. Chat normally and follow each sub-agent and the final message in the Run Panel.
+1. In **Workbench → Orchestration**, select **Director team** from the mode picker.
+2. Under **Settings** (for the global default) or **Flow** (for individual agents), choose API connections and generation presets for the lead writer and sub-agents. Lead writer and sub-agents can differ, so scouting can use a lower-cost model and review a stronger one.
+3. Run the default prompt for a couple of turns first. It already encodes scouting, drafting, review, and revision; when you need changes, use [AI Iteration](/features/orchestrator/iteration-studio).
+4. Chat normally and follow each sub-agent and the final message in the **Run panel** dock or **Orchestration → Run**.
 
 ## Configuration
 
@@ -145,7 +145,7 @@ Keep chat history, style instructions, jailbreak or loosening instructions, and 
 
 ## Single-agent iterative writing
 
-If you already know the voice you want and do not need reviewers, Director can be reduced to one main agent that drafts, reads back, revises and submits. Describe that goal in AI Iteration Studio: remove the sub-agents, keep chat, Memory Graph and world book tools, and let the main agent decide when to stop.
+If you already know the voice you want and do not need reviewers, Director can be reduced to one lead writer that drafts, reads back, revises, and submits. Describe that goal in **Workbench → AI iteration → Orchestration**: remove the sub-agents, keep chat, Memory Graph, and world book tools, and let the lead writer decide when to stop.
 
 This configuration has no review safeguard; the main agent's judgment is final. Run it for a couple of turns, confirm it stops reliably under your prompt, then save it as a new preset.
 
@@ -156,12 +156,12 @@ This configuration has no review safeguard; the main agent's judgment is final. 
 - No orchestration result is injected during a Director turn; the message body is the output.
 - Sub-agents cannot dispatch further sub-agents. They share the query tools enabled for the main agent and stop when a round calls no tools, returning that round's text.
 - The main agent and sub-agents follow the orchestrator's streaming setting.
-- The message updates as the main agent writes or patches it; sub-agent output streams into the Run Panel.
+- The message updates as the main agent writes or patches it; sub-agent output streams into the **Run panel** dock.
 
 ## Related pages
 
 - [Orchestration overview](/features/orchestrator/) — shared settings, triggers and card binding
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — change main-agent and sub-agent prompts in natural language
+- [AI Iteration](/features/orchestrator/iteration-studio) — change lead-writer and sub-agent prompts in natural language
 - [Skills overview](/features/skills/) — knowledge packs used by the default Director profile
 - [Notes](/features/orchestrator/notes) — reading and writing open plot threads
 - [Loop mode](/features/orchestrator/loop) — one agent researches and produces an orchestration result

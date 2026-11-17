@@ -8,7 +8,7 @@
 
 不必手敲全部内容。常见做法：
 
-- **让 AI 起草**：在 [AI 迭代工作台](/zh-CN/features/orchestrator/iteration-studio#用工作台编写-skill) 里描述想要的效果，它会起草 `SKILL.md`、安装好，并在你要求时挂到对应 Agent。
+- **让 AI 起草**：在[编排 AI 迭代](/zh-CN/features/orchestrator/iteration-studio#用工作台编写-skill)里描述想要的效果，它会起草 `SKILL.md`、安装好，并在你要求时挂到对应 Agent。
 - **自己写**：在 [Skill 管理面板](/zh-CN/features/skills/management) 新建，完全控制措辞与结构。
 
 ## 目录布局

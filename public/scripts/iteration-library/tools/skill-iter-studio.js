@@ -396,7 +396,7 @@ export async function commitApprovedSkillProposal(op) {
 // also structuredClones on apply) sees a clean before/after pair.
 // ────────────────────────────────────────────────────────────────────────────
 
-function resolveAgentSkillsContainer(profile, agentId) {
+function resolveAgentSkillsContainer(profile, agentId, { upgradeStringNode = false } = {}) {
     if (!profile || typeof profile !== 'object') return null;
     // Director: mainAgent + subAgents[]
     if (profile.mainAgent || Array.isArray(profile.subAgents)) {
@@ -417,12 +417,22 @@ function resolveAgentSkillsContainer(profile, agentId) {
             return profile.agents[agentId];
         }
     }
-    // Spec: stages[].nodes[] keyed by node id
+    // Spec: stages[].nodes[] keyed by node id (upgrading string-shorthand nodes when writing)
     if (profile.spec && Array.isArray(profile.spec.stages)) {
         for (const stage of profile.spec.stages) {
             if (!stage || !Array.isArray(stage.nodes)) continue;
-            const found = stage.nodes.find(n => String(n?.id || '') === String(agentId));
-            if (found) return found;
+            const idx = stage.nodes.findIndex(n => (typeof n === 'string' ? n.trim() : String(n?.id || '')) === String(agentId));
+            if (idx >= 0) {
+                const found = stage.nodes[idx];
+                if (typeof found === 'string') {
+                    if (!upgradeStringNode) return null;
+                    const id = found.trim();
+                    const upgraded = { id, preset: id, type: 'worker', tools: null };
+                    stage.nodes[idx] = upgraded;
+                    return upgraded;
+                }
+                return found;
+            }
         }
     }
     // Loop: flat profile = single agent. Match either explicit 'loop' / 'agent'
@@ -1057,7 +1067,7 @@ const HANDLERS = {
         if (!profile) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: 'working profile unavailable' });
         const before = structuredClone(profile);
         const next = structuredClone(profile);
-        const container = resolveAgentSkillsContainer(next, args.agentId);
+        const container = resolveAgentSkillsContainer(next, args.agentId, { upgradeStringNode: true });
         if (!container) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: `agent not found in working profile: ${args.agentId}` });
         ensureAgentSkillsField(container);
         const list = container.skills[args.list];
@@ -1081,7 +1091,7 @@ const HANDLERS = {
         if (!profile) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: 'working profile unavailable' });
         const before = structuredClone(profile);
         const next = structuredClone(profile);
-        const container = resolveAgentSkillsContainer(next, args.agentId);
+        const container = resolveAgentSkillsContainer(next, args.agentId, { upgradeStringNode: true });
         if (!container) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: `agent not found in working profile: ${args.agentId}` });
         ensureAgentSkillsField(container);
         const list = container.skills[args.list];

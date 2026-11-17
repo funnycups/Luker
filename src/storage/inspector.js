@@ -132,6 +132,7 @@ export const CATEGORIES = Object.freeze([
         includes: [
             { kind: 'dir', rel: 'groups' },
             { kind: 'dir', rel: 'card-apps' },
+            { kind: 'dir', rel: 'states' },
             { kind: 'dir', rel: 'assets' },
             { kind: 'dir', rel: 'thumbnails' },
             { kind: 'file', rel: 'image-metadata.json' },

@@ -35,6 +35,7 @@ export const PORT_RANGES = {
     diagnostics:    { base: 8681, count: 4 },
     bulkdelete:     { base: 8691, count: 4 },
     'image-illustration': { base: 8701, count: 6 },
+    workbench:      { base: 8711, count: 6 },
 };
 
 /**

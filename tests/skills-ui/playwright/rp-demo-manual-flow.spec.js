@@ -22,8 +22,11 @@ import path from 'node:path';
 import {
     SCREENSHOTS_DIR,
     awaitMainUI,
-    ensureExtensionsDrawerOpen,
-    ensureInlineDrawerOpen,
+    openWorkbenchOrchView,
+    setWorkbenchOrchMode,
+    setWorkbenchOrchEnabled,
+    saveWorkbenchOrchDraftIfVisible,
+    closeWorkbenchWindow,
     takeDocScreenshot,
 } from './helpers.js';
 
@@ -154,11 +157,12 @@ test.describe('Skills RP demo (manual user path)', () => {
         }
         await takeDocScreenshot(page, stepPath(3, 'seraphina-loaded'), { fullPage: false });
 
-        // ── Step 4: open Extensions drawer → Orchestrator inline-drawer →
+        // ── Step 4: open Workbench -> Orchestration -> Setup ->
         //           click "Manage skills..."
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'orchestrator_settings');
-        const manageBtn = page.locator('#orchestrator_settings [data-luker-action="manage-skills"]:visible').first();
+        const setupLens = await openWorkbenchOrchView(page, /^(Setup|准备阶段|準備階段|配置)$/i);
+        const manageBtn = setupLens.locator('.ol-setup-bar button').filter({
+            hasText: /Manage skills|管理技能/i,
+        }).first();
         await manageBtn.waitFor({ state: 'visible', timeout: 10000 });
         await manageBtn.click();
         const skillManagerPopup = page.locator('.popup .luker_skill_manager').first();
@@ -308,61 +312,35 @@ test.describe('Skills RP demo (manual user path)', () => {
         await managerCloseBtn.dispatchEvent('click');
         await page.locator('.popup .luker_skill_manager').waitFor({ state: 'hidden', timeout: 5000 });
 
-        // ── Step 10: open the Orchestration Editor popup — this contains
-        //   the director workspace and the mode-level skill chips editor.
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'orchestrator_settings');
-        const openEditorBtn = page.locator('#orchestrator_settings [data-luker-action="open-orch-editor"]:visible').first();
-        await openEditorBtn.waitFor({ state: 'visible', timeout: 10000 });
-        await openEditorBtn.click();
-        const orchEditor = page.locator('.popup .luker_orch_director_block').first();
-        await orchEditor.waitFor({ state: 'visible', timeout: 15000 });
-        // The mode-level chip block is inside <details class="luker_orch_skills_section" open>
-        // with the summary "Mode-level skills (baseline for every agent)".
-        // Its chips mount has data-luker-chip-target encoding mode=director,
-        // level=mode. We scope the add-select / button to that specific
-        // mount to avoid colliding with per-agent chip blocks above/below.
-        // CSS attr selector wraps value in single quotes because the value
-        // itself (JSON-formatted) contains double quotes.
-        const modeChipSelector = '.popup [data-luker-skill-chips-mount][data-luker-chip-target*=\'"level":"mode"\'][data-luker-chip-target*=\'"mode":"director"\']';
-        const modeChipMount = page.locator(modeChipSelector).first();
-        await modeChipMount.waitFor({ state: 'visible', timeout: 10000 });
-        // Wait for the chips inventory hydration — the mount starts with
-        // "Loading skills..." then renders the chips block.
-        await page.waitForFunction((sel) => {
-            const m = document.querySelector(sel);
-            return Boolean(m && m.querySelector('[data-skill-chip-add-select]'));
-        }, modeChipSelector, { timeout: 15000 });
+        // ── Step 10: open Workbench -> Orchestration (Director mode) -> Setup
+        //           view containing the mode-level skill chips editor.
+        await setWorkbenchOrchMode(page, /Director|导演|導演/i);
+        await setWorkbenchOrchEnabled(page, true);
+        const orchSetup = await openWorkbenchOrchView(page, /^(Setup|准备阶段|準備階段|配置)$/i);
+        const skillsSection = orchSetup.locator('section.ol-setup-section').filter({
+            has: page.locator('.lw-sec-title > span', { hasText: /^Skills$|^技能$/i }),
+        }).first();
+        await skillsSection.waitFor({ state: 'visible', timeout: 15000 });
+        const modeChipMount = skillsSection.locator('.ol-setup-chips .luker_skill_chips').first();
+        await modeChipMount.waitFor({ state: 'visible', timeout: 15000 });
         await takeDocScreenshot(page, stepPath(10, 'director-editor-before-chip-add'), { fullPage: false });
 
         // ── Step 11: add the new skill to the director mode-level visible
-        //   list via the chip add control — select the name from the dropdown,
-        //   then click the "Add" button. This is the chips component's
-        //   user-facing path; it mutates the editor state which the orch
-        //   popup persists on close.
+        //   list via the chip add control, then click `.ol-savebar` Save.
         const addSelect = modeChipMount.locator('[data-skill-chip-add-select]').first();
         await addSelect.waitFor({ state: 'visible', timeout: 5000 });
         await addSelect.selectOption(SKILL_NAME);
         const addBtn = modeChipMount.locator('[data-skill-chip-action="open-add"]').first();
         await addBtn.click();
-        // Wait for the chip with our name to appear in the chips block.
         const newChip = modeChipMount.locator(`[data-skill-chip-name="${SKILL_NAME}"]`).first();
         await newChip.waitFor({ state: 'visible', timeout: 5000 });
+        await saveWorkbenchOrchDraftIfVisible(page);
         await takeDocScreenshot(page, stepPath(11, 'director-chip-added'), { fullPage: false });
 
-        // ── Close the orchestration editor popup (saves on close via the
-        //   debounced settings persister).
-        const orchClose = page.locator('.popup:has(.luker_orch_director_block) div.popup-button-ok').first();
-        await orchClose.click();
-        await page.locator('.popup .luker_orch_director_block').waitFor({ state: 'hidden', timeout: 5000 });
+        // ── Close Workbench before starting the live chat turn.
+        await closeWorkbenchWindow(page);
 
-        // ── Step 12: back to the chat. Verify mode === director (it's the
-        //   default on a fresh worktree; confirm via the orchestrator status
-        //   strip). Close the extensions drawer so the textarea is in focus.
-        // Close extensions drawer.
-        await page.locator('#extensions-settings-button .drawer-toggle').first().click();
-        await page.locator('#rm_extensions_block').waitFor({ state: 'hidden', timeout: 5000 });
-        // Sanity: the orchestrator mode is director.
+        // ── Step 12: back to the chat. Verify mode === director.
         const executionMode = await page.evaluate(() => {
             const ctx = window.Luker?.getContext?.();
             return String(ctx?.extensionSettings?.orchestrator?.executionMode || '');
@@ -481,31 +459,27 @@ test.describe('Skills RP demo (manual user path)', () => {
         // tool_result ok=true) jointly cover the contract.
 
         // ── Teardown — perform user-visible cleanup via UI only. ────────
-        // (a) Re-open the orchestration editor, find the chip, click its ×.
-        await ensureExtensionsDrawerOpen(page);
-        await ensureInlineDrawerOpen(page, 'orchestrator_settings');
-        await page.locator('#orchestrator_settings [data-luker-action="open-orch-editor"]:visible').first().click();
-        await page.locator('.popup .luker_orch_director_block').first().waitFor({ state: 'visible', timeout: 15000 });
-        const modeChipMountTeardown = page.locator(modeChipSelector).first();
+        // (a) Re-open Workbench -> Orchestration -> Setup, remove chip, click Save.
+        const teardownSetup = await openWorkbenchOrchView(page, /^(Setup|准备阶段|準備階段|配置)$/i);
+        const modeChipMountTeardown = teardownSetup.locator('section.ol-setup-section').filter({
+            has: page.locator('.lw-sec-title > span', { hasText: /^Skills$|^技能$/i }),
+        }).first().locator('.ol-setup-chips .luker_skill_chips').first();
         await modeChipMountTeardown.waitFor({ state: 'visible', timeout: 10000 });
-        // Wait for the chip to be rendered, then click its × span.
         const teardownChip = modeChipMountTeardown.locator(`[data-skill-chip-name="${SKILL_NAME}"]`).first();
         await teardownChip.waitFor({ state: 'visible', timeout: 10000 });
         const teardownChipX = modeChipMountTeardown.locator(
             `[data-skill-chip-action="remove"][data-skill-chip-name="${SKILL_NAME}"]`,
         ).first();
         await teardownChipX.dispatchEvent('click');
-        // Confirm the chip is gone.
         await modeChipMountTeardown.locator(`[data-skill-chip-name="${SKILL_NAME}"]`).first().waitFor({ state: 'hidden', timeout: 5000 });
+        await saveWorkbenchOrchDraftIfVisible(page);
         await takeDocScreenshot(page, stepPath(15, 'teardown-chip-removed'), { fullPage: false });
-        // Close the orch editor.
-        await page.locator('.popup:has(.luker_orch_director_block) div.popup-button-ok').first().dispatchEvent('click');
-        await page.locator('.popup .luker_orch_director_block').waitFor({ state: 'hidden', timeout: 5000 });
 
-        // (b) Re-open the Skills Manager, find the row, click Delete, accept
-        //     the confirmation popup.
-        await ensureInlineDrawerOpen(page, 'orchestrator_settings');
-        await page.locator('#orchestrator_settings [data-luker-action="manage-skills"]:visible').first().click();
+        // (b) Re-open the Skills Manager from Setup bar, delete the skill.
+        const manageTeardown = teardownSetup.locator('.ol-setup-bar button').filter({
+            hasText: /Manage skills|管理技能/i,
+        }).first();
+        await manageTeardown.click();
         const mgrPopupTeardown = page.locator('.popup .luker_skill_manager').first();
         await mgrPopupTeardown.waitFor({ state: 'visible', timeout: 10000 });
         await page.waitForFunction((name) => {
@@ -515,21 +489,18 @@ test.describe('Skills RP demo (manual user path)', () => {
         const row = mgrPopupTeardown.locator(`[data-skill-name="${SKILL_NAME}"]`).first();
         const deleteBtn = row.locator('[data-skill-action="delete"]').first();
         await deleteBtn.dispatchEvent('click');
-        // Confirm popup.
         const confirmPopup = page.locator('dialog.popup:visible').last();
         await confirmPopup.waitFor({ state: 'visible', timeout: 5000 });
         await confirmPopup.locator('div.popup-button-ok, button:has-text("Delete"), button:has-text("OK"), button:has-text("Yes")').first().dispatchEvent('click');
-        // Wait for the row to disappear.
         await page.waitForFunction((name) => {
             const rows = document.querySelectorAll('.popup .luker_skill_manager [data-skill-name]');
             return !Array.from(rows).some(r => r.getAttribute('data-skill-name') === name);
         }, SKILL_NAME, { timeout: 10000 });
         await takeDocScreenshot(page, stepPath(16, 'teardown-skill-deleted'), { fullPage: false });
-        // Best-effort close: the manager popup may auto-detach after the last
-        // row is removed; if so the locator resolves to nothing and we exit.
         const managerCloseLast = page.locator('.popup:has(.luker_skill_manager) div.popup-button-ok').first();
         if (await managerCloseLast.count() > 0) {
             await managerCloseLast.dispatchEvent('click').catch(() => {});
         }
+        await closeWorkbenchWindow(page);
     });
 });

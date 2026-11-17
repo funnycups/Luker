@@ -2,18 +2,7 @@
 //
 // #64 — Legacy recall-method migration: when settings.json holds a pre-collapse
 // value (`hybrid_rerank`), the boot pipeline rewrites it to `rag` with the
-// `ragUseRerank` toggle on, and the UI dropdown reflects the new shape.
-//
-// Real-user flow:
-//   1. Pre-seed settings.json with `recallMethod: 'hybrid_rerank'` and the
-//      now-removed `diffusionSteps` field (simulating an upgrade from the
-//      4-mode hybrid recall era).
-//   2. Boot the server, open the MG inline drawer.
-//   3. Read the dropdown <select>: must show value="rag".
-//   4. Read the Enable rerank checkbox: must be checked.
-//   5. Read the Enable query rewrite checkbox: must be unchecked.
-//   6. Read settings via window.Luker.getContext().extensionSettings — must
-//      no longer contain diffusionSteps.
+// `ragUseRerank` toggle on, and Memory Lens Settings reflects the new shape.
 
 import { test, expect } from '@playwright/test';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -26,11 +15,9 @@ import {
     bootstrapVectorsBackend,
     markOnboarded,
 } from '../_lib/fixtures.js';
-import {
-    awaitMainUI,
-    openExtensionsDrawer,
-    openInlineDrawer,
-} from '../_lib/page.js';
+import { awaitMainUI } from '../_lib/page.js';
+import { closeWorkbench } from '../_lib/ui-workbench.js';
+import { openMemoryWorkspace } from '../_lib/ui-mg-varops.js';
 
 let server, mock;
 
@@ -42,9 +29,6 @@ test.beforeAll(async () => {
     appendConnectionProfile({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
     bootstrapVectorsBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
 
-    // Seed legacy values directly into settings.json under extension_settings.
-    // ensureSettings() runs `normalizeLegacyRecallSettings` on every load,
-    // so this is the only knob we need to plant.
     const settingsPath = resolve(server.dataRoot, 'default-user', 'settings.json');
     if (!existsSync(settingsPath)) {
         throw new Error(`settings.json missing at ${settingsPath}`);
@@ -54,7 +38,6 @@ test.beforeAll(async () => {
     s.extension_settings.memory_graph = {
         ...(s.extension_settings.memory_graph || {}),
         recallMethod: 'hybrid_rerank',
-        // Pre-collapse fields the new normalizer must strip.
         diffusionSteps: 3,
         diffusionDecay: 0.7,
         diffusionTopK: 80,
@@ -72,50 +55,23 @@ test.afterAll(async () => {
 test.describe('#64 — legacy hybrid_rerank settings migrate to RAG with rerank on', () => {
     test.setTimeout(120_000);
 
-    test('on boot, the recall dropdown shows RAG, rerank checkbox is checked, diffusion fields are gone', async ({ page }) => {
+    test('on boot, Memory Lens Settings shows RAG, rerank is on, diffusion fields are gone', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
-        await openExtensionsDrawer(page);
-        await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
+        const lens = await openMemoryWorkspace(page, { subview: 'settings' });
+        const settings = lens.locator('.ml-settings').first();
 
-        // Wait for the select to be populated.
-        await page.waitForSelector('#luker_rpg_memory_recall_method', { timeout: 10_000 });
+        const methodSelect = settings.locator('[data-field-key="recallMethod"] select').first();
+        await expect(methodSelect).toHaveValue('rag', { timeout: 10_000 });
 
-        // 1. UI dropdown reflects the migration target.
-        const methodValue = await page.evaluate(() => {
-            return document.getElementById('luker_rpg_memory_recall_method')?.value || '';
-        });
-        expect(methodValue, 'recall method dropdown should show rag after migrating hybrid_rerank').toBe('rag');
+        await expect(settings.locator('[data-field-key="embeddingProfileId"]')).toBeVisible();
 
-        // 2. The RAG sub-block is visible (visibility helper ran post-migration).
-        const ragSettingsVisible = await page.evaluate(() => {
-            const el = document.getElementById('luker_rpg_memory_rag_settings');
-            if (!el) return false;
-            return window.getComputedStyle(el).display !== 'none';
-        });
-        expect(ragSettingsVisible, '#luker_rpg_memory_rag_settings should be visible when method=rag').toBe(true);
+        const rerankSwitch = settings.locator('[data-field-key="ragUseRerank"]').first();
+        await expect(rerankSwitch).toHaveAttribute('aria-checked', 'true');
+        await expect(settings.locator('[data-field-key="rerankProfileId"]')).toBeVisible();
 
-        // 3. Rerank checkbox is checked (carried over from hybrid_rerank).
-        const rerankChecked = await page.evaluate(() => {
-            return Boolean(document.getElementById('luker_rpg_memory_rag_use_rerank')?.checked);
-        });
-        expect(rerankChecked, 'rerank checkbox should be checked after migrating hybrid_rerank').toBe(true);
+        const rewriteSwitch = settings.locator('[data-field-key="ragUseQueryRewrite"]').first();
+        await expect(rewriteSwitch).toHaveAttribute('aria-checked', 'false');
 
-        // 4. The rerank-profile sub-block is visible because the checkbox is on.
-        const rerankBlockVisible = await page.evaluate(() => {
-            const el = document.getElementById('luker_rpg_memory_rag_rerank_block');
-            if (!el) return false;
-            return window.getComputedStyle(el).display !== 'none';
-        });
-        expect(rerankBlockVisible, 'rag rerank block should be visible when checkbox is on').toBe(true);
-
-        // 5. Query-rewrite checkbox is NOT checked (legacy hybrid_rerank did not imply rewrite).
-        const rewriteChecked = await page.evaluate(() => {
-            return Boolean(document.getElementById('luker_rpg_memory_rag_use_query_rewrite')?.checked);
-        });
-        expect(rewriteChecked, 'query rewrite checkbox must NOT be on after migration').toBe(false);
-
-        // 6. In-memory settings reflect the normalized shape, and the legacy
-        // diffusion / enableRerank fields are gone.
         const migrated = await page.evaluate(() => {
             const s = window.Luker.getContext().extensionSettings?.memory_graph || {};
             return {
@@ -137,5 +93,7 @@ test.describe('#64 — legacy hybrid_rerank settings migrate to RAG with rerank 
         expect(migrated.hasDiffusionTopK, 'diffusionTopK must be stripped').toBe(false);
         expect(migrated.hasDiffusionTeleportAlpha, 'diffusionTeleportAlpha must be stripped').toBe(false);
         expect(migrated.hasEnableRerank, 'legacy enableRerank stub must be stripped').toBe(false);
+
+        await closeWorkbench(page);
     });
 });

@@ -31,9 +31,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { fillMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 const SETUP_TURN = 'The reef line shifted overnight; the third buoy drags its mooring.';
 
@@ -77,18 +76,6 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function setCheckbox(page, id, checked) {
-    await page.evaluate(({ id, checked }) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        if (el.checked !== checked) {
-            el.checked = checked;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    }, { id, checked });
-}
-
 test.describe('#69 — an extraction retry surfaces exactly one info toast', () => {
     test.setTimeout(180_000);
 
@@ -119,17 +106,16 @@ test.describe('#69 — an extraction retry surfaces exactly one info toast', () 
             new MutationObserver(scan).observe(document.body, { childList: true, subtree: true, characterData: true });
         });
 
-        // Enable MG through the real checkboxes; keep compression off so the
+        // Enable MG through Memory Lens Settings; keep compression off so the
         // only retryable LLM traffic is the extraction pass.
-        await openExtensionsDrawer(page);
-        await openInlineDrawer(page, 'memory_graph_settings');
-        await setCheckbox(page, 'luker_rpg_memory_enabled', true);
-        await setCheckbox(page, 'luker_rpg_memory_auto_extraction_enabled', true);
-        await setCheckbox(page, 'luker_rpg_memory_auto_compression_enabled', false);
+        await setMgSettings(page, {
+            enabled: true,
+            autoExtractionEnabled: true,
+            autoCompressionEnabled: false,
+        });
 
-        // Drive extraction from the Graph tab's Fill Graph button.
-        await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="graph"]').click();
-        await page.locator('#luker_rpg_memory_fill').click();
+        // Drive extraction from the Fill Graph button.
+        await fillMgGraph(page, { closeAfter: true });
 
         await expect.poll(async () => page.evaluate(() => window.__retryToastTexts.length), {
             timeout: 120_000,

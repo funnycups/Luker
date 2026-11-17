@@ -22,7 +22,7 @@ const USER_DIR_KEYS = Object.freeze([
     'characters', 'backgrounds', 'novelAI_Settings', 'koboldAI_Settings',
     'openAI_Settings', 'textGen_Settings', 'themes', 'movingUI', 'extensions',
     'instruct', 'context', 'quickreplies', 'assets', 'comfyWorkflows', 'files',
-    'vectors', 'backups', 'sysprompt', 'reasoning', 'cardApps',
+    'vectors', 'backups', 'sysprompt', 'reasoning', 'cardApps', 'states',
 ]);
 
 function buildStubDirs(rootDir) {

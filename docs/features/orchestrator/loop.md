@@ -1,6 +1,6 @@
 # Loop Mode
 
-Loop mode gives one agent a single conversation and lets it call tools until it decides the job is done. It fits turns that need research before writing: read the recent chat, check world book entries and memory, then produce a short orchestration result for the main model.
+Loop (**Research loop** in Workbench) gives one agent a single conversation and lets it call tools until it decides the job is done. It fits turns that need research before writing: read the recent chat, check world book entries and memory, then produce a short orchestration result for the main model.
 
 ```d2
 direction: down
@@ -54,19 +54,19 @@ Use Spec for a predictable, repeatable flow, Agenda when the set of agents must 
 
 ## Getting started
 
-1. Select **Single Agent Loop** as the execution mode in the extension drawer.
-2. Open the orchestration editor and write the system prompt: the agent's task and its stopping condition.
-3. Choose the API connection and chat-completion preset for Loop. Leave them empty to use the global orchestration presets.
-4. Enable the tool groups this turn needs.
-5. Chat normally and follow the agent's research and final result in the Run Panel.
+1. In **Workbench → Orchestration**, select **Research loop** (Loop) from the mode picker.
+2. In **Flow** or **Setup**, edit the Researcher agent's role prompt to state its task and stopping condition.
+3. Choose the AI connection and generation preset for Loop under **Flow** (or leave empty to use the defaults in **Settings**).
+4. Enable the tool groups this turn needs under **Setup**.
+5. Chat normally and follow the agent's research and final result in the **Run panel** dock or **Orchestration → Run**.
 
 ## Editor
 
-- **System prompt**: the agent's role, task and stopping condition. Most loops that fail to stop are missing a clear statement of when the result is ready.
-- **Maximum rounds**: 40 by default. One round is one model request plus one tool result.
-- **Wall-clock budget**: 300 seconds by default. The loop stops when it expires, regardless of remaining rounds.
-- **Tool toggles**: grouped by purpose. An unchecked group is absent from the agent's tool list.
-- **API and prompt presets**: let Loop use a cheaper model than the main chat.
+- **Role prompt**: the agent's role, task, and stopping condition. Most loops that fail to stop are missing a clear statement of when the result is ready.
+- **Loop max rounds** (under **Settings**): 40 by default. One round is one model request plus one tool result.
+- **Loop wall-clock budget (seconds)** (under **Settings**): 300 seconds by default. The loop stops when it expires.
+- **Tool toggles** (under **Setup**): grouped by purpose. An unchecked group is absent from the agent's tool list.
+- **AI model** (under **Flow**): lets Loop use a faster or cheaper model than the main chat.
 
 ## Available tools
 
@@ -108,12 +108,12 @@ Use a smaller model, enable only the tool groups this turn needs, and lower the 
 
 ### The result never reaches the main model
 
-Confirm Loop is enabled and the execution mode is correct, then check the Run Panel for a final result. Cancelled or failed runs do not inject unfinished content.
+Confirm Loop is enabled and **Research loop** is selected in the mode picker, then check the **Run panel** dock or **Workbench → Orchestration → Run** for a final result. Cancelled or failed runs do not inject unfinished content.
 
 ## Related pages
 
 - [Orchestration overview](/features/orchestrator/) — mode selection and shared settings
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — change Loop configuration in natural language
+- [AI Iteration](/features/orchestrator/iteration-studio) — change Loop configuration in natural language
 - [Custom tools](/features/orchestrator/custom-tools) — add capabilities beyond the built-in set
 - [Notes](/features/orchestrator/notes) — saving and tracking plot threads
 - [Memory Graph](/features/memory-graph) — long-term memory Loop can query

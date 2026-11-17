@@ -1,0 +1,173 @@
+/* Shell: embedded workspace inside Workbench (inherits --lw-* / --wb-* tokens). */
+.olens {
+    --ol-font: var(--lw-font);
+    --ol-mono: var(--lw-mono);
+    --ol-serif: var(--lw-serif);
+
+    --ol-radius-xs: var(--lw-r-xs);
+    --ol-radius-sm: var(--lw-r-sm);
+    --ol-radius: var(--lw-r);
+    --ol-radius-lg: var(--lw-r-lg);
+    --ol-topbar-h: 52px;
+    --ol-side-w: 268px;
+    --ol-insp-w: 392px;
+    --ol-ease: var(--lw-ease);
+    --ol-dur: var(--lw-dur);
+
+    --ol-bg: var(--lw-bg);
+    --ol-canvas: var(--lw-canvas);
+    --ol-surface: var(--lw-surface);
+    --ol-surface-2: var(--lw-surface-2);
+    --ol-raised: var(--lw-raised);
+    --ol-hover: var(--lw-hover);
+    --ol-active: var(--lw-active);
+    --ol-border: var(--lw-border);
+    --ol-border-strong: var(--lw-border-strong);
+    --ol-text: var(--lw-text);
+    --ol-text-muted: var(--lw-muted);
+    --ol-text-faint: var(--lw-faint);
+    --ol-grid-dot: var(--lw-grid-dot);
+    --ol-accent: var(--lw-accent);
+    --ol-accent-soft: var(--lw-accent-soft);
+    --ol-accent-text: var(--lw-accent-text);
+    --ol-recalled: var(--lw-amber);
+    --ol-recalled-soft: var(--lw-amber-soft);
+    --ol-pinned: var(--lw-blue);
+    --ol-pinned-soft: var(--lw-blue-soft);
+    --ol-danger: var(--lw-danger);
+    --ol-danger-soft: var(--lw-danger-soft);
+    --ol-shadow-1: var(--lw-shadow-1);
+    --ol-shadow-2: var(--lw-shadow-2);
+    --ol-shadow-3: var(--lw-shadow-3);
+    --ol-scrim: var(--lw-scrim);
+
+    --ol-t0: #ff8f6b; --ol-t1: #4fc78b; --ol-t2: #b99af7; --ol-t3: #5dc3d8;
+    --ol-t4: #e58fcf; --ol-t5: #d4cf6f; --ol-t6: #6fb3f2; --ol-t7: #dba36d;
+    --ol-wire: rgba(160, 168, 186, 0.26);
+    --ol-tone: var(--ol-accent);
+    --ol-running: var(--ol-recalled);
+    --ol-running-soft: var(--ol-recalled-soft);
+
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    background: var(--ol-bg);
+    color: var(--ol-text);
+    font-family: var(--ol-font);
+    font-size: 13px;
+    line-height: 1.5;
+    letter-spacing: 0;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    outline: none;
+    isolation: isolate;
+    box-sizing: border-box;
+}
+
+.olens[data-theme="light"],
+.wbench[data-theme="light"] .olens.is-embedded {
+    --ol-t0: #e5643f; --ol-t1: #22a066; --ol-t2: #8a63e0; --ol-t3: #1e9bb5;
+    --ol-t4: #c4509f; --ol-t5: #a39a1c; --ol-t6: #2f7fd0; --ol-t7: #b87632;
+    --ol-wire: rgba(70, 78, 96, 0.24);
+}
+.olens[data-theme="light"] .ol-bar,
+.wbench[data-theme="light"] .olens.is-embedded .ol-bar { color: #fff; background: var(--ol-tone); }
+
+/* Agent tones: stable per agent id (hash % 8). */
+.olens [data-tone="t0"] { --ol-tone: var(--ol-t0); }
+.olens [data-tone="t1"] { --ol-tone: var(--ol-t1); }
+.olens [data-tone="t2"] { --ol-tone: var(--ol-t2); }
+.olens [data-tone="t3"] { --ol-tone: var(--ol-t3); }
+.olens [data-tone="t4"] { --ol-tone: var(--ol-t4); }
+.olens [data-tone="t5"] { --ol-tone: var(--ol-t5); }
+.olens [data-tone="t6"] { --ol-tone: var(--ol-t6); }
+.olens [data-tone="t7"] { --ol-tone: var(--ol-t7); }
+
+.olens *, .olens *::before, .olens *::after { box-sizing: border-box; text-shadow: none; }
+.olens code, .olens kbd, .olens small, .olens b, .olens strong, .olens em, .olens q, .olens a { color: inherit; opacity: 1; }
+.olens code { border: 0; background: none; line-height: inherit; }
+.olens select option { background: var(--ol-surface); color: var(--ol-text); }
+.olens select { margin-bottom: 0; }
+.olens [hidden] { display: none !important; }
+.olens button { font: inherit; color: inherit; margin: 0; }
+.olens h1, .olens h2, .olens h3, .olens h4, .olens p, .olens ul, .olens ol, .olens dl, .olens dd, .olens figure, .olens blockquote, .olens pre { margin: 0; padding: 0; }
+.olens h1, .olens h2, .olens h3, .olens h4 { font-weight: 600; color: var(--ol-text); }
+.olens ul, .olens ol { list-style: none; }
+.olens mark { background: var(--ol-accent-soft); color: inherit; border-radius: 2px; padding: 0 1px; }
+.olens :focus-visible { outline: 2px solid var(--ol-accent); outline-offset: 2px; }
+.olens ::selection { background: var(--ol-accent-soft); }
+.olens .ol-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.olens .ol-spacer { flex: 1 1 auto; }
+
+.olens * { scrollbar-width: thin; scrollbar-color: var(--ol-border-strong) transparent; }
+.olens ::-webkit-scrollbar { width: 10px; height: 10px; }
+.olens ::-webkit-scrollbar-thumb { background: var(--ol-border-strong); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+.olens ::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes ol-enter { from { opacity: 0; transform: scale(0.992); } to { opacity: 1; transform: none; } }
+
+/* Topbar */
+.olens .ol-topbar {
+    position: relative;
+    z-index: 3;
+    flex: 0 0 var(--ol-topbar-h);
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 12px;
+    padding: 0 10px 0 8px;
+    border-bottom: 1px solid var(--ol-border);
+    background: var(--ol-surface);
+}
+.olens .ol-topbar-left, .olens .ol-topbar-right { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.olens .ol-topbar-right { justify-content: flex-end; }
+.olens .ol-brand { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 4px; }
+.olens .ol-brand-mark {
+    display: grid; place-items: center;
+    width: 28px; height: 28px; border-radius: 8px;
+    color: var(--ol-accent);
+    background: var(--ol-accent-soft);
+    flex: none;
+}
+.olens .ol-brand-name { font-weight: 650; font-size: 14px; white-space: nowrap; }
+.olens .ol-brand-chat {
+    color: var(--ol-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+    padding-left: 10px; border-left: 1px solid var(--ol-border-strong);
+}
+
+.olens .ol-sync { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--ol-text-faint); font-size: 12px; white-space: nowrap; }
+.olens .ol-sync-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ol-accent); box-shadow: 0 0 0 3px var(--ol-accent-soft); }
+.olens .ol-sync[data-state="syncing"] .ol-sync-dot { background: var(--ol-recalled); box-shadow: 0 0 0 3px var(--ol-recalled-soft); animation: ol-pulse 1s ease-in-out infinite; }
+.olens .ol-sync[data-state="error"] .ol-sync-dot { background: var(--ol-danger); box-shadow: 0 0 0 3px var(--ol-danger-soft); }
+@keyframes ol-pulse { 50% { opacity: 0.35; } }
+
+/* Body */
+.olens .ol-body { position: relative; flex: 1 1 auto; display: flex; min-height: 0; }
+.olens .ol-inspector {
+    flex: none;
+    min-height: 0;
+    overflow: hidden auto;
+    background: var(--ol-surface);
+    transition: width 220ms var(--ol-ease), opacity 160ms;
+}
+.olens .ol-inspector { width: 0; opacity: 0; border-left: 1px solid transparent; }
+.olens.inspector-open .ol-inspector { width: var(--ol-insp-w); opacity: 1; border-left-color: var(--ol-border); }
+.olens .ol-insp-body { width: var(--ol-insp-w); }
+
+.olens .ol-stagewrap { position: relative; flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.olens .ol-stage { position: relative; flex: 1 1 auto; min-height: 0; }
+.olens .ol-view { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.olens .ol-view > * { flex: 1 1 auto; min-height: 0; }
+.olens .ol-statelayer { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; background: var(--ol-bg); }
+.olens .ol-loading { display: flex; flex-direction: column; align-items: center; gap: 14px; color: var(--ol-text-muted); }
+.olens .ol-spinner { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--ol-border-strong); border-top-color: var(--ol-accent); animation: ol-spin 0.8s linear infinite; }
+@keyframes ol-spin { to { transform: rotate(360deg); } }
+
+.olens .ol-scrim { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+    .olens, .olens * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

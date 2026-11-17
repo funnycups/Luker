@@ -80,10 +80,6 @@ jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assis
 jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/editor-ui.js', () => ({
     createCharacterEditorUi: () => ({}),
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/editor-iteration/studio.js', () => ({
-    openUnifiedCharacterEditorPopup: async () => {},
-    DEFAULT_SYSTEM_PROMPT: '',
-}));
 jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/studio/ai-chat.js', () => ({
     DEFAULT_SYSTEM_PROMPT: '',
 }));

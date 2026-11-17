@@ -1,0 +1,130 @@
+/* Run view: stats, swimlane timeline, step detail. */
+.olens .ol-run { display: flex; flex-direction: column; min-height: 0; overflow: auto; background: var(--ol-canvas); }
+.olens .ol-run-head { padding: 16px 24px 0; display: grid; gap: 10px; }
+.olens .ol-run-pinned { display: flex; align-items: center; gap: 8px; color: var(--ol-pinned); font-size: 12.5px; }
+.olens .ol-stats { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 28px; }
+.olens .ol-stat { display: grid; gap: 2px; }
+.olens .ol-stat-label { font-size: 11px; color: var(--ol-text-faint); }
+.olens .ol-stat-value { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.olens .ol-stat-value small { font-size: 11.5px; font-weight: 500; color: var(--ol-text-faint); }
+.olens .ol-status { display: inline-flex; align-items: center; gap: 6px; }
+.olens .ol-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ol-accent); }
+.olens .ol-status[data-status="running"] .ol-status-dot { background: var(--ol-running); box-shadow: 0 0 0 3px var(--ol-running-soft); animation: ol-pulse 1s ease-in-out infinite; }
+.olens .ol-status[data-status="error"] .ol-status-dot, .olens .ol-status[data-status="failed"] .ol-status-dot { background: var(--ol-danger); }
+.olens .ol-status[data-status="aborted"] .ol-status-dot, .olens .ol-status[data-status="cancelled"] .ol-status-dot, .olens .ol-status[data-status="budget_exhausted"] .ol-status-dot { background: var(--ol-text-faint); }
+.olens .ol-run-error { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--ol-radius); color: var(--ol-danger); background: var(--ol-danger-soft); }
+.olens .ol-btn-danger { color: var(--ol-danger); }
+.olens .ol-btn-danger:hover { border-color: var(--ol-danger); }
+
+.olens .ol-run-main { flex: 1 1 auto; display: grid; grid-template-rows: auto 1fr; gap: 14px; padding: 16px 24px 28px; min-height: 0; }
+
+/* Timeline */
+.olens .ol-tl { --ol-lane-label: 168px; border-radius: var(--ol-radius-lg); background: var(--ol-surface); border: 1px solid var(--ol-border); overflow: hidden; }
+.olens .ol-tl-head { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px 4px; }
+.olens .ol-tl-title { font-weight: 600; }
+.olens .ol-tl-hint { font-size: 11.5px; color: var(--ol-text-faint); }
+.olens .ol-tl-body { position: relative; padding: 0 14px 12px; max-height: 46vh; overflow: auto; }
+.olens .ol-tl-scale, .olens .ol-tl-gridwrap { display: grid; grid-template-columns: var(--ol-lane-label) 1fr; }
+.olens .ol-tl-scale { position: sticky; top: 0; z-index: 2; background: var(--ol-surface); padding: 4px 0 6px; }
+.olens .ol-tl-axis { position: relative; height: 16px; margin-right: 6px; }
+.olens .ol-tl-tick { position: absolute; top: 0; transform: translateX(-50%); font-family: var(--ol-mono); font-size: 10.5px; color: var(--ol-text-faint); white-space: nowrap; }
+.olens .ol-tl-tick:first-child { transform: none; }
+.olens .ol-tl-lanes { position: relative; display: grid; gap: 4px; }
+.olens .ol-tl-gridwrap { position: absolute; inset: 0; pointer-events: none; }
+.olens .ol-tl-grid { position: relative; margin-right: 6px; }
+.olens .ol-tl-grid span { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--ol-border); }
+.olens .ol-lane { position: relative; display: grid; grid-template-columns: var(--ol-lane-label) 1fr; align-items: center; min-height: 34px; }
+.olens .ol-lane-label {
+    display: flex; align-items: center; gap: 8px; min-width: 0; height: 30px; padding: 0 8px 0 2px; margin-right: 8px;
+    border: 0; border-radius: var(--ol-radius-sm); background: none; cursor: pointer; text-align: left;
+}
+.olens .ol-lane-label:hover { background: var(--ol-hover); }
+.olens .ol-lane-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.olens .ol-lane-sum { flex: none; font-family: var(--ol-mono); font-size: 10.5px; color: var(--ol-text-faint); }
+.olens .ol-lane-track { position: relative; height: 26px; margin-right: 6px; border-radius: 7px; background: var(--ol-hover); }
+.olens .ol-bar {
+    position: absolute; top: 3px; bottom: 3px; min-width: 6px; padding: 0 7px;
+    display: flex; align-items: center; overflow: hidden;
+    border: 0; border-radius: 6px; cursor: pointer;
+    background: color-mix(in srgb, var(--ol-tone) 72%, var(--ol-surface));
+    color: #0b0c0f; font-size: 11px; font-weight: 600; text-align: left;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ol-tone) 85%, transparent);
+    transition: filter var(--ol-dur), box-shadow var(--ol-dur);
+}
+.olens[data-theme="light"] .ol-bar { color: #fff; background: var(--ol-tone); }
+.olens .ol-bar:hover { filter: brightness(1.08); }
+.olens .ol-bar[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--ol-surface), 0 0 0 4px var(--ol-tone); z-index: 1; }
+.olens .ol-bar[data-status="running"] {
+    background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--ol-tone) 72%, var(--ol-surface)) 0 8px, color-mix(in srgb, var(--ol-tone) 52%, var(--ol-surface)) 8px 16px);
+    background-size: 23px 23px; animation: ol-stripes 0.8s linear infinite;
+}
+@keyframes ol-stripes { to { background-position: 23px 0; } }
+.olens .ol-bar[data-status="failed"] { background: var(--ol-danger); box-shadow: none; color: #fff; }
+.olens .ol-bar[data-replay="true"] { outline: 1.5px dashed var(--ol-recalled); outline-offset: 1px; }
+.olens .ol-bar-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Detail */
+.olens .ol-detail { min-height: 200px; border-radius: var(--ol-radius-lg); background: var(--ol-surface); border: 1px solid var(--ol-border); padding: 4px 16px 16px; }
+.olens .ol-detail.is-empty { display: grid; align-content: start; gap: 14px; padding: 16px; }
+.olens .ol-detail-hint { color: var(--ol-text-faint); text-align: center; padding: 18px 0; }
+.olens .ol-detail-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 10px; padding: 12px 0 10px; background: var(--ol-surface); border-bottom: 1px solid var(--ol-border); margin-bottom: 12px; }
+.olens .ol-detail-titles { display: grid; min-width: 0; }
+.olens .ol-detail-titles h3 { font-size: 14px; }
+.olens .ol-detail-sub { font-size: 12px; color: var(--ol-text-muted); }
+
+.olens .ol-final { border-radius: var(--ol-radius); border: 1px solid color-mix(in srgb, var(--ol-accent) 35%, var(--ol-border)); background: color-mix(in srgb, var(--ol-accent) 5%, var(--ol-surface)); }
+.olens .ol-final-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--ol-border); color: var(--ol-accent); }
+.olens .ol-final-title { font-weight: 600; color: var(--ol-text); }
+.olens .ol-final-note { font-size: 11.5px; color: var(--ol-text-faint); }
+.olens .ol-final-text { padding: 12px 14px; white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; font-family: var(--ol-serif); font-size: 13.5px; line-height: 1.75; }
+
+/* Steps (sections) */
+.olens .ol-steps { display: grid; gap: 10px; counter-reset: step; }
+.olens .ol-step { position: relative; display: grid; gap: 6px; padding-left: 26px; }
+.olens .ol-step::before { content: ""; position: absolute; left: 9px; top: 24px; bottom: -10px; width: 1px; background: var(--ol-border-strong); }
+.olens .ol-step:last-child::before { display: none; }
+.olens .ol-step.is-empty { padding: 14px; color: var(--ol-text-faint); }
+.olens .ol-step-head { display: flex; align-items: center; gap: 8px; min-height: 22px; min-width: 0; }
+.olens .ol-step-icon { position: absolute; left: 0; top: 1px; display: grid; place-items: center; width: 19px; height: 19px; border-radius: 6px; background: var(--ol-surface-2); border: 1px solid var(--ol-border-strong); color: var(--ol-text-muted); }
+.olens .ol-step[data-kind="tool_call"] .ol-step-icon { color: var(--ol-pinned); }
+.olens .ol-step[data-kind="tool_result"] .ol-step-icon { color: var(--ol-accent); }
+.olens .ol-step[data-kind="note"] .ol-step-icon { color: var(--ol-recalled); }
+.olens .ol-step[data-status="failed"] .ol-step-icon { color: var(--ol-danger); }
+.olens .ol-step-kind { font-size: 11.5px; font-weight: 600; color: var(--ol-text-faint); }
+.olens .ol-step-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.olens .ol-step-live { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ol-running); }
+.olens .ol-step-fail { font-size: 11.5px; color: var(--ol-danger); }
+.olens .ol-step-err { padding: 6px 10px; border-radius: var(--ol-radius-sm); color: var(--ol-danger); background: var(--ol-danger-soft); font-size: 12.5px; }
+.olens .ol-step-wait { color: var(--ol-text-faint); font-size: 12.5px; }
+
+.olens .ol-textwrap { display: grid; gap: 4px; }
+.olens .ol-textblock {
+    position: relative; white-space: pre-wrap; word-break: break-word;
+    padding: 9px 12px; border-radius: var(--ol-radius); background: var(--ol-surface-2); border: 1px solid var(--ol-border);
+    font-size: 12.5px; line-height: 1.65; max-height: 520px; overflow: auto;
+}
+.olens .ol-textblock.is-mono { font-family: var(--ol-mono); font-size: 11.5px; line-height: 1.55; }
+.olens .ol-textblock.is-folded { max-height: 132px; overflow: hidden; }
+.olens .ol-textblock.is-folded::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 44px; background: linear-gradient(transparent, var(--ol-surface-2)); }
+.olens .ol-textblock-foot { display: flex; gap: 14px; }
+.olens .ol-textblock-foot:empty { display: none; }
+
+.olens .ol-kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; padding: 8px 12px; border-radius: var(--ol-radius); background: var(--ol-surface-2); border: 1px solid var(--ol-border); font-size: 12px; }
+.olens .ol-kv dt { color: var(--ol-text-faint); font-family: var(--ol-mono); font-size: 11px; padding-top: 1px; }
+.olens .ol-kv dd { margin: 0; min-width: 0; word-break: break-word; white-space: pre-wrap; }
+.olens .ol-kv dd.is-muted { color: var(--ol-text-faint); }
+.olens .ol-kv-more { grid-column: 1 / -1; color: var(--ol-text-faint); }
+.olens .ol-kv.is-wide { background: none; border: 0; padding: 0; gap: 6px 16px; font-size: 12.5px; }
+.olens .ol-kv.is-wide dt { font-family: var(--ol-font); font-size: 12px; }
+
+.olens .ol-plan { display: grid; gap: 10px; padding: 10px 12px; border-radius: var(--ol-radius); background: var(--ol-surface-2); border: 1px solid var(--ol-border); }
+.olens .ol-plan-label { font-size: 11px; font-weight: 600; color: var(--ol-text-faint); margin-bottom: 4px; }
+.olens .ol-plan-list { display: grid; gap: 4px; }
+.olens .ol-plan-list li { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; }
+.olens .ol-plan-op { flex: none; font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--ol-hover); color: var(--ol-text-muted); }
+.olens .ol-plan-list li[data-op="add"] .ol-plan-op { color: var(--ol-accent); background: var(--ol-accent-soft); }
+.olens .ol-plan-list li[data-op="drop"] .ol-plan-op { color: var(--ol-text-faint); }
+.olens .ol-plan-agent { flex: none; font-weight: 600; color: var(--ol-pinned); }
+.olens .ol-plan-final { display: flex; align-items: center; gap: 6px; color: var(--ol-accent); font-size: 12.5px; }
+.olens .ol-dispatch { display: grid; gap: 4px; padding: 8px 12px; border-radius: var(--ol-radius); background: var(--ol-surface-2); border: 1px solid var(--ol-border); font-size: 12.5px; }
+.olens .ol-dispatch-task { white-space: pre-wrap; color: var(--ol-text-muted); }

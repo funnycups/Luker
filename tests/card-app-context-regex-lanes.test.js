@@ -55,6 +55,7 @@ beforeAll(async () => {
             swipe: { right: () => {} },
             worldInfoEntry: { create: () => ({}), delete: () => {} },
             chatWorldInfo: { getNames: () => [], setSelection: () => {} },
+            presets: { listDocuments: () => [], readDocument: async () => null },
         }),
     };
     ({ buildContext } = await import('../public/scripts/extensions/card-app/context.js'));

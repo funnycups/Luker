@@ -1,133 +1,117 @@
-import { jest } from '@jest/globals';
+/**
+ * @jest-environment jsdom
+ */
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 FunnyCups
 
-// public/lib.js is handled by the global moduleNameMapper (→ tests/util/lib-stub.js).
+// Verifies that seeding a draft into Workbench AI iteration populates the
+// composer cleanly and omits empty drafts.
 
-// popup.js + popup-utils must be mocked BEFORE we touch lib/edits/index.js,
-// since conflict-ui.js → popup.js → power-user.js → textgen-models.js
-// touches `document` at module-load. Register popup mock first so the
-// dynamic `import('../../public/scripts/lib/edits/index.js')` below
-// (used to forward the real applyEdits into the iteration-library mock)
-// doesn't pull the SillyTavern DOM shell.
-jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class { constructor() {} show() {} completeAffirmative() {} dlg = { close: () => {} }; },
-    POPUP_TYPE: { DISPLAY: 'display' },
-    POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 2, CANCELLED: 0 },
-}));
+import { beforeAll, describe, expect, jest, test } from '@jest/globals';
+import { createIteratePage } from '../../public/scripts/workbench/pages/iterate.js';
+import { createCardTarget } from '../../public/scripts/workbench/targets/card.js';
 
-// Forward the REAL edits engine through the iteration-library umbrella so
-// the studio's applyEdits/inverseEdit calls do real work. Other surfaces
-// stay stubbed (they need DOM and are out of scope for this test).
-const realEdits = await import('../../public/scripts/lib/edits/index.js');
-
-const requestToolCallsWithRetryMock = jest.fn();
-jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
-    proposalBus: {},
-    applyEdits: realEdits.applyEdits,
-    inverseEdit: realEdits.inverseEdit,
-    registerOp: realEdits.registerOp,
-    BUILT_IN_OPS: realEdits.BUILT_IN_OPS,
-    showConflictResolution: async () => ({}),
-    bindIterWorkspaceResizer: () => () => {},
-    render: { ensureMarkdownDeps: async () => true, renderMessageMarkdown: (s) => `<p>${s}</p>` },
-    runner: { requestToolCallsWithRetry: requestToolCallsWithRetryMock },
-    storage: {},
-    textDiff: {},
-    zoomOverlay: { attachZoomOverlay: () => () => {} },
-    ui: {
-        toolcall: { renderToolCallChip: () => '' },
-        message: { renderMessageCard: () => '' },
-        diff: { renderDiffCard: () => '' },
-        apply: { renderApplyControls: () => '' },
-        ensureUiStylesheetInjected: () => {},
-    },
-    createRenderScheduler: () => ({ schedule: () => {} }),
-}));
-
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
-    runCharacterEditorHelperToolCall: async () => ({ result: {} }),
-    commitCharacterEditorOperations: async () => ({ ok: true }),
-    commitLorebookOperations: async () => ({ ok: true }),
-    buildCharacterEditorHelperApis: () => [],
-    buildUnifiedCharacterEditorLiveSnapshot: async () => ({ character: {}, lorebooks: {} }),
-    readLegacyCeaEditorSessions: async () => [],
-    readLegacyCharIterPopupSessions: async () => [],
-}));
-
-let studio;
-beforeAll(async () => {
-    studio = await import('../../public/scripts/extensions/character-editor-assistant/editor-iteration/studio.js');
+beforeAll(() => {
+    if (!globalThis.requestAnimationFrame) {
+        globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+    }
+    if (!globalThis.matchMedia) {
+        globalThis.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    }
 });
 
-beforeEach(() => {
-    requestToolCallsWithRetryMock.mockReset();
-});
+function makeApp(ctx) {
+    const target = createCardTarget({ getContext: () => ctx });
+    return {
+        sessions: {
+            list: jest.fn(async () => []),
+            get: jest.fn(async () => null),
+            create: jest.fn(async (fields) => ({ id: 's1', turns: [], ...fields })),
+            update: jest.fn(async (_id, patch) => ({ id: 's1', turns: [], ...patch })),
+            remove: jest.fn(async () => {}),
+        },
+        iterateTargets: () => [target],
+        snapshot: () => ({
+            card: { name: 'Alice', avatar: 'alice.png' },
+            chat: { character: { name: 'Alice', avatar: 'alice.png' } },
+        }),
+        settings: () => ({}),
+        toast: jest.fn(),
+        refreshBadges: jest.fn(),
+        source: { lastReply: async () => '', aiRequest: async () => ({ text: '', calls: [] }) },
+    };
+}
 
-describe('unified CEA editor seed + autoSend', () => {
-    it('exports an internal helper to seed a session system message', () => {
-        // Either a dedicated _internalSeedSystemMessage or it threads through openUnifiedCharacterEditorPopup.
-        expect(typeof studio._internalSeedSystemMessage === 'function' ||
-               typeof studio._testOnly_applyOpenOpts === 'function').toBe(true);
+describe('CEA card Workbench seed draft behavior', () => {
+    test('populates composer input when draft is provided on show()', async () => {
+        const ctx = {
+            characterId: 0,
+            characters: [{ avatar: 'alice.png', name: 'Alice', data: { extensions: {} } }],
+            loadWorldInfo: async () => null,
+            getCharaAuxWorlds: () => [],
+            chatWorldInfo: { getNames: () => [] },
+        };
+        const prevLuker = globalThis.Luker;
+        globalThis.Luker = { getContext: () => ctx };
+        try {
+            const page = createIteratePage(makeApp(ctx));
+            await page.show({ ws: 'card', scope: 'character', draft: 'Just imported this card.' });
+            const textarea = page.el.querySelector('textarea.wb-input');
+            expect(textarea?.value).toBe('Just imported this card.');
+        } finally {
+            globalThis.Luker = prevLuker;
+        }
     });
 
-    it('pushes a system message into state.session.messages when seedSystemMessage is provided', () => {
-        const state = {
-            session: { id: 's1', title: '', avatar: 'a.png', messages: [], surfaceState: {} },
-            live: { character: {}, lorebooks: {} },
-            pendingEdits: [],
-            isBusy: false,
+    test('leaves composer empty when draft is omitted or whitespace-only', async () => {
+        const ctx = {
+            characterId: 0,
+            characters: [{ avatar: 'alice.png', name: 'Alice', data: { extensions: {} } }],
+            loadWorldInfo: async () => null,
+            getCharaAuxWorlds: () => [],
+            chatWorldInfo: { getNames: () => [] },
         };
-        // Call the seed helper directly. Adjust to the real export name if different.
-        const seed = studio._internalSeedSystemMessage || studio._testOnly_applyOpenOpts;
-        seed(state, { seedSystemMessage: 'Just imported this card.' });
-        expect(state.session.messages.length).toBe(1);
-        expect(state.session.messages[0].role).toBe('system');
-        expect(state.session.messages[0].content).toBe('Just imported this card.');
+        const prevLuker = globalThis.Luker;
+        globalThis.Luker = { getContext: () => ctx };
+        try {
+            const page = createIteratePage(makeApp(ctx));
+            await page.show({ ws: 'card', scope: 'character' });
+            const textarea = page.el.querySelector('textarea.wb-input');
+            expect(textarea?.value).toBe('');
+        } finally {
+            globalThis.Luker = prevLuker;
+        }
     });
 
-    it('does nothing when seedSystemMessage is missing/empty', () => {
-        const state = {
-            session: { id: 's2', title: '', avatar: 'a.png', messages: [], surfaceState: {} },
-            live: { character: {}, lorebooks: {} },
-            pendingEdits: [],
-            isBusy: false,
+    test('seedPrompt + hideSeedFromUi + autoSend automatically dispatches turn and hides seed bubble', async () => {
+        const ctx = {
+            characterId: 0,
+            characters: [{ avatar: 'alice.png', name: 'Alice', data: { extensions: {} } }],
+            loadWorldInfo: async () => null,
+            getCharaAuxWorlds: () => [],
+            chatWorldInfo: { getNames: () => [] },
         };
-        const seed = studio._internalSeedSystemMessage || studio._testOnly_applyOpenOpts;
-        seed(state, {});
-        seed(state, { seedSystemMessage: '' });
-        seed(state, { seedSystemMessage: '   ' });
-        expect(state.session.messages.length).toBe(0);
-    });
-
-    it('autoSend triggers a runIterationTurn when invoked via the open opts threader', async () => {
-        // Script the runner to return an immediate finalize so the test exits cleanly.
-        requestToolCallsWithRetryMock.mockResolvedValue({
-            toolCalls: [{ id: 'f1', name: 'luker_cea_editor_finalize_iteration', args: { summary: 'ok' } }],
-            assistantText: 'done',
-        });
-
-        const state = {
-            session: { id: 's3', title: '', avatar: 'a.png', messages: [], surfaceState: {} },
-            live: { character: {}, lorebooks: {} },
-            pendingEdits: [],
-            isBusy: false,
-            abortController: null,
-            helperApis: [],
-        };
-
-        // Seed first, then autoSend via the internal turn entry point.
-        const seed = studio._internalSeedSystemMessage || studio._testOnly_applyOpenOpts;
-        seed(state, { seedSystemMessage: 'Review this card.' });
-
-        await studio._testOnly_runIterationTurn(state, {
-            userText: '',  // autoSend kicks off with empty user text (the seed system message frames the request).
-            isAutoContinue: false,
-            context: { generateTask: async () => ({}) },
-            settings: {},
-        });
-
-        expect(requestToolCallsWithRetryMock).toHaveBeenCalled();
-        // Session should now have the seeded system + an assistant message.
-        expect(state.session.messages.some(m => m.role === 'system' && m.content === 'Review this card.')).toBe(true);
-        expect(state.session.messages.some(m => m.role === 'assistant')).toBe(true);
+        const prevLuker = globalThis.Luker;
+        globalThis.Luker = { getContext: () => ctx };
+        try {
+            const app = makeApp(ctx);
+            const aiSpy = jest.fn(async () => ({ text: 'Auto-send reply.', calls: [] }));
+            app.source.aiRequest = aiSpy;
+            const page = createIteratePage(app);
+            await page.show({
+                ws: 'card',
+                scope: 'character',
+                seedPrompt: 'HIDDEN_SEED_PROMPT',
+                hideSeedFromUi: true,
+                autoSend: true,
+            });
+            expect(aiSpy).toHaveBeenCalledTimes(1);
+            const sentMsgs = aiSpy.mock.calls[0][1].messages;
+            expect(sentMsgs.some(m => m.role === 'user' && m.content.includes('HIDDEN_SEED_PROMPT'))).toBe(true);
+            expect(page.el.querySelector('.wb-msg-me')).toBeNull();
+            expect(page.el.textContent).toContain('Auto-send reply.');
+        } finally {
+            globalThis.Luker = prevLuker;
+        }
     });
 });

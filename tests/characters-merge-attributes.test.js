@@ -130,6 +130,32 @@ describe('applyReplacePaths', () => {
         expect(character.data.extensions.foo).toEqual({ bar: { fresh: 1 }, keep: 2 });
         expect(update.data.extensions.foo.bar).toBeUndefined();
     });
+
+    test('strips nested UNSET sentinels inside replaced objects and arrays', () => {
+        const character = {
+            data: { extensions: { foo: { old: true } } },
+        };
+        const update = {
+            data: {
+                extensions: {
+                    foo: {
+                        keep: 1,
+                        drop: '__@@UNSET@@__',
+                        nested: { ok: true, stale: '__@@UNSET@@__' },
+                        rules: [{ id: 'r1', legacy: '__@@UNSET@@__' }],
+                    },
+                    scripts: [{ id: 's1', legacy: '__@@UNSET@@__' }],
+                },
+            },
+        };
+        applyReplacePaths(character, update, ['data.extensions.foo', 'data.extensions.scripts']);
+        expect(character.data.extensions.foo).toEqual({
+            keep: 1,
+            nested: { ok: true },
+            rules: [{ id: 'r1' }],
+        });
+        expect(character.data.extensions.scripts).toEqual([{ id: 's1' }]);
+    });
 });
 
 describe('mergeCharacterUpdate (replace + merge interplay) — pure simulation', () => {

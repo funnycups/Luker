@@ -56,6 +56,8 @@ const QUOTA_ENFORCED_PATH_PREFIXES = [
     '/api/presets/state/patch',
     '/api/settings/save',
     '/api/settings/patch',
+    '/api/state/set',
+    '/api/state/patch',
     '/api/images/upload',
     '/api/files/upload',
     '/api/backgrounds/upload',
@@ -150,6 +152,8 @@ export const USER_BACKUP_SELECTION_DEFAULTS = Object.freeze({
  * @property {string} backups - The directory where the backups are stored
  * @property {string} sysprompt - The directory where the system prompt data is stored
  * @property {string} reasoning - The directory where the reasoning templates are stored
+ * @property {string} cardApps - The directory where the CardApps are stored
+ * @property {string} states - The directory where the global state documents are stored
  */
 
 /**
@@ -1384,6 +1388,7 @@ export function getUserBackupTargets(directories, selection, options = {}) {
     if (selection.settings) {
         selectedFiles.add(path.join(directories.root, SETTINGS_FILE));
         selectedDirectories.add(directories.backups);
+        selectedDirectories.add(directories.states);
     }
 
     if (selection.secrets) {

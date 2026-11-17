@@ -294,3 +294,47 @@ export function getSemanticCoverageSeq(store) {
     }, 0);
     return Number.isFinite(maxSeq) ? maxSeq : 0;
 }
+
+/** Attaches `childId` under `parentId` and records the `contains` edge. */
+export function reparentNode(store, childId, parentId) {
+    const child = store.nodes[childId];
+    const parent = store.nodes[parentId];
+    if (!child || !parent) {
+        return;
+    }
+
+    const oldParentId = String(child.parentId || '');
+    if (oldParentId && store.nodes[oldParentId]) {
+        const oldParent = store.nodes[oldParentId];
+        oldParent.childrenIds = (oldParent.childrenIds || []).filter(id => id !== childId);
+    }
+
+    child.parentId = parentId;
+    if (!Array.isArray(parent.childrenIds)) {
+        parent.childrenIds = [];
+    }
+    if (!parent.childrenIds.includes(childId)) {
+        parent.childrenIds.push(childId);
+    }
+    addEdge(store, parentId, childId, 'contains');
+}
+
+/** True when making `parentId` the parent of `nodeId` would form a cycle. */
+export function willCreateParentCycle(store, nodeId, parentId) {
+    const childId = String(nodeId || '').trim();
+    let current = String(parentId || '').trim();
+    if (!childId || !current) {
+        return false;
+    }
+
+    let guard = 0;
+    while (current && guard < 3000) {
+        if (current === childId) {
+            return true;
+        }
+        const node = store.nodes?.[current];
+        current = String(node?.parentId || '').trim();
+        guard += 1;
+    }
+    return false;
+}

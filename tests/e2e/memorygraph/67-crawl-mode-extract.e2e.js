@@ -30,9 +30,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { fillMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 const TURNS = [
     'The harbor ledger lists a missing cargo manifest for the third time this season.',
@@ -123,34 +122,6 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function enableMgAndCrawlMode(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        for (const id of ['luker_rpg_memory_enabled', 'luker_rpg_memory_auto_extraction_enabled']) {
-            const el = document.getElementById(id);
-            if (!el) continue;
-            if (!el.checked) {
-                el.checked = true;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }
-    });
-    // The Advanced tab lives in the MG tab strip — open it, then flip
-    // Extraction graph mode to crawl through the real select.
-    await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="advanced"]').click();
-    await page.locator('#luker_rpg_memory_advanced_extract_mode').selectOption('crawl');
-}
-
-async function fillGraphViaUi(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings');
-    // Fill Graph lives in the Graph tab pane of the MG tab strip.
-    await page.locator('#luker_rpg_memory_tabs .luker-tabs-tab[data-luker-tab-key="graph"]').click();
-    await page.locator('#luker_rpg_memory_fill').click();
-}
-
 test.describe('#67 — crawl extraction mode explores before extracting', () => {
     test.setTimeout(240_000);
 
@@ -164,12 +135,14 @@ test.describe('#67 — crawl extraction mode explores before extracting', () => 
             await sendMessageAndAwaitReply(page, t);
         }
 
-        await enableMgAndCrawlMode(page);
+        await setMgSettings(page, {
+            enabled: true,
+            autoExtractionEnabled: true,
+            extractMode: 'crawl',
+        });
 
-        // Drive a backfill through the real Fill Graph button (auto
-        // extraction alone doesn't guarantee a pass fires after the mode
-        // flip lands; Fill Graph forces the pending batches through).
-        await fillGraphViaUi(page);
+        // Drive a backfill through the real Fill Graph button.
+        await fillMgGraph(page, { closeAfter: true });
 
         // ── Crawl requests fired with the 4 read tools ─────────────────
         await expect.poll(() => {
@@ -221,7 +194,7 @@ test.describe('#67 — crawl extraction mode explores before extracting', () => 
                 .map(r => r.body)
                 .filter(isExtractionRequest)
                 .length;
-        }, { timeout: 120_000 }).toBeGreaterThanOrEqual(1);
+        }, { timeout: 120_000 }).toBeGreaterThanOrEqual(2);
 
         const extractionBodies = mock.requests.map(r => r.body).filter(isExtractionRequest);
         const extractionUser = extractionBodies.map(userPromptOf).join('\n');
@@ -232,7 +205,15 @@ test.describe('#67 — crawl extraction mode explores before extracting', () => 
         // the extraction payload's message content (prompt-order assembly
         // may merge messages, so search the whole body; JSON.stringify
         // escapes the inner quotes as \\\"). )
-        const totals = extractionBodies.map(b => {
+        await expect.poll(() => {
+            const bodies = mock.requests.map(r => r.body).filter(isExtractionRequest);
+            const found = bodies.map(b => {
+                const m = /semantic_node_total\\?"?\s*:\s*(\d+)/.exec(JSON.stringify(b.messages));
+                return m ? Number(m[1]) : null;
+            }).filter(v => v !== null);
+            return found.some(v => v >= 1);
+        }, { timeout: 60_000 }).toBe(true);
+        const totals = mock.requests.map(r => r.body).filter(isExtractionRequest).map(b => {
             const m = /semantic_node_total\\?"?\s*:\s*(\d+)/.exec(JSON.stringify(b.messages));
             return m ? Number(m[1]) : null;
         }).filter(v => v !== null);

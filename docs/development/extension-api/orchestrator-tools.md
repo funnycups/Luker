@@ -4,7 +4,7 @@ Register tools that any orchestrator mode (loop, spec, agenda, director) can dis
 
 ## When to use this
 
-Your extension provides a capability that an orchestration agent could benefit from calling autonomously — a database query, a 3rd-party API fetch, a Stable Diffusion image generation, anything. If the user has the orchestrator extension loaded, your tool surfaces in their orchestration editor under **Custom tools → Extension (from other plugins)** and they enable or disable it per profile.
+Your extension provides a capability that an orchestration agent could benefit from calling autonomously — a database query, a 3rd-party API fetch, a Stable Diffusion image generation, anything. If the user has the orchestrator extension loaded, your tool surfaces under **Workbench → Orchestration → Setup → Custom tools** and they enable or disable it per profile.
 
 If the user doesn't have orchestrator loaded, your tool isn't lost — the register call is a silent no-op. Your extension stays functional standalone.
 
@@ -99,7 +99,7 @@ Returns `{ name, mode, description, displayName, hasSimulate, source }` for ever
 
 ## ST function tool bridge
 
-If your extension already uses SillyTavern's `registerFunctionTool` API, the user can bridge it via the orchestration editor's **Bridge SillyTavern tools…** picker. The bridged tool takes the name `st_<your tool name>` and defaults to `mode: 'write'`. No code changes are required on your side.
+If your extension already uses SillyTavern's `registerFunctionTool` API, the user can bridge it via **Workbench → Orchestration → Setup** using the **Bridge SillyTavern tools…** picker. The bridged tool takes the name `st_<your tool name>` and defaults to `mode: 'write'`. No code changes are required on your side.
 
 Wrapping with `registerOrchestrationTool` instead gives you control over mode and simulate semantics; otherwise the bridge is the zero-effort path. Picker labels and mode pickers are exposed through `listAvailableSillyTavernTools()` / `bridgeSillyTavernTool(name, { mode })` for callers that want to drive the bridge programmatically.
 
@@ -135,17 +135,17 @@ orch.applyCharacterExecutionModeForAvatar(ctx, ctx.extensionSettings?.orchestrat
 
 These accessors only touch the character card; they never mutate the global orchestration settings.
 
-## Iter-studio skill tool catalog
+## Shared skill tool catalog
 
-The orchestrator's iter-studio popup uses a set of skill-management tools (inventory inspection, authoring, policy binding, migration helpers) that other iter-studio-style popups can splice into their own tool catalogs. Properties on the published extension api expose the catalog:
+`context.iterationLibrary.tools` (`public/scripts/iteration-library/tools/skill-iter-studio.js`) provides the shared skill-management tools (inventory inspection, authoring, policy binding, migration helpers) used by Workbench's **Orchestration** and **Preset** iteration targets:
 
-| Property | Type | Purpose |
+| Export | Type | Purpose |
 | --- | --- | --- |
-| `SKILL_ITER_STUDIO_TOOL_DEFS` | `readonly array` | OpenAI-shape tool definitions (the `skill_*` tools the orchestrator iter-studio exposes). Filter by `function.name` to pick the subset your popup wants. |
+| `SKILL_ITER_STUDIO_TOOL_DEFS` | `readonly array` | OpenAI-shape tool definitions (`skill_*` tools). Filter by `function.name` to pick the subset your target needs. |
 | `isSkillIterStudioTool(name)` | `(string) => boolean` | Predicate that classifies a tool-call name as one of the skill tools. |
 | `runSkillIterStudioTool(call, mutationCtx)` | `async ({name, args}, {getWorkingProfile}) => result` | Dispatcher for one skill tool call. Pure inventory / authoring / migration handlers ignore `mutationCtx`; policy-binding handlers (`skill_bind_to_agent` / `skill_unbind_from_agent` / `skill_set_mode_defaults` / `skill_replace_in_systemprompt`) require `getWorkingProfile()` to return a mutable orchestrator working profile. |
 
-The CPA iteration studio consumes this surface to splice the profile-independent skill tools into its preset iter-studio (see `completion-preset-assistant/cpa-iteration/tools.js`). Sibling popups that don't have an orchestrator working profile pass `{ getWorkingProfile: () => null }` and only expose the profile-independent handlers.
+Workbench's `preset` target (`public/scripts/workbench/targets/preset-tools.js`) consumes this surface with `{ getWorkingProfile: () => null }` to expose the profile-independent handlers, while `orchestrator/lens/iterate-target.js` supplies `getWorkingProfile: () => live`.
 
 
 
@@ -168,6 +168,6 @@ export function registerMemoryGraphOrchestrationTools() {
 
 ## Related
 
-- [Custom Tools (user docs)](/features/orchestrator/custom-tools) — what users see and how the channels (extension / SillyTavern bridge / handwritten) are presented in the orchestration editor
+- [Custom Tools (user docs)](/features/orchestrator/custom-tools) — what users see and how the channels (extension / SillyTavern bridge / handwritten) are presented under **Workbench → Orchestration → Setup**
 - [Plugin Integration](./plugin-integration.md) — the broader extension API registry that publishes `'orchestrator'` alongside other extension entry points
 - [Memory Graph Extension API](./memory-graph.md) — reference consumer of this API

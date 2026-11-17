@@ -33,10 +33,8 @@ import {
     selectCharacterByName,
     sendMessageAndAwaitReply,
     deleteMessageViaUI,
-    openExtensionsDrawer,
-    openInlineDrawer,
-    closeExtensionsDrawer,
 } from '../_lib/page.js';
+import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, importPath;
 
@@ -105,38 +103,12 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function enableMgViaCheckboxes(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        for (const id of ['luker_rpg_memory_enabled', 'luker_rpg_memory_auto_extraction_enabled']) {
-            const el = document.getElementById(id);
-            if (el && !el.checked) {
-                el.checked = true;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }
-    });
-}
-
-async function importMgGraphBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-}
-
 test.describe('#53 — session-write floor anchor: delete-floor truncates MG records', () => {
     test('5 turns → import sentinels bound to tail → delete last assistant → sentinels are gone', async ({ page }) => {
         test.setTimeout(180_000);
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgViaCheckboxes(page);
+        await setMgSettings(page, { enabled: true, autoExtractionEnabled: true }, { closeAfter: true });
 
         // Disable the delete-confirmation popup so deleteMessageViaUI does
         // not need a follow-up OK click.
@@ -156,32 +128,9 @@ test.describe('#53 — session-write floor anchor: delete-floor truncates MG rec
             await sendMessageAndAwaitReply(page, t);
         }
 
-        // Now disable MG auto-extraction: from here on we don't want each
-        // delete / import / sentinel-load to fan out another extraction
-        // LLM call through the mock (which would queue in-flight requests
-        // and cascade into the delete-message emit chain hanging — the
-        // exact pattern documented in deleteMessageViaUI's comment block).
-        // The extraction we needed for the spec (none in this case; we
-        // import sentinels directly) is already done.
-        await page.evaluate(() => {
-            const el = document.getElementById('luker_rpg_memory_auto_extraction_enabled');
-            if (el && el.checked) {
-                el.checked = false;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        });
-
-        // Seed MG via the real Import button → bind latest floor.
-        await importMgGraphBindLatest(page, importPath);
-        // Belt-and-suspenders: ensure the popup overlay is fully gone
-        // before subsequent gestures.
-        await page.locator('.popup:visible').first().waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+        await setMgSettings(page, { autoExtractionEnabled: false });
+        await importMgGraph(page, importPath, { mode: 'bind-latest', closeAfter: true });
         await page.waitForTimeout(500);
-        // The Extensions drawer is still open from enableMgViaCheckboxes +
-        // importMgGraphBindLatest. It covers the chat area; subsequent
-        // .mes locator interactions can't reach the message. Close it.
-        await closeExtensionsDrawer(page);
 
         // Verify the sentinels are visible BEFORE the delete.
         const beforeDelete = await page.evaluate(async () => {

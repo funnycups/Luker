@@ -44,7 +44,14 @@ import {
     migrateLegacyAnchorsIfNeeded,
     pickLatestValidSnapshot,
 } from './persistence.js';
-import { STATE_ERROR_REASONS, makeStateError } from '../../state-errors.js';
+
+function getStateErrors(context = null) {
+    const se = context?.stateErrors ?? globalThis.Luker?.getContext?.()?.stateErrors;
+    if (!se) {
+        throw new Error('Luker.getContext().stateErrors is unavailable');
+    }
+    return se;
+}
 
 const MODULE_NAME = 'orchestrator';
 
@@ -219,7 +226,7 @@ export function canReuseLatestOrchestrationSnapshot(chatKey, anchor) {
  *
  * Returns the freshly-stored active snapshot, or null when the input
  * was incomplete. Callers that need a UI rebuild after the state
- * changes should run their own `ensureUi` step on the result.
+ * changes should refresh their own view of the result.
  */
 export async function storeCompletedOrchestrationSnapshot(context, anchor, capsuleText, stageOutputs) {
     const chatKey = getChatKey(context);
@@ -315,6 +322,7 @@ export async function refreshOrchestratorStateAfterStructuralEvent(context) {
  * @returns {Promise<{ ok: boolean, reason?: string, hint?: string }>}
  */
 export async function persistEditedSnapshotToFloorState(context, snapshot) {
+    const { STATE_ERROR_REASONS, makeStateError } = getStateErrors(context);
     const anchorPlayableFloor = normalizeAnchorPlayableFloor(snapshot?.anchorPlayableFloor);
     if (!anchorPlayableFloor) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS, 'snapshot anchorPlayableFloor missing or invalid');

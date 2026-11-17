@@ -6,9 +6,9 @@ Skill 本身是什麼、`SKILL.md` 怎麼寫，見 [Skills 概覽](/zh-TW/featur
 
 ## 掛載方式
 
-**讓工作台代勞（推薦）。** 在 AI 迭代工作台編寫或修改 Skill 時，順便說明要讓誰能看到，例如「讓 Director 下所有 Agent 都能看到」或「只給文風評審看」。它會在同一輪審批裡掛到對應位置，你不需要決定放在哪一層。詳見 [用 Skills 調整角色扮演輸出](/zh-TW/recipes/rp-skills-walkthrough) 和 [用工作台編寫 Skill](/zh-TW/features/orchestrator/iteration-studio#用工作台編寫-skill)。
+**讓 AI 迭代代勞（推薦）。** 在**工作台 → AI 迭代 → 編排**中編寫或修改 Skill 時，順便說明要讓誰能看到，例如「讓 Director 下所有 Agent 都能看到」或「只給文風評審看」。它會在同一輪審批裡掛到對應位置，你不需要決定放在哪一層。詳見 [用 Skills 調整角色扮演輸出](/zh-TW/recipes/rp-skills-walkthrough) 和 [用 AI 迭代編寫 Skill](/zh-TW/features/orchestrator/iteration-studio#用工作台編寫-skill)。
 
-**自行掛載。** 開啟編排器面板中的 Director 編輯器，捲動到 Skill 列表區域。每個 Agent 各有一份列表，頂部還有一份所有 Agent 共享的列表。從下拉中選擇一個 Skill，點擊**新增**，然後儲存。
+**自行掛載。** 開啟**工作台 → 編排 → 準備階段**（或在**流程**中點選某位助手），捲動到 Skill 列表區域。每位助手各有一份列表，同時還有一份所有助手共享的列表。從下拉中選擇一個 Skill 並新增，然後儲存。
 
 ![Director 編輯器中的 Skill 列表，剛新增的一條 Skill](/images/skills/rp-demo-11-director-chip-added.png)
 
@@ -26,5 +26,5 @@ Skill 本身是什麼、`SKILL.md` 怎麼寫，見 [Skills 概覽](/zh-TW/featur
 - [Skill 管理](/zh-TW/features/skills/management) —— 安裝、匯入、刪除與切換作用域
 - [創作 Skill](/zh-TW/features/skills/authoring) —— Skill 正文的寫作規則
 - [編排器整合](/zh-TW/features/skills/orchestrator-integration) —— 繼承規則、萬用字元與停用清單
-- [AI 迭代工作台](/zh-TW/features/orchestrator/iteration-studio) —— 讓 AI 替你寫 Skill
+- [編排 AI 迭代](/zh-TW/features/orchestrator/iteration-studio) —— 讓 AI 替你寫 Skill
 - [用 Skills 調整角色扮演輸出](/zh-TW/recipes/rp-skills-walkthrough) —— 端對端示例

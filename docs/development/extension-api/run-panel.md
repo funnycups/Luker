@@ -2,33 +2,32 @@
 
 ## What it is
 
-A reusable, in-memory run trace for any plugin that runs a multi-step LLM task. It renders a slide-in panel beside the chat (or a bottom drawer on narrow screens) with one collapsible card per round, streaming section bodies, a Stop button, an export action, and a floating pill while a run is in progress.
+A reusable, in-memory run trace for any plugin that runs a multi-step LLM task. Plugins write rounds, streaming sections, tool calls, and token usage to a `RunStore` and attach that store to Luker's shared **Run Dock** (`attachDock`) — or mount a standalone `createRunPanel` instance.
+
+The shared Run Dock renders a floating live window on desktop (collapsing into a status pill when idle or dismissed) and a bottom sheet on narrow screens, with round cards, streaming sections, a Stop button, JSON trace export, and optional Inspect / AI diagnosis hooks into [Workbench](/development/extension-api/workbench).
 
 The shared layer lives in `public/scripts/run-panel/` and is exposed as `runPanel` on the Luker context. In-tree consumers:
 
-- Orchestrator — `public/scripts/extensions/orchestrator/run-panel/panel.js`
+- Orchestrator — `public/scripts/extensions/orchestrator/lens/index.js`
 - Search Tools — `public/scripts/extensions/search-tools/run-panel.js`
 
 ![Search agent run in the shared panel](/images/search-tools/run-panel.png)
 
-## Quick start
+## Quick start (Shared Run Dock)
 
 ```js
-import { createRunStore, createRunPanel } from '/scripts/run-panel/index.js';
+const ctx = Luker.getContext();
+const { createRunStore, attachDock, openRunDock } = ctx.runPanel;
 
 const store = createRunStore();
-const panel = createRunPanel({
-    store,
-    t: (text, ...args) => text,   // supply your plugin's translator
-    idPrefix: 'luker-my-run-panel',
-    modeLabels: { myTask: 'My task' },
-    exportFilename: ({ runId }) => `my-run-${runId}.json`,
+attachDock(store, {
+    source: 'my-plugin',
+    getRunContext: () => ({ chatId: ctx.chatId, chatLabel: ctx.name2 }),
+    onInspect: (runKey) => ctx.workbench?.open?.({ ws: 'my-ext', subview: 'run', runKey }),
 });
-panel.init();   // call once at boot
-panel.open();   // call from a menu action
 ```
 
-That is the entire integration. Drive the panel by writing to the store:
+Drive the dock by writing to the store:
 
 ```js
 const runId = store.startRun({ mode: 'myTask', stopFn: () => abortController.abort() });
@@ -41,6 +40,8 @@ store.appendToSection({ runId, roundId, sectionId, delta: 'thinking…' });
 store.setSectionStatus({ runId, roundId, sectionId, status: 'done' });
 store.finishRun({ runId, status: 'committed', finalText: 'Result' });
 ```
+
+Call `await openRunDock()` or `await toggleRunDock()` from a menu item or button to open the dock on demand.
 
 ## Store API
 
@@ -61,7 +62,7 @@ store.finishRun({ runId, status: 'committed', finalText: 'Result' });
 | `setRunMeta({ runId, tokensSpent, cost })` | Set run-level metadata. |
 | `addTokenUsage({ runId, usage })` | Fold an LLM usage object into the running token totals. |
 
-`quiet: true` populates the store without auto-opening the panel; call `panel.open()` to show it later.
+`quiet: true` populates the store without auto-opening the dock or panel; call `openRunDock()` (or `panel.open()`) to show it later.
 
 ## Events
 
@@ -79,9 +80,20 @@ Listeners receive `{ type, ... }` payloads. Constants are exported from `run-pan
 | `run_finished` | `runId`, `status` |
 | `run_cleared` | `runId` |
 
-## Panel options
+## Shared Run Dock & Recorder API
 
-`createRunPanel(options)` returns `{ init, open, destroy }`.
+| Function | Purpose |
+| --- | --- |
+| `attachDock(store, opts)` | Attach a `RunStore` to the shared singleton recorder and floating dock (`{ source, getRunContext, getFlow, onInspect, onDiagnose }`). |
+| `openRunDock()` | Ensure and open the shared Run Dock. |
+| `toggleRunDock()` | Toggle the shared Run Dock open/closed. |
+| `getRunRecorder()` | Return the shared recorder holding live and recent per-account run history. |
+
+Users control **Open automatically on run** directly inside the dock menu (enabled by default; when turned off, non-quiet runs show the compact status pill instead of expanding automatically).
+
+## Standalone `createRunPanel` options
+
+When you need an isolated custom panel instead of the shared dock, `createRunPanel(options)` returns `{ init, open, destroy }`:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
@@ -110,16 +122,16 @@ These convenience wrappers finalize round and section status. They take the stor
 
 ```js
 // Layer 1 — direct ESM import (in-tree extensions)
-import { createRunStore, createRunPanel } from '/scripts/run-panel/index.js';
+import { createRunStore, attachDock, openRunDock } from '/scripts/run-panel/index.js';
 
 // Layer 2 — lukerContext property
-const { createRunPanel } = lukerContext.runPanel;
+const { createRunStore, attachDock, openRunDock } = lukerContext.runPanel;
 
 // Layer 3 — getContext (third-party extensions)
-const { createRunStore } = SillyTavern.getContext().runPanel;
+const { createRunStore, attachDock, openRunDock } = Luker.getContext().runPanel;
 ```
 
 ## Reference consumers
 
-- Orchestrator runtimes write rounds and sections, and the panel auto-opens on each run: `public/scripts/extensions/orchestrator/loop-runtime.js`, `director-runtime.js`, `agenda-runtime.js`, `spec-runtime.js`.
-- The orchestrator wrapper configures i18n and the export filename: `public/scripts/extensions/orchestrator/run-panel/panel.js`.
+- Orchestrator attaches its `RunStore` to the shared Run Dock in `public/scripts/extensions/orchestrator/lens/index.js`, wiring **Inspect run** to Workbench (`ws: 'orch', subview: 'run'`) and **AI diagnosis** to Workbench (`page: 'ai', ws: 'orch'`).
+- Search Tools attaches its `RunStore` to the shared Run Dock (`source: 'search'`) in `public/scripts/extensions/search-tools/run-panel.js`.

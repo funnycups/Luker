@@ -1,237 +1,160 @@
-// Verifies that loading a saved session refreshes state.live from disk
-// via buildUnifiedCharacterEditorLiveSnapshot — pending edits in the
-// loaded session anchor to the CURRENT character state, not the snapshot
-// captured when the session was last open. Without that refresh, edits
-// applied outside the popup (e.g. via a regular SillyTavern field edit)
-// would be silently clobbered when the user pressed Apply on a stale
-// session.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 FunnyCups
 
-import { jest } from '@jest/globals';
+// Verifies that loading the card target (`buildUnifiedCharacterEditorLiveSnapshot`
+// and `createCardTarget().load`) always refreshes live state from disk / context
+// rather than returning stale cached values when external edits occur.
 
-// public/lib.js is handled by the global moduleNameMapper (→ tests/util/lib-stub.js).
+import { describe, expect, jest, test } from '@jest/globals';
 
-// popup.js + popup-utils must be mocked BEFORE we touch lib/edits/index.js,
-// since conflict-ui.js → popup.js → power-user.js → textgen-models.js
-// touches `document` at module-load. Register popup mock first so the
-// dynamic `import('../../public/scripts/lib/edits/index.js')` below
-// (used to forward the real applyEdits into the iteration-library mock)
-// doesn't pull the SillyTavern DOM shell.
+globalThis.jQuery = (cb) => {
+    if (typeof cb === 'function') { /* swallow init handlers */ }
+    return { ready: () => {}, on: () => {}, off: () => {} };
+};
+globalThis.$ = globalThis.jQuery;
+globalThis.window = globalThis.window || globalThis;
+globalThis.document = globalThis.document || {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+};
+globalThis.toastr = globalThis.toastr || {
+    error: () => {}, warning: () => {}, success: () => {}, info: () => {},
+};
+
 jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
-    Popup: class { constructor() {} show() { return Promise.resolve('ok'); } completeAffirmative() {} dlg = { close: () => {} }; },
     POPUP_TYPE: { DISPLAY: 'display' },
     POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 2, CANCELLED: 0 },
+    Popup: class { constructor() {} show() { return Promise.resolve(''); } },
 }));
 
-// Forward the REAL edits engine through the iteration-library umbrella so
-// the studio's applyEdits/inverseEdit calls do real work. Other surfaces
-// stay stubbed (they need DOM and are out of scope for this test).
 const realEdits = await import('../../public/scripts/lib/edits/index.js');
 
+jest.unstable_mockModule('../../public/script.js', () => ({
+    converter: { makeHtml: (s) => s },
+    generateQuietPrompt: async () => '',
+    getCharacterDescription: () => '',
+    getCharacterFirstMessage: () => '',
+    getCharacterMesExample: () => '',
+    getCharacterName: () => '',
+    getCharacterPersonality: () => '',
+    getCharacterScenario: () => '',
+    saveSettingsDebounced: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/extensions.js', () => ({
+    extension_settings: { character_editor_assistant: {} },
+    getContext: () => ({}),
+    getCharacterState: () => ({}),
+    setCharacterState: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
+    addLocaleData: () => {},
+    translate: (s) => s,
+}));
+jest.unstable_mockModule('../../public/scripts/world-info.js', () => ({
+    newWorldInfoEntryTemplate: {},
+    setWorldInfoButtonClass: () => {},
+    updateWorldInfoList: () => {},
+    getCharaAuxWorlds: () => [],
+    getChatWorldInfoNames: () => [],
+    selected_world_info: [],
+}));
+jest.unstable_mockModule('../../public/scripts/utils.js', () => ({
+    getCharaFilename: () => '',
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
+    getChatCompletionConnectionProfiles: () => [],
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/function-call-runtime.js', () => ({
+    TOOL_PROTOCOL_STYLE: { OPENAI: 'openai' },
+    validateParsedToolCalls: () => ({ ok: true, errors: [] }),
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/diff-ui.js', () => ({
+    createCharacterEditorDiffUi: () => ({}),
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/editor-ui.js', () => ({
+    createCharacterEditorUi: () => ({}),
+}));
+jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/studio/ai-chat.js', () => ({
+    DEFAULT_SYSTEM_PROMPT: '',
+}));
 jest.unstable_mockModule('../../public/scripts/iteration-library/index.js', () => ({
-    proposalBus: {},
     applyEdits: realEdits.applyEdits,
-    inverseEdit: realEdits.inverseEdit,
-    registerOp: realEdits.registerOp,
-    BUILT_IN_OPS: realEdits.BUILT_IN_OPS,
-    showConflictResolution: async () => ({}),
-    render: {
-        ensureMarkdownDeps: jest.fn().mockResolvedValue(true),
-        renderMessageMarkdown: (s) => String(s ?? ''),
-    },
-    runner: { requestToolCallsWithRetry: jest.fn() },
-    storage: {},
-    textDiff: {},
-    zoomOverlay: { attachZoomOverlay: () => () => {} },
-    ui: {
-        toolcall: { renderToolCallChip: () => '' },
-        message: { renderMessageCard: () => '' },
-        diff: { renderDiffCard: () => '' },
-        apply: { renderApplyControls: () => '' },
-        ensureUiStylesheetInjected: () => {},
-    },
-    bindIterWorkspaceResizer: () => () => {},
-    createRenderScheduler: () => ({ schedule: () => {} }),
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/index.js', () => ({
+    openSimulationReview: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/i18n/index.js', () => ({
+    ensureSimulationReviewLocaleData: () => {},
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/wi-hits.js', () => ({
+    extractWorldInfoHitsFromRuntime: () => [],
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/simulation-review/dry-run-capture.js', () => ({
+    extractSystemFromCapturedPrompt: () => '',
+    extractNonSystemFromCapturedPrompt: () => '',
+}));
+jest.unstable_mockModule('../../public/scripts/iteration-library/markdown-escape.js', () => ({
+    mdLiteral: (s) => String(s ?? ''),
 }));
 
-jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/main.js', () => ({
-    runCharacterEditorHelperToolCall: async () => ({ result: {} }),
-    commitCharacterEditorOperations: async () => ({ ok: true }),
-    commitLorebookOperations: async () => ({ ok: true }),
-    buildCharacterEditorHelperApis: () => [],
-    buildUnifiedCharacterEditorLiveSnapshot: async () => ({ character: {}, lorebooks: {} }),
-    readLegacyCeaEditorSessions: async () => [],
-    readLegacyCharIterPopupSessions: async () => [],
-}));
+const sharedLukerCtx = {
+    lib: {
+        DOMPurify: { sanitize: (s) => s },
+        lodash: { get: () => undefined, set: () => {}, cloneDeep: (x) => JSON.parse(JSON.stringify(x)) },
+    },
+    extensionSettings: { character_editor_assistant: {} },
+    getCharacterState: () => ({}),
+    updateCharacterState: () => {},
+    addLocaleData: () => {},
+    translate: (s) => s,
+    POPUP_TYPE: { DISPLAY: 'display' },
+    Popup: class {},
+    worldInfoEntry: { template: {}, setButtonClass: () => {} },
+    updateWorldInfoList: () => {},
+    getCharaAuxWorlds: () => [],
+    chatWorldInfo: { getNames: () => [] },
+    getCharaFilename: () => '',
+    generateQuietPrompt: async () => '',
+    saveSettingsDebounced: () => {},
+};
+globalThis.Luker = { getContext: () => sharedLukerCtx };
 
-let _internalLoadSessionIntoState;
-beforeAll(async () => {
-    const mod = await import('../../public/scripts/extensions/character-editor-assistant/editor-iteration/studio.js');
-    _internalLoadSessionIntoState = mod._internalLoadSessionIntoState;
-});
+const CEA = await import('../../public/scripts/extensions/character-editor-assistant/main.js');
+const { createCardTarget } = await import('../../public/scripts/workbench/targets/card.js');
 
-describe('unified CEA editor loadSession refreshes state.live', () => {
-    test('exports _internalLoadSessionIntoState', () => {
-        expect(typeof _internalLoadSessionIntoState).toBe('function');
-    });
-
-    test('replaces state.session and clears state.pendingEdits (bus owns pending data via hydrateBus)', async () => {
-        const sessionB = {
-            id: 'B',
-            avatar: 'alice.png',
-            messages: [{ id: 'm1', role: 'user', content: 'edit B' }],
-            pendingEdits: [{ op: 'set', path: 'card.name', oldValue: 'A', newValue: 'B', target: { kind: 'character' } }],
-            surfaceState: {},
-            updatedAt: 2,
-        };
-        const sessionStore = { load: jest.fn().mockResolvedValue(sessionB) };
-        const buildLiveSnapshot = jest.fn().mockResolvedValue({ character: { name: 'live' }, lorebooks: {} });
-        const hydrateBus = jest.fn();
-        const state = {
-            session: { id: 'A', avatar: 'alice.png', messages: [], pendingEdits: [], surfaceState: {} },
-            pendingEdits: [],
-            live: { character: { name: 'stale' }, lorebooks: {} },
-            isBusy: false,
-            abortController: null,
-        };
-
-        const ok = await _internalLoadSessionIntoState(state, 'B', {
-            sessionStore,
-            buildLiveSnapshot,
-            hydrateBus,
-            context: { _kind: 'ctx' },
-            avatar: 'alice.png',
-        });
-
-        expect(ok).toBe(true);
-        expect(sessionStore.load).toHaveBeenCalledWith('B');
-        expect(state.session).toBe(sessionB);
-        expect(state.pendingEdits).toEqual([]);
-        expect(hydrateBus).toHaveBeenCalledWith(sessionB);
-    });
-
-    test('refreshes state.live by calling buildUnifiedCharacterEditorLiveSnapshot, not by re-using session.live', async () => {
-        // The whole point of Gap 5: loading session B must hit the
-        // bootstrap helper so a card field that was edited outside the
-        // popup since session B was saved is reflected in state.live,
-        // and apply doesn't clobber it with stale values.
-        const sessionB = {
-            id: 'B',
-            avatar: 'alice.png',
-            messages: [],
-            pendingEdits: [],
-            surfaceState: {},
-            // A stale `live` block stored on the session — must NOT be
-            // used. The fresh snapshot is what governs apply.
-            live: { character: { name: 'baked-in-stale' }, lorebooks: {} },
-        };
-        const sessionStore = { load: jest.fn().mockResolvedValue(sessionB) };
-        const buildLiveSnapshot = jest.fn().mockResolvedValue({
-            character: { name: 'fresh-from-disk' },
-            lorebooks: { Lore: { entries: {} } },
-        });
-        const state = {
-            session: { id: 'A', avatar: 'alice.png' },
-            pendingEdits: [],
-            live: { character: {}, lorebooks: {} },
-            isBusy: false,
-            abortController: null,
+describe('CEA live snapshot refresh on load', () => {
+    test('buildUnifiedCharacterEditorLiveSnapshot and cardTarget.load pick up external edits', async () => {
+        let bookContent = 'initial lore';
+        const ctx = {
+            characterId: 0,
+            characters: [{
+                avatar: 'alice.png',
+                name: 'Alice',
+                description: 'initial desc',
+                data: { name: 'Alice', description: 'initial desc', extensions: { world: 'Lore' } },
+            }],
+            loadWorldInfo: async (name) => (name === 'Lore' ? { entries: { 1: { uid: 1, content: bookContent } } } : null),
+            getCharaAuxWorlds: () => [],
+            chatWorldInfo: { getNames: () => [] },
         };
 
-        await _internalLoadSessionIntoState(state, 'B', {
-            sessionStore,
-            buildLiveSnapshot,
-            context: { _kind: 'ctx' },
-            avatar: 'alice.png',
-        });
+        const card = createCardTarget({ getContext: () => ctx });
+        const first = await card.load('character', ctx);
+        expect(first.live.character.description).toBe('initial desc');
+        expect(first.live.lorebooks.Lore.entries[1].content).toBe('initial lore');
 
-        expect(buildLiveSnapshot).toHaveBeenCalledTimes(1);
-        expect(buildLiveSnapshot).toHaveBeenCalledWith({ _kind: 'ctx' }, 'alice.png');
-        expect(state.live.character.name).toBe('fresh-from-disk');
-        expect(state.live.lorebooks).toHaveProperty('Lore');
-    });
+        ctx.characters[0].description = 'fresh-from-disk';
+        ctx.characters[0].data.description = 'fresh-from-disk';
+        bookContent = 'updated lore on disk';
 
-    test('aborts an in-flight LLM call before swapping state', async () => {
-        const sessionB = { id: 'B', avatar: 'alice.png', messages: [], pendingEdits: [], surfaceState: {} };
-        const sessionStore = { load: jest.fn().mockResolvedValue(sessionB) };
-        const buildLiveSnapshot = jest.fn().mockResolvedValue({ character: {}, lorebooks: {} });
-        const abort = jest.fn();
-        const state = {
-            session: { id: 'A', avatar: 'alice.png' },
-            pendingEdits: [],
-            live: { character: {}, lorebooks: {} },
-            isBusy: true,
-            abortController: { abort },
-        };
+        const snap = await CEA.buildUnifiedCharacterEditorLiveSnapshot(ctx, 'alice.png');
+        expect(snap.character.description).toBe('fresh-from-disk');
+        expect(snap.lorebooks.Lore.entries[1].content).toBe('updated lore on disk');
 
-        await _internalLoadSessionIntoState(state, 'B', {
-            sessionStore,
-            buildLiveSnapshot,
-            context: {},
-            avatar: 'alice.png',
-        });
-
-        expect(abort).toHaveBeenCalledTimes(1);
-        expect(state.session).toBe(sessionB);
-    });
-
-    test('returns false (no-op) when id is empty', async () => {
-        const sessionStore = { load: jest.fn() };
-        const buildLiveSnapshot = jest.fn();
-        const state = {
-            session: { id: 'A' },
-            pendingEdits: [{ op: 'set', path: 'x', oldValue: 1, newValue: 2 }],
-            live: { character: { kept: true }, lorebooks: {} },
-            isBusy: false,
-            abortController: null,
-        };
-
-        const ok = await _internalLoadSessionIntoState(state, '', {
-            sessionStore, buildLiveSnapshot, context: {}, avatar: 'a.png',
-        });
-
-        expect(ok).toBe(false);
-        expect(sessionStore.load).not.toHaveBeenCalled();
-        expect(buildLiveSnapshot).not.toHaveBeenCalled();
-        expect(state.session.id).toBe('A');
-    });
-
-    test('returns false (no-op) when target is already current session', async () => {
-        const sessionStore = { load: jest.fn() };
-        const buildLiveSnapshot = jest.fn();
-        const state = {
-            session: { id: 'A' },
-            pendingEdits: [],
-            live: { character: {}, lorebooks: {} },
-            isBusy: false,
-            abortController: null,
-        };
-
-        const ok = await _internalLoadSessionIntoState(state, 'A', {
-            sessionStore, buildLiveSnapshot, context: {}, avatar: 'a.png',
-        });
-
-        expect(ok).toBe(false);
-        expect(sessionStore.load).not.toHaveBeenCalled();
-    });
-
-    test('returns false when sessionStore.load resolves null (id unknown)', async () => {
-        const sessionStore = { load: jest.fn().mockResolvedValue(null) };
-        const buildLiveSnapshot = jest.fn();
-        const state = {
-            session: { id: 'A' },
-            pendingEdits: [],
-            live: { character: { kept: true }, lorebooks: {} },
-            isBusy: false,
-            abortController: null,
-        };
-
-        const ok = await _internalLoadSessionIntoState(state, 'B', {
-            sessionStore, buildLiveSnapshot, context: {}, avatar: 'a.png',
-        });
-
-        expect(ok).toBe(false);
-        // state.live untouched when load fails.
-        expect(state.live.character.kept).toBe(true);
-        expect(buildLiveSnapshot).not.toHaveBeenCalled();
+        const second = await card.load('character', ctx);
+        expect(second.live.character.description).toBe('fresh-from-disk');
+        expect(second.live.lorebooks.Lore.entries[1].content).toBe('updated lore on disk');
     });
 });

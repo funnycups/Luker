@@ -1,6 +1,6 @@
 # 聊天与状态
 
-读取聊天数据、发送和编辑消息、持久化聊天元数据、按聊天 / 按角色存储状态的相关 API。
+读取聊天数据、发送和编辑消息、持久化聊天元数据、按聊天 / 按角色 / 按用户全局存储状态的相关 API。
 
 ## 聊天数据（只读）
 
@@ -726,6 +726,177 @@ if (!result.ok) {
 | 典型用途 | 角色级别的插件配置、CardApp 应用状态 | 聊天内的临时数据、对话上下文 |
 | API | `getCharacterState` / `getCharacterStateBatch` / `setCharacterState` / `updateCharacterState` / `deleteCharacterState` | `getChatState` / `getChatStateBatch` / `updateChatState` / `deleteChatState` |
 | 存储位置 | 卡片旁边的状态文件 | 聊天元数据 |
+
+## 全局状态
+
+全局状态按当前已认证用户账号隔离持久化存储，独立于 `settings.json` 保存，在当前用户的全部角色与聊天之间共享，适合存放插件全局配置、跨角色索引、工作台布局与结构化文档。
+
+以下客户端辅助函数均在 Layer 1 的 `public/scripts/extensions.js`、Layer 2 的 `globalThis.lukerContext` 与 Layer 3 的 `Luker.getContext()` 一致暴露。
+
+### 命名空间规则
+
+全局状态的命名空间为保留大小写、去除首尾空白后的非空字符串。校验分为客户端与服务端两层：
+
+- **客户端校验，失败返回 `reason: 'VALIDATION_ARGS'`：** 拒绝非字符串值、`.trim()` 后为空的字符串，以及包含 `/`、`\`、`..`、`\0`、以 `.` 开头或含 ASCII 控制字符 `\x00-\x1f`、`\x7f` 的命名空间。
+- **服务端校验，返回 HTTP 400，客户端映射为 `reason: 'HTTP_ERROR'`：** 在上述检查之外，通过 `assertSafeRepoNameShape` 额外拒绝以 `.json` 或 `.jsonl` 结尾以及包含文件名不安全字符如 `<`、`>`、`:`、`"`、`|`、`?`、`*` 的命名空间；写入路由 `/api/state/set` 与 `/api/state/patch` 还通过 `assertSafeRepoName` 限制 UTF-8 编码长度不超过 128 字节，读取与删除路由仍允许访问超过该长度的既有命名空间。
+
+### getGlobalState
+
+```ts
+getGlobalState(
+  namespace: string,
+): Promise<
+  | { ok: true, state: object | null }
+  | { ok: false, state: null, reason: string, hint: string }
+>
+```
+
+经由浏览器 HTTP 资源缓存与 `GET /api/state/get` 读取指定命名空间的全局状态。成功时返回 `{ok: true, state}`，其中 `state` 为已存储的对象，命名空间无数据时为 `null`。失败时返回 `{ok: false, state: null, reason, hint}` —— 见下方[错误原因](#错误原因-3)。
+
+| 参数 | 说明 |
+|------|------|
+| `namespace` | 保留大小写的存储命名空间，通常使用插件标识符，如 `'my-extension'` |
+
+### getGlobalStateBatch
+
+```ts
+getGlobalStateBatch(
+  namespaces: string[],
+): Promise<
+  | { ok: true, results: Map<string, { ok: true, state: object | null }> }
+  | { ok: false, results: Map<string, never>, reason: string, hint: string }
+>
+```
+
+经由已缓存的 `GET /api/state/get` 路径并发读取多个去重后的全局状态命名空间。传入的命名空间会去除首尾空白并去重；空数组会在本地直接返回 `{ok: true, results: new Map()}` 而不发起 HTTP 请求，而 `POST /api/state/get-batch` 端点则要求非空数组。若列表中存在未通过客户端校验的命名空间，调用会立即以 `reason: 'VALIDATION_ARGS'` 返回失败。成功时返回 `{ok: true, results}`，其中 `results` 是以命名空间为键的 `Map`，每条结果本身为 `{ok: true, state}`，缺失的命名空间对应 `{ok: true, state: null}`。失败时返回 `{ok: false, results: <空 Map>, reason, hint}`。
+
+### setGlobalState
+
+```ts
+setGlobalState(
+  namespace: string,
+  data: object,
+): Promise<
+  | { ok: true, state: object }
+  | { ok: false, reason: string, hint: string }
+>
+```
+
+通过 `POST /api/state/set` 以整份文档覆盖的方式写入指定命名空间的全局状态，并使该命名空间的读取缓存失效。`data` 必须是可 JSON 序列化的普通对象；`/api/state/set` 不接受 `null`，删除条目请使用 `deleteGlobalState()`。非平凡负载建议优先使用 `updateGlobalState()`，`setGlobalState()` 每次均会传输整份文档。成功时返回 `{ok: true, state}` 回显写入的 `data`；失败时返回 `{ok: false, reason, hint}`。
+
+| 参数 | 说明 |
+|------|------|
+| `namespace` | 存储命名空间 |
+| `data` | 要存储的普通对象 |
+
+### patchGlobalState
+
+```ts
+patchGlobalState(
+  namespace: string,
+  operations: RFC6902Operation[],
+): Promise<
+  | { ok: true, applied: number, created: boolean }
+  | { ok: false, reason: string, hint: string }
+>
+```
+
+通过 `POST /api/state/patch` 原子性应用非空的 RFC 6902 JSON Patch 操作数组，并使该命名空间的读取缓存失效。若状态尚不存在，服务端会以 `{}` 为基线初始化并返回 `created: true`。成功时返回 `{ok: true, applied, created}`；遇到 HTTP 409 的 `test` 操作失败或父路径缺失时返回 `{ok: false, reason: 'CONFLICT', hint}`；校验、HTTP 或传输失败返回 `{ok: false, reason, hint}`。绝大多数场景建议使用 `updateGlobalState()`，无需手动构造 patch 操作。
+
+| 参数 | 说明 |
+|------|------|
+| `namespace` | 存储命名空间 |
+| `operations` | 非空的 RFC 6902 patch 操作数组 |
+
+### updateGlobalState
+
+```ts
+updateGlobalState(
+  namespace: string,
+  updater: (currentState: object, meta: { attempt: number, namespace: string })
+    => object | null | undefined | Promise<object | null | undefined>,
+  options?: { maxOperations?: number, maxRetries?: number, asyncDiff?: boolean },
+): Promise<
+  | { ok: true, state: object | null, updated: boolean, created?: boolean }
+  | { ok: false, reason: string, hint: string }
+>
+```
+
+**推荐的读—改—写接口。** 先使读取缓存失效并拉取最新状态，再将深拷贝传入 `updater`，状态不存在时传入 `{}`。系统在内部通过 `buildObjectPatchOperationsAsync()` 生成最小 RFC 6902 差异，并在 `options.asyncDiff === false` 时改走同步计算，仅通过 `patchGlobalState()` 传输变更切片。`updater` 返回 `null`、`undefined` 或未产生差异的对象时，不发起写入并直接返回 `{ok: true, state, updated: false}`。遇到 409 并发冲突时会自动重试，重试次数由 `options.maxRetries` 控制，默认为 `1`；`options.maxOperations` 默认为 `2000`。该函数永不抛出异常，reducer 抛错或返回非普通对象均会以 `reason: 'VALIDATION_ARGS'` 上报。
+
+```js
+await context.updateGlobalState('my-plugin', (current = {}) => ({
+  ...current,
+  counter: (current.counter || 0) + 1,
+  lastUpdated: Date.now(),
+}));
+```
+
+### deleteGlobalState
+
+```ts
+deleteGlobalState(
+  namespace: string,
+): Promise<{ ok: true } | { ok: false, reason: string, hint: string }>
+```
+
+通过 `POST /api/state/delete` 删除指定命名空间的全局状态，并使读取缓存失效。该操作具有幂等性，状态不存在时同样返回成功。成功时返回 `{ok: true}`；失败时返回 `{ok: false, reason, hint}`。
+
+### 最佳实践
+
+- 优先使用 `updateGlobalState()` 进行读—改—写，不要手动串联 `getGlobalState()` 与 `setGlobalState()` 或 `patchGlobalState()`。
+- `setGlobalState()` 仅用于初次写入或有意整份替换文档；移除命名空间请使用 `deleteGlobalState()`。
+- 负载保持为可 JSON 序列化的普通对象，不支持顶层数组或基本类型。
+- 检查 `result.ok` 并按 `result.reason` 分支处理，不要直接翻译 `hint`。
+
+### 错误原因
+
+每次调用失败均会返回 `{ok: false, reason, hint}`。可能的 `reason` 值：
+
+| Reason | 触发时机 | 建议处理 |
+|---|---|---|
+| `VALIDATION_ARGS` | 未通过客户端命名空间校验、`operations` 为空、`updater` 非函数、reducer 抛错或返回值非普通对象 | 修正调用方参数或 reducer 实现 |
+| `CONFLICT` | `patchGlobalState()` 返回 HTTP 409，或 `updateGlobalState()` 用尽 `maxRetries` | 重新读取当前状态后再试 |
+| `HTTP_ERROR` | 其他非 2xx HTTP 响应，包括服务端命名空间或负载校验返回的 HTTP 400 | 检查 `hint` 中的状态码并向用户提示错误 |
+| `TRANSPORT_ERROR` | `fetch` 抛出异常：网络错误、CORS 或请求中止 | 重试或向用户提示网络错误 |
+
+`hint` 字段为英文、不超过 120 字符的可操作诊断信息。面向用户的本地化文案请根据 `reason` 切换，不要直接翻译 `hint`。
+
+示例：
+
+```js
+const result = await context.updateGlobalState('my-ext', (cur) => ({ ...cur, x: 1 }));
+if (!result.ok) {
+    switch (result.reason) {
+        case 'CONFLICT':
+            toastr.warning(t('保存时与其他写入冲突，请重试。'));
+            break;
+        case 'HTTP_ERROR':
+        case 'TRANSPORT_ERROR':
+            toastr.error(t('无法连接服务器，更改未保存。'));
+            break;
+        case 'VALIDATION_ARGS':
+            console.error('[my-ext] 参数错误：', result.hint);
+            break;
+        default:
+            console.warn('[my-ext] 保存失败：', result.reason, result.hint);
+    }
+    return;
+}
+```
+
+### HTTP 端点 `/api/state/*`
+
+全局状态按用户存储在 `globalStates` 仓库桶中，文件系统后端位于 `states/` 目录，SQLite / Postgres / MySQL 后端位于 `named_docs` 表。`/api/state` 路由如下：
+
+| 方法 | 路径 | 请求 | 响应 |
+|------|------|------|------|
+| `GET` | `/api/state/get` | 查询参数：`namespace`、`account` | `{ ok: true, data: object \| null }`，附带 `ETag` 与 `Cache-Control: private, no-cache, max-age=1`；缓存命中返回 `304`，错误返回 `400` / `403` / `500` `{ code, resource, detail }` |
+| `POST` | `/api/state/get` | 请求体：`{ namespace }` | `{ ok: true, data: object \| null }` |
+| `POST` | `/api/state/get-batch` | 请求体：`{ namespaces: string[] }` | `{ ok: true, data: Record<string, object \| null> }`，要求非空数组并在服务端去重 |
+| `POST` | `/api/state/set` | 请求体：`{ namespace, data }` | `{ ok: true }`，`data` 必须为普通对象 |
+| `POST` | `/api/state/patch` | 请求体：`{ namespace, operations }` 或 `{ namespace, operation }` | `{ ok: true, applied: number, created: boolean }`，冲突返回 `409` `{ error, code }`，非法操作返回 `400` |
+| `POST` | `/api/state/delete` | 请求体：`{ namespace }` | `{ ok: true, deleted: boolean }`，幂等 |
 
 ## 聊天生命周期
 

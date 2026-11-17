@@ -1,6 +1,6 @@
 # Spec Mode
 
-Spec is the orchestrator's default mode. It splits preparation into a fixed sequence of stages, each containing one or more nodes, and ends by combining their output into an orchestration result for the main model. The pipeline is predictable and reusable, which makes it a solid starting point for long-form roleplay.
+Spec (**Pipeline** in Workbench) is the orchestrator's default mode. It splits preparation into a fixed sequence of stages, each containing one or more nodes, and ends by combining their output into an orchestration result for the main model. The pipeline is predictable and reusable, which makes it a solid starting point for long-form roleplay.
 
 ## How it works
 
@@ -89,11 +89,11 @@ The bundled profile provides a working pipeline:
 4. **Review**: check the plan against established facts, character consistency and world rules. Send the responsible node back when something is wrong.
 5. **Synthesize**: turn the accepted output into a short orchestration result.
 
-This covers most roleplay setups. When you need a different shape, describe the goal in [AI Iteration Studio](/features/orchestrator/iteration-studio) and confirm each proposed change.
+This covers most roleplay setups. When you need a different shape, describe the goal in [AI Iteration](/features/orchestrator/iteration-studio) and confirm each proposed change.
 
 ## Editor
 
-Open the **orchestration editor** from the Orchestrator panel. Stages and nodes are on the left, the agent preset library on the right. Each node references a preset containing a system prompt, a user prompt template, and optional API connection and chat-completion preset overrides.
+Open **Workbench → Orchestration** and inspect the **Flow** and **Setup** views. Stages and nodes appear in **Flow**, while **Setup** manages the preset library, structure, and tools. Each node references an agent preset containing a role prompt, a task template, and optional AI connection and generation preset overrides.
 
 Nodes can use different models. A common arrangement is a cheap model for summarizing and planning, and a stronger one for synthesis and review.
 
@@ -110,17 +110,17 @@ The rerun limit controls how many times this can happen. The default is 2; at 0 
 
 | Goal | How |
 | --- | --- |
-| Plan before writing | Describe "two stages: plan the next beat, then write the orchestration result" in the Studio |
+| Plan before writing | Describe "two stages: plan the next beat, then write the orchestration result" in **AI iteration** |
 | Keep characters in voice | Keep the default data-like prose check, or ask for a node that blocks meta commentary and report-style narration |
 | Reuse one pipeline across cards | Apply it globally instead of binding it to a card |
-| Different pipelines per card | Select the card, open the Studio, and apply to the card |
+| Different pipelines per card | Select the card, open **AI iteration**, pick **Character-only** scope, and apply |
 | Reduce cost or latency | Use smaller models, remove nodes, or switch to [Single Agent mode](/features/orchestrator/single) |
-| Iterate on one pipeline | Studio sessions are saved and can be resumed |
+| Iterate on one pipeline | AI iteration sessions are saved and can be resumed |
 | Move to another device | Export the configuration and import it on the target |
 
-## Run Panel
+## Run panel
 
-The Run Panel shows execution by stage. Expand a card to inspect a node's reasoning, output and tool calls.
+The **Run panel** dock and **Workbench → Orchestration → Run** show execution by stage. Expand a card to inspect a node's thinking, output, and tool calls.
 
 Watch for:
 
@@ -128,7 +128,7 @@ Watch for:
 - stage output that does not match what the next stage needs;
 - a final orchestration result that omits something this turn requires.
 
-The export button at the top saves the whole run as JSON for reporting a problem.
+Use **Export trace** to save the whole run as JSON for reporting a problem.
 
 ## Settings
 
@@ -140,7 +140,7 @@ The export button at the top saves the whole run as JSON for reporting a problem
 ## Related pages
 
 - [Orchestration overview](/features/orchestrator/) — shared settings, triggers and card binding
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — change the pipeline in natural language
+- [AI Iteration](/features/orchestrator/iteration-studio) — change the pipeline in natural language
 - [Single Agent mode](/features/orchestrator/single) — a one-node pipeline
 - [Agenda mode](/features/orchestrator/agenda) — a planner decides which nodes run
 - [Loop mode](/features/orchestrator/loop) — single-agent tool loop

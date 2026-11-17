@@ -116,11 +116,13 @@ const SPEC_HOSTILE_PROMPT_MARKERS = [
     '黑森林',
 ];
 
-// ST's shipped "Default" OpenAI preset — the minimal prompt set that
-// every fresh user starts from. We snap the cloned settings back to
-// this so the dev's local prompt-order + custom entries don't bleed
-// into spec assertions.
+// ST's shipped "Default" OpenAI preset + default settings.json — the minimal
+// prompt + parameter set that every fresh user starts from. We snap the cloned
+// settings back to this so the dev's local prompt-order, custom entries, and
+// sampling overrides don't bleed into spec assertions or trigger false
+// unsaved-preset warnings when switching presets.
 const DEFAULT_OAI_PRESET_PATH = resolve(REPO_ROOT, 'default/content/presets/openai/Default.json');
+const DEFAULT_SETTINGS_PATH = resolve(REPO_ROOT, 'default/content/settings.json');
 
 function scrubDevPromptPollution(settingsPath) {
     if (!existsSync(settingsPath)) return;
@@ -131,14 +133,14 @@ function scrubDevPromptPollution(settingsPath) {
     } catch {
         return;
     }
-    // Load the shipped Default preset once; we'll splice its prompts into
-    // the live settings if the active prompts carry any spec-hostile
-    // marker. Anything else (a developer who simply runs the unmodified
-    // default in their dev env) stays untouched.
     let defaultPreset = null;
+    let defaultSettings = null;
     try {
         defaultPreset = JSON.parse(readFileSync(DEFAULT_OAI_PRESET_PATH, 'utf8'));
     } catch { /* shipped preset missing — leave settings alone */ }
+    try {
+        defaultSettings = JSON.parse(readFileSync(DEFAULT_SETTINGS_PATH, 'utf8'));
+    } catch { /* shipped settings missing — fall back to prompt-only scrub */ }
 
     const oai = json?.oai_settings;
     if (oai && Array.isArray(oai.prompts) && defaultPreset?.prompts) {
@@ -146,15 +148,24 @@ function scrubDevPromptPollution(settingsPath) {
             const content = typeof p?.content === 'string' ? p.content : '';
             return SPEC_HOSTILE_PROMPT_MARKERS.some(m => content.includes(m));
         });
-        if (hasPollution) {
-            oai.prompts = JSON.parse(JSON.stringify(defaultPreset.prompts));
-            if (Array.isArray(defaultPreset.prompt_order)) {
-                oai.prompt_order = JSON.parse(JSON.stringify(defaultPreset.prompt_order));
-            }
-            // Pin every "preset for source X" field to "Default" so the
-            // active preset is the one we just installed.
-            for (const key of Object.keys(oai)) {
-                if (key.startsWith('preset_settings_')) oai[key] = 'Default';
+        const isDefaultSelected = oai.preset_settings_openai === 'Default';
+        if (hasPollution || isDefaultSelected) {
+            if (defaultSettings?.oai_settings) {
+                json.oai_settings = {
+                    ...JSON.parse(JSON.stringify(defaultSettings.oai_settings)),
+                    impersonation_prompt: defaultPreset.impersonation_prompt,
+                };
+                const targetDefaultPresetPath = resolve(dirname(settingsPath), 'OpenAI Settings/Default.json');
+                mkdirSync(dirname(targetDefaultPresetPath), { recursive: true });
+                writeFileSync(targetDefaultPresetPath, JSON.stringify(defaultPreset, null, 4));
+            } else {
+                oai.prompts = JSON.parse(JSON.stringify(defaultPreset.prompts));
+                if (Array.isArray(defaultPreset.prompt_order)) {
+                    oai.prompt_order = JSON.parse(JSON.stringify(defaultPreset.prompt_order));
+                }
+                for (const key of Object.keys(oai)) {
+                    if (key.startsWith('preset_settings_')) oai[key] = 'Default';
+                }
             }
             dirty = true;
         }

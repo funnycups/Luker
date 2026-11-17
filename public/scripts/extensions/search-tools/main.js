@@ -318,7 +318,7 @@ function initSearchRunPanel() {
     if (searchRunPanel) {
         return;
     }
-    searchRunPanel = createSearchRunPanel({ t: i18nFormat });
+    searchRunPanel = createSearchRunPanel();
     searchRunPanel.init();
 }
 
@@ -2622,7 +2622,7 @@ const {
     normalizeSafeSearch,
     normalizeWhitespace,
     saveSettingsDebounced,
-    showRunPanel: () => searchRunPanel?.open(),
+    showRunPanel: () => Luker.getContext()?.runPanel?.openRunDock?.(),
     syncSharedLorebookForCurrentChat,
     syncSharedLorebookForLoadedChat,
     world_info_position,

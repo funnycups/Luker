@@ -21,7 +21,10 @@ Regardless of mode, the editor assistant provides these core capabilities:
 
 ## Entry Point and Mode Switching
 
-The entry point is **Extensions Panel → Character Card Editor Assistant**. When the current character has no CardApp, "Open Editor" opens the popup; when it does, Studio opens automatically. Studio can also be launched directly via the "&lt;/&gt; CardApp Studio" button on the same panel.
+Two entry points serve different editing needs:
+
+- **Workbench → AI iteration** (**Character card** / **World book**) — conversational editing with diff cards and rollback inside the unified [Workbench](/features/workbench).
+- **Extensions Panel → Character Editor Assistant** — **Open Editor** opens the standalone popup (used for card/lorebook editing and World Info sync when replacing a card), and **&lt;/&gt; CardApp Studio** launches the three-panel IDE for cards with an embedded CardApp. When the active character contains a CardApp, **Open Editor** opens Studio automatically.
 
 ![Editor assistant entry and configuration in the extensions panel](/images/card-editor-popup/cea-extensions-panel.png)
 
@@ -30,11 +33,9 @@ The entry point is **Extensions Panel → Character Card Editor Assistant**. Whe
 Both modes share the same set of settings on the extensions panel:
 
 - **World Info sync popup** — Whether to enable the World Info sync popup after replacing/updating a character card (only triggered by the popup mode; see [Popup Mode](/features/card-editor/popup#world-info-sync))
-- **Model request LLM preset** — Prompt preset used by the editor assistant (leave empty to use the current preset)
-- **Model request API preset** — API connection used by the editor assistant (leave empty to use the current connection)
-
-Both preset dropdowns have a question-mark button that explains the expected preset type and imports a bundled one in a click.
-- **Tool call retry count** — Number of retries when the AI returns an invalid tool call
+- **Iteration AI prompt preset (params + prompt)** — Prompt preset used by the editor assistant (leave empty to use the current preset); the question-mark button beside this dropdown explains the expected preset type and imports the bundled `plugin-only` preset in a click
+- **Iteration AI API preset (Connection profile)** — API connection used by the editor assistant (leave empty to use the current connection)
+- **Tool-call retries on invalid/missing tool call (N)** — Number of retries when the AI returns an invalid tool call
 
 ## Modification History
 

@@ -191,7 +191,7 @@ export function getAdvancedScopeInfo(context = null, settings = null) {
     };
 }
 
-export async function persistCharacterSchemaOverride(context, avatar, schema) {
+export async function persistCharacterSchemaOverride(context, avatar, schema, options = {}) {
     const target = String(avatar || '').trim();
     if (!target || typeof context?.writeExtensionField !== 'function') {
         return false;
@@ -205,11 +205,15 @@ export async function persistCharacterSchemaOverride(context, avatar, schema) {
         ...previous,
         [CHARACTER_SCHEMA_OVERRIDE_KEY]: deps.normalizeNodeTypeSchema(schema),
     };
-    await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+    if (options?.requireSaved) {
+        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next, { requireSaved: true });
+    } else {
+        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+    }
     return true;
 }
 
-export async function removeCharacterSchemaOverride(context, avatar) {
+export async function removeCharacterSchemaOverride(context, avatar, options = {}) {
     const target = String(avatar || '').trim();
     if (!target || typeof context?.writeExtensionField !== 'function') {
         return false;
@@ -227,7 +231,11 @@ export async function removeCharacterSchemaOverride(context, avatar) {
     // the key from the on-disk blob. Plain `null` would only set the field
     // to null and leave the key in place.
     next[CHARACTER_SCHEMA_OVERRIDE_KEY] = UNSET_VALUE;
-    await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+    if (options?.requireSaved) {
+        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next, { requireSaved: true });
+    } else {
+        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+    }
     return true;
 }
 
@@ -241,7 +249,7 @@ export async function removeCharacterSchemaOverride(context, avatar) {
  * keys such as `schemaOverride` pass through untouched. A failed write
  * propagates to the caller.
  */
-export async function persistCharacterAdvancedOverridePatch(context, avatar, patch = {}) {
+export async function persistCharacterAdvancedOverridePatch(context, avatar, patch = {}, options = {}) {
     const target = String(avatar || '').trim();
     if (!target || typeof context?.writeExtensionField !== 'function') {
         return false;
@@ -264,7 +272,11 @@ export async function persistCharacterAdvancedOverridePatch(context, avatar, pat
             ? nextOverride
             : UNSET_VALUE,
     };
-    await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+    if (options?.requireSaved) {
+        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next, { requireSaved: true });
+    } else {
+        await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+    }
     return true;
 }
 

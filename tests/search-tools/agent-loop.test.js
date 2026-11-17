@@ -2,6 +2,8 @@
 import { jest } from '@jest/globals';
 import { loadManagedEntries, resetFloorStateInstanceForTesting } from '../../public/scripts/extensions/search-tools/persistence.js';
 
+const __defaultStateErrors = globalThis.Luker?.getContext?.()?.stateErrors;
+
 function makeLorebookContext() {
     const books = { __SEARCH_TOOLS__: { entries: {} } };
     let floorState = { entries: {} };
@@ -9,6 +11,7 @@ function makeLorebookContext() {
         eventSource: { on() {} },
         eventTypes: {},
         constants: { promptRoles: { SYSTEM: 0, USER: 1, ASSISTANT: 2 }, wiPosition: {} },
+        stateErrors: __defaultStateErrors,
         getRequestHeaders: () => ({}),
         saveSettings: () => {},
         saveSettingsDebounced: () => {},

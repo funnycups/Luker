@@ -22,14 +22,20 @@ import { startServer, tearDownServer } from '../_lib/server.js';
 import { bootstrapCustomBackend, appendConnectionProfile, markOnboarded, writePreset } from '../_lib/fixtures.js';
 import { awaitMainUI } from '../_lib/page.js';
 import { openIterStudio, closeIterStudio } from '../_lib/ui-iter-studio.js';
+import { workbenchWindow } from '../_lib/ui-workbench.js';
 import { selectPresetByName, normalizeIterStudioSettings } from '../preset/_helpers.js';
 
 let server;
 
 const CPA_SIDECAR_PATH_SEGMENTS = ['default-user', 'OpenAI Settings', 'Default.luker-state.completion_preset_assistant_session.json'];
+const WB_SIDECAR_PATH_SEGMENTS = ['default-user', 'OpenAI Settings', 'Default.luker-state.workbench_sessions.json'];
 
 function cpaSidecarPath(dataRoot) {
     return resolve(dataRoot, ...CPA_SIDECAR_PATH_SEGMENTS);
+}
+
+function wbSidecarPath(dataRoot) {
+    return resolve(dataRoot, ...WB_SIDECAR_PATH_SEGMENTS);
 }
 
 function plantLegacySidecar(dataRoot) {
@@ -100,8 +106,7 @@ test.describe('#84 — iter-studio v2 session auto-migrates to v3 on first read'
         await tearDownServer(server);
     });
 
-    test('opening CPA studio with a legacy currentSessionId rewrites the sidecar to v3', async ({ page }) => {
-        // Verify the planted sidecar starts in legacy shape.
+    test('opening Workbench AI iteration on preset lazily imports legacy CPA session into workbench_sessions', async ({ page }) => {
         const beforePath = cpaSidecarPath(server.dataRoot);
         const before = JSON.parse(readFileSync(beforePath, 'utf8'));
         expect(before.sessions[0].version).toBeUndefined();
@@ -110,25 +115,29 @@ test.describe('#84 — iter-studio v2 session auto-migrates to v3 on first read'
 
         await awaitMainUI(page, server.baseURL);
         await selectPresetByName(page, 'Default');
-        // Opening the studio triggers initSession -> sessionStore.load() ->
-        // migrateToV3 -> in-place write. We do NOT need to send any prompt:
-        // the load is what flips the on-disk shape.
         await openIterStudio(page, 'cpa');
-        // Give the migration write a beat to settle on disk before we read.
-        await expect.poll(async () => {
-            const parsed = JSON.parse(readFileSync(beforePath, 'utf8'));
-            return parsed.sessions[0].version;
-        }, { timeout: 10_000 }).toBe(3);
-        await closeIterStudio(page);
 
-        const after = JSON.parse(readFileSync(beforePath, 'utf8'));
-        const session = after.sessions[0];
-        expect(session.version).toBe(3);
-        const migratedEdit = session.messages[1].edits[0];
-        expect(migratedEdit).not.toHaveProperty('oldValue');
-        expect(migratedEdit).not.toHaveProperty('newValue');
-        expect(migratedEdit.target).toEqual({ type: 'preset' });
-        expect(Array.isArray(migratedEdit.inverse)).toBe(true);
-        expect(migratedEdit.inverse.length).toBeGreaterThan(0);
+        const win = workbenchWindow(page);
+        await expect(win.locator('.wb-sess-list')).toContainText('Migrated legacy session', { timeout: 10_000 });
+
+        const wbPath = wbSidecarPath(server.dataRoot);
+        await expect.poll(() => {
+            try {
+                const parsed = JSON.parse(readFileSync(wbPath, 'utf8'));
+                return Boolean(parsed?.legacyImported?.preset);
+            } catch {
+                return false;
+            }
+        }, { timeout: 10_000 }).toBe(true);
+
+        const after = JSON.parse(readFileSync(wbPath, 'utf8'));
+        const imported = (after.sessions || []).find((s) => s.legacyId === 'legacy-s1');
+        expect(imported).toBeTruthy();
+        expect(imported.ws).toBe('preset');
+        expect(imported.scope).toBe('preset');
+        expect(imported.importedFromLegacy).toBe(true);
+        expect(imported.turns).toHaveLength(2);
+        expect(imported.turns[1].toolCalls?.[0]?.name).toBe('preset_set_field');
+        await closeIterStudio(page);
     });
 });

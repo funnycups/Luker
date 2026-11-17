@@ -2,6 +2,7 @@
     "display_name": "Memory",
     "loading_order": 111,
     "js": "index.js",
+    "css": "lens/style.css",
     "author": "Luker",
     "version": "0.1.0",
     "homePage": "https://github.com/funnycups/Luker"

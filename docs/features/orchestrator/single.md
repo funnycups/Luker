@@ -13,12 +13,12 @@ Use [Loop mode](/features/orchestrator/loop) when an agent must read world books
 
 ## Getting started
 
-Set the execution mode to **Single Agent** in the extension drawer. The other modes' editor entries collapse and two fields appear:
+In **Workbench → Orchestration**, select **Single assistant** from the mode picker. Select the agent in **Flow** (or **Setup**) to edit its two fields:
 
-- **System Prompt**: the agent's role and task.
-- **User Prompt template**: the input for this turn.
+- **Role prompt (system prompt)**: the agent's role and task.
+- **Task template**: the input for this turn.
 
-Fill in the two fields; no orchestration editor is needed. The agent's output is injected into the main model as the orchestration result.
+The agent's output is injected into the main model as the orchestration result.
 
 ## Relationship to Spec
 
@@ -36,11 +36,11 @@ Single Agent is a Spec with one node. Switching back to Spec shows that same nod
 
 ## Writing prompts with AI
 
-[AI Iteration Studio](/features/orchestrator/iteration-studio) works in Single Agent mode. Describe the task, and it drafts the system and user prompts for you to confirm.
+[AI Iteration](/features/orchestrator/iteration-studio) works in Single Agent mode. Describe the task, and it drafts the role and task prompts for you to confirm.
 
 ## Related pages
 
 - [Orchestration overview](/features/orchestrator/) — shared settings, triggers and card binding
 - [Spec mode](/features/orchestrator/spec) — multi-stage flow
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — write prompts in natural language
+- [AI Iteration](/features/orchestrator/iteration-studio) — write prompts in natural language
 - [Loop mode](/features/orchestrator/loop) — let an agent call tools

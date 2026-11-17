@@ -220,8 +220,8 @@ function readFsEngine(dataRoot, handle) {
         }
     }
 
-    // named_docs (themes / movingUI / quickreplies)
-    const namedDocDirs = { themes: 'themes', movingUI: 'movingUI', quickReplies: 'quickreplies' };
+    // named_docs (themes / movingUI / quickreplies / globalStates)
+    const namedDocDirs = { themes: 'themes', movingUI: 'movingUI', quickReplies: 'quickreplies', globalStates: 'states' };
     for (const [bucket, dirName] of Object.entries(namedDocDirs)) {
         const dir = resolve(userRoot, dirName);
         if (!existsSync(dir)) continue;

@@ -28,9 +28,8 @@ import {
     awaitMainUI,
     selectCharacterByName,
     sendMessageAndAwaitReply,
-    openExtensionsDrawer,
-    openInlineDrawer,
 } from '../_lib/page.js';
+import { importMgGraph, setMgSettings } from '../_lib/ui-mg-varops.js';
 
 let server, mock, origPath, importedPath;
 
@@ -122,43 +121,13 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function enableMgViaCheckbox(page) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.evaluate(() => {
-        const el = document.getElementById('luker_rpg_memory_enabled');
-        if (el && !el.checked) {
-            el.checked = true;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    });
-}
-
-/**
- * Wrap the shared importMgGraph helper with the "Bind Latest Floor"
- * custom button click — the helper's OK click never works because the
- * import-mode popup uses custom buttons only.
- */
-async function importBindLatest(page, filePath) {
-    await openExtensionsDrawer(page);
-    await openInlineDrawer(page, 'memory_graph_settings').catch(() => {});
-    await page.locator('#luker_rpg_memory_import').click();
-    await page.locator('#luker_rpg_memory_import_file').setInputFiles(filePath);
-    const popup = page.locator('.popup:visible').last();
-    await popup.waitFor({ state: 'visible', timeout: 10_000 });
-    await popup.locator('.popup-button-custom', { hasText: /Bind Latest|绑定最新/ }).first().click();
-    await popup.waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {});
-    await page.waitForTimeout(500);
-}
-
 test.describe('#57 — MG import never produces ID collisions', () => {
     test.setTimeout(180_000);
 
     test('import wipes originals; subsequent createNode (via re-import) gets fresh ids past imported max', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Seraphina');
-        await enableMgViaCheckbox(page);
+        await setMgSettings(page, { enabled: true }, { closeAfter: true });
 
         // 5 RP turns so MG has a real chat tail.
         for (const t of [
@@ -172,7 +141,8 @@ test.describe('#57 — MG import never produces ID collisions', () => {
         }
 
         // Step 1 — import the ORIG store (5 nodes at n_1..n_5).
-        await importBindLatest(page, origPath);
+        await importMgGraph(page, origPath, { mode: 'bind-latest', closeAfter: true });
+        await page.waitForTimeout(500);
         const afterOrig = await page.evaluate(async () => {
             const ctx = window.Luker.getContext();
             const mg = ctx.getExtensionApi?.('memory-graph');
@@ -183,7 +153,8 @@ test.describe('#57 — MG import never produces ID collisions', () => {
 
         // Step 2 — import the IMPORTED store (3 nodes at n_1..n_3,
         // overlapping ids). Replace-mode wipes the originals.
-        await importBindLatest(page, importedPath);
+        await importMgGraph(page, importedPath, { mode: 'bind-latest', closeAfter: true });
+        await page.waitForTimeout(500);
         const afterImport = await page.evaluate(async () => {
             const ctx = window.Luker.getContext();
             const mg = ctx.getExtensionApi?.('memory-graph');

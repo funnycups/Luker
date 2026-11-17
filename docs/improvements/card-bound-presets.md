@@ -54,7 +54,7 @@ Prompt Manager, the Chat Completion Preset Assistant (CPA), and any AI iteration
 
 Multi-agent orchestrator profiles reference the chat completion preset each agent runs on **by name**. When a character with a card-bound set is loaded, agent name resolution walks card slots first, then local presets, then falls back to the global default. This means an orchestrator profile exported with a card ships end-to-end runnable: the recipient does not need to import a matching preset separately.
 
-**Save To Character Override** in the orchestrator drawer inspects the referenced preset names before persisting. If any agent references a preset that is not yet on the card, Luker prompts:
+**Save To Character Override** under **Workbench → Orchestration → Setup** inspects the referenced preset names before persisting. If any agent references a preset that is not yet on the card, Luker prompts:
 
 - **Embed all** — write each referenced preset's local body into the card so the orchestrator profile stays self-contained after export.
 - **Save names only** — persist the orchestrator profile but leave the presets un-embedded. Recipients without matching local presets will fall back to the runtime default.

@@ -6,13 +6,13 @@ For what a Skill is and how to write one, see [the Skills overview](/features/sk
 
 ## Ways to attach a Skill
 
-**Let the Studio do it (recommended).** When you ask AI Iteration Studio to write or edit a Skill, say who should see it — "every agent in Director mode" or "only the voice reviewer". It wires the Skill into the right place during the same approval round, so you do not have to decide which layer it belongs to. See [Shaping roleplay output with Skills](/recipes/rp-skills-walkthrough) and [Writing Skills with the Studio](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio).
+**Let AI iteration do it (recommended).** When you ask **Workbench → AI iteration → Orchestration** to write or edit a Skill, say who should see it — "every agent in Director mode" or "only the voice reviewer". It wires the Skill into the right place during the same approval round, so you do not have to decide which layer it belongs to. See [Shaping roleplay output with Skills](/recipes/rp-skills-walkthrough) and [Authoring Skills with AI iteration](/features/orchestrator/iteration-studio#authoring-skills-via-iter-studio).
 
-**Attach it yourself.** Open the Director editor in the orchestrator panel and scroll to the Skill list. Each agent has its own list, and a shared list at the top applies to every agent. Pick a Skill from the dropdown, choose **Add**, then save.
+**Attach it yourself.** Open **Workbench → Orchestration → Setup** (or select an agent in **Flow**) and scroll to the Skill list. Each agent has its own list, and a shared list applies to every agent. Pick a Skill from the dropdown, add it, then save.
 
 ![Director editor with the Skill list and a freshly added Skill](/images/skills/rp-demo-11-director-chip-added.png)
 
-If you are unsure which list to use, let the Studio decide.
+If you are unsure which list to use, let AI iteration decide.
 
 ## What the agent sees
 
@@ -26,5 +26,5 @@ The catalog lists names only. Bodies resolve in the order character card, preset
 - [Managing Skills](/features/skills/management) — install, import, delete and move scopes
 - [Authoring Skills](/features/skills/authoring) — writing rules for Skill bodies
 - [Orchestrator integration](/features/skills/orchestrator-integration) — inheritance, wildcards and deny lists
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — let the AI write Skills for you
+- [AI Iteration](/features/orchestrator/iteration-studio) — let the AI write Skills for you
 - [Shaping roleplay output with Skills](/recipes/rp-skills-walkthrough) — end-to-end walkthrough

@@ -3,7 +3,7 @@
 ::: tip What this doc solves
 Luker's [multi-agent orchestrator](/features/orchestrator/), [memory graph](/features/memory-graph), and [search tools](/features/search-tools) each work independently, but coordinating them into a single flow (an agent team that extracts memories, retrieves canon, and drafts the prose) requires several configuration steps performed in order.
 
-This doc starts from an empty configuration and guides you through preset → Director → memory → search end to end. It does not assume that you have read the deep-dive docs above. By the end, you will have a working default setup that you can continue tuning in the Iteration Studio.
+This doc starts from an empty configuration and guides you through preset → Director → memory → search end to end. It does not assume that you have read the deep-dive docs above. By the end, you will have a working default setup that you can continue tuning in **Workbench → AI iteration**.
 :::
 
 ## What you get
@@ -38,7 +38,7 @@ end: "Body appears directly in the chat\n(main model not called this turn)" { sh
 start -> orch.scouts -> orch.brain -> orch.draft -> orch.curate -> end
 ```
 
-The memory graph's own "Auto extraction / Auto compression" no longer triggers — the agent performs the same work. Once a search provider is enabled, canon scout can perform web searches; otherwise it returns zero results.
+Memory Graph's built-in auto extraction and auto compression stay off while the Director agents handle memory. Once a search provider is enabled, canon scout can perform web searches; otherwise it returns zero results.
 
 ## What you need first
 
@@ -51,14 +51,14 @@ Any RP preset you normally use is suitable. This step only confirms that you hav
 
 ## Step 2 — Configure the Preset Assistant and derive the presets Director needs
 
-LLM calls made by Luker's plugins fall into **distinct categories** with very different preset needs. One is **plugins producing RP content** — Director's agent team drafting the body, critic sub-agents reviewing, and so on — which requires a full RP preset with jailbreak / style / anti-cliché guidance. The other is the **iteration AI** that powers various plugins — the Preset Assistant, the Memory Graph configuration studio, CardApp Studio, Director's Iteration Studio, and so on — which uses tool calls to edit configs or extract structured data; any RP instructions leaking in will interfere with the model executing the plugin's instructions, so these slots require a **stripped-down preset that retains only jailbreak**.
+LLM calls made by Luker's plugins fall into **distinct categories** with very different preset needs. One is **plugins producing RP content** — Director's agent team drafting the body, critic sub-agents reviewing, and so on — which requires a full RP preset with jailbreak / style / anti-cliché guidance. The other is the **iteration AI** that powers **Workbench AI iteration** (**Preset**, **Memory graph**, **Memory structure**, **Orchestration**, **Character card**, **World book**) and **CardApp Studio** — which uses tool calls to edit configs or extract structured data; any RP instructions leaking in will interfere with the model executing the plugin's instructions, so these slots require a **stripped-down preset that retains only jailbreak**.
 
 Director's flow touches these categories at once:
 
 | Path | Who uses it | Preset shape |
 |---|---|---|
 | **Agent path** — main agent + sub-agents producing the body | The actual drafters; their output ends up in the chat | A standard RP preset, tuned for tool calling: keeps jailbreak + style + anti-cliché, but drops placeholders / hard schemas that conflict with the orchestrator |
-| **Iteration Studio path** — the AI you talk to inside the studio when tuning your config | A tool-using config editor; never drafts story prose | A **stripped-down preset with only jailbreak left** — no style guidance, no NSFW writing rules, no narrative meta-rules |
+| **Iteration AI path** — the AI you talk to in **Workbench → AI iteration** when tuning your config | A tool-using config editor; never drafts story prose | A **stripped-down preset with only jailbreak left** — no style guidance, no NSFW writing rules, no narrative meta-rules |
 
 ::: tip Why the paths cannot share a single preset
 RP presets assume that "one LLM writes the entire reply by itself." When those instructions are placed into an agent tool loop, they:
@@ -67,29 +67,26 @@ RP presets assume that "one LLM writes the entire reply by itself." When those i
 - Force "must output schema" / "mandatory chain of thought" constraints into the drafting step, breaking tool calling
 - Re-inject placeholders (character description, persona, world info entries) that the orchestrator's main path already injects
 
-The Iteration Studio is even more sensitive — it does not write story prose at all; it edits a JSON config through tool calls. Any RP instruction that leaks in interferes with the model executing the plugin's instructions.
+Workbench AI iteration is even more sensitive — it does not write story prose at all; it edits configs and profiles through tool calls. Any RP instruction that leaks in interferes with the model executing the plugin's instructions.
 :::
 
-### 2a — Configure the Preset Assistant itself
+### 2a — Configure Workbench AI settings
 
-The Preset Assistant is the tool used in 2b to derive the agent preset, but **it is itself an LLM-driven tool** — it requires its own iteration AI preset and API profile before it can be opened.
+The Preset editor inside Workbench is itself an LLM-driven tool, so configure Workbench's default AI connection and generation preset first:
 
-Open the Extensions drawer (`#extensions_settings2` — the same drawer that holds the Orchestrator, Memory, and Search Tools panels). Locate the **Completion Preset Assistant** panel and configure the following fields:
+1. Open **Workbench** (`Alt+W`, wand menu → **Workbench**, or the corner pill) and switch to **Settings**.
+2. Under **AI connection**, pick a working connection profile.
+3. Under **Generation preset**, leave the default or click **Import** under **Luker's bundled "plugin-only" preset** so Workbench automatically uses Luker's clean tool-task preset.
 
-- **Iteration AI prompt preset (params + prompt)** — click the **?** button next to this field
-- **Iteration AI API preset (Connection profile)** — select any working API profile
+![Workbench AI connection and generation preset settings](/images/recipes/agent-onboarding/step-02a-preset-help-button.png)
 
-![Preset Assistant settings panel — iteration AI preset (with ? button) + iteration AI API preset](/images/recipes/agent-onboarding/step-02a-preset-help-button.png)
+![Bundled plugin-only preset import in Workbench settings](/images/recipes/agent-onboarding/step-02a-help-popup.png)
 
-The **?** button opens an explainer popup with an **Import plugin-only preset** button at the bottom — clicking it imports Luker's bundled clean preset and selects it here automatically.
-
-![? button popup — explains which preset belongs in this slot, with a button that imports plugin-only](/images/recipes/agent-onboarding/step-02a-help-popup.png)
-
-Other Luker plugins with their own iteration AI (Director's Iteration Studio, Memory Graph schema studio, CardApp Studio, etc.) expose the same **?** button next to their preset selector — the same import applies there as well.
+Every AI iteration target in Workbench (**Memory graph**, **Memory structure**, **Orchestration**, **Preset**, **Character card**, **World book**) shares this default connection and `plugin-only` preset unless overridden individually or set to **Follow extension**.
 
 ### 2b — Derive the **agent** preset
 
-Now that the Preset Assistant is configured, click **Open Assistant** in the same panel. In the popup, set the **Editing mode** dropdown to **Adapt for orchestrator**, then instruct it:
+Switch to **Workbench → AI iteration → Preset** (or click the wand icon on the Chat Completion preset toolbar, or **Extensions → Completion Preset Assistant → Open in Workbench**). Set **Editing mode** at the top to **Adapt for orchestrator**, then send:
 
 > Convert this preset into an agent-only preset
 
@@ -102,30 +99,30 @@ By default it **derives a new preset** (original name + `-orchestrator` suffix) 
 - Gates instructions that only matter for the final draft (summaries, style sign-off) to the "final commit message" phase
 - **Keeps** chat history, style guidance, and jailbreak / anti-cliché instructions — the main agent reads them while drafting, and the critic sub-agents read them while reviewing
 
-Review its diff and approve each entry.
+Review its diff cards in the **Change list** and apply them.
 
 ::: tip Refine the preset further in the same session
-Adapt for orchestrator is one of the assistant's **Editing modes**. Switch the toolbar's **Editing mode** back to the default **General editing**, start a new session, and the same assistant becomes a general-purpose preset editor — for example: "add an anti-cliché directive backed by a few negative examples", "tone the prose-style guidance down from purple to restrained close-detail", or "merge these three rules that express the same requirement". See [Preset Assistant](/features/preset-assistant) for the full details.
+Adapt for orchestrator is one of the **Editing modes**. Switch **Editing mode** back to **General editing**, start a new conversation, and you have a general-purpose preset editor — for example: "add an anti-cliché directive backed by a few negative examples", "tone the prose-style guidance down from purple to restrained close-detail", or "merge these three rules that express the same requirement". See [Preset Assistant](/features/preset-assistant) for the full details.
 
-The Adapt-for-orchestrator pass also **proactively scans your preset entries for reusable style / format / writing-discipline rules** and proposes lifting them into shareable skills (verbatim, at this preset's scope, with a pointer left in the original entry). Proposals are reviewed independently — approve, reject, or ignore one and the rest of the adaptation still applies. See [Authoring skills from preset content](/features/preset-assistant#extracting-skills-in-adapt-for-orchestrator-mode) for the rationale and the safeguards (one-off tweaks never trigger the scan).
+The Adapt-for-orchestrator pass also **proactively scans your preset entries for reusable style / format / writing-discipline rules** and proposes lifting them into shareable skills (verbatim, at this preset's scope, with a pointer left in the original entry). Proposals are reviewed independently — approve, reject, or ignore one and the rest of the adaptation still applies. See [Authoring skills from preset content](/features/preset-assistant#extracting-skills-in-adapt-for-orchestrator-mode) for details.
 :::
 
 ## Step 3 — Switch to Director mode and configure the presets
 
-Open the **Orchestrator** panel in the Extensions drawer:
+Open **Workbench → Orchestration**:
 
-1. Set **Execution mode** to **Director**
-2. Set the **API preset** and **Prompt preset** to the `-orchestrator` preset from Step 2b
-3. Find the **AI Iteration Studio configuration** section and set its **Iteration AI API preset** and **Iteration AI prompt preset** to the **plugin-only** preset already imported in Step 2a
+1. Turn on **Enable orchestration** and select **Director team** in the topbar mode picker.
+2. Open **Settings** inside **Orchestration** and set the default **Connection profile** and **Generation preset** to the `-orchestrator` preset from Step 2b.
+3. Under **Iteration**, verify that the iteration AI uses your `plugin-only` preset (or let **Workbench → Settings** supply the default).
 
 ## Step 4 — Delegate memory extraction and recall to the agents
 
-Open the **Memory** panel in the Extensions drawer:
+Open **Workbench → Memory graph → Settings**:
 
 - **Enabled** ✓ leave enabled
 - **Auto extraction** ✗ disable (the curator sub-agent takes over)
 - **Auto compression** ✗ disable (the agent handles it during housekeeping)
-- **Enable recall injection** ✗ disable (a scout sub-agent already runs an LLM-level recall pass before drafting; leaving the built-in injector enabled would **duplicate** the recall and contaminate the main agent's context)
+- **Enable recall injection** ✗ disable (a scout sub-agent already runs an LLM-level recall pass before drafting)
 
 ![Memory panel: extraction, compression, recall all delegated to the agents](/images/recipes/agent-onboarding/step-04-memory-toggles.png)
 
@@ -133,13 +130,13 @@ Open the **Memory** panel in the Extensions drawer:
 The default Director configuration claims extraction / recall / compression for itself. If you trust the memory graph's own pipeline more (already configured with multi-model routing, Hybrid + Rerank, etc.):
 
 1. Re-enable **Auto extraction**, **Auto compression**, and **Enable recall injection**
-2. In the [iteration studio (Step 6)](#step-6), tell the studio AI: "I want to manage memory myself with the built-in memory graph; the agents shouldn't touch it."
-3. The studio AI will modify your orchestrator configuration through tool calls — review entry by entry and save.
+2. In [Step 6 (AI iteration)](#step-6), tell the AI: "I want to manage memory myself with the built-in memory graph; the agents shouldn't touch it."
+3. Apply the proposed changes from the **Change list**.
 :::
 
 ## Step 5 — Pick a search engine
 
-Open the **Search Tools** panel in the Extensions drawer. **Search provider** defaults to `DuckDuckGo (no login)` — keep the default. To use a different engine, pick another provider from the dropdown, such as the self-hosted `SearXNG (custom instance)` or an API-key provider.
+Open **Extensions → Search Tools**. **Search provider** defaults to `DuckDuckGo (no login)` — keep the default. To use a different engine, pick another provider from the dropdown, such as the self-hosted `SearXNG (custom instance)` or an API-key provider.
 
 ![Search engine picker](/images/recipes/agent-onboarding/step-05-search-provider.png)
 
@@ -149,19 +146,19 @@ Open the **Search Tools** panel in the Extensions drawer. **Search provider** de
 If you are not running Director and still want search, see the search tool's [working modes](/features/search-tools) instead.
 :::
 
-## Step 6 — Making changes in the Iteration Studio {#step-6}
+## Step 6 — Making changes in Workbench AI iteration {#step-6}
 
-After switching to Director, click **Open AI Iteration Studio** in the Orchestrator panel — this is the entry point for all further customization.
+Open **Workbench → AI iteration → Orchestration** (or click the **AI** button in **Orchestration**) — this is the entry point for all further customization.
 
-![AI Iteration Studio — Director](/images/recipes/agent-onboarding/step-06-iter-studio-director.png)
+![AI Iteration — Orchestration](/images/recipes/agent-onboarding/step-06-iter-studio-director.png)
 
-Which configuration the studio edits depends on when you open it:
+Use the scope switcher at the top to choose what to edit:
 
-- **No character chat open** → the studio edits the **global** default config — all cards without overrides inherit it
-- **A character chat is open** → the studio edits **this card's override** — only this card is affected, and the override travels with the card on export / import
+- **Global** → edits the **global** default profile inherited by all cards without overrides
+- **Character-only** → edits **this card's override**, affecting only this character and travelling with the card on export / import
 
 ::: tip A successful per-card profile can be promoted to global
-If you iterate a Director profile that works particularly well for a specific card, you can **promote it manually**: export that card's profile from the Orchestrator panel, clear the current chat to return to a no-card state, then import that profile to global. The same applies to Memory Graph configuration.
+If you iterate a Director profile that works particularly well for a specific card, you can promote it to global with **Save To Global** under **Orchestration → Setup** (or export and import the JSON).
 :::
 
 ### Global scope — example instructions
@@ -177,27 +174,23 @@ If you iterate a Director profile that works particularly well for a specific ca
 - "This card has custom stamina / mood variables. When the memory curator extracts, prioritize filling those fields."
 - Anything specific to this card's genre that does not belong in the global config.
 
-The studio presents the diff entry by entry — review, approve, and save. If the result does not match your intent, reset to the default Director config.
+Review the diffs in the **Change list** and apply them. If the result does not match your intent, undo from **Change history** or reset to the default Director profile under **Orchestration → Setup**.
 
 ## Optional step — Let AI configure Memory Graph
 
-Memory Graph configuration can also be changed by AI. In the **Memory** panel, click **AI Configure Memory Graph** to open the **Memory Graph Configuration Studio**.
+Memory Graph structure can also be changed by AI. Open **Workbench → AI iteration → Memory structure** (or **Memory graph** to edit nodes in the current chat).
 
-![Memory Graph Configuration Studio](/images/recipes/agent-onboarding/step-07-schema-studio.png)
+![Memory Graph Configuration](/images/recipes/agent-onboarding/step-07-schema-studio.png)
 
-Memory Graph configuration has global and per-card scope; per-card settings travel with the card on export. Use the studio to tailor it for a genre, for example:
+Memory structure supports **Global** and **Character-only** scope, and per-card structures travel with the card on export. Use it to tailor memory for a genre, for example:
 
 - Xianxia / cultivation: add `cultivation_realm`, `spirit_meridian` fields to characters
 - Political intrigue: add a `faction` node type, tracking alliances and enmities
 - Survival: add `inventory_item` nodes, tracking each item's durability and state
 
-::: tip Do not forget the memory graph's iteration AI preset
-The **Configuration Iteration Prompt (configuration-editor AI)** field in the Memory panel belongs to the same "iteration AI path" mentioned in Step 2a — its preset selector also has a **?** button; if you already imported plugin-only in Step 2a, select it from the dropdown here.
-:::
-
 ## See it in action
 
-Send a message in the main chat and expand the reasoning fold to see the agent team at work in real time:
+Send a message in the main chat and watch the **Run panel** dock update in real time:
 
 ![Agent team output in a Director turn](/images/orchestrator/director-takeover/director-real-final-body.png)
 
@@ -206,15 +199,16 @@ Send a message in the main chat and expand the reasoning fold to see the agent t
 - **Post-draft critics**: sub-agents critique the main agent's draft; the main agent decides which critiques to accept
 - **Housekeeping**: writes the turn's new facts back to the memory graph
 
-Need a closer look — agent model reasoning, tool call requests and responses? Click **Show Run Panel** beside the chat (or the bottom drawer on narrow screens) and expand any round.
+Expand any agent row in the **Run panel** dock (or click **Inspect run** to open **Workbench → Orchestration → Run**) to read model reasoning, tool calls, and outputs.
 
-Not satisfied with the result? That reasoning fold is the full agent execution log — use it to pinpoint where the problem occurred, then return to the [AI Iteration Studio](/features/orchestrator/iteration-studio) and describe in natural language what you want changed.
+Not satisfied with the result? Click **Not happy with the result? AI diagnosis** in the Run panel dock to jump straight into **Workbench → AI iteration → Orchestration** with the run trace ready to inspect.
 
 ## Where to go next
 
+- [Workbench](/features/workbench) — unified workspace, Q&A, AI iteration, and change history
 - [Multi-Agent Orchestrator overview](/features/orchestrator/) — triggering, result injection, the execution modes
 - [Director mode](/features/orchestrator/director) — the default sub-agents and their roles
-- [AI Iteration Studio](/features/orchestrator/iteration-studio) — natural-language tuning of your config
+- [AI Iteration for Orchestration](/features/orchestrator/iteration-studio) — natural-language tuning of your config
 - [Memory Graph](/features/memory-graph) — node types, recall algorithms, configuration
 - [Search Tools](/features/search-tools) — engine differences + the standalone working modes
 - [Preset Assistant](/features/preset-assistant) — the other session modes beyond "Adapt for orchestrator"
