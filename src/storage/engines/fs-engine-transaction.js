@@ -169,22 +169,29 @@ function registerChatHandler(tx) {
         confinedParent(key, file);
         fs.mkdirSync(path.dirname(file), { recursive: true });
         const temporary = path.join(path.dirname(file), `${STAGING_PREFIX}chat-create-${randomUUID()}`);
-        const fd = fs.openSync(temporary, 'wx');
+        let fd = fs.openSync(temporary, 'wx');
+        let published = false;
         try {
             fs.writeFileSync(fd, content);
             fs.fsyncSync(fd);
+            const openFd = fd;
+            fd = undefined;
+            fs.closeSync(openFd);
             if (typeof updatedAt === 'number' && Number.isFinite(updatedAt)) fs.utimesSync(temporary, updatedAt / 1000, updatedAt / 1000);
             failpoint(FAILPOINTS.CHAT_PUBLICATION_BEFORE_LINK);
             // State writers and this publication are synchronous in the server.
-            // Keep the complete namespace check and parent link in one local epoch.
+            // Keep the complete namespace check, target absence check, and rename in one local epoch.
             if (requireEmptyState && listNamespaces(key).length > 0) return false;
-            try { fs.linkSync(temporary, file); } catch (error) {
-                if (error.code === 'EEXIST') return false;
-                throw error;
-            }
+            if (statEntry(key, file) !== null) return false;
+            fs.renameSync(temporary, file);
+            published = true;
             return true;
         } finally {
-            try { fs.closeSync(fd); } finally { fs.unlinkSync(temporary); }
+            try {
+                if (fd !== undefined) fs.closeSync(fd);
+            } finally {
+                if (!published) fs.unlinkSync(temporary);
+            }
         }
     };
 

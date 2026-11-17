@@ -1,6 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { FsEngine } from '../../../src/storage/engines/fs-engine.js';
 
 describe('FsEngine chat handler — selected document validation', () => {
@@ -150,5 +152,269 @@ describe('FsEngine chat handler — legacy long name (>128 bytes) round-trip', (
                 header: { chat_metadata: {} }, body: [], integrity: 'x',
                 updatedAt: 1, createdAt: 1,
             }))).rejects.toThrow();
+    });
+});
+
+// Emulated external storage on Android (FUSE + SELinux) and FAT/exFAT volumes
+// deny hard links (link(2) -> EACCES / EPERM / ENOTSUP) while supporting
+// same-directory rename(2). Run real FsEngine + ChatRepo against real disk in
+// a child process whose link(2) entry points reject with EACCES.
+describe('FsEngine chat handler — filesystems that deny hard links', () => {
+    let tmpDir;
+    beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-fs-no-hardlink-'));
+    });
+    afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    const engineModule = new URL('../../../src/storage/engines/fs-engine.js', import.meta.url).href;
+    const repoModule = new URL('../../../src/storage/repositories/chat-repo.js', import.meta.url).href;
+    const errorsModule = new URL('../../../src/storage/errors.js', import.meta.url).href;
+    const endpointHarnessModule = new URL('../harness/endpoint-harness.js', import.meta.url).href;
+    const chatsEndpointModule = new URL('../../../src/endpoints/chats.js', import.meta.url).href;
+    const storageIndexModule = new URL('../../../src/storage/index.js', import.meta.url).href;
+    const utilModule = new URL('../../../src/util.js', import.meta.url).href;
+    const defaultConfigPath = fileURLToPath(new URL('../../../default/config.yaml', import.meta.url));
+
+    function runWithoutHardLinks(scriptBody) {
+        const resultFile = path.join(tmpDir, 'result.json');
+        const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+            import fs from 'node:fs';
+            import path from 'node:path';
+            const denyLink = (src, dest) => {
+                throw Object.assign(
+                    new Error(\`EACCES: permission denied, link '\${src}' -> '\${dest}'\`),
+                    { errno: -13, code: 'EACCES', syscall: 'link', path: String(src), dest: String(dest) },
+                );
+            };
+            fs.linkSync = denyLink;
+            fs.link = (src, dest, cb) => queueMicrotask(() => cb(denyLink(src, dest)));
+            fs.promises.link = async (src, dest) => denyLink(src, dest);
+
+            const { FsEngine } = await import(${JSON.stringify(engineModule)});
+            const { ChatRepo } = await import(${JSON.stringify(repoModule)});
+            const { ConflictError } = await import(${JSON.stringify(errorsModule)});
+            const userDir = ${JSON.stringify(path.join(tmpDir, 'default-user'))};
+            const dirs = {
+                root: userDir,
+                chats: path.join(userDir, 'chats'),
+                groupChats: path.join(userDir, 'group chats'),
+            };
+            fs.mkdirSync(dirs.chats, { recursive: true });
+            fs.mkdirSync(dirs.groupChats, { recursive: true });
+            const engine = new FsEngine({ directoriesByHandle: () => dirs });
+            const repo = new ChatRepo({ engine });
+            const writeResult = (data) => fs.writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify(data));
+            ${scriptBody}
+        `], { encoding: 'utf8' });
+        return {
+            status: child.status,
+            stderr: child.stderr,
+            result: fs.existsSync(resultFile) ? JSON.parse(fs.readFileSync(resultFile, 'utf8')) : null,
+        };
+    }
+
+    test('renames character and group chats with state namespaces without calling link(2)', () => {
+        const child = runWithoutHardLinks(`
+            const updatedAt = 1700000000000;
+            await repo.saveRaw('default-user', 'TestChar', 'source', {
+                header: { user_name: 'U', character_name: 'TestChar', chat_metadata: { note: 'keep' } },
+                body: [{ name: 'U', is_user: true, mes: 'hello' }],
+                integrity: 'orig-integrity',
+                updatedAt,
+                createdAt: updatedAt,
+            });
+            await repo.setState('default-user', 'TestChar', 'source', 'memory_graph', { nodes: [{ id: 'n1' }] });
+            await repo.setState('default-user', 'TestChar', 'source', 'variables', { count: 3 });
+
+            await repo.rename('default-user', 'TestChar', 'source', 'renamed');
+
+            const moved = await repo.get('default-user', 'TestChar', 'renamed');
+            const old = await repo.get('default-user', 'TestChar', 'source');
+            const mg = await repo.getState('default-user', 'TestChar', 'renamed', 'memory_graph');
+            const vars = await repo.getState('default-user', 'TestChar', 'renamed', 'variables');
+            const charEntries = fs.readdirSync(path.join(dirs.chats, 'TestChar')).sort();
+
+            await repo.saveRaw('default-user', '', 'group-old', {
+                header: { user_name: 'U', chat_metadata: { is_group_chat: true } },
+                body: [{ name: 'U', is_user: true, mes: 'group msg' }],
+                integrity: 'group-integrity',
+                updatedAt,
+                createdAt: updatedAt,
+            }, { isGroup: true, groupId: 'group-old' });
+            await repo.setState('default-user', '', 'group-old', 'notes', { pinned: true }, { isGroup: true, groupId: 'group-old' });
+            await repo.rename('default-user', '', 'group-old', 'group-new', { isGroup: true, groupId: 'group-old' });
+
+            const movedGroup = await repo.get('default-user', '', 'group-new', { isGroup: true, groupId: 'group-new' });
+            const groupEntries = fs.readdirSync(dirs.groupChats).sort();
+
+            writeResult({
+                old,
+                movedBody: moved.body,
+                movedIntegrity: moved.integrity,
+                movedUpdatedAt: moved.updatedAt,
+                mg,
+                vars,
+                charEntries,
+                movedGroupBody: movedGroup.body,
+                groupEntries,
+            });
+        `);
+
+        expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: '' });
+        expect(child.result).toEqual({
+            old: null,
+            movedBody: [{ name: 'U', is_user: true, mes: 'hello' }],
+            movedIntegrity: 'orig-integrity',
+            movedUpdatedAt: 1700000000000,
+            mg: { nodes: [{ id: 'n1' }] },
+            vars: { count: 3 },
+            charEntries: [
+                'renamed.jsonl',
+                'renamed.luker-state.memory_graph.json',
+                'renamed.luker-state.variables.json',
+            ],
+            movedGroupBody: [{ name: 'U', is_user: true, mes: 'group msg' }],
+            groupEntries: [
+                'group-new.jsonl',
+                'group-new.luker-state.notes.json',
+            ],
+        });
+    });
+
+    test('insert-only publication preserves occupied targets and cleans up staging files without link(2)', () => {
+        const child = runWithoutHardLinks(`
+            const key = { kind: 'chat', handle: 'default-user', charDir: 'TestChar', name: 'fresh', isGroup: false };
+            const first = await engine.withTransaction('default-user', (tx) =>
+                tx.putResourceIfMatch(key, null, {
+                    header: { chat_metadata: {} },
+                    body: [{ mes: 'first' }],
+                    integrity: 'v1',
+                    updatedAt: 1700000000000,
+                    createdAt: 1700000000000,
+                }));
+            const second = await engine.withTransaction('default-user', (tx) =>
+                tx.putResourceIfMatch(key, null, {
+                    header: { chat_metadata: {} },
+                    body: [{ mes: 'second' }],
+                    integrity: 'v2',
+                    updatedAt: 1700000001000,
+                    createdAt: 1700000001000,
+                }));
+
+            await engine.withTransaction('default-user', (tx) =>
+                tx.putChatState(key, 'ns1', { ok: 1 }, { ifAbsent: true }));
+            let duplicateStateCode = null;
+            try {
+                await engine.withTransaction('default-user', (tx) =>
+                    tx.putChatState(key, 'ns1', { ok: 2 }, { ifAbsent: true }));
+            } catch (err) {
+                duplicateStateCode = err instanceof ConflictError ? err.code : String(err);
+            }
+
+            // Occupied dangling symlink target must also be refused without overwrite.
+            const symlinkTarget = path.join(dirs.chats, 'TestChar', 'dangling.jsonl');
+            fs.symlinkSync(path.join(dirs.chats, 'TestChar', 'missing-target'), symlinkTarget);
+            const onSymlink = await engine.withTransaction('default-user', (tx) =>
+                tx.putResourceIfMatch({ ...key, name: 'dangling' }, null, {
+                    header: { chat_metadata: {} },
+                    body: [],
+                    integrity: 'v3',
+                    updatedAt: 1700000000000,
+                    createdAt: 1700000000000,
+                }));
+
+            const readBack = await repo.get('default-user', 'TestChar', 'fresh');
+            const stateBack = await repo.getState('default-user', 'TestChar', 'fresh', 'ns1');
+            const danglingStillSymlink = fs.lstatSync(symlinkTarget).isSymbolicLink();
+            const stagingRemnants = fs.readdirSync(path.join(dirs.chats, 'TestChar'))
+                .filter((name) => name.startsWith('.luker-staging-'));
+
+            writeResult({
+                first,
+                second,
+                duplicateStateCode,
+                onSymlink,
+                readBackBody: readBack.body,
+                readBackIntegrity: readBack.integrity,
+                stateBack,
+                danglingStillSymlink,
+                stagingRemnants,
+            });
+        `);
+
+        expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: '' });
+        expect(child.result).toEqual({
+            first: { updated: true },
+            second: { updated: false },
+            duplicateStateCode: 'rename_target_exists',
+            onSymlink: { updated: false },
+            readBackBody: [{ mes: 'first' }],
+            readBackIntegrity: 'v1',
+            stateBack: { ok: 1 },
+            danglingStillSymlink: true,
+            stagingRemnants: [],
+        });
+    });
+
+    test('POST /api/chats/rename succeeds for character chats when link(2) fails with EACCES', () => {
+        const child = runWithoutHardLinks(`
+            const { setConfigFilePath, reloadConfigCache } = await import(${JSON.stringify(utilModule)});
+            setConfigFilePath(${JSON.stringify(defaultConfigPath)});
+            reloadConfigCache();
+            globalThis.DATA_ROOT = userDir;
+            const { makeEndpointHarness } = await import(${JSON.stringify(endpointHarnessModule)});
+            const { router: chatsRouter } = await import(${JSON.stringify(chatsEndpointModule)});
+            const { getChatRepo } = await import(${JSON.stringify(storageIndexModule)});
+            const h = await makeEndpointHarness({
+                mode: 'fs',
+                mount: (app) => app.use('/api/chats', chatsRouter),
+            });
+            try {
+                const chatRepo = getChatRepo();
+                await chatRepo.save(h.handle, 'TestChar', 'source', {
+                    user_name: 'U',
+                    character_name: 'TestChar',
+                    chat_metadata: { note: 'persisted' },
+                }, [{ name: 'U', is_user: true, mes: 'route message' }], null);
+                await chatRepo.setState(h.handle, 'TestChar', 'source', 'memory_graph', { version: 1 });
+
+                const baseUrl = \`http://127.0.0.1:\${h.server.address().port}\`;
+                const res = await fetch(\`\${baseUrl}/api/chats/rename\`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        is_group: false,
+                        avatar_url: 'TestChar.png',
+                        original_file: 'source.jsonl',
+                        renamed_file: 'renamed.jsonl',
+                    }),
+                });
+                const renameBody = await res.json();
+                const moved = await chatRepo.get(h.handle, 'TestChar', 'renamed');
+                const old = await chatRepo.get(h.handle, 'TestChar', 'source');
+                const movedState = await chatRepo.getState(h.handle, 'TestChar', 'renamed', 'memory_graph');
+
+                writeResult({
+                    httpStatus: res.status,
+                    renameBody,
+                    old,
+                    movedMessages: moved?.body,
+                    movedState,
+                });
+            } finally {
+                await h.cleanup();
+            }
+        `);
+
+        expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: '' });
+        expect(child.result).toEqual({
+            httpStatus: 200,
+            renameBody: { ok: true, sanitizedFileName: 'renamed' },
+            old: null,
+            movedMessages: [{ name: 'U', is_user: true, mes: 'route message' }],
+            movedState: { version: 1 },
+        });
     });
 });
