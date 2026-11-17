@@ -1294,4 +1294,98 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
             expect(cancelSpy).toHaveBeenCalledTimes(1);
         }
     });
+
+    test('upgrades default scope from global to character when a character is selected, while preserving explicit user choice', async () => {
+        document.body.innerHTML = '';
+        const sessions = createMemorySessionStore();
+        const registry = createWorkbenchRegistry();
+        let activeChar = null;
+        const listeners = new Set();
+        const loadedScopes = [];
+
+        registry.registerIterateTarget({
+            id: 'orch',
+            label: 'Orchestration',
+            tone: 'orch',
+            scopes: async () => ({ global: true, character: Boolean(activeChar) }),
+            load: async (scopeArg) => {
+                loadedScopes.push(scopeArg);
+                return {
+                    live: { mode: 'loop' },
+                    target: scopeArg === 'character'
+                        ? { scope: 'character', avatar: activeChar.avatar }
+                        : { scope: 'global' },
+                    title: scopeArg === 'character' ? activeChar.name : 'Global',
+                };
+            },
+            prompt: async () => 'orch sys',
+            tools: async () => [],
+            isRead: () => true,
+            runRead: async () => ({}),
+            runEdit: async (_c, live) => live,
+            units: () => new Map(),
+            rebuild: (_b, ai) => ai,
+            commit: async () => ({ applied: [], skipped: [], failure: '' }),
+        });
+
+        const source = {
+            readSettings: () => ({ builtinPrompt: false, reviewChanges: true, pill: false }),
+            writeSettings: () => {},
+            loadSnapshot: async () => ({
+                chat: activeChar ? { label: 'Chat 1', character: activeChar } : null,
+                card: activeChar,
+            }),
+            subscribe: (fn) => {
+                listeners.add(fn);
+                return () => listeners.delete(fn);
+            },
+            createSessions: () => sessions,
+            historyStorage: () => null,
+            runRules: () => [],
+            lastReply: async () => '',
+            aiRequest: jest.fn(async () => ({ text: 'ok', calls: [] })),
+        };
+
+        const wb = mountWorkbench({ source, registry, startCollapsed: true });
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        // Booted with no character selected -> page boot snapshot had only global allowed.
+        // Now user selects a character BEFORE opening AI Iteration (without explicit scope).
+        activeChar = { avatar: 'iris.png', name: 'Iris' };
+        for (const fn of listeners) fn();
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        await wb.open({ page: 'ai', ws: 'orch' });
+        await flushMicrotasks();
+        await flushMicrotasks();
+        expect(document.querySelector('.wb-scope-seg .lw-seg-btn[aria-pressed="true"]')?.textContent).toContain('Iris');
+
+        const textarea = document.querySelector('textarea.wb-input');
+        const sendBtn = document.querySelector('button.wb-send');
+        textarea.value = 'Check scope';
+        sendBtn.click();
+        await flushMicrotasks();
+        await flushMicrotasks();
+        expect(loadedScopes.at(-1)).toBe('character');
+
+        // Start a fresh conversation so scope controls unlock, then explicitly click Global.
+        const newChatBtn = [...document.querySelectorAll('.wb-sess-head button')].find(b => b.textContent.includes('New conversation'));
+        newChatBtn.click();
+        await flushMicrotasks();
+
+        const globalBtn = [...document.querySelectorAll('.wb-scope-seg .lw-seg-btn')].find(b => b.textContent.includes('Global'));
+        expect(globalBtn).toBeTruthy();
+        globalBtn.click();
+        await flushMicrotasks();
+        expect(document.querySelector('.wb-scope-seg .lw-seg-btn[aria-pressed="true"]')?.textContent).toContain('Global');
+
+        for (const fn of listeners) fn();
+        await flushMicrotasks();
+        await flushMicrotasks();
+        expect(document.querySelector('.wb-scope-seg .lw-seg-btn[aria-pressed="true"]')?.textContent).toContain('Global');
+
+        wb.close();
+    });
 });

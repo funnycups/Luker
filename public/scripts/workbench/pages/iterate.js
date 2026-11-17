@@ -111,6 +111,7 @@ export function createIteratePage(app) {
 
     let ws = '';
     let scope = 'character';
+    let userPickedScope = false;
     let scopesByTarget = {};
     let session = null;
     let recentSessions = [];
@@ -202,7 +203,8 @@ export function createIteratePage(app) {
 
     function fixScope() {
         const a = allowedScopes();
-        if (a[scope]) return;
+        if (userPickedScope && a[scope]) return;
+        userPickedScope = false;
         for (const candidate of SCOPE_ORDER) {
             if (a[candidate]) {
                 scope = candidate;
@@ -391,7 +393,10 @@ export function createIteratePage(app) {
         if (!loaded || version !== selectionVersion) return;
         session = loaded;
         if (loaded.ws && targetById(loaded.ws)) ws = loaded.ws;
-        if (loaded.scope) scope = loaded.scope;
+        if (loaded.scope) {
+            scope = loaded.scope;
+            userPickedScope = true;
+        }
         sessOpen = false;
         paintAll();
     }
@@ -516,6 +521,7 @@ export function createIteratePage(app) {
                     void firePendingCancelHook();
                     selectionVersion++;
                     ws = v;
+                    userPickedScope = false;
                     session = null;
                     fixScope();
                     activeScopeKey = currentScopeKey();
@@ -531,6 +537,7 @@ export function createIteratePage(app) {
                     void firePendingCancelHook();
                     selectionVersion++;
                     scope = v;
+                    userPickedScope = true;
                     session = null;
                     activeScopeKey = currentScopeKey();
                     paintAll();
@@ -1364,17 +1371,31 @@ export function createIteratePage(app) {
                 if (s) {
                     session = s;
                     if (s.ws) ws = s.ws;
-                    if (s.scope) scope = s.scope;
+                    if (s.scope) {
+                        scope = s.scope;
+                        userPickedScope = true;
+                    }
                 }
             } else if (o.ws && o.ws !== ws) {
                 ws = o.ws;
                 session = null;
-                if (o.scope) scope = o.scope;
+                if (o.scope) {
+                    scope = o.scope;
+                    userPickedScope = true;
+                } else {
+                    userPickedScope = false;
+                }
             } else if (o.ws) {
                 session = null;
-                if (o.scope) scope = o.scope;
+                if (o.scope) {
+                    scope = o.scope;
+                    userPickedScope = true;
+                } else {
+                    userPickedScope = false;
+                }
             } else if (o.scope) {
                 scope = o.scope;
+                userPickedScope = true;
             } else if (o.autoSend && seed) {
                 session = null;
             }
