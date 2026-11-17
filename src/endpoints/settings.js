@@ -69,12 +69,6 @@ function retainSelectedPresetContents(fileContents, fileNames, selectedName) {
 // body instead of every body.
 async function presetsFromRepo(handle, apiId, { includeContents = true, selectedName = '' } = {}) {
     const repo = getPresetRepo();
-    const entries = await repo.list(handle, apiId);
-    const fileNames = entries
-        .map((entry) => entry?.key?.name)
-        .filter((name) => typeof name === 'string' && name.length > 0)
-        .sort((a, b) => a.localeCompare(b));
-
     if (includeContents) {
         const docs = await repo.listWithDocs(handle, apiId);
         return {
@@ -82,6 +76,12 @@ async function presetsFromRepo(handle, apiId, { includeContents = true, selected
             fileNames: docs.map((entry) => entry.name),
         };
     }
+
+    const entries = await repo.list(handle, apiId);
+    const fileNames = entries
+        .map((entry) => entry?.key?.name)
+        .filter((name) => typeof name === 'string' && name.length > 0)
+        .sort((a, b) => a.localeCompare(b));
 
     const fileContents = await Promise.all(fileNames.map(async (name) => {
         if (name !== selectedName) {

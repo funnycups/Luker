@@ -34,6 +34,11 @@ export class NamedDocRepo {
             tx.getResource(this._key(handle, bucket, name)));
     }
 
+    async read(handle, bucket, name) {
+        return this._engine.withTransaction(handle, (tx) =>
+            tx.readResource(this._key(handle, bucket, name)));
+    }
+
     async list(handle, bucket) {
         // _key validates bucket — call it for the side effect to fail fast on
         // unknown buckets, then drop the per-name field for the filter.

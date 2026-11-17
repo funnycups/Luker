@@ -39,8 +39,8 @@ export function registerNamedDocReadRoutes(router, bucket) {
         }
         try {
             const handle = request.user.profile.handle;
-            const entries = await getNamedDocRepo().list(handle, bucket);
-            if (!entries.some(entry => entry?.key?.name === name)) {
+            const result = await getNamedDocRepo().read(handle, bucket, name);
+            if (!result.exists) {
                 return sendResourceReadError(response, {
                     code: 'not_found',
                     resource: `${bucket}:${name}`,
@@ -48,18 +48,17 @@ export function registerNamedDocReadRoutes(router, bucket) {
                     status: 404,
                 });
             }
-            const doc = await getNamedDocRepo().get(handle, bucket, name);
-            if (doc == null) {
+            if (!result.valid) {
                 return sendResourceReadError(response, {
                     code: 'invalid_resource',
                     resource: `${bucket}:${name}`,
-                    detail: 'Document is not valid JSON.',
+                    detail: result.detail || 'Document is not valid JSON.',
                     status: 422,
                 });
             }
             return sendJsonResource(request, response, {
                 resource: `${bucket}:${name}`,
-                value: doc,
+                value: result.value,
             });
         } catch (error) {
             console.error(`Error reading ${bucket} document:`, error);

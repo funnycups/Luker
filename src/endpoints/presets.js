@@ -102,9 +102,8 @@ router.get('/get', async function (request, response) {
     }
     try {
         const handle = request.user.profile.handle;
-        const repo = getPresetRepo();
-        const entries = await repo.list(handle, apiId);
-        if (!entries.some(entry => entry?.key?.name === name)) {
+        const result = await getPresetRepo().read(handle, apiId, name);
+        if (!result.exists) {
             return sendResourceReadError(response, {
                 code: 'not_found',
                 resource: `preset:${apiId}:${name}`,
@@ -112,29 +111,20 @@ router.get('/get', async function (request, response) {
                 status: 404,
             });
         }
-        const doc = await repo.get(handle, apiId, name);
-        if (doc == null) {
+        if (!result.valid) {
             return sendResourceReadError(response, {
                 code: 'invalid_resource',
                 resource: `preset:${apiId}:${name}`,
-                detail: 'Preset document is not valid JSON.',
+                detail: result.detail || 'Preset document is not valid JSON.',
                 status: 422,
             });
         }
         return sendJsonResource(request, response, {
             resource: `preset:${apiId}:${name}`,
-            value: doc,
+            value: result.value,
         });
     } catch (error) {
         console.error('Error reading preset:', error);
-        if (error.code === 'PRESET_DOCUMENT_INVALID') {
-            return sendResourceReadError(response, {
-                code: 'invalid_resource',
-                resource: `preset:${apiId}:${name}`,
-                detail: error.message,
-                status: 422,
-            });
-        }
         return sendResourceReadError(response, {
             code: 'read_failed',
             resource: `preset:${apiId}:${name}`,

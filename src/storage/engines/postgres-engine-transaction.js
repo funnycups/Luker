@@ -50,6 +50,7 @@ export class PgTransaction {
     }
 
     async getResource(key)       { return this._h(key.kind, 'getResource').get(key); }
+    async readResource(key)      { return this._h(key.kind, 'readResource').read(key); }
     async putResource(key, rec)  { return this._h(key.kind, 'putResource').put(key, rec); }
     async deleteResource(key)    { return this._h(key.kind, 'deleteResource').delete(key); }
     async listResources(filter)  { return this._h(filter.kind, 'listResources').list(filter); }
@@ -361,6 +362,19 @@ export function registerPresetHandler(tx) {
             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
             return null;
         },
+        async read(key) {
+            const p = presetKeyToParams(key);
+            const r = await client.query(
+                'SELECT doc FROM presets WHERE handle=$1 AND dir_key=$2 AND name=$3',
+                [p.handle, p.dir_key, p.name],
+            );
+            if (!r.rows.length) return { exists: false };
+            const parsed = coerceJson(r.rows[0].doc);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                return { exists: true, valid: true, value: parsed };
+            }
+            return { exists: true, valid: false, detail: 'Preset document is not valid JSON.' };
+        },
         async put(key, record) {
             assertSafeRepoNameShape(key.name, { field: 'preset.name' });
             const p = presetKeyToParams(key);
@@ -550,6 +564,18 @@ export function registerNamedDocHandler(tx) {
             const parsed = coerceJson(r.rows[0].doc);
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
             return parsed;
+        },
+        async read(key) {
+            const r = await client.query(
+                'SELECT doc FROM named_docs WHERE handle=$1 AND bucket=$2 AND name=$3',
+                [key.handle, key.bucket, key.name],
+            );
+            if (!r.rows.length) return { exists: false };
+            const parsed = coerceJson(r.rows[0].doc);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                return { exists: true, valid: true, value: parsed };
+            }
+            return { exists: true, valid: false, detail: 'Document is not valid JSON.' };
         },
         async put(key, record) {
             assertSafeRepoNameShape(key.name, { field: 'named-doc.name' });

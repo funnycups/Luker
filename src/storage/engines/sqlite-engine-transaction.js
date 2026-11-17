@@ -27,6 +27,7 @@ export class SqliteTransaction {
     }
 
     async getResource(key)       { return this._h(key.kind, 'getResource').get(key); }
+    async readResource(key)      { return this._h(key.kind, 'readResource').read(key); }
     async putResource(key, rec)  { return this._h(key.kind, 'putResource').put(key, rec); }
     async deleteResource(key)    { return this._h(key.kind, 'deleteResource').delete(key); }
     async listResources(filter)  { return this._h(filter.kind, 'listResources').list(filter); }
@@ -324,6 +325,20 @@ export function registerPresetHandler(tx) {
                 return null;
             } catch { return null; }
         },
+        read(key) {
+            const p = presetKeyToParams(key);
+            const row = stmt.get.get(p.handle, p.dir_key, p.name);
+            if (!row) return { exists: false };
+            try {
+                const parsed = JSON.parse(row.doc);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    return { exists: true, valid: true, value: parsed };
+                }
+                return { exists: true, valid: false, detail: 'Preset document is not valid JSON.' };
+            } catch {
+                return { exists: true, valid: false, detail: 'Preset document is not valid JSON.' };
+            }
+        },
         put(key, record) {
             assertSafeRepoNameShape(key.name, { field: 'preset.name' });
             const p = presetKeyToParams(key);
@@ -470,6 +485,19 @@ export function registerNamedDocHandler(tx) {
                 if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
                 return parsed;
             } catch { return null; }
+        },
+        read(key) {
+            const row = stmt.get.get(key.handle, key.bucket, key.name);
+            if (!row) return { exists: false };
+            try {
+                const parsed = JSON.parse(row.doc);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    return { exists: true, valid: true, value: parsed };
+                }
+                return { exists: true, valid: false, detail: 'Document is not valid JSON.' };
+            } catch {
+                return { exists: true, valid: false, detail: 'Document is not valid JSON.' };
+            }
         },
         put(key, record) {
             assertSafeRepoNameShape(key.name, { field: 'named-doc.name' });

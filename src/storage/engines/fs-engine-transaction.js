@@ -45,6 +45,10 @@ export class FsTransaction {
         return this._h(key.kind, 'getResource').get(key);
     }
 
+    async readResource(key) {
+        return this._h(key.kind, 'readResource').read(key);
+    }
+
     async putResource(key, record) {
         return this._h(key.kind, 'putResource').put(key, record);
     }
@@ -541,9 +545,18 @@ function registerSettingsHandler(tx) {
 function registerPresetHandler(tx) {
     const document = key => ({ kind: 'preset', dirKey: key.dirKey, name: key.name });
     const state = (key, namespace) => ({ kind: 'preset-state', dirKey: key.dirKey, name: key.name, namespace });
+    const inventories = new Map();
+    const inventoryKey = key => `${key.handle}\0${key.dirKey}`;
     const inventory = key => {
-        const dirs = tx._directoriesByHandle(key.handle);
-        return readPresetInventory({ folder: dirs[key.dirKey], dirKey: key.dirKey, boundary: dirs.root });
+        const cacheKey = inventoryKey(key);
+        if (!inventories.has(cacheKey)) {
+            const dirs = tx._directoriesByHandle(key.handle);
+            inventories.set(cacheKey, readPresetInventory({ folder: dirs[key.dirKey], dirKey: key.dirKey, boundary: dirs.root }));
+        }
+        return inventories.get(cacheKey);
+    };
+    const invalidateInventory = key => {
+        inventories.delete(inventoryKey(key));
     };
     const get = (key, record) => {
         const entry = selectPresetEntry(inventory(key), record);
@@ -560,6 +573,7 @@ function registerPresetHandler(tx) {
         assertConfinedPath({ boundary: dirs.root, absolutePath });
         fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
         writeFileAtomic(absolutePath, JSON.stringify(doc, null, 4));
+        invalidateInventory(key);
     };
     const remove = entry => {
         assertConfinedPath({ boundary: entry.boundary, absolutePath: entry.absolutePath });
@@ -568,6 +582,18 @@ function registerPresetHandler(tx) {
     const namespaces = key => [...inventory(key).entries.values()].filter(entry => entry.record.kind === 'preset-state' && entry.record.name === key.name).map(entry => entry.record.namespace).sort();
     tx._handlers.set('preset', {
         get: key => get(key, document(key)),
+        read(key) {
+            const entry = inventory(key).entries.get(presetRecordIdentity(document(key)));
+            if (!entry) return { exists: false };
+            try {
+                return { exists: true, valid: true, value: readPresetEntry(entry).doc, filePath: entry.absolutePath };
+            } catch (error) {
+                if (error?.code === 'PRESET_DOCUMENT_INVALID') {
+                    return { exists: true, valid: false, detail: error.message };
+                }
+                throw error;
+            }
+        },
         put(key, value) {
             assertSafeRepoNameShape(key.name, { field: 'preset.name' });
             return put(key, document(key), value.doc);
@@ -578,6 +604,7 @@ function registerPresetHandler(tx) {
             if (!entry) return false;
             for (const stateEntry of current.entries.values()) if (stateEntry.record.kind === 'preset-state' && stateEntry.record.name === key.name) remove(stateEntry);
             remove(entry);
+            invalidateInventory(key);
             return true;
         },
         list(filter) {
@@ -591,6 +618,7 @@ function registerPresetHandler(tx) {
             const entry = selectPresetEntry(inventory(key), state(key, namespace));
             if (!entry) return false;
             remove(entry);
+            invalidateInventory(key);
             return true;
         },
         listPresetSidecarNamespaces: namespaces,
@@ -738,6 +766,31 @@ function registerNamedDocHandler(tx) {
                 if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
                 return parsed;
             } catch { return null; }
+        },
+        read(key) {
+            const name = String(key.name || '');
+            if (!name || /[/\\\0]/.test(name)) return { exists: false };
+            const fp = path.join(folderPath(key), `${name}.json`);
+            assertConfinedPath({ boundary: tx._directoriesByHandle(key.handle).root, absolutePath: fp });
+            let stat;
+            try {
+                stat = fs.statSync(fp);
+            } catch (error) {
+                if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { exists: false };
+                throw error;
+            }
+            if (!stat.isFile()) return { exists: false };
+            const raw = fs.readFileSync(fp, 'utf-8');
+            if (!raw) return { exists: true, valid: false, detail: 'Document is not valid JSON.' };
+            try {
+                const parsed = JSON.parse(raw);
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                    return { exists: true, valid: false, detail: 'Document is not valid JSON.' };
+                }
+                return { exists: true, valid: true, value: parsed, filePath: fp };
+            } catch {
+                return { exists: true, valid: false, detail: 'Document is not valid JSON.' };
+            }
         },
         put(key, record) {
             const name = assertSafeRepoNameShape(key.name, { field: 'named-doc.name' });

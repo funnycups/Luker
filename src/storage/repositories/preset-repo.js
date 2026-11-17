@@ -27,6 +27,10 @@ export class PresetRepo {
         return this._engine.withTransaction(handle, (tx) => tx.getResource(this._key(handle, apiId, name)));
     }
 
+    async read(handle, apiId, name) {
+        return this._engine.withTransaction(handle, (tx) => tx.readResource(this._key(handle, apiId, name)));
+    }
+
     async save(handle, apiId, name, doc) {
         assertWritable();
         await this._engine.withTransaction(handle, (tx) =>
