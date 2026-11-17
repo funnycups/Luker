@@ -307,6 +307,11 @@ export function registerSettingsHandler(tx) {
             if (!r.rows.length) return null;
             return coerceJson(r.rows[0].doc);
         },
+        async read(key) {
+            const r = await client.query('SELECT doc FROM settings WHERE handle=$1', [key.handle]);
+            if (!r.rows.length) return { exists: false };
+            return { exists: true, valid: true, value: coerceJson(r.rows[0].doc) };
+        },
         async getResourceField(key, segments) {
             const r = await client.query(
                 'SELECT jsonb_typeof(doc #> $2::text[]) AS type, doc #> $2::text[] AS value FROM settings WHERE handle=$1',

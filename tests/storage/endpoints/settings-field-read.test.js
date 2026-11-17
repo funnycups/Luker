@@ -1,3 +1,5 @@
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -157,5 +159,45 @@ describe.each(ENDPOINT_HARNESSES)('settings field resources on $name', ({ mode }
             .expect(422);
         expect(response.body.code).toBe('invalid_resource');
         expect(fs.readFileSync(path.join(harness.dirs.root, 'settings.json'), 'utf8')).toBe('{not json');
+    });
+
+    test('reuses cached representations between /fields and /field without re-reading or re-hashing unchanged fs settings', async () => {
+        if (mode !== 'fs') {
+            return;
+        }
+        const directory = await request(harness.server)
+            .get('/api/settings/fields')
+            .query({ account: harness.handle })
+            .expect(200);
+
+        const readFileSpy = jest.spyOn(fs, 'readFileSync');
+        const hashSpy = jest.spyOn(crypto, 'createHash');
+        try {
+            readFileSpy.mockClear();
+            hashSpy.mockClear();
+
+            const field = await request(harness.server)
+                .get('/api/settings/field')
+                .query({ account: harness.handle, path: '/extension_settings/example' })
+                .expect(200);
+            expect(field.body).toEqual(DOCUMENT.extension_settings.example);
+
+            await request(harness.server)
+                .get('/api/settings/fields')
+                .query({ account: harness.handle })
+                .set('If-None-Match', directory.headers.etag)
+                .expect(304);
+            await request(harness.server)
+                .get('/api/settings/field')
+                .query({ account: harness.handle, path: '/extension_settings/example' })
+                .set('If-None-Match', field.headers.etag)
+                .expect(304);
+
+            expect(readFileSpy).not.toHaveBeenCalled();
+            expect(hashSpy).not.toHaveBeenCalled();
+        } finally {
+            readFileSpy.mockRestore();
+            hashSpy.mockRestore();
+        }
     });
 });

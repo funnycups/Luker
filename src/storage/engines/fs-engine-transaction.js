@@ -19,7 +19,7 @@ import { ConflictError } from '../errors.js';
 import { chatHeaderWithIntegrity, parseChatJson } from './chat-record.js';
 import { STAGING_PREFIX } from '../../sync/staging.js';
 import { failpoint, FAILPOINTS } from '../../sync/pipeline/failpoints.js';
-import { invalidateCurrentJsonFile, readCurrentJsonFile } from './current-json-file.js';
+import { invalidateCurrentJsonFile, readCurrentJsonFile, readCurrentJsonFileEntry } from './current-json-file.js';
 import { jsonTypeOf } from './json-value.js';
 
 export class FsTransaction {
@@ -489,13 +489,18 @@ function registerSettingsHandler(tx) {
             if (!fs.existsSync(fp)) return null;
             return JSON.parse(fs.readFileSync(fp, 'utf-8'));
         },
+        read(key) {
+            const entry = readCurrentJsonFileEntry(filePath(key));
+            if (entry == null) return { exists: false };
+            return { exists: true, valid: true, value: entry.value, cacheEntry: entry };
+        },
         getResourceField(key, segments) {
             const fp = filePath(key);
-            const doc = readCurrentJsonFile(fp);
-            if (doc == null) {
+            const entry = readCurrentJsonFileEntry(fp);
+            if (entry == null) {
                 return { exists: false };
             }
-            let current = doc;
+            let current = entry.value;
             let parentType;
             for (const segment of segments) {
                 if (current === null || typeof current !== 'object' || Array.isArray(current)
@@ -505,7 +510,7 @@ function registerSettingsHandler(tx) {
                 parentType = jsonTypeOf(current);
                 current = current[segment];
             }
-            return { exists: true, value: current, type: jsonTypeOf(current), parentType };
+            return { exists: true, value: current, type: jsonTypeOf(current), parentType, cacheEntry: entry };
         },
         getResourceFieldType(key, segments) {
             const fp = filePath(key);
@@ -573,11 +578,13 @@ function registerPresetHandler(tx) {
         assertConfinedPath({ boundary: dirs.root, absolutePath });
         fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
         writeFileAtomic(absolutePath, JSON.stringify(doc, null, 4));
+        invalidateCurrentJsonFile(absolutePath);
         invalidateInventory(key);
     };
     const remove = entry => {
         assertConfinedPath({ boundary: entry.boundary, absolutePath: entry.absolutePath });
         fs.unlinkSync(entry.absolutePath);
+        invalidateCurrentJsonFile(entry.absolutePath);
     };
     const namespaces = key => [...inventory(key).entries.values()].filter(entry => entry.record.kind === 'preset-state' && entry.record.name === key.name).map(entry => entry.record.namespace).sort();
     tx._handlers.set('preset', {
@@ -585,14 +592,21 @@ function registerPresetHandler(tx) {
         read(key) {
             const entry = inventory(key).entries.get(presetRecordIdentity(document(key)));
             if (!entry) return { exists: false };
+            let cached;
             try {
-                return { exists: true, valid: true, value: readPresetEntry(entry).doc, filePath: entry.absolutePath };
+                cached = readCurrentJsonFileEntry(entry.absolutePath);
             } catch (error) {
-                if (error?.code === 'PRESET_DOCUMENT_INVALID') {
-                    return { exists: true, valid: false, detail: error.message };
+                if (error instanceof SyntaxError) {
+                    return { exists: true, valid: false, detail: `Invalid preset JSON at ${entry.absolutePath}; restore or import this resource` };
                 }
                 throw error;
             }
+            if (!cached) return { exists: false };
+            const doc = cached.value;
+            if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+                return { exists: true, valid: false, detail: `Unsupported preset document shape at ${entry.absolutePath}; expected an object` };
+            }
+            return { exists: true, valid: true, value: doc, cacheEntry: cached };
         },
         put(key, value) {
             assertSafeRepoNameShape(key.name, { field: 'preset.name' });
@@ -772,36 +786,34 @@ function registerNamedDocHandler(tx) {
             if (!name || /[/\\\0]/.test(name)) return { exists: false };
             const fp = path.join(folderPath(key), `${name}.json`);
             assertConfinedPath({ boundary: tx._directoriesByHandle(key.handle).root, absolutePath: fp });
-            let stat;
+            let cached;
             try {
-                stat = fs.statSync(fp);
+                cached = readCurrentJsonFileEntry(fp);
             } catch (error) {
-                if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { exists: false };
-                throw error;
-            }
-            if (!stat.isFile()) return { exists: false };
-            const raw = fs.readFileSync(fp, 'utf-8');
-            if (!raw) return { exists: true, valid: false, detail: 'Document is not valid JSON.' };
-            try {
-                const parsed = JSON.parse(raw);
-                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                if (error instanceof SyntaxError) {
                     return { exists: true, valid: false, detail: 'Document is not valid JSON.' };
                 }
-                return { exists: true, valid: true, value: parsed, filePath: fp };
-            } catch {
+                throw error;
+            }
+            if (!cached) return { exists: false };
+            const parsed = cached.value;
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
                 return { exists: true, valid: false, detail: 'Document is not valid JSON.' };
             }
+            return { exists: true, valid: true, value: parsed, cacheEntry: cached };
         },
         put(key, record) {
             const name = assertSafeRepoNameShape(key.name, { field: 'named-doc.name' });
             const fp = filePath({ ...key, name });
             fs.mkdirSync(path.dirname(fp), { recursive: true });
             writeFileAtomic(fp, JSON.stringify(record.doc, null, 4));
+            invalidateCurrentJsonFile(fp);
         },
         delete(key) {
             const fp = filePath(key);
             if (!fs.existsSync(fp)) return false;
             fs.unlinkSync(fp);
+            invalidateCurrentJsonFile(fp);
             return true;
         },
         list(filter) {

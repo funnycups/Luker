@@ -1,4 +1,6 @@
+import { afterAll, afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -265,5 +267,39 @@ describe.each(ENDPOINT_HARNESSES)('character resource reads on $name', ({ mode }
             .send({ avatar_url: avatar, operations: [{ op: 'replace', path: '/data/description', value: 'escaped' }] })
             .expect(400);
         assert.deepEqual(fs.readFileSync(path.join(harness.dirs.characters, 'Alice.png')), before);
+    });
+
+    test('reuses cached representations across /fields, /field, and /projection when the character view is unchanged', async () => {
+        const directory = await request(harness.server)
+            .get('/api/characters/fields')
+            .query({ account: harness.handle, avatar: 'Alice.png' })
+            .expect(200);
+
+        const hashSpy = jest.spyOn(crypto, 'createHash');
+        try {
+            hashSpy.mockClear();
+
+            const field = await request(harness.server)
+                .get('/api/characters/field')
+                .query({ account: harness.handle, avatar: 'Alice.png', path: '/data/description' })
+                .expect(200);
+            expect(JSON.parse(field.text)).toBe(CARD.data.description);
+
+            const projection = await request(harness.server)
+                .get('/api/characters/projection')
+                .query({ account: harness.handle, avatar: 'Alice.png' })
+                .expect(200);
+            expect(projection.headers.etag).toBe(directory.body.projection.etag);
+
+            await request(harness.server)
+                .get('/api/characters/fields')
+                .query({ account: harness.handle, avatar: 'Alice.png' })
+                .set('If-None-Match', directory.headers.etag)
+                .expect(304);
+
+            expect(hashSpy).not.toHaveBeenCalled();
+        } finally {
+            hashSpy.mockRestore();
+        }
     });
 });

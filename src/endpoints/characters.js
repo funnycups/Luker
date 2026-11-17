@@ -2198,7 +2198,7 @@ function characterResourceViewSize(entry) {
         .reduce((total, value) => total + Buffer.byteLength(value, 'utf8'), 0);
     return Buffer.byteLength(entry.raw, 'utf8')
         + fieldBytes
-        + Buffer.byteLength(JSON.stringify(entry.projection), 'utf8');
+        + Buffer.byteLength(entry.projectionText, 'utf8');
 }
 
 function rememberCharacterResourceView(key, entry) {
@@ -2336,7 +2336,16 @@ async function getCharacterResourceView(request, avatar, imagePath) {
         }
 
         const projection = buildCharacterProjection({ raw, character });
-        const entry = { raw, view, projection, dateLastChat };
+        const entry = {
+            raw,
+            view,
+            projection,
+            projectionText: JSON.stringify(projection),
+            dateLastChat,
+            fieldRepresentations: new Map(),
+            projectionRepresentation: null,
+            fieldsDirectoryRepresentation: null,
+        };
         rememberCharacterResourceView(key, entry);
         return entry;
     })();
@@ -2351,33 +2360,60 @@ async function getCharacterResourceView(request, avatar, imagePath) {
     }
 }
 
+function getCharacterFieldRepresentation(entry, account, avatar, fieldPath) {
+    let representation = entry.fieldRepresentations.get(fieldPath);
+    if (!representation) {
+        representation = createPrivateRepresentation({
+            account,
+            resource: `character:${avatar}:field:${fieldPath}`,
+            text: entry.view.values.get(fieldPath),
+            contentType: 'application/json; charset=utf-8',
+        });
+        entry.fieldRepresentations.set(fieldPath, representation);
+    }
+    return representation;
+}
+
+function getCharacterProjectionRepresentation(entry, account, avatar) {
+    if (!entry.projectionRepresentation) {
+        entry.projectionRepresentation = createPrivateRepresentation({
+            account,
+            resource: `character:${avatar}:projection`,
+            text: entry.projectionText,
+            contentType: 'application/json; charset=utf-8',
+        });
+    }
+    return entry.projectionRepresentation;
+}
+
+function getCharacterFieldsDirectoryRepresentation(entry, account, avatar) {
+    if (!entry.fieldsDirectoryRepresentation) {
+        const fields = entry.view.fields.map((fieldPath) => ({
+            path: fieldPath,
+            etag: getCharacterFieldRepresentation(entry, account, avatar, fieldPath).etag,
+        }));
+        const projection = getCharacterProjectionRepresentation(entry, account, avatar);
+        entry.fieldsDirectoryRepresentation = createPrivateRepresentation({
+            account,
+            resource: `character:${avatar}:fields`,
+            text: JSON.stringify({
+                rawLayout: entry.view.rawLayout,
+                fields,
+                projection: { etag: projection.etag },
+            }),
+            contentType: 'application/json; charset=utf-8',
+        });
+    }
+    return entry.fieldsDirectoryRepresentation;
+}
+
 router.get('/fields', async function (request, response) {
     const target = getQueryCharacterAvatar(request, response);
     if (!target) return;
     try {
         const entry = await getCharacterResourceView(request, target.avatar, target.imagePath);
-        const account = target.handle;
-        const fields = entry.view.fields.map((fieldPath) => ({
-            path: fieldPath,
-            etag: createPrivateRepresentation({
-                account,
-                resource: `character:${target.avatar}:field:${fieldPath}`,
-                text: entry.view.values.get(fieldPath),
-            }).etag,
-        }));
-        const projection = createPrivateRepresentation({
-            account,
-            resource: `character:${target.avatar}:projection`,
-            text: JSON.stringify(entry.projection),
-        });
-        return sendJsonResource(request, response, {
-            resource: `character:${target.avatar}:fields`,
-            value: {
-                rawLayout: entry.view.rawLayout,
-                fields,
-                projection: { etag: projection.etag },
-            },
-        });
+        const representation = getCharacterFieldsDirectoryRepresentation(entry, target.handle, target.avatar);
+        return sendPrivateRepresentation(request, response, representation);
     } catch (error) {
         if (error?.code === 'not_found') {
             return sendResourceReadError(response, { code: 'not_found', resource: `character:${target.avatar}`, status: 404 });
@@ -2416,12 +2452,7 @@ router.get('/field', async function (request, response) {
                 status: isContainer ? 400 : 404,
             });
         }
-        const representation = createPrivateRepresentation({
-            account: target.handle,
-            resource: `character:${target.avatar}:field:${fieldPath}`,
-            text: entry.view.values.get(fieldPath),
-            contentType: 'application/json; charset=utf-8',
-        });
+        const representation = getCharacterFieldRepresentation(entry, target.handle, target.avatar, fieldPath);
         return sendPrivateRepresentation(request, response, representation);
     } catch (error) {
         if (error?.code === 'not_found') {
@@ -2440,11 +2471,7 @@ router.get('/projection', async function (request, response) {
     if (!target) return;
     try {
         const entry = await getCharacterResourceView(request, target.avatar, target.imagePath);
-        const representation = createPrivateRepresentation({
-            account: target.handle,
-            resource: `character:${target.avatar}:projection`,
-            text: JSON.stringify(entry.projection),
-        });
+        const representation = getCharacterProjectionRepresentation(entry, target.handle, target.avatar);
         return sendPrivateRepresentation(request, response, representation);
     } catch (error) {
         if (error?.code === 'not_found') {

@@ -59,6 +59,7 @@ export function registerNamedDocReadRoutes(router, bucket) {
             return sendJsonResource(request, response, {
                 resource: `${bucket}:${name}`,
                 value: result.value,
+                cacheEntry: result.cacheEntry,
             });
         } catch (error) {
             console.error(`Error reading ${bucket} document:`, error);

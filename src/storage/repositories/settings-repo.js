@@ -11,6 +11,10 @@ export class SettingsRepo {
         return this._engine.withTransaction(handle, (tx) => tx.getResource(this._key(handle)));
     }
 
+    async read(handle) {
+        return this._engine.withTransaction(handle, (tx) => tx.readResource(this._key(handle)));
+    }
+
     /**
      * Reads one JSON Pointer value without materializing the settings document.
      * @param {string} handle

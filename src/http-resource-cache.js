@@ -44,14 +44,45 @@ export function sendPrivateRepresentation(request, response, representation) {
 }
 
 /**
- * Serializes a JSON value as an account-scoped private representation.
+ * Resolves a serialized JSON representation, reusing a fingerprint-bound cache
+ * entry when available so unchanged resources avoid repeat serialization and
+ * digest computation.
  */
-export function sendJsonResource(request, response, { resource, value }) {
-    const representation = createPrivateRepresentation({
-        account: request.user?.profile?.handle || '',
-        resource,
+export function resolveJsonResourceRepresentation({ account, resource, value, cacheEntry = null }) {
+    const normalizedAccount = String(account || '');
+    const normalizedResource = String(resource);
+    if (cacheEntry?.derived instanceof Map) {
+        const derivedKey = `repr:${normalizedAccount}\0${normalizedResource}`;
+        const cached = cacheEntry.derived.get(derivedKey);
+        if (cached) {
+            return cached;
+        }
+        const created = createPrivateRepresentation({
+            account: normalizedAccount,
+            resource: normalizedResource,
+            text: JSON.stringify(value),
+            contentType: 'application/json; charset=utf-8',
+        });
+        cacheEntry.derived.set(derivedKey, created);
+        return created;
+    }
+    return createPrivateRepresentation({
+        account: normalizedAccount,
+        resource: normalizedResource,
         text: JSON.stringify(value),
         contentType: 'application/json; charset=utf-8',
+    });
+}
+
+/**
+ * Serializes a JSON value as an account-scoped private representation.
+ */
+export function sendJsonResource(request, response, { resource, value, cacheEntry = null }) {
+    const representation = resolveJsonResourceRepresentation({
+        account: request.user?.profile?.handle || '',
+        resource,
+        value,
+        cacheEntry,
     });
     return sendPrivateRepresentation(request, response, representation);
 }

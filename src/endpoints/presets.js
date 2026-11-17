@@ -122,6 +122,7 @@ router.get('/get', async function (request, response) {
         return sendJsonResource(request, response, {
             resource: `preset:${apiId}:${name}`,
             value: result.value,
+            cacheEntry: result.cacheEntry,
         });
     } catch (error) {
         console.error('Error reading preset:', error);

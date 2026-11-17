@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -252,5 +253,55 @@ describe.each(ENDPOINT_HARNESSES)('domain resource GETs on $name', ({ mode }) =>
         } finally {
             readdirSpy.mockRestore();
         }
+    });
+
+    test('reuses stat-fingerprinted representations across conditional preset and named document reads', async () => {
+        if (mode !== 'fs') {
+            return;
+        }
+        await getPresetRepo().save(harness.handle, 'openai', 'CachedPreset', { temperature: 0.6, marker: 'v1' });
+        await getNamedDocRepo().save(harness.handle, 'themes', 'CachedTheme', { name: 'CachedTheme', bg: '#111' });
+
+        const firstPreset = await request(harness.server)
+            .get('/api/presets/get')
+            .query({ account: harness.handle, apiId: 'openai', name: 'CachedPreset' })
+            .expect(200);
+        const firstTheme = await request(harness.server)
+            .get('/api/themes/get')
+            .query({ account: harness.handle, name: 'CachedTheme' })
+            .expect(200);
+
+        const readFileSpy = jest.spyOn(fs, 'readFileSync');
+        const hashSpy = jest.spyOn(crypto, 'createHash');
+        try {
+            readFileSpy.mockClear();
+            hashSpy.mockClear();
+
+            await request(harness.server)
+                .get('/api/presets/get')
+                .query({ account: harness.handle, apiId: 'openai', name: 'CachedPreset' })
+                .set('If-None-Match', firstPreset.headers.etag)
+                .expect(304);
+            await request(harness.server)
+                .get('/api/themes/get')
+                .query({ account: harness.handle, name: 'CachedTheme' })
+                .set('If-None-Match', firstTheme.headers.etag)
+                .expect(304);
+
+            expect(readFileSpy).not.toHaveBeenCalled();
+            expect(hashSpy).not.toHaveBeenCalled();
+        } finally {
+            readFileSpy.mockRestore();
+            hashSpy.mockRestore();
+        }
+
+        await getPresetRepo().save(harness.handle, 'openai', 'CachedPreset', { temperature: 0.9, marker: 'v2' });
+        const updatedPreset = await request(harness.server)
+            .get('/api/presets/get')
+            .query({ account: harness.handle, apiId: 'openai', name: 'CachedPreset' })
+            .set('If-None-Match', firstPreset.headers.etag)
+            .expect(200);
+        expect(updatedPreset.body).toEqual({ temperature: 0.9, marker: 'v2' });
+        expect(updatedPreset.headers.etag).not.toBe(firstPreset.headers.etag);
     });
 });

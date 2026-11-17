@@ -11,7 +11,7 @@ import { getSettingsRepo, getPresetRepo, getNamedDocRepo, getWorldInfoRepo } fro
 import { applyJsonPatch } from '../storage/repositories/json-patch.js';
 import { NotFoundError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
 import { buildSettingsFieldStructure, decodeResourcePointer } from '../../public/scripts/util/resource-fields.js';
-import { createPrivateRepresentation, sendJsonResource, sendPrivateRepresentation, sendResourceReadError } from '../http-resource-cache.js';
+import { createPrivateRepresentation, resolveJsonResourceRepresentation, sendJsonResource, sendPrivateRepresentation, sendResourceReadError } from '../http-resource-cache.js';
 
 const ENABLE_EXTENSIONS = !!getConfigValue('extensions.enabled', true, 'boolean');
 const ENABLE_EXTENSIONS_AUTO_UPDATE = !!getConfigValue('extensions.autoUpdate', true, 'boolean');
@@ -134,6 +134,48 @@ async function loadOrInitializeSettings(request) {
         }
     }
     return parsedSettings;
+}
+
+async function loadOrInitializeSettingsReadEntry(request) {
+    const handle = request.user.profile.handle;
+    const existing = await getSettingsRepo().read(handle);
+    if (existing.exists) {
+        return { document: existing.value, cacheEntry: existing.cacheEntry ?? null };
+    }
+    const document = await loadOrInitializeSettings(request);
+    return { document, cacheEntry: null };
+}
+
+function buildSettingsDirectoryRepresentation({ account, document, cacheEntry }) {
+    const derivedKey = `settings-fields-dir:${account}`;
+    if (cacheEntry?.derived instanceof Map) {
+        const cached = cacheEntry.derived.get(derivedKey);
+        if (cached) {
+            return cached;
+        }
+    }
+    const { containers, values } = buildSettingsFieldStructure(document);
+    const fields = [...values.keys()]
+        .sort((a, b) => a.localeCompare(b))
+        .map((fieldPath) => ({
+            path: fieldPath,
+            etag: resolveJsonResourceRepresentation({
+                account,
+                resource: `settings:field:${fieldPath}`,
+                value: values.get(fieldPath),
+                cacheEntry,
+            }).etag,
+        }));
+    const directoryRepresentation = resolveJsonResourceRepresentation({
+        account,
+        resource: 'settings:fields',
+        value: { containers, fields },
+        cacheEntry,
+    });
+    if (cacheEntry?.derived instanceof Map) {
+        cacheEntry.derived.set(derivedKey, directoryRepresentation);
+    }
+    return directoryRepresentation;
 }
 
 export async function buildSettingsResponse(request, { includePresetContents = true, includeQuickReplyPresets = true } = {}) {
@@ -310,22 +352,9 @@ async function isSettingsLeafPath(handle, segments) {
 router.get('/fields', async function (request, response) {
     try {
         const account = request.user.profile.handle;
-        const document = await loadOrInitializeSettings(request);
-        const { containers, values } = buildSettingsFieldStructure(document);
-        const fields = [...values.keys()]
-            .sort((a, b) => a.localeCompare(b))
-            .map((path) => ({
-                path,
-                etag: createPrivateRepresentation({
-                    account,
-                    resource: `settings:field:${path}`,
-                    text: JSON.stringify(values.get(path)),
-                }).etag,
-            }));
-        return sendJsonResource(request, response, {
-            resource: 'settings:fields',
-            value: { containers, fields },
-        });
+        const { document, cacheEntry } = await loadOrInitializeSettingsReadEntry(request);
+        const representation = buildSettingsDirectoryRepresentation({ account, document, cacheEntry });
+        return sendPrivateRepresentation(request, response, representation);
     } catch (error) {
         if (error instanceof SyntaxError) {
             return sendResourceReadError(response, {
@@ -377,10 +406,11 @@ router.get('/field', async function (request, response) {
                 status: 404,
             });
         }
-        const representation = createPrivateRepresentation({
+        const representation = resolveJsonResourceRepresentation({
             account: handle,
             resource: `settings:field:${pointer}`,
-            text: JSON.stringify(field.value),
+            value: field.value,
+            cacheEntry: field.cacheEntry ?? null,
         });
         return sendPrivateRepresentation(request, response, representation);
     } catch (error) {

@@ -254,6 +254,11 @@ export function registerSettingsHandler(tx) {
             if (!row) return null;
             try { return JSON.parse(row.doc); } catch { return null; }
         },
+        read(key) {
+            const row = stmt.get.get(key.handle);
+            if (!row) return { exists: false };
+            return { exists: true, valid: true, value: JSON.parse(row.doc) };
+        },
         getResourceField(key, segments) {
             const path = toSqlJsonPath(segments);
             const row = stmt.field.get(path, path, key.handle);

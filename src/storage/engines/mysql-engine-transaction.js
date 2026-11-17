@@ -305,6 +305,11 @@ export function registerSettingsHandler(tx) {
             if (!rows.length) return null;
             return coerceJson(rows[0].doc);
         },
+        async read(key) {
+            const [rows] = await conn.execute('SELECT doc FROM settings WHERE handle=?', [key.handle]);
+            if (!rows.length) return { exists: false };
+            return { exists: true, valid: true, value: coerceJson(rows[0].doc) };
+        },
         async getResourceField(key, segments) {
             const path = toSqlJsonPath(segments);
             const [rows] = await conn.execute(
