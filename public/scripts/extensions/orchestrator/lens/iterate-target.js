@@ -1058,11 +1058,12 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                 ? CONTROL_TOOL_DEFS.filter(t => t.function.name !== CONTROL_TOOL_NAMES.resetToGlobal || hasOverride)
                 : [];
             const charTools = resolvedScope === 'character'
-                ? [...LOREBOOK_WRITE_TOOL_DEFS, ...CHARACTER_PRESET_READ_TOOL_DEFS]
+                ? [...LOREBOOK_WRITE_TOOL_DEFS]
                 : [];
             return [
                 ...baseTools,
                 ...LOREBOOK_READ_TOOL_DEFS,
+                ...CHARACTER_PRESET_READ_TOOL_DEFS,
                 ...charTools,
                 ...controlTools,
                 ...SKILL_ITER_STUDIO_TOOL_DEFS,
@@ -1096,8 +1097,13 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
                 return out.result;
             }
             if (isCharacterPresetReadTool(name)) {
-                const out = await runCharacterPresetReadTool({ id: callId, name, args }, { context: c, avatar });
-                if (!out?.ok) throw new SourceError('read', String(out?.error || i18n('Read failed')));
+                const presetAvatar = meta.avatar || resolveActiveAvatar(c);
+                const out = await runCharacterPresetReadTool({ id: callId, name, args }, { context: c, avatar: presetAvatar });
+                if (!out?.ok) {
+                    const err = new SourceError('read', String(out?.error || i18n('Read failed')));
+                    err.envelope = out;
+                    throw err;
+                }
                 return out.result;
             }
             if (SKILL_READ_TOOLS.has(name)) {

@@ -276,6 +276,7 @@ describe('orchestrator/lens/iterate-target.js', () => {
         const gHarness = makeHarness({ hasCharOverride: false });
         const gTools = (await gHarness.target.tools(makeSpecProfile(), 'global', gHarness.ctx)).map(t => t.function.name);
         expect(gTools).toContain(LOREBOOK_READ_TOOL_NAMES[0]);
+        expect(gTools).toContain('inspect_bound_preset');
         expect(gTools).not.toContain(LOREBOOK_WRITE_TOOL_NAMES[0]);
         expect(gTools).not.toContain('luker_orch_reset_live_to_blank');
         expect(gTools).not.toContain('luker_orch_reset_live_to_global');
