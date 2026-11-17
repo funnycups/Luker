@@ -217,7 +217,9 @@ export async function runIterateTurn({
             } catch (err) {
                 callError = String(err?.message || err);
                 failed.push({ name: call.name, error: callError });
-                content = { error: String(err?.envelope ? JSON.stringify(err.envelope) : callError) };
+                content = (err?.envelope && typeof err.envelope === 'object')
+                    ? err.envelope
+                    : { error: callError };
             }
             toolCalls.push({
                 id: call.id,

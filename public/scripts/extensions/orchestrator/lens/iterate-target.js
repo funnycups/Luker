@@ -1284,8 +1284,9 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             const after = fakeSession.workingProfile != null ? fakeSession.workingProfile : sandbox;
             const outcome = interpretSandboxOutcome({ before: live, after, executorResult });
             if (outcome.kind === 'failure') {
-                const err = new SourceError('edit-failed', String(outcome.envelope?.detail || outcome.envelope?.error || outcome.actionText || 'Edit failed'));
-                err.envelope = outcome.envelope;
+                const envelope = outcome.content || outcome.envelope || null;
+                const err = new SourceError('edit-failed', String(envelope?.detail || envelope?.error || outcome.actionText || 'Edit failed'));
+                if (envelope) err.envelope = envelope;
                 throw err;
             }
             if (outcome.kind === 'edits') return tagNext(after);
