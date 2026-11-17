@@ -479,6 +479,9 @@ export function applyPresetBodyChangesToSettings(previousBody, nextBody) {
             oai_settings[settingsKey] = structuredClone(nextValue);
         }
     }
+    if (Object.hasOwn(nextBody, 'reasoning_effort') || Object.hasOwn(nextBody, 'reasoning_effort_by_source')) {
+        syncLiveReasoningEffortFromPreset(nextBody);
+    }
 }
 
 /**
@@ -6276,6 +6279,7 @@ function loadOpenAISettings(data, settings) {
             }
         }
     }
+    syncLiveReasoningEffortFromPreset(activePresetBody);
     oai_settings.chat_completion_custom_models = normalizeCustomModels(oai_settings.chat_completion_custom_models);
     // Migration: the previous per-source `custom_models_by_source` map is
     // gone — each connection profile now owns its own custom-models list.
@@ -6936,6 +6940,25 @@ const REASONING_HINT_TEXT = {
     uniform: 'All models on this provider support the listed reasoning efforts.',
     always_on: 'Models on this provider always think and cannot disable it.',
 };
+
+function getActiveOpenAIPresetBody() {
+    const ghost = getSelectedCardBoundEntry();
+    if (ghost?.body && typeof ghost.body === 'object') {
+        return ghost.body;
+    }
+    const presetIndex = openai_setting_names?.[oai_settings.preset_settings_openai];
+    const presetBody = Number.isInteger(presetIndex) ? openai_settings?.[presetIndex] : null;
+    return presetBody && typeof presetBody === 'object' ? presetBody : null;
+}
+
+function syncLiveReasoningEffortFromPreset(presetBody = getActiveOpenAIPresetBody()) {
+    if (presetBody && typeof presetBody === 'object' && presetBody.reasoning_effort !== undefined) {
+        oai_settings.reasoning_effort = presetBody.reasoning_effort;
+        return;
+    }
+    const source = String(oai_settings.chat_completion_source || '');
+    oai_settings.reasoning_effort = normalizeReasoningToken(oai_settings.reasoning_effort_by_source?.[source] ?? 'auto');
+}
 
 function syncReasoningEffortUI() {
     const source = String(oai_settings.chat_completion_source || '');
@@ -7945,6 +7968,7 @@ async function onSettingsPresetChange(event) {
                     }
                 }
             }
+            syncLiveReasoningEffortFromPreset(preset);
 
             // These cannot be changed via preset if unbound to connection
             if (oai_settings.bind_preset_to_connection) {
@@ -10461,6 +10485,7 @@ export function initOpenAI() {
         reconnectOpenAi();
         forceCharacterEditorTokenize();
         updateFeatureSupportFlags();
+        syncLiveReasoningEffortFromPreset();
         syncReasoningEffortUI();
         eventSource.emit(event_types.CHATCOMPLETION_SOURCE_CHANGED, oai_settings.chat_completion_source);
     });
@@ -10711,8 +10736,10 @@ export function initOpenAI() {
 
     $('#openai_reasoning_effort').on('input', function () {
         const source = String(oai_settings.chat_completion_source || '');
+        const token = normalizeReasoningToken(String($(this).val()));
         oai_settings.reasoning_effort_by_source ??= {};
-        oai_settings.reasoning_effort_by_source[source] = normalizeReasoningToken(String($(this).val()));
+        oai_settings.reasoning_effort_by_source[source] = token;
+        oai_settings.reasoning_effort = token;
         syncReasoningEffortUI();
         saveSettingsDebounced();
     });
