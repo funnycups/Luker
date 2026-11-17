@@ -1,76 +1,69 @@
-# Popup Mode
+# Workbench Card Editing
 
-For regular character cards without a CardApp, "Open Editor" opens an AI conversation panel as a popup. You can describe the changes you want in natural language, the AI executes them via tool calls, and every step is gated by your diff approval.
+Open **Workbench → AI iteration → Character card** (or click **Open Editor** under **Extensions → Character Editor Assistant**) to edit the active character card and its bound World Info books through natural-language conversation. Every edit the AI proposes is staged in the **Change list** for diff review before anything is written.
 
-::: tip Cards with CardApp use Studio
-For character cards that embed a CardApp, "Open Editor" automatically launches the more capable [CardApp Studio](/features/card-editor/studio) instead of the popup described here.
+::: tip Cards with CardApp
+To edit embedded CardApp UI code and state modules, open [CardApp Studio](/features/card-editor/studio) from **Extensions → Character Editor Assistant → &lt;/&gt; CardApp Studio**.
 :::
 
-## Popup Layout
+## Workspace Layout
 
-The top of the popup shows the current character name and the bound primary World Info book. The middle area is the AI conversation. The bottom holds the input field, send/abort buttons, and a collapsible "Conversation history" panel.
+The left pane holds the session drawer, target switcher (**Character card** / **World book**), AI conversation, and composer; the right pane previews the active character card fields and bound World Info books.
 
-![Editor popup, initial empty state](/images/card-editor-popup/cea-popup-overview.png)
+![Character card AI iteration workspace](/images/card-editor-popup/cea-popup-overview.png)
 
 ## Supported Operations
 
-The AI inside the popup can perform the following operations via tool calls:
+The AI can perform the following operations via tool calls:
 
-- **Modify character card fields** — Name, description, personality, scenario, first message, example dialogue, system prompt, jailbreak prompt, creator's notes, etc.
-- **Manage World Info entries** — Create, update, delete entries
-- **Query World Info** — Search entries by keyword, query by activation conditions, fetch entry details
-- **Set primary World Info** — Change the World Info book bound to the character card
-- **Simulate prompt** — Preview the actual prompt structure that will be sent to the model under current settings
+- **Modify character card fields** — Name, description, personality, scenario, first message, alternate greetings, example dialogue, system prompt, post-history instructions, creator's notes, and tags
+- **Manage World Info entries** — Create, update, patch, or delete entries in bound world books
+- **Query World Info** — List visible books, search entries by keyword or activation condition, and read entry contents
+- **Simulate prompt** — Preview the assembled prompt sent to the model under current settings
 
 ## Diff Approval
 
-After an AI modification, the system shows the before/after diff per field in the pending area, waiting for your approval:
+After the AI stages edits, **Change list** groups the before/after diffs by field and world book entry:
 
 ![Pending diffs grouped per field](/images/card-editor-popup/cea-popup-diff-approval.png)
 
-Each field's diff has a zoom icon in the top-right; click to expand into a line-by-line side-by-side view, useful for inspecting long text such as World Info `content`:
+Expand any item to inspect the full line-by-line diff for longer text such as `description` or World Info `content`:
 
-![Zoomed-in line-by-line side-by-side diff](/images/card-editor-popup/cea-popup-line-diff-zoom.png)
+![Expanded line-by-line diff](/images/card-editor-popup/cea-popup-line-diff-zoom.png)
 
-Below each batch of changes you'll find "Approve batch" / "Reject batch" buttons; you can also act on individual diffs:
+Tick individual items and click **Apply selected**, click **Discard everything**, or enable **Apply automatically** below the composer:
 
-![Approve / Reject buttons](/images/card-editor-popup/cea-popup-diff-actions.png)
+![Apply and discard controls](/images/card-editor-popup/cea-popup-diff-actions.png)
 
-Only changes you explicitly approve take effect; rejected changes are discarded. Approved fields are recorded in modification history and can be rolled back at any time.
+Applied edits are recorded in **Workbench → Change history** and can be undone individually.
 
 ## Session Management
 
-Expanding "Conversation history" at the bottom of the popup reveals all editing sessions for the current character:
+The left session list stores conversations for the active character:
 
-![Conversation history: multiple sessions side by side](/images/card-editor-popup/cea-popup-sessions.png)
+![Saved character-editing sessions](/images/card-editor-popup/cea-popup-sessions.png)
 
-- Create, switch, delete sessions; previous sessions are auto-titled by the AI from the first message
-- Each character retains up to **24** sessions; the oldest are auto-cleaned when exceeded
-- Session content is persisted; closing and reopening the popup keeps everything, including pending diffs
+- Start a new conversation, switch between past conversations, or delete old ones; titles are generated from your request
+- Closing and reopening Workbench preserves conversation history, tool traces, and pending diffs
 
-## World Info Sync
+## World Info Sync {#world-info-sync}
 
-When you import a new character card via replace or update, if the new card carries an embedded world book (or the cards bind to different world books), the editor assistant pops up a sync dialog with the following options:
+When you replace or update a character card whose embedded world book differs from the currently bound book, Luker prompts you to choose how to handle the world book:
 
 ![World Info sync popup](/images/card-editor-popup/cea-lorebook-sync.png)
 
-- **Import new book** — Save the new card's embedded world book as a standalone file and bind it to this character. Use when you want the new card's shipped lore verbatim.
-- **Keep old book** — Re-bind the previously bound book and ignore the new card's embedded book. Use when you only wanted to refresh the character fields.
-- **Merge in editor** — Open the editor popup with a prev-vs-next diff so an AI can carry your earlier edits forward into the new book. Use when you have hand-curated additions to preserve.
+- **Import new book** — Save the new card's embedded world book as a standalone file and bind it to this character.
+- **Keep old book** — Keep the previously bound world book and ignore the new card's embedded book.
+- **Merge in editor** — Open **Workbench → AI iteration → Character card** seeded with a structural diff between the previous and newly imported card and world book so the AI can carry your hand-curated entries forward into the new book.
 
-Cancelling the dialog leaves everything untouched.
+![Merging card and world book changes in Workbench](/images/card-editor-popup/cea-replace-diff.png)
 
-When you take the **Merge in editor** path, the editor's topbar carries a **View full replace diff** button. It opens a structured, full-screen overview of the differences between the character card + world book you were using before and the ones you just imported — the same information the AI receives as its first-turn brief, but shown to you with per-field cards, per-entry line diffs, and word-level red/green highlights:
-
-![Full replace-diff popup — previous vs current card and world book](/images/card-editor-popup/cea-replace-diff.png)
-
-If you close the editor without applying any AI-proposed change, the pre-import (new book file + character binding) is rolled back automatically, so cancelling a merge session leaves your working state as it was before the replace.
-
-Whether the sync popup shows up is controlled by the "Enable World Info sync popup after replacing/updating a character card" toggle on the extensions panel.
+If you close or leave the merge session without applying any change, the pre-imported world book and character binding roll back automatically.
 
 ## Related Pages
 
 - [Editor Assistant Overview](/features/card-editor/) — Shared capabilities and entry points
+- [Workbench](/features/workbench) — Unified workspace, Q&A, and Change history
 - [CardApp Studio](/features/card-editor/studio) — Full dev environment for cards with CardApp
-- [Search Tools](/features/search-tools) — Web search inside the popup
+- [Search Tools](/features/search-tools) — Web search inside Workbench AI iteration
 - [State System](/features/state-system) — Character state and chat state

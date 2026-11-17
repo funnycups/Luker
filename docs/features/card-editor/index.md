@@ -1,49 +1,44 @@
 # Character Card Editor Assistant
 
-The Character Card Editor Assistant (CEA) is Luker's built-in AI-assisted editing tool. It lets you modify character card settings, World Info entries, and CardApp code using natural language instructions. Every modification the AI makes is presented as a diff comparison and only takes effect after you approve it item by item — keeping your character card firmly under your control.
+The Character Card Editor Assistant (CEA) is Luker's built-in AI-assisted editing tool. It lets you modify character card fields, World Info entries, and CardApp code using natural-language instructions. Every modification the AI proposes is presented as a diff comparison for review before taking effect.
 
-The editor assistant automatically picks one of two modes based on whether the current character card contains a CardApp:
+Two editing surfaces cover character cards and embedded CardApps:
 
 | Mode | When it applies | Detailed docs |
 | --- | --- | --- |
-| **Popup** | Regular character cards without CardApp | [Popup Mode](/features/card-editor/popup) |
+| **Workbench Card Editing** | Character card fields and bound World Info books | [Workbench Card Editing](/features/card-editor/popup) |
 | **CardApp Studio** | Character cards with an embedded CardApp | [CardApp Studio](/features/card-editor/studio) |
 
 ## Shared Capabilities
 
-Regardless of mode, the editor assistant provides these core capabilities:
+- **AI tool-call driven** — Describe what you want in natural language; the AI stages structured edits to fields and files via tool calls
+- **Diff approval** — Every change is shown in the **Change list** with before/after diffs; select what to apply or discard
+- **Expandable line-by-line diffs** — Field-level differences expand to inspect long text edits line by line
+- **Session persistence** — Multiple edit sessions are saved per character; reopening picks up where you left off
+- **Change history & undo** — Applied changes are recorded in **Workbench → Change history** (and Git version history inside CardApp Studio) for step-by-step undo
 
-- **AI tool-call driven** — Describe what you want in natural language; the AI commits real changes to fields/files via structured tool calls
-- **Diff approval** — Every change is shown as a diff first; approve or reject one at a time or in batches; rejected changes never take effect
-- **Line-by-line side-by-side view** — Field-level differences can be expanded to a full line-by-line side-by-side view
-- **Session persistence** — Multiple edit sessions are saved independently; reopening picks up where you left off, including pending diffs
-- **Modification history & rollback** — Approved changes are recorded in history and can be rolled back to any version
+## Entry Points
 
-## Entry Point and Mode Switching
-
-Two entry points serve different editing needs:
-
-- **Workbench → AI iteration** (**Character card** / **World book**) — conversational editing with diff cards and rollback inside the unified [Workbench](/features/workbench).
-- **Extensions Panel → Character Editor Assistant** — **Open Editor** opens the standalone popup (used for card/lorebook editing and World Info sync when replacing a card), and **&lt;/&gt; CardApp Studio** launches the three-panel IDE for cards with an embedded CardApp. When the active character contains a CardApp, **Open Editor** opens Studio automatically.
+- **Workbench → AI iteration** (**Character card** / **World book**) — conversational editing with diff cards, live card preview, and rollback inside [Workbench](/features/workbench).
+- **Extensions → Character Editor Assistant** — **Open Editor** jumps directly to **Workbench → AI iteration → Character card** for the active character, and **&lt;/&gt; CardApp Studio** launches the three-panel IDE for cards with an embedded CardApp.
 
 ![Editor assistant entry and configuration in the extensions panel](/images/card-editor-popup/cea-extensions-panel.png)
 
 ## Configuration Options
 
-Both modes share the same set of settings on the extensions panel:
+Configure shared defaults in **Workbench → Settings**, or set extension-level presets under **Extensions → Character Editor Assistant**:
 
-- **World Info sync popup** — Whether to enable the World Info sync popup after replacing/updating a character card (only triggered by the popup mode; see [Popup Mode](/features/card-editor/popup#world-info-sync))
-- **Iteration AI prompt preset (params + prompt)** — Prompt preset used by the editor assistant (leave empty to use the current preset); the question-mark button beside this dropdown explains the expected preset type and imports the bundled `plugin-only` preset in a click
-- **Iteration AI API preset (Connection profile)** — API connection used by the editor assistant (leave empty to use the current connection)
+- **Iteration AI prompt preset (params + prompt)** — Prompt preset used by the editor assistant and CardApp Studio (leave empty to follow the shared Workbench or active preset); the help button beside this dropdown imports the bundled `plugin-only` preset in one click
+- **Iteration AI API preset (Connection profile)** — API connection used by the editor assistant and CardApp Studio
 - **Tool-call retries on invalid/missing tool call (N)** — Number of retries when the AI returns an invalid tool call
 
 ## Modification History
 
-Modification history has its own panel inside the extensions panel. Every AI-initiated change you approved is recorded here — you can view diffs, roll back, delete individual records, or clear everything. In Studio mode, file changes go through Git instead, with each record corresponding to a commit; see [CardApp Studio](/features/card-editor/studio#version-history-git).
+Card and world book edits applied in Workbench appear in **Workbench → Change history** for individual undo, alongside the **History** list in the extension panel. In CardApp Studio, file changes are tracked as Git commits; see [CardApp Studio](/features/card-editor/studio#version-history-git).
 
 ## Related Pages
 
-- [Popup Mode](/features/card-editor/popup) — AI editing flow for character cards without CardApp
+- [Workbench Card Editing](/features/card-editor/popup) — AI editing flow for character cards and World Info sync
 - [CardApp Studio](/features/card-editor/studio) — Full development environment for character cards with CardApp
 - [CardApp](/features/cardapp) — In-card application system
-- [Search Tools](/features/search-tools) — Web search inside Studio / the editor assistant
+- [Search Tools](/features/search-tools) — Web search inside Studio and Workbench AI iteration

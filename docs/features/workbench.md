@@ -17,11 +17,15 @@ Drag the title bar to move the floating window, drag the bottom-right corner to 
 
 Shows a token breakdown of the latest prompt across preset, character card, world books, memory graph, and chat history, alongside local rule-based **Suggestions** and status cards for every registered workbench.
 
+![Workbench Overview](/images/workbench/01-overview.png)
+
 Local suggestions check memory graph, orchestration, preset, and character card data on your device without calling an AI model. Each suggestion explains the numbers behind it and provides an action button to inspect or jump straight to the relevant AI editor.
 
 ### Q&A
 
 A read-only diagnostic assistant. Ask questions in natural language—for example why a reply was written a certain way, why a request failed, or which part consumes the most tokens.
+
+![Workbench Q&A](/images/workbench/02-qa.png)
 
 Q&A reads local data on demand: recent chat floors, character card, bound world books, chat completion preset, prompt token breakdown, request inspector history, frontend logs, server logs, memory graph, and orchestration records. API keys and endpoint addresses are redacted before anything leaves your device, and **Show me before sending to the AI** lets you review the overview first. You can edit an earlier question in a new branch or branch from any answer.
 
@@ -38,9 +42,13 @@ A single conversational workspace for editing Luker artifacts with diff review a
 
 Proposed changes appear in a **Change list** with before/after diffs. Tick the changes to apply, discard them, or enable **Apply automatically** to apply edits immediately while keeping every step undoable.
 
+![Workbench AI iteration](/images/workbench/03-ai-iteration.png)
+
 ### Change history
 
 Lists every change applied through AI iteration or a suggestion button during the current session, filterable by workbench. Each entry can be undone individually.
+
+![Workbench Change history](/images/workbench/04-change-history.png)
 
 ### Memory graph
 
@@ -67,6 +75,8 @@ Embeds the full Orchestra Lens workspace directly inside Workbench:
 ### Settings
 
 Configure one default **AI connection** and **Generation preset** shared by Q&A and all AI iteration targets, or override them individually.
+
+![Workbench Settings](/images/workbench/05-settings.png)
 
 - **Bundled `plugin-only` preset** — import Luker's bundled tool-task preset in one click when no default generation preset is picked.
 - **Confirmation** — toggle whether AI iteration shows changes in a review list before applying.

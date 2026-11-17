@@ -33,6 +33,12 @@ The **Memory graph** workspace inside Workbench provides five views:
 - **Memory structure** — edit memory types, record items, extraction rules, persistent injection toggles, templates, import/export, and the **Tag filter** (which strips thinking blocks or status bars before extraction and recall read AI replies).
 - **Settings** — extraction cadence and context window, LLM or RAG vector recall, compression thresholds, token usage trace, and iteration AI settings.
 
+![Memory Graph view in Workbench](/images/memory-graph/memory-graph-view.png)
+
+![Memory Timeline view](/images/memory-graph/memory-timeline-view.png)
+
+![Memory Data table view](/images/memory-graph/memory-table-view.png)
+
 ## Reviewing and editing with AI
 
 In **Data table** or **Graph**, you can edit fields, titles, and links directly; changes are saved to the current chat.
@@ -44,9 +50,13 @@ For broader edits, switch to **Workbench → AI iteration** and choose:
 
 Proposed changes appear in the **Change list** with before/after diffs. Tick what to apply, or undo applied steps in **Change history**.
 
+![Repairing Memory Graph nodes with AI](/images/memory-graph/memory-ai-revise-proposal.png)
+
 ## Fitting the structure to your world
 
 Under **Memory graph → Memory structure**, or via **AI iteration → Memory structure**, you can add types and record items tailored to your setting—such as magic systems, factions, or investigation clues—or start from a built-in template.
+
+![Memory structure editor](/images/memory-graph/memory-schema-editor.png)
 
 Custom structures can be saved globally or only for the active character card (travelling with the card on export). Each type carries its own extraction instructions and optional extraction cadence.
 
