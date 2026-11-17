@@ -2052,15 +2052,14 @@ class PromptManager {
         this.serviceSettings.extensions = this.serviceSettings.extensions && typeof this.serviceSettings.extensions === 'object'
             ? this.serviceSettings.extensions
             : {};
-        this.serviceSettings.extensions.luker = this.serviceSettings.extensions.luker && typeof this.serviceSettings.extensions.luker === 'object'
-            ? this.serviceSettings.extensions.luker
-            : {};
-        this.serviceSettings.extensions.luker.prompt_layout = Array.isArray(this.serviceSettings.extensions.luker.prompt_layout)
-            ? this.serviceSettings.extensions.luker.prompt_layout
-            : [];
-        this.serviceSettings.extensions.luker.prompt_groups = Array.isArray(this.serviceSettings.extensions.luker.prompt_groups)
-            ? this.serviceSettings.extensions.luker.prompt_groups
-            : [];
+        if (this.serviceSettings.extensions.luker && typeof this.serviceSettings.extensions.luker === 'object') {
+            if (Object.hasOwn(this.serviceSettings.extensions.luker, 'prompt_layout') && !Array.isArray(this.serviceSettings.extensions.luker.prompt_layout)) {
+                this.serviceSettings.extensions.luker.prompt_layout = [];
+            }
+            if (Object.hasOwn(this.serviceSettings.extensions.luker, 'prompt_groups') && !Array.isArray(this.serviceSettings.extensions.luker.prompt_groups)) {
+                this.serviceSettings.extensions.luker.prompt_groups = [];
+            }
+        }
 
         if ('global' === this.configuration.promptOrder.strategy) {
             const dummyCharacter = { id: this.configuration.promptOrder.dummyId };
@@ -2071,7 +2070,7 @@ class PromptManager {
 
         // Check whether the referenced prompts are present.
         this.serviceSettings.prompts.length === 0
-            ? this.setPrompts(chatCompletionDefaultPrompts.prompts)
+            ? this.setPrompts(structuredClone(chatCompletionDefaultPrompts.prompts))
             : this.checkForMissingPrompts(this.serviceSettings.prompts);
 
         // Add identifiers if there are none assigned to a prompt
@@ -2081,7 +2080,9 @@ class PromptManager {
             }
             prompt.identifier = prompt.identifier ?? this.getUuidv4();
             if (typeof prompt.name !== 'string') prompt.name = prompt.identifier;
-            prompt.plugin_extra = Boolean(prompt.plugin_extra);
+            if (Object.hasOwn(prompt, 'plugin_extra')) {
+                prompt.plugin_extra = Boolean(prompt.plugin_extra);
+            }
         });
 
         if (this.activeCharacter) {
@@ -2112,7 +2113,7 @@ class PromptManager {
         missingIdentifiers.forEach(identifier => {
             const defaultPrompt = chatCompletionDefaultPrompts.prompts.find(prompt => prompt?.identifier === identifier);
             if (defaultPrompt) {
-                prompts.push(defaultPrompt);
+                prompts.push(structuredClone(defaultPrompt));
                 this.log(`Missing system prompt: ${defaultPrompt.identifier}. Added default.`);
             }
         });
@@ -2324,6 +2325,23 @@ class PromptManager {
     }
 
     /**
+     * Ensure `serviceSettings.extensions.luker.prompt_groups` exists as a writable array.
+     * @returns {Array<{id: string, name: string, collapsed: boolean, identifiers: string[]}>}
+     */
+    ensurePromptGroups() {
+        if (!this.serviceSettings.extensions || typeof this.serviceSettings.extensions !== 'object') {
+            this.serviceSettings.extensions = {};
+        }
+        if (!this.serviceSettings.extensions.luker || typeof this.serviceSettings.extensions.luker !== 'object') {
+            this.serviceSettings.extensions.luker = {};
+        }
+        if (!Array.isArray(this.serviceSettings.extensions.luker.prompt_groups)) {
+            this.serviceSettings.extensions.luker.prompt_groups = [];
+        }
+        return this.serviceSettings.extensions.luker.prompt_groups;
+    }
+
+    /**
      * Get the nesting depth of a group (0 = top-level).
      * @param {string} groupId
      * @returns {number}
@@ -2472,7 +2490,7 @@ class PromptManager {
             parentId: parentId,
         };
 
-        this.getPromptGroups().push(newGroup);
+        this.ensurePromptGroups().push(newGroup);
         return newGroup;
     }
 
@@ -4658,6 +4676,7 @@ class PromptManager {
                     groupMap.set(importedGroup.id, structuredClone(importedGroup));
                 }
             }
+            this.ensurePromptGroups();
             this.serviceSettings.extensions.luker.prompt_groups = Array.from(groupMap.values());
             this.validateGroups();
             this.log('Prompt groups import succeeded');
