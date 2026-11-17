@@ -67,10 +67,10 @@ function aheadOf(version) {
 
 describe('release lookup', () => {
     let stub;
-    let pkgVersion;
+    let lukerVersion;
 
     beforeAll(async () => {
-        ({ pkgVersion } = await getVersion());
+        ({ lukerVersion } = await getVersion());
     });
 
     beforeEach(async () => {
@@ -141,7 +141,7 @@ describe('release lookup', () => {
     });
 
     test('checks pre-release updates when the caller includes them', async () => {
-        const remoteTag = aheadOf(pkgVersion);
+        const remoteTag = aheadOf(lukerVersion);
         stub.setResponse(200, [releasePayload(remoteTag)]);
 
         await expect(checkRemoteVersion({ includePrerelease: true })).resolves.toEqual({
@@ -152,7 +152,7 @@ describe('release lookup', () => {
     });
 
     test('reports an available update when the remote tag is ahead of the local version', async () => {
-        const remoteTag = aheadOf(pkgVersion);
+        const remoteTag = aheadOf(lukerVersion);
         stub.setResponse(200, releasePayload(remoteTag));
 
         await expect(checkRemoteVersion()).resolves.toEqual({
@@ -163,12 +163,12 @@ describe('release lookup', () => {
     });
 
     test('reports the latest version when the remote tag equals the local version', async () => {
-        stub.setResponse(200, releasePayload(pkgVersion));
+        stub.setResponse(200, releasePayload(lukerVersion));
 
         await expect(checkRemoteVersion()).resolves.toEqual({
             isLatest: true,
-            tagName: pkgVersion,
-            htmlUrl: `https://example.invalid/releases/tag/${pkgVersion}`,
+            tagName: lukerVersion,
+            htmlUrl: `https://example.invalid/releases/tag/${lukerVersion}`,
         });
     });
 

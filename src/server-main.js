@@ -668,7 +668,7 @@ async function preSetupTasks() {
 
     // Print formatted header
     console.log();
-    console.log(`Luker ${version.pkgVersion}`);
+    console.log(`Luker ${version.lukerVersion}`);
     if (version.gitBranch && version.commitDate) {
         const date = new Date(version.commitDate);
         const localDate = date.toLocaleString('en-US', { timeZoneName: 'short' });

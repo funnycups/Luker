@@ -1477,8 +1477,9 @@ async function getClientVersion() {
         const data = await response.json();
         CLIENT_VERSION = data.agent;
         EXTENSIONS_CLIENT_VERSION = data.compatAgent || data.agent || EXTENSIONS_CLIENT_VERSION;
-        displayVersion = `Luker ${data.pkgVersion}`;
-        currentVersion = data.pkgVersion;
+        const lukerVersion = data.lukerVersion || data.pkgVersion;
+        displayVersion = `Luker ${lukerVersion}`;
+        currentVersion = lukerVersion;
 
         if (data.gitRevision && data.gitBranch) {
             displayVersion += ` '${data.gitBranch}' (${data.gitRevision})`;

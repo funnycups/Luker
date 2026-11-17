@@ -32,6 +32,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Added the network proxy used by a chat request to the request detail view.
 
+### Third-party extensions
+
+- Fixed third-party extensions that read the SillyTavern version receiving the Luker version.
+
 ### Fixes
 
 - Fixed Memory Graph LLM recall not drilling into always-inject event rollups.

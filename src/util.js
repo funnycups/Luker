@@ -176,12 +176,14 @@ export function isUpdateCheckDisabled() {
 /**
  * Returns the version of the running instance. Get the version from package.json and git metadata.
  * Also returns the agent string for the Horde API.
+ * `pkgVersion` keeps the SillyTavern contract third-party code reads from /version: it is the
+ * SillyTavern compatibility version, not the fork version. The fork version is `lukerVersion`.
  * Performs only local reads; use checkRemoteVersion() for the upstream tag comparison.
  * Does not read config.yaml, so it is safe to call before setConfigFilePath(), e.g. from webpack.config.js.
- * @returns {Promise<{agent: string, compatAgent: string, stCompatVersion: string, pkgVersion: string, gitRevision: string | null, gitBranch: string | null, commitDate: string | null, isDocker: boolean}>} Version info object
+ * @returns {Promise<{agent: string, compatAgent: string, stCompatVersion: string, pkgVersion: string, lukerVersion: string, gitRevision: string | null, gitBranch: string | null, commitDate: string | null, isDocker: boolean}>} Version info object
  */
 export async function getVersion() {
-    let pkgVersion = 'UNKNOWN';
+    let lukerVersion = 'UNKNOWN';
     let gitRevision = null;
     let gitBranch = null;
     let commitDate = null;
@@ -189,7 +191,7 @@ export async function getVersion() {
     try {
         const require = createRequire(import.meta.url);
         const pkgJson = require(path.join(serverDirectory, './package.json'));
-        pkgVersion = pkgJson.version;
+        lukerVersion = pkgJson.version;
         if (commandExistsSync('git')) {
             const git = simpleGit({ baseDir: serverDirectory });
             try {
@@ -205,10 +207,20 @@ export async function getVersion() {
     }
 
     const stCompatVersion = String(process.env.LUKER_ST_COMPAT_VERSION || '1.19.0').trim() || '1.19.0';
-    const agent = `Luker:${pkgVersion}:Cohee#1207`;
+    const agent = `Luker:${lukerVersion}:Cohee#1207`;
     const compatAgent = `Luker:${stCompatVersion}:Cohee#1207`;
     const isDockerRuntime = isDocker();
-    return { agent, compatAgent, stCompatVersion, pkgVersion, gitRevision, gitBranch, commitDate: commitDate?.trim() ?? null, isDocker: isDockerRuntime };
+    return {
+        agent,
+        compatAgent,
+        stCompatVersion,
+        pkgVersion: stCompatVersion,
+        lukerVersion,
+        gitRevision,
+        gitBranch,
+        commitDate: commitDate?.trim() ?? null,
+        isDocker: isDockerRuntime,
+    };
 }
 
 /**

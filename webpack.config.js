@@ -19,7 +19,7 @@ const webpackVersion = createRequire(import.meta.url)('webpack/package.json').ve
  */
 function getWebpackCacheVersion() {
     return crypto.createHash('sha256')
-        .update(JSON.stringify([appVersion.pkgVersion, appVersion.gitRevision, webpackVersion]))
+        .update(JSON.stringify([appVersion.lukerVersion, appVersion.gitRevision, webpackVersion]))
         .digest('hex')
         .slice(0, 16);
 }

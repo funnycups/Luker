@@ -84,6 +84,9 @@ describe('disableUpdateCheck', () => {
 
         expect(result.stderr).not.toContain('No config file path set');
         expect(result.status).toBe(0);
-        expect(JSON.parse(result.stdout)).toMatchObject({ pkgVersion: expect.any(String) });
+        expect(JSON.parse(result.stdout)).toMatchObject({
+            pkgVersion: expect.any(String),
+            lukerVersion: expect.any(String),
+        });
     });
 });
