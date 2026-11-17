@@ -64,6 +64,11 @@ const userData = location.error ? defaultUserData : location.activeUserData;
 app.setPath('userData', userData);
 app.setPath('sessionData', userData);
 
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+    app.quit();
+}
+
 function sameDirectory(a, b) {
     const left = path.resolve(a);
     const right = path.resolve(b);
@@ -695,6 +700,7 @@ function pickShellStrings(locale) {
 }
 
 function relaunchApp() {
+    app.releaseSingleInstanceLock();
     if (process.env.LUKER_DESKTOP_TEST_NO_RELAUNCH === '1') {
         app.quit();
         return;
@@ -1089,6 +1095,7 @@ async function runMigrationSession(current, strings, locale) {
             backgroundThrottling: false,
         },
     });
+    mainWindow = win;
     win.once('ready-to-show', () => win.show());
     win.on('close', (event) => {
         if (settled) {
@@ -1135,6 +1142,7 @@ async function runMigrationSession(current, strings, locale) {
 // takes the window down. Elsewhere the close is let through, because a hidden
 // window with no way back leaves the app running and unreachable.
 let quitting = false;
+let mainWindow = null;
 let tray = null;
 let trayHintShown = false;
 
@@ -1274,104 +1282,113 @@ function showHttpAuthDialog({ parent, host, port, realm, prefill }, strings) {
     });
 }
 
-app.whenReady().then(async () => {
-    // Electron installs a default application menu, which Windows and Linux
-    // draw as an in-window bar the shell has no use for. macOS keeps its own,
-    // because the standard Edit roles there also carry the clipboard
-    // accelerators.
-    if (process.platform !== 'darwin') {
-        Menu.setApplicationMenu(null);
-    }
-
-    const locale = app.getLocale();
-    const strings = pickShellStrings(locale);
-    if (location.error) {
-        await showLocationError(location, strings);
-        return;
-    }
-    if (location.state?.pendingMoveTo) {
-        await runMigrationSession(location, strings, locale);
-        return;
-    }
-    const win = new BrowserWindow({
-        width: 1024,
-        height: 768,
-        webPreferences: {
-            preload: path.join(import.meta.dirname, 'preload.js'),
-            // A hidden window is throttled by default, which would slow the
-            // renderer's timers and animations down while the app runs hidden.
-            // Leaving the page unthrottled matches what hiding does on macOS on
-            // its own, so every platform behaves the same way.
-            backgroundThrottling: false,
-        },
-    });
-    routeExternalNavigation(win);
-
-    startLogTee();
-    fs.rmSync(updatesDirectory, { recursive: true, force: true });
-
-    const httpAuth = createHttpAuthController({
-        store: httpAuthStore,
-        prompt: (request) => showHttpAuthDialog(request, strings),
-    });
-    app.on('login', (event, contents, _details, authInfo, callback) => {
-        // Proxy authentication is outside the endpoint credentials the shell
-        // manages, so the proxy keeps whatever handling Electron gives it.
-        if (authInfo.isProxy) {
-            return;
-        }
-        event.preventDefault();
-        const owner = contents ? BrowserWindow.fromWebContents(contents) : null;
-        httpAuth.handle(authInfo, callback, owner || win);
-    });
-    win.webContents.on('did-finish-load', () => httpAuth.resetAttempts());
-
-    // macOS keeps an application menu that already binds the devtools toggle,
-    // so the handler would race it. Only the menu-less platforms get one.
-    if (process.platform !== 'darwin') {
-        win.webContents.on('before-input-event', (event, input) => {
-            if (devtoolsShortcutFor(process.platform, input) === 'toggle') {
-                event.preventDefault();
-                win.webContents.toggleDevTools();
-            }
-        });
-    }
-
-    win.on('close', (event) => {
-        if (quitting || !hidesOnClose(process.platform)) {
-            return;
-        }
-        event.preventDefault();
-        win.hide();
-        // Windows tucks new tray icons into its overflow area, so the first
-        // close tells the user where the app went.
-        if (usesTray(process.platform) && !trayHintShown) {
-            trayHintShown = true;
-            tray.displayBalloon({ title: 'Luker', content: strings.trayHint });
-        }
-    });
-
-    if (usesTray(process.platform)) {
-        createTray(win, strings);
-    } else if (process.platform === 'darwin') {
-        installApplicationMenu(strings);
-    }
-
-    app.on('activate', () => showMainWindow(win));
-
-    await win.loadFile('loading.html', { query: { locale } });
-
-    try {
-        const port = await pickPort(preferredPort);
-        await startBackend(win, locale, port);
-    } catch (err) {
-        if (bootFailure === null) {
-            await win.loadFile('loading.html', {
-                query: { locale, error: String(err?.message || err), logPath },
-            });
-        }
+app.on('second-instance', () => {
+    if (mainWindow) {
+        showMainWindow(mainWindow);
     }
 });
+
+if (hasSingleInstanceLock) {
+    app.whenReady().then(async () => {
+        // Electron installs a default application menu, which Windows and Linux
+        // draw as an in-window bar the shell has no use for. macOS keeps its own,
+        // because the standard Edit roles there also carry the clipboard
+        // accelerators.
+        if (process.platform !== 'darwin') {
+            Menu.setApplicationMenu(null);
+        }
+
+        const locale = app.getLocale();
+        const strings = pickShellStrings(locale);
+        if (location.error) {
+            await showLocationError(location, strings);
+            return;
+        }
+        if (location.state?.pendingMoveTo) {
+            await runMigrationSession(location, strings, locale);
+            return;
+        }
+        const win = new BrowserWindow({
+            width: 1024,
+            height: 768,
+            webPreferences: {
+                preload: path.join(import.meta.dirname, 'preload.js'),
+                // A hidden window is throttled by default, which would slow the
+                // renderer's timers and animations down while the app runs hidden.
+                // Leaving the page unthrottled matches what hiding does on macOS on
+                // its own, so every platform behaves the same way.
+                backgroundThrottling: false,
+            },
+        });
+        mainWindow = win;
+        routeExternalNavigation(win);
+
+        startLogTee();
+        fs.rmSync(updatesDirectory, { recursive: true, force: true });
+
+        const httpAuth = createHttpAuthController({
+            store: httpAuthStore,
+            prompt: (request) => showHttpAuthDialog(request, strings),
+        });
+        app.on('login', (event, contents, _details, authInfo, callback) => {
+            // Proxy authentication is outside the endpoint credentials the shell
+            // manages, so the proxy keeps whatever handling Electron gives it.
+            if (authInfo.isProxy) {
+                return;
+            }
+            event.preventDefault();
+            const owner = contents ? BrowserWindow.fromWebContents(contents) : null;
+            httpAuth.handle(authInfo, callback, owner || win);
+        });
+        win.webContents.on('did-finish-load', () => httpAuth.resetAttempts());
+
+        // macOS keeps an application menu that already binds the devtools toggle,
+        // so the handler would race it. Only the menu-less platforms get one.
+        if (process.platform !== 'darwin') {
+            win.webContents.on('before-input-event', (event, input) => {
+                if (devtoolsShortcutFor(process.platform, input) === 'toggle') {
+                    event.preventDefault();
+                    win.webContents.toggleDevTools();
+                }
+            });
+        }
+
+        win.on('close', (event) => {
+            if (quitting || !hidesOnClose(process.platform)) {
+                return;
+            }
+            event.preventDefault();
+            win.hide();
+            // Windows tucks new tray icons into its overflow area, so the first
+            // close tells the user where the app went.
+            if (usesTray(process.platform) && !trayHintShown) {
+                trayHintShown = true;
+                tray.displayBalloon({ title: 'Luker', content: strings.trayHint });
+            }
+        });
+
+        if (usesTray(process.platform)) {
+            createTray(win, strings);
+        } else if (process.platform === 'darwin') {
+            installApplicationMenu(strings);
+        }
+
+        app.on('activate', () => showMainWindow(win));
+
+        await win.loadFile('loading.html', { query: { locale } });
+
+        try {
+            const port = await pickPort(preferredPort);
+            await startBackend(win, locale, port);
+        } catch (err) {
+            if (bootFailure === null) {
+                await win.loadFile('loading.html', {
+                    query: { locale, error: String(err?.message || err), logPath },
+                });
+            }
+        }
+    });
+}
 
 app.on('before-quit', () => {
     // Lets the window's close handler through, so a real quit destroys the
