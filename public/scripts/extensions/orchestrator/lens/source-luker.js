@@ -26,7 +26,7 @@ import { mountSkillChips } from '../../../skills/skill-chips.js';
 import { createFactoryPresetForMode } from '../defaults.js';
 import { getLoadedAnchorMap } from '../snapshot-cache.js';
 import { invalidateSkillInventory } from '../skill-resolution.js';
-import { createProfileAccess, createPresetAccess, createSettingsAccess } from './source-write.js';
+import { createProfileAccess, createPresetAccess, createSettingsAccess, persistHostSettings } from './source-write.js';
 
 const MODES = ['spec', 'single', 'agenda', 'loop', 'director'];
 const CHAT_EVENTS = ['CHAT_CHANGED', 'CHAT_DELETED', 'GROUP_CHAT_DELETED'];
@@ -286,7 +286,7 @@ export function createLukerSource(opts = {}) {
             const ctx = getContext();
             const settings = settingsOf(ctx);
             settings.enabled = Boolean(value);
-            ctx.saveSettingsDebounced();
+            await persistHostSettings(ctx);
         },
 
         async setMode(mode) {
@@ -296,7 +296,7 @@ export function createLukerSource(opts = {}) {
             settings.executionMode = next;
             settings.singleAgentModeEnabled = next === 'single';
             invalidateSkillInventory();
-            ctx.saveSettingsDebounced();
+            await persistHostSettings(ctx);
         },
     };
 }

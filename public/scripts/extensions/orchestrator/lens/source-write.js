@@ -80,6 +80,14 @@ export class WriteError extends Error {
 
 const clone = (value) => (value == null ? value : JSON.parse(JSON.stringify(value)));
 
+export async function persistHostSettings(ctx) {
+    if (typeof ctx?.workbench?.saveSettingsChecked === 'function' || typeof ctx?.saveSettings === 'function') {
+        await saveSettingsViaContext(ctx);
+        return;
+    }
+    ctx?.saveSettingsDebounced?.();
+}
+
 async function saveSettingsViaContext(ctx) {
     if (typeof ctx?.workbench?.saveSettingsChecked === 'function') {
         await ctx.workbench.saveSettingsChecked(ctx);
@@ -489,7 +497,7 @@ export function createSettingsAccess(host) {
             if (!SETTING_RULES[key]) return;
             settings[key] = SETTING_RULES[key](value);
             if (CAPSULE_KEYS.includes(key)) api(ctx)?.reapplyCapsule?.();
-            ctx.saveSettingsDebounced();
+            persistHostSettings(ctx).catch(err => globalThis.toastr?.error?.(String(err?.message || err)));
         },
         promptDefaults() {
             const { ctx } = host();
