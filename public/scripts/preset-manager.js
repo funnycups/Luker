@@ -873,7 +873,7 @@ class PresetManager {
         }
 
         const name = selected.text();
-        await this.savePreset(name, null, option);
+        await this.savePreset(name, undefined, option);
 
         const successToast = !this.isAdvancedFormatting() ? t`Preset updated` : t`Template updated`;
         toastr.success(successToast);
@@ -960,6 +960,13 @@ class PresetManager {
      * @param {boolean} [options.select=true] If true, the freshly saved preset becomes the active one when the list updates.
      */
     async savePreset(name, settings, { skipUpdate = false, select = true } = {}) {
+        if (settings !== undefined && (!settings || typeof settings !== 'object' || Array.isArray(settings))) {
+            const receivedType = settings === null ? 'null' : (Array.isArray(settings) ? 'array' : typeof settings);
+            const errorMessage = `Cannot save preset "${name}": settings payload must be an object (received ${receivedType})`;
+            console.error(errorMessage);
+            throw new Error(errorMessage);
+        }
+
         if (this.apiId === 'instruct' && settings) {
             await checkForSystemPromptInInstructTemplate(name, settings);
         }
@@ -968,7 +975,7 @@ class PresetManager {
             settings = convertNovelPreset(settings);
         }
 
-        const preset = settings ?? this.getPresetSettings(name);
+        const preset = settings === undefined ? this.getPresetSettings(name) : settings;
 
         const characterBoundTarget = this.resolveCharacterBoundSaveTarget(name, settings);
         if (characterBoundTarget) {

@@ -80,4 +80,45 @@ describe('preset hydration helpers', () => {
         expect(completed.bodies[0]).toEqual({ temp: 0.1 });
         expect(completed.bodies[1]).toBe(bootstrap.bodies[1]);
     });
+
+    test('retains indexed presets created in memory during warm preload and keeps in-memory edits over stale disk strings', () => {
+        const currentNames = { Default: 0, NewlyCreated: 1 };
+        const editedDefault = { temperature: 0.88, savedInMemory: true };
+        const createdPreset = { temperature: 0.42, extensions: { regex_scripts: [{ id: 'rx-new' }] } };
+        const currentBodies = [editedDefault, createdPreset];
+
+        const completed = hydrateIndexedPresetEntries({
+            currentNames,
+            currentBodies,
+            nextNamesInput: ['Alpha', 'Default'],
+            nextBodiesInput: [JSON.stringify({ temperature: 0.25 }), JSON.stringify({ temperature: 1.0 })],
+            preserveExisting: true,
+        });
+
+        expect(completed.names).toEqual({
+            Alpha: 0,
+            Default: 1,
+            NewlyCreated: 2,
+        });
+        expect(completed.bodies[completed.names.Alpha]).toEqual({ temperature: 0.25 });
+        expect(completed.bodies[completed.names.Default]).toBe(editedDefault);
+        expect(completed.bodies[completed.names.NewlyCreated]).toBe(createdPreset);
+    });
+
+    test('retains ordered presets created in memory during warm preload and keeps in-memory edits over stale disk strings', () => {
+        const editedSelected = { temp: 0.77 };
+        const createdOrdered = { temp: 0.33 };
+        const completed = hydrateOrderedPresetEntries({
+            currentNames: ['Selected', 'CreatedDuringPreload'],
+            currentBodies: [editedSelected, createdOrdered],
+            nextNamesInput: ['First', 'Selected'],
+            nextBodiesInput: [JSON.stringify({ temp: 0.1 }), JSON.stringify({ temp: 0.5 })],
+            preserveExisting: true,
+        });
+
+        expect(completed.names).toEqual(['First', 'Selected', 'CreatedDuringPreload']);
+        expect(completed.bodies[0]).toEqual({ temp: 0.1 });
+        expect(completed.bodies[1]).toBe(editedSelected);
+        expect(completed.bodies[2]).toBe(createdOrdered);
+    });
 });

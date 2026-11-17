@@ -62,9 +62,6 @@ export function hydrateIndexedPresetEntries({
 
     const bodies = Array.isArray(nextBodiesInput)
         ? nextBodiesInput.map((item, index) => {
-            if (typeof item === 'string') {
-                return JSON.parse(item);
-            }
             if (preserveExisting) {
                 const candidate = Array.isArray(nextNamesInput)
                     ? String(nextNamesInput[index] ?? '').trim()
@@ -73,9 +70,21 @@ export function hydrateIndexedPresetEntries({
                     return existingByName.get(candidate);
                 }
             }
+            if (typeof item === 'string') {
+                return JSON.parse(item);
+            }
             return null;
         })
         : [];
+
+    if (preserveExisting) {
+        for (const [name, existingBody] of existingByName.entries()) {
+            if (!(name in names)) {
+                bodies.push(existingBody);
+                names[name] = bodies.length - 1;
+            }
+        }
+    }
 
     return { names, bodies };
 }
@@ -116,18 +125,29 @@ export function hydrateOrderedPresetEntries({
     const names = Array.isArray(nextNamesInput) ? [...nextNamesInput] : [];
     const bodies = Array.isArray(nextBodiesInput)
         ? nextBodiesInput.map((item, index) => {
-            if (typeof item === 'string') {
-                return JSON.parse(item);
-            }
             if (preserveExisting) {
                 const name = names[index];
                 if (typeof name === 'string' && name && existingByName.has(name)) {
                     return existingByName.get(name);
                 }
             }
+            if (typeof item === 'string') {
+                return JSON.parse(item);
+            }
             return null;
         })
         : [];
+
+    if (preserveExisting) {
+        const presentNames = new Set(names);
+        for (const [name, existingBody] of existingByName.entries()) {
+            if (!presentNames.has(name)) {
+                names.push(name);
+                bodies.push(existingBody);
+                presentNames.add(name);
+            }
+        }
+    }
 
     return { names, bodies };
 }
