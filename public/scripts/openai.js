@@ -337,6 +337,7 @@ function logOpenAILukerPersistenceDebug(phase, details = {}) {
 
 const characterBoundPresetState = {
     active: false,
+    legacyDefaultApplied: false,
     previousPreset: '',
     // Multi-slot: maps encoded option value (see preset-ref-codec.js) to the
     // preset body cached for onSettingsPresetChange lookup. Populated on
@@ -980,6 +981,8 @@ function getSettingsForRequest({ llmPresetName = '', apiPresetName = '', apiSett
 
 const default_settings = {
     preset_settings_openai: 'Default',
+    global_preset_settings_openai: 'Default',
+    character_bound_preset_active: false,
     temp_openai: 1.0,
     freq_pen_openai: 0,
     pres_pen_openai: 0,
@@ -6260,6 +6263,14 @@ function loadOpenAISettings(data, settings) {
         $('#settings_preset_openai').append(option);
     });
 
+    const rawSavedPresetName = String(settings?.preset_settings_openai ?? '').trim();
+    const rawSavedGlobalName = String(settings?.global_preset_settings_openai || rawSavedPresetName || default_settings.preset_settings_openai).trim();
+    const resolvedGlobalPresetName = resolveExistingOpenAIPresetName(rawSavedGlobalName)
+        || getOrderedPresetNames(openai_setting_names || {})[0]
+        || default_settings.preset_settings_openai;
+    const wasCharacterBoundSession = Boolean(settings?.character_bound_preset_active)
+        || Boolean(rawSavedPresetName && !(rawSavedPresetName in (openai_setting_names || {})));
+
     migrateChatCompletionSettings(settings);
 
     for (const key of Object.keys(default_settings)) {
@@ -6290,12 +6301,17 @@ function loadOpenAISettings(data, settings) {
             }
         }
     }
+
+    oai_settings.global_preset_settings_openai = resolvedGlobalPresetName;
+    oai_settings.preset_settings_openai = resolvedGlobalPresetName;
+    oai_settings.character_bound_preset_active = false;
+
     // Preserve preset-body alias keys that the active preset (or programmatic
     // callers) mirrored onto oai_settings before save. default_settings only
     // covers runtime keys (e.g. `temp_openai`), so without this any extra
     // alias (e.g. `temperature`) is dropped on reload — leaving callers that
     // read via the preset-body shape with undefined after a restart.
-    if (settings && typeof settings === 'object') {
+    if (!wasCharacterBoundSession && settings && typeof settings === 'object') {
         for (const key of Object.keys(settings)) {
             if (key in default_settings) {
                 continue;
@@ -6309,14 +6325,66 @@ function loadOpenAISettings(data, settings) {
             oai_settings[key] = settings[key];
         }
     }
-    // Fall back to the active preset body for any alias key still missing.
-    // settings.json is debounced and may lag behind the persisted preset file
-    // when a switch happens immediately before a process restart — in that
-    // window settings.json carries the previous preset's runtime keys but
-    // the preset cache (just hydrated above) carries the canonical body.
+
     const activePresetIndex = openai_setting_names?.[oai_settings.preset_settings_openai];
     const activePresetBody = Number.isInteger(activePresetIndex) ? openai_settings?.[activePresetIndex] : null;
-    if (activePresetBody && typeof activePresetBody === 'object') {
+    if (wasCharacterBoundSession && activePresetBody && typeof activePresetBody === 'object') {
+        // When the previous session ended on a character-bound preset, settings.json
+        // holds that card slot's fields and extensions (including regex_scripts).
+        // Restore the selected global preset's own body at startup so a cold reload
+        // without an active character never strands card-bound data on the global preset.
+        const restoredPreset = structuredClone(activePresetBody);
+        migrateChatCompletionSettings(restoredPreset);
+        for (const key of Object.keys(oai_settings)) {
+            if (!(key in default_settings) && Object.hasOwn(settingsToUpdate, key)) {
+                delete oai_settings[key];
+            }
+        }
+        for (const [presetKey, [selector, setting, isCheckbox, isConnection]] of Object.entries(settingsToUpdate)) {
+            if (isConnectionProfileOnlyPresetField(presetKey) || isConnection) {
+                continue;
+            }
+            if (presetKey === 'extensions') {
+                oai_settings.extensions = restoredPreset.extensions || {};
+                continue;
+            }
+            if (restoredPreset[presetKey] !== undefined) {
+                oai_settings[setting] = restoredPreset[presetKey];
+                if (presetKey !== setting) {
+                    oai_settings[presetKey] = restoredPreset[presetKey];
+                }
+            } else if (setting in default_settings) {
+                oai_settings[setting] = structuredClone(default_settings[setting]);
+            }
+            if (!selector || selector === '#NULL_SELECTOR') {
+                continue;
+            }
+            const $element = $(selector);
+            if ($element.length === 0) {
+                continue;
+            }
+            if (isCheckbox || $element.is('input[type="checkbox"]')) {
+                $element.prop('checked', Boolean(oai_settings[setting]));
+            } else if ($element.is('select')) {
+                $element.val(oai_settings[setting]);
+                $element.find(`option[value="${CSS.escape(String(oai_settings[setting]))}"]`).prop('selected', true);
+            } else {
+                $element.val(oai_settings[setting]);
+                if ($element.is('input[type="range"]')) {
+                    const id = $element.attr('id');
+                    const $counter = $(`input[type="number"][data-for="${id}"]`);
+                    if ($counter.length > 0) {
+                        $counter.val(Number(oai_settings[setting]));
+                    }
+                }
+            }
+        }
+    } else if (activePresetBody && typeof activePresetBody === 'object') {
+        // Fall back to the active preset body for any alias key still missing.
+        // settings.json is debounced and may lag behind the persisted preset file
+        // when a switch happens immediately before a process restart — in that
+        // window settings.json carries the previous preset's runtime keys but
+        // the preset cache (just hydrated above) carries the canonical body.
         for (const [presetKey, value] of Object.entries(activePresetBody)) {
             const mapping = settingsToUpdate[presetKey];
             if (!mapping) {
@@ -6542,10 +6610,14 @@ function resolveExistingOpenAIPresetName(name = '') {
     return findCanonicalNameInList(presetNames, name) || '';
 }
 
+function getStoredGlobalOpenAIPresetName() {
+    return String(oai_settings.global_preset_settings_openai || oai_settings.preset_settings_openai || '').trim();
+}
+
 function resolveOpenAIPresetRestoreTarget(preferredName = '') {
     return resolveExistingOpenAIPresetName(preferredName)
         || resolveExistingOpenAIPresetName(getSelectedNonCharacterBoundPresetName())
-        || resolveExistingOpenAIPresetName(String(oai_settings.preset_settings_openai ?? '').trim())
+        || resolveExistingOpenAIPresetName(getStoredGlobalOpenAIPresetName())
         || getOrderedPresetNames(openai_setting_names || {})[0]
         || '';
 }
@@ -6564,6 +6636,8 @@ function restoreOpenAIPresetAfterCharacterBound(preferredName = '') {
     if (!targetPresetName) {
         $('#settings_preset_openai').prop('selectedIndex', -1);
         oai_settings.preset_settings_openai = '';
+        oai_settings.global_preset_settings_openai = '';
+        oai_settings.character_bound_preset_active = false;
         lastOpenAIPresetSelectValue = '';
         updateCharacterBoundPresetBadge(false);
         return false;
@@ -6652,22 +6726,23 @@ async function maybeApplyCharacterBoundPreset() {
     }
 
     if (selected_group) {
-        if (characterBoundPresetState.previousPreset) {
+        const shouldRestoreBoundFallback = Boolean(
+            characterBoundPresetState.previousPreset
+            && (characterBoundPresetState.active || isCharacterBoundPresetOptionSelected() || characterBoundPresetState.legacyDefaultApplied),
+        );
+        if (shouldRestoreBoundFallback) {
             const restored = restoreOpenAIPresetAfterCharacterBound(characterBoundPresetState.previousPreset);
             if (!restored && characterBoundPresetState.previousPreset) {
                 console.warn(`Failed to restore previous chat completion preset: ${characterBoundPresetState.previousPreset}`);
             }
             characterBoundPresetState.active = false;
+            characterBoundPresetState.legacyDefaultApplied = false;
             characterBoundPresetState.previousPreset = '';
         } else {
-            // Fall-through: no restore target, but we still strip ghost DOM.
-            // removeCharacterBoundRuntimeOptions() removes the ghost <option>,
-            // so isCharacterBoundPresetOptionSelected() becomes false and
-            // Invariant I demands active follow suit. Without this clear,
-            // a stranded active=true after a ghost auto-apply with an
-            // unresolvable stale name would violate Invariant I.
             removeCharacterBoundRuntimeOptions();
             clearCharacterBoundActiveAfterRemoval(characterBoundPresetState);
+            characterBoundPresetState.legacyDefaultApplied = false;
+            characterBoundPresetState.previousPreset = '';
         }
         updateCharacterBoundPresetBadge(false);
         return;
@@ -6685,23 +6760,23 @@ async function maybeApplyCharacterBoundPreset() {
     const defaultName = String(boundState?.defaultPresetName || '').trim();
 
     if (boundList.length === 0 && !defaultName) {
-        if (characterBoundPresetState.previousPreset) {
+        const shouldRestoreBoundFallback = Boolean(
+            characterBoundPresetState.previousPreset
+            && (characterBoundPresetState.active || isCharacterBoundPresetOptionSelected() || characterBoundPresetState.legacyDefaultApplied),
+        );
+        if (shouldRestoreBoundFallback) {
             const restored = restoreOpenAIPresetAfterCharacterBound(characterBoundPresetState.previousPreset);
             if (!restored && characterBoundPresetState.previousPreset) {
                 console.warn(`Failed to restore previous chat completion preset: ${characterBoundPresetState.previousPreset}`);
             }
             characterBoundPresetState.active = false;
+            characterBoundPresetState.legacyDefaultApplied = false;
             characterBoundPresetState.previousPreset = '';
         } else {
-            // Fall-through: no restore target, but we still strip ghost DOM.
-            // Same rationale as the selected_group branch above — Invariant I
-            // requires active to follow the ghost DOM signal, and
-            // removeCharacterBoundRuntimeOptions() has just made that signal
-            // false. Without this clear, a character switch from a card-bound
-            // char (whose ghost auto-applied against an unresolvable stale
-            // global name) to a non-bound char would strand active=true.
             removeCharacterBoundRuntimeOptions();
             clearCharacterBoundActiveAfterRemoval(characterBoundPresetState);
+            characterBoundPresetState.legacyDefaultApplied = false;
+            characterBoundPresetState.previousPreset = '';
         }
         updateCharacterBoundPresetBadge(false);
         return;
@@ -6709,7 +6784,7 @@ async function maybeApplyCharacterBoundPreset() {
 
     if (!characterBoundPresetState.active) {
         characterBoundPresetState.previousPreset = resolveExistingOpenAIPresetName(getSelectedNonCharacterBoundPresetName())
-            || resolveExistingOpenAIPresetName(String(oai_settings.preset_settings_openai ?? '').trim());
+            || resolveExistingOpenAIPresetName(getStoredGlobalOpenAIPresetName());
         characterBoundPresetState.active = true;
     }
 
@@ -6753,6 +6828,7 @@ async function maybeApplyCharacterBoundPreset() {
         removeCharacterBoundRuntimeOptions();
     }
     const changed = applyPresetByName(defaultName);
+    characterBoundPresetState.legacyDefaultApplied = Boolean(changed);
     if (!changed) {
         toastr.warning(t`Bound chat completion preset '${defaultName}' was not found.`, t`Preset Not Found`);
     }
@@ -7261,6 +7337,8 @@ async function saveOpenAIPresetBody(name, presetBody, triggerUi = true) {
 
         if (triggerUi) {
             oai_settings.preset_settings_openai = existingName;
+            oai_settings.global_preset_settings_openai = existingName;
+            oai_settings.character_bound_preset_active = false;
             $(`#settings_preset_openai option[value="${value}"]`).prop('selected', true);
             $('#settings_preset_openai').trigger('change');
         }
@@ -7619,9 +7697,12 @@ async function onDeletePresetClick() {
     $(`#settings_preset_openai option[value="${value}"]`).remove();
     delete openai_setting_names[oai_settings.preset_settings_openai];
     oai_settings.preset_settings_openai = null;
+    oai_settings.global_preset_settings_openai = '';
+    oai_settings.character_bound_preset_active = false;
 
     if (Object.keys(openai_setting_names).length) {
         oai_settings.preset_settings_openai = Object.keys(openai_setting_names)[0];
+        oai_settings.global_preset_settings_openai = oai_settings.preset_settings_openai;
         const newValue = openai_setting_names[oai_settings.preset_settings_openai];
         $(`#settings_preset_openai option[value="${newValue}"]`).prop('selected', true);
         $('#settings_preset_openai').trigger('change');
@@ -7933,26 +8014,34 @@ async function onSettingsPresetChange(event) {
         }
     }
 
-    if (!usingCharacterBoundPreset) {
-        oai_settings.preset_settings_openai = presetName;
+    const previousGlobalPresetName = getStoredGlobalOpenAIPresetName();
+    oai_settings.preset_settings_openai = presetName;
+    if (usingCharacterBoundPreset) {
+        oai_settings.character_bound_preset_active = true;
+    } else {
+        oai_settings.global_preset_settings_openai = presetName;
+        oai_settings.character_bound_preset_active = false;
     }
     let preset = usingCharacterBoundPreset
         ? structuredClone(getSelectedCardBoundBody() || {})
-        : structuredClone(openai_settings[openai_setting_names[oai_settings.preset_settings_openai]]);
+        : structuredClone(openai_settings[openai_setting_names[presetName]]);
     if (!usingCharacterBoundPreset && (!preset || typeof preset !== 'object')) {
         await ensureFullSettingsLoaded();
-        preset = structuredClone(openai_settings[openai_setting_names[oai_settings.preset_settings_openai]]);
+        preset = structuredClone(openai_settings[openai_setting_names[presetName]]);
+    }
+    if (Boolean(event?.originalEvent) || usingCharacterBoundPreset) {
+        characterBoundPresetState.legacyDefaultApplied = false;
     }
     updateCharacterBoundPresetBadge(usingCharacterBoundPreset);
     // Invariant I: keep characterBoundPresetState.active ≡ ghost DOM-selected
     // (see public/scripts/character/character-bound-preset-state-sync.js).
-    // Also stashes the stale global name into previousPreset on first entry
+    // Also stashes the global fallback name into previousPreset on first entry
     // into ghost selection so the restore path inside
     // maybeApplyCharacterBoundPreset has a target.
     updateCharacterBoundPresetActiveState({
         state: characterBoundPresetState,
         usingCharacterBoundPreset,
-        oaiSettingsPresetName: oai_settings.preset_settings_openai,
+        oaiSettingsPresetName: previousGlobalPresetName,
         resolveExistingOpenAIPresetName,
     });
 

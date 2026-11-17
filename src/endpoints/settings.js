@@ -184,7 +184,9 @@ export async function buildSettingsResponse(request, { includePresetContents = t
     const settings = JSON.stringify(parsedSettings);
     const selectedKoboldPreset = parsedSettings?.kai_settings?.preset_settings ?? parsedSettings?.preset_settings;
     const selectedNovelPreset = parsedSettings?.preset_settings_novel;
-    const selectedOpenAIPreset = parsedSettings?.oai_settings?.preset_settings_openai ?? parsedSettings?.preset_settings_openai;
+    const selectedOpenAIPreset = parsedSettings?.oai_settings?.global_preset_settings_openai
+        || parsedSettings?.oai_settings?.preset_settings_openai
+        || parsedSettings?.preset_settings_openai;
     const selectedTextGenPreset = parsedSettings?.textgenerationwebui_settings?.preset;
 
     const { fileContents: novelai_settings, fileNames: novelai_setting_names }

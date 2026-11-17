@@ -11,7 +11,9 @@ import {
 function selectedPresetNames(settings) {
     return {
         novel: settings?.preset_settings_novel,
-        openai: settings?.oai_settings?.preset_settings_openai ?? settings?.preset_settings_openai,
+        openai: settings?.oai_settings?.global_preset_settings_openai
+            || settings?.oai_settings?.preset_settings_openai
+            || settings?.preset_settings_openai,
         textgenerationwebui: settings?.textgenerationwebui_settings?.preset,
         kobold: settings?.kai_settings?.preset_settings ?? settings?.preset_settings,
     };
