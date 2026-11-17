@@ -2,6 +2,7 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
 import net from 'node:net';
+import path from 'node:path';
 
 export const DEFAULT_PORT = 8000;
 // Probe window for a free port, matching the range the mobile shells use.
@@ -195,4 +196,68 @@ export async function pickPort(preferred, {
         }
     }
     throw new Error(`no free port between ${preferred} and ${maxPort}`);
+}
+
+const ANSI_ESCAPE_PATTERN = /\u001b\[[0-9;]*[a-zA-Z]/g;
+
+/**
+ * Strips terminal ANSI color sequences and normalizes newlines for display in the failure page.
+ * @param {string} rawLog
+ * @returns {string}
+ */
+export function cleanBootLog(rawLog) {
+    return String(rawLog || '')
+        .replace(ANSI_ESCAPE_PATTERN, '')
+        .replace(/\r\n/g, '\n')
+        .trim();
+}
+
+/**
+ * Updates the top-level `port` entry in config.yaml text while preserving comments and formatting.
+ * @param {string} configText
+ * @param {number} newPort
+ * @returns {string}
+ */
+export function updateConfigPort(configText, newPort) {
+    if (!Number.isInteger(newPort) || newPort < 1 || newPort > 65535) {
+        throw new RangeError(`Port must be an integer between 1 and 65535 (got ${newPort}).`);
+    }
+    const text = String(configText ?? '');
+    if (/^port:\s*.*$/m.test(text)) {
+        return text.replace(/^port:\s*.*$/m, `port: ${newPort}`);
+    }
+    const separator = text.length === 0 || text.endsWith('\n') ? '' : '\n';
+    return `${text}${separator}port: ${newPort}\n`;
+}
+
+/**
+ * Checks whether a `file:` frame URL resolves to `expectedPath` on `platform`,
+ * accounting for percent-encoding and Windows drive-letter / path casing.
+ * @param {string} rawUrl
+ * @param {string} expectedPath
+ * @param {NodeJS.Platform} [platform]
+ * @returns {boolean}
+ */
+export function isSameFileUrl(rawUrl, expectedPath, platform = process.platform) {
+    let parsed;
+    try {
+        parsed = new URL(rawUrl);
+    } catch {
+        return false;
+    }
+    if (parsed.protocol !== 'file:') {
+        return false;
+    }
+    let decodedPathname;
+    try {
+        decodedPathname = decodeURIComponent(parsed.pathname);
+    } catch {
+        return false;
+    }
+    if (platform === 'win32') {
+        const fromUrl = path.win32.normalize(decodedPathname.replace(/^\/([a-zA-Z]:)/, '$1')).toLowerCase();
+        const target = path.win32.normalize(expectedPath).toLowerCase();
+        return fromUrl === target;
+    }
+    return path.posix.normalize(decodedPathname) === path.posix.normalize(expectedPath);
 }

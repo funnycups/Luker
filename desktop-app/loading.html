@@ -10,7 +10,7 @@
     }
 
     html, body {
-        height: 100%;
+        min-height: 100%;
         margin: 0;
     }
 
@@ -29,6 +29,12 @@
         max-width: 34rem;
         padding: 2rem;
         text-align: center;
+        box-sizing: border-box;
+    }
+
+    main.wide {
+        width: 100%;
+        max-width: 44rem;
     }
 
     h1 {
@@ -58,7 +64,8 @@
         75% { content: '...'; }
     }
 
-    .status.moving::after {
+    .status.moving::after,
+    .status.failed::after {
         content: none;
         animation: none;
     }
@@ -103,15 +110,75 @@
         user-select: text;
     }
 
+    .error .boot-log {
+        max-height: 14rem;
+        overflow: auto;
+    }
+
     .error .log-label {
         margin: 1rem 0 0;
         font-size: 0.9rem;
         opacity: 0.8;
     }
+
+    .recovery {
+        margin-top: 1.25rem;
+        padding-top: 1rem;
+        border-top: 1px solid rgba(127, 127, 127, 0.25);
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    .port-row {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        font-size: 0.9rem;
+    }
+
+    .port-row input {
+        width: 7rem;
+        padding: 0.35rem 0.5rem;
+        border-radius: 6px;
+        border: 1px solid rgba(127, 127, 127, 0.4);
+        background: Canvas;
+        color: CanvasText;
+        font: inherit;
+    }
+
+    .port-error {
+        margin: 0;
+        font-size: 0.85rem;
+        color: #d93025;
+    }
+
+    .recovery-actions {
+        display: flex;
+        gap: 0.6rem;
+        flex-wrap: wrap;
+    }
+
+    .recovery-actions button {
+        padding: 0.45rem 0.9rem;
+        border-radius: 6px;
+        border: 1px solid rgba(127, 127, 127, 0.4);
+        background: rgba(127, 127, 127, 0.14);
+        color: CanvasText;
+        font: inherit;
+        font-size: 0.9rem;
+        cursor: pointer;
+    }
+
+    .recovery-actions button.primary {
+        background: CanvasText;
+        color: Canvas;
+        border-color: CanvasText;
+    }
 </style>
 </head>
 <body>
-<main>
+<main id="main">
     <h1>Luker</h1>
     <div id="content"></div>
 </main>
@@ -120,7 +187,12 @@
         'en': {
             starting: 'Starting Luker',
             failed: 'Luker failed to start.',
+            bootLogLabel: 'Startup log:',
             logAt: 'Details were written to:',
+            portLabel: 'Server port',
+            portInvalid: 'Enter a port between 1 and 65535.',
+            retry: 'Retry',
+            openDataDirectory: 'Open Data Directory',
             moving: 'Moving Luker data',
             moveDone: 'Data moved. Restarting Luker.',
             moveProgress: '%s%',
@@ -128,7 +200,12 @@
         'zh-CN': {
             starting: '正在启动 Luker',
             failed: 'Luker 启动失败。',
-            logAt: '详细信息已写入:',
+            bootLogLabel: '启动日志：',
+            logAt: '详细信息已写入：',
+            portLabel: '服务端口',
+            portInvalid: '请输入 1 到 65535 之间的端口号。',
+            retry: '重试',
+            openDataDirectory: '打开数据目录',
             moving: '正在迁移 Luker 数据',
             moveDone: '数据迁移完成，正在重启 Luker。',
             moveProgress: '%s%',
@@ -136,7 +213,12 @@
         'zh-TW': {
             starting: '正在啟動 Luker',
             failed: 'Luker 啟動失敗。',
-            logAt: '詳細資訊已寫入:',
+            bootLogLabel: '啟動日誌：',
+            logAt: '詳細資訊已寫入：',
+            portLabel: '服務連接埠',
+            portInvalid: '請輸入 1 到 65535 之間的連接埠號。',
+            retry: '重試',
+            openDataDirectory: '開啟資料目錄',
             moving: '正在遷移 Luker 資料',
             moveDone: '資料遷移完成，正在重新啟動 Luker。',
             moveProgress: '%s%',
@@ -163,11 +245,14 @@
     const logPath = params.get('logPath');
     const mode = params.get('mode');
 
+    const mainEl = document.getElementById('main');
     const content = document.getElementById('content');
 
     if (error) {
+        mainEl.classList.add('wide');
+
         const status = document.createElement('div');
-        status.className = 'status';
+        status.className = 'status failed';
         status.textContent = strings.failed;
 
         const block = document.createElement('div');
@@ -177,6 +262,9 @@
         detail.className = 'detail';
         detail.textContent = error;
         block.appendChild(detail);
+
+        const bootLogContainer = document.createElement('div');
+        block.appendChild(bootLogContainer);
 
         if (logPath) {
             const label = document.createElement('p');
@@ -191,8 +279,103 @@
             block.appendChild(path);
         }
 
+        const recovery = document.createElement('div');
+        recovery.className = 'recovery';
+
+        const portRow = document.createElement('div');
+        portRow.className = 'port-row';
+        portRow.hidden = true;
+
+        const portLabel = document.createElement('label');
+        portLabel.setAttribute('for', 'startup-port');
+        portLabel.textContent = strings.portLabel;
+
+        const portInput = document.createElement('input');
+        portInput.id = 'startup-port';
+        portInput.type = 'number';
+        portInput.min = '1';
+        portInput.step = '1';
+
+        portRow.appendChild(portLabel);
+        portRow.appendChild(portInput);
+
+        const portError = document.createElement('p');
+        portError.id = 'port-error';
+        portError.className = 'port-error';
+        portError.hidden = true;
+        portError.textContent = strings.portInvalid;
+
+        const actions = document.createElement('div');
+        actions.className = 'recovery-actions';
+
+        const retryBtn = document.createElement('button');
+        retryBtn.id = 'startup-retry';
+        retryBtn.type = 'button';
+        retryBtn.className = 'primary';
+        retryBtn.textContent = strings.retry;
+
+        const openDirBtn = document.createElement('button');
+        openDirBtn.id = 'startup-open-data-dir';
+        openDirBtn.type = 'button';
+        openDirBtn.textContent = strings.openDataDirectory;
+
+        actions.appendChild(retryBtn);
+        actions.appendChild(openDirBtn);
+
+        recovery.appendChild(portRow);
+        recovery.appendChild(portError);
+        recovery.appendChild(actions);
+        block.appendChild(recovery);
+
         content.appendChild(status);
         content.appendChild(block);
+
+        let canEditPort = false;
+
+        retryBtn.addEventListener('click', async () => {
+            portError.hidden = true;
+            if (!window.LukerDesktop?.retryStartup) {
+                return;
+            }
+            if (canEditPort) {
+                const parsed = Number.parseInt(portInput.value, 10);
+                if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+                    portError.hidden = false;
+                    return;
+                }
+                await window.LukerDesktop.retryStartup({ port: parsed });
+                return;
+            }
+            await window.LukerDesktop.retryStartup({});
+        });
+
+        openDirBtn.addEventListener('click', () => {
+            window.LukerDesktop?.openStartupDataDirectory?.();
+        });
+
+        if (window.LukerDesktop?.getStartupFailure) {
+            window.LukerDesktop.getStartupFailure().then((info) => {
+                if (info?.bootLog) {
+                    const logLabel = document.createElement('p');
+                    logLabel.className = 'log-label';
+                    logLabel.textContent = strings.bootLogLabel;
+
+                    const logPre = document.createElement('pre');
+                    logPre.id = 'boot-log';
+                    logPre.className = 'detail boot-log';
+                    logPre.textContent = info.bootLog;
+
+                    bootLogContainer.appendChild(logLabel);
+                    bootLogContainer.appendChild(logPre);
+                    logPre.scrollTop = logPre.scrollHeight;
+                }
+                if (info?.canEditPort) {
+                    canEditPort = true;
+                    portInput.value = String(info.port);
+                    portRow.hidden = false;
+                }
+            }).catch(() => {});
+        }
     } else if (mode === 'move') {
         const status = document.createElement('div');
         status.className = 'status moving';
@@ -221,7 +404,7 @@
             }
             const total = Number(payload?.totalBytes) || 0;
             const copied = Number(payload?.copiedBytes) || 0;
-            const percent = total === 0 ? 100 : Math.min(100, Math.round((copied / total) * 100));
+            const percent = total === 0 ? 100 : Math.min(100, Math.round((copied / total) * 100)); // cap-ok: percentage progress bar ceiling (0-100%)
             bar.style.width = `${percent}%`;
             label.textContent = strings.moveProgress.replace('%s', String(percent));
         };

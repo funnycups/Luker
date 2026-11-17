@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld('LukerDesktop', {
     installFlavour: ipcRenderer.sendSync('luker:install-flavour'),
     getDataDirectory: () => ipcRenderer.invoke('luker:get-data-directory'),
     chooseDataDirectory: () => ipcRenderer.invoke('luker:choose-data-directory'),
+    getStartupFailure: () => ipcRenderer.invoke('luker:get-startup-failure'),
+    retryStartup: (options) => ipcRenderer.invoke('luker:retry-startup', options),
+    openStartupDataDirectory: () => ipcRenderer.invoke('luker:open-startup-data-directory'),
     installUpdateFromUrl: (url, name) => ipcRenderer.invoke('luker:install-update', { url, name }),
     setOpenExternalLinksInBrowser: (enabled) => ipcRenderer.invoke('luker:external-link-policy', Boolean(enabled)),
     onUpdateProgress: (callback) => {

@@ -3,10 +3,13 @@ import { EventEmitter } from 'node:events';
 import yaml from 'yaml';
 import { describe, expect, test } from '@jest/globals';
 import {
+    cleanBootLog,
+    isSameFileUrl,
     pickPort,
     probePort,
     readCliPort,
     resolveStartupListenPlan,
+    updateConfigPort,
 } from '../desktop-app/startup-config.js';
 
 describe('desktop startup port and listen configuration', () => {
@@ -121,5 +124,61 @@ describe('desktop startup port and listen configuration', () => {
             },
         });
         expect(chosen).toBeGreaterThanOrEqual(19801);
+    });
+
+    test('cleanBootLog strips ANSI color sequences and preserves full text', () => {
+        const raw = '\u001b[31mError: listen EADDRINUSE 0.0.0.0:8000\u001b[39m\r\nSecond line\r\n';
+        expect(cleanBootLog(raw)).toBe('Error: listen EADDRINUSE 0.0.0.0:8000\nSecond line');
+        expect(cleanBootLog('')).toBe('');
+    });
+
+    test('updateConfigPort updates top-level port while preserving YAML comments', () => {
+        const original = [
+            '# Server port comment',
+            'port: 8000',
+            'nested:',
+            '  port: -1',
+            '',
+        ].join('\n');
+
+        const updated = updateConfigPort(original, 9234);
+        expect(updated).toContain('# Server port comment');
+        expect(updated).toContain('port: 9234');
+        expect(updated).toContain('  port: -1');
+        expect(yaml.parse(updated).port).toBe(9234);
+
+        const withoutTopPort = 'listen: false\n';
+        expect(yaml.parse(updateConfigPort(withoutTopPort, 8888)).port).toBe(8888);
+
+        expect(() => updateConfigPort(original, 0)).toThrow(RangeError);
+        expect(() => updateConfigPort(original, 70000)).toThrow(RangeError);
+    });
+
+    test('isSameFileUrl matches loading.html across win32 drive casing, CJK paths, linux, and darwin', () => {
+        expect(isSameFileUrl(
+            'file:///C:/Users/%E5%BC%A0%E4%B8%89/AppData/Local/Luker/loading.html?locale=zh-CN&error=boom',
+            'c:\\Users\\张三\\AppData\\Local\\Luker\\loading.html',
+            'win32',
+        )).toBe(true);
+        expect(isSameFileUrl(
+            'http://127.0.0.1:8000/loading.html',
+            'C:\\Users\\张三\\AppData\\Local\\Luker\\loading.html',
+            'win32',
+        )).toBe(false);
+        expect(isSameFileUrl(
+            'file:///opt/Luker/resources/app.asar/loading.html?error=boom',
+            '/opt/Luker/resources/app.asar/loading.html',
+            'linux',
+        )).toBe(true);
+        expect(isSameFileUrl(
+            'file:///Applications/Luker.app/Contents/Resources/app.asar/loading.html?error=boom',
+            '/Applications/Luker.app/Contents/Resources/app.asar/loading.html',
+            'darwin',
+        )).toBe(true);
+        expect(isSameFileUrl(
+            'file:///opt/Luker/resources/app.asar/http-auth.html',
+            '/opt/Luker/resources/app.asar/loading.html',
+            'linux',
+        )).toBe(false);
     });
 });

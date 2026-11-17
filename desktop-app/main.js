@@ -21,7 +21,14 @@ import {
 } from './data-location.js';
 import { createHttpAuthController, HttpAuthStore } from './http-auth.js';
 import { detectInstallFlavour } from './install-flavour.js';
-import { pickPort, readCliPort, resolveStartupListenPlan } from './startup-config.js';
+import {
+    cleanBootLog,
+    isSameFileUrl,
+    pickPort,
+    readCliPort,
+    resolveStartupListenPlan,
+    updateConfigPort,
+} from './startup-config.js';
 import { hidesOnClose, usesTray, devtoolsShortcutFor, reloadShortcutFor } from './window-behaviour.js';
 
 // Electron's main process exposes V8's WebAssembly but not the streaming
@@ -260,6 +267,7 @@ function startLogTee() {
         return;
     }
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.writeFileSync(logPath, '');
     originalStdoutWrite = process.stdout.write.bind(process.stdout);
     originalStderrWrite = process.stderr.write.bind(process.stderr);
     process.stdout.write = (chunk, encoding, callback) => {
@@ -311,6 +319,7 @@ function reportStartupFailure(error) {
     const message = error instanceof Error ? error.message : String(error);
     bootFailure = message;
     console.error(`Luker failed to start: ${message}`);
+    stopTeeingLogs();
     reportBootFailure(message);
     return true;
 }
@@ -327,6 +336,68 @@ function stopWatchingStartup() {
     process.off('unhandledRejection', onUnhandledRejection);
     process.off('uncaughtException', onUncaughtException);
 }
+
+const loadingPagePath = path.join(import.meta.dirname, 'loading.html');
+
+function assertStartupFailureFrame(event, action) {
+    const frame = event.senderFrame;
+    if (bootFailure === null) {
+        throw new Error(`${action} is only available after a startup failure.`);
+    }
+    if (!frame || frame.isDestroyed()) {
+        throw new Error(`${action} was requested by a frame that is no longer available.`);
+    }
+    if (!isSameFileUrl(frame.url, loadingPagePath)) {
+        throw new Error(`${action} was requested by a page outside the startup failure screen.`);
+    }
+}
+
+ipcMain.handle('luker:get-startup-failure', (event) => {
+    assertStartupFailureFrame(event, 'The startup failure report');
+    const rawLog = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+    const configPath = path.join(userData, 'config.yaml');
+    const configText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+    const yaml = backendRequire('yaml');
+    const plan = resolveStartupListenPlan({
+        cliPort,
+        configText,
+        parseYaml: yaml.parse,
+    });
+    return {
+        bootLog: cleanBootLog(rawLog),
+        port: plan.configPort,
+        canEditPort: plan.configValid && cliPort === null,
+    };
+});
+
+ipcMain.handle('luker:retry-startup', (event, payload) => {
+    assertStartupFailureFrame(event, 'The startup retry action');
+    if (payload?.port !== undefined && payload?.port !== null) {
+        const nextPort = Number(payload.port);
+        if (!Number.isInteger(nextPort) || nextPort < 1 || nextPort > 65535) {
+            throw new RangeError(`Invalid port: ${payload.port}`);
+        }
+        const configPath = ensureConfigFile();
+        const configText = fs.readFileSync(configPath, 'utf8');
+        const yaml = backendRequire('yaml');
+        const plan = resolveStartupListenPlan({
+            cliPort,
+            configText,
+            parseYaml: yaml.parse,
+        });
+        if (!plan.configValid || cliPort !== null) {
+            throw new Error('The server port cannot be edited in the current startup configuration.');
+        }
+        fs.writeFileSync(configPath, updateConfigPort(configText, nextPort), 'utf8');
+    }
+    setTimeout(() => relaunchApp(), 50);
+    return { restarting: true };
+});
+
+ipcMain.handle('luker:open-startup-data-directory', (event) => {
+    assertStartupFailureFrame(event, 'Opening the data directory');
+    return openDataDirectory();
+});
 
 function ensureConfigFile() {
     const configPath = path.join(userData, 'config.yaml');
@@ -675,7 +746,12 @@ function relaunchApp() {
         app.quit();
         return;
     }
-    app.relaunch({ args: launchArgs });
+    // A Linux AppImage runs out of an ephemeral FUSE mount that disappears on
+    // exit, so relaunch has to target the outer AppImage file instead.
+    const relaunchOptions = process.platform === 'linux' && process.env.APPIMAGE
+        ? { execPath: process.env.APPIMAGE, args: launchArgs }
+        : { args: launchArgs };
+    app.relaunch(relaunchOptions);
     app.quit();
 }
 
@@ -1120,6 +1196,9 @@ function showMainWindow(win) {
     if (win.isDestroyed()) {
         return;
     }
+    if (process.platform === 'darwin') {
+        app.show();
+    }
     if (win.isMinimized()) {
         win.restore();
     }
@@ -1333,7 +1412,7 @@ if (hasSingleInstanceLock) {
         }
 
         win.on('close', (event) => {
-            if (quitting || !hidesOnClose(process.platform)) {
+            if (quitting || bootFailure !== null || !hidesOnClose(process.platform)) {
                 return;
             }
             event.preventDefault();
@@ -1370,8 +1449,12 @@ if (hasSingleInstanceLock) {
             await startBackend(win, locale, port, configPath);
         } catch (err) {
             if (bootFailure === null) {
+                const message = String(err?.message || err);
+                bootFailure = message;
+                console.error(`Luker failed to start: ${message}`);
+                stopTeeingLogs();
                 await win.loadFile('loading.html', {
-                    query: { locale, error: String(err?.message || err), logPath },
+                    query: { locale, error: message, logPath },
                 });
             }
         }
@@ -1386,6 +1469,9 @@ app.on('web-contents-created', (_event, contents) => {
         }
         const strings = pickShellStrings(app.getLocale());
         const owner = BrowserWindow.fromWebContents(contents);
+        if (owner && !owner.isDestroyed() && !owner.isVisible()) {
+            showMainWindow(owner);
+        }
         const options = {
             type: 'question',
             buttons: [strings.unloadConfirmLeave, strings.cancel],

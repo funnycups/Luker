@@ -88,7 +88,7 @@ test('reload prompts when beforeunload guards unsaved input and app quit exits c
             if (proc && proc.exitCode === null) {
                 proc.kill('SIGKILL');
             }
-            await desktop.close().catch(() => {});
         }
+        await desktop.close().catch(() => {});
     }
 });
