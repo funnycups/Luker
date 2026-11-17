@@ -86,6 +86,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Restored page reload keyboard shortcuts in the Windows and Linux desktop apps.
 - Fixed the desktop app ignoring the configured server port and failing to step past reserved or occupied listen addresses.
 - Added the startup log, port configuration, retry, and open data directory actions to the startup failure screen in the desktop app.
+- Moved the client app Refresh and Endpoint buttons to the top action bar in User Settings.
 
 ### iOS App
 

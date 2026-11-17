@@ -32,7 +32,8 @@ async function openUserSettingsDrawer(page) {
     }
 }
 
-test('android bridge reveals both entries and forwards clicks', async ({ page }) => {
+test('android bridge reveals both entries in the top header bar and forwards clicks', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.addInitScript(() => {
         window.__lukerBridgeCalls = [];
         window.LukerAndroid = {
@@ -43,10 +44,14 @@ test('android bridge reveals both entries and forwards clicks', async ({ page })
     await awaitMainUI(page, server.baseURL);
     await openUserSettingsDrawer(page);
 
-    const reloadButton = page.locator('#app_reload_button');
-    const endpointButton = page.locator('#app_endpoint_button');
+    const reloadButton = page.locator('#account_controls #app_reload_button');
+    const endpointButton = page.locator('#account_controls #app_endpoint_button');
     await expect(reloadButton).toBeVisible();
     await expect(endpointButton).toBeVisible();
+    await expect(reloadButton).toBeInViewport();
+    await expect(endpointButton).toBeInViewport();
+    await expect(reloadButton.locator('i.fa-solid')).toBeVisible();
+    await expect(endpointButton.locator('i.fa-solid')).toBeVisible();
 
     await reloadButton.click();
     await endpointButton.click();
@@ -54,7 +59,7 @@ test('android bridge reveals both entries and forwards clicks', async ({ page })
     expect(await page.evaluate(() => window.__lukerBridgeCalls)).toEqual(['reload', 'endpoint']);
 });
 
-test('desktop bridge reveals refresh only', async ({ page }) => {
+test('desktop bridge reveals refresh only in the top header bar', async ({ page }) => {
     await page.addInitScript(() => {
         window.__lukerBridgeCalls = [];
         window.LukerDesktop = {
@@ -64,9 +69,11 @@ test('desktop bridge reveals refresh only', async ({ page }) => {
     await awaitMainUI(page, server.baseURL);
     await openUserSettingsDrawer(page);
 
-    const reloadButton = page.locator('#app_reload_button');
-    const endpointButton = page.locator('#app_endpoint_button');
+    const reloadButton = page.locator('#account_controls #app_reload_button');
+    const endpointButton = page.locator('#account_controls #app_endpoint_button');
     await expect(reloadButton).toBeVisible();
+    await expect(reloadButton).toBeInViewport();
+    await expect(reloadButton.locator('i.fa-solid')).toBeVisible();
     await expect(endpointButton).toHaveCount(1);
     await expect(endpointButton).toBeHidden();
 
@@ -79,8 +86,8 @@ test('plain browser keeps both entries hidden', async ({ page }) => {
     await awaitMainUI(page, server.baseURL);
     await openUserSettingsDrawer(page);
 
-    const reloadButton = page.locator('#app_reload_button');
-    const endpointButton = page.locator('#app_endpoint_button');
+    const reloadButton = page.locator('#account_controls #app_reload_button');
+    const endpointButton = page.locator('#account_controls #app_endpoint_button');
     await expect(reloadButton).toHaveCount(1);
     await expect(reloadButton).toBeHidden();
     await expect(endpointButton).toHaveCount(1);

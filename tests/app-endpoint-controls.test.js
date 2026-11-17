@@ -6,8 +6,16 @@ import { detectAppBridge, initAppEndpointControls } from '../public/scripts/app-
 
 function setupDom(doc = document) {
     doc.body.innerHTML = `
-        <div id="app_reload_button" style="display: none;"></div>
-        <div id="app_endpoint_button" style="display: none;"></div>
+        <div id="account_controls" class="flex-container">
+            <div id="app_reload_button" class="margin0 menu_button_icon menu_button" style="display: none;">
+                <i class="fa-fw fa-solid fa-arrows-rotate"></i>
+                <span data-i18n="Refresh">Refresh</span>
+            </div>
+            <div id="app_endpoint_button" class="margin0 menu_button_icon menu_button" style="display: none;">
+                <i class="fa-fw fa-solid fa-plug"></i>
+                <span data-i18n="Endpoint">Endpoint</span>
+            </div>
+        </div>
     `;
     return doc;
 }

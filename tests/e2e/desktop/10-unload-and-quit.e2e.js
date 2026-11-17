@@ -38,9 +38,9 @@ test('reload prompts when beforeunload guards unsaved input and app quit exits c
         await desktop.page.locator('#send_textarea').fill('unsaved draft message');
         await openUserSettingsDrawer(desktop.page);
 
-        const reloadButton = desktop.page.locator('#app_reload_button');
+        const reloadButton = desktop.page.locator('#account_controls #app_reload_button');
         await expect(reloadButton).toBeVisible();
-        await reloadButton.scrollIntoViewIfNeeded();
+        await expect(reloadButton).toBeInViewport();
 
         // 1. User cancels the confirmation dialog -> page stays put and keeps draft.
         const initialOrigin = await desktop.page.evaluate(() => performance.timeOrigin);
