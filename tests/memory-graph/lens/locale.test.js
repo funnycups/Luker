@@ -141,4 +141,37 @@ describe('memory-graph/lens locale-data hygiene', () => {
         expect(missingCn).toEqual([]);
         expect(missingTw).toEqual([]);
     });
+
+    test('all i18n/i18nFormat literals in memory-graph/main.js resolve synchronously without waiting for async lens/locale-data.js', () => {
+        const zhCnCore = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/locales/zh-cn.json'), 'utf8'));
+        const zhTwCore = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/locales/zh-tw.json'), 'utf8'));
+
+        const mgI18nSource = fs.readFileSync(path.join(ROOT, 'public/scripts/extensions/memory-graph/i18n.js'), 'utf8');
+        const mgCn = {};
+        const mgTw = {};
+        const cnSectionMatch = /addLocaleData\('zh-cn',\s*\{([\s\S]*?)\n\s*\}\);/.exec(mgI18nSource);
+        const twSectionMatch = /addLocaleData\('zh-tw',\s*\{([\s\S]*?)\n\s*\}\);/.exec(mgI18nSource);
+        for (const m of (cnSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
+            mgCn[m[1].replace(/\\'/g, '\'')] = true;
+        }
+        for (const m of (twSectionMatch?.[1] || '').matchAll(/^\s*'((?:\\'|[^'])+)'\s*:/gm)) {
+            mgTw[m[1].replace(/\\'/g, '\'')] = true;
+        }
+
+        const mainSrc = fs.readFileSync(path.join(ROOT, 'public/scripts/extensions/memory-graph/main.js'), 'utf8');
+        const usedKeys = new Set();
+        const callRe = /\bi18n(?:Format)?\(\s*'((?:\\'|[^'])+)'|\bi18n(?:Format)?\(\s*"((?:\\"|[^"])+)"/g;
+        for (const m of mainSrc.matchAll(callRe)) {
+            const raw = m[1] !== undefined
+                ? m[1].replace(/\\'/g, '\'').replace(/\\\\/g, '\\')
+                : m[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+            usedKeys.add(raw);
+        }
+
+        const missingCn = [...usedKeys].filter(k => !Object.hasOwn(mgCn, k) && !Object.hasOwn(zhCnCore, k));
+        const missingTw = [...usedKeys].filter(k => !Object.hasOwn(mgTw, k) && !Object.hasOwn(zhTwCore, k));
+
+        expect(missingCn).toEqual([]);
+        expect(missingTw).toEqual([]);
+    });
 });

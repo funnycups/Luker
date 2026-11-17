@@ -633,6 +633,9 @@ export function registerLocaleData() {
         'Memory graph request failed, retrying (${0}/${1})…': '记忆图请求失败，正在重试（第 ${0}/${1} 次）…',
         'Memory graph extraction result incomplete, retrying (${0}/${1})…': '记忆图抽取结果不完整，正在重试（第 ${0}/${1} 次）…',
         'Memory graph extraction result invalid, retrying (${0}/${1})…': '记忆图抽取结果无效，正在重试（第 ${0}/${1} 次）…',
+        'Open in Workbench': '在工作台中打开',
+        'Memory graph settings, visualization, and schema tools are located in Workbench.': '记忆图的设置、可视化视图与结构编辑器已整合至工作台。',
+        'Workbench is unavailable.': '工作台当前不可用。',
     });
     addLocaleData('zh-tw', {
         'The active chat has changed.': '目前的聊天已切換。',
@@ -1245,5 +1248,8 @@ export function registerLocaleData() {
         'Memory graph request failed, retrying (${0}/${1})…': '記憶圖請求失敗，正在重試（第 ${0}/${1} 次）…',
         'Memory graph extraction result incomplete, retrying (${0}/${1})…': '記憶圖抽取結果不完整，正在重試（第 ${0}/${1} 次）…',
         'Memory graph extraction result invalid, retrying (${0}/${1})…': '記憶圖抽取結果無效，正在重試（第 ${0}/${1} 次）…',
+        'Open in Workbench': '在工作台中開啟',
+        'Memory graph settings, visualization, and schema tools are located in Workbench.': '記憶圖的設定、視覺化檢視與結構編輯器已整合至工作台。',
+        'Workbench is unavailable.': '工作台目前無法使用。',
     });
 }
