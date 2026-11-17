@@ -56,6 +56,8 @@ const QUOTA_ENFORCED_PATH_PREFIXES = [
     '/api/presets/state/patch',
     '/api/settings/save',
     '/api/settings/patch',
+    '/api/state/set',
+    '/api/state/patch',
     '/api/images/upload',
     '/api/files/upload',
     '/api/backgrounds/upload',
@@ -1386,6 +1388,7 @@ export function getUserBackupTargets(directories, selection, options = {}) {
     if (selection.settings) {
         selectedFiles.add(path.join(directories.root, SETTINGS_FILE));
         selectedDirectories.add(directories.backups);
+        selectedDirectories.add(directories.states);
     }
 
     if (selection.secrets) {
