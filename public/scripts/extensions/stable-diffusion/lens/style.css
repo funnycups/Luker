@@ -20,6 +20,17 @@
     border-bottom: 1px solid var(--lw-border);
     background: var(--lw-surface);
     flex: none;
+    overflow: hidden;
+}
+
+.sdlens-top .lw-seg {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.sdlens-top .lw-seg::-webkit-scrollbar {
+    display: none;
 }
 
 .sdlens-body {

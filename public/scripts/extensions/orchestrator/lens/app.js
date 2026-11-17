@@ -487,18 +487,27 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
         renderState();
     }
 
+    let loadingFrame = 0;
     function renderState() {
         const state = store.get();
+        cancelAnimationFrame(loadingFrame);
+        loadingFrame = 0;
         if (state.status === 'ready') {
             stateLayer.hidden = true;
             return;
         }
-        stateLayer.hidden = false;
-        clear(stateLayer);
         if (state.status === 'loading') {
-            put(stateLayer, h('div', { class: 'ol-loading' }, h('div', { class: 'ol-spinner', 'aria-hidden': 'true' }), h('span', { text: i18n('Reading orchestration settings…') })));
+            loadingFrame = requestAnimationFrame(() => {
+                loadingFrame = 0;
+                if (destroyed || store.get().status !== 'loading') return;
+                stateLayer.hidden = false;
+                clear(stateLayer);
+                put(stateLayer, h('div', { class: 'ol-loading' }, h('div', { class: 'ol-spinner', 'aria-hidden': 'true' }), h('span', { text: i18n('Reading orchestration settings…') })));
+            });
             return;
         }
+        stateLayer.hidden = false;
+        clear(stateLayer);
         if (state.view === 'history') {
             stateLayer.hidden = true;
             return;
@@ -678,6 +687,7 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
     function destroy() {
         if (destroyed) return;
         destroyed = true;
+        cancelAnimationFrame(loadingFrame);
         clearTimeout(toastTimer);
         scheduleReload.cancel();
         onResize.cancel?.();

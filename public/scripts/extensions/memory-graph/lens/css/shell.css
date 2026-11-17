@@ -59,6 +59,7 @@
     position: relative;
     width: 100%;
     height: 100%;
+    overflow: hidden;
     overscroll-behavior: contain;
     display: flex;
     flex-direction: column;
@@ -176,7 +177,7 @@
 @keyframes ml-pulse { 50% { opacity: 0.35; } }
 
 /* Body */
-.mlens .ml-body { position: relative; flex: 1 1 auto; display: flex; min-height: 0; }
+.mlens .ml-body { position: relative; flex: 1 1 auto; display: flex; min-height: 0; min-width: 0; overflow: hidden; }
 .mlens .ml-sidebar, .mlens .ml-inspector {
     flex: none;
     min-height: 0;

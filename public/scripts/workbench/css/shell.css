@@ -98,8 +98,7 @@
 /* ---- Phone: bottom sheet ---- */
 .wbench .wb-scrim { position: absolute; inset: 0; pointer-events: auto; touch-action: none; overscroll-behavior: none; background: var(--wb-scrim); animation: wb-fade 160ms ease-out; }
 @keyframes wb-fade { from { opacity: 0; } }
-.wbench.is-compact .wb-win { min-width: 0; min-height: 0; border-radius: 16px 16px 0 0; animation: wb-sheet 220ms var(--wb-ease); }
-@keyframes wb-sheet { from { transform: translateY(30px); opacity: 0; } }
+.wbench.is-compact .wb-win { min-width: 0; min-height: 0; border-radius: 16px 16px 0 0; animation: none; }
 .wbench.is-compact .wb-resize, .wbench.is-compact .wb-ctl-max, .wbench.is-compact .wb-title-ctx { display: none; }
 .wbench.is-compact .wb-titlebar { height: 52px; padding-top: 6px; cursor: default; }
 .wbench.is-compact .wb-titlebar::before { content: ''; position: absolute; left: 50%; top: 6px; width: 36px; height: 4px; margin-left: -18px; border-radius: 4px; background: var(--wb-border-strong); }

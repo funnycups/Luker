@@ -9,6 +9,7 @@ import path from 'node:path';
 import { describe, test, expect, jest } from '@jest/globals';
 import { renderSections } from '../../../public/scripts/extensions/orchestrator/lens/views/sections.js';
 import { createHistoryView } from '../../../public/scripts/extensions/orchestrator/lens/views/history-view.js';
+import { mountOrchestraLens } from '../../../public/scripts/extensions/orchestrator/lens/app.js';
 
 const ROOT = path.resolve(process.cwd(), '..');
 const LENS_DIR = path.join(ROOT, 'public/scripts/extensions/orchestrator/lens');
@@ -120,5 +121,65 @@ describe('orchestrator/lens zero innerHTML & no legacy dock/ai imports', () => {
             if (/from\s+['"][^'"]*ai-panel\.js['"]/.test(src)) bad.push(f);
         }
         expect(bad).toEqual([]);
+    });
+
+    test('mountOrchestraLens does not flash .ol-statelayer spinner when source.load resolves before next animation frame', async () => {
+        if (typeof globalThis.ResizeObserver !== 'function') {
+            globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+        }
+        const origRaf = globalThis.requestAnimationFrame;
+        const origCaf = globalThis.cancelAnimationFrame;
+        const rafCallbacks = new Map();
+        let nextId = 1;
+        globalThis.requestAnimationFrame = (cb) => {
+            const id = nextId++;
+            rafCallbacks.set(id, cb);
+            return id;
+        };
+        globalThis.cancelAnimationFrame = (id) => {
+            rafCallbacks.delete(id);
+        };
+
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        try {
+            const handle = mountOrchestraLens({
+                container,
+                embedded: true,
+                source: {
+                    async load() {
+                        return {
+                            enabled: false,
+                            mode: 'spec',
+                            source: 'global',
+                            presetName: 'Default',
+                            chatKey: 'c1',
+                            chatLabel: 'Alice',
+                            characterName: 'Alice',
+                            settings: { reviewRerunMaxRounds: 1 },
+                            profile: { spec: { stages: [] }, presets: {} },
+                            target: { scope: 'global', mode: 'spec' },
+                        };
+                    },
+                },
+            });
+
+            const stateLayer = container.querySelector('.ol-statelayer');
+            expect(stateLayer.hidden).toBe(true);
+
+            await Promise.resolve();
+            await Promise.resolve();
+
+            // Flush any remaining rAF callbacks — loading spinner must have been cancelled!
+            for (const cb of [...rafCallbacks.values()]) cb(16);
+            expect(stateLayer.hidden).toBe(true);
+            expect(stateLayer.querySelector('.ol-spinner')).toBeNull();
+
+            handle.destroy();
+        } finally {
+            globalThis.requestAnimationFrame = origRaf;
+            globalThis.cancelAnimationFrame = origCaf;
+            container.remove();
+        }
     });
 });

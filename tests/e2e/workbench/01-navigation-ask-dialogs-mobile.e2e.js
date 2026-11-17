@@ -287,9 +287,80 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
         await switchWorkbenchTab(page, 'ws:memory');
         await expect(win.locator('.mlens')).toHaveClass(/is-compact/);
         await expect(win.locator('.mlens .ml-bottomnav')).toBeVisible();
+        const mlensLayout = await page.evaluate(() => {
+            const mlens = document.querySelector('.wbench .mlens');
+            const left = mlens?.querySelector('.ml-topbar-left');
+            const scrim = mlens?.querySelector('.ml-scrim');
+            const right = mlens?.querySelector('.ml-topbar-right');
+            return {
+                clientW: mlens?.clientWidth ?? 0,
+                scrollW: mlens?.scrollWidth ?? 0,
+                clientH: mlens?.clientHeight ?? 0,
+                scrollH: mlens?.scrollHeight ?? 0,
+                leftDisplay: left ? getComputedStyle(left).display : '',
+                scrimDisplay: scrim ? getComputedStyle(scrim).display : '',
+                rightEdge: right ? Math.round(right.getBoundingClientRect().right) : 0,
+            };
+        });
+        expect(mlensLayout.scrollW).toBeLessThanOrEqual(mlensLayout.clientW);
+        expect(mlensLayout.scrollH).toBeLessThanOrEqual(mlensLayout.clientH);
+        expect(mlensLayout.leftDisplay).toBe('none');
+        expect(mlensLayout.scrimDisplay).toBe('none');
+        expect(mlensLayout.rightEdge).toBeLessThanOrEqual(390);
 
         await switchWorkbenchTab(page, 'ws:orch');
         await expect(win.locator('.olens')).toHaveClass(/is-compact/);
+        await expect(win.locator('.olens .ol-flow-head h2')).toBeVisible();
+        const olensLayout = await page.evaluate(() => {
+            const olens = document.querySelector('.wbench .olens');
+            const left = olens?.querySelector('.ol-topbar-left');
+            const seg = olens?.querySelector('.ol-viewswitch .lw-seg');
+            const aiBtn = olens?.querySelector('.ol-topbar-right .lw-btn');
+            const scrim = olens?.querySelector('.ol-scrim');
+            const inspector = olens?.querySelector('.ol-inspector');
+            const modeBtn = olens?.querySelector('.ol-mobilebar .ol-modebtn');
+            const pills = Array.from(olens?.querySelectorAll('.ol-flow-meta .ol-pill') || []).map((el) => {
+                const r = el.getBoundingClientRect();
+                return { width: Math.round(r.width), right: Math.round(r.right) };
+            });
+            return {
+                clientW: olens?.clientWidth ?? 0,
+                scrollW: olens?.scrollWidth ?? 0,
+                clientH: olens?.clientHeight ?? 0,
+                scrollH: olens?.scrollHeight ?? 0,
+                leftDisplay: left ? getComputedStyle(left).display : '',
+                scrimDisplay: scrim ? getComputedStyle(scrim).display : '',
+                inspectorDisplay: inspector ? getComputedStyle(inspector).display : '',
+                segLeft: seg ? Math.round(seg.getBoundingClientRect().left) : 0,
+                segRight: seg ? Math.round(seg.getBoundingClientRect().right) : 0,
+                aiLeft: aiBtn ? Math.round(aiBtn.getBoundingClientRect().left) : 0,
+                aiRight: aiBtn ? Math.round(aiBtn.getBoundingClientRect().right) : 0,
+                modeRight: modeBtn ? Math.round(modeBtn.getBoundingClientRect().right) : 0,
+                pills,
+            };
+        });
+        expect(olensLayout.scrollW).toBeLessThanOrEqual(olensLayout.clientW);
+        expect(olensLayout.scrollH).toBeLessThanOrEqual(olensLayout.clientH);
+        expect(olensLayout.leftDisplay).toBe('none');
+        expect(olensLayout.scrimDisplay).toBe('none');
+        expect(olensLayout.inspectorDisplay).toBe('none');
+        expect(olensLayout.segLeft).toBeGreaterThanOrEqual(0);
+        expect(olensLayout.segRight).toBeLessThanOrEqual(olensLayout.aiLeft);
+        expect(olensLayout.aiRight).toBeLessThanOrEqual(390);
+        expect(olensLayout.modeRight).toBeGreaterThan(0);
+        expect(olensLayout.modeRight).toBeLessThanOrEqual(390);
+        expect(olensLayout.pills.length).toBeGreaterThanOrEqual(2);
+        for (const p of olensLayout.pills) {
+            expect(p.right).toBeLessThanOrEqual(390);
+        }
+
+        // Tapping an agent card opens the compact bottom sheet; tapping .ol-scrim closes it.
+        await win.locator('.olens .ol-card').first().click();
+        await expect(win.locator('.olens')).toHaveClass(/sheet-open/);
+        await expect(win.locator('.olens .ol-inspector')).toBeVisible();
+        await win.locator('.olens .ol-scrim').click({ position: { x: 8, y: 8 } });
+        await expect(win.locator('.olens')).not.toHaveClass(/sheet-open/);
+        await expect(win.locator('.olens .ol-inspector')).toBeHidden();
 
         await closeWorkbench(page);
         const afterClose = await page.evaluate(() => ({

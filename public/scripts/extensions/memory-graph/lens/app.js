@@ -296,22 +296,31 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
         renderState();
     }
 
+    let loadingFrame = 0;
     function renderState() {
         const state = store.get();
-        if (state.status === 'ready') {
+        cancelAnimationFrame(loadingFrame);
+        loadingFrame = 0;
+        if (state.status === 'ready' || isFullView(state.view)) {
             stateLayer.hidden = true;
+            return;
+        }
+        if (state.status === 'loading') {
+            loadingFrame = requestAnimationFrame(() => {
+                loadingFrame = 0;
+                const current = store.get();
+                if (destroyed || current.status !== 'loading' || isFullView(current.view)) return;
+                stateLayer.hidden = false;
+                clear(stateLayer);
+                put(stateLayer, h('div', { class: 'ml-loading' }, h('div', { class: 'ml-spinner', 'aria-hidden': 'true' }), h('span', { text: i18n('Reading memory…') })));
+            });
             return;
         }
         stateLayer.hidden = false;
         clear(stateLayer);
-        if (state.status === 'loading') {
-            put(stateLayer, h('div', { class: 'ml-loading' }, h('div', { class: 'ml-spinner', 'aria-hidden': 'true' }), h('span', { text: i18n('Reading memory…') })));
-        } else {
-            const code = state.error?.code;
-            put(stateLayer, emptyState('graph', i18n(ERROR_TEXT[code] || 'Failed to read'), code ? '' : String(state.error?.message || ''),
-                button(i18n('Refresh'), () => load({ manual: true }), { iconName: 'refresh' })));
-        }
-        if (isFullView(state.view)) stateLayer.hidden = true;
+        const code = state.error?.code;
+        put(stateLayer, emptyState('graph', i18n(ERROR_TEXT[code] || 'Failed to read'), code ? '' : String(state.error?.message || ''),
+            button(i18n('Refresh'), () => load({ manual: true }), { iconName: 'refresh' })));
     }
 
     function renderAll() {
@@ -489,6 +498,7 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
     function destroy() {
         if (destroyed) return;
         destroyed = true;
+        cancelAnimationFrame(loadingFrame);
         clearTimeout(toastTimer);
         scheduleReload.cancel();
         onResize.cancel?.();

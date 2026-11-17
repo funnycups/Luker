@@ -51,6 +51,7 @@
     position: relative;
     width: 100%;
     height: 100%;
+    overflow: hidden;
     overscroll-behavior: contain;
     display: flex;
     flex-direction: column;
@@ -146,7 +147,7 @@
 @keyframes ol-pulse { 50% { opacity: 0.35; } }
 
 /* Body */
-.olens .ol-body { position: relative; flex: 1 1 auto; display: flex; min-height: 0; }
+.olens .ol-body { position: relative; flex: 1 1 auto; display: flex; min-height: 0; min-width: 0; overflow: hidden; }
 .olens .ol-inspector {
     flex: none;
     min-height: 0;
