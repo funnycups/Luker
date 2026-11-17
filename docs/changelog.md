@@ -62,6 +62,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed the Diagnostics menu overflowing the right edge on narrow screens.
 - Fixed chat rename failures not showing the server's reason.
 - Fixed renaming chats failing in the Android app and on filesystems without hard link support.
+- Fixed background Prompt Manager refreshes interrupting an active prompt drag.
 
 ### Storage & Sync
 
@@ -89,6 +90,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Extension API
 
 - Added Workbench registration APIs for embedded workspaces, AI iteration targets, Q&A read providers, and local suggestion rules, alongside global state read and patch helpers.
+
+### Performance
+
+- Optimized first-screen startup, resource revalidation, settings saving, and hidden Prompt Manager rendering.
 
 ## v2.9.0-rc.2 (2026-11-11)
 
