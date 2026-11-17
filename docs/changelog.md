@@ -82,6 +82,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Included the newest performance trace in HarmonyOS and Android diagnostics bundles.
 - Fixed automatic browser launch and external npm probing running during startup and server plugin dependency installation in the iOS and HarmonyOS apps.
 - Fixed launching the desktop app while already running starting a duplicate process.
+- Fixed unsaved-change guards in the desktop app silently blocking page reloads and preventing quitting from the tray.
 
 ### iOS App
 

@@ -99,6 +99,14 @@ export async function launchLukerDesktop({ scenarioId = 'default', passPort = tr
             return;
         }
         const page = await electronApp.firstWindow();
+        // Electron handles beforeunload synchronously on the main process via
+        // will-prevent-unload; stop Playwright's default CDP auto-dismiss from
+        // sending Page.handleJavaScriptDialog for a dialog Electron already closed.
+        page.on('dialog', (dlg) => {
+            if (dlg.type() !== 'beforeunload') {
+                dlg.dismiss().catch(() => {});
+            }
+        });
         if (waitForSettle) {
             await page.waitForURL(u => isSettled(u), { timeout: 60_000 });
         }

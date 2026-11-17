@@ -602,6 +602,9 @@ const SHELL_STRINGS = {
         emptyStartConfirmMessage: 'Luker will use %s as an empty data folder. Existing data in the old folder stays in place.',
         moveFailedTitle: 'Luker could not move its data',
         moveFailedMessage: 'Luker could not move its data to %s.',
+        unloadConfirmTitle: 'Leave this page?',
+        unloadConfirmMessage: 'Changes you made will be lost if you leave.',
+        unloadConfirmLeave: 'Leave',
     },
     'zh-CN': {
         showWindow: '显示 Luker',
@@ -642,6 +645,9 @@ const SHELL_STRINGS = {
         emptyStartConfirmMessage: 'Luker 会把 %s 作为空的数据目录。旧目录中的现有数据保持不变。',
         moveFailedTitle: 'Luker 无法迁移数据',
         moveFailedMessage: 'Luker 无法把数据迁移到 %s。',
+        unloadConfirmTitle: '离开此页面？',
+        unloadConfirmMessage: '未保存的更改将在离开后丢失。',
+        unloadConfirmLeave: '离开',
     },
     'zh-TW': {
         showWindow: '顯示 Luker',
@@ -682,6 +688,9 @@ const SHELL_STRINGS = {
         emptyStartConfirmMessage: 'Luker 會把 %s 作為空的資料目錄。舊目錄中的現有資料保持不變。',
         moveFailedTitle: 'Luker 無法遷移資料',
         moveFailedMessage: 'Luker 無法把資料遷移到 %s。',
+        unloadConfirmTitle: '離開此頁面？',
+        unloadConfirmMessage: '未儲存的變更將在離開後遺失。',
+        unloadConfirmLeave: '離開',
     },
 };
 
@@ -1390,6 +1399,33 @@ if (hasSingleInstanceLock) {
     });
 }
 
+app.on('web-contents-created', (_event, contents) => {
+    contents.on('will-prevent-unload', (event) => {
+        if (quitting) {
+            event.preventDefault();
+            return;
+        }
+        const strings = pickShellStrings(app.getLocale());
+        const owner = BrowserWindow.fromWebContents(contents);
+        const options = {
+            type: 'question',
+            buttons: [strings.unloadConfirmLeave, strings.cancel],
+            defaultId: 0,
+            cancelId: 1,
+            title: strings.unloadConfirmTitle,
+            message: strings.unloadConfirmTitle,
+            detail: strings.unloadConfirmMessage,
+            noLink: true,
+        };
+        const choice = owner && !owner.isDestroyed()
+            ? dialog.showMessageBoxSync(owner, options)
+            : dialog.showMessageBoxSync(options);
+        if (choice === 0) {
+            event.preventDefault();
+        }
+    });
+});
+
 app.on('before-quit', () => {
     // Lets the window's close handler through, so a real quit destroys the
     // window and the process can exit.
@@ -1397,4 +1433,12 @@ app.on('before-quit', () => {
     backendStarting = false;
     stopWatchingStartup();
     stopTeeingLogs();
+});
+
+app.on('will-quit', () => {
+    if (tray) {
+        tray.destroy();
+        tray = null;
+    }
+    app.releaseSingleInstanceLock();
 });
