@@ -67,6 +67,7 @@ describe('SYNC_CATEGORIES registry', () => {
             comfyWorkflows: '/tmp/fake-user/user/workflows',
             vectors: '/tmp/fake-user/vectors',
             extensions: '/tmp/fake-user/extensions',
+            states: '/tmp/fake-user/states',
         };
         const chats = getCategoryById('chats');
         const resolved = resolveCategoryPaths(chats, fakeDirs);

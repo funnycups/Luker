@@ -6306,6 +6306,8 @@
     ,"sync.category.stats.desc": "stats.json，由聊天记录派生；冲突时可在本地重新计算。"
     ,"sync.category.settings": "设置"
     ,"sync.category.settings.desc": "settings.json，完整的 Luker 配置。"
+    ,"sync.category.global-states": "全局状态"
+    ,"sync.category.global-states.desc": "按命名空间保存的插件与工作台全局状态文件。"
     ,"sync.category.secrets": "API 密钥与凭据"
     ,"sync.category.secrets.desc": "secrets.json，API 密钥、令牌与密码。"
     ,"sync.category.extensions": "扩展插件"

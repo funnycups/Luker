@@ -14,9 +14,9 @@
  *
  * Category scope: this module touches ONLY the categories whose payload
  * lives in the engine in sqlite/mysql/postgres mode — chats, worlds,
- * presets, named-docs (themes/movingUI/quickReplies), groups, settings,
- * stats. Everything else (characters, avatars, assets, …) stays on disk
- * in every engine and is handled by the snapshot walker directly.
+ * presets, named-docs (themes/movingUI/quickReplies/globalStates), groups,
+ * settings, stats. Everything else (characters, avatars, assets, …) stays on
+ * disk in every engine and is handled by the snapshot walker directly.
  *
  * @module sync/materialize
  */
@@ -65,6 +65,7 @@ const NAMED_DOC_BUCKET_BY_CATEGORY = Object.freeze({
     'themes': 'themes',
     'movingUI': 'movingUI',
     'quickreplies': 'quickReplies',
+    'global-states': 'globalStates',
 });
 
 const PRESET_EXT = '.json';

@@ -52,7 +52,7 @@ const CATEGORY_GROUPS = [
     [() => t`Presets`, ['openai-presets', 'novelai-presets', 'koboldai-presets', 'textgen-presets', 'instruct', 'context', 'sysprompt', 'reasoning']],
     [() => t`Appearance`, ['themes', 'movingUI', 'quickreplies', 'backgrounds', 'avatars']],
     [() => t`Files`, ['assets', 'user-files', 'comfy-workflows', 'user-images', 'image-metadata', 'vectors', 'stats']],
-    [() => t`System`, ['settings', 'extensions', 'secrets']],
+    [() => t`System`, ['settings', 'global-states', 'extensions', 'secrets']],
 ];
 
 /**
@@ -87,6 +87,7 @@ const PATH_CATEGORIES = [
     ['User Avatars/', 'avatars'],
     ['vectors/', 'vectors'],
     ['extensions/', 'extensions'],
+    ['states/', 'global-states'],
     ['image-metadata.json', 'image-metadata'],
     ['stats.json', 'stats'],
     ['settings.json', 'settings'],

@@ -42,7 +42,7 @@ const SQL_OWNED_CATEGORIES = [
     'chats', 'worlds',
     'openai-presets', 'novelai-presets', 'koboldai-presets', 'textgen-presets',
     'instruct', 'context', 'sysprompt', 'reasoning',
-    'themes', 'movingUI', 'quickreplies',
+    'themes', 'movingUI', 'quickreplies', 'global-states',
     'settings', 'stats',
 ];
 
@@ -57,7 +57,7 @@ function rel(workdir, abs) {
 async function seedPayload(harness) {
     const { engine, handle, dirs } = harness;
     // Pre-create dirs the FS engine doesn't lazy-mkdir for list().
-    for (const k of ['worlds', 'groups', 'groupChats', 'themes', 'movingUI', 'quickreplies']) {
+    for (const k of ['worlds', 'groups', 'groupChats', 'themes', 'movingUI', 'quickreplies', 'states']) {
         fs.mkdirSync(dirs[k], { recursive: true });
     }
 
@@ -116,9 +116,11 @@ async function seedPayload(harness) {
     const themeDoc = { name: 'midnight', vars: { '--bg': '#000' } };
     const movingDoc = { left: 10, top: 20 };
     const qrDoc = { sets: [{ name: 'greetings' }] };
+    const globalStateDoc = { zoom: 1.1, collapsed: false };
     await named.save(handle, 'themes', 'midnight', themeDoc);
     await named.save(handle, 'movingUI', 'panel', movingDoc);
     await named.save(handle, 'quickReplies', 'qrset', qrDoc);
+    await named.save(handle, 'globalStates', 'workbench_ui', globalStateDoc);
 
     const statsDoc = { 'a.png': { user_msg_count: 7 }, timestamp: 1700000000 };
     await stats.save(handle, statsDoc);
@@ -135,6 +137,7 @@ async function seedPayload(harness) {
         themes: { midnight: themeDoc },
         moving: { panel: movingDoc },
         quickReplies: { qrset: qrDoc },
+        globalStates: { workbench_ui: globalStateDoc },
         stats: statsDoc,
     };
 }
@@ -192,7 +195,7 @@ describe('isSqlBackedCategory', () => {
         for (const id of ['settings', 'stats', 'worlds', 'chats',
             'openai-presets', 'novelai-presets', 'koboldai-presets', 'textgen-presets',
             'instruct', 'context', 'sysprompt', 'reasoning',
-            'themes', 'movingUI', 'quickreplies']) {
+            'themes', 'movingUI', 'quickreplies', 'global-states']) {
             expect(isSqlBackedCategory(id)).toBe(true);
         }
         for (const id of ['characters', 'avatars', 'assets', 'backgrounds',
@@ -354,6 +357,9 @@ describe('materialize (sqlite — exact file layout)', () => {
             expect(
                 readJson(path.join(workdir, 'QuickReplies', 'qrset.json')),
             ).toEqual(expected.quickReplies.qrset);
+            expect(
+                readJson(path.join(workdir, 'states', 'workbench_ui.json')),
+            ).toEqual(expected.globalStates.workbench_ui);
         } finally {
             src.cleanup();
             fs.rmSync(workdir, { recursive: true, force: true });
@@ -581,6 +587,7 @@ describe('dematerialize (sqlite — round-trip)', () => {
             expect(await dstNamed.get(dst.handle, 'themes', 'midnight')).toEqual(expected.themes.midnight);
             expect(await dstNamed.get(dst.handle, 'movingUI', 'panel')).toEqual(expected.moving.panel);
             expect(await dstNamed.get(dst.handle, 'quickReplies', 'qrset')).toEqual(expected.quickReplies.qrset);
+            expect(await dstNamed.get(dst.handle, 'globalStates', 'workbench_ui')).toEqual(expected.globalStates.workbench_ui);
 
             const aliceC1 = await dstChat.get(dst.handle, 'Alice', 'c1');
             expect(recordsEqual('chat', aliceC1, expected.chatAliceC1)).toBe(true);

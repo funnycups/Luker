@@ -71,6 +71,7 @@ export const GATED_ROUTES = Object.freeze([
     route(/^\/api\/chats\/(save|append|patch|merge|split|meta|meta\/patch|state\/patch|state\/delete|rename|delete|import|group\/save|group\/append|group\/patch|group\/merge|group\/split|group\/meta|group\/meta\/patch|group\/import|group\/delete)$/i, ['chats']),
     route(/^\/api\/groups\/(create|edit|delete)$/i, ['chats']),
     route(/^\/api\/settings\/(save|patch|make-snapshot|restore-snapshot|load-snapshot)$/i, ['settings']),
+    route(/^\/api\/state\/(set|patch|delete)$/i, ['global-states']),
     route(/^\/api\/users\/me\/settings\/save$/i, ['settings']),
     route(/^\/api\/users\/reset-settings$/i, ['settings']),
     route(/^\/api\/users\/(reset-step2|restore-backup|restore-backup\/uploads\/[^/]+\/finalize|import\/data-zip|lan-migration\/import)$/i, ALL_CATEGORY_IDS, { wholesale: true }),

@@ -43,6 +43,7 @@ const USER_DIR_DISPLAY = Object.freeze({
     sysprompt: 'sysprompt',
     reasoning: 'reasoning',
     cardApps: 'card-apps',
+    states: 'states',
 });
 
 // The MySQL/Postgres contract harnesses flatten every USER_DIRS key as a

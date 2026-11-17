@@ -343,6 +343,15 @@ export const SYNC_CATEGORIES = [
         syncDefault: 'on',
         warnings: [],
     },
+    {
+        id: 'global-states',
+        displayKey: 'sync.category.global-states',
+        descriptionKey: 'sync.category.global-states.desc',
+        paths: [directory(d => d.states)],
+        conflictMode: 'file',
+        syncDefault: 'on',
+        warnings: [],
+    },
 
     // ── §3.2 Opt-in or on-with-warning ─────────────────────────────────────
     {
