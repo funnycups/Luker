@@ -222,12 +222,15 @@ function applyRemove(document, segments) {
  * fast-json-patch compatible compare operation subset.
  * Generates RFC6902 operations using add/remove/replace.
  */
-export function compare(documentA, documentB) {
+export function compare(documentA, documentB, options = {}) {
     const operations = [];
     // Compare against strict JSON clones so `undefined` object fields are ignored
     // exactly like JSON transport, preventing invalid ops without `value`.
-    const leftRoot = cloneComparableJsonValue(documentA);
-    const rightRoot = cloneComparableJsonValue(documentB);
+    // Callers whose inputs already come directly from JSON.parse pass
+    // `alreadyNormalized: true` to skip two full replacer-driven JSON round-trips.
+    const alreadyNormalized = options?.alreadyNormalized === true;
+    const leftRoot = alreadyNormalized ? documentA : cloneComparableJsonValue(documentA);
+    const rightRoot = alreadyNormalized ? documentB : cloneComparableJsonValue(documentB);
 
     const walk = (left, right, path = '') => {
         if (isSameJsonValue(left, right)) {
@@ -345,4 +348,20 @@ export function applyPatch(document, patch, validateOperation = true, mutateDocu
 
     results.newDocument = nextDocument;
     return results;
+}
+
+export function applyCommittedSnapshotOperations(baseState, operations) {
+    if (!isObjectLike(baseState) || !Array.isArray(operations) || operations.length === 0) {
+        return baseState;
+    }
+    const mutationOperations = operations.filter((op) => {
+        if (!op || typeof op !== 'object') {
+            return false;
+        }
+        return String(op.op || '').trim().toLowerCase() !== 'test';
+    });
+    if (mutationOperations.length === 0) {
+        return baseState;
+    }
+    return applyPatch(baseState, mutationOperations, false, true).newDocument;
 }

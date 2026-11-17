@@ -48,10 +48,20 @@ test('revalidates unchanged settings fields after a real toggle', async ({ page 
     await toggle.scrollIntoViewIfNeeded();
 
     const initiallyChecked = await toggle.isChecked();
-    const saveResponse = page.waitForResponse(response =>
+    const firstSaveResponse = page.waitForResponse(response =>
         response.url().includes('/api/settings/') && response.request().method() === 'POST');
     await toggle.setChecked(!initiallyChecked);
-    expect((await saveResponse).ok()).toBe(true);
+    expect((await firstSaveResponse).ok()).toBe(true);
+
+    const secondSaveResponse = page.waitForResponse(response =>
+        response.url().includes('/api/settings/patch') && response.request().method() === 'POST');
+    await toggle.setChecked(initiallyChecked);
+    expect((await secondSaveResponse).ok()).toBe(true);
+
+    const thirdSaveResponse = page.waitForResponse(response =>
+        response.url().includes('/api/settings/patch') && response.request().method() === 'POST');
+    await toggle.setChecked(!initiallyChecked);
+    expect((await thirdSaveResponse).ok()).toBe(true);
 
     const reloadMarker = network.length;
     await reloadAndAwait(page, server.baseURL);

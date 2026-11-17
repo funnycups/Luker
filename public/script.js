@@ -346,7 +346,7 @@ import { initAccessibility } from './scripts/a11y.js';
 import { applyStreamFadeIn } from './scripts/util/stream-fadein.js';
 import { initDomHandlers } from './scripts/dom-handlers.js';
 import { SimpleMutex } from './scripts/util/SimpleMutex.js';
-import { applyPatch as applyJsonPatch, compare as compareJsonPatch } from './scripts/util/fast-json-patch.js';
+import { applyCommittedSnapshotOperations, applyPatch as applyJsonPatch, compare as compareJsonPatch } from './scripts/util/fast-json-patch.js';
 import { shouldUseSettingsPatch } from './scripts/util/settings-patch-threshold.js';
 import { cloneAsJsonWire } from './scripts/util/json-clone.js';
 import { AudioPlayer } from './scripts/audio-player.js';
@@ -12427,6 +12427,7 @@ function getChatMessageSnapshotKey(target = resolveChatStateTarget()) {
 
 let objectPatchWorker = null;
 let objectPatchWorkerSequence = 0;
+let objectPatchWorkerSettingsSeeded = false;
 const objectPatchWorkerPending = new Map();
 
 export function buildObjectPatchOperations(previousState, nextState, options = {}) {
@@ -12450,6 +12451,7 @@ function cleanupObjectPatchWorker(error = null) {
         objectPatchWorker.terminate();
         objectPatchWorker = null;
     }
+    objectPatchWorkerSettingsSeeded = false;
 
     if (objectPatchWorkerPending.size === 0) {
         return;
@@ -12562,6 +12564,63 @@ export async function buildObjectPatchOperationsAsync(previousState, nextState, 
         console.warn('Falling back to synchronous object patch diff', error);
         return buildObjectPatchOperations(previous, next, { maxOperations });
     }
+}
+
+async function diffSerializedSettingsWithWorker(previousSnapshot, nextSerialized, options = {}) {
+    const maxOperations = Number.isInteger(options?.maxOperations) && options.maxOperations > 0
+        ? options.maxOperations
+        : 4000;
+    const timeoutMs = Number.isInteger(options?.timeoutMs) && options.timeoutMs > 0
+        ? options.timeoutMs
+        : 15000;
+
+    const worker = ensureObjectPatchWorker();
+    if (!worker) {
+        return null;
+    }
+
+    const id = ++objectPatchWorkerSequence;
+    const operations = await new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+            objectPatchWorkerPending.delete(id);
+            reject(new Error('Object patch worker timeout'));
+        }, timeoutMs);
+
+        objectPatchWorkerPending.set(id, { resolve, reject, timeoutId });
+
+        try {
+            worker.postMessage({
+                id,
+                action: 'diffSerializedSnapshot',
+                snapshotKey: 'settings',
+                nextSerialized,
+                maxOperations,
+                attachTests: true,
+                ...(objectPatchWorkerSettingsSeeded
+                    ? {}
+                    : { previousSerialized: JSON.stringify(previousSnapshot) }),
+            });
+        } catch (error) {
+            clearTimeout(timeoutId);
+            objectPatchWorkerPending.delete(id);
+            reject(error);
+        }
+    });
+
+    objectPatchWorkerSettingsSeeded = true;
+    return {
+        operations,
+        commit() {
+            if (objectPatchWorker === worker) {
+                worker.postMessage({ action: 'commitSnapshot', stageId: id });
+            }
+        },
+        discard() {
+            if (objectPatchWorker === worker) {
+                worker.postMessage({ action: 'discardSnapshot', stageId: id });
+            }
+        },
+    };
 }
 
 function decodeJsonPointerSegment(segment) {
@@ -16153,12 +16212,37 @@ function primeCharactersSnapshot(snapshot) {
         : null;
 }
 
-function rememberSettingsSnapshot(nextSettings = null) {
+function rememberSettingsSnapshot(nextSettings = null, { serialized = null, syncWorker = true } = {}) {
     if (!isPlainObject(nextSettings)) {
         settingsSnapshotCache = null;
+        objectPatchWorkerSettingsSeeded = false;
+        if (syncWorker && objectPatchWorker) {
+            try {
+                objectPatchWorker.postMessage({ action: 'setSnapshot', snapshotKey: 'settings', state: null });
+            } catch {
+                objectPatchWorkerSettingsSeeded = false;
+            }
+        }
         return;
     }
     settingsSnapshotCache = nextSettings;
+    if (!syncWorker) {
+        return;
+    }
+    if (objectPatchWorker) {
+        try {
+            objectPatchWorker.postMessage({
+                action: 'setSnapshot',
+                snapshotKey: 'settings',
+                serialized: typeof serialized === 'string' ? serialized : JSON.stringify(nextSettings),
+            });
+            objectPatchWorkerSettingsSeeded = true;
+        } catch {
+            objectPatchWorkerSettingsSeeded = false;
+        }
+    } else {
+        objectPatchWorkerSettingsSeeded = false;
+    }
 }
 
 function getSettingsSnapshot() {
@@ -16217,8 +16301,8 @@ export function requestAsyncDiffForNextSettingsSave() {
     }, 5000);
 }
 
-function buildSettingsPayload() {
-    return normalizeJsonObject({
+function buildRawSettingsObject() {
+    return {
         firstRun: firstRun,
         accountStorage: accountStorage.getState(),
         currentVersion: currentVersion,
@@ -16243,7 +16327,16 @@ function buildSettingsPayload() {
         background: background_settings,
         proxies: proxies,
         selected_proxy: selected_proxy,
-    });
+    };
+}
+
+function parseNormalizedSettingsObject(serialized) {
+    const parsed = JSON.parse(serialized);
+    return isPlainObject(parsed) ? parsed : {};
+}
+
+function buildSettingsPayload() {
+    return normalizeJsonObject(buildRawSettingsObject());
 }
 
 //MARK: saveSettings()
@@ -16265,17 +16358,36 @@ async function saveSettingsInternal(loopCounter = 0, options = {}) {
         TempResponseLength.restore(null);
     }
 
+    let workerDiff = null;
     try {
-        const payload = buildSettingsPayload();
+        const serializedPayload = JSON.stringify(buildRawSettingsObject());
+        let nextSnapshot = null;
         let saved = false;
         const previousSnapshot = getSettingsSnapshot();
 
         if (!options.directSave && isPlainObject(previousSnapshot)) {
-            const operations = options.asyncDiff
-                ? await buildObjectPatchOperationsAsync(previousSnapshot, payload, { maxOperations: 4000 })
-                : buildObjectPatchOperations(previousSnapshot, payload, { maxOperations: 4000 });
+            if (options.asyncDiff) {
+                try {
+                    workerDiff = await diffSerializedSettingsWithWorker(previousSnapshot, serializedPayload, { maxOperations: 4000 });
+                } catch (error) {
+                    console.warn('Falling back to synchronous object patch diff', error);
+                    workerDiff = null;
+                }
+            }
+
+            let operations;
+            if (workerDiff) {
+                operations = workerDiff.operations;
+            } else {
+                nextSnapshot = parseNormalizedSettingsObject(serializedPayload);
+                operations = buildObjectPatchOperations(previousSnapshot, nextSnapshot, { maxOperations: 4000 });
+            }
+
             if (operations.length === 0) {
                 saved = true;
+                workerDiff?.discard();
+                workerDiff = null;
+                nextSnapshot = previousSnapshot;
             } else if (shouldUseSettingsPatch(operations)) {
                 // Use ops count (not byte comparison) to decide patch vs full save —
                 // avoids JSON.stringify-ing the entire settings payload just to
@@ -16287,6 +16399,10 @@ async function saveSettingsInternal(loopCounter = 0, options = {}) {
                     cache: 'no-cache',
                 });
                 saved = patchResult.ok;
+                if (saved) {
+                    workerDiff?.commit();
+                    nextSnapshot = nextSnapshot ?? applyCommittedSnapshotOperations(previousSnapshot, operations);
+                }
             }
             // else: too many ops or overflow sentinel — fall through to full save below.
         }
@@ -16295,21 +16411,24 @@ async function saveSettingsInternal(loopCounter = 0, options = {}) {
             const result = await fetch('/api/settings/save', {
                 method: 'POST',
                 headers: getRequestHeaders(),
-                body: JSON.stringify(payload),
+                body: serializedPayload,
                 cache: 'no-cache',
             });
 
             if (!result.ok) {
                 throw new Error(`Failed to save settings: ${result.statusText}`);
             }
+            workerDiff?.commit();
+            nextSnapshot = nextSnapshot ?? parseNormalizedSettingsObject(serializedPayload);
         }
 
         invalidateSettingsGetResponseCache();
-        settings = payload;
-        rememberSettingsSnapshot(payload);
+        settings = nextSnapshot;
+        rememberSettingsSnapshot(nextSnapshot, { serialized: serializedPayload, syncWorker: !workerDiff });
         options.onSaved?.();
         await eventSource.emit(event_types.SETTINGS_UPDATED);
     } catch (error) {
+        workerDiff?.discard();
         console.error('Error saving settings:', error);
         toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Settings could not be saved`);
     }

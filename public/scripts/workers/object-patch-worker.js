@@ -1,11 +1,13 @@
-import { compare as compareJsonPatch } from '../util/fast-json-patch.js';
+import { applyCommittedSnapshotOperations, compare as compareJsonPatch } from '../util/fast-json-patch.js';
+
+export { applyCommittedSnapshotOperations };
 
 function isPlainObject(value) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
         return false;
     }
     const prototype = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
+    return prototype === Object.prototype || prototype === null || Object.prototype.toString.call(value) === '[object Object]';
 }
 
 function cloneAsJsonWire(value) {
@@ -108,6 +110,7 @@ function buildObjectPatchOperations(previousState, nextState, options = {}) {
         ? options.maxOperations
         : 2000;
     const attachTests = options?.attachTests !== false;
+    const alreadyNormalized = options?.alreadyNormalized === true;
 
     if (!isDiffableContainer(nextState)) {
         return [];
@@ -116,32 +119,124 @@ function buildObjectPatchOperations(previousState, nextState, options = {}) {
     const previous = isDiffableContainer(previousState)
         ? previousState
         : (Array.isArray(nextState) ? [] : {});
-    const operations = compareJsonPatch(previous, nextState);
+    const operations = compareJsonPatch(previous, nextState, { alreadyNormalized });
     if (operations.length > maxOperations) {
-        return [{ op: 'replace', path: '', value: cloneAsJsonWire(nextState) }];
+        return [{ op: 'replace', path: '', value: alreadyNormalized ? nextState : cloneAsJsonWire(nextState) }];
     }
 
     return attachTests ? attachObjectPatchTests(previous, operations) : operations;
 }
 
-self.addEventListener('message', (event) => {
-    const id = Number(event?.data?.id);
-    const previousState = event?.data?.previousState;
-    const nextState = event?.data?.nextState;
-    const maxOperations = Number(event?.data?.maxOperations);
-    const attachTests = event?.data?.attachTests !== false;
+export function createObjectPatchWorkerState() {
+    return {
+        snapshots: new Map(),
+        staged: new Map(),
+    };
+}
 
+function clearStagedSnapshotsForKey(workerState, snapshotKey) {
+    for (const [stageId, entry] of workerState.staged.entries()) {
+        if (entry.snapshotKey === snapshotKey) {
+            workerState.staged.delete(stageId);
+        }
+    }
+}
+
+export function handleObjectPatchWorkerMessage(workerState, data) {
+    const action = typeof data?.action === 'string' ? data.action : '';
+
+    if (action === 'setSnapshot') {
+        const snapshotKey = String(data?.snapshotKey || '');
+        if (!snapshotKey) {
+            return null;
+        }
+        clearStagedSnapshotsForKey(workerState, snapshotKey);
+        if (typeof data?.serialized === 'string') {
+            const parsed = JSON.parse(data.serialized);
+            if (isDiffableContainer(parsed)) {
+                workerState.snapshots.set(snapshotKey, parsed);
+            } else {
+                workerState.snapshots.delete(snapshotKey);
+            }
+        } else if (isDiffableContainer(data?.state)) {
+            workerState.snapshots.set(snapshotKey, data.state);
+        } else {
+            workerState.snapshots.delete(snapshotKey);
+        }
+        return null;
+    }
+
+    if (action === 'commitSnapshot') {
+        const stageId = Number(data?.stageId);
+        const staged = workerState.staged.get(stageId);
+        if (staged) {
+            workerState.staged.delete(stageId);
+            workerState.snapshots.set(staged.snapshotKey, staged.state);
+        }
+        return null;
+    }
+
+    if (action === 'discardSnapshot') {
+        const stageId = Number(data?.stageId);
+        workerState.staged.delete(stageId);
+        return null;
+    }
+
+    const id = Number(data?.id);
     if (!Number.isInteger(id)) {
-        return;
+        return null;
+    }
+
+    const maxOperations = Number(data?.maxOperations);
+    const normalizedMaxOperations = Number.isInteger(maxOperations) && maxOperations > 0 ? maxOperations : 2000;
+    const attachTests = data?.attachTests !== false;
+
+    if (action === 'diffSerializedSnapshot') {
+        try {
+            const snapshotKey = String(data?.snapshotKey || '');
+            if (!snapshotKey) {
+                return { id, ok: false, error: 'Missing snapshotKey' };
+            }
+            if (!workerState.snapshots.has(snapshotKey) && typeof data?.previousSerialized === 'string') {
+                const seeded = JSON.parse(data.previousSerialized);
+                if (isDiffableContainer(seeded)) {
+                    workerState.snapshots.set(snapshotKey, seeded);
+                }
+            }
+            if (!workerState.snapshots.has(snapshotKey)) {
+                return { id, ok: false, code: 'missing_snapshot', error: `Missing worker snapshot for ${snapshotKey}` };
+            }
+            const nextState = JSON.parse(String(data?.nextSerialized ?? 'null'));
+            const operations = buildObjectPatchOperations(workerState.snapshots.get(snapshotKey), nextState, {
+                maxOperations: normalizedMaxOperations,
+                attachTests,
+                alreadyNormalized: true,
+            });
+            workerState.staged.set(id, { snapshotKey, state: nextState });
+            return { id, ok: true, operations };
+        } catch (error) {
+            return { id, ok: false, error: String(error?.message || error) };
+        }
     }
 
     try {
-        const operations = buildObjectPatchOperations(previousState, nextState, {
-            maxOperations: Number.isInteger(maxOperations) && maxOperations > 0 ? maxOperations : 2000,
+        const operations = buildObjectPatchOperations(data?.previousState, data?.nextState, {
+            maxOperations: normalizedMaxOperations,
             attachTests,
         });
-        self.postMessage({ id, ok: true, operations });
+        return { id, ok: true, operations };
     } catch (error) {
-        self.postMessage({ id, ok: false, error: String(error?.message || error) });
+        return { id, ok: false, error: String(error?.message || error) };
     }
-});
+}
+
+const defaultWorkerState = createObjectPatchWorkerState();
+
+if (typeof WorkerGlobalScope !== 'undefined' && typeof self !== 'undefined' && self instanceof WorkerGlobalScope) {
+    self.addEventListener('message', (event) => {
+        const reply = handleObjectPatchWorkerMessage(defaultWorkerState, event?.data);
+        if (reply) {
+            self.postMessage(reply);
+        }
+    });
+}
