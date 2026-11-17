@@ -135,6 +135,34 @@ input.extension_missing[type="checkbox"] {
     flex-wrap: nowrap;
 }
 
+.extensions_info .extension_actions:empty {
+    display: none;
+}
+
+@media (max-width: 720px) {
+    .extensions_info .extension_block {
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .extensions_info .extension_text_block {
+        flex: 1 1 160px;
+        min-width: 0;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        overflow-wrap: anywhere;
+    }
+
+    .extensions_info .extension_version:not(:empty) {
+        display: inline-block;
+    }
+
+    .extensions_info .extension_actions {
+        margin-left: auto;
+    }
+}
+
 .extensions_toolbar {
     top: 0;
     position: sticky;

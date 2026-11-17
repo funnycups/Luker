@@ -52,8 +52,9 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Third-party extensions
 
 - Fixed third-party extensions that read the SillyTavern version receiving the Luker version.
-- Fixed checking versions, switching branches, and updating third-party extensions and server plugins failing in mobile apps and environments where running external Git processes is restricted.
+- Fixed checking versions, switching branches, and updating third-party extensions and server plugins failing in mobile apps, environments where running external Git processes is restricted, and repositories whose configured remote URL omits the `.git` suffix.
 - Fixed third-party extension version checks clearing local branch and commit information when the remote repository cannot be reached.
+- Fixed narrow screens truncating third-party extension version and branch details in Manage extensions and non-Git extension folders appending an empty branch suffix.
 
 ### Fixes
 

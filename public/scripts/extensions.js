@@ -1957,7 +1957,13 @@ async function checkForUpdatesManual(sortFn, abortSignal) {
 
                     const versionElement = extensionBlock.querySelector('.extension_version');
                     if (versionElement) {
-                        versionElement.textContent += ` (${branch}-${commitHash.substring(0, 7)})`;
+                        const shortHash = commitHash ? commitHash.substring(0, 7) : '';
+                        const gitRefLabel = branch && shortHash
+                            ? `${branch}-${shortHash}`
+                            : (branch || shortHash);
+                        if (gitRefLabel) {
+                            versionElement.textContent += ` (${gitRefLabel})`;
+                        }
                     }
                 }
             } catch (error) {
