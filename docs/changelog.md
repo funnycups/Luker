@@ -84,6 +84,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed launching the desktop app while already running starting a duplicate process.
 - Fixed unsaved-change guards in the desktop app silently blocking page reloads and preventing quitting from the tray.
 - Restored page reload keyboard shortcuts in the Windows and Linux desktop apps.
+- Fixed the desktop app ignoring the configured server port and failing to step past reserved or occupied listen addresses.
 
 ### iOS App
 

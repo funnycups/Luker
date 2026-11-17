@@ -35,6 +35,7 @@
       "http-auth.html",
       "http-auth-preload.js",
       "install-flavour.js",
+      "startup-config.js",
       "window-behaviour.js",
       "preload.js",
       "loading.html",

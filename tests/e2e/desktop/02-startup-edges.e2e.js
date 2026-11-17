@@ -4,6 +4,8 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import net from 'node:net';
 import { launchLukerDesktop } from '../_lib/desktop.js';
+import { reservePort } from '../_lib/ports.js';
+import { cloneDataDir } from '../_lib/server.js';
 import { awaitMainUI } from '../_lib/page.js';
 
 const SEED_CONFIG = resolve(import.meta.dirname, '../../../default/config.yaml');
@@ -37,6 +39,28 @@ test('a busy preferred port does not stop startup', async () => {
     expect(d.port).not.toBe(8000);
     await d.close();
     await new Promise(r => blocker.close(r));
+});
+
+test('a port configured in config.yaml is used when no CLI port is passed', async () => {
+    const customPort = await reservePort('desktop');
+    const userData = mkdtempSync(join(tmpdir(), 'luker-desktop-configport-'));
+    cloneDataDir(join(userData, 'data'));
+    const seed = readFileSync(SEED_CONFIG, 'utf8');
+    const config = seed.replace(/^port:\s*\d+$/m, `port: ${customPort}`);
+    expect(config).not.toBe(seed);
+    writeFileSync(join(userData, 'config.yaml'), config);
+
+    const d = await launchLukerDesktop({
+        scenarioId: 'config-port',
+        userData,
+        passPort: false,
+    });
+    try {
+        expect(d.port).toBe(customPort);
+    } finally {
+        await d.close();
+        rmSync(userData, { recursive: true, force: true });
+    }
 });
 
 test('the boot log stops growing once the server is up', async () => {

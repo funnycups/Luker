@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import fs from 'node:fs';
-import net from 'node:net';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -21,6 +21,7 @@ import {
 } from './data-location.js';
 import { createHttpAuthController, HttpAuthStore } from './http-auth.js';
 import { detectInstallFlavour } from './install-flavour.js';
+import { pickPort, readCliPort, resolveStartupListenPlan } from './startup-config.js';
 import { hidesOnClose, usesTray, devtoolsShortcutFor, reloadShortcutFor } from './window-behaviour.js';
 
 // Electron's main process exposes V8's WebAssembly but not the streaming
@@ -38,10 +39,6 @@ if (typeof WebAssembly.instantiateStreaming !== 'function') {
         return { module, instance: await WebAssembly.instantiate(module, importObject) };
     };
 }
-
-const DEFAULT_PORT = 8000;
-// Probe window for a free port, matching the range the mobile shells use.
-const PORT_PROBE_COUNT = 50;
 
 app.setName('Luker');
 
@@ -125,21 +122,8 @@ if (!process.env.LUKER_PREBUILT_BUNDLES_DIR) {
     }
 }
 
-function readPreferredPort(argv) {
-    const prefix = '--port=';
-    for (const arg of argv) {
-        if (!arg.startsWith(prefix)) {
-            continue;
-        }
-        const parsed = Number.parseInt(arg.slice(prefix.length), 10);
-        if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) {
-            return parsed;
-        }
-    }
-    return DEFAULT_PORT;
-}
-
-const preferredPort = readPreferredPort(process.argv);
+const cliPort = readCliPort(process.argv);
+const backendRequire = createRequire(path.join(backendRoot, 'package.json'));
 
 const httpAuthStore = new HttpAuthStore(path.join(userData, 'http-auth.json'));
 
@@ -344,38 +328,15 @@ function stopWatchingStartup() {
     process.off('uncaughtException', onUncaughtException);
 }
 
-function probePort(port) {
-    return new Promise((resolve, reject) => {
-        const probe = net.createServer();
-        probe.once('error', (err) => {
-            if (err.code === 'EADDRINUSE') {
-                resolve(false);
-            } else {
-                reject(err);
-            }
-        });
-        probe.listen({ host: '127.0.0.1', port }, () => {
-            probe.close(() => resolve(true));
-        });
-    });
-}
-
-async function pickPort(preferred) {
-    for (let offset = 0; offset < PORT_PROBE_COUNT; offset++) {
-        const port = preferred + offset;
-        if (await probePort(port)) {
-            return port;
-        }
-    }
-    throw new Error(`no free port between ${preferred} and ${preferred + PORT_PROBE_COUNT - 1}`);
-}
-
-async function startBackend(win, locale, port) {
+function ensureConfigFile() {
     const configPath = path.join(userData, 'config.yaml');
     if (!fs.existsSync(configPath)) {
         fs.copyFileSync(path.resolve(backendRoot, 'default', 'config.yaml'), configPath);
     }
+    return configPath;
+}
 
+async function startBackend(win, locale, port, configPath) {
     const serverJs = path.resolve(backendRoot, 'server.js');
 
     process.argv = [
@@ -1396,8 +1357,17 @@ if (hasSingleInstanceLock) {
         await win.loadFile('loading.html', { query: { locale } });
 
         try {
-            const port = await pickPort(preferredPort);
-            await startBackend(win, locale, port);
+            const configPath = ensureConfigFile();
+            const yaml = backendRequire('yaml');
+            const listenPlan = resolveStartupListenPlan({
+                cliPort,
+                configText: fs.readFileSync(configPath, 'utf8'),
+                parseYaml: yaml.parse,
+            });
+            const port = await pickPort(listenPlan.preferredPort, {
+                probeTargets: listenPlan.probeTargets,
+            });
+            await startBackend(win, locale, port, configPath);
         } catch (err) {
             if (bootFailure === null) {
                 await win.loadFile('loading.html', {
