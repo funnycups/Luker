@@ -11,7 +11,7 @@ import { getSettingsRepo, getPresetRepo, getNamedDocRepo, getWorldInfoRepo } fro
 import { applyJsonPatch } from '../storage/repositories/json-patch.js';
 import { NotFoundError, PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError } from '../storage/errors.js';
 import { buildSettingsFieldStructure, decodeResourcePointer } from '../../public/scripts/util/resource-fields.js';
-import { createPrivateRepresentation, resolveJsonResourceRepresentation, sendJsonResource, sendPrivateRepresentation, sendResourceReadError } from '../http-resource-cache.js';
+import { resolveJsonResourceRepresentation, sendPrivateRepresentation, sendResourceReadError } from '../http-resource-cache.js';
 
 const ENABLE_EXTENSIONS = !!getConfigValue('extensions.enabled', true, 'boolean');
 const ENABLE_EXTENSIONS_AUTO_UPDATE = !!getConfigValue('extensions.autoUpdate', true, 'boolean');
