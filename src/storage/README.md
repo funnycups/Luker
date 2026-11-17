@@ -63,6 +63,7 @@ router.post('/something', async function (req, res) {
 | `/api/presets` | `/save`, `/patch`, `/delete`, `/state/get`, `/state/get-batch`, `/state/patch`, `/state/delete`, `/state/delete-all`, `/state/rename` |
 | `/api/worldinfo` | `/list`, `/list-lite`, `/get`, `/get-batch`, `/delete`, `/import`, `/edit`, `/patch` |
 | `/api/themes`, `/api/moving-ui`, `/api/quick-replies` | `/save`, `/delete` |
+| `/api/state` | `/get`, `/get-batch`, `/set`, `/patch`, `/delete` |
 | `/api/groups` | `/all`, `/create`, `/edit`, `/delete` (also `getGroupsSnapshot` consumed by `/api/bootstrap`) |
 | `/api/stats` | internal IO only (`init`, `saveStatsToFile`); endpoints unchanged because they read/write the in-memory `STATS` Map |
 

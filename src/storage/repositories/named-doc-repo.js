@@ -89,9 +89,6 @@ export class NamedDocRepo {
             const existing = await tx.getResource(key);
             const seed = (existing && typeof existing === 'object' && !Array.isArray(existing)) ? existing : {};
             const next = applyJsonPatch(seed, operations);
-            if (next === null || typeof next !== 'object' || Array.isArray(next)) {
-                throw new InvalidArgumentError('NamedDocRepo.patch: resulting document must be a plain object');
-            }
             await tx.putResource(key, { doc: next });
             return {
                 applied: operations.length,

@@ -156,6 +156,17 @@ describe('applyJsonPatch', () => {
         expect(caught.op).toBe('remove');
     });
 
+    test('root pointer replace or add with non-plain-object value throws UnsupportedPatchOpError immediately', () => {
+        for (const badValue of [null, [1, 2, 3], 'scalar', 42, undefined]) {
+            expect(() => applyJsonPatch({ a: 1 }, [{ op: 'replace', path: '', value: badValue }]))
+                .toThrow(UnsupportedPatchOpError);
+            expect(() => applyJsonPatch({ a: 1 }, [
+                { op: 'add', path: '', value: badValue },
+                { op: 'add', path: '/x', value: 1 },
+            ])).toThrow(UnsupportedPatchOpError);
+        }
+    });
+
     test('non-empty path without leading slash throws UnsupportedPatchOpError', () => {
         expect(() => applyJsonPatch({ a: 1 }, [{ op: 'replace', path: 'a', value: 2 }]))
             .toThrow(UnsupportedPatchOpError);

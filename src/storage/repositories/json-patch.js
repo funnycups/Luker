@@ -2,6 +2,10 @@ import _ from 'lodash';
 
 import { PatchTestFailedError, PatchMissingParentError, UnsupportedPatchOpError, UnsafePatchPathError } from '../errors.js';
 
+function isPlainObjectDoc(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 export function applyJsonPatch(doc, ops) {
     let result = _.cloneDeep(doc);
     for (const op of ops) {
@@ -18,6 +22,9 @@ export function applyJsonPatch(doc, ops) {
         }
         if (op.op === 'replace') {
             if (segs.length === 0) {
+                if (!isPlainObjectDoc(op.value)) {
+                    throw new UnsupportedPatchOpError(op.op);
+                }
                 result = _.cloneDeep(op.value);
             } else {
                 setAt(result, segs, op.value, op.path);
@@ -26,6 +33,9 @@ export function applyJsonPatch(doc, ops) {
         }
         if (op.op === 'add') {
             if (segs.length === 0) {
+                if (!isPlainObjectDoc(op.value)) {
+                    throw new UnsupportedPatchOpError(op.op);
+                }
                 result = _.cloneDeep(op.value);
             } else {
                 addAt(result, segs, op.value);

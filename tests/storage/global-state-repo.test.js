@@ -165,11 +165,11 @@ describe.each(ENGINES)('NamedDocRepo globalStates on $name', ({ make }) => {
         ])).rejects.toBeInstanceOf(UnsupportedPatchOpError);
         expect(await repo.get(h.handle, 'globalStates', 'root-ops')).toEqual(initial);
 
-        // Root replace with non-object -> InvalidArgumentError, doc intact
+        // Root replace with non-object -> UnsupportedPatchOpError, doc intact
         for (const badValue of [[1, 2, 3], null, 'scalar', 42]) {
             await expect(repo.patch(h.handle, 'globalStates', 'root-ops', [
                 { op: 'replace', path: '', value: badValue },
-            ])).rejects.toBeInstanceOf(InvalidArgumentError);
+            ])).rejects.toBeInstanceOf(UnsupportedPatchOpError);
             expect(await repo.get(h.handle, 'globalStates', 'root-ops')).toEqual(initial);
         }
 
@@ -280,7 +280,7 @@ describe('globalStates backend layout and integration', () => {
         }
     });
 
-    test('patch rejects non-array operations or non-pointer op path cleanly', async () => {
+    test('patch rejects non-array operations or non-object root replacement cleanly', async () => {
         const h = await makeTempFsEngineHarness();
         try {
             const repo = new NamedDocRepo({ engine: h.engine });
@@ -288,7 +288,11 @@ describe('globalStates backend layout and integration', () => {
                 .rejects.toBeInstanceOf(InvalidArgumentError);
             await expect(repo.patch(h.handle, 'globalStates', 'bad-root', [
                 { op: 'replace', path: '', value: [1, 2, 3] },
-            ])).rejects.toBeInstanceOf(InvalidArgumentError);
+            ])).rejects.toBeInstanceOf(UnsupportedPatchOpError);
+            await expect(repo.patch(h.handle, 'globalStates', 'bad-root-multi', [
+                { op: 'replace', path: '', value: null },
+                { op: 'add', path: '/x', value: 1 },
+            ])).rejects.toBeInstanceOf(UnsupportedPatchOpError);
         } finally {
             h.cleanup();
         }
