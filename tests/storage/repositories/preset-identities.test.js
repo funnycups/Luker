@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, jest, test } from '@jest/globals';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { PresetRepo } from '../../../src/storage/repositories/preset-repo.js';
+import { readPresetInventory } from '../../../src/storage/preset-inventory.js';
 import { makeTempFsEngineHarness } from '../harness/contract-harness.js';
 import { makeRemote, BACKEND_ID } from '../../sync/_lib/devices.js';
 import { DirectoryBackend } from '../../sync/_lib/directory-backend.js';
@@ -186,5 +188,65 @@ describe('filesystem preset identity ownership', () => {
         raw(`.luker-preset-records/${relative}`, JSON.stringify(STATE));
         await expect(repo.get(h.handle, 'openai', 'A')).rejects.toHaveProperty('code');
         expect(fs.readFileSync(path.join(h.dirs.openAI_Settings, 'A.json'), 'utf8')).toBe(JSON.stringify(PRESET));
+    });
+
+    test('inventory scan checks folder confinement once without per-entry lstat amplification while rejecting owned symlinks', async () => {
+        for (let i = 0; i < 30; i++) {
+            raw(`Preset_${i}.json`, JSON.stringify(PRESET));
+        }
+        for (let i = 0; i < 5; i++) {
+            raw(extended(['preset', 'openAI_Settings', `Extended_${i}.luker-state.ns`]), JSON.stringify(PRESET));
+        }
+
+        const lstatSpy = jest.spyOn(fs, 'lstatSync');
+        try {
+            const inventory = readPresetInventory({
+                folder: h.dirs.openAI_Settings,
+                dirKey: 'openAI_Settings',
+                boundary: h.dirs.root,
+            });
+            expect(inventory.entries.size).toBe(35);
+            const depthSegments = path.relative(path.resolve(h.dirs.root), path.resolve(h.dirs.openAI_Settings))
+                .split(path.sep)
+                .filter(Boolean).length;
+            expect(lstatSpy.mock.calls.length).toBeLessThanOrEqual(depthSegments + 1);
+        } finally {
+            lstatSpy.mockRestore();
+        }
+
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-preset-symlink-'));
+        try {
+            const outsideJson = path.join(outside, 'secret.json');
+            fs.writeFileSync(outsideJson, JSON.stringify(PRESET));
+
+            // Unowned symlink is ignored by preset inventory
+            fs.symlinkSync(outsideJson, path.join(h.dirs.openAI_Settings, 'notes.txt'));
+            expect(readPresetInventory({
+                folder: h.dirs.openAI_Settings,
+                dirKey: 'openAI_Settings',
+                boundary: h.dirs.root,
+            }).entries.size).toBe(35);
+
+            // Owned flat preset symlink is rejected with SYNC_UNSAFE_LIVE_PATH
+            const ownedLink = path.join(h.dirs.openAI_Settings, 'LinkedPreset.json');
+            fs.symlinkSync(outsideJson, ownedLink);
+            expect(() => readPresetInventory({
+                folder: h.dirs.openAI_Settings,
+                dirKey: 'openAI_Settings',
+                boundary: h.dirs.root,
+            })).toThrow(expect.objectContaining({ code: 'SYNC_UNSAFE_LIVE_PATH' }));
+            fs.unlinkSync(ownedLink);
+
+            // Symlink inside reserved record directory is rejected with PRESET_PROJECTION_INVALID
+            const reservedLink = path.join(h.dirs.openAI_Settings, '.luker-preset-records', 'v1', 'linked');
+            fs.symlinkSync(outside, reservedLink);
+            expect(() => readPresetInventory({
+                folder: h.dirs.openAI_Settings,
+                dirKey: 'openAI_Settings',
+                boundary: h.dirs.root,
+            })).toThrow(expect.objectContaining({ code: 'PRESET_PROJECTION_INVALID' }));
+        } finally {
+            fs.rmSync(outside, { recursive: true, force: true });
+        }
     });
 });

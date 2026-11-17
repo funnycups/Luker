@@ -5,9 +5,21 @@ import { assertConfinedPath } from './path-confinement.js';
 import { buildSidecarFilename } from './engines/sidecar-naming.js';
 import { PRESET_RECORDS_DIRECTORY, decodePresetRecordRelativePath, presetRecordIdentity } from './preset-paths.js';
 
+function direntKind(parentDir, child) {
+    if (child.isFile()) return 'file';
+    if (child.isDirectory()) return 'directory';
+    if (child.isSymbolicLink()) return 'symlink';
+    const stat = fs.lstatSync(path.join(parentDir, child.name));
+    if (stat.isFile()) return 'file';
+    if (stat.isDirectory()) return 'directory';
+    if (stat.isSymbolicLink()) return 'symlink';
+    return 'other';
+}
+
 /** Select all physical ownership structurally, before reading any document bytes. */
 export function readPresetInventory({ folder, dirKey, boundary }) {
-    assertConfinedPath({ boundary, absolutePath: folder });
+    const root = path.resolve(boundary);
+    assertConfinedPath({ boundary: root, absolutePath: folder });
     const entries = new Map();
     const byPath = new Map();
     let children;
@@ -15,11 +27,13 @@ export function readPresetInventory({ folder, dirKey, boundary }) {
         if (error.code === 'ENOENT') return { entries, byPath };
         throw error;
     }
-    const add = relativePath => {
+    const add = (relativePath, { isSymlink = false } = {}) => {
         const record = decodePresetRecordRelativePath(dirKey, relativePath);
         if (!record) return;
         const absolutePath = path.join(folder, ...relativePath.split('/'));
-        assertConfinedPath({ boundary, absolutePath });
+        if (isSymlink) {
+            throw Object.assign(new Error(`Unsafe live path at ${path.resolve(absolutePath)}: the path must remain inside ${root} without symbolic links`), { code: 'SYNC_UNSAFE_LIVE_PATH' });
+        }
         const key = presetRecordIdentity(record);
         const prior = entries.get(key);
         if (prior) throw Object.assign(new Error(`Duplicate preset identity ${key}: ${prior.absolutePath} and ${absolutePath}`), { code: 'PRESET_IDENTITY_DUPLICATE' });
@@ -29,20 +43,25 @@ export function readPresetInventory({ folder, dirKey, boundary }) {
     };
     const walkReserved = relative => {
         const absolutePath = path.join(folder, ...relative.split('/'));
-        assertConfinedPath({ boundary, absolutePath });
         for (const child of fs.readdirSync(absolutePath, { withFileTypes: true })) {
             const next = `${relative}/${child.name}`;
             if (relative === PRESET_RECORDS_DIRECTORY && child.name !== 'v1') decodePresetRecordRelativePath(dirKey, next);
-            if (child.isDirectory()) walkReserved(next);
-            else if (child.isFile()) add(next);
+            const kind = direntKind(absolutePath, child);
+            if (kind === 'directory') walkReserved(next);
+            else if (kind === 'file') add(next);
             else throw Object.assign(new Error(`Invalid preset record entry at ${path.join(folder, next)}`), { code: 'PRESET_PROJECTION_INVALID' });
         }
     };
     for (const child of children) {
+        const kind = direntKind(folder, child);
         if (child.name === PRESET_RECORDS_DIRECTORY) {
-            if (!child.isDirectory()) throw Object.assign(new Error(`Preset record structure is not a directory at ${folder}`), { code: 'PRESET_PROJECTION_INVALID' });
+            if (kind !== 'directory') throw Object.assign(new Error(`Preset record structure is not a directory at ${folder}`), { code: 'PRESET_PROJECTION_INVALID' });
             walkReserved(child.name);
-        } else if (child.isFile() || child.isSymbolicLink()) add(child.name);
+        } else if (kind === 'file') {
+            add(child.name);
+        } else if (kind === 'symlink') {
+            add(child.name, { isSymlink: true });
+        }
     }
     return { entries, byPath };
 }
