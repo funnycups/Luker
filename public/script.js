@@ -9107,24 +9107,35 @@ async function generateInternal(type, { automatic_trigger, force_name2, quiet_pr
             break;
         }
         case 'openai': {
-            let [prompt, counts] = await prepareOpenAIMessages({
-                name2: name2,
-                charDescription: description,
-                charPersonality: personality,
-                scenario: scenario,
-                worldInfoBeforeEntries: worldInfoBeforeEntries,
-                worldInfoAfterEntries: worldInfoAfterEntries,
-                extensionPrompts: extension_prompts,
-                bias: promptBias,
-                type: type,
-                quietPrompt: quiet_prompt,
-                quietImage: quietImage,
-                cyclePrompt: cyclePrompt,
-                systemPromptOverride: system,
-                jailbreakPromptOverride: jailbreak,
-                messages: oaiMessages,
-                messageExamples: oaiMessageExamples,
-            }, dryRun);
+            let prompt, counts;
+            try {
+                [prompt, counts] = await prepareOpenAIMessages({
+                    name2: name2,
+                    charDescription: description,
+                    charPersonality: personality,
+                    scenario: scenario,
+                    worldInfoBeforeEntries: worldInfoBeforeEntries,
+                    worldInfoAfterEntries: worldInfoAfterEntries,
+                    extensionPrompts: extension_prompts,
+                    bias: promptBias,
+                    type: type,
+                    quietPrompt: quiet_prompt,
+                    quietImage: quietImage,
+                    cyclePrompt: cyclePrompt,
+                    systemPromptOverride: system,
+                    jailbreakPromptOverride: jailbreak,
+                    messages: oaiMessages,
+                    messageExamples: oaiMessageExamples,
+                }, dryRun);
+            } catch (error) {
+                if (!dryRun) {
+                    if (type !== 'quiet') {
+                        notifyMessageFailure(String(error?.message || error || ''), String(name2 || ''));
+                    }
+                    unblockGeneration(type);
+                }
+                throw error;
+            }
             generate_data = { prompt: prompt };
 
             // TODO: move these side-effects somewhere else, so this switch-case solely sets generate_data

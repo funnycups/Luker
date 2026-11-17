@@ -65,6 +65,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed chat rename failures not showing the server's reason.
 - Fixed renaming chats failing in the Android app and on filesystems without hard link support.
 - Fixed background Prompt Manager refreshes interrupting an active prompt drag.
+- Fixed prompt assembly failures showing a generic token-counting error, dispatching an empty context, and omitting cross-frame error details from diagnostics logs.
 
 ### Storage & Sync
 

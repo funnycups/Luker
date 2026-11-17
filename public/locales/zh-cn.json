@@ -2684,6 +2684,7 @@
     "An error occurred while counting tokens: Invalid character name": "统计词符时发生错误：角色名称无效",
     "The name of at least one character contained whitespaces or special characters. Please check your user and character name.": "至少有一个角色名称包含空格或特殊字符。请检查你的用户名和角色名。",
     "An unknown error occurred while counting tokens. Further information may be available in console.": "统计词符时发生未知错误。更多信息请查看控制台。",
+    "Failed to prepare prompts": "准备提示词失败",
     "${0} + $${1}": "${0} + $${1}",
     "Use OpenRouter website setting": "使用 OpenRouter 网站设置",
     "API returned an error": "API 返回了错误",

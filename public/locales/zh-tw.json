@@ -2640,6 +2640,7 @@
     "Note: Themes can be made/applied by going to the ": "注意：主題可通過前往以下位置進行創建／應用",
     "Theme Name": "主題名稱",
     "An unknown error occurred while counting tokens. Further information may be available in console.": "計算符元時發生未知錯誤。更多資訊可能可在主控台（console）中查看。",
+    "Failed to prepare prompts": "準備提示詞失敗",
     "Type the folder name of the theme you want to apply.": "輸入您想套用的主題資料夾名稱。",
     "Place your theme data in a folder.": "請將主題資料存於該資料夾內。",
     "Unsure where to start? Type ": "不確定如何開始？輸入：",

@@ -1472,7 +1472,9 @@ class PromptManager {
         if (main_api !== 'openai') return;
 
         if ('character' === this.configuration.promptOrder.strategy && null === this.activeCharacter) return;
-        this.error = null;
+        if (afterTryGenerate) {
+            this.error = null;
+        }
         const requestId = ++this.renderRequestId;
 
         waitUntilCondition(() => !is_send_press && !is_group_generating && !this._isDragging, 1024 * 1024, 100).catch(() => {

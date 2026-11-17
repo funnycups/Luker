@@ -2234,6 +2234,47 @@ async function preparePromptsForChatCompletion({ scenario, charPersonality, name
 }
 
 /**
+ * Extracts a readable message from an exception thrown while assembling prompts,
+ * including cross-realm errors from sandboxed iframes and XHR rejections.
+ * @param {any} error Thrown error value
+ * @returns {string} Human-readable error message
+ */
+function formatPromptPreparationError(error) {
+    if (typeof error === 'string') {
+        return error.trim() || t`Unknown error`;
+    }
+
+    if (error && typeof error === 'object') {
+        const name = typeof error.name === 'string' ? error.name.trim() : '';
+        const message = typeof error.message === 'string'
+            ? error.message.trim()
+            : (typeof error.error?.message === 'string'
+                ? error.error.message.trim()
+                : (typeof error.responseJSON?.error?.message === 'string'
+                    ? error.responseJSON.error.message.trim()
+                    : (typeof error.responseJSON?.message === 'string' ? error.responseJSON.message.trim() : '')));
+
+        if (message) {
+            if (name && name !== 'Error' && !message.startsWith(`${name}:`)) {
+                return `${name}: ${message}`;
+            }
+            return message;
+        }
+
+        if (typeof error.status === 'number' && error.status > 0) {
+            const statusText = typeof error.statusText === 'string' ? error.statusText.trim() : '';
+            return statusText ? `HTTP ${error.status} ${statusText}` : `HTTP ${error.status}`;
+        }
+
+        if (name) {
+            return name;
+        }
+    }
+
+    return t`Unknown error`;
+}
+
+/**
  * Take a configuration object and prepares messages for a chat with OpenAI's chat completion API.
  * Handles prompts, prepares chat history, manages token budget, and processes various user settings.
  *
@@ -2283,6 +2324,8 @@ export async function prepareOpenAIMessages({
 
     const userSettings = promptManager.serviceSettings;
     chatCompletion.setTokenBudget(userSettings.openai_max_context, userSettings.openai_max_tokens);
+    promptManager.error = null;
+    let promptError = null;
 
     try {
         // Merge markers and ordered user prompts with system prompts
@@ -2321,23 +2364,32 @@ export async function prepareOpenAIMessages({
             chatCompletion.log('Invalid character name');
             promptManager.error = t`The name of at least one character contained whitespaces or special characters. Please check your user and character name.`;
         } else {
-            toastr.error(t`An unknown error occurred while counting tokens. Further information may be available in console.`);
+            const detail = formatPromptPreparationError(error);
+            toastr.error(detail, t`Failed to prepare prompts`, { preventDuplicates: true });
+            promptManager.error = detail;
             console.error('Unexpected error while preparing prompts', error);
             chatCompletion.log('----- Unexpected error while preparing prompts -----');
             chatCompletion.log(error);
-            chatCompletion.log(error.stack);
+            chatCompletion.log(error?.stack);
             chatCompletion.log('----------------------------------------------------');
+            if (!dryRun) {
+                promptError = error;
+            }
         }
     } finally {
         // Pass chat completion to prompt manager for inspection
         promptManager.setChatCompletion(chatCompletion);
 
-        if (oai_settings.squash_system_messages && dryRun == false) {
+        if (oai_settings.squash_system_messages && dryRun == false && !promptError) {
             await chatCompletion.squashSystemMessages();
         }
 
         // All information is up-to-date, render.
         if (false === dryRun) promptManager.render(false);
+    }
+
+    if (promptError) {
+        throw promptError;
     }
 
     const chat = chatCompletion.getChat();
