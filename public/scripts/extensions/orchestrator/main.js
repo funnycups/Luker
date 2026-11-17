@@ -4287,7 +4287,7 @@ export async function executeAiIterationToolCalls(context, session, toolCalls, a
                 session.workingProfile.presets[presetId] = createPresetDraft();
             }
             const nodes = Array.isArray(stage.nodes) ? stage.nodes : [];
-            const existingIndex = nodes.findIndex(item => String(item?.id || '') === nodeId);
+            const existingIndex = nodes.findIndex(item => (typeof item === 'string' ? item.trim() : String(item?.id || '')) === nodeId);
             // Strict optional-string fields. Wrong-type args throw and
             // surface as `{ok:false, error:'invalid_args'}` tool replies
             // — silently falling back to the existing value (the old
@@ -4355,7 +4355,7 @@ export async function executeAiIterationToolCalls(context, session, toolCalls, a
                 pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
                 continue;
             }
-            const index = stage.nodes.findIndex(item => String(item?.id || '') === nodeId);
+            const index = stage.nodes.findIndex(item => (typeof item === 'string' ? item.trim() : String(item?.id || '')) === nodeId);
             if (index >= 0) {
                 stage.nodes.splice(index, 1);
                 const actionText = `Node "${nodeId}" removed from stage "${stageId}".`;
@@ -4462,13 +4462,17 @@ export async function executeAiIterationToolCalls(context, session, toolCalls, a
                 pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
                 continue;
             }
-            const node = stage.nodes.find(n => String(n?.id || '') === nodeId);
-            if (!node) {
+            const nodeIndex = stage.nodes.findIndex(n => (typeof n === 'string' ? n.trim() : String(n?.id || '')) === nodeId);
+            if (nodeIndex < 0) {
                 const actionText = `Skipped node tools update: node "${nodeId}" not found in stage "${stageId}".`;
                 actions.push(actionText);
                 pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
                 continue;
             }
+            if (typeof stage.nodes[nodeIndex] === 'string') {
+                stage.nodes[nodeIndex] = { id: nodeId, preset: nodeId, type: ORCH_NODE_TYPE_WORKER };
+            }
+            const node = stage.nodes[nodeIndex];
             if (!node.tools || typeof node.tools !== 'object') {
                 node.tools = session.workingProfile.spec?.defaultTools && typeof session.workingProfile.spec.defaultTools === 'object'
                     ? JSON.parse(JSON.stringify(session.workingProfile.spec.defaultTools))
@@ -4508,11 +4512,17 @@ export async function executeAiIterationToolCalls(context, session, toolCalls, a
                 pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
                 continue;
             }
-            const node = stage.nodes.find(n => String(n?.id || '') === nodeId);
+            const node = stage.nodes.find(n => (typeof n === 'string' ? n.trim() : String(n?.id || '')) === nodeId);
             if (!node) {
                 const actionText = `Skipped node tools clear: node "${nodeId}" not found in stage "${stageId}".`;
                 actions.push(actionText);
                 pushToolResult({ ok: false, error: actionText, stage_id: stageId, node_id: nodeId });
+                continue;
+            }
+            if (typeof node === 'string') {
+                const actionText = `Node "${nodeId}" tools already inheriting default.`;
+                actions.push(actionText);
+                pushToolResult({ ok: true, changed: false, action: actionText });
                 continue;
             }
             const hadOverride = node.tools && typeof node.tools === 'object';
