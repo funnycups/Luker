@@ -751,7 +751,7 @@ class PresetManager {
      * @returns {string[]} List of preset names
      */
     getAllPresets() {
-        return $(this.select).find('option').map((_, el) => el.text).toArray();
+        return Array.from(new Set($(this.select).find('option').map((_, el) => el.text).toArray()));
     }
 
     /**
