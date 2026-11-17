@@ -15864,6 +15864,23 @@ function reloadLoop() {
 //MARK: getSettings()
 ///////////////////////////////////////////
 const SETTINGS_GET_ENDPOINT = '/api/settings/get';
+const SETTINGS_GET_INVALIDATING_ENDPOINTS = new Set([
+    '/api/presets/save',
+    '/api/presets/patch',
+    '/api/presets/delete',
+    '/api/settings/save',
+    '/api/settings/patch',
+    '/api/settings/restore-snapshot',
+    '/api/worldinfo/delete',
+    '/api/worldinfo/import',
+    '/api/worldinfo/edit',
+    '/api/worldinfo/patch',
+    '/api/themes/save',
+    '/api/themes/delete',
+    '/api/moving-ui/save',
+    '/api/quick-replies/save',
+    '/api/quick-replies/delete',
+]);
 let settingsGetRequestInterceptorInstalled = false;
 let settingsGetResponseCache = null;
 let settingsGetRequestPromise = null;
@@ -15906,6 +15923,22 @@ function isSettingsGetRequest(input, init = {}) {
     }
 }
 
+function isSettingsGetInvalidatingRequest(input, init = {}) {
+    const request = input instanceof Request ? input : null;
+    const method = String(init?.method ?? request?.method ?? 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD') {
+        return false;
+    }
+
+    try {
+        const requestUrl = request?.url ?? String(input);
+        const url = new URL(requestUrl, window.location.origin);
+        return url.origin === window.location.origin && SETTINGS_GET_INVALIDATING_ENDPOINTS.has(url.pathname);
+    } catch {
+        return false;
+    }
+}
+
 function invalidateSettingsGetResponseCache() {
     settingsGetCacheGeneration += 1;
     settingsGetRequestPromise = null;
@@ -15920,7 +15953,15 @@ function installSettingsGetRequestInterceptor() {
     const baseFetch = window.fetch.bind(window);
     window.fetch = async function settingsGetRequestInterceptor(input, init) {
         if (!isSettingsGetRequest(input, init)) {
-            return await baseFetch(input, init);
+            const invalidatesCache = isSettingsGetInvalidatingRequest(input, init);
+            if (invalidatesCache) {
+                invalidateSettingsGetResponseCache();
+            }
+            const response = await baseFetch(input, init);
+            if (invalidatesCache) {
+                invalidateSettingsGetResponseCache();
+            }
+            return response;
         }
 
         const cachedResponse = buildSettingsGetCachedResponse();
