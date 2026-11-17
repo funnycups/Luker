@@ -4572,9 +4572,7 @@ async function sendOpenAIRequest(type, messages, signal, {
     const normalizedTools = Array.isArray(tools) ? tools : [];
     const normalizedToolChoice = toolChoice ?? 'auto';
     const modeOptions = functionCallOptions && typeof functionCallOptions === 'object' ? functionCallOptions : {};
-    let requestMessages = Array.isArray(messages)
-        ? messages.map(message => ({ ...message }))
-        : messages;
+    let requestMessages = messages;
     let effectiveTools = tools;
     let effectiveToolChoice = toolChoice;
     let effectiveReplaceTools = replaceTools;
@@ -4583,7 +4581,10 @@ async function sendOpenAIRequest(type, messages, signal, {
     if (usePromptXmlFunctionCalls && normalizedTools.length > 0) {
         const triggerSignal = String(modeOptions.triggerSignal || generateRandomTriggerSignal()).trim();
         if (Array.isArray(requestMessages)) {
-            requestMessages = normalizeToolMessagesForPlainTextFunctionCalling(requestMessages, { triggerSignal });
+            requestMessages = normalizeToolMessagesForPlainTextFunctionCalling(
+                requestMessages.map(message => ({ ...message })),
+                { triggerSignal },
+            );
         }
 
         const protocolStyle = modeOptions.protocolStyle === TOOL_PROTOCOL_STYLE.TABLE
