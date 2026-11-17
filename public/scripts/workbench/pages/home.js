@@ -12,10 +12,23 @@ import { budgetNote } from '../model/budget.js';
 export function createHomePage(app) {
     const el = h('div', { class: 'wb-page' });
     const openWhy = new Set();
+    let lastPaintSignature = null;
 
-    function paint() {
-        clear(el);
+    function computePaintSignature(snap) {
+        const snapPart = snap ? (() => { const { at: _at, ...rest } = snap; return rest; })() : null;
+        const suggPart = (app.suggestions() || []).map(s => ({ id: s.id, sig: s.sig, tone: s.tone, text: s.text, why: s.why, source: s.source }));
+        const wsPart = (app.workspaces?.() || []).map(w => ({ id: w.id, title: w.title }));
+        return JSON.stringify({ snap: snapPart, sugg: suggPart, ws: wsPart, err: app.loadError() || '' });
+    }
+
+    function paint({ force = true } = {}) {
         const snap = app.snapshot();
+        const sig = computePaintSignature(snap);
+        if (!force && el.childNodes.length > 0 && sig === lastPaintSignature) {
+            return;
+        }
+        lastPaintSignature = sig;
+        clear(el);
         const chat = snap?.chat;
         put(el, h('div', null,
             h('h2', { class: 'wb-h2', text: i18n('Overview') }),
@@ -185,7 +198,8 @@ export function createHomePage(app) {
 
     return {
         el,
-        show: paint,
-        onSnapshot: paint,
+        show: () => paint({ force: true }),
+        onSnapshot: () => paint({ force: false }),
+        onRegistryUpdate: () => paint({ force: true }),
     };
 }

@@ -16,7 +16,7 @@
 .wbench .wb-tip > .wb-dot { margin-top: 6px; }
 .wbench .wb-tip-main { flex: 1; min-width: 0; }
 .wbench .wb-tip-meta { font-size: 11.5px; color: var(--wb-faint); }
-.wbench .wb-tip-acts { display: flex; gap: 6px; flex: none; }
+.wbench .wb-tip-acts { display: flex; flex-wrap: wrap; gap: 6px; flex: none; }
 .wbench .wb-why { margin-top: 6px; }
 .wbench .wb-why summary { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--wb-faint); cursor: pointer; list-style: none; }
 .wbench .wb-why summary::-webkit-details-marker { display: none; }
@@ -25,11 +25,11 @@
 .wbench .wb-why-src { display: inline-block; margin-top: 4px; font-size: 11px; color: var(--wb-faint); }
 
 .wbench .wb-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.wbench .wb-card { position: relative; display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--wb-border); border-radius: var(--wb-r); background: var(--wb-surface); transition: border-color var(--wb-dur); }
+.wbench .wb-card { position: relative; display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 14px; border: 1px solid var(--wb-border); border-radius: var(--wb-r); background: var(--wb-surface); transition: border-color var(--wb-dur); }
 .wbench .wb-card:hover { border-color: var(--wb-border-strong); }
 .wbench .wb-card::before { content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: var(--tone); }
 .wbench .wb-card-head { display: flex; align-items: center; gap: 10px; }
-.wbench .wb-card-icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 9px; color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent); }
+.wbench .wb-card-icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 9px; color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, var(--wb-surface)); }
 .wbench .wb-card-title { flex: 1; min-width: 0; }
 .wbench .wb-card-name { font-weight: 650; font-size: 13.5px; }
 .wbench .wb-card-by { font-size: 11.5px; color: var(--wb-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -37,7 +37,7 @@
 .wbench .wb-card-stat b { color: var(--wb-text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .wbench .wb-card-acts { display: flex; flex-wrap: wrap; gap: 6px; }
 
-.wbench.is-compact .wb-cards { grid-template-columns: 1fr; }
+.wbench.is-compact .wb-cards { grid-template-columns: minmax(0, 1fr); }
 .wbench.is-compact .wb-budget-warn { margin-left: 0; width: 100%; }
 .wbench.is-compact .wb-tip { flex-wrap: wrap; }
 .wbench.is-compact .wb-tip-acts { width: 100%; padding-left: 18px; }
