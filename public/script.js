@@ -12279,7 +12279,6 @@ const chatStateRequestCache = new Map();
 const presetStateRequestCache = new Map();
 const chatStateRequestGeneration = new Map();
 const presetStateRequestGeneration = new Map();
-let settingsGetCacheGeneration = 0;
 
 function normalizePresetStateApiId(apiId = '') {
     const normalized = String(apiId || (main_api === 'koboldhorde' ? 'kobold' : main_api) || '').trim();
@@ -15875,52 +15874,11 @@ function reloadLoop() {
 //MARK: getSettings()
 ///////////////////////////////////////////
 const SETTINGS_GET_ENDPOINT = '/api/settings/get';
-const SETTINGS_GET_INVALIDATING_ENDPOINTS = new Set([
-    '/api/presets/save',
-    '/api/presets/patch',
-    '/api/presets/delete',
-    '/api/settings/save',
-    '/api/settings/patch',
-    '/api/settings/restore-snapshot',
-    '/api/worldinfo/delete',
-    '/api/worldinfo/import',
-    '/api/worldinfo/edit',
-    '/api/worldinfo/patch',
-    '/api/themes/save',
-    '/api/themes/delete',
-    '/api/moving-ui/save',
-    '/api/quick-replies/save',
-    '/api/quick-replies/delete',
-]);
 let settingsGetRequestInterceptorInstalled = false;
-let settingsGetResponseCache = null;
-let settingsGetRequestPromise = null;
-
-function buildSettingsGetCachedResponse() {
-    if (!settingsGetResponseCache) {
-        return null;
-    }
-
-    return new Response(settingsGetResponseCache.body, {
-        headers: new Headers(settingsGetResponseCache.headers),
-        status: settingsGetResponseCache.status,
-        statusText: settingsGetResponseCache.statusText,
-    });
-}
-
-async function cacheSettingsGetResponse(response) {
-    const clone = response.clone();
-    return {
-        body: await clone.text(),
-        headers: Array.from(response.headers.entries()),
-        status: response.status,
-        statusText: response.statusText,
-    };
-}
 
 function isSettingsGetRequest(input, init = {}) {
     const request = input instanceof Request ? input : null;
-    const method = String(init.method ?? request?.method ?? 'GET').toUpperCase();
+    const method = String(init?.method ?? request?.method ?? 'GET').toUpperCase();
     if (method !== 'POST') {
         return false;
     }
@@ -15934,28 +15892,6 @@ function isSettingsGetRequest(input, init = {}) {
     }
 }
 
-function isSettingsGetInvalidatingRequest(input, init = {}) {
-    const request = input instanceof Request ? input : null;
-    const method = String(init?.method ?? request?.method ?? 'GET').toUpperCase();
-    if (method === 'GET' || method === 'HEAD') {
-        return false;
-    }
-
-    try {
-        const requestUrl = request?.url ?? String(input);
-        const url = new URL(requestUrl, window.location.origin);
-        return url.origin === window.location.origin && SETTINGS_GET_INVALIDATING_ENDPOINTS.has(url.pathname);
-    } catch {
-        return false;
-    }
-}
-
-function invalidateSettingsGetResponseCache() {
-    settingsGetCacheGeneration += 1;
-    settingsGetRequestPromise = null;
-    settingsGetResponseCache = null;
-}
-
 function installSettingsGetRequestInterceptor() {
     if (settingsGetRequestInterceptorInstalled) {
         return;
@@ -15964,63 +15900,44 @@ function installSettingsGetRequestInterceptor() {
     const baseFetch = window.fetch.bind(window);
     window.fetch = async function settingsGetRequestInterceptor(input, init) {
         if (!isSettingsGetRequest(input, init)) {
-            const invalidatesCache = isSettingsGetInvalidatingRequest(input, init);
-            if (invalidatesCache) {
-                invalidateSettingsGetResponseCache();
-            }
-            const response = await baseFetch(input, init);
-            if (invalidatesCache) {
-                invalidateSettingsGetResponseCache();
-            }
-            return response;
+            return await baseFetch(input, init);
         }
 
-        const cachedResponse = buildSettingsGetCachedResponse();
-        if (cachedResponse) {
-            return cachedResponse;
-        }
-
-        if (!settingsGetRequestPromise) {
-            const requestGeneration = settingsGetCacheGeneration;
-            settingsGetRequestPromise = (async () => {
-                const response = await baseFetch(input, init);
-                const cached = await cacheSettingsGetResponse(response);
-                if (response.ok && requestGeneration === settingsGetCacheGeneration) {
-                    settingsGetResponseCache = cached;
-                }
-                return cached;
-            })().finally(() => {
-                settingsGetRequestPromise = null;
+        const request = input instanceof Request ? input : null;
+        const signal = init?.signal ?? request?.signal;
+        try {
+            const envelope = await loadSettingsEnvelope({ bootstrap: false, signal });
+            return new Response(JSON.stringify(envelope), {
+                headers: { 'Content-Type': 'application/json; charset=utf-8' },
+                status: 200,
+                statusText: 'OK',
+            });
+        } catch (error) {
+            if (error?.name === 'AbortError' || !Number.isInteger(error?.status)) {
+                throw error;
+            }
+            return new Response(JSON.stringify({
+                code: error.code || 'http_error',
+                detail: error.detail || error.message || '',
+            }), {
+                headers: { 'Content-Type': 'application/json; charset=utf-8' },
+                status: error.status,
             });
         }
-
-        const requestCache = await settingsGetRequestPromise;
-        return new Response(requestCache.body, {
-            headers: new Headers(requestCache.headers),
-            status: requestCache.status,
-            statusText: requestCache.statusText,
-        });
     };
     settingsGetRequestInterceptorInstalled = true;
 }
 
-async function fetchSettingsPayload(endpoint, { silent = false } = {}) {
-    const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify({}),
-        cache: 'no-cache',
-    });
-
-    if (!response.ok) {
+async function fetchSettingsEnvelope({ bootstrap = false, silent = false } = {}) {
+    try {
+        return await loadSettingsEnvelope({ bootstrap });
+    } catch (error) {
         if (!silent) {
             reloadLoop();
             toastr.error(t`Settings could not be loaded after multiple attempts. Please try again later.`);
         }
-        throw new Error(`Error getting settings from ${endpoint}`);
+        throw error;
     }
-
-    return response.json();
 }
 
 async function fetchBootstrapSnapshot() {
@@ -16098,7 +16015,7 @@ export async function ensureFullSettingsLoaded() {
 export async function getSettings(options = {}) {
     let onboardingTask = null;
     const useBootstrap = options?.bootstrap === true;
-    const data = options?.payload ?? await fetchSettingsPayload(useBootstrap ? '/api/settings/bootstrap' : '/api/settings/get');
+    const data = options?.payload ?? await fetchSettingsEnvelope({ bootstrap: useBootstrap });
 
     if (useBootstrap) {
         fullSettingsLoaded = false;
@@ -16474,7 +16391,6 @@ async function saveSettingsInternal(loopCounter = 0, options = {}) {
             nextSnapshot = nextSnapshot ?? parseNormalizedSettingsObject(serializedPayload);
         }
 
-        invalidateSettingsGetResponseCache();
         settings = nextSnapshot;
         rememberSettingsSnapshot(nextSnapshot, { serialized: serializedPayload, syncWorker: !workerDiff });
         options.onSaved?.();

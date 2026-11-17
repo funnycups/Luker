@@ -1,6 +1,6 @@
 // #67 — Chat completion preset runtime parity & event message identity.
 //
-// Guards four runtime contracts relied upon by external preset/request
+// Guards five runtime contracts relied upon by external preset/request
 // consumers:
 //   1. Prompt message object references emitted in CHAT_COMPLETION_PROMPT_READY
 //      and GENERATE_AFTER_DATA remain identical in CHAT_COMPLETION_SETTINGS_READY
@@ -16,6 +16,9 @@
 //   4. `PresetManager.getAllPresets()` returns unique preset names even when
 //      the active character carries a card-bound preset colliding with a
 //      global preset name.
+//   5. `POST /api/settings/get` delegates to negotiated GET resource reads
+//      without maintaining a client-side snapshot cache, reflecting both
+//      `savePreset` writes and out-of-band server file updates immediately.
 
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
@@ -348,39 +351,60 @@ test.describe('#67 — chat completion preset runtime parity', () => {
         expect(listInspection.listed).toHaveLength(listInspection.uniqueCount);
     });
 
-    test('saving a preset invalidates the cached /api/settings/get snapshot', async ({ page }) => {
+    test('delegates POST /api/settings/get to revalidated resource reads without stale client cache', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 
-        const roundTrip = await page.evaluate(async (presetName) => {
+        const observedRequests = [];
+        page.on('request', req => {
+            observedRequests.push({ method: req.method(), url: req.url() });
+        });
+
+        const readPresetTempViaSettingsGet = (presetName) => page.evaluate(async (targetName) => {
             const ctx = window.Luker.getContext();
+            const res = await window.fetch('/api/settings/get', {
+                method: 'POST',
+                headers: ctx.getRequestHeaders(),
+                body: '{}',
+            });
+            if (!res.ok) {
+                throw new Error(`POST /api/settings/get failed with HTTP ${res.status}`);
+            }
+            const payload = await res.json();
+            const idx = payload.openai_setting_names.indexOf(targetName);
+            const raw = payload.openai_settings[idx];
+            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            return parsed?.temperature;
+        }, presetName);
+
+        const beforeTemp = await readPresetTempViaSettingsGet(PLAIN_PRESET_NAME);
+        expect(beforeTemp).not.toBe(0.63);
+
+        await page.evaluate(async (targetName) => {
             const { getPresetManager } = await import('/scripts/preset-manager.js');
             const pm = getPresetManager('openai');
-
-            const readFromSettingsGet = async () => {
-                const res = await window.fetch('/api/settings/get', {
-                    method: 'POST',
-                    headers: ctx.getRequestHeaders(),
-                    body: '{}',
-                });
-                const payload = await res.json();
-                const idx = payload.openai_setting_names.indexOf(presetName);
-                const raw = payload.openai_settings[idx];
-                return typeof raw === 'string' ? JSON.parse(raw) : raw;
-            };
-
-            const before = await readFromSettingsGet();
-            const updated = structuredClone(before);
-            updated.temperature = 0.63;
-            await pm.savePreset(presetName, updated, { skipUpdate: true });
-            const after = await readFromSettingsGet();
-
-            return {
-                beforeTemp: before?.temperature,
-                afterTemp: after?.temperature,
-            };
+            const current = structuredClone(pm.getCompletionPresetByName(targetName));
+            current.temperature = 0.63;
+            await pm.savePreset(targetName, current, { skipUpdate: true });
         }, PLAIN_PRESET_NAME);
 
-        expect(roundTrip.beforeTemp).not.toBe(0.63);
-        expect(roundTrip.afterTemp).toBe(0.63);
+        const afterSaveTemp = await readPresetTempViaSettingsGet(PLAIN_PRESET_NAME);
+        expect(afterSaveTemp).toBe(0.63);
+
+        // Out-of-band server-side update (no client write fetch) must also be
+        // observed on the next read via HTTP ETag revalidation.
+        writePreset({
+            dataRoot: server.dataRoot,
+            name: PLAIN_PRESET_NAME,
+            overrides: {
+                temperature: 0.41,
+            },
+        });
+
+        const afterDiskUpdateTemp = await readPresetTempViaSettingsGet(PLAIN_PRESET_NAME);
+        expect(afterDiskUpdateTemp).toBe(0.41);
+
+        expect(observedRequests.some(r => r.method === 'POST' && r.url.endsWith('/api/settings/get'))).toBe(false);
+        expect(observedRequests.some(r => r.method === 'GET' && r.url.includes('/api/settings/fields?'))).toBe(true);
+        expect(observedRequests.some(r => r.method === 'GET' && r.url.includes('/api/presets/get?'))).toBe(true);
     });
 });
