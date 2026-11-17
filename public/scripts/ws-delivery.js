@@ -646,10 +646,12 @@ export function installFetchProxy(delivery, options = {}) {
         // and let the server echo it via x-luker-generation-id.
         let requestId = uuidv4();
         let requestTimeoutMs = 0;
+        let isStreamRequest = false;
         try {
             const b = init?.body;
             if (typeof b === 'string') {
                 const parsed = JSON.parse(b);
+                isStreamRequest = Boolean(parsed?.stream || parsed?.streaming);
                 const bodyId = String(parsed?.luker_generation?.job_id || '').trim();
                 if (bodyId) requestId = bodyId;
                 const bodyTimeout = Number(parsed?.luker_generation?.request_timeout_ms);
@@ -706,9 +708,12 @@ export function installFetchProxy(delivery, options = {}) {
         // `response.status` or `!response.ok` fire correctly.
         const head = await headPromise;
         console.info(`[ws-delivery] head resolved request_id=${requestId} status=${head.status}`);
+        const defaultContentType = isStreamRequest
+            ? 'text/event-stream; charset=utf-8'
+            : 'application/json; charset=utf-8';
         const mergedHeaders = {
             ...initialHeaders,
-            'content-type': 'text/event-stream',
+            'content-type': defaultContentType,
             ...(head.headers || {}),
         };
         return new Response(stream, {

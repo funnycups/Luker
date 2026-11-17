@@ -17,6 +17,40 @@ import {
 import { createDispatchContext } from './context.js';
 import { createRequestProxyAgent } from '../request-proxy.js';
 
+const TEXT_GENERATION_ENDPOINTS = new Set([
+    'chat-completions',
+    'text-completions',
+    'kobold',
+    'novelai',
+]);
+
+function normalizeDispatchHeadEvent(event, { endpoint, isStream }) {
+    if (event?.kind !== 'head' || !TEXT_GENERATION_ENDPOINTS.has(endpoint)) {
+        return event;
+    }
+    const status = Number(event.data?.status ?? 200);
+    if (status < 200 || status >= 300) {
+        return event;
+    }
+    const headers = { ...(event.data?.headers || {}) };
+    const currentContentType = String(headers['content-type'] || '').toLowerCase();
+    if (isStream) {
+        if (!currentContentType.includes('text/event-stream')) {
+            headers['content-type'] = 'text/event-stream; charset=utf-8';
+        }
+    } else if (!currentContentType.includes('application/json')) {
+        headers['content-type'] = 'application/json; charset=utf-8';
+    }
+    return {
+        ...event,
+        data: {
+            ...(event.data || {}),
+            status,
+            headers,
+        },
+    };
+}
+
 export async function runLukerDispatch(request, response, { endpoint, select }) {
     // Prefer the client-supplied job_id (from body.luker_generation.job_id)
     // when present so /jobs/status?id=<uuid> queries hit the same job the
@@ -206,7 +240,9 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         const ctx = createDispatchContext({
             request, task: job, abortController,
             onCloseHandlers,
-            onEmit: (event) => {
+            onEmit: (rawEvent) => {
+                const isStream = Boolean(request.body?.stream || request.body?.streaming);
+                const event = normalizeDispatchHeadEvent(rawEvent, { endpoint, isStream });
                 // Store every envelope (head / chunk / end / error) in
                 // `job.events` so `ws-delivery.js:eventToFrame` can turn
                 // each entry into the exact wire frame the browser's WS
@@ -235,7 +271,6 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                         try { text = Buffer.from(bytes).toString('utf8'); } catch { text = ''; }
                     }
                     if (!text) return;
-                    const isStream = Boolean(request.body?.stream || request.body?.streaming);
                     if (isStream) {
                         flushSseFrames(text);
                     } else {

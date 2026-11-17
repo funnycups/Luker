@@ -218,4 +218,80 @@ describe('runLukerDispatch', () => {
         expect(decoded).toContain('"persisted":');
         expect(decoded).toContain('"status":');
     });
+
+    test('normalizes 2xx head content-type to application/json for non-streaming text generation when upstream omits or mislabels it', async () => {
+        const { getTaskByRequestId } = await import('../../src/endpoints/backends/luker-generation.js');
+        const reqMissing = fakeRequest({ requestId: 'head-ct-nonstream-1', body: { stream: false } });
+        const resMissing = fakeResponse();
+        await runLukerDispatch(reqMissing, resMissing, {
+            endpoint: 'chat-completions',
+            select: () => async (ctx) => {
+                ctx.emit.head({ status: 200, headers: {} });
+                ctx.emit.chunk(new TextEncoder().encode('{"choices":[]}'));
+                ctx.emit.end();
+            },
+        });
+
+        const reqPlain = fakeRequest({ requestId: 'head-ct-nonstream-2', body: { stream: false } });
+        const resPlain = fakeResponse();
+        await runLukerDispatch(reqPlain, resPlain, {
+            endpoint: 'chat-completions',
+            select: () => async (ctx) => {
+                ctx.emit.head({ status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+                ctx.emit.chunk(new TextEncoder().encode('{"choices":[]}'));
+                ctx.emit.end();
+            },
+        });
+
+        await new Promise(r => setTimeout(r, 25));
+
+        const jobMissing = getTaskByRequestId('head-ct-nonstream-1', 'alice');
+        const headMissing = jobMissing.events.find(e => e.data?.kind === 'head');
+        expect(headMissing.data.data.headers['content-type']).toBe('application/json; charset=utf-8');
+        if (jobMissing.persistenceTimer) { clearTimeout(jobMissing.persistenceTimer); jobMissing.persistenceTimer = null; }
+
+        const jobPlain = getTaskByRequestId('head-ct-nonstream-2', 'alice');
+        const headPlain = jobPlain.events.find(e => e.data?.kind === 'head');
+        expect(headPlain.data.data.headers['content-type']).toBe('application/json; charset=utf-8');
+        if (jobPlain.persistenceTimer) { clearTimeout(jobPlain.persistenceTimer); jobPlain.persistenceTimer = null; }
+    });
+
+    test('normalizes 2xx head content-type to text/event-stream for streaming text generation when upstream omits or mislabels it', async () => {
+        const { getTaskByRequestId } = await import('../../src/endpoints/backends/luker-generation.js');
+        const req = fakeRequest({ requestId: 'head-ct-stream-1', body: { stream: true } });
+        const res = fakeResponse();
+        await runLukerDispatch(req, res, {
+            endpoint: 'text-completions',
+            select: () => async (ctx) => {
+                ctx.emit.head({ status: 200, headers: { 'content-type': 'application/x-ndjson' } });
+                ctx.emit.chunk(new TextEncoder().encode('data: {"choices":[]}\n\n'));
+                ctx.emit.end();
+            },
+        });
+
+        await new Promise(r => setTimeout(r, 25));
+        const job = getTaskByRequestId('head-ct-stream-1', 'alice');
+        const head = job.events.find(e => e.data?.kind === 'head');
+        expect(head.data.data.headers['content-type']).toBe('text/event-stream; charset=utf-8');
+        if (job.persistenceTimer) { clearTimeout(job.persistenceTimer); job.persistenceTimer = null; }
+    });
+
+    test('leaves head content-type untouched for image-generation endpoints', async () => {
+        const { getTaskByRequestId } = await import('../../src/endpoints/backends/luker-generation.js');
+        const req = fakeRequest({ requestId: 'head-ct-sd-1', body: { prompt: 'mountain' } });
+        const res = fakeResponse();
+        await runLukerDispatch(req, res, {
+            endpoint: 'sd',
+            select: () => async (ctx) => {
+                ctx.emit.head({ status: 200, headers: { 'content-type': 'image/png' } });
+                ctx.emit.end();
+            },
+        });
+
+        await new Promise(r => setTimeout(r, 25));
+        const job = getTaskByRequestId('head-ct-sd-1', 'alice');
+        const head = job.events.find(e => e.data?.kind === 'head');
+        expect(head.data.data.headers['content-type']).toBe('image/png');
+        if (job.persistenceTimer) { clearTimeout(job.persistenceTimer); job.persistenceTimer = null; }
+    });
 });

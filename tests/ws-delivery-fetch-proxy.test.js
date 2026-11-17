@@ -116,4 +116,51 @@ describe('installFetchProxy', () => {
         await window.fetch(PROXY_URL, { method: 'POST', headers: {}, body: '{}' });
         expect(capturedOptions.timeoutMs).toBe(0);
     });
+
+    test('defaults content-type to application/json for non-streaming requests when head omits content-type', async () => {
+        const { installFetchProxy } = await import('../public/scripts/ws-delivery.js');
+        installFetchProxy(mockDelivery, { originalFetch });
+        const resp = await window.fetch(PROXY_URL, {
+            method: 'POST',
+            headers: {},
+            body: JSON.stringify({ stream: false }),
+        });
+        expect(resp.headers.get('content-type')).toBe('application/json; charset=utf-8');
+    });
+
+    test('defaults content-type to text/event-stream for streaming requests when head omits content-type', async () => {
+        const { installFetchProxy } = await import('../public/scripts/ws-delivery.js');
+        installFetchProxy(mockDelivery, { originalFetch });
+        const streamResp = await window.fetch(PROXY_URL, {
+            method: 'POST',
+            headers: {},
+            body: JSON.stringify({ stream: true }),
+        });
+        expect(streamResp.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
+
+        delete window.__lukerFetchProxyDisposer;
+        installFetchProxy(mockDelivery, { originalFetch });
+        const legacyStreamingResp = await window.fetch('/api/backends/kobold/generate', {
+            method: 'POST',
+            headers: {},
+            body: JSON.stringify({ streaming: true }),
+        });
+        expect(legacyStreamingResp.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
+    });
+
+    test('preserves explicit content-type supplied by head headers', async () => {
+        const { installFetchProxy } = await import('../public/scripts/ws-delivery.js');
+        mockDelivery.subscribe.mockImplementation(() => ({
+            stream: new ReadableStream({ start(c) { c.close(); } }),
+            headPromise: Promise.resolve({ status: 200, headers: { 'content-type': 'image/png' } }),
+            unsubscribe: jest.fn(),
+        }));
+        installFetchProxy(mockDelivery, { originalFetch });
+        const resp = await window.fetch('/api/sd/generate', {
+            method: 'POST',
+            headers: {},
+            body: JSON.stringify({ prompt: 'scenic landscape' }),
+        });
+        expect(resp.headers.get('content-type')).toBe('image/png');
+    });
 });
