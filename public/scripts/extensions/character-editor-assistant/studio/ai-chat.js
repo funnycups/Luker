@@ -13,7 +13,6 @@ import {
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
 import { applyEdits } from '../../../lib/edits/index.js';
 import { showConflictResolution } from '../../../lib/edits/conflict-ui.js';
-import { getScriptsByType, normalizePluginScriptRecord, omitLegacyPluginScope, saveScriptsByType, SCRIPT_TYPES } from '../../regex/engine.js';
 import {
     listCtxKeys,
     describeCtxPath,
@@ -79,11 +78,19 @@ const TOOL_NAMES = Object.freeze({
     CARDAPP_SET_ENABLED: 'cardapp_set_enabled',
 });
 
+function getRegexApi() {
+    const api = (getContext?.() || __ctx)?.regex;
+    if (!api) {
+        throw new Error('[CEA Studio] Luker.getContext().regex is unavailable');
+    }
+    return api;
+}
+
 function normalizeRegexScriptForTool(script) {
     if (!script || typeof script !== 'object') {
         return script;
     }
-    return normalizePluginScriptRecord(script);
+    return getRegexApi().normalizePluginScriptRecord(script);
 }
 
 function normalizeRegexScriptsForTool(scripts) {
@@ -1169,6 +1176,7 @@ export async function executeTool(charId, toolName, args, options = {}) {
             }
             // ==================== Regex Scripts ====================
             case TOOL_NAMES.REGEX_LIST_SCRIPTS: {
+                const { SCRIPT_TYPES, getScriptsByType } = getRegexApi();
                 const scope = String(args?.scope || 'all').toLowerCase();
                 if (scope === 'all') {
                     return {
@@ -1186,6 +1194,7 @@ export async function executeTool(charId, toolName, args, options = {}) {
                 return { ok: false, error: `Unknown scope "${scope}" — use 'character', 'global', or 'all'` };
             }
             case TOOL_NAMES.REGEX_CREATE_SCRIPT: {
+                const { SCRIPT_TYPES, getScriptsByType, omitLegacyPluginScope, saveScriptsByType } = getRegexApi();
                 const scope = String(args?.scope || '').toLowerCase();
                 if (scope !== 'character' && scope !== 'global') {
                     return { ok: false, error: 'scope must be \'character\' or \'global\'' };
@@ -1218,6 +1227,7 @@ export async function executeTool(charId, toolName, args, options = {}) {
                 return { ok: true, script: normalizeRegexScriptForTool(newScript) };
             }
             case TOOL_NAMES.REGEX_UPDATE_SCRIPT: {
+                const { SCRIPT_TYPES, getScriptsByType, omitLegacyPluginScope, normalizePluginScriptRecord, saveScriptsByType } = getRegexApi();
                 const scope = String(args?.scope || '').toLowerCase();
                 if (scope !== 'character' && scope !== 'global') {
                     return { ok: false, error: 'scope must be \'character\' or \'global\'' };
@@ -1240,6 +1250,7 @@ export async function executeTool(charId, toolName, args, options = {}) {
                 return { ok: true, script: normalizeRegexScriptForTool(updated) };
             }
             case TOOL_NAMES.REGEX_DELETE_SCRIPT: {
+                const { SCRIPT_TYPES, getScriptsByType, saveScriptsByType } = getRegexApi();
                 const scope = String(args?.scope || '').toLowerCase();
                 if (scope !== 'character' && scope !== 'global') {
                     return { ok: false, error: 'scope must be \'character\' or \'global\'' };

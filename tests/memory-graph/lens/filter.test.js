@@ -1,13 +1,6 @@
 import './_mocks/luker-zh.js';
-import { test, expect, jest } from '@jest/globals';
+import { test, expect } from '@jest/globals';
 import { parseTag, parseTagList, addToList, buildScripts, filterText, inspectText, planWarnings, invalidTokens } from '../../../public/scripts/extensions/memory-graph/lens/filter/tag-filter.js';
-
-jest.unstable_mockModule('../../../public/scripts/extensions/regex/engine.js', () => ({
-    SCRIPT_TYPES: {},
-    getRegexScripts: () => [],
-    getScriptsByType: () => [],
-    registerRegexProvider: () => ({ refresh: () => {}, unregister: () => {} }),
-}));
 
 const { startTagFilter, readFilterSettings, activePlan, isPromptRule, collapse, depthOf, previewFloor } = await import('../../../public/scripts/extensions/memory-graph/lens/filter/filter-runtime.js');
 

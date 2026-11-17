@@ -33,17 +33,6 @@ function normalizePluginScriptRecord(script) {
     return { ...omitLegacyPluginScope(script), pluginLanes: getPluginLanes(script) };
 }
 
-jest.unstable_mockModule('../../public/scripts/extensions/regex/engine.js', () => ({
-    SCRIPT_TYPES: { SCOPED: 'scoped', GLOBAL: 'global', PRESET: 'preset' },
-    getScriptsByType: () => store,
-    saveScriptsByType: async (scripts) => {
-        store.splice(0, store.length, ...scripts);
-    },
-    getPluginLanes,
-    omitLegacyPluginScope,
-    normalizePluginScriptRecord,
-}));
-
 jest.unstable_mockModule('../../public/scripts/extensions/character-editor-assistant/studio/studio.js', () => ({
     fetchFileList: async () => [],
     fetchFileContent: async () => '',
@@ -89,6 +78,16 @@ beforeAll(async () => {
             getCharacterState: () => ({}),
             updateCharacterState: () => {},
             lib: {},
+            regex: {
+                SCRIPT_TYPES: { SCOPED: 'scoped', GLOBAL: 'global', PRESET: 'preset' },
+                getScriptsByType: () => store,
+                saveScriptsByType: async (scripts) => {
+                    store.splice(0, store.length, ...scripts);
+                },
+                getPluginLanes,
+                omitLegacyPluginScope,
+                normalizePluginScriptRecord,
+            },
         }),
     };
     ({ executeTool, TOOL_NAMES } = await import('../../public/scripts/extensions/character-editor-assistant/studio/ai-chat.js'));

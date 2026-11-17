@@ -77,7 +77,7 @@ Luker 基於 SillyTavern 建構，但在 API 層面有以下主要差異：
 | 角色輔助世界書 | 無 | `getCharaAuxWorlds()` |
 | 生成鉤子 | 基礎事件 | 新增 `GENERATION_CONTEXT_READY`、`GENERATION_BEFORE_WORLD_INFO_SCAN` 等細粒度鉤子 |
 | 事件排序 | 註冊順序 | 支援 `priority`、`pluginOrder`、`makeFirst`/`makeLast` |
-| 正則執行時 | 無外掛 API | `registerManagedRegexProvider()` |
+| 正則執行時 | 無外掛 API | `context.regex.*` 統一 API |
 | 搜尋工具 | 無外掛 API | `Luker.searchTools` 全域 API |
 | 函數呼叫 | 基礎 `ToolManager` | 純文字模式支援 + 連線級獨立開關 + `sendOpenAIRequest` 預設覆寫 |
 | 連線設定 | 全域單一 | `context.presets.resolve()` 支援按預設解析連線設定 |

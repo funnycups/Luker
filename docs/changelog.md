@@ -108,6 +108,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Added Workbench registration APIs for embedded workspaces, AI iteration targets, Q&A read providers, and local suggestion rules, alongside global state read and patch helpers.
 - Exposed structured image generation on `context.imageGeneration` and CardApp `ctx.imageGeneration`.
+- Exposed runtime regex provider registration and scoped regex script management on `context.regex`.
 
 ### Performance
 

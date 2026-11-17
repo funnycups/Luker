@@ -33,17 +33,6 @@ function normalizePluginScriptRecord(script) {
     return { ...omitLegacyPluginScope(script), pluginLanes: getPluginLanes(script) };
 }
 
-jest.unstable_mockModule('../public/scripts/extensions/regex/engine.js', () => ({
-    SCRIPT_TYPES: { SCOPED: 'scoped', GLOBAL: 'global', PRESET: 'preset' },
-    getScriptsByType: () => store,
-    saveScriptsByType: async (scripts) => {
-        store.splice(0, store.length, ...scripts);
-    },
-    getPluginLanes,
-    omitLegacyPluginScope,
-    normalizePluginScriptRecord,
-}));
-
 let buildContext;
 
 beforeAll(async () => {
@@ -56,6 +45,16 @@ beforeAll(async () => {
             worldInfoEntry: { create: () => ({}), delete: () => {} },
             chatWorldInfo: { getNames: () => [], setSelection: () => {} },
             presets: { listDocuments: () => [], readDocument: async () => null },
+            regex: {
+                SCRIPT_TYPES: { SCOPED: 'scoped', GLOBAL: 'global', PRESET: 'preset' },
+                getScriptsByType: () => store,
+                saveScriptsByType: async (scripts) => {
+                    store.splice(0, store.length, ...scripts);
+                },
+                getPluginLanes,
+                omitLegacyPluginScope,
+                normalizePluginScriptRecord,
+            },
         }),
     };
     ({ buildContext } = await import('../public/scripts/extensions/card-app/context.js'));

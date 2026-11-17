@@ -77,7 +77,7 @@ Luker is built on SillyTavern but has the following major API-level differences:
 | Character auxiliary world books | None | `getCharaAuxWorlds()` |
 | Generation hooks | Basic events | New fine-grained hooks such as `GENERATION_CONTEXT_READY`, `GENERATION_BEFORE_WORLD_INFO_SCAN`, etc. |
 | Event ordering | Registration order | Supports `priority`, `pluginOrder`, `makeFirst`/`makeLast` |
-| Regex runtime | No plugin API | `registerManagedRegexProvider()` |
+| Regex runtime | No plugin API | Unified `context.regex.*` API (`registerRegexProvider`, `registerManagedRegexProvider`, `applyRegex`) |
 | Search tools | No plugin API | `Luker.searchTools` global API |
 | Function calling | Basic `ToolManager` | Plain-text mode support + connection-level toggle + `sendOpenAIRequest` preset override |
 | Connection config | Single global config | `context.presets.resolve()` supports per-preset connection resolution |

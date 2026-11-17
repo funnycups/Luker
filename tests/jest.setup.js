@@ -178,6 +178,46 @@ if (typeof globalThis.Luker === 'undefined') {
             registerExtensionApi: () => {},
             stateErrors,
             decodeCardBoundOptionValue: presetRefCodecMod.decodeCardBoundOptionValue,
+            regex: {
+                applyRegex: (s) => String(s ?? ''),
+                runRegexScript: (_script, s) => String(s ?? ''),
+                placement: { USER_INPUT: 1, AI_OUTPUT: 2, SLASH_COMMAND: 3, WORLD_INFO: 5, REASONING: 6 },
+                substituteFindRegex: { NONE: 0, RAW: 1, ESCAPED: 2 },
+                SCRIPT_TYPES: { GLOBAL: 0, PRESET: 1, SCOPED: 2 },
+                registerRegexProvider: () => ({ refresh: () => {}, unregister: () => {} }),
+                registerManagedRegexProvider: () => ({
+                    upsertScript: () => {},
+                    setScripts: () => {},
+                    removeScript: () => {},
+                    clearScripts: () => {},
+                    unregister: () => {},
+                    dispose: () => {},
+                }),
+                unregisterRegexProvider: () => {},
+                getScripts: () => [],
+                getScriptsByType: () => [],
+                saveScriptsByType: async () => {},
+                getPluginLanes: (script) => (
+                    Array.isArray(script?.pluginLanes)
+                        ? [...new Set(script.pluginLanes.filter(l => l === 'request' || l === 'reply'))]
+                        : (script?.pluginOnly ? ['request', 'reply'] : [])
+                ),
+                omitLegacyPluginScope: (script) => {
+                    if (!script || typeof script !== 'object') return script;
+                    const rest = { ...script };
+                    delete rest.pluginOnly;
+                    return rest;
+                },
+                normalizePluginScriptRecord: (script) => {
+                    if (!script || typeof script !== 'object') return script;
+                    const rest = { ...script };
+                    const lanes = Array.isArray(script?.pluginLanes)
+                        ? [...new Set(script.pluginLanes.filter(l => l === 'request' || l === 'reply'))]
+                        : (script?.pluginOnly ? ['request', 'reply'] : []);
+                    delete rest.pluginOnly;
+                    return { ...rest, pluginLanes: lanes };
+                },
+            },
         };
         return new Proxy(base, {
             get(t, prop) {

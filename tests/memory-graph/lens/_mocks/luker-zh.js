@@ -33,5 +33,12 @@ globalThis.Luker = {
         addLocaleData: collect,
         getCurrentLocale: () => 'zh-cn',
         translate: (text) => table[text] ?? text,
+        regex: {
+            SCRIPT_TYPES: {},
+            placement: { USER_INPUT: 1, AI_OUTPUT: 2, SLASH_COMMAND: 3, WORLD_INFO: 5, REASONING: 6 },
+            getScripts: () => [],
+            getScriptsByType: () => [],
+            registerRegexProvider: () => ({ refresh: () => {}, unregister: () => {} }),
+        },
     }),
 };

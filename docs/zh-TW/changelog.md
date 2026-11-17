@@ -108,6 +108,7 @@
 
 - 新增工作台註冊介面，支援擴充功能接入嵌入式工作區、AI 迭代目標、問答唯讀資料來源與本機排查規則，並提供全域狀態的讀取與更新介面。
 - 在 `context.imageGeneration` 與 CardApp `ctx.imageGeneration` 上暴露結構化生圖介面。
+- 在 `context.regex` 上暴露執行時正則提供者註冊與依作用域讀寫腳本介面。
 
 ### 效能
 

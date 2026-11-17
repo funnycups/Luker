@@ -4,27 +4,46 @@
 
 ## 正则运行时 API
 
-插件可以注册只存在于内存中的正则规则。这些规则和用户自己的规则一起参与每一次正则处理，不会写入用户的正则列表。正则引擎模块导出两个注册函数。
+插件统一通过 `Luker.getContext().regex` 注册内存态正则规则、执行正则改写以及读写各作用域脚本，无需直接导入正则扩展内部文件。运行时规则与用户规则一同参与每次正则处理，不会写入用户的持久化正则列表。
+
+### `context.regex` 接口与枚举
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `applyRegex(rawString, placement, params?)` | 函数 | 按指定作用范围与通道参数执行全部匹配的正则规则 |
+| `runRegexScript(regexScript, rawString, options?)` | 函数 | 对输入字符串单独执行一条正则脚本对象 |
+| `placement` | 枚举 | 作用范围常量：`USER_INPUT`、`AI_OUTPUT`、`SLASH_COMMAND`、`WORLD_INFO`、`REASONING` |
+| `substituteFindRegex` | 枚举 | `findRegex` 宏替换模式：`NONE`、`RAW`、`ESCAPED` |
+| `SCRIPT_TYPES` | 枚举 | 持久化脚本作用域：`GLOBAL`、`PRESET`、`SCOPED` |
+| `registerRegexProvider(owner, provider, options?)` | 函数 | 注册按需计算的运行时规则回调，返回 `{ refresh, unregister }` |
+| `registerManagedRegexProvider(owner, options?)` | 函数 | 注册由引擎托管存储的运行时脚本集，返回 `{ upsertScript, setScripts, removeScript, clearScripts, unregister }` |
+| `unregisterRegexProvider(owner)` | 函数 | 按 owner 标识注销运行时或托管正则提供者 |
+| `getScripts(options?)` | 函数 | 列出当前生效的持久化与运行时正则脚本 |
+| `getScriptsByType(scriptType, options?)` | 函数 | 按 `SCRIPT_TYPES` 作用域读取持久化脚本列表，不触发运行时回调 |
+| `saveScriptsByType(scripts, scriptType)` | 函数 | 将更新后的脚本数组保存至指定 `SCRIPT_TYPES` 作用域 |
+| `getPluginLanes(script)` | 函数 | 提取脚本归一化后的 `'request'` 与 `'reply'` 插件通道列表 |
+| `omitLegacyPluginScope(script)` | 函数 | 返回剥离旧版 `pluginOnly` 字段后的浅拷贝对象 |
+| `normalizePluginScriptRecord(script)` | 函数 | 归一化脚本记录并补齐 `pluginLanes` 字段 |
 
 ### registerRegexProvider
 
-规则集合由当前状态推导，需要随时重新计算时使用。回调在每次正则处理时执行，因此总能读到当前的聊天、角色和设置。
+规则集合由当前状态推导、需要随时重新计算时使用。回调在每次正则处理时执行，始终读取当前的聊天、角色和设置。
 
 ```js
-import { registerRegexProvider } from '../../extensions/regex/engine.js';
+const { regex } = Luker.getContext();
 
-const registration = registerRegexProvider('my-plugin', () => [
+const registration = regex.registerRegexProvider('my-plugin', () => [
   {
     id: 'my-rule-1',
     scriptName: 'My Regex Rule',
     findRegex: '/foo/g',
     replaceString: 'bar',
     trimStrings: [],
-    placement: [1, 2],
+    placement: [regex.placement.USER_INPUT, regex.placement.AI_OUTPUT],
   },
 ]);
 
-// 重新计算是自动的。refresh() 还会重新加载已渲染的聊天。
+// 重新计算自动执行，refresh() 同时刷新已渲染的聊天消息
 registration.refresh({ requestReload: true });
 
 // 卸载
@@ -33,12 +52,12 @@ registration.unregister();
 
 ### registerManagedRegexProvider
 
-希望由引擎保管脚本存储时使用。返回的句柄管理该插件的一组脚本。
+由引擎保管脚本存储时使用，返回的句柄管理该插件的脚本集合。
 
 ```js
-import { registerManagedRegexProvider } from '../../extensions/regex/engine.js';
+const { regex } = Luker.getContext();
 
-const handle = registerManagedRegexProvider('my-plugin', {
+const handle = regex.registerManagedRegexProvider('my-plugin', {
   reloadOnChange: true,
 });
 
@@ -48,7 +67,7 @@ handle.upsertScript({
   findRegex: '/foo/g',
   replaceString: 'bar',
   trimStrings: [],
-  placement: [1, 2],
+  placement: [regex.placement.USER_INPUT, regex.placement.AI_OUTPUT],
 });
 handle.setScripts([ /* 整组替换 */ ]);
 handle.removeScript('my-rule-1');

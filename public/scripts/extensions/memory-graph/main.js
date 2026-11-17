@@ -77,7 +77,6 @@ export {
     normalizeExtractExcludeRecentTurns,
     sanitizeRecallQueryMessages,
 };
-import { registerManagedRegexProvider, regex_placement, substitute_find_regex } from '../regex/engine.js';
 import { computeDepthsFromEnd } from '../../lib/chat-regex.js';
 import { cookPluginFloorText } from '../../lib/plugin-floors.js';
 import { markPluginFloorMessage } from '../../lib/plugin-prompt-regex.js';
@@ -434,18 +433,20 @@ function getGenerationVisibleHistoryRuntimeRegexScripts() {
     }
     const suffix = visibleLayers > 0 ? ` (${visibleLayers})` : '';
 
+    const regexApi = (getContext?.() || __ctx)?.regex;
+
     return [{
         id: GENERATION_VISIBLE_HISTORY_REGEX_SCRIPT_ID,
         scriptName: `Memory Graph Visible Message Window${suffix}`,
         findRegex: '/[\\s\\S]*/g',
         replaceString: '',
         trimStrings: [],
-        placement: [regex_placement.USER_INPUT, regex_placement.AI_OUTPUT],
+        placement: [regexApi.placement.USER_INPUT, regexApi.placement.AI_OUTPUT],
         disabled: false,
         markdownOnly: false,
         promptOnly: true,
         runOnEdit: false,
-        substituteRegex: substitute_find_regex.NONE,
+        substituteRegex: regexApi.substituteFindRegex.NONE,
         minDepth: visibleLayers,
         maxDepth: null,
     }];
@@ -10874,7 +10875,7 @@ jQuery(() => {
         getSettings,
     });
     registerMemoryGraphCardBindingSlot(getContext());
-    generationVisibleHistoryRegexProvider = registerManagedRegexProvider(GENERATION_VISIBLE_HISTORY_REGEX_PROVIDER_ID);
+    generationVisibleHistoryRegexProvider = getContext().regex.registerManagedRegexProvider(GENERATION_VISIBLE_HISTORY_REGEX_PROVIDER_ID);
     syncGenerationVisibleHistoryRuntimeRegexScripts();
     saveSettingsDebounced();
     ensureUi();

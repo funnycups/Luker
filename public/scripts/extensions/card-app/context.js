@@ -2,8 +2,6 @@
  * CardApp Context - builds the ctx object passed to CardApp's init() function.
  */
 
-import { getScriptsByType, normalizePluginScriptRecord, omitLegacyPluginScope, saveScriptsByType, SCRIPT_TYPES } from '../regex/engine.js';
-
 const __ctx = Luker.getContext();
 const eventSource = __ctx.eventSource;
 const chat = __ctx.chat;
@@ -59,6 +57,14 @@ function requireExtensionApi(name) {
     return api;
 }
 
+function getRegexApi() {
+    const api = (getContext?.() || __ctx)?.regex;
+    if (!api) {
+        throw new Error('[CardApp] Luker.getContext().regex is unavailable');
+    }
+    return api;
+}
+
 /**
  * Map a friendly regex scope label to the engine's SCRIPT_TYPES enum.
  * Card-level lives at character.data.extensions.regex_scripts; global at
@@ -68,6 +74,7 @@ function requireExtensionApi(name) {
  * @returns {number}
  */
 function regexScopeToScriptType(scope) {
+    const { SCRIPT_TYPES } = getRegexApi();
     if (scope === 'character') return SCRIPT_TYPES.SCOPED;
     if (scope === 'global') return SCRIPT_TYPES.GLOBAL;
     throw new Error(`[CardApp] Unknown regex scope "${scope}" — use 'character' or 'global'`);
@@ -1030,6 +1037,7 @@ export function buildContext(container, charId, config) {
          * @returns {Array<object>}
          */
         getRegexScripts(scope = 'character') {
+            const { getScriptsByType, normalizePluginScriptRecord } = getRegexApi();
             const scriptType = regexScopeToScriptType(scope);
             return getScriptsByType(scriptType).map(normalizePluginScriptRecord);
         },
@@ -1067,6 +1075,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<object>} The created script (with assigned id)
          */
         async createRegexScript(fields = {}) {
+            const { SCRIPT_TYPES, getScriptsByType, omitLegacyPluginScope, saveScriptsByType } = getRegexApi();
             const scriptType = SCRIPT_TYPES.SCOPED;
             const current = getScriptsByType(scriptType);
             const source = (fields && typeof fields === 'object') ? fields : {};
@@ -1105,6 +1114,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<object>} The updated script
          */
         async updateRegexScript(id, patch) {
+            const { SCRIPT_TYPES, getScriptsByType, omitLegacyPluginScope, normalizePluginScriptRecord, saveScriptsByType } = getRegexApi();
             const scriptType = SCRIPT_TYPES.SCOPED;
             const idStr = String(id || '').trim();
             if (!idStr) throw new Error('[CardApp] updateRegexScript requires a script id');
@@ -1128,6 +1138,7 @@ export function buildContext(container, charId, config) {
          * @returns {Promise<void>}
          */
         async deleteRegexScript(id) {
+            const { SCRIPT_TYPES, getScriptsByType, saveScriptsByType } = getRegexApi();
             const scriptType = SCRIPT_TYPES.SCOPED;
             const idStr = String(id || '').trim();
             if (!idStr) throw new Error('[CardApp] deleteRegexScript requires a script id');

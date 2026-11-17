@@ -51,6 +51,7 @@ describe('scripts/check-plugin-imports.js', () => {
                 'import { s } from \'/scripts/run-panel/store.js\';',
                 'import { x } from \'../../openai.js\';',
                 'import { mg } from \'../memory-graph/api.js\';',
+                'import { registerRegexProvider } from \'../regex/engine.js\';',
             ].join('\n'),
         );
 
@@ -71,6 +72,13 @@ describe('scripts/check-plugin-imports.js', () => {
                 spec: '../memory-graph/api.js',
                 target: 'public/scripts/extensions/memory-graph/api.js',
                 peer: 'memory-graph',
+            },
+            {
+                file: 'public/scripts/extensions/orchestrator/main.js',
+                line: 5,
+                spec: '../regex/engine.js',
+                target: 'public/scripts/extensions/regex/engine.js',
+                peer: 'regex',
             },
         ]);
     });
@@ -141,7 +149,10 @@ describe('scripts/check-plugin-imports.js', () => {
         ]);
     });
 
-    test('real repo has zero reverse violations from workbench, lens-shared, and run-panel', () => {
+    test('real repo has zero plugin, core, and reverse violations', () => {
+        const { coreViolations, pluginViolations } = findPluginViolations();
+        expect([...coreViolations.entries()]).toEqual([]);
+        expect([...pluginViolations.entries()]).toEqual([]);
         const hits = findReverseViolations();
         const platformHits = hits.filter(h => (
             h.file.startsWith('public/scripts/workbench/')

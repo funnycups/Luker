@@ -51,6 +51,11 @@ export const LUKER_PLUGIN_DIRS = new Set([
     'search-tools',
 ]);
 
+export const BANNED_EXTENSION_PEERS = new Set([
+    ...LUKER_PLUGIN_DIRS,
+    'regex',
+]);
+
 export const LUKER_PLATFORM_DIRS = new Set([
     'iteration-library',
     'lens-shared',
@@ -153,7 +158,7 @@ export function classifyForPlugin(specifier, fromFile, pluginDir, repoRoot = REP
 
     if (relFromExt[0] === pluginDir) return null;
 
-    if (LUKER_PLUGIN_DIRS.has(relFromExt[0])) {
+    if (BANNED_EXTENSION_PEERS.has(relFromExt[0])) {
         return { kind: 'plugin', target: relative(repoRoot, resolved), peer: relFromExt[0] };
     }
 

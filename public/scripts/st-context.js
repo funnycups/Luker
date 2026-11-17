@@ -2515,32 +2515,30 @@ export function getContext() {
         getPastCharacterChats,
         deleteCharacterChat: deleteCharacterChatByName,
         saveSettingsDebounced,
-        // Prompt-scoped regex helpers. Third-party plugins (orchestrator,
-        // memory-graph, iter-studio, ...) that surface chat text to an
-        // LLM must rewrite it through the user's regex scripts, or their
-        // agents see raw `.mes` while the main generation pipeline sees
-        // the rewritten text. Direct `import` from
-        // `extensions/regex/engine.js` would transitively pull
-        // `public/script.js` and its DOM bootstrap chain into environments
-        // that can't handle it (jest ESM, isolated test rigs). Exposing
-        // the two primitives here keeps plugins DOM-clean and matches the
-        // three-layer API contract.
+        // Regex runtime & script API. Extensions and CardApp helpers consume
+        // regex capabilities exclusively through `getContext().regex` rather
+        // than importing `extensions/regex/engine.js` directly (which would
+        // pull `public/script.js` and its DOM bootstrap chain into isolated
+        // environments and couple plugins to internal engine paths).
         //
-        // - `applyRegex(rawString, placement, params?)` — thin alias for
-        //   `getRegexedString`. `placement` is a `regex_placement.*` value;
-        //   `params` mirrors the engine signature ({ characterOverride,
-        //   isMarkdown, isPrompt, isPluginInput, isPluginOutput, isEdit, depth }).
-        // - `placement` — the `regex_placement` enum (USER_INPUT / AI_OUTPUT
-        //   / SLASH_COMMAND / WORLD_INFO / REASONING).
-        //
-        // For READING chat floors as cooked prompt-ready records, prefer
+        //For READING chat floors as cooked prompt-ready records, prefer
         // `readPluginFloors` below over hand-rolling a chat walk — it
-        // already routes every floor through this lane with real depths.
+        // already routes every floor through the plugin regex lane with real depths.
         regex: {
             applyRegex: regexEngine.getRegexedString,
+            runRegexScript: regexEngine.runRegexScript,
             placement: regexEngine.regex_placement,
+            substituteFindRegex: regexEngine.substitute_find_regex,
+            SCRIPT_TYPES: regexEngine.SCRIPT_TYPES,
             registerRegexProvider: regexEngine.registerRegexProvider,
+            registerManagedRegexProvider: regexEngine.registerManagedRegexProvider,
             unregisterRegexProvider: regexEngine.unregisterRegexProvider,
+            getScripts: regexEngine.getRegexScripts,
+            getScriptsByType: regexEngine.getScriptsByType,
+            saveScriptsByType: regexEngine.saveScriptsByType,
+            getPluginLanes: regexEngine.getPluginLanes,
+            omitLegacyPluginScope: regexEngine.omitLegacyPluginScope,
+            normalizePluginScriptRecord: regexEngine.normalizePluginScriptRecord,
         },
         // Chat floor accessor for plugin LLM requests (lib/plugin-floors.js):
         // walks the current chat once, cooks each floor through the plugin

@@ -141,12 +141,6 @@ jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
     t: (k) => k,
 }));
 
-jest.unstable_mockModule('../../public/scripts/extensions/regex/engine.js', () => ({
-    registerManagedRegexProvider: () => ({ dispose: () => {} }),
-    regex_placement: {},
-    substitute_find_regex: () => '',
-}));
-
 jest.unstable_mockModule(
     '../../public/scripts/extensions/connection-manager/profile-resolver.js',
     () => ({

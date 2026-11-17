@@ -11,7 +11,6 @@
 // normalizeText), then the plugin lane with the user's own regex rules,
 // then ours (runtime scripts always run last).
 
-import { getRegexScripts, getScriptsByType, registerRegexProvider, SCRIPT_TYPES } from '../../../regex/engine.js';
 import { i18n } from '../i18n.js';
 import { buildScripts, applyScripts, compileFind, requestLaneScope, AI_OUTPUT } from './tag-filter.js';
 
@@ -23,6 +22,13 @@ let registration = null;
 let scripts = [];
 let mirror = true;
 let override = null; // preview: scripts to serve instead of the saved ones
+let activeGetCtx = () => globalThis.Luker?.getContext?.();
+
+function resolveRegexApi(ctx = null) {
+    return (ctx || activeGetCtx?.() || globalThis.Luker?.getContext?.())?.regex
+        || globalThis.Luker?.getContext?.()?.regex
+        || null;
+}
 
 const MIRROR_PREFIX = 'memory-lens-tagfilter-mirror-';
 const mirrorNamePrefix = () => i18n('Memory Lens · Reused · ');
@@ -53,14 +59,18 @@ export function writeFilterSettings(ctx, settings) {
 }
 
 export function startTagFilter(getCtx) {
+    if (typeof getCtx === 'function') activeGetCtx = getCtx;
     // Callback provider: evaluated on every regex pass, so mirrored rules
     // follow the user's preset / character switches, and the preview can
     // swap in unsaved scripts without firing change events.
-    registration = registerRegexProvider(OWNER, () => {
-        if (override) return override.map(s => ({ ...s }));
-        const plan = activePlan(readFilterSettings(getCtx()));
-        return [...(plan.enabled && mirror ? mirroredRules() : []), ...scripts.map(s => ({ ...s }))];
-    });
+    const regexApi = resolveRegexApi(getCtx?.());
+    registration = typeof regexApi?.registerRegexProvider === 'function'
+        ? regexApi.registerRegexProvider(OWNER, () => {
+            if (override) return override.map(s => ({ ...s }));
+            const plan = activePlan(readFilterSettings(getCtx()));
+            return [...(plan.enabled && mirror ? mirroredRules() : []), ...scripts.map(s => ({ ...s }))];
+        })
+        : null;
     if (!registration) throw new Error('could not register regex provider');
     const sync = () => {
         try {
@@ -89,10 +99,11 @@ export function startTagFilter(getCtx) {
  */
 export function mirroredRules() {
     const out = [];
-    for (const type of Object.values(SCRIPT_TYPES)) {
+    const regexApi = resolveRegexApi();
+    for (const type of Object.values(regexApi?.SCRIPT_TYPES || {})) {
         let list = [];
         // getScriptsByType never calls runtime providers (no recursion).
-        try { list = getScriptsByType(type, { allowedOnly: true }) || []; } catch { list = []; }
+        try { list = regexApi?.getScriptsByType?.(type, { allowedOnly: true }) || []; } catch { list = []; }
         for (const s of list) {
             if (!isPromptRule(s)) continue;
             const { pluginOnly: _legacy, pluginLanes: _lanes, ...rest } = s;
@@ -136,7 +147,8 @@ const onPluginLane = (s) => s && !s.disabled && onRequestLane(s) && Array.isArra
 export function filterStatus() {
     if (!registration) return { registered: false, active: 0, mirrored: [], userRules: [] };
     let all = [];
-    try { all = getRegexScripts({ allowedOnly: true }) || []; } catch { all = []; }
+    const regexApi = resolveRegexApi();
+    try { all = regexApi?.getScripts?.({ allowedOnly: true }) || []; } catch { all = []; }
     return {
         registered: true,
         active: all.filter(s => isOurs(s) && !s.disabled && !String(s.id).startsWith(MIRROR_PREFIX)).length,

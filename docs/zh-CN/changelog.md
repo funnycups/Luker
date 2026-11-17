@@ -108,6 +108,7 @@
 
 - 新增工作台注册接口，支持扩展接入嵌入式工作区、AI 迭代目标、问答只读数据源与本地排查规则，并提供全局状态的读取与更新接口。
 - 在 `context.imageGeneration` 与 CardApp `ctx.imageGeneration` 上暴露结构化生图接口。
+- 在 `context.regex` 上暴露运行时正则提供者注册与按作用域读写脚本接口。
 
 ### 性能
 
