@@ -278,7 +278,9 @@ describe('Workbench providers for memory-graph', () => {
             ensureMemoryStoreLoaded: async () => ({ nodes: {} }),
             getMemoryGraphReadApi: () => ({
                 listNodes: () => [
-                    ...Array.from({ length: 55 }, (_, i) => ({ id: `e${i}`, type: 'event', archived: false, semanticDepth: 0, parentId: '' })),
+                    ...Array.from({ length: 55 }, (_, i) => ({ id: `e${i}`, type: 'event', archived: false, semantic_depth: 0, parent_id: '' })),
+                    { id: 'e_merged', type: 'event', archived: false, semantic_depth: 0, parent_id: 'r_1' },
+                    { id: 'r_1', type: 'event', archived: false, semantic_depth: 1, parent_id: '' },
                 ],
             }),
         });
@@ -290,7 +292,7 @@ describe('Workbench providers for memory-graph', () => {
         expect(askProvider.tools.map(t => t.function.name)).toEqual(['wb_read_memory']);
         expect(askProvider.overviewKey).toBe('记忆图');
         expect(await askProvider.getOverview(fakeCtx)).toEqual({
-            节点: 55,
+            节点: 57,
             常驻: 1000,
             本次召回: 50,
         });

@@ -291,10 +291,10 @@ test('force layout keeps nodes apart', () => {
 test('buildChapters handles cyclic parentId/childrenIds without infinite recursion', () => {
     const model = buildModel({
         nodes: [
-            { id: 'r0', type: 'event', title: 'R0', semanticRollup: true, semanticDepth: 2, parentId: '', childrenIds: ['r1'], fields: { summary: 'Root' }, seqTo: 1 },
-            { id: 'r1', type: 'event', title: 'R1', semanticRollup: true, semanticDepth: 1, parentId: 'r0', childrenIds: ['r2'], fields: { summary: 'A' }, seqTo: 2 },
-            { id: 'r2', type: 'event', title: 'R2', semanticRollup: true, semanticDepth: 1, parentId: 'r1', childrenIds: ['r1', 'e1'], fields: { summary: 'B' }, seqTo: 3 },
-            { id: 'e1', type: 'event', title: 'E1', parentId: 'r2', childrenIds: [], fields: { summary: 'C' }, seqTo: 4 },
+            { id: 'r0', type: 'event', title: 'R0', semantic_rollup: true, semantic_depth: 2, parent_id: '', children_ids: ['r1'], fields: { summary: 'Root' }, seq_to: 1 },
+            { id: 'r1', type: 'event', title: 'R1', semantic_rollup: true, semantic_depth: 1, parent_id: 'r0', children_ids: ['r2'], fields: { summary: 'A' }, seq_to: 2 },
+            { id: 'r2', type: 'event', title: 'R2', semantic_rollup: true, semantic_depth: 1, parent_id: 'r1', children_ids: ['r1', 'e1'], fields: { summary: 'B' }, seq_to: 3 },
+            { id: 'e1', type: 'event', title: 'E1', parent_id: 'r2', children_ids: [], fields: { summary: 'C' }, seq_to: 4 },
         ],
         edges: [],
     });

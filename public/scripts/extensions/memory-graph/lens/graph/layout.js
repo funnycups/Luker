@@ -10,7 +10,9 @@ import { compareTimeline } from '../model.js';
 import { hashString } from '../../../../lens-shared/util.js';
 
 export function nodeRadius(node) {
+    // cap-ok: visual canvas node radius geometry bound so high-degree hubs do not overlap neighbors
     if (node.type === 'event') return node.isRollup ? 15 + Math.min(6, node.depth * 2) : 11;
+    // cap-ok: visual canvas node radius geometry bound so high-degree hubs do not overlap neighbors
     const degreeBoost = Math.min(20, Math.sqrt(node.degree || 0) * 5);
     return 16 + degreeBoost;
 }

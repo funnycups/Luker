@@ -134,6 +134,7 @@ function splitAnchorValue(rest) {
         return [words[0], words.slice(1).join(' ')];
     }
     let end = 0;
+    // cap-ok: header anchor phrase token span for flattened single-line summary recovery
     for (let i = 0; i < Math.min(words.length - 1, 6); i++) {
         const word = words[i];
         const capital = /^[A-Z0-9]/.test(word);
@@ -224,9 +225,9 @@ export function buildModel(snapshot = {}) {
         const type = str(raw.type).trim() || 'unknown';
         if (type === 'recall' || type.startsWith('recall_')) continue;
         const fields = raw.fields && typeof raw.fields === 'object' ? { ...raw.fields } : {};
-        const depth = Number.isFinite(Number(raw.semanticDepth)) ? Math.max(0, Math.floor(Number(raw.semanticDepth))) : 0;
-        const floorRange = raw.floorRange && Number.isFinite(raw.floorRange.start) && Number.isFinite(raw.floorRange.end)
-            ? { start: raw.floorRange.start, end: raw.floorRange.end }
+        const depth = Number.isFinite(Number(raw.semantic_depth)) ? Math.max(0, Math.floor(Number(raw.semantic_depth))) : 0;
+        const floorRange = raw.floor_range && Number.isFinite(raw.floor_range.start) && Number.isFinite(raw.floor_range.end)
+            ? { start: raw.floor_range.start, end: raw.floor_range.end }
             : null;
         const node = {
             id: str(raw.id),
@@ -235,13 +236,13 @@ export function buildModel(snapshot = {}) {
             rawLevel: str(raw.level),
             rawTitle: str(raw.title).trim(),
             fields,
-            seqTo: Number.isFinite(Number(raw.seqTo)) ? Number(raw.seqTo) : -1,
+            seqTo: Number.isFinite(Number(raw.seq_to)) ? Number(raw.seq_to) : -1,
             floorRange,
-            parentId: str(raw.parentId),
-            childrenIds: toArray(raw.childrenIds).map(str).filter(Boolean),
+            parentId: str(raw.parent_id),
+            childrenIds: toArray(raw.children_ids).map(str).filter(Boolean),
             archived: Boolean(raw.archived),
             depth,
-            isRollup: type === 'event' && (Boolean(raw.semanticRollup) || depth > 0),
+            isRollup: type === 'event' && (Boolean(raw.semantic_rollup) || depth > 0),
             parsed: null,
             title: '',
             summaryText: '',
@@ -341,9 +342,9 @@ export function buildModel(snapshot = {}) {
     for (const edge of edges) relations.set(edge.type, (relations.get(edge.type) || 0) + 1);
 
     const injection = {
-        recalled: new Set(toArray(snapshot.injection?.recallSelectedIds).map(str)),
-        pinned: new Set(toArray(snapshot.injection?.alwaysInjectIds).map(str)),
-        candidates: new Set(toArray(snapshot.injection?.visibleIds).map(str)),
+        recalled: new Set(toArray(snapshot.injection?.recall_selected_ids).map(str)),
+        pinned: new Set(toArray(snapshot.injection?.always_inject_ids).map(str)),
+        candidates: new Set(toArray(snapshot.injection?.visible_ids).map(str)),
     };
 
     const schemaColumns = new Map();
@@ -569,6 +570,7 @@ export function searchNodes(model, query, { limit = 30 } = {}) {
         }
         if (!ok) continue;
         if (node.archived) score -= 4;
+        // cap-ok: degree tiebreak bonus bounded below substring title match weight of 9
         score += Math.min(4, node.degree * 0.25);
         if (isInContext(model, node.id)) score += 1;
         const bodySource = node.type === 'event' ? (node.parsed?.prose.join(' ') || node.summaryText) : Object.values(node.fields).map(fieldText).join(' · ');

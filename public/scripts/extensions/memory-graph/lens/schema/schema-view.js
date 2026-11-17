@@ -469,6 +469,7 @@ export function createSchemaView(app, source) {
         area.value = value;
         const fit = () => {
             area.style.height = 'auto';
+            // cap-ok: auto-grow textarea viewport height ceiling before inner scrollbar activates
             area.style.height = `${Math.min(area.scrollHeight + 2, 220)}px`;
         };
         requestAnimationFrame(fit);

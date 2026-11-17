@@ -74,7 +74,7 @@ export async function buildMemorySnapshot(ctx, deps = {}) {
         out.nodes = nodes.length;
         const events = nodes.filter(node => node?.type === 'event' && !node.archived);
         out.events = events.length;
-        out.unmerged = events.filter(node => !(Number(node.semanticDepth) > 0) && !node.parentId).length;
+        out.unmerged = events.filter(node => !(Number(node.semantic_depth) > 0) && !node.parent_id).length;
     }
 
     const proj = typeof mg.getLastRecallProjection === 'function'

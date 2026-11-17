@@ -282,6 +282,7 @@ export function createSettingsView(app, source) {
             surfaceError(new Error(i18n('No assistant turns available to rebuild.')));
             return;
         }
+        // cap-ok: initial default input value clamped to available chat turns; max is latest
         const input = h('input', { class: 'ml-schema-input', type: 'number', min: 1, max: latest, step: 1, value: String(Math.min(20, latest)) });
         openModal(app, {
             title: i18n('Rebuild Recent'),

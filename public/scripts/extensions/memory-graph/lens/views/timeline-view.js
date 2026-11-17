@@ -79,6 +79,7 @@ export function createTimelineView(app) {
         put(header, leafCount);
         const ordered = app.state().timelineOrder === 'desc' ? [...children].reverse() : children;
         const body = isCollapsed ? null : h('div', { class: 'ml-tl-chapter-body' }, ordered.map(child => renderTree(model, child, depth + 1)));
+        // cap-ok: timeline.css defines depth-0..depth-3 indentation classes
         return h('section', { class: `ml-tl-chapter depth-${Math.min(depth, 3)} ${isCollapsed ? 'is-collapsed' : ''}`.trim() }, header, body);
     }
 

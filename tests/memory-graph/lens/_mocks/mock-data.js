@@ -4,9 +4,9 @@
 // Shape mirrors memory-graph's read-api NodeView / EdgeView. The story is
 // original sample content.
 
-const C = (id, title, fields) => ({ id, type: 'character_sheet', level: 'semantic', title, fields: { title, ...fields }, seqTo: 1 });
-const L = (id, title, fields) => ({ id, type: 'location_state', level: 'semantic', title, fields: { title, ...fields }, seqTo: 1 });
-const T = (id, title, status, note, seqTo) => ({ id, type: 'thread', level: 'semantic', title, fields: { title, status, note }, seqTo });
+const C = (id, title, fields) => ({ id, type: 'character_sheet', level: 'semantic', title, fields: { title, ...fields }, seq_to: 1 });
+const L = (id, title, fields) => ({ id, type: 'location_state', level: 'semantic', title, fields: { title, ...fields }, seq_to: 1 });
+const T = (id, title, status, note, seqTo) => ({ id, type: 'thread', level: 'semantic', title, fields: { title, status, note }, seq_to: seqTo });
 
 const characters = [
     C('c_lin', '林栖', { aliases: '阿栖、灯塔看守', traits: '沉静、记性极好、习惯在本子上画潮汐表', identity: '雾港第七灯塔的看守人', goal: '找到十年前失踪的父亲留下的航海日志', inventory: '黄铜罗盘（父亲遗物）', addressing_user: '称用户为“船长”' }),
@@ -51,9 +51,9 @@ const ev = (n, title, time, place, prose, extra = {}) => ({
             extra.quotes ? `\n原文摘录:\n${extra.quotes.map(([who, q]) => `- ${who}: "${q}"`).join('\n')}` : '',
         ].filter(Boolean).join('\n'),
     },
-    seqTo: n * 2,
-    floorRange: { start: n * 4 - 3, end: n * 4 },
-    semanticDepth: 0,
+    seq_to: n * 2,
+    floor_range: { start: n * 4 - 3, end: n * 4 },
+    semantic_depth: 0,
 });
 
 const events = [
@@ -81,10 +81,10 @@ const rollup = (id, title, depth, childIds, prose, seqTo) => ({
     level: 'semantic',
     title,
     fields: { summary: prose },
-    seqTo,
-    childrenIds: childIds,
-    semanticDepth: depth,
-    semanticRollup: true,
+    seq_to: seqTo,
+    children_ids: childIds,
+    semantic_depth: depth,
+    semantic_rollup: true,
 });
 
 const rollups = [
@@ -97,9 +97,9 @@ const rollups = [
 
 const nodes = [...characters, ...locations, ...threads, ...events, ...rollups];
 for (const r of rollups) {
-    for (const childId of r.childrenIds) {
+    for (const childId of r.children_ids) {
         const child = nodes.find(n => n.id === childId);
-        if (child) child.parentId = r.id;
+        if (child) child.parent_id = r.id;
     }
 }
 // One older, archived character version.
@@ -119,7 +119,7 @@ for (const [eventId, [chars, loc]] of Object.entries(involve)) {
     for (const c of chars) E(eventId, c, 'involved_in');
     E(eventId, loc, 'occurred_at');
 }
-for (const r of rollups) for (const childId of r.childrenIds) E(r.id, childId, 'semantic_contains');
+for (const r of rollups) for (const childId of r.children_ids) E(r.id, childId, 'semantic_contains');
 E('e04', 't_log', 'advances'); E('e06', 't_log', 'advances'); E('e14', 't_log', 'advances');
 E('e02', 't_sick', 'advances'); E('e12', 't_sick', 'advances'); E('e05', 't_sick', 'evidence');
 E('e09', 't_debt', 'advances'); E('e11', 't_key', 'updates');
@@ -144,9 +144,9 @@ export function createMockSnapshot() {
         edges: structuredClone(edges),
         schema: { types: createMockSchema() },
         injection: {
-            alwaysInjectIds: ['t_log', 't_sick', 't_debt', 'r2_a'],
-            recallSelectedIds: ['e13', 'e14', 'e16', 'c_lin', 'c_shen', 'l_tower'],
-            visibleIds: [],
+            always_inject_ids: ['t_log', 't_sick', 't_debt', 'r2_a'],
+            recall_selected_ids: ['e13', 'e14', 'e16', 'c_lin', 'c_shen', 'l_tower'],
+            visible_ids: [],
         },
         tokens: {
             current: { at: Date.now() - 1000 * 60 * 3, core: 412, focus: 868 },
@@ -260,7 +260,7 @@ export function createLargeSnapshot(count = 600) {
         base.nodes.push({
             id, type: 'event', level: 'semantic', title: `批量事件 ${i}`,
             fields: { summary: `时间: 第 ${i} 天\n地点: 北码头\n\n这是用于压力测试的第 ${i} 个事件。` },
-            seqTo: 40 + i, floorRange: { start: 70 + i * 2, end: 71 + i * 2 }, semanticDepth: 0,
+            seq_to: 40 + i, floor_range: { start: 70 + i * 2, end: 71 + i * 2 }, semantic_depth: 0,
         });
         base.edges.push({ from: id, to: ['c_lin', 'c_wen', 'c_ye', 'c_shen'][i % 4], type: 'involved_in' });
         base.edges.push({ from: id, to: 'l_dock', type: 'occurred_at' });

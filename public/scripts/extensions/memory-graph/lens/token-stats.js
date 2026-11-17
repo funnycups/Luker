@@ -9,6 +9,7 @@
 export const META_KEY = 'memory_lens_tokens';
 /** Fired on window after a new entry is recorded. */
 export const TOKENS_EVENT = 'memory-lens:tokens';
+// cap-ok: bounds chat_metadata[memory_lens_tokens] payload serialized on every chat save
 const MAX_ENTRIES = 500;
 const END_EVENTS = ['GENERATION_ENDED', 'GENERATION_STOPPED'];
 

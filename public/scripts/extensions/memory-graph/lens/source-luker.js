@@ -5,7 +5,7 @@
 import { requestToolCallsWithRetry } from '../../../iteration-library/runner.js';
 import { getChatCompletionConnectionProfiles } from '../../connection-manager/profile-resolver.js';
 import { listEmbeddingProfiles, listRerankProfiles } from '../../connection-manager/embed-rerank.js';
-import { getEffectiveSettings } from '../character-overrides.js';
+import { getEffectiveNodeTypeSchema, getEffectiveSettings } from '../character-overrides.js';
 import { buildSchemaExportPayload, getSchemaExportFileName, parseSchemaImportPayload } from '../import-export.js';
 import {
     addMemoryStatusListener,
@@ -119,7 +119,7 @@ export function createLukerSource({ onError = null } = {}) {
                 if (Array.isArray(info?.schema)) schema = { types: structuredClone(info.schema) };
             }
             if (!schema) {
-                schema = read.getSchema();
+                schema = { types: structuredClone(getEffectiveNodeTypeSchema(ctx, getSettings())) };
             }
 
             const rawLabels = ctx.extensionSettings?.[LABEL_KEY]?.columnLabels;

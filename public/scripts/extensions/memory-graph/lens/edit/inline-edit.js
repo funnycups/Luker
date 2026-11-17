@@ -92,6 +92,7 @@ function open(el, { app, node, key, value, label }) {
     const fit = () => {
         if (!multiline) return;
         field.style.height = 'auto';
+        // cap-ok: auto-grow textarea viewport height ceiling before inner scrollbar activates
         field.style.height = `${Math.min(field.scrollHeight + 2, 420)}px`;
     };
     let done = false;
