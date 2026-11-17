@@ -177,7 +177,19 @@
 .olens.is-compact .ol-select { height: 36px; font-size: 16px; }
 .olens.is-compact .ol-field-input { font-size: 16px; }
 
-/* Mid widths: tighter topbar; the AI pane floats over the inspector. */
+/* Mid widths (measured against .olens container width as well as viewport): tighter topbar. */
+.olens:not(.is-compact)[data-width-tier="mid"] .ol-mode-desc,
+.olens:not(.is-compact)[data-width-tier="mid"] .ol-modebtn-label,
+.olens:not(.is-compact)[data-width-tier="narrow"] .ol-sync-text,
+.olens:not(.is-compact)[data-width-tier="narrow"] .ol-modebtn-label,
+.olens:not(.is-compact)[data-width-tier="narrow"] .ol-mode-desc,
+.olens:not(.is-compact)[data-width-tier="narrow"] .ol-enable .lw-switch-label { display: none; }
+.olens:not(.is-compact)[data-width-tier="mid"] .ol-viewswitch .lw-seg-btn,
+.olens:not(.is-compact)[data-width-tier="narrow"] .ol-viewswitch .lw-seg-btn { padding: 0 9px; }
+.olens:not(.is-compact)[data-width-tier="narrow"] .ol-viewswitch .lw-seg-btn[aria-pressed="false"] .lw-seg-label,
+.olens:not(.is-compact)[data-width-tier="narrow"] .ol-brand-chat { display: none; }
+.olens:not(.is-compact)[data-width-tier="narrow"].ai-open .ol-aipane { position: absolute; z-index: 6; top: 0; right: 0; bottom: 0; box-shadow: var(--ol-shadow-3); }
+
 @media (max-width: 1240px) {
     .olens:not(.is-compact) .ol-sync-text, .olens:not(.is-compact) .ol-modebtn-label, .olens:not(.is-compact) .ol-mode-desc, .olens:not(.is-compact) .ol-enable .lw-switch-label { display: none; }
     .olens:not(.is-compact) .ol-viewswitch .lw-seg-btn { padding: 0 9px; }

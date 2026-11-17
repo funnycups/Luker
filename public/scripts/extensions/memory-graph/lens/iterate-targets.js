@@ -573,6 +573,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
 
             return h('div', { class: 'wb-preset-controls wb-memory-controls' }, blankBtn, globalBtn);
         },
+        targetKey: (t) => (t?.scope === 'character' ? `memory:character:${t.avatar || ''}` : 'memory:global'),
         renderPreview: ({ base, ai }) => renderMemoryConfigPreview({ base, ai }),
         async load(scope, ctx) {
             const c = resolveCtx(ctx);

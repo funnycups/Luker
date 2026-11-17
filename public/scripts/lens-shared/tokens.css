@@ -91,7 +91,8 @@
     --wb-scrim: var(--lw-scrim);
 }
 
-:is(.lw-surface, .wbench, .mlens, .olens, .rpdock)[data-theme="light"] {
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock)[data-theme="light"],
+[data-theme="light"] :is(.lw-surface, .mlens, .olens, .rpdock):not([data-theme="dark"]) {
     color-scheme: light;
     --lw-bg: #f4f4f5;
     --lw-canvas: #fafafa;

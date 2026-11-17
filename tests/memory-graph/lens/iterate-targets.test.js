@@ -975,4 +975,38 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
         })).rejects.toThrow();
         expect(h.commitMock).not.toHaveBeenCalled();
     });
+
+    test('memory config targetKey stays invariant across character override creation while distinguishing avatar and scope', async () => {
+        const h = makeConfigHarness({ avatar: 'alice.png' });
+        const target = createMemoryConfigTarget(() => h.ctx, h.deps);
+        const beforeOverride = await target.load('character', h.ctx);
+        expect(beforeOverride.target.hasOverride).toBe(false);
+
+        let ai = clone(beforeOverride.live);
+        ai = await target.runEdit({
+            id: 'e1',
+            name: 'mg_schema_set_node_type',
+            args: {
+                node_type: {
+                    id: 'character_sheet',
+                    label: 'Hero Sheet',
+                    tableName: 'heroes',
+                    tableColumns: ['name', 'traits'],
+                    embeddingColumns: ['name'],
+                },
+            },
+        }, ai);
+        const next = target.rebuild(beforeOverride.live, ai, ['schema:character_sheet']);
+        await target.commit(beforeOverride.target, beforeOverride.live, next, ['schema:character_sheet']);
+
+        const afterOverride = await target.load('character', h.ctx);
+        expect(afterOverride.target.hasOverride).toBe(true);
+        expect(target.targetKey(beforeOverride.target)).toBe(target.targetKey(afterOverride.target));
+        expect(target.targetKey(beforeOverride.target)).not.toBe(
+            target.targetKey({ scope: 'character', avatar: 'bob.png', hasOverride: true }),
+        );
+        expect(target.targetKey(beforeOverride.target)).not.toBe(
+            target.targetKey({ scope: 'global', avatar: '', hasOverride: false }),
+        );
+    });
 });

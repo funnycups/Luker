@@ -855,7 +855,11 @@ export function createIteratePage(app) {
         return `${w}:${s}`;
     };
 
-    const targetIdFor = (target) => JSON.stringify(target ?? {});
+    const targetIdFor = (target, targetObj = selectDefaultTarget()) => (
+        typeof targetObj?.targetKey === 'function'
+            ? String(targetObj.targetKey(target))
+            : JSON.stringify(target ?? {})
+    );
 
     async function reloadCurrentWork() {
         const k = keyOf();
@@ -959,7 +963,7 @@ export function createIteratePage(app) {
             if (stillViewingRunScope()) loadError = '';
             const w = { base: loaded.live, target: loaded.target, title: loaded.title };
             work.set(runKey, w);
-            const id = targetIdFor(w.target);
+            const id = targetIdFor(w.target, runTargetObj);
 
             let current = startingSession ? ((await store.get(startingSession.id, runScopeOpts)) || startingSession) : null;
             if (current?.targetId && current.targetId !== id) {

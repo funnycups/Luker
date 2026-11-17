@@ -741,4 +741,27 @@ describe('orchestrator/lens/iterate-target.js', () => {
         const rebuiltViaTarget = h.target.rebuild(clonedChar, resetViaTarget, ['preset:distiller'], charLoaded.target);
         expect(rebuiltViaTarget.presets.distiller.systemPrompt).toBe('You are distiller.');
     });
+
+    test('targetKey stays invariant across character override creation while distinguishing mode, avatar, and global preset', async () => {
+        const h = makeHarness({ mode: 'spec', hasCharOverride: false });
+        const beforeOverride = await h.target.load('character', h.ctx);
+        expect(beforeOverride.target.hasOverride).toBe(false);
+
+        const edited = clone(beforeOverride.live);
+        edited.presets.distiller.systemPrompt = 'Updated character distiller';
+        await h.target.commit(beforeOverride.target, beforeOverride.live, edited, ['preset:distiller']);
+
+        const afterOverride = await h.target.load('character', h.ctx);
+        expect(afterOverride.target.hasOverride).toBe(true);
+        expect(h.target.targetKey(beforeOverride.target)).toBe(h.target.targetKey(afterOverride.target));
+        expect(h.target.targetKey(beforeOverride.target)).not.toBe(
+            h.target.targetKey({ ...afterOverride.target, avatar: 'other.png' }),
+        );
+        expect(h.target.targetKey(beforeOverride.target)).not.toBe(
+            h.target.targetKey({ ...afterOverride.target, mode: 'loop' }),
+        );
+        expect(h.target.targetKey({ scope: 'global', mode: 'spec', presetId: 'p1' })).not.toBe(
+            h.target.targetKey({ scope: 'global', mode: 'spec', presetId: 'p2' }),
+        );
+    });
 });

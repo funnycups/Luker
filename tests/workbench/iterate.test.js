@@ -1388,4 +1388,103 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
 
         wb.close();
     });
+
+    test('continues a character-scope conversation across Turn 2 after Turn 1 apply creates character override', async () => {
+        const sessions = createMemorySessionStore();
+        const registry = createWorkbenchRegistry();
+        let activeChar = { avatar: 'iris.png', name: 'Iris' };
+        let hasOverride = false;
+        let savedVal = 'v0';
+        const toasts = [];
+
+        registry.registerIterateTarget({
+            id: 'orch',
+            label: 'Orchestration',
+            tone: 'orch',
+            targetKey: (t) => (
+                t?.scope === 'character'
+                    ? `orch:character:${t.mode || ''}:${t.avatar || ''}`
+                    : `orch:global:${t?.mode || ''}:${t?.presetId || ''}`
+            ),
+            scopes: async () => ({ global: true, character: Boolean(activeChar) }),
+            load: async (scopeArg) => ({
+                live: { val: savedVal },
+                target: scopeArg === 'character'
+                    ? {
+                        scope: 'character',
+                        mode: 'director',
+                        avatar: activeChar.avatar,
+                        presetId: hasOverride ? 'default' : 'global-active',
+                        hasOverride,
+                    }
+                    : { scope: 'global', mode: 'director', presetId: 'global-active', hasOverride: false },
+                title: scopeArg === 'character' ? activeChar.name : 'Global',
+            }),
+            prompt: async () => 'orch sys',
+            tools: async () => [{ type: 'function', function: { name: 'set_val' } }],
+            isRead: () => false,
+            runRead: async () => ({}),
+            runEdit: async (call) => ({ val: call.args.val }),
+            units: (doc) => new Map([['val', { group: 'Prompt', label: 'Value', text: String(doc.val) }]]),
+            rebuild: (_b, ai) => ai,
+            commit: async (_targetRef, _base, next) => {
+                hasOverride = true;
+                savedVal = next.val;
+                return { applied: ['val'], skipped: [], failure: '' };
+            },
+        });
+
+        let turnNum = 0;
+        const source = {
+            readSettings: () => ({ builtinPrompt: false, reviewChanges: true, pill: false }),
+            writeSettings: () => {},
+            loadSnapshot: async () => ({
+                chat: { label: 'Chat 1', character: activeChar },
+                card: activeChar,
+            }),
+            subscribe: () => () => {},
+            createSessions: () => sessions,
+            historyStorage: () => null,
+            runRules: () => [],
+            lastReply: async () => '',
+            aiRequest: jest.fn(async () => {
+                turnNum += 1;
+                if (turnNum === 1) return { text: '', calls: [{ id: 'c1', name: 'set_val', args: { val: 'v1' } }] };
+                if (turnNum === 2) return { text: 'Turn 1 ready.', calls: [] };
+                if (turnNum === 3) return { text: '', calls: [{ id: 'c2', name: 'set_val', args: { val: 'v2' } }] };
+                return { text: 'Turn 2 ready.', calls: [] };
+            }),
+        };
+
+        const wb = mountWorkbench({ source, registry, startCollapsed: true });
+        await wb.open({ page: 'ai', ws: 'orch', scope: 'character' });
+        await flushMicrotasks();
+        await flushMicrotasks();
+
+        const textarea = document.querySelector('textarea.wb-input');
+        const sendBtn = document.querySelector('button.wb-send');
+
+        // Turn 1 (before character override exists: hasOverride=false, presetId='global-active')
+        textarea.value = 'First refinement';
+        sendBtn.click();
+        for (let i = 0; i < 6; i++) await flushMicrotasks();
+        expect(document.body.textContent).toContain('Turn 1 ready.');
+
+        const applyBtn = [...document.querySelectorAll('.wb-chg-foot button')].find(b => b.textContent.includes('Apply selected'));
+        expect(applyBtn).toBeTruthy();
+        applyBtn.click();
+        for (let i = 0; i < 6; i++) await flushMicrotasks();
+        expect(hasOverride).toBe(true);
+        expect(savedVal).toBe('v1');
+
+        // Turn 2 in the SAME session after override creation (hasOverride=true, presetId='default')
+        textarea.value = 'Second refinement';
+        sendBtn.click();
+        for (let i = 0; i < 6; i++) await flushMicrotasks();
+        expect(document.body.textContent).toContain('Turn 2 ready.');
+        expect(document.body.textContent).not.toContain('This chat was editing something else');
+        expect(toasts).toEqual([]);
+
+        wb.close();
+    });
 });

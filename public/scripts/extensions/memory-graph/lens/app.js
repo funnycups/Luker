@@ -466,6 +466,13 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
 
     // ----- Mount ----------------------------------------------------------
     container.appendChild(root);
+    const hostThemeTarget = hostApp ? root.closest('[data-theme]') : null;
+    const hostThemeObserver = hostThemeTarget && typeof MutationObserver === 'function'
+        ? new MutationObserver(() => {
+            requestAnimationFrame(() => views.graph.onThemeChange?.());
+        })
+        : null;
+    hostThemeObserver?.observe(hostThemeTarget, { attributes: true, attributeFilter: ['data-theme'] });
     renderAll();
     load();
 
@@ -486,6 +493,7 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
         scheduleReload.cancel();
         onResize.cancel?.();
         resizeObserver?.disconnect();
+        hostThemeObserver?.disconnect();
         unsubscribeSource();
         compactMql?.removeEventListener?.('change', syncCompact);
         globalThis.removeEventListener('resize', onResize);

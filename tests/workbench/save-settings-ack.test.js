@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, test, expect, beforeAll, beforeEach, afterEach, jest } from '@jest/globals';
-import { compare as compareJsonPatch, applyPatch as applyJsonPatch } from '../../public/scripts/util/fast-json-patch.js';
-import { cloneAsJsonWire } from '../../public/scripts/util/json-clone.js';
 import { saveSettingsChecked } from '../../public/scripts/workbench/model/patch.js';
 
 const noop = () => {};
@@ -278,11 +276,6 @@ jest.unstable_mockModule('../../public/scripts/named-resource-read.js', () => ({
     readPresetDocument: async () => null,
 }));
 jest.unstable_mockModule('../../public/scripts/workbench/index.js', () => ({ initWorkbench: noop }));
-jest.unstable_mockModule('../../public/scripts/util/fast-json-patch.js', () => ({
-    applyPatch: applyJsonPatch,
-    compare: compareJsonPatch,
-}));
-jest.unstable_mockModule('../../public/scripts/util/json-clone.js', () => ({ cloneAsJsonWire }));
 
 globalThis.document = {
     readyState: 'complete',

@@ -8,6 +8,14 @@ import { saveSettingsChecked } from './model/patch.js';
 
 export { saveSettingsChecked };
 
+function cloneDescriptorObject(obj, overrides = {}) {
+    const descriptors = Object.getOwnPropertyDescriptors(obj);
+    for (const [key, value] of Object.entries(overrides)) {
+        descriptors[key] = { value, writable: true, enumerable: true, configurable: true };
+    }
+    return Object.defineProperties({}, descriptors);
+}
+
 function sortEntries(entries) {
     return [...entries]
         .sort((a, b) => {
@@ -16,7 +24,7 @@ function sortEntries(entries) {
             if (ao !== bo) return ao - bo;
             return a.seq - b.seq;
         })
-        .map(entry => ({ ...entry.def }));
+        .map(entry => cloneDescriptorObject(entry.def));
 }
 
 export function isWorkspaceEnabled(ws) {
@@ -65,7 +73,7 @@ export function createWorkbenchRegistry() {
         map.set(id, {
             token,
             seq: existing ? existing.seq : ++seq,
-            def: { ...def, id },
+            def: cloneDescriptorObject(def, { id }),
         });
         notify();
         return () => {

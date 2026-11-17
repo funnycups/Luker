@@ -879,6 +879,11 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
         tone: 'orch',
         order: 20,
         proposalKinds,
+        targetKey: (t) => (
+            t?.scope === 'character'
+                ? `orch:character:${t.mode || ''}:${t.avatar || ''}`
+                : `orch:global:${t?.mode || ''}:${t?.presetId || ''}`
+        ),
         isEnabled: (ctx) => Boolean(deps.getSettings?.() || resolveCtx(ctx)?.extensionSettings?.orchestrator),
         chips: () => [
             i18n('What was slow in the last run'),

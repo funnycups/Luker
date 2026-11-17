@@ -259,6 +259,47 @@ describe('workbench registry (order-independent)', () => {
         expect(received[1]).toEqual({ page: 'home', ws: 'preset' });
     });
 
+    test('preserves property getters across register and get so dynamic labels stay live', () => {
+        const reg = createWorkbenchRegistry();
+        let lang = 'en';
+        const dict = {
+            en: { title: 'Memory graph', label: 'Memory graph', ask: 'Memory search' },
+            zh: { title: '记忆图', label: '记忆图', ask: '记忆检索' },
+        };
+
+        const u1 = reg.registerWorkspace({
+            id: 'memory',
+            get title() { return dict[lang].title; },
+            icon: 'memory',
+            mount: () => {},
+        });
+        const u2 = reg.registerIterateTarget({
+            id: 'memory',
+            get label() { return dict[lang].label; },
+        });
+        const u3 = reg.registerAskProvider({
+            id: 'memory-ask',
+            get label() { return dict[lang].ask; },
+        });
+
+        const wsBefore = reg.getWorkspaces()[0];
+        const targetBefore = reg.getIterateTargets()[0];
+        const askBefore = reg.getAskProviders()[0];
+        expect(wsBefore.title).toBe('Memory graph');
+        expect(targetBefore.label).toBe('Memory graph');
+        expect(askBefore.label).toBe('Memory search');
+
+        lang = 'zh';
+        expect(wsBefore.title).toBe('记忆图');
+        expect(targetBefore.label).toBe('记忆图');
+        expect(askBefore.label).toBe('记忆检索');
+        expect(reg.getWorkspaces()[0].title).toBe('记忆图');
+        expect(reg.getIterateTargets()[0].label).toBe('记忆图');
+        expect(reg.getAskProviders()[0].label).toBe('记忆检索');
+
+        u1(); u2(); u3();
+    });
+
     test('singleton exports match registry contract', () => {
         const u1 = registerWorkspace({ id: 'singleton-test', title: 'S', icon: 'home', mount: () => {} });
         const u2 = registerIterateTarget({ id: 't1' });
@@ -627,5 +668,10 @@ describe('workbench boundary and locale-data contracts', () => {
         const mgSettingsCss = readFileSync(fileURLToPath(new URL('../../public/scripts/extensions/memory-graph/lens/css/settings.css', import.meta.url)), 'utf8');
         expect(shellCss).toMatch(/body:has\(\.wbench\s+\.wb-win:not\(\[hidden\]\)\)\s+#toast-container\s*\{\s*z-index:\s*2147483000\s*;/);
         expect(mgSettingsCss).not.toContain('#toast-container');
+    });
+
+    test('tokens.css cascades light-theme tokens from [data-theme="light"] host to embedded .mlens and .olens', () => {
+        const tokensCss = readFileSync(fileURLToPath(new URL('../../public/scripts/lens-shared/tokens.css', import.meta.url)), 'utf8');
+        expect(tokensCss).toContain('[data-theme="light"] :is(.lw-surface, .mlens, .olens, .rpdock):not([data-theme="dark"])');
     });
 });

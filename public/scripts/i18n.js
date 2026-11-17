@@ -2,6 +2,7 @@ import { registerDebugFunction } from './power-user.js';
 import { updateSecretDisplay } from './secrets.js';
 import { registerLensSharedLocaleData } from './lens-shared/locale-data.js';
 import { registerRunPanelLocaleData } from './run-panel/locale-data.js';
+import { registerWorkbenchLocaleData } from './workbench/locale-data.js';
 
 const storageKey = 'language';
 const overrideLanguage = localStorage.getItem(storageKey);
@@ -355,6 +356,7 @@ export async function initLocales() {
     localeData = await getLocaleData(localeFile);
     registerLensSharedLocaleData(addLocaleData);
     registerRunPanelLocaleData(addLocaleData);
+    registerWorkbenchLocaleData(addLocaleData);
     document.documentElement.lang = localeFile;
     applyLocale();
     addLanguagesToDropdown();

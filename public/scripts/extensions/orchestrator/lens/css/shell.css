@@ -115,7 +115,7 @@
     z-index: 3;
     flex: 0 0 var(--ol-topbar-h);
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
     padding: 0 10px 0 8px;
@@ -123,7 +123,8 @@
     background: var(--ol-surface);
 }
 .olens .ol-topbar-left, .olens .ol-topbar-right { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.olens .ol-topbar-right { justify-content: flex-end; }
+.olens .ol-topbar-right { justify-content: flex-end; flex: none; }
+.olens .ol-viewswitch { display: flex; justify-content: center; min-width: 0; }
 .olens .ol-brand { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 4px; }
 .olens .ol-brand-mark {
     display: grid; place-items: center;

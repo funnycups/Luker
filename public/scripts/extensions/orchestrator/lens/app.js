@@ -612,7 +612,13 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
         if (w > 0) return w <= 860;
         return Boolean(compactMql?.matches || hostApp?.isCompact?.());
     };
+    const syncWidthTier = () => {
+        const w = root.clientWidth;
+        if (w <= 0) return;
+        root.dataset.widthTier = w <= 1120 ? 'narrow' : (w <= 1380 ? 'mid' : 'wide');
+    };
     const syncCompact = () => {
+        syncWidthTier();
         const next = computeCompact();
         if (next !== store.get().compact) store.set({ compact: next, sheet: false });
     };
@@ -653,6 +659,7 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
     root.addEventListener('keydown', onKeydown);
 
     container.appendChild(root);
+    syncWidthTier();
     renderAll();
     load();
 
