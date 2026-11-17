@@ -1475,7 +1475,7 @@ class PromptManager {
         this.error = null;
         const requestId = ++this.renderRequestId;
 
-        waitUntilCondition(() => !is_send_press && !is_group_generating, 1024 * 1024, 100).catch(() => {
+        waitUntilCondition(() => !is_send_press && !is_group_generating && !this._isDragging, 1024 * 1024, 100).catch(() => {
             console.log('Timeout while waiting for send press to be false');
             throw new Error('prompt-manager-render-skip');
         }).then(async () => {
@@ -3567,6 +3567,7 @@ class PromptManager {
         // on the freshly-built list) leaves the previous render's DOM alive
         // as detached nodes. Heap snapshots showed 228 stale drag handles.
         // Must run while the old list is still attached so jQuery can find it.
+        this._teardownDeferredDraggable();
         const $existingList = $(`#${this.configuration.prefix}prompt_manager_list`);
         // @ts-ignore
         if ($existingList.length && $existingList.sortable('instance') !== undefined) {
@@ -3918,6 +3919,11 @@ class PromptManager {
 
         // Set up event delegation on the list element (once per list rebuild)
         this.setupListEventDelegation(promptManagerList);
+        // @ts-ignore
+        if ($(promptManagerList).sortable('instance') !== undefined) {
+            // @ts-ignore
+            $(promptManagerList).sortable('refresh');
+        }
     }
 
     /**
@@ -4189,6 +4195,7 @@ class PromptManager {
      * Enter group edit mode.
      */
     enterGroupEditMode() {
+        this._teardownDeferredDraggable();
         this._groupEditMode = true;
         this._groupEditSelection = new Set();
         this.renderGroupEditUI();
@@ -4815,11 +4822,30 @@ class PromptManager {
      * @property {string} identifier
      * @returns {void}
      */
+    _teardownDeferredDraggable() {
+        if (this._draggableVisibilityObserver) {
+            this._draggableVisibilityObserver.disconnect();
+            this._draggableVisibilityObserver = null;
+        }
+        if (this._deferredDraggableAbort) {
+            this._deferredDraggableAbort.abort();
+            this._deferredDraggableAbort = null;
+        }
+        this._draggableDeferred = false;
+        this._isDragging = false;
+    }
+
     makeDraggable() {
+        this._teardownDeferredDraggable();
+
         // Don't enable drag in group edit mode
         if (this._groupEditMode) return;
 
-        const listSelector = `#${this.configuration.prefix}prompt_manager_list`;
+        const listId = `${this.configuration.prefix}prompt_manager_list`;
+        const listNode = document.getElementById(listId);
+        if (!listNode) return;
+
+        const listSelector = `#${listId}`;
 
         // Destroy any prior Sortable instance attached to this list before
         // re-initialising — re-init alone does not release the previous
@@ -4829,6 +4855,38 @@ class PromptManager {
         if ($(listSelector).sortable('instance') !== undefined) {
             // @ts-ignore
             $(listSelector).sortable('destroy');
+        }
+
+        // Defer Sortable initialization while the list is inside a closed
+        // drawer (`display: none` -> zero client rects) to avoid synchronous
+        // layout and O(n^2) document-position scans during hidden renders.
+        if (listNode.getClientRects().length === 0) {
+            this._draggableDeferred = true;
+            const activateIfVisible = () => {
+                if (!this._draggableDeferred || this._groupEditMode) return;
+                if (!listNode.isConnected || listNode.getClientRects().length === 0) return;
+                this.makeDraggable();
+            };
+
+            if (typeof ResizeObserver === 'function') {
+                this._draggableVisibilityObserver = new ResizeObserver(() => {
+                    if (listNode.getClientRects().length > 0) {
+                        activateIfVisible();
+                    }
+                });
+                this._draggableVisibilityObserver.observe(listNode);
+            }
+
+            const abortController = new AbortController();
+            this._deferredDraggableAbort = abortController;
+            for (const eventName of ['pointerenter', 'mousedown', 'touchstart']) {
+                listNode.addEventListener(eventName, activateIfVisible, {
+                    capture: true,
+                    passive: true,
+                    signal: abortController.signal,
+                });
+            }
+            return;
         }
 
         // Track which groups we auto-expanded during a drag so the drag can
@@ -4850,6 +4908,7 @@ class PromptManager {
             scrollSensitivity: 60,
             scrollSpeed: 18,
             start: (_event, ui) => {
+                this._isDragging = true;
                 stylePromptManagerDragPlaceholder(ui);
 
                 // Auto-expand every collapsed group so the sortable can
@@ -4908,6 +4967,7 @@ class PromptManager {
                 this._lastDragDropGroupId = this._resolvePlaceholderGroupId(ui.placeholder);
             },
             stop: () => {
+                this._isDragging = false;
                 const $list = $(listSelector);
                 $list.find('li.prompt-manager-group.is-drop-target').removeClass('is-drop-target');
 
