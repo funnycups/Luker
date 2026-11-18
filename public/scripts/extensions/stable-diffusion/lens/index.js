@@ -13,6 +13,7 @@ export function initSdLens({
     getContext = () => globalThis.Luker?.getContext?.(),
     imageService = null,
     getRunStore = null,
+    comfyBridge = null,
 } = {}) {
     const ctx = getContext?.();
     const { addLocaleData, workbench } = ctx || {};
@@ -60,7 +61,7 @@ export function initSdLens({
         }
         if (typeof workbench.registerIterateTarget === 'function') {
             activeUnregisters.push(
-                workbench.registerIterateTarget(createSdIterateTarget(getContext)),
+                workbench.registerIterateTarget(createSdIterateTarget(getContext, { comfyBridge })),
             );
         }
         if (typeof workbench.registerAskProvider === 'function') {

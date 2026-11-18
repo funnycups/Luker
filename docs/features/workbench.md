@@ -39,7 +39,7 @@ A single conversational workspace for editing Luker artifacts with diff review a
 - **Preset** — edit the active Chat Completion preset's parameters and prompt entries, compare against a reference preset, adapt a preset for orchestration or tool tasks, and extract reusable skills.
 - **Character card** — edit the active character card's fields and bound world books.
 - **World book** — edit globally active world books or the books bound to the current character and chat.
-- **Image Generation** — edit illustration prompt presets, exploration prompts, and archived character visual profiles.
+- **Image Generation** — edit illustration prompt presets, exploration prompts, archived character visual profiles, and ComfyUI API-format workflows with live node introspection and draft test generation.
 
 Proposed changes appear in a **Change list** with before/after diffs. Tick the changes to apply, discard them, or enable **Apply automatically** to apply edits immediately while keeping every step undoable.
 

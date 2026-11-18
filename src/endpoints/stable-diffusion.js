@@ -32,6 +32,7 @@ import { dispatchSdWorkersai } from '../luker-dispatch/providers/sd/workersai.js
 import { dispatchSdChatImage } from '../luker-dispatch/providers/sd/chat-image.js';
 import { normalizeModelsUrl, resolveSdSecret } from '../luker-dispatch/providers/sd/sd-auth.js';
 import { createProxyBoundFetch, createRequestProxyAgent } from '../request-proxy.js';
+import { fetchComfyObjectInfo, inspectComfyNodes, searchComfyObjectInfo } from '../comfy-object-info.js';
 
 /**
  * Gets the comfy workflows.
@@ -473,6 +474,45 @@ comfy.post('/vaes', async (request, response) => {
     } catch (error) {
         console.error(error);
         return response.sendStatus(500);
+    }
+});
+
+comfy.post('/object-info/search', async (request, response) => {
+    try {
+        const info = await fetchComfyObjectInfo({
+            baseUrl: request.body?.url,
+            auth: request.body?.auth,
+            networkProxy: request.body?.network_proxy,
+            refresh: Boolean(request.body?.refresh),
+        });
+        const result = searchComfyObjectInfo(info, {
+            query: request.body?.query,
+            category: request.body?.category,
+        });
+        return response.json(result);
+    } catch (error) {
+        console.error('ComfyUI object_info search failed:', error);
+        return response.status(error?.statusCode || 502).json({ error: String(error?.message || error) });
+    }
+});
+
+comfy.post('/object-info/node', async (request, response) => {
+    try {
+        const classTypes = request.body?.class_types;
+        if (!Array.isArray(classTypes) || classTypes.length === 0) {
+            return response.status(400).json({ error: 'class_types must be a non-empty array of ComfyUI node class names.' });
+        }
+        const info = await fetchComfyObjectInfo({
+            baseUrl: request.body?.url,
+            auth: request.body?.auth,
+            networkProxy: request.body?.network_proxy,
+            refresh: Boolean(request.body?.refresh),
+        });
+        const result = inspectComfyNodes(info, classTypes);
+        return response.json(result);
+    } catch (error) {
+        console.error('ComfyUI object_info node inspect failed:', error);
+        return response.status(error?.statusCode || 502).json({ error: String(error?.message || error) });
     }
 });
 

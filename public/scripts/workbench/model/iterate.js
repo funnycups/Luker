@@ -176,6 +176,7 @@ export async function runIterateTurn({
                     bus: activeBus,
                     sourceCallId: call.id,
                     target: targetRef,
+                    signal: signal || null,
                     propose: async (input) => {
                         if (!activeBus) throw new SourceError('unsupported', 'ProposalBus is not configured for this target');
                         const out = await activeBus.propose({ sourceCallId: call.id, ...input });

@@ -624,6 +624,13 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
         runStore.setRoundStatus({ runId: rId, roundId: 'rd_1', status: 'done' });
         runStore.finishRun({ runId: rId, status: 'committed' });
 
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = async (url) => {
+            if (url === '/api/sd/comfy/workflows') {
+                return { ok: true, status: 200, json: async () => [] };
+            }
+            throw new Error(`Unexpected fetch URL: ${url}`);
+        };
         globalThis.Luker = { getContext: () => ctx };
         const cleanup = initSdLens({ getContext: () => ctx });
 
@@ -691,6 +698,7 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             expect(sdSettings.illustration.presets[0].characterDesignPrompt || '').toBe('');
             expect(await profileStore.getProfile('char_iter_1')).toBeNull();
         } finally {
+            globalThis.fetch = originalFetch;
             cleanup();
         }
     });
@@ -725,6 +733,13 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
         runStore.appendRound({ runId: badRunId, round: { id: 'r_err', label: 'Message #5' } });
         runStore.finishRun({ runId: badRunId, status: 'error', error: 'Upstream 500' });
 
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = async (url) => {
+            if (url === '/api/sd/comfy/workflows') {
+                return { ok: true, status: 200, json: async () => [] };
+            }
+            throw new Error(`Unexpected fetch URL: ${url}`);
+        };
         globalThis.Luker = { getContext: () => ctx };
         const cleanup = initSdLens({ getContext: () => ctx });
 
@@ -732,7 +747,7 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             const askProvider = reg.getAskProviders().find(p => p.id === 'sd');
             expect(askProvider).toBeDefined();
 
-            for (const part of ['summary', 'capabilities', 'presets', 'characters', 'last_run']) {
+            for (const part of ['summary', 'capabilities', 'presets', 'characters', 'workflows', 'last_run']) {
                 const payload = await askProvider.readers.wb_read_sd({ part }, ctx);
                 const serialized = JSON.stringify(payload);
                 expect(serialized).not.toContain('supersecretpassword');
@@ -766,6 +781,7 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             const cleanSnap = await askProvider.getSnapshot(ctx);
             expect(missingConnRule.check({ providers: { sd: cleanSnap } })).toBeNull();
         } finally {
+            globalThis.fetch = originalFetch;
             cleanup();
         }
     });

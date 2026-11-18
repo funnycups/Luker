@@ -56,6 +56,14 @@ Click **Open in Workbench** in **Extensions → Image Generation**, select **Ima
   - **OC design in studio** — click **Design OC in studio** to open **Image Studio** in **Character reference design** mode, where the studio AI reads your character card and bound world books, refines candidate sheets across turns, and stages a profile card. Click **Apply to character archive** to promote the chosen image into the global archive with full **Change history** undo support.
 - **Run Traces** — Inspect live and recent illustration and exploration runs, export run JSON, or click **Diagnose with AI** to troubleshoot failed runs in Workbench **AI iteration**.
 
+## Iterating ComfyUI Workflows with AI
+
+When **Source** is set to **ComfyUI**, click **Iterate workflow with AI** next to the **ComfyUI Workflow** selector, or open [Workbench](/features/workbench) **AI iteration** and select **Image Generation**:
+
+- **Live node introspection** — The iteration AI queries your connected ComfyUI server on demand to inspect installed custom node classes, required and optional inputs, available model and LoRA filenames, and output slot indices.
+- **Template node wiring and tuning** — Ask the AI to clone an API-format workflow, insert a dynamic `%lora_name%` `LoraLoader` template, wire `%ref_image%` or numbered `%ref_image_1%` reference slots to installed conditioning nodes, or adjust sampling, upscaling, and custom `%placeholder%` bindings.
+- **Draft test generation and rollback** — The AI executes draft workflows directly against your ComfyUI server to verify links and render a preview image in the review pane before anything is saved. Review per-node changes in the **Change list** to apply, and revert any applied workflow edit from **Change history**.
+
 ## Related Pages
 
 - [Workbench](/features/workbench) — unified workspace, AI iteration, Q&A, and Change history

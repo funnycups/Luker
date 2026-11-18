@@ -1,10 +1,63 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { formatDuration } from '../../../lens-shared/util.js';
+import { redact } from '../../../workbench/model/requests.js';
 import { computeImageCapabilities } from '../capabilities.js';
 import { createCharacterProfileStore } from '../character-archive/store.js';
+import { formatWorkflowTopology } from '../comfy-workflow-graph.js';
 import { getPresetById } from '../illustration/settings.js';
 import { i18n, i18nFormat } from './i18n.js';
+import { fetchDiskWorkflows } from './iterate-target.js';
+
+const PRIVATE_SD_URL_KEYS = [
+    'auto_url',
+    'vlad_url',
+    'sdcpp_url',
+    'drawthings_url',
+    'comfy_url',
+    'comfy_runpod_url',
+    'novel_url',
+    'chat_image_url',
+];
+
+const PRIVATE_SD_SECRET_KEYS = [
+    'auto_auth',
+    'vlad_auth',
+    'drawthings_auth',
+    'comfy_auth',
+    'api_key',
+];
+
+function redactSdString(raw, sdSettings) {
+    let text = String(raw ?? '');
+    if (sdSettings && typeof sdSettings === 'object') {
+        for (const k of PRIVATE_SD_SECRET_KEYS) {
+            const secretVal = String(sdSettings[k] || '').trim();
+            if (secretVal && text.includes(secretVal)) {
+                text = text.split(secretVal).join('***');
+            }
+        }
+        for (const k of PRIVATE_SD_URL_KEYS) {
+            const rawUrl = String(sdSettings[k] || '').trim();
+            if (!rawUrl) continue;
+            const candidates = new Set([rawUrl, rawUrl.replace(/\/+$/, '')]);
+            try {
+                const parsed = new URL(rawUrl);
+                if (parsed.origin && parsed.origin !== 'null') candidates.add(parsed.origin);
+                if (parsed.host) candidates.add(parsed.host);
+                if (parsed.hostname) candidates.add(parsed.hostname);
+            } catch {
+                // Non-URL literal is still stripped via exact rawUrl match above.
+            }
+            for (const cand of [...candidates].sort((a, b) => b.length - a.length)) {
+                if (cand && text.includes(cand)) {
+                    text = text.split(cand).join('***');
+                }
+            }
+        }
+    }
+    return redact(text);
+}
 
 function resolveLatestSdRun(ctx) {
     const rec = ctx?.runPanel?.getRunRecorder?.();
@@ -79,6 +132,7 @@ export async function buildSdSnapshot(ctx) {
         installed: true,
         source: String(sdSettings.source || ''),
         model: String(sdSettings.model || ''),
+        comfyWorkflow: sdSettings.source === 'comfy' ? String(sdSettings.comfy_workflow || '') : '',
         illustrationEnabled: Boolean(ill.enabled),
         autoGenerate: Boolean(ill.autoGenerate),
         activePresetName: String(activeIllPreset?.name || ''),
@@ -101,7 +155,7 @@ export function createSdAskProvider(getContext = () => globalThis.Luker?.getCont
             const snap = await buildSdSnapshot(ctx || getContext());
             if (!snap) return i18n('Not present');
             return {
-                Backend: [snap.source, snap.model].filter(Boolean).join(' · ') || '—',
+                Backend: [snap.source, snap.model, snap.comfyWorkflow].filter(Boolean).join(' · ') || '—',
                 [i18n('Character Archive')]: snap.characterCount,
                 Illustration: snap.illustrationEnabled ? 'on' : 'off',
             };
@@ -136,13 +190,13 @@ export function createSdAskProvider(getContext = () => globalThis.Luker?.getCont
             type: 'function',
             function: {
                 name: 'wb_read_sd',
-                description: 'Read redacted Image Generation & AI Illustration state (backend capabilities, prompt presets, archived character summaries, or latest run trace). Credentials and private endpoint URLs are never exposed.',
+                description: 'Read redacted Image Generation & AI Illustration state (backend capabilities, prompt presets, archived character summaries, ComfyUI workflows, or latest run trace). Credentials and private endpoint URLs are never exposed.',
                 parameters: {
                     type: 'object',
                     properties: {
                         part: {
                             type: 'string',
-                            enum: ['summary', 'capabilities', 'presets', 'characters', 'last_run'],
+                            enum: ['summary', 'capabilities', 'presets', 'characters', 'workflows', 'last_run'],
                             description: 'Section to inspect. Defaults to summary.',
                         },
                     },
@@ -175,9 +229,9 @@ export function createSdAskProvider(getContext = () => globalThis.Luker?.getCont
                         id: String(p.id || ''),
                         name: String(p.name || ''),
                         visualInspection: Boolean(p.visualInspection),
-                        illustrationPrompt: String(p.illustrationPrompt || ''),
-                        studioPrompt: String(p.studioPrompt || ''),
-                        explorationPrompt: String(p.explorationPrompt || ''),
+                        illustrationPrompt: redactSdString(p.illustrationPrompt, sdSettings),
+                        studioPrompt: redactSdString(p.studioPrompt, sdSettings),
+                        explorationPrompt: redactSdString(p.explorationPrompt, sdSettings),
                     }));
                 }
 
@@ -200,6 +254,31 @@ export function createSdAskProvider(getContext = () => globalThis.Luker?.getCont
                             referenceCount: (o.referenceImages || []).length,
                         })),
                     }));
+                }
+
+                if (part === 'workflows') {
+                    const workflows = await fetchDiskWorkflows(c);
+                    const activeWorkflow = String(sdSettings.comfy_workflow || '');
+                    return {
+                        activeWorkflow,
+                        placeholders: Array.isArray(sdSettings.comfy_placeholders)
+                            ? sdSettings.comfy_placeholders.map(p => ({
+                                find: redactSdString(p?.find, sdSettings),
+                                replace: redactSdString(p?.replace, sdSettings),
+                            }))
+                            : [],
+                        workflows: workflows.map(wf => ({
+                            fileName: wf.fileName,
+                            isActive: wf.fileName === activeWorkflow,
+                            topology: redactSdString(
+                                formatWorkflowTopology(wf.fileName, wf.graph, {
+                                    isActive: wf.fileName === activeWorkflow,
+                                    rawError: wf.rawError,
+                                }),
+                                sdSettings,
+                            ),
+                        })),
+                    };
                 }
 
                 if (part === 'last_run') {

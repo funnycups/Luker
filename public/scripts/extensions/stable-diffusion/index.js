@@ -77,7 +77,8 @@ import {
     syncGenerationPresetFromSettings,
 } from './generation-presets.js';
 import { createLoraCatalog } from './lora/catalog.js';
-import { inspectReferenceSlots, applyReferencesToWorkflow } from './reference/workflow.js';
+import { inspectReferenceSlots } from './reference/workflow.js';
+import { compileComfyWorkflowPromptPayload } from './comfy-workflow-graph.js';
 import { parseAspectRatio, resolveAspectRatioDimensions } from './aspect-ratio.js';
 import {
     computeImageCapabilities,
@@ -87,7 +88,6 @@ import {
     resolveAttributionPayload,
 } from './capabilities.js';
 import { setImageGenerationProvider } from '../../image-generation/registry.js';
-import { applyLorasToWorkflow, LORA_NAME_PLACEHOLDER } from './lora/workflow.js';
 import { buildLorasProperty, parseSlashLoras, validateLorasArg } from './lora/tool.js';
 import {
     CONNECTION_PROFILE_CAPABLE_SOURCES,
@@ -1020,6 +1020,16 @@ function applySettingsToUiInner() {
 export function createIllustrationBridge() {
     return {
         beginActivityJob: options => beginImageActivityJob(options),
+        comfyBridge: {
+            async onComfyWorkflowsCommitted() {
+                await loadComfyWorkflows();
+                await refreshLoraCatalog({ force: true });
+            },
+            async savePreviewBase64(data, format = 'png') {
+                const filename = `_studio_${humanizedDateTime()}`;
+                return await saveBase64AsFile(data, '_studio', filename, format || 'png', null);
+            },
+        },
         async getAvailableLoras() {
             const state = await loraCatalog.refresh({ force: true });
             registerFunctionTool();
@@ -5126,53 +5136,32 @@ async function generateComfyImageCommon(prompt, negativePrompt, signal, basePath
         const text = await workflowResponse.text();
         toastr.error(`Failed to load workflow.\n\n${text}`);
     }
-    let workflow = (await workflowResponse.json()).replaceAll('"%prompt%"', JSON.stringify(prompt));
-    workflow = workflow.replaceAll('"%negative_prompt%"', JSON.stringify(negativePrompt));
-
-    const explicitSeed = extraOptions.seed ?? extension_settings.sd.seed;
-    const seed = explicitSeed >= 0 ? explicitSeed : Math.round(Math.random() * Number.MAX_SAFE_INTEGER);
-    workflow = workflow.replaceAll('"%seed%"', JSON.stringify(seed));
-
-    const denoising_strength = extension_settings.sd.denoising_strength === undefined ? 1.0 : extension_settings.sd.denoising_strength;
-    workflow = workflow.replaceAll('"%denoise%"', JSON.stringify(denoising_strength));
-
-    const clip_skip = isNaN(extension_settings.sd.clip_skip) ? -1 : -extension_settings.sd.clip_skip;
-    workflow = workflow.replaceAll('"%clip_skip%"', JSON.stringify(clip_skip));
-
-    placeholders.forEach(ph => {
-        const overrideVal = ph === 'width' && extraOptions.width !== undefined
-            ? extraOptions.width
-            : (ph === 'height' && extraOptions.height !== undefined ? extraOptions.height : extension_settings.sd[ph]);
-        workflow = workflow.replaceAll(`"%${ph}%"`, JSON.stringify(overrideVal));
-    });
-    (extension_settings.sd.comfy_placeholders ?? []).forEach(ph => {
-        workflow = workflow.replaceAll(`"%${ph.find}%"`, JSON.stringify(substituteParams(ph.replace)));
-    });
-    if (/%user_avatar%/gi.test(workflow)) {
+    const workflowRaw = await workflowResponse.json();
+    let userAvatarBase64;
+    if (/%user_avatar%/gi.test(workflowRaw)) {
         const response = await fetch(getUserAvatarUrl());
         if (response.ok) {
             const avatarBlob = await response.blob();
             const avatarBase64DataUrl = await getBase64Async(avatarBlob);
-            const avatarBase64 = avatarBase64DataUrl.split(',')[1];
-            workflow = workflow.replaceAll('"%user_avatar%"', JSON.stringify(avatarBase64));
+            userAvatarBase64 = avatarBase64DataUrl.split(',')[1];
         } else {
-            workflow = workflow.replaceAll('"%user_avatar%"', JSON.stringify(PNG_PIXEL));
+            userAvatarBase64 = PNG_PIXEL;
         }
     }
-    if (/%char_avatar%/gi.test(workflow)) {
+    let charAvatarBase64;
+    if (/%char_avatar%/gi.test(workflowRaw)) {
         const response = await fetch(getCharacterAvatarUrl());
         if (response.ok) {
             const avatarBlob = await response.blob();
             const avatarBase64DataUrl = await getBase64Async(avatarBlob);
-            const avatarBase64 = avatarBase64DataUrl.split(',')[1];
-            workflow = workflow.replaceAll('"%char_avatar%"', JSON.stringify(avatarBase64));
+            charAvatarBase64 = avatarBase64DataUrl.split(',')[1];
         } else {
-            workflow = workflow.replaceAll('"%char_avatar%"', JSON.stringify(PNG_PIXEL));
+            charAvatarBase64 = PNG_PIXEL;
         }
     }
 
     const references = Array.isArray(extraOptions.references) ? extraOptions.references : [];
-    const slotInfo = inspectReferenceSlots(workflow);
+    const slotInfo = inspectReferenceSlots(workflowRaw);
     currentComfyReferenceSlotCount = slotInfo.slotCount;
 
     let uploadedFilenames = [];
@@ -5206,22 +5195,20 @@ async function generateComfyImageCommon(prompt, negativePrompt, signal, basePath
         uploadedFilenames = Array.isArray(uploadData?.filenames) ? uploadData.filenames : [];
     }
 
-    const needsGraphTransform = slotInfo.slotCount > 0 || workflow.includes(LORA_NAME_PLACEHOLDER) || loras.length > 0;
-    let workflowPrompt;
-    if (needsGraphTransform) {
-        let graph = JSON.parse(workflow);
-        if (slotInfo.slotCount > 0 || uploadedFilenames.length > 0) {
-            graph = applyReferencesToWorkflow(graph, uploadedFilenames);
-        }
-        if (workflow.includes(LORA_NAME_PLACEHOLDER) || loras.length > 0) {
-            graph = applyLorasToWorkflow(graph, loras);
-        }
-        workflowPrompt = JSON.stringify({ prompt: graph });
-    } else {
-        workflowPrompt = `{
-                "prompt": ${workflow}
-            }`;
-    }
+    const { promptPayload: workflowPrompt } = compileComfyWorkflowPromptPayload({
+        workflowText: workflowRaw,
+        prompt,
+        negativePrompt,
+        sdSettings: extension_settings.sd,
+        settingPlaceholders: placeholders,
+        customPlaceholders: extension_settings.sd.comfy_placeholders ?? [],
+        substituteFn: substituteParams,
+        uploadedFilenames,
+        loras,
+        extraOptions,
+        userAvatarBase64,
+        charAvatarBase64,
+    });
 
     const promptResult = await fetch(`${basePath}/generate`, {
         method: 'POST',
@@ -5871,6 +5858,16 @@ async function onComfyOpenWorkflowEditorClick() {
             await refreshLoraCatalog();
         }
     }
+}
+
+function onComfyIterateWorkflowClick() {
+    const context = getContext();
+    const wfName = String(extension_settings.sd.comfy_workflow || 'Default_Comfy_Workflow.json');
+    void context.workbench?.open?.({
+        page: 'ai',
+        ws: 'sd',
+        draft: t`Inspect ComfyUI workflow "${wfName}" and help me update it: `,
+    });
 }
 
 async function onComfyNewWorkflowClick() {
@@ -7085,6 +7082,7 @@ export async function init() {
     $('#sd_comfy_runpod_url').on('input', onComfyRunPodUrlInput);
     $('#sd_comfy_workflow').on('change', onComfyWorkflowChange);
     $('#sd_comfy_open_workflow_editor').on('click', onComfyOpenWorkflowEditorClick);
+    $('#sd_comfy_iterate_workflow').on('click', onComfyIterateWorkflowClick);
     $('#sd_comfy_new_workflow').on('click', onComfyNewWorkflowClick);
     $('#sd_comfy_rename_workflow').on('click', onComfyRenameWorkflowClick);
     $('#sd_comfy_delete_workflow').on('click', onComfyDeleteWorkflowClick);

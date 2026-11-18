@@ -123,6 +123,7 @@ export async function initIllustration(bridge) {
         getContext: () => context,
         imageService,
         getRunStore: () => getImageActivityStore(),
+        comfyBridge: bridge?.comfyBridge || null,
     });
     let actions = null;
     const pipeline = createIllustrationPipeline({
