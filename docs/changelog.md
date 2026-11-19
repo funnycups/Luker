@@ -119,6 +119,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Performance
 
 - Optimized first-screen startup, resource revalidation, settings saving, and hidden Prompt Manager rendering.
+- Optimized prompt group collapse and expand in the Prompt Manager.
 
 ## v2.9.0-rc.2 (2026-11-11)
 

@@ -127,3 +127,59 @@ test('skips Sortable setup while drawer is closed and activates automatically on
             .map(el => el.getAttribute('data-pm-identifier')),
     ), { timeout: 10_000 }).toEqual([secondId, thirdId, firstId]);
 });
+
+test('expands prompt groups without replacing rows or refreshing Sortable', async ({ page }) => {
+    await awaitMainUI(page, server.baseURL);
+    await ensureOaiDrawerOpen(page);
+
+    const { parentId, childId, parentPromptName } = await page.evaluate(async () => {
+        const { promptManager } = await import('/scripts/openai.js');
+        const [parent, child] = promptManager.getPromptsForCharacter(promptManager.activeCharacter)
+            .filter(prompt => promptManager.isPromptEditAllowed(prompt));
+        promptManager.ensurePromptGroups().push(
+            { id: 'outer', name: 'Parent group', collapsed: true, identifiers: [parent.identifier] },
+            { id: 'inner', name: 'Child group', collapsed: true, identifiers: [child.identifier], parentId: 'outer' },
+        );
+        await promptManager.renderPromptManagerListItems();
+        return { parentId: parent.identifier, childId: child.identifier, parentPromptName: parent.name };
+    });
+
+    const list = page.locator('#completion_prompt_manager_list');
+    const parent = list.locator('.prompt-manager-group[data-pm-group-id="outer"]');
+    const child = list.locator('.prompt-manager-group[data-pm-group-id="inner"]');
+    const parentPrompt = list.locator(`li[data-pm-identifier="${parentId}"]`);
+    const childPrompt = list.locator(`li[data-pm-identifier="${childId}"]`);
+    const childEnd = list.locator('[data-pm-group-end="inner"]');
+    const originalRow = await parentPrompt.elementHandle();
+
+    await expect.poll(() => list.evaluate(el => Boolean(window.jQuery(el).sortable('instance')))).toBe(true);
+    await list.evaluate(el => {
+        const sortable = window.jQuery(el).sortable('instance');
+        const refresh = sortable.refresh;
+        sortable.refresh = function (...args) {
+            el.dataset.testSortableRefreshed = 'true';
+            return refresh.apply(this, args);
+        };
+    });
+
+    await parent.locator('.prompt-manager-group-name').click();
+    await expect(parentPrompt).toBeVisible();
+    await expect(child).toBeVisible();
+    await expect(childPrompt).toBeHidden();
+    expect(await originalRow.evaluate(el => el.isConnected)).toBe(true);
+
+    await child.locator('.prompt-manager-group-name').click();
+    await expect(childPrompt).toBeVisible();
+    await expect(childEnd).not.toHaveClass(/prompt-manager-group-end-hidden/);
+    await parent.locator('.prompt-manager-group-name').click();
+    await expect(child).toBeHidden();
+    await expect(childPrompt).toBeHidden();
+    await expect(childEnd).toHaveClass(/prompt-manager-group-end-hidden/);
+
+    await parent.locator('.prompt-manager-group-name').click();
+    await expect(childPrompt).toBeVisible();
+    await expect(list).not.toHaveAttribute('data-test-sortable-refreshed', 'true');
+    await parentPrompt.hover();
+    await parentPrompt.locator('.prompt-manager-edit-action').click();
+    await expect(page.locator('#completion_prompt_manager_popup_entry_form_name')).toHaveValue(parentPromptName);
+});
