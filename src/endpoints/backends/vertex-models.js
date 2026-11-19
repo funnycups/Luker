@@ -1,5 +1,7 @@
 import fetch from 'node-fetch';
 
+import { getVertexApiHost } from '../vertex-host.js';
+
 /**
  * Vertex AI exposes publisher models through Model Garden's
  * `publishers.models.list`. Two properties of that route matter here:
@@ -17,8 +19,6 @@ import fetch from 'node-fetch';
  * UI ships, while full (service account) and proxy modes can.
  */
 export const VERTEX_MODELS_PATH = '/v1beta1/publishers/google/models';
-
-const VERTEX_GLOBAL_HOST = 'https://aiplatform.googleapis.com';
 
 export class VertexModelsHttpError extends Error {
     /**
@@ -45,16 +45,12 @@ export class VertexModelsResponseError extends Error {
 }
 
 /**
- * Resolves the Model Garden host for a Vertex AI region. `global` is served
- * by the un-prefixed host, every other region by a region-prefixed one.
- * @param {string} region Vertex AI region
+ * Resolves the Model Garden host for a Vertex AI location.
+ * @param {string} region Vertex AI location
  * @returns {string} Host without a trailing slash
  */
 export function getVertexModelsHost(region) {
-    const trimmed = String(region || '').trim();
-    return !trimmed || trimmed === 'global'
-        ? VERTEX_GLOBAL_HOST
-        : `https://${trimmed}-aiplatform.googleapis.com`;
+    return getVertexApiHost(region);
 }
 
 /**

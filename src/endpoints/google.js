@@ -8,6 +8,7 @@ import urlJoin from 'url-join';
 import lodash from 'lodash';
 
 import { readSecret, SECRET_KEYS, readProviderSecret } from './secrets.js';
+import { getVertexApiHost } from './vertex-host.js';
 import { GEMINI_SAFETY, VERTEX_SAFETY } from '../constants.js';
 import { delay, getConfigValue, trimTrailingSlash } from '../util.js';
 import { runLukerDispatch } from '../luker-dispatch/runner.js';
@@ -183,9 +184,7 @@ export async function getGoogleApiConfig(request, model, endpoint = 'generateCon
             // Express mode: use API key parameter
             const keyParam = authHeader.replace('Bearer ', '');
             const projectId = request.body.vertexai_express_project_id;
-            baseUrl = region === 'global'
-                ? 'https://aiplatform.googleapis.com/v1'
-                : `https://${region}-aiplatform.googleapis.com/v1`;
+            baseUrl = `${getVertexApiHost(region)}/v1`;
             url = projectId
                 ? `${baseUrl}/projects/${projectId}/locations/${region}/publishers/google/models/${model}:${endpoint}`
                 : `${baseUrl}/publishers/google/models/${model}:${endpoint}`;
@@ -205,10 +204,7 @@ export async function getGoogleApiConfig(request, model, endpoint = 'generateCon
             } catch (error) {
                 throw new Error('Failed to extract project ID from Service Account JSON.');
             }
-            // Handle global region differently - no region prefix in hostname
-            baseUrl = region === 'global'
-                ? 'https://aiplatform.googleapis.com/v1'
-                : `https://${region}-aiplatform.googleapis.com/v1`;
+            baseUrl = `${getVertexApiHost(region)}/v1`;
             url = `${baseUrl}/projects/${projectId}/locations/${region}/publishers/google/models/${model}:${endpoint}`;
             headers['Authorization'] = authHeader;
         } else {

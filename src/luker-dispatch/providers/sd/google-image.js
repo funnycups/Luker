@@ -4,6 +4,7 @@ import mime from 'mime-types';
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { getGoogleApiConfig } from '../../../endpoints/google.js';
+import { getVertexApiHost } from '../../../endpoints/vertex-host.js';
 import { loadReferenceInputs } from '../../../media-input-loader.js';
 import { extractImageMeta } from '../../../request-inspector.js';
 import { getConfigValue, trimTrailingSlash } from '../../../util.js';
@@ -42,9 +43,7 @@ async function buildGoogleDispatchTarget(ctx, model, endpoint) {
         const key = resolveSdSecret(ctx, [SECRET_KEYS.VERTEXAI, SECRET_KEYS.MAKERSUITE]);
         const region = String(body.vertexai_region || 'us-central1').trim();
         const projectId = String(body.vertexai_express_project_id || '').trim();
-        const defaultHost = region === 'global'
-            ? 'https://aiplatform.googleapis.com/v1'
-            : `https://${region}-aiplatform.googleapis.com/v1`;
+        const defaultHost = `${getVertexApiHost(region)}/v1`;
         const baseUrl = customApiUrl
             ? (/\/v\d+$/i.test(customApiUrl) ? customApiUrl : `${customApiUrl}/v1`)
             : defaultHost;

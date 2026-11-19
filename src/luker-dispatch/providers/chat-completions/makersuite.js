@@ -36,6 +36,7 @@ import {
 } from '../../../constants.js';
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { getVertexAIAuth, getProjectIdFromServiceAccount } from '../../../endpoints/google.js';
+import { getVertexApiHost } from '../../../endpoints/vertex-host.js';
 import {
     convertGooglePrompt,
     calculateGoogleBudgetTokens,
@@ -365,11 +366,9 @@ export async function dispatchMakerSuite(ctx) {
                 const keyParam = authHeader.replace('Bearer ', '');
                 const region = body.vertexai_region || 'us-central1';
                 const projectId = body.vertexai_express_project_id;
-                const baseUrl = region === 'global'
-                    ? 'https://aiplatform.googleapis.com'
-                    : `https://${region}-aiplatform.googleapis.com`;
+                const baseUrl = getVertexApiHost(region);
                 url = projectId
-                    ? `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/${region}/publishers/google/models/${model}:${responseType}?key=${keyParam}${stream ? '&alt=sse' : ''}`
+                    ? `${baseUrl}/v1/projects/${projectId}/locations/${region}/publishers/google/models/${model}:${responseType}?key=${keyParam}${stream ? '&alt=sse' : ''}`
                     : `${baseUrl}/v1/publishers/google/models/${model}:${responseType}?key=${keyParam}${stream ? '&alt=sse' : ''}`;
             } else if (authType === 'full') {
                 // For Full mode (service account authentication), use project-specific URL
@@ -391,12 +390,7 @@ export async function dispatchMakerSuite(ctx) {
                     return;
                 }
                 const region = body.vertexai_region || 'us-central1';
-                // Handle global region differently - no region prefix in hostname
-                if (region === 'global') {
-                    url = `https://aiplatform.googleapis.com/v1/projects/${projectId}/locations/${region}/publishers/google/models/${model}:${responseType}${stream ? '?alt=sse' : ''}`;
-                } else {
-                    url = `https://${region}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${region}/publishers/google/models/${model}:${responseType}${stream ? '?alt=sse' : ''}`;
-                }
+                url = `${getVertexApiHost(region)}/v1/projects/${projectId}/locations/${region}/publishers/google/models/${model}:${responseType}${stream ? '?alt=sse' : ''}`;
                 headers['Authorization'] = authHeader;
             } else {
                 // For proxy mode, use the original URL with Authorization header

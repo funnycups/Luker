@@ -30,6 +30,8 @@ describe('Vertex AI model list URL', () => {
         expect(getVertexModelsHost('')).toBe('https://aiplatform.googleapis.com');
         expect(getVertexModelsHost('us-central1')).toBe('https://us-central1-aiplatform.googleapis.com');
         expect(getVertexModelsHost('europe-west2')).toBe('https://europe-west2-aiplatform.googleapis.com');
+        expect(getVertexModelsHost('us')).toBe('https://aiplatform.us.rep.googleapis.com');
+        expect(getVertexModelsHost('eu')).toBe('https://aiplatform.eu.rep.googleapis.com');
     });
 
     test('never builds a project-scoped URL', () => {
