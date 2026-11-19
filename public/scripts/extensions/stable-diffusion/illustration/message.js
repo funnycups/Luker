@@ -1,5 +1,4 @@
 export const ILLUSTRATION_ATTRIBUTE = 'data-illustration-id';
-export const ILLUSTRATION_IMAGE_CLASS = 'luker-illustration-image';
 export const ILLUSTRATION_FAILED_CLASS = 'luker-illustration-failed';
 
 export const ILLUSTRATION_STRIP_FIND_REGEX = '/(?:<img\\b[^>]*\\bdata-illustration-id=(?:"[^"]*"|\'[^\']*\')[^>]*>[ \\t]?|<span\\b[^>]*\\bdata-illustration-id=(?:"[^"]*"|\'[^\']*\')[^>]*>[\\s\\S]*?<\\/span>[ \\t]?)/gi';
@@ -126,7 +125,7 @@ export function buildImageTag({ id, imageUrl, prompt, width }) {
     }
     const safePrompt = escapeHtml(prompt);
     return `<img src="${escapeHtml(imageUrl)}" alt="${safePrompt}" `
-        + `class="${ILLUSTRATION_IMAGE_CLASS}" ${ILLUSTRATION_ATTRIBUTE}="${escapeHtml(id)}" `
+        + `${ILLUSTRATION_ATTRIBUTE}="${escapeHtml(id)}" `
         + `style="width: ${numericWidth}%;">`;
 }
 

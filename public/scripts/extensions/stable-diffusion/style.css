@@ -88,7 +88,8 @@
     transform: translateX(-50%);
 }
 
-.luker-illustration-image {
+/* Message sanitization rewrites classes on chat markup, so style the data attribute. */
+img[data-illustration-id] {
     display: block;
     margin-left: auto;
     margin-right: auto;

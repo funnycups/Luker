@@ -84,6 +84,7 @@ test.describe('automatic illustration', () => {
         await openInlineDrawer(page, 'sd_illustration_container');
         await page.locator('#sd_illustration_enabled').check();
         await page.locator('#sd_illustration_auto_generate').check();
+        await page.locator('#sd_illustration_display_width').fill('50');
         await page.waitForTimeout(1500);
         await closeAnyOpenTopSettingsDrawer(page);
 
@@ -141,6 +142,29 @@ test.describe('automatic illustration', () => {
         expect(snapshot.mes).toMatch(/brass spyglass\s*<img[^>]+data-illustration-id[^>]*>\s*on the chart/);
         expect(snapshot.swipes[snapshot.swipeId]).toBe(snapshot.mes);
         expect(snapshot.swipeInfo[snapshot.swipeId].extra.illustrations).toHaveLength(1);
+
+        await page.waitForFunction(() => {
+            const image = document.querySelector('.mes_text img[data-illustration-id]');
+            return image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0;
+        }, null, { timeout: 30_000 });
+        const layout = await page.evaluate(() => {
+            const image = document.querySelector('.mes_text img[data-illustration-id]');
+            const text = image.closest('.mes_text');
+            const imageBox = image.getBoundingClientRect();
+            const textBox = text.getBoundingClientRect();
+            const textStyle = getComputedStyle(text);
+            const contentLeft = textBox.left + parseFloat(textStyle.paddingLeft);
+            const contentRight = textBox.right - parseFloat(textStyle.paddingRight);
+            return {
+                display: getComputedStyle(image).display,
+                imageCenter: imageBox.left + imageBox.width / 2,
+                contentCenter: (contentLeft + contentRight) / 2,
+                widthRatio: imageBox.width / (contentRight - contentLeft),
+            };
+        });
+        expect(layout.display).toBe('block');
+        expect(layout.widthRatio).toBeLessThan(0.9);
+        expect(Math.abs(layout.imageCenter - layout.contentCenter)).toBeLessThanOrEqual(1);
 
         const txt2img = sdMock.requests.slice(before).find(request => request.url === '/sdapi/v1/txt2img');
         expect(txt2img, 'mock should receive one image generation request').toBeTruthy();
