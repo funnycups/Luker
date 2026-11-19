@@ -77,6 +77,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed background Prompt Manager refreshes interrupting an active prompt drag.
 - Fixed prompt assembly failures showing a generic token-counting error, dispatching an empty context, and omitting cross-frame error details from diagnostics logs.
 - Fixed preset switching and background preset loading overwriting another preset's regex rules and settings.
+- Fixed saving one world book dropping another world book's pending save.
 
 ### Storage & Sync
 
