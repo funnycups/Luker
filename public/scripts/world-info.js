@@ -220,21 +220,30 @@ function normalizeWorldInfoSaveOptions(options = null) {
     };
 }
 
-function mergeWorldInfoSaveOptions(baseOptions = null, overrideOptions = null) {
-    return {
-        refreshEditor: Boolean(overrideOptions?.refreshEditor) || Boolean(baseOptions?.refreshEditor),
-    };
-}
+const pendingWorldInfoSaves = new Map();
+let worldInfoSaveChain = Promise.resolve();
 
-const saveWorldDebounced = debounce(async (name, data, options = null) => await _save(name, data, options), debounce_timeout.relaxed);
+const saveWorldDebounced = debounce(async () => {
+    const names = [...pendingWorldInfoSaves.keys()];
+    await Promise.allSettled(names.map(async (name) => {
+        const entry = pendingWorldInfoSaves.get(name);
+        if (!entry) {
+            return;
+        }
+        pendingWorldInfoSaves.delete(name);
+        try {
+            await _save(name, entry.data, entry.options);
+        } catch (error) {
+            console.error(`[WI] Failed to save "${name}"`, error);
+        }
+    }));
+}, debounce_timeout.relaxed);
 const saveSettingsDebounced = debounce(() => {
     Object.assign(world_info, { globalSelect: selected_world_info });
     saveSettings();
 }, debounce_timeout.relaxed);
 const sortFn = (a, b) => b.order - a.order;
 let updateEditor = (navigation, flashOnNav = true) => { console.debug('Triggered WI navigation', navigation, flashOnNav); };
-let worldInfoSaveInFlight = null;
-let worldInfoSaveQueuedRequest = null;
 
 // Do not optimize. updateEditor is a function that is updated by the displayWorldEntries with new data.
 export const worldInfoFilter = new FilterHelper(() => updateEditor());
@@ -8206,34 +8215,26 @@ async function saveWorldInfoInternal(name, data, options = {}) {
 }
 
 async function _save(name, data, options = {}) {
-    // Prevent double saving if both immediate and debounced save are called
-    cancelDebounce(saveWorldDebounced);
+    const normalizedName = String(name || '').trim();
+    if (!normalizedName) {
+        return;
+    }
 
     const normalizedOptions = normalizeWorldInfoSaveOptions(options);
 
-    if (worldInfoSaveInFlight) {
-        worldInfoSaveQueuedRequest = {
-            name,
-            data,
-            options: mergeWorldInfoSaveOptions(worldInfoSaveQueuedRequest?.options, normalizedOptions),
-        };
-        return worldInfoSaveInFlight;
+    // An immediate save takes over this book's pending debounced save.
+    pendingWorldInfoSaves.delete(normalizedName);
+    if (pendingWorldInfoSaves.size === 0) {
+        cancelDebounce(saveWorldDebounced);
     }
 
-    worldInfoSaveInFlight = (async () => {
-        try {
-            await saveWorldInfoInternal(name, data, normalizedOptions);
-        } finally {
-            worldInfoSaveInFlight = null;
-            if (worldInfoSaveQueuedRequest) {
-                const queuedRequest = worldInfoSaveQueuedRequest;
-                worldInfoSaveQueuedRequest = null;
-                await _save(queuedRequest.name, queuedRequest.data, queuedRequest.options);
-            }
-        }
-    })();
-
-    return worldInfoSaveInFlight;
+    // Keep saves serialized so WORLDINFO_UPDATED keeps the same one-at-a-time
+    // order, but chain every request instead of letting the last queued one
+    // overwrite the previous.
+    const run = () => saveWorldInfoInternal(normalizedName, data, normalizedOptions);
+    const result = worldInfoSaveChain.then(run);
+    worldInfoSaveChain = result.catch(() => {});
+    return result;
 }
 
 
@@ -8269,7 +8270,11 @@ export async function saveWorldInfo(name, data, immediately = false, options = {
         return await _save(normalizedName, data, normalizedOptions);
     }
 
-    saveWorldDebounced(normalizedName, data, normalizedOptions);
+    // Keep the latest state per book and move it to the end so the flush order
+    // follows the last edit. One debounce timer then flushes every book.
+    pendingWorldInfoSaves.delete(normalizedName);
+    pendingWorldInfoSaves.set(normalizedName, { data, options: normalizedOptions });
+    saveWorldDebounced();
 }
 
 async function renameWorldInfo(name, data) {
@@ -8449,6 +8454,12 @@ export async function deleteWorldInfo(worldInfoName) {
 
     if (!response.ok) {
         return false;
+    }
+
+    // Drop any debounced save for this book so it cannot recreate the file.
+    pendingWorldInfoSaves.delete(resolvedWorldInfoName);
+    if (pendingWorldInfoSaves.size === 0) {
+        cancelDebounce(saveWorldDebounced);
     }
 
     if (worldInfoCache.has(resolvedWorldInfoName)) {
