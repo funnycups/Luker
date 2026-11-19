@@ -2572,6 +2572,32 @@ class PromptManager {
     }
 
     /**
+     * Apply collapse state to the existing rows so a group click keeps the sortable items intact.
+     * @param {HTMLElement} listElement - The prompt list element.
+     */
+    updateGroupCollapseInPlace(listElement) {
+        const states = new Map(this.getPromptGroups().map(group => [group.id, {
+            collapsed: Boolean(group.collapsed),
+            ancestorCollapsed: this._isAncestorCollapsed(group.id),
+        }]));
+
+        for (const row of listElement.children) {
+            const endGroupId = row.getAttribute('data-pm-group-end');
+            const groupId = row.getAttribute('data-pm-group-id') ?? endGroupId;
+            const state = groupId ? states.get(groupId) : undefined;
+            if (!state) continue;
+
+            if (row.classList.contains('prompt-manager-group')) {
+                row.classList.toggle('expanded', !state.collapsed);
+                row.classList.toggle('prompt-manager-group-hidden', state.ancestorCollapsed);
+            } else {
+                const hiddenClass = endGroupId === null ? 'prompt-manager-group-child-hidden' : 'prompt-manager-group-end-hidden';
+                row.classList.toggle(hiddenClass, state.collapsed || state.ancestorCollapsed);
+            }
+        }
+    }
+
+    /**
      * Toggle all prompts in a group on/off.
      * @param {string} groupId
      */
@@ -4167,7 +4193,7 @@ class PromptManager {
 
                 // Click anywhere else on group header = toggle collapse
                 this.toggleGroupCollapse(groupId);
-                this.renderPromptManagerListItems();
+                this.updateGroupCollapseInPlace(listElement);
                 // Don't save collapse state to settings (it's UI-only)
                 return;
             }
