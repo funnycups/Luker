@@ -292,12 +292,12 @@
 /* Resize handle */
 .rpdock .rp-dock-resize { display: none; }
 .rpdock.rp-dock.is-float[data-size="small"] .rp-dock-resize {
-    display: block; position: absolute; right: -3px; bottom: -3px; z-index: 7; width: 14px; height: 14px;
+    display: block; position: absolute; right: 0; bottom: 0; z-index: 7; width: 16px; height: 16px;
     cursor: nwse-resize; touch-action: none; border-radius: 0 0 14px 0;
 }
 .rpdock.rp-dock.is-float[data-size="small"] .rp-dock-resize::before {
-    content: ""; position: absolute; right: 5px; bottom: 5px; width: 7px; height: 7px;
-    border-right: 2px solid var(--lw-border-strong); border-bottom: 2px solid var(--lw-border-strong); border-radius: 0 0 6px 0;
+    content: ""; position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px;
+    border-right: 2px solid var(--lw-border-strong); border-bottom: 2px solid var(--lw-border-strong); border-radius: 0 0 4px 0;
     opacity: 0; transition: opacity var(--lw-dur);
 }
 .rpdock.rp-dock.is-float:hover .rp-dock-resize::before,

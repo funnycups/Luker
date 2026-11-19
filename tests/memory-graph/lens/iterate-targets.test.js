@@ -566,7 +566,8 @@ describe('memory IterateTarget (config + schema)', () => {
         }, clone(loaded.live));
         const preview = target.renderPreview({ base: loaded.live, ai, target: loaded.target });
         expect(preview).toBeInstanceOf(Node);
-        expect(preview.textContent).toContain('Event');
+        expect(preview.textContent).toContain('事件');
+        expect(preview.textContent).toContain('Character sheet');
         expect(preview.textContent).toContain('召回最大轮数');
         expect(preview.textContent).toContain('6');
     });
@@ -788,6 +789,22 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
             setChatKey: (k) => { activeChatKey = k; },
         };
     }
+
+    test('graph preview keeps custom type identifiers distinct', () => {
+        const target = createMemoryGraphTarget();
+        const preview = target.renderPreview({
+            base: { nodes: {}, links: {} },
+            ai: {
+                nodes: {
+                    a: { id: 'a', type: 'custom_1', title: 'A' },
+                    b: { id: 'b', type: 'custom_2', title: 'B' },
+                },
+                links: {},
+            },
+        });
+        expect([...preview.querySelectorAll('summary .wb-mg-preview-label')].map(label => label.textContent))
+            .toEqual(['custom_1', 'custom_2']);
+    });
 
     test('scopes enables chat only when active chat exists, and prompt reads graphIterSystemPrompt', async () => {
         const hOpen = makeGraphHarness({ chatId: 'c1.jsonl' });

@@ -37,7 +37,7 @@ export function openModal(app, { title, content, okLabel = '', danger = false, o
     }, panel);
     unregister = app.registerModal?.(close) || null;
     app.root.appendChild(backdrop);
-    requestAnimationFrame(() => (ok || panel).focus());
+    requestAnimationFrame(() => (ok || panel).focus({ preventScroll: true }));
     return close;
 }
 

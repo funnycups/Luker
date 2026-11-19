@@ -139,7 +139,8 @@ export function segmented(options, value, onChange, {
             class: 'lw-seg-btn',
             disabled: o.disabled,
             'aria-pressed': String(o.value === value),
-            title: o.title || null,
+            'aria-label': o.ariaLabel || (iconOnlyMobile ? o.label : null),
+            title: o.title || (iconOnlyMobile ? o.label : null),
             onClick: () => { if (o.value !== value) onChange?.(o.value); },
         },
         o.tone ? h('span', { class: 'lw-dot', style: { '--tone': `var(--lw-t-${o.tone}, var(--lw-faint))` }, 'aria-hidden': 'true' }) : null,
@@ -264,7 +265,7 @@ export function confirmDialog(hostOrOptions, maybeOptions) {
             settled = true;
             backdrop.remove();
             if (returnFocus?.isConnected && typeof returnFocus.focus === 'function') {
-                returnFocus.focus();
+                returnFocus.focus({ preventScroll: true });
             }
             if (!result) onCancel?.();
             resolve(result);
@@ -306,6 +307,6 @@ export function confirmDialog(hostOrOptions, maybeOptions) {
         }, panel);
 
         host.appendChild(backdrop);
-        globalThis.requestAnimationFrame?.(() => confirmBtn.focus());
+        globalThis.requestAnimationFrame?.(() => confirmBtn.focus({ preventScroll: true }));
     });
 }

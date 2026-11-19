@@ -96,6 +96,7 @@ export function ensureStyles() {
 }
 .luker-notes-row__actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 4px;
     margin-top: 4px;
 }
@@ -346,6 +347,9 @@ export function ensureStyles() {
     background: rgba(140, 140, 140, 0.08);
 }
 .luker_skill_chip_add_select {
+    --lw-ctl-bg: transparent;
+    --lw-ctl-border: 0;
+    --lw-ctl-focus-bg: transparent;
     height: 1.9rem;
     padding: 1px 22px 1px 8px;
     font-size: 0.8rem;

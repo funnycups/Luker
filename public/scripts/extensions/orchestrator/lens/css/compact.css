@@ -65,6 +65,8 @@
 .olens.is-compact .ol-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; }
 .olens.is-compact .ol-stat-note { display: none; }
 .olens.is-compact .ol-stats .ol-spacer { display: none; }
+.olens.is-compact .ol-stats .ol-insp-note { grid-column: span 2; align-self: center; }
+.olens.is-compact .ol-stats .lw-ibtn { justify-self: end; align-self: center; }
 .olens.is-compact .ol-stats .lw-btn { grid-column: 1 / -1; }
 .olens.is-compact .ol-tl-tick:nth-child(even) { display: none; }
 .olens.is-compact .ol-run-main { padding: 12px 10px 24px; }
@@ -77,6 +79,7 @@
 
 /* History */
 .olens.is-compact .ol-history-head { padding: 14px 14px 6px; }
+.olens.is-compact .ol-history-head .ol-spacer { display: none; }
 .olens.is-compact .ol-history-body { padding: 4px 12px 32px; }
 .olens.is-compact .ol-hrow { grid-template-columns: 44px 1fr 14px; gap: 10px; }
 .olens.is-compact .ol-hrow-side { display: none; }

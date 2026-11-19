@@ -21,6 +21,7 @@
  */
 
 let registered = false;
+let inflight = null;
 
 const TRANSLATIONS = {
     'zh-cn': {
@@ -394,12 +395,23 @@ const TRANSLATIONS = {
  */
 export function ensureSkillI18n() {
     if (registered) return Promise.resolve();
-    registered = true;
-    return import('../i18n.js').then(({ addLocaleData }) => {
+    const ctxAdd = globalThis.Luker?.getContext?.()?.addLocaleData;
+    if (typeof ctxAdd === 'function') {
+        registered = true;
+        ctxAdd('zh-cn', TRANSLATIONS['zh-cn']);
+        ctxAdd('zh-tw', TRANSLATIONS['zh-tw']);
+        return Promise.resolve();
+    }
+    if (inflight) return inflight;
+    inflight = import('../i18n.js').then(({ addLocaleData }) => {
         if (typeof addLocaleData !== 'function') return;
+        registered = true;
         addLocaleData('zh-cn', TRANSLATIONS['zh-cn']);
         addLocaleData('zh-tw', TRANSLATIONS['zh-tw']);
     }).catch(() => {
-        // Non-browser environment (e.g. Jest) — skip silently.
+        // Non-browser environment (e.g. Jest) without Luker context yet.
+    }).finally(() => {
+        inflight = null;
     });
+    return inflight;
 }

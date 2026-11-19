@@ -158,14 +158,14 @@ export function createPalette(app) {
         input.value = initial;
         active = 0;
         compute();
-        requestAnimationFrame(() => { input.focus(); input.select(); });
+        requestAnimationFrame(() => { input.focus({ preventScroll: true }); input.select(); });
     }
 
     function close({ keepMatches = false } = {}) {
         if (el.hidden) return;
         el.hidden = true;
         if (!keepMatches) app.setMatches(null);
-        if (returnFocus && typeof returnFocus.focus === 'function' && returnFocus.isConnected) returnFocus.focus();
+        if (returnFocus && typeof returnFocus.focus === 'function' && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
     }
 
     return { el, open, close, isOpen: () => !el.hidden };

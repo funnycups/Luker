@@ -16,6 +16,9 @@
 }
 .mlens .ml-palette-field { display: flex; align-items: center; gap: 10px; padding: 0 14px; height: 52px; border-bottom: 1px solid var(--ml-border); color: var(--ml-text-faint); }
 .mlens .ml-palette-input {
+    --lw-ctl-bg: transparent;
+    --lw-ctl-border: 0;
+    --lw-ctl-focus-bg: transparent;
     flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; outline: none; box-shadow: none;
     background: transparent; color: var(--ml-text); font: inherit; font-size: 15px;
 }
@@ -53,11 +56,13 @@
 .mlens dd.ml-editable.is-empty { color: var(--ml-text-faint); font-style: normal; }
 .mlens .ml-inline { display: flex; flex-direction: column; gap: 4px; width: 100%; min-width: 0; vertical-align: top; }
 .mlens .ml-inline-input {
+    --lw-ctl-border: 1px solid var(--ml-accent);
+    --lw-ctl-margin: -4px 0 0;
     display: block; width: 100%; min-width: 0;
     border: 1px solid var(--ml-accent); border-radius: var(--ml-radius-sm);
     background: var(--ml-surface); color: var(--ml-text);
     font: inherit; font-size: inherit; font-weight: inherit; line-height: inherit; letter-spacing: inherit;
-    padding: 4px 8px; margin: -5px -9px 0; width: calc(100% + 18px);
+    padding: 4px 8px; margin: -4px 0 0;
     outline: none; resize: none;
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--ml-accent) 18%, transparent);
 }

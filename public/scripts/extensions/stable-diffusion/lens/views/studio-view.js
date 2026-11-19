@@ -920,7 +920,6 @@ export function createStudioView(app) {
                 void persistCurrentSession();
             }, { ariaLabel: i18n('Target profile to update') });
             targetSelect.dataset.sdRole = 'studio-target-profile';
-            targetSelect.style.maxWidth = '210px';
 
             const ctx = getCtx();
             const sourceOpts = [
@@ -947,7 +946,6 @@ export function createStudioView(app) {
                 void persistCurrentSession();
             }, { ariaLabel: i18n('Source character card') });
             sourceSelect.dataset.sdRole = 'studio-source-select';
-            sourceSelect.style.maxWidth = '210px';
             toolbarItems.push(targetSelect, sourceSelect);
         } else if (session) {
             const visualSwitch = switchControl(i18n('Visual review'), Boolean(session.visualReview), (next) => {
@@ -1017,8 +1015,8 @@ export function createStudioView(app) {
 
         const attachedSource = session?.attachedReferences?.find(r => r.role === 'source');
         const attachedBanner = attachedSource
-            ? h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 12px', fontSize: '12px', background: 'var(--lw-surface-2)' } },
-                h('span', { text: i18nFormat('Editing source image: ${0}', attachedSource.imagePath) }),
+            ? h('div', { class: 'sdlens-studio-source-banner' },
+                h('span', { title: attachedSource.imagePath, text: i18nFormat('Editing source image: ${0}', attachedSource.imagePath) }),
                 iconButton('x', i18n('Remove'), () => {
                     session.attachedReferences = session.attachedReferences.filter(r => r !== attachedSource);
                     paint();

@@ -25,7 +25,7 @@ export function createDialog() {
         if (sections instanceof Node) {
             put(body, sections);
             el.hidden = false;
-            requestAnimationFrame(() => closeBtn.focus());
+            requestAnimationFrame(() => closeBtn.focus({ preventScroll: true }));
             return;
         }
         for (const section of sections) {
@@ -35,13 +35,13 @@ export function createDialog() {
                 h('pre', { class: 'ml-insp-pre', text: text || i18n('(empty)') })));
         }
         el.hidden = false;
-        requestAnimationFrame(() => closeBtn.focus());
+        requestAnimationFrame(() => closeBtn.focus({ preventScroll: true }));
     }
 
     function close() {
         if (el.hidden) return;
         el.hidden = true;
-        if (returnFocus?.isConnected) returnFocus.focus();
+        if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
     }
 
     return { el, open, close, isOpen: () => !el.hidden };

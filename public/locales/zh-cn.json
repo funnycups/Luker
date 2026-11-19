@@ -7743,4 +7743,9 @@
     ,"Draft test preview": "草稿测试预览"
     ,"Iterate workflow with AI": "使用 AI 迭代工作流"
     ,"Inspect ComfyUI workflow \"${0}\" and help me update it: ": "检查 ComfyUI 工作流「${0}」并按以下需求修改："
+    ,"Complete": "完成"
+    ,"Running": "运行中"
+    ,"Backend": "后端"
+    ,"AI Illustration": "自动插图"
+    ,"${0} profile(s)": "${0} 个档案"
 }

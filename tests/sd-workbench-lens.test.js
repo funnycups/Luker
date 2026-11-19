@@ -17,6 +17,7 @@ import { mountSdLens } from '../public/scripts/extensions/stable-diffusion/lens/
 import { buildSdDiagnoseDraft } from '../public/scripts/extensions/stable-diffusion/activity.js';
 import { askTools, readLabel } from '../public/scripts/workbench/model/ask.js';
 import { wsName } from '../public/scripts/workbench/pages/ask.js';
+import { ensureSkillI18n } from '../public/scripts/skills/i18n.js';
 
 beforeAll(() => {
     globalThis.structuredClone ??= value => JSON.parse(JSON.stringify(value));
@@ -787,7 +788,11 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
     });
 
     test('Diagnose draft targets sd_read_run (not wb_read_sd), Workbench Ask/Home expose sd labels, Studio preserves references/target outfit, and zh-cn renders zero untranslated Lens strings', async () => {
-        const { ctx, rec } = createHarnessContext();
+        const recorder = createRecorder({
+            storage: createMemoryStorage(),
+            getRunContext: () => ({ chatId: 'c_zh', chatLabel: '海雾哨站' }),
+        });
+        const { ctx, reg, rec } = createHarnessContext({ recorder });
         const runStore = createRunStore();
         rec.attach(runStore, 'sd');
         const rId = runStore.startRun({ mode: 'image', chatKey: 'chat_diag' });
@@ -808,6 +813,7 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
 
         // Important 5: Workbench Ask suggest enum, readLabel, and wsName include 'sd' / 'wb_read_sd'
         globalThis.Luker = { getContext: () => ctx };
+        const cleanup = initSdLens({ getContext: () => ctx });
         const answerTool = askTools().find(t => t.function.name === 'wb_answer');
         expect(answerTool.function.parameters.properties.suggest.enum).toContain('sd');
         expect(readLabel('wb_read_sd')).toBe('Image Generation');
@@ -981,6 +987,40 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
         expect(container.textContent).not.toContain('UNTRANSLATED:');
         expect(container.textContent).not.toContain('round(s)');
 
+        // Verify populated run view in zh-cn localizes status pills and shows chatLabel as title
+        const sdRunStore = createRunStore();
+        rec.attach(sdRunStore, 'sd');
+        const zhRunId = sdRunStore.startRun({ mode: 'image', chatKey: 'c_zh' });
+        sdRunStore.appendRound({ runId: zhRunId, round: { id: 'r_zh', label: '消息 #12' } });
+        sdRunStore.ensureSection({ runId: zhRunId, roundId: 'r_zh', section: { id: 'p_zh', kind: 'prompt', title: '提示词 1' } });
+        sdRunStore.appendToSection({ runId: zhRunId, roundId: 'r_zh', sectionId: 'p_zh', delta: '1girl, lantern' });
+        sdRunStore.setSectionStatus({ runId: zhRunId, roundId: 'r_zh', sectionId: 'p_zh', status: 'running' });
+        sdRunStore.setRoundStatus({ runId: zhRunId, roundId: 'r_zh', status: 'running' });
+        handle.update({ subview: 'run', runKey: `sd:${zhRunId}` });
+        await new Promise(r => setTimeout(r, 20));
+        expect(container.textContent).not.toContain('UNTRANSLATED:');
+        expect(container.textContent).not.toContain('(running)');
+        expect(container.querySelector('.sdlens-runs-detail h3')?.textContent).toBe('海雾哨站');
+        expect(container.querySelector('.sdlens-runs-detail h3')?.getAttribute('title')).toBe(`sd:${zhRunId}`);
+        expect(container.textContent).toContain('运行中');
+
+        // Verify AskProvider overview / sideInfo / Home card localize all labels in zh-cn
+        const sdAskProvider = reg.getAskProviders().find(p => p.id === 'sd');
+        const overviewZh = await sdAskProvider.getOverview(ctx);
+        expect(Object.keys(overviewZh)).not.toContain('Backend');
+        expect(Object.keys(overviewZh)).not.toContain('Illustration');
+        const sideZh = sdAskProvider.getSideInfo({ characterCount: 3, brokenConnectionProfile: false });
+        expect(sideZh.countText).not.toContain('chars');
+        expect(sideZh.countText).not.toContain('UNTRANSLATED:');
+
+        // Verify ensureSkillI18n registers synchronously via Luker.getContext().addLocaleData
+        const addedLocales = [];
+        ctx.addLocaleData = (loc, table) => addedLocales.push([loc, table]);
+        const registration = ensureSkillI18n();
+        expect(addedLocales.map(([loc]) => loc)).toEqual(['zh-cn', 'zh-tw']);
+        await registration;
+
         handle.destroy();
+        cleanup();
     });
 });

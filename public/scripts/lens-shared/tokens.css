@@ -145,7 +145,65 @@
 .lw-surface *, .lw-surface *::before, .lw-surface *::after { box-sizing: border-box; text-shadow: none; }
 .lw-surface [hidden] { display: none !important; }
 .lw-surface button, .lw-surface input, .lw-surface select, .lw-surface textarea { font: inherit; color: inherit; margin: 0; }
-.lw-surface select option { background: var(--lw-surface); color: var(--lw-text); }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) :is(
+    input:not([type]),
+    input[type="text"],
+    input[type="number"],
+    input[type="search"],
+    input[type="url"],
+    input[type="email"],
+    input[type="password"],
+    textarea,
+    select
+) {
+    background-color: var(--lw-ctl-bg, var(--lw-surface)) !important;
+    border: var(--lw-ctl-border, 1px solid var(--lw-border-strong)) !important;
+    color: var(--lw-ctl-fg, var(--lw-text)) !important;
+    margin: var(--lw-ctl-margin, 0) !important;
+}
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) :is(
+    input:not([type]),
+    input[type="text"],
+    input[type="number"],
+    input[type="search"],
+    input[type="url"],
+    input[type="email"],
+    input[type="password"],
+    textarea,
+    select
+):focus {
+    background-color: var(--lw-ctl-focus-bg, var(--lw-ctl-bg, var(--lw-surface))) !important;
+    border-color: var(--lw-ctl-focus-border, var(--lw-accent)) !important;
+}
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) select:not(.luker_skill_chip_add_select) {
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url('/img/down-arrow.svg');
+    background-repeat: no-repeat;
+    background-position: right 9px center;
+    background-size: 9px 6px;
+    padding-right: 26px;
+    text-overflow: ellipsis;
+}
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) select option,
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) select option:checked {
+    background-color: var(--lw-surface) !important;
+    color: var(--lw-text) !important;
+}
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) :is(input, textarea)::placeholder {
+    color: var(--lw-faint) !important;
+    opacity: 1;
+}
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) button.menu_button {
+    background-color: var(--lw-raised);
+    border: 1px solid var(--lw-border-strong);
+    border-radius: var(--lw-r-sm);
+    color: var(--lw-text);
+}
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) button.menu_button:hover:not(:disabled) {
+    background-color: var(--lw-surface-2);
+    border-color: var(--lw-faint);
+}
 .lw-surface :focus-visible { outline: 2px solid var(--lw-accent); outline-offset: 2px; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock)[tabindex="-1"]:focus,
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) [tabindex="-1"]:focus,
@@ -267,11 +325,11 @@
 
 /* ---- Select & form field ---- */
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-select {
-    width: 100%; min-width: 0; height: 30px; padding: 0 8px;
+    width: 100%; min-width: 0; height: 30px; padding: 0 26px 0 8px;
     border: 1px solid var(--lw-border-strong); border-radius: var(--lw-r-sm);
-    background: var(--lw-surface); color: var(--lw-text); font-size: 12.5px;
+    background-color: var(--lw-surface); color: var(--lw-text); font-size: 12.5px;
 }
-:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-select.is-follow { color: var(--lw-faint); }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-select.is-follow { --lw-ctl-fg: var(--lw-faint); color: var(--lw-faint); }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-select:focus { border-color: var(--lw-accent); outline: none; }
 
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-field {
@@ -283,7 +341,7 @@
 
 /* ---- Section title, dot, pilltag, empty, dialog ---- */
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-sec-title {
-    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
     margin-bottom: 8px;
     font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
     color: var(--lw-faint);
@@ -297,6 +355,7 @@
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-pilltag {
     flex: none; padding: 1px 8px; border-radius: 999px; font-size: 11px;
     background: var(--lw-hover); color: var(--lw-muted); white-space: nowrap;
+    text-transform: none; letter-spacing: normal;
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-pilltag.is-ok { background: var(--lw-accent-soft); color: var(--lw-accent); }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-pilltag.is-warn { background: var(--lw-amber-soft); color: var(--lw-amber); }

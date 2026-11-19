@@ -20,6 +20,7 @@
 .wbench .wb-chat-title { font-weight: 650; }
 .wbench .wb-chat-hist { width: auto; max-width: 200px; }
 .wbench .wb-chat-body { flex: 1; overflow: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.wbench .wb-chat-body > * { flex-shrink: 0; }
 .wbench .wb-msg-me { align-self: flex-end; max-width: 78%; padding: 9px 13px; border-radius: 12px 12px 4px 12px; background: var(--wb-accent-soft); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .wbench .wb-msg-ai { max-width: 94%; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; line-height: 1.7; }
 .wbench .wb-msg-ai > * { max-width: 100%; }

@@ -15,9 +15,9 @@
 .mlens .ml-insp-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 
 .mlens .ml-insp-anchors { display: grid; gap: 4px; padding: 10px 12px; border-radius: var(--ml-radius); background: var(--ml-surface-2); border: 1px solid var(--ml-border); }
-.mlens .ml-insp-anchor { display: grid; grid-template-columns: 16px 34px 1fr; align-items: baseline; gap: 6px; }
+.mlens .ml-insp-anchor { display: grid; grid-template-columns: 16px minmax(34px, auto) 1fr; align-items: baseline; gap: 6px; }
 .mlens .ml-insp-anchor .mlens-icon { color: var(--ml-text-faint); transform: translateY(2px); }
-.mlens .ml-insp-anchor-label { font-size: 11.5px; color: var(--ml-text-faint); }
+.mlens .ml-insp-anchor-label { font-size: 11.5px; color: var(--ml-text-faint); white-space: nowrap; }
 
 .mlens .ml-insp-prose { display: grid; gap: 10px; font-family: var(--ml-serif); font-size: 14px; line-height: 1.85; color: var(--ml-text); }
 .mlens .ml-insp-prose p { text-wrap: pretty; }

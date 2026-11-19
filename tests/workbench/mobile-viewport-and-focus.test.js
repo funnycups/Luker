@@ -8,6 +8,9 @@ import { fitToViewport } from '../../public/scripts/workbench/viewport.js';
 import { createWindow } from '../../public/scripts/workbench/ui/window.js';
 import { createAskPage } from '../../public/scripts/workbench/pages/ask.js';
 import { createHomePage } from '../../public/scripts/workbench/pages/home.js';
+import { confirmDialog } from '../../public/scripts/lens-shared/ui.js';
+import { createDock } from '../../public/scripts/run-panel/dock.js';
+import { createRecorder, createMemoryStorage } from '../../public/scripts/run-panel/recorder.js';
 
 beforeAll(() => {
     if (!globalThis.requestAnimationFrame) {
@@ -146,5 +149,60 @@ describe('workbench mobile viewport & preventScroll focus', () => {
         home.onSnapshot();
         expect(home.el.querySelector('.wb-card')).not.toBe(firstCard);
         expect(home.el.textContent).toContain('p2');
+    });
+
+    test('confirmDialog focuses confirm button and restores prior focus with preventScroll: true', async () => {
+        const trigger = document.createElement('button');
+        document.body.appendChild(trigger);
+        trigger.focus();
+        const returnFocusSpy = jest.spyOn(trigger, 'focus');
+
+        const promise = confirmDialog({
+            host: document.body,
+            title: 'Delete',
+            message: 'Confirm removal?',
+        });
+        const confirmBtn = document.body.querySelector('.lw-dialog-foot .lw-btn.is-primary');
+        const confirmFocusSpy = jest.spyOn(confirmBtn, 'focus');
+        await new Promise((r) => requestAnimationFrame(r));
+        expect(confirmFocusSpy).toHaveBeenCalledWith({ preventScroll: true });
+
+        returnFocusSpy.mockClear();
+        document.body.querySelector('.lw-dialog-foot .lw-btn.is-ghost').click();
+        await expect(promise).resolves.toBe(false);
+        expect(returnFocusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    });
+
+    test('Run Dock compact fitToViewport zeroes width and height before measuring getBoundingClientRect origin', async () => {
+        const origMatchMedia = globalThis.matchMedia;
+        globalThis.matchMedia = (q) => ({
+            matches: q === '(max-width: 860px)',
+            addEventListener: () => {},
+            removeEventListener: () => {},
+        });
+        Object.defineProperty(window, 'innerWidth', { value: 375, configurable: true });
+        Object.defineProperty(window, 'innerHeight', { value: 812, configurable: true });
+
+        const recorder = createRecorder({ storage: createMemoryStorage(), owner: () => 'u1' });
+        const dock = createDock({ recorder, host: document.body });
+        try {
+            const root = document.body.querySelector('.rpdock');
+            root.style.width = '375px';
+            root.style.height = '900px';
+            const observed = [];
+            const origGetBCR = root.getBoundingClientRect.bind(root);
+            root.getBoundingClientRect = () => {
+                observed.push({ width: root.style.width, height: root.style.height });
+                return { ...origGetBCR(), left: 0, top: 0, width: 0, height: 0 };
+            };
+            dock.open();
+            await new Promise(resolve => requestAnimationFrame(resolve));
+            expect(observed.length).toBeGreaterThanOrEqual(1);
+            expect(observed[0]).toEqual({ width: '0px', height: '0px' });
+        } finally {
+            dock.destroy();
+            recorder.detach();
+            globalThis.matchMedia = origMatchMedia;
+        }
     });
 });

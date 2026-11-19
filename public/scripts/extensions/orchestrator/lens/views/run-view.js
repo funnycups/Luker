@@ -124,9 +124,10 @@ export function createRunView(app) {
         const key = app.state().selectedSegment;
         const seg = run.segments.find(item => item.key === key);
         if (!seg) {
+            if (!run.lanes.length && !run.finalText) return null;
             return h('div', { class: 'ol-detail is-empty' },
                 run.finalText ? finalBlock(run) : null,
-                h('p', { class: 'ol-detail-hint', text: i18n('Pick a bar on the timeline to see its process.') }));
+                run.lanes.length ? h('p', { class: 'ol-detail-hint', text: i18n('Pick a bar on the timeline to see its process.') }) : null);
         }
         const index = run.segments.indexOf(seg);
         const prev = run.segments[index - 1];
@@ -166,7 +167,10 @@ export function createRunView(app) {
             return;
         }
         if (run.runId !== lastRunId) lastRunId = run.runId;
-        put(el, header(run), h('div', { class: 'ol-run-main' }, timeline(run), detail(run)));
+        const detailEl = detail(run);
+        put(el,
+            header(run),
+            run.lanes.length || detailEl ? h('div', { class: 'ol-run-main' }, run.lanes.length ? timeline(run) : null, detailEl) : null);
     }
 
     return {

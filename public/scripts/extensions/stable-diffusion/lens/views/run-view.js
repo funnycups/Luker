@@ -55,6 +55,14 @@ export function createRunView(app) {
         return 'is-warn';
     }
 
+    function formatRunStatus(status) {
+        if (status === 'committed' || status === 'done' || status === 'succeeded') return i18n('Complete');
+        if (status === 'running') return i18n('Running');
+        if (status === 'error' || status === 'failed') return i18n('Failed');
+        if (status === 'aborted' || status === 'cancelled') return i18n('Stopped');
+        return String(status || '');
+    }
+
     function paint() {
         clear(el);
         const runs = listSdRuns();
@@ -87,7 +95,7 @@ export function createRunView(app) {
             h('div', { class: 'sdlens-char-meta' },
                 h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' } },
                     h('span', { class: 'sdlens-char-name', text: run.chatLabel || run.runKey }),
-                    h('span', { class: `lw-pilltag ${statusBadgeKind(run.status)}`, text: run.status })),
+                    h('span', { class: `lw-pilltag ${statusBadgeKind(run.status)}`, text: formatRunStatus(run.status) })),
                 h('div', {
                     class: 'sdlens-char-sub',
                     text: `${i18nFormat('${0} round(s)', run.rounds?.length || 0)} · ${run.startedAtWall ? new Date(run.startedAtWall).toLocaleTimeString() : run.runId}`,
@@ -110,17 +118,21 @@ export function createRunView(app) {
 
         const detailPane = h('div', { class: 'sdlens-runs-detail' },
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
-                h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-                    h('h3', { style: { margin: '0', fontSize: '15px' }, text: activeRun.runKey }),
-                    h('span', { class: `lw-pilltag ${statusBadgeKind(activeRun.status)}`, text: activeRun.status })),
-                h('div', { style: { display: 'flex', gap: '8px' } }, exportBtn, diagBtn)),
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: '0' } },
+                    h('h3', {
+                        title: activeRun.runKey,
+                        style: { margin: '0', fontSize: '15px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                        text: activeRun.chatLabel || activeRun.runKey,
+                    }),
+                    h('span', { class: `lw-pilltag ${statusBadgeKind(activeRun.status)}`, text: formatRunStatus(activeRun.status) })),
+                h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, exportBtn, diagBtn)),
             activeRun.error
                 ? h('pre', { class: 'sdlens-pre', text: String(activeRun.error) })
                 : null,
             ...(activeRun.rounds || []).map(round => h('div', { class: 'sdlens-round-card', dataset: { roundId: round.id } },
-                sectionTitle(round.label || round.id, h('span', { class: `lw-pilltag ${statusBadgeKind(round.status)}`, text: round.status })),
+                sectionTitle(round.label || round.id, h('span', { class: `lw-pilltag ${statusBadgeKind(round.status)}`, text: formatRunStatus(round.status) })),
                 ...(round.sections || []).map(sec => h('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-                    h('div', { style: { fontSize: '12px', fontWeight: '600', color: 'var(--lw-muted)' }, text: `${sec.title || sec.kind} (${sec.status})` }),
+                    h('div', { style: { fontSize: '12px', fontWeight: '600', color: 'var(--lw-muted)' }, text: `${sec.title || sec.kind} · ${formatRunStatus(sec.status)}` }),
                     sec.body ? h('pre', { class: 'sdlens-pre', text: String(sec.body) }) : null,
                     sec.meta?.imageUrl
                         ? h('img', {

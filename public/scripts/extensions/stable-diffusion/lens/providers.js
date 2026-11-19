@@ -155,15 +155,15 @@ export function createSdAskProvider(getContext = () => globalThis.Luker?.getCont
             const snap = await buildSdSnapshot(ctx || getContext());
             if (!snap) return i18n('Not present');
             return {
-                Backend: [snap.source, snap.model, snap.comfyWorkflow].filter(Boolean).join(' · ') || '—',
+                [i18n('Backend')]: [snap.source, snap.model, snap.comfyWorkflow].filter(Boolean).join(' · ') || '—',
                 [i18n('Character Archive')]: snap.characterCount,
-                Illustration: snap.illustrationEnabled ? 'on' : 'off',
+                [i18n('AI Illustration')]: snap.illustrationEnabled ? i18n('Enabled') : i18n('Disabled'),
             };
         },
         getSideInfo(pSnap) {
             return {
                 label: i18n('Image Generation'),
-                countText: pSnap ? `${pSnap.characterCount} chars` : '—',
+                countText: pSnap ? i18nFormat('${0} profile(s)', pSnap.characterCount) : '—',
                 status: !pSnap ? 'warn' : (pSnap.brokenConnectionProfile ? 'bad' : 'ok'),
             };
         },
@@ -178,7 +178,7 @@ export function createSdAskProvider(getContext = () => globalThis.Luker?.getCont
                 pill: status('sd', Boolean(pSnap?.illustrationEnabled)),
                 stats: pSnap ? [
                     [i18n('Character Archive'), String(pSnap.characterCount)],
-                    pSnap.lastRun ? ['Last run', formatDuration(pSnap.lastRun.durationMs)] : null,
+                    pSnap.lastRun ? [i18n('Last run'), formatDuration(pSnap.lastRun.durationMs)] : null,
                 ].filter(Boolean) : [],
                 acts: [
                     pSnap ? askBtn('sd') : null,

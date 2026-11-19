@@ -77,6 +77,8 @@ function fitToViewport(root, { layout = null } = {}) {
         root.style.top = '0px';
         root.style.right = 'auto';
         root.style.bottom = 'auto';
+        root.style.width = '0px';
+        root.style.height = '0px';
         const origin = root.getBoundingClientRect();
         root.style.left = `${left - origin.left}px`;
         root.style.top = `${top - origin.top}px`;

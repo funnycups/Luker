@@ -47,7 +47,7 @@
 .olens .ol-insp-section { display: grid; gap: 4px; }
 .olens .ol-insp-section .ol-section-title { margin-bottom: 4px; text-transform: none; letter-spacing: 0.02em; font-size: 11.5px; }
 .olens .ol-insp-note { font-weight: 500; color: var(--ol-text-faint); text-transform: none; letter-spacing: 0; }
-.olens .ol-insp-actions { display: inline-flex; gap: 2px; }
+.olens .ol-insp-actions { display: inline-flex; flex-wrap: wrap; gap: 2px; }
 .olens .ol-insp-hint { text-align: center; padding-top: 6px; }
 .olens .ol-insp-overview { display: grid; gap: 16px; }
 .olens .ol-prompt {
@@ -65,10 +65,10 @@
 
 /* History */
 .olens .ol-history { display: flex; flex-direction: column; min-height: 0; overflow: auto; background: var(--ol-canvas); }
-.olens .ol-history-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; padding: 18px 24px 8px; }
+.olens .ol-history-head { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; padding: 18px 24px 8px; }
 .olens .ol-history-head h2 { font-size: 18px; }
 .olens .ol-history-hint { color: var(--ol-text-faint); font-size: 12px; margin-top: 2px; }
-.olens .ol-history-body { display: grid; align-content: start; gap: 6px; padding: 6px 24px 40px; max-width: 1080px; width: 100%; }
+.olens .ol-history-body { flex: none; display: grid; align-content: start; gap: 6px; padding: 6px 24px 40px; max-width: 1080px; width: 100%; }
 .olens .ol-hday { padding: 14px 4px 4px; font-size: 11.5px; font-weight: 600; color: var(--ol-text-faint); display: flex; gap: 10px; align-items: baseline; }
 .olens .ol-hday small { font-weight: 400; }
 .olens .ol-hrow {

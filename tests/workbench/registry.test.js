@@ -24,6 +24,7 @@ import {
 import { mountWorkbench } from '../../public/scripts/workbench/app.js';
 import { initWorkbench, resetWorkbenchForTest } from '../../public/scripts/workbench/index.js';
 import { registerWorkbenchLocaleData } from '../../public/scripts/workbench/locale-data.js';
+import { segmented } from '../../public/scripts/lens-shared/ui.js';
 
 function createMockLukerContext({
     extensionNames = [],
@@ -673,5 +674,17 @@ describe('workbench boundary and locale-data contracts', () => {
     test('tokens.css cascades light-theme tokens from [data-theme="light"] host to embedded .mlens and .olens', () => {
         const tokensCss = readFileSync(fileURLToPath(new URL('../../public/scripts/lens-shared/tokens.css', import.meta.url)), 'utf8');
         expect(tokensCss).toContain('[data-theme="light"] :is(.lw-surface, .mlens, .olens, .rpdock):not([data-theme="dark"])');
+    });
+
+    test('segmented with iconOnlyMobile sets aria-label and title fallback on each button', () => {
+        const seg = segmented([
+            { value: 'studio', label: '图像工作台', iconName: 'image' },
+            { value: 'run', label: '运行详情', iconName: 'play', title: '自定义标题' },
+        ], 'studio', () => {}, { iconOnlyMobile: true });
+        const buttons = [...seg.querySelectorAll('.lw-seg-btn')];
+        expect(buttons[0].getAttribute('aria-label')).toBe('图像工作台');
+        expect(buttons[0].getAttribute('title')).toBe('图像工作台');
+        expect(buttons[1].getAttribute('aria-label')).toBe('运行详情');
+        expect(buttons[1].getAttribute('title')).toBe('自定义标题');
     });
 });

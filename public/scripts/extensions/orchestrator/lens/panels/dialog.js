@@ -28,7 +28,7 @@ export function createDialog() {
                 h('pre', { class: 'ol-insp-pre', text: text || i18n('(empty)') })));
         }
         el.hidden = false;
-        requestAnimationFrame(() => closeBtn.focus());
+        requestAnimationFrame(() => closeBtn.focus({ preventScroll: true }));
     }
 
     /**
@@ -51,7 +51,7 @@ export function createDialog() {
         )));
         put(body, foot);
         el.hidden = false;
-        requestAnimationFrame(() => (foot.querySelector('.is-primary') || closeBtn).focus());
+        requestAnimationFrame(() => (foot.querySelector('.is-primary') || closeBtn).focus({ preventScroll: true }));
         return new Promise((resolve) => { pending = resolve; });
     }
 
@@ -67,7 +67,7 @@ export function createDialog() {
         if (pending) { finish(''); return; }
         if (el.hidden) return;
         el.hidden = true;
-        if (returnFocus?.isConnected) returnFocus.focus();
+        if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
     }
 
     return { el, open, ask, close, isOpen: () => !el.hidden };

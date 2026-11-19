@@ -57,6 +57,7 @@
 .wbench .wb-body { flex: 1; display: flex; min-height: 0; }
 .wbench .wb-rail { flex: none; width: 150px; padding: 10px 8px; border-right: 1px solid var(--wb-border); display: flex; flex-direction: column; gap: 2px; overflow: auto; overscroll-behavior: contain; }
 .wbench .wb-tab {
+    flex: none;
     display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; padding: 0 10px;
     border: 0; border-radius: var(--wb-r-sm); background: none; color: var(--wb-muted); cursor: pointer; text-align: left; white-space: nowrap;
 }

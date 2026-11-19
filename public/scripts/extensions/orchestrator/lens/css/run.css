@@ -1,6 +1,6 @@
 /* Run view: stats, swimlane timeline, step detail. */
 .olens .ol-run { display: flex; flex-direction: column; min-height: 0; overflow: auto; background: var(--ol-canvas); }
-.olens .ol-run-head { padding: 16px 24px 0; display: grid; gap: 10px; }
+.olens .ol-run-head { flex: none; padding: 16px 24px 0; display: grid; gap: 10px; }
 .olens .ol-run-pinned { display: flex; align-items: center; gap: 8px; color: var(--ol-pinned); font-size: 12.5px; }
 .olens .ol-stats { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 28px; }
 .olens .ol-stat { display: grid; gap: 2px; }
@@ -16,7 +16,7 @@
 .olens .ol-btn-danger { color: var(--ol-danger); }
 .olens .ol-btn-danger:hover { border-color: var(--ol-danger); }
 
-.olens .ol-run-main { flex: 1 1 auto; display: grid; grid-template-rows: auto 1fr; gap: 14px; padding: 16px 24px 28px; min-height: 0; }
+.olens .ol-run-main { flex: 1 0 auto; display: grid; grid-template-rows: auto 1fr; gap: 14px; padding: 16px 24px 28px; }
 
 /* Timeline */
 .olens .ol-tl { --ol-lane-label: 168px; border-radius: var(--ol-radius-lg); background: var(--ol-surface); border: 1px solid var(--ol-border); overflow: hidden; }

@@ -60,6 +60,7 @@ import {
     buildGraphIterSystemPrompt,
 } from '../graph-iteration/system-prompt.js';
 import { buildGraphDiffSummary, diffGraphDocs } from '../graph-iteration/diff-cards.js';
+import { typeDisplayName } from './schema/schema-model.js';
 import { i18n, i18nFormat, listSeparator } from './i18n.js';
 
 const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
@@ -360,7 +361,7 @@ function renderMemoryConfigPreview({ base, ai }) {
             schemaNodes.push(
                 h('details', { class: `wb-mg-preview-type ${state}`.trim(), open: true },
                     h('summary', null,
-                        h('span', { class: 'wb-mg-preview-label', text: nt?.label || id || '?' }),
+                        h('span', { class: 'wb-mg-preview-label', text: typeDisplayName(nt) || id || '?' }),
                         state ? h('span', { class: 'wb-chg-tag', text: state === 'is-add' ? '+' : '~' }) : null),
                     cols ? h('div', { class: 'wb-note', text: cols }) : null,
                     flags.length ? h('div', { class: 'wb-note', text: flags.join(listSeparator()) }) : null),
@@ -371,7 +372,7 @@ function renderMemoryConfigPreview({ base, ai }) {
             if (!id || aiById.has(id)) continue;
             schemaNodes.push(
                 h('div', { class: 'wb-mg-preview-type is-del' },
-                    h('span', { class: 'wb-mg-preview-label', text: nt?.label || id }),
+                    h('span', { class: 'wb-mg-preview-label', text: typeDisplayName(nt) || id }),
                     h('span', { class: 'wb-chg-tag is-del', text: '-' })),
             );
         }
@@ -960,7 +961,7 @@ function renderMemoryGraphPreview({ base, ai }) {
     for (const [type, nodes] of groups) {
         put(container, h('details', { class: 'wb-mg-preview-group', open: true },
             h('summary', null,
-                h('span', { class: 'wb-mg-preview-label', text: type }),
+                h('span', { class: 'wb-mg-preview-label', text: typeDisplayName({ id: type, label: type }) }),
                 h('span', { class: 'wb-note', text: String(nodes.length) })),
             nodes.map((node) => {
                 const id = String(node?.id || '');
