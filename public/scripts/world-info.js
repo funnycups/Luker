@@ -3038,6 +3038,11 @@ export async function loadWorldInfoBatch(names) {
                 }
                 if (data && requestGenerationByName.get(name) === getWorldInfoRequestGeneration(name)) {
                     cacheWorldInfoData(name, data);
+                    // The cache keeps this reading. Hand callers their own copy:
+                    // the World Editor fills in template fields and displayIndex
+                    // while rendering, and those runtime-only values must not be
+                    // mistaken for unsaved edits by later readers.
+                    data = cloneAsJsonWire(data);
                 }
                 batchResults.set(name, data);
             }));
