@@ -2725,14 +2725,9 @@ async function onMainApiChanged({ apiId }) {
     if (!presetManager) {
         return;
     }
-    const presetName = presetManager.getSelectedPresetName();
-    const presetScripts = getScriptsByType(SCRIPT_TYPES.PRESET);
-    if (getCurrentChatId() &&
-        isPresetScriptsAllowed(apiId, presetName) &&
-        presetScripts.filter(script => !script.disabled).length > 0) {
-        notifyReloadCurrentChat(presetName);
-    }
-
+    // Preset regex scripts follow the active preset, not the active API. An API
+    // switch does not switch the preset, so the reload prompt must not be raised
+    // here. Actual preset switches are reported by PRESET_CHANGED.
     await loadRegexScripts();
 }
 
