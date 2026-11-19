@@ -22,7 +22,6 @@ import { floorRecordToTaskMessage, readPluginFloors } from '../../lib/plugin-flo
 import { safeClone } from '../../iteration-library/storage/safe-clone.js';
 import { i18n, i18nFormat } from '../i18n.js';
 import { SourceError } from '../model/errors.js';
-import { bookForWrite } from '../model/commit.js';
 import { same } from '../model/patch.js';
 
 export const CHARACTER_EDITOR_ROOT_TEXT_FIELDS = Object.freeze([
@@ -527,30 +526,24 @@ export async function commitLorebookOperations(bookName, liveBook, edits, opts =
     return { applied: clean.length, conflicts, alreadyDone, persisted };
 }
 
-export async function readPersistedBook(name, ctx = null) {
-    try {
-        if (typeof ctx?.readWorldInfoDocument === 'function') {
-            return safeClone(await ctx.readWorldInfoDocument(name));
-        }
-        const { readWorldInfoDocument } = await import('../../named-resource-read.js');
-        return safeClone(await readWorldInfoDocument(name));
-    } catch (err) {
-        if (err?.status === 404) {
-            throw new SourceError('target-gone', i18nFormat('World book "${0}" no longer exists', name));
-        }
-        throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', name));
-    }
-}
-
 export function createWorldBookIo(getCtx) {
     return {
         readBook: async (book) => {
             const ctx = typeof getCtx === 'function' ? getCtx() : getCtx;
-            const persisted = await readPersistedBook(book, ctx);
-            const cached = typeof ctx?.loadWorldInfo === 'function'
-                ? safeClone(await ctx.loadWorldInfo(book))
-                : null;
-            return bookForWrite(persisted, cached, book);
+            if (typeof ctx?.loadWorldInfo !== 'function') {
+                throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', book));
+            }
+            let data;
+            try {
+                data = await ctx.loadWorldInfo(book);
+            } catch (err) {
+                if (err instanceof SourceError) throw err;
+                throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', book), { cause: err });
+            }
+            if (data == null) {
+                throw new SourceError('read-failed', i18nFormat('Could not read "${0}", so nothing was changed', book));
+            }
+            return safeClone(data);
         },
         async saveBook(book, data) {
             const ctx = typeof getCtx === 'function' ? getCtx() : getCtx;

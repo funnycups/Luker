@@ -3,8 +3,8 @@
 // A world book opened in the World Info panel before any chat uses it must
 // still be editable from Workbench. The panel's render pass backfills entry
 // template fields and `displayIndex`; those runtime-only fields must not leak
-// into the shared read cache, or the next Workbench Apply refuses the write
-// with "has unsaved edits in the world info panel".
+// into the shared read cache, or the next Workbench write saves them as if
+// the user had typed them.
 
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';

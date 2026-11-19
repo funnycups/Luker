@@ -8,7 +8,7 @@
 import { i18n, i18nFormat } from '../i18n.js';
 import { BOOK_META, applyBookOps, bookUnits } from './adapters.js';
 import { SourceError } from './errors.js';
-import { clone, conflictsLeftAlone, requireApplied, same, writeFields } from './patch.js';
+import { clone, conflictsLeftAlone, requireApplied, writeFields } from './patch.js';
 
 const parseBookKey = (key) => key.match(/^wi:(.*):([^:]+)$/)?.[2];
 
@@ -21,17 +21,6 @@ function requireBook(book, name, count) {
         throw new SourceError('book-empty', i18nFormat('"${0}" reads as empty but had entries before, so nothing was written', name));
     }
     return book;
-}
-
-/**
- * A book to write to. Luker's cache can hold unsaved or failed writes, so
- * comparing the entire document also protects metadata and untouched entries.
- */
-export function bookForWrite(persisted, cached, name) {
-    if (persisted && cached && !same(persisted, cached)) {
-        throw new SourceError('unsaved', i18nFormat('"${0}" has unsaved edits in the world info panel. Wait for them to save, then try again.', name));
-    }
-    return persisted;
 }
 
 async function commitBook(name, ops, baseCount, io) {

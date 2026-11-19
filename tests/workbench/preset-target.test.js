@@ -58,6 +58,14 @@ function createMockPresetCtx({
                 const entry = stored.get(ref?.name);
                 return entry ? clone(entry) : null;
             },
+            getLive: (collection = 'openai') => (currentName && stored.has(currentName)
+                ? {
+                    ref: { collection, name: currentName, origin: { kind: 'global' } },
+                    body: clone(stored.get(currentName).body),
+                    stored: true,
+                    selected: true,
+                }
+                : null),
             get: async (ref) => {
                 const entry = stored.get(ref?.name);
                 return entry ? clone(entry.body) : null;

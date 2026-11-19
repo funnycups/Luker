@@ -101,6 +101,14 @@ function findCanonicalPresetName(names, requestedName) {
     return names.find((name) => String(name || '').trim().toLocaleLowerCase() === target) || '';
 }
 
+function samePresetRef(a, b) {
+    if (!a || !b) return false;
+    if (String(a.collection || '') !== String(b.collection || '')) return false;
+    if (String(a.name || '') !== String(b.name || '')) return false;
+    const originOf = (ref) => (ref.origin?.kind === 'character' ? `character:${ref.origin.avatar || ''}` : 'global');
+    return originOf(a) === originOf(b);
+}
+
 async function loadReferenceBody(ctx, refName) {
     const name = String(refName || '').trim();
     if (!name || !ctx?.presets) return null;
@@ -330,16 +338,15 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
         },
         async load(_scope, ctx) {
             const c = resolveCtx(ctx);
-            const ref = c?.presets?.getSelected?.('openai');
-            if (!ref?.name) throw new SourceError('no-preset', i18n('No chat completion preset selected'));
-            const stored = c.presets.getStored?.(ref);
-            if (!stored?.body) throw new SourceError('no-preset', i18nFormat('Preset "${0}" is unreadable', ref.name));
+            const snapshot = c?.presets?.getLive?.('openai');
+            if (!snapshot?.ref?.name) throw new SourceError('no-preset', i18n('No chat completion preset selected'));
+            if (!snapshot.body) throw new SourceError('no-preset', i18nFormat('Preset "${0}" is unreadable', snapshot.ref.name));
             const strip = c.openai?.stripPresetConnectionFields || ((b) => b);
-            const live = clone(strip(stored.body));
+            const live = clone(strip(snapshot.body));
             return {
                 live,
-                target: { scope: 'preset', ref: clone(ref) },
-                title: i18nFormat('Preset "${0}"${1}', ref.name, ref.origin?.kind === 'character' ? i18n(' (bound to the character card)') : ''),
+                target: { scope: 'preset', ref: clone(snapshot.ref) },
+                title: i18nFormat('Preset "${0}"${1}', snapshot.ref.name, snapshot.ref.origin?.kind === 'character' ? i18n(' (bound to the character card)') : ''),
             };
         },
         async prompt(_live, _scope, ctx) {
@@ -511,9 +518,13 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
             return commitFields({
                 read() {
                     const c = resolveCtx();
-                    const body = clone(c?.presets?.getStored?.(targetRef.ref)?.body);
-                    if (!body) throw new SourceError('no-preset', i18nFormat('Preset "${0}" is unreadable', targetRef.ref?.name || ''));
-                    return body;
+                    const ref = targetRef.ref;
+                    const snapshot = c?.presets?.getLive?.(ref?.collection || 'openai');
+                    if (!snapshot?.body) throw new SourceError('no-preset', i18nFormat('Preset "${0}" is unreadable', ref?.name || ''));
+                    if (!samePresetRef(snapshot.ref, ref)) {
+                        throw new SourceError('target-gone', i18nFormat('Preset "${0}" is no longer selected, so nothing was written', ref?.name || ''));
+                    }
+                    return clone(snapshot.body);
                 },
                 units: presetUnits,
                 apply: applyPresetOps,

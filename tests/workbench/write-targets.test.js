@@ -34,6 +34,10 @@ function createMockCardWorldCtx({
             { ref: { collection: 'openai', name, origin: { kind: 'global' } }, body: clone(body) },
         ]),
     );
+    const livePresetStore = new Map(
+        Object.entries(presets).map(([name, body]) => [name, clone(body)]),
+    );
+    let selectedPresetName = selectedPreset;
 
     const ctx = {
         characters: charStore,
@@ -85,10 +89,22 @@ function createMockCardWorldCtx({
         },
         presets: {
             list: () => [...presetStore.keys()].map((name) => ({ collection: 'openai', name, origin: { kind: 'global' } })),
-            getSelected: () => (selectedPreset && presetStore.has(selectedPreset) ? clone(presetStore.get(selectedPreset).ref) : null),
+            getSelected: () => (selectedPresetName && presetStore.has(selectedPresetName) ? clone(presetStore.get(selectedPresetName).ref) : null),
+            setSelected: (name) => { selectedPresetName = String(name || ''); },
             getStored: (ref) => (presetStore.has(ref?.name) ? clone(presetStore.get(ref.name)) : null),
+            getLive: (collection = 'openai') => (selectedPresetName && livePresetStore.has(selectedPresetName)
+                ? {
+                    ref: { collection, name: selectedPresetName, origin: { kind: 'global' } },
+                    body: clone(livePresetStore.get(selectedPresetName)),
+                    stored: presetStore.has(selectedPresetName),
+                    selected: true,
+                }
+                : null),
             save: jest.fn(async (ref, body) => {
                 presetStore.set(ref.name, { ref: clone(ref), body: clone(body) });
+                if (ref.name === selectedPresetName) {
+                    livePresetStore.set(ref.name, clone(body));
+                }
                 return { ok: true, ref: clone(ref) };
             }),
         },
@@ -98,7 +114,7 @@ function createMockCardWorldCtx({
         eventTypes: { APP_READY: 'APP_READY' },
         listExtensionNames: () => [],
     };
-    return { ctx, charStore, bookStore, presetStore };
+    return { ctx, charStore, bookStore, presetStore, livePresetStore };
 }
 
 beforeEach(() => {
@@ -127,26 +143,44 @@ describe('workbench write targets (preset, card, world)', () => {
         expect(getIterateTargets()).toEqual([]);
     });
 
-    test('a pending preset proposal writes and undoes X while Y stays selected', async () => {
-        let selected = 'X';
-        const presets = { X: { temperature: 1 }, Y: { temperature: 2 } };
-        const { ctx, presetStore } = createMockCardWorldCtx({ presets, selectedPreset: 'X' });
-        ctx.presets.getSelected = () => ({ collection: 'openai', name: selected, origin: { kind: 'global' } });
+    test('a pending preset proposal writes and undoes the preset it was loaded from', async () => {
+        const { ctx, presetStore } = createMockCardWorldCtx({
+            presets: { X: { temperature: 1 }, Y: { temperature: 2 } },
+            selectedPreset: 'X',
+        });
 
         const target = createPresetTarget({ getContext: () => ctx });
         const original = await target.load('preset', ctx);
-        selected = 'Y';
-        const next = await target.load('preset', ctx);
-        expect(next.target.ref.name).toBe('Y');
+        expect(original.target.ref.name).toBe('X');
 
-        const handle = await target.commit(original.target, original.live, { temperature: 3 }, ['settings']);
+        const next = { ...original.live, temperature: 3 };
+        ctx.presets.setSelected('Y');
+        await expect(target.commit(original.target, original.live, next, ['settings']))
+            .rejects.toMatchObject({ code: 'target-gone' });
+        expect(presetStore.get('X').body).toEqual({ temperature: 1 });
+        expect(presetStore.get('Y').body).toEqual({ temperature: 2 });
+
+        ctx.presets.setSelected('X');
+        const handle = await target.commit(original.target, original.live, next, ['settings']);
         expect(presetStore.get('X').body).toEqual({ temperature: 3 });
         expect(presetStore.get('Y').body).toEqual({ temperature: 2 });
 
         await handle.undo();
         expect(presetStore.get('X').body).toEqual({ temperature: 1 });
         expect(presetStore.get('Y').body).toEqual({ temperature: 2 });
-        expect(selected).toBe('Y');
+        expect(ctx.presets.getSelected().name).toBe('X');
+    });
+
+    test('preset load reads the live settings rather than the stored body', async () => {
+        const { ctx, livePresetStore } = createMockCardWorldCtx({
+            presets: { Live: { temperature: 1 } },
+            selectedPreset: 'Live',
+        });
+        livePresetStore.set('Live', { temperature: 0.5 });
+
+        const target = createPresetTarget({ getContext: () => ctx });
+        const loaded = await target.load('preset', ctx);
+        expect(loaded.live.temperature).toBe(0.5);
     });
 
     test('card target scopes, loads, edits card + bound world book, commits, and undoes', async () => {
@@ -241,5 +275,44 @@ describe('workbench write targets (preset, card, world)', () => {
 
         await handle.undo();
         expect(bookStore.GlobalBook.entries[10].content).toBe('Global lore');
+    });
+
+    test('world book apply writes the pending panel edit from the cache', async () => {
+        const { ctx, bookStore } = createMockCardWorldCtx({
+            characters: [{
+                avatar: 'Bob.png',
+                name: 'Bob',
+                data: { extensions: { world: 'CharBook' } },
+            }],
+            books: {
+                CharBook: {
+                    entries: {
+                        1: { uid: 1, key: ['bob'], content: 'Char lore', comment: 'Bob' },
+                        2: { uid: 2, key: ['bell'], content: 'Bell', comment: 'Bell' },
+                    },
+                },
+            },
+        });
+
+        const world = createWorldTarget({ getContext: () => ctx });
+        const loaded = await world.load('character', ctx);
+
+        // The user typed into entry 1 in the World Info panel; the debounced
+        // save has not reached disk yet, so only the cache has the new text.
+        ctx.worldInfoCache.get('CharBook').entries[1].content = 'Char lore edited in the panel';
+
+        const ai = await world.runEdit({
+            id: 'w2',
+            name: 'cea_update_lorebook_entry',
+            args: { book_name: 'CharBook', uid: 2, patch: { content: 'Bell revised' } },
+        }, loaded.live);
+        const keys = diffUnits(world.units(loaded.live), world.units(ai)).map((c) => c.key);
+        expect(keys).toEqual(['wi:CharBook:2']);
+
+        const rebuilt = world.rebuild(loaded.live, ai, keys);
+        await world.commit(loaded.target, loaded.live, rebuilt, keys);
+
+        expect(bookStore.CharBook.entries[1].content).toBe('Char lore edited in the panel');
+        expect(bookStore.CharBook.entries[2].content).toBe('Bell revised');
     });
 });

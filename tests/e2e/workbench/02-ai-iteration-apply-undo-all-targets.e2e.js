@@ -191,7 +191,7 @@ test.describe('Workbench AI iteration + Apply + Undo across all 5 targets', () =
         await closeWorkbench(page);
     });
 
-    test('preset: initializes empty prompt_order, applies new prompt entry, and undoes', async ({ page }) => {
+    test('preset: applies a new prompt entry to the live preset and undoes it', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectPresetByName(page, EMPTY_ORDER_PRESET);
 
@@ -232,19 +232,18 @@ test.describe('Workbench AI iteration + Apply + Undo across all 5 targets', () =
         await applyIterateChanges(page);
 
         await expect.poll(() => {
-            const p = readPresetFile(server.dataRoot, EMPTY_ORDER_PRESET);
-            return p?.prompt_order?.[0]?.order || [];
-        }, { timeout: 10_000 }).toEqual([
-            { identifier: 'main', enabled: true },
-            { identifier: 'custom_rule', enabled: true },
-        ]);
+            const order = readPresetFile(server.dataRoot, EMPTY_ORDER_PRESET)?.prompt_order?.[0]?.order || [];
+            const ids = order.map((o) => o.identifier);
+            return ids.includes('main') && ids.includes('custom_rule');
+        }, { timeout: 10_000 }).toBe(true);
         const appliedPreset = readPresetFile(server.dataRoot, EMPTY_ORDER_PRESET);
         expect(appliedPreset.prompts.find((p) => p.identifier === 'custom_rule')?.content).toBe('Keep dialogue grounded.');
 
         await undoIterateChanges(page);
         await expect.poll(() => {
             const p = readPresetFile(server.dataRoot, EMPTY_ORDER_PRESET);
-            return p.prompts.some((x) => x.identifier === 'custom_rule');
+            const ids = (p?.prompt_order?.[0]?.order || []).map((o) => o.identifier);
+            return p.prompts.some((x) => x.identifier === 'custom_rule') || ids.includes('custom_rule');
         }, { timeout: 10_000 }).toBe(false);
         await closeWorkbench(page);
     });

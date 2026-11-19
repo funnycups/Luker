@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, test, expect } from '@jest/globals';
-import { bookForWrite, commitCardAndBooks, orchCharacterRecord, writeCharacterProfile } from '../../public/scripts/workbench/model/commit.js';
+import { commitCardAndBooks, orchCharacterRecord, writeCharacterProfile } from '../../public/scripts/workbench/model/commit.js';
 import { cardEditsFor, worldUnits } from '../../public/scripts/workbench/model/adapters.js';
 import { diffUnits } from '../../public/scripts/workbench/model/units.js';
 
@@ -162,14 +162,6 @@ describe('workbench model/commit', () => {
         fail = false;
         await out.undo();
         expect(stored.book.entries[1].content).toBe('a');
-    });
-
-    test('reading for a write refuses a cached entry the server does not have', () => {
-        const persisted = { entries: { 1: { content: 'a' }, 2: { content: 'b' } } };
-        const cached = { entries: { 1: { content: 'unsaved' }, 2: { content: 'b' } } };
-        expect(() => bookForWrite(persisted, cached, 'BookA')).toThrow(/unsaved/i);
-        expect(() => bookForWrite(persisted, { ...persisted, scan_depth: 2 }, 'BookA')).toThrow(/unsaved/i);
-        expect(bookForWrite(persisted, null, 'BookA')).toBe(persisted);
     });
 
     test('orchestrator undo targets the recorded card', () => {
