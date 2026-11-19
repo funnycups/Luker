@@ -22,6 +22,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Connections & Models
 
 - Added a network proxy setting to chat completion connection profiles, taking precedence over the global proxy.
+- Fixed Vertex AI requests to the `us` and `eu` multi-regions using an invalid hostname.
 
 ### Image generation
 
