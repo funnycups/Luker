@@ -1619,6 +1619,40 @@ describe('convertGooglePrompt', () => {
         expect(funcResp.functionResponse.name).toBe('search');
     });
 
+    test('preserves tool call ids on functionCall and functionResponse parts', () => {
+        const messages = [
+            { role: 'user', content: 'search cats' },
+            { role: 'assistant', tool_calls: [
+                { id: 'gemini-call-1', function: { name: 'search', arguments: '{"q":"cats"}' } },
+            ] },
+            { role: 'tool', content: 'Results here', tool_call_id: 'gemini-call-1' },
+        ];
+        const result = mod.convertGooglePrompt(messages, 'gemini-4-argon', false, names);
+        const parts = result.contents.flatMap(c => c.parts);
+        const funcCall = parts.find(p => p.functionCall);
+        const funcResp = parts.find(p => p.functionResponse);
+        expect(funcCall.functionCall.id).toBe('gemini-call-1');
+        expect(funcResp.functionResponse.id).toBe('gemini-call-1');
+    });
+
+    test('keeps ids distinct for parallel calls to the same function', () => {
+        const messages = [
+            { role: 'user', content: 'search both' },
+            { role: 'assistant', tool_calls: [
+                { id: 'gemini-call-1', function: { name: 'search', arguments: '{"q":"cats"}' } },
+                { id: 'gemini-call-2', function: { name: 'search', arguments: '{"q":"dogs"}' } },
+            ] },
+            { role: 'tool', content: 'cat results', tool_call_id: 'gemini-call-1' },
+            { role: 'tool', content: 'dog results', tool_call_id: 'gemini-call-2' },
+        ];
+        const result = mod.convertGooglePrompt(messages, 'gemini-4-argon', false, names);
+        const parts = result.contents.flatMap(c => c.parts);
+        expect(parts.filter(p => p.functionCall).map(p => p.functionCall.id))
+            .toEqual(['gemini-call-1', 'gemini-call-2']);
+        expect(parts.filter(p => p.functionResponse).map(p => p.functionResponse.id))
+            .toEqual(['gemini-call-1', 'gemini-call-2']);
+    });
+
     test('groups parallel tool responses into a single user turn', () => {
         const messages = [
             { role: 'user', content: 'do two things' },

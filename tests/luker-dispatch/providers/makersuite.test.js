@@ -109,6 +109,29 @@ describe('dispatchMakerSuite', () => {
         expect(init.signal).toBe(ctx.signal);
     });
 
+    test('MAKERSUITE non-streaming: replays tool call ids on functionCall and functionResponse parts', async () => {
+        const ctx = fakeCtx({
+            body: {
+                messages: [
+                    { role: 'user', content: 'do the thing' },
+                    { role: 'assistant', content: '', tool_calls: [
+                        { id: 'gemini-call-1', type: 'function', function: { name: 'do_thing', arguments: '{}' } },
+                    ] },
+                    { role: 'tool', content: 'thing done', tool_call_id: 'gemini-call-1' },
+                ],
+            },
+        });
+        await dispatchMakerSuite(ctx);
+
+        const [, init] = ctx.fetch.mock.calls[0];
+        const requestBody = JSON.parse(init.body);
+        const parts = requestBody.contents.flatMap(content => content.parts);
+        const funcCall = parts.find(part => part.functionCall);
+        const funcResp = parts.find(part => part.functionResponse);
+        expect(funcCall.functionCall.id).toBe('gemini-call-1');
+        expect(funcResp.functionResponse.id).toBe('gemini-call-1');
+    });
+
     test('MAKERSUITE non-streaming: feeds raw Gemini body to inspector alongside OAI-normalized reply (Task 2D)', async () => {
         // extractUsageFromGemini reads usageMetadata.cachedContentTokenCount
         // + candidatesTokenCount from the raw shape; extractPartsFromPayload

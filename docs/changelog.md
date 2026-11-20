@@ -24,6 +24,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Added a network proxy setting to chat completion connection profiles, taking precedence over the global proxy.
 - Fixed switching APIs incorrectly prompting to reload the chat for preset regex scripts.
 - Fixed Vertex AI requests to the `us` and `eu` multi-regions using an invalid hostname.
+- Fixed Gemini multi-turn tool calls dropping the call and response pairing id.
 
 ### Image generation
 

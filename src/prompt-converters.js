@@ -621,6 +621,7 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
                     functionResponse: {
                         name: name,
                         response: { name: name, content: part.content },
+                        ...(part.tool_call_id ? { id: part.tool_call_id } : {}),
                     },
                 });
             } else if (part.type === 'tool_calls') {
@@ -629,6 +630,7 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
                         functionCall: {
                             name: toolCall.function.name,
                             args: tryParse(toolCall.function.arguments) ?? toolCall.function.arguments,
+                            ...(toolCall.id ? { id: toolCall.id } : {}),
                         },
                         ...(toolCall.signature ? { thoughtSignature: toolCall.signature } : {}),
                     });
