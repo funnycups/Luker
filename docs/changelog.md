@@ -33,6 +33,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Embedded Image Studio, the global Character Archive, and illustration run traces into Workbench, supporting fanwork character exploration and original character reference design.
 - Added AI iteration for ComfyUI API-format workflows in Workbench with live node introspection, template node wiring, draft test generation, and per-node diff review.
 - Added inline illustration locking, version switching, and source image editing to AI Illustration.
+- Failed AI illustrations keep their failure badge for the current session only and are no longer written to the chat file.
 - Fixed AI Illustration settings labels being squeezed into vertical text.
 
 ### Search Tools

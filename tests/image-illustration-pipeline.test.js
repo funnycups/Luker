@@ -5,6 +5,7 @@ import { expect, test } from '@jest/globals';
 import {
     messageFingerprint, getLastAssistantMessage, buildJobKey, createIllustrationPipeline,
 } from '../public/scripts/extensions/stable-diffusion/illustration/pipeline.js';
+import { getFailedIllustrationRecords } from '../public/scripts/extensions/stable-diffusion/illustration/records.js';
 
 // The jsdom environment used by this suite predates the platform clone helper
 // the illustration modules call; the values cloned here are plain data.
@@ -352,7 +353,8 @@ test('a failed image keeps the LoRA selection on its record', async () => {
 
     await pipeline.runForMessage({ messageId: 0, source: 'manual' });
 
-    expect(message.extra.illustrations[0]).toMatchObject({
+    expect(message.extra.illustrations).toBeUndefined();
+    expect(getFailedIllustrationRecords(message)[0]).toMatchObject({
         status: 'failed',
         loras: [{ name: 'a.safetensors', weight: 0.8 }],
     });

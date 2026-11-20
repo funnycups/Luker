@@ -5,7 +5,8 @@ import { expect, test } from '@jest/globals';
 import {
     createIllustrationRecord, getIllustrationRecord, appendIllustrationRecords,
     removeIllustrationRecord, applyIllustrationResult, syncMessageSwipeData,
-    clearSwipeIllustrationRecords,
+    clearSwipeIllustrationRecords, getFailedIllustrationRecords,
+    renderFailedIllustrationMarkup,
 } from '../public/scripts/extensions/stable-diffusion/illustration/records.js';
 
 // The jsdom environment used by this suite predates the platform clone helper
@@ -38,7 +39,7 @@ test('applies records inline and syncs the current swipe', () => {
     expect(message.swipe_info[0].extra.illustrations).toHaveLength(1);
 });
 
-test('failed records use the failed placeholder', () => {
+test('failed records stay in memory and never enter message text', () => {
     const message = makeMessage();
     const record = createIllustrationRecord({
         id: 'ill_1', prompt: 'p', imageUrl: '', status: 'failed', error: 'boom',
@@ -46,10 +47,40 @@ test('failed records use the failed placeholder', () => {
     });
     applyIllustrationResult({
         message, records: [record], imageDisplayWidth: 100, ensureSwipes: () => {},
+    });
+
+    expect(message.mes).toBe('alpha beta gamma delta');
+    expect(message.extra.illustrations).toBeUndefined();
+    expect(getIllustrationRecord(message, 'ill_1')).toBe(record);
+    expect(JSON.stringify(message)).not.toContain('ill_1');
+    expect(message.swipe_info[0].extra.illustrations).toBeUndefined();
+
+    const rendered = renderFailedIllustrationMarkup(message.mes, message, {
         failedLabel: 'Image generation failed',
     });
-    expect(message.mes).toContain('Image generation failed');
-    expect(message.mes).toContain('data-illustration-id="ill_1"');
+    expect(rendered).toContain('Image generation failed');
+    expect(rendered).toContain('data-illustration-id="ill_1"');
+});
+
+test('a mixed batch persists only ready records', () => {
+    const message = makeMessage();
+    const ready = createIllustrationRecord({
+        id: 'ill_ready', prompt: 'ok', imageUrl: '/user/images/ok.png', status: 'ready',
+        parentId: null, anchorAfter: 'alpha', anchorBefore: 'beta', createdAt: 1,
+    });
+    const failed = createIllustrationRecord({
+        id: 'ill_failed', prompt: 'bad', imageUrl: '', status: 'failed', error: 'boom',
+        parentId: null, anchorAfter: 'beta', anchorBefore: 'gamma', createdAt: 2,
+    });
+    applyIllustrationResult({
+        message, records: [ready, failed], imageDisplayWidth: 100, ensureSwipes: () => {},
+    });
+
+    expect(message.extra.illustrations.map(record => record.id)).toEqual(['ill_ready']);
+    expect(getFailedIllustrationRecords(message).map(record => record.id)).toEqual(['ill_failed']);
+    expect(JSON.stringify(message.extra)).not.toContain('ill_failed');
+    expect(message.mes).toContain('data-illustration-id="ill_ready"');
+    expect(message.mes).not.toContain('data-illustration-id="ill_failed"');
 });
 
 test('removing a record removes its descendants and keeps ancestors', () => {

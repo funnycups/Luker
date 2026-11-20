@@ -644,7 +644,6 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
                 records,
                 imageDisplayWidth: settings.imageDisplayWidth,
                 ensureSwipes: hooks.ensureSwipes,
-                failedLabel: t`Image generation failed`,
             });
             hooks.updateMessageBlock?.(messageId, latestMessage);
             await hooks.notifyMessageChanged?.(messageId);

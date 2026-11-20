@@ -9,7 +9,7 @@ import { GenerationQueue } from './queue.js';
 import { createImageService } from './image-service.js';
 import { createIllustrationPipeline } from './pipeline.js';
 import { initIllustrationActions } from './actions.js';
-import { clearSwipeIllustrationRecords } from './records.js';
+import { clearSwipeIllustrationRecords, renderFailedIllustrationMarkup } from './records.js';
 import { buildIllustrationStripRegexScript } from './message.js';
 import { emitMessageChanged } from './message-events.js';
 import { createStudioSessionStore } from '../lens/studio-store.js';
@@ -17,6 +17,7 @@ import { initSdLens } from '../lens/index.js';
 import { attachImageActivityDock, getImageActivityStore } from '../activity.js';
 
 let activeIllustrationErrorToast = null;
+let failedMarkupHookRegistered = false;
 
 function clearIllustrationErrorToast() {
     if (!activeIllustrationErrorToast) {
@@ -212,4 +213,31 @@ export async function initIllustration(bridge) {
         notifyError: notifyIllustrationError,
         t,
     });
+
+    const messageFormatter = context.messageFormatter;
+    if (!failedMarkupHookRegistered && typeof messageFormatter?.addHook === 'function') {
+        messageFormatter.addHook((mes, ctx) => {
+            if (!settings.enabled || ctx.isReasoning || ctx.isUser || ctx.isSystem) {
+                return mes;
+            }
+            const messageId = Number(ctx.messageId);
+            if (!Number.isInteger(messageId) || messageId < 0) {
+                return mes;
+            }
+            const message = context.chat?.[messageId];
+            if (!message) {
+                return mes;
+            }
+            // Streaming previews receive text that is not yet in the message.
+            const sourceText = message.extra?.display_text ?? message.mes;
+            if (String(sourceText ?? '') !== mes) {
+                return mes;
+            }
+            return renderFailedIllustrationMarkup(mes, message, { failedLabel: t`Image generation failed` });
+        }, {
+            stage: messageFormatter.stage.BEFORE_REGEX,
+            order: messageFormatter.order.LATE,
+        });
+        failedMarkupHookRegistered = true;
+    }
 }

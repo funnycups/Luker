@@ -8,7 +8,7 @@ import {
     switchMessageIllustrationVersion,
     syncMessageSwipeData,
 } from './records.js';
-import { buildImageTag, escapeHtml, replaceIllustrationMarkup } from './message.js';
+import { buildImageTag, escapeHtml, insertTagsAtAnchors, replaceIllustrationMarkup } from './message.js';
 import { emitMessageChanged } from './message-events.js';
 import { makeIllustrationId } from './presets.js';
 import { messageFingerprint } from './pipeline.js';
@@ -145,12 +145,28 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             anchorBefore: replaceRecord.anchorBefore,
             loras,
         });
-        currentMessage.mes = replaceIllustrationMarkup(currentMessage.mes, replaceRecord.id, buildImageTag({
+        const html = buildImageTag({
             id: record.id,
             imageUrl: record.imageUrl,
             prompt: record.prompt,
             width: settings.imageDisplayWidth,
-        }));
+        });
+        if (replaceRecord.status === 'failed') {
+            // Failed badges are session-only and never enter message text, so
+            // place the replacement at the original anchors instead.
+            const replaced = replaceIllustrationMarkup(currentMessage.mes, replaceRecord.id, html);
+            currentMessage.mes = replaced !== currentMessage.mes
+                ? replaced
+                : insertTagsAtAnchors(String(currentMessage.mes || ''), [{
+                    id: record.id,
+                    html,
+                    insertAfter: replaceRecord.anchorAfter,
+                    insertBefore: replaceRecord.anchorBefore,
+                }]).text;
+            removeIllustrationRecord(currentMessage, replaceRecord.id);
+        } else {
+            currentMessage.mes = replaceIllustrationMarkup(currentMessage.mes, replaceRecord.id, html);
+        }
         appendIllustrationRecords(currentMessage, [record]);
         syncMessageSwipeData(currentMessage, ensureSwipes);
         context.updateMessageBlock(messageId, currentMessage);
@@ -200,10 +216,18 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             }
         }
 
+        const isFailed = record.status === 'failed';
         const lockLabel = record.locked ? t`Unlock illustration` : t`Lock illustration`;
         const editFromImageBtn = supportsSourceImage
             ? `<div id="sd_illustration_action_edit_from_image" class="menu_button">${escapeHtml(t`Edit from this image`)}</div>`
             : '';
+        // Failed badges are session-only and have no persisted version tree.
+        const lockBtn = isFailed
+            ? ''
+            : `<div id="sd_illustration_action_toggle_lock" class="menu_button">${escapeHtml(lockLabel)}</div>`;
+        const historyBtn = isFailed
+            ? ''
+            : `<div id="sd_illustration_action_history" class="menu_button">${escapeHtml(t`History`)}</div>`;
 
         const html = `
             <div id="sd_illustration_actions" class="sd_illustration_actions">
@@ -212,8 +236,8 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
                     <div id="sd_illustration_action_regenerate" class="menu_button">${escapeHtml(t`Regenerate`)}</div>
                     <div id="sd_illustration_action_edit_prompt" class="menu_button">${escapeHtml(t`Edit prompt`)}</div>
                     ${editFromImageBtn}
-                    <div id="sd_illustration_action_toggle_lock" class="menu_button">${escapeHtml(lockLabel)}</div>
-                    <div id="sd_illustration_action_history" class="menu_button">${escapeHtml(t`History`)}</div>
+                    ${lockBtn}
+                    ${historyBtn}
                     <div id="sd_illustration_action_delete" class="menu_button">${escapeHtml(t`Delete`)}</div>
                 </div>
             </div>`;
@@ -318,7 +342,6 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
                     toId: targetId,
                     imageDisplayWidth: settings.imageDisplayWidth,
                     ensureSwipes,
-                    failedLabel: t`Image generation failed`,
                 });
                 await historyPopup.complete(POPUP_RESULT.AFFIRMATIVE);
                 if (switched) {
