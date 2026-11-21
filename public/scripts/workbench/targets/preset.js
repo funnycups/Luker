@@ -292,9 +292,12 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
                 text,
             };
         },
+        applyLaunch(launch = {}) {
+            const mode = String(launch?.presetMode || '').trim();
+            if (mode) state.mode = sanitizeSessionMode(mode);
+        },
         renderControls({ onReload } = {}) {
-            const ctx = resolveCtx();
-            const currentName = String(ctx?.presets?.getSelected?.('openai')?.name || '').trim();
+            const ctx = resolveCtx();            const currentName = String(ctx?.presets?.getSelected?.('openai')?.name || '').trim();
             const allNames = listOpenAiPresetNames(ctx).filter((n) => n !== currentName);
             if (state.referenceName && !allNames.includes(state.referenceName)) {
                 state.referenceName = '';

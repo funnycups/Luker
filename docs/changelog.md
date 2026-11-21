@@ -15,6 +15,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Added the responsive floating Workbench window with prompt token breakdown, local configuration suggestions, and read-only AI Q&A.
 - Unified AI iteration for Memory Graph, Memory Structure, Multi-Agent Orchestrator, Image Generation, presets, character cards, and world books inside Workbench, with diff review, Change history undo, and automatic migration of historical iteration sessions.
+- Added example import, re-import with confirmation, and derivation actions beside plugin preset selectors, and reworked Workbench Settings to show the shared AI configuration, per-target overrides, and the resolved source of each connection and preset.
 
 ### Multi-Agent Orchestrator
 

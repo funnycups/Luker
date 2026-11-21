@@ -91,7 +91,7 @@ const unregister = Luker.getContext().workbench.registerWorkspace({
 | `scopes?(ctx)` | 非同步回傳 `{ global?, character?, preset?, chat? }` 可用性 |
 | `scopeNotes` | 函式 `(scope, ctx) => string` 或映射 `{ [scope]: string \| (() => string) }`，顯示於作用域選擇器下方 |
 | `isEnabled?(ctx)` | 可選的啟用條件檢查 |
-| `getNativeAi?(ctx)` | 當工作台 AI 設定設為**跟隨外掛**時回傳 `{ connection, preset }` |
+| `getNativeAi?(ctx)` | 當工作台 AI 設定設為**跟隨外掛設定**時回傳 `{ connection, preset }` |
 | `promptInfo?(ctx)` | 非同步回傳 `{ from, custom, text }`，供**設定 → 提示詞**顯示 |
 | `load(scope, ctx)` | 讀取即時目標資料，回傳 `{ live, target, title }` |
 | `tools(live, scope, ctx, { target })` | 回傳 OpenAI 風格的函式工具定義陣列（或 Promise） |

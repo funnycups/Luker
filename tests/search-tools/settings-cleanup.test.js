@@ -26,9 +26,6 @@ globalThis.Luker = {
 jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
     getChatCompletionConnectionProfiles: async () => [],
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/preset-help.js', () => ({
-    renderPresetHelpButton: () => '',
-}));
 
 let mod;
 beforeAll(async () => {

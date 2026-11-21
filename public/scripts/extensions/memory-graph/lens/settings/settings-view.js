@@ -9,6 +9,7 @@ import { i18n, i18nFormat } from '../i18n.js';
 import { button, checkRow, sectionTitle, switchControl } from '../ui/components.js';
 import { confirmText, formField, openModal, selectInput } from '../panels/modal.js';
 import { TECHNICAL_FIELDS, formatCadenceSummary, withMissing, withMissingProfiles } from './settings-model.js';
+import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../../../lens-shared/preset-examples.js';
 
 const REPAINT_KEYS = new Set(['recallMethod', 'ragUseRerank', 'ragUseQueryRewrite', 'recallInjectPosition']);
 const clone = (value) => (value == null ? value : JSON.parse(JSON.stringify(value)));
@@ -99,8 +100,7 @@ export function createSettingsView(app, source) {
     };
 
     const toggle = (key, label) => fieldWrap(key, switchControl(label, view.values[key], (value) => { setValue(key, value); paint(); }));
-    const pick = (key, label, options) => fieldWrap(key, formField(label, selectInput(options, view.values[key], (value) => setValue(key, value))));
-    const number = (key, label, min, max, onInputExtra = null) => fieldWrap(key, formField(label, h('input', {
+    const pick = (key, label, options) => fieldWrap(key, formField(label, selectInput(options, view.values[key], (value) => setValue(key, value))));    const number = (key, label, min, max, onInputExtra = null) => fieldWrap(key, formField(label, h('input', {
         class: 'ml-schema-input', type: 'number', min, max, step: 1, value: String(view.values[key] ?? ''),
         onInput: (event) => {
             if (onInputExtra) onInputExtra(event.target.value);
@@ -143,6 +143,24 @@ export function createSettingsView(app, source) {
     const embeddingProfileOptions = () => withMissingProfiles(view.options.embeddingProfiles, view.values.embeddingProfileId, i18n('(unset)'), i18n('(missing)'));
     const rerankProfileOptions = () => withMissingProfiles(view.options.rerankProfiles, view.values.rerankProfileId, i18n('(unset)'), i18n('(missing)'));
 
+    const presetActions = (key) => {
+        const exampleName = PRESET_EXAMPLES.pluginOnly;
+        const installed = Boolean(view?.options?.presets?.includes(exampleName));
+        return h('div', { class: 'ml-preset-actions' },
+            button(installed ? i18n('Re-import example') : i18n('Import example'), () => run(async () => {
+                const ok = await importPresetExample(exampleName);
+                if (!ok) return;
+                refreshOptionsOnly();
+                setValue(key, exampleName);
+            }), { className: 'ml-btn-ghost ml-btn-sm', disabled: busy }),
+            button(i18n('Derive from an existing preset'), () => {
+                openPresetDerivation('jailbreak-only').catch(surfaceError);
+            }, { className: 'ml-btn-ghost ml-btn-sm', disabled: busy }));
+    };
+    const presetField = (key, label) => h('div', { class: 'ml-preset-field' },
+        pick(key, label, presetOptions(key)),
+        presetActions(key));
+
     const group = (...children) => h('section', { class: 'ml-aiset-group' }, children);
     const fields = (...children) => h('div', { class: 'ml-aiset-fields' }, children);
 
@@ -171,7 +189,7 @@ export function createSettingsView(app, source) {
             toggle('autoCompressionEnabled', i18n('Auto compression')),
             fields(
                 pick('extractApiPresetName', i18n('Extract API preset (Connection profile)'), connectionOptions('extractApiPresetName')),
-                pick('extractPresetName', i18n('Extract preset (params + prompt)'), presetOptions('extractPresetName'))),
+                presetField('extractPresetName', i18n('Extract preset (params + prompt)'))),
             fields(
                 number('updateEvery', i18n('Update every N assistant turns'), 1, undefined, (raw) => updateCadenceSummary(raw)),
                 advNumber('extractBatchTurns', i18n('Extract batch assistant turns'), 1, undefined, () => updateCadenceSummary()),
@@ -220,10 +238,10 @@ export function createSettingsView(app, source) {
                 rag ? toggle('ragUseQueryRewrite', i18n('Enable query rewrite (extra LLM call)')) : null,
                 rag && values.ragUseQueryRewrite ? fields(
                     pick('ragRewriteApiPresetName', i18n('Query rewrite API preset (Connection profile)'), connectionOptions('ragRewriteApiPresetName')),
-                    pick('ragRewriteLlmPresetName', i18n('Query rewrite prompt preset'), presetOptions('ragRewriteLlmPresetName'))) : null,
+                    presetField('ragRewriteLlmPresetName', i18n('Query rewrite prompt preset'))) : null,
                 !rag ? fields(
                     pick('recallApiPresetName', i18n('Recall API preset (Connection profile)'), connectionOptions('recallApiPresetName')),
-                    pick('recallPresetName', i18n('Recall preset (params + prompt)'), presetOptions('recallPresetName'))) : null),
+                    presetField('recallPresetName', i18n('Recall preset (params + prompt)'))) : null),
             h('div', { class: 'ml-settings-subblock' },
                 h('div', { class: 'ml-aiset-label', text: i18n('Placement & Debug') }),
                 pick('recallInjectPosition', i18n('Injection position'), [
@@ -433,7 +451,7 @@ export function createSettingsView(app, source) {
         h('div', { class: 'ml-settings-details-body' },
             fields(
                 pick('requestApiPresetName', i18n('Iteration AI API preset (Connection profile)'), connectionOptions('requestApiPresetName')),
-                pick('requestLlmPresetName', i18n('Iteration AI prompt preset (params + prompt)'), presetOptions('requestLlmPresetName'))),
+                presetField('requestLlmPresetName', i18n('Iteration AI prompt preset (params + prompt)'))),
             fields(...visible.filter(field => field.kind === 'int').map(technicalControl)),
             visible.filter(field => field.kind === 'bool').map(technicalControl),
             visible.filter(field => field.kind === 'text').map(technicalControl)));
@@ -477,7 +495,8 @@ export function createSettingsView(app, source) {
                 toggle('enabled', i18n('Enabled')),
                 statusEl,
                 errorEl,
-                busy ? button(i18n('Stop'), () => source.ops.stop(), { iconName: 'x', className: 'ml-btn-danger' }) : null),
+                busy ? button(i18n('Stop'), () => source.ops.stop(), { iconName: 'x', className: 'ml-btn-danger' }) : null,
+                h('p', { class: 'ml-settings-note', text: i18n('The AI Workbench uses to edit these settings is selected in Workbench → Settings.') })),
             extractionSection(),
             recallSection(),
             operationsSection(),

@@ -1,4 +1,4 @@
-import { renderPresetHelpButton } from '../preset-help.js';
+import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../lens-shared/preset-examples.js';
 
 export function createSearchToolsSettingsUi(deps) {
     const {
@@ -131,8 +131,12 @@ export function createSearchToolsSettingsUi(deps) {
         <input id="search_tools_default_visit_max_chars" class="text_pole" type="number" min="0" max="50000" step="100" />
         <label for="search_tools_agent_api_preset_name">${escapeHtml(i18n('Agent API preset (Connection profile)'))}</label>
         <select id="search_tools_agent_api_preset_name" class="text_pole"></select>
-        <label for="search_tools_agent_preset_name">${escapeHtml(i18n('Agent preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'agent' })}</label>
+        <label for="search_tools_agent_preset_name">${escapeHtml(i18n('Agent preset (params + prompt)'))}</label>
         <select id="search_tools_agent_preset_name" class="text_pole"></select>
+        <div class="flex-container" style="margin-top: 6px;">
+            <div class="menu_button menu_button_small" id="search_tools_import_preset_example">${escapeHtml(i18n('Import example'))}</div>
+            <div class="menu_button menu_button_small" id="search_tools_derive_preset">${escapeHtml(i18n('Derive from an existing preset'))}</div>
+        </div>
         <label class="checkbox_label">
             <input id="search_tools_include_world_info_with_preset" type="checkbox" />
             ${escapeHtml(i18n('Include world info'))}
@@ -511,7 +515,10 @@ export function createSearchToolsSettingsUi(deps) {
         const context = getContext();
         const settings = getSettings();
         root.find('#search_tools_agent_api_preset_name').html(getConnectionProfileOptions(settings.agentApiPresetName));
-        root.find('#search_tools_agent_preset_name').html(getOpenAIPresetOptions(context, settings.agentPresetName));
+        const presetSelect = root.find('#search_tools_agent_preset_name');
+        presetSelect.html(getOpenAIPresetOptions(context, settings.agentPresetName));
+        const presetInstalled = presetSelect.length > 0 && [...presetSelect[0].options].some(option => option.value === 'plugin-only');
+        root.find('#search_tools_import_preset_example').text(presetInstalled ? i18n('Re-import example') : i18n('Import example'));
         refreshProviderSettingsUi(root, settings);
         root.find('#search_tools_enabled').prop('checked', Boolean(settings.enabled));
         root.find('#search_tools_pre_request_enabled').prop('checked', Boolean(settings.preRequestEnabled));
@@ -582,6 +589,26 @@ export function createSearchToolsSettingsUi(deps) {
                 element.val(String(normalized));
             }
             saveSettingsDebounced();
+        });
+        root.on('click.searchTools', '#search_tools_import_preset_example', async () => {
+            try {
+                const ok = await importPresetExample(PRESET_EXAMPLES.pluginOnly);
+                if (!ok) return;
+                settings.agentPresetName = PRESET_EXAMPLES.pluginOnly;
+                saveSettingsDebounced();
+                presetSelect.html(getOpenAIPresetOptions(context, settings.agentPresetName));
+                presetSelect.val(settings.agentPresetName);
+                root.find('#search_tools_import_preset_example').text(i18n('Re-import example'));
+            } catch (err) {
+                if (typeof toastr !== 'undefined') toastr.error(String(err?.message || err));
+            }
+        });
+        root.on('click.searchTools', '#search_tools_derive_preset', async () => {
+            try {
+                await openPresetDerivation('jailbreak-only');
+            } catch (err) {
+                if (typeof toastr !== 'undefined') toastr.error(String(err?.message || err));
+            }
         });
         root.on('change.searchTools', '#search_tools_agent_api_preset_name', function () {
             settings.agentApiPresetName = normalizeWhitespace(jQuery(this).val());

@@ -172,6 +172,7 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
         editBlockedReason,
         fieldsOf: (id) => (draftsActive() ? agentFields(snapshot.target.mode, drafts.profile(), id) : []),
         modelOptions: () => modelOptions,
+        reloadModelOptions: () => reloadModelOptions(),
         openAi: (text = '') => openWorkbenchAi(text),
         diagnose(key, step = 0) {
             const raw = rec.history().find(item => runKey(item) === key || item.runId === key)
@@ -467,6 +468,11 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
             try { modelOptions = await source.edit.options(); modelOptionsLoaded = true; } catch (err) { console.warn('[orchestrator/lens] ensureModelOptions failed:', err); }
         }
         return modelOptions;
+    }
+
+    async function reloadModelOptions() {
+        modelOptionsLoaded = false;
+        return ensureModelOptions();
     }
 
     function toggleInspector() {

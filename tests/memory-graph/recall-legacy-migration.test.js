@@ -50,9 +50,6 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
 jest.unstable_mockModule('../../public/scripts/request-compression.js', () => ({
     compressRequest: async (r) => r,
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/preset-help.js', () => ({
-    renderPresetHelpButton: () => '',
-}));
 jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
     Popup: class { constructor() {} show() { return Promise.resolve(); } },
     POPUP_TYPE: { DISPLAY: 0, INPUT: 1, CONFIRM: 2 },

@@ -459,6 +459,10 @@ function registerLocaleData() {
         'Failed to save CardApp Studio session (disk write failed).': '保存 CardApp Studio 会话失败（磁盘写入失败）。',
         'Failed to save CardApp Studio session.': '保存 CardApp Studio 会话失败。',
         'CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.': 'CardApp Studio 已恢复为独立界面。已清空过渡迭代版的会话——磁盘上的文件保持不变。',
+        'Import example': '导入示例',
+        'Re-import example': '重新导入示例',
+        'Derive from an existing preset': '从现有预设派生',
+        'The AI Workbench uses to edit these settings is selected in Workbench → Settings.': '修改这些配置所用的 AI 在工作台 → 设置中选择。',
     });
     addLocaleData('zh-tw', {
         'Character Editor Assistant': '角色卡編輯助手',
@@ -772,6 +776,10 @@ function registerLocaleData() {
         'Failed to save CardApp Studio session (disk write failed).': '儲存 CardApp Studio 會話失敗（磁碟寫入失敗）。',
         'Failed to save CardApp Studio session.': '儲存 CardApp Studio 會話失敗。',
         'CardApp Studio reverted to its standalone UI. Brief iteration-studio sessions cleared — files on disk unchanged.': 'CardApp Studio 已還原為獨立介面。已清空過渡迭代版的會話——磁碟上的檔案保持不變。',
+        'Import example': '匯入示例',
+        'Re-import example': '重新匯入示例',
+        'Derive from an existing preset': '從現有預設派生',
+        'The AI Workbench uses to edit these settings is selected in Workbench → Settings.': '修改這些設定所用的 AI 在工作台 → 設定中選擇。',
     });
 }
 
@@ -982,6 +990,8 @@ function refreshPresetSelectors(root, context, settings) {
     if (llmSelect.length) {
         llmSelect.html(renderOpenAIPresetOptions(context, settings.requestLlmPresetName));
         llmSelect.val(String(settings.requestLlmPresetName || '').trim());
+        const installed = [...llmSelect[0].options].some(option => option.value === 'plugin-only');
+        root.find('#cea_import_preset_example').text(installed ? i18n('Re-import example') : i18n('Import example'));
     }
     const apiSelect = root.find('#cea_sync_api_preset');
     if (apiSelect.length) {

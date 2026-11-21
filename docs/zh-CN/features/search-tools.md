@@ -136,7 +136,7 @@ DuckDuckGo、SearXNG、Brave Search、Tavily、Serper 与 SerpApi 支持图片�
 | **默认页面摘要最大字符数** | 访问网页时提取的最大文本长度（`0` 为不截断） |
 | **安全搜索** | 搜索结果的安全过滤级别 |
 | **Agent API 预设** | 预请求 Agent 使用的 API 连接预设（留空使用主连接） |
-| **Agent 预设** | 预请求 Agent 使用的预设（留空使用主预设），下拉框旁的帮助按钮说明所需预设类型 |
+| **Agent 预设** | 预请求 Agent 使用的预设，留空使用主预设。下拉框下方的操作可导入内置的 `plugin-only` 示例，或打开预设工作台从现有预设派生 |
 
 ::: info 相关页面
 - [图像生成与 AI 插图](/zh-CN/features/image-generation) —— 结合图片搜索自动探索同人角色设定与参考图

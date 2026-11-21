@@ -344,7 +344,7 @@ renderFieldHelpButton(options: {
 }): string
 ```
 
-Renders a small "?" icon button that opens a title + body popup on click. Use it for generic field explanations attached to labels or headings. For preset-slot help (which needs preset-scoped resolution), use `renderPresetHelpButton` instead.
+Renders a small "?" icon button that opens a title + body popup on click. Use it for generic field explanations attached to labels or headings.
 
 All layers expose the same function:
 

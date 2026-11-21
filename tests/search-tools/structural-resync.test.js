@@ -29,9 +29,6 @@ import {
 jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
     getChatCompletionConnectionProfiles: async () => [],
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/preset-help.js', () => ({
-    renderPresetHelpButton: () => '',
-}));
 
 const event_types = {
     CHAT_CHANGED: 'chat_id_changed',

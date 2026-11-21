@@ -228,6 +228,15 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect([...rrSelect.options].some(o => o.value === 'deleted-rerank-id' && o.textContent.includes('deleted-rerank-id'))).toBe(true);
     });
 
+    test('shows import and derive actions beside preset fields', () => {
+        const { view } = mountSettingsView({ snap: { options: { presets: ['plugin-only', 'DefaultPreset'] } } });
+        const actions = view.el.querySelectorAll('.ml-preset-actions');
+        expect(actions.length).toBe(2);
+        expect(view.el.textContent).toContain('重新导入示例');
+        expect(view.el.textContent).toContain('从现有预设派生');
+        expect(view.el.textContent).toContain('修改这些配置所用的 AI 在工作台 → 设置中选择。');
+    });
+
     test('surfaces async run errors and rawJson rejections via toast and persistent error banner without paint() wiping them', async () => {
         const fill = jest.fn(async () => { throw new Error('fill boom'); });
         const rawJson = jest.fn(async () => { throw new Error('rawJson boom'); });

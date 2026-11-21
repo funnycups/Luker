@@ -853,6 +853,10 @@ export function registerLocaleData(customAddLocaleData = null) {
         'Persistent injection recency horizon (assistant turns, 0 = no limit)': '常驻注入最大回溯楼层数（Assistant 回复数，0 = 不限制）',
         'RAG Vector Recall (vector + optional rerank + optional rewrite)': 'RAG 向量召回（向量 + 可选重排 + 可选改写）',
         'No memory graph': '没有记忆图',
+        'Import example': '导入示例',
+        'Re-import example': '重新导入示例',
+        'Derive from an existing preset': '从现有预设派生',
+        'The AI Workbench uses to edit these settings is selected in Workbench → Settings.': '修改这些配置所用的 AI 在工作台 → 设置中选择。',
     });
 
     addLocaleData('zh-tw', {
@@ -1687,5 +1691,9 @@ export function registerLocaleData(customAddLocaleData = null) {
         'Persistent injection recency horizon (assistant turns, 0 = no limit)': '常駐注入最大回溯樓層數（Assistant 回覆數，0 = 不限制）',
         'RAG Vector Recall (vector + optional rerank + optional rewrite)': 'RAG 向量召回（向量 + 可選重排 + 可選改寫）',
         'No memory graph': '沒有記憶圖',
+        'Import example': '匯入示例',
+        'Re-import example': '重新匯入示例',
+        'Derive from an existing preset': '從現有預設派生',
+        'The AI Workbench uses to edit these settings is selected in Workbench → Settings.': '修改這些設定所用的 AI 在工作台 → 設定中選擇。',
     });
 }

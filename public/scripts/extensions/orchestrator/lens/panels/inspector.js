@@ -12,6 +12,7 @@ import { agentAvatar, toneOf } from '../views/flow-view.js';
 import { renderSections } from '../views/sections.js';
 import { textField, routingField } from './field-editor.js';
 import { fieldLabel } from '../model/edit.js';
+import { importPresetExample, openPresetDerivation, exampleNameForMode } from '../../../../lens-shared/preset-examples.js';
 
 const PROMPT_PREVIEW = 420;
 
@@ -62,7 +63,30 @@ export function createInspector(app) {
             original: app.drafts.changeFor(id, key)?.before ?? app.drafts.get(id, key),
             options: key === 'api' ? opts.connections : opts.presets,
         }));
-        return routingField({ rows, editable: app.canEdit(), fallback: i18n('Follow orchestration default'), onChange: (key, value) => app.drafts.set(id, key, value) });
+        const node = routingField({ rows, editable: app.canEdit(), fallback: i18n('Follow orchestration default'), onChange: (key, value) => app.drafts.set(id, key, value) });
+        if (!app.canEdit() || !fields.includes('preset')) return node;
+        const exampleName = exampleNameForMode(app.snapshot()?.mode);
+        const installed = (app.modelOptions().presets || []).includes(exampleName);
+        node.append(h('div', { class: 'ol-preset-actions' },
+            button(installed ? i18n('Re-import example') : i18n('Import example'), async () => {
+                try {
+                    const ok = await importPresetExample(exampleName);
+                    if (!ok) return;
+                    app.drafts.set(id, 'preset', exampleName);
+                    await app.reloadModelOptions();
+                    render();
+                } catch (err) {
+                    app.notify(String(err?.message || err), { error: true });
+                }
+            }, { className: 'ol-btn-sm ol-btn-ghost' }),
+            button(i18n('Derive from an existing preset'), async () => {
+                try {
+                    await openPresetDerivation('orchestrator-optimize');
+                } catch (err) {
+                    app.notify(String(err?.message || err), { error: true });
+                }
+            }, { className: 'ol-btn-sm ol-btn-ghost' })));
+        return node;
     }
 
     function routing(agent) {

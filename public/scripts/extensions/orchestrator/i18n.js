@@ -548,6 +548,10 @@ export function registerLocaleData(customAddLocaleData = null) {
         'Operation failed': '操作失败',
         'Last run duration': '上次耗时',
         'Orchestrator is not installed': '没有安装多智能体编排',
+        'Import example': '导入示例',
+        'Re-import example': '重新导入示例',
+        'Derive from an existing preset': '从现有预设派生',
+        'The AI Workbench uses to edit these settings is selected in Workbench → Settings.': '修改这些配置所用的 AI 在工作台 → 设置中选择。',
     });
 
     addLocaleData('zh-tw', {
@@ -1077,5 +1081,9 @@ export function registerLocaleData(customAddLocaleData = null) {
         'Operation failed': '操作失敗',
         'Last run duration': '上次耗時',
         'Orchestrator is not installed': '未安裝多代理程式編排',
+        'Import example': '匯入示例',
+        'Re-import example': '重新匯入示例',
+        'Derive from an existing preset': '從現有預設派生',
+        'The AI Workbench uses to edit these settings is selected in Workbench → Settings.': '修改這些設定所用的 AI 在工作台 → 設定中選擇。',
     });
 }

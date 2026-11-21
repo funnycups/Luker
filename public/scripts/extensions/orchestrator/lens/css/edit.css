@@ -58,6 +58,8 @@
 .olens .ol-dialog-text { color: var(--ol-text-muted); line-height: 1.6; }
 .olens .ol-form { display: grid; gap: 12px; }
 .olens .ol-form-row { display: grid; gap: 4px; font-size: 12px; color: var(--ol-text-muted); }
+.olens .ol-preset-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.olens .ol-setup-note { margin: 0 0 12px; font-size: 12px; color: var(--ol-text-muted); line-height: 1.55; }
 
 /* Topbar AI button */
 .olens .ol-aibtn {
