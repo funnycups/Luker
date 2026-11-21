@@ -12,7 +12,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Multi-Agent Orchestrator
 
 - Embedded the orchestration flow editor, run inspector, run history, timing statistics, presets, skills, custom tools, and plot notes into Workbench.
-- Added a shared floating Run panel for live orchestration and pre-request search runs.
+- Added a shared floating Run panel for live orchestration, pre-request search, and image generation runs.
 - Fixed spec mode AI iteration failing to edit stage nodes written in string shorthand.
 
 ### Documentation
@@ -23,12 +23,14 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Added a network proxy setting to chat completion connection profiles, taking precedence over the global proxy.
 - Fixed switching APIs incorrectly prompting to reload the chat for preset regex scripts.
+- Fixed the reasoning effort setting not updating when switching chat completion presets or API sources.
 - Fixed Vertex AI requests to the `us` and `eu` multi-regions using an invalid hostname.
 - Fixed Gemini multi-turn tool calls dropping the call and response pairing id.
 
 ### Image generation
 
 - Added connection profile binding and OpenAI-compatible multimodal chat image generation to Image Generation.
+- Added generation presets for saving and switching image generation settings.
 - Added character reference image, style reference image, and source image editing support across supported image backends.
 - Embedded Image Studio, the global Character Archive, and illustration run traces into Workbench, supporting fanwork character exploration and original character reference design.
 - Added AI iteration for ComfyUI API-format workflows in Workbench with live node introspection, template node wiring, draft test generation, and per-node diff review.
@@ -70,6 +72,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed narrow screens truncating third-party extension version and branch details in Manage extensions and non-Git extension folders appending an empty branch suffix.
 - Fixed third-party extensions failing to read and save chat completion presets and losing request message references across generation events.
 - Fixed non-streaming generation responses carrying an event-stream content-type header and character-bound preset switches failing to update the active preset name.
+- Fixed third-party extensions receiving duplicate preset names.
 
 ### Fixes
 
@@ -79,6 +82,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed chat rename failures not showing the server's reason.
 - Fixed renaming chats failing in the Android app and on filesystems without hard link support.
 - Fixed background Prompt Manager refreshes interrupting an active prompt drag.
+- Fixed the Prompt Manager modifying the default prompt templates when loading.
 - Fixed prompt assembly failures showing a generic token-counting error, dispatching an empty context, and omitting cross-frame error details from diagnostics logs.
 - Fixed preset switching and background preset loading overwriting another preset's regex rules and settings.
 - Fixed saving one world book dropping another world book's pending save.
@@ -89,6 +93,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed character card field edits bypassing sync locking and account storage quotas.
 - Fixed reading SQL settings strings starting with quotes and extension keys containing control characters.
 - Fixed sync status checks failing immediately on an interrupted request or alerting accounts without configured sync backends.
+- Fixed the Secrets category being disabled in the Account window's backup and restore pages.
+- Fixed backup, restore, and migration selections and progress resetting when the Account window is reopened.
 
 ### Client Apps
 
