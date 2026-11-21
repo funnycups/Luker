@@ -1073,9 +1073,11 @@ router.post('/announcements/delete', requireAdminMiddleware, async (request, res
 // existing /storage/* user-account endpoints above).
 //
 // Concurrency model: a module-level `_migrationState` object holds resume
-// state for the in-flight migration (or null if none is running) and blocks
-// overlapping migrations whose target fingerprint differs. The migration
-// itself is synchronous from the HTTP caller's perspective — we don't return
+// state for the most recent attempt (null before the first run and after a
+// successful swap); `_migrationActive` says whether a request is executing
+// right now. The on-disk migration lock blocks overlapping migrations whose
+// target fingerprint differs. The migration itself is synchronous from the
+// HTTP caller's perspective — we don't return
 // until the per-user copy + verify pass is done (no SSE / progress stream).
 // The endpoint flips the global
 // read-only flag via setReadOnly() for the duration; the storage error
@@ -1083,6 +1085,10 @@ router.post('/announcements/delete', requireAdminMiddleware, async (request, res
 // into a 503.
 
 let _migrationState = null;
+// Whether a /storage/migrate request is executing right now. Distinct from
+// `_migrationState`, which is retained after a failed run so a retry can
+// resume the users that already finished.
+let _migrationActive = false;
 let _lastMigrationAt = null;
 
 /**
@@ -1115,7 +1121,7 @@ function buildRepos(engine) {
 router.post('/storage/status', requireAdminMiddleware, async (_request, response) => {
     return response.send({
         currentMode: detectCurrentMode(),
-        migrationInProgress: _migrationState != null,
+        migrationInProgress: _migrationActive,
         readOnly: isReadOnly(),
         lastMigration: _lastMigrationAt,
         state: serializeStatus(_migrationState, Date.now()),
@@ -1219,6 +1225,11 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
     // here (after acquire succeeded, so we never arm a timer that races a
     // 409 return) and stopped in the matching `finally` below.
     const heartbeat = startHeartbeat({ dataRoot, holderId: lockHolderId });
+
+    // The lock is ours and the request is doing migration work from here on;
+    // status must report an active run even during setup before the per-user
+    // loop starts. Cleared in the finally below.
+    _migrationActive = true;
 
     let destEngine;
     try {
@@ -1370,6 +1381,7 @@ router.post('/storage/migrate', requireAdminMiddleware, async (request, response
         // means we can't race ourselves (a tick already fired but mid-acquire
         // would re-write the lockfile after release rms it). `stopHeartbeat`
         // is null-safe so this is fine even if we never got that far.
+        _migrationActive = false;
         stopHeartbeat(heartbeat);
         await releaseMigrationLock({ dataRoot, holderId: lockHolderId });
     }
@@ -1380,6 +1392,12 @@ router.post('/storage/migrate/reset', requireAdminMiddleware, async (request, re
         return response.status(400).send({
             error: 'reset_requires_confirm',
             message: 'pass { confirm: true } to reset in-memory migration state',
+        });
+    }
+    if (_migrationActive) {
+        return response.status(409).send({
+            error: 'migration_in_progress',
+            message: 'a migration is currently running; wait for it to finish before resetting',
         });
     }
     _migrationState = null;

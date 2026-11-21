@@ -69,7 +69,7 @@ export async function closeAdminPanel(page) {
  * works inside a regular logged-in single-user session.
  *
  * @param {import('@playwright/test').Page} page
- * @returns {Promise<{ currentMode: 'fs'|'sqlite'|'mysql'|'postgres', readOnly: boolean, lastMigration: string|null, migrationInProgress: boolean }>}
+ * @returns {Promise<{ currentMode: 'fs'|'sqlite'|'mysql'|'postgres', readOnly: boolean, lastMigration: string|null, migrationInProgress: boolean, state: any }>}
  */
 export async function fetchStorageStatus(page) {
     return page.evaluate(async () => {
