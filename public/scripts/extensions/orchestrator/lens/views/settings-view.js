@@ -17,6 +17,9 @@ const PROMPTS = [
 
 export function createSettingsView(app) {
     const el = h('div', { class: 'ol-setup' });
+    const unsubDockPrefs = globalThis.Luker?.getContext?.()?.runPanel?.subscribeRunDockPrefs?.(() => {
+        if (el.isConnected) render();
+    }) || null;
 
     function render() {
         if (isEditing(el)) return;
@@ -63,11 +66,17 @@ export function createSettingsView(app) {
         const positions = [[P.before, 'Before Character Definitions'], [P.after, 'After Character Definitions'], [P.ANTop, 'Before Author\'s Note'], [P.ANBottom, 'After Author\'s Note'], [P.EMTop, 'Before Example Messages'], [P.EMBottom, 'After Example Messages'], [P.atDepth, 'At Chat Depth']].map(([value, label]) => ({ value: String(value), label: i18n(label) }));
         const atDepth = Number(values.capsuleInjectPosition) === Number(P.atDepth);
 
+        const runPanelApi = Luker.getContext()?.runPanel;
+        const dockPrefs = runPanelApi?.getRunDockPrefs?.() || { autoOpen: true, defaultSize: 'small' };
+
         put(el,
             section('Default API and prompt preset',
                 formRow(i18n('Connection profile'), selectInput(options(opts.connections, values.llmNodeApiPresetName), values.llmNodeApiPresetName, set('llmNodeApiPresetName'))),
                 formRow(i18n('Generation preset'), selectInput(options(opts.presets, values.llmNodePresetName), values.llmNodePresetName, set('llmNodePresetName'))),
                 checkRow({ checked: values.includeWorldInfoWithPreset, label: i18n('Include world info in agent prompts'), onChange: set('includeWorldInfoWithPreset') })),
+            section('Run panel',
+                checkRow({ checked: dockPrefs.autoOpen !== false, label: i18n('Open automatically on run'), onChange: (on) => { runPanelApi?.setRunDockPrefs?.({ autoOpen: Boolean(on) }); render(); } }),
+                formRow(i18n('Run panel default size'), selectInput([{ value: 'small', label: i18n('Small window') }, { value: 'large', label: i18n('Large window') }], dockPrefs.defaultSize === 'large' ? 'large' : 'small', (val) => { runPanelApi?.setRunDockPrefs?.({ defaultSize: val === 'large' ? 'large' : 'small' }); render(); }))),
             section('Runtime limits', ...limits),
             section('Cross-mode limits',
                 number('Recent assistant turns for orchestration', 'maxRecentMessages'),
@@ -88,5 +97,11 @@ export function createSettingsView(app) {
                 PROMPTS.map(([key, label, id]) => [formRow(i18n(label), textArea(values[key], set(key), { rows: 6 })), reset(key, defaults[id])])));
     }
 
-    return { el, render };
+    return {
+        el,
+        render,
+        destroy() {
+            unsubDockPrefs?.();
+        },
+    };
 }

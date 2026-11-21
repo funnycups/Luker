@@ -83,6 +83,31 @@ describe('workbench mobile viewport & preventScroll focus', () => {
         win.focus();
         expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
 
+        // Verify mobile bottom-edge height resize (.wb-resize-y) and touch double-tap on .wb-titlebar
+        const bar = win.win.querySelector('.wb-titlebar');
+        const bottomGrip = win.win.querySelector('.wb-resize-y');
+        expect(bottomGrip).not.toBeNull();
+        const startHeight = parseInt(win.win.style.height, 10);
+
+        const firePtr = (el, type, props = {}) => {
+            const ev = new Event(type, { bubbles: true, cancelable: true });
+            Object.assign(ev, { pointerId: 1, pointerType: 'touch', button: 0, clientX: 180, clientY: 400, ...props });
+            el.dispatchEvent(ev);
+        };
+
+        firePtr(bottomGrip, 'pointerdown', { clientY: 500 });
+        firePtr(bottomGrip, 'pointermove', { clientY: 560 });
+        firePtr(bottomGrip, 'pointerup', { clientY: 560 });
+        expect(parseInt(win.win.style.height, 10)).toBe(startHeight + 60);
+
+        // Touch double-tap on titlebar toggles maximised on mobile
+        expect(win.win.classList.contains('is-max')).toBe(false);
+        firePtr(bar, 'pointerdown', { clientX: 150, clientY: 160 });
+        firePtr(bar, 'pointerup', { clientX: 151, clientY: 160 });
+        firePtr(bar, 'pointerdown', { clientX: 151, clientY: 160 });
+        firePtr(bar, 'pointerup', { clientX: 151, clientY: 160 });
+        expect(win.win.classList.contains('is-max')).toBe(true);
+
         win.destroy();
     });
 

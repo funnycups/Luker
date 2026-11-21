@@ -11,17 +11,22 @@ import { h, put, clear } from '../../lens-shared/util.js';
 import { iconButton } from '../../lens-shared/ui.js';
 import { icon } from '../icons.js';
 import { fitToViewport } from '../viewport.js';
-import { defaultBox, clampBox, maxBox, sheetBox, pillPos, clampPill, isCompactWidth, parseSavedBox } from '../model/geometry.js';
+import { defaultBox, clampBox, compactDefaultBox, clampCompactBox, maxBox, pillPos, clampPill, isCompactWidth, parseSavedBox } from '../model/geometry.js';
 import { loadPrefs, savePrefs } from '../prefs.js';
 
 /**
- * @param {{ title: string, onThemeToggle(): void, theme: () => string, startCollapsed?: boolean, pillVisible?: () => boolean, onExpand?(): void, onCollapse?(): void }} options
- * @returns {{ layer: HTMLElement, body: HTMLElement, win: HTMLElement, setContext(text: string): void, setPill(...nodes: any[]): void, refresh(): void, collapse(): void, expand(): void, toggle(): void, isCollapsed(): boolean, isCompact(): boolean, paintTheme(): void, focus(): void, destroy(): void }}
+ * @param {{ title: string, onThemeToggle(): void, theme: () => string, defaultSize?: () => string, startCollapsed?: boolean, pillVisible?: () => boolean, onExpand?(): void, onCollapse?(): void }} options
+ * @returns {{ layer: HTMLElement, body: HTMLElement, win: HTMLElement, setContext(text: string): void, setPill(...nodes: any[]): void, setMaximised(next: boolean): void, resetPosition(): void, refresh(): void, collapse(): void, expand(): void, toggle(): void, isCollapsed(): boolean, isCompact(): boolean, paintTheme(): void, focus(): void, destroy(): void }}
  */
-export function createWindow({ title, onThemeToggle, theme, startCollapsed = false, pillVisible = () => true, onExpand = null, onCollapse = null }) {
+export function createWindow({ title, onThemeToggle, theme, defaultSize = null, startCollapsed = false, pillVisible = () => true, onExpand = null, onCollapse = null }) {
     const prefs = loadPrefs();
     let box = parseSavedBox(prefs.box);
-    let maximised = Boolean(prefs.maximised);
+    let mobileBox = parseSavedBox(prefs.mobileBox);
+    const configuredDefault = () => {
+        const val = typeof defaultSize === 'function' ? defaultSize() : '';
+        return val === 'large' || val === 'small' ? val : '';
+    };
+    let maximised = configuredDefault() ? configuredDefault() === 'large' : Boolean(prefs.maximised);
     let pillAt = prefs.pill && typeof prefs.pill === 'object' ? prefs.pill : null;
     let collapsed = Boolean(startCollapsed);
     let compact = false;
@@ -40,8 +45,9 @@ export function createWindow({ title, onThemeToggle, theme, startCollapsed = fal
         maxBtn,
         iconButton('x', i18n('Fold to corner'), () => collapse(), { className: 'is-close', renderIcon: icon }));
     const body = h('div', { class: 'wb-body' });
+    const bottomGrip = h('div', { class: 'wb-resize-y', 'aria-hidden': 'true' });
     const grip = h('div', { class: 'wb-resize', 'aria-hidden': 'true' });
-    const win = h('section', { class: 'wb-win', role: 'dialog', 'aria-label': title, tabIndex: -1 }, bar, body, grip);
+    const win = h('section', { class: 'wb-win', role: 'dialog', 'aria-label': title, tabIndex: -1 }, bar, body, bottomGrip, grip);
     const scrim = h('div', { class: 'wb-scrim', hidden: true, onClick: () => collapse() });
     const pill = h('button', { type: 'button', class: 'wb-pill', hidden: true, 'aria-label': i18nFormat('Open the ${0}', title), title: i18nFormat('Open ${0} (draggable)', title) });
     const layer = h('div', { class: 'wbench lw-surface', dataset: { theme: theme() } }, scrim, win, pill);
@@ -55,14 +61,18 @@ export function createWindow({ title, onThemeToggle, theme, startCollapsed = fal
     function apply() {
         compact = isCompactWidth(vw);
         layer.classList.toggle('is-compact', compact);
-        win.classList.toggle('is-max', maximised && !compact);
+        win.classList.toggle('is-max', maximised);
         clear(maxBtn);
         put(maxBtn, icon(maximised ? 'restore' : 'max'));
         maxBtn.title = maxBtn.ariaLabel = maximised ? i18n('Restore size') : i18n('Maximize');
         win.hidden = collapsed;
         pill.hidden = !collapsed || !pillVisible();
-        scrim.hidden = !compact || collapsed;
-        const b = compact ? sheetBox(vw, vh) : maximised ? maxBox(vw, vh) : (box = clampBox(box || defaultBox(vw, vh), vw, vh));
+        scrim.hidden = true;
+        const b = maximised
+            ? maxBox(vw, vh)
+            : compact
+                ? (mobileBox = clampCompactBox(mobileBox || compactDefaultBox(vw, vh), vw, vh))
+                : (box = clampBox(box || defaultBox(vw, vh), vw, vh));
         Object.assign(win.style, { left: `${b.left}px`, top: `${b.top}px`, width: `${b.width}px`, height: `${b.height}px` });
         placePill();
     }
@@ -105,50 +115,130 @@ export function createWindow({ title, onThemeToggle, theme, startCollapsed = fal
         expand();
     });
 
-    const persist = () => savePrefs({ box, maximised });
+    const persist = () => savePrefs({ box, mobileBox, maximised });
 
     function toggleMax() {
-        if (compact) return;
         maximised = !maximised;
         apply();
         persist();
     }
 
-    // ----- Drag (title bar) -----
+    // ----- Drag (title bar with 6px deadzone & touch double-tap to maximise) -----
+    let lastBarTapAt = 0;
+    let lastBarTapPos = { x: 0, y: 0 };
+    let lastTouchDblTapAt = 0;
     bar.addEventListener('pointerdown', (event) => {
-        if (event.button !== 0 || event.target.closest('button') || compact || maximised) return;
-        event.preventDefault();
-        const start = { x: event.clientX, y: event.clientY, left: box.left, top: box.top };
-        bar.setPointerCapture?.(event.pointerId);
-        bar.classList.add('is-dragging');
+        if ((event.pointerType === 'mouse' && event.button !== 0) || event.target.closest('button')) return;
+        const isMobile = compact;
+        const cur = isMobile ? (mobileBox || compactDefaultBox(vw, vh)) : (box || defaultBox(vw, vh));
+        const start = { x: event.clientX, y: event.clientY, left: cur.left, top: cur.top };
+        let draggingBar = false;
         const move = (e) => {
-            box = clampBox({ ...box, left: start.left + e.clientX - start.x, top: start.top + e.clientY - start.y }, vw, vh);
-            win.style.left = `${box.left}px`;
-            win.style.top = `${box.top}px`;
+            if (maximised) return;
+            const dx = e.clientX - start.x;
+            const dy = e.clientY - start.y;
+            if (!draggingBar) {
+                if (Math.hypot(dx, dy) < 6) return;
+                draggingBar = true;
+                bar.setPointerCapture?.(event.pointerId);
+                bar.classList.add('is-dragging');
+            }
+            e.preventDefault();
+            if (isMobile) {
+                mobileBox = clampCompactBox({ ...cur, ...(mobileBox || {}), left: start.left + dx, top: start.top + dy }, vw, vh);
+                win.style.left = `${mobileBox.left}px`;
+                win.style.top = `${mobileBox.top}px`;
+            } else {
+                box = clampBox({ ...cur, ...(box || {}), left: start.left + dx, top: start.top + dy }, vw, vh);
+                win.style.left = `${box.left}px`;
+                win.style.top = `${box.top}px`;
+            }
         };
-        const end = () => {
+        const end = (e) => {
             bar.classList.remove('is-dragging');
             bar.removeEventListener('pointermove', move);
             bar.removeEventListener('pointerup', end);
-            bar.removeEventListener('pointercancel', end);
-            persist();
+            bar.removeEventListener('pointercancel', cancel);
+            if (draggingBar) {
+                persist();
+                return;
+            }
+            if (e.pointerType !== 'mouse') {
+                const now = Date.now();
+                if (now - lastBarTapAt < 320 && Math.hypot(e.clientX - lastBarTapPos.x, e.clientY - lastBarTapPos.y) < 28) {
+                    lastBarTapAt = 0;
+                    lastTouchDblTapAt = now;
+                    toggleMax();
+                } else {
+                    lastBarTapAt = now;
+                    lastBarTapPos = { x: e.clientX, y: e.clientY };
+                }
+            }
+        };
+        const cancel = () => {
+            bar.classList.remove('is-dragging');
+            bar.removeEventListener('pointermove', move);
+            bar.removeEventListener('pointerup', end);
+            bar.removeEventListener('pointercancel', cancel);
+            if (draggingBar) persist();
         };
         bar.addEventListener('pointermove', move);
         bar.addEventListener('pointerup', end);
-        bar.addEventListener('pointercancel', end);
+        bar.addEventListener('pointercancel', cancel);
     });
-    bar.addEventListener('dblclick', (event) => { if (!event.target.closest('button')) toggleMax(); });
+    bar.addEventListener('dblclick', (event) => {
+        if (event.target.closest('button')) return;
+        if (Date.now() - lastTouchDblTapAt < 450) return;
+        toggleMax();
+    });
+
+    // ----- Bottom-edge vertical resize (mobile thumb-friendly height drag) -----
+    bottomGrip.addEventListener('pointerdown', (event) => {
+        if ((event.pointerType === 'mouse' && event.button !== 0) || maximised) return;
+        event.preventDefault();
+        const isMobile = compact;
+        const cur = isMobile ? (mobileBox || compactDefaultBox(vw, vh)) : (box || defaultBox(vw, vh));
+        const start = { y: event.clientY, height: cur.height };
+        bottomGrip.setPointerCapture?.(event.pointerId);
+        const move = (e) => {
+            const nextH = start.height + (e.clientY - start.y);
+            if (isMobile) {
+                mobileBox = clampCompactBox({ ...cur, ...(mobileBox || {}), height: nextH }, vw, vh);
+                win.style.height = `${mobileBox.height}px`;
+            } else {
+                box = clampBox({ ...cur, ...(box || {}), height: nextH }, vw, vh);
+                win.style.height = `${box.height}px`;
+            }
+        };
+        const end = () => {
+            bottomGrip.removeEventListener('pointermove', move);
+            bottomGrip.removeEventListener('pointerup', end);
+            bottomGrip.removeEventListener('pointercancel', end);
+            persist();
+        };
+        bottomGrip.addEventListener('pointermove', move);
+        bottomGrip.addEventListener('pointerup', end);
+        bottomGrip.addEventListener('pointercancel', end);
+    });
 
     // ----- Resize (bottom-right grip) -----
     grip.addEventListener('pointerdown', (event) => {
-        if (event.button !== 0 || compact || maximised) return;
+        if ((event.pointerType === 'mouse' && event.button !== 0) || maximised) return;
         event.preventDefault();
-        const start = { x: event.clientX, y: event.clientY, width: box.width, height: box.height };
+        const isMobile = compact;
+        const cur = isMobile ? (mobileBox || compactDefaultBox(vw, vh)) : (box || defaultBox(vw, vh));
+        const start = { x: event.clientX, y: event.clientY, width: cur.width, height: cur.height };
         grip.setPointerCapture?.(event.pointerId);
         const move = (e) => {
-            box = clampBox({ ...box, width: start.width + e.clientX - start.x, height: start.height + e.clientY - start.y }, vw, vh);
-            win.style.width = `${box.width}px`;
-            win.style.height = `${box.height}px`;
+            if (isMobile) {
+                mobileBox = clampCompactBox({ ...mobileBox, width: start.width + e.clientX - start.x, height: start.height + e.clientY - start.y }, vw, vh);
+                win.style.width = `${mobileBox.width}px`;
+                win.style.height = `${mobileBox.height}px`;
+            } else {
+                box = clampBox({ ...box, width: start.width + e.clientX - start.x, height: start.height + e.clientY - start.y }, vw, vh);
+                win.style.width = `${box.width}px`;
+                win.style.height = `${box.height}px`;
+            }
         };
         const end = () => {
             grip.removeEventListener('pointermove', move);
@@ -179,6 +269,10 @@ export function createWindow({ title, onThemeToggle, theme, startCollapsed = fal
         if (!wasCollapsed) onCollapse?.();
     }
     function expand() {
+        if (collapsed) {
+            const def = configuredDefault();
+            if (def) maximised = def === 'large';
+        }
         collapsed = false;
         apply();
         win.focus({ preventScroll: true });
@@ -201,6 +295,27 @@ export function createWindow({ title, onThemeToggle, theme, startCollapsed = fal
             clear(pill);
             put(pill, h('span', { class: 'wb-mark', 'aria-hidden': 'true' }, icon('mark', { size: 15 })), ...nodes);
             globalThis.requestAnimationFrame?.(placePill);
+        },
+        setMaximised(next) {
+            maximised = Boolean(next);
+            apply();
+            persist();
+        },
+        resetPosition() {
+            box = null;
+            mobileBox = null;
+            pillAt = null;
+            const def = configuredDefault();
+            maximised = def === 'large';
+            try {
+                const p = JSON.parse(globalThis.localStorage?.getItem('workbench.prefs.v1') || '{}');
+                delete p.box;
+                delete p.mobileBox;
+                delete p.pill;
+                delete p.maximised;
+                globalThis.localStorage?.setItem('workbench.prefs.v1', JSON.stringify(p));
+            } catch { /* ignore */ }
+            apply();
         },
         refresh() {
             apply();
