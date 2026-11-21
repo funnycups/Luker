@@ -2,6 +2,12 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
+## Unreleased
+
+### Fixes
+
+- Fixed generation progress notifications playing the system notification sound when Luker moves to the background.
+
 ## v2.9.0-rc.3 (2026-11-21)
 
 ### Workbench
