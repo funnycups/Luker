@@ -75,16 +75,13 @@
 
 /* Dock container */
 .rpdock.rp-dock {
-    position: fixed; top: 0; right: 0; bottom: 0; left: auto;
+    position: fixed;
     z-index: 9000;
-    width: clamp(320px, calc((100vw - var(--sheldWidth, 50vw)) / 2), 420px);
-    height: 100vh; height: 100dvh;
     display: flex; flex-direction: column;
     background: var(--lw-surface);
-    border-left: 1px solid var(--lw-border-strong);
-    box-shadow: -18px 0 48px -24px rgba(0, 0, 0, 0.55);
-    transform: translateX(0);
-    transition: transform 240ms var(--lw-ease), visibility 0s;
+    border: 1px solid var(--lw-border-strong);
+    border-radius: 14px;
+    box-shadow: var(--lw-shadow-2);
     font-size: 13px;
 }
 .rpdock.rp-dock[data-state="closed"],
@@ -104,7 +101,7 @@
 .rpdock .rp-dock-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; padding-left: 34px; font-size: 11.5px; color: var(--lw-faint); font-variant-numeric: tabular-nums; }
 .rpdock .rp-dock-stat { display: inline-flex; align-items: center; gap: 5px; }
 
-.rpdock .rp-dock-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 12px 18px; display: grid; align-content: start; gap: 12px; }
+.rpdock .rp-dock-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 12px 12px 18px; display: grid; align-content: start; gap: 12px; }
 .rpdock .rp-dock-empty { color: var(--lw-faint); text-align: center; padding: 40px 16px; }
 .rpdock .rp-dock-also { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--lw-blue); }
 .rpdock .rp-run-error { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--lw-r); color: var(--lw-danger); background: var(--lw-danger-soft); font-size: 12.5px; }
@@ -178,7 +175,7 @@
 .rpdock .rp-textblock {
     position: relative; white-space: pre-wrap; word-break: break-word;
     padding: 9px 12px; border-radius: var(--lw-r); background: var(--lw-surface-2); border: 1px solid var(--lw-border);
-    font-size: 12.5px; line-height: 1.65; max-height: 280px; overflow: auto;
+    font-size: 12.5px; line-height: 1.65; max-height: 280px; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
 }
 .rpdock .rp-textblock.is-mono { font-family: var(--lw-mono); font-size: 11.5px; line-height: 1.55; }
 .rpdock .rp-textblock.is-folded { max-height: 132px; overflow: hidden; }
@@ -207,7 +204,7 @@
 .rpdock .rp-final-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 12px; border-bottom: 1px solid var(--lw-border); color: var(--lw-accent); }
 .rpdock .rp-final-title { font-weight: 600; color: var(--lw-text); }
 .rpdock .rp-final-note { font-size: 11.5px; color: var(--lw-faint); }
-.rpdock .rp-final-text { padding: 12px 14px; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; font-family: var(--lw-serif); font-size: 13px; line-height: 1.75; }
+.rpdock .rp-final-text { padding: 12px 14px; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; font-family: var(--lw-serif); font-size: 13px; line-height: 1.75; }
 
 .rpdock .rp-dock-foot { position: relative; flex: none; display: flex; align-items: center; padding: 4px 14px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--lw-border); }
 .rpdock .rp-dock-foot:empty { display: none; }
@@ -229,7 +226,9 @@
     color: var(--lw-text); background: var(--lw-raised);
     border: 1px solid color-mix(in srgb, var(--rp-running) 50%, var(--lw-border-strong));
     box-shadow: var(--lw-shadow-2); animation: rp-pill-in 200ms var(--lw-ease);
+    touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab;
 }
+.rpdock.rp-dock-pill.is-dragging { cursor: grabbing; }
 .rpdock.rp-dock-pill[hidden] { display: none; }
 .rpdock.rp-dock-pill:not([data-status="running"]) { border-color: var(--lw-border-strong); }
 .rpdock .rp-dock-pill-main {
@@ -315,35 +314,42 @@
 
 /* Dropdown menu */
 .rpdock .rp-menu {
-    position: absolute; right: 8px; top: 44px; z-index: 6; width: 190px; padding: 6px;
-    border-radius: var(--lw-r-lg); background: var(--lw-raised); box-shadow: var(--lw-shadow-3);
+    position: absolute; right: 8px; top: 44px; z-index: 6; width: min(216px, calc(100vw - 32px)); padding: 6px;
+    border-radius: var(--lw-r-lg); background: var(--lw-raised); border: 1px solid var(--lw-border-strong); box-shadow: var(--lw-shadow-3);
 }
 .rpdock .rp-menu[hidden] { display: none; }
+.rpdock .rp-menu-sep { height: 1px; margin: 4px 6px; background: var(--lw-border); }
 .rpdock .rp-menu-item {
-    display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px;
+    display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px;
     border: 0; border-radius: var(--lw-r-sm); background: none; cursor: pointer;
-    text-align: left; color: var(--lw-text); font-size: 13px;
+    text-align: left; color: var(--lw-text); font-size: 12.5px;
 }
 .rpdock .rp-menu-item:hover { background: var(--lw-hover); }
 .rpdock .rp-menu-check { flex: none; width: 14px; display: grid; place-items: center; color: var(--lw-accent); }
-.rpdock .rp-menu-title { font-weight: 500; }
+.rpdock .rp-menu-title { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rpdock.rp-dock.is-float[data-size="small"] .rp-dock-menu { top: 38px; }
+.rpdock .rp-menu.is-up,
+.rpdock.rp-dock.is-float[data-size="small"] .rp-dock-menu.is-up,
+.rpdock.rp-dock.is-compact .rp-menu.is-up { top: auto; bottom: calc(100% + 6px); }
 
 .rpdock .rp-dock-diag { display: flex; justify-content: center; padding: 4px 0 8px; }
 
 @media (max-width: 860px) {
-    .rpdock.rp-dock {
-        top: auto; left: 0; right: 0; bottom: 0; width: auto; height: min(72dvh, 640px);
-        border-left: 0; border-top: 1px solid var(--lw-border-strong); border-radius: 16px 16px 0 0;
-        box-shadow: 0 -18px 48px -20px rgba(0, 0, 0, 0.6);
-    }
-    .rpdock.rp-dock.is-compact[data-state="closed"],
-    .rpdock.rp-dock.is-compact[data-state="pill"] { transform: translate3d(0, 104%, 0); }
-    .rpdock .rp-dock-grip { display: block; flex: none; width: 36px; height: 4px; margin: 8px auto 0; border-radius: 4px; background: var(--lw-border-strong); }
-    .rpdock .rp-dock-head { padding-top: 6px; }
-    .rpdock .rp-dock-agent-head { min-height: 44px; }
-    .rpdock.rp-dock-scrim:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 8999; background: var(--lw-scrim); }
-    .rpdock.rp-dock-pill { inset: auto 12px calc(76px + env(safe-area-inset-bottom)) auto; height: 38px; }
+    .rpdock.rp-dock.is-compact[data-size="small"] .rp-dock-resize { display: none; }
+    .rpdock.rp-dock.is-compact[data-size="small"] .rp-dock-head { padding: 6px 6px 6px 10px; }
+    .rpdock.rp-dock.is-compact .rp-dock-oneline { gap: 3px; }
+    .rpdock.rp-dock.is-compact .rp-dock-oneline .lw-ibtn.is-sm { width: 34px; height: 34px; }
+    .rpdock.rp-dock.is-compact[data-size="large"] .rp-dock-head { padding: 8px 8px 8px 12px; }
+    .rpdock.rp-dock.is-compact[data-size="large"] .lw-ibtn.is-sm { width: 36px; height: 36px; }
+    .rpdock.rp-dock.is-compact[data-size="large"] .rp-dock-stats { padding-left: 30px; gap: 4px 10px; }
+    .rpdock.rp-dock.is-compact .rp-menu { top: 44px; width: min(228px, calc(100vw - 24px)); }
+    .rpdock.rp-dock.is-compact .rp-menu-item { min-height: 40px; padding: 9px 12px; font-size: 13.5px; }
+    .rpdock .rp-dock-agent-head { min-height: 42px; }
+    .rpdock.rp-dock-pill.is-compact,
+    .rpdock.rp-dock-pill { height: 40px; max-width: calc(100vw - 24px); }
+    .rpdock.rp-dock-pill .rp-dock-pill-main { padding: 0 12px 0 14px; }
+    .rpdock.rp-dock-pill .rp-dock-pill-x { width: 36px; height: 36px; margin: 0 2px 0 -4px; }
+    .rpdock .rp-dock-pill-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {

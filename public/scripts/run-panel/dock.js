@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Shared floating Run Dock: displays live and recent runs from any attached
-// RunStore (orchestrator, search-tools, …) in one floating window on desktop
-// or a bottom sheet on narrow screens.
+// RunStore (orchestrator, search-tools, …) in one floating window across
+// desktop and mobile viewports, with configurable small/large default size.
 
 import { h, clear, put, copyText, debounce } from '../lens-shared/util.js';
 import { accountLocalStorage, currentAccountHandle } from '../lens-shared/current-account.js';
-import { button, iconButton, switchControl } from '../lens-shared/ui.js';
+import { button, iconButton } from '../lens-shared/ui.js';
 import { icon } from './dock-icons.js';
 import { i18n, i18nFormat, listSeparator, agentName, agentRole, statusLabel, modeInfo, toneOf, agentAvatar } from './dock-i18n.js';
 import {
@@ -32,7 +32,88 @@ const WIDTH_RANGE = [240, 560];
 const MIN_HEIGHT = 160;
 const NARROW_WIDTH = 280;
 const DEFAULT_POS = { right: 20, bottom: 84 };
+const DEFAULT_MOBILE_POS = { right: 12, bottom: 96 };
+const MOBILE_DEFAULT_WIDTH = 356;
 const SHRINK_AFTER_MS = 4000;
+
+export function normalizeDefaultDockSize(value) {
+    return value === 'large' ? 'large' : 'small';
+}
+
+function normalizePrefsObject(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    return {
+        ...src,
+        autoOpen: src.autoOpen !== false,
+        defaultSize: normalizeDefaultDockSize(src.defaultSize),
+    };
+}
+
+const prefListeners = new Set();
+const liveDocks = new Set();
+
+function notifyPrefListeners(prefs) {
+    const snapshot = {
+        autoOpen: prefs.autoOpen !== false,
+        defaultSize: normalizeDefaultDockSize(prefs.defaultSize),
+    };
+    for (const fn of prefListeners) {
+        try {
+            fn(snapshot);
+        } catch (err) {
+            console.error('[run-panel] pref listener error:', err);
+        }
+    }
+    return snapshot;
+}
+
+export function getRunDockPrefs() {
+    const storage = accountLocalStorage();
+    const handle = currentAccountHandle();
+    const loaded = handle ? loadPrefs(storage) : {};
+    const normalized = normalizePrefsObject(loaded);
+    return {
+        autoOpen: normalized.autoOpen,
+        defaultSize: normalized.defaultSize,
+    };
+}
+
+export function setRunDockPrefs(patch = {}) {
+    const storage = accountLocalStorage();
+    const handle = currentAccountHandle();
+    if (!handle || !patch || typeof patch !== 'object') {
+        return getRunDockPrefs();
+    }
+    const next = normalizePrefsObject(loadPrefs(storage));
+    if (typeof patch.autoOpen === 'boolean') {
+        next.autoOpen = patch.autoOpen;
+    }
+    if (patch.defaultSize === 'small' || patch.defaultSize === 'large') {
+        next.defaultSize = patch.defaultSize;
+    }
+    if (patch.resetPosition) {
+        delete next.pos;
+        delete next.size;
+        delete next.mobilePos;
+        delete next.pillPos;
+        delete next.mobilePillPos;
+    }
+    savePrefs(storage, next);
+    for (const dock of liveDocks) {
+        dock._applyExternalPrefs?.(patch);
+    }
+    return notifyPrefListeners(next);
+}
+
+export function resetRunDockPosition() {
+    return setRunDockPrefs({ resetPosition: true });
+}
+
+export function subscribeRunDockPrefs(listener) {
+    if (typeof listener !== 'function') return () => {};
+    prefListeners.add(listener);
+    return () => { prefListeners.delete(listener); };
+}
 
 export function ensureDockStyles(doc = globalThis.document) {
     if (!doc?.head) return;
@@ -183,7 +264,7 @@ export function createDock({
     ensureDockStyles(container?.ownerDocument || document);
     const prefStorage = accountLocalStorage();
     let prefsHandle = currentAccountHandle();
-    let prefs = { autoOpen: true, ...(prefsHandle ? loadPrefs(prefStorage) : {}) };
+    let prefs = normalizePrefsObject(prefsHandle ? loadPrefs(prefStorage) : {});
     const compactMql = globalThis.matchMedia?.(COMPACT_QUERY);
     let state = 'closed';
     let expanded = new Set();
@@ -191,12 +272,13 @@ export function createDock({
     let shownRunKey = '';
     let shownBlockId = '';
     let destroyed = false;
-    let size = 'small';
+    let size = normalizeDefaultDockSize(prefs.defaultSize);
     let menuOpen = false;
     let shrinkTimer = 0;
-    const isFloat = () => !compactMql?.matches;
+    const isCompact = () => Boolean(compactMql?.matches);
+    const isFloat = () => true;
 
-    const root = h('div', { class: 'rpdock lw-surface rp-dock', role: 'complementary', 'aria-label': i18n('Run panel'), tabIndex: -1, dataset: { state } });
+    const root = h('div', { class: 'rpdock lw-surface rp-dock is-float', role: 'complementary', 'aria-label': i18n('Run panel'), tabIndex: -1, dataset: { state } });
     const head = h('header', { class: 'rp-dock-head' });
     const body = h('div', { class: 'rp-dock-body' });
     const foot = h('footer', { class: 'rp-dock-foot' });
@@ -205,16 +287,38 @@ export function createDock({
     const menu = h('div', { class: 'rp-menu rp-dock-menu', role: 'menu', hidden: true });
     const toastEl = h('div', { class: 'rp-dock-toast', hidden: true });
     put(root, grip, resizer, head, body, foot, menu, toastEl);
-    const pillMain = h('button', { type: 'button', class: 'rp-dock-pill-main', onClick: () => setState('open') });
-    const pillClose = h('button', { type: 'button', class: 'rp-dock-pill-x', title: i18n('Close'), 'aria-label': i18n('Close'), onClick: () => setState('closed') }, icon('x', { size: 12 }));
+    let pillDragged = false;
+    const pillMain = h('button', {
+        type: 'button',
+        class: 'rp-dock-pill-main',
+        onClick: () => {
+            if (pillDragged) { pillDragged = false; return; }
+            syncPrefs();
+            size = normalizeDefaultDockSize(prefs.defaultSize);
+            setState('open');
+        },
+    });
+    const pillClose = h('button', {
+        type: 'button',
+        class: 'rp-dock-pill-x',
+        title: i18n('Close'),
+        'aria-label': i18n('Close'),
+        onClick: () => {
+            if (pillDragged) { pillDragged = false; return; }
+            setState('closed');
+        },
+    }, icon('x', { size: 13 }));
     const pill = h('div', { class: 'rpdock lw-surface rp-dock-pill', hidden: true }, pillMain, pillClose);
-    const scrim = h('div', { class: 'rpdock lw-surface rp-dock-scrim', onClick: () => (isFloat() ? setSize('small') : collapse()) });
+    const scrim = h('div', {
+        class: 'rpdock lw-surface rp-dock-scrim is-float',
+        onClick: () => (normalizeDefaultDockSize(prefs.defaultSize) === 'large' ? collapse() : setSize('small')),
+    });
 
     root.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') {
             event.stopPropagation();
             if (menuOpen) setMenu(false);
-            else if (isFloat() && size === 'large') setSize('small');
+            else if (size === 'large' && normalizeDefaultDockSize(prefs.defaultSize) !== 'large') setSize('small');
             else collapse();
             return;
         }
@@ -233,12 +337,22 @@ export function createDock({
 
     const viewportSize = () => {
         const vv = globalThis.visualViewport;
-        return { vw: Math.round(vv?.width ?? innerWidth), vh: Math.round(vv?.height ?? innerHeight) };
+        return {
+            vw: Math.round(vv?.width ?? innerWidth),
+            vh: Math.round(vv?.height ?? innerHeight),
+            ox: Math.round(vv?.offsetLeft ?? 0),
+            oy: Math.round(vv?.offsetTop ?? 0),
+        };
     };
     const clampNum = (n, lo, hi) => Math.round(Math.min(Math.max(lo, Number(n) || 0), Math.max(lo, hi)));
     function clampPos(pos, width = floatSize.width) {
         const { vw, vh } = viewportSize();
         return { right: clampNum(pos?.right, 8, vw - width - 8), bottom: clampNum(pos?.bottom, 8, vh - 140) };
+    }
+    function clampMobilePos(pos, width) {
+        const { vw, vh } = viewportSize();
+        const w = width ?? clampNum(MOBILE_DEFAULT_WIDTH, 220, Math.max(220, vw - 24));
+        return { right: clampNum(pos?.right, 8, Math.max(8, vw - w - 8)), bottom: clampNum(pos?.bottom, 8, Math.max(8, vh - 120)) };
     }
     function clampSize(sz, pos = floatPos) {
         const { vw, vh } = viewportSize();
@@ -250,39 +364,86 @@ export function createDock({
 
     let wantPos = { ...DEFAULT_POS, ...(prefs.pos || {}) };
     let wantSize = { ...DEFAULT_SIZE, ...(prefs.size || {}) };
+    let wantMobilePos = { ...DEFAULT_MOBILE_POS, ...(prefs.mobilePos || {}) };
+    let wantPillPos = prefs.pillPos && typeof prefs.pillPos === 'object' ? { ...prefs.pillPos } : null;
+    let wantMobilePillPos = prefs.mobilePillPos && typeof prefs.mobilePillPos === 'object' ? { ...prefs.mobilePillPos } : null;
     let floatSize = { width: clampNum(wantSize.width, ...WIDTH_RANGE), height: wantSize.height };
     let floatPos = clampPos(wantPos);
+    let mobileFloatPos = clampMobilePos(wantMobilePos);
+
+    function reloadPrefsFromStorage({ updateSizeIfClosed = true } = {}) {
+        prefs = normalizePrefsObject(prefsHandle ? loadPrefs(prefStorage) : {});
+        wantPos = { ...DEFAULT_POS, ...(prefs.pos || {}) };
+        wantSize = { ...DEFAULT_SIZE, ...(prefs.size || {}) };
+        wantMobilePos = { ...DEFAULT_MOBILE_POS, ...(prefs.mobilePos || {}) };
+        wantPillPos = prefs.pillPos && typeof prefs.pillPos === 'object' ? { ...prefs.pillPos } : null;
+        wantMobilePillPos = prefs.mobilePillPos && typeof prefs.mobilePillPos === 'object' ? { ...prefs.mobilePillPos } : null;
+        floatSize = { width: clampNum(wantSize.width, ...WIDTH_RANGE), height: wantSize.height };
+        floatPos = clampPos(wantPos);
+        mobileFloatPos = clampMobilePos(wantMobilePos);
+        if (updateSizeIfClosed && state !== 'open') {
+            size = normalizeDefaultDockSize(prefs.defaultSize);
+        }
+    }
 
     function syncPrefs() {
         const nextHandle = currentAccountHandle();
         if (nextHandle === prefsHandle) return;
         prefsHandle = nextHandle;
-        prefs = { autoOpen: true, ...(nextHandle ? loadPrefs(prefStorage) : {}) };
-        wantPos = { ...DEFAULT_POS, ...(prefs.pos || {}) };
-        wantSize = { ...DEFAULT_SIZE, ...(prefs.size || {}) };
-        floatSize = { width: clampNum(wantSize.width, ...WIDTH_RANGE), height: wantSize.height };
-        floatPos = clampPos(wantPos);
+        reloadPrefsFromStorage({ updateSizeIfClosed: true });
     }
 
     function placeFloat() {
-        if (!isFloat() || !root.isConnected) return;
-        const { vw, vh } = viewportSize();
+        if (!root.isConnected) return;
+        const { vw, vh, ox, oy } = viewportSize();
+        const compact = isCompact();
         const st = root.style;
         if (size === 'large') {
-            const width = Math.min(820, vw - 48); // cap-ok: viewport hardware dimensions for centered modal readability
-            const height = Math.min(Math.round(vh * 0.86), 920); // cap-ok: viewport hardware height limit for centered modal
-            Object.assign(st, { left: `${Math.round((vw - width) / 2)}px`, top: `${Math.round((vh - height) / 2)}px`, right: 'auto', bottom: 'auto', width: `${width}px`, height: `${height}px`, maxHeight: '' });
+            const marginX = compact ? 24 : 48;
+            const maxW = compact ? 560 : 820; // cap-ok: viewport hardware dimensions for centered modal readability
+            const maxH = compact ? 680 : 920; // cap-ok: viewport hardware height limit for centered modal
+            const ratioH = compact ? 0.78 : 0.86;
+            const width = Math.max(240, Math.min(maxW, vw - marginX)); // cap-ok: viewport hardware dimensions for centered modal readability
+            const height = Math.max(200, Math.min(Math.round(vh * ratioH), maxH)); // cap-ok: viewport hardware height limit for centered modal
+            Object.assign(st, {
+                left: `${ox + Math.round((vw - width) / 2)}px`,
+                top: `${oy + Math.round((vh - height) / 2)}px`,
+                right: '',
+                bottom: '',
+                width: `${width}px`,
+                height: `${height}px`,
+                maxHeight: '',
+            });
+            root.classList.remove('is-narrow');
+            return;
+        }
+        if (compact) {
+            const width = clampNum(MOBILE_DEFAULT_WIDTH, 220, Math.max(220, vw - 24));
+            mobileFloatPos = clampMobilePos(wantMobilePos, width);
+            const maxH = clampNum(Math.min(Math.round(vh * 0.46), 340), 140, Math.max(140, vh - mobileFloatPos.bottom - 12)); // cap-ok: viewport hardware height limit for mobile floating card
+            const vvRight = Math.max(0, Math.round((globalThis.innerWidth || vw) - (ox + vw)));
+            const vvBottom = Math.max(0, Math.round((globalThis.innerHeight || vh) - (oy + vh)));
+            Object.assign(st, {
+                left: '',
+                top: '',
+                right: `${mobileFloatPos.right + vvRight}px`,
+                bottom: `${mobileFloatPos.bottom + vvBottom}px`,
+                width: `${width}px`,
+                height: '',
+                maxHeight: `${maxH}px`,
+            });
+            root.classList.toggle('is-narrow', width < NARROW_WIDTH);
             return;
         }
         floatPos = clampPos(wantPos, clampNum(wantSize.width, ...WIDTH_RANGE));
         floatSize = clampSize(wantSize, floatPos);
-        Object.assign(st, { left: 'auto', top: 'auto', right: `${floatPos.right}px`, bottom: `${floatPos.bottom}px`, width: `${floatSize.width}px`, height: '', maxHeight: `${floatSize.height}px` });
+        Object.assign(st, { left: '', top: '', right: `${floatPos.right}px`, bottom: `${floatPos.bottom}px`, width: `${floatSize.width}px`, height: '', maxHeight: `${floatSize.height}px` });
         root.classList.toggle('is-narrow', floatSize.width < NARROW_WIDTH);
     }
 
     let sizing = null;
     resizer.addEventListener('pointerdown', (event) => {
-        if (!isFloat() || size !== 'small' || event.button !== 0) return;
+        if (isCompact() || size !== 'small' || event.button !== 0) return;
         const rect = root.getBoundingClientRect();
         sizing = { id: event.pointerId, x: event.clientX, y: event.clientY, width: rect.width, height: rect.height, pos: { ...floatPos } };
         resizer.setPointerCapture?.(event.pointerId);
@@ -317,33 +478,84 @@ export function createDock({
     resizer.addEventListener('pointercancel', endSize);
 
     let drag = null;
+    let lastHeadTapAt = 0;
+    let lastHeadTapPos = { x: 0, y: 0 };
+    let lastHeadTouchDblAt = 0;
     head.addEventListener('pointerdown', (event) => {
-        if (!isFloat() || size !== 'small' || event.button !== 0 || event.target.closest('button')) return;
-        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, pos: { ...floatPos } };
-        head.setPointerCapture?.(event.pointerId);
-        root.classList.add('is-dragging');
-        event.preventDefault();
+        if ((event.pointerType === 'mouse' && event.button !== 0) || event.target.closest('button')) return;
+        const compact = isCompact();
+        drag = {
+            id: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+            compact,
+            active: false,
+            pos: compact ? { ...mobileFloatPos } : { ...floatPos },
+        };
     });
     head.addEventListener('pointermove', (event) => {
-        if (!drag || event.pointerId !== drag.id) return;
-        wantPos = clampPos({ right: drag.pos.right - (event.clientX - drag.x), bottom: drag.pos.bottom - (event.clientY - drag.y) });
+        if (!drag || event.pointerId !== drag.id || size !== 'small') return;
+        const dx = event.clientX - drag.x;
+        const dy = event.clientY - drag.y;
+        if (!drag.active) {
+            if (Math.hypot(dx, dy) < 6) return;
+            drag.active = true;
+            head.setPointerCapture?.(event.pointerId);
+            root.classList.add('is-dragging');
+        }
+        event.preventDefault();
+        const nextRaw = { right: drag.pos.right - dx, bottom: drag.pos.bottom - dy };
+        if (drag.compact) {
+            wantMobilePos = clampMobilePos(nextRaw);
+        } else {
+            wantPos = clampPos(nextRaw);
+        }
         placeFloat();
     });
-    const endDrag = (event) => {
+    const finishHeadGesture = (event, cancelled = false) => {
         if (!drag || event.pointerId !== drag.id) return;
+        const wasCompact = drag.compact;
+        const wasActive = drag.active;
         drag = null;
         root.classList.remove('is-dragging');
-        const nextPos = wantPos;
-        syncPrefs();
-        wantPos = nextPos;
-        prefs.pos = wantPos;
-        savePrefs(prefStorage, prefs);
+        if (wasActive) {
+            if (wasCompact) {
+                const nextMobilePos = wantMobilePos;
+                syncPrefs();
+                wantMobilePos = nextMobilePos;
+                prefs.mobilePos = wantMobilePos;
+            } else {
+                const nextPos = wantPos;
+                syncPrefs();
+                wantPos = nextPos;
+                prefs.pos = wantPos;
+            }
+            savePrefs(prefStorage, prefs);
+            return;
+        }
+        if (!cancelled && event.pointerType !== 'mouse') {
+            const now = Date.now();
+            if (now - lastHeadTapAt < 320 && Math.hypot(event.clientX - lastHeadTapPos.x, eCoord(event.clientY) - lastHeadTapPos.y) < 28) {
+                lastHeadTapAt = 0;
+                lastHeadTouchDblAt = now;
+                setSize(size === 'large' ? 'small' : 'large');
+            } else {
+                lastHeadTapAt = now;
+                lastHeadTapPos = { x: event.clientX, y: eCoord(event.clientY) };
+            }
+        }
     };
-    head.addEventListener('pointerup', endDrag);
-    head.addEventListener('pointercancel', endDrag);
+    const eCoord = (v) => Number(v) || 0;
+    head.addEventListener('pointerup', (e) => finishHeadGesture(e, false));
+    head.addEventListener('pointercancel', (e) => finishHeadGesture(e, true));
+    head.addEventListener('dblclick', (event) => {
+        if (event.target.closest('button')) return;
+        if (Date.now() - lastHeadTouchDblAt < 450) return;
+        setSize(size === 'large' ? 'small' : 'large');
+    });
 
     function setSize(next) {
-        size = next;
+        size = normalizeDefaultDockSize(next);
         root.dataset.size = size;
         setMenu(false);
         setState(state);
@@ -357,6 +569,16 @@ export function createDock({
         return getDiagnoseHandler?.(source) || onDiagnose || null;
     }
 
+    function updateDefaultSizeFromMenu(nextDefault) {
+        syncPrefs();
+        prefs.defaultSize = normalizeDefaultDockSize(nextDefault);
+        savePrefs(prefStorage, prefs);
+        notifyPrefListeners(prefs);
+        size = prefs.defaultSize;
+        setMenu(false);
+        setState(state);
+    }
+
     function setMenu(open) {
         syncPrefs();
         menuOpen = open;
@@ -365,12 +587,29 @@ export function createDock({
         const item = (label, onClick, extra = {}) => h('button', { type: 'button', class: 'rp-menu-item', role: 'menuitem', onClick, ...extra },
             h('span', { class: 'rp-menu-check' }, extra['aria-checked'] === 'true' ? icon('check', { size: 13 }) : null),
             h('span', { class: 'rp-menu-title', text: label }));
+        const sep = () => h('div', { class: 'rp-menu-sep', role: 'separator' });
         const data = currentView();
         const inspectFn = data ? resolveInspect(data.view.source) : null;
+        const defSize = normalizeDefaultDockSize(prefs.defaultSize);
         put(clear(menu),
-            item(i18n('Open automatically on run'), () => { syncPrefs(); prefs.autoOpen = !prefs.autoOpen; savePrefs(prefStorage, prefs); setMenu(true); }, { role: 'menuitemcheckbox', 'aria-checked': String(prefs.autoOpen) }),
+            item(i18n('Open automatically on run'), () => {
+                syncPrefs();
+                prefs.autoOpen = !prefs.autoOpen;
+                savePrefs(prefStorage, prefs);
+                notifyPrefListeners(prefs);
+                setMenu(true);
+            }, { role: 'menuitemcheckbox', 'aria-checked': String(prefs.autoOpen) }),
+            sep(),
+            item(i18n('Open in small window by default'), () => updateDefaultSizeFromMenu('small'), { role: 'menuitemradio', 'aria-checked': String(defSize === 'small') }),
+            item(i18n('Open in large window by default'), () => updateDefaultSizeFromMenu('large'), { role: 'menuitemradio', 'aria-checked': String(defSize === 'large') }),
+            data ? sep() : null,
             data ? item(i18n('Export trace'), () => { setMenu(false); exportTrace(data.view); }) : null,
             inspectFn && data ? item(i18n('Inspect run'), () => { setMenu(false); inspectFn(data.view.runKey); }) : null);
+        const { vh } = viewportSize();
+        const headRect = head.getBoundingClientRect();
+        const spaceBelow = vh - headRect.bottom;
+        const flipUp = size === 'small' && spaceBelow < 240 && headRect.top > 220;
+        menu.classList.toggle('is-up', flipUp);
     }
     const onOutside = (event) => {
         if (menuOpen && !menu.contains(event.target) && !event.target.closest?.('.rp-dock-more')) setMenu(false);
@@ -406,38 +645,83 @@ export function createDock({
     function scheduleShrink(delay = SHRINK_AFTER_MS) {
         clearTimeout(shrinkTimer);
         shrinkTimer = setTimeout(() => {
-            if (destroyed || !isFloat() || state !== 'open' || size !== 'small' || recorder.isRunning()) return;
-            if (menuOpen || drag || sizing || root.matches(':hover')) { scheduleShrink(1500); return; }
+            if (destroyed || state !== 'open' || size !== 'small' || recorder.isRunning()) return;
+            const hovered = (() => { try { return root.matches(':hover'); } catch { return false; } })();
+            if (menuOpen || drag || sizing || expanded.size > 0 || hovered) { scheduleShrink(1500); return; }
             setState('pill');
         }, delay);
     }
 
-    const viewportFit = fitToViewport(root, {
-        layout(vw, vh) {
-            if (compactMql?.matches) {
-                const height = Math.round(Math.min(vh * 0.72, 640)); // cap-ok: viewport hardware height limit for mobile bottom sheet
-                return { left: 0, top: vh - height, width: vw, height };
-            }
-            return false;
-        },
-    });
-
     const scrimFit = fitToViewport(scrim);
+    function clampPillPos(pos, pillW = 180, pillH = 38) {
+        const { vw, vh } = viewportSize();
+        return {
+            right: clampNum(pos?.right, 6, Math.max(6, vw - pillW - 6)),
+            bottom: clampNum(pos?.bottom, 6, Math.max(6, vh - pillH - 6)),
+        };
+    }
+    function currentPillMargin(compact, pillW, pillH) {
+        const custom = compact ? wantMobilePillPos : wantPillPos;
+        const fallback = compact ? { right: 12, bottom: 96 } : floatPos;
+        return clampPillPos(custom || fallback, pillW, pillH);
+    }
     function placePill() {
         if (pill.hidden || !pill.isConnected) return;
         const vv = globalThis.visualViewport;
         const vw = Math.round(vv?.width ?? innerWidth);
         const vh = Math.round(vv?.height ?? innerHeight);
-        const compact = Boolean(compactMql?.matches);
+        const compact = isCompact();
+        pill.classList.toggle('is-compact', compact);
         pill.style.left = '0px'; pill.style.top = '0px'; pill.style.right = 'auto'; pill.style.bottom = 'auto';
         const r = pill.getBoundingClientRect();
-        const marginRight = compact ? 12 : floatPos.right;
-        const marginBottom = compact ? 76 : floatPos.bottom;
+        const { right: marginRight, bottom: marginBottom } = currentPillMargin(compact, r.width || 180, r.height || 38);
         pill.style.left = `${vw - marginRight - r.width - r.left + Math.round(vv?.offsetLeft ?? 0)}px`;
         pill.style.top = `${vh - marginBottom - r.height - r.top + Math.round(vv?.offsetTop ?? 0)}px`;
     }
+
+    pill.addEventListener('pointerdown', (event) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        const compact = isCompact();
+        const r = pill.getBoundingClientRect();
+        const startMargin = currentPillMargin(compact, r.width || 180, r.height || 38);
+        const start = { x: event.clientX, y: event.clientY, ...startMargin, w: r.width || 180, h: r.height || 38 };
+        let draggingPill = false;
+        pillDragged = false;
+        const move = (e) => {
+            const dx = e.clientX - start.x;
+            const dy = e.clientY - start.y;
+            if (!draggingPill) {
+                if (Math.hypot(dx, dy) < 6) return;
+                draggingPill = true;
+                pillDragged = true;
+                pill.setPointerCapture?.(event.pointerId);
+                pill.classList.add('is-dragging');
+            }
+            e.preventDefault();
+            const next = clampPillPos({ right: start.right - dx, bottom: start.bottom - dy }, start.w, start.h);
+            if (compact) wantMobilePillPos = next;
+            else wantPillPos = next;
+            placePill();
+        };
+        const end = () => {
+            pill.classList.remove('is-dragging');
+            pill.removeEventListener('pointermove', move);
+            pill.removeEventListener('pointerup', end);
+            pill.removeEventListener('pointercancel', end);
+            if (!draggingPill) return;
+            syncPrefs();
+            if (compact) prefs.mobilePillPos = wantMobilePillPos;
+            else prefs.pillPos = wantPillPos;
+            savePrefs(prefStorage, prefs);
+        };
+        pill.addEventListener('pointermove', move);
+        pill.addEventListener('pointerup', end);
+        pill.addEventListener('pointercancel', end);
+    });
     const onResize = () => { placeFloat(); placePill(); };
     globalThis.addEventListener('resize', onResize);
+    globalThis.visualViewport?.addEventListener('resize', onResize);
+    globalThis.visualViewport?.addEventListener('scroll', onResize);
 
     function setState(next) {
         syncPrefs();
@@ -445,22 +729,21 @@ export function createDock({
         if (next !== 'open') clearTimeout(shrinkTimer);
         state = next;
         root.dataset.state = state;
-        const compact = Boolean(compactMql?.matches);
+        const compact = isCompact();
         root.classList.toggle('is-compact', compact);
-        root.classList.toggle('is-float', !compact);
-        root.dataset.size = compact ? 'small' : size;
-        if (compact) root.style.maxHeight = '';
-        viewportFit.refresh();
+        pill.classList.toggle('is-compact', compact);
+        root.classList.add('is-float');
+        root.dataset.size = size;
         scrimFit.refresh();
         placeFloat();
-        scrim.classList.toggle('is-float', !compact);
-        scrim.hidden = !(state === 'open' && (compact || size === 'large'));
+        scrim.classList.add('is-float');
+        scrim.hidden = !(state === 'open' && size === 'large');
         render();
         if (!pill.hidden) placePill();
     }
 
     function collapse() {
-        setState(recorder.isRunning() || (isFloat() && currentView()) ? 'pill' : 'closed');
+        setState(recorder.isRunning() || currentView() ? 'pill' : 'closed');
     }
 
     function currentView() {
@@ -550,6 +833,7 @@ export function createDock({
                 h('span', { class: 'rp-spacer' }),
                 running ? iconButton('stop', i18n('Stop run'), () => { recorder.stop(view.runKey); }, { className: 'is-sm rp-dock-stop', renderIcon: icon, size: 15 }) : null,
                 iconButton('shrink', i18n('Shrink'), () => setSize('small'), { className: 'is-sm', renderIcon: icon, size: 15 }),
+                iconButton('minus', i18n('Collapse'), () => collapse(), { className: 'is-sm', renderIcon: icon, size: 15 }),
                 iconButton('more', i18n('More'), () => setMenu(!menuOpen), { className: 'is-sm rp-dock-more', pressed: menuOpen, renderIcon: icon, size: 15 })),
             h('div', { class: 'rp-dock-stats' },
                 h('span', { class: 'rp-dock-stat' }, icon('clock', { size: 12 }), h('span', { text: formatDuration(view.duration) })),
@@ -674,7 +958,14 @@ export function createDock({
             root.dataset.state = state;
         }
         if (!data) {
-            put(clear(head), h('div', { class: 'rp-dock-title' }, h('span', { class: 'rp-dock-name', text: i18n('Run panel') }), h('span', { class: 'rp-spacer' }), iconButton('x', i18n('Close'), () => setState('closed'), { className: 'is-sm', renderIcon: icon, size: 15 })));
+            const large = size === 'large';
+            const btnSize = large ? 15 : 14;
+            put(clear(head), h('div', { class: `rp-dock-title${large ? '' : ' rp-dock-oneline'}` },
+                h('span', { class: 'rp-dock-name', text: i18n('Run panel') }),
+                h('span', { class: 'rp-spacer' }),
+                iconButton(large ? 'shrink' : 'fit', i18n(large ? 'Shrink' : 'Enlarge'), () => setSize(large ? 'small' : 'large'), { className: 'is-sm', renderIcon: icon, size: btnSize }),
+                iconButton('more', i18n('More'), () => setMenu(!menuOpen), { className: 'is-sm rp-dock-more', pressed: menuOpen, renderIcon: icon, size: btnSize }),
+                iconButton('x', i18n('Close'), () => setState('closed'), { className: 'is-sm', renderIcon: icon, size: btnSize })));
             put(clear(body),
                 storageErrorBanner(),
                 h('p', { class: 'rp-dock-empty', text: i18n('After you send a message, orchestration and search progress shows here live.') }));
@@ -744,15 +1035,7 @@ export function createDock({
             finalEl(view),
             diag);
         body.scrollTop = pinnedBottom ? body.scrollHeight : prevScroll;
-        if (isFloat()) { clear(foot); return; }
-
-        put(clear(foot),
-            switchControl(i18n('Open automatically on run'), prefs.autoOpen, (next) => {
-                syncPrefs();
-                prefs.autoOpen = next;
-                savePrefs(prefStorage, prefs);
-                render();
-            }, { className: 'rp-dock-auto' }));
+        clear(foot);
     }
 
     function humanError(text) {
@@ -776,13 +1059,18 @@ export function createDock({
             syncPrefs();
             const sourceAutoOpen = sourceConfigs.get(payload)?.autoOpen;
             const shouldAutoOpen = sourceAutoOpen === undefined ? prefs.autoOpen : (prefs.autoOpen && sourceAutoOpen);
-            if (shouldAutoOpen && state !== 'open') setState(compactMql?.matches && state === 'pill' ? 'pill' : 'open');
-            else if (!shouldAutoOpen && state === 'closed' && sourceAutoOpen !== false) setState('pill');
-            else render();
+            if (shouldAutoOpen && state !== 'open') {
+                size = normalizeDefaultDockSize(prefs.defaultSize);
+                setState('open');
+            } else if (!shouldAutoOpen && state === 'closed' && sourceAutoOpen !== false) {
+                setState('pill');
+            } else {
+                render();
+            }
             return;
         }
         if (kind === 'clear') { render(); return; }
-        if (kind === 'finish' && isFloat() && state === 'open' && size === 'small' && !recorder.isRunning()) scheduleShrink();
+        if (kind === 'finish' && state === 'open' && size === 'small' && !recorder.isRunning()) scheduleShrink();
         renderSoon();
     });
     const ticker = setInterval(() => { if (state !== 'closed' && recorder.isRunning()) render(); }, 1000);
@@ -792,26 +1080,54 @@ export function createDock({
     container.appendChild(scrim);
     container.appendChild(root);
     container.appendChild(pill);
-    viewportFit.refresh();
     scrimFit.refresh();
     scrim.hidden = true;
-    root.classList.toggle('is-compact', Boolean(compactMql?.matches));
-    root.classList.toggle('is-float', isFloat());
+    root.classList.toggle('is-compact', isCompact());
+    root.classList.add('is-float');
     root.dataset.size = size;
     placeFloat();
     applyTheme();
-    if (currentView()?.view.status === 'running') setState(prefs.autoOpen ? 'open' : 'pill');
+    if (currentView()?.view.status === 'running') {
+        size = normalizeDefaultDockSize(prefs.defaultSize);
+        setState(prefs.autoOpen ? 'open' : 'pill');
+    }
 
-    return {
-        open: () => setState('open'),
+    const api = {
+        open: () => {
+            syncPrefs();
+            if (state !== 'open') {
+                size = normalizeDefaultDockSize(prefs.defaultSize);
+            }
+            setState('open');
+        },
         close: () => setState('closed'),
-        toggle: () => setState(state === 'open' ? 'closed' : 'open'),
+        toggle: () => {
+            syncPrefs();
+            if (state === 'open') {
+                setState('closed');
+                return;
+            }
+            size = normalizeDefaultDockSize(prefs.defaultSize);
+            setState('open');
+        },
         isOpen: () => state === 'open',
+        getSize: () => size,
+        setSize: (next) => setSize(next),
         isConnected: () => root.isConnected,
         refresh: render,
         serializeCurrentTrace,
+        _applyExternalPrefs(patch = {}) {
+            prefsHandle = currentAccountHandle();
+            reloadPrefsFromStorage({ updateSizeIfClosed: false });
+            if (patch.defaultSize === 'small' || patch.defaultSize === 'large') {
+                size = normalizeDefaultDockSize(patch.defaultSize);
+                root.dataset.size = size;
+            }
+            setState(state);
+        },
         destroy() {
             destroyed = true;
+            liveDocks.delete(api);
             unsubscribe();
             clearInterval(ticker);
             clearTimeout(shrinkTimer);
@@ -819,14 +1135,17 @@ export function createDock({
             renderSoon.cancel?.();
             document.removeEventListener('pointerdown', onOutside, true);
             compactMql?.removeEventListener?.('change', onCompact);
-            viewportFit.destroy();
             scrimFit.destroy();
             globalThis.removeEventListener('resize', onResize);
+            globalThis.visualViewport?.removeEventListener('resize', onResize);
+            globalThis.visualViewport?.removeEventListener('scroll', onResize);
             root.remove();
             pill.remove();
             scrim.remove();
         },
     };
+    liveDocks.add(api);
+    return api;
 }
 
 // ----- Platform singleton runtime --------------------------------------------

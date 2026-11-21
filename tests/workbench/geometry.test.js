@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { test, expect, beforeAll } from '@jest/globals';
-import { defaultBox, clampBox, maxBox, sheetBox, isCompactWidth, parseSavedBox, clampPill, MIN_W } from '../../public/scripts/workbench/model/geometry.js';
+import { defaultBox, clampBox, compactDefaultBox, clampCompactBox, maxBox, sheetBox, isCompactWidth, parseSavedBox, clampPill, MIN_W, MIN_COMPACT_W } from '../../public/scripts/workbench/model/geometry.js';
 import { formatTokens, relativeTime, formatDuration } from '../../public/scripts/lens-shared/util.js';
 import { registerLensSharedLocaleData } from '../../public/scripts/lens-shared/locale-data.js';
 import { registerWorkbenchLocaleData } from '../../public/scripts/workbench/locale-data.js';
@@ -51,6 +51,18 @@ test('max, sheet, compact, saved box', () => {
     expect(isCompactWidth(1024)).toBe(false);
     expect(parseSavedBox({ left: 1 })).toBeNull();
     expect(parseSavedBox({ left: '1', top: 2, width: 3.4, height: 4 })).toEqual({ left: 1, top: 2, width: 3, height: 4 });
+
+    const cf = compactDefaultBox(390, 844);
+    expect(cf.left).toBe(12);
+    expect(cf.width).toBe(366);
+    expect(cf.top).toBeGreaterThanOrEqual(16);
+    expect(cf.top + cf.height).toBeLessThan(844);
+
+    const clamped = clampCompactBox({ left: 9000, top: -30, width: 100, height: 9000 }, 390, 844);
+    expect(clamped.width).toBe(MIN_COMPACT_W);
+    expect(clamped.height).toBe(844);
+    expect(clamped.left).toBe(390 - 96);
+    expect(clamped.top).toBe(0);
 });
 
 test('formatting helpers', () => {

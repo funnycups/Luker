@@ -144,7 +144,7 @@
 }
 .lw-surface *, .lw-surface *::before, .lw-surface *::after { box-sizing: border-box; text-shadow: none; }
 .lw-surface [hidden] { display: none !important; }
-.lw-surface button, .lw-surface input, .lw-surface select, .lw-surface textarea { font: inherit; color: inherit; margin: 0; }
+.lw-surface button, .lw-surface input, .lw-surface select, .lw-surface textarea { font: inherit; color: inherit; margin: 0; box-shadow: none; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) :is(
     input:not([type]),
     input[type="text"],
@@ -176,14 +176,17 @@
     border-color: var(--lw-ctl-focus-border, var(--lw-accent)) !important;
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) select:not(.luker_skill_chip_add_select) {
-    -webkit-appearance: none;
-    appearance: none;
-    background-image: url('/img/down-arrow.svg');
-    background-repeat: no-repeat;
-    background-position: right 9px center;
-    background-size: 9px 6px;
-    padding-right: 26px;
-    text-overflow: ellipsis;
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    background-image: url('/img/down-arrow.svg') !important;
+    background-repeat: no-repeat !important;
+    background-position: right 9px center !important;
+    background-size: 9px 6px !important;
+    padding-right: 26px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    line-height: normal !important;
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) select option,
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) select option:checked {
@@ -415,3 +418,13 @@ body > .lw-dialog-backdrop.lw-surface {
 @keyframes lw-spin { to { transform: rotate(360deg); } }
 @keyframes lw-fade { from { opacity: 0; } }
 @keyframes lw-pop { from { opacity: 0; transform: translateY(-6px) scale(0.985); } }
+
+/* ---- Mobile / compact touch-target sizing ---- */
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock).is-compact .lw-ibtn { width: 36px; height: 36px; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock).is-compact .lw-ibtn.is-sm { width: 34px; height: 34px; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock).is-compact .lw-btn { height: 38px; padding: 0 14px; font-size: 13px; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock).is-compact .lw-btn.is-sm { height: 34px; padding: 0 12px; font-size: 12.5px; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock).is-compact .lw-select { height: 38px; padding: 0 28px 0 10px; font-size: 13px; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock).is-compact .lw-check { min-height: 38px; align-items: center; padding: 6px 8px; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock).is-compact .lw-switch { min-height: 38px; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock).is-compact .lw-seg-btn { height: 32px; padding: 0 12px; }

@@ -95,6 +95,7 @@ export function mountWorkbench({
     const win = createWindow({
         title: i18n('Workbench'),
         theme: () => theme,
+        defaultSize: () => settings.defaultSize || 'small',
         onThemeToggle: () => { theme = theme === 'dark' ? 'light' : 'dark'; savePrefs({ theme }); },
         startCollapsed,
         pillVisible: () => settings.pill !== false,
@@ -160,6 +161,8 @@ export function mountWorkbench({
         toast: showToast,
         reload: () => load(),
         collapse: () => win.collapse(),
+        setWindowSize: (mode) => win.setMaximised(mode === 'large'),
+        resetWindowPosition: () => win.resetPosition(),
     };
 
     const buildCorePage = (def) => {
@@ -237,6 +240,13 @@ export function mountWorkbench({
             enabledWorkspaces.map(wsTab),
             h('div', { class: 'wb-rail-foot' }, coreTab(FOOTER_PAGE)),
         );
+        if (win.isCompact()) {
+            globalThis.requestAnimationFrame?.(() => {
+                try {
+                    rail.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'center' });
+                } catch { /* ignore in test DOM */ }
+            });
+        }
         paintPill();
     }
 
