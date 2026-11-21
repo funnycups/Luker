@@ -19,7 +19,7 @@
 .olens.is-compact .lw-ibtn { width: 34px; height: 34px; }
 .olens.is-compact .ol-modebtn { height: 34px; margin: 0; padding: 0 8px 0 10px; max-width: 100%; }
 .olens.is-compact .ol-mode-desc { display: none; }
-.olens.is-compact .ol-menu { position: fixed; left: 10px; right: 10px; top: calc(var(--ol-topbar-h) + env(safe-area-inset-top) + 6px); width: auto; }
+.olens.is-compact .ol-menu { left: 10px; right: 10px; width: auto; animation: none; }
 .olens.is-compact .ol-menu-item { padding: 12px; }
 
 .olens.is-compact .ol-inspector {

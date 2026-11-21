@@ -35,6 +35,7 @@
     min-width: 560px; min-height: 380px;
     border-radius: var(--wb-r-lg); background: var(--wb-surface); box-shadow: var(--wb-shadow);
     overflow: hidden; outline: none;
+    transform: translateZ(0);
     animation: wb-in 200ms var(--wb-ease);
 }
 @keyframes wb-in { from { opacity: 0; transform: translateY(8px) scale(0.985); } }
@@ -99,11 +100,11 @@
 /* ---- Phone: bottom sheet ---- */
 .wbench .wb-scrim { position: absolute; inset: 0; pointer-events: auto; touch-action: none; overscroll-behavior: none; background: var(--wb-scrim); animation: wb-fade 160ms ease-out; }
 @keyframes wb-fade { from { opacity: 0; } }
-.wbench.is-compact .wb-win { min-width: 0; min-height: 0; border-radius: 16px 16px 0 0; animation: none; }
+.wbench.is-compact .wb-win { min-width: 0; min-height: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; animation: none; }
 .wbench.is-compact .wb-resize, .wbench.is-compact .wb-ctl-max, .wbench.is-compact .wb-title-ctx { display: none; }
-.wbench.is-compact .wb-titlebar { height: 52px; padding-top: 6px; cursor: default; }
+.wbench.is-compact .wb-titlebar { height: 52px; padding-top: 6px; cursor: default; border-radius: 16px 16px 0 0; border-top: 1px solid var(--wb-border-strong); overflow: hidden; }
 .wbench.is-compact .wb-titlebar::before { content: ''; position: absolute; left: 50%; top: 6px; width: 36px; height: 4px; margin-left: -18px; border-radius: 4px; background: var(--wb-border-strong); }
-.wbench.is-compact .wb-body { flex-direction: column; }
+.wbench.is-compact .wb-body { flex-direction: column; background: var(--wb-surface); overflow: hidden; }
 .wbench.is-compact .wb-rail { width: auto; flex-direction: row; gap: 2px; padding: 6px; border-right: 0; border-bottom: 1px solid var(--wb-border); overflow-x: auto; scrollbar-width: none; }
 .wbench.is-compact .wb-tab { width: auto; flex: none; height: 32px; padding: 0 9px; gap: 6px; font-size: 12.5px; }
 .wbench.is-compact .wb-tab-count { margin-left: 2px; }

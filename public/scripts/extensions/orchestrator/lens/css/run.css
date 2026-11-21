@@ -1,5 +1,5 @@
 /* Run view: stats, swimlane timeline, step detail. */
-.olens .ol-run { display: flex; flex-direction: column; min-height: 0; overflow: auto; background: var(--ol-canvas); }
+.olens .ol-run { display: flex; flex-direction: column; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--ol-canvas); }
 .olens .ol-run-head { flex: none; padding: 16px 24px 0; display: grid; gap: 10px; }
 .olens .ol-run-pinned { display: flex; align-items: center; gap: 8px; color: var(--ol-pinned); font-size: 12.5px; }
 .olens .ol-stats { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 28px; }

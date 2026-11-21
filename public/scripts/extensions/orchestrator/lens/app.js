@@ -253,6 +253,7 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
     const scrim = h('div', { class: 'ol-scrim', onClick: () => store.set({ sheet: false }) });
     const savebar = h('div', { class: 'ol-savebar', hidden: true, role: 'status' });
     const body = h('div', { class: 'ol-body' }, h('div', { class: 'ol-stagewrap' }, mobileBar, banner, savebar, stage, stateLayer), inspector.el, scrim);
+    const modeMenuEl = h('div', { class: 'ol-menu', role: 'menu', hidden: true });
     const toast = h('div', { class: 'ol-toast', role: 'status', 'aria-live': 'polite', hidden: true });
     let toastTimer = 0;
     function showToast(text, { error = false, duration = 3000, action = null } = {}) {
@@ -273,11 +274,23 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
         toast.hidden = false;
         toastTimer = setTimeout(() => { toast.hidden = true; }, duration);
     }
-    put(root, topbar, body, dialog.el, toast);
+    put(root, topbar, body, modeMenuEl, dialog.el, toast);
 
     function liveState() {
         if (store.get().status === 'error') return 'error';
         return rec.isRunning() ? 'running' : 'live';
+    }
+
+    function enableSwitch() {
+        return snapshot && source.setEnabled ? h('div', { class: 'ol-enable' }, switchControl(i18n('Enable orchestration'), snapshot.enabled, async (value) => {
+            try {
+                await source.setEnabled(value);
+                snapshot = { ...snapshot, enabled: value };
+                renderAll();
+            } catch (err) {
+                showToast(String(err?.message || err), { error: true });
+            }
+        })) : null;
     }
 
     function modePicker({ withDesc = false } = {}) {
@@ -291,40 +304,98 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
             'aria-expanded': String(state.modeMenu),
             title: `${i18n('Execution mode')}: ${info.hint}`,
             disabled: !source.setMode || !snapshot,
-            onClick: (event) => { event.stopPropagation(); store.set({ modeMenu: !state.modeMenu }); },
+            onClick: (event) => { event.stopPropagation(); store.set({ modeMenu: !store.get().modeMenu }); },
         }, h('span', { class: 'ol-modebtn-label', text: i18n('Execution mode') }), h('span', { class: 'ol-modebtn-value', text: info.label }), icon('chevronDown', { size: 13 }));
-        const menu = state.modeMenu ? h('div', { class: 'ol-menu', role: 'menu' },
-            MODE_IDS.map(id => h('button', {
-                type: 'button',
-                role: 'menuitemradio',
-                class: 'ol-menu-item',
-                'aria-checked': String(id === mode),
-                onClick: async () => {
-                    store.set({ modeMenu: false });
-                    if (id === mode) return;
-                    try {
-                        await source.setMode(id);
-                        showToast(i18nFormat('${0}: ${1}', i18n('Execution mode'), modeInfo(id).label));
-                    } catch (err) {
-                        showToast(String(err?.message || err), { error: true });
-                    }
-                    scheduleReload();
-                },
-            },
-            h('span', { class: 'ol-menu-check', 'aria-hidden': 'true' }, id === mode ? icon('check', { size: 13 }) : null),
-            h('span', { class: 'ol-menu-text' }, h('span', { class: 'ol-menu-title', text: modeInfo(id).label }), h('span', { class: 'ol-menu-hint', text: modeInfo(id).hint }))))) : null;
         return h('div', { class: 'ol-modepick' },
             trigger,
-            withDesc ? h('span', { class: 'ol-mode-desc', text: info.hint, title: info.hint }) : null,
-            menu);
+            withDesc ? h('span', { class: 'ol-mode-desc', text: info.hint, title: info.hint }) : null);
     }
 
+    function positionModeMenu() {
+        if (modeMenuEl.hidden) return;
+        const compact = store.get().compact;
+        const trigger = (compact ? mobileBar : topbarRight).querySelector('.ol-modebtn');
+        if (!trigger) return;
+        const rootRect = root.getBoundingClientRect();
+        const trigRect = trigger.getBoundingClientRect();
+        if (rootRect.width <= 0 || rootRect.height <= 0 || trigRect.height <= 0) return;
+        const gap = 6;
+        const margin = 10;
+        const top = Math.max(margin, Math.round(trigRect.bottom - rootRect.top + gap));
+        const availHeight = Math.max(120, Math.round(rootRect.height - top - margin));
+        modeMenuEl.style.top = `${top}px`;
+        modeMenuEl.style.maxHeight = `${availHeight}px`;
+        if (compact) {
+            modeMenuEl.style.left = `${margin}px`;
+            modeMenuEl.style.right = `${margin}px`;
+        } else {
+            modeMenuEl.style.left = '';
+            const right = Math.max(margin, Math.round(rootRect.right - trigRect.right));
+            modeMenuEl.style.right = `${right}px`;
+        }
+    }
+
+    function renderModeMenu() {
+        const state = store.get();
+        const open = Boolean(state.modeMenu && snapshot);
+        for (const btn of root.querySelectorAll('.ol-modebtn')) {
+            btn.setAttribute('aria-expanded', String(open));
+        }
+        if (!open) {
+            modeMenuEl.hidden = true;
+            clear(modeMenuEl);
+            return;
+        }
+        const mode = snapshot.mode || 'spec';
+        put(clear(modeMenuEl), MODE_IDS.map(id => h('button', {
+            type: 'button',
+            role: 'menuitemradio',
+            class: 'ol-menu-item',
+            'aria-checked': String(id === mode),
+            onClick: async () => {
+                store.set({ modeMenu: false });
+                if (id === mode) return;
+                try {
+                    await source.setMode(id);
+                    showToast(i18nFormat('${0}: ${1}', i18n('Execution mode'), modeInfo(id).label));
+                } catch (err) {
+                    showToast(String(err?.message || err), { error: true });
+                }
+                scheduleReload();
+            },
+        },
+        h('span', { class: 'ol-menu-check', 'aria-hidden': 'true' }, id === mode ? icon('check', { size: 13 }) : null),
+        h('span', { class: 'ol-menu-text' }, h('span', { class: 'ol-menu-title', text: modeInfo(id).label }), h('span', { class: 'ol-menu-hint', text: modeInfo(id).hint })))));
+        modeMenuEl.hidden = false;
+        positionModeMenu();
+    }
+
+    let lastMobileBarKey = '';
+    function renderMobileBar() {
+        const state = store.get();
+        if (!state.compact || !snapshot) {
+            if (lastMobileBarKey !== '' || !mobileBar.hidden) {
+                clear(mobileBar);
+                mobileBar.hidden = true;
+                lastMobileBarKey = '';
+            }
+            return;
+        }
+        const key = `${Boolean(snapshot.enabled)}|${snapshot.mode || 'spec'}|${Boolean(source.setEnabled)}|${Boolean(source.setMode)}`;
+        if (key === lastMobileBarKey && !mobileBar.hidden) return;
+        lastMobileBarKey = key;
+        put(clear(mobileBar), enableSwitch(), modePicker());
+        mobileBar.hidden = false;
+    }
+
+    let lastLiveBarKey = '';
     function renderTopbar() {
         const state = store.get();
         titleChat.textContent = snapshot?.chatLabel || '';
         titleChat.hidden = !snapshot?.chatLabel;
         const run = rec.current();
-        const badge = run?.status === 'running' && !run.quiet ? h('span', { class: 'ol-seg-live', 'aria-hidden': 'true' }) : null;
+        const hasRunningBadge = Boolean(run?.status === 'running' && !run.quiet);
+        const badge = hasRunningBadge ? h('span', { class: 'ol-seg-live', 'aria-hidden': 'true' }) : null;
         put(clear(viewSwitch), segmented([
             { value: 'flow', label: i18n('Flow'), icon: 'flow' },
             { value: 'run', label: i18n('Run'), icon: 'play' },
@@ -336,20 +407,11 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
         ], state.view, (value) => store.set({ view: value, modeMenu: false }), { ariaLabel: i18n('Flow'), iconOnlyMobile: true }));
         if (badge) viewSwitch.querySelectorAll('.lw-seg-btn')[1]?.appendChild(badge);
         const live = liveState();
-        const enableSwitch = () => (snapshot && source.setEnabled ? h('div', { class: 'ol-enable' }, switchControl(i18n('Enable orchestration'), snapshot.enabled, async (value) => {
-            try {
-                await source.setEnabled(value);
-                snapshot = { ...snapshot, enabled: value };
-                renderAll();
-            } catch (err) {
-                showToast(String(err?.message || err), { error: true });
-            }
-        })) : null);
-        put(clear(mobileBar), enableSwitch(), snapshot ? modePicker() : null);
-        mobileBar.hidden = !snapshot;
+        lastLiveBarKey = `${live}|${hasRunningBadge}`;
+        renderMobileBar();
         put(clear(topbarRight),
-            enableSwitch(),
-            snapshot ? modePicker({ withDesc: true }) : null,
+            !state.compact ? enableSwitch() : null,
+            !state.compact && snapshot ? modePicker({ withDesc: true }) : null,
             h('span', { class: 'ol-sync', dataset: { state: live }, role: 'status' },
                 h('span', { class: 'ol-sync-dot', 'aria-hidden': 'true' }),
                 h('span', { class: 'ol-sync-text', text: live === 'running' ? i18n('Running') : i18n('Live') })),
@@ -357,6 +419,7 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
             !hostApp ? iconButton(state.theme === 'dark' ? 'sun' : 'moon', i18n('Toggle theme'), () => store.set({ theme: state.theme === 'dark' ? 'light' : 'dark' })) : null,
             iconButton('sidebarRight', i18n('Details panel'), () => toggleInspector(), { className: 'ol-toggle-inspector', pressed: state.inspectorOpen }),
             embedded ? null : iconButton('x', i18n('Close'), () => destroy(), { className: 'ol-close' }));
+        renderModeMenu();
     }
 
     function renderBanner() {
@@ -599,7 +662,9 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
         if (view === 'run' && !store.get().pinnedRunId) runView.render();
         if (view === 'history') historyView.render();
         inspector.onRunUpdate?.();
-        renderTopbar();
+        const run = rec.current();
+        const nextLiveKey = `${liveState()}|${Boolean(run?.status === 'running' && !run.quiet)}`;
+        if (nextLiveKey !== lastLiveBarKey) renderTopbar();
     };
     const unsubscribeRecorder = rec.subscribe((kind) => {
         if (kind === 'start' && !store.get().pinnedRunId) store.set({ selectedSegment: '' });
@@ -619,7 +684,8 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
             inspector.render();
         }
         if (changed.has('pinnedRunId')) inspector.render();
-        if (['theme', 'view', 'inspectorOpen', 'compact', 'modeMenu', 'status'].some(key => changed.has(key))) renderTopbar();
+        if (['theme', 'view', 'inspectorOpen', 'compact', 'status'].some(key => changed.has(key))) renderTopbar();
+        else if (changed.has('modeMenu')) renderModeMenu();
     });
 
     const computeCompact = () => {
@@ -635,7 +701,8 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
     const syncCompact = () => {
         syncWidthTier();
         const next = computeCompact();
-        if (next !== store.get().compact) store.set({ compact: next, sheet: false });
+        if (next !== store.get().compact) store.set({ compact: next, sheet: false, modeMenu: false });
+        else if (store.get().modeMenu) positionModeMenu();
     };
     compactMql?.addEventListener?.('change', syncCompact);
     const onResize = debounce(syncCompact, 120);
@@ -643,7 +710,7 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
     resizeObserver?.observe(root);
 
     const onRootClick = (event) => {
-        if (store.get().modeMenu && !event.target.closest?.('.ol-modepick')) store.set({ modeMenu: false });
+        if (store.get().modeMenu && !event.target.closest?.('.ol-modepick, .ol-menu')) store.set({ modeMenu: false });
     };
     root.addEventListener('click', onRootClick);
 

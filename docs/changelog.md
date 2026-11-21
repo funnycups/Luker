@@ -4,6 +4,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Workbench
+
+- Fixed the mobile Orchestration mode selector and header area failing to render and the mode menu opening outside the Workbench window.
+
 ### Image generation
 
 - Show completed illustration images in the Run panel while the remaining images are still generating.
