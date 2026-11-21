@@ -423,14 +423,20 @@ export {
 
 /**
  * Wait for page to load before continuing the app initialization.
+ * Not a top-level await: modules evaluated after this one in the import cycle
+ * (e.g. power-user.js) would wait on it, and WebKit may then run the ready
+ * handler below before they initialize, throwing a TDZ ReferenceError.
+ * @returns {Promise<void>}
  */
-await new Promise((resolve) => {
-    if (document.readyState === 'complete') {
-        resolve();
-    } else {
-        window.addEventListener('load', resolve);
-    }
-});
+function waitForPageLoad() {
+    return new Promise((resolve) => {
+        if (document.readyState === 'complete') {
+            resolve();
+        } else {
+            window.addEventListener('load', () => resolve(), { once: true });
+        }
+    });
+}
 
 // Configure toast library:
 toastr.options = {
@@ -20328,6 +20334,8 @@ function restoreCharacterSearchVisibility() {
 
 // MARK: DOM Handlers Start
 jQuery(async function () {
+    await waitForPageLoad();
+
     // Wire the diagnostics menu before startup work begins. The preloader
     // clears while firstLoadInit is still running, so binding it at the end of
     // startup would leave the control dead for a window after the app looks
