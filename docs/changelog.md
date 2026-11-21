@@ -2,7 +2,7 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
-## Unreleased
+## v2.9.0-rc.3 (2026-11-21)
 
 ### Workbench
 
@@ -128,6 +128,8 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Optimized first-screen startup, resource revalidation, settings saving, and hidden Prompt Manager rendering.
 - Optimized prompt group collapse and expand in the Prompt Manager.
+
+**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.2...v2.9.0-rc.3
 
 ## v2.9.0-rc.2 (2026-11-11)
 
