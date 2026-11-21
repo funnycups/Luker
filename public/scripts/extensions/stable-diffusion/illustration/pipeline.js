@@ -562,11 +562,13 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
 
             acceptedPrompts.forEach((value, index) => {
                 activityJob?.addSection(`prompt-${index}`, { kind: 'prompt', title: `${t`Prompt`} ${index + 1}`, body: value.prompt });
+                activityJob?.updateSection(`prompt-${index}`, { status: 'done' });
                 activityJob?.addSection(`image-${index}`, { kind: 'image', title: `${t`Image`} ${index + 1}` });
             });
 
             const characterName = String(message.name || '');
-            const results = await Promise.allSettled(acceptedPrompts.map(value => {
+            let imageFailures = 0;
+            const results = await Promise.allSettled(acceptedPrompts.map(async (value, index) => {
                 const genOptions = {
                     characterName,
                     signal: job.abortController.signal,
@@ -576,7 +578,23 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
                 if (value.aspectRatio) genOptions.aspectRatio = value.aspectRatio;
                 if (Array.isArray(value.references) && value.references.length > 0) genOptions.references = value.references;
                 if (Array.isArray(value.characterPrompts) && value.characterPrompts.length > 0) genOptions.characterPrompts = value.characterPrompts;
-                return imageService.generate(value.prompt, genOptions).then(imageUrl => ({ value, imageUrl }));
+                try {
+                    const imageUrl = await imageService.generate(value.prompt, genOptions);
+                    activityJob?.updateSection(`image-${index}`, { status: 'done', meta: { imageUrl } });
+                    return { value, imageUrl };
+                } catch (error) {
+                    const aborted = error?.name === 'AbortError' || job.abortController.signal.aborted;
+                    if (aborted) {
+                        activityJob?.updateSection(`image-${index}`, { status: 'aborted' });
+                    } else {
+                        imageFailures += 1;
+                        activityJob?.updateSection(`image-${index}`, { status: 'failed' });
+                        const errorKey = `error-${index}`;
+                        activityJob?.addSection(errorKey, { kind: 'error', title: `${t`Error`} ${index + 1}`, body: String(error?.message || error) });
+                        activityJob?.updateSection(errorKey, { status: 'failed' });
+                    }
+                    throw error;
+                }
             }));
 
             if (job.abortController.signal.aborted) {
@@ -585,19 +603,6 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             if (!contextMatches(job)) {
                 throw abortError();
             }
-
-            let imageFailures = 0;
-            results.forEach((result, index) => {
-                if (result.status === 'fulfilled') {
-                    activityJob?.updateSection(`image-${index}`, { status: 'done', meta: { imageUrl: result.value.imageUrl } });
-                } else if (result.reason?.name !== 'AbortError') {
-                    imageFailures += 1;
-                    activityJob?.updateSection(`image-${index}`, { status: 'failed' });
-                    const errorKey = `error-${index}`;
-                    activityJob?.addSection(errorKey, { kind: 'error', title: `${t`Error`} ${index + 1}`, body: String(result.reason?.message || result.reason) });
-                    activityJob?.updateSection(errorKey, { status: 'failed' });
-                }
-            });
 
             const records = results.map((result, index) => {
                 const value = acceptedPrompts[index];

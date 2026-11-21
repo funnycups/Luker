@@ -18,6 +18,28 @@ test.beforeAll(async () => {
     mock = await startMockLLM();
     mock.scriptCompletion(({ toolNames, userMessages }) => {
         if (toolNames.includes('add_image_prompt')) {
+            if (userMessages.some(text => text.includes('both scenes'))) {
+                return {
+                    toolCalls: [
+                        {
+                            name: 'add_image_prompt',
+                            arguments: {
+                                prompt: '1girl, brass spyglass, dusk',
+                                insert_after: 'brass spyglass',
+                                insert_before: 'on the chart',
+                            },
+                        },
+                        {
+                            name: 'add_image_prompt',
+                            arguments: {
+                                prompt: 'folded reef chart, candle',
+                                insert_after: 'on the chart',
+                                insert_before: 'and studies',
+                            },
+                        },
+                    ],
+                };
+            }
             if (userMessages.some(text => text.includes('void'))) {
                 return {
                     tool: 'add_image_prompt',
@@ -84,8 +106,8 @@ test.describe('automatic illustration', () => {
         await openInlineDrawer(page, 'sd_illustration_container');
         await page.locator('#sd_illustration_enabled').check();
         await page.locator('#sd_illustration_auto_generate').check();
+        await expect(page.locator('#sd_illustration_auto_generate')).toBeChecked();
         await page.locator('#sd_illustration_display_width').fill('50');
-        await page.waitForTimeout(1500);
         await closeAnyOpenTopSettingsDrawer(page);
 
         const before = sdMock.requests.length;
@@ -195,7 +217,7 @@ test.describe('automatic illustration', () => {
         await openInlineDrawer(page, 'sd_illustration_container');
         await page.locator('#sd_illustration_enabled').check();
         await page.locator('#sd_illustration_auto_generate').check();
-        await page.waitForTimeout(1500);
+        await expect(page.locator('#sd_illustration_auto_generate')).toBeChecked();
         await closeAnyOpenTopSettingsDrawer(page);
 
         const before = sdMock.requests.length;
@@ -208,5 +230,82 @@ test.describe('automatic illustration', () => {
         const illustrations = await page.evaluate(() => window.Luker.getContext().chat.at(-1)?.extra?.illustrations || []);
         expect(illustrations).toHaveLength(0);
         expect(sdMock.requests.slice(before).filter(request => request.url === '/sdapi/v1/txt2img')).toHaveLength(0);
+    });
+
+    test('displays completed partial images in run panel and workbench run traces while remaining images are still generating', async ({ page }) => {
+        await awaitMainUI(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
+        await page.evaluate(() => document.querySelector('#api_button_openai').click());
+        await page.locator('#send_but:not(.displayNone)').waitFor({ state: 'visible', timeout: 30_000 });
+        await configureSd(page);
+
+        await openExtensionsDrawer(page);
+        await openInlineDrawer(page, 'sd_illustration_container');
+        await page.locator('#sd_illustration_enabled').check();
+        await page.locator('#sd_illustration_auto_generate').check();
+        await expect(page.locator('#sd_illustration_auto_generate')).toBeChecked();
+        await closeAnyOpenTopSettingsDrawer(page);
+
+        let notifySecondStarted;
+        const secondStarted = new Promise(resolve => { notifySecondStarted = resolve; });
+        let releaseSecond;
+        const holdSecond = new Promise(resolve => { releaseSecond = resolve; });
+
+        sdMock.setTxt2imgDelayMs(0);
+        sdMock.setTxt2imgGate(async ({ body }) => {
+            if (String(body?.prompt || '').includes('folded reef chart')) {
+                notifySecondStarted();
+                await holdSecond;
+            }
+        });
+
+        try {
+            await sendMessageAndAwaitReply(page, 'Show me both scenes.');
+            await secondStarted;
+
+            // 1. Open SD Run Panel from the live capsule while image #2 is still generating
+            const pill = page.locator('#luker-sd-run-panel-pill');
+            await expect(pill).toBeVisible({ timeout: 10_000 });
+            await pill.click();
+
+            const panel = page.locator('#luker-sd-run-panel');
+            await expect(panel).toHaveAttribute('data-state', 'open');
+            await expect(panel.locator('[data-section-id="image-job-1-prompt-0"]')).toHaveAttribute('data-status', 'done');
+            await expect(panel.locator('[data-section-id="image-job-1-prompt-1"]')).toHaveAttribute('data-status', 'done');
+            await expect(panel.locator('[data-section-id="image-job-1-image-0"]')).toHaveAttribute('data-status', 'done', { timeout: 10_000 });
+            await expect(panel.locator('[data-section-id="image-job-1-image-0"] img.section-image')).toBeVisible();
+            await expect(panel.locator('[data-section-id="image-job-1-image-0"] img.section-image')).toHaveAttribute('src', /\/user\/images\//);
+            await expect(panel.locator('[data-section-id="image-job-1-image-1"]')).toHaveAttribute('data-status', 'running');
+            await expect(panel.locator('[data-section-id="image-job-1-image-1"] img.section-image')).toHaveCount(0);
+            await panel.locator('[data-action="close"]').click();
+
+            // 2. Open Workbench -> Image Generation -> Run Traces via real menu/tab clicks while image #2 is still generating
+            const visibleToasts = page.locator('#toast-container .toast:visible');
+            while (await visibleToasts.count() > 0) {
+                await visibleToasts.first().click();
+            }
+            await page.locator('#extensionsMenuButton').click();
+            await page.locator('#luker_workbench_wand_item').click();
+            await page.locator('.wb-rail .wb-tab', { hasText: 'Image Generation' }).click();
+            while (await visibleToasts.count() > 0) {
+                await visibleToasts.first().click();
+            }
+            await page.locator('[data-sd-nav="run"]').click();
+
+            const runTraces = page.locator('[data-sd-view="run"]');
+            await expect(runTraces).toBeVisible();
+            await expect(runTraces.locator('img')).toHaveCount(1);
+            await expect(runTraces.locator('img').first()).toHaveAttribute('src', /\/user\/images\//);
+            await expect(runTraces).toContainText('Image 1 · Complete');
+            await expect(runTraces).toContainText('Image 2 · Running');
+
+            // 3. Release image #2 and confirm Run Traces updates live to show both images
+            releaseSecond();
+            await expect(runTraces.locator('img')).toHaveCount(2, { timeout: 15_000 });
+            await expect(runTraces).toContainText('Image 2 · Complete');
+        } finally {
+            releaseSecond?.();
+            sdMock.setTxt2imgGate(null);
+        }
     });
 });

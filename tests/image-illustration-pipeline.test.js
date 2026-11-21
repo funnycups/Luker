@@ -1,15 +1,34 @@
 /**
  * @jest-environment jsdom
  */
-import { expect, test } from '@jest/globals';
+import { expect, test, beforeAll } from '@jest/globals';
 import {
     messageFingerprint, getLastAssistantMessage, buildJobKey, createIllustrationPipeline,
 } from '../public/scripts/extensions/stable-diffusion/illustration/pipeline.js';
+import { createImageActivity } from '../public/scripts/extensions/stable-diffusion/activity.js';
 import { getFailedIllustrationRecords } from '../public/scripts/extensions/stable-diffusion/illustration/records.js';
+import { createRecorder, createMemoryStorage, createDock } from '../public/scripts/run-panel/index.js';
+import { createRunView } from '../public/scripts/extensions/stable-diffusion/lens/views/run-view.js';
 
 // The jsdom environment used by this suite predates the platform clone helper
 // the illustration modules call; the values cloned here are plain data.
 globalThis.structuredClone ??= value => JSON.parse(JSON.stringify(value));
+
+beforeAll(() => {
+    if (!globalThis.matchMedia) {
+        globalThis.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    }
+    if (!globalThis.requestAnimationFrame) {
+        globalThis.requestAnimationFrame = cb => setTimeout(cb, 0);
+    }
+    if (!globalThis.cancelAnimationFrame) {
+        globalThis.cancelAnimationFrame = id => clearTimeout(id);
+    }
+    if (!globalThis.CSS) globalThis.CSS = {};
+    if (typeof globalThis.CSS.escape !== 'function') {
+        globalThis.CSS.escape = value => String(value).replace(/[^a-zA-Z0-9_\u00a0-\uffff-]/g, ch => `\\${ch}`);
+    }
+});
 
 const SETTINGS = {
     enabled: true,
@@ -221,6 +240,7 @@ test('illustration jobs open activity rounds before the prompt request and repor
         { key: 'image-0', kind: 'image', title: 'Image 1', body: '', meta: null },
     ]);
     expect(activityJob.calls.updates).toEqual([
+        { key: 'prompt-0', status: 'done', meta: undefined },
         { key: 'image-0', status: 'done', meta: { imageUrl: '/user/images/new.png' } },
     ]);
     expect(activityJob.calls.finished).toEqual(['done']);
@@ -239,6 +259,7 @@ test('failed illustration images keep the round open with an error section', asy
     await pipeline.runForMessage({ messageId: 0, source: 'manual' });
 
     expect(activityJob.calls.updates).toEqual([
+        { key: 'prompt-0', status: 'done', meta: undefined },
         { key: 'image-0', status: 'failed', meta: undefined },
         { key: 'error-0', status: 'failed', meta: undefined },
     ]);
@@ -388,4 +409,238 @@ test('a prompt naming an unavailable LoRA fails the round with the helper messag
     expect(errors).toEqual([
         'Illustration failed: No image prompts could be used: unknown LoRA \'b.safetensors\' ×1.',
     ]);
+});
+
+function createDeferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    return { promise, resolve, reject };
+}
+
+async function waitForUiFlush() {
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 90));
+}
+
+test('marks completed images and failures in run panel, dock, and workbench run view while remaining images are still generating', async () => {
+    const message = makeMessage({
+        mes: 'alpha beta gamma delta',
+        swipes: ['alpha beta gamma delta'],
+    });
+    const deferreds = [createDeferred(), createDeferred(), createDeferred()];
+    let startedCount = 0;
+
+    const activity = createImageActivity({ translate: text => String(text), getChatKey: () => 'chat-1' });
+    const recorder = createRecorder({ storage: createMemoryStorage() });
+    recorder.attach(activity.store, 'sd');
+    const dock = createDock({ recorder });
+    const runView = createRunView({
+        getContext: () => ({ runPanel: { getRunRecorder: () => recorder } }),
+    });
+    document.body.appendChild(runView.el);
+    runView.show();
+
+    try {
+        const chat = [message];
+        const pipeline = createIllustrationPipeline({
+            context: {
+                chat,
+                chatId: 'chat-1',
+                generateTask: async () => ({
+                    toolCalls: [
+                        { name: 'add_image_prompt', args: { prompt: 'first scene', insert_after: 'alpha', insert_before: 'beta' } },
+                        { name: 'add_image_prompt', args: { prompt: 'second scene', insert_after: 'beta', insert_before: 'gamma' } },
+                        { name: 'add_image_prompt', args: { prompt: 'third scene', insert_after: 'gamma', insert_before: 'delta' } },
+                    ],
+                }),
+            },
+            imageService: {
+                configure() {},
+                getAvailableLoras: async () => ({ names: [], includeWeight: false }),
+                generate: (_prompt, options) => {
+                    const idx = startedCount;
+                    startedCount += 1;
+                    options?.signal?.addEventListener('abort', () => {
+                        const err = new Error('Aborted');
+                        err.name = 'AbortError';
+                        deferreds[idx].reject(err);
+                    }, { once: true });
+                    return deferreds[idx].promise;
+                },
+            },
+            settings: SETTINGS,
+            hooks: {
+                toast: () => {},
+                notifyError: () => {},
+                t: (strings, ...values) => strings.reduce((out, str, idx) => out + str + (values[idx] ?? ''), ''),
+                saveChat: async () => {},
+                updateMessageBlock: () => {},
+                ensureSwipes: () => {},
+                getChatId: () => 'chat-1',
+                getChat: () => chat,
+                notifyMessageChanged: () => {},
+                beginActivityJob: options => activity.beginJob(options),
+            },
+        });
+
+        const runPromise = pipeline.runForMessage({ messageId: 0, source: 'manual' });
+        await waitForUiFlush();
+        expect(startedCount).toBe(3);
+
+        activity.openPanel();
+        dock.open();
+        document.querySelector('.rp-dock-agent-head')?.click();
+
+        // Prompt sections are already complete while all 3 images are still generating
+        const initialRound = activity.store.getCurrentRun().rounds[0];
+        expect(initialRound.sections.filter(s => s.kind === 'prompt').map(s => s.status)).toEqual(['done', 'done', 'done']);
+        expect(initialRound.sections.filter(s => s.kind === 'image').map(s => s.status)).toEqual(['running', 'running', 'running']);
+
+        // Complete ONLY the first image while #2 and #3 remain in flight
+        deferreds[0].resolve('/user/images/scene-1.png');
+        await waitForUiFlush();
+
+        const midRound = activity.store.getCurrentRun().rounds[0];
+        expect(activity.store.getCurrentRun().status).toBe('running');
+        expect(midRound.status).toBe('running');
+        expect(midRound.sections.find(s => s.id.endsWith('-image-0'))).toMatchObject({
+            status: 'done',
+            meta: { imageUrl: '/user/images/scene-1.png' },
+        });
+        expect(midRound.sections.find(s => s.id.endsWith('-image-1'))).toMatchObject({
+            status: 'running',
+            meta: null,
+        });
+
+        // 1) SD Run Panel (#luker-sd-run-panel) already displays scene-1.png while image-1 stays running
+        const sdImg0 = document.querySelector('#luker-sd-run-panel [data-section-id="image-job-1-image-0"]');
+        const sdImg1 = document.querySelector('#luker-sd-run-panel [data-section-id="image-job-1-image-1"]');
+        expect(sdImg0?.dataset.status).toBe('done');
+        expect(sdImg0?.querySelector('img.section-image')?.getAttribute('src')).toBe('/user/images/scene-1.png');
+        expect(sdImg1?.dataset.status).toBe('running');
+        expect(sdImg1?.querySelector('img.section-image')).toBeNull();
+
+        // 2) Workbench Run Traces view already displays scene-1.png while Image 2 stays running
+        expect(runView.el.querySelector('img[src="/user/images/scene-1.png"]')).not.toBeNull();
+        expect(runView.el.textContent).toContain('Image 1 · Complete');
+        expect(runView.el.textContent).toContain('Image 2 · Running');
+
+        // 3) Shared Floating Run Dock (.rp-dock) already displays scene-1.png while Image 2 stays running
+        expect(document.querySelector('.rp-dock img.rp-step-image[src="/user/images/scene-1.png"]')).not.toBeNull();
+
+        // Fail the second image while #3 is still generating
+        deferreds[1].reject(new Error('backend busy'));
+        await waitForUiFlush();
+
+        const afterFailRound = activity.store.getCurrentRun().rounds[0];
+        expect(afterFailRound.sections.find(s => s.id.endsWith('-image-1'))?.status).toBe('failed');
+        expect(afterFailRound.sections.find(s => s.id.endsWith('-error-1'))).toMatchObject({
+            status: 'failed',
+            body: 'backend busy',
+        });
+        expect(afterFailRound.sections.find(s => s.id.endsWith('-image-2'))?.status).toBe('running');
+        expect(runView.el.textContent).toContain('backend busy');
+
+        // Finish the third image
+        deferreds[2].resolve('/user/images/scene-3.png');
+        await runPromise;
+        await waitForUiFlush();
+
+        expect(runView.el.querySelector('img[src="/user/images/scene-1.png"]')).not.toBeNull();
+        expect(runView.el.querySelector('img[src="/user/images/scene-3.png"]')).not.toBeNull();
+        expect(message.extra.illustrations.map(r => r.status)).toEqual(['ready', 'ready']);
+        expect(getFailedIllustrationRecords(message).map(r => r.status)).toEqual(['failed']);
+    } finally {
+        runView.destroy();
+        runView.el.remove();
+        dock.destroy();
+        recorder.detach();
+        activity.destroy();
+    }
+});
+
+test('preserves already-generated partial images in run trace when aborted mid-batch', async () => {
+    const message = makeMessage({
+        mes: 'alpha beta gamma',
+        swipes: ['alpha beta gamma'],
+    });
+    const deferreds = [createDeferred(), createDeferred()];
+    let startedCount = 0;
+
+    const activity = createImageActivity({ translate: text => String(text), getChatKey: () => 'chat-1' });
+    const recorder = createRecorder({ storage: createMemoryStorage() });
+    recorder.attach(activity.store, 'sd');
+
+    try {
+        const chat = [message];
+        const pipeline = createIllustrationPipeline({
+            context: {
+                chat,
+                chatId: 'chat-1',
+                generateTask: async () => ({
+                    toolCalls: [
+                        { name: 'add_image_prompt', args: { prompt: 'first scene', insert_after: 'alpha', insert_before: 'beta' } },
+                        { name: 'add_image_prompt', args: { prompt: 'second scene', insert_after: 'beta', insert_before: 'gamma' } },
+                    ],
+                }),
+            },
+            imageService: {
+                configure() {},
+                getAvailableLoras: async () => ({ names: [], includeWeight: false }),
+                generate: (_prompt, options) => {
+                    const idx = startedCount;
+                    startedCount += 1;
+                    options?.signal?.addEventListener('abort', () => {
+                        const err = new Error('Aborted');
+                        err.name = 'AbortError';
+                        deferreds[idx].reject(err);
+                    }, { once: true });
+                    return deferreds[idx].promise;
+                },
+            },
+            settings: SETTINGS,
+            hooks: {
+                toast: () => {},
+                notifyError: () => {},
+                t: (strings, ...values) => strings.reduce((out, str, idx) => out + str + (values[idx] ?? ''), ''),
+                saveChat: async () => {},
+                updateMessageBlock: () => {},
+                ensureSwipes: () => {},
+                getChatId: () => 'chat-1',
+                getChat: () => chat,
+                notifyMessageChanged: () => {},
+                beginActivityJob: options => activity.beginJob(options),
+            },
+        });
+
+        const runPromise = pipeline.runForMessage({ messageId: 0, source: 'manual' });
+        await waitForUiFlush();
+
+        deferreds[0].resolve('/user/images/kept.png');
+        await waitForUiFlush();
+
+        pipeline.cancelForMessage(0);
+        await runPromise;
+        await waitForUiFlush();
+
+        const archived = recorder.history()[0];
+        expect(archived).toBeDefined();
+        expect(archived.status).toBe('aborted');
+        const sections = archived.rounds[0].sections;
+        expect(sections.find(s => s.id.endsWith('-image-0'))).toMatchObject({
+            status: 'done',
+            meta: { imageUrl: '/user/images/kept.png' },
+        });
+        expect(sections.find(s => s.id.endsWith('-image-1'))).toMatchObject({
+            status: 'aborted',
+            meta: null,
+        });
+    } finally {
+        recorder.detach();
+        activity.destroy();
+    }
 });

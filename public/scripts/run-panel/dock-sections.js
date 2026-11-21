@@ -17,8 +17,25 @@ const KIND = {
     tool_result: { label: 'Tool result', icon: 'check' },
     note: { label: 'Planner decision', icon: 'review' },
     sub_agent: { label: 'Sub-agent dispatch', icon: 'user' },
+    prompt: { label: 'Prompt', icon: 'pen' },
+    image: { label: 'Image', icon: 'image' },
+    error: { label: 'Error', icon: 'alert' },
+    tool: { label: 'Tool', icon: 'tool' },
 };
 const LONG = 700;
+
+function isSafeImageUrl(raw) {
+    const url = String(raw || '').trim();
+    if (!url) return false;
+    return /^(?:\/(?!\/)|blob:|data:image\/|https?:\/\/)/i.test(url);
+}
+
+function distinctTitle(kind, rawTitle) {
+    const t = String(rawTitle || '').trim();
+    if (!t) return '';
+    const meta = KIND[kind] || KIND.text;
+    return t === i18n(meta.label) || t === meta.label ? '' : t;
+}
 
 function textBlock(text, { app, title = '', mono = false, collapsed = null } = {}) {
     const value = String(text ?? '');
@@ -121,6 +138,56 @@ export function renderSections(sections, { app, mode, agentId } = {}) {
         } else if (kind === 'note' && section.meta?.output && mode === 'agenda') {
             const decision = plannerDecision(section);
             content = decision ? plannerBlock(decision) : textBlock(body, { app, mono: true });
+        } else if (kind === 'image') {
+            title = distinctTitle('image', section.title);
+            extra = null;
+            const rawUrl = typeof section.meta?.imageUrl === 'string' ? section.meta.imageUrl.trim() : '';
+            if (isSafeImageUrl(rawUrl)) {
+                content = h('a', {
+                    class: 'rp-step-image-link',
+                    href: rawUrl,
+                    target: '_blank',
+                    rel: 'noopener',
+                    style: { display: 'block', width: 'fit-content', maxWidth: '100%' },
+                }, h('img', {
+                    class: 'rp-step-image',
+                    src: rawUrl,
+                    alt: String(section.title || i18n('Image')),
+                    loading: 'lazy',
+                    style: {
+                        display: 'block',
+                        maxWidth: '100%',
+                        maxHeight: '240px',
+                        borderRadius: 'var(--lw-r-sm)',
+                        border: '1px solid var(--lw-border)',
+                        objectFit: 'contain',
+                    },
+                }));
+            } else if (section.status === 'running') {
+                content = h('div', { class: 'rp-step-wait', text: i18n('Generating image') });
+            } else if (section.status === 'failed') {
+                const errMsg = body || String(section.meta?.err || '');
+                content = errMsg.trim() ? h('div', { class: 'rp-step-err', text: errMsg }) : null;
+            } else if (section.status === 'aborted') {
+                content = h('div', { class: 'rp-step-wait', text: i18n('Stopped') });
+            } else {
+                continue;
+            }
+        } else if (kind === 'prompt') {
+            if (!body.trim()) continue;
+            title = distinctTitle('prompt', section.title);
+            content = textBlock(body, { app, title: String(section.title || i18n('Prompt')) });
+        } else if (kind === 'error') {
+            const errText = body || String(section.meta?.err || '');
+            if (!errText.trim()) continue;
+            title = distinctTitle('error', section.title);
+            content = h('div', { class: 'rp-step-err', text: errText });
+        } else if (kind === 'tool') {
+            title = distinctTitle('tool', section.title);
+            content = body.trim()
+                ? textBlock(body, { app, mono: true, collapsed: true, title: String(section.title || i18n('Tool')) })
+                : (section.status === 'running' ? h('div', { class: 'rp-step-wait', text: i18n('Generating…') }) : null);
+            if (!content) continue;
         } else if (kind === 'reasoning') {
             if (!body.trim()) continue;
             content = textBlock(body, { app, collapsed: true, title: `${agentName(agentId)} · ${i18n('Model thinking')}` });

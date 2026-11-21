@@ -4,6 +4,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Image generation
+
+- Show completed illustration images in the Run panel while the remaining images are still generating.
+
 ### Fixes
 
 - Fixed generation progress notifications playing the system notification sound when Luker moves to the background.

@@ -10,6 +10,8 @@ export const ONE_PX_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAA
 export async function startSdWebUiMock({ txt2imgDelayMs = 0 } = {}) {
     const requests = [];
     let txt2imgDelay = txt2imgDelayMs;
+    let txt2imgGate = null;
+    let txt2imgCount = 0;
     const httpServer = http.createServer(async (req, res) => {
         let body = '';
         for await (const chunk of req) body += chunk;
@@ -49,7 +51,11 @@ export async function startSdWebUiMock({ txt2imgDelayMs = 0 } = {}) {
             return;
         }
         if ((req.url === '/sdapi/v1/txt2img' || req.url === '/sdapi/v1/img2img') && req.method === 'POST') {
-            if (txt2imgDelay > 0) {
+            const currentIndex = txt2imgCount;
+            txt2imgCount += 1;
+            if (typeof txt2imgGate === 'function') {
+                await txt2imgGate({ body: parsed, index: currentIndex });
+            } else if (txt2imgDelay > 0) {
                 await new Promise(resolve => setTimeout(resolve, txt2imgDelay));
             }
             respondJson(200, {
@@ -72,6 +78,7 @@ export async function startSdWebUiMock({ txt2imgDelayMs = 0 } = {}) {
         baseURL: `http://127.0.0.1:${port}`,
         requests,
         setTxt2imgDelayMs(ms) { txt2imgDelay = Number(ms) || 0; },
+        setTxt2imgGate(fn) { txt2imgGate = typeof fn === 'function' ? fn : null; },
         stop: () => new Promise((resolve) => httpServer.close(() => resolve())),
     };
 }
