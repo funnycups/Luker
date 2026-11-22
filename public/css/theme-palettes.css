@@ -1,0 +1,100 @@
+/* Declarative theme palette strip mounted at the top of the #options menu when the active theme defines palettes */
+#theme-palette-strip {
+    display: none !important;
+    grid-template-columns: repeat(var(--theme-palette-columns, 5), minmax(0, 1fr));
+    gap: 1px;
+    width: 100%;
+    padding: 5px 4px 6px;
+    margin: 0 0 2px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+    box-sizing: border-box;
+    user-select: none;
+}
+
+html.theme-palettes-active #theme-palette-strip {
+    display: grid !important;
+}
+
+#theme-palette-strip .theme-palette-item {
+    appearance: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+    padding: 4px 1px 3px;
+    margin: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--SmartThemeEmColor, var(--SmartThemeBodyColor));
+    font-family: var(--mainFontFamily, inherit);
+    font-size: 10.5px;
+    font-weight: 500;
+    line-height: 1.1;
+    white-space: nowrap;
+    cursor: pointer;
+    box-shadow: none;
+    text-shadow: none;
+    transition: background-color 0.14s cubic-bezier(0.2, 0.8, 0.2, 1), color 0.14s, border-color 0.14s;
+}
+
+#theme-palette-strip .theme-palette-item:hover {
+    background-color: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, transparent);
+    color: var(--SmartThemeBodyColor);
+}
+
+#theme-palette-strip .theme-palette-item:focus-visible {
+    outline: 2px solid var(--theme-palette-accent, var(--SmartThemeQuoteColor));
+    outline-offset: -1px;
+}
+
+#theme-palette-strip .theme-palette-item.is-active {
+    background-color: color-mix(in srgb, var(--theme-palette-accent, var(--SmartThemeQuoteColor)) 15%, transparent);
+    border-color: color-mix(in srgb, var(--theme-palette-accent, var(--SmartThemeQuoteColor)) 45%, transparent);
+    color: var(--theme-palette-accent, var(--SmartThemeQuoteColor));
+    font-weight: 600;
+}
+
+#theme-palette-strip .theme-palette-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 18%, transparent);
+    box-sizing: border-box;
+    transition: transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.14s;
+}
+
+#theme-palette-strip .theme-palette-item.is-active .theme-palette-swatch {
+    border-color: transparent;
+    box-shadow:
+        0 0 0 1.5px var(--SmartThemeBlurTintColor),
+        0 0 0 2.8px var(--theme-palette-accent, var(--SmartThemeQuoteColor));
+    transform: scale(1.06);
+}
+
+@media screen and (max-width: 1000px) {
+    #theme-palette-strip {
+        gap: 2px;
+        padding: 6px 4px 7px;
+    }
+
+    #theme-palette-strip .theme-palette-item {
+        min-height: 40px;
+        padding: 5px 1px 4px;
+        font-size: 10.5px;
+    }
+
+    #theme-palette-strip .theme-palette-swatch {
+        width: 15px;
+        height: 15px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #theme-palette-strip .theme-palette-item,
+    #theme-palette-strip .theme-palette-swatch {
+        transition: none;
+    }
+}
