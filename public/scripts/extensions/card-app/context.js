@@ -121,6 +121,11 @@ export function buildContext(container, charId, config) {
          */
         get lukerContext() { return getContext(); },
 
+        /** Capture fixed prompt inputs for an independent generation task. */
+        captureTaskPromptContext(options) {
+            return getContext().captureTaskPromptContext(options);
+        },
+
         /**
          * Skills API namespace. Mirrors `getContext().skills` so CardApp
          * authors can list/read/install/write/transport skills without

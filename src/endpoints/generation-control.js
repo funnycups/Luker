@@ -6,6 +6,8 @@ import {
     abortGenerationJobForInspector,
 } from './backends/luker-generation.js';
 import { abortInspectionByJobId } from '../request-inspector.js';
+import { TRANSIENT_SESSION_HEADER } from '../transient-sessions.js';
+import { withDispatchLogging } from '../luker-dispatch/logging.js';
 
 /**
  * Router for out-of-band control over in-flight generation jobs. Mounted
@@ -29,7 +31,7 @@ generationControlRouter.post('/:request_id/abort', (req, res) => {
     const ownerHandle = req.user?.profile?.handle || '';
     let job;
     try {
-        job = getTaskByRequestId(requestId, ownerHandle);
+        job = getTaskByRequestId(requestId, ownerHandle, req.headers[TRANSIENT_SESSION_HEADER.toLowerCase()]);
     } catch (err) {
         return res.status(403).json({ error: 'forbidden' });
     }
@@ -45,13 +47,17 @@ generationControlRouter.post('/:request_id/abort', (req, res) => {
         // Mark the inspector entry first so the dispatch's own
         // `inspection.fail(AbortError)` cannot overwrite the aborted state.
         abortInspectionByJobId(ownerHandle, requestId, 'Aborted from request inspector');
-        const aborted = abortGenerationJobForInspector(job, 'Aborted from request inspector');
+        const aborted = withDispatchLogging(Boolean(job.transientSessionId), () => abortGenerationJobForInspector(job, 'Aborted from request inspector'));
         if (!aborted) {
             return res.status(409).json({ aborted: false, error: 'not_running' });
         }
         return res.json({ aborted: true });
     }
 
+    if (job.transientSessionId) {
+        const aborted = withDispatchLogging(true, () => abortGenerationJobForInspector(job, 'Aborted by caller'));
+        return res.json({ aborted });
+    }
     if (job.abortController) {
         try { job.abortController.abort('client abort'); } catch { /* already aborted */ }
     }

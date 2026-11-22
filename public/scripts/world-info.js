@@ -1780,10 +1780,11 @@ function invalidateWorldInfoRequestCache(names = []) {
  * @param {WIGlobalScanData} globalScanData Chat independent context to be scanned
  * @returns {Promise<WIPromptResult>} The world info string and depth.
  */
-export async function getWorldInfoPrompt(chat, maxContext, isDryRun, globalScanData) {
+export async function getWorldInfoPrompt(chat, maxContext, isDryRun, globalScanData, options = {}) {
     let worldInfoBeforeEntries = [], worldInfoAfterEntries = [];
 
-    const activatedWorldInfo = await checkWorldInfo(chat, maxContext, isDryRun, globalScanData);
+    const isolated = Boolean(options?.isolated);
+    const activatedWorldInfo = await checkWorldInfo(chat, maxContext, isDryRun, globalScanData, options);
     worldInfoBeforeEntries = Array.isArray(activatedWorldInfo.worldInfoBeforeEntries) ? activatedWorldInfo.worldInfoBeforeEntries : [];
     worldInfoAfterEntries = Array.isArray(activatedWorldInfo.worldInfoAfterEntries) ? activatedWorldInfo.worldInfoAfterEntries : [];
     const worldInfoString = [...worldInfoBeforeEntries, ...worldInfoAfterEntries].join('\n');
@@ -1792,7 +1793,7 @@ export async function getWorldInfoPrompt(chat, maxContext, isDryRun, globalScanD
         ? Array.from(activatedWorldInfo.allActivatedEntries.values())
         : [];
 
-    if (!isDryRun && activatedEntriesList.length > 0) {
+    if (!isDryRun && !isolated && activatedEntriesList.length > 0) {
         await eventSource.emit(event_types.WORLD_INFO_ACTIVATED, activatedEntriesList);
     }
 
@@ -8858,7 +8859,7 @@ async function getPersonaLore() {
     return entries;
 }
 
-export async function getSortedEntries() {
+export async function getSortedEntries({ isolated = false } = {}) {
     try {
         const [
             globalLore,
@@ -8872,7 +8873,9 @@ export async function getSortedEntries() {
             getPersonaLore(),
         ]);
 
-        await eventSource.emit(event_types.WORLDINFO_ENTRIES_LOADED, { globalLore, characterLore, chatLore, personaLore });
+        if (!isolated) {
+            await eventSource.emit(event_types.WORLDINFO_ENTRIES_LOADED, { globalLore, characterLore, chatLore, personaLore });
+        }
 
         let entries;
 
@@ -8977,8 +8980,17 @@ function parseDecorators(content) {
  * @returns {Promise<WIActivated>} The world info activated.
  */
 //MARK: checkWorldInfo
-export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData = defaultGlobalScanData) {
+export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData = defaultGlobalScanData, {
+    isolated = false,
+    substitute = substituteParams,
+    applyRegex = getRegexedString,
+} = {}) {
     const context = getContext();
+    const resolveMacro = (text) => {
+        if (isolated) return substitute(text, { skipSideEffects: false });
+        if (isDryRun) return substitute(text, { skipSideEffects: true });
+        return substitute(text);
+    };
     const buffer = new WorldInfoBuffer(chat, globalScanData);
     const activationTraceScopeKey = getActivationTraceScopeKey();
     const scanStartedAt = Date.now();
@@ -8992,7 +9004,9 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
     // Put this code here since otherwise, the chat reference is modified
     for (const key of Object.keys(context.extensionPrompts)) {
         if (context.extensionPrompts[key]?.scan) {
-            const prompt = await getExtensionPromptByName(key);
+            const prompt = isolated
+                ? resolveMacro(String(context.extensionPrompts[key]?.value ?? ''))
+                : await getExtensionPromptByName(key);
             if (prompt) {
                 buffer.addInject(prompt);
             }
@@ -9016,7 +9030,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
     }
 
     console.debug(`[WI] Context size: ${maxContext}; WI budget: ${budget} (max% = ${world_info_budget}%, cap = ${world_info_budget_cap})`);
-    const sortedEntries = await getSortedEntries();
+    const sortedEntries = await getSortedEntries({ isolated });
     const timedEffects = new WorldInfoTimedEffects(chat, sortedEntries, isDryRun);
 
     timedEffects.checkTimedEffects();
@@ -9289,7 +9303,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
 
             // PRIMARY KEYWORDS
             let primaryKeyMatch = entry.key.find(key => {
-                const substituted = substituteParams(key);
+                const substituted = resolveMacro(key);
                 return substituted && buffer.matchKeys(textToScan, substituted.trim(), entry);
             });
 
@@ -9298,7 +9312,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
                 continue;
             }
 
-            const substitutedPrimary = String(substituteParams(primaryKeyMatch) || primaryKeyMatch || '').trim();
+            const substitutedPrimary = String(resolveMacro(primaryKeyMatch) || primaryKeyMatch || '').trim();
             const matchSourceHints = substitutedPrimary
                 ? buffer.getMatchSourceHints(entry, substitutedPrimary, scanState)
                 : [];
@@ -9336,7 +9350,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
                 let hasAllMatch = true;
                 const matchedSecondaryKeys = [];
                 for (let keysecondary of entry.keysecondary) {
-                    const secondarySubstituted = substituteParams(keysecondary);
+                    const secondarySubstituted = resolveMacro(keysecondary);
                     const hasSecondaryMatch = secondarySubstituted && buffer.matchKeys(textToScan, secondarySubstituted.trim(), entry);
 
                     if (hasSecondaryMatch) hasAnyMatch = true;
@@ -9403,7 +9417,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
                             primaryKey: substitutedPrimary || String(primaryKeyMatch || ''),
                             sourceHints: matchSourceHints,
                             selectiveLogic: 'AND_ALL',
-                            matchedSecondaryKeys: entry.keysecondary.map(x => String(substituteParams(x) || x || '').trim()).filter(Boolean),
+                            matchedSecondaryKeys: entry.keysecondary.map(x => String(resolveMacro(x) || x || '').trim()).filter(Boolean),
                         }),
                     );
                     return true;
@@ -9422,7 +9436,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
                         primaryKey: substitutedPrimary || String(primaryKeyMatch || ''),
                         sourceHints: matchSourceHints,
                         selectiveLogic: Object.entries(world_info_logic).find(x => x[1] === selectiveLogic)?.[0] || String(selectiveLogic),
-                        secondaryKeys: entry.keysecondary.map(x => String(substituteParams(x) || x || '').trim()).filter(Boolean),
+                        secondaryKeys: entry.keysecondary.map(x => String(resolveMacro(x) || x || '').trim()).filter(Boolean),
                     }),
                 );
                 continue;
@@ -9525,13 +9539,13 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
             // mid-pipeline). The single final strip happens at the generation
             // request boundary, so the LLM sees literal `{{...}}` while
             // authoring sources keep the backslash.
-            entry.content = substituteParams(entry.content);
+            entry.content = resolveMacro(entry.content);
             newContent += `${entry.content}\n`;
 
             if (!entry.ignoreBudget && (textToScanTokens + (await getTokenCountAsync(newContent))) >= budget) {
                 if (!token_budget_overflowed) {
                     console.debug('[WI] --- BUDGET OVERFLOW CHECK ---');
-                    if (world_info_overflow_alert) {
+                    if (!isolated && world_info_overflow_alert) {
                         console.warn(`[WI] budget of ${budget} reached, stopping after ${allActivatedEntries.size} entries`);
                         toastr.warning(`World info budget reached after ${allActivatedEntries.size} entries.`, 'World Info');
                     } else {
@@ -9665,7 +9679,9 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
             },
             timedEffects,
         };
-        await eventSource.emit(event_types.WORLDINFO_SCAN_DONE, args);
+        if (!isolated) {
+            await eventSource.emit(event_types.WORLDINFO_SCAN_DONE, args);
+        }
 
         // Some fields are allowed to be changed by listeners, those will be handled here manually. They can be updated via changed the args from the listeners.
         // Any array provided directly can be modified by updating it's elements, adding or removing elements. This has to be done consistently.
@@ -9679,7 +9695,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
         token_budget_overflowed = args.budget.overflowed;
     }
 
-    if (scanTraceByEntry.size > 0) {
+    if (!isolated && scanTraceByEntry.size > 0) {
         const bucket = getOrCreateActivationTraceBucket(activationTraceScopeKey);
         const scanFinishedAt = Date.now();
         for (const [entryKey, traceState] of scanTraceByEntry.entries()) {
@@ -9740,7 +9756,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
     // TODO (kingbri): Change to use WI Anchor positioning instead of separate top/bottom arrays
     [...allActivatedEntries.values()].sort(sortFn).forEach((entry) => {
         const regexDepth = entry.position === world_info_position.atDepth ? (entry.depth ?? DEFAULT_DEPTH) : null;
-        const content = getRegexedString(entry.content, regex_placement.WORLD_INFO, { depth: regexDepth, isMarkdown: false, isPrompt: true });
+        const content = applyRegex(entry.content, regex_placement.WORLD_INFO, { depth: regexDepth, isMarkdown: false, isPrompt: true });
 
         if (!content) {
             console.debug(`[WI] Entry ${entry.uid}`, 'skipped adding to prompt due to empty content', entry);

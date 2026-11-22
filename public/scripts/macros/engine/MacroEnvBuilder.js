@@ -78,7 +78,7 @@ class MacroEnvBuilder {
      * @param {MacroEnvRawContext} ctx
      * @returns {MacroEnv}
      */
-    buildFromRawEnv(ctx) {
+    buildFromRawEnv(ctx, { includeProviders = true } = {}) {
         // Create the env first, we will populate it step by step.
         // Some fields are marked as required, so we have to fill them with dummy fields here
         /** @type {MacroEnv} */
@@ -161,7 +161,7 @@ class MacroEnvBuilder {
 
         // Let providers augment the env, if any are registered. Apply them in order,
         // so callers can influence when their provider runs relative to others.
-        const orderedProviders = this.#providers.slice().sort((a, b) => a.order - b.order);
+        const orderedProviders = includeProviders ? this.#providers.slice().sort((a, b) => a.order - b.order) : [];
         for (const { fn } of orderedProviders) {
             try {
                 fn(env, ctx);

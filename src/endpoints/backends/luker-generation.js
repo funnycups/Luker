@@ -8,6 +8,13 @@ import { CHAT_COMPLETION_SOURCES } from '../../constants.js';
 import { appendMessagesToChatFile } from '../chats.js';
 import { getConfigValue } from '../../util.js';
 import { stripJsonlExt } from '../../storage/name-validation.js';
+import { dispatchLog as console, withDispatchLogging } from '../../luker-dispatch/logging.js';
+import {
+    getRequestTransientSession,
+    getTransientSessionForUser,
+    TRANSIENT_SESSION_HEADER,
+    TransientSessionError,
+} from '../../transient-sessions.js';
 
 const generationJobs = new Map();
 const LUKER_GENERATION_JOB_MAX_ITEMS = 128;
@@ -342,16 +349,19 @@ export function accumulateChunkTextIntoJob(job, chunkBytes) {
 
 function pruneGenerationJobs() {
     const now = Date.now();
+    const ordinaryKeys = [];
     for (const [key, job] of generationJobs.entries()) {
+        if (job.transientSessionId) continue;
         const updatedAt = Number(job?.updatedAt || job?.createdAt || 0);
         if (!updatedAt || (now - updatedAt) > LUKER_GENERATION_JOB_TTL_MS) {
             clearGenerationJobPersistenceTimer(job);
             generationJobs.delete(key);
+        } else {
+            ordinaryKeys.push(key);
         }
     }
 
-    while (generationJobs.size > LUKER_GENERATION_JOB_MAX_ITEMS) {
-        const oldestKey = generationJobs.keys().next().value;
+    for (const oldestKey of ordinaryKeys.slice(0, Math.max(0, ordinaryKeys.length - LUKER_GENERATION_JOB_MAX_ITEMS))) {
         clearGenerationJobPersistenceTimer(generationJobs.get(oldestKey));
         generationJobs.delete(oldestKey);
     }
@@ -459,12 +469,16 @@ export function getPersistChatKey(persistTarget) {
     return `char:${avatar}:${stripJsonlExt(fileName)}`;
 }
 
-export function getTaskByRequestId(requestId, expectedOwner) {
+export function getTaskByRequestId(requestId, expectedOwner, transientSessionId) {
     const id = String(requestId || '');
     if (!id) return null;
     const job = generationJobs.get(id);
     if (!job) return null;
     if (String(expectedOwner || '') !== String(job.owner || '')) {
+        throw new Error('forbidden');
+    }
+    const session = getTransientSessionForUser(transientSessionId, expectedOwner);
+    if (job.transientSessionId !== session?.id) {
         throw new Error('forbidden');
     }
     return job;
@@ -483,11 +497,15 @@ export function createGenerationJob(request, options) {
     }
 
     const now = Date.now();
-    const persistTarget = options.persist_target && typeof options.persist_target === 'object'
+    const session = getRequestTransientSession(request);
+    const persistTarget = !session && options.persist_target && typeof options.persist_target === 'object'
         ? options.persist_target
         : null;
     const chatKey = getPersistChatKey(persistTarget);
     const existing = generationJobs.get(jobId);
+    if (existing && (existing.owner !== request.user.profile.handle || existing.transientSessionId !== session?.id)) {
+        throw new TransientSessionError(409, 'TRANSIENT_JOB_SCOPE_CONFLICT', 'The generation job belongs to a different request scope.');
+    }
     const job = existing || {
         id: jobId,
         handle: request.user.profile.handle,
@@ -511,6 +529,7 @@ export function createGenerationJob(request, options) {
         persistenceInFlight: false,
         requestMeta: null,
         modelName: '',
+        ...(session ? { transientSessionId: session.id } : {}),
     };
 
     // A recycled job_id (the client re-POSTs the same job_id when it retries a
@@ -571,7 +590,7 @@ export function appendGenerationEvent(job, rawData) {
     job.lastSeq = nextSeq;
     const entry = { seq: nextSeq, data: rawData, ts: Date.now() };
     job.events.push(entry);
-    if (job.events.length > LUKER_GENERATION_JOB_MAX_EVENTS) {
+    if (!job.transientSessionId && job.events.length > LUKER_GENERATION_JOB_MAX_EVENTS) {
         job.events.splice(0, job.events.length - LUKER_GENERATION_JOB_MAX_EVENTS);
     }
     job.updatedAt = Date.now();
@@ -767,16 +786,18 @@ export async function completeGenerationJobFromText(request, job, text, modelNam
     const finalText = String(text || '');
     job.text = finalText || job.text || '';
     job.modelName = String(modelName || job.modelName || request.body?.model || '');
-    job.status = 'awaiting_ack';
+    job.status = job.transientSessionId ? 'completed' : 'awaiting_ack';
     job.updatedAt = Date.now();
-    job.finishedAt = null;
+    job.finishedAt = job.transientSessionId ? Date.now() : null;
     job.persisted = false;
     job.persistenceInFlight = false;
     job.abortController = null;
     clearGenerationJobPersistenceTimer(job);
-    job.persistenceTimer = setTimeout(() => {
-        void persistGenerationJobIfUnacked(job);
-    }, LUKER_GENERATION_ACK_GRACE_MS);
+    if (!job.transientSessionId) {
+        job.persistenceTimer = setTimeout(() => {
+            void persistGenerationJobIfUnacked(job);
+        }, LUKER_GENERATION_ACK_GRACE_MS);
+    }
     notifyJobStatus(job);
     return false;
 }
@@ -840,9 +861,22 @@ export function cancelGenerationJobForRequest(request, jobId, reason = 'Cancelle
         return { ok: false, status: 400, message: 'Job id is required.' };
     }
 
-    const job = generationJobs.get(id);
-    if (!job || job.handle !== request.user.profile.handle) {
+    let job;
+    try {
+        job = getGenerationJobForRequest(request, id);
+    } catch (error) {
+        if (error instanceof TransientSessionError) {
+            return { ok: false, status: error.status, message: error.message };
+        }
+        throw error;
+    }
+    if (!job) {
         return { ok: false, status: 404, message: 'Job not found.' };
+    }
+
+    if (job.transientSessionId) {
+        const cancelled = withDispatchLogging(true, () => abortGenerationJobForInspector(job, reason));
+        return { ok: true, status: 200, cancelled, job };
     }
 
     if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
@@ -1018,5 +1052,20 @@ export function getGenerationJobForRequest(request, jobId) {
     if (!job || job.handle !== request.user.profile.handle) {
         return null;
     }
+    const sessionId = request.headers?.[TRANSIENT_SESSION_HEADER.toLowerCase()];
+    const session = getTransientSessionForUser(sessionId, request.user.profile.handle);
+    if (job.transientSessionId !== session?.id) return null;
     return job;
+}
+
+export function releaseTransientGenerationJobs(session) {
+    for (const [id, job] of generationJobs) {
+        if (job.transientSessionId !== session.id || job.handle !== session.userHandle) continue;
+        clearGenerationJobPersistenceTimer(job);
+        jobSubscribers.delete(id);
+        generationJobs.delete(id);
+        job.events.length = 0;
+        job.text = '';
+        job.requestMeta = null;
+    }
 }

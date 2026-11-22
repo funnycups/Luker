@@ -1,7 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 const TICKET_PROTOCOL_PREFIX = 'luker-ws-ticket.';
+const TRANSIENT_SESSION_HEADER = 'X-Luker-Transient-Session';
 const DEFAULT_RECONNECT_BACKOFF_MS = 500;
+
+function readTransientSessionHeader(headers) {
+    if (!headers || typeof headers !== 'object') return undefined;
+    for (const [key, value] of Object.entries(headers)) {
+        if (String(key).toLowerCase() === TRANSIENT_SESSION_HEADER.toLowerCase()) {
+            const normalized = String(value ?? '').trim();
+            return normalized || undefined;
+        }
+    }
+    return undefined;
+}
 // Client-side stale-connection detector. The server pings on a fixed cadence
 // (see src/ws-delivery.js WS_SERVER_PING_INTERVAL_MS = 30_000). If we haven't
 // heard *anything* — ping frames, real data frames — from the server for
@@ -314,7 +326,12 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 for (const [requestId, entry] of pending.entries()) {
                     const fromSeq = entry.lastSeq > 0 ? entry.lastSeq + 1 : 1;
                     console.info(`[ws-delivery] resume request_id=${requestId} from_seq=${fromSeq}`);
-                    ws.send(JSON.stringify({ type: 'resume', request_id: requestId, from_seq: fromSeq }));
+                    ws.send(JSON.stringify({
+                        type: 'resume',
+                        request_id: requestId,
+                        from_seq: fromSeq,
+                        ...(entry.transientSessionId ? { transient_session_id: entry.transientSessionId } : {}),
+                    }));
                 }
             } catch (err) {
                 console.warn('[ws-delivery] reconnect failed, retrying:', err?.message || err);
@@ -362,10 +379,14 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         let resolveHead;
         let rejectHead;
         const headPromise = new Promise((res, rej) => { resolveHead = res; rejectHead = rej; });
+        const transientSessionId = typeof options.transientSessionId === 'string' && options.transientSessionId.trim()
+            ? options.transientSessionId.trim()
+            : undefined;
         const entry = {
             controller,
             lastSeq: fromSeq > 0 ? fromSeq - 1 : 0,
             initialHeaders,
+            transientSessionId,
             resolveHead,
             rejectHead,
             headResolved: false,
@@ -384,8 +405,17 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
         pending.set(requestId, entry);
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(fromSeq > 0
-                ? { type: 'resume', request_id: requestId, from_seq: fromSeq }
-                : { type: 'subscribe', request_id: requestId }));
+                ? {
+                    type: 'resume',
+                    request_id: requestId,
+                    from_seq: fromSeq,
+                    ...(transientSessionId ? { transient_session_id: transientSessionId } : {}),
+                }
+                : {
+                    type: 'subscribe',
+                    request_id: requestId,
+                    ...(transientSessionId ? { transient_session_id: transientSessionId } : {}),
+                }));
         } else {
             // Queued: pending is populated so reconnect's resume loop will
             // pick this up. Log so a hung request in this state is diagnosable.
@@ -475,8 +505,8 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             // `resume {from_seq: 1}` replays from the start of the stream.
             return subscribeInternal(requestId, initialHeaders || {}, 1, options);
         },
-        resume(requestId, fromSeq) {
-            return subscribeInternal(requestId, {}, fromSeq);
+        resume(requestId, fromSeq, options = {}) {
+            return subscribeInternal(requestId, {}, fromSeq, options);
         },
         isConnected() { return ws !== null && ws.readyState === WebSocket.OPEN; },
         // Exposed so page-lifecycle hooks (visibilitychange/online, installed
@@ -623,13 +653,14 @@ export function installFetchProxy(delivery, options = {}) {
     // Fire-and-forget POST to notify the server that a proxied generation
     // was aborted client-side. The server endpoint may not exist yet; any
     // error (404, network) is swallowed so aborts remain best-effort.
-    function sendAbortNotification(requestId) {
+    function sendAbortNotification(requestId, transientSessionId) {
         try {
             const p = originalFetch(`/api/generation/${encodeURIComponent(requestId)}/abort`, {
                 method: 'POST',
                 headers: {
                     ...getExtraHeaders(),
                     'x-luker-request-id': requestId,
+                    ...(transientSessionId ? { [TRANSIENT_SESSION_HEADER]: transientSessionId } : {}),
                 },
             });
             if (p && typeof p.catch === 'function') p.catch(() => {});
@@ -640,6 +671,14 @@ export function installFetchProxy(delivery, options = {}) {
 
     async function proxiedFetch(url, init) {
         if (!shouldProxy(url)) return originalFetch(url, init);
+        // Normalize caller headers to a plain object so `spread` works even
+        // when the caller passed a `Headers` instance (spread on Headers
+        // yields empty because Headers isn't a plain object).
+        const callerHeaders = init?.headers;
+        const normalizedHeaders = callerHeaders instanceof Headers
+            ? Object.fromEntries(callerHeaders.entries())
+            : (callerHeaders || {});
+        const transientSessionId = readTransientSessionHeader(normalizedHeaders);
         // Client-provided request id: reuse body.luker_generation.job_id when
         // caller pre-generated one (openai.js:4201 does this so it can poll
         // /jobs/status?id= with the same uuid). Otherwise mint a fresh one
@@ -655,18 +694,11 @@ export function installFetchProxy(delivery, options = {}) {
                 const bodyId = String(parsed?.luker_generation?.job_id || '').trim();
                 if (bodyId) requestId = bodyId;
                 const bodyTimeout = Number(parsed?.luker_generation?.request_timeout_ms);
-                if (Number.isFinite(bodyTimeout) && bodyTimeout > 0) {
+                if (!transientSessionId && Number.isFinite(bodyTimeout) && bodyTimeout > 0) {
                     requestTimeoutMs = Math.floor(bodyTimeout);
                 }
             }
         } catch { /* body not JSON or unparseable — keep the minted uuid */ }
-        // Normalize caller headers to a plain object so `spread` works even
-        // when the caller passed a `Headers` instance (spread on Headers
-        // yields empty because Headers isn't a plain object).
-        const callerHeaders = init?.headers;
-        const normalizedHeaders = callerHeaders instanceof Headers
-            ? Object.fromEntries(callerHeaders.entries())
-            : (callerHeaders || {});
         const headers = { ...normalizedHeaders, 'x-luker-request-id': requestId };
         const httpResp = await originalFetch(url, { ...(init || {}), headers });
         if (!httpResp.ok) return httpResp;
@@ -682,15 +714,16 @@ export function installFetchProxy(delivery, options = {}) {
             if (k.toLowerCase().startsWith('x-luker-')) initialHeaders[k] = v;
         });
         const { stream, headPromise } = delivery.subscribe(requestId, initialHeaders, {
+            transientSessionId,
             timeoutMs: requestTimeoutMs,
-            onTimeout: () => sendAbortNotification(requestId),
+            onTimeout: () => sendAbortNotification(requestId, transientSessionId),
             // Caller-supplied AbortSignal is wired inside the delivery so the
             // listener is removed on every entry teardown (unsubscribe / end /
             // error / timeout / close). The handler terminates the caller's
             // ReadableStream with an AbortError and notifies the server so
             // upstream generation stops. Server endpoint is best-effort.
             signal: init?.signal,
-            onAbort: () => sendAbortNotification(requestId),
+            onAbort: () => sendAbortNotification(requestId, transientSessionId),
             // Server-initiated abort (request inspector). The callback lets
             // the owning page abort its local generation controller so
             // retry / auto-continue / auto-swipe paths see a user stop.

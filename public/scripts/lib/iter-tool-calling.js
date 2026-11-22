@@ -82,6 +82,10 @@ export async function requestToolCallWithRetry(context, settings, {
     functionDescription = '',
     parameters = {},
     abortSignal = null,
+    includeCharacterCard = true,
+    promptContext = null,
+    transientSessionId = undefined,
+    onPreparedRequest = null,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
@@ -112,7 +116,7 @@ export async function requestToolCallWithRetry(context, settings, {
             await waitForRpmSlot(settings, abortSignal);
             const generateTaskOpts = {
                 taskMessages,
-                includeCharacterCard: true,
+                includeCharacterCard: includeCharacterCard !== false,
                 worldInfoSource: 'none',
                 runtimeWorldInfo: runtimeWorldInfo || {},
                 apiPresetName: String(apiPresetName || '').trim(),
@@ -125,6 +129,9 @@ export async function requestToolCallWithRetry(context, settings, {
                     protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
                 },
                 abortSignal: attemptSignal,
+                ...(promptContext !== null && promptContext !== undefined ? { promptContext } : {}),
+                ...(transientSessionId !== undefined ? { transientSessionId } : {}),
+                ...(typeof onPreparedRequest === 'function' ? { onPreparedRequest } : {}),
             };
             const result = await context.generateTask(generateTaskOpts);
             throwIfAborted(abortSignal, 'Orchestration aborted.');
@@ -184,6 +191,10 @@ export async function requestToolCallsWithRetry(context, settings, {
     onControlCall = null,
     onUsage = null,
     isControlCall = null,
+    includeCharacterCard = true,
+    promptContext = null,
+    transientSessionId = undefined,
+    onPreparedRequest = null,
     // Fires once per attempt on the FIRST upstream stream chunk (text or
     // reasoning). Streaming path only — a non-streaming preset never
     // produces incremental chunks so the callback stays silent. Barrier
@@ -216,7 +227,7 @@ export async function requestToolCallsWithRetry(context, settings, {
             await waitForRpmSlot(settings, abortSignal);
             const generateTaskOpts = {
                 taskMessages,
-                includeCharacterCard: true,
+                includeCharacterCard: includeCharacterCard !== false,
                 worldInfoSource: 'none',
                 runtimeWorldInfo: runtimeWorldInfo || {},
                 apiPresetName: String(apiPresetName || '').trim(),
@@ -237,6 +248,9 @@ export async function requestToolCallsWithRetry(context, settings, {
                 // chat text) opt in by passing substituteMacros: true.
                 substituteMacros: Boolean(substituteMacros),
                 abortSignal: attemptSignal,
+                ...(promptContext !== null && promptContext !== undefined ? { promptContext } : {}),
+                ...(transientSessionId !== undefined ? { transientSessionId } : {}),
+                ...(typeof onPreparedRequest === 'function' ? { onPreparedRequest } : {}),
             };
             // Streaming path (when the caller's preset has stream_openai
             // enabled AND the context exposes generateTaskStream): drain

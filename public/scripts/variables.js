@@ -14,7 +14,7 @@ import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHel
 import { SlashCommandScope } from './slash-commands/SlashCommandScope.js';
 import { isFalseBoolean, convertValueType, isTrueBoolean } from './utils.js';
 import { applyPathOp, splitRootAndPath } from './variable-op-log/path-ops.js';
-import { resolveVarPath } from './macros/util/var-path.js';
+import { readVariableValue } from './macros/util/variable-values.js';
 
 /** @typedef {import('./slash-commands/SlashCommandParser.js').NamedArguments} NamedArguments */
 /** @typedef {import('./slash-commands/SlashCommand.js').UnnamedArguments} UnnamedArguments */
@@ -25,41 +25,7 @@ export function getLocalVariable(name, args = {}) {
     if (!chat_metadata.variables) {
         chat_metadata.variables = {};
     }
-
-    let localVariable;
-    if (typeof name === 'string' && name.includes('.') && args.index === undefined && !args.key) {
-        // Dotted-name read uses the same resolver as the {{getvar::a.b}} macro
-        // so behavior stays in sync. The getter returns '' for missing keys —
-        // matching the macro-side contract — so that a missing head triggers
-        // resolveVarPath's literal flat-key fallback (e.g. when the var store
-        // contains a literal `a.b` key but no `a`).
-        localVariable = resolveVarPath(
-            (n) => Object.prototype.hasOwnProperty.call(chat_metadata.variables, n)
-                ? chat_metadata.variables[n]
-                : '',
-            name,
-        );
-    } else {
-        localVariable = chat_metadata?.variables[args.key ?? name];
-        if (args.index !== undefined) {
-            try {
-                localVariable = JSON.parse(localVariable);
-                const numIndex = Number(args.index);
-                if (Number.isNaN(numIndex)) {
-                    localVariable = localVariable[args.index];
-                } else {
-                    localVariable = localVariable[Number(args.index)];
-                }
-                if (typeof localVariable == 'object') {
-                    localVariable = JSON.stringify(localVariable);
-                }
-            } catch {
-                // that didn't work
-            }
-        }
-    }
-
-    return (localVariable?.trim?.() === '' || isNaN(Number(localVariable))) ? (localVariable || '') : Number(localVariable);
+    return readVariableValue(chat_metadata.variables, name, args, { dotted: true });
 }
 
 export function setLocalVariable(name, value, args = {}) {
@@ -108,25 +74,7 @@ export function setLocalVariable(name, value, args = {}) {
 }
 
 export function getGlobalVariable(name, args = {}) {
-    let globalVariable = extension_settings.variables.global[args.key ?? name];
-    if (args.index !== undefined) {
-        try {
-            globalVariable = JSON.parse(globalVariable);
-            const numIndex = Number(args.index);
-            if (Number.isNaN(numIndex)) {
-                globalVariable = globalVariable[args.index];
-            } else {
-                globalVariable = globalVariable[Number(args.index)];
-            }
-            if (typeof globalVariable == 'object') {
-                globalVariable = JSON.stringify(globalVariable);
-            }
-        } catch {
-            // that didn't work
-        }
-    }
-
-    return (globalVariable?.trim?.() === '' || isNaN(Number(globalVariable))) ? (globalVariable || '') : Number(globalVariable);
+    return readVariableValue(extension_settings.variables.global, name, args);
 }
 
 export function setGlobalVariable(name, value, args = {}) {

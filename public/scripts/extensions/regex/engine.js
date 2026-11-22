@@ -538,20 +538,24 @@ function collectRuntimeRegexScripts(options = DEFAULT_GET_REGEX_SCRIPTS_OPTIONS)
             const provider = runtimeProvider?.provider;
             const value = provider?.(options);
             if (!Array.isArray(value)) {
+                if (options.throwOnError && value != null) throw new Error(`Regex provider "${owner}" did not return a script array.`);
                 continue;
             }
             for (const script of value) {
                 if (!script || typeof script !== 'object') {
+                    if (options.throwOnError) throw new Error(`Regex provider "${owner}" returned an invalid script.`);
                     continue;
                 }
                 const scriptName = String(script.scriptName || '').trim();
                 if (!scriptName) {
+                    if (options.throwOnError) throw new Error(`Regex provider "${owner}" returned a script without a name.`);
                     console.warn(`collectRuntimeRegexScripts: provider "${owner}" returned a script without scriptName; skipped.`);
                     continue;
                 }
                 scripts.push({ ...script, scriptName, trimStrings: normalizeRuntimeTrimStrings(script.trimStrings), __runtime_owner: owner });
             }
         } catch (error) {
+            if (options.throwOnError) throw error;
             console.error(`collectRuntimeRegexScripts: provider "${owner}" failed`, error);
         }
     }
@@ -580,6 +584,35 @@ export function getRegexScripts(options = DEFAULT_GET_REGEX_SCRIPTS_OPTIONS) {
         ...Object.values(SCRIPT_TYPES).flatMap(type => getScriptsByType(type, options)),
         ...collectRuntimeRegexScripts(options),
     ];
+}
+
+/**
+ * Freeze enabled script data without retaining provider callbacks or performance
+ * state. Preset-only tasks do not collect character or runtime-context providers.
+ */
+export function captureRegexScripts({ includeCharacter = true, preset = null } = {}) {
+    if (extension_settings.disabledExtensions.includes('regex')) return [];
+    const copyScripts = value => {
+        const scripts = value ?? [];
+        if (!Array.isArray(scripts) || scripts.some(script => !isPersistedRegexScriptRecord(script))) {
+            throw new Error('Cannot capture invalid persisted regex scripts. Correct them in the Regex settings.');
+        }
+        return JSON.parse(JSON.stringify(scripts));
+    };
+    const scripts = copyScripts(extension_settings.regex);
+    const presetAllowed = preset
+        && extension_settings.preset_allowed_regex?.[preset.apiId]?.includes(preset.name);
+    if (presetAllowed) {
+        scripts.push(...copyScripts(preset.settings.extensions?.regex_scripts));
+    }
+    if (includeCharacter) {
+        const character = characters[this_chid];
+        if (isScopedScriptsAllowed(character)) {
+            scripts.push(...copyScripts(character?.data?.extensions?.regex_scripts));
+        }
+        scripts.push(...collectRuntimeRegexScripts({ allowedOnly: true, throwOnError: true }));
+    }
+    return JSON.parse(JSON.stringify(scripts.filter(script => !isRegexScriptPaused(script.id))));
 }
 
 /**
@@ -879,7 +912,16 @@ export function normalizePluginScriptRecord(script) {
  * @returns {string} The regexed string
  * @typedef {{characterOverride?: string, isMarkdown?: boolean, isPrompt?: boolean, isPluginInput?: boolean, isPluginOutput?: boolean, isEdit?: boolean, depth?: number }} RegexParams The parameters to use for the regex script
  */
-export function getRegexedString(rawString, placement, { characterOverride, isMarkdown, isPrompt, isPluginInput, isPluginOutput, isEdit, depth } = {}) {
+export function getRegexedString(rawString, placement, {
+    characterOverride, isMarkdown, isPrompt, isPluginInput, isPluginOutput, isEdit, depth,
+    scripts, substitute, isolated = false,
+} = {}) {
+    if ((scripts !== undefined && !Array.isArray(scripts)) || (isolated && scripts === undefined)) {
+        throw new TypeError('Captured regex execution requires a script snapshot.');
+    }
+    if (isolated && typeof substitute !== 'function') {
+        throw new TypeError('Captured regex execution requires a macro snapshot processor.');
+    }
     // WTF have you passed me?
     if (typeof rawString !== 'string') {
         console.warn('getRegexedString: rawString is not a string. Returning empty string.');
@@ -887,12 +929,12 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
     }
 
     let finalString = rawString;
-    if (extension_settings.disabledExtensions.includes('regex') || !rawString || placement === undefined) {
+    if ((!isolated && extension_settings.disabledExtensions.includes('regex')) || !rawString || placement === undefined) {
         return finalString;
     }
 
-    const allRegex = getRegexScripts({ allowedOnly: true });
-    const trackPerformance = extension_settings.regex_perf_detection !== false;
+    const allRegex = scripts ?? getRegexScripts({ allowedOnly: true });
+    const trackPerformance = !isolated && extension_settings.regex_perf_detection !== false;
     allRegex.forEach((script, index) => {
         if (!script || typeof script !== 'object') {
             return;
@@ -903,6 +945,7 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
             ? script.placement
             : pluginLanes.length > 0 ? [] : null;
         if (!placementList) {
+            if (isolated) throw new Error(`Regex script "${script.scriptName}" has invalid placement settings.`);
             warnInvalidRegexPlacement(script, index);
             return;
         }
@@ -926,7 +969,7 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
             // Script applies to the persisted chat content only when no scoped target is enabled.
             (!hasScopedTarget && !isMarkdown && !isPrompt && !isPluginInput && !isPluginOutput)) {
             if (isEdit && !script.runOnEdit) {
-                console.debug(`getRegexedString: Skipping script ${script.scriptName} because it does not run on edit`);
+                if (!isolated) console.debug(`getRegexedString: Skipping script ${script.scriptName} because it does not run on edit`);
                 return;
             }
 
@@ -934,22 +977,22 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
             // other lane that reaches this branch.
             if (typeof depth === 'number' && !isReplyLane) {
                 if (!isNaN(script.minDepth) && script.minDepth !== null && script.minDepth >= -1 && depth < script.minDepth) {
-                    console.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is less than minDepth ${script.minDepth}`);
+                    if (!isolated) console.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is less than minDepth ${script.minDepth}`);
                     return;
                 }
 
                 if (!isNaN(script.maxDepth) && script.maxDepth !== null && script.maxDepth >= 0 && depth > script.maxDepth) {
-                    console.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is greater than maxDepth ${script.maxDepth}`);
+                    if (!isolated) console.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is greater than maxDepth ${script.maxDepth}`);
                     return;
                 }
             }
 
             if (isReplyLane || placementList.includes(placement)) {
-                if (isRegexScriptPaused(script.id)) {
+                if (!isolated && isRegexScriptPaused(script.id)) {
                     return;
                 }
                 const __regexStart = trackPerformance ? performance.now() : 0;
-                finalString = runRegexScript(script, finalString, { characterOverride });
+                finalString = runRegexScript(script, finalString, { characterOverride, substitute, isolated });
                 if (trackPerformance) {
                     const __regexElapsed = performance.now() - __regexStart;
                     recordRegexExecution(script, __regexElapsed);
@@ -969,7 +1012,7 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
  * @returns {string} The new string
  * @typedef {{characterOverride?: string}} RegexScriptParams The parameters to use for the regex script
  */
-export function runRegexScript(regexScript, rawString, { characterOverride } = {}) {
+export function runRegexScript(regexScript, rawString, { characterOverride, substitute, isolated = false } = {}) {
     let newString = rawString;
     if (!regexScript || !!(regexScript.disabled) || !regexScript?.findRegex || !rawString) {
         return newString;
@@ -980,19 +1023,23 @@ export function runRegexScript(regexScript, rawString, { characterOverride } = {
             case substitute_find_regex.NONE:
                 return regexScript.findRegex;
             case substitute_find_regex.RAW:
-                return substituteParamsExtended(regexScript.findRegex);
+                return substitute ? substitute(regexScript.findRegex) : substituteParamsExtended(regexScript.findRegex);
             case substitute_find_regex.ESCAPED:
-                return substituteParamsExtended(regexScript.findRegex, {}, sanitizeRegexMacro);
+                return substitute
+                    ? substitute(regexScript.findRegex, { postProcessFn: sanitizeRegexMacro })
+                    : substituteParamsExtended(regexScript.findRegex, {}, sanitizeRegexMacro);
             default:
+                if (isolated) throw new Error(`Regex script "${regexScript.scriptName}" has an unknown substitution mode.`);
                 console.warn(`runRegexScript: Unknown substituteRegex value ${regexScript.substituteRegex}. Using raw regex.`);
                 return regexScript.findRegex;
         }
     };
     const regexString = getRegexString();
-    const findRegex = RegexProvider.instance.get(regexString);
+    const findRegex = isolated ? regexFromString(regexString) : RegexProvider.instance.get(regexString);
 
     // The user skill issued. Return with nothing.
     if (!findRegex) {
+        if (isolated) throw new Error(`Regex script "${regexScript.scriptName}" has an invalid expression.`);
         return newString;
     }
 
@@ -1016,13 +1063,13 @@ export function runRegexScript(regexScript, rawString, { characterOverride } = {
             }
 
             // Remove trim strings from the match
-            const filteredMatch = filterString(match, regexScript.trimStrings, { characterOverride });
+            const filteredMatch = filterString(match, regexScript.trimStrings, { characterOverride, substitute });
 
             return filteredMatch;
         });
 
         // Substitute at the end
-        return substituteParams(replaceWithGroups);
+        return (substitute ?? substituteParams)(replaceWithGroups);
     });
 
     return newString;
@@ -1035,10 +1082,10 @@ export function runRegexScript(regexScript, rawString, { characterOverride } = {
  * @param {RegexScriptParams} params The parameters to use for the regex filter
  * @returns {string} The filtered string
  */
-function filterString(rawString, trimStrings, { characterOverride } = {}) {
+function filterString(rawString, trimStrings, { characterOverride, substitute = substituteParams } = {}) {
     let finalString = rawString;
     trimStrings.forEach((trimString) => {
-        const subTrimString = substituteParams(trimString, { name2Override: characterOverride });
+        const subTrimString = substitute(trimString, { name2Override: characterOverride });
         finalString = finalString.replaceAll(subTrimString, '');
     });
 

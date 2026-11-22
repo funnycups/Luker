@@ -63,6 +63,7 @@ import { withProfileRetry } from './extensions/connection-manager/profile-retry.
 import { normalizeStreamingFinishReason } from './extensions/connection-manager/auto-continue-truncated.js';
 
 import { getEventSourceStream } from './sse-stream.js';
+import { transientSessionHeaders } from './lib/transient-session.js';
 import { readPresetDocument } from './named-resource-read.js';
 import { hydrateIndexedPresetEntries } from './util/preset-hydration.js';
 import {
@@ -3681,7 +3682,7 @@ function getVerbosity(settings = null) {
  * @param {import('../script.js').AdditionalRequestOptions} options Additional request options
  * @returns {Promise<object>} Final generation parameters object appropriate for the chat completion source
  */
-export async function createGenerationParameters(settings, model, type, messages, { jsonSchema = null, tools = null, toolChoice = null, replaceTools = false, responseLength = null, allowStreamingForQuiet = false } = {}) {
+export async function createGenerationParameters(settings, model, type, messages, { jsonSchema = null, tools = null, toolChoice = null, replaceTools = false, responseLength = null, allowStreamingForQuiet = false, promptNames = null } = {}) {
     // HACK: Filter out null and non-object messages
     if (!Array.isArray(messages)) {
         throw new Error('messages must be an array');
@@ -3814,9 +3815,9 @@ export async function createGenerationParameters(settings, model, type, messages
         'stop': getCustomStoppingStrings(openai_max_stop_strings),
         'chat_completion_source': settings.chat_completion_source,
         'n': canMultiSwipe ? settings.n : undefined,
-        'user_name': name1,
-        'char_name': name2,
-        'group_names': getGroupNames(),
+        'user_name': promptNames ? promptNames.userName : name1,
+        'char_name': promptNames ? promptNames.charName : name2,
+        'group_names': promptNames ? promptNames.groupNames : getGroupNames(),
         'include_reasoning': Boolean(settings.show_thoughts),
         'reasoning_effort': getReasoningEffort(settings),
         'enable_web_search': Boolean(settings.enable_web_search),
@@ -4375,17 +4376,25 @@ function isChatCompletionResponseEmpty(data) {
 /**
  * @param {object} requestBody
  * @param {AbortSignal?} signal
- * @param {{quietErrors?: boolean, apiPresetName?: string}} [options]
+ * @param {{quietErrors?: boolean, apiPresetName?: string, transientSessionId?: string, onPreparedRequest?: (record: { requestApi: string, payload: object }) => void}} [options]
  * @returns {Promise<PostChatCompletionResult>}
  */
-async function postChatCompletionGenerateRequest(requestBody, signal, { quietErrors = false, apiPresetName = '' } = {}) {
+async function postChatCompletionGenerateRequest(requestBody, signal, {
+    quietErrors = false,
+    apiPresetName = '',
+    transientSessionId = undefined,
+    onPreparedRequest = null,
+} = {}) {
+    const sessionHeaders = transientSessionHeaders(transientSessionId);
+    const suppressToasts = quietErrors || Boolean(transientSessionId);
     const isStreamRequest = Boolean(requestBody?.stream);
     // Only peek body for empty-response detection when retries are enabled
     // and this is a non-stream request. Streaming responses have their own
     // consumer and must not have their body pre-read.
     const shouldDetectEmpty = !isStreamRequest && getMaxRequestRetries(apiPresetName) > 0;
 
-    const requestTimeoutMs = getRequestTimeoutMs(apiPresetName);
+    // Temporary isolated requests must not inherit configured inactivity timeouts.
+    const requestTimeoutMs = transientSessionId ? 0 : getRequestTimeoutMs(apiPresetName);
     const requestBodyWithTimeout = requestTimeoutMs > 0
         ? {
             ...requestBody,
@@ -4402,10 +4411,14 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
         : requestBodyWithTimeout;
 
     const response = await withProfileRetry(async () => {
+        const preparedPayload = unescapeMacroBracesInRequestData(requestBodyWithProxy);
+        if (typeof onPreparedRequest === 'function') {
+            onPreparedRequest({ requestApi: 'openai', payload: JSON.parse(JSON.stringify(preparedPayload)) });
+        }
         const r = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
-            body: JSON.stringify(unescapeMacroBracesInRequestData(requestBodyWithProxy)),
-            headers: getRequestHeaders(),
+            body: JSON.stringify(preparedPayload),
+            headers: { ...getRequestHeaders(), ...sessionHeaders },
             signal,
         });
         if (!shouldDetectEmpty || !r.ok) return r;
@@ -4431,7 +4444,7 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
         signal,
         label: 'chat-completion',
         onAttempt: (attempt, _err, _delay, maxRetries) => {
-            if (quietErrors) return;
+            if (suppressToasts) return;
             toastr.info(
                 t`Retrying request… (${attempt}/${maxRetries})`,
                 t`Request failed`,
@@ -4442,7 +4455,7 @@ async function postChatCompletionGenerateRequest(requestBody, signal, { quietErr
 
     if (!response.ok) {
         const responseBody = await response.text();
-        tryParseStreamingError(response, responseBody, { quiet: quietErrors });
+        tryParseStreamingError(response, responseBody, { quiet: suppressToasts });
         console.error(`[openai] ${response.status} from ${response.url}`, {
             status: response.status,
             statusText: response.statusText,
@@ -4468,6 +4481,8 @@ async function attemptPlainTextFunctionCallRetry({
     responseLength = null,
     requestSecretId = '',
     apiPresetName = '',
+    transientSessionId = undefined,
+    onPreparedRequest = null,
 } = {}) {
     let currentResponseData = initialResponseData;
     let currentInspection = inspectPlainTextFunctionCallResponse(initialResponseData, runtimeFunctionCallContext);
@@ -4512,7 +4527,12 @@ async function attemptPlainTextFunctionCallRetry({
                 requestBody.secret_id = requestSecretId;
             }
 
-            const { response: retryResponse } = await postChatCompletionGenerateRequest(requestBody, signal, { quietErrors: true, apiPresetName });
+            const { response: retryResponse } = await postChatCompletionGenerateRequest(requestBody, signal, {
+                quietErrors: true,
+                apiPresetName,
+                transientSessionId,
+                onPreparedRequest,
+            });
             const retryData = await retryResponse.json();
             checkQuotaError(retryData, { quiet: true });
             checkModerationError(retryData, { quiet: true });
@@ -4566,7 +4586,11 @@ async function sendOpenAIRequest(type, messages, signal, {
     functionCallMode = 'auto',
     functionCallOptions = null,
     allowStreamingForQuiet = false,
+    transientSessionId = undefined,
+    onPreparedRequest = null,
+    promptNames = null,
 } = {}) {
+    transientSessionHeaders(transientSessionId);
     // Provide default abort signal
     if (!signal) {
         signal = new AbortController().signal;
@@ -4673,6 +4697,7 @@ async function sendOpenAIRequest(type, messages, signal, {
         replaceTools: effectiveReplaceTools,
         responseLength,
         allowStreamingForQuiet,
+        promptNames,
     });
     const shouldRunChatCompletionHooks = requestScope !== 'extension_internal';
     if (shouldRunChatCompletionHooks) {
@@ -4689,7 +4714,7 @@ async function sendOpenAIRequest(type, messages, signal, {
     if (requestSecretId) {
         requestBody.secret_id = requestSecretId;
     }
-    const shouldTrackLukerGenerationState = shouldUseLukerServerPersistence(type, requestSettings.chat_completion_source);
+    const shouldTrackLukerGenerationState = !transientSessionId && shouldUseLukerServerPersistence(type, requestSettings.chat_completion_source);
     if (shouldTrackLukerGenerationState) {
         lastOpenAIReplyPersistedByServer = false;
         lastOpenAIGenerationId = '';
@@ -4711,7 +4736,11 @@ async function sendOpenAIRequest(type, messages, signal, {
             });
         }
     }
-    const { response } = await postChatCompletionGenerateRequest(requestBody, signal, { apiPresetName });
+    const { response } = await postChatCompletionGenerateRequest(requestBody, signal, {
+        apiPresetName,
+        transientSessionId,
+        onPreparedRequest,
+    });
     const generationIdHeader = response.headers.get('x-luker-generation-id');
     if (shouldTrackLukerGenerationState && generationIdHeader) {
         lastOpenAIGenerationId = generationIdHeader;
@@ -4765,6 +4794,8 @@ async function sendOpenAIRequest(type, messages, signal, {
                             responseLength,
                             requestSecretId,
                             apiPresetName,
+                            transientSessionId,
+                            onPreparedRequest,
                         });
                         const inspection = retryOutcome.inspection;
                         if (inspection.error) {
@@ -4955,6 +4986,8 @@ async function sendOpenAIRequest(type, messages, signal, {
                 responseLength,
                 requestSecretId,
                 apiPresetName,
+                transientSessionId,
+                onPreparedRequest,
             });
             data = retryOutcome.responseData;
             const inspection = retryOutcome.inspection;

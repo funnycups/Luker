@@ -498,6 +498,8 @@ export function findGroupMemberId(arg, full = false) {
  * Gets depth prompts for group members.
  * @param {string} groupId Group ID
  * @param {number} characterId Current Character ID
+ * @param {Object} [options]
+ * @param {typeof baseChatReplace} [options.replace] Field text substitution
  * @returns {{depth: number, text: string, role: string}[]} Array of depth prompts
  */
 export function getGroupDepthPrompts(groupId, characterId) {
@@ -570,7 +572,7 @@ export function getGroupCharacterCards(groupId, characterId) {
  * @param {number} characterId Current Character ID
  * @returns {{description: string, personality: string, scenario: string, mesExamples: string}} Group character cards with lazy getters
  */
-export function getGroupCharacterCardsLazy(groupId, characterId) {
+export function getGroupCharacterCardsLazy(groupId, characterId, { replace = baseChatReplace } = {}) {
     const group = groups.find(x => x.id === groupId);
 
     // If no group cards should be generated, return null so caller knows to fall back
@@ -590,7 +592,7 @@ export function getGroupCharacterCardsLazy(groupId, characterId) {
         if (!value) return '';
         value = value.replace(/<FIELDNAME>/gi, fieldName);
         value = trim ? value.trim() : value;
-        return baseChatReplace(value, null, characterName);
+        return replace(value, null, characterName);
     }
 
     /**
@@ -640,8 +642,8 @@ export function getGroupCharacterCardsLazy(groupId, characterId) {
     return createLazyFields({
         description: () => collectField('Description', c => getCharacterDescription(c)),
         personality: () => collectField('Personality', c => getCharacterPersonality(c)),
-        scenario: () => baseChatReplace(scenarioOverride?.trim()) || collectField('Scenario', c => getCharacterScenario(c)),
-        mesExamples: () => baseChatReplace(mesExamplesOverride?.trim()) ||
+        scenario: () => replace(scenarioOverride?.trim()) || collectField('Scenario', c => getCharacterScenario(c)),
+        mesExamples: () => replace(mesExamplesOverride?.trim()) ||
             collectField('Example Messages', c => getCharacterMesExample(c), x => !x.startsWith('<START>') ? `<START>\n${x}` : x),
     });
 }

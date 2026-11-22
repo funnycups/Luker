@@ -172,6 +172,10 @@ export const MacroValueType = Object.freeze({
 let instance;
 export { instance as MacroRegistry };
 
+export function createIsolatedMacroRegistry() {
+    return new MacroRegistry();
+}
+
 class MacroRegistry {
     /** @type {MacroRegistry} */ static #instance;
     /** @type {MacroRegistry} */ static get instance() { return MacroRegistry.#instance ?? (MacroRegistry.#instance = new MacroRegistry()); }
@@ -415,7 +419,7 @@ class MacroRegistry {
             })();
 
             const message = `Macro "${def.name}" called with ${args.length} unnamed arguments but expects ${expectation}.`;
-            if (def.strictArgs) {
+            if (def.strictArgs || call.env.evaluation?.strict) {
                 throw createMacroRuntimeError({ message, call, def });
             }
             logMacroRuntimeWarning({ message, call, def });
@@ -453,7 +457,10 @@ class MacroRegistry {
             resolve: (text, { offsetDelta = 0 } = {}) => MacroEngine.evaluate(text, call.env, {
                 contextOffset: call.globalOffset + offsetDelta,
             }),
-            warn: (message, error = undefined) => logMacroRuntimeWarning({ message, call, def, error }),
+            warn: (message, error = undefined) => {
+                if (call.env.evaluation?.strict) throw new Error(message, { cause: error });
+                logMacroRuntimeWarning({ message, call, def, error });
+            },
         };
 
         const result = def.handler(executionContext);
@@ -751,7 +758,7 @@ function validateArgTypes(call, def, unnamedArgs) {
             const argName = argDef.name || `Argument ${i + 1}`;
             const optionalLabel = argDef.optional ? ' (optional)' : '';
             const message = `Macro "${call.name}" (position ${i + 1}${optionalLabel}) argument "${argName}" expected type ${argDef.type} but got value "${value}".`;
-            if (def.strictArgs) {
+            if (def.strictArgs || call.env.evaluation?.strict) {
                 throw createMacroRuntimeError({ message, call, def: def });
             }
             logMacroRuntimeWarning({ message, call, def: def });

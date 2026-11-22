@@ -46,11 +46,12 @@ describe('dispatchToSender — openai', () => {
 });
 
 describe('dispatchToSender — koboldhorde', () => {
-    test('calls generateHorde with text payload', async () => {
+    test('calls generateHorde with text payload and forwards transientSessionId / onPreparedRequest', async () => {
         let captured = null;
+        const onPreparedRequest = () => {};
         const senders = {
-            generateHorde: async (prompt, params, signal) => {
-                captured = { prompt, params, signal };
+            generateHorde: async (prompt, params, signal, reportProgress, options) => {
+                captured = { prompt, params, signal, reportProgress, options };
                 return { results: [{ text: 'horde reply' }] };
             },
             getKoboldGenerationData: () => ({ stub: true }),
@@ -65,9 +66,16 @@ describe('dispatchToSender — koboldhorde', () => {
         const out = await dispatchToSender({
             requestApi: 'koboldhorde',
             payload: 'folded text prompt',
+            transientSessionId: '550e8400-e29b-41d4-a716-446655440000',
+            onPreparedRequest,
             abortSignal: undefined,
         }, { senders });
         expect(captured.prompt).toBe('folded text prompt');
+        expect(captured.reportProgress).toBe(false);
+        expect(captured.options).toEqual({
+            transientSessionId: '550e8400-e29b-41d4-a716-446655440000',
+            onPreparedRequest,
+        });
         expect(out.results[0].text).toBe('horde reply');
     });
 });

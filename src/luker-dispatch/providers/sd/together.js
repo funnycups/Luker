@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { dispatchLog as console } from '../../logging.js';
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 //
 // Pure dispatch for TogetherAI images. Extracted from

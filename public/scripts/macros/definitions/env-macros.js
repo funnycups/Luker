@@ -1,4 +1,4 @@
-import { MacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
+import { MacroRegistry as activeMacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
 import { isMobile } from '../../RossAscends-mods.js';
 import { parseMesExamples, main_api } from '../../../script.js';
 import { power_user } from '../../power-user.js';
@@ -11,7 +11,7 @@ import { formatInstructModeExamples } from '../../instruct-mode.js';
  * (names, character card fields, system metadata, extras) or basic
  * environment flags.
  */
-export function registerEnvMacros() {
+export function registerEnvMacros(MacroRegistry = activeMacroRegistry) {
     // Names and participant macros (from MacroEnv.names)
     MacroRegistry.registerMacro('user', {
         category: MacroCategory.NAMES,
@@ -109,6 +109,7 @@ export function registerEnvMacros() {
         handler: ({ env }) => {
             const raw = env.character.mesExamplesRaw ?? '';
             if (!raw) return '';
+            if (env.contextSnapshot) return env.contextSnapshot.formattedExamples;
 
             const isInstruct = !!power_user?.instruct?.enabled && main_api !== 'openai';
             const parsed = parseMesExamples(raw, isInstruct);
@@ -200,6 +201,6 @@ export function registerEnvMacros() {
         description: '"true" if currently running in a mobile environment, "false" otherwise.',
         returns: 'Whether the environment is mobile.',
         returnType: MacroValueType.BOOLEAN,
-        handler: () => String(isMobile()),
+        handler: ({ env }) => String(env.contextSnapshot ? env.contextSnapshot.isMobile : isMobile()),
     });
 }

@@ -1,12 +1,12 @@
-import { MacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
+import { MacroRegistry as activeMacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
 import { resolveVarPath } from '../util/var-path.js';
 
 /**
  * Registers variable-related {{...}} macros that operate on local and global
  * variables (e.g. {{setvar}}, {{getvar}}, {{incvar}}, etc.).
  */
-export function registerVariableMacros() {
-    const ctx = Luker.getContext();
+export function registerVariableMacros(MacroRegistry = activeMacroRegistry, ctx = Luker.getContext()) {
+    const varsFor = (env) => env?.variables ?? ctx.variables;
 
     // {{setvar::name::value}} -> '' (side-effect on local variable)
     MacroRegistry.registerMacro('setvar', {
@@ -26,8 +26,8 @@ export function registerVariableMacros() {
         description: 'Sets a local variable to the given value.',
         returns: '',
         exampleUsage: ['{{setvar::myvar::foo}}', '{{setvar::myintvar::3}}'],
-        handler: ({ unnamedArgs: [name, value] }) => {
-            ctx.variables.local.set(name, value);
+        handler: ({ unnamedArgs: [name, value], env }) => {
+            varsFor(env).local.set(name, value);
             return '';
         },
     });
@@ -50,8 +50,8 @@ export function registerVariableMacros() {
         description: 'Adds a value to an existing local variable (numeric or string append). If the variable does not exist, it will be created.',
         returns: '',
         exampleUsage: ['{{addvar::mystrvar::foo}}', '{{addvar::myintvar::3}}'],
-        handler: ({ unnamedArgs: [name, value] }) => {
-            ctx.variables.local.add(name, value);
+        handler: ({ unnamedArgs: [name, value], env }) => {
+            varsFor(env).local.add(name, value);
             return '';
         },
     });
@@ -75,8 +75,8 @@ export function registerVariableMacros() {
         description: 'Pushes a value onto a local variable that holds a JSON array. Auto-creates the array if missing.',
         returns: '',
         exampleUsage: ['{{pushvar::inventory::sword}}', '{{pushvar::roster.alice.inventory::shield}}'],
-        handler: ({ unnamedArgs: [name, value] }) => {
-            ctx.variables.local.push(name, value);
+        handler: ({ unnamedArgs: [name, value], env }) => {
+            varsFor(env).local.push(name, value);
             return '';
         },
     });
@@ -94,8 +94,8 @@ export function registerVariableMacros() {
         description: 'Pops the last value from a local variable that holds a JSON array. No-op when the variable is missing, empty, or not an array.',
         returns: '',
         exampleUsage: ['{{popvar::inventory}}', '{{popvar::roster.alice.inventory}}'],
-        handler: ({ unnamedArgs: [name] }) => {
-            ctx.variables.local.pop(name);
+        handler: ({ unnamedArgs: [name], env }) => {
+            varsFor(env).local.pop(name);
             return '';
         },
     });
@@ -114,8 +114,8 @@ export function registerVariableMacros() {
         returns: 'The new value of the local variable.',
         returnType: MacroValueType.NUMBER,
         exampleUsage: ['{{incvar::myintvar}}', '{{incvar some-local-int-var}}'],
-        handler: ({ unnamedArgs: [name], normalize }) => {
-            const result = ctx.variables.local.inc(name);
+        handler: ({ unnamedArgs: [name], normalize, env }) => {
+            const result = varsFor(env).local.inc(name);
             return normalize(result);
         },
     });
@@ -134,8 +134,8 @@ export function registerVariableMacros() {
         returns: 'The new value of the local variable.',
         returnType: MacroValueType.NUMBER,
         exampleUsage: ['{{decvar::myintvar}}', '{{decvar some-local-int-var}}'],
-        handler: ({ unnamedArgs: [name], normalize }) => {
-            const result = ctx.variables.local.dec(name);
+        handler: ({ unnamedArgs: [name], normalize, env }) => {
+            const result = varsFor(env).local.dec(name);
             return normalize(result);
         },
     });
@@ -157,8 +157,8 @@ export function registerVariableMacros() {
         returns: 'The value of the local variable, or the value at the dotted path if the variable is JSON-stringified.',
         returnType: [MacroValueType.STRING, MacroValueType.NUMBER],
         exampleUsage: ['{{getvar::myvar}}', '{{getvar myintvar}}', '{{getvar::npcs.alice.hp}}', '{{getvar::list.0}}'],
-        handler: ({ unnamedArgs: [name], normalize }) => {
-            const result = resolveVarPath((n) => ctx.variables.local.get(n), name);
+        handler: ({ unnamedArgs: [name], normalize, env }) => {
+            const result = resolveVarPath((n) => varsFor(env).local.get(n), name);
             return normalize(result);
         },
     });
@@ -178,8 +178,8 @@ export function registerVariableMacros() {
         returns: '"true" if the variable exists, "false" otherwise.',
         returnType: MacroValueType.STRING,
         exampleUsage: ['{{hasvar::myvar}}', '{{hasvar some-local-var}}'],
-        handler: ({ unnamedArgs: [name] }) => {
-            return ctx.variables.local.has(name) ? 'true' : 'false';
+        handler: ({ unnamedArgs: [name], env }) => {
+            return varsFor(env).local.has(name) ? 'true' : 'false';
         },
     });
 
@@ -197,8 +197,8 @@ export function registerVariableMacros() {
         description: 'Deletes a local variable.',
         returns: '',
         exampleUsage: ['{{deletevar::myvar}}', '{{deletevar some-local-var}}'],
-        handler: ({ unnamedArgs: [name] }) => {
-            ctx.variables.local.del(name);
+        handler: ({ unnamedArgs: [name], env }) => {
+            varsFor(env).local.del(name);
             return '';
         },
     });
@@ -227,8 +227,8 @@ export function registerVariableMacros() {
         description: 'Sets a value at a specific key or index in a local object or array. If the variable does not exist, it will be created based on the type of the key.',
         returns: '',
         exampleUsage: ['{{setvarkey::myarray::0::foo}}', '{{setvarkey::myobj::uniquekey::somevalue}}'],
-        handler: ({ unnamedArgs: [name, key, value] }) => {
-            ctx.variables.local.set(name, value, { index: key });
+        handler: ({ unnamedArgs: [name, key, value], env }) => {
+            varsFor(env).local.set(name, value, { index: key });
             return '';
         },
     });
@@ -253,8 +253,8 @@ export function registerVariableMacros() {
         returns: 'The value at the specified key or index in the local object or array variable.',
         returnType: [MacroValueType.STRING, MacroValueType.NUMBER],
         exampleUsage: ['{{getvarkey::myarray::0}}', '{{getvarkey::myobj::uniquekey}}'],
-        handler: ({ unnamedArgs: [name, key], normalize }) => {
-            const result = ctx.variables.local.get(name, { index: key });
+        handler: ({ unnamedArgs: [name, key], normalize, env }) => {
+            const result = varsFor(env).local.get(name, { index: key });
             return normalize(result);
         },
     });
@@ -277,8 +277,8 @@ export function registerVariableMacros() {
         description: 'Sets a global variable to the given value.',
         returns: '',
         exampleUsage: ['{{setglobalvar::myvar::foo}}', '{{setglobalvar::myintvar::3}}'],
-        handler: ({ unnamedArgs: [name, value] }) => {
-            ctx.variables.global.set(name, value);
+        handler: ({ unnamedArgs: [name, value], env }) => {
+            varsFor(env).global.set(name, value);
             return '';
         },
     });
@@ -301,8 +301,8 @@ export function registerVariableMacros() {
         description: 'Adds a value to an existing global variable (numeric or string append). If the variable does not exist, it will be created.',
         returns: '',
         exampleUsage: ['{{addglobalvar::mystrvar::foo}}', '{{addglobalvar::myintvar::3}}'],
-        handler: ({ unnamedArgs: [name, value] }) => {
-            ctx.variables.global.add(name, value);
+        handler: ({ unnamedArgs: [name, value], env }) => {
+            varsFor(env).global.add(name, value);
             return '';
         },
     });
@@ -321,8 +321,8 @@ export function registerVariableMacros() {
         returns: 'The new value of the global variable.',
         returnType: MacroValueType.NUMBER,
         exampleUsage: ['{{incglobalvar::myintvar}}', '{{incglobalvar some-global-int-var}}'],
-        handler: ({ unnamedArgs: [name], normalize }) => {
-            const result = ctx.variables.global.inc(name);
+        handler: ({ unnamedArgs: [name], normalize, env }) => {
+            const result = varsFor(env).global.inc(name);
             return normalize(result);
         },
     });
@@ -341,8 +341,8 @@ export function registerVariableMacros() {
         returns: 'The new value of the global variable.',
         returnType: MacroValueType.NUMBER,
         exampleUsage: ['{{decglobalvar::myintvar}}', '{{decglobalvar some-global-int-var}}'],
-        handler: ({ unnamedArgs: [name], normalize }) => {
-            const result = ctx.variables.global.dec(name);
+        handler: ({ unnamedArgs: [name], normalize, env }) => {
+            const result = varsFor(env).global.dec(name);
             return normalize(result);
         },
     });
@@ -362,8 +362,8 @@ export function registerVariableMacros() {
         returns: 'The value of the global variable, or the value at the dotted path if the variable is JSON-stringified.',
         returnType: [MacroValueType.STRING, MacroValueType.NUMBER],
         exampleUsage: ['{{getglobalvar::myvar}}', '{{getglobalvar myintvar}}', '{{getglobalvar::flags.debug}}'],
-        handler: ({ unnamedArgs: [name], normalize }) => {
-            const result = resolveVarPath((n) => ctx.variables.global.get(n), name);
+        handler: ({ unnamedArgs: [name], normalize, env }) => {
+            const result = resolveVarPath((n) => varsFor(env).global.get(n), name);
             return normalize(result);
         },
     });
@@ -383,8 +383,8 @@ export function registerVariableMacros() {
         returns: '"true" if the variable exists, "false" otherwise.',
         returnType: MacroValueType.STRING,
         exampleUsage: ['{{hasglobalvar::myvar}}', '{{hasglobalvar some-global-var}}'],
-        handler: ({ unnamedArgs: [name] }) => {
-            return ctx.variables.global.has(name) ? 'true' : 'false';
+        handler: ({ unnamedArgs: [name], env }) => {
+            return varsFor(env).global.has(name) ? 'true' : 'false';
         },
     });
 
@@ -402,8 +402,8 @@ export function registerVariableMacros() {
         description: 'Deletes a global variable.',
         returns: '',
         exampleUsage: ['{{deleteglobalvar::myvar}}', '{{deleteglobalvar some-global-var}}'],
-        handler: ({ unnamedArgs: [name] }) => {
-            ctx.variables.global.del(name);
+        handler: ({ unnamedArgs: [name], env }) => {
+            varsFor(env).global.del(name);
             return '';
         },
     });
@@ -432,8 +432,8 @@ export function registerVariableMacros() {
         description: 'Sets a value at a specific key or index in a global object or array variable. If the variable does not exist, it will be created based on the type of the key.',
         returns: '',
         exampleUsage: ['{{setglobalvarkey::myarray::0::foo}}', '{{setglobalvarkey::myobj::uniquekey::bar}}'],
-        handler: ({ unnamedArgs: [name, key, value] }) => {
-            ctx.variables.global.set(name, value, { index: key });
+        handler: ({ unnamedArgs: [name, key, value], env }) => {
+            varsFor(env).global.set(name, value, { index: key });
             return '';
         },
     });
@@ -458,8 +458,8 @@ export function registerVariableMacros() {
         returns: 'The value at the specified key or index in the global object or array variable.',
         returnType: [MacroValueType.STRING, MacroValueType.NUMBER],
         exampleUsage: ['{{getglobalvarkey::myarray::0}}', '{{getglobalvarkey::myobj::uniquekey}}'],
-        handler: ({ unnamedArgs: [name, key], normalize }) => {
-            const result = ctx.variables.global.get(name, { index: key });
+        handler: ({ unnamedArgs: [name, key], normalize, env }) => {
+            const result = varsFor(env).global.get(name, { index: key });
             return normalize(result);
         },
     });

@@ -1,12 +1,16 @@
 import { moment } from '../../../lib.js';
 import { chat } from '../../../script.js';
 import { timestampToMoment } from '../../utils.js';
-import { MacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
+import { MacroRegistry as activeMacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
 
 /**
  * Registers time/date related macros and utilities.
  */
-export function registerTimeMacros() {
+function nowFor(env) {
+    return env.contextSnapshot ? moment(env.contextSnapshot.now) : moment();
+}
+
+export function registerTimeMacros(MacroRegistry = activeMacroRegistry) {
     // Time and date macros
     MacroRegistry.registerMacro('time', {
         category: MacroCategory.TIME,
@@ -25,16 +29,16 @@ export function registerTimeMacros() {
         returns: 'A time string in the format HH:mm.',
         displayOverride: '{{time::[UTC±(offset)]}}',
         exampleUsage: ['{{time}}', '{{time::UTC+2}}', '{{time::UTC-7}}'],
-        handler: ({ unnamedArgs: [offsetSpec] }) => {
-            if (!offsetSpec) return moment().format('LT');
+        handler: ({ unnamedArgs: [offsetSpec], env }) => {
+            if (!offsetSpec) return nowFor(env).format('LT');
 
             const match = /^UTC([+-]\d+)$/.exec(offsetSpec);
-            if (!match) return moment().format('LT');
+            if (!match) return nowFor(env).format('LT');
 
             const offset = Number.parseInt(match[1], 10);
-            if (Number.isNaN(offset)) return moment().format('LT');
+            if (Number.isNaN(offset)) return nowFor(env).format('LT');
 
-            return moment().utc().utcOffset(offset).format('LT');
+            return nowFor(env).utc().utcOffset(offset).format('LT');
         },
     });
 
@@ -42,28 +46,28 @@ export function registerTimeMacros() {
         category: MacroCategory.TIME,
         description: 'Current local date as a string in the local short format.',
         returns: 'Current local date in local short format.',
-        handler: () => moment().format('LL'),
+        handler: ({ env }) => nowFor(env).format('LL'),
     });
 
     MacroRegistry.registerMacro('weekday', {
         category: MacroCategory.TIME,
         description: 'Current weekday name.',
         returns: 'Current weekday name.',
-        handler: () => moment().format('dddd'),
+        handler: ({ env }) => nowFor(env).format('dddd'),
     });
 
     MacroRegistry.registerMacro('isotime', {
         category: MacroCategory.TIME,
         description: 'Current time in HH:mm format.',
         returns: 'Current time in HH:mm format.',
-        handler: () => moment().format('HH:mm'),
+        handler: ({ env }) => nowFor(env).format('HH:mm'),
     });
 
     MacroRegistry.registerMacro('isodate', {
         category: MacroCategory.TIME,
         description: 'Current date in YYYY-MM-DD format.',
         returns: 'Current date in YYYY-MM-DD format.',
-        handler: () => moment().format('YYYY-MM-DD'),
+        handler: ({ env }) => nowFor(env).format('YYYY-MM-DD'),
     });
 
     MacroRegistry.registerMacro('datetimeformat', {
@@ -79,7 +83,7 @@ export function registerTimeMacros() {
         description: 'Formats the current date/time using the given moment.js format string.',
         returns: 'Formatted date/time string.',
         exampleUsage: ['{{datetimeformat::YYYY-MM-DD HH:mm:ss}}', '{{datetimeformat::LLLL}}'],
-        handler: ({ unnamedArgs: [format] }) => moment().format(format),
+        handler: ({ unnamedArgs: [format], env }) => nowFor(env).format(format),
     });
 
     MacroRegistry.registerMacro('idleDuration', {
@@ -87,7 +91,10 @@ export function registerTimeMacros() {
         category: MacroCategory.TIME,
         description: 'Human-readable duration since the last user message.',
         returns: 'Human-readable duration since the last user message.',
-        handler: () => getTimeSinceLastMessage(),
+        handler: ({ env }) => getTimeSinceLastMessage(
+            env.contextSnapshot ? env.contextSnapshot.chat : chat,
+            nowFor(env),
+        ),
     });
 
     // Time difference between two values
@@ -118,15 +125,13 @@ export function registerTimeMacros() {
     });
 }
 
-function getTimeSinceLastMessage() {
-    const now = moment();
-
-    if (Array.isArray(chat) && chat.length > 0) {
+function getTimeSinceLastMessage(chatData = chat, now = moment()) {
+    if (Array.isArray(chatData) && chatData.length > 0) {
         let lastMessage;
         let takeNext = false;
 
-        for (let i = chat.length - 1; i >= 0; i--) {
-            const message = chat[i];
+        for (let i = chatData.length - 1; i >= 0; i--) {
+            const message = chatData[i];
 
             if (message.is_system) {
                 continue;

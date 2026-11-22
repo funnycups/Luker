@@ -8,6 +8,7 @@ import {
     failGenerationJob,
     attachJobToRequest,
     notifyJobTextProgress,
+    releaseTransientGenerationJobs,
 } from '../endpoints/backends/luker-generation.js';
 import {
     completeInspection,
@@ -16,7 +17,13 @@ import {
 } from '../request-inspector.js';
 import { createDispatchContext } from './context.js';
 import { createRequestProxyAgent } from '../request-proxy.js';
-import { assertTransientMediaRead } from '../transient-sessions.js';
+import {
+    assertTransientMediaRead,
+    getRequestTransientSession,
+    registerTransientCleanup,
+    trackTransientOperation,
+} from '../transient-sessions.js';
+import { dispatchLog as console, withDispatchLogging } from './logging.js';
 
 const TEXT_GENERATION_ENDPOINTS = new Set([
     'chat-completions',
@@ -53,7 +60,9 @@ function normalizeDispatchHeadEvent(event, { endpoint, isStream }) {
 }
 
 export async function runLukerDispatch(request, response, { endpoint, select }) {
+    let session;
     try {
+        session = getRequestTransientSession(request);
         if (Array.isArray(request.body?.references)) {
             for (const entry of request.body.references) {
                 if (entry && typeof entry.imagePath === 'string' && entry.imagePath.trim()) {
@@ -96,10 +105,16 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
     }
 
     const persistTarget = request.body?.luker_generation?.persist_target || null;
-    const job = createGenerationJob(request, {
-        job_id: requestId,
-        persist_target: persistTarget,
-    });
+    let job;
+    try {
+        job = createGenerationJob(request, {
+            job_id: requestId,
+            persist_target: persistTarget,
+        });
+    } catch (error) {
+        response.status(error.status || 500).json({ error: error.message, code: error.code });
+        return;
+    }
     if (!job) {
         response.status(500).json({ error: 'failed to create task' });
         return;
@@ -134,11 +149,11 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
     // more than once on some socket teardown paths; each handler still
     // runs at most once because it is only added once.
     if (request && typeof request.once === 'function') {
-        request.once('close', () => {
+        request.once('close', () => withDispatchLogging(Boolean(session), () => {
             for (const handler of onCloseHandlers) {
                 try { handler(); } catch (err) { console.warn('[Dispatch] onRequestClose handler threw:', err); }
             }
-        });
+        }));
     }
 
     response.status(200);
@@ -153,7 +168,7 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
     response.json({});
 
     // Background dispatch
-    setImmediate(async () => {
+    const dispatch = async () => {
         // Two INDEPENDENT event stores fed from the same emit stream:
         //
         //   1. `job.events[]` — envelope shape `{seq, data:{kind, data}, ts}`.
@@ -358,7 +373,7 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                     ctx.emit.trailer(new TextEncoder().encode(`data: ${trailer}\n\n`));
                 } catch { /* best-effort */ }
             }
-            // 若 dispatch 没显式 emit end,兜底 (already terminal → no-op).
+            // Finish providers that do not emit their own terminal event.
             ctx.emit.end();
             // Runner-side inspector complete. Only advance `type: 'chat'`
             // entries — SD dispatches use `startImageInspection` (creates a
@@ -446,5 +461,21 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                 }
             } catch (e) { console.warn('[Runner] inspection.fail threw:', e); }
         }
+    };
+    const operation = new Promise((resolve, reject) => {
+        setImmediate(() => { withDispatchLogging(Boolean(session), dispatch).then(resolve, reject); });
+    });
+    if (session) {
+        trackTransientOperation(session, operation, {
+            abort: () => withDispatchLogging(true, () => abortController.abort('Temporary session closed.')),
+        });
+        registerTransientCleanup(session, () => releaseTransientGenerationJobs(session));
+    }
+    void operation.catch(error => {
+        appendGenerationEvent(job, {
+            kind: 'error',
+            data: { code: 'internal', message: error.message },
+        });
+        failGenerationJob(job, error.message);
     });
 }

@@ -33,6 +33,10 @@ import { ELSE_MARKER } from '../definitions/core-macros.js';
 let instance;
 export { instance as MacroEngine };
 
+export function createIsolatedMacroEngine(registry) {
+    return new MacroEngine({ registry, strict: true });
+}
+
 class MacroEngine {
     /** @type {MacroEngine} */ static #instance;
     /** @type {MacroEngine} */ static get instance() { return MacroEngine.#instance ?? (MacroEngine.#instance = new MacroEngine()); }
@@ -41,8 +45,12 @@ class MacroEngine {
     #preProcessors = [];
     /** @type {RegisteredProcessor[]} */
     #postProcessors = [];
+    #registry;
+    #strict;
 
-    constructor() {
+    constructor({ registry = null, strict = false } = {}) {
+        this.#registry = registry;
+        this.#strict = strict;
         this.#registerCorePreProcessors();
         this.#registerCorePostProcessors();
     }
@@ -115,14 +123,23 @@ class MacroEngine {
      * @returns {string} The resolved string.
      */
     evaluate(input, env, { contextOffset = 0 } = {}) {
+        if (env?.evaluation?.engine && env.evaluation.engine !== this) {
+            return env.evaluation.engine.evaluate(input, env, { contextOffset });
+        }
         if (!input) {
             return '';
         }
-        const safeEnv = Object.freeze({ ...env });
+        const safeEnv = Object.freeze({
+            ...env,
+            evaluation: { engine: this, registry: this.#registry ?? MacroRegistry, strict: this.#strict },
+        });
 
         const preProcessed = this.#runPreProcessors(input, safeEnv);
 
         const { cst, lexingErrors, parserErrors } = MacroParser.parseDocument(preProcessed);
+        if (this.#strict && (lexingErrors.length || parserErrors.length)) {
+            throw new Error('Invalid macro syntax in the captured prompt context.');
+        }
 
         // For now, we log and still try to process what we can.
         if (lexingErrors && lexingErrors.length > 0) {
@@ -134,6 +151,7 @@ class MacroEngine {
 
         // If the parser did not produce a valid CST, fall back to the original input.
         if (!cst || typeof cst !== 'object' || !cst.children) {
+            if (this.#strict) throw new Error('The captured prompt did not produce a valid macro document.');
             logMacroGeneralError({ message: 'Macro parser produced an invalid CST. Returning original input.', error: { input, lexingErrors, parserErrors } });
             return input;
         }
@@ -149,6 +167,7 @@ class MacroEngine {
                 trimContent: this.trimScopedContent.bind(this),
             });
         } catch (error) {
+            if (this.#strict) throw error;
             logMacroGeneralError({ message: 'Macro evaluation failed. Returning original input.', error: { input, error } });
             return input;
         }
@@ -166,6 +185,7 @@ class MacroEngine {
      */
     #resolveMacro(call) {
         const { name, env } = call;
+        const registry = env.evaluation.registry;
 
         const raw = `{{${call.rawInner}}}`;
         if (!name) return raw;
@@ -191,8 +211,9 @@ class MacroEngine {
                 // Case 3: MacroDefinitionOptions - use the full definition builder
                 try {
                     const options = /** @type {MacroDefinitionOptions} */ (impl);
-                    defOverride = MacroRegistry.buildMacroDefFromOptions(name, options);
+                    defOverride = registry.buildMacroDefFromOptions(name, options);
                 } catch (error) {
+                    if (this.#strict) throw error;
                     // If building fails, log warning and fall through to check registered macros
                     logMacroRuntimeWarning({ message: `Dynamic macro "${name}" has invalid options: ${error.message}`, call });
                 }
@@ -201,32 +222,36 @@ class MacroEngine {
                 if (['number', 'boolean'].includes(typeof impl)) {
                     logMacroRuntimeWarning({ message: `Dynamic macro "${name}" uses unsupported number/boolean format.`, call });
                 }
-                defOverride = MacroRegistry.buildMacroDefFromOptions(name, {
+                defOverride = registry.buildMacroDefFromOptions(name, {
                     handler: typeof impl === 'function' ? impl : () => String(impl ?? ''),
                     category: 'dynamic',
                     description: 'Dynamic macro',
                     returnType: MacroValueType.STRING,
                 });
             } else {
+                if (this.#strict) throw new Error(`Invalid captured dynamic macro "${name}".`);
                 logMacroRuntimeWarning({ message: `Dynamic macro "${name}" is not defined correctly (must be string, a handler function, or a macro def options object with handler property).`, call });
             }
         }
 
         // If not, check if the macro exists and is registered
-        if (!defOverride && !MacroRegistry.hasMacro(name)) {
+        if (!defOverride && !registry.hasMacro(name)) {
+            if (this.#strict) throw new Error(`Macro "${name}" is not available in the captured prompt context.`);
             return raw; // Unknown macro: keep macro syntax, but nested macros inside rawInner are already resolved.
         }
 
         try {
-            const result = MacroRegistry.executeMacro(call, { defOverride });
+            const result = registry.executeMacro(call, { defOverride });
 
             try {
                 return call.env.functions.postProcess(result);
             } catch (error) {
+                if (this.#strict) throw error;
                 logMacroInternalError({ message: `Macro "${name}" postProcess function failed.`, call, error });
                 return result;
             }
         } catch (error) {
+            if (this.#strict) throw error;
             const isRuntimeError = !!(error && (error.name === 'MacroRuntimeError' || error.isMacroRuntimeError));
             if (isRuntimeError) {
                 logMacroRuntimeWarning({ message: (error.message || `Macro "${name}" execution failed.`), call, error });

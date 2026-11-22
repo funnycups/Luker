@@ -175,7 +175,7 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
                 const requestId = String(msg.request_id || '');
                 if (!requestId) return;
                 let job;
-                try { job = getTaskByRequestId(requestId, ws.userHandle); } catch (err) {
+                try { job = getTaskByRequestId(requestId, ws.userHandle, msg.transient_session_id); } catch (err) {
                     console.warn(`[ws-delivery] subscribe forbidden user=${ws.userHandle} request_id=${requestId}`);
                     sendJson(ws, { type: 'error', request_id: requestId, code: 'forbidden', message: 'access denied' });
                     return;

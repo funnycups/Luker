@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { dispatchLog as console } from './logging.js';
 import fetch from 'node-fetch';
 import { createProxyBoundFetch, createRequestProxyAgent } from '../request-proxy.js';
 import { readSecret, getRequestedSecretId } from '../endpoints/secrets.js';

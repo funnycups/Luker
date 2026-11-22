@@ -508,8 +508,8 @@ export function formatInstructModeStoryString(storyString, { customContext = nul
  * @param {string} name2 Character name.
  * @returns {string[]} Formatted example messages string.
  */
-export function formatInstructModeExamples(mesExamplesArray, name1, name2) {
-    const blockHeading = power_user.context.example_separator ? `${substituteParams(power_user.context.example_separator)}\n` : '';
+export function formatInstructModeExamples(mesExamplesArray, name1, name2, { substitute = substituteParams } = {}) {
+    const blockHeading = power_user.context.example_separator ? `${substitute(power_user.context.example_separator)}\n` : '';
 
     if (power_user.instruct.skip_examples) {
         return mesExamplesArray.map(x => x.replace(/<START>\n/i, blockHeading));
@@ -524,10 +524,10 @@ export function formatInstructModeExamples(mesExamplesArray, name1, name2) {
     let outputSuffix = power_user.instruct.output_suffix || '';
 
     if (power_user.instruct.macro) {
-        inputPrefix = substituteParams(inputPrefix, { name1Override: name1, name2Override: name2 });
-        outputPrefix = substituteParams(outputPrefix, { name1Override: name1, name2Override: name2 });
-        inputSuffix = substituteParams(inputSuffix, { name1Override: name1, name2Override: name2 });
-        outputSuffix = substituteParams(outputSuffix, { name1Override: name1, name2Override: name2 });
+        inputPrefix = substitute(inputPrefix, { name1Override: name1, name2Override: name2 });
+        outputPrefix = substitute(outputPrefix, { name1Override: name1, name2Override: name2 });
+        inputSuffix = substitute(inputSuffix, { name1Override: name1, name2Override: name2 });
+        outputSuffix = substitute(outputSuffix, { name1Override: name1, name2Override: name2 });
 
         inputPrefix = inputPrefix.replace(/{{name}}/gi, name1);
         outputPrefix = outputPrefix.replace(/{{name}}/gi, name2);

@@ -1,11 +1,11 @@
-import { MacroRegistry, MacroCategory } from '../engine/MacroRegistry.js';
-import { power_user } from '../../power-user.js';
+import { MacroRegistry as activeMacroRegistry, MacroCategory } from '../engine/MacroRegistry.js';
+import { power_user as activePowerUser } from '../../power-user.js';
 
 /**
  * Registers instruct-mode related {{...}} macros (instruct* and system
  * prompt/context macros) in the MacroRegistry.
  */
-export function registerInstructMacros() {
+export function registerInstructMacros(MacroRegistry = activeMacroRegistry, power_user = activePowerUser) {
     /**
      * Helper to register macros that just expose a value from power_user.instruct.
      * The first name is the primary, subsequent names become visible aliases.

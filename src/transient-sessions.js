@@ -13,6 +13,7 @@ const JOURNAL_FILENAME = 'session.json';
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const sessions = new Map();
 const ownerSessions = new WeakMap();
+const requestSessions = new WeakMap();
 
 export class TransientSessionError extends Error {
     constructor(status, code, message) {
@@ -95,15 +96,30 @@ export async function createTransientSession({ userHandle, directories, owner })
     return session;
 }
 
-export function getTransientSession(request, { allowClosing = false, allowMissing = false } = {}) {
-    const id = request.get(TRANSIENT_SESSION_HEADER);
-    if (!id) return null;
+export function getTransientSessionForUser(id, userHandle, { allowClosing = false, allowMissing = false } = {}) {
+    if (id === undefined) return null;
     const session = sessions.get(id);
     if (!session && allowMissing) return null;
-    if (!session || session.userHandle !== request.user.profile.handle) {
+    if (!session || session.userHandle !== userHandle) {
         throw new TransientSessionError(403, 'TRANSIENT_SESSION_FORBIDDEN', 'The temporary media session does not belong to this user.');
     }
     if (!allowClosing) assertOpen(session);
+    return session;
+}
+
+export function getTransientSession(request, options) {
+    return getTransientSessionForUser(
+        request?.headers?.[TRANSIENT_SESSION_HEADER.toLowerCase()],
+        request?.user?.profile?.handle,
+        options,
+    );
+}
+
+export function getRequestTransientSession(request) {
+    const bound = requestSessions.get(request);
+    if (bound) return bound;
+    const session = getTransientSession(request);
+    if (session) requestSessions.set(request, session);
     return session;
 }
 

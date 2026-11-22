@@ -1,6 +1,7 @@
-import { MacroRegistry, MacroCategory } from '../engine/MacroRegistry.js';
+import { MacroRegistry as activeMacroRegistry, MacroCategory } from '../engine/MacroRegistry.js';
 import { eventSource, event_types } from '../../events.js';
 import { findExtension } from '../../extensions.js';
+import { equalsIgnoreCaseAndAccents } from '../../utils.js';
 
 let lastGenerationTypeValue = '';
 let lastGenerationTypeTrackingInitialized = false;
@@ -29,14 +30,18 @@ function ensureLastGenerationTypeTracking() {
  * Registers macros that depend on runtime application state or event tracking
  * rather than static environment fields.
  */
-export function registerStateMacros() {
-    ensureLastGenerationTypeTracking();
+export function getLastGenerationType() {
+    return lastGenerationTypeValue;
+}
+
+export function registerStateMacros(MacroRegistry = activeMacroRegistry) {
+    if (MacroRegistry === activeMacroRegistry) ensureLastGenerationTypeTracking();
 
     MacroRegistry.registerMacro('lastGenerationType', {
         category: MacroCategory.STATE,
         description: 'Type of the last queued generation request (e.g. "normal", "impersonate", "regenerate", "quiet", "swipe", "continue"). Empty if none yet or chat was switched.',
         returns: 'Type of the last queued generation request.',
-        handler: () => lastGenerationTypeValue,
+        handler: ({ env }) => env.contextSnapshot ? env.contextSnapshot.lastGenerationType : lastGenerationTypeValue,
     });
 
     // Macro that checks if an extension is enabled
@@ -49,8 +54,11 @@ export function registerStateMacros() {
         }],
         description: 'Checks if a specific extension is enabled. If the extension does not exist, returns false.',
         returns: 'true if the extension is enabled, false otherwise.',
-        handler: ({ unnamedArgs: [extensionName] }) => {
-            const extension = findExtension(extensionName);
+        handler: ({ unnamedArgs: [extensionName], env }) => {
+            const extension = env.contextSnapshot
+                ? env.contextSnapshot.extensions.find(extension => equalsIgnoreCaseAndAccents(extension.name, extensionName)
+                    || equalsIgnoreCaseAndAccents(extension.name, `third-party/${extensionName}`))
+                : findExtension(extensionName);
             return String(extension?.enabled ?? false);
         },
     });

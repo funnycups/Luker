@@ -3,7 +3,7 @@ import { chat_metadata, main_api, getMaxPromptTokens, getMaxContextTokens, getMa
 import { getStringHash, isFalseBoolean } from '../../utils.js';
 import { textgenerationwebui_banned_in_macros } from '../../textgen-settings.js';
 import { inject_ids } from '../../constants.js';
-import { MacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
+import { MacroRegistry as activeMacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroRegistry.js';
 import { MACRO_VARIABLE_SHORTHAND_PATTERN } from '../engine/MacroLexer.js';
 import { MacroParser } from '../engine/MacroParser.js';
 import { MacroCstWalker } from '../engine/MacroCstWalker.js';
@@ -29,7 +29,7 @@ export const ELSE_MARKER = '\u0000\u001FELSE\u001F\u0000';
  * intended to preserve the behavior of the existing regex-based macros
  * in macros.js while using the new MacroRegistry/MacroEngine pipeline.
  */
-export function registerCoreMacros() {
+export function registerCoreMacros(MacroRegistry = activeMacroRegistry, context = null) {
     // {{space}} -> ' '
     MacroRegistry.registerMacro('space', {
         category: MacroCategory.UTILITY,
@@ -263,7 +263,7 @@ export function registerCoreMacros() {
         returns: 'The concatenated rendered body, once per entry. Empty string when the collection resolves to nothing iterable.',
         delayArgResolution: true,
         handler: ({ unnamedArgs: [rawCollection, rawBody], env, globalOffset, flags, trimContent }) => {
-            const ctx = Luker.getContext();
+            const ctx = context ?? Luker.getContext();
 
             // Resolve any nested macros inside the collection arg first. We
             // can't use the resolve callback because we need to inject our
@@ -309,7 +309,9 @@ export function registerCoreMacros() {
         category: MacroCategory.UTILITY,
         description: 'Current text from the send textarea.',
         returns: 'Current text from the send textarea.',
-        handler: () => (/** @type {HTMLTextAreaElement} */(document.querySelector('#send_textarea')))?.value ?? '',
+        handler: ({ env }) => env.contextSnapshot
+            ? env.contextSnapshot.input
+            : (/** @type {HTMLTextAreaElement} */(document.querySelector('#send_textarea')))?.value ?? '',
     });
 
     // {{maxPrompt}} -> max context size (context minus response)
@@ -319,7 +321,7 @@ export function registerCoreMacros() {
         description: 'Maximum prompt context size.',
         returns: 'Maximum prompt context size.',
         returnType: MacroValueType.INTEGER,
-        handler: () => String(getMaxPromptTokens()),
+        handler: ({ env }) => String(env.contextSnapshot ? env.contextSnapshot.maxPromptTokens : getMaxPromptTokens()),
     });
 
     // {{maxContext}} -> max context token limit
@@ -329,7 +331,7 @@ export function registerCoreMacros() {
         description: 'Maximum context token limit.',
         returns: 'Maximum context token limit.',
         returnType: MacroValueType.INTEGER,
-        handler: () => String(getMaxContextTokens()),
+        handler: ({ env }) => String(env.contextSnapshot ? env.contextSnapshot.maxContextTokens : getMaxContextTokens()),
     });
 
     // {{maxResponse}} -> max response token limit
@@ -339,7 +341,7 @@ export function registerCoreMacros() {
         description: 'Maximum response token limit.',
         returns: 'Maximum response token limit.',
         returnType: MacroValueType.INTEGER,
-        handler: () => String(getMaxResponseTokens()),
+        handler: ({ env }) => String(env.contextSnapshot ? env.contextSnapshot.maxResponseTokens : getMaxResponseTokens()),
     });
 
     // String utilities
@@ -465,7 +467,7 @@ export function registerCoreMacros() {
             // When changing the hashing logic, make sure to update unit test functionality
             // in registerTestablePick() to be identical.
 
-            const chatIdHash = getChatIdHash();
+            const chatIdHash = env.contextSnapshot ? env.contextSnapshot.chatIdHash : getChatIdHash();
 
             // Use the full original input string for deterministic behavior
             const rawContentHash = env.contentHash;
@@ -476,7 +478,7 @@ export function registerCoreMacros() {
             const offset = globalOffset;
 
             // Reroll seed allows users to reset all picks in the chat via /reroll-pick command
-            const rerollSeed = chat_metadata.pick_reroll_seed || null;
+            const rerollSeed = (env.contextSnapshot ? env.contextSnapshot.chatMetadata : chat_metadata).pick_reroll_seed || null;
 
             const combinedSeedString = [chatIdHash, rawContentHash, offset, rerollSeed].filter(it => it !== null).join('-');
             const finalSeed = getStringHash(combinedSeedString);
@@ -515,7 +517,8 @@ export function registerCoreMacros() {
         description: 'Bans a word for Text Completion backend. (Strips quotes surrounding the banned word, if present)',
         returns: '',
         exampleUsage: ['{{banned::delve}}'],
-        handler: ({ unnamedArgs: [bannedWord] }) => {
+        handler: ({ unnamedArgs: [bannedWord], env }) => {
+            if (env.contextSnapshot) throw new Error('Captured task macros cannot change generation settings.');
             // Strip quotes via regex, which were allowed in legacy syntax
             bannedWord = bannedWord.replace(/^"|"$/g, '');
             if (main_api === 'textgenerationwebui') {
@@ -540,8 +543,9 @@ export function registerCoreMacros() {
         description: 'Returns the world info outlet prompt for a given outlet key.',
         returns: 'World info outlet prompt.',
         exampleUsage: ['{{outlet::character-achievements}}'],
-        handler: ({ unnamedArgs: [outlet] }) => {
+        handler: ({ unnamedArgs: [outlet], env }) => {
             if (!outlet) return '';
+            if (env.contextSnapshot) return env.contextSnapshot.outlets[inject_ids.CUSTOM_WI_OUTLET(outlet)] ?? '';
             const value = extension_prompts[inject_ids.CUSTOM_WI_OUTLET(outlet)]?.value;
             return value || '';
         },

@@ -54,6 +54,7 @@ jest.unstable_mockModule('../../src/endpoints/backends/luker-generation.js', () 
     // the trailer frame's persisted/status values).
     notifyJobTextProgress: () => {},
     failGenerationJob: (job, err) => { if (job) { job.status = 'failed'; job.error = String(err || ''); } },
+    releaseTransientGenerationJobs: () => {},
     // The whole point of this test file: force-complete synchronously
     // with persisted=true so the trailer envelope carries a real value.
     completeGenerationJobFromText: async (_req, job) => {

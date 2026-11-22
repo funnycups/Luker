@@ -27,6 +27,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Added visible stored defaults and individual reset controls to extension prompt settings.
 
+### Extension API
+
+- Added `captureTaskPromptContext` and session-isolated task generation with final request inspection hooks across `generateTask`, `generateTaskStream`, `context`, and CardApp `ctx`.
+
 ### Fixes
 
 - Fixed generation progress notifications playing the system notification sound when Luker moves to the background.

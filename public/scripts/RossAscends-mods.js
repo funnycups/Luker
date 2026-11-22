@@ -403,7 +403,7 @@ export async function RA_CountCharTokens() {
             permanent_tokens += isPermanent ? Number(counter.text()) : 0;
         } else {
             // We substitute macro for existing characters, but not for the character being created
-            const valueToCount = menu_type === 'create' ? value : substituteParams(value);
+            const valueToCount = menu_type === 'create' ? value : substituteParams(value, { skipSideEffects: true });
             const tokens = await getTokenCountAsync(valueToCount);
 
             if (counterNonceLocal !== counterNonce) {

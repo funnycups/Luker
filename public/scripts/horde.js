@@ -16,6 +16,7 @@ import { t } from './i18n.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { kai_settings } from './kai-settings.js';
 import { withProfileRetry } from './extensions/connection-manager/profile-retry.js';
+import { transientSessionHeaders } from './lib/transient-session.js';
 
 export {
     MIN_LENGTH,
@@ -197,10 +198,12 @@ function setContextSizePreview() {
  * @param params
  * @param signal
  * @param reportProgress
+ * @param {{ transientSessionId?: string, onPreparedRequest?: (record: { requestApi: string, payload: object }) => void }} [requestOptions]
  * @returns {Promise<{text: *, workerName: string}>}
  * @throws {Error}
  */
-export async function generateHorde(prompt, params, signal, reportProgress) {
+export async function generateHorde(prompt, params, signal, reportProgress, { transientSessionId = undefined, onPreparedRequest = null } = {}) {
+    const sessionHeaders = transientSessionHeaders(transientSessionId);
     validateHordeModel();
     delete params.prompt;
 
@@ -220,9 +223,12 @@ export async function generateHorde(prompt, params, signal, reportProgress) {
     };
 
     const response = await withProfileRetry(async () => {
+        if (typeof onPreparedRequest === 'function') {
+            onPreparedRequest({ requestApi: 'koboldhorde', payload: JSON.parse(JSON.stringify(payload)) });
+        }
         return await fetch('/api/horde/generate-text', {
             method: 'POST',
-            headers: getRequestHeaders(),
+            headers: { ...getRequestHeaders(), ...sessionHeaders },
             body: JSON.stringify(payload),
             signal,
         });
@@ -230,6 +236,7 @@ export async function generateHorde(prompt, params, signal, reportProgress) {
         signal,
         label: 'horde',
         onAttempt: (attempt, _err, _delay, maxRetries) => {
+            if (transientSessionId) return;
             toastr.info(
                 t`Retrying request… (${attempt}/${maxRetries})`,
                 t`Request failed`,
@@ -239,8 +246,22 @@ export async function generateHorde(prompt, params, signal, reportProgress) {
     });
 
     if (!response.ok) {
-        toastr.error(response.statusText, 'Horde generation failed');
-        throw new Error(`Horde generation failed: ${response.statusText}`);
+        let errorDetail = response.statusText;
+        try {
+            const text = await response.text();
+            if (text) {
+                try {
+                    const parsed = JSON.parse(text);
+                    errorDetail = parsed?.error?.message || parsed?.message || text;
+                } catch {
+                    errorDetail = text;
+                }
+            }
+        } catch { /* keep statusText */ }
+        if (!transientSessionId) {
+            toastr.error(errorDetail, 'Horde generation failed');
+        }
+        throw new Error(`Horde generation failed: ${errorDetail}`);
     }
 
     const responseJson = await response.json();

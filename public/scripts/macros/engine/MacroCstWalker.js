@@ -111,7 +111,7 @@ class MacroCstWalker {
         let items = this.#collectDocumentItems(cst);
 
         // Process scoped macros: find opening/closing pairs and merge them
-        items = this.#processScopedMacros(items, text);
+        items = this.#processScopedMacros(items, text, env.evaluation?.registry ?? MacroRegistry);
 
         if (items.length === 0) {
             return text;
@@ -408,7 +408,7 @@ class MacroCstWalker {
         const argumentNodes = /** @type {CstNode[]} */ (argumentsNode?.children?.argument || []);
 
         // Check if this macro has delayArgResolution flag - if so, skip nested macro evaluation
-        const macroDef = MacroRegistry.getMacro(name);
+        const macroDef = (context.env.evaluation?.registry ?? MacroRegistry).getMacro(name);
         const delayArgResolution = macroDef?.delayArgResolution === true;
 
         /** @type {string[]} */
@@ -620,7 +620,7 @@ class MacroCstWalker {
         const lazyValue = hasValueExpr ? this.#createLazyValue(operatorChildren, context) : () => '';
 
         // Execute the operation using direct variable API calls
-        return this.#executeVariableOperation(varName, isGlobal, operation, lazyValue);
+        return this.#executeVariableOperation(varName, isGlobal, operation, lazyValue, context);
     }
 
     /**
@@ -653,9 +653,13 @@ class MacroCstWalker {
      * @param {() => string} lazyValue - A lazy function that returns the value when called. Only evaluated when needed.
      * @returns {string} The result of the operation.
      */
-    #executeVariableOperation(varName, isGlobal, operation, lazyValue) {
-        const ctx = Luker.getContext();
-        const vars = isGlobal ? ctx.variables.global : ctx.variables.local;
+    #executeVariableOperation(varName, isGlobal, operation, lazyValue, context) {
+        const variables = context.env.variables ?? Luker.getContext().variables;
+        const vars = isGlobal ? variables.global : variables.local;
+        const warn = message => {
+            if (context.env.evaluation?.strict) throw new Error(message);
+            logMacroRuntimeWarning({ message });
+        };
 
         /**
         * Normalizes macro results into a string.
@@ -693,7 +697,7 @@ class MacroCstWalker {
                 // Subtract by adding the negative value
                 const numValue = Number(lazyValue());
                 if (!isNaN(numValue)) vars.add(varName, -numValue);
-                else logMacroRuntimeWarning({ message: `Variable shorthand "-=" operator requires a numeric value, got: "${lazyValue()}"` });
+                else warn(`Variable shorthand "-=" operator requires a numeric value, got: "${lazyValue()}"`);
                 return '';
             }
 
@@ -752,7 +756,7 @@ class MacroCstWalker {
                 const currentNum = Number(vars.get(varName));
                 const compareNum = Number(lazyValue());
                 if (isNaN(currentNum) || isNaN(compareNum)) {
-                    logMacroRuntimeWarning({ message: `Variable shorthand ">" operator requires numeric values. Got: "${vars.get(varName)}" > "${lazyValue()}"` });
+                    warn(`Variable shorthand ">" operator requires numeric values. Got: "${vars.get(varName)}" > "${lazyValue()}"`);
                     return 'false';
                 }
                 return currentNum > compareNum ? 'true' : 'false';
@@ -763,7 +767,7 @@ class MacroCstWalker {
                 const currentNum = Number(vars.get(varName));
                 const compareNum = Number(lazyValue());
                 if (isNaN(currentNum) || isNaN(compareNum)) {
-                    logMacroRuntimeWarning({ message: `Variable shorthand ">=" operator requires numeric values. Got: "${vars.get(varName)}" >= "${lazyValue()}"` });
+                    warn(`Variable shorthand ">=" operator requires numeric values. Got: "${vars.get(varName)}" >= "${lazyValue()}"`);
                     return 'false';
                 }
                 return currentNum >= compareNum ? 'true' : 'false';
@@ -774,7 +778,7 @@ class MacroCstWalker {
                 const currentNum = Number(vars.get(varName));
                 const compareNum = Number(lazyValue());
                 if (isNaN(currentNum) || isNaN(compareNum)) {
-                    logMacroRuntimeWarning({ message: `Variable shorthand "<" operator requires numeric values. Got: "${vars.get(varName)}" < "${lazyValue()}"` });
+                    warn(`Variable shorthand "<" operator requires numeric values. Got: "${vars.get(varName)}" < "${lazyValue()}"`);
                     return 'false';
                 }
                 return currentNum < compareNum ? 'true' : 'false';
@@ -785,14 +789,14 @@ class MacroCstWalker {
                 const currentNum = Number(vars.get(varName));
                 const compareNum = Number(lazyValue());
                 if (isNaN(currentNum) || isNaN(compareNum)) {
-                    logMacroRuntimeWarning({ message: `Variable shorthand "<=" operator requires numeric values. Got: "${vars.get(varName)}" <= "${lazyValue()}"` });
+                    warn(`Variable shorthand "<=" operator requires numeric values. Got: "${vars.get(varName)}" <= "${lazyValue()}"`);
                     return 'false';
                 }
                 return currentNum <= compareNum ? 'true' : 'false';
             }
 
             default:
-                logMacroRuntimeWarning({ message: `Unknown variable shorthand operation: "${operation}"` });
+                warn(`Unknown variable shorthand operation: "${operation}"`);
                 return '';
         }
     }
@@ -930,7 +934,7 @@ class MacroCstWalker {
 
         // Collect items and process scoped macros
         let items = this.#collectDocumentItems(cst);
-        items = this.#processScopedMacros(items, rawContent);
+        items = this.#processScopedMacros(items, rawContent, context.env.evaluation?.registry ?? MacroRegistry);
 
         // If no items, return raw content
         if (items.length === 0) {
@@ -1179,7 +1183,7 @@ class MacroCstWalker {
      * @param {string} text - The original document text.
      * @returns {Array<DocumentItem>} - The processed items with scoped macros merged.
      */
-    #processScopedMacros(items, text) {
+    #processScopedMacros(items, text, registry = MacroRegistry) {
         // Build a list of scoped macro info for each macro item
         /** @type {Array<{ index: number, item: DocumentItemMacro, name: string, isClosing: boolean, matched: boolean }>} */
         const macroInfos = [];
@@ -1216,11 +1220,11 @@ class MacroCstWalker {
             if (openInfo.isClosing || openInfo.matched || insideScope.has(openInfo.index)) continue;
 
             // Find the matching closing macro for this opening macro
-            const closingIdx = this.#findMatchingClosingMacro(macroInfos, i);
+            const closingIdx = this.#findMatchingClosingMacro(macroInfos, i, registry);
             if (closingIdx === -1) continue;
 
             // Check if the macro can accept scoped content (arity validation)
-            if (!this.#canAcceptScopedContent(openInfo.item.node, openInfo.name)) {
+            if (!this.#canAcceptScopedContent(openInfo.item.node, openInfo.name, registry)) {
                 // Macro cannot accept scoped content - mark both as keepRaw
                 openInfo.item.keepRaw = true;
                 macroInfos[closingIdx].item.keepRaw = true;
@@ -1305,8 +1309,8 @@ class MacroCstWalker {
      * @param {string} macroName - The macro name.
      * @returns {boolean} - True if scoped content is allowed.
      */
-    #canAcceptScopedContent(macroNode, macroName) {
-        const def = MacroRegistry.getPrimaryMacro(macroName);
+    #canAcceptScopedContent(macroNode, macroName, registry = MacroRegistry) {
+        const def = registry.getPrimaryMacro(macroName);
         if (!def) {
             // Unknown macro - allow scoped content (will be handled as unknown macro later)
             return true;
@@ -1341,7 +1345,7 @@ class MacroCstWalker {
      * @param {number} openingIdx - Index in macroInfos array of the opening macro.
      * @returns {number} - Index in macroInfos array of the matching closing macro, or -1 if not found.
      */
-    #findMatchingClosingMacro(macroInfos, openingIdx) {
+    #findMatchingClosingMacro(macroInfos, openingIdx, registry = MacroRegistry) {
         const openInfo = macroInfos[openingIdx];
         const targetName = openInfo.name;
         let depth = 1;
@@ -1363,7 +1367,7 @@ class MacroCstWalker {
             } else {
                 // Only increment depth for opening macros that can accept scoped content
                 // Inline macros (e.g., {{if condition::content}}) don't need closing tags
-                if (this.#canAcceptScopedContent(info.item.node, info.name)) {
+                if (this.#canAcceptScopedContent(info.item.node, info.name, registry)) {
                     depth++;
                 }
             }

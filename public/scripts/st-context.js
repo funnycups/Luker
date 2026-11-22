@@ -197,6 +197,24 @@ const { getRegexedString, regex_placement } = regexEngine;
 import { addMessages, updateMessages, deleteMessages, getMessage, getMessageCount } from './messages.js';
 import { createFloorState } from './floor-state.js';
 import { generateTask, generateTaskStream, GenerateTaskError, resolveOpenAiStreamFlag } from './generate-task.js';
+
+let substituteCapturedMacrosImpl = null;
+
+function substituteCapturedMacros(content, snapshot, options) {
+    if (typeof substituteCapturedMacrosImpl !== 'function') {
+        throw new Error('Captured task macro substitution is not initialized; capture a TaskPromptContext first.');
+    }
+    return substituteCapturedMacrosImpl(content, snapshot, options);
+}
+
+async function captureTaskPromptContext(options) {
+    const [taskCtxMod, snapshotMod] = await Promise.all([
+        import('./task-prompt-context.js'),
+        import('./macros/snapshot.js'),
+    ]);
+    substituteCapturedMacrosImpl = snapshotMod.substituteCapturedMacros;
+    return await taskCtxMod.captureTaskPromptContext(options);
+}
 import { createMessageEditorHandle, TakeoverError } from './message-takeover.js';
 import { generateHorde } from './horde.js';
 import { getKoboldGenerationData, kai_settings, koboldai_settings, koboldai_setting_names } from './kai-settings.js';
@@ -301,12 +319,23 @@ function isPresetAvailable(manager, presetName) {
     return Boolean(findCanonicalNameInList(names, presetName));
 }
 
-function getPresetSnapshot(apiId, presetName = '') {
+function getPresetSnapshot(apiId, presetName = '', { strict = false } = {}) {
     const api = normalizePresetApi(apiId);
     const manager = getPresetManager(api);
     const selectedName = manager?.getSelectedPresetName?.() || '';
     const requestedName = findCanonicalNameInList(manager?.getAllPresets?.() || [], presetName) || String(presetName || '').trim();
     const targetName = requestedName || String(selectedName || '');
+    if (strict) {
+        if (!manager) throw new Error(`Prompt preset manager "${api}" is not initialized.`);
+        if (presetName && !isPresetAvailable(manager, requestedName)) {
+            throw new Error(`Prompt preset "${presetName}" was not found for "${api}".`);
+        }
+        const settings = requestedName
+            ? manager.getStoredPreset(requestedName)
+            : manager.getPresetSettings(targetName);
+        if (!isPlainObject(settings)) throw new Error(`Prompt preset "${targetName}" has invalid settings.`);
+        return { apiId: api, name: targetName, settings: JSON.parse(JSON.stringify(settings)) };
+    }
 
     let settings = {};
     let resolvedName = targetName;
@@ -1483,19 +1512,24 @@ function getActivePromptPresetEnvelope({
     instructPresetName = '',
     syspromptPresetName = '',
     reasoningPresetName = '',
+    capturedContext = null,
 } = {}) {
     const completionApi = normalizePresetApi(api);
     const requestedCompletionPreset = String(promptPresetName || completionPresetName || '').trim();
-    const completionPreset = getPresetSnapshot(completionApi, requestedCompletionPreset);
-    const contextPreset = getPresetSnapshot('context', contextPresetName);
-    const instructPreset = getPresetSnapshot('instruct', instructPresetName);
-    const syspromptPreset = getPresetSnapshot('sysprompt', syspromptPresetName);
-    const reasoningPreset = getPresetSnapshot('reasoning', reasoningPresetName);
+    const snapshotOptions = { strict: Boolean(capturedContext) };
+    const completionPreset = getPresetSnapshot(completionApi, requestedCompletionPreset, snapshotOptions);
+    const contextPreset = getPresetSnapshot('context', contextPresetName, snapshotOptions);
+    const instructPreset = getPresetSnapshot('instruct', instructPresetName, snapshotOptions);
+    const syspromptPreset = getPresetSnapshot('sysprompt', syspromptPresetName, snapshotOptions);
+    const reasoningPreset = getPresetSnapshot('reasoning', reasoningPresetName, snapshotOptions);
 
-    const fields = getCharacterCardFields({ chid: this_chid }) || {};
-    const character = characters?.[this_chid];
-    const syspromptRaw = cleanText(substituteParams(power_user?.sysprompt?.content || ''));
-    const postHistoryRaw = cleanText(substituteParams(power_user?.sysprompt?.post_history || ''));
+    const fields = capturedContext ? capturedContext.fields : getCharacterCardFields({ chid: this_chid }) || {};
+    const character = capturedContext ? capturedContext.character : characters?.[this_chid];
+    const substitute = capturedContext
+        ? text => substituteCapturedMacros(text, capturedContext.macroEnv)
+        : substituteParams;
+    const syspromptRaw = cleanText(substitute(power_user?.sysprompt?.content || ''));
+    const postHistoryRaw = cleanText(substitute(power_user?.sysprompt?.post_history || ''));
     const cardSystem = cleanText(fields?.system || '');
     const cardPostHistory = cleanText(fields?.jailbreak || '');
 
@@ -1636,7 +1670,7 @@ function normalizePromptMessages(messages) {
 // through untouched, and the internal sourceFloorIndex marker is
 // stripped from every returned message.
 
-function applyPluginRegexToRuntimeWorldInfo(runtimeWorldInfo = null) {
+function applyPluginRegexToRuntimeWorldInfo(runtimeWorldInfo = null, applyRegex = getRegexedString) {
     if (!runtimeWorldInfo || typeof runtimeWorldInfo !== 'object') {
         return runtimeWorldInfo;
     }
@@ -1647,7 +1681,7 @@ function applyPluginRegexToRuntimeWorldInfo(runtimeWorldInfo = null) {
         if (!text) {
             return '';
         }
-        return getRegexedString(text, regex_placement.WORLD_INFO, {
+        return applyRegex(text, regex_placement.WORLD_INFO, {
             isPluginInput: true,
             ...options,
         });
@@ -1684,10 +1718,10 @@ function applyPluginRegexToRuntimeWorldInfo(runtimeWorldInfo = null) {
     });
 }
 
-function getPluginPromptOrderPreferredCharacterIds() {
+export function getPluginPromptOrderPreferredCharacterIds({ includeCharacter = true } = {}) {
     const ids = [];
     const manager = getPresetManager('openai');
-    const activeId = manager?.activeCharacter?.id;
+    const activeId = includeCharacter ? manager?.activeCharacter?.id : undefined;
     const normalizedActive = String(activeId ?? '').trim();
     if (normalizedActive) {
         ids.push(normalizedActive);
@@ -2136,7 +2170,7 @@ function canUseScriptInjectPrompt(prompt) {
     }
 }
 
-function collectScriptInjectPromptFields() {
+export function collectScriptInjectPromptFields({ substitute = substituteParams } = {}) {
     const injectEntries = Object.entries(extension_prompts || {})
         .filter(([key]) => String(key || '').startsWith('script_inject_'))
         .sort(([a], [b]) => String(a).localeCompare(String(b)))
@@ -2152,13 +2186,13 @@ function collectScriptInjectPromptFields() {
 
     const before = injectEntries
         .filter(prompt => Number(prompt?.position) === extension_prompt_types.BEFORE_PROMPT)
-        .map(prompt => substituteParams(String(prompt?.value ?? '').trim()))
+        .map(prompt => substitute(String(prompt?.value ?? '').trim()))
         .filter(Boolean)
         .join('\n')
         .trim();
     const after = injectEntries
         .filter(prompt => Number(prompt?.position) === extension_prompt_types.IN_PROMPT)
-        .map(prompt => substituteParams(String(prompt?.value ?? '').trim()))
+        .map(prompt => substitute(String(prompt?.value ?? '').trim()))
         .filter(Boolean)
         .join('\n')
         .trim();
@@ -2168,7 +2202,7 @@ function collectScriptInjectPromptFields() {
         if (Number(prompt?.position) !== extension_prompt_types.IN_CHAT) {
             continue;
         }
-        const content = substituteParams(String(prompt?.value ?? '').trim());
+        const content = substitute(String(prompt?.value ?? '').trim());
         if (!content) {
             continue;
         }
@@ -2193,7 +2227,9 @@ function collectScriptInjectPromptFields() {
     };
 }
 
-function resolveRuntimeWorldInfoForPromptAssembly(runtimeWorldInfo = null, { applyPluginRegex = false } = {}) {
+function resolveRuntimeWorldInfoForPromptAssembly(runtimeWorldInfo = null, {
+    applyPluginRegex = false, applyRegex = getRegexedString,
+} = {}) {
     const normalized = runtimeWorldInfo && typeof runtimeWorldInfo === 'object'
         ? normalizeRuntimeWorldInfo(runtimeWorldInfo)
         : normalizeRuntimeWorldInfo({
@@ -2203,7 +2239,7 @@ function resolveRuntimeWorldInfoForPromptAssembly(runtimeWorldInfo = null, { app
     if (!applyPluginRegex) {
         return normalized;
     }
-    return applyPluginRegexToRuntimeWorldInfo(normalized);
+    return applyPluginRegexToRuntimeWorldInfo(normalized, applyRegex);
 }
 
 function normalizeWorldInfoSourceMessages(messages) {
@@ -2258,6 +2294,11 @@ async function resolveWorldInfoForMessages(messages = [], {
     globalScanData = undefined,
     fallbackToCurrentChat = true,
     postActivationHook = null,
+    dryRun = false,
+    isolated = false,
+    substitute = substituteParams,
+    applyRegex = getRegexedString,
+    throwOnError = false,
 } = {}) {
     const sourceMessages = Array.isArray(messages) && messages.length > 0
         ? messages
@@ -2272,6 +2313,10 @@ async function resolveWorldInfoForMessages(messages = [], {
         coreChat,
         type: String(type || 'quiet'),
         includeNames: includeNames !== false,
+        dryRun,
+        isolated,
+        substitute,
+        applyRegex,
     };
     const maxContextValue = Number(maxContext);
     if (Number.isFinite(maxContextValue) && maxContextValue > 0) {
@@ -2298,18 +2343,27 @@ async function resolveWorldInfoForMessages(messages = [], {
             activatedEntries: Array.isArray(resolution?.activatedEntries) ? resolution.activatedEntries : [],
         }, postActivationHook);
     } catch (error) {
+        if (throwOnError) throw error;
         console.warn('[LUKER] resolveWorldInfoForMessages failed', error);
         return normalizeRuntimeWorldInfo();
     }
 }
 
-function buildPluginMessagesFromPromptOrder(completionCore, envelope, normalizedMessages, runtimeWorldInfo = null) {
+function buildPluginMessagesFromPromptOrder(completionCore, envelope, normalizedMessages, runtimeWorldInfo = null, promptContext = null) {
+    const substitute = promptContext
+        ? text => substituteCapturedMacros(text, promptContext.macroEnv)
+        : substituteParams;
+    const applyRegex = promptContext
+        ? (text, placement, options) => getRegexedString(text, placement, {
+            ...options, scripts: promptContext.regexScripts, substitute, isolated: true,
+        })
+        : getRegexedString;
     const prompts = Array.isArray(completionCore?.prompts) ? completionCore.prompts : [];
     const promptMap = new Map(prompts
         .filter(prompt => prompt && typeof prompt === 'object' && typeof prompt.identifier === 'string')
         .map(prompt => [String(prompt.identifier), prompt]));
     const orderEntries = resolvePluginPromptOrderEntries(completionCore, {
-        preferredCharacterIds: getPluginPromptOrderPreferredCharacterIds(),
+        preferredCharacterIds: promptContext?.preferredCharacterIds ?? getPluginPromptOrderPreferredCharacterIds(),
     });
     if (orderEntries.length === 0) {
         return null;
@@ -2317,8 +2371,8 @@ function buildPluginMessagesFromPromptOrder(completionCore, envelope, normalized
 
     const result = [];
     let historyInjected = false;
-    const runtimePromptFields = resolveRuntimeWorldInfoForPromptAssembly(runtimeWorldInfo, { applyPluginRegex: true });
-    const scriptInjectFields = collectScriptInjectPromptFields();
+    const runtimePromptFields = resolveRuntimeWorldInfoForPromptAssembly(runtimeWorldInfo, { applyPluginRegex: true, applyRegex });
+    const scriptInjectFields = promptContext?.scriptInjectFields ?? collectScriptInjectPromptFields();
     const mergedWorldInfoDepth = [
         ...(Array.isArray(runtimePromptFields.worldInfoDepth) ? runtimePromptFields.worldInfoDepth : []),
         ...scriptInjectFields.depthEntries,
@@ -2369,7 +2423,7 @@ function buildPluginMessagesFromPromptOrder(completionCore, envelope, normalized
         if (prompt.marker === true) {
             content = resolvePluginMarkerPromptContent(identifier, envelope, runtimePromptFields);
         } else {
-            content = String(substituteParams(prompt.content || '')).trim();
+            content = String(substitute(prompt.content || '')).trim();
         }
 
         if (identifier === 'authorsNote') {
@@ -2419,6 +2473,7 @@ function buildPresetAwarePromptMessages({
     envelopeOptions = {},
     promptPresetName = '',
     runtimeWorldInfo = null,
+    promptContext = null,
 } = {}) {
     const normalizedMessages = normalizePromptMessages(messages);
     const resolvedEnvelopeOptions = envelopeOptions && typeof envelopeOptions === 'object'
@@ -2444,13 +2499,22 @@ function buildPresetAwarePromptMessages({
         }
     }
 
-    const pluginRegexMessages = applyPluginLaneRegex(normalizedMessages, { applyRegex: getRegexedString });
+    const applyRegex = promptContext
+        ? (text, placement, options) => getRegexedString(text, placement, {
+            ...options,
+            scripts: promptContext.regexScripts,
+            substitute: (value, args) => substituteCapturedMacros(value, promptContext.macroEnv, args),
+            isolated: true,
+        })
+        : getRegexedString;
+    const pluginRegexMessages = applyPluginLaneRegex(normalizedMessages, { applyRegex });
 
     const orderedMessages = buildPluginMessagesFromPromptOrder(
         resolvedEnvelope?.promptCore?.completion,
         resolvedEnvelope,
         pluginRegexMessages,
         runtimeWorldInfo,
+        promptContext,
     );
     if (Array.isArray(orderedMessages)) {
         return orderedMessages;
@@ -2852,6 +2916,8 @@ export function getContext() {
                 .then((m) => m.applyEmbeddedLorebookFromPreset(opts)),
         },
         getActivePromptPresetEnvelope,
+        captureTaskPromptContext,
+        substituteCapturedMacros,
         getActivePromptLayout,
         formatPromptPresetEnvelope,
         buildPresetAwarePromptMessages,

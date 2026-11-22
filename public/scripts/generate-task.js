@@ -6,6 +6,7 @@
  */
 
 import { regexAgentPluginOutput } from './lib/chat-regex.js';
+import { transientSessionHeaders } from './lib/transient-session.js';
 
 function getDefaultResolver() {
     const ctx = typeof globalThis.Luker?.getContext === 'function'
@@ -50,6 +51,66 @@ function getDefaultSubstituteParams() {
         ? globalThis.Luker.getContext()
         : null;
     return typeof ctx?.substituteParams === 'function' ? ctx.substituteParams : null;
+}
+
+function getDefaultCapturedSubstituteParams() {
+    const ctx = typeof globalThis.Luker?.getContext === 'function'
+        ? globalThis.Luker.getContext()
+        : null;
+    return typeof ctx?.substituteCapturedMacros === 'function' ? ctx.substituteCapturedMacros : null;
+}
+
+function getDefaultCapturedReplyRegex() {
+    const ctx = typeof globalThis.Luker?.getContext === 'function'
+        ? globalThis.Luker.getContext()
+        : null;
+    if (!ctx?.regex || typeof ctx.regex.applyRegex !== 'function' || typeof ctx.substituteCapturedMacros !== 'function') {
+        return null;
+    }
+    return (text, promptContext) => {
+        const raw = String(text ?? '');
+        if (!raw) return '';
+        return ctx.regex.applyRegex(raw, ctx.regex.placement.AI_OUTPUT, {
+            isPluginOutput: true,
+            scripts: Array.isArray(promptContext.regexScripts) ? promptContext.regexScripts : [],
+            substitute: (value, options) => ctx.substituteCapturedMacros(value, promptContext.macroEnv, options),
+            isolated: true,
+        });
+    };
+}
+
+/**
+ * Capture a serializable prompt-context snapshot through the active Luker runtime.
+ * Delegated lazily through `Luker.getContext()` so this module remains importable
+ * outside the browser bootstrap chain.
+ *
+ * @param {{ scope: 'preset' | 'chat', llmPresetName?: string, apiPresetName?: string }} [options]
+ * @param {{ _injected?: { captureTaskPromptContext?: Function } | null }} [internal]
+ * @returns {Promise<object>}
+ */
+export async function captureTaskPromptContext(options = {}, { _injected = null } = {}) {
+    const impl = typeof _injected?.captureTaskPromptContext === 'function'
+        ? _injected.captureTaskPromptContext
+        : globalThis.Luker?.getContext?.()?.captureTaskPromptContext;
+    if (typeof impl !== 'function') {
+        throw new GenerateTaskError(
+            'unknown',
+            'captureTaskPromptContext is unavailable (Luker.getContext().captureTaskPromptContext missing).',
+        );
+    }
+    return await impl(options);
+}
+
+function validatePromptContext(promptContext) {
+    if (promptContext === null || promptContext === undefined) {
+        return null;
+    }
+    if (typeof promptContext !== 'object'
+        || !promptContext.envelope || typeof promptContext.envelope !== 'object'
+        || !promptContext.macroEnv || typeof promptContext.macroEnv !== 'object') {
+        throw new GenerateTaskError('invalid_input', 'promptContext must be a captured TaskPromptContext object.');
+    }
+    return promptContext;
 }
 
 /**
@@ -109,6 +170,10 @@ export function applyMacroSubstitution(taskMessages, substituteParamsFn) {
     return taskMessages.map(message => {
         if (!message || typeof message !== 'object') {
             return message;
+        }
+        if (message.substituteMacros === false) {
+            const { substituteMacros: _skip, ...rest } = message;
+            return rest;
         }
         if (typeof message.content !== 'string' || !message.content) {
             return message;
@@ -262,9 +327,16 @@ export async function resolveWorldInfo({
     forceWorldInfoResimulate = false,
     worldInfoType = 'quiet',
     postActivationHook = null,
+    promptContext = null,
 } = {}, {
     worldInfoResolver = null,
 } = {}) {
+    if (promptContext && typeof promptContext === 'object') {
+        return promptContext.runtimeWorldInfo && typeof promptContext.runtimeWorldInfo === 'object'
+            ? promptContext.runtimeWorldInfo
+            : {};
+    }
+
     const hasSnapshot = runtimeWorldInfo && typeof runtimeWorldInfo === 'object'
         && Object.keys(runtimeWorldInfo).length > 0;
     if (hasSnapshot && !forceWorldInfoResimulate) {
@@ -336,6 +408,7 @@ export function assembleMessages({
     llmPresetName = '',
     requestApi = 'openai',
     runtimeWorldInfo = null,
+    promptContext = null,
 } = {}, { builder } = {}) {
     if (typeof builder !== 'function') {
         throw new GenerateTaskError(
@@ -347,8 +420,11 @@ export function assembleMessages({
     const envelopeApi = presetName ? 'openai' : (String(requestApi || 'openai').trim() || 'openai');
     return builder({
         messages: Array.isArray(taskMessages) ? taskMessages : [],
+        ...(promptContext ? { envelope: promptContext.envelope, promptContext } : {}),
         envelopeOptions: {
-            includeCharacterCard: includeCharacterCard !== false,
+            includeCharacterCard: promptContext
+                ? Boolean(promptContext.envelope?.characterCard)
+                : includeCharacterCard !== false,
             api: envelopeApi,
             promptPresetName: presetName,
         },
@@ -423,6 +499,9 @@ export async function dispatchToSender({
     functionCallMode = 'auto',
     functionCallOptions = null,
     abortSignal = undefined,
+    transientSessionId = undefined,
+    onPreparedRequest = null,
+    promptNames = null,
 } = {}, { senders = null } = {}) {
     if (!SUPPORTED_APIS.has(requestApi)) {
         throw new GenerateTaskError(
@@ -430,6 +509,7 @@ export async function dispatchToSender({
             `requestApi '${requestApi}' is not supported by dispatchToSender`,
         );
     }
+    const sessionHeaders = transientSessionHeaders(transientSessionId);
     const s = senders && typeof senders === 'object' ? senders : {};
 
     if (requestApi === 'openai') {
@@ -454,6 +534,9 @@ export async function dispatchToSender({
             requestScope: 'extension_internal',
             functionCallMode: String(functionCallMode || 'auto'),
             functionCallOptions: functionCallOptions || null,
+            ...(transientSessionId !== undefined ? { transientSessionId } : {}),
+            ...(typeof onPreparedRequest === 'function' ? { onPreparedRequest } : {}),
+            ...(promptNames ? { promptNames } : {}),
         });
     }
 
@@ -466,7 +549,12 @@ export async function dispatchToSender({
             ? rt.koboldai_settings[rt.koboldai_setting_names[rt.kai_settings?.preset_settings]]
             : null;
         const data = s.getKoboldGenerationData(String(payload), settings, rt?.amount_gen, rt?.max_context, true, 'quiet');
-        return await s.generateHorde(String(payload), data, abortSignal, false);
+        const hordeOptions = {};
+        if (transientSessionId !== undefined) hordeOptions.transientSessionId = transientSessionId;
+        if (typeof onPreparedRequest === 'function') hordeOptions.onPreparedRequest = onPreparedRequest;
+        return Object.keys(hordeOptions).length > 0
+            ? await s.generateHorde(String(payload), data, abortSignal, false, hordeOptions)
+            : await s.generateHorde(String(payload), data, abortSignal, false);
     }
 
     let body;
@@ -509,9 +597,12 @@ export async function dispatchToSender({
         throw new GenerateTaskError('unknown', `dispatchToSender ${requestApi} path requires senders.getGenerateUrl / getRequestHeaders / fetchImpl`);
     }
     const url = s.getGenerateUrl(requestApi);
+    if (typeof onPreparedRequest === 'function') {
+        onPreparedRequest({ requestApi, payload: JSON.parse(JSON.stringify(body)) });
+    }
     const response = await s.fetchImpl(url, {
         method: 'POST',
-        headers: s.getRequestHeaders(),
+        headers: { ...s.getRequestHeaders(), ...sessionHeaders },
         cache: 'no-cache',
         body: JSON.stringify(body),
         signal: abortSignal,
@@ -519,9 +610,10 @@ export async function dispatchToSender({
     if (!response.ok) {
         let errBody = null;
         try { errBody = await response.json(); } catch { /* swallow */ }
+        const detail = errBody?.error?.message || errBody?.message || (typeof errBody?.error === 'string' ? errBody.error : '');
         throw new GenerateTaskError(
             'network',
-            `${requestApi} sender HTTP ${response.status}`,
+            detail ? `${requestApi} sender HTTP ${response.status}: ${detail}` : `${requestApi} sender HTTP ${response.status}`,
             { details: { status: response.status, body: errBody } },
         );
     }
@@ -550,6 +642,9 @@ export function dispatchToSenderStreaming({
     functionCallMode = 'auto',
     functionCallOptions = null,
     abortSignal = undefined,
+    transientSessionId = undefined,
+    onPreparedRequest = null,
+    promptNames = null,
 } = {}, { senders = null } = {}) {
     if (requestApi !== 'openai') {
         throw new GenerateTaskError(
@@ -557,6 +652,7 @@ export function dispatchToSenderStreaming({
             `streaming is not available for requestApi '${requestApi}'`,
         );
     }
+    transientSessionHeaders(transientSessionId);
     const s = senders && typeof senders === 'object' ? senders : {};
     if (typeof s.sendOpenAIRequest !== 'function') {
         throw new GenerateTaskError('unknown', 'dispatchToSenderStreaming requires senders.sendOpenAIRequest');
@@ -590,6 +686,9 @@ export function dispatchToSenderStreaming({
                 functionCallMode: String(functionCallMode || 'auto'),
                 functionCallOptions: functionCallOptions || null,
                 allowStreamingForQuiet: true,
+                ...(transientSessionId !== undefined ? { transientSessionId } : {}),
+                ...(typeof onPreparedRequest === 'function' ? { onPreparedRequest } : {}),
+                ...(promptNames ? { promptNames } : {}),
             });
             if (typeof genFactory !== 'function') {
                 throw new GenerateTaskError('no_response', 'openai streaming sender did not return a generator factory');
@@ -962,6 +1061,9 @@ export async function generateTask({
     functionCallOptions = null,
     abortSignal = undefined,
     substituteMacros = true,
+    promptContext = null,
+    transientSessionId = undefined,
+    onPreparedRequest = null,
 } = {}, { _injected = null } = {}) {
     // ── 1. Input validation ──
     const hasTools = Array.isArray(tools) && tools.length > 0;
@@ -969,6 +1071,8 @@ export async function generateTask({
     if (hasTools && hasJsonSchema) {
         throw new GenerateTaskError('invalid_input', 'tools and jsonSchema are mutually exclusive');
     }
+    const validatedPromptContext = validatePromptContext(promptContext);
+    transientSessionHeaders(transientSessionId);
 
     const profileResolver = _injected?.profileResolver || null;
     const worldInfoResolver = _injected?.worldInfoResolver || getDefaultWorldInfoResolver();
@@ -1000,6 +1104,7 @@ export async function generateTask({
         forceWorldInfoResimulate,
         worldInfoType,
         postActivationHook,
+        promptContext: validatedPromptContext,
     }, { worldInfoResolver });
 
     // ── 4.5 Macro substitution on caller-supplied task messages ──
@@ -1009,17 +1114,29 @@ export async function generateTask({
     // `{{getvar::}}` / etc. as literal text. skipSideEffects:true is mandatory
     // — otherwise every plugin call would re-fire setvar/addvar macros and
     // mutate chat_metadata.variables on each dispatch.
+    const effectiveSubstituteFn = validatedPromptContext
+        ? (content, options) => {
+            const capturedSubstitute = _injected?.substituteCapturedMacros || getDefaultCapturedSubstituteParams();
+            if (typeof capturedSubstitute !== 'function') {
+                throw new GenerateTaskError('unknown', 'Captured task macro substitution is unavailable.');
+            }
+            return capturedSubstitute(content, validatedPromptContext.macroEnv, options);
+        }
+        : substituteParamsFn;
     const effectiveTaskMessages = substituteMacros
-        ? applyMacroSubstitution(taskMessages, substituteParamsFn)
+        ? applyMacroSubstitution(taskMessages, effectiveSubstituteFn)
         : taskMessages;
 
     // ── 5. Assemble messages (envelope-aware, chat-completion shape) ──
     const messages = assembleMessages({
         taskMessages: effectiveTaskMessages,
-        includeCharacterCard,
+        includeCharacterCard: validatedPromptContext
+            ? Boolean(validatedPromptContext.envelope?.characterCard)
+            : includeCharacterCard,
         llmPresetName: effectiveLlmPresetName,
         requestApi: profile.requestApi,
         runtimeWorldInfo: wi,
+        promptContext: validatedPromptContext,
     }, { builder });
 
     // ── 6. Render per-family ──
@@ -1033,6 +1150,15 @@ export async function generateTask({
     // — `Promise<terminal>` — unchanged. `generateTaskStream` remains the
     // entry point for callers that want chunk-by-chunk delivery.
     const mode = hasJsonSchema ? RESPONSE_MODES.JSON : (hasTools ? RESPONSE_MODES.TOOL : RESPONSE_MODES.TEXT);
+    const promptNames = validatedPromptContext
+        ? {
+            userName: String(validatedPromptContext.macroEnv?.names?.user ?? ''),
+            charName: String(validatedPromptContext.macroEnv?.names?.char ?? ''),
+            groupNames: Array.isArray(validatedPromptContext.macroEnv?.contextSnapshot?.groupNames)
+                ? validatedPromptContext.macroEnv.contextSnapshot.groupNames
+                : [],
+        }
+        : null;
     const useStreamingTransport = profile.requestApi === 'openai'
         && resolveOpenAiStreamFlag(senders?.getOpenAiRuntime?.(), effectiveLlmPresetName);
     let raw;
@@ -1050,6 +1176,9 @@ export async function generateTask({
                 functionCallMode,
                 functionCallOptions,
                 abortSignal,
+                transientSessionId,
+                onPreparedRequest,
+                promptNames,
             }, { senders });
             // Drain inner stream so the producer is not blocked waiting for a
             // consumer (chunks are dropped per channel spec when no consumer
@@ -1070,6 +1199,9 @@ export async function generateTask({
                 functionCallMode,
                 functionCallOptions,
                 abortSignal,
+                transientSessionId,
+                onPreparedRequest,
+                promptNames,
             }, { senders });
         }
     } catch (e) {
@@ -1082,8 +1214,16 @@ export async function generateTask({
     // ── 9. Plugin output-direction regex pass ──
     // Rules with the plugin reply lane (`pluginLanes: ['reply']`) cook the
     // assistant text a plugin request returns. toolCalls payloads are never touched.
-    const regexOutputApplier = _injected?.regexOutputApplier || regexAgentPluginOutput;
-    result.assistantText = regexOutputApplier(result.assistantText);
+    if (_injected?.regexOutputApplier) {
+        result.assistantText = _injected.regexOutputApplier(result.assistantText);
+    } else if (validatedPromptContext) {
+        const capturedReplyRegex = _injected?.applyCapturedReplyRegex || getDefaultCapturedReplyRegex();
+        if (typeof capturedReplyRegex === 'function') {
+            result.assistantText = capturedReplyRegex(result.assistantText, validatedPromptContext);
+        }
+    } else {
+        result.assistantText = regexAgentPluginOutput(result.assistantText);
+    }
 
     return result;
 }
@@ -1114,6 +1254,9 @@ export function generateTaskStream({
     functionCallOptions = null,
     abortSignal = undefined,
     substituteMacros = true,
+    promptContext = null,
+    transientSessionId = undefined,
+    onPreparedRequest = null,
 } = {}, { _injected = null } = {}) {
     // ── 1. Input validation ──
     const hasTools = Array.isArray(tools) && tools.length > 0;
@@ -1121,6 +1264,8 @@ export function generateTaskStream({
     if (hasTools && hasJsonSchema) {
         throw new GenerateTaskError('invalid_input', 'tools and jsonSchema are mutually exclusive');
     }
+    const validatedPromptContext = validatePromptContext(promptContext);
+    transientSessionHeaders(transientSessionId);
 
     const profileResolver = _injected?.profileResolver || null;
     const worldInfoResolver = _injected?.worldInfoResolver || getDefaultWorldInfoResolver();
@@ -1166,26 +1311,48 @@ export function generateTaskStream({
                 forceWorldInfoResimulate,
                 worldInfoType,
                 postActivationHook,
+                promptContext: validatedPromptContext,
             }, { worldInfoResolver });
 
             // ── 4.5 Macro substitution ──
+            const effectiveSubstituteFn = validatedPromptContext
+                ? (content, options) => {
+                    const capturedSubstitute = _injected?.substituteCapturedMacros || getDefaultCapturedSubstituteParams();
+                    if (typeof capturedSubstitute !== 'function') {
+                        throw new GenerateTaskError('unknown', 'Captured task macro substitution is unavailable.');
+                    }
+                    return capturedSubstitute(content, validatedPromptContext.macroEnv, options);
+                }
+                : substituteParamsFn;
             const effectiveTaskMessages = substituteMacros
-                ? applyMacroSubstitution(taskMessages, substituteParamsFn)
+                ? applyMacroSubstitution(taskMessages, effectiveSubstituteFn)
                 : taskMessages;
 
             // ── 5. Assemble messages ──
             const messages = assembleMessages({
                 taskMessages: effectiveTaskMessages,
-                includeCharacterCard,
+                includeCharacterCard: validatedPromptContext
+                    ? Boolean(validatedPromptContext.envelope?.characterCard)
+                    : includeCharacterCard,
                 llmPresetName: effectiveLlmPresetName,
                 requestApi: profile.requestApi,
                 runtimeWorldInfo: wi,
+                promptContext: validatedPromptContext,
             }, { builder });
 
             // ── 6. Render per-family ──
             const payload = renderForApi(profile.requestApi, messages, { rawPromptBuilder });
 
             // ── 7. Dispatch (streaming) ──
+            const promptNames = validatedPromptContext
+                ? {
+                    userName: String(validatedPromptContext.macroEnv?.names?.user ?? ''),
+                    charName: String(validatedPromptContext.macroEnv?.names?.char ?? ''),
+                    groupNames: Array.isArray(validatedPromptContext.macroEnv?.contextSnapshot?.groupNames)
+                        ? validatedPromptContext.macroEnv.contextSnapshot.groupNames
+                        : [],
+                }
+                : null;
             const { stream: innerStream, rawTerminal } = dispatchToSenderStreaming({
                 requestApi: profile.requestApi,
                 payload,
@@ -1198,6 +1365,9 @@ export function generateTaskStream({
                 functionCallMode,
                 functionCallOptions,
                 abortSignal,
+                transientSessionId,
+                onPreparedRequest,
+                promptNames,
             }, { senders });
 
             // Forward inner chunks to outer stream.
@@ -1223,8 +1393,16 @@ export function generateTaskStream({
                 const normalized = normalizeResponse({ requestApi: profile.requestApi, mode, raw });
                 // ── 9. Plugin output-direction regex pass ──
                 // Terminal text only; streamed deltas stay raw.
-                const regexOutputApplier = _injected?.regexOutputApplier || regexAgentPluginOutput;
-                normalized.assistantText = regexOutputApplier(normalized.assistantText);
+                if (_injected?.regexOutputApplier) {
+                    normalized.assistantText = _injected.regexOutputApplier(normalized.assistantText);
+                } else if (validatedPromptContext) {
+                    const capturedReplyRegex = _injected?.applyCapturedReplyRegex || getDefaultCapturedReplyRegex();
+                    if (typeof capturedReplyRegex === 'function') {
+                        normalized.assistantText = capturedReplyRegex(normalized.assistantText, validatedPromptContext);
+                    }
+                } else {
+                    normalized.assistantText = regexAgentPluginOutput(normalized.assistantText);
+                }
                 resolveResult(normalized);
             } catch (e) {
                 rejectResult(e);

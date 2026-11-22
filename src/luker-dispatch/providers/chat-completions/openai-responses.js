@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { dispatchLog as console } from '../../logging.js';
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 //
 // OpenAI Responses API chat-completion dispatch. Speaks the /v1/responses

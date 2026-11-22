@@ -19,6 +19,14 @@ import {
     getInspectionAbortSignal,
     getAbortKind,
 } from '../src/request-inspector.js';
+import {
+    TRANSIENT_SESSION_HEADER,
+    closeTransientSession,
+    createTransientSession,
+} from '../src/transient-sessions.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 // Each test gets a unique handle so the module-level ring buffer stays
 // isolated between cases; findEntry() keys on handle + __inspectorId.
@@ -840,6 +848,60 @@ describe('request-inspector: abort route', () => {
 
         expect(res.status).toBe(409);
         expect(res.body).toEqual({ aborted: false, error: 'not_running' });
+    });
+});
+
+describe('request-inspector: transient session isolation', () => {
+    test('skips chat, image, and embedding inspection for owned transient sessions without clearing ordinary entries', async () => {
+        const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'luker-ri-transient-'));
+        const directories = { userImages: path.join(tempRoot, 'images') };
+        await fs.mkdir(directories.userImages, { recursive: true });
+        const handle = `ri-transient-${Date.now()}`;
+        let session;
+        try {
+            session = await createTransientSession({ userHandle: handle, directories, owner: {} });
+            const ordinary = {
+                user: { profile: { handle } },
+                headers: {},
+                body: {
+                    chat_completion_source: 'openai',
+                    model: 'test-model',
+                    messages: [{ role: 'user', content: 'ordinary chat message' }],
+                },
+            };
+            startInspection(ordinary);
+            completeInspection(ordinary, {
+                choices: [{ message: { content: 'ordinary reply' }, finish_reason: 'stop' }],
+            });
+            const before = [...getBufferForHandle(handle)];
+            expect(before).toHaveLength(1);
+
+            const scopedHeaders = { [TRANSIENT_SESSION_HEADER.toLowerCase()]: session.id };
+            const transientChat = {
+                user: { profile: { handle } },
+                headers: scopedHeaders,
+                body: {
+                    chat_completion_source: 'openai',
+                    model: 'test-model',
+                    messages: [{ role: 'user', content: 'private simulation prompt' }],
+                },
+            };
+            startInspection(transientChat);
+            completeInspection(transientChat, {
+                choices: [{ message: { content: 'private simulation reply' }, finish_reason: 'stop' }],
+            });
+
+            const transientImage = { user: { profile: { handle } }, headers: scopedHeaders, body: {} };
+            startImageInspection(transientImage, { backend: 'comfy', prompt: 'private prompt' });
+
+            const transientEmbed = { user: { profile: { handle } }, headers: scopedHeaders, body: {} };
+            startEmbeddingInspection(transientEmbed, { model: 'embed', routeKind: 'query', inputCount: 1, inputCharTotal: 4, inputTexts: [] });
+
+            expect(getBufferForHandle(handle)).toEqual(before);
+        } finally {
+            if (session) await closeTransientSession(session).catch(() => {});
+            await fs.rm(tempRoot, { recursive: true, force: true });
+        }
     });
 });
 

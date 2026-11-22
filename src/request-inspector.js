@@ -7,6 +7,7 @@ import { getConfigValue } from './util.js';
 import { ByteBudgetLedger } from './util/byte-budget.js';
 import { getGlobalProxyInfo } from './request-proxy.js';
 import { joinReasoningDetailsText, mergeReasoningDetails } from '../public/scripts/util/reasoning-details.js';
+import { getRequestTransientSession } from './transient-sessions.js';
 
 const RING_BUFFER_SIZE = 200;
 // Completed records are diagnostic snapshots, not durable data — 2h covers
@@ -346,6 +347,7 @@ export function describeNetworkProxy(request) {
 export function startInspection(request) {
     const handle = String(request?.user?.profile?.handle || '');
     if (!handle) return;
+    if (getRequestTransientSession(request)) return;
 
     const body = request.body || {};
     const messages = Array.isArray(body.messages) ? body.messages : [];
@@ -1879,6 +1881,7 @@ function imageMimeFromFormat(format) {
 export function startImageInspection(request, meta) {
     const handle = String(request?.user?.profile?.handle || '');
     if (!handle) return;
+    if (getRequestTransientSession(request)) return;
 
     const entry = {
         id: randomUUID(),
@@ -2084,6 +2087,7 @@ export function extractEmbeddingMeta(routeKind, body = {}) {
 export function startEmbeddingInspection(request, meta) {
     const handle = String(request?.user?.profile?.handle || '');
     if (!handle) return;
+    if (getRequestTransientSession(request)) return;
 
     const entry = {
         id: randomUUID(),

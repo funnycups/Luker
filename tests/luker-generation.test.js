@@ -14,6 +14,7 @@ import {
     createGenerationJob,
     attachJobToRequest,
     getJobFromRequest,
+    getGenerationJobForRequest,
     appendGenerationEvent,
     accumulateChunkTextIntoJob,
     subscribeToJob,
@@ -21,7 +22,16 @@ import {
     failGenerationJob,
     notifyJobTextProgress,
     abortGenerationJobForInspector,
+    releaseTransientGenerationJobs,
 } from '../src/endpoints/backends/luker-generation.js';
+import {
+    TRANSIENT_SESSION_HEADER,
+    closeTransientSession,
+    createTransientSession,
+} from '../src/transient-sessions.js';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 let idCounter = 0;
 function uniqueJobId(prefix) {
@@ -726,5 +736,43 @@ describe('notifyJobTextProgress', () => {
         expect(statusFrames[0].status).toBe('running');
         expect(statusFrames[0].text).toBe('first');
         expect(statusFrames[1].status).toBe('failed');
+    });
+});
+
+describe('releaseTransientGenerationJobs', () => {
+    test('releases only the closed session jobs and preservesOrdinaryGenerationRecovery', async () => {
+        const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'luker-gen-transient-'));
+        const directories = { userImages: path.join(tempRoot, 'images') };
+        await fs.mkdir(directories.userImages, { recursive: true });
+        let sessionA;
+        let sessionB;
+        try {
+            sessionA = await createTransientSession({ userHandle: 'alice', directories, owner: {} });
+            sessionB = await createTransientSession({ userHandle: 'alice', directories, owner: {} });
+
+            const ordinaryId = uniqueJobId('ordinary-keep');
+            const isolatedAId = uniqueJobId('isolated-a');
+            const isolatedBId = uniqueJobId('isolated-b');
+
+            const ordinaryReq = baseRequest({ headers: {} });
+            const reqA = baseRequest({ headers: { [TRANSIENT_SESSION_HEADER.toLowerCase()]: sessionA.id } });
+            const reqB = baseRequest({ headers: { [TRANSIENT_SESSION_HEADER.toLowerCase()]: sessionB.id } });
+
+            createGenerationJob(ordinaryReq, { job_id: ordinaryId });
+            const jobA = createGenerationJob(reqA, { job_id: isolatedAId });
+            appendGenerationEvent(jobA, 'data: {"choices":[]}');
+            createGenerationJob(reqB, { job_id: isolatedBId });
+
+            releaseTransientGenerationJobs(sessionA);
+
+            expect(getGenerationJobForRequest(reqA, isolatedAId)).toBeNull();
+            expect(jobA.events).toEqual([]);
+            expect(getGenerationJobForRequest(reqB, isolatedBId)?.id).toBe(isolatedBId);
+            expect(getGenerationJobForRequest(ordinaryReq, ordinaryId)?.id).toBe(ordinaryId);
+        } finally {
+            if (sessionA) await closeTransientSession(sessionA).catch(() => {});
+            if (sessionB) await closeTransientSession(sessionB).catch(() => {});
+            await fs.rm(tempRoot, { recursive: true, force: true });
+        }
     });
 });
