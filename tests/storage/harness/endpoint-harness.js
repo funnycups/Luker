@@ -38,6 +38,7 @@ import pg from 'pg';
 import request from 'supertest';
 
 import { initStorage, getStorageEngine } from '../../../src/storage/index.js';
+import { _resetChatBackupThrottlesForTests } from '../../../src/endpoints/chats.js';
 
 // Mirror src/constants.js USER_DIRECTORY_TEMPLATE — must stay in sync.
 const USER_DIRS = Object.freeze({
@@ -328,6 +329,9 @@ export async function makeEndpointHarness({ mode, mount, profile, extraHandles, 
             const settled = await Promise.allSettled([closure, readiness]);
             for (const result of settled) if (result.status === 'rejected') failures.push(result.reason);
             await drainActive();
+            // Cancel any deferred trailing backupChat() throttle timers before
+            // tearing down storage and removing dataRoot.
+            _resetChatBackupThrottlesForTests();
             const failure = workFailure();
             if (failure && !failures.includes(failure)) failures.push(failure);
             if (engine) {
