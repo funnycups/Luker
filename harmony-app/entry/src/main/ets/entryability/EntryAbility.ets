@@ -6,6 +6,7 @@ import { webview } from '@kit.ArkWeb';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BackendManager } from '../BackendManager';
 import { ImmersiveManager } from '../ImmersiveManager';
+import { SafeAreaManager } from '../SafeAreaManager';
 import { KeepAliveManager } from '../KeepAliveManager';
 import { launchInProcessEarly, prepareDataDir } from '../BackendLauncher';
 import { LastExit, recordLastExit } from '../crash/LastExit';
@@ -76,20 +77,32 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
     try {
-      ImmersiveManager.attach(windowStage.getMainWindowSync());
+      const mainWindow: window.Window = windowStage.getMainWindowSync();
+      ImmersiveManager.attach(mainWindow);
+      // Edge to edge layout: the page paints the theme colour behind the system
+      // bars so the strips above and below the web view stop being system white.
+      SafeAreaManager.attach(mainWindow);
     } catch (e) {
-      hilog.error(DOMAIN, TAG, 'attach immersive window failed: %{public}s', JSON.stringify(e));
+      hilog.error(DOMAIN, TAG, 'attach window managers failed: %{public}s', JSON.stringify(e));
     }
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, TAG, 'loadContent failed: %{public}s', JSON.stringify(err));
+        return;
       }
+      SafeAreaManager.refresh();
     });
+  }
+
+  onWindowStageDestroy(): void {
+    SafeAreaManager.detach();
+    ImmersiveManager.detach();
   }
 
   onForeground(): void {
     KeepAliveManager.setInBackground(false);
     RuntimeNotification.setForeground(true);
+    SafeAreaManager.refresh();
   }
 
   onBackground(): void {

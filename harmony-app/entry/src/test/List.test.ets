@@ -6,6 +6,7 @@ import endpointUrlTest from './EndpointUrl.test';
 import endpointFailureTest from './EndpointFailure.test';
 import httpAuthTest from './HttpAuth.test';
 import webRecoveryStateTest from './WebRecoveryState.test';
+import safeAreaPolicyTest from './SafeAreaPolicy.test';
 
 export default function testsuite(): void {
   crashSummaryTest();
@@ -16,4 +17,5 @@ export default function testsuite(): void {
   endpointFailureTest();
   httpAuthTest();
   webRecoveryStateTest();
+  safeAreaPolicyTest();
 }

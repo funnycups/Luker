@@ -4,6 +4,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { notificationManager } from '@kit.NotificationKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ImmersiveManager } from './ImmersiveManager';
+import { SafeAreaManager } from './SafeAreaManager';
 import { ExternalLinkSettings } from './ExternalLinkPolicy';
 import { RuntimeNotification } from './RuntimeNotification';
 
@@ -263,6 +264,15 @@ export class LukerHarmonyBridge {
 
   setImmersiveModeEnabled(enabled: boolean): void {
     ImmersiveManager.setEnabled(enabled === true);
+  }
+
+  /**
+   * The page reports the background it is rendering (SillyTavern themes it),
+   * so the strips behind the system bars can match the current theme instead of
+   * being painted with a colour the app guessed at build time.
+   */
+  setPageBackgroundColor(color: string): void {
+    SafeAreaManager.setPageBackground(color);
   }
 
   setOpenExternalLinksInBrowser(enabled: boolean): void {

@@ -15,6 +15,7 @@ import { writeArkWebExit } from '../crash/CrashCapture';
 import { LastExit } from '../crash/LastExit';
 import { KeepAliveManager, LukerHarmonyBridge } from '../KeepAliveManager';
 import { ImmersiveManager } from '../ImmersiveManager';
+import { DEFAULT_PAGE_BACKGROUND, PAGE_THEME_REPORTER, SafeAreaManager } from '../SafeAreaManager';
 import { ExternalLinkSettings, LinkRoute, originOf, routeNewWindow, routeTopLevelNavigation } from '../ExternalLinkPolicy';
 import { FileSelectionPlan, MediaKind, planFileSelection } from '../FileSelectionPlanner';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -70,6 +71,13 @@ struct Index {
   @StorageLink('luker.serverUrl') serverUrl: string = DEFAULT_LOCAL_BASE_URL;
   @StorageLink('luker.customEndpoint') customEndpoint: boolean = false;
   @StorageLink('luker.pendingAction') @Watch('onPendingAction') pendingAction: string = '';
+  // Filled by SafeAreaManager with the system bar and cutout insets; the page
+  // paints the theme colour into them instead of letting the system show a white strip.
+  @StorageProp('luker.safeTop') safeTopVp: number = 0;
+  @StorageProp('luker.safeBottom') safeBottomVp: number = 0;
+  @StorageProp('luker.safeLeft') safeLeftVp: number = 0;
+  @StorageProp('luker.safeRight') safeRightVp: number = 0;
+  @StorageProp('luker.pageBackground') pageBackground: string = DEFAULT_PAGE_BACKGROUND;
   private exporting: boolean = false;
   private crashDialogDone: boolean = false;
   private saveTargets: Map<string, string> = new Map<string, string>();
@@ -117,6 +125,7 @@ struct Index {
 
   onPageShow(): void {
     this.pageShown = true;
+    SafeAreaManager.refresh();
     this.openPendingEndpointDialog();
   }
 
@@ -127,6 +136,21 @@ struct Index {
   private res(id: number, arg?: string): string {
     const mgr = getContext(this).resourceManager;
     return arg === undefined ? mgr.getStringSync(id) : mgr.getStringSync(id, arg);
+  }
+
+  /**
+   * Injects the reporter that tells the window which background the page is
+   * showing right now, and repeats that on every restyle (theme switch, chat
+   * background change), so the system bar strips and icon contrast follow it.
+   */
+  private reportPageTheme(): void {
+    try {
+      this.controller.runJavaScript(PAGE_THEME_REPORTER).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'theme reporter injection failed: %{public}s', JSON.stringify(err));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'theme reporter injection threw: %{public}s', JSON.stringify(e));
+    }
   }
 
   private crashFilesDir(): string {
@@ -600,6 +624,7 @@ struct Index {
     this.controllerAttached = false;
     this.rendererExited = false;
     this.rendererExitReason = -1;
+    SafeAreaManager.resetToNativeChrome();
     this.start();
     return true;
   }
@@ -865,6 +890,7 @@ struct Index {
               methodList: [
                 'setGenerationActive',
                 'setImmersiveModeEnabled',
+                'setPageBackgroundColor',
                 'setOpenExternalLinksInBrowser',
                 'openExternalUrl',
                 'openEndpointSettings',
@@ -934,14 +960,19 @@ struct Index {
             .onHttpAuthRequest((event) => {
               return this.handleHttpAuthRequest(event);
             })
-            .onPageEnd(() => {
+            .onPageEnd((event) => {
               // A finished page proves the accepted credentials work; the next
               // navigation may reuse them without treating them as a failed attempt.
               this.recentHttpAuthAttempts.clear();
+              const pageOrigin: string = originOf(event ? event.url : '');
+              if (pageOrigin.length > 0 && pageOrigin === originOf(this.serverUrl)) {
+                this.reportPageTheme();
+              }
             })
             .onRenderExited((event) => {
               this.closePopupDialog();
               KeepAliveManager.setGenerationActive(false);
+              SafeAreaManager.resetToNativeChrome();
               const reason: number = event ? event.renderExitReason : -1;
               this.applyRecoverySnapshot(onRendererExitedState(this.recoverySnapshot(), reason));
               if (event && isArkWebCrashReason(reason)) {
@@ -1038,6 +1069,19 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    // Edge to edge: the strips behind the system bars and cutouts are painted
+    // with the background the page reports, so they follow the theme.
+    .padding({
+      top: this.safeTopVp,
+      bottom: this.safeBottomVp,
+      left: this.safeLeftVp,
+      right: this.safeRightVp,
+    })
+    .backgroundColor(this.pageBackground)
+    .expandSafeArea(
+      [SafeAreaType.SYSTEM],
+      [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END],
+    )
   }
 }
 
