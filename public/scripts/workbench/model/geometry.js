@@ -7,7 +7,7 @@ export const MIN_W = 560;
 export const MIN_H = 380;
 export const MIN_COMPACT_W = 280;
 export const MIN_COMPACT_H = 260;
-export const COMPACT_BELOW = 640; // viewport width; below this the window uses compact floating layout
+export const COMPACT_MAX_WIDTH = 640; // viewport width; at or below this the window uses compact floating layout
 
 /** Default box: centred, up to 960×640, leaving room around it. */
 export function defaultBox(vw, vh) {
@@ -48,22 +48,18 @@ export function compactDefaultBox(vw, vh) {
     };
 }
 
-/** Keeps a compact mobile floating box usable and reachable inside the viewport. */
+/**
+ * Keeps a compact mobile floating box fully inside the visible viewport so its
+ * bottom content and resize controls never slip off-screen.
+ */
 export function clampCompactBox(box, vw, vh) {
     const minW = Math.min(MIN_COMPACT_W, vw);
     const minH = Math.min(MIN_COMPACT_H, vh);
     const width = Math.round(Math.min(Math.max(Number(box?.width) || 0, minW), vw));
     const height = Math.round(Math.min(Math.max(Number(box?.height) || 0, minH), vh));
-    const keep = Math.min(96, width); // cap-ok: viewport hardware grab-handle minimum width
-    const left = Math.round(Math.min(Math.max(Number(box?.left) || 0, keep - width), vw - keep));
-    const top = Math.round(Math.min(Math.max(Number(box?.top) || 0, 0), Math.max(0, vh - 46)));
+    const left = Math.round(Math.min(Math.max(Number(box?.left) || 0, 0), Math.max(0, vw - width)));
+    const top = Math.round(Math.min(Math.max(Number(box?.top) || 0, 0), Math.max(0, vh - height)));
     return { left, top, width, height };
-}
-
-/** Legacy phone bottom sheet helper (retained for compatibility). */
-export function sheetBox(vw, vh) {
-    const height = Math.round(vh * 0.88);
-    return { left: 0, top: vh - height, width: vw, height };
 }
 
 /** Where the entry pill sits by default (bottom-right, above Luker's input bar on phones). */
@@ -79,7 +75,7 @@ export function clampPill(pos, vw, vh, size = { width: 200, height: 42 }) {
 }
 
 export function isCompactWidth(vw) {
-    return vw < COMPACT_BELOW;
+    return vw <= COMPACT_MAX_WIDTH;
 }
 
 /** Reads a saved box; returns null if missing or malformed. */

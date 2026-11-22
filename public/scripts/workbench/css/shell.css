@@ -98,9 +98,7 @@
 .wbench .wb-toast.is-error { color: var(--wb-danger); }
 .wbench .wb-toast-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--wb-accent-soft); color: var(--wb-accent); font-weight: 600; cursor: pointer; }
 
-/* ---- Phone: compact floating window ---- */
-.wbench .wb-scrim { position: absolute; inset: 0; pointer-events: auto; touch-action: none; overscroll-behavior: none; background: var(--wb-scrim); animation: wb-fade 160ms ease-out; }
-@keyframes wb-fade { from { opacity: 0; } }
+/* ---- Phone: compact floating window (<= 640px) ---- */
 .wbench.is-compact .wb-win { min-width: 0; min-height: 0; border-radius: var(--wb-r-lg); border: 1px solid var(--wb-border-strong); }
 .wbench.is-compact .wb-win.is-max { border-radius: 12px; }
 .wbench.is-compact .wb-title-ctx { display: none; }

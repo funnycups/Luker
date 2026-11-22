@@ -28,7 +28,6 @@ export {
     openRunDock,
     toggleRunDock,
     getRunRecorder,
-    normalizeDefaultDockSize,
     getRunDockPrefs,
     setRunDockPrefs,
     resetRunDockPosition,

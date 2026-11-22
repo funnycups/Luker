@@ -211,7 +211,7 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
         await closeWorkbench(page);
     });
 
-    test('narrow mobile viewport (<= 720px) switches to compact bottom sheet and navigates all workspaces', async ({ page }) => {
+    test('narrow mobile viewport (<= 640px) switches to compact floating window and navigates all workspaces', async ({ page }) => {
         await page.setViewportSize({ width: 390, height: 844 });
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, 'Ash the Cartographer');
@@ -223,11 +223,12 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
         const win = workbenchWindow(page);
 
         await expect(layer).toHaveClass(/is-compact/);
-        await expect(layer.locator('.wb-scrim')).toBeVisible();
+        await expect(layer.locator('.wb-scrim')).toHaveCount(0);
 
         const box = await win.boundingBox();
         expect(box).toBeTruthy();
         expect(box.width).toBeLessThanOrEqual(390);
+        expect(box.y + box.height).toBeLessThanOrEqual(844);
 
         await switchWorkbenchTab(page, 'home');
         await expect(win.locator('.wb-h2')).toHaveText(/^(Overview|总览|總覽)$/);

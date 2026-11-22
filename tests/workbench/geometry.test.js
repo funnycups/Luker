@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { test, expect, beforeAll } from '@jest/globals';
-import { defaultBox, clampBox, compactDefaultBox, clampCompactBox, maxBox, sheetBox, isCompactWidth, parseSavedBox, clampPill, MIN_W, MIN_COMPACT_W } from '../../public/scripts/workbench/model/geometry.js';
+import { defaultBox, clampBox, compactDefaultBox, clampCompactBox, maxBox, isCompactWidth, parseSavedBox, clampPill, MIN_W, MIN_COMPACT_W } from '../../public/scripts/workbench/model/geometry.js';
 import { formatTokens, relativeTime, formatDuration } from '../../public/scripts/lens-shared/util.js';
 import { registerLensSharedLocaleData } from '../../public/scripts/lens-shared/locale-data.js';
 import { registerWorkbenchLocaleData } from '../../public/scripts/workbench/locale-data.js';
@@ -43,11 +43,11 @@ test('clamp keeps the title bar reachable and size sane', () => {
     expect(clampBox({ left: -9999, top: 0, width: 900, height: 500 }, 1280, 800).left).toBe(120 - 900);
 });
 
-test('max, sheet, compact, saved box', () => {
+test('max, compact floating box, and saved box', () => {
     expect(maxBox(1000, 700)).toEqual({ left: 10, top: 10, width: 980, height: 680 });
-    const s = sheetBox(390, 844);
-    expect(s.top + s.height).toBe(844);
     expect(isCompactWidth(390)).toBe(true);
+    expect(isCompactWidth(640)).toBe(true);
+    expect(isCompactWidth(641)).toBe(false);
     expect(isCompactWidth(1024)).toBe(false);
     expect(parseSavedBox({ left: 1 })).toBeNull();
     expect(parseSavedBox({ left: '1', top: 2, width: 3.4, height: 4 })).toEqual({ left: 1, top: 2, width: 3, height: 4 });
@@ -61,8 +61,15 @@ test('max, sheet, compact, saved box', () => {
     const clamped = clampCompactBox({ left: 9000, top: -30, width: 100, height: 9000 }, 390, 844);
     expect(clamped.width).toBe(MIN_COMPACT_W);
     expect(clamped.height).toBe(844);
-    expect(clamped.left).toBe(390 - 96);
+    expect(clamped.left).toBe(390 - MIN_COMPACT_W);
     expect(clamped.top).toBe(0);
+
+    // Tall box with positive top must never push its bottom edge past vh
+    const tall = clampCompactBox({ left: 12, top: 136, width: 366, height: 820 }, 390, 844);
+    expect(tall.top).toBe(24);
+    expect(tall.height).toBe(820);
+    expect(tall.top + tall.height).toBeLessThanOrEqual(844);
+    expect(tall.left + tall.width).toBeLessThanOrEqual(390);
 });
 
 test('formatting helpers', () => {

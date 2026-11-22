@@ -4,7 +4,7 @@
 
 一个可复用的内存内运行轨迹，供任何执行多步 LLM 任务的插件使用。插件把轮次、流式分节、工具调用和 token 用量写入 `RunStore`，再挂载到 Luker 共享的**运行面板**悬浮窗（`attachDock`），也可以通过 `createRunPanel` 创建独立面板。
 
-共享悬浮窗在桌面端显示为可拖动、可缩放的浮动窗口（空闲或收起时折叠为状态胶囊），窄屏下转为底部抽屉，提供轮次卡片、流式内容、停止按钮、JSON 轨迹导出，以及跳转至[工作台](/zh-CN/development/extension-api/workbench)查看详情或 AI 诊断的钩子。
+共享悬浮窗在桌面端与窄屏移动端（`<= 640px`）均显示为可拖动、支持小窗/大窗切换的圆角浮动窗口（双端坐标独立记忆，空闲或收起时折叠为可拖动的状态胶囊），提供轮次卡片、流式内容、停止按钮、JSON 轨迹导出，以及跳转至[工作台](/zh-CN/development/extension-api/workbench)查看详情或 AI 诊断的钩子。
 
 共享层位于 `public/scripts/run-panel/`，在 Luker context 上暴露为 `runPanel`。仓库内消费方：
 
@@ -88,8 +88,12 @@ store.finishRun({ runId, status: 'committed', finalText: 'Result' });
 | `openRunDock()` | 确保并打开共享运行面板。 |
 | `toggleRunDock()` | 切换共享运行面板的打开与关闭状态。 |
 | `getRunRecorder()` | 返回按账号保存近期运行历史的共享记录器。 |
+| `getRunDockPrefs()` | 读取当前登录账号的运行面板偏好（`{ autoOpen: boolean, defaultSize: 'small' \| 'large' }`）。 |
+| `setRunDockPrefs(patch)` | 更新运行面板偏好（`{ autoOpen?, defaultSize?, resetPosition? }`），同步存活面板实例并通知订阅者。 |
+| `resetRunDockPosition()` | 清除当前账号在桌面端与移动端保存的面板及胶囊位置。 |
+| `subscribeRunDockPrefs(listener)` | 订阅运行面板偏好变更；返回取消订阅函数。 |
 
-用户可以在悬浮窗菜单中直接切换**运行时自动打开**（默认开启；关闭后非 quiet 运行仅显示状态胶囊，不会自动展开）。
+用户可以在悬浮窗菜单、搜索工具设置、编排设置或工作台**设置 → 窗口**中同步切换**运行时自动打开**与**运行面板默认大小**（**小窗** / **大窗**；自动打开默认开启，关闭后非 quiet 运行仅显示状态胶囊，不会自动展开）。
 
 ## 独立 `createRunPanel` 选项
 

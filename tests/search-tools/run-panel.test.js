@@ -2,7 +2,11 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, test, expect, jest, beforeEach } from '@jest/globals';
+import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
+
+jest.unstable_mockModule('../../public/scripts/extensions/preset-help.js', () => ({
+    renderPresetHelpButton: () => '',
+}));
 
 const attachDock = jest.fn();
 const openRunDock = jest.fn();
@@ -72,5 +76,51 @@ describe('search-tools/run-panel.js', () => {
         expect(rpSrc).not.toMatch(/orchestrator/);
         expect(rpSrc).not.toMatch(/style\.css/);
         expect(mainSrc).not.toMatch(/standaloneDock/);
+    });
+
+    test('createSearchToolsSettingsUi.destroy tears down subscribeRunDockPrefs subscription and event handlers', async () => {
+        const { createSearchToolsSettingsUi } = await import('../../public/scripts/extensions/search-tools/settings-ui.js');
+        const unsub = jest.fn();
+        const subscribeRunDockPrefs = jest.fn(() => unsub);
+        const off = jest.fn();
+        const fakeRoot = {
+            length: 1,
+            find: () => ({ html: () => {}, prop: () => {}, val: () => '0', toggle: () => {} }),
+            off,
+            on: () => {},
+        };
+        const prevJQuery = globalThis.jQuery;
+        globalThis.jQuery = (sel) => (sel === '#search_tools_settings' ? fakeRoot : { length: 0 });
+        try {
+            const ui = createSearchToolsSettingsUi({
+                DEFAULT_SETTINGS: { agentSystemPrompt: 'sys' },
+                UI_BLOCK_ID: 'search_tools_settings',
+                escapeHtml: (s) => String(s ?? ''),
+                getAvailableSearchProviders: () => [],
+                getConnectionProfileOptions: () => '',
+                getContext: () => ({
+                    runPanel: {
+                        getRunDockPrefs: () => ({ autoOpen: true, defaultSize: 'small' }),
+                        subscribeRunDockPrefs,
+                    },
+                }),
+                getOpenAIPresetOptions: () => '',
+                getProviderDefinition: () => ({ id: 'ddg', fields: [] }),
+                getProviderSettings: () => ({}),
+                getSettings: () => ({ provider: 'ddg' }),
+                i18n: (s) => s,
+                normalizeProvider: (s) => s,
+                world_info_position: { atDepth: 4 },
+            });
+            ui.bindSettingsUi();
+            expect(subscribeRunDockPrefs).toHaveBeenCalledTimes(1);
+            expect(unsub).not.toHaveBeenCalled();
+
+            ui.destroy();
+            expect(unsub).toHaveBeenCalledTimes(1);
+            expect(off).toHaveBeenCalledWith('.searchTools');
+        } finally {
+            globalThis.jQuery = prevJQuery;
+        }
     });
 });

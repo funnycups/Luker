@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// The floating window: title bar (drag, double-click to maximise), resize
-// grip, maximise / collapse, and the entry pill. The pill is the workbench's
-// resident entry point: it stays in a corner whenever the window is folded
-// away, can be dragged, and remembers where it was put. On narrow screens
-// the window becomes a bottom sheet over a scrim. Boxes are remembered.
+// The floating window: title bar (drag, double-click / double-tap to maximise),
+// resize grips, maximise / collapse, and the entry pill. The pill is the
+// workbench's resident entry point: it stays in a corner whenever the window is
+// folded away, can be dragged, and remembers where it was put. Desktop (`box`)
+// and narrow mobile (`mobileBox`, <= 640px) floating geometries are persisted
+// independently.
 
 import { i18n, i18nFormat } from '../i18n.js';
 import { h, put, clear } from '../../lens-shared/util.js';
@@ -26,7 +27,9 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
         const val = typeof defaultSize === 'function' ? defaultSize() : '';
         return val === 'large' || val === 'small' ? val : '';
     };
-    let maximised = configuredDefault() ? configuredDefault() === 'large' : Boolean(prefs.maximised);
+    let maximised = typeof prefs.maximised === 'boolean'
+        ? prefs.maximised
+        : configuredDefault() === 'large';
     let pillAt = prefs.pill && typeof prefs.pill === 'object' ? prefs.pill : null;
     let collapsed = Boolean(startCollapsed);
     let compact = false;
@@ -48,9 +51,8 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
     const bottomGrip = h('div', { class: 'wb-resize-y', 'aria-hidden': 'true' });
     const grip = h('div', { class: 'wb-resize', 'aria-hidden': 'true' });
     const win = h('section', { class: 'wb-win', role: 'dialog', 'aria-label': title, tabIndex: -1 }, bar, body, bottomGrip, grip);
-    const scrim = h('div', { class: 'wb-scrim', hidden: true, onClick: () => collapse() });
     const pill = h('button', { type: 'button', class: 'wb-pill', hidden: true, 'aria-label': i18nFormat('Open the ${0}', title), title: i18nFormat('Open ${0} (draggable)', title) });
-    const layer = h('div', { class: 'wbench lw-surface', dataset: { theme: theme() } }, scrim, win, pill);
+    const layer = h('div', { class: 'wbench lw-surface', dataset: { theme: theme() } }, win, pill);
 
     function paintTheme() {
         layer.dataset.theme = theme();
@@ -67,7 +69,6 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
         maxBtn.title = maxBtn.ariaLabel = maximised ? i18n('Restore size') : i18n('Maximize');
         win.hidden = collapsed;
         pill.hidden = !collapsed || !pillVisible();
-        scrim.hidden = true;
         const b = maximised
             ? maxBox(vw, vh)
             : compact
@@ -198,15 +199,17 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
         event.preventDefault();
         const isMobile = compact;
         const cur = isMobile ? (mobileBox || compactDefaultBox(vw, vh)) : (box || defaultBox(vw, vh));
-        const start = { y: event.clientY, height: cur.height };
+        const start = { y: event.clientY, top: cur.top, height: cur.height };
         bottomGrip.setPointerCapture?.(event.pointerId);
         const move = (e) => {
-            const nextH = start.height + (e.clientY - start.y);
+            const rawH = start.height + (e.clientY - start.y);
             if (isMobile) {
-                mobileBox = clampCompactBox({ ...cur, ...(mobileBox || {}), height: nextH }, vw, vh);
+                const maxH = Math.max(0, vh - start.top);
+                mobileBox = clampCompactBox({ ...cur, ...(mobileBox || {}), top: start.top, height: Math.min(rawH, maxH) }, vw, vh);
+                win.style.top = `${mobileBox.top}px`;
                 win.style.height = `${mobileBox.height}px`;
             } else {
-                box = clampBox({ ...cur, ...(box || {}), height: nextH }, vw, vh);
+                box = clampBox({ ...cur, ...(box || {}), height: rawH }, vw, vh);
                 win.style.height = `${box.height}px`;
             }
         };
@@ -227,11 +230,22 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
         event.preventDefault();
         const isMobile = compact;
         const cur = isMobile ? (mobileBox || compactDefaultBox(vw, vh)) : (box || defaultBox(vw, vh));
-        const start = { x: event.clientX, y: event.clientY, width: cur.width, height: cur.height };
+        const start = { x: event.clientX, y: event.clientY, left: cur.left, top: cur.top, width: cur.width, height: cur.height };
         grip.setPointerCapture?.(event.pointerId);
         const move = (e) => {
             if (isMobile) {
-                mobileBox = clampCompactBox({ ...mobileBox, width: start.width + e.clientX - start.x, height: start.height + e.clientY - start.y }, vw, vh);
+                const maxW = Math.max(0, vw - start.left);
+                const maxH = Math.max(0, vh - start.top);
+                mobileBox = clampCompactBox({
+                    ...cur,
+                    ...(mobileBox || {}),
+                    left: start.left,
+                    top: start.top,
+                    width: Math.min(start.width + e.clientX - start.x, maxW),
+                    height: Math.min(start.height + e.clientY - start.y, maxH),
+                }, vw, vh);
+                win.style.left = `${mobileBox.left}px`;
+                win.style.top = `${mobileBox.top}px`;
                 win.style.width = `${mobileBox.width}px`;
                 win.style.height = `${mobileBox.height}px`;
             } else {
@@ -269,10 +283,6 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
         if (!wasCollapsed) onCollapse?.();
     }
     function expand() {
-        if (collapsed) {
-            const def = configuredDefault();
-            if (def) maximised = def === 'large';
-        }
         collapsed = false;
         apply();
         win.focus({ preventScroll: true });

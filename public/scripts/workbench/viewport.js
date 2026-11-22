@@ -8,7 +8,7 @@
 // CSS `inset:0` stays as the fallback until the first measurement.
 
 // `layout(vw, vh)` may return a sub-rectangle { left, top, width, height } of
-// the viewport (the side dock uses this); default is the whole viewport.
+// the viewport; default is the whole visible viewport.
 export function fitToViewport(root, { layout = null } = {}) {
     const win = root.ownerDocument?.defaultView || globalThis;
     const vv = win.visualViewport || null;

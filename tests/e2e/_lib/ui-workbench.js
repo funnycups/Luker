@@ -181,8 +181,6 @@ export async function closeWorkbench(page, { via = 'button', timeoutMs = 10_000 
     if (!(await win.isVisible().catch(() => false))) return;
     if (via === 'shortcut' || via === 'hotkey') {
         await page.keyboard.press('Alt+w');
-    } else if (via === 'scrim') {
-        await page.locator('.wbench .wb-scrim').first().click({ position: { x: 4, y: 4 } });
     } else {
         await win.locator('.wb-titlebar .is-close').first().click();
     }

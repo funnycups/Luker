@@ -144,7 +144,7 @@ test.describe('shared floating run dock live E2E', () => {
         await takeDocScreenshot(page, path.join(RUN_PANEL_SCREENSHOTS, '04-panel-final.png'), { fullPage: false });
     });
 
-    test('compact bottom-sheet layout on narrow viewport', async ({ browser }) => {
+    test('compact floating layout on narrow viewport', async ({ browser }) => {
         const context = await browser.newContext({ viewport: { width: 375, height: 812 } });
         const page = await context.newPage();
         try {
@@ -192,7 +192,7 @@ test.describe('shared floating run dock live E2E', () => {
                 return lens.reduce((s, n) => s + n, 0);
             }, { timeout: 60_000, message: 'compact dock never received streamed bytes' }).toBeGreaterThan(0);
             await clearToasts(page);
-            await takeDocScreenshot(page, path.join(RUN_PANEL_SCREENSHOTS, '05-panel-drawer.png'), { fullPage: false });
+            await takeDocScreenshot(page, path.join(RUN_PANEL_SCREENSHOTS, '05-panel-mobile.png'), { fullPage: false });
         } finally {
             await context.close();
         }

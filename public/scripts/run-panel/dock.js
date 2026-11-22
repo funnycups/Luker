@@ -26,7 +26,7 @@ import { createRecorder, serializeRunTrace } from './recorder.js';
 const PREF_KEY = 'orchestraLens.dock.v1';
 const TOKENS_CSS_ID = 'luker-lens-shared-tokens-css';
 const DOCK_CSS_ID = 'luker-run-panel-dock-css';
-const COMPACT_QUERY = '(max-width: 860px)';
+const COMPACT_QUERY = '(max-width: 640px)';
 const DEFAULT_SIZE = { width: 300, height: 560 };
 const WIDTH_RANGE = [240, 560];
 const MIN_HEIGHT = 160;
@@ -36,7 +36,7 @@ const DEFAULT_MOBILE_POS = { right: 12, bottom: 96 };
 const MOBILE_DEFAULT_WIDTH = 356;
 const SHRINK_AFTER_MS = 4000;
 
-export function normalizeDefaultDockSize(value) {
+function normalizeDefaultDockSize(value) {
     return value === 'large' ? 'large' : 'small';
 }
 
@@ -276,17 +276,14 @@ export function createDock({
     let menuOpen = false;
     let shrinkTimer = 0;
     const isCompact = () => Boolean(compactMql?.matches);
-    const isFloat = () => true;
 
-    const root = h('div', { class: 'rpdock lw-surface rp-dock is-float', role: 'complementary', 'aria-label': i18n('Run panel'), tabIndex: -1, dataset: { state } });
+    const root = h('div', { class: 'rpdock lw-surface rp-dock', role: 'complementary', 'aria-label': i18n('Run panel'), tabIndex: -1, dataset: { state } });
     const head = h('header', { class: 'rp-dock-head' });
     const body = h('div', { class: 'rp-dock-body' });
-    const foot = h('footer', { class: 'rp-dock-foot' });
-    const grip = h('div', { class: 'rp-dock-grip', 'aria-hidden': 'true' });
     const resizer = h('div', { class: 'rp-dock-resize', title: i18n('Drag to resize'), 'aria-hidden': 'true' });
     const menu = h('div', { class: 'rp-menu rp-dock-menu', role: 'menu', hidden: true });
     const toastEl = h('div', { class: 'rp-dock-toast', hidden: true });
-    put(root, grip, resizer, head, body, foot, menu, toastEl);
+    put(root, resizer, head, body, menu, toastEl);
     let pillDragged = false;
     const pillMain = h('button', {
         type: 'button',
@@ -310,7 +307,7 @@ export function createDock({
     }, icon('x', { size: 13 }));
     const pill = h('div', { class: 'rpdock lw-surface rp-dock-pill', hidden: true }, pillMain, pillClose);
     const scrim = h('div', {
-        class: 'rpdock lw-surface rp-dock-scrim is-float',
+        class: 'rpdock lw-surface rp-dock-scrim',
         onClick: () => (normalizeDefaultDockSize(prefs.defaultSize) === 'large' ? collapse() : setSize('small')),
     });
 
@@ -570,13 +567,13 @@ export function createDock({
     }
 
     function updateDefaultSizeFromMenu(nextDefault) {
-        syncPrefs();
-        prefs.defaultSize = normalizeDefaultDockSize(nextDefault);
-        savePrefs(prefStorage, prefs);
-        notifyPrefListeners(prefs);
-        size = prefs.defaultSize;
-        setMenu(false);
-        setState(state);
+        const normalized = normalizeDefaultDockSize(nextDefault);
+        if (currentAccountHandle()) {
+            setRunDockPrefs({ defaultSize: normalized });
+            setMenu(false);
+        } else {
+            setSize(normalized);
+        }
     }
 
     function setMenu(open) {
@@ -594,9 +591,9 @@ export function createDock({
         put(clear(menu),
             item(i18n('Open automatically on run'), () => {
                 syncPrefs();
-                prefs.autoOpen = !prefs.autoOpen;
-                savePrefs(prefStorage, prefs);
-                notifyPrefListeners(prefs);
+                if (currentAccountHandle()) {
+                    setRunDockPrefs({ autoOpen: !prefs.autoOpen });
+                }
                 setMenu(true);
             }, { role: 'menuitemcheckbox', 'aria-checked': String(prefs.autoOpen) }),
             sep(),
@@ -732,11 +729,9 @@ export function createDock({
         const compact = isCompact();
         root.classList.toggle('is-compact', compact);
         pill.classList.toggle('is-compact', compact);
-        root.classList.add('is-float');
         root.dataset.size = size;
         scrimFit.refresh();
         placeFloat();
-        scrim.classList.add('is-float');
         scrim.hidden = !(state === 'open' && size === 'large');
         render();
         if (!pill.hidden) placePill();
@@ -783,28 +778,6 @@ export function createDock({
     }
 
     function renderHead(view, counts) {
-        const running = view.status === 'running';
-        const inspectFn = resolveInspect(view.source);
-        if (isFloat()) { renderFloatHead(view, counts); return; }
-        put(clear(head),
-            h('div', { class: 'rp-dock-title' },
-                h('span', { class: 'rp-dock-mark', dataset: { source: view.source } }, icon(sourceIconName(view.source), { size: 15 })),
-                h('span', { class: 'rp-dock-name', text: sourceTitle(view, ' · ') }),
-                h('span', { class: 'rp-status', dataset: { status: running ? 'running' : view.status } },
-                    h('span', { class: 'rp-status-dot', 'aria-hidden': 'true' }),
-                    h('span', { text: statusLabel(view.status) })),
-                h('span', { class: 'rp-spacer' }),
-                running ? iconButton('stop', i18n('Stop run'), () => { recorder.stop(view.runKey); }, { className: 'is-sm rp-dock-stop', renderIcon: icon, size: 15 }) : null,
-                inspectFn ? iconButton('fit', i18n('Inspect run'), () => inspectFn(view.runKey), { className: 'is-sm', renderIcon: icon, size: 15 }) : null,
-                iconButton(compactMql?.matches ? 'chevronDown' : 'chevronRight', i18n('Collapse'), () => collapse(), { className: 'is-sm', renderIcon: icon, size: 15 })),
-            h('div', { class: 'rp-dock-stats' },
-                h('span', { class: 'rp-dock-stat' }, icon('clock', { size: 12 }), h('span', { text: formatDuration(view.duration) })),
-                counts.agents ? h('span', { class: 'rp-dock-stat' }, icon('user', { size: 12 }), h('span', { text: counts.running > 1 ? i18nFormat('${0} agents · ${1} working at once', counts.agents, counts.running) : i18nFormat('${0} agents', counts.agents) })) : null,
-                counts.tools ? h('span', { class: 'rp-dock-stat' }, icon('tool', { size: 12 }), h('span', { text: i18nFormat('${0} calls', counts.tools) })) : null,
-                view.tokens ? h('span', { class: 'rp-dock-stat' }, icon('bolt', { size: 12 }), h('span', { text: `${formatTokens(view.tokens)} tokens` })) : null));
-    }
-
-    function renderFloatHead(view, counts) {
         const running = view.status === 'running';
         const large = size === 'large';
         if (!large) {
@@ -858,7 +831,6 @@ export function createDock({
     }
 
     function summaryLines(lines, seg) {
-        if (!isFloat()) return lines.slice(0, 4);
         const running = seg.status === 'running';
         if (size === 'small' || running) {
             const line = running ? lines[lines.length - 1] : lines[0];
@@ -952,8 +924,8 @@ export function createDock({
         const data = currentView();
         const pillWasHidden = pill.hidden;
         const liveRun = data?.view.status === 'running';
-        pill.hidden = !(state === 'pill' && data && (liveRun || isFloat()));
-        if (state === 'pill' && !(data && (liveRun || isFloat()))) {
+        pill.hidden = !(state === 'pill' && data);
+        if (state === 'pill' && !data) {
             state = 'closed';
             root.dataset.state = state;
         }
@@ -969,7 +941,6 @@ export function createDock({
             put(clear(body),
                 storageErrorBanner(),
                 h('p', { class: 'rp-dock-empty', text: i18n('After you send a message, orchestration and search progress shows here live.') }));
-            clear(foot);
             shownBlockId = '';
             return;
         }
@@ -1014,7 +985,7 @@ export function createDock({
                     { icon: icon('target', { size: 13 }), small: true },
                 ))
             : null;
-        if (isFloat() && size === 'small') {
+        if (size === 'small') {
             const cur = currentBlock(blocks);
             put(clear(body),
                 storageErrorBanner(),
@@ -1024,18 +995,16 @@ export function createDock({
                 view.status !== 'running' ? finalEl(view) : null,
                 diag);
             body.scrollTop = pinnedBottom ? body.scrollHeight : prevScroll;
-            clear(foot);
             return;
         }
         put(clear(body),
             storageErrorBanner(),
-            others.length ? h('div', { class: 'rp-dock-also' }, icon('play', { size: 12 }), h('span', { text: i18nFormat('${0} also running', others.map(r => (r.source === 'search' ? i18n('Online search') : i18n('Orchestration'))).join(listSeparator())) })) : null,
+            others.length ? h('div', { class: 'rp-dock-also' }, icon('play', { size: 12 }), h('span', { text: i18nFormat('${0} also running', others.map(r => sourceShortLabel(r.source)).join(listSeparator())) })) : null,
             view.error && view.status !== 'committed' ? h('div', { class: 'rp-run-error' }, icon('alert', { size: 13 }), h('span', { text: humanError(view.error) })) : null,
             blocks.length ? h('div', { class: 'rp-dock-blocks' }, blocks.map(blk => blockEl(blk, view))) : h('p', { class: 'rp-dock-empty', text: i18n('Getting ready…') }),
             finalEl(view),
             diag);
         body.scrollTop = pinnedBottom ? body.scrollHeight : prevScroll;
-        clear(foot);
     }
 
     function humanError(text) {
@@ -1083,7 +1052,6 @@ export function createDock({
     scrimFit.refresh();
     scrim.hidden = true;
     root.classList.toggle('is-compact', isCompact());
-    root.classList.add('is-float');
     root.dataset.size = size;
     placeFloat();
     applyTheme();

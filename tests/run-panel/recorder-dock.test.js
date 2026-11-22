@@ -486,7 +486,7 @@ describe('run-panel recorder & dock', () => {
         const origH = globalThis.innerHeight;
         let isCompactViewport = true;
         globalThis.matchMedia = (q) => ({
-            matches: q === '(max-width: 860px)' ? isCompactViewport : false,
+            matches: q === '(max-width: 640px)' ? isCompactViewport : false,
             addEventListener: () => {},
             removeEventListener: () => {},
         });
@@ -515,12 +515,22 @@ describe('run-panel recorder & dock', () => {
             const dockEl = document.querySelector('.rp-dock');
             const scrimEl = document.querySelector('.rp-dock-scrim');
             expect(dock.isOpen()).toBe(true);
-            expect(dockEl.classList.contains('is-float')).toBe(true);
             expect(dockEl.classList.contains('is-compact')).toBe(true);
             expect(dockEl.dataset.size).toBe('small');
             expect(scrimEl.hidden).toBe(true);
             expect(dockEl.style.right).toBe('18px');
             expect(dockEl.style.bottom).toBe('92px');
+
+            // Menu default-size radio goes through setRunDockPrefs and syncs sibling live docks' _applyExternalPrefs
+            const siblingDock = createDock({ recorder });
+            siblingDock.open();
+            expect(siblingDock.getSize()).toBe('small');
+            dockEl.querySelector('.rp-dock-more').click();
+            const menuLargeBtn = [...dockEl.querySelectorAll('.rp-menu-item')].find(el => el.textContent.includes('Open in large window by default'));
+            menuLargeBtn.click();
+            expect(siblingDock.getSize()).toBe('large');
+            siblingDock.destroy();
+            setRunDockPrefs({ defaultSize: 'small' });
 
             // Switch defaultSize to large via shared prefs API -> live dock updates and shows centered floating modal
             setRunDockPrefs({ defaultSize: 'large' });

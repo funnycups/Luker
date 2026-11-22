@@ -90,7 +90,6 @@
     --wb-t-chat: var(--lw-t-chat);
     --wb-t-other: var(--lw-t-other);
     --wb-shadow: var(--lw-shadow);
-    --wb-scrim: var(--lw-scrim);
 }
 
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock)[data-theme="light"],

@@ -93,6 +93,7 @@ export const DEFAULT_SETTINGS = {
     },
     hotkey: 'alt+w',
     pill: true,
+    defaultSize: 'small',
 };
 
 const clone = (value) => (value == null ? value : JSON.parse(JSON.stringify(value)));

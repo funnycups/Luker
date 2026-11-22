@@ -514,6 +514,13 @@ export function createSearchToolsSettingsUi(deps) {
 
     let unsubscribeDockPrefs = null;
 
+    function teardownDockPrefsSubscription() {
+        if (unsubscribeDockPrefs) {
+            unsubscribeDockPrefs();
+            unsubscribeDockPrefs = null;
+        }
+    }
+
     function syncDockPrefControls(root, prefs) {
         if (!root?.length) return;
         const p = prefs || getContext()?.runPanel?.getRunDockPrefs?.() || { autoOpen: true, defaultSize: 'small' };
@@ -524,15 +531,21 @@ export function createSearchToolsSettingsUi(deps) {
     function bindSettingsUi() {
         const root = jQuery(`#${UI_BLOCK_ID}`);
         if (!root.length) {
+            teardownDockPrefsSubscription();
             return;
         }
 
         const context = getContext();
         const settings = getSettings();
         syncDockPrefControls(root);
-        unsubscribeDockPrefs?.();
+        teardownDockPrefsSubscription();
         unsubscribeDockPrefs = context?.runPanel?.subscribeRunDockPrefs?.((next) => {
-            syncDockPrefControls(jQuery(`#${UI_BLOCK_ID}`), next);
+            const liveRoot = jQuery(`#${UI_BLOCK_ID}`);
+            if (!liveRoot.length) {
+                teardownDockPrefsSubscription();
+                return;
+            }
+            syncDockPrefControls(liveRoot, next);
         }) || null;
         root.find('#search_tools_agent_api_preset_name').html(getConnectionProfileOptions(settings.agentApiPresetName));
         root.find('#search_tools_agent_preset_name').html(getOpenAIPresetOptions(context, settings.agentPresetName));
@@ -696,8 +709,17 @@ export function createSearchToolsSettingsUi(deps) {
         void refreshUiStatusForCurrentChat();
     }
 
+    function destroy() {
+        teardownDockPrefsSubscription();
+        const root = jQuery(`#${UI_BLOCK_ID}`);
+        if (root.length) {
+            root.off('.searchTools');
+        }
+    }
+
     return {
         bindSettingsUi,
+        destroy,
         ensureUi,
         refreshUiStatusForCurrentChat,
         updateUiStatus,
