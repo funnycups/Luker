@@ -3159,7 +3159,11 @@ function buildDynamicToolDescription(spec = {}, mode = 'create') {
     const chunks = [];
     if (normalizedMode === 'edit') {
         chunks.push(`Edit semantic node for type "${typeId}" (table "${tableName || typeId}") by node_id.`);
-        chunks.push('Provide only changed fields in set_fields. Existing fields not mentioned will stay unchanged.');
+        if (fields.includes('title')) {
+            chunks.push('Use top-level title to rename; provide other changed fields in set_fields. Existing fields not mentioned will stay unchanged.');
+        } else {
+            chunks.push('Provide only changed fields in set_fields. Existing fields not mentioned will stay unchanged.');
+        }
     } else {
         chunks.push(`Create semantic node for type "${typeId}" (table "${tableName || typeId}").`);
         chunks.push('Use this tool only for creating new nodes.');
@@ -3296,8 +3300,9 @@ function buildDynamicExtractTools(schema = [], options = {}) {
             }
             createProperties[field] = { type: 'string' };
         }
+        const nonTitleFields = filteredFields.filter(field => field !== 'title');
         const editFieldProperties = {};
-        for (const field of fieldSet) {
+        for (const field of nonTitleFields) {
             editFieldProperties[field] = { type: 'string' };
         }
 
@@ -3327,6 +3332,25 @@ function buildDynamicExtractTools(schema = [], options = {}) {
             },
         });
         if (isEditableType) {
+            const editProperties = {
+                node_id: { type: 'string', description: 'When referencing an existing node, use only an id that appears in graph_data.nodes.' },
+                title: { type: 'string' },
+            };
+            if (nonTitleFields.length > 0) {
+                editProperties.set_fields = {
+                    type: 'object',
+                    properties: editFieldProperties,
+                    additionalProperties: false,
+                };
+                editProperties.clear_fields = {
+                    type: 'array',
+                    items: {
+                        type: 'string',
+                        enum: nonTitleFields,
+                    },
+                };
+            }
+            editProperties.reason = { type: 'string' };
             tools.push({
                 type: 'function',
                 function: {
@@ -3340,23 +3364,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
                     }, 'edit'),
                     parameters: {
                         type: 'object',
-                        properties: {
-                            node_id: { type: 'string', description: 'When referencing an existing node, use only an id that appears in graph_data.nodes.' },
-                            title: { type: 'string' },
-                            set_fields: {
-                                type: 'object',
-                                properties: editFieldProperties,
-                                additionalProperties: false,
-                            },
-                            clear_fields: {
-                                type: 'array',
-                                items: {
-                                    type: 'string',
-                                    enum: filteredFields,
-                                },
-                            },
-                            reason: { type: 'string' },
-                        },
+                        properties: editProperties,
                         required: ['node_id'],
                         additionalProperties: false,
                     },
