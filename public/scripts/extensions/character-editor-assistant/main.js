@@ -31,6 +31,8 @@ import {
     projectCardV2Fields,
 } from '../../workbench/targets/card-world.js';
 
+import { initializePromptDefaults } from '../../lib/prompt-values.js';
+
 const __ctx = Luker.getContext();
 const generateQuietPrompt = __ctx.generateQuietPrompt;
 const saveSettingsDebounced = __ctx.saveSettingsDebounced;
@@ -862,8 +864,12 @@ function ensureSettings() {
     delete settings.plainTextFunctionCallMode;
     settings.toolCallRetryMax = Math.max(0, Math.min(10, Math.floor(Number(settings.toolCallRetryMax || defaultSettings.toolCallRetryMax) || 0)));
     settings.maxJournalEntries = Math.max(20, Math.min(500, Number(settings.maxJournalEntries || defaultSettings.maxJournalEntries)));
-    settings.editorIterationSystemPrompt = String(settings.editorIterationSystemPrompt || '').trim() || DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT;
-    settings.cardAppStudioSystemPrompt = String(settings.cardAppStudioSystemPrompt || '').trim() || DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT;
+    if (initializePromptDefaults(settings, {
+        editorIterationSystemPrompt: DEFAULT_EDITOR_ITERATION_SYSTEM_PROMPT,
+        cardAppStudioSystemPrompt: DEFAULT_CARDAPP_STUDIO_SYSTEM_PROMPT,
+    })) {
+        saveSettingsDebounced();
+    }
 }
 
 function getSettings() {

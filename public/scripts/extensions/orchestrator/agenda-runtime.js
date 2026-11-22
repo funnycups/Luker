@@ -50,8 +50,6 @@ import { createFirstChunkBarrier } from './dispatch-barrier.js';
 import {
     AGENDA_PLANNER_TOOL,
     AGENDA_RESULT_TOOL,
-    DEFAULT_AGENDA_PLANNER_PROMPT,
-    DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT,
     ORCH_EXECUTION_MODE_AGENDA,
     ORCH_NODE_TYPE_WORKER,
 } from './defaults.js';
@@ -77,6 +75,7 @@ import {
     finishRun, setRoundStatus, setSectionStatus, startRun, addTokenUsage,
 } from './run-state/store.js';
 import { i18n, i18nFormat } from './i18n.js';
+import { requireStoredPrompt } from '../../lib/prompt-values.js';
 import { getChatKey } from './snapshot-cache.js';
 import { normalizeNodeType } from './spec-schema.js';
 import { getPreviousOrchestrationCapsuleText } from './snapshot-cache.js';
@@ -578,7 +577,7 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
     const apiPresetName = resolveOrchestrationAgentApiPresetName(settings, planner)?.name || '';
     const promptText = [
         '## planner_prompt',
-        String(planner?.userPromptTemplate || DEFAULT_AGENDA_PLANNER_PROMPT),
+        requireStoredPrompt(planner.userPromptTemplate, i18n('Fill in the prompt or reset it to the default.')),
         '',
         buildAutoInjectedNodePromptPrelude({
             previousOrchestration,
@@ -607,10 +606,8 @@ export async function runAgendaPlannerStep(context, payload, messages, profile, 
         forceWorldInfoResimulate: Boolean(payload?.forceWorldInfoResimulate),
         abortSignal,
     });
-    const systemText = String(planner?.systemPrompt || DEFAULT_AGENDA_PLANNER_SYSTEM_PROMPT).trim()
-        || 'Return concise guidance through function-call fields.';
-    const userText = promptText.trim()
-        || 'Use function-call fields only. Do not put JSON strings into summary.';
+    const systemText = requireStoredPrompt(planner.systemPrompt, i18n('Fill in the prompt or reset it to the default.'));
+    const userText = promptText.trim();
     // Persistent Open Notes surfaced to the planner too — dispatch
     // decisions depend on knowing which plot threads are already open
     // (so the planner doesn't dispatch a notes_curator to open something
@@ -733,7 +730,7 @@ export async function runAgendaTextAgent(context, payload, messages, profile, st
     ).trim();
     const promptText = [
         '## planner_prompt',
-        String(planner?.userPromptTemplate || DEFAULT_AGENDA_PLANNER_PROMPT),
+        requireStoredPrompt(planner.userPromptTemplate, i18n('Fill in the prompt or reset it to the default.')),
         '',
         buildAutoInjectedNodePromptPrelude({
             previousOrchestration,

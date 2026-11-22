@@ -4,33 +4,28 @@
 /**
  * Advanced-settings defaults and normalization.
  *
- * `ADVANCED_SETTING_DEFAULTS` carries only the keys that are seeded into
- * `defaultSettings`. The five unseeded keys are deliberately absent so their
- * slots stay empty on disk and the code constants keep driving the runtime
- * value; a seeded text slot would freeze the constant for that user.
- *
- * `normalizeAdvancedSettings` returns all 24 registered keys. The Advanced
- * panel and the Layer-2 API both write the whole normalized object, so the
- * shape stays a full snapshot even though the registry knows more keys than
- * the seeded defaults.
+ * Built-in prompt text is stored verbatim. Legacy blank defaults are
+ * initialized once; normalization preserves subsequent edits.
  */
 
 import { CONFIG_FIELDS } from './fields.js';
+import { initializePromptDefaults } from '../../../lib/prompt-values.js';
 
-const UNSEDDED_KEYS = new Set([
-    'extractTemplate',
-    'extractEdgeRules',
-    'extractConcurrent',
-    'graphIterSystemPrompt',
-    'configIterSystemPrompt',
-]);
+const PROMPT_DEFAULTS = Object.fromEntries(Object.values(CONFIG_FIELDS)
+    .filter(def => def.kind === 'text')
+    .map(def => [def.key, def.defaultValue]));
 
 /** Settings keys seeded into `defaultSettings` with their code defaults. */
 export const ADVANCED_SETTING_DEFAULTS = Object.freeze(Object.fromEntries(
     Object.values(CONFIG_FIELDS)
-        .filter(def => !UNSEDDED_KEYS.has(def.key))
+        .filter(def => def.key !== 'extractConcurrent')
         .map(def => [def.key, def.defaultValue]),
 ));
+
+/** Initialize legacy prompt values, keeping character overrides sparse. */
+export function migrateAdvancedPromptSettings(settings, { sparse = false } = {}) {
+    return initializePromptDefaults(settings, PROMPT_DEFAULTS, { sparse });
+}
 
 function pickBase(fallbackSource) {
     return fallbackSource && typeof fallbackSource === 'object'
@@ -71,15 +66,7 @@ function normalizeEnum(def, input, base) {
 }
 
 function normalizeText(def, input, base) {
-    let value = String(input[def.key] ?? '').trim();
-    if (!value) {
-        const baseValue = String(base[def.key] ?? '').trim();
-        value = def.fillDefaultOnNormalize ? (baseValue || def.defaultValue) : baseValue;
-    }
-    if (def.clearWhenDefault && value === String(def.defaultValue ?? '').trim()) {
-        return '';
-    }
-    return value;
+    return String(input[def.key] ?? base[def.key] ?? def.defaultValue);
 }
 
 /**
@@ -100,8 +87,7 @@ export function normalizeCrawlCandidateLimit(value, fallback = 40) {
 
 /**
  * Normalize a settings snapshot against a fallback source. Returns every
- * registered key; text slots that only repeat a default stay empty unless
- * the field is explicitly seeded from the default.
+ * registered key, preserving stored prompt text including empty edits.
  */
 export function normalizeAdvancedSettings(source = null, fallbackSource = null) {
     const input = source && typeof source === 'object' ? source : {};

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
 import { createSearchToolsSettingsUi } from './settings-ui.js';
+import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-values.js';
 import { createSearchRunPanel } from './run-panel.js';
 import {
     buildLastUserAnchor,
@@ -443,8 +444,9 @@ function ensureSettings() {
     settings.agentApiPresetName = String(settings.agentApiPresetName ?? DEFAULT_SETTINGS.agentApiPresetName).trim();
     settings.agentPresetName = String(settings.agentPresetName ?? DEFAULT_SETTINGS.agentPresetName).trim();
     settings.includeWorldInfoWithPreset = Boolean(settings.includeWorldInfoWithPreset ?? DEFAULT_SETTINGS.includeWorldInfoWithPreset);
-    const normalizedAgentSystemPrompt = String(settings.agentSystemPrompt ?? DEFAULT_SETTINGS.agentSystemPrompt).trim();
-    settings.agentSystemPrompt = normalizedAgentSystemPrompt || DEFAULT_SETTINGS.agentSystemPrompt;
+    if (initializePromptDefaults(settings, { agentSystemPrompt: DEFAULT_SETTINGS.agentSystemPrompt })) {
+        saveSettingsDebounced();
+    }
     settings.toolCallRetryMax = clampInteger(
         settings.toolCallRetryMax ?? DEFAULT_SETTINGS.toolCallRetryMax,
         0,
@@ -1930,8 +1932,7 @@ function getManagedEntriesByIds(data, entryIds = []) {
 }
 
 function buildAgentSystemPrompt(settings) {
-    const configured = String(settings?.agentSystemPrompt || '').trim();
-    return configured || DEFAULT_AGENT_SYSTEM_PROMPT;
+    return requireStoredPrompt(settings?.agentSystemPrompt, i18n('Fill in the prompt or reset it to the default.'));
 }
 
 function buildSearchAgentUserPrompt(payload, { bookName, managedEntries } = {}) {

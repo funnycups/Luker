@@ -268,8 +268,8 @@ export async function persistCharacterAdvancedOverridePatch(context, avatar, pat
     }
     const next = {
         ...previous,
-        [CHARACTER_ADVANCED_OVERRIDE_KEY]: Object.keys(nextOverride).length > 0
-            ? nextOverride
+        [CHARACTER_ADVANCED_OVERRIDE_KEY]: Object.keys(nextOverride).some(key => key !== 'promptDefaultsInitialized')
+            ? { ...nextOverride, promptDefaultsInitialized: true }
             : UNSET_VALUE,
     };
     if (options?.requireSaved) {
@@ -298,9 +298,12 @@ export async function persistCharacterAdvancedOverride(context, avatar, advanced
     const previous = getCharacterExtensionDataByAvatar(context, target);
     const next = {
         ...previous,
-        [CHARACTER_ADVANCED_OVERRIDE_KEY]: deps.normalizeAdvancedSettings(advancedSettings, deps.defaultSettings),
+        [CHARACTER_ADVANCED_OVERRIDE_KEY]: {
+            ...deps.normalizeAdvancedSettings(advancedSettings, deps.defaultSettings),
+            promptDefaultsInitialized: true,
+        },
     };
-    await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next);
+    await context.writeExtensionField(characterIndex, deps.MODULE_NAME, next, { requireSaved: true });
     return true;
 }
 

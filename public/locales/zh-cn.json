@@ -1,4 +1,11 @@
 {
+    "Advanced prompts": "高级提示词",
+    "Iteration base prompt": "迭代基础提示词",
+    "Orchestrator optimization mode prompt": "多智能体编排优化模式提示词",
+    "Jailbreak-only mode prompt": "仅越狱模式提示词",
+    "Fill in the prompt or reset it to the default.": "请填写提示词或重置为默认值。",
+    "${0}: Fill in the prompt or reset it to the default.": "${0}：请填写提示词或重置为默认值。",
+    "Failed to initialize character prompt defaults.": "初始化角色提示词默认值失败。",
     "Group chat ${0} could not be loaded. Reload the page to retry.": "无法加载群聊 ${0}。请重新加载页面后重试。",
     "Group chat ${0} could not be saved. Check the server connection and retry saving.": "无法保存群聊 ${0}。请检查服务器连接后重试保存。",
     "Syncing: ${0}": "正在同步：${0}",

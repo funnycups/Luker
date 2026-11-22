@@ -12,6 +12,7 @@ import {
 } from '../../function-call-runtime.js';
 import { fetchFileList, fetchFileContent, saveFileContent, deleteFile, renameFile } from './studio.js';
 import { applyEdits } from '../../../lib/edits/index.js';
+import { requireStoredPrompt } from '../../../lib/prompt-values.js';
 import { showConflictResolution } from '../../../lib/edits/conflict-ui.js';
 import {
     listCtxKeys,
@@ -2436,7 +2437,7 @@ let makeCallId = (() => {
  * @param {string} userMessage - User's message
  * @param {object} options
  * @param {AbortSignal} [options.abortSignal]
- * @param {string} [options.systemPrompt]
+ * @param {string} options.systemPrompt
  * @param {function} [options.onToolCall] - Callback when a tool is called: (toolName, args, result) => void
  * @param {function} [options.onAssistantText] - Callback when assistant produces text: (text) => void
  * @param {function} [options.onPendingApproval] - Callback when a file modification needs approval: (pendingOp) => Promise<boolean> (true=approved, false=rejected)
@@ -2445,7 +2446,7 @@ let makeCallId = (() => {
 export async function sendAIMessage(charId, conversationMessages, userMessage, options = {}) {
     const {
         abortSignal = null,
-        systemPrompt = DEFAULT_SYSTEM_PROMPT,
+        systemPrompt,
         onToolCall = null,
         onAssistantText = null,
         onPendingApproval = null,
@@ -2453,6 +2454,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
         apiPresetName = '',
     } = options;
 
+    requireStoredPrompt(systemPrompt, __ctx.translate('Fill in the prompt or reset it to the default.'));
     const tools = buildTools();
     const allowedNames = new Set(Object.values(TOOL_NAMES));
     const modifiedFiles = [];

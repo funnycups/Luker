@@ -86,15 +86,14 @@ describe('resolveExtractionTemplate', () => {
         })).toEqual({ template: 'TEMPLATE', edgeRules: 'EDGES' });
     });
 
-    test('falls back to the code constants', () => {
-        expect(resolveExtractionTemplate({})).toEqual({
-            template: DEFAULT_EXTRACT_TEMPLATE,
-            edgeRules: DEFAULT_EXTRACT_EDGE_RULES,
-        });
+    test('rejects missing stored prompts', () => {
+        expect(() => resolveExtractionTemplate({})).toThrow();
     });
 
     test('ignores the retired unit slots', () => {
         const units = resolveExtractionTemplate({
+            extractTemplate: DEFAULT_EXTRACT_TEMPLATE,
+            extractEdgeRules: DEFAULT_EXTRACT_EDGE_RULES,
             extractMainPrompt: 'OLD_MAIN',
             extractEventSummaryRules: 'OLD_EVENT',
             extractThoughtSkeleton: 'OLD_THOUGHT',

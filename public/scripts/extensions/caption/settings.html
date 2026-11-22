@@ -221,8 +221,11 @@
                 </div>
             </div>
             <div id="caption_prompt_block">
-                <label for="caption_prompt" data-i18n="Caption Prompt">Caption Prompt</label>
-                <textarea id="caption_prompt" class="text_pole textarea_compact autoSetHeight" rows="1" placeholder="&lt; Use default &gt;">{{PROMPT_DEFAULT}}</textarea>
+                <div class="flex-container alignItemsBaseline">
+                    <label for="caption_prompt" data-i18n="Caption Prompt">Caption Prompt</label>
+                    <button type="button" id="caption_prompt_restore" class="menu_button" data-i18n="Reset to default">Reset to default</button>
+                </div>
+                <textarea id="caption_prompt" class="text_pole textarea_compact autoSetHeight" rows="1"></textarea>
                 <label class="checkbox_label margin-bot-10px" for="caption_prompt_ask" title="Ask for a custom prompt every time an image is captioned.">
                     <input id="caption_prompt_ask" type="checkbox" class="checkbox">
                     <span data-i18n="Ask every time">Ask every time</span>

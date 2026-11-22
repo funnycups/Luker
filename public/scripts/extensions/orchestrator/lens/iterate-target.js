@@ -913,11 +913,10 @@ export function createOrchIterateTarget(getCtx = defaultGetContext, deps = {}) {
             const defaults = deps.ITERATION_MODE_PROMPT_DEFAULTS || {};
             const defaultBase = deps.getDefaultRequestSystemPrompt?.() || '';
             const modeKey = { spec: 'iterModePromptSpec', loop: 'iterModePromptLoop', director: 'iterModePromptDirector', agenda: 'iterModePromptAgenda' }[mode];
-            const storedBase = String(s.requestSystemPrompt || '').trim();
-            const storedMode = String(s[modeKey] || '').trim();
-            const custom = (Boolean(storedBase) && storedBase !== defaultBase.trim())
-                || (Boolean(storedMode) && storedMode !== String(defaults[mode] || '').trim());
-            const text = [storedBase || defaultBase, storedMode || defaults[mode] || ''].filter(Boolean).join('\n\n');
+            const storedBase = String(s.requestSystemPrompt ?? '');
+            const storedMode = String(s[modeKey] ?? '');
+            const custom = storedBase !== defaultBase || storedMode !== String(defaults[mode] ?? '');
+            const text = [storedBase, storedMode].filter(Boolean).join('\n\n');
             return {
                 from: i18nFormat('Built into Luker · ${0}', i18n('AI Iteration Studio configuration')),
                 custom,

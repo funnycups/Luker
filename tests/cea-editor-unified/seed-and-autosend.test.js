@@ -10,6 +10,7 @@
 import { beforeAll, describe, expect, jest, test } from '@jest/globals';
 import { createIteratePage } from '../../public/scripts/workbench/pages/iterate.js';
 import { createCardTarget } from '../../public/scripts/workbench/targets/card.js';
+import { DEFAULT_CARD_SYSTEM_PROMPT } from '../../public/scripts/workbench/targets/card-prompts.js';
 
 beforeAll(() => {
     if (!globalThis.requestAnimationFrame) {
@@ -85,6 +86,12 @@ describe('CEA card Workbench seed draft behavior', () => {
 
     test('seedPrompt + hideSeedFromUi + autoSend automatically dispatches turn and hides seed bubble', async () => {
         const ctx = {
+            extensionSettings: {
+                character_editor_assistant: {
+                    editorIterationSystemPrompt: DEFAULT_CARD_SYSTEM_PROMPT,
+                    promptDefaultsInitialized: true,
+                },
+            },
             characterId: 0,
             characters: [{ avatar: 'alice.png', name: 'Alice', data: { extensions: {} } }],
             loadWorldInfo: async () => null,

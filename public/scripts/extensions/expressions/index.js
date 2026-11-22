@@ -17,6 +17,7 @@ import { slashCommandReturnHelper } from '../../slash-commands/SlashCommandRetur
 import { generateWebLlmChatPrompt, isWebLlmSupported } from '../shared.js';
 import { Popup, POPUP_RESULT } from '../../popup.js';
 import { t } from '../../i18n.js';
+import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-values.js';
 import { removeReasoningFromString } from '../../reasoning.js';
 import { macros } from '../../macros/macro-system.js';
 import { MacrosParser } from '/scripts/macros.js';
@@ -992,7 +993,8 @@ function sampleClassifyText(text) {
  */
 async function getLlmPrompt(labels) {
     const labelsString = labels.map(x => `"${x}"`).join(', ');
-    const prompt = substituteParamsExtended(String(extension_settings.expressions.llmPrompt), { labels: labelsString });
+    const storedPrompt = requireStoredPrompt(extension_settings.expressions.llmPrompt, t`Fill in the prompt or reset it to the default.`);
+    const prompt = substituteParamsExtended(storedPrompt, { labels: labelsString });
     return prompt;
 }
 
@@ -2197,8 +2199,7 @@ function migrateSettings() {
         saveSettingsDebounced();
     }
 
-    if (extension_settings.expressions.llmPrompt === undefined) {
-        extension_settings.expressions.llmPrompt = DEFAULT_LLM_PROMPT;
+    if (initializePromptDefaults(extension_settings.expressions, { llmPrompt: DEFAULT_LLM_PROMPT })) {
         saveSettingsDebounced();
     }
 

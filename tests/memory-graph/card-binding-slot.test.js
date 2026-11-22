@@ -60,7 +60,7 @@ test('register wires a descriptor that persists each preserved key', async () =>
     const writes = context.writeExtensionField.mock.calls.filter(call => call[1] === 'memory_graph');
     expect(writes).toHaveLength(2);
     expect(writes[0][2].schemaOverride).toEqual([{ id: 'tide' }]);
-    expect(writes[1][2].advancedOverride).toEqual({ recallTopN: 7 });
+    expect(writes[1][2].advancedOverride).toEqual({ recallTopN: 7, promptDefaultsInitialized: true });
 });
 
 test('write skips an empty schema override beside a non-empty advanced override', async () => {
@@ -75,7 +75,7 @@ test('write skips an empty schema override beside a non-empty advanced override'
     await descriptor.write(0, { schemaOverride: [], advancedOverride: { recallTopN: 7 } });
     const writes = context.writeExtensionField.mock.calls.filter(call => call[1] === 'memory_graph');
     expect(writes).toHaveLength(1);
-    expect(writes[0][2].advancedOverride).toEqual({ recallTopN: 7 });
+    expect(writes[0][2].advancedOverride).toEqual({ recallTopN: 7, promptDefaultsInitialized: true });
     expect(writes[0][2]).not.toHaveProperty('schemaOverride');
 });
 

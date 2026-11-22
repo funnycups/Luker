@@ -11,6 +11,7 @@
 import { safeClone } from '../../iteration-library/storage/safe-clone.js';
 import { i18n, i18nFormat, listSeparator } from '../i18n.js';
 import { SourceError } from '../model/errors.js';
+import { requireStoredPrompt } from '../../lib/prompt-values.js';
 import { cardUnits, cardRebuild, cardEditsFor } from '../model/adapters.js';
 import { commitCardAndBooks } from '../model/commit.js';
 import { DEFAULT_CARD_SYSTEM_PROMPT } from './card-prompts.js';
@@ -92,12 +93,12 @@ export function createCardTarget({ getContext = defaultGetContext, bookIo = null
         async promptInfo(ctx) {
             const c = resolveCtx(ctx);
             const s = c?.extensionSettings?.character_editor_assistant;
-            const stored = String(s?.editorIterationSystemPrompt || '').trim();
+            const stored = String(s?.editorIterationSystemPrompt ?? '');
             const custom = Boolean(stored) && stored !== DEFAULT_CARD_SYSTEM_PROMPT.trim();
             return {
                 from: i18nFormat('Built into Luker · ${0}', i18n('"Edit iteration prompt" in Character Assistant settings')),
                 custom,
-                text: stored || DEFAULT_CARD_SYSTEM_PROMPT,
+                text: stored,
             };
         },
         async load(_scope, ctx) {
@@ -119,7 +120,7 @@ export function createCardTarget({ getContext = defaultGetContext, bookIo = null
         async prompt(_live, _scope, ctx) {
             const c = resolveCtx(ctx);
             const s = c?.extensionSettings?.character_editor_assistant;
-            return String(s?.editorIterationSystemPrompt || '').trim() || DEFAULT_CARD_SYSTEM_PROMPT;
+            return requireStoredPrompt(s?.editorIterationSystemPrompt, i18n('Fill in the prompt or reset it to the default.'));
         },
         async tools(_live, _scope, ctx) {
             const c = resolveCtx(ctx);

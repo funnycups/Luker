@@ -18,6 +18,7 @@ import { createPresetTarget } from '../../public/scripts/workbench/targets/prese
 import { isCpaSkillTool } from '../../public/scripts/workbench/targets/preset-tools.js';
 import { initWorkbench, resetWorkbenchForTest } from '../../public/scripts/workbench/index.js';
 import { getIterateTargets } from '../../public/scripts/workbench/registry.js';
+import { buildBaseSystemPrompt, buildOrchestratorOptimizeModeBlock, buildJailbreakOnlyModeBlock } from '../../public/scripts/workbench/targets/preset-prompts.js';
 
 const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
 
@@ -37,7 +38,15 @@ function createMockPresetCtx({
     let currentName = selectedName;
 
     const ctx = {
-        extensionSettings: clone(extensionSettings),
+        extensionSettings: {
+            ...clone(extensionSettings),
+            completion_preset_assistant: {
+                iterBaseSystemPrompt: buildBaseSystemPrompt(),
+                iterModePromptOrchestratorOptimize: buildOrchestratorOptimizeModeBlock(),
+                iterModePromptJailbreakOnly: buildJailbreakOnlyModeBlock(),
+                ...clone(extensionSettings.completion_preset_assistant || {}),
+            },
+        },
         openai: {
             stripPresetConnectionFields: (body) => {
                 const copy = clone(body);

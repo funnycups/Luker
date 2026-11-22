@@ -50,6 +50,7 @@ import {
     sanitizeSpec,
 } from './spec-schema.js';
 import { sanitizeOptionalAgentToolFlags } from './persistence.js';
+import { initializePromptDefaults } from '../../lib/prompt-values.js';
 
 function cloneSkillsField(skills) {
     if (!skills || typeof skills !== 'object') return undefined;
@@ -69,8 +70,8 @@ export function sanitizeIdentifierToken(value, fallback = '') {
 
 export function createPresetDraft(seed = {}) {
     const out = {
-        systemPrompt: String(seed.systemPrompt || '').trim(),
-        userPromptTemplate: String(seed.userPromptTemplate || '').trim(),
+        systemPrompt: String(seed.systemPrompt ?? ''),
+        userPromptTemplate: String(seed.userPromptTemplate ?? ''),
         apiPresetName: getPresetApiPresetName(seed),
         promptPresetName: getPresetPromptPresetName(seed),
         // null = inherit from profile.defaultTools at runtime; an object =
@@ -95,12 +96,12 @@ export function createAgendaPlannerDraft(seed = {}) {
     const source = typeof seed === 'string'
         ? { userPromptTemplate: seed }
         : (seed && typeof seed === 'object' ? seed : {});
-    return createPresetDraft({
-        ...defaultAgendaPlanner,
-        ...source,
-        systemPrompt: String(source.systemPrompt || defaultAgendaPlanner.systemPrompt).trim(),
-        userPromptTemplate: String(source.userPromptTemplate || defaultAgendaPlanner.userPromptTemplate).trim(),
+    const planner = { ...source };
+    initializePromptDefaults(planner, {
+        systemPrompt: defaultAgendaPlanner.systemPrompt,
+        userPromptTemplate: defaultAgendaPlanner.userPromptTemplate,
     });
+    return { ...createPresetDraft(planner), promptDefaultsInitialized: true };
 }
 
 const FORBIDDEN_PRESET_KEYS = new Set(['__proto__', 'constructor', 'prototype']);

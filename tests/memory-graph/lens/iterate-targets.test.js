@@ -145,6 +145,8 @@ function makeConfigHarness({
         : [];
     const mgSettings = {
         nodeTypeSchema: clone(DEFAULT_SCHEMA),
+        configIterSystemPrompt: DEFAULT_CONFIG_ITER_SYSTEM_PROMPT,
+        promptDefaultsInitialized: true,
         recallMaxIterations: 3,
         updateEvery: 2,
         ...clone(globalSettings),
@@ -323,18 +325,18 @@ describe('memory IterateTarget (config + schema)', () => {
         });
         const target = createMemoryConfigTarget(() => h.ctx, h.deps);
         const prompt = await target.prompt({}, 'global', h.ctx);
-        expect(prompt).toContain('CUSTOM CONFIG ITER PROMPT');
-        expect(prompt).not.toContain('DEPRECATED SCHEMA PROMPT');
+        expect(prompt).toBe('CUSTOM CONFIG ITER PROMPT');
 
         const info = await target.promptInfo(h.ctx);
         expect(info.custom).toBe(true);
         expect(info.text).toBe('CUSTOM CONFIG ITER PROMPT');
 
-        // Without configIterSystemPrompt, falls back to DEFAULT_CONFIG_ITER_SYSTEM_PROMPT even if schemaIterSystemPrompt is set
         delete h.mgSettings.configIterSystemPrompt;
-        const defaultPrompt = await target.prompt({}, 'global', h.ctx);
-        expect(defaultPrompt).toBe(DEFAULT_CONFIG_ITER_SYSTEM_PROMPT);
+        await expect(target.prompt({}, 'global', h.ctx)).rejects.toThrow();
         expect((await target.promptInfo(h.ctx)).custom).toBe(false);
+        expect((await target.promptInfo(h.ctx)).text).toBe('');
+        h.mgSettings.configIterSystemPrompt = '';
+        await expect(target.prompt({}, 'global', h.ctx)).rejects.toThrow();
     });
 
     test('character scope exposes LOREBOOK_READ_TOOL_DEFS + mg_schema_* + mg_config_* and dispatches lorebook reads via runLorebookReadTool', async () => {
@@ -662,7 +664,8 @@ describe('memory IterateTarget (config + schema)', () => {
         const promptNoOverride = await target.prompt(loaded.live, 'character', h.ctx);
         const toolsNoOverride = (await target.tools(loaded.live, 'character', h.ctx)).map(t => t.function.name);
         expect(scopeSpy).toHaveBeenCalledTimes(1);
-        expect(promptNoOverride).toContain('This card has NO schema override yet');
+        expect(typeof promptNoOverride).toBe('string');
+        expect(promptNoOverride.length).toBeGreaterThan(0);
         expect(toolsNoOverride).not.toContain('luker_mg_schema_reset_live_to_global');
 
         // Explicit extra.target with hasOverride: true drives both prompt and tools without re-querying.
@@ -670,7 +673,7 @@ describe('memory IterateTarget (config + schema)', () => {
         const promptOverride = await target.prompt(clone(loaded.live), 'character', h.ctx, { target: explicitTarget });
         const toolsOverride = (await target.tools(clone(loaded.live), 'character', h.ctx, { target: explicitTarget })).map(t => t.function.name);
         expect(scopeSpy).toHaveBeenCalledTimes(1);
-        expect(promptOverride).not.toContain('This card has NO schema override yet');
+        expect(promptOverride).not.toBe(promptNoOverride);
         expect(toolsOverride).toContain('luker_mg_schema_reset_live_to_global');
     });
 });
@@ -694,7 +697,8 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
         let activeChatKey = chatId ? `char:${avatar}:${chatId}` : '';
         const mgSettings = {
             nodeTypeSchema: clone(DEFAULT_SCHEMA),
-            graphIterSystemPrompt: '',
+            graphIterSystemPrompt: DEFAULT_GRAPH_ITER_SYSTEM_PROMPT,
+            promptDefaultsInitialized: true,
             requestApiPresetName: 'Conn1',
             requestLlmPresetName: 'Preset1',
         };
@@ -814,6 +818,8 @@ describe('memory_graph IterateTarget (chat scope + graph-revision + vector sync)
         expect(await tOpen.prompt({}, 'chat', hOpen.ctx)).toBe(DEFAULT_GRAPH_ITER_SYSTEM_PROMPT);
         hOpen.mgSettings.graphIterSystemPrompt = 'CUSTOM GRAPH PROMPT';
         expect(await tOpen.prompt({}, 'chat', hOpen.ctx)).toBe('CUSTOM GRAPH PROMPT');
+        hOpen.mgSettings.graphIterSystemPrompt = '';
+        await expect(tOpen.prompt({}, 'chat', hOpen.ctx)).rejects.toThrow();
 
         const hClosed = makeGraphHarness({ chatId: '' });
         const tClosed = createMemoryGraphTarget(() => hClosed.ctx, hClosed.deps);

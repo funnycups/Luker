@@ -13,12 +13,15 @@ import { renderSections } from '../views/sections.js';
 import { textField, routingField } from './field-editor.js';
 import { fieldLabel } from '../model/edit.js';
 import { importPresetExample, openPresetDerivation, exampleNameForMode } from '../../../../lens-shared/preset-examples.js';
+import { defaultAgendaPlanner, DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT, DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE } from '../../defaults.js';
+import { DEFAULT_LOOP_SYSTEM_PROMPT } from '../../loop-default-prompt.js';
 
 const PROMPT_PREVIEW = 420;
 
 export function createInspector(app) {
     const bodyEl = h('div', { class: 'ol-insp-body' });
     const el = h('aside', { class: 'ol-inspector', 'aria-label': i18n('Details') }, bodyEl);
+    let renderedTarget = '';
 
     function promptBlock(title, text) {
         const value = String(text || '').trim();
@@ -40,11 +43,18 @@ export function createInspector(app) {
         const value = drafts.get(id, key);
         const original = drafts.changeFor(id, key)?.before ?? value;
         if (!value && !app.canEdit()) return null;
+        const mode = app.snapshot().mode;
+        const defaults = mode === 'agenda' && id === 'agenda_planner'
+            ? { system: defaultAgendaPlanner.systemPrompt, task: defaultAgendaPlanner.userPromptTemplate }
+            : mode === 'single' && id === 'single_agent'
+                ? { system: DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT, task: DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE }
+                : mode === 'loop' && id === 'loop_agent' ? { system: DEFAULT_LOOP_SYSTEM_PROMPT } : {};
         return textField({
             app,
             title,
             value,
             original,
+            defaultValue: defaults[key],
             editable: app.canEdit(),
             fullTitle: `${agentName(id)} · ${title}`,
             onChange: (next) => drafts.set(id, key, next),
@@ -163,8 +173,14 @@ export function createInspector(app) {
     }
 
     function render() {
-        clear(bodyEl);
         const id = app.state().selectedAgent;
+        const snapshot = app.snapshot();
+        const target = snapshot?.target;
+        const targetKey = JSON.stringify([id, snapshot?.mode, target?.scope, target?.presetId, target?.avatar, target?.chatKey]);
+        // Keep an open prompt edit through refreshes of the same target.
+        if (targetKey === renderedTarget && bodyEl.querySelector('.ol-field-input')) return;
+        renderedTarget = targetKey;
+        clear(bodyEl);
         const flow = app.flow();
         if (!id) {
             put(bodyEl, overview());

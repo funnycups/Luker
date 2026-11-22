@@ -44,6 +44,8 @@ import {
     renderProfileSelect,
 } from '../connection-manager/embed-rerank.js';
 import { EmbeddingService } from '../../embedding-service.js';
+import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-values.js';
+import { t } from '../../i18n.js';
 
 /**
  * @typedef {object} HashedMessage
@@ -54,6 +56,7 @@ import { EmbeddingService } from '../../embedding-service.js';
  */
 
 const MODULE_NAME = 'vectors';
+const DEFAULT_SUMMARY_PROMPT = 'Ignore previous instructions. Summarize the most important parts of the message. Limit yourself to 250 words or less. Your response should include nothing but the summary.';
 
 export const EXTENSION_PROMPT_TAG = '3_vectors';
 export const EXTENSION_PROMPT_TAG_DB = '4_vectors_data_bank';
@@ -76,7 +79,7 @@ const settings = {
     summarize: false,
     summarize_sent: false,
     summary_source: 'main',
-    summary_prompt: 'Ignore previous instructions. Summarize the most important parts of the message. Limit yourself to 250 words or less. Your response should include nothing but the summary.',
+    summary_prompt: DEFAULT_SUMMARY_PROMPT,
     summary_retries: 2,
     summary_threshold: 200,
     force_chunk_delimiter: '',
@@ -289,7 +292,8 @@ function splitByChunks(items) {
  * @returns {Promise<boolean>} Success
  */
 async function summarizeMain(element) {
-    element.text = removeReasoningFromString(await generateRaw({ prompt: element.text, systemPrompt: settings.summary_prompt }));
+    const systemPrompt = requireStoredPrompt(settings.summary_prompt, t`Fill in the prompt or reset it to the default.`);
+    element.text = removeReasoningFromString(await generateRaw({ prompt: element.text, systemPrompt }));
     return true;
 }
 
@@ -304,7 +308,8 @@ async function summarizeWebLLM(element) {
         return false;
     }
 
-    const messages = [{ role: 'system', content: settings.summary_prompt }, { role: 'user', content: element.text }];
+    const systemPrompt = requireStoredPrompt(settings.summary_prompt, t`Fill in the prompt or reset it to the default.`);
+    const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: element.text }];
     element.text = removeReasoningFromString(await generateWebLlmChatPrompt(messages));
 
     return true;
@@ -1397,6 +1402,9 @@ export async function init() {
     migrateLegacySettings();
 
     Object.assign(settings, extension_settings.vectors);
+    if (initializePromptDefaults(settings, { summary_prompt: DEFAULT_SUMMARY_PROMPT })) {
+        persistSettings();
+    }
 
     // Coerce removed/renamed sources, just in case the migration runs again.
     if (settings.summary_source === 'extras') settings.summary_source = 'main';
@@ -1505,6 +1513,11 @@ export async function init() {
     });
     $('#vectors_summary_prompt').val(settings.summary_prompt).on('input', () => {
         settings.summary_prompt = String($('#vectors_summary_prompt').val());
+        persistSettings();
+    });
+    $('#vectors_summary_prompt_restore').on('click', () => {
+        settings.summary_prompt = DEFAULT_SUMMARY_PROMPT;
+        $('#vectors_summary_prompt').val(DEFAULT_SUMMARY_PROMPT);
         persistSettings();
     });
     $('#vectors_summary_retries').val(settings.summary_retries).on('input', () => {

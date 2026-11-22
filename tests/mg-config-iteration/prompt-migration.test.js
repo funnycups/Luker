@@ -28,6 +28,15 @@ describe('migrateConfigIterationPrompt', () => {
         expect(settings.schemaIterSystemPrompt).toBe('my custom schema prompt');
     });
 
+    test('preserves all bytes of a custom legacy prompt during migration', () => {
+        const custom = '  Use the supplied configuration.\n\n';
+        const settings = { schemaIterSystemPrompt: custom };
+
+        expect(migrateConfigIterationPrompt(settings)).toBe(true);
+        expect(settings.configIterSystemPrompt).toBe(custom);
+        expect(settings.schemaIterSystemPrompt).toBe(custom);
+    });
+
     test('leaves the new slot undefined when the legacy prompt is still the old default', () => {
         const seeded = { schemaIterSystemPrompt: LEGACY_SCHEMA_ITER_SYSTEM_PROMPT };
 

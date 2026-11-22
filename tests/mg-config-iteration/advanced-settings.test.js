@@ -5,9 +5,8 @@
  * Structural tests for the advanced-settings normalizer.
  *
  * `normalizeAdvancedSettings` mirrors the clamp semantics the Advanced panel
- * and the Layer-2 API rely on. `ADVANCED_SETTING_DEFAULTS` only carries the
- * keys that are seeded into `defaultSettings`; the five unseeded keys stay
- * out so code constants can keep driving their defaults.
+ * and the Layer-2 API rely on. Built-in prompt defaults are stored in full;
+ * subsequent normalization preserves exact edited values.
  */
 
 import { describe, test, expect } from '@jest/globals';
@@ -21,28 +20,20 @@ import {
 } from '../../public/scripts/extensions/memory-graph/config-iteration/advanced-settings.js';
 import {
     DEFAULT_CRAWL_SYSTEM_PROMPT,
+    DEFAULT_EXTRACT_TEMPLATE,
     DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
     DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
 } from '../../public/scripts/extensions/memory-graph/default-prompts.js';
 import { DEFAULT_CONFIG_ITER_SYSTEM_PROMPT } from '../../public/scripts/extensions/memory-graph/config-iteration/system-prompt.js';
-
-const UNSEDDED_KEYS = [
-    'extractTemplate',
-    'extractEdgeRules',
-    'extractConcurrent',
-    'graphIterSystemPrompt',
-    'configIterSystemPrompt',
-];
+import { CONFIG_FIELDS } from '../../public/scripts/extensions/memory-graph/config-iteration/fields.js';
 
 describe('ADVANCED_SETTING_DEFAULTS', () => {
-    test('contains exactly the 19 seeded keys', () => {
-        expect(Object.keys(ADVANCED_SETTING_DEFAULTS)).toHaveLength(19);
+    test('seeds the registered defaults except the inherited concurrency field', () => {
+        expect(Object.keys(ADVANCED_SETTING_DEFAULTS)).toHaveLength(Object.keys(CONFIG_FIELDS).length - 1);
     });
 
     test('leaves the unseeded keys out', () => {
-        for (const key of UNSEDDED_KEYS) {
-            expect(ADVANCED_SETTING_DEFAULTS).not.toHaveProperty(key);
-        }
+        expect(ADVANCED_SETTING_DEFAULTS).not.toHaveProperty('extractConcurrent');
     });
 
     test('seeds the prompt keys with the moved constants', () => {
@@ -60,8 +51,8 @@ describe('normalizeAdvancedSettings', () => {
             extractMode: 'oneshot',
             extractContextTurns: 2,
             extractConcurrent: false,
-            extractTemplate: '',
-            configIterSystemPrompt: '',
+            extractTemplate: DEFAULT_EXTRACT_TEMPLATE,
+            configIterSystemPrompt: DEFAULT_CONFIG_ITER_SYSTEM_PROMPT,
             recallRouteSystemPrompt: DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
         });
     });
@@ -92,25 +83,25 @@ describe('normalizeAdvancedSettings', () => {
         expect(normalizeAdvancedSettings({ extractMode: 'bogus' }, {}).extractMode).toBe('oneshot');
     });
 
-    test('keeps empty slots empty for user-edited templates', () => {
+    test('preserves whitespace and empty edits in stored templates', () => {
         const normalized = normalizeAdvancedSettings({ extractTemplate: '   ', extractEdgeRules: '' }, {});
-        expect(normalized.extractTemplate).toBe('');
+        expect(normalized.extractTemplate).toBe('   ');
         expect(normalized.extractEdgeRules).toBe('');
     });
 
-    test('trims user-entered template text', () => {
+    test('preserves user-entered template text verbatim', () => {
         const normalized = normalizeAdvancedSettings({ extractTemplate: '  custom {{nodes}} {{edges}}  ' }, {});
-        expect(normalized.extractTemplate).toBe('custom {{nodes}} {{edges}}');
+        expect(normalized.extractTemplate).toBe('  custom {{nodes}} {{edges}}  ');
     });
 
-    test('fills the crawl and recall prompts from base or default', () => {
-        expect(normalizeAdvancedSettings({ extractCrawlSystemPrompt: '' }, {}).extractCrawlSystemPrompt).toBe(DEFAULT_CRAWL_SYSTEM_PROMPT);
+    test('preserves cleared prompts and inherits absent prompts from base or default', () => {
+        expect(normalizeAdvancedSettings({ extractCrawlSystemPrompt: '' }, {}).extractCrawlSystemPrompt).toBe('');
         expect(normalizeAdvancedSettings({}, { recallRouteSystemPrompt: 'base route' }).recallRouteSystemPrompt).toBe('base route');
         expect(normalizeAdvancedSettings({}, {}).recallFinalizeSystemPrompt).toBe(DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT);
     });
 
-    test('clears configIterSystemPrompt when it equals the code default', () => {
-        expect(normalizeAdvancedSettings({ configIterSystemPrompt: DEFAULT_CONFIG_ITER_SYSTEM_PROMPT }, {}).configIterSystemPrompt).toBe('');
+    test('keeps default and custom configuration prompts in storage', () => {
+        expect(normalizeAdvancedSettings({ configIterSystemPrompt: DEFAULT_CONFIG_ITER_SYSTEM_PROMPT }, {}).configIterSystemPrompt).toBe(DEFAULT_CONFIG_ITER_SYSTEM_PROMPT);
         expect(normalizeAdvancedSettings({ configIterSystemPrompt: 'custom config prompt' }, {}).configIterSystemPrompt).toBe('custom config prompt');
     });
 
@@ -126,8 +117,8 @@ describe('applyAdvancedSettings', () => {
         applyAdvancedSettings(target, { extractMode: 'crawl', includeWorldInfoWithPreset: false });
         expect(target.extractMode).toBe('crawl');
         expect(target.includeWorldInfoWithPreset).toBe(false);
-        expect(target.configIterSystemPrompt).toBe('');
-        expect(target.extractTemplate).toBe('');
+        expect(target.configIterSystemPrompt).toBe(DEFAULT_CONFIG_ITER_SYSTEM_PROMPT);
+        expect(target.extractTemplate).toBe(DEFAULT_EXTRACT_TEMPLATE);
         expect(Object.keys(target)).toHaveLength(24);
     });
 

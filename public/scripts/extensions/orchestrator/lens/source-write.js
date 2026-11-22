@@ -109,8 +109,8 @@ function readTarget(ctx, settings, target) {
             spec: { stages: [{ id: 'single', mode: 'serial', nodes: ['single_agent'] }] },
             presets: {
                 single_agent: {
-                    systemPrompt: String(settings.singleAgentSystemPrompt || DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT),
-                    userPromptTemplate: String(settings.singleAgentUserPromptTemplate || DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE),
+                    systemPrompt: String(settings.singleAgentSystemPrompt ?? ''),
+                    userPromptTemplate: String(settings.singleAgentUserPromptTemplate ?? ''),
                 },
             },
         };
@@ -473,7 +473,7 @@ const SETTING_RULES = {
     capsuleInjectPosition: normalizeCapsuleInjectPosition,
     capsuleInjectDepth: intAtLeast(0, 0),
     capsuleInjectRole: value => (ROLES.includes(Number(value)) ? Number(value) : 0),
-    capsuleCustomInstruction: value => text(value).trim(),
+    capsuleCustomInstruction: text,
     requestApiPresetName: sanitizeConnectionProfileName,
     requestLlmPresetName: value => text(value).trim(),
     requestSystemPrompt: text,

@@ -11,6 +11,7 @@ import {
     runLorebookReadTool,
 } from '../../../iteration-library/tools/lorebook-reads.js';
 import { SourceError } from '../../../workbench/model/errors.js';
+import { readStoredPrompt } from '../prompt-units.js';
 import {
     conflictsLeftAlone,
     fieldPlan,
@@ -516,12 +517,12 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             const c = resolveCtx(ctx);
             const mgSettings = getMgSettings();
             const effective = deps.getEffectiveSettings?.(c, mgSettings) || mgSettings;
-            const stored = String(effective?.configIterSystemPrompt || '').trim();
+            const stored = String(effective?.configIterSystemPrompt ?? '');
             const custom = Boolean(stored) && stored !== DEFAULT_CONFIG_ITER_SYSTEM_PROMPT.trim();
             return {
                 from: i18nFormat('Built into Luker · ${0}', i18n('Configuration Iteration Prompt (configuration-editor AI)')),
                 custom,
-                text: stored || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT,
+                text: stored,
             };
         },
         renderControls({ scope, onReload } = {}) {
@@ -625,14 +626,14 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             const meta = resolveMeta(live, extra?.target, { scope, ctx: c });
             if (meta.scope === 'character') {
                 const effective = deps.getEffectiveSettings?.(c, mgSettings) || mgSettings;
-                const base = String(effective?.configIterSystemPrompt || '').trim() || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT;
+                const base = readStoredPrompt(effective?.configIterSystemPrompt, 'Configuration Iteration Prompt (configuration-editor AI)');
                 return appendScopeHintIfNeeded(base, {
                     scope: 'character',
                     hasOverride: Boolean(meta.hasOverride),
                     characterDisplayName: meta.characterName || resolveActiveCharacterName(c, meta.avatar || resolveActiveAvatar(c)),
                 });
             }
-            return String(mgSettings?.configIterSystemPrompt || '').trim() || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT;
+            return readStoredPrompt(mgSettings?.configIterSystemPrompt, 'Configuration Iteration Prompt (configuration-editor AI)');
         },
         async tools(live, scope, ctx, extra = {}) {
             const c = resolveCtx(ctx);
@@ -802,8 +803,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                             persistCharacterSchema: async () => true,
                             persistCharacterSettings: async () => true,
                             saveGlobalSettings: () => {
-                                // Keep seeded defaults present on mgSettings while leaving
-                                // unseeded prompt/flag slots deleted when reset to default.
+                                // Reset stores the current built-in text alongside scalar defaults.
                                 for (const key of plan.unset || []) {
                                     if (Object.prototype.hasOwnProperty.call(ADVANCED_SETTING_DEFAULTS, key)) {
                                         mgSettings[key] = ADVANCED_SETTING_DEFAULTS[key];
@@ -1151,12 +1151,12 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
             const c = resolveCtx(ctx);
             const mgSettings = getMgSettings();
             const effective = deps.getEffectiveSettings?.(c, mgSettings) || mgSettings;
-            const stored = String(effective?.graphIterSystemPrompt || '').trim();
+            const stored = String(effective?.graphIterSystemPrompt ?? '');
             const custom = Boolean(stored) && stored !== DEFAULT_GRAPH_ITER_SYSTEM_PROMPT.trim();
             return {
                 from: i18nFormat('Built into Luker · ${0}', i18n('Graph Revision Prompt (graph-editor AI)')),
                 custom,
-                text: stored || DEFAULT_GRAPH_ITER_SYSTEM_PROMPT,
+                text: stored,
             };
         },
         renderPreview: ({ base, ai, target }) => renderMemoryGraphPreview({ base, ai, target }),

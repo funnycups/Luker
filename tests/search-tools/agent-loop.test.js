@@ -55,6 +55,8 @@ jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/pro
 let mod;
 beforeAll(async () => {
     mod = await import('../../public/scripts/extensions/search-tools/main.js');
+    settings.agentSystemPrompt = mod.DEFAULT_SETTINGS.agentSystemPrompt;
+    settings.promptDefaultsInitialized = true;
 });
 
 beforeEach(() => {

@@ -15,10 +15,8 @@
  * SillyTavern script.js / lib.js runtime in.
  */
 
-import {
-    DEFAULT_EXTRACT_EDGE_RULES,
-    DEFAULT_EXTRACT_TEMPLATE,
-} from './default-prompts.js';
+import { i18n, i18nFormat } from './i18n.js';
+import { requireStoredPrompt } from '../../lib/prompt-values.js';
 
 export const NODES_BLOCK_MARKER = '{{nodes}}';
 export const EDGES_BLOCK_MARKER = '{{edges}}';
@@ -41,16 +39,21 @@ export function renderExtractionTemplate(template, { nodesBlock = '', edgesBlock
 }
 
 /**
- * Resolve the template settings into the template text and the edge rules.
- * Each slot falls back to its code constant when empty, so a user who never
- * edited it picks up later constant changes without touching settings.
+ * Read a stored prompt at the execution boundary.
+ */
+export function readStoredPrompt(value, label) {
+    return requireStoredPrompt(value, i18nFormat('${0}: Fill in the prompt or reset it to the default.', i18n(label)));
+}
+
+/**
+ * Resolve stored template settings into the template text and the edge rules.
  *
  * @param {{ extractTemplate?: string, extractEdgeRules?: string }} settings
  * @returns {{ template: string, edgeRules: string }}
  */
 export function resolveExtractionTemplate(settings = {}) {
     return {
-        template: settings?.extractTemplate || DEFAULT_EXTRACT_TEMPLATE,
-        edgeRules: settings?.extractEdgeRules || DEFAULT_EXTRACT_EDGE_RULES,
+        template: readStoredPrompt(settings?.extractTemplate, 'Extraction Template'),
+        edgeRules: readStoredPrompt(settings?.extractEdgeRules, 'Edge Rules'),
     };
 }

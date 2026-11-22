@@ -32,15 +32,18 @@ import {
     buildRoundNodesSection,
     classifyExtractionMutation,
 } from './extraction-schedule.js';
-import { renderExtractionTemplate, resolveExtractionTemplate } from './prompt-units.js';
+import { readStoredPrompt, renderExtractionTemplate, resolveExtractionTemplate } from './prompt-units.js';
 export { DEFAULT_PER_TYPE_INSTRUCTIONS, computeActiveExtractionTypes };
 import {
     configure as configureCharacterOverrides,
+    getCurrentAvatar,
+    getCharacterAdvancedOverrideByAvatar,
     getEffectiveSettings,
     getEffectiveNodeTypeSchema,
     getSchemaScopeInfo,
     getAdvancedScopeInfo,
     persistCharacterAdvancedOverride,
+    persistCharacterAdvancedOverridePatch,
     removeCharacterAdvancedOverride,
 } from './character-overrides.js';
 import { registerMemoryGraphCardBindingSlot } from './card-binding-slot.js';
@@ -50,21 +53,14 @@ import {
     clearImportedStoreTransientState,
     bindImportedStoreToAssistantFloor,
 } from './import-export.js';
-import { DEFAULT_CONFIG_ITER_SYSTEM_PROMPT } from './config-iteration/system-prompt.js';
-import { DEFAULT_GRAPH_ITER_SYSTEM_PROMPT } from './graph-iteration/system-prompt.js';
 import { migrateConfigIterationPrompt } from './config-iteration/prompt-migration.js';
 import {
-    DEFAULT_EXTRACT_EDGE_RULES,
-    DEFAULT_EXTRACT_TEMPLATE,
     DEFAULT_EVENT_COMPRESS_INSTRUCTION,
-    DEFAULT_CRAWL_SYSTEM_PROMPT,
-    DEFAULT_RAG_REWRITE_SYSTEM_PROMPT,
-    DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
-    DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
 } from './default-prompts.js';
 import {
     ADVANCED_SETTING_DEFAULTS,
     applyAdvancedSettings,
+    migrateAdvancedPromptSettings,
     normalizeAdvancedSettings,
     normalizeCrawlCandidateLimit,
     normalizeExtractExcludeRecentTurns,
@@ -679,16 +675,16 @@ function ensureSettings() {
         'recallInjectPositionSchemaVersion',
     );
 
+    migrateConfigIterationPrompt(extension_settings[MODULE_NAME]);
     for (const [key, value] of Object.entries(defaultSettings)) {
         if (extension_settings[MODULE_NAME][key] === undefined) {
             extension_settings[MODULE_NAME][key] = cloneDefault(value);
         }
     }
 
-    // One-shot: carry a user-authored legacy schema prompt into the
-    // configuration prompt slot. Must run before the legacy normalization
-    // below rewrites the old key with the retired default.
-    migrateConfigIterationPrompt(extension_settings[MODULE_NAME]);
+    if (migrateAdvancedPromptSettings(extension_settings[MODULE_NAME])) {
+        saveSettingsDebounced();
+    }
 
     const normalizedAdvanced = normalizeAdvancedSettings(extension_settings[MODULE_NAME], defaultSettings);
     for (const key of Object.keys(ADVANCED_SETTING_DEFAULTS)) {
@@ -5374,7 +5370,7 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
     const readKeys = new Set();
     const observations = [];
     const tools = buildExtractionCrawlTools();
-    const systemPrompt = String(settings?.extractCrawlSystemPrompt || '').trim() || DEFAULT_CRAWL_SYSTEM_PROMPT;
+    const systemPrompt = readStoredPrompt(settings?.extractCrawlSystemPrompt, 'Extraction Crawl Prompt');
     let round = 0;
     while (round < maxRounds) {
         round += 1;
@@ -6423,7 +6419,7 @@ async function runQueryRewrite(context, settings, queryBundle, opts = {}) {
         return null;
     }
     const llmPresetName = String(settings?.ragRewriteLlmPresetName || '').trim();
-    const systemPrompt = String(settings?.ragRewriteSystemPrompt || '').trim() || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT;
+    const systemPrompt = readStoredPrompt(settings?.ragRewriteSystemPrompt, 'Query rewrite system prompt');
     const recentMessages = Array.isArray(queryBundle?.recent_messages) ? queryBundle.recent_messages : [];
     if (recentMessages.length === 0) {
         return null;
@@ -6828,7 +6824,7 @@ function normalizeEdgeTypeList(rawTypes) {
 }
 
 async function chooseRecallRoute(context, settings, recallState) {
-    const routeSystemPrompt = String(settings?.recallRouteSystemPrompt || '').trim() || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT;
+    const routeSystemPrompt = readStoredPrompt(settings?.recallRouteSystemPrompt, 'Recall Routing Prompt');
     const alwaysInjectIds = Array.isArray(recallState?.alwaysInjectIds) ? recallState.alwaysInjectIds : [];
     const candidateSet = new Set((recallState.candidates || []).map(node => String(node?.id || '')).filter(Boolean));
     if (candidateSet.size === 0) {
@@ -7067,7 +7063,7 @@ export function expandRouteCandidates(store, route, rootCandidates) {
 }
 
 async function chooseFocusNodes(context, settings, recallState) {
-    const finalizeSystemPrompt = String(settings?.recallFinalizeSystemPrompt || '').trim() || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT;
+    const finalizeSystemPrompt = readStoredPrompt(settings?.recallFinalizeSystemPrompt, 'Recall Selection Prompt');
     const alwaysInjectIds = Array.isArray(recallState?.alwaysInjectIds) ? recallState.alwaysInjectIds : [];
     const candidateSet = new Set((recallState.candidates || []).map(node => String(node?.id || '')).filter(Boolean));
     if (candidateSet.size === 0) {
@@ -9625,20 +9621,6 @@ export function setMemorySetting(key, value) {
     return settings[key];
 }
 
-function withAdvancedPromptDefaults(source) {
-    return {
-        ...source,
-        extractTemplate: source.extractTemplate || DEFAULT_EXTRACT_TEMPLATE,
-        extractEdgeRules: source.extractEdgeRules || DEFAULT_EXTRACT_EDGE_RULES,
-        extractCrawlSystemPrompt: source.extractCrawlSystemPrompt || DEFAULT_CRAWL_SYSTEM_PROMPT,
-        recallRouteSystemPrompt: source.recallRouteSystemPrompt || DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
-        recallFinalizeSystemPrompt: source.recallFinalizeSystemPrompt || DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT,
-        ragRewriteSystemPrompt: source.ragRewriteSystemPrompt || DEFAULT_RAG_REWRITE_SYSTEM_PROMPT,
-        graphIterSystemPrompt: source.graphIterSystemPrompt || DEFAULT_GRAPH_ITER_SYSTEM_PROMPT,
-        configIterSystemPrompt: source.configIterSystemPrompt || DEFAULT_CONFIG_ITER_SYSTEM_PROMPT,
-    };
-}
-
 /** Everything the settings page shows: values, choices and the advanced scope. */
 export function getMemorySettingsView(context) {
     const settings = getSettings();
@@ -9654,8 +9636,8 @@ export function getMemorySettingsView(context) {
             compressibleTypes: getCompressibleTypeSpecs(getEffectiveSettings(context, settings), context),
         },
         advanced: {
-            values: withAdvancedPromptDefaults(info.settings),
-            defaults: withAdvancedPromptDefaults(normalizeAdvancedSettings(defaultSettings, defaultSettings)),
+            values: info.settings,
+            defaults: normalizeAdvancedSettings(defaultSettings, defaultSettings),
             scope: info.scope,
             hasAvatar: info.hasAvatar,
             hasOverride: info.hasOverride,
@@ -10718,7 +10700,19 @@ export function _setPersistentDrainHookForTest(hook) {
 }
 export { buildRoleSplitChatMessages as _buildRoleSplitChatMessagesForTest };
 
-jQuery(() => {
+async function initializeCharacterPromptDefaults(context) {
+    try {
+        const avatar = getCurrentAvatar(context);
+        const override = avatar ? getCharacterAdvancedOverrideByAvatar(context, avatar) : null;
+        if (!override || !migrateAdvancedPromptSettings(override, { sparse: true })) return;
+        await persistCharacterAdvancedOverridePatch(context, avatar, { set: override }, { requireSaved: true });
+    } catch (error) {
+        console.error(`[${MODULE_NAME}] Character prompt initialization failed`, error);
+        toastr.error(String(error?.message || error), i18n('Failed to initialize character prompt defaults.'));
+    }
+}
+
+jQuery(async () => {
     const context = getContext();
     registerLocaleData();
     import('./lens/index.js')
@@ -10732,6 +10726,7 @@ jQuery(() => {
         normalizeAdvancedSettings,
         getSettings,
     });
+    await initializeCharacterPromptDefaults(context);
     registerMemoryGraphCardBindingSlot(getContext());
     generationVisibleHistoryRegexProvider = getContext().regex.registerManagedRegexProvider(GENERATION_VISIBLE_HISTORY_REGEX_PROVIDER_ID);
     syncGenerationVisibleHistoryRuntimeRegexScripts();
@@ -10756,6 +10751,7 @@ jQuery(() => {
     // early on every chat switch; (b) run an explicit migration for the
     // initial chat before mounting the singleton.
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, async () => {
+        await initializeCharacterPromptDefaults(getContext());
         latestRecallSnapshot = null;
         void ensureMemoryStoreLoaded(getContext()).catch(() => {});
         const runtimeContext = getContext();

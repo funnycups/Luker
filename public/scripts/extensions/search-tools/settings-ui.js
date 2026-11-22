@@ -571,7 +571,7 @@ export function createSearchToolsSettingsUi(deps) {
         root.find('#search_tools_lorebook_role').val(String(settings.lorebookRole));
         root.find('#search_tools_lorebook_entry_order').val(String(settings.lorebookEntryOrder));
         updateLorebookPositionVisibility(root);
-        root.find('#search_tools_agent_system_prompt').val(String(settings.agentSystemPrompt || DEFAULT_SETTINGS.agentSystemPrompt));
+        root.find('#search_tools_agent_system_prompt').val(String(settings.agentSystemPrompt ?? ''));
 
         root.off('.searchTools');
         root.on('input.searchTools', '#search_tools_enabled', function () {
@@ -692,7 +692,7 @@ export function createSearchToolsSettingsUi(deps) {
             saveSettingsDebounced();
         });
         root.on('change.searchTools input.searchTools', '#search_tools_agent_system_prompt', function () {
-            settings.agentSystemPrompt = String(jQuery(this).val() || '').trim() || DEFAULT_SETTINGS.agentSystemPrompt;
+            settings.agentSystemPrompt = String(jQuery(this).val() ?? '');
             saveSettingsDebounced();
         });
         root.on('click.searchTools', '#search_tools_reset_agent_prompt', function () {

@@ -13,9 +13,9 @@ const PREVIEW = 420;
 
 /**
  * @param {{ app: object, title: string, value: string, original: string, editable: boolean,
- *   onChange(value: string): void, fullTitle?: string, placeholder?: string, aiAction?: () => void }} opts
+ *   onChange(value: string): void, fullTitle?: string, placeholder?: string, aiAction?: () => void, defaultValue?: string }} opts
  */
-export function textField({ app, title, value, original, editable, onChange, fullTitle = title, placeholder = '', aiAction = null }) {
+export function textField({ app, title, value, original, editable, onChange, fullTitle = title, placeholder = '', aiAction = null, defaultValue }) {
     const el = h('section', { class: 'ol-insp-section ol-field', dataset: { changed: value !== original ? 'true' : null } });
     let editing = false;
 
@@ -32,6 +32,7 @@ export function textField({ app, title, value, original, editable, onChange, ful
                     text ? iconButton('copy', i18n('Copy'), async () => { if (await copyText(text)) app.notify(i18n('Copied')); }, { className: 'ol-iconbtn-sm' }) : null,
                     long ? iconButton('fit', i18n('View full screen'), () => app.showText(fullTitle, [{ title: '', text }]), { className: 'ol-iconbtn-sm' }) : null,
                     aiAction ? iconButton('sparkle', i18n('Let the AI improve this'), aiAction, { className: 'ol-iconbtn-sm' }) : null,
+                    editable && typeof defaultValue === 'string' ? button(i18n('Reset to default'), () => { value = defaultValue; onChange(value); view(); }, { className: 'ol-btn-sm ol-btn-ghost' }) : null,
                     editable ? iconButton('pen', i18n('Edit field'), () => edit(), { className: 'ol-iconbtn-sm' }) : null)),
             text
                 ? h('div', { class: `ol-prompt${long ? ' is-clamped' : ''}${editable ? ' is-editable' : ''}`, text, onDblclick: editable ? () => edit() : null, title: editable ? i18n('Double-click to edit') : null })

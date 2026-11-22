@@ -304,7 +304,10 @@
                             <option value="webllm" data-i18n="WebLLM Extension">WebLLM Extension</option>
                         </select>
 
-                        <label for="vectors_summary_prompt" title="Summary Prompt:">Summary Prompt:</label>
+                        <div class="flex-container alignItemsBaseline">
+                            <label for="vectors_summary_prompt" data-i18n="Summary Prompt">Summary Prompt</label>
+                            <button type="button" id="vectors_summary_prompt_restore" class="menu_button" data-i18n="Reset to default">Reset to default</button>
+                        </div>
                         <small data-i18n="Only used when Main API or WebLLM Extension is selected.">Only used when Main API or WebLLM Extension is selected.</small>
                         <textarea id="vectors_summary_prompt" class="text_pole textarea_compact" rows="6" placeholder="This prompt will be sent to AI to request the summary generation."></textarea>
 

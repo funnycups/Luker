@@ -30,6 +30,7 @@ import {
 import { sanitizeAgendaWorkingProfile } from './agenda-profile.js';
 import { sanitizeLoopProfile } from './persistence.js';
 import { sanitizeSpec } from './spec-schema.js';
+import { createAgendaPlannerDraft } from './editable-spec.js';
 
 function getStateErrors(context = null) {
     const se = context?.stateErrors ?? globalThis.Luker?.getContext?.()?.stateErrors;
@@ -55,11 +56,9 @@ function makePresetId() {
 }
 
 /**
- * Callback fired after `migrateLegacyCardOverrideForMode` mutates a
- * card's `data.extensions.orchestrator` blob into the new preset-library
- * shape. main.js wires this to a debounced write through
- * `persistOrchestratorCharacterExtension` so the migrated shape settles
- * to disk instead of being re-derived on every reload.
+ * Persist scope changes made by legacy-profile migration and prompt
+ * initialization. An empty avatar selects global settings; a card avatar
+ * selects that card's extension data.
  *
  * Kept as an opt-in hook (rather than a direct import of the persistence
  * helper) to avoid a `preset-library → editor-persist → preset-library`
@@ -124,6 +123,7 @@ function getScopeContainer(settings, scope, { context, avatar } = {}) {
         if (!settings.activePresetIds || typeof settings.activePresetIds !== 'object') {
             settings.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
         }
+        if (initializeAgendaPrompts(settings.presetLibraries, settings.chatOverrides)) migrationPersistHook(context, '', ORCH_EXECUTION_MODE_AGENDA);
         return { libraries: settings.presetLibraries, activeIds: settings.activePresetIds };
     }
     if (scope === 'character') {
@@ -138,9 +138,29 @@ function getScopeContainer(settings, scope, { context, avatar } = {}) {
         if (!ext.activePresetIds || typeof ext.activePresetIds !== 'object') {
             ext.activePresetIds = { spec: '', agenda: '', loop: '', director: '' };
         }
+        if (initializeAgendaPrompts(ext.presetLibraries)) migrationPersistHook(context, avatar, ORCH_EXECUTION_MODE_AGENDA);
         return { libraries: ext.presetLibraries, activeIds: ext.activePresetIds };
     }
     return null;
+}
+
+function initializeAgendaPrompts(libraries, chatOverrides = {}) {
+    let changed = false;
+    const entries = [
+        ...Object.values(libraries.agenda || {}),
+        ...Object.values(chatOverrides).map(override => override?.agenda).filter(Boolean),
+    ];
+    for (const entry of entries) {
+        if (!entry || typeof entry !== 'object' || entry.planner?.promptDefaultsInitialized === true) continue;
+        entry.planner = createAgendaPlannerDraft(entry.planner || {
+            systemPrompt: entry.plannerSystemPrompt,
+            userPromptTemplate: entry.plannerPrompt,
+            apiPresetName: entry.plannerApiPresetName,
+            promptPresetName: entry.plannerPromptPresetName,
+        });
+        changed = true;
+    }
+    return changed;
 }
 
 export function listPresets(settings, mode, { scope = 'global', context, avatar } = {}) {

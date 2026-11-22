@@ -51,14 +51,14 @@ describe('graph-iteration system prompt builder', () => {
         expect(DEFAULT_GRAPH_ITER_SYSTEM_PROMPT.length).toBeGreaterThan(0);
     });
 
-    test('empty or missing settings fall back to the built-in prompt', () => {
-        expect(buildGraphIterSystemPrompt(null)).toBe(DEFAULT_GRAPH_ITER_SYSTEM_PROMPT);
-        expect(buildGraphIterSystemPrompt({})).toBe(DEFAULT_GRAPH_ITER_SYSTEM_PROMPT);
-        expect(buildGraphIterSystemPrompt({ graphIterSystemPrompt: '   ' })).toBe(DEFAULT_GRAPH_ITER_SYSTEM_PROMPT);
+    test('rejects empty or missing stored prompts', () => {
+        expect(() => buildGraphIterSystemPrompt(null)).toThrow();
+        expect(() => buildGraphIterSystemPrompt({})).toThrow();
+        expect(() => buildGraphIterSystemPrompt({ graphIterSystemPrompt: '   ' })).toThrow();
     });
 
-    test('a configured override wins (trimmed)', () => {
+    test('uses a configured prompt verbatim', () => {
         expect(buildGraphIterSystemPrompt({ graphIterSystemPrompt: '  custom rules  ' }))
-            .toBe('custom rules');
+            .toBe('  custom rules  ');
     });
 });

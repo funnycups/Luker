@@ -644,12 +644,19 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
             }));
         }
         if (field.kind === 'text') {
-            return fieldWrap(field.key, formField(label, h('textarea', {
+            const input = h('textarea', {
                 class: 'ml-schema-input',
                 rows: 8,
                 text: String(advanced[field.key] ?? ''),
                 onInput: (event) => { advanced[field.key] = event.target.value; onAdvancedFieldMutated(); },
-            })));
+            });
+            return fieldWrap(field.key, h('div', {},
+                formField(label, input),
+                button(i18n('Reset to default'), () => {
+                    advanced[field.key] = view.advanced.defaults[field.key];
+                    input.value = advanced[field.key];
+                    onAdvancedFieldMutated();
+                }, { className: 'ml-btn-ghost' })));
         }
         return fieldWrap(field.key, formField(label, h('input', {
             class: 'ml-schema-input',

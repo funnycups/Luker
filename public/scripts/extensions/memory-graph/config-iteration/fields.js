@@ -60,24 +60,24 @@ const REGISTRY = [
     intField('extractCrawlMaxRounds', 'extraction', 'Crawl max rounds', 'Maximum number of crawl read rounds before extraction starts.', 3, { min: 1, max: 5 }),
     intField('extractCrawlCandidateLimit', 'extraction', 'Crawl candidate limit', 'Maximum number of candidate nodes listed per crawl round. 0 means unlimited.', 40, { min: 0, max: 100 }),
     intField('extractCrawlMaxReads', 'extraction', 'Crawl read budget', 'Maximum number of node reads allowed in one crawl extraction.', 12, { min: 1, max: 30 }),
-    textField('extractTemplate', 'extraction', 'Extraction Template', 'System template for the extraction request. Must keep the {{nodes}} and {{edges}} markers.', DEFAULT_EXTRACT_TEMPLATE, { markers: ['{{nodes}}', '{{edges}}'], clearWhenDefault: true }),
-    textField('extractEdgeRules', 'extraction', 'Edge Rules', 'Edge rules appended to the extraction request.', DEFAULT_EXTRACT_EDGE_RULES, { clearWhenDefault: true }),
-    textField('extractCrawlSystemPrompt', 'extraction', 'Extraction Crawl Prompt', 'System prompt for the crawl-stage explorer that runs before extraction.', DEFAULT_CRAWL_SYSTEM_PROMPT, { fillDefaultOnNormalize: true }),
+    textField('extractTemplate', 'extraction', 'Extraction Template', 'System template for the extraction request. Must keep the {{nodes}} and {{edges}} markers.', DEFAULT_EXTRACT_TEMPLATE, { markers: ['{{nodes}}', '{{edges}}'] }),
+    textField('extractEdgeRules', 'extraction', 'Edge Rules', 'Edge rules appended to the extraction request.', DEFAULT_EXTRACT_EDGE_RULES),
+    textField('extractCrawlSystemPrompt', 'extraction', 'Extraction Crawl Prompt', 'System prompt for the crawl-stage explorer that runs before extraction.', DEFAULT_CRAWL_SYSTEM_PROMPT),
 
     // ---- recall -----------------------------------------------------------
-    textField('recallRouteSystemPrompt', 'recall', 'Recall Stage 1 Prompt (Route/Drill)', 'First-stage LLM recall prompt that plans and drills into candidate nodes.', DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT, { fillDefaultOnNormalize: true }),
-    textField('recallFinalizeSystemPrompt', 'recall', 'Recall Stage 2 Prompt (Finalize)', 'Second-stage LLM recall prompt that picks the final node set.', DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT, { fillDefaultOnNormalize: true }),
+    textField('recallRouteSystemPrompt', 'recall', 'Recall Routing Prompt', 'First-stage LLM recall prompt that plans and drills into candidate nodes.', DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT),
+    textField('recallFinalizeSystemPrompt', 'recall', 'Recall Selection Prompt', 'Second-stage LLM recall prompt that picks the final node set.', DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT),
     intField('recallMaxIterations', 'recall', 'Recall max iterations', 'Maximum number of tool rounds for LLM recall.', 3, { min: 2, max: 6 }),
     intField('recallQueryMessages', 'recall', 'Recall query recent assistant turns', 'Number of recent assistant turns used to build the recall query.', 2, { min: 0, max: 64 }),
     intField('persistentInjectionMaxSeqDistance', 'recall', 'Persistent injection recency horizon (assistant turns; 0 = no limit)', 'Recency horizon for always-injected nodes in assistant turns; 0 means no limit.', 0, { min: 0 }),
     intField('llmVisibleRecentMessages', 'recall', 'Visible recent message layers for generation (0 = disabled)', 'Number of recent message layers visible to the generation model; 0 disables hiding.', 5, { min: 0, max: 200 }),
 
     // ---- query rewrite ----------------------------------------------------
-    textField('ragRewriteSystemPrompt', 'query_rewrite', 'Query rewrite system prompt', 'System prompt for rewriting the recall query; used only by RAG recall with query rewrite enabled.', DEFAULT_RAG_REWRITE_SYSTEM_PROMPT, { fillDefaultOnNormalize: true }),
+    textField('ragRewriteSystemPrompt', 'query_rewrite', 'Query rewrite system prompt', 'System prompt for rewriting the recall query; used only by RAG recall with query rewrite enabled.', DEFAULT_RAG_REWRITE_SYSTEM_PROMPT),
 
     // ---- iteration --------------------------------------------------------
-    textField('graphIterSystemPrompt', 'iteration', 'Graph Revision Prompt (graph-editor AI)', 'System prompt for the graph revision workbench.', DEFAULT_GRAPH_ITER_SYSTEM_PROMPT, { clearWhenDefault: true }),
-    textField('configIterSystemPrompt', 'iteration', 'Configuration Iteration Prompt (configuration-editor AI)', 'System prompt for this configuration workbench.', DEFAULT_CONFIG_ITER_SYSTEM_PROMPT, { clearWhenDefault: true }),
+    textField('graphIterSystemPrompt', 'iteration', 'Graph Revision Prompt (graph-editor AI)', 'System prompt for the graph revision workbench.', DEFAULT_GRAPH_ITER_SYSTEM_PROMPT),
+    textField('configIterSystemPrompt', 'iteration', 'Configuration Iteration Prompt (configuration-editor AI)', 'System prompt for this configuration workbench.', DEFAULT_CONFIG_ITER_SYSTEM_PROMPT),
 
     // ---- runtime ----------------------------------------------------------
     intField('toolCallRetryMax', 'runtime', 'Tool-call retries', 'Number of retries after a failed tool call.', 2, { min: 0, max: 10 }),
@@ -131,7 +131,7 @@ function resolveEnum(def, value) {
 }
 
 function resolveText(def, value) {
-    return String(value ?? '').trim() || def.defaultValue;
+    return String(value ?? def.defaultValue);
 }
 
 function resolveValue(def, value) {
@@ -150,8 +150,7 @@ function resolveSource(source) {
 
 /**
  * Project the effective settings for a read source. Every registered key is
- * returned; empty text slots resolve to their code default so callers never
- * see a blank prompt where the runtime would use a constant.
+ * returned with its stored text. Missing values use the initialization defaults.
  */
 export function resolveSettingsForView(source = null) {
     const input = resolveSource(source);

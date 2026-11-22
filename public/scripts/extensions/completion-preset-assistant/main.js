@@ -16,6 +16,7 @@ import {
     buildJailbreakOnlyModeBlock,
 } from './cpa-iteration/system-prompts.js';
 import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
+import { initializePromptDefaults } from '../../lib/prompt-values.js';
 
 const DEFAULT_CPA_BASE_SYSTEM_PROMPT = buildBaseSystemPrompt();
 const DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE = buildOrchestratorOptimizeModeBlock();
@@ -38,6 +39,12 @@ const defaultSettings = {
     iterModePromptOrchestratorOptimize: DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE,
     iterModePromptJailbreakOnly: DEFAULT_CPA_MODE_JAILBREAK_ONLY,
 };
+
+const PROMPT_FIELDS = [
+    { key: 'iterBaseSystemPrompt', id: 'cpa_iter_base_system_prompt', label: 'Iteration base prompt' },
+    { key: 'iterModePromptOrchestratorOptimize', id: 'cpa_iter_mode_orchestrator_prompt', label: 'Orchestrator optimization mode prompt' },
+    { key: 'iterModePromptJailbreakOnly', id: 'cpa_iter_mode_jailbreak_prompt', label: 'Jailbreak-only mode prompt' },
+];
 
 function clone(value, fallback = {}) {
     return cloneJsonValue(value, fallback);
@@ -71,9 +78,14 @@ function ensureSettings() {
     settings.includeWorldInfo = settings.includeWorldInfo === true;
     settings.toolCallRetryMax = Math.max(0, Math.min(TOOL_CALL_RETRY_MAX, toInteger(settings.toolCallRetryMax, defaultSettings.toolCallRetryMax)));
     delete settings.iterSystemPrompt;
-    settings.iterBaseSystemPrompt = String(settings.iterBaseSystemPrompt || '').trim() || DEFAULT_CPA_BASE_SYSTEM_PROMPT;
-    settings.iterModePromptOrchestratorOptimize = String(settings.iterModePromptOrchestratorOptimize || '').trim() || DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE;
-    settings.iterModePromptJailbreakOnly = String(settings.iterModePromptJailbreakOnly || '').trim() || DEFAULT_CPA_MODE_JAILBREAK_ONLY;
+    if (initializePromptDefaults(settings, {
+        iterBaseSystemPrompt: DEFAULT_CPA_BASE_SYSTEM_PROMPT,
+        iterModePromptOrchestratorOptimize: DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE,
+        iterModePromptJailbreakOnly: DEFAULT_CPA_MODE_JAILBREAK_ONLY,
+    })) {
+        __ctx.saveSettingsDebounced();
+    }
+    return settings;
 }
 
 function registerLocaleData() {
@@ -468,7 +480,8 @@ function ensureOpenAiToolbarButton() {
 }
 
 function refreshUiState() {
-    ensureSettings();
+    const settings = ensureSettings();
+    for (const { key, id } of PROMPT_FIELDS) jQuery(`#${id}`).val(settings[key] ?? '');
     ensureOpenAiToolbarButton();
 }
 
@@ -487,6 +500,16 @@ function bindUi() {
     });
     root.on('click.cpa', `#${SKILLS_BUTTON_ID}`, async function () {
         await openBundleSkillsForCurrentPreset();
+    });
+    root.on('input.cpa', '[data-cpa-prompt]', function () {
+        ensureSettings()[this.dataset.cpaPrompt] = this.value;
+        getContext().saveSettingsDebounced();
+    });
+    root.on('click.cpa', '[data-cpa-reset-prompt]', function () {
+        const key = this.dataset.cpaResetPrompt;
+        ensureSettings()[key] = defaultSettings[key];
+        refreshUiState();
+        getContext().saveSettingsDebounced();
     });
 
     jQuery(document).on('click.cpaOpen', `#${OPENAI_BUTTON_ID}`, async function () {
@@ -520,6 +543,15 @@ function ensureUi(context = getContext()) {
                     <i class="fa-fw fa-solid fa-cubes"></i> ${escapeHtml(i18n('Bundle skills with this preset'))}
                 </div>
             </div>
+            <details class="marginTop10">
+                <summary data-i18n="Advanced prompts">${escapeHtml(i18n('Advanced prompts'))}</summary>
+                ${PROMPT_FIELDS.map(({ key, id, label }) => `
+                <div class="flex-container alignItemsBaseline">
+                    <label for="${id}" data-i18n="${label}">${escapeHtml(i18n(label))}</label>
+                    <button type="button" id="cpa_reset_${id.slice(4)}" class="menu_button" data-cpa-reset-prompt="${key}" data-i18n="Reset to default">${escapeHtml(i18n('Reset to default'))}</button>
+                </div>
+                <textarea id="${id}" class="text_pole" rows="6" data-cpa-prompt="${key}"></textarea>`).join('')}
+            </details>
         </div>
     </div>
 </div>`);

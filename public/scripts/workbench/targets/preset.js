@@ -20,6 +20,7 @@ import { h } from '../../lens-shared/util.js';
 import { skillAuthor, presetClone } from '../../iteration-library/proposal-bus/index.js';
 import { i18n, i18nFormat } from '../i18n.js';
 import { SourceError } from '../model/errors.js';
+import { requireStoredPrompt } from '../../lib/prompt-values.js';
 import { commitFields, fieldPlan } from '../model/patch.js';
 import { presetUnits, applyPresetOps, presetRebuild } from '../model/adapters.js';
 import { select } from '../ui/components.js';
@@ -227,15 +228,18 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
         },
     };
 
-    function buildPromptText(ctx, { includeRuntimeContext = true } = {}) {
+    function buildPromptText(ctx, { includeRuntimeContext = true, validate = true } = {}) {
         const s = ctx?.extensionSettings?.completion_preset_assistant;
-        const base = String(s?.iterBaseSystemPrompt || '').trim() || buildBaseSystemPrompt();
+        const readPrompt = key => validate
+            ? requireStoredPrompt(s?.[key], i18n('Fill in the prompt or reset it to the default.'))
+            : String(s?.[key] ?? '');
+        const base = readPrompt('iterBaseSystemPrompt');
         const mode = sanitizeSessionMode(state.mode);
         let modeBlock = '';
         if (mode === 'orchestrator-optimize') {
-            modeBlock = String(s?.iterModePromptOrchestratorOptimize || '').trim() || buildOrchestratorOptimizeModeBlock();
+            modeBlock = readPrompt('iterModePromptOrchestratorOptimize');
         } else if (mode === 'jailbreak-only') {
-            modeBlock = String(s?.iterModePromptJailbreakOnly || '').trim() || buildJailbreakOnlyModeBlock();
+            modeBlock = readPrompt('iterModePromptJailbreakOnly');
         }
         const parts = [modeBlock ? `${base}\n${modeBlock}` : base];
         if (includeRuntimeContext && state.referenceName) {
@@ -279,13 +283,13 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
         async promptInfo(ctx) {
             const c = resolveCtx(ctx);
             const s = c?.extensionSettings?.completion_preset_assistant;
-            const storedBase = String(s?.iterBaseSystemPrompt || '').trim();
-            const storedOrch = String(s?.iterModePromptOrchestratorOptimize || '').trim();
-            const storedJb = String(s?.iterModePromptJailbreakOnly || '').trim();
+            const storedBase = String(s?.iterBaseSystemPrompt ?? '');
+            const storedOrch = String(s?.iterModePromptOrchestratorOptimize ?? '');
+            const storedJb = String(s?.iterModePromptJailbreakOnly ?? '');
             const custom = (Boolean(storedBase) && storedBase !== buildBaseSystemPrompt().trim())
                 || (Boolean(storedOrch) && storedOrch !== buildOrchestratorOptimizeModeBlock().trim())
                 || (Boolean(storedJb) && storedJb !== buildJailbreakOnlyModeBlock().trim());
-            const text = buildPromptText(c, { includeRuntimeContext: false }).join('\n\n');
+            const text = buildPromptText(c, { includeRuntimeContext: false, validate: false }).join('\n\n');
             return {
                 from: i18nFormat('Built into Luker · ${0}', i18n('"Iteration base prompt" in Preset Assistant settings')),
                 custom,

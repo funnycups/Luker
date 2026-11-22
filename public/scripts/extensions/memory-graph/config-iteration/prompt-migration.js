@@ -110,8 +110,8 @@ export function migrateConfigIterationPrompt(settings) {
     if (Number(settings.configPromptSchemaVersion) >= 1) {
         return false;
     }
-    const legacy = String(settings.schemaIterSystemPrompt || '').trim();
-    if (legacy && legacy !== LEGACY_SCHEMA_ITER_SYSTEM_PROMPT.trim()) {
+    const legacy = String(settings.schemaIterSystemPrompt ?? '');
+    if (legacy.trim() && legacy !== LEGACY_SCHEMA_ITER_SYSTEM_PROMPT) {
         settings.configIterSystemPrompt = legacy;
     }
     settings.configPromptSchemaVersion = CONFIG_PROMPT_SCHEMA_VERSION;

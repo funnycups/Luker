@@ -16,6 +16,7 @@ import {
     normalizeOrchestrationSnapshot,
 } from './anchors.js';
 import { i18n, i18nFormat, registerLocaleData } from './i18n.js';
+import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-values.js';
 import { ensureStyles } from './styles.js';
 import {
     CAPSULE_INJECT_POSITION_SCHEMA_VERSION,
@@ -271,6 +272,7 @@ registerExtensionApi(MODULE_NAME, {
     reapplyCapsule: () => reapplyLatestCapsuleInjection(getContext()),
     getIterationPromptDefaults: () => ({
         request: getDefaultRequestSystemPrompt(),
+        capsuleCustomInstruction: defaultSettings.capsuleCustomInstruction,
         spec: DEFAULT_SPEC_ITERATION_MODE_BLOCK,
         loop: DEFAULT_LOOP_ITERATION_MODE_BLOCK,
         director: DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK,
@@ -314,8 +316,6 @@ export function ensureSettings() {
         extension_settings[MODULE_NAME].executionMode || (hadLegacySingleMode ? ORCH_EXECUTION_MODE_SINGLE : ORCH_EXECUTION_MODE_SPEC),
     );
     extension_settings[MODULE_NAME].singleAgentModeEnabled = extension_settings[MODULE_NAME].executionMode === ORCH_EXECUTION_MODE_SINGLE;
-    extension_settings[MODULE_NAME].singleAgentSystemPrompt = String(extension_settings[MODULE_NAME].singleAgentSystemPrompt || DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT);
-    extension_settings[MODULE_NAME].singleAgentUserPromptTemplate = String(extension_settings[MODULE_NAME].singleAgentUserPromptTemplate || DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE);
     // Legacy global agenda / spec / loop slots are now owned by
     // `presetLibraries.<mode>.<id>` and sanitized at read time via
     // preset-library. `plainTextFunctionCallMode` and
@@ -379,7 +379,6 @@ export function ensureSettings() {
             : extension_prompt_roles.SYSTEM;
     }
     delete extension_settings[MODULE_NAME].capsuleRenderFormat;
-    extension_settings[MODULE_NAME].capsuleCustomInstruction = String(extension_settings[MODULE_NAME].capsuleCustomInstruction || '').trim();
     {
         // requestSystemPrompt migration. The default used to be a 70-line
         // spec-flavored prompt; users who never customized this setting
@@ -391,20 +390,22 @@ export function ensureSettings() {
         // catches the "never customized" users so they pick up the new
         // base. Users who customized keep their text; they may want to
         // clean up spec-isms manually.
-        const current = String(extension_settings[MODULE_NAME].requestSystemPrompt || '').trim();
+        const current = extension_settings[MODULE_NAME].requestSystemPrompt;
         if (current === getLegacyDefaultRequestSystemPromptForMigration()) {
             extension_settings[MODULE_NAME].requestSystemPrompt = getDefaultRequestSystemPrompt();
-        } else if (!current) {
-            extension_settings[MODULE_NAME].requestSystemPrompt = getDefaultRequestSystemPrompt();
-        } else {
-            extension_settings[MODULE_NAME].requestSystemPrompt = current;
         }
     }
     delete extension_settings[MODULE_NAME].capsuleIncludeRawJson;
-    extension_settings[MODULE_NAME].iterModePromptLoop = String(extension_settings[MODULE_NAME].iterModePromptLoop || '').trim() || DEFAULT_LOOP_ITERATION_MODE_BLOCK;
-    extension_settings[MODULE_NAME].iterModePromptDirector = String(extension_settings[MODULE_NAME].iterModePromptDirector || '').trim() || DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK;
-    extension_settings[MODULE_NAME].iterModePromptAgenda = String(extension_settings[MODULE_NAME].iterModePromptAgenda || '').trim() || DEFAULT_AGENDA_ITERATION_MODE_BLOCK;
-    extension_settings[MODULE_NAME].iterModePromptSpec = String(extension_settings[MODULE_NAME].iterModePromptSpec || '').trim() || DEFAULT_SPEC_ITERATION_MODE_BLOCK;
+    if (initializePromptDefaults(extension_settings[MODULE_NAME], {
+        singleAgentSystemPrompt: DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT,
+        singleAgentUserPromptTemplate: DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE,
+        capsuleCustomInstruction: defaultSettings.capsuleCustomInstruction,
+        requestSystemPrompt: getDefaultRequestSystemPrompt(),
+        iterModePromptLoop: DEFAULT_LOOP_ITERATION_MODE_BLOCK,
+        iterModePromptDirector: DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK,
+        iterModePromptAgenda: DEFAULT_AGENDA_ITERATION_MODE_BLOCK,
+        iterModePromptSpec: DEFAULT_SPEC_ITERATION_MODE_BLOCK,
+    })) saveSettingsDebounced();
     extension_settings[MODULE_NAME].toolCallRetryMax = Math.max(
         0,
         Math.floor(Number(extension_settings[MODULE_NAME].toolCallRetryMax) || 0),
@@ -427,12 +428,8 @@ export function ensureSettings() {
 }
 
 /**
- * Wire the preset-library migration persist hook so that whenever a
- * card's legacy `override.<mode>` payload is migrated into the new
- * preset-library shape on first read, the new shape is written back to
- * the card on disk. Without this, the migration is recomputed on every
- * reload and `customTools[]` / preset bodies keep living under the
- * legacy keys forever even though the runtime now ignores them.
+ * Persist initialized prompts and migrated preset libraries in their scope.
+ * Global changes use the settings saver; card changes use checked writes.
  *
  * Coalesces multiple per-mode migrations on the same card into a single
  * writeExtensionField call via a microtask flush — boot-time path that
@@ -443,7 +440,11 @@ function wirePresetLibraryMigrationPersist() {
     const pending = new Set();
     let scheduled = false;
     setMigrationPersistHook((context, avatar /*, mode */) => {
-        if (!context || !avatar) return;
+        if (!avatar) {
+            saveSettingsDebounced();
+            return;
+        }
+        if (!context) return;
         pending.add(String(avatar));
         if (scheduled) return;
         scheduled = true;
@@ -457,9 +458,10 @@ function wirePresetLibraryMigrationPersist() {
                     if (idx < 0) continue;
                     const ext = getCharacterExtensionDataByAvatar(context, a);
                     if (!ext || typeof ext !== 'object') continue;
-                    await persistOrchestratorCharacterExtension(context, idx, { ...ext });
+                    await context.writeExtensionField(idx, MODULE_NAME, { ...ext }, { requireSaved: true });
                 } catch (err) {
-                    console.warn(`[${MODULE_NAME}] failed to persist migrated card override for ${a}:`, err);
+                    console.error(`[${MODULE_NAME}] failed to persist migrated card settings for ${a}:`, err);
+                    toastr.error(`${i18n('Failed to initialize character prompt defaults.')} ${a}: ${err.message}`);
                 }
             }
         });
@@ -679,8 +681,8 @@ export function getEffectiveProfile(context) {
             presets: sanitizePresetMap({
                 ...settings.presets,
                 single_agent: {
-                    systemPrompt: String(settings.singleAgentSystemPrompt || DEFAULT_SINGLE_AGENT_SYSTEM_PROMPT),
-                    userPromptTemplate: String(settings.singleAgentUserPromptTemplate || DEFAULT_SINGLE_AGENT_USER_PROMPT_TEMPLATE),
+                    systemPrompt: String(settings.singleAgentSystemPrompt ?? ''),
+                    userPromptTemplate: String(settings.singleAgentUserPromptTemplate ?? ''),
                 },
             }),
         };
@@ -1015,6 +1017,11 @@ async function onWorldInfoFinalized(payload) {
         await loadOrchestratorChatState(context);
         throwIfAborted(orchestrationPayload?.signal, 'Orchestration aborted.');
         const profile = getEffectiveProfile(context);
+        if (profile.mode === ORCH_EXECUTION_MODE_SINGLE) {
+            const message = i18n('Fill in the prompt or reset it to the default.');
+            requireStoredPrompt(profile.presets.single_agent.systemPrompt, message);
+            requireStoredPrompt(profile.presets.single_agent.userPromptTemplate, message);
+        }
         // Director mode produces the assistant message body itself via
         // the GENERATE_TAKEOVER_DISPATCH hook — it does not run on the
         // capsule-injection pipeline. Exit early so we don't try to
@@ -1658,7 +1665,8 @@ const DEFAULT_SPEC_ITERATION_MODE_BLOCK = [
 ].join('\n');
 
 export function buildAiIterationSystemPrompt(settings, session = null) {
-    const base = normalizeTemplateForAiPrompt(String(settings.requestSystemPrompt || '').trim()) || getDefaultRequestSystemPrompt();
+    const emptyMessage = i18n('Fill in the prompt or reset it to the default.');
+    const base = normalizeTemplateForAiPrompt(requireStoredPrompt(settings.requestSystemPrompt, emptyMessage));
     const withGuidance = [base, '', ...LOREBOOK_READ_GUIDANCE_LINES].join('\n');
     const withMentalModel = [withGuidance, '', ...RUNTIME_AGENT_CONTEXT_MENTAL_MODEL].join('\n');
     const withMacros = [withMentalModel, '', ...ITER_STUDIO_MACRO_CONTRACT_LINES].join('\n');
@@ -1667,13 +1675,13 @@ export function buildAiIterationSystemPrompt(settings, session = null) {
     const withCustomToolDoctrine = [withMacros, '', ...CUSTOM_TOOL_AUTHORING_DOCTRINE_LINES].join('\n');
     let prompt;
     if (isLoopIterationSession(session)) {
-        prompt = `${withCustomToolDoctrine}\n\n${settings.iterModePromptLoop || DEFAULT_LOOP_ITERATION_MODE_BLOCK}`;
+        prompt = `${withCustomToolDoctrine}\n\n${requireStoredPrompt(settings.iterModePromptLoop, emptyMessage)}`;
     } else if (isDirectorIterationSession(session)) {
-        prompt = `${withCustomToolDoctrine}\n\n${settings.iterModePromptDirector || DEFAULT_DIRECTOR_ITERATION_MODE_BLOCK}`;
+        prompt = `${withCustomToolDoctrine}\n\n${requireStoredPrompt(settings.iterModePromptDirector, emptyMessage)}`;
     } else if (isAgendaIterationSession(session)) {
-        prompt = `${withCustomToolDoctrine}\n\n${settings.iterModePromptAgenda || DEFAULT_AGENDA_ITERATION_MODE_BLOCK}`;
+        prompt = `${withCustomToolDoctrine}\n\n${requireStoredPrompt(settings.iterModePromptAgenda, emptyMessage)}`;
     } else {
-        prompt = `${withCustomToolDoctrine}\n\n${settings.iterModePromptSpec || DEFAULT_SPEC_ITERATION_MODE_BLOCK}`;
+        prompt = `${withCustomToolDoctrine}\n\n${requireStoredPrompt(settings.iterModePromptSpec, emptyMessage)}`;
     }
     // Append a read-only intro listing the visible custom tools so the
     // Studio AI knows which enable-flag path it can flip — the path varies

@@ -12,6 +12,8 @@ import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '
 import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnumsProvider.js';
 import { callGenericPopup, Popup, POPUP_TYPE } from '../../popup.js';
 import { debounce_timeout, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '../../constants.js';
+import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-values.js';
+import { t } from '../../i18n.js';
 export { MODULE_NAME };
 
 const MODULE_NAME = 'caption';
@@ -62,8 +64,8 @@ function migrateSettings() {
         extension_settings.caption.multimodal_model = 'gpt-5.6-luna';
     }
 
-    if (!extension_settings.caption.prompt) {
-        extension_settings.caption.prompt = PROMPT_DEFAULT;
+    if (initializePromptDefaults(extension_settings.caption, { prompt: PROMPT_DEFAULT })) {
+        saveSettingsDebounced();
     }
 
     if (!extension_settings.caption.template) {
@@ -295,7 +297,7 @@ async function captionHorde(base64Img) {
  * @returns {Promise<{caption: string}>} Generated caption
  */
 async function captionMultimodal(base64Img, externalPrompt) {
-    let prompt = externalPrompt || extension_settings.caption.prompt || PROMPT_DEFAULT;
+    let prompt = externalPrompt || extension_settings.caption.prompt;
 
     if (!externalPrompt && extension_settings.caption.prompt_ask) {
         const customPrompt = await callGenericPopup('Enter a comment or question:', POPUP_TYPE.INPUT, prompt, { rows: 4 });
@@ -305,7 +307,7 @@ async function captionMultimodal(base64Img, externalPrompt) {
         prompt = String(customPrompt).trim();
     }
 
-    prompt = substituteParams(prompt);
+    prompt = substituteParams(requireStoredPrompt(prompt, t`Fill in the prompt or reset it to the default.`));
 
     const caption = await getMultimodalCaption(base64Img, prompt);
     return { caption };
@@ -632,6 +634,11 @@ export async function init() {
     });
     $('#caption_prompt').on('input', () => {
         extension_settings.caption.prompt = String($('#caption_prompt').val());
+        saveSettingsDebounced();
+    });
+    $('#caption_prompt_restore').on('click', () => {
+        extension_settings.caption.prompt = PROMPT_DEFAULT;
+        $('#caption_prompt').val(PROMPT_DEFAULT);
         saveSettingsDebounced();
     });
     $('#caption_template').on('input', () => {

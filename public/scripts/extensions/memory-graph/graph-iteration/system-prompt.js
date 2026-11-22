@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups
 
+import { readStoredPrompt } from '../prompt-units.js';
+
 /**
  * Memory Graph — graph-revision system prompt.
  *
@@ -45,5 +47,5 @@ export const DEFAULT_GRAPH_ITER_SYSTEM_PROMPT = [
 ].join('\n');
 
 export function buildGraphIterSystemPrompt(settings) {
-    return String(settings?.graphIterSystemPrompt || '').trim() || DEFAULT_GRAPH_ITER_SYSTEM_PROMPT;
+    return readStoredPrompt(settings?.graphIterSystemPrompt, 'Graph Revision Prompt (graph-editor AI)');
 }
