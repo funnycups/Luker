@@ -17,6 +17,7 @@ import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync, readdirSync
 import { execSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import isDocker from 'is-docker';
 import { reservePort } from './ports.js';
 import '../../../src/fetch-patch.js';
 
@@ -465,9 +466,8 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
     };
     if (batchKey === 'sync' && process.env.LUKER_SYNC_ACCEPTANCE_JITLESS === '1') {
         try {
-            const cache = resolve(dataRoot, '_webpack');
-            const bundles = readdirSync(cache).map(name => resolve(cache, name, 'output')).find(directory => existsSync(resolve(directory, 'lib.core.bundle.js')));
-            if (!bundles) throw new Error(`BLOCKED: no genuine warmup bundles in ${cache}`);
+            const bundles = resolveWarmupBundlesDir(dataRoot);
+            if (!bundles) throw new Error(`BLOCKED: no genuine warmup bundles for ${dataRoot}`);
             await restart({ jitless: true, extraEnv: { LUKER_FORCE_JITLESS: '1', LUKER_PREBUILT_BUNDLES_DIR: bundles } });
             if (!execArgv.includes('--jitless')) throw new Error('BLOCKED: sync acceptance server was not launched with --jitless');
         } catch (error) {
@@ -476,6 +476,16 @@ async function spawnAt(port, batchKey, scenarioId, extraEnv, extraConfig, useExi
         }
     }
     return handle;
+}
+
+export function resolveWarmupBundlesDir(dataRoot) {
+    // Mirror webpack.config.js: inside Docker webpack writes to <repo>/dist/_webpack,
+    // while bare hosts write under <dataRoot>/_webpack.
+    const cache = isDocker() ? resolve(REPO_ROOT, 'dist', '_webpack') : resolve(dataRoot, '_webpack');
+    if (!existsSync(cache)) return null;
+    return readdirSync(cache)
+        .map(name => resolve(cache, name, 'output'))
+        .find(directory => existsSync(resolve(directory, 'lib.core.bundle.js'))) || null;
 }
 
 /**

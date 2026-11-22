@@ -2,7 +2,7 @@ import { test, expect } from '@jest/globals';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-import { startServer, tearDownServer } from '../e2e/_lib/server.js';
+import { startServer, tearDownServer, resolveWarmupBundlesDir } from '../e2e/_lib/server.js';
 import '../../src/fetch-patch.js';
 
 test('controlled restarts retain port and user data and expose actual process exit and jitless argv', async () => {
@@ -27,8 +27,7 @@ test('controlled restarts retain port and user data and expose actual process ex
         expect(server.outputEpochs).toHaveLength(2);
         expect(server.outputEpochs[0].includes(firstOutput)).toBe(true);
         await expect(fetch(`http://${address}:${port}/api/sync/v1/health`)).rejects.toThrow();
-        const cache = path.join(root, '_webpack');
-        const bundles = fs.readdirSync(cache).map(name => path.join(cache, name, 'output')).find(dir => fs.existsSync(path.join(dir, 'lib.core.bundle.js')));
+        const bundles = resolveWarmupBundlesDir(root);
         expect(bundles).toBeTruthy();
         await server.restart({ extraConfig: { listen: true }, extraEnv: { LUKER_PREBUILT_BUNDLES_DIR: bundles }, jitless: true });
         expect(server.port).toBe(port);
