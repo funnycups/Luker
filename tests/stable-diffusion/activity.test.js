@@ -204,3 +204,25 @@ test('a new job after a finished run starts a fresh run', () => {
         activity.destroy();
     }
 });
+
+test('setPrompt marks prompt section done immediately and finish closes any remaining running sections', () => {
+    const activity = createImageActivity({ translate: t });
+    try {
+        const job = activity.beginJob({ kind: 'generation' });
+        job.setPrompt('lantern by the pier');
+
+        const livePrompt = activity.store.getCurrentRun()?.rounds[0]?.sections[0];
+        expect(livePrompt?.status).toBe('done');
+        const domPrompt = document.querySelector('#luker-sd-run-panel [data-section-id="image-job-1-prompt"]');
+        expect(domPrompt?.dataset.status).toBe('done');
+        expect(domPrompt?.querySelector(':scope > details')?.open).toBe(true);
+
+        job.addSection('tool-1', { kind: 'tool', title: 'lookup' });
+        expect(activity.store.getCurrentRun()?.rounds[0]?.sections[1]?.status).toBe('running');
+
+        job.finish('done');
+        expect(activity.store.getCurrentRun()?.rounds[0]?.sections.map(s => s.status)).toEqual(['done', 'done']);
+    } finally {
+        activity.destroy();
+    }
+});

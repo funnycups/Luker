@@ -72,7 +72,56 @@ export function createCharactersView(app) {
     let profiles = [];
     let selectedId = '';
     let draftProfile = null;
+    let savedProfileSnapshot = null;
+    let lastNotifiedDirty = false;
+    let dirtyBarEl = null;
     let filterQuery = '';
+
+    function profileSnapshotKey(profile) {
+        if (!profile) return '';
+        const norm = normalizeCharacterProfile(profile, 0);
+        if (!norm) {
+            return JSON.stringify({ ...profile, createdAt: 0, updatedAt: 0 });
+        }
+        return JSON.stringify({ ...norm, createdAt: 0, updatedAt: 0 });
+    }
+
+    function isDirty() {
+        if (!draftProfile) return false;
+        if (!savedProfileSnapshot) return true;
+        return profileSnapshotKey(draftProfile) !== profileSnapshotKey(savedProfileSnapshot);
+    }
+
+    function syncDirtyState() {
+        const dirty = isDirty();
+        if (dirtyBarEl) {
+            dirtyBarEl.hidden = !dirty;
+        }
+        if (dirty !== lastNotifiedDirty) {
+            lastNotifiedDirty = dirty;
+            app.notifyDirty?.(dirty);
+        }
+    }
+
+    function guardDirtySwitch() {
+        if (!isDirty()) return true;
+        app.toast(i18n('Save or discard your edits first.'), { error: true });
+        return false;
+    }
+
+    function discardDraftProfile() {
+        if (savedProfileSnapshot) {
+            selectedId = savedProfileSnapshot.id;
+            draftProfile = JSON.parse(JSON.stringify(savedProfileSnapshot));
+        } else {
+            const fallback = profiles[0] || null;
+            selectedId = fallback?.id || '';
+            savedProfileSnapshot = fallback ? JSON.parse(JSON.stringify(fallback)) : null;
+            draftProfile = fallback ? JSON.parse(JSON.stringify(fallback)) : null;
+        }
+        paint();
+        syncDirtyState();
+    }
     // Per-invocation mode only — intentionally ephemeral and never persisted to settings or card extensions.
     let launchMode = 'fanwork';
     let launchTargetText = '';
@@ -146,8 +195,10 @@ export function createCharactersView(app) {
         const ctx = getCtx();
         if (typeof ctx?.getGlobalState !== 'function') {
             profiles = [];
+            savedProfileSnapshot = null;
             draftProfile = null;
             paint();
+            syncDirtyState();
             return;
         }
         try {
@@ -155,11 +206,13 @@ export function createCharactersView(app) {
             const targetId = selectProfileId || (keepSelected ? selectedId : '');
             const matched = profiles.find(p => p.id === targetId) || profiles[0] || null;
             selectedId = matched?.id || '';
+            savedProfileSnapshot = matched ? JSON.parse(JSON.stringify(matched)) : null;
             draftProfile = matched ? JSON.parse(JSON.stringify(matched)) : null;
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
         }
         paint();
+        syncDirtyState();
     }
 
     async function handleLaunchSubmit() {
@@ -224,7 +277,15 @@ export function createCharactersView(app) {
                 : i18n('Exploration finished with no new profiles.'));
             const newestId = result.savedProfiles[0]?.id || selectedId;
             launchTargetText = '';
-            await reload({ selectProfileId: newestId });
+            if (isDirty()) {
+                try {
+                    profiles = await getStore().listProfiles();
+                } catch (refreshErr) {
+                    app.toast(String(refreshErr?.message || refreshErr), { error: true });
+                }
+            } else {
+                await reload({ selectProfileId: newestId });
+            }
         } catch (err) {
             if (activeRunId && runStore) {
                 runStore.finishRun({
@@ -244,6 +305,7 @@ export function createCharactersView(app) {
     }
 
     function startNewDraftProfile() {
+        if (!guardDirtySwitch()) return;
         const created = normalizeCharacterProfile({
             id: makeIllustrationId('char'),
             name: 'New Character',
@@ -252,8 +314,10 @@ export function createCharactersView(app) {
             defaultOutfitId: 'outfit_default',
         });
         selectedId = created.id;
+        savedProfileSnapshot = null;
         draftProfile = created;
         paint();
+        syncDirtyState();
     }
 
     async function saveDraftProfile() {
@@ -262,6 +326,7 @@ export function createCharactersView(app) {
         const before = await store.getProfile(draftProfile.id);
         const saved = await store.upsertProfile(draftProfile);
         selectedId = saved.id;
+        savedProfileSnapshot = JSON.parse(JSON.stringify(saved));
         draftProfile = JSON.parse(JSON.stringify(saved));
         app.recordHistory?.({
             label: `${i18n('Save profile')}: ${saved.name}`,
@@ -392,9 +457,13 @@ export function createCharactersView(app) {
                             class: `sdlens-char-card ${profile.id === selectedId ? 'is-active' : ''}`.trim(),
                             dataset: { profileId: profile.id },
                             onClick: () => {
+                                if (profile.id === selectedId) return;
+                                if (!guardDirtySwitch()) return;
                                 selectedId = profile.id;
+                                savedProfileSnapshot = JSON.parse(JSON.stringify(profile));
                                 draftProfile = JSON.parse(JSON.stringify(profile));
                                 paint();
+                                syncDirtyState();
                             },
                         },
                         thumb
@@ -439,6 +508,7 @@ export function createCharactersView(app) {
                         outfit.referenceImages.push(promoted.imagePath);
                     }
                     paint();
+                    syncDirtyState();
                 } catch (err) {
                     app.toast(String(err?.message || err), { error: true });
                 }
@@ -459,6 +529,7 @@ export function createCharactersView(app) {
                         outfit.referenceImages.push(imagePath);
                     }
                     paint();
+                    syncDirtyState();
                 } catch (err) {
                     app.toast(String(err?.message || err), { error: true });
                 }
@@ -474,6 +545,7 @@ export function createCharactersView(app) {
                         : button(i18n('Set as default outfit'), () => {
                             draftProfile.defaultOutfitId = outfit.id;
                             paint();
+                            syncDirtyState();
                         }, { small: true, ghost: true }),
                     draftProfile.outfits.length > 1
                         ? iconButton('trash', i18n('Delete'), () => {
@@ -482,6 +554,7 @@ export function createCharactersView(app) {
                                 draftProfile.defaultOutfitId = draftProfile.outfits[0]?.id || '';
                             }
                             paint();
+                            syncDirtyState();
                         }, { className: 'is-sm', renderIcon: icon })
                         : null)),
             h('div', { class: 'sdlens-grid-2' },
@@ -489,18 +562,18 @@ export function createCharactersView(app) {
                     type: 'text',
                     class: 'sdlens-input',
                     value: outfit.name,
-                    onInput: (e) => { outfit.name = e.target.value; },
+                    onInput: (e) => { outfit.name = e.target.value; syncDirtyState(); },
                 })),
                 formField(i18n('Outfit tags (comma-separated)'), h('input', {
                     type: 'text',
                     class: 'sdlens-input',
                     value: outfit.tags.join(', '),
-                    onInput: (e) => { outfit.tags = parseCsvList(e.target.value); },
+                    onInput: (e) => { outfit.tags = parseCsvList(e.target.value); syncDirtyState(); },
                 }))),
             formField(i18n('Outfit prose description'), (() => {
                 const ta = h('textarea', {
                     class: 'sdlens-textarea',
-                    onInput: (e) => { outfit.prose = e.target.value; },
+                    onInput: (e) => { outfit.prose = e.target.value; syncDirtyState(); },
                 });
                 ta.value = outfit.prose || '';
                 return ta;
@@ -515,6 +588,7 @@ export function createCharactersView(app) {
                         onClick: () => {
                             outfit.referenceImages.splice(refIdx, 1);
                             paint();
+                            syncDirtyState();
                         },
                     }, icon('x', { size: 12 }))))),
             h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
@@ -554,6 +628,7 @@ export function createCharactersView(app) {
         saveBtn.dataset.sdRole = 'save-profile';
 
         const refineBtn = button(i18n('Refine in OC studio'), () => {
+            if (!guardDirtySwitch()) return;
             app.openStudioForCharacterDesign({
                 profileId: draftProfile.id,
                 characterName: draftProfile.name,
@@ -573,7 +648,27 @@ export function createCharactersView(app) {
         });
         deleteBtn.dataset.sdRole = 'delete-profile';
 
+        const discardBtn = button(i18n('Discard changes'), () => discardDraftProfile(), {
+            small: true,
+            ghost: true,
+        });
+        discardBtn.dataset.sdRole = 'discard-profile';
+
+        const bannerSaveBtn = button(i18n('Save profile'), () => { void saveDraftProfile(); }, {
+            small: true,
+            primary: true,
+            iconName: 'check',
+            renderIcon: icon,
+        });
+
+        dirtyBarEl = h('div', { class: 'sdlens-dirty-bar', role: 'status', hidden: !isDirty() },
+            h('span', { class: 'sdlens-dirty-dot', 'aria-hidden': 'true' }),
+            h('span', { class: 'sdlens-dirty-text', text: i18n('Unsaved profile changes') }),
+            discardBtn,
+            bannerSaveBtn);
+
         return h('div', { class: 'sdlens-chars-detail' },
+            dirtyBarEl,
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
                 h('h3', { style: { margin: '0', fontSize: '15px' }, text: `${draftProfile.name} (${draftProfile.id})` }),
                 h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, refineBtn, saveBtn, deleteBtn)),
@@ -583,23 +678,24 @@ export function createCharactersView(app) {
                     class: 'sdlens-input',
                     dataset: { sdField: 'profile-name' },
                     value: draftProfile.name,
-                    onInput: (e) => { draftProfile.name = e.target.value; },
+                    onInput: (e) => { draftProfile.name = e.target.value; syncDirtyState(); },
                 })),
                 formField(i18n('Aliases (comma-separated)'), h('input', {
                     type: 'text',
                     class: 'sdlens-input',
                     value: draftProfile.aliases.join(', '),
-                    onInput: (e) => { draftProfile.aliases = parseCsvList(e.target.value); },
+                    onInput: (e) => { draftProfile.aliases = parseCsvList(e.target.value); syncDirtyState(); },
                 })),
                 formField(i18n('Source work or franchise'), h('input', {
                     type: 'text',
                     class: 'sdlens-input',
                     value: draftProfile.sourceWork,
-                    onInput: (e) => { draftProfile.sourceWork = e.target.value; },
+                    onInput: (e) => { draftProfile.sourceWork = e.target.value; syncDirtyState(); },
                 })),
                 formField(i18n('Source character card'), selectInput(cardOpts, boundCardValue, (val) => {
                     draftProfile.sourceCardAvatars = val ? [val] : [];
                     paint();
+                    syncDirtyState();
                 }, { ariaLabel: i18n('Source character card') }))),
             h('div', { class: 'sdlens-grid-2' },
                 formField(i18n('Core appearance tags (comma-separated)'), h('input', {
@@ -607,18 +703,18 @@ export function createCharactersView(app) {
                     class: 'sdlens-input',
                     dataset: { sdField: 'canonical-tags' },
                     value: draftProfile.canonicalTags.join(', '),
-                    onInput: (e) => { draftProfile.canonicalTags = parseCsvList(e.target.value); },
+                    onInput: (e) => { draftProfile.canonicalTags = parseCsvList(e.target.value); syncDirtyState(); },
                 })),
                 formField(i18n('Negative tags (comma-separated)'), h('input', {
                     type: 'text',
                     class: 'sdlens-input',
                     value: draftProfile.negativeTags.join(', '),
-                    onInput: (e) => { draftProfile.negativeTags = parseCsvList(e.target.value); },
+                    onInput: (e) => { draftProfile.negativeTags = parseCsvList(e.target.value); syncDirtyState(); },
                 }))),
             formField(i18n('Natural language appearance description'), (() => {
                 const ta = h('textarea', {
                     class: 'sdlens-textarea',
-                    onInput: (e) => { draftProfile.proseDescription = e.target.value; },
+                    onInput: (e) => { draftProfile.proseDescription = e.target.value; syncDirtyState(); },
                 });
                 ta.value = draftProfile.proseDescription || '';
                 return ta;
@@ -634,12 +730,14 @@ export function createCharactersView(app) {
                         referenceImages: [],
                     });
                     paint();
+                    syncDirtyState();
                 }, { small: true, iconName: 'plus', renderIcon: icon }),
             ),
             ...draftProfile.outfits.map((outfit, idx) => renderOutfitEditor(outfit, idx)));
     }
 
     function paint() {
+        dirtyBarEl = null;
         clear(el);
         put(el,
             renderLauncher(),
@@ -650,8 +748,12 @@ export function createCharactersView(app) {
 
     return {
         el,
+        isDirty,
         show(opts = {}) {
             const focusProfileId = opts?.focusId ? String(opts.focusId) : '';
+            if (isDirty() && (!focusProfileId || focusProfileId === selectedId)) {
+                return;
+            }
             void reload({ selectProfileId: focusProfileId });
         },
         reload,

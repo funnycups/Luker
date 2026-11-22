@@ -35,7 +35,7 @@ beforeEach(() => {
     globalSettings = {
         ...ADVANCED_SETTING_DEFAULTS,
         recallMaxIterations: 3,
-        recentRawTurns: 7,
+        extractBatchTurns: 7,
     };
     configure({
         MODULE_NAME: 'memory_graph',
@@ -87,13 +87,15 @@ describe('getCharacterAdvancedOverrideByAvatar', () => {
 });
 
 describe('getEffectiveAdvancedSettings', () => {
-    test('merges the sparse override on top of normalized globals', () => {
-        const ctx = makeContext({ recallMaxIterations: 5 });
-        const effective = getEffectiveAdvancedSettings(ctx, { recallMaxIterations: 3, recentRawTurns: 7 });
+    test('merges the sparse override on top of normalized globals and drops legacy recentRawTurns', () => {
+        const ctx = makeContext({ recallMaxIterations: 5, updateEvery: 3, recentRawTurns: 9 });
+        const effective = getEffectiveAdvancedSettings(ctx, { recallMaxIterations: 3, extractBatchTurns: 7 });
 
         expect(effective.recallMaxIterations).toBe(5);
-        expect(effective.recentRawTurns).toBe(7);
+        expect(effective.updateEvery).toBe(3);
+        expect(effective.extractBatchTurns).toBe(7);
         expect(effective.extractContextTurns).toBe(2);
+        expect('recentRawTurns' in effective).toBe(false);
     });
 
     test('returns normalized globals when the card has no override', () => {
@@ -151,10 +153,10 @@ describe('persistCharacterAdvancedOverridePatch', () => {
     });
 
     test('keeps untouched sparse keys and removes unset keys', async () => {
-        const ctx = makeContext({ recallMaxIterations: 5, recentRawTurns: 9 });
+        const ctx = makeContext({ recallMaxIterations: 5, extractBatchTurns: 9 });
         await persistCharacterAdvancedOverridePatch(ctx, 'a.png', {
             set: { recallMaxIterations: 6 },
-            unset: ['recentRawTurns'],
+            unset: ['extractBatchTurns'],
         });
 
         const written = ctx.writeExtensionField.mock.calls[0][2];
@@ -164,12 +166,12 @@ describe('persistCharacterAdvancedOverridePatch', () => {
     test('creates a sparse override when the card has none', async () => {
         const ctx = makeContext();
         await persistCharacterAdvancedOverridePatch(ctx, 'a.png', {
-            set: { recentRawTurns: 4 },
+            set: { updateEvery: 4 },
             unset: [],
         });
 
         const written = ctx.writeExtensionField.mock.calls[0][2];
-        expect(written.advancedOverride).toEqual({ recentRawTurns: 4 });
+        expect(written.advancedOverride).toEqual({ updateEvery: 4 });
         expect(written.schemaOverride).toEqual([{ id: 'event' }]);
     });
 

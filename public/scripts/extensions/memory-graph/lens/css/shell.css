@@ -72,7 +72,6 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     outline: none;
-    isolation: isolate;
 }
 
 .mlens[data-theme="light"],
@@ -129,7 +128,6 @@
 /* Topbar */
 .mlens .ml-topbar {
     position: relative;
-    z-index: 3;
     flex: 0 0 var(--ml-topbar-h);
     display: grid;
     grid-template-columns: 1fr auto 1fr;

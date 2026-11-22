@@ -151,7 +151,6 @@ test.describe('#68 — overswipe regenerate reuses the recall snapshot', () => {
             enabled: true,
             autoExtractionEnabled: false,
             recallMethod: 'rag',
-            recentRawTurns: 0,
         }, { closeAfter: true });
 
         // Two RP turns for a real chat tail.

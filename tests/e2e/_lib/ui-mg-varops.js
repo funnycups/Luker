@@ -27,6 +27,7 @@ const SUBVIEW_LABELS = {
 };
 
 const ADVANCED_SAVE_KEYS = new Set([
+    'updateEvery',
     'extractBatchTurns',
     'extractContextTurns',
     'extractExcludeRecentTurns',
@@ -35,7 +36,6 @@ const ADVANCED_SAVE_KEYS = new Set([
     'extractCrawlCandidateLimit',
     'extractCrawlMaxReads',
     'persistentInjectionMaxSeqDistance',
-    'recentRawTurns',
     'includeWorldInfoWithPreset',
     'recallMaxIterations',
     'toolCallRetryMax',
@@ -53,12 +53,23 @@ const ADVANCED_SAVE_KEYS = new Set([
     'graphIterSystemPrompt',
 ]);
 
+const CUSTOM_MODAL_KEYS = new Set([
+    'updateEvery',
+    'extractBatchTurns',
+    'extractContextTurns',
+    'extractExcludeRecentTurns',
+    'llmVisibleRecentMessages',
+    'extractMode',
+    'extractCrawlMaxRounds',
+    'extractCrawlCandidateLimit',
+    'extractCrawlMaxReads',
+]);
+
 const TECHNICAL_KEYS = new Set([
     'recallMaxIterations',
     'toolCallRetryMax',
     'rpmLimit',
     'recallQueryMessages',
-    'llmVisibleRecentMessages',
     'extractConcurrent',
     'extractCrawlSystemPrompt',
     'extractTemplate',
@@ -69,6 +80,36 @@ const TECHNICAL_KEYS = new Set([
     'configIterSystemPrompt',
     'graphIterSystemPrompt',
 ]);
+
+async function applyFieldControl(container, key, value, timeoutMs) {
+    const field = container.locator(`[data-field-key="${key}"]`).first();
+    await field.waitFor({ state: 'visible', timeout: timeoutMs });
+    const role = await field.getAttribute('role');
+    if (role === 'switch' || role === 'checkbox') {
+        const want = Boolean(value);
+        const cur = (await field.getAttribute('aria-checked')) === 'true';
+        if (cur !== want) {
+            await field.click();
+        }
+        return;
+    }
+    const checkInside = field.locator('[role="checkbox"]').first();
+    if ((await checkInside.count()) > 0) {
+        const want = Boolean(value);
+        const cur = (await checkInside.getAttribute('aria-checked')) === 'true';
+        if (cur !== want) {
+            await checkInside.click();
+        }
+        return;
+    }
+    const selectEl = field.locator('select').first();
+    if ((await selectEl.count()) > 0) {
+        await selectEl.selectOption(String(value));
+        return;
+    }
+    const inputEl = field.locator('input, textarea').first();
+    await inputEl.fill(String(value));
+}
 
 /**
  * Open Workbench, switch to the Memory graph workspace, and activate `subview`.
@@ -108,8 +149,36 @@ export async function setMgSettings(page, settings, { saveScope = 'global', clos
     const panel = lens.locator('.ml-settings').first();
     await panel.locator('[data-field-key="enabled"]').waitFor({ state: 'visible', timeout: timeoutMs });
 
+    const modalEntries = [];
+    const inlineEntries = [];
+    for (const [key, value] of Object.entries(settings)) {
+        if (CUSTOM_MODAL_KEYS.has(key)) modalEntries.push([key, value]);
+        else inlineEntries.push([key, value]);
+    }
+    // Apply extractMode before crawl-only numeric inputs so crawl inputs are rendered inside the modal.
+    modalEntries.sort(([a], [b]) => (a === 'extractMode' ? -1 : b === 'extractMode' ? 1 : 0));
+
+    let touchedAdvanced = false;
+
+    if (modalEntries.length > 0) {
+        touchedAdvanced = true;
+        const customCard = panel.locator('[data-cadence-custom]').first();
+        await customCard.waitFor({ state: 'visible', timeout: timeoutMs });
+        await customCard.click();
+
+        const modal = lens.locator('.ml-dialog-backdrop').last();
+        await modal.waitFor({ state: 'visible', timeout: timeoutMs });
+        for (const [key, value] of modalEntries) {
+            await applyFieldControl(modal, key, value, timeoutMs);
+        }
+        const applyBtn = modal.locator('.ml-schema-modal-foot button').filter({ hasText: /^(Apply|确定|確定)$/ }).first();
+        await applyBtn.waitFor({ state: 'visible', timeout: timeoutMs });
+        await applyBtn.click();
+        await modal.waitFor({ state: 'detached', timeout: timeoutMs });
+    }
+
     let needsTechnical = false;
-    for (const key of Object.keys(settings)) {
+    for (const [key] of inlineEntries) {
         if (TECHNICAL_KEYS.has(key)) {
             needsTechnical = true;
             break;
@@ -124,42 +193,15 @@ export async function setMgSettings(page, settings, { saveScope = 'global', clos
         }
     }
 
-    let touchedAdvanced = false;
-    for (const [key, value] of Object.entries(settings)) {
+    for (const [key, value] of inlineEntries) {
         if (ADVANCED_SAVE_KEYS.has(key)) touchedAdvanced = true;
-        const field = panel.locator(`[data-field-key="${key}"]`).first();
-        await field.waitFor({ state: 'visible', timeout: timeoutMs });
-        const role = await field.getAttribute('role');
-        if (role === 'switch' || role === 'checkbox') {
-            const want = Boolean(value);
-            const cur = (await field.getAttribute('aria-checked')) === 'true';
-            if (cur !== want) {
-                await field.click();
-            }
-            continue;
-        }
-        const checkInside = field.locator('[role="checkbox"]').first();
-        if ((await checkInside.count()) > 0) {
-            const want = Boolean(value);
-            const cur = (await checkInside.getAttribute('aria-checked')) === 'true';
-            if (cur !== want) {
-                await checkInside.click();
-            }
-            continue;
-        }
-        const selectEl = field.locator('select').first();
-        if ((await selectEl.count()) > 0) {
-            await selectEl.selectOption(String(value));
-            continue;
-        }
-        const inputEl = field.locator('input, textarea').first();
-        await inputEl.fill(String(value));
+        await applyFieldControl(panel, key, value, timeoutMs);
     }
 
     if (touchedAdvanced) {
         const saveLabel = saveScope === 'character'
-            ? /^(Save Advanced to Character|保存高级到当前角色|儲存進階到目前角色)$/
-            : /^(Save Advanced to Global|保存高级到全局|儲存進階到全域)$/;
+            ? /^(Save Advanced to Character|将高级设置保存到角色卡|將進階設定儲存到角色卡|保存高级到当前角色|儲存進階到目前角色)$/
+            : /^(Save Advanced to Global|将高级设置保存到全局|將進階設定儲存到全域|保存高级到全局|儲存進階到全域)$/;
         const saveBtn = panel.locator('.ml-settings-sticky button').filter({ hasText: saveLabel }).first();
         await saveBtn.waitFor({ state: 'visible', timeout: timeoutMs });
         await saveBtn.click();

@@ -25,7 +25,7 @@ import {
     normalizeToolCallToEdit,
     projectNodeTypeForRead,
 } from '../../public/scripts/extensions/memory-graph/config-iteration/tools.js';
-import { resolveSettingsForView } from '../../public/scripts/extensions/memory-graph/config-iteration/fields.js';
+import { CONFIG_FIELDS, resolveSettingsForView } from '../../public/scripts/extensions/memory-graph/config-iteration/fields.js';
 import { validateParsedToolCalls } from '../../public/scripts/extensions/function-call-runtime.js';
 
 const normalizeNodeTypeSchema = (schema) => (Array.isArray(schema) ? schema : []);
@@ -416,5 +416,20 @@ describe('MG schema — normalizeToolCallToEdit (smoke)', () => {
         };
         await expect(normalizeToolCallToEdit(call, ctx(liveConfig([]))))
             .rejects.toThrow(/unknown_tool/);
+    });
+});
+
+describe('CONFIG_FIELDS — unified 2-2-5 defaults and recentRawTurns removal', () => {
+    test('registers updateEvery with default 2, extractBatchTurns default 2, llmVisibleRecentMessages default 5, and removes recentRawTurns', () => {
+        expect(CONFIG_FIELDS['settings.updateEvery']).toMatchObject({
+            key: 'updateEvery',
+            group: 'extraction',
+            kind: 'int',
+            defaultValue: 2,
+            min: 1,
+        });
+        expect(CONFIG_FIELDS['settings.extractBatchTurns'].defaultValue).toBe(2);
+        expect(CONFIG_FIELDS['settings.llmVisibleRecentMessages'].defaultValue).toBe(5);
+        expect(CONFIG_FIELDS['settings.recentRawTurns']).toBeUndefined();
     });
 });

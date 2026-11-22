@@ -295,10 +295,6 @@ async function execMemoryListCandidates(args, context) {
     const options = {};
     const types = normalizeStringArrayArg(args?.types);
     if (types) options.types = types;
-    const excludeRecent = pickFiniteInt(args?.exclude_recent_messages);
-    if (excludeRecent !== undefined && excludeRecent >= 0) {
-        options.excludeRecentMessages = excludeRecent;
-    }
     const candidates = session.listVisibleCandidates(options) || [];
     return {
         candidates: Array.from(candidates).map(n => trimCandidatePreview(n, context)).filter(Boolean),
@@ -706,11 +702,6 @@ const SCHEMAS = [
                     type: 'array',
                     items: { type: 'string' },
                     description: 'Optional node-type filter (e.g. ["event", "character_sheet"]).',
-                },
-                exclude_recent_messages: {
-                    type: 'integer',
-                    minimum: 0,
-                    description: 'Drop nodes inside the recent-N raw turns window so freshly-injected context is not duplicated.',
                 },
             },
             additionalProperties: false,

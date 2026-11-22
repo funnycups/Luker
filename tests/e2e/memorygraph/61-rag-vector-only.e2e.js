@@ -125,7 +125,6 @@ test.describe('#61 — RAG recall mode reaches the seeded graph via real chat se
             enabled: true,
             autoExtractionEnabled: false,
             recallMethod: 'rag',
-            recentRawTurns: 0,
         }, { closeAfter: true });
 
         // 2 RP turns to give MG a real chat tail.

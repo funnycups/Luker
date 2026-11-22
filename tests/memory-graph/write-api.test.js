@@ -71,13 +71,6 @@ jest.unstable_mockModule('../../public/scripts/request-compression.js', () => ({
     compressRequest: async (req) => req,
 }));
 
-// preset-help.js → popup.js → RossAscends-mods.js → macros engine →
-// /scripts/utils.js bare-spec failure. The UI helpers it exports are only
-// reached by interactive code paths the write-api tests don't exercise.
-jest.unstable_mockModule('../../public/scripts/extensions/preset-help.js', () => ({
-    renderPresetHelpButton: () => '',
-}));
-
 // popup.js pulls the whole UI shell. Stub the parts memory-graph might
 // reach for at import time.
 jest.unstable_mockModule('../../public/scripts/popup.js', () => ({

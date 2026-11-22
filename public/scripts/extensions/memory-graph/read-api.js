@@ -53,7 +53,6 @@ import {
     expandRouteCandidates,
     selectVisibleNodesForType,
     getLatestSeqIndex,
-    isNodeInRecentExcludeWindow,
     collectSemanticRootsByDepth,
 } from './main.js';
 import { compareNodesByTimeline } from './graph-ops.js';
@@ -636,10 +635,6 @@ export function getMemoryGraphReadApi(store, context = null) {
         const store = resolveStore();
         if (!store) return Object.freeze([]);
         const settings = resolveSettings();
-        const latestSeqIndex = getLatestSeqIndex(store);
-        const excludeRecentMessages = Number.isFinite(Number(options.excludeRecentMessages))
-            ? Math.max(0, Math.floor(Number(options.excludeRecentMessages)))
-            : 0;
 
         let candidates = [];
         try {
@@ -649,7 +644,6 @@ export function getMemoryGraphReadApi(store, context = null) {
                 { fullText: '' },
                 [],
                 context,
-                { latestSeqIndex, excludeMessages: excludeRecentMessages },
             ) || [];
         } catch (_) {
             candidates = [];
@@ -1109,7 +1103,7 @@ export function getMemoryGraphReadApi(store, context = null) {
 
     // -----------------------------------------------------------------------
     // Imports retained for surface symmetry: `selectVisibleNodesForType`,
-    // `isNodeInRecentExcludeWindow`, and `buildGraphNodeHints` are part of the
+    // `selectVisibleNodesForType` and `buildGraphNodeHints` are part of the
     // spec's "view onto recall primitives" but are reached transitively via
     // `collectRootCandidates` / `getNodeRecallExposure`. Keeping the imports
     // documents the dependency boundary even when this file does not call
@@ -1117,7 +1111,6 @@ export function getMemoryGraphReadApi(store, context = null) {
     // without forcing another import edit + commit cycle.
     // -----------------------------------------------------------------------
     void selectVisibleNodesForType;
-    void isNodeInRecentExcludeWindow;
     void buildGraphNodeHints;
 
     return Object.freeze({

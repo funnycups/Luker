@@ -136,7 +136,7 @@ The plugin keeps the shared lorebook aligned with stored search results as the c
 | **Default page excerpt max chars** | Maximum text length extracted when visiting web pages (`0` = full extract) |
 | **Safe Search** | Safety filtering level for search results |
 | **Agent API preset** | API connection preset for the pre-request Agent (empty uses main connection) |
-| **Agent preset** | Generation preset for the pre-request Agent (empty uses main preset). The help button beside the dropdown explains the expected preset type |
+| **Agent preset** | Generation preset for the pre-request Agent, empty uses the main preset. The actions below the dropdown import the bundled `plugin-only` example, or open the preset workspace to derive from an existing preset |
 
 ::: info Related Pages
 - [Image Generation & AI Illustration](/features/image-generation) — character visual exploration with image search

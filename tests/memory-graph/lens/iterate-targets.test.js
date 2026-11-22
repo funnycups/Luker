@@ -146,7 +146,7 @@ function makeConfigHarness({
     const mgSettings = {
         nodeTypeSchema: clone(DEFAULT_SCHEMA),
         recallMaxIterations: 3,
-        recentRawTurns: 2,
+        updateEvery: 2,
         ...clone(globalSettings),
     };
     const invalidateMock = jest.fn();
@@ -466,7 +466,7 @@ describe('memory IterateTarget (config + schema)', () => {
         ai = await target.runEdit({
             id: 'e2',
             name: 'mg_config_set_fields',
-            args: { set: { 'settings.recentRawTurns': 6 } },
+            args: { set: { 'settings.updateEvery': 6 } },
         }, ai);
 
         const keys = diffUnits(target.units(base), target.units(ai)).map(c => c.key);
@@ -477,13 +477,13 @@ describe('memory IterateTarget (config + schema)', () => {
             0,
             'memory_graph',
             expect.objectContaining({
-                advancedOverride: { recentRawTurns: 6 },
+                advancedOverride: { updateEvery: 6 },
             }),
             { requireSaved: true },
         );
         expect(h.characters[0].data.extensions.memory_graph.schemaOverride.some(t => t.id === 'quest')).toBe(true);
         // Global settings untouched
-        expect(h.mgSettings.recentRawTurns).toBe(2);
+        expect(h.mgSettings.updateEvery).toBe(2);
         expect(h.mgSettings.nodeTypeSchema.some(t => t.id === 'quest')).toBe(false);
         expect(h.invalidateMock).toHaveBeenCalledTimes(1);
 
@@ -511,12 +511,12 @@ describe('memory IterateTarget (config + schema)', () => {
         const ai = await target.runEdit({
             id: 'e1',
             name: 'mg_config_set_fields',
-            args: { set: { 'settings.recentRawTurns': 8 } },
+            args: { set: { 'settings.updateEvery': 8 } },
         }, clone(base));
-        const keys = ['settings:recentRawTurns'];
+        const keys = ['settings:updateEvery'];
         await expect(target.commit(loaded.target, base, target.rebuild(base, ai, keys), keys))
             .rejects.toThrow(/disk write denied/);
-        expect(h.mgSettings.recentRawTurns).toBe(2);
+        expect(h.mgSettings.updateEvery).toBe(2);
     });
 
     test('renderControls provides reset_to_blank and character reset_to_global matching control actions', async () => {

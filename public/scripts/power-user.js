@@ -1286,6 +1286,8 @@ function maybeShowMessageProgressNotification() {
                 body: bodyWithSpeaker,
                 tag: 'luker-generation-progress',
                 renotify: false,
+                // Status-only: the completion and failure notifications carry the alert.
+                silent: true,
             });
             notification.onclick = () => window.focus();
             activeMessageProgressNotification = notification;

@@ -136,10 +136,11 @@ describe('resolveSettingsForView', () => {
     });
 
     test('clamps integers and floors fractions', () => {
-        const view = resolveSettingsForView({ extractContextTurns: 999, extractCrawlMaxRounds: 3.9, recentRawTurns: -5 });
+        const view = resolveSettingsForView({ extractContextTurns: 999, extractCrawlMaxRounds: 3.9, updateEvery: 0, extractExcludeRecentTurns: -5 });
         expect(view.extractContextTurns).toBe(32);
         expect(view.extractCrawlMaxRounds).toBe(3);
-        expect(view.recentRawTurns).toBe(0);
+        expect(view.updateEvery).toBe(1);
+        expect(view.extractExcludeRecentTurns).toBe(0);
     });
 
     test('rejects non-boolean and unknown enum values in favour of defaults', () => {
@@ -208,7 +209,7 @@ describe('buildConfigFieldCatalog', () => {
             schema: [{ id: 'event', label: 'Event' }],
             group: 'recall',
         });
-        expect(catalog.fields).toHaveLength(7);
+        expect(catalog.fields).toHaveLength(6);
         expect(new Set(catalog.fields.map(field => field.group))).toEqual(new Set(['recall']));
         expect(catalog.groups.map(group => group.id)).toEqual(['extraction', 'recall', 'query_rewrite', 'iteration', 'runtime']);
         expect(catalog.schema_index).toEqual([{ index: 0, id: 'event', label: 'Event' }]);
@@ -216,7 +217,7 @@ describe('buildConfigFieldCatalog', () => {
     });
 
     test('trims a group id and treats a blank one as no filter', () => {
-        expect(buildConfigFieldCatalog({ group: '  recall  ' }).fields).toHaveLength(7);
+        expect(buildConfigFieldCatalog({ group: '  recall  ' }).fields).toHaveLength(6);
         expect(buildConfigFieldCatalog({ group: '' }).fields).toHaveLength(24);
         expect(buildConfigFieldCatalog({ group: '   ' }).fields).toHaveLength(24);
         expect(buildConfigFieldCatalog({ group: null }).fields).toHaveLength(24);

@@ -179,21 +179,6 @@
             "forbid_overrides": false
         },
         {
-            "identifier": "ef55413d-69bf-4c53-be76-11e7946cf39f",
-            "system_prompt": false,
-            "enabled": false,
-            "marker": false,
-            "plugin_extra": false,
-            "name": "CoT",
-            "role": "assistant",
-            "content": "<think>\nLet me start the mission\n</think>\nI'll stirictly follow the users requests. Let me start by <thought> first...",
-            "injection_position": 0,
-            "injection_depth": 4,
-            "injection_order": 100,
-            "injection_trigger": [],
-            "forbid_overrides": false
-        },
-        {
             "identifier": "22b0836d-8c7c-4703-936e-70b0b6c3abaf",
             "system_prompt": false,
             "enabled": false,
@@ -328,10 +313,6 @@
                 },
                 {
                     "identifier": "22b0836d-8c7c-4703-936e-70b0b6c3abaf",
-                    "enabled": true
-                },
-                {
-                    "identifier": "ef55413d-69bf-4c53-be76-11e7946cf39f",
                     "enabled": true
                 }
             ]

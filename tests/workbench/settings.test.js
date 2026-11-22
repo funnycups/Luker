@@ -92,4 +92,37 @@ describe('workbench settings page', () => {
         expect(page.el.textContent).not.toContain('STALE_SOURCE');
         expect(page.el.textContent).not.toContain('STALE_PROMPT_TEXT');
     });
+
+    test('renders the shared block, per-target rows and resolved source', async () => {
+        const app = {
+            settings: () => ({ ai: { default: {}, memory: {} }, ask: { sources: {} }, rules: {}, dismissed: {} }),
+            saveSettings: jest.fn(),
+            toast: jest.fn(),
+            iterateTargets: () => [{ id: 'memory', label: 'Memory graph', tone: 'memory' }],
+            suggestRuleProviders: () => [],
+            source: {
+                listAiChoices: jest.fn(async () => ({
+                    connections: ['ConnA'],
+                    presets: ['plugin-only', 'NativePreset'],
+                    native: { memory: { connection: '', preset: 'NativePreset' } },
+                    hasPluginOnly: true,
+                    errors: {},
+                })),
+                promptInfo: jest.fn(async () => ({ from: 'test', custom: false, text: 'prompt' })),
+            },
+        };
+        const page = createSettingsPage(app);
+        document.body.appendChild(page.el);
+        page.show();
+        await flushMicrotasks();
+        const text = page.el.textContent;
+        expect(text).toContain('AI used inside Workbench');
+        expect(text).toContain('Shared');
+        expect(text).toContain('Not selected, using the bundled example plugin-only');
+        expect(text).toContain('Set individually (2 targets)');
+        expect(text).toContain('Memory graph settings · NativePreset');
+        expect(text).toContain('Luker\'s current connection');
+        expect(page.el.querySelector('.wb-ai-actions')).not.toBeNull();
+        expect(page.el.querySelector('.wb-ai-targets')).not.toBeNull();
+    });
 });

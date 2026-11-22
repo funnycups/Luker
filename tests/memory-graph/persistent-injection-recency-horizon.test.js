@@ -50,12 +50,9 @@ function collectAlwaysInjectNodesRef(store, schema, options = {}) {
     const alwaysSpecs = alwaysSpecsRaw
         .map((spec) => ({
             type: String(spec.id || '').toLowerCase(),
-            latestOnly: Boolean(spec?.latestOnly),
         }))
         .filter((s) => s.type);
     if (alwaysSpecs.length === 0) return [];
-
-    const latestOnlyTypes = new Set(alwaysSpecs.filter((s) => s.latestOnly).map((s) => s.type));
 
     const allNodes = Object.values(store?.nodes || {});
     const picked = [];
@@ -74,25 +71,15 @@ function collectAlwaysInjectNodesRef(store, schema, options = {}) {
         }
     }
 
-    // POST-filter 1: seqWindowFrom — drop nodes NEWER than window (latestOnly exempt)
-    const seqWindowFromRaw = Number(options?.seqWindowFrom);
-    const windowed = Number.isFinite(seqWindowFromRaw)
-        ? picked.filter((node) => {
-            const nodeType = String(node?.type || '').toLowerCase();
-            if (latestOnlyTypes.has(nodeType)) return true;
-            return Number.isFinite(Number(node?.seqTo)) && Number(node.seqTo) < seqWindowFromRaw;
-        })
-        : picked;
-
-    // POST-filter 2: seqCutoffFrom — drop nodes OLDER than horizon (all types)
+    // POST-filter: seqCutoffFrom — drop nodes OLDER than horizon (all types)
     const seqCutoffFromRaw = Number(options?.seqCutoffFrom);
     const capped = Number.isFinite(seqCutoffFromRaw)
-        ? windowed.filter((node) => {
+        ? picked.filter((node) => {
             const toSeq = Number(node?.seqTo);
             if (!Number.isFinite(toSeq)) return false;
             return toSeq >= seqCutoffFromRaw;
         })
-        : windowed;
+        : picked;
 
     return capped.sort(_compareNodesByTimeline);
 }
@@ -233,37 +220,6 @@ describe('seqCutoffFrom finite — drop nodes with seqTo < cutoff (all types)', 
     });
 });
 
-describe('seqCutoffFrom composed with seqWindowFrom — both post-filters apply', () => {
-    test('seqWindowFrom = 12 (drop new for non-latestOnly) + seqCutoffFrom = 5 (drop old for all)', () => {
-        const out = collectAlwaysInjectNodesRef(
-            buildMixedStore(),
-            mixedSchema(),
-            { seqWindowFrom: 12, seqCutoffFrom: 5 },
-        );
-        const ids = out.map((n) => n.id);
-        // After seqWindowFrom=12 (non-latestOnly drop seqTo >= 12):
-        //   event: {1,3,7,11}; world_constants: {2,5,10}; character_sheet: {4,12} (exempt)
-        // After seqCutoffFrom=5 (drop seqTo < 5, all types):
-        //   event: {7,11}; world_constants: {5,10}; character_sheet: {12}
-        // Final asc: rule_5, evt_7, rule_10, evt_11, sheet_12
-        expect(ids).toEqual(['rule_5', 'evt_7', 'rule_10', 'evt_11', 'sheet_12']);
-    });
-
-    test('seqCutoffFrom higher than seqWindowFrom → cutoff wins', () => {
-        const out = collectAlwaysInjectNodesRef(
-            buildMixedStore(),
-            mixedSchema(),
-            { seqWindowFrom: 6, seqCutoffFrom: 10 },
-        );
-        const ids = out.map((n) => n.id);
-        // After window=6 (non-latestOnly keep seqTo < 6):
-        //   event: {1,3}; world_constants: {2,5}; character_sheet: {4,12} (exempt)
-        // After cutoff=10 (keep seqTo >= 10):
-        //   event: {}; world_constants: {}; character_sheet: {12}
-        expect(ids).toEqual(['sheet_12']);
-    });
-});
-
 // ---------------------------------------------------------------------------
 // Settings clamp
 // ---------------------------------------------------------------------------
@@ -353,7 +309,6 @@ describe('recall pipeline observes seqCutoffFrom (behavior)', () => {
     function horizonSettings(persistentInjectionMaxSeqDistance) {
         return {
             persistentInjectionMaxSeqDistance,
-            recentRawTurns: 0,
             nodeTypeSchema: [
                 {
                     id: 'event',
@@ -382,10 +337,8 @@ describe('recall pipeline observes seqCutoffFrom (behavior)', () => {
         expect(computeRecallAlwaysInjectOptions(store, settings)).toEqual({});
     });
 
-    test('computeRecallAlwaysInjectOptions does NOT include seqWindowFrom even when recentRawTurns > 0 (recall pool must ignore raw-visible window)', () => {
+    test('computeRecallAlwaysInjectOptions ignores legacy recentRawTurns and returns only seqCutoffFrom', () => {
         const store = buildHorizonStore();
-        // recentRawTurns > 0: would trigger seqWindowFrom in sync-side, but
-        // recall side must not observe it.
         const settings = { ...horizonSettings(3), recentRawTurns: 5 };
         const opts = computeRecallAlwaysInjectOptions(store, settings);
         expect(opts).toEqual({ seqCutoffFrom: 13 });

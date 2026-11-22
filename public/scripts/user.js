@@ -1228,6 +1228,20 @@ export async function triggerStorageBackendMigration(targetMode, dbCreds = {}) {
 }
 
 /**
+ * Clears the migration resume state retained after a failed run.
+ * @returns {Promise<{ok: boolean, status: number, data: any}>} The server's report
+ */
+export async function requestStorageMigrationReset() {
+    const response = await fetch('/api/users/storage/migrate/reset', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({ confirm: true }),
+    });
+    const data = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, data };
+}
+
+/**
  * Log out the current user.
  * @returns {Promise<void>}
  */

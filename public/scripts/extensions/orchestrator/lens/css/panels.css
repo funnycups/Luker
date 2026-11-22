@@ -16,8 +16,9 @@
 .olens .ol-modebtn-label { font-size: 11.5px; color: var(--ol-text-faint); }
 .olens .ol-modebtn-value { font-weight: 600; color: var(--ol-text); }
 .olens .ol-menu {
-    position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: 270px; padding: 6px;
-    border-radius: var(--ol-radius-lg); background: var(--ol-raised); box-shadow: var(--ol-shadow-3);
+    position: absolute; right: 10px; top: calc(var(--ol-topbar-h) + 6px); z-index: 30;
+    width: 270px; max-height: calc(100% - 16px); overflow-y: auto; overscroll-behavior: contain; padding: 6px;
+    border: 1px solid var(--ol-border-strong); border-radius: var(--ol-radius-lg); background: var(--ol-raised); box-shadow: var(--ol-shadow-3);
     animation: ol-pop 140ms var(--ol-ease);
 }
 .olens .ol-menu-item { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--ol-radius-sm); background: none; cursor: pointer; text-align: left; }
@@ -32,7 +33,7 @@
 
 .olens .ol-banner {
     flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 24px;
-    color: var(--ol-recalled); background: var(--ol-recalled-soft); border-bottom: 1px solid var(--ol-border);
+    color: var(--ol-recalled); background: color-mix(in srgb, var(--ol-recalled) 12%, var(--ol-surface)); border-bottom: 1px solid var(--ol-border);
 }
 .olens .ol-banner > span { flex: 1; color: var(--ol-text); }
 
@@ -64,7 +65,7 @@
 .olens .ol-inspector .ol-steps .ol-textblock.is-folded { max-height: 96px; }
 
 /* History */
-.olens .ol-history { display: flex; flex-direction: column; min-height: 0; overflow: auto; background: var(--ol-canvas); }
+.olens .ol-history { display: flex; flex-direction: column; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--ol-canvas); }
 .olens .ol-history-head { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; padding: 18px 24px 8px; }
 .olens .ol-history-head h2 { font-size: 18px; }
 .olens .ol-history-hint { color: var(--ol-text-faint); font-size: 12px; margin-top: 2px; }
@@ -98,7 +99,7 @@
 .olens .ol-pre { white-space: pre-wrap; word-break: break-word; font-family: var(--ol-mono); font-size: 12px; line-height: 1.6; padding: 12px; border-radius: var(--ol-radius); background: var(--ol-surface-2); border: 1px solid var(--ol-border); }
 
 /* Phone: enable + mode controls live under the topbar */
-.olens .ol-mobilebar { display: none; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--ol-border); background: var(--ol-surface); }
+.olens .ol-mobilebar { flex: none; display: none; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--ol-border); background: var(--ol-surface); }
 .olens .ol-mobilebar .ol-enable .lw-switch-label { display: inline; }
 .olens .ol-mobilebar .ol-modebtn-label { display: inline; }
 

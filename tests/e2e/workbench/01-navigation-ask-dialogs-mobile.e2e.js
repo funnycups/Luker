@@ -100,6 +100,23 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
 
         await switchWorkbenchTab(page, 'ws:orch');
         await expect(win.locator('.olens')).toBeVisible();
+        await expect(win.locator('.olens .ol-modebtn')).toHaveCount(1);
+        await win.locator('.olens .ol-modebtn').click();
+        const desktopMenu = win.locator('.olens > .ol-menu');
+        await expect(desktopMenu).toBeVisible();
+        const desktopMenuGeom = await page.evaluate(() => {
+            const olens = document.querySelector('.wbench .olens').getBoundingClientRect();
+            const btn = document.querySelector('.wbench .olens .ol-modebtn').getBoundingClientRect();
+            const menu = document.querySelector('.wbench .olens > .ol-menu').getBoundingClientRect();
+            return {
+                inside: menu.top >= olens.top && menu.bottom <= olens.bottom && menu.left >= olens.left && menu.right <= olens.right,
+                belowBtn: menu.top >= btn.bottom,
+            };
+        });
+        expect(desktopMenuGeom).toEqual({ inside: true, belowBtn: true });
+        await page.keyboard.press('Escape');
+        await expect(desktopMenu).toBeHidden();
+        await expect(win).toBeVisible();
 
         // 3. Ask privacy switches & secret redaction.
         await switchWorkbenchTab(page, 'settings');
@@ -353,6 +370,72 @@ test.describe('Workbench navigation, Ask privacy/redaction, overlays, and mobile
         for (const p of olensLayout.pills) {
             expect(p.right).toBeLessThanOrEqual(390);
         }
+
+        // Single mode picker on compact mobile; menu opens inside .olens below .ol-mobilebar without scrolling host page.
+        await expect(win.locator('.olens .ol-modebtn')).toHaveCount(1);
+        await expect(win.locator('.olens .ol-enable')).toHaveCount(1);
+        await expect(win.locator('.olens .ol-menu')).toHaveCount(1);
+        await win.locator('.olens .ol-mobilebar .ol-modebtn').click();
+        const compactMenu = win.locator('.olens > .ol-menu');
+        await expect(compactMenu).toBeVisible();
+        const compactMenuGeom = await page.evaluate(() => {
+            const olens = document.querySelector('.wbench .olens');
+            const olensR = olens.getBoundingClientRect();
+            const btnR = olens.querySelector('.ol-mobilebar .ol-modebtn').getBoundingClientRect();
+            const menu = olens.querySelector(':scope > .ol-menu');
+            const menuR = menu.getBoundingClientRect();
+            return {
+                scrollY: window.scrollY,
+                position: getComputedStyle(menu).position,
+                insideOlens: menuR.top >= olensR.top && menuR.bottom <= olensR.bottom && menuR.left >= olensR.left && menuR.right <= olensR.right,
+                belowTrigger: menuR.top >= btnR.bottom,
+                rightEdge: Math.round(menuR.right),
+            };
+        });
+        expect(compactMenuGeom.scrollY).toBe(0);
+        expect(compactMenuGeom.position).toBe('absolute');
+        expect(compactMenuGeom.insideOlens).toBe(true);
+        expect(compactMenuGeom.belowTrigger).toBe(true);
+        expect(compactMenuGeom.rightEdge).toBeLessThanOrEqual(390);
+
+        // Selecting an execution mode updates the active mode and closes the menu without scrolling.
+        const initialModeText = (await win.locator('.olens .ol-mobilebar .ol-modebtn-value').textContent()).trim();
+        const targetItem = compactMenu.locator('[role="menuitemradio"][aria-checked="false"]').first();
+        const targetModeLabel = (await targetItem.locator('.ol-menu-title').textContent()).trim();
+        await targetItem.click();
+        await expect(compactMenu).toBeHidden();
+        await expect(win.locator('.olens .ol-mobilebar .ol-modebtn-value')).toHaveText(targetModeLabel);
+        expect(targetModeLabel).not.toBe(initialModeText);
+        expect(await page.evaluate(() => window.scrollY)).toBe(0);
+
+        // Switching to Run view keeps .ol-mobilebar mode picker visible and uses uniform canvas background.
+        await win.locator('.olens .ol-viewswitch .lw-seg-btn').nth(1).click();
+        await expect(win.locator('.olens .ol-run')).toBeVisible();
+        const runSurface = await page.evaluate(() => {
+            const olens = document.querySelector('.wbench .olens');
+            const run = olens.querySelector('.ol-run');
+            const modeBtn = olens.querySelector('.ol-mobilebar .ol-modebtn');
+            return {
+                scrollY: window.scrollY,
+                olensBg: getComputedStyle(olens).backgroundColor,
+                runBg: getComputedStyle(run).backgroundColor,
+                modeRight: Math.round(modeBtn.getBoundingClientRect().right),
+            };
+        });
+        expect(runSurface.scrollY).toBe(0);
+        expect(runSurface.olensBg).toBe(runSurface.runBg);
+        expect(runSurface.modeRight).toBeGreaterThan(0);
+        expect(runSurface.modeRight).toBeLessThanOrEqual(390);
+
+        // Switch back to Flow view and restore original mode before card/inspector sheet test.
+        await win.locator('.olens .ol-viewswitch .lw-seg-btn').nth(0).click();
+        await expect(win.locator('.olens .ol-flow-head h2')).toBeVisible();
+        await win.locator('.olens .ol-mobilebar .ol-modebtn').click();
+        await compactMenu.locator('[role="menuitemradio"]').filter({
+            has: page.locator('.ol-menu-title', { hasText: initialModeText }),
+        }).first().click();
+        await expect(compactMenu).toBeHidden();
+        await expect(win.locator('.olens .ol-mobilebar .ol-modebtn-value')).toHaveText(initialModeText);
 
         // Tapping an agent card opens the compact bottom sheet; tapping .ol-scrim closes it.
         await win.locator('.olens .ol-card').first().click();

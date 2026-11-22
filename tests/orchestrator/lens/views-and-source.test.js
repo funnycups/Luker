@@ -228,4 +228,119 @@ describe('orchestrator/lens zero innerHTML & no legacy dock/ai imports', () => {
         expect(runCss).toMatch(/\.olens\s+\.ol-run-head\s*\{[^}]*flex:\s*none;/);
         expect(runCss).toMatch(/\.olens\s+\.ol-run-main\s*\{[^}]*flex:\s*1\s+0\s+auto;/);
     });
+
+    test('compact and desktop modes render a single mode picker without tearing down .ol-mobilebar across menu toggle or tab switches', async () => {
+        if (typeof globalThis.ResizeObserver !== 'function') {
+            globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+        }
+        const setMode = jest.fn(async () => {});
+        const setEnabled = jest.fn(async () => {});
+        let currentMode = 'director';
+        const makeSource = () => ({
+            setMode: async (id) => { currentMode = id; await setMode(id); },
+            setEnabled,
+            async load() {
+                return {
+                    enabled: false,
+                    mode: currentMode,
+                    source: 'global',
+                    presetName: 'Default',
+                    chatKey: 'c1',
+                    chatLabel: 'Alice',
+                    characterName: 'Alice',
+                    settings: { reviewRerunMaxRounds: 1 },
+                    profile: { spec: { stages: [] }, presets: {}, maxRounds: 10 },
+                    target: { scope: 'global', mode: currentMode },
+                };
+            },
+        });
+
+        // 1. Compact mode
+        const compactHost = document.createElement('div');
+        document.body.appendChild(compactHost);
+        const compactHandle = mountOrchestraLens({
+            container: compactHost,
+            embedded: true,
+            hostApp: { isCompact: () => true },
+            source: makeSource(),
+        });
+        try {
+            await Promise.resolve();
+            await Promise.resolve();
+
+            const root = compactHost.querySelector('.olens');
+            expect(root.querySelectorAll('.ol-modebtn')).toHaveLength(1);
+            expect(root.querySelectorAll('.ol-enable')).toHaveLength(1);
+            expect(root.querySelectorAll('.ol-menu')).toHaveLength(1);
+            expect(root.querySelector('.ol-topbar-right .ol-modebtn')).toBeNull();
+            expect(root.querySelector('.ol-topbar-right .ol-enable')).toBeNull();
+
+            const modeBtn = root.querySelector('.ol-mobilebar .ol-modebtn');
+            const menu = root.querySelector(':scope > .ol-menu');
+            expect(modeBtn).toBeTruthy();
+            expect(menu.hidden).toBe(true);
+
+            // Opening menu keeps the live .ol-modebtn DOM node intact.
+            modeBtn.click();
+            expect(root.querySelector('.ol-mobilebar .ol-modebtn')).toBe(modeBtn);
+            expect(modeBtn.getAttribute('aria-expanded')).toBe('true');
+            expect(menu.hidden).toBe(false);
+            expect(root.querySelectorAll('.ol-menu')).toHaveLength(1);
+
+            // Switching tabs closes the menu and preserves .ol-mobilebar DOM.
+            root.querySelectorAll('.ol-viewswitch .lw-seg-btn')[1].click();
+            expect(root.querySelector('.ol-mobilebar .ol-modebtn')).toBe(modeBtn);
+            expect(menu.hidden).toBe(true);
+            expect(modeBtn.getAttribute('aria-expanded')).toBe('false');
+
+            // Selecting an execution mode calls source.setMode and closes menu.
+            modeBtn.click();
+            menu.querySelector('[role="menuitemradio"]').click();
+            await Promise.resolve();
+            expect(setMode).toHaveBeenCalledWith('spec');
+            expect(menu.hidden).toBe(true);
+        } finally {
+            compactHandle.destroy();
+            compactHost.remove();
+        }
+
+        // 2. Desktop mode
+        const desktopHost = document.createElement('div');
+        document.body.appendChild(desktopHost);
+        const desktopHandle = mountOrchestraLens({
+            container: desktopHost,
+            embedded: true,
+            hostApp: { isCompact: () => false },
+            source: makeSource(),
+        });
+        try {
+            await Promise.resolve();
+            await Promise.resolve();
+
+            const root = desktopHost.querySelector('.olens');
+            expect(root.querySelector('.ol-mobilebar').hidden).toBe(true);
+            expect(root.querySelector('.ol-mobilebar .ol-modebtn')).toBeNull();
+            expect(root.querySelectorAll('.ol-modebtn')).toHaveLength(1);
+            expect(root.querySelectorAll('.ol-enable')).toHaveLength(1);
+            expect(root.querySelector('.ol-topbar-right .ol-modebtn')).toBeTruthy();
+        } finally {
+            desktopHandle.destroy();
+            desktopHost.remove();
+        }
+    });
+
+    test('compact Workbench and Orchestra Lens CSS avoid fixed mode menu, 3D perspective leakage, and translucent border saveLayers', () => {
+        const compactCss = fs.readFileSync(path.join(LENS_DIR, 'css/compact.css'), 'utf8');
+        const panelsCss = fs.readFileSync(path.join(LENS_DIR, 'css/panels.css'), 'utf8');
+        const shellCss = fs.readFileSync(path.join(LENS_DIR, 'css/shell.css'), 'utf8');
+        const wbShellCss = fs.readFileSync(path.join(ROOT, 'public/scripts/workbench/css/shell.css'), 'utf8');
+        const tokensCss = fs.readFileSync(path.join(ROOT, 'public/scripts/lens-shared/tokens.css'), 'utf8');
+
+        expect(compactCss).not.toMatch(/\.ol-menu\s*\{[^}]*position:\s*fixed/);
+        expect(panelsCss).toMatch(/\.olens\s+\.ol-mobilebar\s*\{[^}]*flex:\s*none;/);
+        expect(shellCss).not.toMatch(/\.olens\s+\.ol-topbar\s*\{[^}]*z-index:/);
+        expect(wbShellCss).toMatch(/\.wbench\s+\.wb-win\s*\{[^}]*transform:\s*translateZ\(0\)/);
+        expect(wbShellCss).toMatch(/\.wbench\.is-compact\s+\.wb-win\s*\{[^}]*box-shadow:\s*none;/);
+        expect(tokensCss).not.toMatch(/--lw-border(?:-strong)?:\s*rgba\(/);
+    });
 });

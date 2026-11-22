@@ -182,12 +182,17 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
     };
 
     // ----- Layout ---------------------------------------------------------
+    let renderTopbarReady = false;
+    function notifyUnsavedChanged() {
+        if (renderTopbarReady) renderTopbar();
+        hostApp?.refreshBadges?.();
+    }
     const views = {
         graph: createGraphView(app),
         timeline: createTimelineView(app),
         table: createTableView(app),
-        schema: createSchemaView(app, source),
-        settings: createSettingsView(app, source),
+        schema: createSchemaView(app, source, { onDirtyChange: notifyUnsavedChanged }),
+        settings: createSettingsView(app, source, { onDirtyChange: notifyUnsavedChanged }),
     };
     const isFullView = (view) => view === 'schema' || view === 'settings';
     const sidebar = createSidebar(app);
@@ -234,6 +239,7 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
     put(root, topbar, body, bottomNav, palette.el, dialog.el, toast);
 
     function renderTopbar() {
+        renderTopbarReady = true;
         const state = store.get();
         titleChat.textContent = model?.chatLabel ? model.chatLabel : '';
         titleChat.hidden = !model?.chatLabel;
@@ -241,8 +247,8 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
             { value: 'graph', label: i18n('Graph'), icon: 'graph' },
             { value: 'timeline', label: i18n('Timeline'), icon: 'timeline' },
             { value: 'table', label: i18n('Data table'), icon: 'table' },
-            { value: 'schema', label: i18n('Memory structure'), icon: 'blocks' },
-            { value: 'settings', label: i18n('Settings'), icon: 'gear' },
+            { value: 'schema', label: i18n('Memory structure'), icon: 'blocks', dirty: Boolean(views.schema.isDirty?.()) },
+            { value: 'settings', label: i18n('Settings'), icon: 'gear', dirty: Number(views.settings.dirtyCount?.() || 0) > 0 },
         ], state.view, (value) => store.set({ view: value }), { ariaLabel: i18n('Display'), iconOnlyMobile: true }));
         put(clear(topbarRight),
             h('button', { type: 'button', class: 'ml-searchbtn', onClick: () => palette.open(), 'aria-label': i18n('Search') },
@@ -528,6 +534,7 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
             views.schema?.invalidate?.();
             scheduleReload();
         },
+        unsavedCount: () => Number(views.settings.dirtyCount?.() || 0) + (views.schema.isDirty?.() ? 1 : 0),
         destroy,
         reload: () => load({ manual: true }),
         app,

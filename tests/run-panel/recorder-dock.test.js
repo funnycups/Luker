@@ -475,6 +475,53 @@ describe('run-panel recorder & dock', () => {
             jest.useRealTimers();
         }
     });
+
+    test('dock renders sd round labels, live partial images, prompts, and errors without dropping completed image sections', async () => {
+        const sdStore = createRunStore();
+        const recorder = createRecorder({ storage: accountLocalStorage() });
+        recorder.attach(sdStore, 'sd');
+        const dock = createDock({ recorder });
+        dock.open();
+
+        const runId = sdStore.startRun({ mode: 'image' });
+        const roundId = sdStore.appendRound({ runId, round: { id: 'image-job-1', label: 'Message #4' } });
+        const p0 = sdStore.ensureSection({ runId, roundId, section: { id: 'p0', kind: 'prompt', title: 'Prompt 1' } });
+        sdStore.appendToSection({ runId, roundId, sectionId: p0, delta: '1girl, harbor lantern' });
+        sdStore.setSectionStatus({ runId, roundId, sectionId: p0, status: 'done' });
+        const img0 = sdStore.ensureSection({ runId, roundId, section: { id: 'img0', kind: 'image', title: 'Image 1' } });
+        const img1 = sdStore.ensureSection({ runId, roundId, section: { id: 'img1', kind: 'image', title: 'Image 2' } });
+        const unsafeImg = sdStore.ensureSection({ runId, roundId, section: { id: 'img2', kind: 'image', title: 'Image 3' } });
+
+        await new Promise(r => setTimeout(r, 90));
+        expect(document.querySelector('.rp-dock-agent-name')?.textContent).toBe('Message #4');
+
+        // Complete Image 1 while Image 2 is still running; Image 3 gets an unsafe URL scheme
+        sdStore.setSectionStatus({ runId, roundId, sectionId: img0, status: 'done', meta: { imageUrl: '/user/images/harbor-1.png' } });
+        sdStore.setSectionStatus({ runId, roundId, sectionId: unsafeImg, status: 'done', meta: { imageUrl: 'javascript:alert(1)' } });
+        await new Promise(r => setTimeout(r, 90));
+
+        // Expand row and verify Image 1 renders <img> while Image 2 still shows Running and unsafe URL is ignored
+        document.querySelector('.rp-dock-agent-head')?.click();
+        const renderedImgs = [...document.querySelectorAll('.rp-dock-detail img.rp-step-image')];
+        expect(renderedImgs.map(el => el.getAttribute('src'))).toEqual(['/user/images/harbor-1.png']);
+        expect(document.querySelector('.rp-dock-detail')?.textContent).toContain('1girl, harbor lantern');
+        expect(document.querySelector('.rp-dock-detail')?.textContent).toContain('Image 2');
+
+        // Fail Image 2 and append Error 2
+        sdStore.setSectionStatus({ runId, roundId, sectionId: img1, status: 'failed' });
+        const err1 = sdStore.ensureSection({ runId, roundId, section: { id: 'err1', kind: 'error', title: 'Error 2' } });
+        sdStore.appendToSection({ runId, roundId, sectionId: err1, delta: 'connection reset' });
+        sdStore.setSectionStatus({ runId, roundId, sectionId: err1, status: 'failed' });
+        sdStore.setRoundStatus({ runId, roundId, status: 'failed' });
+        sdStore.finishRun({ runId, status: 'error' });
+        await new Promise(r => setTimeout(r, 90));
+
+        expect(document.querySelector('.rp-dock-detail img.rp-step-image')?.getAttribute('src')).toBe('/user/images/harbor-1.png');
+        expect(document.querySelector('.rp-dock-detail .rp-step-err')?.textContent).toContain('connection reset');
+
+        dock.destroy();
+        recorder.detach();
+    });
 });
 
 describe('run-panel locale-data and boundary contracts', () => {

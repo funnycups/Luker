@@ -192,6 +192,7 @@ export function createWindow({ title, onThemeToggle, theme, startCollapsed = fal
         layer,
         body,
         win,
+        pill,
         setContext(text) {
             ctx.textContent = text || '';
             ctx.hidden = !text;

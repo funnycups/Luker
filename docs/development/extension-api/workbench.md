@@ -91,7 +91,7 @@ Key fields on `targetDef`:
 | `scopes?(ctx)` | Async `{ global?, character?, preset?, chat? }` availability flags |
 | `scopeNotes` | Function `(scope, ctx) => string` or map `{ [scope]: string \| (() => string) }` shown under the scope picker |
 | `isEnabled?(ctx)` | Optional availability check |
-| `getNativeAi?(ctx)` | Returns `{ connection, preset }` when Workbench AI settings use **Follow extension** |
+| `getNativeAi?(ctx)` | Returns `{ connection, preset }` when Workbench AI settings use **Follow plugin setting** |
 | `promptInfo?(ctx)` | Async `{ from, custom, text }` shown under **Settings → Prompts** |
 | `load(scope, ctx)` | Loads the live artifact `{ live, target, title }` |
 | `tools(live, scope, ctx, { target })` | Returns OpenAI-style function tool definitions (or a Promise resolving to them) |

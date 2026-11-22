@@ -133,7 +133,6 @@ async function enableMgAndTune(page) {
         enabled: true,
         autoExtractionEnabled: false,
         recallMethod: 'llm',
-        recentRawTurns: 0,
         toolCallRetryMax: 0,
     }, { closeAfter: true });
 }

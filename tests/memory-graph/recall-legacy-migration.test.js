@@ -50,9 +50,6 @@ jest.unstable_mockModule('../../public/lib.js', async () => {
 jest.unstable_mockModule('../../public/scripts/request-compression.js', () => ({
     compressRequest: async (r) => r,
 }));
-jest.unstable_mockModule('../../public/scripts/extensions/preset-help.js', () => ({
-    renderPresetHelpButton: () => '',
-}));
 jest.unstable_mockModule('../../public/scripts/popup.js', () => ({
     Popup: class { constructor() {} show() { return Promise.resolve(); } },
     POPUP_TYPE: { DISPLAY: 0, INPUT: 1, CONFIRM: 2 },
@@ -185,13 +182,15 @@ describe('normalizeLegacyRecallSettings', () => {
         expect(s).not.toHaveProperty('enableRerank');
     });
 
-    test('strips legacy mainInjectionAssistantTurnsWindow (collapsed into recentRawTurns)', () => {
+    test('strips legacy mainInjectionAssistantTurnsWindow and recentRawTurns', () => {
         const s = {
             recallMethod: 'llm',
             mainInjectionAssistantTurnsWindow: 7,
+            recentRawTurns: 2,
         };
         normalizeLegacyRecallSettings(s);
         expect(s).not.toHaveProperty('mainInjectionAssistantTurnsWindow');
+        expect(s).not.toHaveProperty('recentRawTurns');
     });
 
     test('coerces rag field types', () => {
