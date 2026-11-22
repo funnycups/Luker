@@ -28,5 +28,9 @@ export {
     openRunDock,
     toggleRunDock,
     getRunRecorder,
+    getRunDockPrefs,
+    setRunDockPrefs,
+    resetRunDockPosition,
+    subscribeRunDockPrefs,
 } from './dock.js';
 export { registerRunPanelLocaleData } from './locale-data.js';

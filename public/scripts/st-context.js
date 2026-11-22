@@ -251,6 +251,10 @@ const RUN_PANEL_API = Object.freeze({
     openRunDock: RUN_PANEL_API_NS.openRunDock,
     toggleRunDock: RUN_PANEL_API_NS.toggleRunDock,
     getRunRecorder: RUN_PANEL_API_NS.getRunRecorder,
+    getRunDockPrefs: RUN_PANEL_API_NS.getRunDockPrefs,
+    setRunDockPrefs: RUN_PANEL_API_NS.setRunDockPrefs,
+    resetRunDockPosition: RUN_PANEL_API_NS.resetRunDockPosition,
+    subscribeRunDockPrefs: RUN_PANEL_API_NS.subscribeRunDockPrefs,
 });
 
 const WORKBENCH_API = Object.freeze({

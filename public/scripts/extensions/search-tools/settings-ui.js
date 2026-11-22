@@ -175,6 +175,16 @@ export function createSearchToolsSettingsUi(deps) {
         <div class="flex-container" style="margin-top: 8px;">
             <div id="search_tools_manage_entries" class="menu_button menu_button_small">${escapeHtml(i18n('Manage stored search entries'))}</div>
         </div>
+        <hr />
+        <label class="checkbox_label">
+            <input id="search_tools_dock_auto_open" type="checkbox" />
+            ${escapeHtml(i18n('Open automatically on run'))}
+        </label>
+        <label for="search_tools_dock_default_size">${escapeHtml(i18n('Run panel default size'))}</label>
+        <select id="search_tools_dock_default_size" class="text_pole">
+            <option value="small">${escapeHtml(i18n('Small window'))}</option>
+            <option value="large">${escapeHtml(i18n('Large window'))}</option>
+        </select>
         <div class="flex-container" style="margin-top: 8px;">
             <div id="search_tools_show_run_panel" class="menu_button menu_button_small">${escapeHtml(i18n('Show search run panel'))}</div>
         </div>
@@ -506,14 +516,41 @@ export function createSearchToolsSettingsUi(deps) {
         await popup.show();
     }
 
+    let unsubscribeDockPrefs = null;
+
+    function teardownDockPrefsSubscription() {
+        if (unsubscribeDockPrefs) {
+            unsubscribeDockPrefs();
+            unsubscribeDockPrefs = null;
+        }
+    }
+
+    function syncDockPrefControls(root, prefs) {
+        if (!root?.length) return;
+        const p = prefs || getContext()?.runPanel?.getRunDockPrefs?.() || { autoOpen: true, defaultSize: 'small' };
+        root.find('#search_tools_dock_auto_open').prop('checked', p.autoOpen !== false);
+        root.find('#search_tools_dock_default_size').val(p.defaultSize === 'large' ? 'large' : 'small');
+    }
+
     function bindSettingsUi() {
         const root = jQuery(`#${UI_BLOCK_ID}`);
         if (!root.length) {
+            teardownDockPrefsSubscription();
             return;
         }
 
         const context = getContext();
         const settings = getSettings();
+        syncDockPrefControls(root);
+        teardownDockPrefsSubscription();
+        unsubscribeDockPrefs = context?.runPanel?.subscribeRunDockPrefs?.((next) => {
+            const liveRoot = jQuery(`#${UI_BLOCK_ID}`);
+            if (!liveRoot.length) {
+                teardownDockPrefsSubscription();
+                return;
+            }
+            syncDockPrefControls(liveRoot, next);
+        }) || null;
         root.find('#search_tools_agent_api_preset_name').html(getConnectionProfileOptions(settings.agentApiPresetName));
         const presetSelect = root.find('#search_tools_agent_preset_name');
         presetSelect.html(getOpenAIPresetOptions(context, settings.agentPresetName));
@@ -672,6 +709,13 @@ export function createSearchToolsSettingsUi(deps) {
         root.on('click.searchTools', '#search_tools_manage_entries', function () {
             void openManageEntriesDialog();
         });
+        root.on('input.searchTools', '#search_tools_dock_auto_open', function () {
+            getContext()?.runPanel?.setRunDockPrefs?.({ autoOpen: Boolean(jQuery(this).prop('checked')) });
+        });
+        root.on('change.searchTools', '#search_tools_dock_default_size', function () {
+            const val = String(jQuery(this).val()) === 'large' ? 'large' : 'small';
+            getContext()?.runPanel?.setRunDockPrefs?.({ defaultSize: val });
+        });
         root.on('click.searchTools', '#search_tools_show_run_panel', function () {
             showRunPanel();
         });
@@ -692,8 +736,17 @@ export function createSearchToolsSettingsUi(deps) {
         void refreshUiStatusForCurrentChat();
     }
 
+    function destroy() {
+        teardownDockPrefsSubscription();
+        const root = jQuery(`#${UI_BLOCK_ID}`);
+        if (root.length) {
+            root.off('.searchTools');
+        }
+    }
+
     return {
         bindSettingsUi,
+        destroy,
         ensureUi,
         refreshUiStatusForCurrentChat,
         updateUiStatus,

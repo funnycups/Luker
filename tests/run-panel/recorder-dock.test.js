@@ -17,6 +17,10 @@ import {
     openRunDock,
     toggleRunDock,
     getRunRecorder,
+    getRunDockPrefs,
+    setRunDockPrefs,
+    resetRunDockPosition,
+    subscribeRunDockPrefs,
 } from '../../public/scripts/run-panel/index.js';
 import { registerRunPanelLocaleData } from '../../public/scripts/run-panel/locale-data.js';
 import { accountLocalStorage } from '../../public/scripts/lens-shared/current-account.js';
@@ -521,6 +525,191 @@ describe('run-panel recorder & dock', () => {
 
         dock.destroy();
         recorder.detach();
+    });
+
+    test('mobile compact viewport uses floating window (small & large), honors defaultSize prefs, and keeps mobilePos separate from desktop pos', () => {
+        const origMatchMedia = globalThis.matchMedia;
+        const origW = globalThis.innerWidth;
+        const origH = globalThis.innerHeight;
+        let isCompactViewport = true;
+        globalThis.matchMedia = (q) => ({
+            matches: q === '(max-width: 640px)' ? isCompactViewport : false,
+            addEventListener: () => {},
+            removeEventListener: () => {},
+        });
+        globalThis.innerWidth = 390;
+        globalThis.innerHeight = 844;
+
+        try {
+            globalThis.localStorage.setItem('orchestraLens.dock.v1::alice', JSON.stringify({
+                autoOpen: true,
+                pos: { right: 64, bottom: 110 },
+                mobilePos: { right: 18, bottom: 92 },
+            }));
+
+            const orchStore = createRunStore();
+            const searchStore = createRunStore();
+            const recorder = createRecorder({ storage: accountLocalStorage() });
+            recorder.attach(orchStore, 'orchestrator');
+            recorder.attach(searchStore, 'search');
+
+            const seenPrefs = [];
+            const unsub = subscribeRunDockPrefs((p) => seenPrefs.push(p));
+
+            const dock = createDock({ recorder });
+            const searchRun = searchStore.startRun({ mode: 'search' });
+
+            const dockEl = document.querySelector('.rp-dock');
+            const scrimEl = document.querySelector('.rp-dock-scrim');
+            expect(dock.isOpen()).toBe(true);
+            expect(dockEl.classList.contains('is-compact')).toBe(true);
+            expect(dockEl.dataset.size).toBe('small');
+            expect(scrimEl.hidden).toBe(true);
+            expect(dockEl.style.right).toBe('18px');
+            expect(dockEl.style.bottom).toBe('92px');
+
+            // Menu default-size radio goes through setRunDockPrefs and syncs sibling live docks' _applyExternalPrefs
+            const siblingDock = createDock({ recorder });
+            siblingDock.open();
+            expect(siblingDock.getSize()).toBe('small');
+            dockEl.querySelector('.rp-dock-more').click();
+            const menuLargeBtn = [...dockEl.querySelectorAll('.rp-menu-item')].find(el => el.textContent.includes('Open in large window by default'));
+            menuLargeBtn.click();
+            expect(siblingDock.getSize()).toBe('large');
+            siblingDock.destroy();
+            setRunDockPrefs({ defaultSize: 'small' });
+
+            // Switch defaultSize to large via shared prefs API -> live dock updates and shows centered floating modal
+            setRunDockPrefs({ defaultSize: 'large' });
+            expect(getRunDockPrefs().defaultSize).toBe('large');
+            expect(seenPrefs[seenPrefs.length - 1]?.defaultSize).toBe('large');
+            expect(dockEl.dataset.size).toBe('large');
+            expect(scrimEl.hidden).toBe(false);
+            expect(dockEl.style.right).toBe('');
+            expect(dockEl.style.left).toBe('12px');
+
+            // User temporarily shrinks to small during search run, then collapses to pill
+            dock.setSize('small');
+            expect(dockEl.dataset.size).toBe('small');
+            searchStore.finishRun({ runId: searchRun, status: 'committed', finalText: 'found' });
+            dock.close();
+
+            // Starting a new orchestrator run re-opens in configured defaultSize ('large')
+            const orchRun = orchStore.startRun({ mode: 'spec' });
+            expect(dock.isOpen()).toBe(true);
+            expect(dockEl.dataset.size).toBe('large');
+            orchStore.finishRun({ runId: orchRun, status: 'committed', finalText: 'planned' });
+
+            // Desktop pos remained untouched while on mobile; resetRunDockPosition clears both
+            const beforeReset = JSON.parse(globalThis.localStorage.getItem('orchestraLens.dock.v1::alice'));
+            expect(beforeReset.pos).toEqual({ right: 64, bottom: 110 });
+            expect(beforeReset.mobilePos).toEqual({ right: 18, bottom: 92 });
+
+            resetRunDockPosition();
+            const afterReset = JSON.parse(globalThis.localStorage.getItem('orchestraLens.dock.v1::alice'));
+            expect(afterReset.pos).toBeUndefined();
+            expect(afterReset.mobilePos).toBeUndefined();
+
+            // Reset defaultSize back to small and test touch double-tap on header + pill drag without accidental open
+            setRunDockPrefs({ defaultSize: 'small' });
+            dock.open();
+            expect(dockEl.dataset.size).toBe('small');
+
+            const headEl = dockEl.querySelector('.rp-dock-head');
+            const firePtr = (el, type, props = {}) => {
+                const ev = new Event(type, { bubbles: true, cancelable: true });
+                Object.assign(ev, { pointerId: 1, pointerType: 'touch', button: 0, clientX: 180, clientY: 560, ...props });
+                el.dispatchEvent(ev);
+            };
+
+            // Micro-jitter (<6px) does not drag; second tap within 320ms toggles size small -> large
+            const initialRight = dockEl.style.right;
+            firePtr(headEl, 'pointerdown', { clientX: 180, clientY: 560 });
+            firePtr(headEl, 'pointermove', { clientX: 182, clientY: 561 });
+            firePtr(headEl, 'pointerup', { clientX: 182, clientY: 561 });
+            expect(dockEl.style.right).toBe(initialRight);
+            expect(dockEl.dataset.size).toBe('small');
+
+            firePtr(headEl, 'pointerdown', { clientX: 181, clientY: 560 });
+            firePtr(headEl, 'pointerup', { clientX: 181, clientY: 560 });
+            expect(dockEl.dataset.size).toBe('large');
+
+            // Double-tap again toggles large -> small
+            firePtr(headEl, 'pointerdown', { clientX: 180, clientY: 100 });
+            firePtr(headEl, 'pointerup', { clientX: 180, clientY: 100 });
+            firePtr(headEl, 'pointerdown', { clientX: 181, clientY: 100 });
+            firePtr(headEl, 'pointerup', { clientX: 181, clientY: 100 });
+            expect(dockEl.dataset.size).toBe('small');
+
+            // Collapse to pill and test pill drag (>=6px) saves mobilePillPos and suppresses accidental click-to-open
+            const collapseBtn = [...headEl.querySelectorAll('button')].find(b => b.title === 'Collapse');
+            collapseBtn.click();
+            const pillEl = document.querySelector('.rp-dock-pill');
+            expect(pillEl.hidden).toBe(false);
+
+            firePtr(pillEl, 'pointerdown', { clientX: 300, clientY: 740 });
+            firePtr(pillEl, 'pointermove', { clientX: 240, clientY: 660 });
+            firePtr(pillEl, 'pointerup', { clientX: 240, clientY: 660 });
+            pillEl.querySelector('.rp-dock-pill-main').click(); // synthetic post-drag click must be ignored
+            expect(dock.isOpen()).toBe(false);
+            const savedAfterPillDrag = JSON.parse(globalThis.localStorage.getItem('orchestraLens.dock.v1::alice'));
+            expect(savedAfterPillDrag.mobilePillPos).toBeDefined();
+
+            // Clean tap on pill opens dock normally
+            pillEl.querySelector('.rp-dock-pill-main').click();
+            expect(dock.isOpen()).toBe(true);
+
+            resetRunDockPosition();
+            expect(JSON.parse(globalThis.localStorage.getItem('orchestraLens.dock.v1::alice')).mobilePillPos).toBeUndefined();
+
+            // Regression: releasing outside head (e.g. from large mode) must clear drag state independently of buttons guard
+            dock.setSize('large');
+            firePtr(headEl, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 180, clientY: 120 });
+            firePtr(document.body, 'pointerup', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 180, clientY: 300 });
+            dock.setSize('small');
+            const rightBeforeHeadHover = dockEl.style.right;
+            const bottomBeforeHeadHover = dockEl.style.bottom;
+            firePtr(headEl, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 100, clientY: 400 });
+            expect(dockEl.style.right).toBe(rightBeforeHeadHover);
+            expect(dockEl.style.bottom).toBe(bottomBeforeHeadHover);
+
+            // Missing pointerup + mouse buttons=0 move aborts head drag without moving dock
+            firePtr(headEl, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 180, clientY: 560 });
+            firePtr(headEl, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 100, clientY: 400 });
+            expect(dockEl.style.right).toBe(rightBeforeHeadHover);
+            expect(dockEl.style.bottom).toBe(bottomBeforeHeadHover);
+
+            // Regression: releasing outside pill after <6px move cleans up listeners,
+            // default mobile pill position (bottom: 150px) clears Workbench's compact entry pill (96..138px),
+            // and clicking .rp-dock-pill-x right after dragging the pill closes it on the first click.
+            const liveCollapseBtn = [...headEl.querySelectorAll('button')].find(b => b.title === 'Collapse');
+            liveCollapseBtn.click();
+            expect(pillEl.hidden).toBe(false);
+            expect(pillEl.style.top).toBe(`${844 - 150}px`);
+            const pillLeftBeforeHover = pillEl.style.left;
+            const pillTopBeforeHover = pillEl.style.top;
+            firePtr(pillEl, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 300, clientY: 660 });
+            firePtr(document.body, 'pointerup', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 302, clientY: 661 });
+            firePtr(pillEl, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 200, clientY: 500 });
+            expect(pillEl.style.left).toBe(pillLeftBeforeHover);
+            expect(pillEl.style.top).toBe(pillTopBeforeHover);
+
+            // Drag pill (>=6px) without clicking pillMain, then click .rp-dock-pill-x -> closes on first click
+            firePtr(pillEl, 'pointerdown', { pointerType: 'touch', pointerId: 2, clientX: 300, clientY: 660 });
+            firePtr(pillEl, 'pointermove', { pointerType: 'touch', pointerId: 2, clientX: 240, clientY: 580 });
+            firePtr(pillEl, 'pointerup', { pointerType: 'touch', pointerId: 2, clientX: 240, clientY: 580 });
+            pillEl.querySelector('.rp-dock-pill-x').click();
+            expect(pillEl.hidden).toBe(true);
+            expect(dock.isOpen()).toBe(false);
+
+            unsub();
+            dock.destroy();
+            recorder.detach();
+        } finally {
+            globalThis.matchMedia = origMatchMedia;
+            globalThis.innerWidth = origW;
+            globalThis.innerHeight = origH;
+        }
     });
 });
 

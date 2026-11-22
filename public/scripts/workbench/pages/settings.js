@@ -10,6 +10,7 @@ import { button, link, dot, checkRow, select, sectionTitle, loading } from '../u
 import { listRules } from '../model/suggest.js';
 import { resolveAiRow } from '../model/ai-source.js';
 import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../lens-shared/preset-examples.js';
+import { getRunDockPrefs, setRunDockPrefs, resetRunDockPosition, subscribeRunDockPrefs } from '../../run-panel/index.js';
 
 export function knownRoles() {
     return [
@@ -60,6 +61,9 @@ export function createSettingsPage(app) {
     let prompts = null;
     let promptsVersion = 0;
     let targetsOpen = false;
+    const unsubDockPrefs = subscribeRunDockPrefs(() => {
+        if (el.isConnected) paint();
+    });
 
     function activeRows() {
         const targets = app.iterateTargets?.() || [];
@@ -297,8 +301,11 @@ export function createSettingsPage(app) {
                 sectionTitle(i18n('Window')),
                 h('div', { class: 'wb-list' },
                     setRow(i18n('Corner entry'), i18n('Stays in the corner, shows prompt usage and to-do count. Click to open, drag to move'), checkRow({ checked: s.pill !== false, label: i18n('Show'), onChange: (v) => edit(n => { n.pill = v; }) })),
+                    setRow(i18n('Workbench default size'), null, select([{ value: 'small', label: i18n('Small window') }, { value: 'large', label: i18n('Large window') }], s.defaultSize === 'large' ? 'large' : 'small', (v) => { const next = v === 'large' ? 'large' : 'small'; edit(n => { n.defaultSize = next; }); app.setWindowSize?.(next); paint(); }, { ariaLabel: i18n('Workbench default size') })),
+                    setRow(i18n('Run panel'), null, checkRow({ checked: getRunDockPrefs().autoOpen !== false, label: i18n('Open automatically on run'), onChange: (v) => { setRunDockPrefs({ autoOpen: Boolean(v) }); paint(); } })),
+                    setRow(i18n('Run panel default size'), null, select([{ value: 'small', label: i18n('Small window') }, { value: 'large', label: i18n('Large window') }], getRunDockPrefs().defaultSize === 'large' ? 'large' : 'small', (v) => { setRunDockPrefs({ defaultSize: v === 'large' ? 'large' : 'small' }); paint(); }, { ariaLabel: i18n('Run panel default size') })),
                     setRow(i18n('Shortcut'), i18n('Can also be opened from the wand menu'), select([{ value: 'alt+w', label: 'Alt + W' }, { value: '', label: i18n('No shortcut') }], s.hotkey ?? 'alt+w', (v) => edit(n => { n.hotkey = v; }), { ariaLabel: i18n('Shortcut') })),
-                    setRow(i18n('Window and entry position'), i18n('Drag the title bar to move, the bottom-right corner to resize, double-click the title bar to maximize'), button(i18n('Reset position'), () => { try { const p = JSON.parse(localStorage.getItem('workbench.prefs.v1') || '{}'); delete p.box; delete p.pill; delete p.maximised; localStorage.setItem('workbench.prefs.v1', JSON.stringify(p)); } catch { /* ignore */ } app.toast(i18n('Takes effect after reloading the page')); }, { className: 'is-sm' })))),
+                    setRow(i18n('Window and entry position'), i18n('Drag the title bar to move, the bottom-right corner to resize, double-click the title bar to maximize'), button(i18n('Reset position'), () => { app.resetWindowPosition?.(); resetRunDockPosition(); app.toast(i18n('Window position restored')); }, { className: 'is-sm' })))),
             rulesSection());
     }
 
@@ -375,6 +382,9 @@ export function createSettingsPage(app) {
                 loadPrompts();
                 paint();
             }
+        },
+        destroy() {
+            unsubDockPrefs?.();
         },
     };
 }

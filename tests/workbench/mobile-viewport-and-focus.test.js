@@ -83,7 +83,103 @@ describe('workbench mobile viewport & preventScroll focus', () => {
         win.focus();
         expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
 
+        // Verify mobile bottom-edge height resize (.wb-resize-y) and touch double-tap on .wb-titlebar
+        const bar = win.win.querySelector('.wb-titlebar');
+        const bottomGrip = win.win.querySelector('.wb-resize-y');
+        expect(bottomGrip).not.toBeNull();
+        const startHeight = parseInt(win.win.style.height, 10);
+
+        const firePtr = (el, type, props = {}) => {
+            const ev = new Event(type, { bubbles: true, cancelable: true });
+            Object.assign(ev, { pointerId: 1, pointerType: 'touch', button: 0, clientX: 180, clientY: 400, ...props });
+            el.dispatchEvent(ev);
+        };
+
+        firePtr(bottomGrip, 'pointerdown', { clientY: 500 });
+        firePtr(bottomGrip, 'pointermove', { clientY: 560 });
+        firePtr(bottomGrip, 'pointerup', { clientY: 560 });
+        expect(parseInt(win.win.style.height, 10)).toBe(startHeight + 60);
+
+        // Touch double-tap on titlebar toggles maximised on mobile
+        expect(win.win.classList.contains('is-max')).toBe(false);
+        firePtr(bar, 'pointerdown', { clientX: 150, clientY: 160 });
+        firePtr(bar, 'pointerup', { clientX: 151, clientY: 160 });
+        firePtr(bar, 'pointerdown', { clientX: 151, clientY: 160 });
+        firePtr(bar, 'pointerup', { clientX: 151, clientY: 160 });
+        expect(win.win.classList.contains('is-max')).toBe(true);
+
+        // Regression 1: pointerdown on maximised titlebar followed by pointerup outside titlebar
+        // cleans up global drag listeners (even if a later move has buttons=1).
+        firePtr(bar, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 150, clientY: 20 });
+        firePtr(document.body, 'pointerup', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 150, clientY: 200 });
+        win.setMaximised(false);
+        const leftBeforeHover = win.win.style.left;
+        const topBeforeHover = win.win.style.top;
+        firePtr(bar, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 210, clientY: 240 });
+        expect(win.win.style.left).toBe(leftBeforeHover);
+        expect(win.win.style.top).toBe(topBeforeHover);
+
+        // Regression 2: if pointerup was missed completely (e.g. released outside browser), a mouse
+        // pointermove with buttons=0 aborts the stale gesture without dragging.
+        firePtr(bar, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 150, clientY: 160 });
+        firePtr(bar, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 210, clientY: 240 });
+        expect(win.win.style.left).toBe(leftBeforeHover);
+        expect(win.win.style.top).toBe(topBeforeHover);
+
         win.destroy();
+    });
+
+    test('createWindow honors persisted prefs.maximised over defaultSize and preserves manual maximise across collapse/expand', () => {
+        Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+        Object.defineProperty(window, 'innerHeight', { value: 844, configurable: true });
+
+        // 1) No saved prefs.maximised -> falls back to defaultSize ('large')
+        let configured = 'large';
+        const winDefaultLarge = createWindow({
+            title: 'Workbench',
+            theme: () => 'dark',
+            defaultSize: () => configured,
+            onThemeToggle: () => {},
+        });
+        document.body.appendChild(winDefaultLarge.layer);
+        expect(winDefaultLarge.win.classList.contains('is-max')).toBe(true);
+        winDefaultLarge.destroy();
+
+        // 2) Saved prefs.maximised: true MUST NOT be discarded when defaultSize returns 'small'
+        localStorage.setItem('workbench.prefs.v1', JSON.stringify({ maximised: true }));
+        configured = 'small';
+        const winSavedMax = createWindow({
+            title: 'Workbench',
+            theme: () => 'dark',
+            defaultSize: () => configured,
+            onThemeToggle: () => {},
+        });
+        document.body.appendChild(winSavedMax.layer);
+        expect(winSavedMax.win.classList.contains('is-max')).toBe(true);
+
+        // 3) Folding (collapse) and reopening (expand) preserves manual maximised state
+        winSavedMax.collapse();
+        expect(winSavedMax.isCollapsed()).toBe(true);
+        winSavedMax.expand();
+        expect(winSavedMax.win.classList.contains('is-max')).toBe(true);
+
+        // 4) Manual restore persists maximised: false; manual maximise then collapse -> expand keeps true
+        winSavedMax.win.querySelector('.wb-ctl-max').click();
+        expect(winSavedMax.win.classList.contains('is-max')).toBe(false);
+        expect(JSON.parse(localStorage.getItem('workbench.prefs.v1')).maximised).toBe(false);
+
+        winSavedMax.win.querySelector('.wb-ctl-max').click();
+        expect(winSavedMax.win.classList.contains('is-max')).toBe(true);
+        winSavedMax.collapse();
+        winSavedMax.expand();
+        expect(winSavedMax.win.classList.contains('is-max')).toBe(true);
+
+        // 5) resetPosition clears persisted maximised and returns to configuredDefault ('small')
+        winSavedMax.resetPosition();
+        expect(winSavedMax.win.classList.contains('is-max')).toBe(false);
+        expect(JSON.parse(localStorage.getItem('workbench.prefs.v1')).maximised).toBeUndefined();
+
+        winSavedMax.destroy();
     });
 
     test('Ask page show() focuses composer input with preventScroll: true', async () => {
@@ -173,36 +269,93 @@ describe('workbench mobile viewport & preventScroll focus', () => {
         expect(returnFocusSpy).toHaveBeenCalledWith({ preventScroll: true });
     });
 
-    test('Run Dock compact fitToViewport zeroes width and height before measuring getBoundingClientRect origin', async () => {
+    test('Run Dock .rp-dock and .rp-dock-scrim are tested distinctly on narrow mobile viewports (<= 640px) with visualViewport offsets', async () => {
         const origMatchMedia = globalThis.matchMedia;
+        const origVV = globalThis.visualViewport;
         globalThis.matchMedia = (q) => ({
-            matches: q === '(max-width: 860px)',
+            matches: q === '(max-width: 640px)',
             addEventListener: () => {},
             removeEventListener: () => {},
         });
         Object.defineProperty(window, 'innerWidth', { value: 375, configurable: true });
         Object.defineProperty(window, 'innerHeight', { value: 812, configurable: true });
 
+        const vvListeners = new Map();
+        const mockVV = {
+            width: 375,
+            height: 812,
+            offsetLeft: 0,
+            offsetTop: 0,
+            addEventListener: (ev, fn) => {
+                if (!vvListeners.has(ev)) vvListeners.set(ev, new Set());
+                vvListeners.get(ev).add(fn);
+            },
+            removeEventListener: (ev, fn) => vvListeners.get(ev)?.delete(fn),
+        };
+        Object.defineProperty(globalThis, 'visualViewport', { value: mockVV, configurable: true });
+
         const recorder = createRecorder({ storage: createMemoryStorage(), owner: () => 'u1' });
-        const dock = createDock({ recorder, host: document.body });
+        const dock = createDock({ recorder, container: document.body });
         try {
-            const root = document.body.querySelector('.rpdock');
-            root.style.width = '375px';
-            root.style.height = '900px';
-            const observed = [];
-            const origGetBCR = root.getBoundingClientRect.bind(root);
-            root.getBoundingClientRect = () => {
-                observed.push({ width: root.style.width, height: root.style.height });
+            const dockEl = document.body.querySelector('.rp-dock');
+            const scrimEl = document.body.querySelector('.rp-dock-scrim');
+            expect(dockEl).not.toBeNull();
+            expect(scrimEl).not.toBeNull();
+            expect(dockEl).not.toBe(scrimEl);
+            expect(dockEl.querySelector('.rp-dock-foot')).toBeNull();
+            expect(dockEl.querySelector('.rp-dock-grip')).toBeNull();
+
+            // 1) Test .rp-dock itself on compact mobile small mode + keyboard visualViewport shrink
+            // Default mobile bottom (150px) sits cleanly above Workbench's default mobile pill (bottom: 96px, height: 42px => 138px).
+            dock.open();
+            expect(dockEl.classList.contains('is-compact')).toBe(true);
+            expect(dockEl.dataset.size).toBe('small');
+            expect(dockEl.style.bottom).toBe('150px');
+
+            mockVV.height = 512; // 300px mobile keyboard opens
+            for (const fn of vvListeners.get('resize') || []) fn();
+            expect(dockEl.style.bottom).toBe('450px');
+            expect(parseInt(dockEl.style.bottom, 10) - 300 + parseInt(dockEl.style.maxHeight, 10)).toBeLessThanOrEqual(512);
+
+            // Dragging upward to the extreme top edge must stay within the 12px top margin (no negative top overflow)
+            mockVV.height = 420;
+            for (const fn of vvListeners.get('resize') || []) fn();
+            const headEl = dockEl.querySelector('.rp-dock-head');
+            const fireHead = (type, clientY) => {
+                const ev = new Event(type, { bubbles: true, cancelable: true });
+                Object.assign(ev, { pointerId: 2, pointerType: 'touch', button: 0, clientX: 180, clientY });
+                headEl.dispatchEvent(ev);
+            };
+            fireHead('pointerdown', 350);
+            fireHead('pointermove', -350); // +700px upward drag hits clampMobilePos ceiling
+            fireHead('pointerup', -350);
+            const vvBottomAfter = 812 - 420;
+            const visibleBottom = parseInt(dockEl.style.bottom, 10) - vvBottomAfter;
+            const maxH = parseInt(dockEl.style.maxHeight, 10);
+            expect(visibleBottom).toBe(420 - 152);
+            expect(visibleBottom + maxH).toBeLessThanOrEqual(420 - 12);
+
+            // 2) Test .rp-dock-scrim fitToViewport origin measurement in large mode
+            mockVV.height = 812;
+            scrimEl.style.width = '375px';
+            scrimEl.style.height = '900px';
+            const observedScrim = [];
+            const origGetBCR = scrimEl.getBoundingClientRect.bind(scrimEl);
+            scrimEl.getBoundingClientRect = () => {
+                observedScrim.push({ width: scrimEl.style.width, height: scrimEl.style.height });
                 return { ...origGetBCR(), left: 0, top: 0, width: 0, height: 0 };
             };
-            dock.open();
+            dock.setSize('large');
             await new Promise(resolve => requestAnimationFrame(resolve));
-            expect(observed.length).toBeGreaterThanOrEqual(1);
-            expect(observed[0]).toEqual({ width: '0px', height: '0px' });
+            expect(scrimEl.hidden).toBe(false);
+            expect(observedScrim.length).toBeGreaterThanOrEqual(1);
+            expect(observedScrim[0]).toEqual({ width: '0px', height: '0px' });
+            expect(dockEl.style.left).toBe('12px');
         } finally {
             dock.destroy();
             recorder.detach();
             globalThis.matchMedia = origMatchMedia;
+            Object.defineProperty(globalThis, 'visualViewport', { value: origVV, configurable: true });
         }
     });
 });

@@ -13,6 +13,10 @@ test('index.js exposes the public surface', () => {
     expect(typeof runPanel.openRunDock).toBe('function');
     expect(typeof runPanel.toggleRunDock).toBe('function');
     expect(typeof runPanel.getRunRecorder).toBe('function');
+    expect(typeof runPanel.getRunDockPrefs).toBe('function');
+    expect(typeof runPanel.setRunDockPrefs).toBe('function');
+    expect(typeof runPanel.resetRunDockPosition).toBe('function');
+    expect(typeof runPanel.subscribeRunDockPrefs).toBe('function');
 });
 
 test('st-context.js imports and exposes the run-panel namespace', () => {
@@ -26,4 +30,8 @@ test('st-context.js imports and exposes the run-panel namespace', () => {
     expect(src).toContain('openRunDock: RUN_PANEL_API_NS.openRunDock,');
     expect(src).toContain('toggleRunDock: RUN_PANEL_API_NS.toggleRunDock,');
     expect(src).toContain('getRunRecorder: RUN_PANEL_API_NS.getRunRecorder,');
+    expect(src).toContain('getRunDockPrefs: RUN_PANEL_API_NS.getRunDockPrefs,');
+    expect(src).toContain('setRunDockPrefs: RUN_PANEL_API_NS.setRunDockPrefs,');
+    expect(src).toContain('resetRunDockPosition: RUN_PANEL_API_NS.resetRunDockPosition,');
+    expect(src).toContain('subscribeRunDockPrefs: RUN_PANEL_API_NS.subscribeRunDockPrefs,');
 });

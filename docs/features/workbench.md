@@ -9,7 +9,7 @@ Workbench is Luker's unified workspace for inspecting prompts, diagnosing issues
 - Press `Alt+W` to open or collapse the window.
 - Click **Open in Workbench** inside **Extensions → Memory**, **Extensions → Orchestrator**, or **Extensions → Image Generation**, or select **Image iteration studio** in the wand menu.
 
-Drag the title bar to move the floating window, drag the bottom-right corner to resize, or double-click the title bar to maximize.
+Workbench opens as a rounded floating window on both desktop and narrow mobile screens (`<= 640px`). Drag the title bar to move the floating window, drag the bottom-right corner (or the bottom edge on mobile) to resize, or double-click / double-tap the title bar (or click Maximize) to switch between small and large views.
 
 ## Tabs
 
@@ -96,7 +96,7 @@ Configure one shared **AI connection** and **Generation preset** for Q&A and eve
 - **Example actions** — **Import example** installs the bundled `plugin-only` example, **Re-import example** overwrites an installed copy after confirmation, and **Derive from an existing preset** opens the preset workspace with the matching editing mode.
 - **Confirmation** — toggle whether AI iteration shows changes in a review list before applying.
 - **Read** — choose which local sources Q&A may access, how many surrounding chat floors to include, whether to redact secrets, and whether to preview before sending.
-- **Window** — toggle the corner entry pill, toggle the `Alt+W` shortcut, and reset window position.
+- **Window** — toggle the corner entry pill, choose **Workbench default size** (`Small window` / `Large window`), configure the shared **Run panel** auto-open toggle and **Run panel default size**, set the `Alt+W` shortcut, or reset both windows' desktop and mobile positions immediately.
 - **Suggestions** — enable or disable individual local check rules.
 - **Prompts** — inspect the system prompts used by Q&A and each AI iteration target, and toggle the workbench instruction prefix.
 

@@ -152,6 +152,63 @@ describe('search-tools provider capabilities, extension API, and orchestrator im
 
         await api.searchImages({ query: 'camelCase maxResults', maxResults: 9 });
         expect(fetchCalls[2].body.max_results).toBe(9);
+
+        // Regression: bfcache pagehide (persisted: true) must NOT tear down settings UI listeners,
+        // while non-persisted pagehide (persisted: false) tears down cleanly.
+        const pagehideListeners = [];
+        const unsubDockPrefs = jest.fn();
+        const offSpy = jest.fn();
+        const fakeSettingsRoot = {
+            length: 1,
+            find: () => ({ length: 0, html: () => {}, text: () => {}, prop: () => {}, val: () => '0', toggle: () => {} }),
+            off: offSpy,
+            on: () => {},
+        };
+        const fakeHost = { length: 1, append: () => {} };
+        mockContext.runPanel.getRunDockPrefs = () => ({ autoOpen: true, defaultSize: 'small' });
+        mockContext.runPanel.subscribeRunDockPrefs = jest.fn(() => unsubDockPrefs);
+        const prevWindow = globalThis.window;
+        const prevJQuery = globalThis.jQuery;
+        globalThis.window = {
+            addEventListener: (type, fn, opts) => {
+                if (type === 'pagehide') pagehideListeners.push({ fn, once: Boolean(opts?.once) });
+            },
+        };
+        const dispatchPagehide = (event) => {
+            for (const entry of [...pagehideListeners]) {
+                if (entry.once) {
+                    const idx = pagehideListeners.indexOf(entry);
+                    if (idx !== -1) pagehideListeners.splice(idx, 1);
+                }
+                entry.fn(event);
+            }
+        };
+        globalThis.jQuery = (sel) => {
+            if (sel === '#extensions_settings2') return fakeHost;
+            if (sel === '#search_tools_settings') return fakeSettingsRoot;
+            return { length: 0, empty: () => {}, append: () => {}, find: () => ({ length: 0, on: () => {} }), on: () => {} };
+        };
+        globalThis.$ = globalThis.jQuery;
+        try {
+            readyCallback();
+            expect(pagehideListeners).toHaveLength(1);
+            expect(pagehideListeners[0].once).toBe(false);
+            expect(mockContext.runPanel.subscribeRunDockPrefs).toHaveBeenCalledTimes(1);
+            offSpy.mockClear();
+
+            dispatchPagehide({ persisted: true });
+            expect(unsubDockPrefs).not.toHaveBeenCalled();
+            expect(offSpy).not.toHaveBeenCalled();
+
+            dispatchPagehide({ persisted: false });
+            expect(unsubDockPrefs).toHaveBeenCalledTimes(1);
+            expect(offSpy).toHaveBeenCalledWith('.searchTools');
+        } finally {
+            if (prevWindow === undefined) delete globalThis.window;
+            else globalThis.window = prevWindow;
+            globalThis.jQuery = prevJQuery;
+            globalThis.$ = prevJQuery;
+        }
     });
 
     test('orchestrator-tools registers luker_web_image_search and luker_web_page_images as read tools', async () => {

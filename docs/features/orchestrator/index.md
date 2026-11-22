@@ -39,7 +39,7 @@ Send a message in the chat and leave the other settings at their defaults. Befor
 
 ### Step 4 — Review the run {#step-4}
 
-As soon as a run starts, the floating **Run panel** dock opens automatically on desktop (or rises from the bottom on narrow screens). It updates live as rounds progress; expand any agent row to inspect model thinking, tool calls, and results.
+As soon as a run starts, the floating **Run panel** dock opens automatically in your chosen default window size (`Small window` or `Large window`). It updates live as rounds progress; expand any agent row to inspect model thinking, tool calls, and results.
 
 ![The Run Panel as a director run begins](/images/run-panel/01-panel-initial.png)
 
@@ -51,9 +51,9 @@ Expand any tool call to see its inputs and outputs:
 
 ![A tool call expanded — arguments and results](/images/run-panel/03-panel-tool-expanded.png)
 
-On narrow screens, the dock becomes a bottom sheet you can drag up or dismiss:
+On narrow mobile screens (`<= 640px`), the dock stays a compact rounded floating window above the input bar—drag the header to reposition it, double-tap the header or tap Enlarge/Shrink to switch between small and large views, or collapse it into a draggable corner pill:
 
-![Run Panel on a phone-sized viewport](/images/run-panel/05-panel-drawer.png)
+![Run Panel floating on a phone-sized viewport](/images/run-panel/05-panel-mobile.png)
 
 From the Run panel dock you can:
 
@@ -62,7 +62,7 @@ From the Run panel dock you can:
 - **Export trace** to download the full run as JSON
 - **Not happy with the result? AI diagnosis** to jump into **Workbench → AI iteration → Orchestration** with the run context pre-filled
 
-Toggle **Open automatically on run** in the Run panel menu, or reopen the dock anytime from the wand menu → **Run panel**.
+Configure **Open automatically on run** and **Run panel default size** (`Small window` / `Large window`) in the Run panel menu, Orchestrator settings, or Workbench settings, or reopen the dock anytime from the wand menu → **Run panel**.
 
 The orchestrator is now active. Choose an execution mode:
 

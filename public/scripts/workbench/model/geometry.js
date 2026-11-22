@@ -5,7 +5,9 @@
 
 export const MIN_W = 560;
 export const MIN_H = 380;
-export const COMPACT_BELOW = 640; // viewport width; below this the window is a bottom sheet
+export const MIN_COMPACT_W = 280;
+export const MIN_COMPACT_H = 260;
+export const COMPACT_MAX_WIDTH = 640; // viewport width; at or below this the window uses compact floating layout
 
 /** Default box: centred, up to 960×640, leaving room around it. */
 export function defaultBox(vw, vh) {
@@ -34,10 +36,30 @@ export function maxBox(vw, vh) {
     return { left: m, top: m, width: Math.max(0, vw - m * 2), height: Math.max(0, vh - m * 2) };
 }
 
-/** Phone bottom sheet. */
-export function sheetBox(vw, vh) {
-    const height = Math.round(vh * 0.88);
-    return { left: 0, top: vh - height, width: vw, height };
+/** Phone floating window default box: centred with breathing margin around all edges. */
+export function compactDefaultBox(vw, vh) {
+    const width = Math.max(Math.min(MIN_COMPACT_W, vw), vw - 24);
+    const height = Math.min(520, Math.max(Math.min(MIN_COMPACT_H, vh), Math.round(vh * 0.62))); // cap-ok: viewport hardware default compact floating window size
+    return {
+        left: Math.round((vw - width) / 2),
+        top: Math.round(Math.max(16, (vh - height) * 0.42)),
+        width,
+        height,
+    };
+}
+
+/**
+ * Keeps a compact mobile floating box fully inside the visible viewport so its
+ * bottom content and resize controls never slip off-screen.
+ */
+export function clampCompactBox(box, vw, vh) {
+    const minW = Math.min(MIN_COMPACT_W, vw);
+    const minH = Math.min(MIN_COMPACT_H, vh);
+    const width = Math.round(Math.min(Math.max(Number(box?.width) || 0, minW), vw));
+    const height = Math.round(Math.min(Math.max(Number(box?.height) || 0, minH), vh));
+    const left = Math.round(Math.min(Math.max(Number(box?.left) || 0, 0), Math.max(0, vw - width)));
+    const top = Math.round(Math.min(Math.max(Number(box?.top) || 0, 0), Math.max(0, vh - height)));
+    return { left, top, width, height };
 }
 
 /** Where the entry pill sits by default (bottom-right, above Luker's input bar on phones). */
@@ -53,7 +75,7 @@ export function clampPill(pos, vw, vh, size = { width: 200, height: 42 }) {
 }
 
 export function isCompactWidth(vw) {
-    return vw < COMPACT_BELOW;
+    return vw <= COMPACT_MAX_WIDTH;
 }
 
 /** Reads a saved box; returns null if missing or malformed. */
