@@ -246,6 +246,9 @@ describe('materializeTransientSource — sqlite', () => {
     });
 });
 
+const MYSQL_ROOT_URL = process.env.LUKER_TEST_MYSQL_ROOT_URL || 'mysql://root:root@127.0.0.1:53306';
+const PG_ROOT_URL = process.env.LUKER_TEST_POSTGRES_URL || 'postgresql://luker:postgres@127.0.0.1:55432/luker_test';
+
 // mysql / pg tests: skip without local test DB. Both follow the same shape:
 // seed a real engine with data, build a ZIP from its dumpUser, then
 // materialize and assert the scratch handle on the engine reads through it.
@@ -281,7 +284,7 @@ describeMysql('materializeTransientSource — mysql', () => {
                     dataRoot,
                     scratchHandle,
                     // Re-use the harness DB as the operator's scratch DB.
-                    scratchCreds: { mysqlUrl: srcHarness.engine._pool?.config?.connectionConfig?.uri || `mysql://root:root@127.0.0.1:53306/${srcHarness.dbName}` },
+                    scratchCreds: { mysqlUrl: `${MYSQL_ROOT_URL}/${srcHarness.dbName}` },
                 },
             );
             try {
@@ -354,7 +357,7 @@ describePg('materializeTransientSource — postgres', () => {
             const scratchHandle = makeScratchHandle();
             // We need the same connection URL the harness used; reuse the harness's engine config.
             const scratchUrl = srcHarness.engine._pool?.options?.connectionString
-                || `postgresql://luker:postgres@127.0.0.1:55432/luker_test?options=-csearch_path%3D${encodeURIComponent(srcHarness.schemaName)}`;
+                || `${PG_ROOT_URL}?options=-csearch_path%3D${encodeURIComponent(srcHarness.schemaName)}`;
             const transient = await materializeTransientSource(
                 { engineKind: 'postgres', handle: srcHarness.handle },
                 zipPath,
