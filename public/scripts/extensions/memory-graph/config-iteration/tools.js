@@ -151,7 +151,7 @@ function nodeTypeSchemaParams() {
             requiredColumns: { type: 'array', items: { type: 'string' }, description: 'Columns the extractor must always fill.' },
             primaryKeyColumns: { type: 'array', items: { type: 'string' }, description: 'Columns that form the natural identity for upsert.' },
             forceUpdate: { type: 'boolean', description: 'If true, this node type must be emitted every extraction round; a round that omits it is treated as a failure. The per-type cadence does not apply to it. Default false.' },
-            editable: { type: 'boolean', description: 'Whether end-users may edit entries in the graph viewer.' },
+            editable: { type: 'boolean', description: 'If true, exposes edit and delete tools to the extraction LLM so existing nodes of this type can be updated across turns (required for stateful types like characters, locations, and threads; false for append-only types like events).' },
             level: { type: 'string', enum: ['semantic'], description: 'Storage tier identifier. Currently only "semantic" is supported; omit to use the default.' },
             extractHint: { type: 'string', description: 'Overall hint for the extraction LLM about when to emit this node type.' },
             extractionInstructions: { type: 'string', description: 'Per-type detailed instructions added to the extraction request when this type is active this round. Use for type-specific rules (e.g. "at most one event per batch"). Empty = no type-specific appendix.' },
