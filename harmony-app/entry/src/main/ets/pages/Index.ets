@@ -15,6 +15,7 @@ import { writeArkWebExit } from '../crash/CrashCapture';
 import { LastExit } from '../crash/LastExit';
 import { KeepAliveManager, LukerHarmonyBridge } from '../KeepAliveManager';
 import { ImmersiveManager } from '../ImmersiveManager';
+import { DEFAULT_PAGE_BACKGROUND, PAGE_THEME_REPORTER, SafeAreaManager } from '../SafeAreaManager';
 import { ExternalLinkSettings, LinkRoute, originOf, routeNewWindow, routeTopLevelNavigation } from '../ExternalLinkPolicy';
 import { FileSelectionPlan, MediaKind, planFileSelection } from '../FileSelectionPlanner';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -70,6 +71,11 @@ struct Index {
   @StorageLink('luker.serverUrl') serverUrl: string = DEFAULT_LOCAL_BASE_URL;
   @StorageLink('luker.customEndpoint') customEndpoint: boolean = false;
   @StorageLink('luker.pendingAction') @Watch('onPendingAction') pendingAction: string = '';
+  // Filled by SafeAreaManager with the system bar heights; the page paints the
+  // theme colour into them instead of letting the system show a white strip.
+  @StorageProp('luker.safeTop') safeTopVp: number = 0;
+  @StorageProp('luker.safeBottom') safeBottomVp: number = 0;
+  @StorageProp('luker.pageBackground') pageBackground: string = DEFAULT_PAGE_BACKGROUND;
   private exporting: boolean = false;
   private crashDialogDone: boolean = false;
   private saveTargets: Map<string, string> = new Map<string, string>();
@@ -117,6 +123,7 @@ struct Index {
 
   onPageShow(): void {
     this.pageShown = true;
+    SafeAreaManager.refresh();
     this.openPendingEndpointDialog();
   }
 
@@ -127,6 +134,21 @@ struct Index {
   private res(id: number, arg?: string): string {
     const mgr = getContext(this).resourceManager;
     return arg === undefined ? mgr.getStringSync(id) : mgr.getStringSync(id, arg);
+  }
+
+  /**
+   * Injects the reporter that tells the window which background the page is
+   * showing right now, and repeats that on every restyle (theme switch, chat
+   * background change), so the system bar strips and icon contrast follow it.
+   */
+  private reportPageTheme(): void {
+    try {
+      this.controller.runJavaScript(PAGE_THEME_REPORTER).catch((err: BusinessError) => {
+        hilog.warn(DOMAIN, TAG, 'theme reporter injection failed: %{public}s', JSON.stringify(err));
+      });
+    } catch (e) {
+      hilog.warn(DOMAIN, TAG, 'theme reporter injection threw: %{public}s', JSON.stringify(e));
+    }
   }
 
   private crashFilesDir(): string {
@@ -865,6 +887,7 @@ struct Index {
               methodList: [
                 'setGenerationActive',
                 'setImmersiveModeEnabled',
+                'setPageBackgroundColor',
                 'setOpenExternalLinksInBrowser',
                 'openExternalUrl',
                 'openEndpointSettings',
@@ -938,6 +961,7 @@ struct Index {
               // A finished page proves the accepted credentials work; the next
               // navigation may reuse them without treating them as a failed attempt.
               this.recentHttpAuthAttempts.clear();
+              this.reportPageTheme();
             })
             .onRenderExited((event) => {
               this.closePopupDialog();
@@ -1038,6 +1062,11 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    // Edge to edge: the strip behind the status bar and the navigation bar is
+    // painted with the background the page reports, so it follows the theme.
+    .padding({ top: this.safeTopVp, bottom: this.safeBottomVp })
+    .backgroundColor(this.pageBackground)
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 }
 
