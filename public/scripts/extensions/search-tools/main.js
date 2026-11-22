@@ -2819,7 +2819,7 @@ jQuery(() => {
     const context = getContext();
     registerTools(context);
     ensureUi();
-    window.addEventListener('pagehide', () => {
+    globalThis.window?.addEventListener?.('pagehide', () => {
         destroySettingsUi();
     }, { once: true });
     // search-tools publishes its 2 read tools into the orchestrator's
