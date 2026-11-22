@@ -2639,6 +2639,9 @@ function registerLocaleData() {
         'Tool: ${0}': '工具：${0}',
         'Tool result: ${0}': '工具结果：${0}',
         'Round ${0}': '第 ${0} 轮',
+        'Import example': '导入示例',
+        'Re-import example': '重新导入示例',
+        'Derive from an existing preset': '从现有预设派生',
     });
 
     addLocaleData('zh-tw', {
@@ -2762,6 +2765,9 @@ function registerLocaleData() {
         'Tool: ${0}': '工具：${0}',
         'Tool result: ${0}': '工具結果：${0}',
         'Round ${0}': '第 ${0} 輪',
+        'Import example': '匯入示例',
+        'Re-import example': '重新匯入示例',
+        'Derive from an existing preset': '從現有預設派生',
     });
 }
 

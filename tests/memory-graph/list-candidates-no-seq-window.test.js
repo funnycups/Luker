@@ -30,10 +30,10 @@ describe('memory_list_candidates schema: seq_window removed', () => {
         expect(tool.parameters.properties.seq_window).toBeUndefined();
     });
 
-    test('types and exclude_recent_messages parameters remain', () => {
+    test('only types parameter remains (exclude_recent_messages removed alongside recentRawTurns)', () => {
         const tool = SCHEMAS.find(s => s.name === 'memory_list_candidates');
         expect(tool.parameters.properties.types).toBeDefined();
-        expect(tool.parameters.properties.exclude_recent_messages).toBeDefined();
+        expect(tool.parameters.properties.exclude_recent_messages).toBeUndefined();
     });
 
     test('additionalProperties is false (so unknown args including legacy seq_window are rejected at the schema layer)', () => {

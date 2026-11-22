@@ -1,4 +1,4 @@
-import { renderPresetHelpButton } from '../preset-help.js';
+import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../lens-shared/preset-examples.js';
 
 export function createCharacterEditorUi(deps) {
     const {
@@ -62,6 +62,8 @@ export function createCharacterEditorUi(deps) {
         style.id = STYLE_ID;
         style.textContent = `
 #${UI_BLOCK_ID} .cea_row { display:flex; gap:8px; align-items:center; margin:6px 0; flex-wrap:wrap; }
+#${UI_BLOCK_ID} .cea_preset_note { display:block; margin:8px 0 4px; opacity:0.78; }
+#${UI_BLOCK_ID} .cea_preset_actions { margin:4px 0 8px; }
 #${UI_BLOCK_ID} .cea_panel { border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 22%, transparent); border-radius:8px; padding:8px; margin:8px 0; }
 #${UI_BLOCK_ID} .cea_item { border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 16%, transparent); border-radius:8px; padding:8px; margin:6px 0; }
 #${UI_BLOCK_ID} .cea_item_top { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
@@ -258,8 +260,13 @@ export function createCharacterEditorUi(deps) {
                 <div class="menu_button" id="cea_open_editor_popup">${escapeHtml(i18n('Open Editor'))}</div>
                 <div class="menu_button" id="cea_open_cardapp_studio"><i class="fa-solid fa-code"></i> ${escapeHtml(i18n('CardApp Studio'))}</div>
             </div>
-            <label for="cea_sync_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}${renderPresetHelpButton({ kind: 'iteration', targetSelectId: 'cea_sync_llm_preset' })}</label>
+            <small class="cea_preset_note">${escapeHtml(i18n('The AI Workbench uses to edit these settings is selected in Workbench → Settings.'))}</small>
+            <label for="cea_sync_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}</label>
             <select id="cea_sync_llm_preset" class="text_pole"></select>
+            <div class="cea_row cea_preset_actions">
+                <div class="menu_button menu_button_small" id="cea_import_preset_example">${escapeHtml(i18n('Import example'))}</div>
+                <div class="menu_button menu_button_small" id="cea_derive_preset">${escapeHtml(i18n('Derive from an existing preset'))}</div>
+            </div>
             <label for="cea_sync_api_preset">${escapeHtml(i18n('Iteration AI API preset (Connection profile)'))}</label>
             <select id="cea_sync_api_preset" class="text_pole"></select>
             <label for="cea_tool_retries">${escapeHtml(i18n('Tool-call retries on invalid/missing tool call (N)'))}</label>
@@ -355,6 +362,27 @@ export function createCharacterEditorUi(deps) {
 
         jQuery(document).on('pointerdown.ceaDiffZoom', '.popup .cea_line_diff_splitter', function (event) {
             beginCeaLineDiffResize(this, event.originalEvent || event);
+        });
+
+        root.on('click.cea', '#cea_import_preset_example', async () => {
+            try {
+                const ok = await importPresetExample(PRESET_EXAMPLES.pluginOnly);
+                if (!ok) return;
+                const settings = getSettings();
+                settings.requestLlmPresetName = PRESET_EXAMPLES.pluginOnly;
+                saveSettingsDebounced();
+                refreshPresetSelectors(root, getContext(), settings);
+            } catch (err) {
+                toastr.error(String(err?.message || err));
+            }
+        });
+
+        root.on('click.cea', '#cea_derive_preset', async () => {
+            try {
+                await openPresetDerivation('jailbreak-only');
+            } catch (err) {
+                toastr.error(String(err?.message || err));
+            }
         });
 
         root.on('change.cea', '#cea_sync_llm_preset', function () {

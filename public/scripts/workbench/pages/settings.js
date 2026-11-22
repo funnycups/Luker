@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Settings: AI connections (connection profile and generation preset chosen
-// separately, a default row plus one row per active role), Ask sources,
-// window, and suggestions rules (core + SuggestRuleProviders).
+// separately, a shared block plus per-target overrides with resolved sources),
+// Ask sources, window, and suggestions rules (core + SuggestRuleProviders).
 
 import { i18n, i18nFormat } from '../i18n.js';
 import { h, put, clear } from '../../lens-shared/util.js';
 import { button, link, dot, checkRow, select, sectionTitle, loading } from '../ui/components.js';
 import { listRules } from '../model/suggest.js';
+import { resolveAiRow } from '../model/ai-source.js';
+import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../lens-shared/preset-examples.js';
 import { getRunDockPrefs, setRunDockPrefs, resetRunDockPosition, subscribeRunDockPrefs } from '../../run-panel/dock.js';
 
 export function knownRoles() {
@@ -21,6 +23,25 @@ export function knownRoles() {
         { key: 'sd', label: i18n('Image Generation'), tone: 'sd' },
     ];
 }
+
+const AI_ROLE_LABELS = {
+    ask: 'Q&A',
+    memory: 'Edit memory graph settings',
+    orch: 'Edit orchestration settings',
+    preset: 'Edit preset',
+    card: 'Edit character card',
+    world: 'Edit world book',
+    sd: 'Generate images',
+};
+
+const PLUGIN_LABELS = {
+    memory: 'Memory graph settings',
+    orch: 'Orchestration settings',
+    preset: 'Preset Assistant settings',
+    card: 'Character Assistant settings',
+    world: 'Character Assistant settings',
+    sd: 'Image Generation settings',
+};
 
 export function sourceDefs() {
     return [
@@ -39,6 +60,7 @@ export function createSettingsPage(app) {
     let testing = '';
     let prompts = null;
     let promptsVersion = 0;
+    let targetsOpen = false;
     const unsubDockPrefs = subscribeRunDockPrefs(() => {
         if (el.isConnected) paint();
     });
@@ -82,28 +104,161 @@ export function createSettingsPage(app) {
         app.saveSettings(next);
     }
 
-    function aiTable() {
+    async function importSharedExample() {
+        try {
+            const ok = await importPresetExample(PRESET_EXAMPLES.pluginOnly);
+            if (!ok) return;
+            edit(n => {
+                n.ai = n.ai || {};
+                n.ai.default = n.ai.default || {};
+                n.ai.default.preset = PRESET_EXAMPLES.pluginOnly;
+            });
+            choices = null;
+            await ensureChoices();
+        } catch (err) {
+            app.toast(String(err?.message || err), { error: true });
+        }
+    }
+
+    async function derivePreset(mode) {
+        try {
+            await openPresetDerivation(mode);
+        } catch (err) {
+            app.toast(String(err?.message || err), { error: true });
+        }
+    }
+
+    function aiLabel(row) {
+        return i18n(AI_ROLE_LABELS[row.key] || row.label || row.key);
+    }
+
+    function firstOption(key, field, isShared) {
+        if (isShared) {
+            if (field === 'connection') return i18n('Not selected, using Luker\'s current connection');
+            return choices.hasPluginOnly
+                ? i18n('Not selected, using the bundled example plugin-only')
+                : i18n('Not selected, using Luker\'s current preset');
+        }
+        return choices.native?.[key]
+            ? i18n('Follow plugin setting')
+            : i18n('Follow shared settings');
+    }
+
+    function sourceDetail(source, field, key) {
+        if (!source) return i18n('Not set');
+        if (source.scope === 'current') {
+            return field === 'connection'
+                ? i18n('Luker\'s current connection')
+                : i18n('Luker\'s current preset');
+        }
+        if (source.scope === 'target') return i18nFormat('Set for this target · ${0}', source.value);
+        const scope = source.scope === 'plugin'
+            ? i18n(PLUGIN_LABELS[key] || 'Plugin settings')
+            : i18n('Shared settings');
+        if (source.implicit) {
+            return i18nFormat('${0} · not selected, using the bundled example ${1}', scope, source.value);
+        }
+        return i18nFormat('${0} · ${1}', scope, source.value);
+    }
+
+    function sourceLines(sources, key) {
+        const line = (field, label) => h('div', { class: 'wb-api-source-line' },
+            h('span', { class: 'wb-api-source-key', text: label }),
+            h('span', { text: sourceDetail(sources[field], field, key) }));
+        return [line('connection', i18n('Connection')), line('preset', i18n('Preset slot'))];
+    }
+
+    function aiSelect(key, field, isShared, ariaLabel) {
+        const cur = app.settings().ai?.[key] || {};
+        const list = field === 'connection' ? (choices.connections || []) : (choices.presets || []);
+        return select(
+            [{ value: '', label: firstOption(key, field, isShared) }, ...list.map(name => ({ value: name, label: name }))],
+            cur[field] || '',
+            (v) => edit(n => {
+                n.ai = n.ai || {};
+                n.ai[key] = n.ai[key] || {};
+                n.ai[key][field] = v;
+            }),
+            { ariaLabel, follow: true },
+        );
+    }
+
+    function aiActions() {
+        const installed = choices.presets?.includes(PRESET_EXAMPLES.pluginOnly);
+        return h('div', { class: 'wb-ai-actions' },
+            link(installed ? i18n('Re-import example') : i18n('Import example'), importSharedExample),
+            h('span', { class: 'wb-ai-actions-sep', text: '·' }),
+            link(i18n('Derive from an existing preset'), () => derivePreset('jailbreak-only')));
+    }
+
+    function sharedBlock() {
+        return h('div', { class: 'wb-ai-shared' },
+            h('div', { class: 'wb-ai-block-title', text: i18n('Shared') }),
+            h('div', { class: 'wb-ai-shared-grid' },
+                h('label', { class: 'wb-ai-field' },
+                    h('span', { class: 'wb-ai-field-label', text: i18n('Connection profile') }),
+                    aiSelect('default', 'connection', true, i18n('Shared connection profile'))),
+                h('label', { class: 'wb-ai-field' },
+                    h('span', { class: 'wb-ai-field-label', text: i18n('Generation preset') }),
+                    aiSelect('default', 'preset', true, i18n('Shared generation preset')))),
+            aiActions());
+    }
+
+    function aiRow(row) {
         const s = app.settings();
-        if (!choices) return loading(i18n('Reading connection profiles…'));
-        const opts = (list, first) => [{ value: '', label: first }, ...list.map(name => ({ value: name, label: name }))];
-        const nativeLabel = (key, field) => {
-            const n = choices.native?.[key]?.[field];
-            return n ? i18nFormat('Follow extension (${0})', n) : i18n('Follow default');
-        };
-        const row = (key, label, tone, isDefault = false) => {
-            const cur = s.ai?.[key] || {};
-            const first = (field) => (isDefault
-                ? (field === 'preset' ? (choices.hasPluginOnly ? i18n('plugin-only (recommended by Luker)') : i18n('Use what Luker has selected')) : i18n('Use Luker\'s current one'))
-                : nativeLabel(key, field));
-            return h('tr', null,
-                h('td', null, tone ? dot(tone) : null, isDefault ? h('b', { text: label }) : h('span', { text: label })),
-                h('td', null, select(opts(choices.connections || [], first('connection')), cur.connection || '', (v) => edit(n => { n.ai = n.ai || {}; n.ai[key] = n.ai[key] || {}; n.ai[key].connection = v; }), { ariaLabel: i18nFormat('${0} connection profile', label), follow: true })),
-                h('td', null, select(opts(choices.presets || [], first('preset')), cur.preset || '', (v) => edit(n => { n.ai = n.ai || {}; n.ai[key] = n.ai[key] || {}; n.ai[key].preset = v; }), { ariaLabel: i18nFormat('${0} generation preset', label), follow: true })));
-        };
+        const own = s.ai?.[row.key] || {};
+        const shared = s.ai?.default || {};
+        const native = choices.native?.[row.key] || {};
+        const sources = resolveAiRow({
+            own,
+            native,
+            shared,
+            fallbackConnection: { scope: 'current' },
+            fallbackPreset: choices.hasPluginOnly
+                ? { scope: 'shared', value: PRESET_EXAMPLES.pluginOnly, implicit: true }
+                : { scope: 'current' },
+        });
+        const label = aiLabel(row);
+        return h('tr', null,
+            h('td', null,
+                dot(row.tone),
+                h('span', { text: label }),
+                h('div', { class: 'wb-api-source-inline' }, sourceLines(sources, row.key))),
+            h('td', null, aiSelect(row.key, 'connection', false, i18nFormat('${0} connection profile', label))),
+            h('td', null, aiSelect(row.key, 'preset', false, i18nFormat('${0} generation preset', label))),
+            h('td', { class: 'wb-api-source' }, sourceLines(sources, row.key)));
+    }
+
+    function targetsBlock() {
         const rows = activeRows();
-        return h('div', { class: 'wb-list' }, h('table', { class: 'wb-api' },
-            h('thead', null, h('tr', null, h('th'), h('th', { text: i18n('Connection profile') }), h('th', { text: i18n('Generation preset') }))),
-            h('tbody', null, row('default', i18n('Default'), '', true), rows.map(r => row(r.key, r.label, r.tone)))));
+        if (!rows.length) return null;
+        return h('details', {
+            class: 'wb-ai-targets',
+            open: targetsOpen || null,
+            onToggle: (event) => { targetsOpen = event.target.open; },
+        },
+        h('summary', { class: 'wb-ai-targets-summary' },
+            h('span', { text: rows.length === 1 ? i18n('Set individually (1 target)') : i18nFormat('Set individually (${0} targets)', rows.length) })),
+        h('table', { class: 'wb-api wb-api-targets' },
+            h('thead', null, h('tr', null,
+                h('th', { text: i18n('Used for') }),
+                h('th', { text: i18n('Connection profile') }),
+                h('th', { text: i18n('Generation preset') }),
+                h('th', { text: i18n('Current source') }))),
+            h('tbody', null, rows.map(aiRow))));
+    }
+
+    function aiSection() {
+        const errs = Object.values(choices?.errors || {}).filter(Boolean);
+        return h('section', null,
+            sectionTitle(i18n('AI used inside Workbench'), testing ? h('span', { class: 'wb-note', text: i18n('Testing…') }) : link(i18n('Test default'), () => test())),
+            h('p', { class: 'wb-sub', text: i18n('Workbench uses these connections and presets to read data, edit settings and draft changes. Chat replies and the plugin\'s automatic tasks use the AI configured in each plugin\'s settings and are not affected by this section.') }),
+            errs.length ? h('p', { class: 'wb-msg-error', text: errs.join(' · ') }) : null,
+            !choices
+                ? loading(i18n('Reading connection profiles…'))
+                : h('div', null, sharedBlock(), targetsBlock()),
+            h('div', { class: 'wb-checks' },
+                checkRow({ checked: app.settings().reviewChanges !== false, label: i18n('Show me the changes first — do not apply them directly'), onChange: (v) => edit(n => { n.reviewChanges = v; }) })));
     }
 
     async function test() {
@@ -124,17 +279,9 @@ export function createSettingsPage(app) {
         const s = app.settings();
         const askCfg = s.ask || {};
         const askSources = askCfg.sources || {};
-        const errs = Object.values(choices?.errors || {}).filter(Boolean);
         put(el,
-            h('div', null, h('h2', { class: 'wb-h2', text: i18n('Settings') }), h('p', { class: 'wb-sub', text: i18n('Pick the AI connection once for Ask and all workbenches, or change it for one of them.') })),
-            h('section', null,
-                sectionTitle(i18n('AI connection'), testing ? h('span', { class: 'wb-note', text: i18n('Testing…') }) : link(i18n('Test default'), () => test())),
-                errs.length ? h('p', { class: 'wb-msg-error', text: errs.join(' · ') }) : null,
-                aiTable(),
-                h('p', { class: 'wb-note wb-api-note', text: i18n('The connection profile decides which model and address are used, and the generation preset decides the prompts wrapped around the request (jailbreak text lives there and is sent as usual). With no default preset picked, Luker\'s bundled plugin-only is used. "Follow extension" uses the iteration AI set in Memory Graph, Orchestrator, Preset Assistant or Character Assistant settings. Both lists come from Luker itself — the workbench only picks from them and never changes them.') }),
-                presetHint(),
-                h('div', { class: 'wb-checks' },
-                    checkRow({ checked: s.reviewChanges !== false, label: i18n('Show me the changes first — do not apply them directly'), onChange: (v) => edit(n => { n.reviewChanges = v; }) }))),
+            h('div', null, h('h2', { class: 'wb-h2', text: i18n('Settings') })),
+            aiSection(),
             promptSection(),
             h('section', null,
                 sectionTitle(i18n('Q&A')),
@@ -173,23 +320,6 @@ export function createSettingsPage(app) {
                 dot(rule.tone),
                 h('div', { class: 'wb-rule-main' }, h('div', { text: rule.name }), h('div', { class: 'wb-note', text: rule.when })),
                 checkRow({ checked: s.rules?.[rule.id] ?? rule.defaultOn, ariaLabel: rule.name, onChange: (v) => edit(n => { n.rules = n.rules || {}; n.rules[rule.id] = v; }) })))));
-    }
-
-    function presetHint() {
-        if (!choices || choices.hasPluginOnly) return null;
-        return h('div', { class: 'wb-hint' },
-            h('div', null,
-                h('b', { text: i18n('Luker\'s bundled "plugin-only" preset is not installed') }),
-                h('div', { class: 'wb-note', text: i18n('Luker made this preset for extensions and iteration AI. It separates tool work from roleplay so the AI is not swayed by style. Once imported the workbench uses it by default, and your jailbreak can go in it as usual.') })),
-            h('div', { class: 'wb-hint-acts' },
-                button(i18n('Import'), async () => {
-                    try {
-                        await app.source.importBundledPreset('plugin-only');
-                        choices = null;
-                        app.toast(i18n('plugin-only imported'));
-                        ensureChoices();
-                    } catch (err) { app.toast(String(err?.message || err), { error: true }); }
-                }, { className: 'is-primary is-sm' })));
     }
 
     async function loadPrompts() {

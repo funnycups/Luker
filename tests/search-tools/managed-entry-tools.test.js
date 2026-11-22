@@ -24,14 +24,11 @@ globalThis.Luker = {
 };
 
 // main.js transitively pulls browser-only modules (`profile-resolver.js` ->
-// `script.js` / `openai.js` -> `textgen-models.js`, and `settings-ui.js` ->
-// `preset-help.js`) that touch `document` at load time. Stub those two edges
-// so the module graph loads under the node test environment.
+// `script.js` / `openai.js` -> `textgen-models.js`) that touch `document` at
+// load time. Stub that edge so the module graph loads under the node test
+// environment.
 jest.unstable_mockModule('../../public/scripts/extensions/connection-manager/profile-resolver.js', () => ({
     getChatCompletionConnectionProfiles: async () => [],
-}));
-jest.unstable_mockModule('../../public/scripts/extensions/preset-help.js', () => ({
-    renderPresetHelpButton: () => '',
 }));
 
 let mod;

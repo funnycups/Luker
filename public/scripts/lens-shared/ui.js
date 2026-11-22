@@ -124,7 +124,7 @@ export function switchControl(label, checked, onChange, { className = '', disabl
 }
 
 /**
- * @param {{ value: string, label: string, tone?: string, iconName?: string, icon?: string | Node, badge?: string | number, disabled?: boolean, hidden?: boolean, title?: string }[]} options
+ * @param {{ value: string, label: string, tone?: string, iconName?: string, icon?: string | Node, badge?: string | number, dirty?: boolean, disabled?: boolean, hidden?: boolean, title?: string }[]} options
  */
 export function segmented(options, value, onChange, {
     ariaLabel = '',
@@ -138,6 +138,7 @@ export function segmented(options, value, onChange, {
             type: 'button',
             class: 'lw-seg-btn',
             disabled: o.disabled,
+            dataset: o.dirty ? { dirty: 'true' } : null,
             'aria-pressed': String(o.value === value),
             'aria-label': o.ariaLabel || (iconOnlyMobile ? o.label : null),
             title: o.title || (iconOnlyMobile ? o.label : null),
@@ -146,7 +147,8 @@ export function segmented(options, value, onChange, {
         o.tone ? h('span', { class: 'lw-dot', style: { '--tone': `var(--lw-t-${o.tone}, var(--lw-faint))` }, 'aria-hidden': 'true' }) : null,
         (o.icon || o.iconName) ? resolveIcon(o.icon || o.iconName, 14, renderIcon) : null,
         h('span', { class: 'lw-seg-label', text: o.label }),
-        o.badge !== undefined ? h('span', { class: 'lw-seg-badge', text: String(o.badge) }) : null)));
+        o.badge !== undefined ? h('span', { class: 'lw-seg-badge', text: String(o.badge) }) : null,
+        o.dirty ? h('span', { class: 'lw-dirty-dot', 'aria-hidden': 'true' }) : null)));
 }
 
 export function checkRow({

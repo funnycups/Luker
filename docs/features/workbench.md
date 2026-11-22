@@ -59,7 +59,11 @@ Embeds the full Memory Lens workspace directly inside Workbench:
 - **Timeline** — chronological story view grouped by summary tiers.
 - **Data table** — tabular view with inline field editing.
 - **Memory structure** — type and field editor, starter templates, import/export, persistent injection controls, and tag filtering.
-- **Settings** — extraction cadence, LLM or RAG recall, compression, token trace, and iteration AI selection.
+- **Settings** — extraction cadence and built-in floor hiding presets, LLM or RAG recall, compression, token trace, and iteration AI selection.
+
+### Unsaved changes indicators
+
+When a workspace has unsaved edits—such as Memory Graph settings or structure, Orchestration flow drafts, or Character Archive edits—Workbench highlights the save bar inside the view, marks the sub-tab and left-rail workspace tab with an amber indicator, displays an unsaved state on the collapsed pill, and shows a non-blocking reminder with a quick jump-back button when switching tabs or collapsing the window.
 
 ### Orchestration
 
@@ -83,11 +87,13 @@ Embeds the Image Generation workspace directly inside Workbench:
 
 ### Settings
 
-Configure one default **AI connection** and **Generation preset** shared by Q&A and all AI iteration targets, or override them individually.
+Configure one shared **AI connection** and **Generation preset** for Q&A and every AI iteration target, or set a target individually.
 
 ![Workbench Settings](/images/workbench/05-settings.png)
 
-- **Bundled `plugin-only` preset** — import Luker's bundled tool-task preset in one click when no default generation preset is picked.
+- **Shared** — the connection profile and generation preset used by targets that follow shared settings.
+- **Set individually** — settings rows for Q&A and each AI iteration target. **Follow plugin setting** uses the iteration AI configured in the plugin; **Follow shared settings** uses the shared block. The **Current source** column resolves each value through target, plugin, shared settings, and the bundled example.
+- **Example actions** — **Import example** installs the bundled `plugin-only` example, **Re-import example** overwrites an installed copy after confirmation, and **Derive from an existing preset** opens the preset workspace with the matching editing mode.
 - **Confirmation** — toggle whether AI iteration shows changes in a review list before applying.
 - **Read** — choose which local sources Q&A may access, how many surrounding chat floors to include, whether to redact secrets, and whether to preview before sending.
 - **Window** — toggle the corner entry pill, choose **Workbench default size** (`Small window` / `Large window`), configure the shared **Run panel** auto-open toggle and **Run panel default size**, set the `Alt+W` shortcut, or reset both windows' desktop and mobile positions immediately.

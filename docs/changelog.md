@@ -2,12 +2,34 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
+## Unreleased
+
+### Workbench
+
+- Added Workbench-wide unsaved-changes indicators across view save bars, sub-tabs, left-rail workspace tabs, the collapsed pill, and non-blocking return reminders when switching tabs or collapsing the window.
+- Fixed the mobile Orchestration mode selector and header area failing to render and the mode menu opening outside the Workbench window.
+
+### Memory Graph
+
+- Redesigned extraction cadence and built-in floor-hiding settings with quick presets, a custom configuration modal, a live animated preview, and visibility-gap warnings, defaulting to extracting every 2 AI replies and hiding messages past 5 floors.
+- Removed recent-turn exclusion filtering from memory injection and recall, resolving odd-turn event gaps under multi-turn batching and freshly updated entity sheets being excluded from recall.
+
+### Image generation
+
+- Show completed illustration images in the Run panel while the remaining images are still generating.
+
+### Fixes
+
+- Fixed generation progress notifications playing the system notification sound when Luker moves to the background.
+- Fixed a failed storage backend migration leaving the Storage Backend page locked as in progress until the server restarted.
+
 ## v2.9.0-rc.3 (2026-11-21)
 
 ### Workbench
 
 - Added the responsive floating Workbench window with prompt token breakdown, local configuration suggestions, and read-only AI Q&A.
 - Unified AI iteration for Memory Graph, Memory Structure, Multi-Agent Orchestrator, Image Generation, presets, character cards, and world books inside Workbench, with diff review, Change history undo, and automatic migration of historical iteration sessions.
+- Added example import, re-import with confirmation, and derivation actions beside plugin preset selectors, and reworked Workbench Settings to show the shared AI configuration, per-target overrides, and the resolved source of each connection and preset.
 
 ### Multi-Agent Orchestrator
 

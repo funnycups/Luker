@@ -3,7 +3,7 @@
 // Workbench shell: the floating window, the left rail and page/workspace
 // switching, shared state (snapshot, settings), toasts, and live refresh.
 
-import { i18n } from './i18n.js';
+import { i18n, i18nFormat } from './i18n.js';
 import { h, put, clear, debounce, formatTokens } from '../lens-shared/util.js';
 import { emptyState } from '../lens-shared/ui.js';
 import { icon } from './icons.js';
@@ -105,6 +105,18 @@ export function mountWorkbench({
         },
         onCollapse: () => {
             for (const p of Object.values(corePages)) p.onCollapse?.();
+            const dirtyList = dirtyWorkspaces();
+            if (dirtyList.length > 0) {
+                const first = dirtyList[0];
+                const msg = dirtyList.length === 1
+                    ? i18nFormat('"${0}" has unsaved changes', first.title)
+                    : i18nFormat('${0} workspaces have unsaved changes', dirtyList.length);
+                showToast(msg, {
+                    warn: true,
+                    action: i18n('Reopen to save'),
+                    onAction: () => { void app.open({ ws: first.id }); },
+                });
+            }
         },
     });
 
@@ -138,6 +150,20 @@ export function mountWorkbench({
         askProviders: () => registry.getAskProviders(),
         suggestRuleProviders: () => registry.getSuggestRuleProviders(),
         go(id, opts = {}) {
+            const prevTab = activeTab;
+            if (prevTab !== id && prevTab.startsWith('ws:')) {
+                const prevId = prevTab.slice(3);
+                const prevEntry = workspaceViews.get(prevId);
+                if (Number(prevEntry?.unsavedCount?.() || 0) > 0) {
+                    const wsDef = registry.getWorkspaces({ enabledOnly: false }).find(w => w.id === prevId);
+                    const wsTitle = wsDef?.title || prevId;
+                    showToast(i18nFormat('"${0}" has unsaved changes', wsTitle), {
+                        warn: true,
+                        action: i18n('Return to save'),
+                        onAction: () => { void app.go(prevTab, { ws: prevId }); },
+                    });
+                }
+            }
             activeTab = id;
             if (isKnownCore(id)) savePrefs({ page: id });
             paintRail();
@@ -206,6 +232,18 @@ export function mountWorkbench({
         });
     }
 
+    function dirtyWorkspaces() {
+        const out = [];
+        const allWs = registry.getWorkspaces({ enabledOnly: true });
+        for (const ws of allWs) {
+            const count = Number(workspaceViews.get(ws.id)?.unsavedCount?.() || 0);
+            if (count > 0) {
+                out.push({ id: ws.id, title: ws.title || ws.id, count });
+            }
+        }
+        return out;
+    }
+
     function paintRail() {
         clear(rail);
         const coreTab = (def) => h('button', {
@@ -221,16 +259,20 @@ export function mountWorkbench({
 
         const wsTab = (ws) => {
             const tabId = `ws:${ws.id}`;
+            const unsaved = Number(workspaceViews.get(ws.id)?.unsavedCount?.() || 0);
             return h('button', {
                 type: 'button',
                 role: 'tab',
-                class: 'wb-tab',
+                class: `wb-tab ${unsaved > 0 ? 'is-dirty' : ''}`.trim(),
                 'aria-selected': String(activeTab === tabId),
+                title: unsaved > 0 ? i18nFormat('"${0}" has unsaved changes', ws.title || ws.id) : null,
                 onClick: () => app.go(tabId, { ws: ws.id }),
             },
             ws.icon instanceof Node ? ws.icon.cloneNode(true) : icon(ws.icon || 'mark'),
             h('span', { class: 'wb-tab-label', text: ws.title || ws.id }),
-            ws.badge ? h('span', { class: 'wb-tab-count', text: String(ws.badge) }) : null);
+            unsaved > 0
+                ? h('span', { class: 'wb-tab-dirty', title: i18n('Unsaved changes'), text: String(unsaved) })
+                : (ws.badge ? h('span', { class: 'wb-tab-count', text: String(ws.badge) }) : null));
         };
 
         const enabledWorkspaces = registry.getWorkspaces({ enabledOnly: true });
@@ -252,9 +294,14 @@ export function mountWorkbench({
 
     function paintPill() {
         const todo = suggestions.length;
+        const dirtyList = dirtyWorkspaces();
+        const totalUnsaved = dirtyList.reduce((acc, item) => acc + item.count, 0);
+        win.pill?.classList.toggle('has-unsaved', totalUnsaved > 0);
         win.setPill(
             h('span', null, i18n('Prompt '), h('b', { text: snapshot?.budget ? formatTokens(snapshot.budget.total) : '—' })),
-            todo ? h('span', { class: 'wb-pill-todo' }, '· ', h('b', { text: String(todo) }), i18n(' to do')) : null,
+            totalUnsaved > 0
+                ? h('span', { class: 'wb-pill-unsaved' }, '· ', h('b', { text: i18n('Unsaved') }))
+                : (todo ? h('span', { class: 'wb-pill-todo' }, '· ', h('b', { text: String(todo) }), i18n(' to do')) : null),
         );
     }
 
@@ -299,6 +346,7 @@ export function mountWorkbench({
             onSnapshot: () => {
                 if (typeof instance === 'object' && instance) instance.onSnapshot?.();
             },
+            unsavedCount: () => (typeof instance === 'object' && instance ? Number(instance.unsavedCount?.() || 0) : 0),
         };
         workspaceViews.set(ws.id, view);
         return view;
@@ -330,13 +378,14 @@ export function mountWorkbench({
         return next.show?.(opts);
     }
 
-    function showToast(text, { action = '', onAction = null, error = false, duration = 3500 } = {}) {
+    function showToast(text, { action = '', onAction = null, error = false, warn = false, duration = 3500 } = {}) {
         clearTimeout(toastTimer);
         clear(toast);
-        toast.classList.toggle('is-error', error);
+        toast.classList.toggle('is-error', Boolean(error));
+        toast.classList.toggle('is-warn', Boolean(warn) && !error);
         put(
             toast,
-            icon(error ? 'alert' : 'check', { size: 15 }),
+            icon(error || warn ? 'alert' : 'check', { size: 15 }),
             h('span', { text }),
             action
                 ? h('button', { type: 'button', class: 'wb-toast-btn', onClick: () => { toast.hidden = true; onAction?.(); } }, icon('undo', { size: 13 }), h('span', { text: action }))

@@ -268,6 +268,22 @@ describe('preset adapter: empty and multi-group prompt_order', () => {
 });
 
 describe('platform preset target (controls, modes, reference, proposal-bus, custom prompts)', () => {
+    test('applyLaunch preselects the requested edit mode', () => {
+        const liveBody = {
+            temperature: 0.7,
+            prompts: [{ identifier: 'main', name: 'Main', role: 'system', content: 'Original main' }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }],
+        };
+        const { ctx } = createMockPresetCtx({
+            selectedName: 'LivePreset',
+            presets: { LivePreset: liveBody },
+        });
+        const target = createPresetTarget({ getContext: () => ctx });
+        target.applyLaunch({ presetMode: 'jailbreak-only' });
+        const controls = target.renderControls({ live: liveBody, scope: 'preset', settings: {}, onReload: () => {} });
+        expect(controls.querySelector('[data-wb-preset-control="mode"]').value).toBe('jailbreak-only');
+    });
+
     test('renderControls switches CPA mode and reference preset, updating prompt, active tool catalog, and runCpaReadTool reference injection', async () => {
         const liveBody = {
             temperature: 0.7,

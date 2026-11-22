@@ -344,7 +344,7 @@ renderFieldHelpButton(options: {
 }): string
 ```
 
-渲染一個小小的「?」圖示按鈕，點擊後彈出標題 + 內文的彈窗。用於掛在標籤或標題旁的通用欄位說明。若需要根據預設槽位解析的說明文字（preset-slot help），請改用 `renderPresetHelpButton`。
+渲染一個小小的「?」圖示按鈕，點擊後彈出標題 + 內文的彈窗。用於掛在標籤或標題旁的通用欄位說明。
 
 各層暴露同一個函式：
 

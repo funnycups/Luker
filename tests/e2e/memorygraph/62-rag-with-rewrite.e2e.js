@@ -127,7 +127,6 @@ test.describe('#62 — RAG recall with query rewrite hits the LLM and embeds the
             recallMethod: 'rag',
             ragUseQueryRewrite: true,
             ragRewriteApiPresetName: mockProfileName,
-            recentRawTurns: 0,
         }, { closeAfter: true });
 
         // Two turns to give MG a real tail.
@@ -202,7 +201,6 @@ test.describe('#62 — RAG recall with query rewrite hits the LLM and embeds the
                 ragUseQueryRewrite: s.ragUseQueryRewrite,
                 ragRewriteApiPresetName: s.ragRewriteApiPresetName,
                 ragRewriteLlmPresetName: s.ragRewriteLlmPresetName,
-                recentRawTurns: s.recentRawTurns,
             };
         });
         expect(settingsDump.recallMethod, 'recallMethod should be rag').toBe('rag');

@@ -115,9 +115,12 @@ export function buildRunView(run, knownIds = []) {
             }
             continue;
         }
+        const segAgentId = mode === 'image' && str(round.label).trim()
+            ? str(round.label).trim()
+            : info.agentId;
         segments.push({
             key: round.id,
-            agentId: info.agentId,
+            agentId: segAgentId,
             todo: info.todo || '',
             attempt: info.attempt || 1,
             final: Boolean(info.final),
@@ -371,6 +374,36 @@ export function segmentPreview(seg, mode) {
     if (!seg || seg.pending) return { lines: [{ icon: 'clock', text: i18n('Waiting'), muted: true }] };
     const running = seg.status === 'running';
     const sections = seg.sections || [];
+
+    if (mode === 'image') {
+        for (const section of sections) {
+            if (section.kind === 'image') {
+                const label = str(section.title) || i18n('Image');
+                if (section.status === 'done' && section.meta?.imageUrl) {
+                    lines.push({ icon: 'image', text: `${label} · ${i18n('Complete')}` });
+                } else if (section.status === 'failed') {
+                    lines.push({ icon: 'alert', text: `${label} · ${i18n('Failed')}` });
+                } else if (section.status === 'running') {
+                    lines.push({ icon: 'clock', text: `${label} · ${i18n('Generating image')}`, muted: true });
+                }
+            } else if (section.kind === 'error' && str(section.body).trim()) {
+                lines.push({ icon: 'alert', text: previewText(section.body) });
+            }
+        }
+        if (!lines.length) {
+            const promptSec = sections.find(s => s.kind === 'prompt' && str(s.body).trim());
+            if (promptSec) {
+                lines.push({
+                    icon: running ? 'clock' : 'doc',
+                    text: running ? `${i18n('Generating image')} · ${previewText(promptSec.body, { max: 80 })}` : previewText(promptSec.body),
+                    muted: running,
+                });
+            } else if (running) {
+                lines.push({ icon: 'clock', text: i18n('Generating prompt'), muted: true });
+            }
+        }
+        return { lines };
+    }
 
     if (mode === 'agenda') {
         const decision = plannerDecision(sections.find(s => s.meta?.output));

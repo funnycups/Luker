@@ -53,16 +53,16 @@ describe('planConfigCommit — settings diff against the inherited baseline', ()
     });
 
     test('keys that differ from the baseline on BOTH sides are not part of the plan', () => {
-        // recentRawTurns was overridden before the turn started and the
+        // extractBatchTurns was overridden before the turn started and the
         // proposal leaves it alone — only recallMaxIterations moved.
         const external = planConfigCommit({
-            before: { schema: [], settings: { ...defaults, recentRawTurns: 9, recallMaxIterations: 3 } },
-            next: { schema: [], settings: { ...defaults, recentRawTurns: 9, recallMaxIterations: 5 } },
+            before: { schema: [], settings: { ...defaults, extractBatchTurns: 4, recallMaxIterations: 3 } },
+            next: { schema: [], settings: { ...defaults, extractBatchTurns: 4, recallMaxIterations: 5 } },
             scope: 'global',
             inheritedSettings: defaults,
         });
         expect(external.set).toEqual({ recallMaxIterations: 5 });
-        expect(external.set).not.toHaveProperty('recentRawTurns');
+        expect(external.set).not.toHaveProperty('extractBatchTurns');
         expect(external.changedKeys).toEqual(['recallMaxIterations']);
     });
 

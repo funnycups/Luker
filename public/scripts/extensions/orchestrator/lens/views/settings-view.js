@@ -7,6 +7,7 @@ import { h, clear, put } from '../../../../lens-shared/util.js';
 import { i18n } from '../i18n.js';
 import { button, checkRow, sectionTitle, emptyState } from '../ui/components.js';
 import { formRow, isEditing, selectInput, textArea, textInput } from './setup-view.js';
+import { importPresetExample, openPresetDerivation, exampleNameForMode, PRESET_EXAMPLES } from '../../../../lens-shared/preset-examples.js';
 
 const PROMPTS = [
     ['iterModePromptSpec', 'Spec mode iteration prompt', 'spec'],
@@ -39,6 +40,29 @@ export function createSettingsView(app) {
         const reset = (key, text) => button(i18n('Reset to default'), () => { access.set(key, text); render(); }, { className: 'ol-btn-sm ol-btn-ghost' });
         const defaults = access.promptDefaults();
 
+        const presetActions = ({ key, name, deriveMode }) => {
+            const installed = opts.presets.includes(name);
+            return h('div', { class: 'ol-preset-actions' },
+                button(installed ? i18n('Re-import example') : i18n('Import example'), async () => {
+                    try {
+                        const ok = await importPresetExample(name);
+                        if (!ok) return;
+                        access.set(key, name);
+                        await app.reloadModelOptions();
+                        render();
+                    } catch (err) {
+                        app.notify(String(err?.message || err), { error: true });
+                    }
+                }, { className: 'ol-btn-sm ol-btn-ghost' }),
+                button(i18n('Derive from an existing preset'), async () => {
+                    try {
+                        await openPresetDerivation(deriveMode);
+                    } catch (err) {
+                        app.notify(String(err?.message || err), { error: true });
+                    }
+                }, { className: 'ol-btn-sm ol-btn-ghost' }));
+        };
+
         const profile = snapshot.profile || {};
         const target = snapshot.target;
         const limit = (label, value, toPatch) => formRow(i18n(label), textInput(value, v => app.guard(() => access.setLimit(target, toPatch(Math.max(1, Math.floor(Number(v)) || 1)))), { type: 'number', disabled: target?.scope === 'chat' }));
@@ -70,9 +94,11 @@ export function createSettingsView(app) {
         const dockPrefs = runPanelApi?.getRunDockPrefs?.() || { autoOpen: true, defaultSize: 'small' };
 
         put(el,
+            h('p', { class: 'ol-setup-note', text: i18n('The AI Workbench uses to edit these settings is selected in Workbench → Settings.') }),
             section('Default API and prompt preset',
                 formRow(i18n('Connection profile'), selectInput(options(opts.connections, values.llmNodeApiPresetName), values.llmNodeApiPresetName, set('llmNodeApiPresetName'))),
                 formRow(i18n('Generation preset'), selectInput(options(opts.presets, values.llmNodePresetName), values.llmNodePresetName, set('llmNodePresetName'))),
+                presetActions({ key: 'llmNodePresetName', name: exampleNameForMode(snapshot.mode), deriveMode: 'orchestrator-optimize' }),
                 checkRow({ checked: values.includeWorldInfoWithPreset, label: i18n('Include world info in agent prompts'), onChange: set('includeWorldInfoWithPreset') })),
             section('Run panel',
                 checkRow({ checked: dockPrefs.autoOpen !== false, label: i18n('Open automatically on run'), onChange: (on) => { runPanelApi?.setRunDockPrefs?.({ autoOpen: Boolean(on) }); render(); } }),
@@ -92,6 +118,7 @@ export function createSettingsView(app) {
             section('AI Iteration Studio configuration',
                 formRow(i18n('Connection profile'), selectInput(options(opts.connections, values.requestApiPresetName), values.requestApiPresetName, set('requestApiPresetName'))),
                 formRow(i18n('Generation preset'), selectInput(options(opts.presets, values.requestLlmPresetName), values.requestLlmPresetName, set('requestLlmPresetName'))),
+                presetActions({ key: 'requestLlmPresetName', name: PRESET_EXAMPLES.pluginOnly, deriveMode: 'jailbreak-only' }),
                 formRow(i18n('Iteration AI base system prompt'), textArea(values.requestSystemPrompt, set('requestSystemPrompt'), { rows: 6 })),
                 reset('requestSystemPrompt', defaults.request),
                 PROMPTS.map(([key, label, id]) => [formRow(i18n(label), textArea(values[key], set(key), { rows: 6 })), reset(key, defaults[id])])));

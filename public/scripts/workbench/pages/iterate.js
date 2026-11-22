@@ -135,6 +135,7 @@ export function createIteratePage(app) {
     let sessOpen = false;
     let loadError = '';
     let pendingCancelHook = null;
+    let pendingLaunch = null;
 
     async function firePendingCancelHook() {
         const hook = pendingCancelHook;
@@ -405,6 +406,15 @@ export function createIteratePage(app) {
     function paintControls() {
         clear(controlsSlot);
         const t = selectDefaultTarget();
+        const launch = pendingLaunch;
+        pendingLaunch = null;
+        if (launch && t && typeof t.applyLaunch === 'function') {
+            try {
+                t.applyLaunch(launch);
+            } catch (err) {
+                console.warn('[workbench/iterate] applyLaunch failed:', err);
+            }
+        }
         if (!t || typeof t.renderControls !== 'function' || blocked() || disabled()) {
             controlsSlot.hidden = true;
             return;
@@ -1355,6 +1365,7 @@ export function createIteratePage(app) {
             const targets = getTargets();
             if (!ws && targets.length) ws = targets[0].id;
             const seed = typeof o.seedPrompt === 'string' ? o.seedPrompt.trim() : '';
+            pendingLaunch = o.launch && typeof o.launch === 'object' ? o.launch : null;
             const hasLaunchReset = Boolean(
                 o.onCancelWithoutApply
                 || (o.autoSend && seed)

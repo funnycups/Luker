@@ -172,6 +172,7 @@ export function createImageActivity({ translate = identity, getChatKey = () => n
             },
             setPrompt(prompt) {
                 job.addSection('prompt', { kind: 'prompt', title: format('Prompt'), body: prompt });
+                job.updateSection('prompt', { status: 'done' });
             },
             setImage(imageUrl) {
                 job.addSection('image', { kind: 'image', title: format('Image'), meta: { imageUrl } });
@@ -190,7 +191,7 @@ export function createImageActivity({ translate = identity, getChatKey = () => n
                 if (!activeJobs.has(roundId)) return;
                 activeJobs.delete(roundId);
                 retryStates.delete(roundId);
-                if (status !== 'done') closeRunningSections(store.getCurrentRun(), roundId, status);
+                closeRunningSections(store.getCurrentRun(), roundId, status);
                 store.setRoundStatus({ runId: activeRunId, roundId, status });
                 if (activeJobs.size > 0) return;
                 const run = store.getCurrentRun();

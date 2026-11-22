@@ -11,6 +11,7 @@ import { askSystemPrompt } from './model/ask.js';
 import { buildBudget } from './model/budget.js';
 import { SourceError } from './model/errors.js';
 import { attribute, describeRequest, finishOverview, redactReaders } from './model/requests.js';
+import { resolveAiRow } from './model/ai-source.js';
 import { createSessionStore } from './model/sessions.js';
 import { runRules } from './model/suggest.js';
 import { hasTextCalls, salvageTextCalls } from './model/textcalls.js';
@@ -18,7 +19,6 @@ import { defaultRegistry } from './registry.js';
 
 const SETTINGS_KEY = 'workbench';
 const LEGACY_SETTINGS_KEY = 'luker_workbench';
-export const BUNDLED_PRESETS = ['plugin-only', 'agent-director', 'agent-non-director'];
 
 export { SourceError };
 
@@ -293,19 +293,6 @@ export async function listAiChoices(registry = defaultRegistry) {
     };
 }
 
-/** Imports one of Luker's bundled presets (public/presets/<name>.json). */
-export async function importBundledPreset(name = 'plugin-only') {
-    if (!BUNDLED_PRESETS.includes(name)) throw new SourceError('bad-name', i18n('Unrecognized preset'));
-    const manager = getContext()?.getPresetManager?.('openai');
-    if (!manager) throw new SourceError('unsupported', i18n('Preset manager unavailable'));
-    const res = await fetch(`/presets/${name}.json`);
-    if (!res.ok) throw new SourceError('download', i18nFormat('Failed to download "${0}" (HTTP ${1})', name, res.status));
-    const data = await res.json();
-    if (data && typeof data === 'object') data.name = name;
-    await manager.savePreset(name, data);
-    return name;
-}
-
 function hasPreset(name) {
     const ctx = getContext();
     try {
@@ -318,12 +305,6 @@ function hasPreset(name) {
 }
 
 /** Default generation preset when none is picked: Luker's plugin-only if installed. */
-export function defaultPreset(settings = readSettings()) {
-    const picked = String(settings.ai?.default?.preset || '').trim();
-    if (picked) return picked;
-    return hasPreset('plugin-only') ? 'plugin-only' : '';
-}
-
 export function aiTarget(role, settings = readSettings(), registry = defaultRegistry) {
     const own = settings.ai?.[role] || {};
     const def = settings.ai?.default || {};
@@ -335,9 +316,18 @@ export function aiTarget(role, settings = readSettings(), registry = defaultRegi
             break;
         }
     }
+    const resolved = resolveAiRow({
+        own,
+        native: nat,
+        shared: def,
+        fallbackConnection: { scope: 'current' },
+        fallbackPreset: hasPreset('plugin-only')
+            ? { scope: 'shared', value: 'plugin-only', implicit: true }
+            : { scope: 'current' },
+    });
     return {
-        apiPresetName: String(own.connection || nat.connection || def.connection || '').trim(),
-        llmPresetName: String(own.preset || nat.preset || defaultPreset(settings) || '').trim(),
+        apiPresetName: resolved.connection?.value || '',
+        llmPresetName: resolved.preset?.value || '',
     };
 }
 
@@ -798,7 +788,6 @@ export function createLukerSource(registry = defaultRegistry) {
         aiRequest: (role, opts) => aiRequest(role, opts),
         aiTest: (role) => aiTest(role),
         listAiChoices: () => listAiChoices(registry),
-        importBundledPreset: (name) => importBundledPreset(name),
         promptInfo: (role) => promptInfo(role, registry),
     };
 }

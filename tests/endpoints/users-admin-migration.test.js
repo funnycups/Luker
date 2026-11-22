@@ -197,9 +197,9 @@ describe('POST /storage/migrate — partial failure', () => {
         // initStorage NOT called — source engine retained
         expect(mockState.initStorageCalled).toBe(false);
 
-        // state survives
+        // state survives for a resume, but no request is executing
         const statusRes = await request(app).post('/storage/status').send({});
-        expect(statusRes.body.migrationInProgress).toBe(true);
+        expect(statusRes.body.migrationInProgress).toBe(false);
         expect(statusRes.body.state.perUser.b.status).toBe('failed');
     });
 });
@@ -284,7 +284,8 @@ describe('POST /storage/migrate/reset', () => {
             .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } });
 
         let statusRes = await request(app).post('/storage/status').send({});
-        expect(statusRes.body.migrationInProgress).toBe(true);
+        expect(statusRes.body.migrationInProgress).toBe(false);
+        expect(statusRes.body.state).not.toBeNull();
 
         const resetRes = await request(app)
             .post('/storage/migrate/reset')
@@ -295,6 +296,37 @@ describe('POST /storage/migrate/reset', () => {
         statusRes = await request(app).post('/storage/status').send({});
         expect(statusRes.body.migrationInProgress).toBe(false);
         expect(statusRes.body.state).toBeNull();
+    });
+
+    test('while a migration is running -> 409', async () => {
+        mockState.handles = ['a'];
+        let release;
+        mockState.migrateUserBehavior = () => new Promise((resolve) => { release = resolve; });
+        const app = makeApp();
+        const migratePromise = request(app)
+            .post('/storage/migrate')
+            .send({ targetMode: 'postgres', postgres: { url: 'postgresql://u:p@h/d' } })
+            .then(res => res);
+
+        let statusRes;
+        for (let i = 0; i < 100; i++) {
+            statusRes = await request(app).post('/storage/status').send({});
+            if (statusRes.body.migrationInProgress) break;
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        expect(statusRes.body.migrationInProgress).toBe(true);
+
+        const resetRes = await request(app).post('/storage/migrate/reset').send({ confirm: true });
+        expect(resetRes.status).toBe(409);
+        expect(resetRes.body.error).toBe('migration_in_progress');
+
+        release();
+        const migrateRes = await migratePromise;
+        expect(migrateRes.status).toBe(200);
+
+        const afterRes = await request(app).post('/storage/status').send({});
+        expect(afterRes.body.migrationInProgress).toBe(false);
+        expect(afterRes.body.state).toBeNull();
     });
 });
 

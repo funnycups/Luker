@@ -33,6 +33,7 @@ import {
     requestSetUserEnabled,
     requestSetUserQuota,
     requestSlugify,
+    requestStorageMigrationReset,
     requestUpdateServerPlugin,
     triggerStorageBackendMigration,
 } from './user.js';
@@ -1130,7 +1131,12 @@ export class AdminPages {
         const tp = this.top;
         tp.db ??= { mysqlUrl: '', mysqlPoolSize: '', postgresUrl: '', postgresPoolSize: '' };
         const running = this.migrating || s.migrationInProgress;
+        // `state` outlives the request that produced it: a failed run keeps
+        // per-user resume state so a retry can skip the users that finished.
+        // Only `migrationInProgress` means work is executing right now.
+        const resumable = !running && s.state != null;
         if (tp.target === s.currentMode) tp.target = null;
+        if (resumable && !tp.target) tp.target = s.state.targetMode;
         const radio = mode => {
             const current = mode === s.currentMode;
             return `<button class="dw-radio${tp.target === mode ? ' on' : ''}" data-act="adm-backend-target" data-mode="${mode}" ${current || running ? 'disabled' : ''}>
@@ -1157,15 +1163,23 @@ export class AdminPages {
                 <div class="dw-radios">${BACKEND_MODES.map(radio).join('')}</div>
             </section>
             ${db}
-            ${running ? this.migrationProgress(s) : ''}
+            ${running || resumable ? this.migrationProgress(s, { running }) : ''}
             ${this.migrationResult()}
             ${this.w.foot(`<button class="dw-btn danger solid big${running ? ' busy' : ''}" data-act="adm-migrate" ${tp.target && !running ? '' : 'disabled'}>${running ? ic('sync', 'dw-spin') : ic('db')}${running ? t`Migration in progress, do not refresh...` : t`Migrate Now`}</button>`)}`;
     }
 
-    migrationProgress(status) {
+    /**
+     * Renders a running migration's progress, or the retained state of a
+     * failed run together with its recovery action.
+     * @param {any} status Storage status response
+     * @param {{running?: boolean}} [options] Whether a request is executing now
+     */
+    migrationProgress(status, { running = true } = {}) {
         const state = status?.state;
         if (!state?.perUser) {
-            return `<div class="dw-banner">${ic('sync', 'dw-spin')}<span>${t`Migration in progress. This may take several minutes.`}</span></div>`;
+            return running
+                ? `<div class="dw-banner">${ic('sync', 'dw-spin')}<span>${t`Migration in progress. This may take several minutes.`}</span></div>`
+                : '';
         }
         const handles = Object.keys(state.perUser);
         const done = handles.filter(h => state.perUser[h]?.status === 'done').length;
@@ -1176,10 +1190,14 @@ export class AdminPages {
             failed: `<span class="dw-pilltag is-bad">${t`failed`}</span>`,
             in_flight: `<span class="dw-pilltag is-warn">${ic('sync', 'dw-spin')}${t`in flight`}${e.stage ? ` · ${esc(e.stage)}` : ''}</span>`,
         })[e.status] || `<span class="dw-pilltag">${t`pending`}</span>`;
+        const headline = running
+            ? `<div class="dw-banner">${ic('sync', 'dw-spin')}<span>${t`Migration in progress. This may take several minutes.`}</span></div>`
+            : `<div class="dw-banner error">${ic('x')}<span>${t`The previous migration did not finish. Retry it, or reset the migration state and start over.`}</span><button class="dw-btn sm ghost" data-act="adm-migrate-reset">${ic('trash')}${t`Reset migration state`}</button></div>`;
         return `
+            ${headline}
             <div class="dw-progress">
-                <div class="dw-progress-line">${ic('sync', 'dw-spin')}<span>${t`Progress:`} ${done}/${handles.length} ${t`done`}${failed ? `, ${failed} ${t`failed`}` : ''}</span><span class="dw-sp"></span>
-                    <span>${esc(modeLabel(state.targetMode))}${typeof state.staleSeconds === 'number' ? ` · ${t`last progress`} ${state.staleSeconds}s` : ''}</span></div>
+                <div class="dw-progress-line">${running ? ic('sync', 'dw-spin') : ''}<span>${t`Progress:`} ${done}/${handles.length} ${t`done`}${failed ? `, ${failed} ${t`failed`}` : ''}</span><span class="dw-sp"></span>
+                    <span>${esc(modeLabel(state.targetMode))}${running && typeof state.staleSeconds === 'number' ? ` · ${t`last progress`} ${state.staleSeconds}s` : ''}</span></div>
                 <div class="dw-stages"><div class="dw-stage now" style="--p:${pct}%"></div></div>
             </div>
             <div class="dw-list">${handles.map(h => {
@@ -1265,6 +1283,25 @@ export class AdminPages {
             if (tp.target) tp.target = null;
             await this.load('backend');
         }
+    }
+
+    /** Clears the resume state a failed migration left behind. */
+    async migrateReset() {
+        const ok = await this.w.confirm({
+            title: t`Reset migration state?`,
+            text: t`Progress from the failed migration is discarded. Data already copied to the target backend stays there.`,
+            ok: t`Reset`,
+            danger: true,
+        });
+        if (!ok) return;
+        const response = await requestStorageMigrationReset();
+        if (!response.ok) {
+            this.w.toast(response.data?.message || t`Could not reset the migration state.`, true);
+            return;
+        }
+        this.migrateResult = null;
+        this.top.target = null;
+        await this.load('backend');
     }
 
     // ---------- storage management ----------
@@ -1394,6 +1431,7 @@ export class AdminPages {
                 this.top.target = el.dataset.mode;
                 return this.w.rerender();
             case 'adm-migrate': return this.migrateGo();
+            case 'adm-migrate-reset': return this.migrateReset();
             case 'adm-migrate-x':
                 this.migrateResult = null;
                 return this.w.rerender();

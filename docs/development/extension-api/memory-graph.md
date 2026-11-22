@@ -579,12 +579,11 @@ console.log(projected.length, 'projected semantic edges');
 
 ### listVisibleCandidates(options?)
 
-**Signature:** `listVisibleCandidates(options?: { seqWindow?: { from?: number, to?: number }, types?: string[], excludeRecentMessages?: number }): ReadonlyArray<NodeView>`
+**Signature:** `listVisibleCandidates(options?: { seqWindow?: { from?: number, to?: number }, types?: string[] }): ReadonlyArray<NodeView>`
 
 **Contract:**
 
 - Returns the same candidate pool `chooseRecallRoute` constructs via `collectRootCandidates` — but as deep-frozen `NodeView`.
-- `excludeRecentMessages` matches the native `isNodeInRecentExcludeWindow` semantics: nodes within the last N user messages are filtered. Default 0.
 - `seqWindow` and `types` apply *after* the native candidate construction, narrowing the pool.
 - **Sorted by `compareNodesByRecency`** (seq_to desc → semantic_depth desc → id lex) — this is the order the route LLM sees, *different* from `listNodes`.
 

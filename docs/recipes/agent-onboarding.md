@@ -72,17 +72,15 @@ Workbench AI iteration is even more sensitive — it does not write story prose 
 
 ### 2a — Configure Workbench AI settings
 
-The Preset editor inside Workbench is itself an LLM-driven tool, so configure Workbench's default AI connection and generation preset first:
+The Preset editor inside Workbench is itself an LLM-driven tool, so configure Workbench's shared AI connection and generation preset first:
 
 1. Open **Workbench** (`Alt+W`, wand menu → **Workbench**, or the corner pill) and switch to **Settings**.
-2. Under **AI connection**, pick a working connection profile.
-3. Under **Generation preset**, leave the default or click **Import** under **Luker's bundled "plugin-only" preset** so Workbench automatically uses Luker's clean tool-task preset.
+2. Under **Shared**, pick a working connection profile.
+3. Under **Generation preset**, pick an imported example or click **Import example** to install the bundled `plugin-only`. Clicking **Derive from an existing preset** opens the preset workspace with **Jailbreak only** preselected.
 
-![Workbench AI connection and generation preset settings](/images/recipes/agent-onboarding/step-02a-preset-help-button.png)
+![Workbench shared AI connection and generation preset](/images/recipes/agent-onboarding/step-02a-workbench-settings.png)
 
-![Bundled plugin-only preset import in Workbench settings](/images/recipes/agent-onboarding/step-02a-help-popup.png)
-
-Every AI iteration target in Workbench (**Memory graph**, **Memory structure**, **Orchestration**, **Preset**, **Character card**, **World book**) shares this default connection and `plugin-only` preset unless overridden individually or set to **Follow extension**.
+Every AI iteration target in Workbench, including **Memory graph**, **Memory structure**, **Orchestration**, **Preset**, **Character card**, and **World book**, follows the shared connection and preset unless set individually. The **Current source** column shows which level supplies each value.
 
 ### 2b — Derive the **agent** preset
 

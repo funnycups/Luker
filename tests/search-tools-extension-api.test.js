@@ -2,9 +2,6 @@
 
 import { describe, test, expect, jest, beforeEach } from '@jest/globals';
 
-jest.unstable_mockModule('../public/scripts/extensions/preset-help.js', () => ({
-    renderPresetHelpButton: () => '',
-}));
 
 describe('search-tools provider capabilities, extension API, and orchestrator image tools', () => {
     beforeEach(() => {

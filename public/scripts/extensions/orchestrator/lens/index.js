@@ -184,6 +184,7 @@ export function initOrchestraLens() {
                         },
                         onEscape: () => instance?.onEscape?.() || false,
                         onSnapshot: () => instance?.onSnapshot?.(),
+                        unsavedCount: () => Number(instance?.unsavedCount?.() || 0),
                         destroy() {
                             destroyed = true;
                             instance?.destroy?.();

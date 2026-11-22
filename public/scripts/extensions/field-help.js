@@ -6,8 +6,8 @@
  *   Layer 2 (lukerContext): const { renderFieldHelpButton } = lukerContext;
  *   Layer 3 (getContext):   const { renderFieldHelpButton } = Luker.getContext();
  *
- * Similar visual to preset-help (fa-circle-question) but plain title+body popup;
- * no preset-import side action. Body must be HTML-safe (call site's responsibility).
+ * Inline question-mark button with a plain title+body popup; no side actions.
+ * Body must be HTML-safe (call site's responsibility).
  */
 
 import { escapeHtml } from '../utils.js';

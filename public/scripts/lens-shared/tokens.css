@@ -25,8 +25,8 @@
     --lw-raised: #1f2127;
     --lw-hover: rgba(255, 255, 255, 0.045);
     --lw-active: rgba(255, 255, 255, 0.08);
-    --lw-border: rgba(255, 255, 255, 0.07);
-    --lw-border-strong: rgba(255, 255, 255, 0.13);
+    --lw-border: #26282d;
+    --lw-border-strong: #35373d;
     --lw-text: #e9eaed;
     --lw-muted: #9da1ab;
     --lw-faint: #676b74;
@@ -102,8 +102,8 @@
     --lw-raised: #ffffff;
     --lw-hover: rgba(15, 20, 30, 0.04);
     --lw-active: rgba(15, 20, 30, 0.075);
-    --lw-border: rgba(15, 20, 30, 0.08);
-    --lw-border-strong: rgba(15, 20, 30, 0.15);
+    --lw-border: #e8e9ec;
+    --lw-border-strong: #d8dadd;
     --lw-text: #1b1d22;
     --lw-muted: #5d626d;
     --lw-faint: #9196a0;
@@ -296,6 +296,11 @@
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg-btn:disabled { color: var(--lw-faint); cursor: not-allowed; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg-badge { font-size: 11px; color: var(--lw-faint); font-variant-numeric: tabular-nums; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dirty-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--lw-amber);
+    box-shadow: 0 0 0 2px var(--lw-amber-soft);
+}
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg.is-sm .lw-seg-btn { height: 24px; padding: 0 9px; font-size: 12px; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg.is-block { display: flex; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg.is-block .lw-seg-btn { flex: 1; }

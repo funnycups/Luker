@@ -70,7 +70,8 @@ describe('normalizeAdvancedSettings', () => {
         expect(normalizeAdvancedSettings({ extractContextTurns: 999 }, {}).extractContextTurns).toBe(32);
         expect(normalizeAdvancedSettings({ extractContextTurns: 0 }, {}).extractContextTurns).toBe(1);
         expect(normalizeAdvancedSettings({ extractCrawlMaxRounds: 9 }, {}).extractCrawlMaxRounds).toBe(5);
-        expect(normalizeAdvancedSettings({ recentRawTurns: -3 }, {}).recentRawTurns).toBe(0);
+        expect(normalizeAdvancedSettings({ updateEvery: 0 }, {}).updateEvery).toBe(1);
+        expect(normalizeAdvancedSettings({ extractExcludeRecentTurns: -3 }, {}).extractExcludeRecentTurns).toBe(0);
         expect(normalizeAdvancedSettings({ extractBatchTurns: 2.7 }, {}).extractBatchTurns).toBe(2);
     });
 

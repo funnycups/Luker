@@ -4,10 +4,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, test, expect, jest, beforeAll, beforeEach } from '@jest/globals';
 
-jest.unstable_mockModule('../../public/scripts/extensions/preset-help.js', () => ({
-    renderPresetHelpButton: () => '',
-}));
-
 const attachDock = jest.fn();
 const openRunDock = jest.fn();
 let currentCtx = {};
@@ -85,7 +81,7 @@ describe('search-tools/run-panel.js', () => {
         const off = jest.fn();
         const fakeRoot = {
             length: 1,
-            find: () => ({ html: () => {}, prop: () => {}, val: () => '0', toggle: () => {} }),
+            find: () => ({ length: 0, html: () => {}, text: () => {}, prop: () => {}, val: () => '0', toggle: () => {} }),
             off,
             on: () => {},
         };

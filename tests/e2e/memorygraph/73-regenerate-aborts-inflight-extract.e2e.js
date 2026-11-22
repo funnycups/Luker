@@ -139,6 +139,8 @@ test.describe('regenerating the last turn aborts the extraction pass covering it
             autoExtractionEnabled: true,
             autoCompressionEnabled: false,
             recallEnabled: false,
+            updateEvery: 1,
+            extractBatchTurns: 1,
         });
 
         // Cover the floors that predate MG, so the next automatic pass starts

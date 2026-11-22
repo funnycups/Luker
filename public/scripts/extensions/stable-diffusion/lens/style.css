@@ -622,3 +622,17 @@
         min-height: 0;
     }
 }
+
+.sdlens .sdlens-dirty-bar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    padding: 8px 12px; margin-bottom: 10px;
+    border-radius: var(--lw-r-sm);
+    border: 1px solid color-mix(in srgb, var(--lw-amber) 45%, transparent);
+    background: var(--lw-amber-soft);
+}
+.sdlens .sdlens-dirty-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--lw-amber); flex: none;
+}
+.sdlens .sdlens-dirty-text {
+    font-size: 12.5px; font-weight: 600; color: var(--lw-amber); margin-right: auto;
+}
