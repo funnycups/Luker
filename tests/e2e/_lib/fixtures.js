@@ -234,6 +234,13 @@ export function bootstrapCustomBackend({ dataRoot, handle = 'default-user', base
             m[key] = '';
         }
     }
+    if (Array.isArray(ext.sd?.illustration?.presets)) {
+        for (const preset of ext.sd.illustration.presets) {
+            if (!preset || typeof preset !== 'object') continue;
+            preset.llm = { apiPresetName: '', llmPresetName: '' };
+            preset.explorationLlm = { apiPresetName: '', llmPresetName: '' };
+        }
+    }
     // Clear the active connection profile so resolveProfile doesn't
     // override chat_completion_source/custom_url with a dev's "Claude"
     // / "Gemini" profile blob.
@@ -303,6 +310,13 @@ export function bootstrapResponsesBackend({ dataRoot, handle = 'default-user', b
             'extractApiPresetName', 'extractLlmPresetName',
         ]) {
             m[key] = '';
+        }
+    }
+    if (Array.isArray(ext.sd?.illustration?.presets)) {
+        for (const preset of ext.sd.illustration.presets) {
+            if (!preset || typeof preset !== 'object') continue;
+            preset.llm = { apiPresetName: '', llmPresetName: '' };
+            preset.explorationLlm = { apiPresetName: '', llmPresetName: '' };
         }
     }
     // Clear the active connection profile so resolveProfile doesn't
@@ -394,6 +408,13 @@ function bootstrapMockChatBackend({ dataRoot, handle = 'default-user', baseURL, 
             'extractApiPresetName', 'extractLlmPresetName',
         ]) {
             m[key] = '';
+        }
+    }
+    if (Array.isArray(ext.sd?.illustration?.presets)) {
+        for (const preset of ext.sd.illustration.presets) {
+            if (!preset || typeof preset !== 'object') continue;
+            preset.llm = { apiPresetName: '', llmPresetName: '' };
+            preset.explorationLlm = { apiPresetName: '', llmPresetName: '' };
         }
     }
     ext.connectionManager = ext.connectionManager || { profiles: [], selectedProfile: null };

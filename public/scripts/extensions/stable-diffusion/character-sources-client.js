@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { transientSessionHeaders } from '../../lib/transient-session.js';
+
 function normalizeSpace(text) {
     return String(text || '').replace(/\s+/g, ' ').trim();
 }
@@ -154,15 +156,21 @@ export async function visitCharacterPage({ context, url, abortSignal = null }) {
     };
 }
 
-export async function fetchReferenceImage({ context, imageUrl, refererUrl = '', profileId = 'char', abortSignal = null }) {
+export async function fetchReferenceImage({
+    context, imageUrl, refererUrl = '', profileId = 'char', abortSignal = null, staging = false, transientSessionId,
+}) {
     const res = await fetch('/api/sd/character-sources/fetch-image', {
         method: 'POST',
-        headers: context?.getRequestHeaders?.() || { 'Content-Type': 'application/json' },
+        headers: {
+            ...(context?.getRequestHeaders?.() || { 'Content-Type': 'application/json' }),
+            ...transientSessionHeaders(transientSessionId),
+        },
         signal: abortSignal || undefined,
         body: JSON.stringify({
             imageUrl,
             refererUrl: refererUrl || undefined,
             profileId,
+            staging,
         }),
     });
     const data = await res.json().catch(() => ({}));
@@ -174,14 +182,20 @@ export async function fetchReferenceImage({ context, imageUrl, refererUrl = '', 
     return data;
 }
 
-export async function promoteLocalReferenceImage({ context, sourcePath, profileId = 'char', abortSignal = null }) {
+export async function promoteLocalReferenceImage({
+    context, sourcePath, profileId = 'char', abortSignal = null, staging = false, transientSessionId,
+}) {
     const res = await fetch('/api/sd/character-sources/promote-local-image', {
         method: 'POST',
-        headers: context?.getRequestHeaders?.() || { 'Content-Type': 'application/json' },
+        headers: {
+            ...(context?.getRequestHeaders?.() || { 'Content-Type': 'application/json' }),
+            ...transientSessionHeaders(transientSessionId),
+        },
         signal: abortSignal || undefined,
         body: JSON.stringify({
             sourcePath,
             profileId,
+            staging,
         }),
     });
     const data = await res.json().catch(() => ({}));

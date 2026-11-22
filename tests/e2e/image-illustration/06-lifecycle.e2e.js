@@ -219,18 +219,22 @@ test.describe.serial('illustration lifecycle', () => {
         const taskRequests = chatRequests.filter(isIllustrationTaskRequest);
         expect(taskRequests.length).toBeGreaterThan(0);
         const latestTaskUserContent = String(
-            taskRequests.at(-1)?.body?.messages?.find(m => m.role === 'user')?.content || '',
+            taskRequests.at(-1)?.body?.messages?.find(m => m.role === 'user' && String(m.content || '').includes('=== CURRENT MESSAGE ===\n'))?.content || '',
         );
-        const [contextPart, currentPart] = latestTaskUserContent.split('=== CURRENT MESSAGE ===');
+        const marker = '=== CURRENT MESSAGE ===\n';
+        const markerIndex = latestTaskUserContent.lastIndexOf(marker);
+        expect(markerIndex).toBeGreaterThan(-1);
+        const contextPart = latestTaskUserContent.slice(0, markerIndex);
+        const currentPart = latestTaskUserContent.slice(markerIndex + marker.length);
         expect(contextPart).toContain(`alt="${IMAGE_PROMPT}"`);
-        expect(currentPart || '').not.toContain('data-illustration-id');
+        expect(currentPart).not.toContain('data-illustration-id');
 
         const cleanedPrompt = await page.evaluate(() => {
             const ctx = window.Luker.getContext();
             return ctx.regex.applyRegex(
                 'before <img src="/user/images/a.png" data-illustration-id="ill_1"> after',
                 ctx.regex.placement.AI_OUTPUT,
-                { isPrompt: true },
+                { isPrompt: true, depth: 0 },
             );
         });
         expect(cleanedPrompt).toBe('before after');

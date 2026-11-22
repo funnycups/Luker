@@ -18,6 +18,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Show completed illustration images in the Run panel while the remaining images are still generating.
 - Added session-owned temporary image staging and cleanup.
+- Added image prompt style selection and reset controls with stored defaults.
+- Unified illustration and background character exploration execution across formal runs and isolated sandbox contexts.
+- Added a conversational AI character profile builder dialog with an explicit source selector, editable draft conflict resolution, and transactional reference image saving.
+- Focused Image Studio on free image generation and source image editing, retired the legacy character design prompt override with an export/discard review dialog, and unified wand-menu naming to Image Studio.
 
 ### Themes
 

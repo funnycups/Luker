@@ -11015,12 +11015,13 @@ export function charSetAuxWorlds(fileName, books) {
  * getter reads from there to stay consistent with the setters.
  *
  * @param {string} fileName - From {@link getCharaFilename}; pass empty/missing to get `[]`.
+ * @param {{storedOnly?: boolean}} [options] - Read the saved binding instead of the active creation draft.
  * @returns {string[]} A deduplicated copy of the bound book names; empty array if none.
  */
-export function getCharaAuxWorlds(fileName) {
+export function getCharaAuxWorlds(fileName, { storedOnly = false } = {}) {
     if (!fileName) return [];
 
-    if (menu_type === 'create') {
+    if (menu_type === 'create' && !storedOnly) {
         const current = create_save.extra_books ?? [];
         return Array.isArray(current) ? current.filter(Boolean).filter(onlyUnique) : [];
     }

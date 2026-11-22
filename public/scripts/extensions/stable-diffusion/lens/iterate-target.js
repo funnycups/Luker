@@ -29,14 +29,14 @@ import {
     validateComfyWorkflowGraph,
 } from '../comfy-workflow-graph.js';
 import { patchGenerationPresetConfig } from '../generation-presets.js';
-import { makeIllustrationId } from '../illustration/presets.js';
+import { getDefaultPromptValues, makeIllustrationId } from '../illustration/presets.js';
 import { getPresetById } from '../illustration/settings.js';
 import { i18n } from './i18n.js';
 
 export const DEFAULT_SD_ITERATE_PROMPT = `You are a configuration, visual-archive, and ComfyUI workflow editor for Luker's Image Generation and AI Illustration system.
 
 Capabilities:
-- Edit AI illustration prompt presets (illustrationPrompt, studioPrompt, characterDesignPrompt, explorationPrompt, visualInspection) via sd_list_presets, sd_read_preset, and sd_update_preset.
+- Edit AI illustration prompt presets (illustrationPrompt, studioPrompt, explorationPrompt, visualInspection) via sd_list_presets, sd_read_preset, and sd_update_preset.
 - Edit character visual archive profiles (canonicalTags, negativeTags, proseDescription, outfits) via sd_list_characters, sd_read_character, sd_upsert_character, and sd_delete_character, cross-checking bound lorebooks with world_book_list, lorebook_list, lorebook_query, and lorebook_get.
 - Edit ComfyUI API-format workflows and custom placeholders via sd_list_workflows, sd_read_workflow, sd_create_workflow, sd_upsert_workflow_nodes, sd_remove_workflow_nodes, sd_delete_workflow, and sd_update_comfy_config.
 - Query the user's connected ComfyUI server via sd_search_comfy_nodes and sd_inspect_comfy_node before wiring unfamiliar or custom nodes so class_type names, required inputs, enum filenames, and output slot indices match installed nodes.
@@ -234,7 +234,6 @@ const SD_ITERATE_TOOLS = Object.freeze([
                     name: { type: 'string' },
                     illustration_prompt: { type: 'string' },
                     studio_prompt: { type: 'string' },
-                    character_design_prompt: { type: 'string' },
                     exploration_prompt: { type: 'string' },
                     visual_inspection: { type: 'boolean' },
                 },
@@ -408,9 +407,6 @@ function formatPresetUnitText(fields) {
         `--- illustrationPrompt ---\n${fields.illustrationPrompt || ''}`,
         `--- studioPrompt ---\n${fields.studioPrompt || ''}`,
     ];
-    if (fields.characterDesignPrompt) {
-        lines.push(`--- characterDesignPrompt ---\n${fields.characterDesignPrompt}`);
-    }
     if (fields.explorationPrompt) {
         lines.push(`--- explorationPrompt ---\n${fields.explorationPrompt}`);
     }
@@ -530,7 +526,6 @@ export function buildSdUnits(doc) {
             name: String(preset.name || ''),
             illustrationPrompt: String(preset.illustrationPrompt || ''),
             studioPrompt: String(preset.studioPrompt || ''),
-            characterDesignPrompt: String(preset.characterDesignPrompt || ''),
             explorationPrompt: String(preset.explorationPrompt || ''),
             visualInspection: Boolean(preset.visualInspection),
         };
@@ -548,7 +543,6 @@ export function buildSdUnits(doc) {
             name: String(char.name || ''),
             aliases: clone(char.aliases || []),
             sourceWork: String(char.sourceWork || ''),
-            sourceCardAvatars: clone(char.sourceCardAvatars || []),
             canonicalTags: clone(char.canonicalTags || []),
             negativeTags: clone(char.negativeTags || []),
             proseDescription: String(char.proseDescription || ''),
@@ -611,15 +605,17 @@ function applyOpsToSdDoc(doc, ops) {
             }
             let target = next.presets.find(p => p.id === id);
             if (!target) {
+                const defaults = getDefaultPromptValues('tag');
                 target = {
                     id,
                     name: id,
+                    promptStyle: 'tag',
+                    promptDefaultsInitialized: true,
                     createdAt: Date.now(),
                     updatedAt: Date.now(),
-                    illustrationPrompt: '',
-                    studioPrompt: '',
-                    characterDesignPrompt: '',
-                    explorationPrompt: '',
+                    illustrationPrompt: defaults.illustrationPrompt,
+                    studioPrompt: defaults.studioPrompt,
+                    explorationPrompt: defaults.explorationPrompt,
                     llm: { apiPresetName: '', llmPresetName: '' },
                     explorationLlm: { apiPresetName: '', llmPresetName: '' },
                     visualInspection: false,
@@ -627,6 +623,11 @@ function applyOpsToSdDoc(doc, ops) {
                 next.presets.push(target);
             }
             for (const c of op.changes) {
+                if (op.kind === 'add'
+                    && (c.field === 'illustrationPrompt' || c.field === 'studioPrompt' || c.field === 'explorationPrompt')
+                    && !String(c.after ?? '').trim()) {
+                    continue;
+                }
                 target[c.field] = clone(c.after);
             }
             target.updatedAt = Date.now();
@@ -1245,7 +1246,6 @@ export function createSdIterateTarget(
                 if (args.name !== undefined) target.name = String(args.name);
                 if (args.illustration_prompt !== undefined) target.illustrationPrompt = String(args.illustration_prompt);
                 if (args.studio_prompt !== undefined) target.studioPrompt = String(args.studio_prompt);
-                if (args.character_design_prompt !== undefined) target.characterDesignPrompt = String(args.character_design_prompt);
                 if (args.exploration_prompt !== undefined) target.explorationPrompt = String(args.exploration_prompt);
                 if (args.visual_inspection !== undefined) target.visualInspection = Boolean(args.visual_inspection);
                 return next;

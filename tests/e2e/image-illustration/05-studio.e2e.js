@@ -13,8 +13,7 @@ let server, mock, sdMock;
 
 test.beforeAll(async () => {
     sdMock = await startSdWebUiMock();
-    mock = await startMockLLM({ scriptedReplies: ['已按你的反馈调整。'] });
-    mock.scriptToolCall({ name: 'generate_image', arguments: { prompt: '1girl, lighthouse, dusk' } });
+    mock = await startMockLLM();
     server = await startServer({ batchKey: 'image-illustration', scenarioId: '05-studio' });
     markOnboarded({ dataRoot: server.dataRoot });
     bootstrapCustomBackend({ dataRoot: server.dataRoot, baseURL: mock.baseURL });
@@ -39,12 +38,27 @@ async function configureSd(page) {
 
 async function openStudio(page) {
     await page.locator('#extensionsMenuButton').click();
-    await page.locator('#sd_illustration_open_studio').click();
+    const menuItem = page.locator('#sd_illustration_open_studio');
+    const expectedLabel = await page.evaluate(() => window.Luker.getContext().translate('Image Studio'));
+    await expect(menuItem).toContainText(expectedLabel);
+    await menuItem.click();
     await expect(page.locator('.wbench .wb-win:not([hidden]) [data-sd-view="studio"]')).toBeVisible({ timeout: 10_000 });
 }
 
 test.describe('Workbench embedded image studio', () => {
-    test('keeps tool history with attribution:none and persists sessions in GlobalState across restarts', async ({ page }) => {
+    test('supports free drawing, source image editing, attribution:none, and GlobalState persistence without character-design controls', async ({ page }) => {
+        let round = 0;
+        mock.scriptCompletion(() => {
+            round += 1;
+            if (round === 1) {
+                return { tool: 'generate_image', arguments: { prompt: '1girl, lighthouse, dusk' } };
+            }
+            if (round === 2) {
+                return { tool: 'generate_image', arguments: { prompt: '1girl, lighthouse, starry night' } };
+            }
+            return { text: '已按你的反馈调整。' };
+        });
+
         await awaitMainUI(page, server.baseURL);
         await configureSd(page);
         await openExtensionsDrawer(page);
@@ -55,6 +69,11 @@ test.describe('Workbench embedded image studio', () => {
         await openStudio(page);
         const studioRoot = page.locator('.wbench .wb-win:not([hidden]) [data-sd-view="studio"]');
 
+        // Character-design controls are retired from Studio.
+        await expect(studioRoot.locator('[data-sd-studio-mode]')).toHaveCount(0);
+        await expect(studioRoot.locator('[data-sd-role="studio-target-profile"]')).toHaveCount(0);
+        await expect(studioRoot.locator('[data-sd-role="studio-source-select"]')).toHaveCount(0);
+
         // First round: the model calls generate_image; output saved under _studio with attribution:none.
         await studioRoot.locator('[data-sd-role="studio-input"]').fill('画一座海边的灯塔');
         await studioRoot.locator('[data-sd-role="studio-send"]').click();
@@ -63,26 +82,39 @@ test.describe('Workbench embedded image studio', () => {
         await expect(imageCard).toBeVisible({ timeout: 60_000 });
         const imgSrc = await imageCard.locator('img').getAttribute('src');
         expect(imgSrc).toContain('/user/images/_studio/');
+        await expect(studioRoot.locator('[data-studio-action="promote-reference"]')).toHaveCount(0);
 
         const txt2img = sdMock.requests.find(request => request.url === '/sdapi/v1/txt2img');
-        expect(txt2img, 'SD mock should receive one image generation request').toBeTruthy();
+        expect(txt2img, 'SD mock should receive one txt2img request').toBeTruthy();
         expect(String(txt2img.body.prompt)).toContain('lighthouse');
 
-        // Second round: plain text reply, carrying previous assistant tool_calls and tool result.
-        await studioRoot.locator('[data-sd-role="studio-input"]').fill('改成夜晚');
+        // Second round: attach first image as source via Edit source and generate edited image via img2img.
+        await studioRoot.locator('[data-studio-action="edit-source"]').click();
+        await expect(studioRoot.locator('.sdlens-studio-source-banner')).toBeVisible();
+        await studioRoot.locator('[data-sd-role="studio-input"]').fill('把天空改成星空夜晚');
+        await studioRoot.locator('[data-sd-role="studio-send"]').click();
+        await expect(studioRoot.locator('[data-studio-image-id]')).toHaveCount(2, { timeout: 60_000 });
+
+        const img2img = sdMock.requests.find(request => request.url === '/sdapi/v1/img2img');
+        expect(img2img, 'SD mock should receive an img2img request when editing source image').toBeTruthy();
+        expect(String(img2img.body.prompt)).toContain('starry night');
+
+        // Third round: plain text reply, carrying previous assistant tool_calls and tool result.
+        await studioRoot.locator('[data-sd-role="studio-input"]').fill('构图很不错');
         await studioRoot.locator('[data-sd-role="studio-send"]').click();
         await expect(studioRoot.locator('.sdlens-studio-messages')).toContainText('已按你的反馈调整。', { timeout: 60_000 });
 
         const chatRequests = mock.requests.filter(request => String(request.url).includes('/chat/completions'));
-        expect(chatRequests.length).toBeGreaterThanOrEqual(2);
-        const secondHistory = chatRequests.at(-1).body.messages;
-        const toolMessage = secondHistory.find(message => message.role === 'tool');
-        expect(toolMessage, 'second round must replay the tool result').toBeTruthy();
+        expect(chatRequests.length).toBeGreaterThanOrEqual(3);
+        expect(chatRequests[0].body.tools.map(t => t.function.name)).toEqual(['generate_image']);
+        const thirdHistory = chatRequests.at(-1).body.messages;
+        const toolMessage = thirdHistory.find(message => message.role === 'tool');
+        expect(toolMessage, 'later round must replay the tool result').toBeTruthy();
         expect(toolMessage.content).toContain('/user/images/_studio/');
-        expect(secondHistory.some(message => message.role === 'assistant'
+        expect(thirdHistory.some(message => message.role === 'assistant'
             && Array.isArray(message.tool_calls) && message.tool_calls.length > 0)).toBe(true);
 
-        // Session is stored in states/sd_studio_sessions.json, NOT settings.json.
+        // Session is stored in states/sd_studio_sessions.json without retired character-design keys, NOT settings.json.
         const stateFile = resolve(server.dataRoot, 'default-user', 'states', 'sd_studio_sessions.json');
         const settingsFile = resolve(server.dataRoot, 'default-user', 'settings.json');
         await expect.poll(() => {
@@ -93,6 +125,11 @@ test.describe('Workbench embedded image studio', () => {
                 return 0;
             }
         }, { timeout: 15_000 }).toBe(1);
+
+        const storedSession = Object.values(JSON.parse(readFileSync(stateFile, 'utf8')).sessions)[0];
+        for (const retiredKey of ['mode', 'targetProfileId', 'sourceKind', 'sourceCardAvatar', 'stagedProfileDraft']) {
+            expect(Object.hasOwn(storedSession, retiredKey)).toBe(false);
+        }
 
         const settingsJson = JSON.parse(readFileSync(settingsFile, 'utf8'));
         expect(settingsJson.extension_settings?.sd?.illustration?.studioSessions).toBeUndefined();
@@ -107,8 +144,9 @@ test.describe('Workbench embedded image studio', () => {
         const reopenedStudio = page.locator('.wbench .wb-win:not([hidden]) [data-sd-view="studio"]');
         await expect(reopenedStudio.locator('[data-studio-session-id]')).toHaveCount(1);
         await reopenedStudio.locator('[data-studio-session-id]').first().click();
-        await expect(reopenedStudio.locator('[data-studio-image-id]')).toHaveCount(1);
+        await expect(reopenedStudio.locator('[data-studio-image-id]')).toHaveCount(2);
         await expect(reopenedStudio.locator('.sdlens-studio-messages')).toContainText('画一座海边的灯塔');
-        await expect(reopenedStudio.locator('.sdlens-studio-messages')).toContainText('改成夜晚');
+        await expect(reopenedStudio.locator('.sdlens-studio-messages')).toContainText('把天空改成星空夜晚');
+        await expect(reopenedStudio.locator('.sdlens-studio-messages')).toContainText('构图很不错');
     });
 });

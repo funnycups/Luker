@@ -21,6 +21,8 @@ const TAB_LABELS = {
     memory: /^(Memory graph|记忆图|記憶圖)$/i,
     'ws:orch': /^(Orchestration|编排|編排)$/i,
     orch: /^(Orchestration|编排|編排)$/i,
+    'ws:sd': /^(Image Generation|图像生成|圖像生成)$/i,
+    sd: /^(Image Generation|图像生成|圖像生成)$/i,
 };
 
 const TARGET_ALIASES = {
@@ -41,6 +43,7 @@ const TARGET_ALIASES = {
     orch: 'orch',
     orchestrator: 'orch',
     orchestration: 'orch',
+    sd: 'sd',
 };
 
 const TARGET_LABELS = {
@@ -50,6 +53,7 @@ const TARGET_LABELS = {
     preset: /^(Preset|预设|預設)$/i,
     card: /^(Character card|角色卡)$/i,
     world: /^(World book|世界书|世界書)$/i,
+    sd: /^(Image Generation|图像生成|圖像生成)$/i,
 };
 
 const SCOPE_PATTERNS = {

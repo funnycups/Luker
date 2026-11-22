@@ -27,6 +27,48 @@ function createMemoryGlobalStateContext() {
 }
 
 describe('character-archive/store, lens/studio-store, and DataMaidService image protection', () => {
+    test('removesCardBindingsFromProfiles', async () => {
+        const { normalizeCharacterProfile } = await import('../public/scripts/extensions/stable-diffusion/character-archive/store.js');
+        const profile = normalizeCharacterProfile({
+            id: 'profile_visual',
+            name: 'Visual profile',
+            sourceWork: 'Supplied setting',
+            sourceCardAvatars: ['unrelated-card.png'],
+            proseDescription: 'Appearance supplied by the user.',
+        }, 100);
+        expect(profile).not.toHaveProperty('sourceCardAvatars');
+        expect(profile.sourceWork).toBe('Supplied setting');
+        expect(profile.proseDescription).toBe('Appearance supplied by the user.');
+    });
+
+    test('profile versions use canonical normalized data', async () => {
+        const store = await import('../public/scripts/extensions/stable-diffusion/character-archive/store.js');
+        expect(typeof store.profileVersion).toBe('function');
+        const profile = store.normalizeCharacterProfile({
+            id: 'profile_visual',
+            name: 'Visual profile',
+            proseDescription: 'Appearance supplied by the user.',
+        }, 100);
+        const reordered = Object.fromEntries(Object.entries(profile).reverse());
+        const withRetiredBinding = { ...reordered, sourceCardAvatars: ['unrelated-card.png'] };
+        expect(store.profileVersion(withRetiredBinding)).toBe(store.profileVersion(profile));
+        expect(store.profileVersion(profile)).toBe(JSON.stringify(profile));
+    });
+
+    test('profile versions distinguish changed content', async () => {
+        const store = await import('../public/scripts/extensions/stable-diffusion/character-archive/store.js');
+        expect(typeof store.profileVersion).toBe('function');
+        const profile = store.normalizeCharacterProfile({ id: 'profile_visual', name: 'Visual profile' }, 100);
+        expect(store.profileVersion({ ...profile, proseDescription: 'A revised appearance.' }))
+            .not.toBe(store.profileVersion(profile));
+    });
+
+    test('an absent profile has no version', async () => {
+        const store = await import('../public/scripts/extensions/stable-diffusion/character-archive/store.js');
+        expect(typeof store.profileVersion).toBe('function');
+        expect(store.profileVersion(null)).toBeNull();
+    });
+
     test('character profile store performs CRUD, resolves outfits, and formats compact grep-style index without arbitrary caps', async () => {
         const {
             CHARACTER_PROFILES_NAMESPACE,

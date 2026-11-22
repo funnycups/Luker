@@ -11,9 +11,14 @@ import { createWorkbenchRegistry } from '../public/scripts/workbench/registry.js
 import { createRunStore } from '../public/scripts/run-panel/store.js';
 import { createRecorder, createMemoryStorage } from '../public/scripts/run-panel/recorder.js';
 import { createCharacterProfileStore } from '../public/scripts/extensions/stable-diffusion/character-archive/store.js';
+import { DEFAULT_EXPLORATION_PROMPT } from '../public/scripts/extensions/stable-diffusion/exploration/prompts.js';
+import { getDefaultPromptValues } from '../public/scripts/extensions/stable-diffusion/illustration/presets.js';
+import { migrateIllustrationPromptSettings } from '../public/scripts/extensions/stable-diffusion/illustration/settings.js';
+import { openLegacyCharacterDesignMigrationDialog } from '../public/scripts/extensions/stable-diffusion/illustration/legacy-migration-dialog.js';
 import { registerWorkbenchLocaleData } from '../public/scripts/workbench/locale-data.js';
 import { initSdLens } from '../public/scripts/extensions/stable-diffusion/lens/index.js';
 import { mountSdLens } from '../public/scripts/extensions/stable-diffusion/lens/app.js';
+import { createStudioSessionStore, normalizeStudioSession } from '../public/scripts/extensions/stable-diffusion/lens/studio-store.js';
 import { buildSdDiagnoseDraft } from '../public/scripts/extensions/stable-diffusion/activity.js';
 import { askTools, readLabel } from '../public/scripts/workbench/model/ask.js';
 import { wsName } from '../public/scripts/workbench/pages/ask.js';
@@ -66,9 +71,11 @@ function createHarnessContext({ recorder = null, workbenchRegistry = null } = {}
             presets: [{
                 id: 'preset_1',
                 name: 'Tag style',
+                promptStyle: 'tag',
+                promptDefaultsInitialized: true,
                 illustrationPrompt: 'Prompt instructions',
                 studioPrompt: 'Studio instructions',
-                explorationPrompt: '',
+                explorationPrompt: DEFAULT_EXPLORATION_PROMPT,
                 llm: { apiPresetName: '', llmPresetName: '' },
                 explorationLlm: { apiPresetName: '', llmPresetName: '' },
                 visualInspection: false,
@@ -236,100 +243,6 @@ describe('embedded ws:sd workspace, characters archive view, and run view', () =
         cleanup();
     });
 
-    test('characters view supports profile CRUD and per-action fanwork vs OC mode switch without writing global settings', async () => {
-        const explorationCalls = [];
-        const { ctx, reg, sdSettings } = createHarnessContext();
-        ctx.generateTask = async (opts) => {
-            explorationCalls.push(opts);
-            if (explorationCalls.length === 1) {
-                return {
-                    toolCalls: [{
-                        id: 'exp_1',
-                        name: 'save_character_profile',
-                        args: {
-                            id: 'char_lyra',
-                            name: 'Lyra',
-                            source_work: 'Horizon',
-                            canonical_tags: ['1girl', 'silver braid'],
-                            outfits: [{ id: 'outfit_1', name: 'Coat', tags: ['navy coat'] }],
-                        },
-                    }],
-                    assistantText: '',
-                };
-            }
-            return { toolCalls: [], assistantText: 'Archived Lyra.' };
-        };
-        globalThis.Luker = { getContext: () => ctx };
-
-        const store = createCharacterProfileStore(ctx);
-        await store.upsertProfile({
-            id: 'char_existing',
-            name: 'Existing Heroine',
-            canonicalTags: ['1girl', 'blonde hair'],
-            outfits: [{ id: 'outfit_base', name: ' Casual', tags: ['white dress'] }],
-        });
-
-        const cleanup = initSdLens({ getContext: () => ctx });
-        const ws = reg.getWorkspaces().find(w => w.id === 'sd');
-        const container = document.createElement('div');
-        document.body.appendChild(container);
-
-        const sdSettingsSnapshotBefore = JSON.stringify(sdSettings);
-        const cardExtensionsBefore = JSON.stringify(ctx.characters.map(c => c.data.extensions));
-
-        const handle = ws.mount(container, {
-            app: { toast: jest.fn(), isCompact: () => false },
-            opts: { ws: 'sd', subview: 'characters' },
-        });
-        await new Promise(r => setTimeout(r, 30));
-
-        expect(container.textContent).toContain('Existing Heroine');
-
-        // Verify known character card selector is a <select> dropdown, not free-text
-        const cardSelect = container.querySelector('[data-sd-role="launch-card-select"]');
-        expect(cardSelect?.tagName).toBe('SELECT');
-        const optionValues = [...cardSelect.querySelectorAll('option')].map(o => o.value);
-        expect(optionValues).toEqual(expect.arrayContaining(['', 'lyra.png', 'kaelen.png']));
-
-        // Switch per-invocation toggle to OC design -> verify NO global or card setting was mutated, and clicking launch switches to studio view
-        const ocSegBtn = container.querySelector('[data-sd-launch-mode="oc"]');
-        expect(ocSegBtn).not.toBeNull();
-        ocSegBtn.click();
-        expect(JSON.stringify(sdSettings)).toBe(sdSettingsSnapshotBefore);
-        expect(JSON.stringify(ctx.characters.map(c => c.data.extensions))).toBe(cardExtensionsBefore);
-
-        const targetInput = container.querySelector('[data-sd-role="launch-target-input"]');
-        targetInput.value = 'Aurelia';
-        targetInput.dispatchEvent(new Event('input', { bubbles: true }));
-        cardSelect.value = 'lyra.png';
-        cardSelect.dispatchEvent(new Event('change', { bubbles: true }));
-
-        const launchBtn = container.querySelector('[data-sd-role="launch-submit"]');
-        launchBtn.click();
-        await new Promise(r => setTimeout(r, 20));
-        expect(container.querySelector('[data-sd-view="studio"]')).not.toBeNull();
-        expect(JSON.stringify(sdSettings)).toBe(sdSettingsSnapshotBefore);
-
-        // Switch back to characters view, toggle to fanwork exploration, and dispatch exploration agent
-        handle.update({ ws: 'sd', subview: 'characters' });
-        await new Promise(r => setTimeout(r, 20));
-        const fanworkBtn = container.querySelector('[data-sd-launch-mode="fanwork"]');
-        fanworkBtn.click();
-        const fanTargetInput = container.querySelector('[data-sd-role="launch-target-input"]');
-        fanTargetInput.value = 'Lyra';
-        fanTargetInput.dispatchEvent(new Event('input', { bubbles: true }));
-
-        container.querySelector('[data-sd-role="launch-submit"]').click();
-        await new Promise(r => setTimeout(r, 60));
-
-        expect(explorationCalls.length).toBe(2);
-        const profilesAfter = await store.listProfiles();
-        expect(profilesAfter.map(p => p.id)).toEqual(expect.arrayContaining(['char_existing', 'char_lyra']));
-
-        handle.destroy();
-        cleanup();
-    });
-
     test('run view renders live and historical source:sd runs with full details and AI diagnosis jump', async () => {
         const { ctx, reg, rec, openedCalls } = createHarnessContext();
         globalThis.Luker = { getContext: () => ctx };
@@ -387,47 +300,87 @@ describe('embedded ws:sd workspace, characters archive view, and run view', () =
     });
 });
 
-describe('workbench sd studio view and multi-turn OC reference design', () => {
-    test('executes general and character_design multi-turn loops with attribution:none, promotes staged gallery refs, and records undo history', async () => {
-        const { ctx, reg } = createHarnessContext();
-        const generatedCalls = [];
-        const promotedCalls = [];
-        const historyRecords = [];
-
-        ctx.powerUserSettings = { persona_description: 'Tall astronomer with amber eyes and a dark cape.' };
-        ctx.userAvatar = 'astronomer.png';
-        ctx.worldNames = ['HorizonLore'];
-        ctx.loadWorldInfo = async (bookName) => {
-            if (bookName === 'HorizonLore') {
-                return {
-                    entries: {
-                        0: {
-                            uid: 0,
-                            comment: 'Aurelia Appearance',
-                            key: ['Aurelia'],
-                            content: 'Aurelia wears a star-embroidered white gown and golden circlet.',
-                            disable: false,
-                        },
-                    },
-                };
-            }
-            return { entries: {} };
+describe('workbench sd studio separation, legacy migration, and free drawing', () => {
+    test('preservesLegacyStudioContent', async () => {
+        const { ctx } = createHarnessContext();
+        const legacySession = {
+            id: 'sess_legacy_oc',
+            title: 'Legacy OC Sheet',
+            presetId: 'preset_1',
+            mode: 'character_design',
+            targetProfileId: 'char_99',
+            sourceKind: 'card',
+            sourceCardAvatar: 'lyra.png',
+            stagedProfileDraft: { name: 'Aurelia', outfits: [] },
+            visualReview: true,
+            attachedReferences: [{ imagePath: '/user/images/_studio/base.png', role: 'source' }],
+            messages: [
+                { id: 'm_u1', role: 'user', content: 'Draw a golden observatory portrait.', at: 100, tool_calls: [], tool_results: [] },
+                {
+                    id: 'm_a1',
+                    role: 'assistant',
+                    content: 'Generated the observatory portrait.',
+                    at: 200,
+                    tool_calls: [{ id: 'tc_1', type: 'function', function: { name: 'generate_image', arguments: '{"prompt":"observatory"}' } }],
+                    tool_results: [{ tool_call_id: 'tc_1', content: '{"status":"ready","image_id":"img_1"}' }],
+                },
+            ],
+            images: [{
+                id: 'img_1',
+                messageId: 'm_a1',
+                prompt: '1girl, observatory, lantern',
+                negativePrompt: 'blurry',
+                aspectRatio: '2:3',
+                imageUrl: '/user/images/_studio/obs_1.png',
+                sourceImageId: '',
+                characterImageIds: [],
+                loras: [{ name: 'detail.safetensors', weight: 0.7 }],
+                status: 'ready',
+                error: '',
+                createdAt: 200,
+            }],
+            createdAt: 100,
+            updatedAt: 200,
         };
 
+        const normalized = normalizeStudioSession(legacySession);
+        expect(normalized.messages).toEqual(legacySession.messages);
+        expect(normalized.images).toEqual(legacySession.images);
+        expect(normalized.attachedReferences).toEqual(legacySession.attachedReferences);
+        expect(normalized.visualReview).toBe(true);
+        for (const retiredKey of ['mode', 'targetProfileId', 'sourceKind', 'sourceCardAvatar', 'stagedProfileDraft']) {
+            expect(Object.hasOwn(normalized, retiredKey)).toBe(false);
+        }
+
+        await ctx.updateGlobalState('sd_studio_sessions', () => ({
+            version: 1,
+            sessions: { [legacySession.id]: legacySession },
+        }));
+        const store = createStudioSessionStore(ctx);
+        const loaded = await store.getSession(legacySession.id);
+        expect(loaded.messages).toEqual(legacySession.messages);
+        expect(loaded.images).toEqual(legacySession.images);
+        expect(loaded.attachedReferences).toEqual(legacySession.attachedReferences);
+        for (const retiredKey of ['mode', 'targetProfileId', 'sourceKind', 'sourceCardAvatar', 'stagedProfileDraft']) {
+            expect(Object.hasOwn(loaded, retiredKey)).toBe(false);
+        }
+    });
+
+    test('keepsFreeDrawingAndEditing', async () => {
+        const { ctx, reg, sdSettings } = createHarnessContext();
+        const generatedCalls = [];
+        const llmCalls = [];
+
         const originalFetch = globalThis.fetch;
-        globalThis.fetch = async (url, init) => {
-            if (String(url).includes('/api/sd/character-sources/promote-local-image')) {
-                const body = JSON.parse(init.body);
-                promotedCalls.push(body);
+        globalThis.fetch = async (url) => {
+            if (String(url).startsWith('/user/images/_studio/')) {
+                const bytes = new Uint8Array([137, 80, 78, 71]);
                 return {
                     ok: true,
                     status: 200,
-                    json: async () => ({
-                        ok: true,
-                        imagePath: `/user/images/_references/${body.profileId || 'oc'}_promoted.png`,
-                        sha256: 'abc123def456',
-                        width: 1024,
-                        height: 1024,
+                    blob: async () => ({
+                        type: 'image/png',
+                        arrayBuffer: async () => bytes.buffer,
                     }),
                 };
             }
@@ -454,42 +407,25 @@ describe('workbench sd studio view and multi-turn OC reference design', () => {
             },
             async generate(prompt, opts) {
                 generatedCalls.push({ prompt, opts });
-                return `/user/images/_studio/cand_${generatedCalls.length}.png`;
+                return `/user/images/_studio/free_${generatedCalls.length}.png`;
             },
         };
 
-        let studioRound = 0;
-        let capturedCandidateId = '';
+        let round = 0;
         ctx.generateTask = async (opts) => {
-            studioRound += 1;
+            round += 1;
+            llmCalls.push(opts);
             const toolNames = (opts.tools || []).map(t => t.function.name);
-            expect(toolNames).toEqual(expect.arrayContaining([
-                'read_character_card',
-                'read_user_persona',
-                'lorebook_get',
-                'generate_image',
-                'stage_character_profile',
-            ]));
+            expect(toolNames).toEqual(['generate_image']);
+            expect(opts.taskMessages[0]).toEqual({ role: 'system', content: 'Studio instructions' });
 
-            if (studioRound === 1) {
-                return {
-                    toolCalls: [
-                        { id: 'st_1', name: 'read_user_persona', args: {} },
-                        { id: 'st_2', name: 'lorebook_get', args: { book_name: 'HorizonLore', uids: [0] } },
-                    ],
-                    assistantText: '',
-                };
-            }
-            if (studioRound === 2) {
-                const toolMsgs = opts.taskMessages.filter(m => m.role === 'tool').map(m => m.content).join('\n');
-                expect(toolMsgs).toContain('amber eyes');
-                expect(toolMsgs).toContain('star-embroidered white gown');
+            if (round === 1) {
                 return {
                     toolCalls: [{
-                        id: 'st_3',
+                        id: 'st_1',
                         name: 'generate_image',
                         args: {
-                            prompt: '1girl, golden circlet, star-embroidered white gown, standing portrait',
+                            prompt: '1girl, lighthouse harbor, dusk light',
                             aspect_ratio: '2:3',
                             loras: [{ name: 'detail_tweaker.safetensors', weight: 0.7 }],
                         },
@@ -497,36 +433,28 @@ describe('workbench sd studio view and multi-turn OC reference design', () => {
                     assistantText: '',
                 };
             }
-            if (studioRound === 3) {
-                const lastToolMsg = opts.taskMessages.filter(m => m.role === 'tool').at(-1);
-                const parsed = JSON.parse(lastToolMsg.content);
-                capturedCandidateId = parsed.image_id;
-                expect(capturedCandidateId).toBeTruthy();
+            if (round === 2) {
+                // Visual review round receives the preview image and replies in text.
+                const hasImagePreview = opts.taskMessages
+                    .filter(m => m.role === 'user' && Array.isArray(m.content))
+                    .flatMap(m => m.content)
+                    .some(part => part.type === 'image_url' && part.image_url?.url?.startsWith('data:image/'));
+                expect(hasImagePreview).toBe(true);
+                return { toolCalls: [], assistantText: 'Lighting looks crisp.' };
+            }
+            if (round === 3) {
                 return {
                     toolCalls: [{
-                        id: 'st_4',
-                        name: 'stage_character_profile',
+                        id: 'st_2',
+                        name: 'generate_image',
                         args: {
-                            name: 'Aurelia',
-                            source_work: 'Original',
-                            canonical_tags: ['1girl', 'golden circlet', 'amber eyes'],
-                            prose_description: 'Regal astronomer with amber eyes and a golden circlet.',
-                            outfits: [{
-                                id: 'outfit_ceremonial',
-                                name: 'Ceremonial Gown',
-                                tags: ['star-embroidered white gown'],
-                                image_ids: [capturedCandidateId],
-                            }],
-                            default_outfit_id: 'outfit_ceremonial',
+                            prompt: '1girl, lighthouse harbor, starry midnight sky',
                         },
                     }],
                     assistantText: '',
                 };
             }
-            return {
-                toolCalls: [],
-                assistantText: 'Here is Aurelia with her ceremonial gown ready to apply.',
-            };
+            return { toolCalls: [], assistantText: 'Finished.' };
         };
 
         globalThis.Luker = { getContext: () => ctx };
@@ -538,34 +466,30 @@ describe('workbench sd studio view and multi-turn OC reference design', () => {
         try {
             const toastMock = jest.fn();
             const handle = ws.mount(container, {
-                app: {
-                    toast: toastMock,
-                    isCompact: () => false,
-                    history: {
-                        record: entry => historyRecords.push(entry),
-                    },
-                },
+                app: { toast: toastMock, isCompact: () => false },
                 opts: { ws: 'sd', subview: 'studio' },
             });
             await new Promise(r => setTimeout(r, 30));
 
-            // Switch studio session mode to character_design
-            const charDesignModeBtn = container.querySelector('[data-sd-studio-mode="character_design"]');
-            expect(charDesignModeBtn).not.toBeNull();
-            charDesignModeBtn.click();
+            // Character-design UI controls are physically gone from Studio.
+            expect(container.querySelector('[data-sd-studio-mode]')).toBeNull();
+            expect(container.querySelector('[data-sd-role="studio-target-profile"]')).toBeNull();
+            expect(container.querySelector('[data-sd-role="studio-source-select"]')).toBeNull();
+            expect(container.querySelector('[data-sd-role="staged-proposal"]')).toBeNull();
+
+            // Enable Visual review and generate an image.
+            const visualSwitch = container.querySelector('.sdlens-studio-toolbar button[role="switch"]');
+            expect(visualSwitch).not.toBeNull();
+            visualSwitch.click();
             await new Promise(r => setTimeout(r, 15));
 
             const input = container.querySelector('[data-sd-role="studio-input"]');
-            expect(input).not.toBeNull();
-            input.value = 'Design Aurelia based on the lorebook and persona.';
+            input.value = 'Paint a harbor lighthouse at dusk.';
             input.dispatchEvent(new Event('input', { bubbles: true }));
-
             container.querySelector('[data-sd-role="studio-send"]').click();
             await new Promise(r => setTimeout(r, 80));
 
-            const errorToasts = toastMock.mock.calls.filter(([, opts]) => opts?.error);
-            expect(errorToasts).toEqual([]);
-            expect(studioRound).toBe(4);
+            expect(round).toBe(2);
             expect(generatedCalls).toHaveLength(1);
             expect(generatedCalls[0].opts).toMatchObject({
                 attribution: 'none',
@@ -573,35 +497,172 @@ describe('workbench sd studio view and multi-turn OC reference design', () => {
                 aspectRatio: '2:3',
                 loras: [{ name: 'detail_tweaker.safetensors', weight: 0.7 }],
             });
+            expect(container.querySelector('[data-studio-action="promote-reference"]')).toBeNull();
 
-            // Staged proposal review card is rendered; click Apply
-            const applyBtn = container.querySelector('[data-sd-role="apply-staged-profile"]');
-            expect(applyBtn).not.toBeNull();
-            applyBtn.click();
-            await new Promise(r => setTimeout(r, 40));
+            // Attach the generated image as source via Edit source, disable visual review, and edit.
+            container.querySelector('.sdlens-studio-toolbar button[role="switch"]').click();
+            container.querySelector('[data-studio-action="edit-source"]').click();
+            await new Promise(r => setTimeout(r, 15));
 
-            expect(promotedCalls).toHaveLength(1);
-            expect(promotedCalls[0].sourcePath).toBe('/user/images/_studio/cand_1.png');
+            const editInput = container.querySelector('[data-sd-role="studio-input"]');
+            editInput.value = 'Turn the sky to starry midnight.';
+            editInput.dispatchEvent(new Event('input', { bubbles: true }));
+            container.querySelector('[data-sd-role="studio-send"]').click();
+            await new Promise(r => setTimeout(r, 60));
 
-            const profileStore = createCharacterProfileStore(ctx);
-            const allProfiles = await profileStore.listProfiles();
-            expect(allProfiles).toHaveLength(1);
-            expect(allProfiles[0].name).toBe('Aurelia');
-            expect(allProfiles[0].outfits[0].referenceImages).toEqual([
-                `/user/images/_references/${allProfiles[0].id}_promoted.png`,
+            expect(generatedCalls).toHaveLength(2);
+            expect(generatedCalls[1].opts.references).toEqual([
+                { imagePath: '/user/images/_studio/free_1.png', role: 'source' },
             ]);
 
-            // Verify Workbench history undo removes the newly created profile cleanly
-            expect(historyRecords).toHaveLength(1);
-            expect(historyRecords[0].ws).toBe('sd');
-            await historyRecords[0].undo();
-            expect(await profileStore.listProfiles()).toHaveLength(0);
+            // Empty studioPrompt errors before contacting the model.
+            const callsBeforeEmpty = llmCalls.length;
+            sdSettings.illustration.presets[0].studioPrompt = '   ';
+            const emptyInput = container.querySelector('[data-sd-role="studio-input"]');
+            emptyInput.value = 'Should fail without studio prompt.';
+            emptyInput.dispatchEvent(new Event('input', { bubbles: true }));
+            container.querySelector('[data-sd-role="studio-send"]').click();
+            await new Promise(r => setTimeout(r, 20));
+            expect(llmCalls).toHaveLength(callsBeforeEmpty);
+            expect(toastMock).toHaveBeenCalledWith(expect.stringContaining('Fill in the prompt or reset it to the default.'), { error: true });
+
+            // Characters view has no legacy launcher or OC studio refine button.
+            handle.update({ ws: 'sd', subview: 'characters' });
+            await new Promise(r => setTimeout(r, 20));
+            expect(container.querySelector('.sdlens-launcher')).toBeNull();
+            expect(container.querySelector('[data-sd-role="launch-submit"]')).toBeNull();
+            expect(container.querySelector('[data-sd-role="refine-in-studio"]')).toBeNull();
+            expect(container.querySelector('[data-sd-role="open-ai-builder"]')).not.toBeNull();
 
             handle.destroy();
         } finally {
             globalThis.fetch = originalFetch;
             cleanup();
         }
+    });
+
+    test('requiresVisiblePromptMigration', async () => {
+        const legacyText = '  Custom legacy appearance sheet instructions.\nKeep exact details.\n';
+        const { settings } = migrateIllustrationPromptSettings({
+            initialized: true,
+            currentPresetId: 'p_legacy',
+            presets: [{
+                id: 'p_legacy',
+                name: 'Legacy Preset',
+                promptStyle: 'tag',
+                promptDefaultsInitialized: true,
+                illustrationPrompt: 'ill',
+                studioPrompt: 'stu',
+                explorationPrompt: 'exp',
+                characterDesignPrompt: legacyText,
+            }],
+        });
+
+        expect(Object.hasOwn(settings.presets[0], 'characterDesignPrompt')).toBe(false);
+        expect(settings.pendingCharacterDesignPrompts).toEqual([{
+            presetId: 'p_legacy',
+            presetName: 'Legacy Preset',
+            text: legacyText,
+        }]);
+
+        // Minimal Popup harness hosting real dialog DOM inside document.body.
+        const makePopupClass = (driveAction) => class MockPopup {
+            constructor(content, _type, _input, opts = {}) {
+                this.content = content;
+                this.opts = opts;
+                this.resolve = null;
+            }
+            async show() {
+                document.body.appendChild(this.content);
+                return await new Promise(resolve => {
+                    this.resolve = resolve;
+                    setTimeout(() => { void driveAction(this.content, this); }, 0);
+                });
+            }
+            async complete(val) {
+                this.content.remove();
+                this.resolve?.(val);
+            }
+        };
+
+        let saveCount = 0;
+        const makeCtx = (PopupClass) => ({
+            Popup: PopupClass,
+            POPUP_TYPE: { DISPLAY: 1, CONFIRM: 2 },
+            POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: null },
+            translate: s => String(s ?? ''),
+            workbench: {
+                saveSettingsChecked: async () => { saveCount += 1; },
+            },
+        });
+
+        // 1. Cancel keeps pendingCharacterDesignPrompts intact.
+        await openLegacyCharacterDesignMigrationDialog({
+            settings,
+            context: makeCtx(makePopupClass((el) => {
+                expect(el.querySelector('[data-sd-role="legacy-prompt-text"]').value).toBe(legacyText);
+                el.querySelector('[data-sd-role="legacy-prompt-cancel"]').click();
+            })),
+        });
+        expect(settings.pendingCharacterDesignPrompts).toHaveLength(1);
+        expect(saveCount).toBe(0);
+
+        // 2. Export without user confirmation keeps pendingCharacterDesignPrompts intact.
+        let exportedPayload = '';
+        await openLegacyCharacterDesignMigrationDialog({
+            settings,
+            context: makeCtx(makePopupClass(async (el) => {
+                el.querySelector('[data-sd-role="legacy-prompt-export"]').click();
+                await new Promise(r => setTimeout(r, 20));
+                el.querySelector('[data-sd-role="legacy-prompt-cancel"]').click();
+            })),
+            exportFile: async (_name, content) => {
+                exportedPayload = content;
+                return true;
+            },
+            confirmAction: async () => false,
+        });
+        expect(exportedPayload).toContain(legacyText);
+        expect(settings.pendingCharacterDesignPrompts).toHaveLength(1);
+        expect(saveCount).toBe(0);
+
+        // 3. Export with confirmed complete file clears pending record and persists settings.
+        await openLegacyCharacterDesignMigrationDialog({
+            settings,
+            context: makeCtx(makePopupClass((el) => {
+                el.querySelector('[data-sd-role="legacy-prompt-export"]').click();
+            })),
+            exportFile: async (_name, content) => {
+                exportedPayload = content;
+                return true;
+            },
+            confirmAction: async () => true,
+        });
+        expect(Object.hasOwn(settings, 'pendingCharacterDesignPrompts')).toBe(false);
+        expect(saveCount).toBe(1);
+
+        // 4. Discard requires explicit confirmation before clearing.
+        settings.pendingCharacterDesignPrompts = [{ presetId: 'p_legacy', presetName: 'Legacy Preset', text: legacyText }];
+        await openLegacyCharacterDesignMigrationDialog({
+            settings,
+            context: makeCtx(makePopupClass(async (el) => {
+                el.querySelector('[data-sd-role="legacy-prompt-discard"]').click();
+                await new Promise(r => setTimeout(r, 20));
+                el.querySelector('[data-sd-role="legacy-prompt-cancel"]').click();
+            })),
+            confirmAction: async () => false,
+        });
+        expect(settings.pendingCharacterDesignPrompts).toHaveLength(1);
+
+        await openLegacyCharacterDesignMigrationDialog({
+            settings,
+            context: makeCtx(makePopupClass((el) => {
+                el.querySelector('[data-sd-role="legacy-prompt-discard"]').click();
+            })),
+            confirmAction: async () => true,
+        });
+        expect(Object.hasOwn(settings, 'pendingCharacterDesignPrompts')).toBe(false);
+        expect(saveCount).toBe(2);
     });
 });
 
@@ -655,13 +716,17 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             const runReadOut = await target.runRead({ name: 'sd_read_run', args: {} }, loaded.live);
             expect(runReadOut.runId).toBe(rId);
 
-            // Draft edits: modify preset_1 (including character_design_prompt) AND add a character profile
+            // Draft edits: modify preset_1 (no retired character_design_prompt) AND add a character profile
+            const toolDefs = await target.tools();
+            const updateTool = toolDefs.find(t => t.function.name === 'sd_update_preset');
+            expect(Object.hasOwn(updateTool.function.parameters.properties, 'character_design_prompt')).toBe(false);
+
             let draft = await target.runEdit({
                 name: 'sd_update_preset',
                 args: {
                     preset_id: 'preset_1',
                     illustration_prompt: 'Updated illustration instructions',
-                    character_design_prompt: 'Custom OC sheet instructions',
+                    exploration_prompt: 'Updated exploration instructions',
                 },
             }, JSON.parse(JSON.stringify(base)));
             draft = await target.runEdit({
@@ -678,7 +743,20 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             const draftUnits = target.units(draft);
             expect(baseUnits.has('preset:preset_1')).toBe(true);
             expect(draftUnits.has('character:char_iter_1')).toBe(true);
-            expect(draftUnits.get('preset:preset_1').fields.characterDesignPrompt).toBe('Custom OC sheet instructions');
+            expect(Object.hasOwn(draftUnits.get('preset:preset_1').fields, 'characterDesignPrompt')).toBe(false);
+            expect(draftUnits.get('preset:preset_1').fields.explorationPrompt).toBe('Updated exploration instructions');
+
+            // Newly synthesized presets in rebuild use stored defaults rather than blank strings.
+            const withAddedPreset = JSON.parse(JSON.stringify(draft));
+            withAddedPreset.presets.push({ id: 'preset_new', name: 'Added Preset' });
+            const rebuiltAdded = target.rebuild(base, withAddedPreset, ['preset:preset_new']);
+            const addedPreset = rebuiltAdded.presets.find(p => p.id === 'preset_new');
+            expect(addedPreset.promptStyle).toBe('tag');
+            expect(addedPreset.promptDefaultsInitialized).toBe(true);
+            expect(addedPreset.illustrationPrompt).toBe(getDefaultPromptValues('tag').illustrationPrompt);
+            expect(addedPreset.studioPrompt).toBe(getDefaultPromptValues('tag').studioPrompt);
+            expect(addedPreset.explorationPrompt).toBe(getDefaultPromptValues('tag').explorationPrompt);
+            expect(Object.hasOwn(addedPreset, 'characterDesignPrompt')).toBe(false);
 
             // Selective rebuild: accept BOTH units, commit, verify persistence, then undo!
             const selectedKeys = ['preset:preset_1', 'character:char_iter_1'];
@@ -688,7 +766,8 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             expect(committed.applied).toEqual(expect.arrayContaining(selectedKeys));
             expect(saveCount).toBeGreaterThanOrEqual(1);
             expect(sdSettings.illustration.presets[0].illustrationPrompt).toBe('Updated illustration instructions');
-            expect(sdSettings.illustration.presets[0].characterDesignPrompt).toBe('Custom OC sheet instructions');
+            expect(sdSettings.illustration.presets[0].explorationPrompt).toBe('Updated exploration instructions');
+            expect(Object.hasOwn(sdSettings.illustration.presets[0], 'characterDesignPrompt')).toBe(false);
 
             const profileStore = createCharacterProfileStore(ctx);
             expect((await profileStore.getProfile('char_iter_1'))?.name).toBe('Seren');
@@ -696,7 +775,7 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             // Undo reverts both preset and character archive!
             await committed.undo();
             expect(sdSettings.illustration.presets[0].illustrationPrompt).toBe('Prompt instructions');
-            expect(sdSettings.illustration.presets[0].characterDesignPrompt || '').toBe('');
+            expect(sdSettings.illustration.presets[0].explorationPrompt).toBe(DEFAULT_EXPLORATION_PROMPT);
             expect(await profileStore.getProfile('char_iter_1')).toBeNull();
         } finally {
             globalThis.fetch = originalFetch;
@@ -933,7 +1012,8 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
         expect(container.textContent).not.toContain('Editing source image:');
         expect(container.textContent).not.toContain('tool call(s)');
 
-        // Regenerate img_derived -> must pass reconstructed source + character references!
+        // Regenerate img_derived -> must pass reconstructed source + character references, with no promote-reference button!
+        expect(container.querySelector('[data-studio-action="promote-reference"]')).toBeNull();
         container.querySelector('[data-studio-action="regenerate"]').click();
         await new Promise(r => setTimeout(r, 30));
         expect(generateCalls).toHaveLength(1);
@@ -942,45 +1022,13 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             { imagePath: '/user/images/_studio/chr.png', role: 'character' },
         ]);
 
-        // Promote when targetProfileId === '' -> must create a NEW profile, NOT mutate char_unrelated!
-        container.querySelector('[data-studio-action="promote-reference"]').click();
-        await new Promise(r => setTimeout(r, 30));
-        const unrelatedAfter = await profileStore.getProfile('char_unrelated');
-        expect(unrelatedAfter.outfits[0].referenceImages).toEqual([]);
-        const allProfiles = await profileStore.listProfiles();
-        expect(allProfiles.length).toBe(3);
-
-        // Switch targetProfileId to char_target (defaultOutfitId === 'out_gala') and promote -> must append to out_gala (2nd outfit), not out_casual!
-        const targetSelect = container.querySelector('[data-sd-role="studio-target-profile"]');
-        targetSelect.value = 'char_target';
-        targetSelect.dispatchEvent(new Event('change', { bubbles: true }));
-        container.querySelector('[data-studio-action="promote-reference"]').click();
-        await new Promise(r => setTimeout(r, 30));
-        const targetAfter = await profileStore.getProfile('char_target');
-        expect(targetAfter.outfits[0].referenceImages).toEqual([]);
-        expect(targetAfter.outfits[1].referenceImages).toEqual(['/user/images/_references/char_target_promoted.png']);
-
-        // Switch to characters & run views in zh-cn -> verify zero UNTRANSLATED: or raw outfit(s)/round(s)
+        // Switch to characters & run views in zh-cn -> verify zero UNTRANSLATED:, no legacy launcher, and no raw outfit(s)/round(s)
         handle.update({ subview: 'characters' });
         await new Promise(r => setTimeout(r, 30));
         expect(container.textContent).not.toContain('UNTRANSLATED:');
         expect(container.textContent).not.toContain('outfit(s)');
-
-        // Launch OC design with empty target text after typing in studio earlier -> draftInput must reset to ''
-        const studioInputBefore = document.createElement('div');
-        handle.update({ subview: 'studio' });
-        await new Promise(r => setTimeout(r, 20));
-        const ta1 = container.querySelector('[data-sd-role="studio-input"]');
-        ta1.value = 'stale draft text';
-        ta1.dispatchEvent(new Event('input', { bubbles: true }));
-
-        handle.update({ subview: 'characters' });
-        await new Promise(r => setTimeout(r, 20));
-        container.querySelector('[data-sd-launch-mode="oc"]').click();
-        container.querySelector('[data-sd-role="launch-submit"]').click();
-        await new Promise(r => setTimeout(r, 30));
-        expect(container.querySelector('[data-sd-role="studio-input"]').value).toBe('');
-        void studioInputBefore;
+        expect(container.querySelector('.sdlens-launcher')).toBeNull();
+        expect(container.querySelector('[data-sd-role="refine-in-studio"]')).toBeNull();
 
         handle.update({ subview: 'run' });
         await new Promise(r => setTimeout(r, 20));

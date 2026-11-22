@@ -184,6 +184,7 @@ export function buildIllustrationAgentTools({
     includeWeight = false,
     capabilities = null,
     includeArchiveTools = false,
+    allowExploration = true,
 } = {}) {
     const tools = [
         buildAddImagePromptTool(loras, {
@@ -194,7 +195,9 @@ export function buildIllustrationAgentTools({
     ];
     if (includeArchiveTools) {
         tools.push(cloneJson(READ_CHARACTER_PROFILES_TOOL));
-        tools.push(cloneJson(EXPLORE_CHARACTERS_TOOL));
+        if (allowExploration) {
+            tools.push(cloneJson(EXPLORE_CHARACTERS_TOOL));
+        }
     }
     return tools;
 }

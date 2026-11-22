@@ -644,3 +644,54 @@ test('preserves already-generated partial images in run trace when aborted mid-b
         activity.destroy();
     }
 });
+
+test('keepsFormalPipelineSideEffects: chat switch aborts before mutating chat or saving', async () => {
+    let activeChatId = 'chat-1';
+    const message = makeMessage({ mes: 'alpha beta', swipes: ['alpha beta'] });
+    const chat = [message];
+    let savedCount = 0;
+    let updatedBlocks = 0;
+    const activityJob = makeFakeActivityJob();
+    const pipeline = createIllustrationPipeline({
+        context: {
+            chat,
+            chatId: 'chat-1',
+            generateTask: async () => {
+                // Switch chat while model request is in flight.
+                activeChatId = 'chat-2';
+                return {
+                    toolCalls: [{
+                        name: 'add_image_prompt',
+                        args: { prompt: 'new prompt', insert_after: 'alpha', insert_before: 'beta' },
+                    }],
+                };
+            },
+        },
+        imageService: {
+            configure() {},
+            getAvailableLoras: async () => ({ names: [], includeWeight: false }),
+            generate: async () => {
+                throw new Error('must not generate image after chat switch');
+            },
+        },
+        settings: SETTINGS,
+        hooks: {
+            toast: () => {},
+            notifyError: err => { throw new Error(`Unexpected error on abort: ${err}`); },
+            t: (strings, ...values) => strings.reduce((out, str, index) => out + str + (values[index] ?? ''), ''),
+            saveChat: async () => { savedCount += 1; },
+            updateMessageBlock: () => { updatedBlocks += 1; },
+            ensureSwipes: () => {},
+            getChatId: () => activeChatId,
+            getChat: () => chat,
+            beginActivityJob: () => activityJob,
+        },
+    });
+
+    await pipeline.runForMessage({ messageId: 0, source: 'manual' });
+
+    expect(savedCount).toBe(0);
+    expect(updatedBlocks).toBe(0);
+    expect(message.mes).toBe('alpha beta');
+    expect(activityJob.calls.finished).toEqual(['aborted']);
+});

@@ -74,6 +74,17 @@ When the user only asks a question or discusses the image, answer in text and do
 
 Use earlier prompts in the conversation to keep the subject, clothing, setting, and style consistent.`;
 
+export function getDefaultPromptValues(promptStyle) {
+    if (promptStyle !== 'tag' && promptStyle !== 'natural') {
+        throw new Error(`Unknown default prompt style: ${String(promptStyle)}`);
+    }
+    return {
+        illustrationPrompt: promptStyle === 'tag' ? DEFAULT_ILLUSTRATION_PROMPT : DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
+        studioPrompt: promptStyle === 'tag' ? DEFAULT_STUDIO_PROMPT : DEFAULT_NATURAL_STUDIO_PROMPT,
+        explorationPrompt: DEFAULT_EXPLORATION_PROMPT,
+    };
+}
+
 export function makeIllustrationId(prefix = 'ill') {
     const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
     return `${prefix}_${random}`;
@@ -90,12 +101,11 @@ export function createDefaultPresets({ llm = {}, now = Date.now(), names = {} } 
         {
             id: makeIllustrationId('preset'),
             name: tagName,
+            promptStyle: 'tag',
+            promptDefaultsInitialized: true,
             createdAt: now,
             updatedAt: now,
-            illustrationPrompt: DEFAULT_ILLUSTRATION_PROMPT,
-            studioPrompt: DEFAULT_STUDIO_PROMPT,
-            characterDesignPrompt: '',
-            explorationPrompt: '',
+            ...getDefaultPromptValues('tag'),
             llm: sharedLlm,
             explorationLlm: { apiPresetName: '', llmPresetName: '' },
             visualInspection: false,
@@ -103,15 +113,15 @@ export function createDefaultPresets({ llm = {}, now = Date.now(), names = {} } 
         {
             id: makeIllustrationId('preset'),
             name: naturalName,
+            promptStyle: 'natural',
+            promptDefaultsInitialized: true,
             createdAt: now,
             updatedAt: now,
-            illustrationPrompt: DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
-            studioPrompt: DEFAULT_NATURAL_STUDIO_PROMPT,
-            characterDesignPrompt: '',
-            explorationPrompt: '',
+            ...getDefaultPromptValues('natural'),
             llm: structuredClone(sharedLlm),
             explorationLlm: { apiPresetName: '', llmPresetName: '' },
             visualInspection: false,
         },
     ];
 }
+import { DEFAULT_EXPLORATION_PROMPT } from '../exploration/prompts.js';

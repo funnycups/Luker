@@ -8,16 +8,13 @@ import {
     formField,
     iconButton,
     sectionTitle,
-    segmented,
-    selectInput,
 } from '../../../../lens-shared/ui.js';
-import { createCharacterProfileStore, normalizeCharacterProfile } from '../../character-archive/store.js';
+import { createCharacterProfileStore, normalizeCharacterProfile, profileVersion } from '../../character-archive/store.js';
 import { promoteLocalReferenceImage } from '../../character-sources-client.js';
-import { runExplorationAgent } from '../../exploration/agent.js';
 import { makeIllustrationId } from '../../illustration/presets.js';
-import { getPresetById } from '../../illustration/settings.js';
 import { icon } from '../icons.js';
 import { i18n, i18nFormat } from '../i18n.js';
+import { openCharacterBuilderDialog } from './character-builder-dialog.js';
 
 function parseCsvList(text) {
     return String(text || '')
@@ -75,6 +72,8 @@ export function createCharactersView(app) {
     let savedProfileSnapshot = null;
     let lastNotifiedDirty = false;
     let dirtyBarEl = null;
+    let draftVersion = null;
+    let profileWritePending = false;
     let filterQuery = '';
 
     function profileSnapshotKey(profile) {
@@ -113,22 +112,17 @@ export function createCharactersView(app) {
         if (savedProfileSnapshot) {
             selectedId = savedProfileSnapshot.id;
             draftProfile = JSON.parse(JSON.stringify(savedProfileSnapshot));
+            draftVersion = profileVersion(savedProfileSnapshot);
         } else {
             const fallback = profiles[0] || null;
             selectedId = fallback?.id || '';
             savedProfileSnapshot = fallback ? JSON.parse(JSON.stringify(fallback)) : null;
             draftProfile = fallback ? JSON.parse(JSON.stringify(fallback)) : null;
+            draftVersion = profileVersion(fallback);
         }
         paint();
         syncDirtyState();
     }
-    // Per-invocation mode only — intentionally ephemeral and never persisted to settings or card extensions.
-    let launchMode = 'fanwork';
-    let launchTargetText = '';
-    let launchCardAvatar = '';
-    let exploring = false;
-    let exploreAbort = null;
-    let localAssetsCache = new Map();
 
     function getCtx() {
         return app.getContext();
@@ -138,65 +132,13 @@ export function createCharactersView(app) {
         return createCharacterProfileStore(getCtx());
     }
 
-    function listCardOptions() {
-        const ctx = getCtx();
-        const chars = Array.isArray(ctx?.characters) ? ctx.characters : [];
-        const opts = [{ value: '', label: i18n('No card selected') }];
-        for (const ch of chars) {
-            const avatar = String(ch?.avatar || '').trim();
-            if (!avatar) continue;
-            const name = String(ch?.name || avatar).trim();
-            opts.push({ value: avatar, label: `${name} (${avatar})` });
-        }
-        return opts;
-    }
-
-    async function loadLocalCardAssets(avatar) {
-        const cleanAvatar = String(avatar || '').trim();
-        if (!cleanAvatar) return [];
-        if (localAssetsCache.has(cleanAvatar)) return localAssetsCache.get(cleanAvatar);
-        const ctx = getCtx();
-        const chars = Array.isArray(ctx?.characters) ? ctx.characters : [];
-        const card = chars.find(c => String(c?.avatar || '') === cleanAvatar);
-        const items = [{
-            value: `/characters/${cleanAvatar}`,
-            label: `${card?.name || cleanAvatar} — Avatar (/characters/${cleanAvatar})`,
-        }];
-        const folder = cleanAvatar.replace(/\.[^.]+$/, '');
-        if (folder && typeof fetch === 'function') {
-            try {
-                const res = await fetch(`/api/sprites/get?name=${encodeURIComponent(folder)}`, {
-                    method: 'GET',
-                    headers: ctx?.getRequestHeaders?.() || {},
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (Array.isArray(data)) {
-                        for (const sp of data) {
-                            const spPath = String(sp?.path || '').trim();
-                            if (spPath) {
-                                items.push({
-                                    value: spPath,
-                                    label: `${sp?.label || 'Sprite'} (${spPath})`,
-                                });
-                            }
-                        }
-                    }
-                }
-            } catch {
-                // Optional sprite lookup; primary card avatar remains selectable.
-            }
-        }
-        localAssetsCache.set(cleanAvatar, items);
-        return items;
-    }
-
     async function reload({ keepSelected = true, selectProfileId = '' } = {}) {
         const ctx = getCtx();
         if (typeof ctx?.getGlobalState !== 'function') {
             profiles = [];
             savedProfileSnapshot = null;
             draftProfile = null;
+            draftVersion = null;
             paint();
             syncDirtyState();
             return;
@@ -208,6 +150,7 @@ export function createCharactersView(app) {
             selectedId = matched?.id || '';
             savedProfileSnapshot = matched ? JSON.parse(JSON.stringify(matched)) : null;
             draftProfile = matched ? JSON.parse(JSON.stringify(matched)) : null;
+            draftVersion = profileVersion(matched);
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
         }
@@ -215,207 +158,109 @@ export function createCharactersView(app) {
         syncDirtyState();
     }
 
-    async function handleLaunchSubmit() {
-        if (launchMode === 'oc') {
-            const nameHint = launchTargetText.split(',')[0]?.trim() || '';
-            app.openStudioForCharacterDesign({
-                profileId: '',
-                characterName: nameHint,
-                cardAvatar: launchCardAvatar,
-                initialBrief: launchTargetText.trim(),
-            });
-            return;
-        }
-
-        if (exploring) {
-            exploreAbort?.abort('Stopped by user');
-            return;
-        }
-
-        const ctx = getCtx();
-        const sdSettings = ctx?.extensionSettings?.sd;
-        const illSettings = sdSettings?.illustration;
-        const preset = getPresetById(illSettings, illSettings?.currentPresetId) || illSettings?.presets?.[0] || {};
-        const targets = parseCsvList(launchTargetText).map(name => ({ name }));
-
-        exploring = true;
-        exploreAbort = new AbortController();
-        paint();
-
-        let activeRunId = null;
-        const runStore = app.getRunStore?.();
-        if (runStore && !runStore.getCurrentRun()?.status?.includes('running')) {
-            try {
-                activeRunId = runStore.startRun({
-                    mode: 'image',
-                    chatKey: String(ctx?.chatId || ''),
-                    stopFn: () => exploreAbort?.abort('Stopped'),
-                });
-            } catch {
-                activeRunId = null;
-            }
-        }
-
-        try {
-            const result = await runExplorationAgent({
-                context: ctx,
-                profileStore: getStore(),
-                targets,
-                cardAvatar: launchCardAvatar,
-                userHint: launchTargetText,
-                preset,
-                runStore: activeRunId ? runStore : null,
-                runId: activeRunId || '',
-                abortSignal: exploreAbort.signal,
-            });
-            if (activeRunId && runStore) {
-                runStore.finishRun({ runId: activeRunId, status: 'committed' });
-            }
-            const count = result.savedProfiles.length;
-            app.toast(count > 0
-                ? i18nFormat('Archived ${0} character profile(s).', count)
-                : i18n('Exploration finished with no new profiles.'));
-            const newestId = result.savedProfiles[0]?.id || selectedId;
-            launchTargetText = '';
-            if (isDirty()) {
-                try {
-                    profiles = await getStore().listProfiles();
-                } catch (refreshErr) {
-                    app.toast(String(refreshErr?.message || refreshErr), { error: true });
-                }
-            } else {
-                await reload({ selectProfileId: newestId });
-            }
-        } catch (err) {
-            if (activeRunId && runStore) {
-                runStore.finishRun({
-                    runId: activeRunId,
-                    status: exploreAbort?.signal?.aborted ? 'aborted' : 'error',
-                    error: String(err?.message || err),
-                });
-            }
-            if (!exploreAbort?.signal?.aborted) {
-                app.toast(String(err?.message || err), { error: true });
-            }
-        } finally {
-            exploring = false;
-            exploreAbort = null;
-            paint();
-        }
-    }
-
     function startNewDraftProfile() {
         if (!guardDirtySwitch()) return;
         const created = normalizeCharacterProfile({
             id: makeIllustrationId('char'),
             name: 'New Character',
-            sourceCardAvatars: launchCardAvatar ? [launchCardAvatar] : [],
             outfits: [{ id: 'outfit_default', name: 'Default', tags: [], prose: '', referenceImages: [] }],
             defaultOutfitId: 'outfit_default',
         });
         selectedId = created.id;
         savedProfileSnapshot = null;
         draftProfile = created;
+        draftVersion = null;
         paint();
         syncDirtyState();
     }
 
     async function saveDraftProfile() {
-        if (!draftProfile) return;
+        if (!draftProfile || profileWritePending) return;
+        const input = JSON.parse(JSON.stringify(draftProfile));
+        const expectedVersion = draftVersion;
         const store = getStore();
-        const before = await store.getProfile(draftProfile.id);
-        const saved = await store.upsertProfile(draftProfile);
-        selectedId = saved.id;
-        savedProfileSnapshot = JSON.parse(JSON.stringify(saved));
-        draftProfile = JSON.parse(JSON.stringify(saved));
-        app.recordHistory?.({
-            label: `${i18n('Save profile')}: ${saved.name}`,
-            undo: async () => {
-                if (before) await store.upsertProfile(before);
-                else await store.deleteProfile(saved.id);
-                await reload({ selectProfileId: before?.id || '' });
-            },
-        });
-        app.toast(i18n('Profile saved.'));
-        await reload({ selectProfileId: saved.id });
+        profileWritePending = true;
+        paint();
+        try {
+            const before = await store.getProfile(input.id);
+            const saved = await store.upsertProfile(input, Date.now(), { expectedVersion });
+            const savedVersion = profileVersion(saved);
+            selectedId = saved.id;
+            savedProfileSnapshot = JSON.parse(JSON.stringify(saved));
+            draftProfile = JSON.parse(JSON.stringify(saved));
+            draftVersion = savedVersion;
+            app.recordHistory?.({
+                label: `${i18n('Save profile')}: ${saved.name}`,
+                undo: async () => {
+                    if (before) await store.upsertProfile(before, Date.now(), { expectedVersion: savedVersion });
+                    else await store.deleteProfile(saved.id, { expectedVersion: savedVersion });
+                    await reload({ selectProfileId: before?.id || '' });
+                },
+            });
+            app.toast(i18n('Profile saved.'));
+            await reload({ selectProfileId: saved.id });
+        } catch (err) {
+            app.toast(String(err?.message || err), { error: true });
+        } finally {
+            profileWritePending = false;
+            paint();
+            syncDirtyState();
+        }
     }
 
     async function deleteDraftProfile() {
-        if (!draftProfile) return;
+        if (!draftProfile || profileWritePending) return;
         const target = JSON.parse(JSON.stringify(draftProfile));
+        const expectedVersion = draftVersion;
         const store = getStore();
-        const existed = await store.getProfile(target.id);
-        if (existed) {
-            const ok = await confirmDialog(el, {
-                title: i18n('Delete profile'),
-                message: `${target.name} (${target.id})`,
-                danger: true,
-            });
-            if (!ok) return;
-            await store.deleteProfile(target.id);
-            app.recordHistory?.({
-                label: `${i18n('Delete profile')}: ${target.name}`,
-                undo: async () => {
-                    await store.upsertProfile(existed);
-                    await reload({ selectProfileId: existed.id });
-                },
-            });
+        try {
+            const existed = await store.getProfile(target.id);
+            if (expectedVersion !== null) {
+                const ok = await confirmDialog(el, {
+                    title: i18n('Delete profile'),
+                    message: `${target.name} (${target.id})`,
+                    danger: true,
+                });
+                if (!ok) return;
+                profileWritePending = true;
+                paint();
+                await store.deleteProfile(target.id, { expectedVersion });
+                app.recordHistory?.({
+                    label: `${i18n('Delete profile')}: ${target.name}`,
+                    undo: async () => {
+                        await store.upsertProfile(existed, Date.now(), { expectedVersion: null });
+                        await reload({ selectProfileId: existed.id });
+                    },
+                });
+            }
+            app.toast(i18n('Profile deleted.'));
+            selectedId = '';
+            savedProfileSnapshot = null;
+            draftProfile = null;
+            draftVersion = null;
+            await reload({ keepSelected: false });
+        } catch (err) {
+            app.toast(String(err?.message || err), { error: true });
+        } finally {
+            profileWritePending = false;
+            paint();
         }
-        app.toast(i18n('Profile deleted.'));
-        selectedId = '';
-        draftProfile = null;
-        await reload({ keepSelected: false });
     }
 
-    function renderLauncher() {
-        const modeOptions = [
-            { value: 'fanwork', label: i18n('Fanwork exploration'), iconName: 'search' },
-            { value: 'oc', label: i18n('OC design in studio'), iconName: 'spark' },
-        ];
-        const segEl = segmented(modeOptions, launchMode, (next) => {
-            launchMode = next;
-            paint();
-        }, {
-            ariaLabel: i18n('Launch mode for this character creation'),
-            renderIcon: icon,
-        });
-        const segBtns = segEl.querySelectorAll('.lw-seg-btn');
-        modeOptions.forEach((opt, idx) => {
-            if (segBtns[idx]) segBtns[idx].dataset.sdLaunchMode = opt.value;
-        });
-
-        const targetInput = h('input', {
-            type: 'text',
-            class: 'sdlens-input',
-            placeholder: i18n('Character names or hints (comma-separated)'),
-            value: launchTargetText,
-            dataset: { sdRole: 'launch-target-input' },
-            onInput: (e) => { launchTargetText = e.target.value; },
-            onKeydown: (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    void handleLaunchSubmit();
-                }
-            },
-        });
-
-        const cardSelect = selectInput(listCardOptions(), launchCardAvatar, (val) => {
-            launchCardAvatar = val;
-        }, { ariaLabel: i18n('Source character card') });
-        cardSelect.dataset.sdRole = 'launch-card-select';
-
-        const submitLabel = launchMode === 'oc'
-            ? i18n('Design OC in studio')
-            : (exploring ? i18n('Exploring character canon…') : i18n('Start exploration'));
-        const submitBtn = button(submitLabel, () => { void handleLaunchSubmit(); }, {
-            primary: !exploring,
-            danger: exploring,
-            iconName: launchMode === 'oc' ? 'spark' : (exploring ? 'stop' : 'search'),
-            renderIcon: icon,
-        });
-        submitBtn.dataset.sdRole = 'launch-submit';
-
-        return h('div', { class: 'sdlens-launcher' }, segEl, targetInput, cardSelect, submitBtn);
+    async function openAiBuilder(initialProfile = null) {
+        try {
+            const opener = typeof app.openCharacterBuilderDialog === 'function'
+                ? opts => app.openCharacterBuilderDialog(opts)
+                : opts => openCharacterBuilderDialog({ app, ...opts });
+            await opener({
+                initialProfile,
+                onSaved: async (saved) => {
+                    await reload({ selectProfileId: saved?.id || '' });
+                },
+            });
+        } catch (err) {
+            app.toast(String(err?.message || err), { error: true });
+        }
     }
 
     function renderListPane() {
@@ -439,13 +284,21 @@ export function createCharactersView(app) {
             },
         });
 
+        const aiBuildBtn = button(i18n('AI Profile Builder'), () => { void openAiBuilder(null); }, {
+            primary: true,
+            small: true,
+            iconName: 'spark',
+            renderIcon: icon,
+        });
+        aiBuildBtn.dataset.sdRole = 'open-ai-builder';
+
         const addBtn = iconButton('plus', i18n('New character profile'), () => startNewDraftProfile(), {
             renderIcon: icon,
         });
         addBtn.dataset.sdRole = 'new-profile';
 
         return h('aside', { class: 'sdlens-chars-list-pane' },
-            h('div', { class: 'sdlens-chars-list-head' }, filterInput, addBtn),
+            h('div', { class: 'sdlens-chars-list-head' }, filterInput, aiBuildBtn, addBtn),
             h('div', { class: 'sdlens-chars-cards' },
                 visible.length === 0
                     ? emptyState('users', i18n('No character profiles archived yet'), '', null, { renderIcon: icon })
@@ -462,6 +315,7 @@ export function createCharactersView(app) {
                                 selectedId = profile.id;
                                 savedProfileSnapshot = JSON.parse(JSON.stringify(profile));
                                 draftProfile = JSON.parse(JSON.stringify(profile));
+                                draftVersion = profileVersion(profile);
                                 paint();
                                 syncDirtyState();
                             },
@@ -480,41 +334,6 @@ export function createCharactersView(app) {
 
     function renderOutfitEditor(outfit, index) {
         const isDefault = draftProfile.defaultOutfitId === outfit.id;
-        const cardOptions = listCardOptions();
-        const selectedCardForBind = draftProfile.sourceCardAvatars?.[0] || launchCardAvatar || (cardOptions[1]?.value || '');
-
-        const assetPickerWrap = h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' } });
-        void loadLocalCardAssets(selectedCardForBind).then((assets) => {
-            if (!assetPickerWrap.isConnected) return;
-            clear(assetPickerWrap);
-            const pickerOpts = [
-                { value: '', label: i18n('Select a local character asset…') },
-                ...assets,
-            ];
-            let chosenAsset = '';
-            const sel = selectInput(pickerOpts, '', (v) => { chosenAsset = v; }, {
-                ariaLabel: i18n('Bind card avatar or expression sprite'),
-            });
-            sel.style.flex = '1 1 200px';
-            const bindBtn = button(i18n('Bind asset'), async () => {
-                if (!chosenAsset) return;
-                try {
-                    const promoted = await promoteLocalReferenceImage({
-                        context: getCtx(),
-                        sourcePath: chosenAsset,
-                        profileId: draftProfile.id,
-                    });
-                    if (!outfit.referenceImages.includes(promoted.imagePath)) {
-                        outfit.referenceImages.push(promoted.imagePath);
-                    }
-                    paint();
-                    syncDirtyState();
-                } catch (err) {
-                    app.toast(String(err?.message || err), { error: true });
-                }
-            }, { small: true, renderIcon: icon });
-            put(assetPickerWrap, sel, bindBtn);
-        });
 
         const fileInput = h('input', {
             type: 'file',
@@ -597,28 +416,31 @@ export function createCharactersView(app) {
                     iconName: 'upload',
                     renderIcon: icon,
                 }),
-                fileInput),
-            assetPickerWrap);
+                fileInput));
     }
 
     function renderDetailPane() {
         if (!draftProfile) {
+            const emptyAiBtn = button(i18n('AI Profile Builder'), () => { void openAiBuilder(null); }, {
+                primary: true,
+                iconName: 'spark',
+                renderIcon: icon,
+            });
+            emptyAiBtn.dataset.sdRole = 'open-ai-builder';
+            const emptyNewBtn = button(i18n('New character profile'), () => startNewDraftProfile(), {
+                iconName: 'plus',
+                renderIcon: icon,
+            });
+            emptyNewBtn.dataset.sdRole = 'new-profile';
             return h('div', { class: 'sdlens-chars-detail' },
                 emptyState(
                     'users',
                     i18n('No character profiles archived yet'),
-                    i18n('Use Fanwork exploration above to look up public-work characters, or switch to OC design in studio to craft original character reference sheets interactively.'),
-                    button(i18n('New character profile'), () => startNewDraftProfile(), {
-                        primary: true,
-                        iconName: 'plus',
-                        renderIcon: icon,
-                    }),
+                    i18n('Use AI Profile Builder to craft or look up character profiles through conversation, or create a blank profile manually.'),
+                    h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' } }, emptyAiBtn, emptyNewBtn),
                     { renderIcon: icon },
                 ));
         }
-
-        const cardOpts = listCardOptions();
-        const boundCardValue = draftProfile.sourceCardAvatars?.[0] || '';
 
         const saveBtn = button(i18n('Save profile'), () => { void saveDraftProfile(); }, {
             primary: true,
@@ -627,19 +449,15 @@ export function createCharactersView(app) {
         });
         saveBtn.dataset.sdRole = 'save-profile';
 
-        const refineBtn = button(i18n('Refine in OC studio'), () => {
+        const refineWithAiBtn = button(i18n('Refine with AI'), () => {
             if (!guardDirtySwitch()) return;
-            app.openStudioForCharacterDesign({
-                profileId: draftProfile.id,
-                characterName: draftProfile.name,
-                cardAvatar: boundCardValue,
-                initialBrief: '',
-            });
+            const existing = profiles.find(p => p.id === draftProfile.id) || draftProfile;
+            void openAiBuilder(existing);
         }, {
             iconName: 'spark',
             renderIcon: icon,
         });
-        refineBtn.dataset.sdRole = 'refine-in-studio';
+        refineWithAiBtn.dataset.sdRole = 'refine-with-ai';
 
         const deleteBtn = button(i18n('Delete profile'), () => { void deleteDraftProfile(); }, {
             danger: true,
@@ -671,7 +489,7 @@ export function createCharactersView(app) {
             dirtyBarEl,
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
                 h('h3', { style: { margin: '0', fontSize: '15px' }, text: `${draftProfile.name} (${draftProfile.id})` }),
-                h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, refineBtn, saveBtn, deleteBtn)),
+                h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, refineWithAiBtn, saveBtn, deleteBtn)),
             h('div', { class: 'sdlens-grid-2' },
                 formField(i18n('Canonical display name'), h('input', {
                     type: 'text',
@@ -691,12 +509,7 @@ export function createCharactersView(app) {
                     class: 'sdlens-input',
                     value: draftProfile.sourceWork,
                     onInput: (e) => { draftProfile.sourceWork = e.target.value; syncDirtyState(); },
-                })),
-                formField(i18n('Source character card'), selectInput(cardOpts, boundCardValue, (val) => {
-                    draftProfile.sourceCardAvatars = val ? [val] : [];
-                    paint();
-                    syncDirtyState();
-                }, { ariaLabel: i18n('Source character card') }))),
+                }))),
             h('div', { class: 'sdlens-grid-2' },
                 formField(i18n('Core appearance tags (comma-separated)'), h('input', {
                     type: 'text',
@@ -740,10 +553,14 @@ export function createCharactersView(app) {
         dirtyBarEl = null;
         clear(el);
         put(el,
-            renderLauncher(),
             h('div', { class: 'sdlens-chars-split' },
                 renderListPane(),
                 renderDetailPane()));
+        if (profileWritePending) {
+            for (const control of el.querySelectorAll('input, textarea, select, button')) {
+                control.disabled = true;
+            }
+        }
     }
 
     return {
@@ -757,8 +574,6 @@ export function createCharactersView(app) {
             void reload({ selectProfileId: focusProfileId });
         },
         reload,
-        destroy() {
-            exploreAbort?.abort('Workspace closed');
-        },
+        destroy() {},
     };
 }

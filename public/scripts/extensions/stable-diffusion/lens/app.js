@@ -5,6 +5,7 @@ import { segmented } from '../../../lens-shared/ui.js';
 import { createStudioView } from './views/studio-view.js';
 import { createCharactersView } from './views/characters-view.js';
 import { createRunView } from './views/run-view.js';
+import { openCharacterBuilderDialog } from './views/character-builder-dialog.js';
 import { icon } from './icons.js';
 import { i18n } from './i18n.js';
 
@@ -76,9 +77,8 @@ export function mountSdLens({
             activeView = viewId;
             renderShell(viewOpts);
         },
-        openStudioForCharacterDesign(designReq) {
-            activeView = 'studio';
-            renderShell({ characterDesign: designReq });
+        openCharacterBuilderDialog(dialogOpts = {}) {
+            return openCharacterBuilderDialog({ app, ...dialogOpts });
         },
         notifyDirty() {
             renderTopBar();

@@ -2,6 +2,7 @@ import { expect, test } from '@jest/globals';
 import {
     buildIllustrationContext, buildIllustrationTaskMessages, requestIllustrationPrompts,
 } from '../public/scripts/extensions/stable-diffusion/illustration/task.js';
+import { applyMacroSubstitution } from '../public/scripts/generate-task.js';
 
 const chat = [
     { name: 'User', is_user: true, mes: 'hello' },
@@ -74,4 +75,35 @@ test('prompt requests activate world info from the live chat', async () => {
         apiPresetName: 'api',
         llmPresetName: 'llm',
     });
+});
+
+test('illustration prompt requests only macro-substitute the system prompt and keep chat transcript braces literal', async () => {
+    let captured;
+    await requestIllustrationPrompts({
+        context: {
+            generateTask: async value => {
+                captured = value;
+                return { toolCalls: [], assistantText: '', finishReason: '' };
+            },
+        },
+        preset: { llm: { apiPresetName: 'api', llmPresetName: 'llm' } },
+        taskMessages: [
+            { role: 'system', content: 'Illustrate {{char}}' },
+            { role: 'user', content: '=== CURRENT MESSAGE ===\nLiteral {{unclosed and {{unknown_macro}} prose.' },
+        ],
+    });
+
+    expect(captured.taskMessages[0].substituteMacros).toBeUndefined();
+    expect(captured.taskMessages[1].substituteMacros).toBe(false);
+
+    const substituted = applyMacroSubstitution(captured.taskMessages, (content) => {
+        if (content.includes('{{unclosed') || content.includes('{{unknown_macro}}')) {
+            throw new Error('Strict macro engine should not evaluate chat transcript text');
+        }
+        return content.replace('{{char}}', 'Lyra');
+    });
+    expect(substituted).toEqual([
+        { role: 'system', content: 'Illustrate Lyra' },
+        { role: 'user', content: '=== CURRENT MESSAGE ===\nLiteral {{unclosed and {{unknown_macro}} prose.' },
+    ]);
 });

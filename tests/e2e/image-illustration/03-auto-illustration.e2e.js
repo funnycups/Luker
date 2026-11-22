@@ -223,9 +223,8 @@ test.describe('automatic illustration', () => {
         const before = sdMock.requests.length;
         await sendMessageAndAwaitReply(page, 'Show me the void.');
 
-        const toast = page.locator('#toast-container .toast-error').last();
+        const toast = page.locator('#toast-container .toast-error', { hasText: 'Illustration failed' }).last();
         await expect(toast).toBeVisible({ timeout: 30_000 });
-        await expect(toast).toContainText('Illustration failed');
         await expect(toast).toContainText('quoted text not found');
         const illustrations = await page.evaluate(() => window.Luker.getContext().chat.at(-1)?.extra?.illustrations || []);
         expect(illustrations).toHaveLength(0);

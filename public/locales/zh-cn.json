@@ -4,11 +4,21 @@
     "Orchestrator optimization mode prompt": "多智能体编排优化模式提示词",
     "Jailbreak-only mode prompt": "仅越狱模式提示词",
     "Fill in the prompt or reset it to the default.": "请填写提示词或重置为默认值。",
-    "${0}: Fill in the prompt or reset it to the default.": "${0}：请填写提示词或重置为默认值。",
-    "Failed to initialize character prompt defaults.": "初始化角色提示词默认值失败。",
+    "Default prompt style": "默认提示词风格",
+    "Choose a default prompt style": "选择默认提示词风格",
+    "Iterate prompts with AI": "使用 AI 迭代提示词",
+    "Studio prompt": "画室提示词",
+    "Character profile agent": "角色建档",
+    "Character profile agent prompt": "角色建档提示词",
+    "The character profile changed. Reload it before continuing.": "角色档案已更改。请重新加载后继续。",
+    "Enter a character name or choose a source.": "请输入角色名称或选择设定来源。",
     "Failed to open the temporary media session.": "无法建立临时媒体会话。",
     "Failed to close the temporary media session.": "无法关闭临时媒体会话。",
     "The temporary media connection closed.": "临时媒体连接已关闭。",
+    "Select an image file.": "请选择图片文件。",
+    "Promote temporary reference images before saving the character profile.": "请先保存临时参考图，再保存角色档案。",
+    "${0}: Fill in the prompt or reset it to the default.": "${0}：请填写提示词或重置为默认值。",
+    "Failed to initialize character prompt defaults.": "初始化角色提示词默认值失败。",
     "Group chat ${0} could not be loaded. Reload the page to retry.": "无法加载群聊 ${0}。请重新加载页面后重试。",
     "Group chat ${0} could not be saved. Check the server connection and retry saving.": "无法保存群聊 ${0}。请检查服务器连接后重试保存。",
     "Syncing: ${0}": "正在同步：${0}",
@@ -7011,7 +7021,7 @@
     ,"sd_illustration_preset_rename": "重命名"
     ,"sd_illustration_preset_delete": "删除"
     ,"sd_illustration_prompt": "消息配图任务提示词"
-    ,"sd_illustration_studio_prompt": "迭代工作台提示词"
+    ,"sd_illustration_studio_prompt": "画室提示词"
     ,"sd_illustration_api_preset": "连接配置"
     ,"sd_illustration_llm_preset": "补全预设"
     ,"sd_illustration_context_count": "上下文消息数"
@@ -7019,7 +7029,7 @@
     ,"sd_illustration_min_interval": "请求最小间隔，毫秒"
     ,"sd_illustration_display_width": "插图显示宽度，百分比"
     ,"sd_illustration_generate_last": "为最后一条消息生成插图"
-    ,"sd_illustration_open_studio": "图像迭代工作台"
+    ,"sd_illustration_open_studio": "画室"
     ,"sd_illustration_message_button": "AI 插图"
     ,"sd_generation_preset": "生图预设"
     ,"Also delete server image files": "同时删除服务器图片文件"
@@ -7635,12 +7645,11 @@
     ,"Searching images...": "正在搜索图片..."
     ,"Extract Page Images": "提取网页图片"
     ,"Extracting page images...": "正在提取网页图片..."
-    ,"sd_illustration_exploration_section": "角色视觉探索 Agent"
+    ,"sd_illustration_exploration_section": "角色建档 Agent"
     ,"sd_illustration_visual_inspection": "开启多模态视觉审阅下载的候选参考图"
     ,"sd_illustration_exploration_api_preset": "探索连接配置"
     ,"sd_illustration_exploration_llm_preset": "探索补全预设"
     ,"sd_illustration_exploration_prompt": "探索提示词覆盖"
-    ,"sd_illustration_character_design_prompt": "原创角色定妆提示词覆盖"
     ,"(Inherit illustration connection)": "（继承插图连接配置）"
     ,"(Inherit illustration preset)": "（继承插图补全预设）"
     ,"sd_connection_profile_label": "连接配置"
@@ -7746,4 +7755,38 @@
     ,"Obsidian Ink": "墨玉（夜间纯色）"
     ,"Warm Paper": "素笺（日间护眼）"
     ,"Follow System": "跟随系统日夜"
+    ,"AI Profile Builder": "AI 建档"
+    ,"Refine with AI": "AI 调整档案"
+    ,"Build character profile with AI": "AI 角色建档"
+    ,"Refine character profile with AI": "AI 调整角色档案"
+    ,"Source material": "读取设定来源"
+    ,"Do not read a character card": "不读取角色卡"
+    ,"Current chat card: ${0}": "当前聊天角色卡：${0}"
+    ,"Current user persona: ${0}": "当前用户人设：${0}"
+    ,"Editable profile draft": "可编辑角色档案草稿"
+    ,"Describe the character, ask AI to search public sources or generate candidate portraits, and edit the draft on the right at any time.": "描述目标角色，让 AI 检索公开图源或生成候选立绘，并随时在右侧直接编辑草稿。"
+    ,"Describe the character or request appearance, outfit, or reference updates…": "描述角色特征，或提出外貌、服装与参考图的修改意见…"
+    ,"Character Builder AI": "角色建档 AI"
+    ,"Saving…": "正在保存…"
+    ,"Confirm & save to archive": "确认保存至角色库"
+    ,"Draft conflicts need your choice before saving": "保存前需先处理草稿冲突"
+    ,"Keep my edit": "保留我的修改"
+    ,"Use AI suggestion": "采纳 AI 建议"
+    ,"Your edit": "你的修改"
+    ,"AI suggestion": "AI 建议"
+    ,"Draft updated.": "草稿已更新。"
+    ,"Builder stopped.": "已停止生成。"
+    ,"Resolve all draft conflicts before saving.": "请先处理全部草稿冲突再保存。"
+    ,"Character profile requires a non-empty name.": "角色档案名称不能为空。"
+    ,"Temporary media cleanup failed: ${0}": "临时图片清理失败：${0}"
+    ,"Retry cleanup": "重试清理"
+    ,"Use AI Profile Builder to craft or look up character profiles through conversation, or create a blank profile manually.": "点击「AI 建档」通过多轮对话检索公开图源或生成候选立绘，或手动新建空白角色档案。"
+    ,"Legacy character design prompts need review": "存在待处理的旧定妆提示词"
+    ,"Review legacy prompts": "查看旧提示词"
+    ,"Legacy character design prompts": "旧定妆提示词迁移"
+    ,"Character design prompt overrides are no longer used at runtime. Export these saved custom texts or discard them explicitly. Cancel keeps this record for later review.": "运行时不再读取角色定妆提示词覆盖。你可以导出保存这些自定义文本或明确舍弃，点击取消将保留记录以供稍后处理。"
+    ,"Export & clear": "导出并清除"
+    ,"Discard legacy prompts": "舍弃旧提示词"
+    ,"Discard these legacy character design prompts permanently?": "确认永久舍弃这些旧定妆提示词？"
+    ,"Confirm that you received the complete exported file before clearing these legacy prompts.": "请确认已收到完整的导出文件，再清除这些旧定妆提示词。"
 }

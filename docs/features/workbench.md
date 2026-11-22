@@ -7,7 +7,7 @@ Workbench is Luker's unified workspace for inspecting prompts, diagnosing issues
 - Click the wand menu next to the message input box and select **Workbench**.
 - Click the corner entry pill in the bottom-right corner, which displays the current prompt token count and pending suggestion count.
 - Press `Alt+W` to open or collapse the window.
-- Click **Open in Workbench** inside **Extensions → Memory**, **Extensions → Orchestrator**, or **Extensions → Image Generation**, or select **Image iteration studio** in the wand menu.
+- Click **Open in Workbench** inside **Extensions → Memory**, **Extensions → Orchestrator**, or **Extensions → Image Generation**, or select **Image Studio** in the wand menu.
 
 Workbench opens as a rounded floating window on both desktop and narrow mobile screens (`<= 640px`). Drag the title bar to move the floating window, drag the bottom-right corner (or the bottom edge on mobile) to resize, or double-click / double-tap the title bar (or click Maximize) to switch between small and large views.
 
@@ -81,8 +81,8 @@ Embeds the full Orchestra Lens workspace directly inside Workbench:
 
 Embeds the Image Generation workspace directly inside Workbench:
 
-- **Image Studio** — conversational workspace for **Free image generation** and **Character reference design**, with session branching, gallery history, single-image regeneration, and staged character profile review.
-- **Character Archive** — global library of character appearance tags, outfits, and reference sheets, with a per-launch choice between **Fanwork exploration** and **OC design in studio**.
+- **Image Studio** — conversational workspace for free image generation and source image editing, with visual review, session branching, gallery history, and single-image regeneration.
+- **Character Archive** — global library of character appearance tags, outfits, and reference sheets, with **AI Profile Builder** and **Refine with AI** conversational authoring alongside manual editing.
 - **Run Traces** — live and recent illustration and exploration run traces with round timelines, prompts, JSON export, and one-click AI diagnosis.
 
 ### Settings

@@ -6,9 +6,11 @@ import {
     LEGACY_DEFAULT_ILLUSTRATION_PROMPT,
     LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
 } from '../public/scripts/extensions/stable-diffusion/illustration/presets.js';
-import { normalizeIllustrationSettings } from '../public/scripts/extensions/stable-diffusion/illustration/settings.js';
+import { migrateIllustrationPromptSettings, normalizeIllustrationSettings } from '../public/scripts/extensions/stable-diffusion/illustration/settings.js';
 import { createIllustrationPipeline } from '../public/scripts/extensions/stable-diffusion/illustration/pipeline.js';
-import { createImageActivity, attachImageActivityDock } from '../public/scripts/extensions/stable-diffusion/activity.js';
+import { runIllustrationAgent } from '../public/scripts/extensions/stable-diffusion/illustration/agent.js';
+import { createSandboxProfileStore } from '../public/scripts/extensions/stable-diffusion/lens/simulation-sandbox.js';
+import { attachImageActivityDock } from '../public/scripts/extensions/stable-diffusion/activity.js';
 
 function createMemoryGlobalStateContext(extra = {}) {
     const namespaces = new Map();
@@ -48,7 +50,7 @@ function makeMessage(mes = 'She laid the brass spyglass on the chart table.') {
     };
 }
 
-describe('normalizeIllustrationSettings legacy default prompt upgrade', () => {
+describe('one-time illustration prompt migration', () => {
     test('upgrades unmodified legacy default prompts by identity while preserving custom prompts', () => {
         expect(typeof LEGACY_DEFAULT_ILLUSTRATION_PROMPT).toBe('string');
         expect(typeof LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT).toBe('string');
@@ -56,7 +58,7 @@ describe('normalizeIllustrationSettings legacy default prompt upgrade', () => {
         expect(DEFAULT_NATURAL_ILLUSTRATION_PROMPT).not.toBe(LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT);
 
         const customPrompt = 'Custom user prompt crafted specifically for watercolor scenes.';
-        const normalized = normalizeIllustrationSettings({
+        const { settings: normalized } = migrateIllustrationPromptSettings({
             initialized: true,
             currentPresetId: 'preset_tag',
             presets: [
@@ -283,7 +285,7 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
         expect(chat[0].extra.illustrations[0].aspectRatio).toBe('3:4');
     });
 
-    test('(c) invokes exploration agent via explore_characters and binds newly saved profile on next turn', async () => {
+    test('(c) group illustration explores an explicit identity and binds its saved profile', async () => {
         const chat = [makeMessage()];
         const generated = [];
         let illustrationRound = 0;
@@ -291,6 +293,7 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
 
         const context = createMemoryGlobalStateContext({
             chat,
+            groupId: 'group_visual',
             async generateTask(opts) {
                 const toolNames = (opts.tools || []).map(t => t.function.name);
                 const isExploration = toolNames.includes('save_character_profile');
@@ -554,6 +557,210 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
             { prompt: '1girl, blonde hair', negativePrompt: 'hat', center: { x: 0.3, y: 0.5 } },
             { prompt: '1girl, black hair', negativePrompt: '', center: { x: 0.7, y: 0.5 } },
         ]);
+    });
+
+    test('preservesIllustrationToolFlow in shared runIllustrationAgent with sandbox store, deduplication, partial failures, and private trace', async () => {
+        const messageText = 'She laid the brass spyglass on the chart table and watched the harbor lantern.';
+        const seedProfiles = [{
+            id: 'char_lyra',
+            name: 'Lyra',
+            canonicalTags: ['1girl', 'silver braid'],
+            negativeTags: ['glasses'],
+            outfits: [{
+                id: 'outfit_coat',
+                name: 'Naval Coat',
+                tags: ['navy coat'],
+                referenceImages: ['/user/images/_references/lyra_coat.png'],
+            }],
+            defaultOutfitId: 'outfit_coat',
+        }];
+        const sandboxStore = createSandboxProfileStore(seedProfiles);
+        const generatedCalls = [];
+        const fetchedRefs = [];
+        const observedEvents = [];
+        let globalStateTouched = false;
+        let illRound = 0;
+        let expRound = 0;
+
+        const promptContext = { scope: 'chat', envelope: { version: 1 }, runtimeWorldInfo: {}, macroEnv: { names: { user: 'U', char: 'C' } } };
+        const explorationPromptContext = { scope: 'preset', envelope: { version: 1 }, runtimeWorldInfo: {}, macroEnv: { names: { user: '', char: '' } } };
+
+        const expPromptContexts = [];
+        const illPromptContexts = [];
+        const context = {
+            async getGlobalState() { globalStateTouched = true; throw new Error('must not touch global state'); },
+            async updateGlobalState() { globalStateTouched = true; throw new Error('must not touch global state'); },
+            async generateTask(opts) {
+                expect(opts.transientSessionId).toBe('sess_sandbox_1');
+                const toolNames = (opts.tools || []).map(t => t.function.name);
+                if (toolNames.includes('save_character_profile')) {
+                    expPromptContexts.push(opts.promptContext);
+                    expRound += 1;
+                    opts.onPreparedRequest?.({ requestApi: 'openai', payload: { round: `exp-${expRound}`, messages: opts.taskMessages } });
+                    if (expRound === 1) {
+                        return {
+                            toolCalls: [{
+                                id: 'exp_fetch_1',
+                                name: 'fetch_reference_image',
+                                args: { image_url: 'https://example.test/vesper.png', profile_id: 'char_vesper' },
+                            }],
+                            assistantText: '',
+                            reasoning: 'Looking up Vesper portrait.',
+                        };
+                    }
+                    if (expRound === 2) {
+                        return {
+                            toolCalls: [{
+                                id: 'exp_save_1',
+                                name: 'save_character_profile',
+                                args: {
+                                    id: 'char_vesper',
+                                    name: 'Vesper',
+                                    outfits: [{
+                                        id: 'outfit_cloak',
+                                        name: 'Cloak',
+                                        reference_images: ['/user/images/_sandbox_tmp/sess_sandbox_1/vesper.png'],
+                                    }],
+                                    default_outfit_id: 'outfit_cloak',
+                                },
+                            }],
+                            assistantText: '',
+                        };
+                    }
+                    return { toolCalls: [], assistantText: 'Saved Vesper to sandbox.' };
+                }
+
+                illPromptContexts.push(opts.promptContext);
+                illRound += 1;
+                opts.onPreparedRequest?.({ requestApi: 'openai', payload: { round: `ill-${illRound}`, messages: opts.taskMessages } });
+                if (illRound === 1) {
+                    // Round 1: explore a new character AND emit a bad-anchor call + one valid call
+                    return {
+                        toolCalls: [
+                            { id: 'c_exp', name: 'explore_characters', args: { targets: [{ name: 'Vesper' }] } },
+                            {
+                                id: 'c_bad',
+                                name: 'add_image_prompt',
+                                args: { prompt: 'bad anchor prompt', insert_after: 'missing', insert_before: 'missing' },
+                            },
+                            {
+                                id: 'c_ok_1',
+                                name: 'add_image_prompt',
+                                args: {
+                                    prompt: '1girl, brass spyglass',
+                                    insert_after: 'laid the brass spyglass',
+                                    insert_before: 'on the chart table',
+                                },
+                            },
+                        ],
+                        assistantText: 'Exploring Vesper first.',
+                        reasoning: 'Need Vesper reference.',
+                        finishReason: 'tool_calls',
+                    };
+                }
+                // Round 2: duplicate of c_ok_1 (must dedupe!) + second valid call referencing sandbox-saved Vesper
+                return {
+                    toolCalls: [
+                        {
+                            id: 'c_dup',
+                            name: 'add_image_prompt',
+                            args: {
+                                prompt: '1girl, brass spyglass',
+                                insert_after: 'laid the brass spyglass',
+                                insert_before: 'on the chart table',
+                            },
+                        },
+                        {
+                            id: 'c_ok_2',
+                            name: 'add_image_prompt',
+                            args: {
+                                prompt: '1girl, harbor lantern',
+                                character_refs: [{ profile_id: 'char_vesper', outfit_id: 'outfit_cloak' }],
+                                insert_after: 'watched the',
+                                insert_before: 'harbor lantern.',
+                            },
+                        },
+                    ],
+                    assistantText: '',
+                    finishReason: 'tool_calls',
+                };
+            },
+        };
+
+        const preset = {
+            id: 'p_draft',
+            illustrationPrompt: 'Draft illustration prompt',
+            explorationPrompt: 'Draft exploration prompt',
+            llm: { apiPresetName: 'Api', llmPresetName: 'Llm' },
+            explorationLlm: { apiPresetName: '', llmPresetName: '' },
+            visualInspection: false,
+        };
+
+        const output = await runIllustrationAgent({
+            context,
+            preset,
+            input: {
+                current: messageText,
+                snapshotText: messageText,
+                context: '',
+                memoryRecall: '',
+                characterName: 'Narrator',
+                cardAvatar: '',
+                loras: { names: [], includeWeight: false },
+                capabilities: {
+                    source: 'google',
+                    model: 'gemini-image',
+                    supportsCharacterReference: true,
+                    maxCharacterReferences: null,
+                    supportsMultiCharacterPrompts: false,
+                    supportsDynamicAspectRatio: true,
+                },
+                promptContext,
+                explorationPromptContext,
+            },
+            profileStore: sandboxStore,
+            media: {
+                async generate(prompt, opts) {
+                    generatedCalls.push({ prompt, opts });
+                    if (prompt.includes('harbor lantern')) {
+                        throw new Error('backend timeout');
+                    }
+                    return '/user/images/_sandbox_tmp/sess_sandbox_1/spyglass.png';
+                },
+                async fetchReferenceImage(args) {
+                    fetchedRefs.push(args);
+                    return { imagePath: '/user/images/_sandbox_tmp/sess_sandbox_1/vesper.png' };
+                },
+            },
+            observe: event => observedEvents.push(event),
+            transientSessionId: 'sess_sandbox_1',
+        });
+
+        expect(globalStateTouched).toBe(false);
+        expect(expPromptContexts).toEqual([explorationPromptContext, explorationPromptContext, explorationPromptContext]);
+        expect(illPromptContexts).toEqual([promptContext, promptContext]);
+        expect(fetchedRefs).toHaveLength(1);
+        expect(output.savedProfiles.map(p => p.id)).toEqual(['char_vesper']);
+        expect(sandboxStore.getRecordedChanges().map(p => p.id)).toEqual(['char_vesper']);
+        expect(output.acceptedPrompts).toHaveLength(2);
+        expect(generatedCalls).toHaveLength(2);
+        expect(output.results).toEqual([
+            expect.objectContaining({
+                index: 0,
+                status: 'ready',
+                imageUrl: '/user/images/_sandbox_tmp/sess_sandbox_1/spyglass.png',
+            }),
+            expect.objectContaining({
+                index: 1,
+                status: 'failed',
+                error: 'backend timeout',
+            }),
+        ]);
+        expect(output.trace.rounds).toHaveLength(2);
+        expect(output.trace.rounds[0].preparedRequests).toHaveLength(1);
+        expect(output.trace.rounds[0].reasoning).toBe('Need Vesper reference.');
+        expect(output.trace.rounds[0].toolCalls[0].subTrace.length).toBeGreaterThan(0);
+        expect(observedEvents.some(e => e.type === 'prepared_request')).toBe(true);
     });
 });
 

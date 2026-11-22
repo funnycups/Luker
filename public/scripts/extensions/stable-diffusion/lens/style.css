@@ -75,28 +75,6 @@
     overflow: hidden;
 }
 
-.sdlens-launcher {
-    flex: none;
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--lw-border);
-    background: var(--lw-surface-2);
-}
-
-.sdlens-launcher .sdlens-input {
-    flex: 1 1 200px;
-    height: 30px;
-}
-
-.sdlens-launcher .lw-select {
-    width: auto;
-    min-width: 150px;
-    max-width: 240px;
-}
-
 .sdlens-chars-split {
     flex: 1;
     min-height: 0;
@@ -384,17 +362,6 @@
     background: var(--lw-surface-2);
 }
 
-.sdlens-proposal-card {
-    flex: none;
-    padding: 12px;
-    border-radius: var(--lw-r);
-    border: 1px solid var(--lw-t-sd);
-    background: var(--lw-raised);
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
 .sdlens-studio-compose {
     flex: none;
     display: flex;
@@ -549,11 +516,6 @@
         flex: 1 1 0;
         min-height: 0;
     }
-
-    .sdlens-launcher .lw-select {
-        flex: 1 1 160px;
-        max-width: 100%;
-    }
 }
 
 @container (max-width: 620px) {
@@ -635,4 +597,255 @@
 }
 .sdlens .sdlens-dirty-text {
     font-size: 12.5px; font-weight: 600; color: var(--lw-amber); margin-right: auto;
+}
+
+/* Character Builder Dialog */
+.popup.sdlens-builder-popup .popup-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    padding: 0;
+    text-align: left;
+}
+
+.sdlens-builder-dialog {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: min(82vh, 860px);
+    min-height: 420px;
+    background: var(--lw-canvas);
+    color: var(--lw-text);
+    overflow: hidden;
+}
+
+.sdlens-builder-header {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--lw-border);
+    background: var(--lw-surface);
+}
+
+.sdlens-builder-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.sdlens-builder-source-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.sdlens-builder-source-label {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--lw-muted);
+    white-space: nowrap;
+}
+
+.sdlens-builder-source-wrap .lw-select {
+    width: auto;
+    min-width: 200px;
+    max-width: 320px;
+}
+
+.sdlens-builder-split {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.15fr);
+    overflow: hidden;
+}
+
+.sdlens-builder-chat-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--lw-border);
+    background: var(--lw-canvas);
+    overflow: hidden;
+}
+
+.sdlens-builder-messages {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.sdlens-builder-empty-chat {
+    padding: 16px;
+    border: 1px dashed var(--lw-border-strong);
+    border-radius: var(--lw-r);
+    color: var(--lw-muted);
+    font-size: 12.5px;
+    line-height: 1.5;
+}
+
+.sdlens-builder-msg-role {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--lw-muted);
+}
+
+.sdlens-builder-msg-text {
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.sdlens-builder-tool-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.sdlens-builder-compose {
+    flex: none;
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--lw-border);
+    background: var(--lw-surface);
+}
+
+.sdlens-builder-input {
+    min-height: 44px;
+    max-height: 140px;
+}
+
+.sdlens-builder-draft-pane {
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--lw-surface);
+}
+
+.sdlens-builder-draft-pane > * {
+    flex-shrink: 0;
+}
+
+.sdlens-builder-conflicts {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--lw-warn, #d97706);
+    border-radius: var(--lw-r);
+    background: var(--lw-raised);
+}
+
+.sdlens-builder-conflicts-title {
+    font-size: 12.5px;
+    font-weight: 600;
+}
+
+.sdlens-builder-conflict-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--lw-border-strong);
+    border-radius: var(--lw-r-sm);
+    background: var(--lw-surface);
+    font-size: 12px;
+}
+
+.sdlens-builder-conflict-diff {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    color: var(--lw-muted);
+    word-break: break-word;
+}
+
+.sdlens-builder-conflict-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.sdlens-builder-footer {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--lw-border);
+    background: var(--lw-surface);
+}
+
+.sdlens-builder-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    border: 1px solid var(--lw-err, #dc2626);
+    border-radius: var(--lw-r-sm);
+    background: var(--lw-raised);
+    color: var(--lw-err, #dc2626);
+    font-size: 12.5px;
+}
+
+.sdlens-builder-footer-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 720px) {
+    .sdlens-builder-dialog {
+        height: min(88vh, 920px);
+        min-height: 0;
+    }
+
+    .sdlens-builder-split {
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+    }
+
+    .sdlens-builder-chat-pane {
+        flex: none;
+        border-right: 0;
+        border-bottom: 1px solid var(--lw-border);
+        min-height: 220px;
+        max-height: 44vh;
+    }
+
+    .sdlens-builder-draft-pane {
+        flex: none;
+        overflow: visible;
+    }
+
+    .sdlens-builder-source-wrap {
+        width: 100%;
+    }
+
+    .sdlens-builder-source-wrap .lw-select {
+        flex: 1 1 180px;
+        max-width: 100%;
+    }
 }

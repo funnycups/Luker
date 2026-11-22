@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { makeIllustrationId } from '../illustration/presets.js';
+import { i18n } from '../lens/i18n.js';
+import { normalizeLocalImagePath } from '../media-path.js';
 
 export const CHARACTER_PROFILES_NAMESPACE = 'sd_character_profiles';
 
@@ -67,7 +69,6 @@ export function normalizeCharacterProfile(raw, now = Date.now()) {
         name,
         aliases: cleanStringList(raw.aliases),
         sourceWork: String(raw.sourceWork || '').trim(),
-        sourceCardAvatars: cleanStringList(raw.sourceCardAvatars),
         canonicalTags: cleanStringList(raw.canonicalTags),
         negativeTags: cleanStringList(raw.negativeTags),
         proseDescription: String(raw.proseDescription || '').trim(),
@@ -76,6 +77,21 @@ export function normalizeCharacterProfile(raw, now = Date.now()) {
         createdAt: Number.isFinite(Number(raw.createdAt)) ? Number(raw.createdAt) : now,
         updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : now,
     };
+}
+
+export function profileVersion(profile) {
+    if (profile == null) return null;
+    // An absent legacy timestamp must not make a version depend on the current clock.
+    const normalized = normalizeCharacterProfile(profile, 0);
+    return normalized ? JSON.stringify(normalized) : null;
+}
+
+function assertExpectedVersion(profile, expectedVersion, exists) {
+    if (expectedVersion === undefined) return;
+    const changed = expectedVersion === null ? exists : profileVersion(profile) !== expectedVersion;
+    if (changed) {
+        throw new Error(i18n('The character profile changed. Reload it before continuing.'));
+    }
 }
 
 export function resolveProfileAssets(profile, { outfitId = '' } = {}) {
@@ -192,7 +208,7 @@ export function createCharacterProfileStore(context) {
             return buildCompactProfileIndex(profiles);
         },
 
-        async upsertProfile(input, now = Date.now()) {
+        async upsertProfile(input, now = Date.now(), { expectedVersion, transientSessionId } = {}) {
             if (typeof context?.updateGlobalState !== 'function') {
                 throw new Error('GlobalState API (context.updateGlobalState) is unavailable.');
             }
@@ -202,9 +218,11 @@ export function createCharacterProfileStore(context) {
                     ? { ...current.profiles }
                     : {};
                 const requestedId = String(input?.id || '').trim();
+                const exists = Boolean(requestedId && Object.hasOwn(existingProfiles, requestedId));
                 const previous = requestedId && existingProfiles[requestedId]
-                    ? normalizeCharacterProfile(existingProfiles[requestedId], now)
+                    ? normalizeCharacterProfile({ ...existingProfiles[requestedId], id: requestedId }, now)
                     : null;
+                assertExpectedVersion(previous, expectedVersion, exists);
 
                 const merged = normalizeCharacterProfile({
                     ...(previous || {}),
@@ -217,6 +235,13 @@ export function createCharacterProfileStore(context) {
                 if (!merged) {
                     throw new Error('Character profile requires a non-empty name.');
                 }
+                for (const outfit of merged.outfits) {
+                    for (const imagePath of outfit.referenceImages) {
+                        if (normalizeLocalImagePath(imagePath).toLowerCase().startsWith('/user/images/_sandbox_tmp/')) {
+                            throw new Error(`${i18n('Promote temporary reference images before saving the character profile.')} ${imagePath}`);
+                        }
+                    }
+                }
                 existingProfiles[merged.id] = merged;
                 savedProfile = merged;
                 return {
@@ -224,7 +249,7 @@ export function createCharacterProfileStore(context) {
                     version: 1,
                     profiles: existingProfiles,
                 };
-            }, { asyncDiff: false });
+            }, { asyncDiff: false, transientSessionId });
 
             if (!res?.ok) {
                 throw new Error(`Failed to persist character profile: ${res?.hint || res?.reason || 'unknown error'}`);
@@ -232,7 +257,7 @@ export function createCharacterProfileStore(context) {
             return savedProfile;
         },
 
-        async deleteProfile(id) {
+        async deleteProfile(id, { expectedVersion, transientSessionId } = {}) {
             const target = String(id || '').trim();
             if (!target) {
                 return false;
@@ -245,7 +270,12 @@ export function createCharacterProfileStore(context) {
                 const existingProfiles = (current?.profiles && typeof current.profiles === 'object' && !Array.isArray(current.profiles))
                     ? { ...current.profiles }
                     : {};
-                if (!Object.hasOwn(existingProfiles, target)) {
+                const exists = Object.hasOwn(existingProfiles, target);
+                const previous = exists
+                    ? normalizeCharacterProfile({ ...existingProfiles[target], id: target })
+                    : null;
+                assertExpectedVersion(previous, expectedVersion, exists);
+                if (!exists) {
                     return null;
                 }
                 delete existingProfiles[target];
@@ -255,7 +285,7 @@ export function createCharacterProfileStore(context) {
                     version: 1,
                     profiles: existingProfiles,
                 };
-            }, { asyncDiff: false });
+            }, { asyncDiff: false, transientSessionId });
 
             if (!res?.ok) {
                 throw new Error(`Failed to delete character profile "${target}": ${res?.hint || res?.reason || 'unknown error'}`);

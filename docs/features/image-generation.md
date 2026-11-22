@@ -32,7 +32,7 @@ Expand **AI Illustration** inside **Extensions → Image Generation** and enable
 When illustrating a message, the illustration agent coordinates character visuals in three ways:
 
 - **Well-known fanwork characters** — When a character is already recognized natively by the active image generation model, the illustration agent generates the prompt directly without launching web exploration.
-- **Unarchived fanwork characters** — When the scene introduces a public-work character whose appearance is unfamiliar to the image model, the illustration agent invokes the **Character exploration agent** to read the character card, bound world books, public character databases, and [Search Tools](/features/search-tools) image results, then archives verified tags, outfits, and reference images into the global **Character Archive**. Enable **Send downloaded reference previews to multimodal LLM for inspection** inside **Character exploration agent** when your exploration model supports vision.
+- **Unarchived fanwork characters** — When the scene introduces a public-work character whose appearance is unfamiliar to the image model, the illustration agent invokes the **Character profile agent** to read the character card, bound world books, public character databases, and [Search Tools](/features/search-tools) image results, then archives verified tags, outfits, and reference images into the global **Character Archive**. Enable **Send downloaded reference previews to multimodal LLM for inspection** inside **Character profile agent** when your exploration model supports vision.
 - **Archived characters** — Characters already present in the **Character Archive** reuse their stored canonical tags, outfit presets, and reference images immediately.
 
 Inline illustrations are stripped from outgoing chat prompts automatically while remaining visible in plugin floor context so subsequent illustrations stay consistent.
@@ -48,12 +48,12 @@ Click any inline illustration in chat to open its action bar:
 
 ## Workbench Workspace
 
-Click **Open in Workbench** in **Extensions → Image Generation**, select **Image iteration studio** in the wand menu, or switch to the **Image Generation** tab inside [Workbench](/features/workbench):
+Click **Open in Workbench** in **Extensions → Image Generation**, select **Image Studio** in the wand menu, or switch to the **Image Generation** tab inside [Workbench](/features/workbench):
 
-- **Image Studio** — Conversational workspace supporting **Free image generation** for iterative scene drafting and **Character reference design** for original character sheets. Sessions support branching with **Branch from here**, single-image gallery regeneration, and persistent history across restarts.
-- **Character Archive** — Global library of character appearance tags, outfits, card expression bindings, and local reference sheets. At the top of the view, choose the launch mode for the current creation task:
-  - **Fanwork exploration** — enter character names or hints and click **Start exploration** to gather canon traits and reference art automatically.
-  - **OC design in studio** — click **Design OC in studio** to open **Image Studio** in **Character reference design** mode, where the studio AI reads your character card and bound world books, refines candidate sheets across turns, and stages a profile card. Click **Apply to character archive** to promote the chosen image into the global archive with full **Change history** undo support.
+- **Image Studio** — Conversational workspace for free image generation and source image editing, with visual review, session branching with **Branch from here**, single-image gallery regeneration, and persistent history across restarts.
+- **Character Archive** — Global library of character appearance tags, outfits, and local reference sheets:
+  - **AI Profile Builder** / **Refine with AI** — Opens a two-pane conversational dialog to create or update a character profile across multiple turns. Choose an explicit **Source material** option when you want the builder to read a specific character card or your user persona, or keep **Do not read a character card** selected. The builder can search public art databases, download candidate portraits, generate candidate reference sheets, and stage partial updates into the live editable draft on the right without overwriting concurrent manual edits. Click **Confirm & save to archive** to promote retained candidate images into formal archive references with **Change history** undo support; cancelling discards temporary images cleanly.
+  - **Manual editing** — Click **New character profile** to author tags, prose descriptions, outfits, and uploaded local reference images directly.
 - **Run Traces** — Inspect live and recent illustration and exploration runs, export run JSON, or click **Diagnose with AI** to troubleshoot failed runs in Workbench **AI iteration**.
 
 ## Iterating ComfyUI Workflows with AI

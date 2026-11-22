@@ -45,7 +45,7 @@ for (const locale of ['en', 'zh-cn', 'zh-tw']) {
                 };
             }));
 
-            expect(rows).toHaveLength(9);
+            expect(rows).toHaveLength(10);
             for (const { id, row, label, control } of rows) {
                 const context = `${locale}, ${width}px, ${id}`;
                 // Allow one CSS pixel for subpixel layout rounding.

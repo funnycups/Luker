@@ -2,7 +2,7 @@ import { extension_settings, getContext } from '../../../extensions.js';
 import { ensureSwipes, eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
 import { t } from '../../../i18n.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
-import { normalizeIllustrationSettings } from './settings.js';
+import { migrateIllustrationPromptSettings } from './settings.js';
 import { initSettingsUi } from './settings-ui.js';
 import { initMenus, setIllustrationEnabled } from './menus.js';
 import { GenerationQueue } from './queue.js';
@@ -62,7 +62,8 @@ export async function initIllustration(bridge) {
         .find(profile => String(profile.id || '') === currentProfileId);
     const currentLlmPreset = context.getPresetManager?.('openai')?.getSelectedPresetName?.() || '';
 
-    sdSettings.illustration = normalizeIllustrationSettings(sdSettings.illustration, {
+    const previousSettings = sdSettings.illustration;
+    const { settings, changed } = migrateIllustrationPromptSettings(previousSettings, {
         llm: {
             apiPresetName: String(currentProfile?.name || ''),
             llmPresetName: String(currentLlmPreset || ''),
@@ -72,7 +73,16 @@ export async function initIllustration(bridge) {
             naturalStyle: t`Natural language style`,
         },
     });
-    const settings = sdSettings.illustration;
+    sdSettings.illustration = settings;
+    if (changed && typeof context?.workbench?.saveSettingsChecked === 'function') {
+        try {
+            await context.workbench.saveSettingsChecked(context);
+        } catch (error) {
+            sdSettings.illustration = previousSettings;
+            console.error('[sd] failed to persist migrated illustration prompt settings:', error);
+            notifyIllustrationError(String(error?.message || error));
+        }
+    }
 
     if (typeof context.updateGlobalState === 'function') {
         try {

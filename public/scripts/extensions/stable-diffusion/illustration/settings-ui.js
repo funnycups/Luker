@@ -10,6 +10,9 @@ import {
     selectPreset,
     updatePreset,
 } from './settings.js';
+import { getDefaultPromptValues } from './presets.js';
+import { openLegacyCharacterDesignMigrationDialog } from './legacy-migration-dialog.js';
+import { DEFAULT_EXPLORATION_PROMPT } from '../exploration/prompts.js';
 
 const CONTAINER_ID = 'sd_illustration_container';
 
@@ -30,22 +33,41 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
     $('#sd_container').append(html);
 
     const presetSelect = $('#sd_illustration_preset');
+    const styleSelect = $('#sd_illustration_prompt_style');
+    const legacyDesignNotice = $('#sd_illustration_legacy_design_notice');
+    const reviewLegacyDesignBtn = $('#sd_illustration_review_legacy_design');
     const promptField = $('#sd_illustration_prompt');
     const studioField = $('#sd_illustration_studio_prompt');
-    const charDesignField = $('#sd_illustration_character_design_prompt');
     const explorationField = $('#sd_illustration_exploration_prompt');
     const visualInspectionCheck = $('#sd_illustration_visual_inspection');
     const apiPresetSelect = $('#sd_illustration_api_preset');
     const llmPresetSelect = $('#sd_illustration_llm_preset');
     const expApiPresetSelect = $('#sd_illustration_exploration_api_preset');
     const expLlmPresetSelect = $('#sd_illustration_exploration_llm_preset');
+    const presetButtons = $('#sd_illustration_preset_new, #sd_illustration_preset_rename, #sd_illustration_preset_delete');
+    const resetButtons = [
+        ['illustrationPrompt', $('#sd_illustration_prompt_reset')],
+        ['studioPrompt', $('#sd_illustration_studio_prompt_reset')],
+        ['explorationPrompt', $('#sd_illustration_exploration_prompt_reset')],
+    ];
+    let presetSavePending = false;
+    let emptyPresetStyle = '';
 
     const refreshFields = () => {
         const preset = currentPreset(settings);
-        const disabled = !preset;
+        const disabled = !preset || presetSavePending;
+        const hasPendingLegacy = Array.isArray(settings.pendingCharacterDesignPrompts)
+            && settings.pendingCharacterDesignPrompts.length > 0;
+        legacyDesignNotice.toggle(hasPendingLegacy);
+        reviewLegacyDesignBtn.prop('disabled', presetSavePending);
+        presetSelect.prop('disabled', presetSavePending);
+        styleSelect.prop('disabled', presetSavePending).val(preset ? (preset.promptStyle || '') : emptyPresetStyle);
+        presetButtons.prop('disabled', presetSavePending).attr('aria-disabled', String(presetSavePending));
+        for (const [field, reset] of resetButtons) {
+            reset.prop('disabled', disabled || (field !== 'explorationPrompt' && !preset?.promptStyle));
+        }
         promptField.prop('disabled', disabled);
         studioField.prop('disabled', disabled);
-        charDesignField.prop('disabled', disabled);
         explorationField.prop('disabled', disabled);
         visualInspectionCheck.prop('disabled', disabled);
         apiPresetSelect.prop('disabled', disabled);
@@ -54,13 +76,38 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
         expLlmPresetSelect.prop('disabled', disabled);
         promptField.val(preset?.illustrationPrompt || '');
         studioField.val(preset?.studioPrompt || '');
-        charDesignField.val(preset?.characterDesignPrompt || '');
         explorationField.val(preset?.explorationPrompt || '');
         visualInspectionCheck.prop('checked', Boolean(preset?.visualInspection));
         apiPresetSelect.val(preset?.llm?.apiPresetName || '');
         llmPresetSelect.val(preset?.llm?.llmPresetName || '');
         expApiPresetSelect.val(preset?.explorationLlm?.apiPresetName || '');
         expLlmPresetSelect.val(preset?.explorationLlm?.llmPresetName || '');
+    };
+
+    const reportSaveError = error => toastr.error(String(error?.message || error), t`Image Generation`);
+    const savePresetUpdate = async (preset, patch) => {
+        if (presetSavePending) return;
+        const previous = { ...preset };
+        presetSavePending = true;
+        let applied;
+        try {
+            updatePreset(settings, preset.id, patch);
+            applied = { ...preset };
+            refreshFields();
+            await context.workbench.saveSettingsChecked(context);
+        } catch (error) {
+            if (applied) {
+                for (const key of new Set([...Object.keys(previous), ...Object.keys(applied)])) {
+                    if (previous[key] === applied[key] || preset[key] !== applied[key]) continue;
+                    if (Object.hasOwn(previous, key)) preset[key] = previous[key];
+                    else delete preset[key];
+                }
+            }
+            reportSaveError(error);
+        } finally {
+            presetSavePending = false;
+            refreshFields();
+        }
     };
 
     const refreshPresetOptions = () => {
@@ -131,6 +178,38 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
         refreshLlmPresetOptions();
     });
 
+    styleSelect.on('change', async function () {
+        const style = String($(this).val() || '');
+        const preset = currentPreset(settings);
+        if (!preset) {
+            emptyPresetStyle = style;
+            return;
+        }
+        await savePresetUpdate(preset, { promptStyle: style });
+    });
+    for (const [field, reset] of resetButtons) {
+        reset.on('click', async () => {
+            const preset = currentPreset(settings);
+            if (!preset) {
+                return;
+            }
+            const value = field === 'explorationPrompt'
+                ? DEFAULT_EXPLORATION_PROMPT
+                : getDefaultPromptValues(preset.promptStyle)[field];
+            await savePresetUpdate(preset, { [field]: value });
+        });
+    }
+    $('#sd_illustration_iterate_ai').on('click', () => {
+        context.workbench.open({ page: 'ai', ws: 'sd' });
+    });
+    reviewLegacyDesignBtn.on('click', () => {
+        void openLegacyCharacterDesignMigrationDialog({
+            settings,
+            context,
+            onResolved: () => refreshFields(),
+        });
+    });
+
     promptField.on('input', function () {
         const preset = currentPreset(settings);
         if (!preset) {
@@ -146,15 +225,6 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
             return;
         }
         updatePreset(settings, preset.id, { studioPrompt: String($(this).val() || '') }, Date.now());
-        saveSettings();
-    });
-
-    charDesignField.on('input', function () {
-        const preset = currentPreset(settings);
-        if (!preset) {
-            return;
-        }
-        updatePreset(settings, preset.id, { characterDesignPrompt: String($(this).val() || '') }, Date.now());
         saveSettings();
     });
 
@@ -226,22 +296,43 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
         saveSettings();
     });
 
-    $('#sd_illustration_preset_new').on('click', () => {
+    $('#sd_illustration_preset_new').on('click', async () => {
+        if (presetSavePending) return;
         const template = currentPreset(settings);
+        const promptStyle = template ? template.promptStyle : emptyPresetStyle;
+        if (!promptStyle) {
+            toastr.info(t`Choose a default prompt style`, t`Image Generation`);
+            styleSelect.trigger('focus');
+            return;
+        }
         const name = t`Copy of ${template?.name || t`Preset`}`;
-        const preset = addPresetFromCurrent(settings, {
-            name,
-            llm: template?.llm || {},
-            now: Date.now(),
-        });
-        selectPreset(settings, preset.id);
-        saveSettings();
-        refreshPresetOptions();
-        refreshConnectionOptions();
-        refreshLlmPresetOptions();
+        const previousId = settings.currentPresetId;
+        let preset;
+        presetSavePending = true;
+        try {
+            preset = addPresetFromCurrent(settings, {
+                name, promptStyle, llm: template?.llm || {}, now: Date.now(),
+            });
+            selectPreset(settings, preset.id);
+            refreshPresetOptions();
+            await context.workbench.saveSettingsChecked(context);
+        } catch (error) {
+            if (preset) {
+                const index = settings.presets.findIndex(candidate => candidate.id === preset.id);
+                if (index !== -1) settings.presets.splice(index, 1);
+                if (settings.currentPresetId === preset.id) settings.currentPresetId = previousId;
+            }
+            reportSaveError(error);
+        } finally {
+            presetSavePending = false;
+            refreshPresetOptions();
+            refreshConnectionOptions();
+            refreshLlmPresetOptions();
+        }
     });
 
     $('#sd_illustration_preset_rename').on('click', async () => {
+        if (presetSavePending) return;
         const preset = currentPreset(settings);
         if (!preset) {
             toastr.warning(t`No preset selected.`, t`Image Generation`);
@@ -257,6 +348,7 @@ export async function initSettingsUi({ settings, saveSettings, context, onEnable
     });
 
     $('#sd_illustration_preset_delete').on('click', async () => {
+        if (presetSavePending) return;
         const preset = currentPreset(settings);
         if (!preset) {
             toastr.warning(t`No preset selected.`, t`Image Generation`);

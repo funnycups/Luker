@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { throwIfAborted } from '../../../lib/abort-utils.js';
+import { requireStoredPrompt } from '../../../lib/prompt-values.js';
 import {
     appendStandardToolRoundMessages,
     makeRuntimeToolCallId,
     requestToolCallsWithRetry,
 } from '../../../lib/iter-tool-calling.js';
-import { DEFAULT_EXPLORATION_PROMPT } from './prompts.js';
+import { BACKGROUND_EXPLORATION_TOOL_INSTRUCTIONS } from './prompts.js';
+import { i18n } from '../lens/i18n.js';
+import { createSourcePolicy } from './source-policy.js';
 import {
     EXPLORATION_TOOL_NAMES,
     buildExplorationToolDefs,
@@ -73,7 +76,7 @@ export async function defaultLoadVisualPreviewDataUrl(imagePath, context) {
     return `data:${mime};base64,${base64}`;
 }
 
-function buildInitialUserGoal({ targets = [], cardAvatar = '', userHint = '', existingIndex = '' }) {
+function buildInitialUserGoal({ targets = [], sourcePolicy, userHint = '', existingIndex = '' }) {
     const sections = [];
     if (existingIndex) {
         sections.push(`<existing_character_profiles>\n${existingIndex}\n</existing_character_profiles>`);
@@ -84,7 +87,7 @@ function buildInitialUserGoal({ targets = [], cardAvatar = '', userHint = '', ex
     if (Array.isArray(targets) && targets.length > 0) {
         const lines = targets.map((t, idx) => {
             if (typeof t === 'string') return `${idx + 1}. ${t}`;
-            const parts = [`${idx + 1}. ${t?.name || 'Unknown'}`];
+            const parts = [`${idx + 1}. ${t.name}`];
             if (t?.work) parts.push(`work: ${t.work}`);
             if (t?.hint) parts.push(`context: ${t.hint}`);
             return parts.join(' — ');
@@ -92,14 +95,11 @@ function buildInitialUserGoal({ targets = [], cardAvatar = '', userHint = '', ex
         sections.push(`<exploration_targets>\n${lines.join('\n')}\n</exploration_targets>`);
     }
 
-    if (cardAvatar) {
-        sections.push(`Target character card: ${cardAvatar}`);
-    }
+    sections.push(sourcePolicy.kind === 'card'
+        ? `Selected source card: ${sourcePolicy.card.avatar}`
+        : sourcePolicy.kind === 'persona' ? 'Selected source: user persona.' : 'Local source: none.');
     if (userHint) {
         sections.push(`Additional instructions: ${String(userHint).trim()}`);
-    }
-    if (sections.length === 1) {
-        sections.push('Inspect the active character card and bound worldbooks, then build or update visual profiles for the main characters.');
     }
     return sections.join('\n\n');
 }
@@ -109,8 +109,14 @@ export async function runExplorationAgent({
     profileStore,
     targets = [],
     cardAvatar = '',
+    source = null,
+    sourcePolicy: providedSourcePolicy = null,
     userHint = '',
     preset = {},
+    media = null,
+    promptContext = null,
+    transientSessionId = undefined,
+    onTrace = null,
     runStore = null,
     runId = '',
     abortSignal = null,
@@ -118,11 +124,29 @@ export async function runExplorationAgent({
 } = {}) {
     throwIfAborted(abortSignal, 'Character exploration aborted.');
 
-    const tools = buildExplorationToolDefs();
+    const storedPrompt = requireStoredPrompt(preset?.explorationPrompt, i18n('Fill in the prompt or reset it to the default.'));
+    if (!Array.isArray(targets) || targets.some(target => (
+        typeof target === 'string'
+            ? !target.trim()
+            : typeof target?.name !== 'string' || !target.name.trim()
+    ))) {
+        throw new Error('explore_characters: invalid_args — targets must contain character names');
+    }
+    const sourcePolicy = providedSourcePolicy ?? await createSourcePolicy(
+        context,
+        source ?? (cardAvatar ? { kind: 'card', card_avatar: cardAvatar } : { kind: 'none' }),
+    );
+    if (sourcePolicy.kind === 'none' && !targets.length && !String(userHint).trim()) {
+        throw new Error(i18n('Enter a character name or choose a source.'));
+    }
+    const tools = buildExplorationToolDefs({ sourcePolicy });
     const allowedNames = tools.map(t => t.function.name);
-    const systemPrompt = String(preset?.explorationPrompt || '').trim() || DEFAULT_EXPLORATION_PROMPT;
+    const systemPrompt = `${storedPrompt}\n\n${BACKGROUND_EXPLORATION_TOOL_INSTRUCTIONS}`;
     const { apiPresetName, llmPresetName } = resolveExplorationLlm(preset);
     const visualInspection = Boolean(preset?.visualInspection);
+    const previewLoader = typeof media?.preview === 'function'
+        ? (imagePath) => media.preview(imagePath)
+        : (imagePath) => loadVisualPreviewDataUrl(imagePath, context);
 
     const existingProfiles = await profileStore.listProfiles();
     const existingIndex = profileStore.buildCompactProfileIndex(existingProfiles);
@@ -131,7 +155,7 @@ export async function runExplorationAgent({
         { role: 'system', content: systemPrompt },
         {
             role: 'user',
-            content: buildInitialUserGoal({ targets, cardAvatar, userHint, existingIndex }),
+            content: buildInitialUserGoal({ targets, sourcePolicy, userHint, existingIndex }),
         },
     ];
 
@@ -143,6 +167,7 @@ export async function runExplorationAgent({
         throwIfAborted(abortSignal, 'Character exploration aborted.');
         roundIndex += 1;
         const roundId = `exp_round_${roundIndex}`;
+        onTrace?.({ type: 'round_start', roundIndex });
         if (runStore && runId) {
             runStore.appendRound?.({
                 runId,
@@ -161,12 +186,24 @@ export async function runExplorationAgent({
                     llmPresetName,
                     tools,
                     allowedNames,
+                    includeCharacterCard: false,
                     includeAssistantText: true,
                     allowNoToolCalls: true,
                     abortSignal,
+                    ...(promptContext ? { promptContext } : {}),
+                    ...(transientSessionId !== undefined ? { transientSessionId } : {}),
+                    ...(typeof onTrace === 'function'
+                        ? { onPreparedRequest: record => onTrace({ type: 'prepared_request', roundIndex, record }) }
+                        : {}),
                 },
             );
         } catch (err) {
+            onTrace?.({
+                type: 'round_end',
+                roundIndex,
+                status: abortSignal?.aborted ? 'aborted' : 'failed',
+                error: String(err?.message || err),
+            });
             if (runStore && runId) {
                 runStore.setRoundStatus?.({
                     runId,
@@ -180,6 +217,16 @@ export async function runExplorationAgent({
         const calls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
         const assistantText = String(response?.assistantText || '');
         const reasoning = String(response?.reasoning || '');
+
+        onTrace?.({
+            type: 'model_response',
+            roundIndex,
+            assistantText,
+            reasoning,
+            reasoningBlocks: response?.reasoningBlocks || null,
+            reasoningDetails: response?.reasoningDetails || null,
+            toolCalls: calls,
+        });
 
         if (runStore && runId) {
             if (reasoning) {
@@ -206,6 +253,7 @@ export async function runExplorationAgent({
 
         if (calls.length === 0) {
             finalText = assistantText;
+            onTrace?.({ type: 'round_end', roundIndex, status: 'done' });
             if (runStore && runId) {
                 runStore.setRoundStatus?.({ runId, roundId, status: 'done' });
             }
@@ -244,7 +292,7 @@ export async function runExplorationAgent({
             try {
                 toolResult = await executeExplorationToolCall(
                     { id: callId, name: rawCall.name, args: rawCall.args },
-                    { context, profileStore, defaultAvatar: cardAvatar, abortSignal },
+                    { context, profileStore, sourcePolicy, media, abortSignal },
                 );
                 if (rawCall.name === EXPLORATION_TOOL_NAMES.SAVE_CHARACTER_PROFILE && toolResult?.savedProfile) {
                     savedById.set(toolResult.savedProfile.id, toolResult.savedProfile);
@@ -254,6 +302,12 @@ export async function runExplorationAgent({
                 }
             } catch (err) {
                 if (abortSignal?.aborted) {
+                    onTrace?.({
+                        type: 'round_end',
+                        roundIndex,
+                        status: 'aborted',
+                        error: String(err?.message || err),
+                    });
                     if (runStore && runId) {
                         runStore.setSectionStatus?.({ runId, roundId, sectionId: toolSecId, status: 'aborted' });
                         runStore.setRoundStatus?.({ runId, roundId, status: 'aborted' });
@@ -263,6 +317,16 @@ export async function runExplorationAgent({
                 isError = true;
                 toolResult = { ok: false, error: String(err?.message || err) };
             }
+
+            onTrace?.({
+                type: 'tool_result',
+                roundIndex,
+                callId,
+                name: rawCall.name,
+                args: rawCall.args ?? {},
+                result: toolResult,
+                isError,
+            });
 
             if (runStore && runId) {
                 const resultText = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
@@ -298,7 +362,8 @@ export async function runExplorationAgent({
             const previewParts = [];
             for (const imagePath of fetchedForPreview) {
                 try {
-                    const dataUrl = await loadVisualPreviewDataUrl(imagePath, context);
+                    const dataUrl = await previewLoader(imagePath);
+                    onTrace?.({ type: 'visual_preview', roundIndex, imagePath, dataUrl: dataUrl || '', error: '' });
                     if (dataUrl) {
                         previewParts.push({
                             type: 'text',
@@ -310,9 +375,11 @@ export async function runExplorationAgent({
                         });
                     }
                 } catch (err) {
+                    const errorMessage = String(err?.message || err);
+                    onTrace?.({ type: 'visual_preview', roundIndex, imagePath, dataUrl: '', error: errorMessage });
                     previewParts.push({
                         type: 'text',
-                        text: `[Visual inspection preview unavailable for ${imagePath}: ${String(err?.message || err)}]`,
+                        text: `[Visual inspection preview unavailable for ${imagePath}: ${errorMessage}]`,
                     });
                 }
             }
@@ -324,6 +391,7 @@ export async function runExplorationAgent({
             }
         }
 
+        onTrace?.({ type: 'round_end', roundIndex, status: 'done' });
         if (runStore && runId) {
             runStore.setRoundStatus?.({ runId, roundId, status: 'done' });
         }

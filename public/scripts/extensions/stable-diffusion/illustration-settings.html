@@ -22,20 +22,39 @@
                     <select id="sd_illustration_preset" class="text_pole"></select>
                 </div>
                 <div class="sd_illustration_button_row">
-                    <div id="sd_illustration_preset_new" class="menu_button menu_button_icon" data-i18n="sd_illustration_preset_new">New</div>
+                    <button type="button" id="sd_illustration_preset_new" class="menu_button menu_button_icon" data-i18n="sd_illustration_preset_new">New</button>
                     <div id="sd_illustration_preset_rename" class="menu_button menu_button_icon" data-i18n="sd_illustration_preset_rename">Rename</div>
                     <div id="sd_illustration_preset_delete" class="menu_button menu_button_icon" data-i18n="sd_illustration_preset_delete">Delete</div>
+                    <button type="button" id="sd_illustration_iterate_ai" class="menu_button menu_button_icon" data-i18n="Iterate prompts with AI">Iterate prompts with AI</button>
+                </div>
+                <div class="sd_illustration_row">
+                    <label for="sd_illustration_prompt_style" data-i18n="Default prompt style">Default prompt style</label>
+                    <select id="sd_illustration_prompt_style" class="text_pole">
+                        <option value="" disabled data-i18n="Choose a default prompt style">Choose a default prompt style</option>
+                        <option value="tag" data-i18n="Tag style">Tag style</option>
+                        <option value="natural" data-i18n="Natural language style">Natural language style</option>
+                    </select>
                 </div>
             </div>
 
-            <label for="sd_illustration_prompt" data-i18n="sd_illustration_prompt">Message illustration prompt</label>
+            <div id="sd_illustration_legacy_design_notice" class="sd_illustration_block" style="display: none;">
+                <div class="sd_illustration_button_row">
+                    <span data-i18n="Legacy character design prompts need review">Legacy character design prompts need review</span>
+                    <button type="button" id="sd_illustration_review_legacy_design" class="menu_button" data-i18n="Review legacy prompts">Review legacy prompts</button>
+                </div>
+            </div>
+
+            <div class="sd_illustration_button_row">
+                <label for="sd_illustration_prompt" data-i18n="sd_illustration_prompt">Message illustration prompt</label>
+                <button type="button" id="sd_illustration_prompt_reset" class="menu_button" data-i18n="Reset to default">Reset to default</button>
+            </div>
             <textarea id="sd_illustration_prompt" class="textarea_compact text_pole" rows="8"></textarea>
 
-            <label for="sd_illustration_studio_prompt" data-i18n="sd_illustration_studio_prompt">Studio prompt</label>
+            <div class="sd_illustration_button_row">
+                <label for="sd_illustration_studio_prompt" data-i18n="Studio prompt">Studio prompt</label>
+                <button type="button" id="sd_illustration_studio_prompt_reset" class="menu_button" data-i18n="Reset to default">Reset to default</button>
+            </div>
             <textarea id="sd_illustration_studio_prompt" class="textarea_compact text_pole" rows="5"></textarea>
-
-            <label for="sd_illustration_character_design_prompt" data-i18n="sd_illustration_character_design_prompt">OC character design prompt override</label>
-            <textarea id="sd_illustration_character_design_prompt" class="textarea_compact text_pole" rows="4"></textarea>
 
             <div class="sd_illustration_row">
                 <label for="sd_illustration_api_preset" data-i18n="sd_illustration_api_preset">Connection profile</label>
@@ -48,7 +67,7 @@
 
             <div class="inline-drawer marginTop5">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <span data-i18n="sd_illustration_exploration_section">Character exploration agent</span>
+                    <span data-i18n="Character profile agent">Character profile agent</span>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
@@ -64,7 +83,10 @@
                         <label for="sd_illustration_exploration_llm_preset" data-i18n="sd_illustration_exploration_llm_preset">Exploration completion preset</label>
                         <select id="sd_illustration_exploration_llm_preset" class="text_pole"></select>
                     </div>
-                    <label for="sd_illustration_exploration_prompt" data-i18n="sd_illustration_exploration_prompt">Exploration prompt override</label>
+                    <div class="sd_illustration_button_row">
+                        <label for="sd_illustration_exploration_prompt" data-i18n="Character profile agent prompt">Character profile agent prompt</label>
+                        <button type="button" id="sd_illustration_exploration_prompt_reset" class="menu_button" data-i18n="Reset to default">Reset to default</button>
+                    </div>
                     <textarea id="sd_illustration_exploration_prompt" class="textarea_compact text_pole" rows="5"></textarea>
                 </div>
             </div>

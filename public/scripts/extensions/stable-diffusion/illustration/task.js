@@ -140,7 +140,11 @@ export async function requestIllustrationPrompts({
     includeWeight = false,
     capabilities = null,
     includeArchiveTools = false,
+    allowExploration = true,
     tools = null,
+    promptContext = null,
+    transientSessionId = undefined,
+    onPreparedRequest = null,
 }) {
     if (typeof context?.generateTask !== 'function') {
         throw new Error('generateTask is not available.');
@@ -153,11 +157,23 @@ export async function requestIllustrationPrompts({
                 includeWeight,
                 capabilities,
                 includeArchiveTools,
+                allowExploration,
             })
             : [buildAddImagePromptTool(availableLoras, { includeWeight })]);
 
+    // Only the preset system prompt (index 0, role "system") is a macro template.
+    // Chat transcript excerpts, memory recall, archive blocks, assistant turns,
+    // and tool results are runtime data and must not be parsed as strict macros.
+    const preparedTaskMessages = Array.isArray(taskMessages)
+        ? taskMessages.map((msg, idx) => (
+            idx === 0 && msg?.role === 'system'
+                ? msg
+                : (msg && typeof msg === 'object' ? { ...msg, substituteMacros: false } : msg)
+        ))
+        : taskMessages;
+
     const result = await context.generateTask({
-        taskMessages,
+        taskMessages: preparedTaskMessages,
         includeCharacterCard: true,
         worldInfoSource: 'chat',
         apiPresetName: preset?.llm?.apiPresetName || '',
@@ -167,6 +183,9 @@ export async function requestIllustrationPrompts({
         functionCallMode: 'auto',
         substituteMacros: true,
         abortSignal,
+        ...(promptContext ? { promptContext } : {}),
+        ...(transientSessionId !== undefined ? { transientSessionId } : {}),
+        ...(typeof onPreparedRequest === 'function' ? { onPreparedRequest } : {}),
     });
     const calls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
     const mapped = {

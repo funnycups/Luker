@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import {
-    LOREBOOK_READ_TOOL_DEFS,
-    isLorebookReadTool,
-    runLorebookReadTool,
-} from '../../../iteration-library/tools/lorebook-reads.js';
+    SOURCE_READ_TOOL_NAMES,
+    assertSourceImagePath,
+    buildSourceReadTools,
+    executeSourceReadTool,
+    isSourceReadTool,
+} from './source-policy.js';
 import {
     fetchReferenceImage,
     promoteLocalReferenceImage,
@@ -12,8 +14,10 @@ import {
     visitCharacterPage,
 } from '../character-sources-client.js';
 
+export { readCharacterCardData } from './source-policy.js';
+
 export const EXPLORATION_TOOL_NAMES = Object.freeze({
-    READ_CHARACTER_CARD: 'read_character_card',
+    ...SOURCE_READ_TOOL_NAMES,
     LIST_CHARACTER_PROFILES: 'list_character_profiles',
     READ_CHARACTER_PROFILES: 'read_character_profiles',
     SEARCH_CHARACTER_SOURCES: 'search_character_sources',
@@ -22,93 +26,9 @@ export const EXPLORATION_TOOL_NAMES = Object.freeze({
     SAVE_CHARACTER_PROFILE: 'save_character_profile',
 });
 
-function resolveCardFromContext(context, requestedAvatar = '') {
-    const characters = Array.isArray(context?.characters) ? context.characters : [];
-    const trimmed = String(requestedAvatar || '').trim();
-    if (trimmed) {
-        const byAvatar = characters.find(
-            c => String(c?.avatar || '') === trimmed || String(c?.name || '') === trimmed,
-        );
-        if (byAvatar) {
-            return byAvatar;
-        }
-    }
-    const idx = Number(context?.characterId);
-    if (Number.isInteger(idx) && idx >= 0 && idx < characters.length) {
-        return characters[idx];
-    }
-    return null;
-}
-
-export async function readCharacterCardData(context, { cardAvatar = '', abortSignal = null } = {}) {
-    const card = resolveCardFromContext(context, cardAvatar);
-    if (!card) {
-        return { found: false, message: 'No active or matching character card found.' };
-    }
-
-    const avatarFile = String(card.avatar || '').trim();
-    const avatarStem = avatarFile.replace(/\.[^.]+$/, '');
-    const cardData = card.data && typeof card.data === 'object' ? card.data : {};
-
-    let sprites = [];
-    if (avatarStem && typeof globalThis.fetch === 'function') {
-        try {
-            const res = await fetch(`/api/sprites/get?name=${encodeURIComponent(avatarStem)}`, {
-                method: 'GET',
-                headers: context?.getRequestHeaders?.() || {},
-                signal: abortSignal || undefined,
-            });
-            if (res.ok) {
-                const rawSprites = await res.json();
-                if (Array.isArray(rawSprites)) {
-                    sprites = rawSprites
-                        .map(item => ({
-                            label: String(item?.label || ''),
-                            imagePath: String(item?.path || '').replace(/\?.*$/, ''),
-                        }))
-                        .filter(item => item.imagePath.startsWith('/characters/'));
-                }
-            }
-        } catch {
-            sprites = [];
-        }
-    }
-
-    return {
-        found: true,
-        name: String(card.name || cardData.name || ''),
-        avatar: avatarFile,
-        avatarImagePath: avatarFile ? `/characters/${avatarFile}` : '',
-        primaryWorldBook: String(cardData?.extensions?.world || ''),
-        description: String(card.description || cardData.description || ''),
-        personality: String(card.personality || cardData.personality || ''),
-        scenario: String(card.scenario || cardData.scenario || ''),
-        firstMessage: String(card.first_mes || cardData.first_mes || ''),
-        creatorNotes: String(cardData.creator_notes || card.creatorcomment || ''),
-        sprites,
-    };
-}
-
-export function buildExplorationToolDefs() {
+export function buildExplorationToolDefs({ sourcePolicy = { kind: 'none' } } = {}) {
     return [
-        {
-            type: 'function',
-            function: {
-                name: EXPLORATION_TOOL_NAMES.READ_CHARACTER_CARD,
-                description: 'Read character card text fields, primary avatar image path (/characters/...), and local expression sprite paths.',
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        card_avatar: {
-                            type: 'string',
-                            description: 'Optional character card avatar filename or character name. Omit to read the active character card.',
-                        },
-                    },
-                    additionalProperties: false,
-                },
-            },
-        },
-        ...LOREBOOK_READ_TOOL_DEFS,
+        ...buildSourceReadTools(sourcePolicy),
         {
             type: 'function',
             function: {
@@ -226,7 +146,6 @@ export function buildExplorationToolDefs() {
                         name: { type: 'string', description: 'Canonical character display name.' },
                         aliases: { type: 'array', items: { type: 'string' } },
                         source_work: { type: 'string', description: 'Source franchise / work title, or empty for original characters.' },
-                        source_card_avatars: { type: 'array', items: { type: 'string' } },
                         canonical_tags: {
                             type: 'array',
                             items: { type: 'string' },
@@ -278,23 +197,17 @@ export function buildExplorationToolDefs() {
 export async function executeExplorationToolCall(call, {
     context,
     profileStore,
-    defaultAvatar = '',
+    sourcePolicy = { kind: 'none' },
+    media = null,
     abortSignal = null,
 } = {}) {
     const name = String(call?.name || '').trim();
     const args = call?.args && typeof call.args === 'object' ? call.args : {};
 
-    if (isLorebookReadTool(name)) {
-        const card = resolveCardFromContext(context, defaultAvatar);
-        return await runLorebookReadTool(
-            { id: call?.id, name, args },
-            { context, avatar: card?.avatar || defaultAvatar },
-        );
-    }
-
-    if (name === EXPLORATION_TOOL_NAMES.READ_CHARACTER_CARD) {
-        return await readCharacterCardData(context, {
-            cardAvatar: args.card_avatar || defaultAvatar,
+    if (isSourceReadTool(name)) {
+        return await executeSourceReadTool({ id: call?.id, name, args }, {
+            context,
+            policy: sourcePolicy,
             abortSignal,
         });
     }
@@ -335,6 +248,16 @@ export async function executeExplorationToolCall(call, {
         const rawUrl = String(args.image_url || '').trim();
         const profileId = String(args.profile_id || 'char').trim();
         if (rawUrl.startsWith('/')) {
+            assertSourceImagePath(sourcePolicy, rawUrl);
+            if (typeof media?.fetchReferenceImage === 'function') {
+                const staged = await media.fetchReferenceImage({
+                    imageUrl: rawUrl,
+                    refererUrl: args.referer_url || '',
+                    profileId,
+                    abortSignal,
+                });
+                return { ok: true, ...staged };
+            }
             const promoted = await promoteLocalReferenceImage({
                 context,
                 sourcePath: rawUrl,
@@ -342,6 +265,15 @@ export async function executeExplorationToolCall(call, {
                 abortSignal,
             });
             return { ok: true, ...promoted };
+        }
+        if (typeof media?.fetchReferenceImage === 'function') {
+            const staged = await media.fetchReferenceImage({
+                imageUrl: rawUrl,
+                refererUrl: args.referer_url || '',
+                profileId,
+                abortSignal,
+            });
+            return { ok: true, ...staged };
         }
         const downloaded = await fetchReferenceImage({
             context,
@@ -354,20 +286,28 @@ export async function executeExplorationToolCall(call, {
     }
 
     if (name === EXPLORATION_TOOL_NAMES.SAVE_CHARACTER_PROFILE) {
-        const saved = await profileStore.upsertProfile({
-            id: args.id,
-            name: args.name,
-            aliases: args.aliases,
-            sourceWork: args.source_work,
-            sourceCardAvatars: args.source_card_avatars,
-            canonicalTags: args.canonical_tags,
-            negativeTags: args.negative_tags,
-            proseDescription: args.prose_description,
-            outfits: args.outfits,
-            defaultOutfitId: args.default_outfit_id,
-        });
+        for (const outfit of args.outfits ?? []) {
+            for (const imagePath of outfit.referenceImages ?? outfit.reference_images ?? []) {
+                assertSourceImagePath({ kind: 'none' }, imagePath, name);
+            }
+        }
+        const patch = {};
+        for (const [argument, field] of Object.entries({
+            id: 'id',
+            name: 'name',
+            aliases: 'aliases',
+            source_work: 'sourceWork',
+            canonical_tags: 'canonicalTags',
+            negative_tags: 'negativeTags',
+            prose_description: 'proseDescription',
+            outfits: 'outfits',
+            default_outfit_id: 'defaultOutfitId',
+        })) {
+            if (Object.hasOwn(args, argument)) patch[field] = args[argument];
+        }
+        const saved = await profileStore.upsertProfile(patch);
         return { ok: true, savedProfile: saved };
     }
 
-    return { ok: false, error: `Unknown exploration tool: ${name}` };
+    throw new Error(`${name}: unknown_tool — unknown exploration tool`);
 }
