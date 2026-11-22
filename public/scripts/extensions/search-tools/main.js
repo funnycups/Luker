@@ -2825,9 +2825,10 @@ jQuery(() => {
     const context = getContext();
     registerTools(context);
     ensureUi();
-    globalThis.window?.addEventListener?.('pagehide', () => {
+    globalThis.window?.addEventListener?.('pagehide', (event) => {
+        if (event?.persisted) return;
         destroySettingsUi();
-    }, { once: true });
+    });
     // search-tools publishes its 2 read tools into the orchestrator's
     // Layer-2 registry so any of the four orchestration modes can
     // dispatch them. Deferred to APP_READY because search-tools is
