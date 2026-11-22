@@ -1,6 +1,20 @@
 import { window, display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import {
+  AvoidAreaSnapshot,
+  DEFAULT_PAGE_BACKGROUND,
+  NATIVE_CHROME_BACKGROUND,
+  ResolvedSystemBarStyle,
+  Rgba,
+  SafeAreaInsets,
+  WindowSizePx,
+  computeSafeAreaInsets,
+  parseCssColor,
+  resolveSystemBarStyle,
+} from './SafeAreaPolicy';
+
+export { DEFAULT_PAGE_BACKGROUND, NATIVE_CHROME_BACKGROUND, Rgba, parseCssColor };
 
 const TAG: string = 'luker.safearea';
 const DOMAIN: number = 0xE1EC;
@@ -8,145 +22,46 @@ const DOMAIN: number = 0xE1EC;
 /** AppStorage keys shared between the ability, this manager and the page. */
 export const STORAGE_SAFE_TOP: string = 'luker.safeTop';
 export const STORAGE_SAFE_BOTTOM: string = 'luker.safeBottom';
+export const STORAGE_SAFE_LEFT: string = 'luker.safeLeft';
+export const STORAGE_SAFE_RIGHT: string = 'luker.safeRight';
 export const STORAGE_PAGE_BACKGROUND: string = 'luker.pageBackground';
 
-/** SillyTavern's default dark background (--SmartThemeBlurTintColor). */
-export const DEFAULT_PAGE_BACKGROUND: string = '#171717';
-
-export interface Rgba {
-  r: number;
-  g: number;
-  b: number;
-  a: number;
-}
-
-function clampByte(value: number): number {
-  if (value < 0) {
-    return 0;
-  }
-  return value > 255 ? 255 : Math.round(value);
-}
-
-function parseHexColor(text: string): Rgba | null {
-  const body: string = text.substring(1);
-  if (body.length === 3) {
-    const r: number = parseInt(body.substring(0, 1) + body.substring(0, 1), 16);
-    const g: number = parseInt(body.substring(1, 2) + body.substring(1, 2), 16);
-    const b: number = parseInt(body.substring(2, 3) + body.substring(2, 3), 16);
-    if (isNaN(r) || isNaN(g) || isNaN(b)) {
-      return null;
-    }
-    return { r: r, g: g, b: b, a: 1 };
-  }
-  if (body.length === 6 || body.length === 8) {
-    const r: number = parseInt(body.substring(0, 2), 16);
-    const g: number = parseInt(body.substring(2, 4), 16);
-    const b: number = parseInt(body.substring(4, 6), 16);
-    const a: number = body.length === 8 ? parseInt(body.substring(6, 8), 16) / 255 : 1;
-    if (isNaN(r) || isNaN(g) || isNaN(b) || isNaN(a)) {
-      return null;
-    }
-    return { r: r, g: g, b: b, a: a };
-  }
-  return null;
-}
-
-function parseRgbColor(text: string): Rgba | null {
-  const numbers: string[] | null = text.match(/-?[0-9]*\.?[0-9]+/g);
-  if (numbers === null || numbers.length < 3) {
-    return null;
-  }
-  const r: number = Number.parseFloat(numbers[0]);
-  const g: number = Number.parseFloat(numbers[1]);
-  const b: number = Number.parseFloat(numbers[2]);
-  let a: number = 1;
-  if (numbers.length >= 4) {
-    a = Number.parseFloat(numbers[3]);
-  }
-  // The modern space separated form may carry the alpha as a percentage.
-  if (text.indexOf('%') >= 0 && numbers.length >= 4) {
-    a = Number.parseFloat(numbers[3]) / 100;
-  }
-  if (isNaN(r) || isNaN(g) || isNaN(b) || isNaN(a)) {
-    return null;
-  }
-  return { r: r, g: g, b: b, a: Math.max(0, Math.min(1, a)) };
-}
-
 /**
- * Parses the colour strings a browser reports through getComputedStyle, so the
- * window background can follow whatever theme the page is actually rendering.
- */
-export function parseCssColor(input: string): Rgba | null {
-  const text: string = input.trim().toLowerCase();
-  if (text.length === 0) {
-    return null;
-  }
-  if (text === 'transparent') {
-    return { r: 0, g: 0, b: 0, a: 0 };
-  }
-  if (text.startsWith('#')) {
-    return parseHexColor(text);
-  }
-  if (text.startsWith('rgb')) {
-    return parseRgbColor(text);
-  }
-  return null;
-}
-
-function compositeOver(top: Rgba, bottom: Rgba): Rgba {
-  const alpha: number = top.a + bottom.a * (1 - top.a);
-  if (alpha <= 0) {
-    return { r: bottom.r, g: bottom.g, b: bottom.b, a: 1 };
-  }
-  return {
-    r: clampByte((top.r * top.a + bottom.r * bottom.a * (1 - top.a)) / alpha),
-    g: clampByte((top.g * top.a + bottom.g * bottom.a * (1 - top.a)) / alpha),
-    b: clampByte((top.b * top.a + bottom.b * bottom.a * (1 - top.a)) / alpha),
-    a: 1,
-  };
-}
-
-function toHexColor(color: Rgba): string {
-  const hex = (value: number): string => {
-    const text: string = clampByte(value).toString(16);
-    return text.length === 1 ? '0' + text : text;
-  };
-  return '#' + hex(color.r) + hex(color.g) + hex(color.b);
-}
-
-function relativeLuminance(color: Rgba): number {
-  const channel = (value: number): number => {
-    const srgb: number = clampByte(value) / 255;
-    return srgb <= 0.03928 ? srgb / 12.92 : Math.pow((srgb + 0.055) / 1.055, 2.4);
-  };
-  return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b);
-}
-
-/**
- * Runs on every page load and again whenever the page restyles itself, so the
- * strip the window paints behind the system bars always matches the theme the
- * web UI is currently showing.
+ * Injected into app-origin pages so the strips behind the system bars follow
+ * the active theme across initial async settings load, theme switches and
+ * custom CSS updates. Coalesces rapid mutations on a 120 ms trailing window.
  */
 export const PAGE_THEME_REPORTER: string =
   '(function(){' +
   'if(window.__lukerPageThemeHook){window.__lukerPageThemeReport();return;}' +
   'window.__lukerPageThemeHook=true;' +
   'var pending=false;' +
+  'function isTransparent(c){return !c||c==="rgba(0, 0, 0, 0)"||c==="transparent";}' +
+  'function isStyleNode(n){if(!n||n.nodeType!==1){return false;}var t=n.tagName;return t==="STYLE"||t==="LINK";}' +
+  'function headMutationAffectsStyle(list){' +
+  'for(var i=0;i<list.length;i++){' +
+  'var m=list[i];' +
+  'var tgt=m.target;' +
+  'if(isStyleNode(tgt)||(tgt&&isStyleNode(tgt.parentNode))){return true;}' +
+  'for(var j=0;j<m.addedNodes.length;j++){if(isStyleNode(m.addedNodes[j])){return true;}}' +
+  'for(var k=0;k<m.removedNodes.length;k++){if(isStyleNode(m.removedNodes[k])){return true;}}' +
+  '}' +
+  'return false;' +
+  '}' +
   'window.__lukerPageThemeReport=function(){' +
   'if(pending){return;}pending=true;' +
   'setTimeout(function(){pending=false;' +
   'try{' +
+  'var bridge=window.LukerHarmony;' +
+  'if(!bridge||!bridge.setPageBackgroundColor){return;}' +
   'var el=document.body||document.documentElement;' +
   'var bg=el?getComputedStyle(el).backgroundColor:"";' +
-  'if(!bg||bg==="rgba(0, 0, 0, 0)"||bg==="transparent"){bg=getComputedStyle(document.documentElement).backgroundColor;}' +
-  'var root=getComputedStyle(document.body||document.documentElement);' +
-  'var tint=(root.getPropertyValue("--SmartThemeBlurTintColor")||"").trim();' +
-  'var bridge=window.LukerHarmony;' +
-  'if(bridge&&bridge.setPageBackgroundColor){' +
-  'if((!bg||bg==="rgba(0, 0, 0, 0)"||bg==="transparent")&&tint){bg=tint;}' +
-  'bridge.setPageBackgroundColor(String(bg||""));' +
+  'if(isTransparent(bg)&&document.documentElement){bg=getComputedStyle(document.documentElement).backgroundColor;}' +
+  'if(isTransparent(bg)&&el){' +
+  'var tint=(getComputedStyle(el).getPropertyValue("--SmartThemeBlurTintColor")||"").trim();' +
+  'if(tint){bg=tint;}' +
   '}' +
+  'bridge.setPageBackgroundColor(String(bg||""));' +
   '}catch(e){}' +
   '},120);' +
   '};' +
@@ -155,96 +70,251 @@ export const PAGE_THEME_REPORTER: string =
   'setTimeout(window.__lukerPageThemeReport,1500);' +
   'try{document.addEventListener("DOMContentLoaded",window.__lukerPageThemeReport);}catch(e){}' +
   'try{' +
-  'var mo=new MutationObserver(window.__lukerPageThemeReport);' +
-  'if(document.body){mo.observe(document.body,{attributes:true,attributeFilter:["class","style"]});}' +
-  'mo.observe(document.documentElement,{attributes:true,attributeFilter:["class","style"]});' +
-  'if(document.head){mo.observe(document.head,{childList:true,subtree:true,characterData:true});}' +
+  'var attrMo=new MutationObserver(window.__lukerPageThemeReport);' +
+  'if(document.body){attrMo.observe(document.body,{attributes:true,attributeFilter:["class","style"]});}' +
+  'if(document.documentElement){attrMo.observe(document.documentElement,{attributes:true,attributeFilter:["class","style"]});}' +
+  'if(document.head){' +
+  'var headMo=new MutationObserver(function(list){if(headMutationAffectsStyle(list)){window.__lukerPageThemeReport();}});' +
+  'headMo.observe(document.head,{childList:true,subtree:true,characterData:true});' +
+  '}' +
   '}catch(e){}' +
   'try{window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",window.__lukerPageThemeReport);}catch(e){}' +
   '})();';
 
+function toAvoidAreaSnapshot(area: window.AvoidArea): AvoidAreaSnapshot {
+  return {
+    visible: area.visible,
+    topRect: {
+      left: area.topRect.left,
+      top: area.topRect.top,
+      width: area.topRect.width,
+      height: area.topRect.height,
+    },
+    bottomRect: {
+      left: area.bottomRect.left,
+      top: area.bottomRect.top,
+      width: area.bottomRect.width,
+      height: area.bottomRect.height,
+    },
+    leftRect: {
+      left: area.leftRect.left,
+      top: area.leftRect.top,
+      width: area.leftRect.width,
+      height: area.leftRect.height,
+    },
+    rightRect: {
+      left: area.rightRect.left,
+      top: area.rightRect.top,
+      width: area.rightRect.width,
+      height: area.rightRect.height,
+    },
+  };
+}
+
 /**
- * Keeps the window edge to edge and tells ArkUI how much of the top and bottom
- * belongs to the system bars, so the page can paint the theme colour there
- * while its own content stays clear of the status bar and the navigation bar.
+ * Keeps the window edge to edge and tells ArkUI how much of each edge belongs
+ * to the system bars and cutouts, so the page can paint the theme colour there
+ * while its own content stays clear of them.
  */
 export class SafeAreaManager {
   private static mainWindow: window.Window | undefined = undefined;
-  private static listening: boolean = false;
+  private static layoutFullScreen: boolean = false;
+  private static immersiveMode: boolean = false;
   private static appliedBackground: string = '';
+  private static avoidAreaListener: ((options: window.AvoidAreaOptions) => void) | undefined = undefined;
+  private static windowSizeListener: (() => void) | undefined = undefined;
 
   static attach(mainWindow: window.Window): void {
+    if (SafeAreaManager.mainWindow !== undefined) {
+      SafeAreaManager.detach();
+    }
     SafeAreaManager.mainWindow = mainWindow;
-    mainWindow.setWindowLayoutFullScreen(true).catch((err: BusinessError) => {
-      hilog.error(DOMAIN, TAG, 'setWindowLayoutFullScreen failed: %{public}d %{public}s', err.code, err.message);
-    });
-    SafeAreaManager.applySystemBarColors({ r: 23, g: 23, b: 23, a: 1 });
-    if (!SafeAreaManager.listening) {
-      SafeAreaManager.listening = true;
-      try {
-        mainWindow.on('avoidAreaChange', () => {
-          SafeAreaManager.publishInsets();
-        });
-      } catch (e) {
-        hilog.error(DOMAIN, TAG, 'avoidAreaChange subscribe failed: %{public}s', JSON.stringify(e));
+    SafeAreaManager.layoutFullScreen = false;
+    SafeAreaManager.appliedBackground = '';
+    SafeAreaManager.installListeners(mainWindow);
+    SafeAreaManager.applyCurrentStyle();
+
+    mainWindow.setWindowLayoutFullScreen(true).then(() => {
+      if (SafeAreaManager.mainWindow !== mainWindow) {
+        return;
       }
+      SafeAreaManager.layoutFullScreen = true;
+      SafeAreaManager.publishInsets();
+    }).catch((err: BusinessError) => {
+      hilog.error(DOMAIN, TAG, 'setWindowLayoutFullScreen failed: %{public}d %{public}s', err.code, err.message);
+      if (SafeAreaManager.mainWindow === mainWindow) {
+        SafeAreaManager.layoutFullScreen = false;
+        SafeAreaManager.publishInsets();
+      }
+    });
+  }
+
+  static detach(): void {
+    const mainWindow: window.Window | undefined = SafeAreaManager.mainWindow;
+    const avoidListener = SafeAreaManager.avoidAreaListener;
+    const sizeListener = SafeAreaManager.windowSizeListener;
+    SafeAreaManager.mainWindow = undefined;
+    SafeAreaManager.avoidAreaListener = undefined;
+    SafeAreaManager.windowSizeListener = undefined;
+    SafeAreaManager.layoutFullScreen = false;
+    SafeAreaManager.appliedBackground = '';
+    if (mainWindow === undefined) {
+      return;
+    }
+    if (avoidListener !== undefined) {
       try {
-        mainWindow.on('windowSizeChange', () => {
-          SafeAreaManager.publishInsets();
-        });
+        mainWindow.off('avoidAreaChange', avoidListener);
       } catch (e) {
-        hilog.error(DOMAIN, TAG, 'windowSizeChange subscribe failed: %{public}s', JSON.stringify(e));
+        hilog.error(DOMAIN, TAG, 'avoidAreaChange unsubscribe failed: %{public}s', JSON.stringify(e));
       }
     }
-    SafeAreaManager.publishInsets();
+    if (sizeListener !== undefined) {
+      try {
+        mainWindow.off('windowSizeChange', sizeListener);
+      } catch (e) {
+        hilog.error(DOMAIN, TAG, 'windowSizeChange unsubscribe failed: %{public}s', JSON.stringify(e));
+      }
+    }
   }
 
   static refresh(): void {
     SafeAreaManager.publishInsets();
   }
 
+  static setImmersiveMode(enabled: boolean): void {
+    SafeAreaManager.immersiveMode = enabled;
+    if (!enabled) {
+      SafeAreaManager.reapplySystemBarColors();
+    }
+    SafeAreaManager.publishInsets();
+  }
+
+  static reapplySystemBarColors(): void {
+    SafeAreaManager.appliedBackground = '';
+    SafeAreaManager.applyCurrentStyle();
+  }
+
+  /** Restores the strip and bar icons to the native splash/error chrome colour. */
+  static resetToNativeChrome(): void {
+    SafeAreaManager.setPageBackground(NATIVE_CHROME_BACKGROUND);
+  }
+
+  private static installListeners(mainWindow: window.Window): void {
+    const avoidListener = (options: window.AvoidAreaOptions): void => {
+      if (options.type === window.AvoidAreaType.TYPE_SYSTEM
+        || options.type === window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR
+        || options.type === window.AvoidAreaType.TYPE_CUTOUT) {
+        SafeAreaManager.publishInsets();
+      }
+    };
+    try {
+      mainWindow.on('avoidAreaChange', avoidListener);
+      SafeAreaManager.avoidAreaListener = avoidListener;
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'avoidAreaChange subscribe failed: %{public}s', JSON.stringify(e));
+    }
+
+    const sizeListener = (): void => {
+      SafeAreaManager.publishInsets();
+    };
+    try {
+      mainWindow.on('windowSizeChange', sizeListener);
+      SafeAreaManager.windowSizeListener = sizeListener;
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'windowSizeChange subscribe failed: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  private static resolvePxToVp(mainWindow: window.Window): ((px: number) => number) | null {
+    try {
+      const uiContext = mainWindow.getUIContext();
+      return (px: number): number => uiContext.px2vp(px);
+    } catch (uiErr) {
+      // UIContext is unavailable until loadContent finishes; use the display
+      // backing this window rather than assuming density = 1.
+    }
+    try {
+      const displayId: number | undefined = mainWindow.getWindowProperties().displayId;
+      const screen: display.Display = displayId !== undefined
+        ? display.getDisplayByIdSync(displayId)
+        : display.getDefaultDisplaySync();
+      const density: number = screen.densityPixels;
+      if (density > 0) {
+        return (px: number): number => px / density;
+      }
+      hilog.error(DOMAIN, TAG, 'invalid display density: %{public}f', density);
+    } catch (displayErr) {
+      hilog.error(DOMAIN, TAG, 'resolve display density failed: %{public}s', JSON.stringify(displayErr));
+    }
+    return null;
+  }
+
+  private static readAvoidArea(
+    mainWindow: window.Window,
+    type: window.AvoidAreaType,
+    label: string,
+  ): AvoidAreaSnapshot | null {
+    try {
+      return toAvoidAreaSnapshot(mainWindow.getWindowAvoidArea(type));
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'getWindowAvoidArea(%{public}s) failed: %{public}s', label, JSON.stringify(e));
+      return null;
+    }
+  }
+
+  private static readWindowSize(mainWindow: window.Window): WindowSizePx | null {
+    try {
+      const rect = mainWindow.getWindowProperties().windowRect;
+      if (rect.width > 0 && rect.height > 0) {
+        return { width: rect.width, height: rect.height };
+      }
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, 'getWindowProperties failed: %{public}s', JSON.stringify(e));
+    }
+    return null;
+  }
+
   /**
-   * Publishes the system bar heights in vp. Immersive mode hides the bars and
-   * the insets collapse to zero, which is exactly what a full screen page needs.
+   * Publishes four-edge avoid insets in vp. When full-screen layout has not
+   * taken effect, insets stay 0 so ArkUI does not double-pad the content.
    */
   static publishInsets(): void {
     const mainWindow: window.Window | undefined = SafeAreaManager.mainWindow;
     if (mainWindow === undefined) {
       return;
     }
-    let density: number = 1;
-    try {
-      density = display.getDefaultDisplaySync().densityPixels;
-    } catch (e) {
-      density = 1;
+    if (!SafeAreaManager.layoutFullScreen) {
+      SafeAreaManager.writeInsets({ top: 0, bottom: 0, left: 0, right: 0 });
+      return;
     }
-    if (density <= 0) {
-      density = 1;
+    const pxToVp: ((px: number) => number) | null = SafeAreaManager.resolvePxToVp(mainWindow);
+    if (pxToVp === null) {
+      return;
     }
-    let topPx: number = 0;
-    let bottomPx: number = 0;
-    try {
-      const systemArea: window.AvoidArea = mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-      if (systemArea.visible) {
-        topPx = systemArea.topRect.height;
-        bottomPx = systemArea.bottomRect.height;
-      }
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, 'getWindowAvoidArea(TYPE_SYSTEM) failed: %{public}s', JSON.stringify(e));
-    }
-    try {
-      const indicatorArea: window.AvoidArea =
-        mainWindow.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
-      if (indicatorArea.visible && indicatorArea.bottomRect.height > bottomPx) {
-        bottomPx = indicatorArea.bottomRect.height;
-      }
-    } catch (e) {
-      hilog.error(DOMAIN, TAG, 'getWindowAvoidArea(TYPE_NAVIGATION_INDICATOR) failed: %{public}s', JSON.stringify(e));
-    }
-    const topVp: number = topPx > 0 ? topPx / density : 0;
-    const bottomVp: number = bottomPx > 0 ? bottomPx / density : 0;
-    AppStorage.setOrCreate(STORAGE_SAFE_TOP, topVp);
-    AppStorage.setOrCreate(STORAGE_SAFE_BOTTOM, bottomVp);
+    const systemArea: AvoidAreaSnapshot | null =
+      SafeAreaManager.readAvoidArea(mainWindow, window.AvoidAreaType.TYPE_SYSTEM, 'TYPE_SYSTEM');
+    const indicatorArea: AvoidAreaSnapshot | null = SafeAreaManager.readAvoidArea(
+      mainWindow, window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR, 'TYPE_NAVIGATION_INDICATOR');
+    const cutoutArea: AvoidAreaSnapshot | null =
+      SafeAreaManager.readAvoidArea(mainWindow, window.AvoidAreaType.TYPE_CUTOUT, 'TYPE_CUTOUT');
+    const windowSize: WindowSizePx | null = SafeAreaManager.readWindowSize(mainWindow);
+    const insets: SafeAreaInsets = computeSafeAreaInsets(
+      SafeAreaManager.layoutFullScreen,
+      SafeAreaManager.immersiveMode,
+      systemArea,
+      indicatorArea,
+      cutoutArea,
+      windowSize,
+      pxToVp,
+    );
+    SafeAreaManager.writeInsets(insets);
+  }
+
+  private static writeInsets(insets: SafeAreaInsets): void {
+    AppStorage.setOrCreate(STORAGE_SAFE_TOP, insets.top);
+    AppStorage.setOrCreate(STORAGE_SAFE_BOTTOM, insets.bottom);
+    AppStorage.setOrCreate(STORAGE_SAFE_LEFT, insets.left);
+    AppStorage.setOrCreate(STORAGE_SAFE_RIGHT, insets.right);
   }
 
   /**
@@ -253,19 +323,29 @@ export class SafeAreaManager {
    * icons have to be light or dark, so the whole window follows the theme.
    */
   static setPageBackground(cssColor: string): void {
-    const parsed: Rgba | null = parseCssColor(cssColor);
-    if (parsed === null) {
+    const resolved: ResolvedSystemBarStyle | null = resolveSystemBarStyle(cssColor);
+    if (resolved === null) {
       return;
     }
-    const base: Rgba = parseCssColor(SafeAreaManager.currentBackground()) ?? { r: 23, g: 23, b: 23, a: 1 };
-    const opaque: Rgba = parsed.a >= 1 ? parsed : compositeOver(parsed, base);
-    const hex: string = toHexColor(opaque);
-    if (hex === SafeAreaManager.appliedBackground) {
+    SafeAreaManager.applyResolvedStyle(resolved);
+  }
+
+  private static applyCurrentStyle(): void {
+    const resolved: ResolvedSystemBarStyle | null =
+      resolveSystemBarStyle(SafeAreaManager.currentBackground())
+        ?? resolveSystemBarStyle(DEFAULT_PAGE_BACKGROUND);
+    if (resolved !== null) {
+      SafeAreaManager.applyResolvedStyle(resolved);
+    }
+  }
+
+  private static applyResolvedStyle(style: ResolvedSystemBarStyle): void {
+    if (style.backgroundHex === SafeAreaManager.appliedBackground) {
       return;
     }
-    SafeAreaManager.appliedBackground = hex;
-    AppStorage.setOrCreate(STORAGE_PAGE_BACKGROUND, hex);
-    SafeAreaManager.applySystemBarColors(opaque);
+    SafeAreaManager.appliedBackground = style.backgroundHex;
+    AppStorage.setOrCreate(STORAGE_PAGE_BACKGROUND, style.backgroundHex);
+    SafeAreaManager.applySystemBarColors(style.contentColor);
   }
 
   private static currentBackground(): string {
@@ -273,20 +353,16 @@ export class SafeAreaManager {
     return stored ?? DEFAULT_PAGE_BACKGROUND;
   }
 
-  private static applySystemBarColors(background: Rgba): void {
+  private static applySystemBarColors(contentColor: string): void {
     const mainWindow: window.Window | undefined = SafeAreaManager.mainWindow;
     if (mainWindow === undefined) {
       return;
     }
-    const dark: boolean = relativeLuminance(background) < 0.5;
-    const contentColor: string = dark ? '#FFFFFF' : '#000000';
     const properties: window.SystemBarProperties = {
       statusBarColor: '#00000000',
       navigationBarColor: '#00000000',
       statusBarContentColor: contentColor,
       navigationBarContentColor: contentColor,
-      isStatusBarLightIcon: dark,
-      isNavigationBarLightIcon: dark,
     };
     try {
       mainWindow.setWindowSystemBarProperties(properties).catch((err: BusinessError) => {

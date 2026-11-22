@@ -88,8 +88,15 @@ export default class EntryAbility extends UIAbility {
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, TAG, 'loadContent failed: %{public}s', JSON.stringify(err));
+        return;
       }
+      SafeAreaManager.refresh();
     });
+  }
+
+  onWindowStageDestroy(): void {
+    SafeAreaManager.detach();
+    ImmersiveManager.detach();
   }
 
   onForeground(): void {

@@ -71,10 +71,12 @@ struct Index {
   @StorageLink('luker.serverUrl') serverUrl: string = DEFAULT_LOCAL_BASE_URL;
   @StorageLink('luker.customEndpoint') customEndpoint: boolean = false;
   @StorageLink('luker.pendingAction') @Watch('onPendingAction') pendingAction: string = '';
-  // Filled by SafeAreaManager with the system bar heights; the page paints the
-  // theme colour into them instead of letting the system show a white strip.
+  // Filled by SafeAreaManager with the system bar and cutout insets; the page
+  // paints the theme colour into them instead of letting the system show a white strip.
   @StorageProp('luker.safeTop') safeTopVp: number = 0;
   @StorageProp('luker.safeBottom') safeBottomVp: number = 0;
+  @StorageProp('luker.safeLeft') safeLeftVp: number = 0;
+  @StorageProp('luker.safeRight') safeRightVp: number = 0;
   @StorageProp('luker.pageBackground') pageBackground: string = DEFAULT_PAGE_BACKGROUND;
   private exporting: boolean = false;
   private crashDialogDone: boolean = false;
@@ -622,6 +624,7 @@ struct Index {
     this.controllerAttached = false;
     this.rendererExited = false;
     this.rendererExitReason = -1;
+    SafeAreaManager.resetToNativeChrome();
     this.start();
     return true;
   }
@@ -957,15 +960,19 @@ struct Index {
             .onHttpAuthRequest((event) => {
               return this.handleHttpAuthRequest(event);
             })
-            .onPageEnd(() => {
+            .onPageEnd((event) => {
               // A finished page proves the accepted credentials work; the next
               // navigation may reuse them without treating them as a failed attempt.
               this.recentHttpAuthAttempts.clear();
-              this.reportPageTheme();
+              const pageOrigin: string = originOf(event ? event.url : '');
+              if (pageOrigin.length > 0 && pageOrigin === originOf(this.serverUrl)) {
+                this.reportPageTheme();
+              }
             })
             .onRenderExited((event) => {
               this.closePopupDialog();
               KeepAliveManager.setGenerationActive(false);
+              SafeAreaManager.resetToNativeChrome();
               const reason: number = event ? event.renderExitReason : -1;
               this.applyRecoverySnapshot(onRendererExitedState(this.recoverySnapshot(), reason));
               if (event && isArkWebCrashReason(reason)) {
@@ -1062,11 +1069,19 @@ struct Index {
     }
     .width('100%')
     .height('100%')
-    // Edge to edge: the strip behind the status bar and the navigation bar is
-    // painted with the background the page reports, so it follows the theme.
-    .padding({ top: this.safeTopVp, bottom: this.safeBottomVp })
+    // Edge to edge: the strips behind the system bars and cutouts are painted
+    // with the background the page reports, so they follow the theme.
+    .padding({
+      top: this.safeTopVp,
+      bottom: this.safeBottomVp,
+      left: this.safeLeftVp,
+      right: this.safeRightVp,
+    })
     .backgroundColor(this.pageBackground)
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+    .expandSafeArea(
+      [SafeAreaType.SYSTEM],
+      [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END],
+    )
   }
 }
 
