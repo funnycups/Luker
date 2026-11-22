@@ -3202,7 +3202,6 @@ function buildDynamicExtractTools(schema = [], options = {}) {
     const tools = [];
     const specByToolName = new Map();
     const usedNames = new Set();
-    const allowEditDelete = options?.allowEditDelete !== false;
     const allowLinks = options?.allowLinks !== false;
     const activeTypes = options?.activeTypes instanceof Set ? options.activeTypes : null;
 
@@ -3228,7 +3227,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
         }
         usedNames.add(createToolName);
         let editToolName = '';
-        if (isEditableType && allowEditDelete) {
+        if (isEditableType) {
             editToolName = `${baseName}_edit`;
             suffix = 2;
             while (usedNames.has(editToolName)) {
@@ -3238,7 +3237,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
             usedNames.add(editToolName);
         }
         let deleteToolName = '';
-        if (isEditableType && allowEditDelete) {
+        if (isEditableType) {
             deleteToolName = `${baseName}_delete`;
             suffix = 2;
             while (usedNames.has(deleteToolName)) {
@@ -3327,7 +3326,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
                 },
             },
         });
-        if (isEditableType && allowEditDelete) {
+        if (isEditableType) {
             tools.push({
                 type: 'function',
                 function: {
@@ -3364,7 +3363,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
                 },
             });
         }
-        if (isEditableType && allowEditDelete) {
+        if (isEditableType) {
             tools.push({
                 type: 'function',
                 function: {
@@ -3390,7 +3389,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
             columnHints: filteredColumnHints,
             op: 'create',
         });
-        if (isEditableType && allowEditDelete) {
+        if (isEditableType) {
             specByToolName.set(editToolName, {
                 ...spec,
                 id: typeId,
@@ -3400,7 +3399,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
                 op: 'edit',
             });
         }
-        if (isEditableType && allowEditDelete) {
+        if (isEditableType) {
             specByToolName.set(deleteToolName, {
                 ...spec,
                 id: typeId,
@@ -4075,7 +4074,6 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
     const extractionMaxSeq = Number.isFinite(Number(options?.maxSeq))
         ? Math.max(0, Math.floor(Number(options.maxSeq)))
         : null;
-    const rebuildCreateOnly = Boolean(options?.rebuildCreateOnly);
     const crawlGraph = options?.crawlGraph && typeof options.crawlGraph === 'object' ? options.crawlGraph : null;
     const includeEdges = options?.includeEdges !== false;
     const includeLinks = options?.includeLinks !== false;
@@ -4163,7 +4161,6 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
         abortSignal: options?.abortSignal || null,
     });
     const { tools, specByToolName } = buildDynamicExtractTools(schema, {
-        allowEditDelete: !rebuildCreateOnly,
         activeTypes,
         allowLinks: includeLinks,
     });
@@ -5600,7 +5597,6 @@ async function processConcurrentBatch(context, store, settings, schema, extractB
     maxSeq,
     minSeq,
     abortSignal,
-    rebuildCreateOnly,
     onPhaseProgress,
 } = {}) {
     const readStore = normalizeStoreForRuntime(store);
@@ -5623,7 +5619,6 @@ async function processConcurrentBatch(context, store, settings, schema, extractB
         const operations = await extractNodesWithLLM(context, readStore, settings, schema, extractBatch, {
             maxSeq,
             abortSignal,
-            rebuildCreateOnly,
             crawlGraph: await buildCrawl(),
             types: new Set([typeId]),
             includeEdges: false,
@@ -5656,7 +5651,6 @@ async function processConcurrentBatch(context, store, settings, schema, extractB
     const edgeOperations = await extractNodesWithLLM(context, readStore, settings, schema, extractBatch, {
         maxSeq,
         abortSignal,
-        rebuildCreateOnly,
         crawlGraph: await buildCrawl(),
         types: new Set(),
         includeEdges: true,
@@ -5694,14 +5688,12 @@ async function processPendingMessageBatchWithLLM(context, store, settings, schem
             maxSeq: extractionMaxSeq,
             minSeq: extractionMinSeq,
             abortSignal: options?.abortSignal || null,
-            rebuildCreateOnly: Boolean(options?.rebuildCreateOnly),
             onPhaseProgress: options?.onPhaseProgress,
         });
     }
     const operations = await extractNodesWithLLM(context, store, settings, schema, extractBatch, {
         maxSeq: extractionMaxSeq,
         abortSignal: options?.abortSignal || null,
-        rebuildCreateOnly: Boolean(options?.rebuildCreateOnly),
         crawlGraph: String(settings?.extractMode || '').toLowerCase() === 'crawl'
             ? await buildExtractionCrawlGraph(context, store, settings, schema, extractBatch, { maxSeq: extractionMaxSeq, abortSignal: options?.abortSignal || null })
             : null,
@@ -5987,7 +5979,6 @@ async function runExtractionForStore(context, store, {
     onBatchApplied = null,
     onCompressionApplied = null,
     onPhaseProgress = null,
-    rebuildCreateOnly = false,
     getEffectiveLatestSeq = null,
 } = {}) {
     const settings = getEffectiveSettings(context, getSettings());
@@ -6099,7 +6090,6 @@ async function runExtractionForStore(context, store, {
                     {
                         compressionStats,
                         abortSignal,
-                        rebuildCreateOnly: Boolean(rebuildCreateOnly),
                         onPhaseProgress: batchOnPhaseProgress,
                     },
                 );
@@ -8106,7 +8096,6 @@ async function rebuildStoreFromCurrentChat(context, { abortSignal = null, onBatc
                 { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
             );
         },
-        rebuildCreateOnly: true,
     });
     const latestSeq = Math.max(0, Number(rebuilt?.lastExtractionDebug?.latestSeq || 0));
     if (!extracted && latestSeq > 0 && String(rebuilt?.lastExtractionDebug?.reason || '') !== 'no_graph_changes') {

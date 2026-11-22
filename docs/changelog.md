@@ -11,6 +11,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Memory Graph
 
+- Fixed full graph rebuild omitting edit and delete tools for editable node types.
 - Redesigned extraction cadence and built-in floor-hiding settings with quick presets, a custom configuration modal, a live animated preview, and visibility-gap warnings, defaulting to extracting every 2 AI replies and hiding messages past 5 floors.
 - Removed recent-turn exclusion filtering from memory injection and recall, resolving odd-turn event gaps under multi-turn batching and freshly updated entity sheets being excluded from recall.
 
