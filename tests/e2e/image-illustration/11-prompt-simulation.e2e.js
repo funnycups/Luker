@@ -140,6 +140,9 @@ async function configureConnectionAndComfy(page) {
     await page.locator('#sd_width_value').dispatchEvent('input');
     await page.locator('#sd_height_value').fill('256');
     await page.locator('#sd_height_value').dispatchEvent('input');
+    await page.locator('#sd_character_reference_enabled').setChecked(true);
+    await expect(page.locator('#sd_character_reference_mode')).toBeVisible();
+    await page.locator('#sd_character_reference_mode').selectOption('text_only');
 
     await openInlineDrawer(page, 'sd_illustration_container');
     await page.locator('#sd_illustration_enabled').uncheck();
@@ -155,15 +158,18 @@ async function configureConnectionAndComfy(page) {
     await page.locator('#sd_illustration_visual_inspection').uncheck();
 
     await expect.poll(() => {
-        const settings = readIllustrationSettings();
+        const sd = readSettingsJson().extension_settings.sd;
+        const settings = sd.illustration;
         const cur = settings.presets.find(p => p.id === settings.currentPresetId);
         return {
             llm: cur?.llm,
             explorationLlm: cur?.explorationLlm,
+            characterRef: Boolean(sd.character_reference_enabled),
         };
     }).toEqual({
         llm: { apiPresetName: profileName, llmPresetName: completionPreset },
         explorationLlm: { apiPresetName: profileName, llmPresetName: completionPreset },
+        characterRef: true,
     });
     await closeAnyOpenTopSettingsDrawer(page);
 
@@ -297,7 +303,7 @@ test.describe.serial('Workbench SD prompt simulation review loop', () => {
                                 mode: 'dialog',
                                 user_turns: [
                                     'Create a portrait of a lighthouse keeper in a storm coat.',
-                                    'Add brass spectacles to the canonical tags.',
+                                    'Add brass spectacles to the visual description.',
                                 ],
                                 source: { kind: 'none' },
                             },
@@ -361,10 +367,7 @@ test.describe.serial('Workbench SD prompt simulation review loop', () => {
                             arguments: {
                                 id,
                                 name,
-                                canonical_tags: ['storm_coat', 'brass_lantern'],
-                                prose_description: 'Weathered coastal watchman.',
-                                outfits: [{ id: 'outfit_default', name: 'Storm Coat', tags: ['navy_oilskin'] }],
-                                default_outfit_id: 'outfit_default',
+                                description: 'Weathered coastal watchman wearing a navy oilskin storm coat and carrying a brass lantern.',
                             },
                         }],
                     };
@@ -395,14 +398,8 @@ test.describe.serial('Workbench SD prompt simulation review loop', () => {
                             name: 'stage_character_profile',
                             arguments: {
                                 name: 'Lighthouse Keeper',
-                                canonical_tags: ['weathered_face', 'dark_storm_coat'],
-                                outfits: [{
-                                    id: 'outfit_keeper',
-                                    name: 'Storm Watch',
-                                    tags: ['dark_storm_coat'],
-                                    reference_images: [genResult.imagePath],
-                                }],
-                                default_outfit_id: 'outfit_keeper',
+                                description: 'Weathered face, dark storm coat.',
+                                reference_images: [{ path: genResult.imagePath, label: 'Storm Watch' }],
                             },
                         }],
                     };
@@ -415,7 +412,7 @@ test.describe.serial('Workbench SD prompt simulation review loop', () => {
                         toolCalls: [{
                             name: 'stage_character_profile',
                             arguments: {
-                                canonical_tags: ['weathered_face', 'dark_storm_coat', 'brass_spectacles'],
+                                description: 'Weathered face, dark storm coat, brass spectacles.',
                             },
                         }],
                     };
@@ -466,7 +463,7 @@ test.describe.serial('Workbench SD prompt simulation review loop', () => {
             timeoutMs: 90_000,
         });
         await expect(dlgDialog.locator('.luker-sim-review')).toContainText('Lighthouse Keeper');
-        await expect(dlgDialog.locator('.luker-sim-review')).toContainText('brass_spectacles');
+        await expect(dlgDialog.locator('.luker-sim-review')).toContainText('brass spectacles');
         const dlgImg = dlgDialog.locator('img.luker-sim-image[data-sim-ignore="true"]').first();
         await expect(dlgImg).toBeVisible();
         await expect.poll(async () => dlgImg.evaluate(el => el.complete && el.naturalWidth > 0)).toBe(true);

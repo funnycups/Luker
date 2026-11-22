@@ -81,11 +81,8 @@ function createSimContext({ chat = [], characterId = null, characters = [], gene
             name: 'Formal Archive Hero',
             aliases: [],
             sourceWork: 'Formal Work',
-            canonicalTags: ['black_hair'],
-            negativeTags: [],
-            proseDescription: 'Stored formally on disk.',
-            outfits: [{ id: 'outfit_default', name: 'Default', tags: [], prose: '', referenceImages: ['/user/images/_references/formal_1.png'] }],
-            defaultOutfitId: 'outfit_default',
+            description: 'Black hair. Stored formally on disk.',
+            referenceImages: [{ path: '/user/images/_references/formal_1.png', label: 'Default' }],
             createdAt: 100,
             updatedAt: 100,
         },
@@ -161,14 +158,14 @@ function createSimContext({ chat = [], characterId = null, characters = [], gene
         },
         async getGlobalState(ns) {
             if (ns === 'sd_character_profiles') {
-                return { ok: true, state: { version: 1, profiles: clone(formalProfiles) } };
+                return { ok: true, state: { version: 2, profiles: clone(formalProfiles) } };
             }
             return { ok: true, state: {} };
         },
         async updateGlobalState(ns, updater) {
             globalWrites.push(ns);
             if (ns === 'sd_character_profiles') {
-                const next = await updater({ version: 1, profiles: clone(formalProfiles) });
+                const next = await updater({ version: 2, profiles: clone(formalProfiles) });
                 if (next?.profiles) {
                     Object.keys(formalProfiles).forEach(k => delete formalProfiles[k]);
                     Object.assign(formalProfiles, clone(next.profiles));
@@ -213,17 +210,8 @@ function makeDraftLive() {
             name: 'Draft Navigator',
             aliases: ['Starfinder'],
             sourceWork: 'Draft Chronicle',
-            canonicalTags: ['silver_braid', 'amber_eyes'],
-            negativeTags: ['blurry'],
-            proseDescription: 'Uncommitted draft character wearing a brass astrolabe cloak.',
-            outfits: [{
-                id: 'outfit_cloak',
-                name: 'Astrolabe Cloak',
-                tags: ['navy_cloak', 'brass_compass'],
-                prose: 'Deep navy cloak trimmed with brass compass charms.',
-                referenceImages: ['/user/images/_references/draft_nav.png'],
-            }],
-            defaultOutfitId: 'outfit_cloak',
+            description: 'Silver braid, amber eyes. Uncommitted draft character wearing a deep navy astrolabe cloak trimmed with brass compass charms.',
+            referenceImages: [{ path: '/user/images/_references/draft_nav.png', label: 'Astrolabe Cloak' }],
             createdAt: 200,
             updatedAt: 200,
         }],
@@ -334,9 +322,7 @@ describe('workbench sd simulation tools', () => {
                                 args: {
                                     id: 'char_sandbox_new',
                                     name: 'Harbor Keeper',
-                                    canonical_tags: ['lantern', 'raincoat'],
-                                    outfits: [{ id: 'outfit_rain', name: 'Raincoat', tags: ['yellow_raincoat'] }],
-                                    default_outfit_id: 'outfit_rain',
+                                    description: 'Weathered harbor keeper wearing a yellow raincoat and carrying a brass lantern.',
                                 },
                             }],
                             assistantText: '',
@@ -367,7 +353,7 @@ describe('workbench sd simulation tools', () => {
                                 aspect_ratio: '16:9',
                                 insert_after: 'under amber lanterns.',
                                 insert_before: ' Waves rolled softly',
-                                character_refs: [{ profile_id: 'char_draft_1', outfit_id: 'outfit_cloak' }],
+                                character_refs: [{ profile_id: 'char_draft_1', image_paths: ['/user/images/_references/draft_nav.png'] }],
                             },
                         },
                         {
@@ -491,9 +477,8 @@ describe('workbench sd simulation tools', () => {
                             args: {
                                 id: 'char_bg_1',
                                 name: 'Background Character',
-                                canonical_tags: ['teal_eyes'],
-                                outfits: [{ id: 'outfit_1', name: 'Coat', reference_images: [stagedPath] }],
-                                default_outfit_id: 'outfit_1',
+                                description: 'Teal eyes, wearing a heavy coastal coat.',
+                                reference_images: [{ path: stagedPath, label: 'Coat' }],
                             },
                         }],
                         assistantText: '',
@@ -579,12 +564,7 @@ describe('workbench sd simulation tools', () => {
                             id: 'dlg_stage_1',
                             name: 'stage_character_profile',
                             args: {
-                                outfits: [{
-                                    id: 'outfit_cloak',
-                                    name: 'Astrolabe Cloak',
-                                    tags: ['navy_cloak'],
-                                    reference_images: [genResult.imagePath],
-                                }],
+                                reference_images: [{ path: genResult.imagePath, label: 'Astrolabe Cloak' }],
                             },
                         }],
                         assistantText: '',
@@ -598,12 +578,12 @@ describe('workbench sd simulation tools', () => {
                         toolCalls: [{
                             id: 'dlg_stage_2',
                             name: 'stage_character_profile',
-                            args: { canonical_tags: ['silver_braid', 'amber_eyes', 'star_hairpin'] },
+                            args: { description: 'Silver braid, amber eyes, star hairpin, navy astrolabe cloak.' },
                         }],
                         assistantText: '',
                     };
                 }
-                return { toolCalls: [], assistantText: 'Added star hairpin to canonical tags.' };
+                return { toolCalls: [], assistantText: 'Added star hairpin to description.' };
             },
         });
 
@@ -619,8 +599,8 @@ describe('workbench sd simulation tools', () => {
                 mode: 'dialog',
                 initial_profile_id: 'char_draft_1',
                 user_turns: [
-                    'Generate a portrait for the Astrolabe Cloak outfit.',
-                    'Also add a star hairpin to her core appearance tags.',
+                    'Generate a portrait for the Astrolabe Cloak look.',
+                    'Also add a star hairpin to her core appearance description.',
                 ],
                 source: { kind: 'none' },
             },
@@ -629,8 +609,9 @@ describe('workbench sd simulation tools', () => {
                 expect(kind).toBe('sd-exploration');
                 expect(payload.mode).toBe('dialog');
                 expect(payload.turns).toHaveLength(2);
-                expect(payload.finalDraft.canonicalTags).toContain('star_hairpin');
-                expect(payload.finalDraft.outfits[0].referenceImages[0]).toMatch(/^\/user\/images\/_sandbox_tmp\//);
+                expect(payload.finalDraft.description).toContain('star hairpin');
+                expect(payload.finalDraft.referenceImages[0].path).toMatch(/^\/user\/images\/_sandbox_tmp\//);
+                expect(payload.finalDraft.referenceImages[0].label).toBe('Astrolabe Cloak');
                 return await runRealDomReview({ kind, payload, worldInfoHits }).run();
             },
         });
@@ -643,8 +624,8 @@ describe('workbench sd simulation tools', () => {
         expect(toolNames).toContain('stage_character_profile');
         expect(toolNames).toContain('generate_image');
         expect(toolNames).not.toContain('save_character_profile');
-        expect(result).toContain('star_hairpin');
-        expect(result).toContain('Added star hairpin to canonical tags.');
+        expect(result).toContain('star hairpin');
+        expect(result).toContain('Added star hairpin to description.');
         expect(result).not.toContain(FAKE_DATA_URL);
     });
 
@@ -664,7 +645,7 @@ describe('workbench sd simulation tools', () => {
                             args: {
                                 id: `char_attempt_${attemptCount}`,
                                 name: `Attempt ${attemptCount} Character`,
-                                canonical_tags: [`tag_attempt_${attemptCount}`],
+                                description: `Attempt ${attemptCount} visual description.`,
                             },
                         }],
                         assistantText: '',

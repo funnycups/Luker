@@ -163,8 +163,10 @@ export function createCharactersView(app) {
         const created = normalizeCharacterProfile({
             id: makeIllustrationId('char'),
             name: 'New Character',
-            outfits: [{ id: 'outfit_default', name: 'Default', tags: [], prose: '', referenceImages: [] }],
-            defaultOutfitId: 'outfit_default',
+            aliases: [],
+            sourceWork: '',
+            description: '',
+            referenceImages: [],
         });
         selectedId = created.id;
         savedProfileSnapshot = null;
@@ -247,6 +249,18 @@ export function createCharactersView(app) {
         }
     }
 
+    function appendDraftReferenceImage(imagePath, expectedProfileId = '') {
+        const cleanPath = String(imagePath || '').trim();
+        if (!cleanPath || !draftProfile) return;
+        if (expectedProfileId && draftProfile.id !== expectedProfileId) return;
+        const existing = Array.isArray(draftProfile.referenceImages) ? draftProfile.referenceImages : [];
+        if (!existing.some(ref => ref.path === cleanPath)) {
+            draftProfile.referenceImages = [...existing, { path: cleanPath, label: '' }];
+        }
+        paint();
+        syncDirtyState();
+    }
+
     async function openAiBuilder(initialProfile = null) {
         try {
             const opener = typeof app.openCharacterBuilderDialog === 'function'
@@ -303,8 +317,8 @@ export function createCharactersView(app) {
                 visible.length === 0
                     ? emptyState('users', i18n('No character profiles archived yet'), '', null, { renderIcon: icon })
                     : visible.map(profile => {
-                        const defaultOutfit = profile.outfits.find(o => o.id === profile.defaultOutfitId) || profile.outfits[0];
-                        const thumb = defaultOutfit?.referenceImages?.[0] || '';
+                        const refs = Array.isArray(profile.referenceImages) ? profile.referenceImages : [];
+                        const thumb = refs[0]?.path || '';
                         return h('button', {
                             type: 'button',
                             class: `sdlens-char-card ${profile.id === selectedId ? 'is-active' : ''}`.trim(),
@@ -327,96 +341,86 @@ export function createCharactersView(app) {
                             h('div', { class: 'sdlens-char-name', text: profile.name }),
                             h('div', {
                                 class: 'sdlens-char-sub',
-                                text: [profile.sourceWork, i18nFormat('${0} outfit(s)', profile.outfits.length)].filter(Boolean).join(' · '),
+                                text: [profile.sourceWork, i18nFormat('${0} reference image(s)', refs.length)].filter(Boolean).join(' · '),
                             })));
                     })));
     }
 
-    function renderOutfitEditor(outfit, index) {
-        const isDefault = draftProfile.defaultOutfitId === outfit.id;
+    function renderReferenceImagesSection() {
+        const refs = Array.isArray(draftProfile.referenceImages) ? draftProfile.referenceImages : [];
 
         const fileInput = h('input', {
             type: 'file',
             accept: 'image/*',
             hidden: true,
+            dataset: { sdRole: 'upload-ref-input' },
             onChange: async (e) => {
                 const file = e.target.files?.[0];
-                if (!file) return;
+                if (!file || !draftProfile) return;
+                const targetProfileId = draftProfile.id;
                 try {
-                    const imagePath = await uploadAndPromoteReferenceFile(file, draftProfile.id, getCtx());
-                    if (!outfit.referenceImages.includes(imagePath)) {
-                        outfit.referenceImages.push(imagePath);
-                    }
-                    paint();
-                    syncDirtyState();
+                    const imagePath = await uploadAndPromoteReferenceFile(file, targetProfileId, getCtx());
+                    if (!draftProfile || draftProfile.id !== targetProfileId) return;
+                    appendDraftReferenceImage(imagePath, targetProfileId);
                 } catch (err) {
                     app.toast(String(err?.message || err), { error: true });
+                } finally {
+                    e.target.value = '';
                 }
             },
         });
 
-        return h('div', { class: 'sdlens-outfit-card', dataset: { outfitId: outfit.id } },
-            h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' } },
-                h('strong', { text: `${outfit.name} (${outfit.id})` }),
-                h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
-                    isDefault
-                        ? h('span', { class: 'lw-pilltag is-ok', text: i18n('Default outfit') })
-                        : button(i18n('Set as default outfit'), () => {
-                            draftProfile.defaultOutfitId = outfit.id;
-                            paint();
-                            syncDirtyState();
-                        }, { small: true, ghost: true }),
-                    draftProfile.outfits.length > 1
-                        ? iconButton('trash', i18n('Delete'), () => {
-                            draftProfile.outfits.splice(index, 1);
-                            if (draftProfile.defaultOutfitId === outfit.id) {
-                                draftProfile.defaultOutfitId = draftProfile.outfits[0]?.id || '';
-                            }
-                            paint();
-                            syncDirtyState();
-                        }, { className: 'is-sm', renderIcon: icon })
-                        : null)),
-            h('div', { class: 'sdlens-grid-2' },
-                formField(i18n('Outfit name'), h('input', {
-                    type: 'text',
-                    class: 'sdlens-input',
-                    value: outfit.name,
-                    onInput: (e) => { outfit.name = e.target.value; syncDirtyState(); },
-                })),
-                formField(i18n('Outfit tags (comma-separated)'), h('input', {
-                    type: 'text',
-                    class: 'sdlens-input',
-                    value: outfit.tags.join(', '),
-                    onInput: (e) => { outfit.tags = parseCsvList(e.target.value); syncDirtyState(); },
-                }))),
-            formField(i18n('Outfit prose description'), (() => {
-                const ta = h('textarea', {
-                    class: 'sdlens-textarea',
-                    onInput: (e) => { outfit.prose = e.target.value; syncDirtyState(); },
-                });
-                ta.value = outfit.prose || '';
-                return ta;
-            })()),
-            h('div', { class: 'sdlens-ref-strip' },
-                (outfit.referenceImages || []).map((imgPath, refIdx) => h('div', { class: 'sdlens-ref-item' },
-                    h('img', { src: imgPath, alt: outfit.name }),
-                    h('button', {
+        const uploadBtn = button(i18n('Upload local reference image'), () => fileInput.click(), {
+            small: true,
+            iconName: 'upload',
+            renderIcon: icon,
+        });
+        uploadBtn.dataset.sdRole = 'upload-ref';
+
+        const refGrid = refs.length === 0
+            ? h('div', { class: 'sdlens-ref-empty', text: i18n('No reference images added yet.') })
+            : h('div', { class: 'sdlens-ref-strip' },
+                refs.map((ref, refIdx) => {
+                    const removeBtn = h('button', {
                         type: 'button',
                         class: 'sdlens-ref-remove',
                         title: i18n('Remove'),
+                        'aria-label': i18n('Remove'),
+                        dataset: { sdRole: 'ref-remove' },
                         onClick: () => {
-                            outfit.referenceImages.splice(refIdx, 1);
+                            draftProfile.referenceImages.splice(refIdx, 1);
                             paint();
                             syncDirtyState();
                         },
-                    }, icon('x', { size: 12 }))))),
-            h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
-                button(i18n('Upload local reference image'), () => fileInput.click(), {
-                    small: true,
-                    iconName: 'upload',
-                    renderIcon: icon,
-                }),
-                fileInput));
+                    }, icon('x', { size: 12 }));
+
+                    const labelInput = h('input', {
+                        type: 'text',
+                        class: 'sdlens-input sdlens-ref-label',
+                        value: ref.label || '',
+                        placeholder: i18n('Short label (optional)'),
+                        'aria-label': i18n('Reference label'),
+                        dataset: { sdField: 'ref-label', sdRole: 'ref-label' },
+                        onInput: (e) => {
+                            ref.label = e.target.value;
+                            syncDirtyState();
+                        },
+                    });
+
+                    return h('div', {
+                        class: 'sdlens-ref-item',
+                        dataset: { sdRole: 'ref-item', refPath: ref.path },
+                    },
+                    h('div', { class: 'sdlens-ref-thumb' },
+                        h('img', { src: ref.path, alt: ref.label || draftProfile.name }),
+                        removeBtn),
+                    h('div', { class: 'sdlens-ref-body' }, labelInput));
+                }));
+
+        return h('section', { class: 'sdlens-refs-section' },
+            sectionTitle(i18n('Reference images')),
+            refGrid,
+            h('div', { class: 'sdlens-ref-controls' }, uploadBtn, fileInput));
     }
 
     function renderDetailPane() {
@@ -485,6 +489,14 @@ export function createCharactersView(app) {
             discardBtn,
             bannerSaveBtn);
 
+        const descTextarea = h('textarea', {
+            class: 'sdlens-textarea sdlens-description-textarea',
+            placeholder: i18n('Describe appearance, Danbooru character tag if applicable, outfits, and visual notes…'),
+            dataset: { sdField: 'profile-description' },
+            onInput: (e) => { draftProfile.description = e.target.value; syncDirtyState(); },
+        });
+        descTextarea.value = draftProfile.description || '';
+
         return h('div', { class: 'sdlens-chars-detail' },
             dirtyBarEl,
             h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
@@ -510,43 +522,8 @@ export function createCharactersView(app) {
                     value: draftProfile.sourceWork,
                     onInput: (e) => { draftProfile.sourceWork = e.target.value; syncDirtyState(); },
                 }))),
-            h('div', { class: 'sdlens-grid-2' },
-                formField(i18n('Core appearance tags (comma-separated)'), h('input', {
-                    type: 'text',
-                    class: 'sdlens-input',
-                    dataset: { sdField: 'canonical-tags' },
-                    value: draftProfile.canonicalTags.join(', '),
-                    onInput: (e) => { draftProfile.canonicalTags = parseCsvList(e.target.value); syncDirtyState(); },
-                })),
-                formField(i18n('Negative tags (comma-separated)'), h('input', {
-                    type: 'text',
-                    class: 'sdlens-input',
-                    value: draftProfile.negativeTags.join(', '),
-                    onInput: (e) => { draftProfile.negativeTags = parseCsvList(e.target.value); syncDirtyState(); },
-                }))),
-            formField(i18n('Natural language appearance description'), (() => {
-                const ta = h('textarea', {
-                    class: 'sdlens-textarea',
-                    onInput: (e) => { draftProfile.proseDescription = e.target.value; syncDirtyState(); },
-                });
-                ta.value = draftProfile.proseDescription || '';
-                return ta;
-            })()),
-            sectionTitle(
-                i18n('Outfits & reference sheets'),
-                button(i18n('Add outfit'), () => {
-                    draftProfile.outfits.push({
-                        id: makeIllustrationId('outfit'),
-                        name: `Outfit ${draftProfile.outfits.length + 1}`,
-                        tags: [],
-                        prose: '',
-                        referenceImages: [],
-                    });
-                    paint();
-                    syncDirtyState();
-                }, { small: true, iconName: 'plus', renderIcon: icon }),
-            ),
-            ...draftProfile.outfits.map((outfit, idx) => renderOutfitEditor(outfit, idx)));
+            formField(i18n('Character visual description'), descTextarea),
+            renderReferenceImagesSection());
     }
 
     function paint() {

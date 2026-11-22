@@ -18,6 +18,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Image generation
 
+- Simplified Character Archive profiles to a unified plain-text description and flat labeled reference images with automatic one-time migration and Danbooru character name tag lookup.
 - Added preset-scoped switches for character reference delivery modes, style references, and img2img editing with live backend compatibility conflict warnings.
 - Show completed illustration images in the Run panel while the remaining images are still generating.
 - Added session-owned temporary image staging and cleanup.

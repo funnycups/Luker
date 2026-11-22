@@ -18,10 +18,10 @@ import {
 import {
     buildCompactProfileIndex,
     createCharacterProfileStore,
+    formatCharacterProfileForAgent,
 } from '../../character-archive/store.js';
 import { filterReplayReferences, resolveCharacterReferenceMode } from '../../capabilities.js';
 import { defaultLoadVisualPreviewDataUrl } from '../../exploration/agent.js';
-import { formatProfileDetailForIllustration } from '../../illustration/agent.js';
 import { makeIllustrationId } from '../../illustration/presets.js';
 import { getPresetById, selectPreset } from '../../illustration/settings.js';
 import {
@@ -33,7 +33,6 @@ import {
     GENERATE_IMAGE_TOOL,
     READ_CHARACTER_PROFILES_TOOL,
     buildGenerateImageTool,
-    mergeNegativePrompts,
     resolvePromptCharacterRefs,
     validateGenerateImageArgs,
 } from '../../illustration/tools.js';
@@ -292,9 +291,9 @@ export function createStudioView(app) {
                 };
             }
 
-            let effectiveNegativePrompt = val.negativePrompt || '';
+            const effectiveNegativePrompt = val.negativePrompt || '';
 
-            // Character archive refs (v1 character_refs)
+            // Character archive refs (v2 character_refs)
             if (Array.isArray(val.characterRefs) && val.characterRefs.length > 0) {
                 let profileMap = new Map(profiles.map(p => [p.id, p]));
                 if (typeof ctx?.getGlobalState === 'function') {
@@ -315,7 +314,6 @@ export function createStudioView(app) {
                 for (const ref of resolvedRefs.references) {
                     pushUniqueRef(ref);
                 }
-                effectiveNegativePrompt = mergeNegativePrompts(effectiveNegativePrompt, resolvedRefs.negativeTags);
             }
 
             // Character reference images from gallery or attached references (gated on supportsCharacterReference)
@@ -418,7 +416,7 @@ export function createStudioView(app) {
             const found = await store.getProfilesByIds(ids);
             const agentMode = resolveCharacterReferenceMode(capabilities);
             const formatted = found.length > 0
-                ? found.map(p => formatProfileDetailForIllustration(p, agentMode)).join('\n\n---\n\n')
+                ? found.map(p => formatCharacterProfileForAgent(p, { mode: agentMode })).join('\n\n---\n\n')
                 : `No character profiles found for ids: ${ids.join(', ')}`;
             return { toolResult: formatted, generatedImage: null };
         }
@@ -469,7 +467,9 @@ export function createStudioView(app) {
 
             let characterArchiveIndex;
             if (capabilities?.characterReferenceEnabled) {
-                characterArchiveIndex = buildCompactProfileIndex(profiles);
+                characterArchiveIndex = buildCompactProfileIndex(profiles, {
+                    includeImages: Boolean(capabilities.supportsCharacterReference),
+                });
             }
             const systemPrompt = buildStudioSystemPrompt(preset, { capabilities, characterArchiveIndex });
 

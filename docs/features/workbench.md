@@ -82,7 +82,7 @@ Embeds the full Orchestra Lens workspace directly inside Workbench:
 Embeds the Image Generation workspace directly inside Workbench:
 
 - **Image Studio** — conversational workspace for free image generation and source image editing, with visual review, session branching, gallery history, and single-image regeneration.
-- **Character Archive** — global library of character appearance tags, outfits, and reference sheets, with **AI Profile Builder** and **Refine with AI** conversational authoring alongside manual editing.
+- **Character Archive** — global library of plain-text character descriptions and labeled reference images, with **AI Profile Builder** and **Refine with AI** conversational authoring alongside manual editing.
 - **Run Traces** — live and recent illustration and exploration run traces with round timelines, prompts, JSON export, and one-click AI diagnosis.
 
 ### Settings

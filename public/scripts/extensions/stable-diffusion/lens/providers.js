@@ -323,15 +323,11 @@ export function createSdAskProvider(getContext = () => globalThis.Luker?.getCont
                         name: ch.name,
                         aliases: ch.aliases,
                         sourceWork: ch.sourceWork,
-                        canonicalTags: ch.canonicalTags,
-                        negativeTags: ch.negativeTags,
-                        proseDescription: ch.proseDescription,
-                        defaultOutfitId: ch.defaultOutfitId,
-                        outfits: (ch.outfits || []).map(o => ({
-                            id: o.id,
-                            name: o.name,
-                            tags: o.tags,
-                            referenceCount: (o.referenceImages || []).length,
+                        description: redactSdString(ch.description, sdSettings),
+                        referenceImageCount: (ch.referenceImages || []).length,
+                        referenceImages: (ch.referenceImages || []).map(r => ({
+                            path: r.path,
+                            label: redactSdString(r.label, sdSettings),
                         })),
                     }));
                 }

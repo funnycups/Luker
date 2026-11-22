@@ -28,7 +28,7 @@ export const DIALOG_EXPLORATION_TOOL_INSTRUCTIONS = [
     'Use stage_character_profile to update the editable draft shown beside this conversation.',
     'Pass only the fields you want to add or change; omitted fields remain intact.',
     'Do not attempt to write directly to the formal archive; the user reviews and confirms the draft.',
-    'You can search public sources, fetch reference images, or call generate_image to produce candidate portraits and outfit sheets, then attach returned image paths to outfits in stage_character_profile.',
+    'You can search public sources, fetch reference images, or call generate_image to produce candidate portraits and reference sheets, then attach returned image paths with short labels in reference_images via stage_character_profile.',
 ].join(' ');
 
 export const STAGE_CHARACTER_PROFILE_TOOL = Object.freeze({
@@ -42,45 +42,29 @@ export const STAGE_CHARACTER_PROFILE_TOOL = Object.freeze({
                 name: { type: 'string', description: 'Canonical character display name.' },
                 aliases: { type: 'array', items: { type: 'string' } },
                 source_work: { type: 'string', description: 'Source franchise or work title, or empty for original characters.' },
-                canonical_tags: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Stable core appearance tags.',
-                },
-                negative_tags: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Optional negative tags to avoid visual mistakes.',
-                },
-                prose_description: {
+                description: {
                     type: 'string',
-                    description: 'Natural-language appearance description.',
+                    description: 'Structured plain-text visual description (appearance, attire variants, distinguishing traits, and Danbooru character tag if one exists).',
                 },
-                outfits: {
+                reference_images: {
                     type: 'array',
+                    description: 'Managed /user/images/... paths or image_ids returned by fetch_reference_image or generate_image, with optional short labels.',
                     items: {
                         type: 'object',
                         properties: {
-                            id: { type: 'string' },
-                            name: { type: 'string' },
-                            tags: { type: 'array', items: { type: 'string' } },
-                            prose: { type: 'string' },
-                            reference_images: {
-                                type: 'array',
-                                items: { type: 'string' },
-                                description: 'Managed /user/images/... paths or image_ids returned by fetch_reference_image or generate_image.',
+                            path: {
+                                type: 'string',
+                                description: 'Managed /user/images/... path or image_id returned by fetch_reference_image or generate_image.',
                             },
-                            referenceImages: {
-                                type: 'array',
-                                items: { type: 'string' },
-                                description: 'Managed /user/images/... paths or image_ids returned by fetch_reference_image or generate_image.',
+                            label: {
+                                type: 'string',
+                                description: 'Optional short portrait label (e.g. default attire, battle attire, close-up).',
                             },
                         },
-                        required: ['name'],
+                        required: ['path'],
                         additionalProperties: false,
                     },
                 },
-                default_outfit_id: { type: 'string' },
             },
             additionalProperties: false,
         },
@@ -372,35 +356,36 @@ export async function runCharacterBuilderTurn({
                         'name',
                         'aliases',
                         'source_work',
-                        'canonical_tags',
-                        'negative_tags',
-                        'prose_description',
-                        'default_outfit_id',
+                        'description',
                     ]) {
                         if (Object.hasOwn(callArgs, key)) {
                             patch[key] = callArgs[key];
                         }
                     }
-                    if (Object.hasOwn(callArgs, 'outfits')) {
-                        if (!Array.isArray(callArgs.outfits)) {
-                            throw new Error('stage_character_profile: invalid_args — outfits must be an array');
+                    const hasRefImages = Object.hasOwn(callArgs, 'referenceImages') || Object.hasOwn(callArgs, 'reference_images');
+                    if (hasRefImages) {
+                        const rawRefs = Object.hasOwn(callArgs, 'referenceImages')
+                            ? callArgs.referenceImages
+                            : callArgs.reference_images;
+                        if (!Array.isArray(rawRefs)) {
+                            throw new Error('stage_character_profile: invalid_args — reference_images must be an array');
                         }
-                        patch.outfits = callArgs.outfits.map(outfit => {
-                            if (!outfit || typeof outfit !== 'object') {
-                                throw new Error('stage_character_profile: invalid_args — each outfit must be an object');
+                        patch.referenceImages = rawRefs.map(entry => {
+                            if (typeof entry === 'string') {
+                                const str = entry.trim();
+                                const resolved = generatedById.get(str) || str;
+                                assertSourceImagePath({ kind: 'none' }, resolved, STAGE_CHARACTER_PROFILE_TOOL_NAME);
+                                return { path: resolved, label: '' };
                             }
-                            const rawRefs = outfit.referenceImages ?? outfit.reference_images;
-                            const resolvedRefs = Array.isArray(rawRefs)
-                                ? rawRefs.map(token => {
-                                    const str = String(token ?? '').trim();
-                                    const resolved = generatedById.get(str) || str;
-                                    assertSourceImagePath({ kind: 'none' }, resolved, STAGE_CHARACTER_PROFILE_TOOL_NAME);
-                                    return resolved;
-                                })
-                                : [];
+                            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+                                throw new Error('stage_character_profile: invalid_args — each reference_images entry must be an object with path');
+                            }
+                            const str = String(entry.path ?? '').trim();
+                            const resolved = generatedById.get(str) || str;
+                            assertSourceImagePath({ kind: 'none' }, resolved, STAGE_CHARACTER_PROFILE_TOOL_NAME);
                             return {
-                                ...outfit,
-                                referenceImages: resolvedRefs,
+                                path: resolved,
+                                label: String(entry.label ?? '').trim(),
                             };
                         });
                     }
@@ -505,7 +490,7 @@ export async function runCharacterBuilderTurn({
                     if (dataUrl) {
                         previewParts.push({
                             type: 'text',
-                            text: `[Visual inspection preview for ${imagePath} — verify appearance, outfit, and quality before keeping it in stage_character_profile]`,
+                            text: `[Visual inspection preview for ${imagePath} — verify appearance and visual clarity before keeping it in stage_character_profile]`,
                         });
                         previewParts.push({
                             type: 'image_url',

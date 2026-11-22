@@ -185,48 +185,81 @@
     gap: 10px;
 }
 
-.sdlens-outfit-card {
-    flex: none;
-    border: 1px solid var(--lw-border-strong);
-    border-radius: var(--lw-r);
-    background: var(--lw-surface);
-    padding: 12px;
+.sdlens-description-textarea {
+    min-height: 140px;
+}
+
+.sdlens-refs-section {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 180px;
+}
+
+.sdlens-ref-empty {
+    padding: 12px;
+    border: 1px dashed var(--lw-border-strong);
+    border-radius: var(--lw-r-sm);
+    color: var(--lw-muted);
+    font-size: 12.5px;
 }
 
 .sdlens-ref-strip {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+    gap: 10px;
 }
 
 .sdlens-ref-item {
-    position: relative;
-    width: 72px;
-    height: 72px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
     border-radius: var(--lw-r-sm);
     overflow: hidden;
     border: 1px solid var(--lw-border-strong);
-    background: var(--lw-bg);
+    background: var(--lw-surface);
+    content-visibility: auto;
+    contain-intrinsic-size: auto 176px;
 }
 
-.sdlens-ref-item img {
+.sdlens-ref-thumb {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    background: var(--lw-bg);
+    overflow: hidden;
+}
+
+.sdlens-ref-thumb img {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
 }
 
+.sdlens-ref-body {
+    padding: 6px;
+    border-top: 1px solid var(--lw-border);
+    background: var(--lw-surface-2);
+}
+
+.sdlens-ref-label {
+    padding: 4px 6px;
+    font-size: 11.5px;
+}
+
+.sdlens-ref-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
 .sdlens-ref-remove {
     position: absolute;
-    top: 3px;
-    right: 3px;
-    width: 20px;
-    height: 20px;
+    top: 4px;
+    right: 4px;
+    width: 22px;
+    height: 22px;
     border: 0;
     border-radius: 50%;
     background: rgba(0, 0, 0, 0.72);
@@ -589,7 +622,7 @@
     display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
     padding: 8px 12px; margin-bottom: 10px;
     border-radius: var(--lw-r-sm);
-    border: 1px solid color-mix(in srgb, var(--lw-amber) 45%, transparent);
+    border: 1px solid var(--lw-amber);
     background: var(--lw-amber-soft);
 }
 .sdlens .sdlens-dirty-dot {

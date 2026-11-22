@@ -21,8 +21,12 @@ function normalizeCharacterRefs(raw) {
             if (!profileId) {
                 return null;
             }
-            const outfitId = String(entry.outfitId ?? entry.outfit_id ?? '').trim();
-            return outfitId ? { profileId, outfitId } : { profileId };
+            const rawPaths = entry.imagePaths ?? entry.image_paths;
+            if (Array.isArray(rawPaths)) {
+                const imagePaths = rawPaths.map(p => String(p ?? '').trim()).filter(Boolean);
+                return imagePaths.length > 0 ? { profileId, imagePaths } : { profileId };
+            }
+            return { profileId };
         })
         .filter(Boolean);
 }

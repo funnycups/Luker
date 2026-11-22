@@ -1,6 +1,6 @@
 import { filterReplayReferences } from '../capabilities.js';
 import { buildLorasProperty, validateLorasArg } from '../lora/tool.js';
-import { resolveProfileAssets } from '../character-archive/store.js';
+import { normalizeReferenceImageEntry } from '../character-archive/store.js';
 import { findInsertionPoint } from './message.js';
 
 export { filterReplayReferences };
@@ -43,7 +43,7 @@ export const READ_CHARACTER_PROFILES_TOOL = Object.freeze({
     type: 'function',
     function: {
         name: 'read_character_profiles',
-        description: 'Read character visual archive details (appearance, outfits, and/or reference image metadata according to active reference mode) for specific character ids from <character_archive>.',
+        description: 'Read character visual archive details (plain-text description and/or reference image metadata according to active reference mode) for specific character ids from <character_archive>.',
         parameters: {
             type: 'object',
             properties: {
@@ -129,9 +129,10 @@ function buildCharacterRefsProperty(capabilities) {
                     type: 'string',
                     description: 'Character profile id from <character_archive>.',
                 },
-                outfit_id: {
-                    type: 'string',
-                    description: 'Optional outfit id from the character profile.',
+                image_paths: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Optional subset of reference image paths from this profile. Omit to attach all reference images of the profile.',
                 },
             },
             required: ['profile_id'],
@@ -296,8 +297,22 @@ function validateCharacterRefsShape(raw, capabilities = null) {
         if (!profileId) {
             return { ok: false, error: 'Each character_refs entry requires a non-empty profile_id' };
         }
-        const outfitId = String(entry.outfit_id ?? entry.outfitId ?? '').trim();
-        normalized.push(outfitId ? { profileId, outfitId } : { profileId });
+        const rawPaths = entry.image_paths ?? entry.imagePaths;
+        if (rawPaths !== undefined && rawPaths !== null) {
+            if (!Array.isArray(rawPaths)) {
+                return { ok: false, error: `character_refs entry for "${profileId}" has non-array image_paths` };
+            }
+            const imagePaths = rawPaths.map(p => String(p ?? '').trim()).filter(Boolean);
+            if (imagePaths.length === 0) {
+                return {
+                    ok: false,
+                    error: `character_refs entry for "${profileId}" provided an empty image_paths array; omit image_paths to attach all images or specify valid paths.`,
+                };
+            }
+            normalized.push({ profileId, imagePaths });
+        } else {
+            normalized.push({ profileId });
+        }
     }
     if (normalized.length > 0 && capabilities && capabilities.supportsCharacterReference === false) {
         return {
@@ -386,33 +401,12 @@ export function validateAddImagePromptArgs(args, { availableLoras, includeWeight
     return { ok: true, value };
 }
 
-export function mergeNegativePrompts(explicitNegative = '', negativeTags = []) {
-    const parts = [];
-    const seen = new Set();
-    const pushItem = (raw) => {
-        const trimmed = String(raw ?? '').trim();
-        if (!trimmed) return;
-        const key = trimmed.toLowerCase();
-        if (seen.has(key)) return;
-        seen.add(key);
-        parts.push(trimmed);
-    };
-
-    for (const chunk of String(explicitNegative || '').split(',')) {
-        pushItem(chunk);
-    }
-    for (const tag of Array.isArray(negativeTags) ? negativeTags : []) {
-        pushItem(tag);
-    }
-    return parts.join(', ');
-}
-
 /**
- * Deterministically resolves `character_refs` against archived character profiles and backend capabilities.
+ * Deterministically resolves `character_refs` against archived v2 character profiles and backend capabilities.
  */
 export function resolvePromptCharacterRefs(characterRefs = [], { profileMap = new Map(), capabilities = null } = {}) {
     if (!Array.isArray(characterRefs) || characterRefs.length === 0) {
-        return { ok: true, references: [], negativeTags: [] };
+        return { ok: true, references: [] };
     }
     if (capabilities && capabilities.supportsCharacterReference === false) {
         return {
@@ -422,7 +416,6 @@ export function resolvePromptCharacterRefs(characterRefs = [], { profileMap = ne
     }
     const references = [];
     const seenPaths = new Set();
-    const negativeTags = [];
 
     for (const ref of characterRefs) {
         const profileId = String(ref?.profileId ?? ref?.profile_id ?? '').trim();
@@ -432,7 +425,6 @@ export function resolvePromptCharacterRefs(characterRefs = [], { profileMap = ne
                 error: 'Each character_refs entry requires a non-empty profile_id.',
             };
         }
-        const outfitId = String(ref?.outfitId ?? ref?.outfit_id ?? '').trim();
         const profile = profileMap instanceof Map ? profileMap.get(profileId) : profileMap?.[profileId];
         if (!profile) {
             return {
@@ -440,36 +432,63 @@ export function resolvePromptCharacterRefs(characterRefs = [], { profileMap = ne
                 error: `Unknown character profile_id "${profileId}". Check <character_archive> or call read_character_profiles first.`,
             };
         }
-        if (outfitId && !(Array.isArray(profile.outfits) && profile.outfits.some(o => o.id === outfitId))) {
-            const validIds = (profile.outfits || []).map(o => o.id).join(', ') || 'none';
+
+        const availableImages = (Array.isArray(profile.referenceImages) ? profile.referenceImages : [])
+            .map(normalizeReferenceImageEntry)
+            .filter(Boolean);
+
+        if (availableImages.length === 0) {
             return {
                 ok: false,
-                error: `Unknown outfit_id "${outfitId}" for character "${profile.name}" (${profile.id}). Available outfit ids: ${validIds}.`,
+                error: `Character "${profile.name}" (${profile.id}) has no reference images (refs=0). Do not pass character_refs for this character.`,
             };
         }
-        const resolved = resolveProfileAssets(profile, { outfitId });
-        for (const neg of resolved?.negativeTags || []) {
-            negativeTags.push(neg);
+
+        const requestedRaw = ref?.imagePaths ?? ref?.image_paths;
+        let selectedImages;
+        if (requestedRaw !== undefined && requestedRaw !== null) {
+            if (!Array.isArray(requestedRaw)) {
+                return {
+                    ok: false,
+                    error: `image_paths for character "${profile.name}" (${profile.id}) must be an array.`,
+                };
+            }
+            const requestedPaths = requestedRaw.map(p => String(p ?? '').trim()).filter(Boolean);
+            if (requestedPaths.length === 0) {
+                return {
+                    ok: false,
+                    error: `image_paths for character "${profile.name}" (${profile.id}) is empty; omit image_paths to attach all images or specify valid paths from reference_images.`,
+                };
+            }
+            const byPath = new Map(availableImages.map(img => [img.path, img]));
+            const missing = requestedPaths.filter(path => !byPath.has(path));
+            if (missing.length > 0) {
+                const validList = availableImages.map(img => img.path).join(', ');
+                return {
+                    ok: false,
+                    error: `Invalid image_paths for character "${profile.name}" (${profile.id}): ${missing.join(', ')}. Available paths: ${validList}.`,
+                };
+            }
+            selectedImages = [];
+            const seenInEntry = new Set();
+            for (const path of requestedPaths) {
+                if (seenInEntry.has(path)) continue;
+                seenInEntry.add(path);
+                selectedImages.push(byPath.get(path));
+            }
+        } else {
+            selectedImages = availableImages;
         }
-        const refImages = resolved?.referenceImages || [];
-        if (refImages.length === 0) {
-            return {
-                ok: false,
-                error: `Character "${profile.name}" (${profile.id}) has no reference images for the selected outfit. Do not pass character_refs for this character.`,
-            };
-        }
-        const label = resolved?.outfitName
-            ? `${resolved.name} — ${resolved.outfitName}`
-            : String(resolved?.name || profile.name);
-        for (const imagePath of refImages) {
-            if (seenPaths.has(imagePath)) {
+
+        for (const img of selectedImages) {
+            if (seenPaths.has(img.path)) {
                 continue;
             }
-            seenPaths.add(imagePath);
+            seenPaths.add(img.path);
             references.push({
-                imagePath,
+                imagePath: img.path,
                 role: 'character',
-                label,
+                label: img.label ? `${profile.name} — ${img.label}` : String(profile.name),
             });
         }
     }
@@ -482,11 +501,11 @@ export function resolvePromptCharacterRefs(characterRefs = [], { profileMap = ne
     ) {
         return {
             ok: false,
-            error: `Selected character_refs resolve to ${references.length} reference image(s), exceeding limit of ${capabilities.maxCharacterReferences}. Select fewer characters or outfits within the limit.`,
+            error: `Selected character_refs resolve to ${references.length} reference image(s), exceeding limit of ${capabilities.maxCharacterReferences}. Select fewer characters or specify a smaller image_paths subset within the limit.`,
         };
     }
 
-    return { ok: true, references, negativeTags };
+    return { ok: true, references };
 }
 
 export function validateGenerateImageArgs(args, { availableLoras, includeWeight = false, capabilities = null } = {}) {
@@ -567,10 +586,6 @@ export function selectPromptCalls(toolCalls, {
             }
             if (resolved.references.length > 0) {
                 value.references = resolved.references;
-            }
-            const mergedNeg = mergeNegativePrompts(value.negativePrompt || '', resolved.negativeTags);
-            if (mergedNeg) {
-                value.negativePrompt = mergedNeg;
             }
         }
         const key = JSON.stringify([

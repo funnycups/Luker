@@ -52,22 +52,14 @@ function formatProfileSummaryText(profile) {
     ];
     if (profile?.aliases?.length) lines.push(`aliases: ${profile.aliases.join(', ')}`);
     if (profile?.sourceWork) lines.push(`sourceWork: ${profile.sourceWork}`);
-    if (profile?.canonicalTags?.length) lines.push(`canonicalTags: ${profile.canonicalTags.join(', ')}`);
-    if (profile?.negativeTags?.length) lines.push(`negativeTags: ${profile.negativeTags.join(', ')}`);
-    if (profile?.proseDescription) lines.push(`proseDescription: ${profile.proseDescription}`);
-    if (profile?.defaultOutfitId) lines.push(`defaultOutfitId: ${profile.defaultOutfitId}`);
-    if (Array.isArray(profile?.outfits) && profile.outfits.length > 0) {
-        lines.push('outfits:');
-        for (const outfit of profile.outfits) {
-            const parts = [
-                `  - id=${outfit.id || ''}`,
-                `name="${outfit.name || ''}"`,
-            ];
-            if (outfit.tags?.length) parts.push(`tags=[${outfit.tags.join(', ')}]`);
-            if (outfit.prose) parts.push(`prose="${outfit.prose}"`);
-            const refs = Array.isArray(outfit.referenceImages) ? outfit.referenceImages : [];
-            parts.push(`referenceImages=[${refs.join(', ')}]`);
-            lines.push(parts.join(' | '));
+    if (profile?.description) lines.push(`description: ${profile.description}`);
+    if (Array.isArray(profile?.referenceImages) && profile.referenceImages.length > 0) {
+        lines.push('referenceImages:');
+        for (const entry of profile.referenceImages) {
+            const imagePath = typeof entry === 'string' ? entry.trim() : String(entry?.path || '').trim();
+            const label = typeof entry === 'string' ? '' : String(entry?.label || '').trim();
+            if (!imagePath) continue;
+            lines.push(label ? `  - ${imagePath} (${label})` : `  - ${imagePath}`);
         }
     }
     return lines.join('\n');
@@ -75,12 +67,14 @@ function formatProfileSummaryText(profile) {
 
 function collectProfilePreviewImages(profile, imagePreviews = {}) {
     const out = [];
-    for (const outfit of Array.isArray(profile?.outfits) ? profile.outfits : []) {
-        for (const imagePath of Array.isArray(outfit?.referenceImages) ? outfit.referenceImages : []) {
-            const dataUrl = imagePreviews[imagePath];
-            if (dataUrl) {
-                out.push({ dataUrl, alt: `${profile.name || profile.id} — ${outfit.name || outfit.id}` });
-            }
+    for (const entry of Array.isArray(profile?.referenceImages) ? profile.referenceImages : []) {
+        const imagePath = typeof entry === 'string' ? entry.trim() : String(entry?.path || '').trim();
+        const label = typeof entry === 'string' ? '' : String(entry?.label || '').trim();
+        if (!imagePath) continue;
+        const dataUrl = imagePreviews[imagePath];
+        if (dataUrl) {
+            const baseAlt = profile?.name || profile?.id || 'Reference';
+            out.push({ dataUrl, alt: label ? `${baseAlt} — ${label}` : baseAlt });
         }
     }
     return out;
@@ -203,7 +197,11 @@ export function renderSdIllustration(payload, i18n = (_k, fb) => fb || _k) {
                 lines.push(`LoRAs: ${item.loras.map(l => (l.weight !== undefined ? `${l.name}:${l.weight}` : l.name)).join(', ')}`);
             }
             if (Array.isArray(item.characterRefs) && item.characterRefs.length > 0) {
-                lines.push(`Referenced profiles/outfits: ${item.characterRefs.map(r => `${r.profileId || r.profile_id || ''}/${r.outfitId || r.outfit_id || 'default'}`).join(', ')}`);
+                lines.push(`Referenced profiles: ${item.characterRefs.map(r => {
+                    const id = r.profileId || r.profile_id || '';
+                    const paths = Array.isArray(r.imagePaths ?? r.image_paths) ? (r.imagePaths ?? r.image_paths) : [];
+                    return paths.length > 0 ? `${id} (${paths.join(', ')})` : id;
+                }).join(', ')}`);
             }
             if (Array.isArray(item.references) && item.references.length > 0) {
                 lines.push(`Reference assets: ${item.references.map(r => `${r.role || 'character'}:${r.imagePath || ''}`).join(', ')}`);

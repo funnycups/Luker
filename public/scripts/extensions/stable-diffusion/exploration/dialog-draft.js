@@ -2,7 +2,7 @@
 
 import {
     CHARACTER_PROFILES_NAMESPACE,
-    normalizeCharacterOutfit,
+    normalizeReferenceImageEntry,
     profileVersion,
 } from '../character-archive/store.js';
 import { makeIllustrationId } from '../illustration/presets.js';
@@ -13,11 +13,8 @@ export const DRAFT_FIELD_KEYS = Object.freeze([
     'name',
     'aliases',
     'sourceWork',
-    'canonicalTags',
-    'negativeTags',
-    'proseDescription',
-    'outfits',
-    'defaultOutfitId',
+    'description',
+    'referenceImages',
 ]);
 
 const PATCH_KEY_MAP = Object.freeze({
@@ -25,15 +22,9 @@ const PATCH_KEY_MAP = Object.freeze({
     aliases: 'aliases',
     sourceWork: 'sourceWork',
     source_work: 'sourceWork',
-    canonicalTags: 'canonicalTags',
-    canonical_tags: 'canonicalTags',
-    negativeTags: 'negativeTags',
-    negative_tags: 'negativeTags',
-    proseDescription: 'proseDescription',
-    prose_description: 'proseDescription',
-    outfits: 'outfits',
-    defaultOutfitId: 'defaultOutfitId',
-    default_outfit_id: 'defaultOutfitId',
+    description: 'description',
+    referenceImages: 'referenceImages',
+    reference_images: 'referenceImages',
 });
 
 function deepClone(value) {
@@ -57,20 +48,42 @@ function cleanStringList(list) {
     return out;
 }
 
-function normalizeDraftOutfits(rawOutfits, { allowEmpty = false } = {}) {
-    const list = Array.isArray(rawOutfits)
-        ? rawOutfits.map((entry, idx) => normalizeCharacterOutfit(entry, idx)).filter(Boolean)
-        : [];
-    if (list.length === 0 && !allowEmpty) {
-        list.push({
-            id: 'outfit_default',
-            name: 'Default',
-            tags: [],
-            prose: '',
-            referenceImages: [],
-        });
+function normalizeDraftReferenceImages(list, { trimLabel = true } = {}) {
+    if (!Array.isArray(list)) {
+        return [];
     }
-    return list;
+    const out = [];
+    const byPath = new Map();
+    for (const item of list) {
+        let entry;
+        if (typeof item === 'string') {
+            const path = item.trim();
+            entry = path ? { path, label: '' } : null;
+        } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+            const path = typeof item.path === 'string' ? item.path.trim() : '';
+            if (!path) {
+                entry = null;
+            } else {
+                const rawLabel = String(item.label ?? '');
+                entry = { path, label: trimLabel ? rawLabel.trim() : rawLabel };
+            }
+        } else {
+            entry = null;
+        }
+        if (!entry) {
+            continue;
+        }
+        const existing = byPath.get(entry.path);
+        if (existing) {
+            if (!existing.label.trim() && entry.label.trim()) {
+                existing.label = entry.label;
+            }
+            continue;
+        }
+        byPath.set(entry.path, entry);
+        out.push(entry);
+    }
+    return out;
 }
 
 function createInitialDraftState(initialProfile) {
@@ -80,36 +93,17 @@ function createInitialDraftState(initialProfile) {
             name: '',
             aliases: [],
             sourceWork: '',
-            canonicalTags: [],
-            negativeTags: [],
-            proseDescription: '',
-            outfits: [
-                {
-                    id: 'outfit_default',
-                    name: 'Default',
-                    tags: [],
-                    prose: '',
-                    referenceImages: [],
-                },
-            ],
-            defaultOutfitId: 'outfit_default',
+            description: '',
+            referenceImages: [],
         };
     }
-    const outfits = normalizeDraftOutfits(initialProfile.outfits);
-    const requestedDefault = String(initialProfile.defaultOutfitId || '').trim();
-    const defaultOutfitId = outfits.some(o => o.id === requestedDefault)
-        ? requestedDefault
-        : outfits[0].id;
     return {
         id: String(initialProfile.id || '').trim() || makeIllustrationId('char'),
         name: String(initialProfile.name || ''),
         aliases: cleanStringList(initialProfile.aliases),
         sourceWork: String(initialProfile.sourceWork || ''),
-        canonicalTags: cleanStringList(initialProfile.canonicalTags),
-        negativeTags: cleanStringList(initialProfile.negativeTags),
-        proseDescription: String(initialProfile.proseDescription || ''),
-        outfits,
-        defaultOutfitId,
+        description: String(initialProfile.description || ''),
+        referenceImages: normalizeDraftReferenceImages(initialProfile.referenceImages),
         ...(Number.isFinite(Number(initialProfile.createdAt)) ? { createdAt: Number(initialProfile.createdAt) } : {}),
         ...(Number.isFinite(Number(initialProfile.updatedAt)) ? { updatedAt: Number(initialProfile.updatedAt) } : {}),
     };
@@ -119,15 +113,12 @@ function normalizeFieldForPatch(field, value) {
     switch (field) {
         case 'name':
         case 'sourceWork':
-        case 'proseDescription':
-        case 'defaultOutfitId':
+        case 'description':
             return String(value ?? '').trim();
         case 'aliases':
-        case 'canonicalTags':
-        case 'negativeTags':
             return cleanStringList(value);
-        case 'outfits':
-            return normalizeDraftOutfits(value);
+        case 'referenceImages':
+            return normalizeDraftReferenceImages(value, { trimLabel: true });
         default:
             throw new Error(`Unsupported draft field "${field}".`);
     }
@@ -137,23 +128,12 @@ function normalizeFieldForManualEdit(field, value) {
     switch (field) {
         case 'name':
         case 'sourceWork':
-        case 'proseDescription':
-        case 'defaultOutfitId':
+        case 'description':
             return String(value ?? '');
         case 'aliases':
-        case 'canonicalTags':
-        case 'negativeTags':
             return cleanStringList(value);
-        case 'outfits':
-            return Array.isArray(value)
-                ? value.map((entry, idx) => ({
-                    id: String(entry?.id || '').trim() || makeIllustrationId(`outfit_${idx + 1}`),
-                    name: String(entry?.name ?? ''),
-                    tags: cleanStringList(entry?.tags),
-                    prose: String(entry?.prose ?? ''),
-                    referenceImages: cleanStringList(entry?.referenceImages ?? entry?.reference_images),
-                }))
-                : [];
+        case 'referenceImages':
+            return normalizeDraftReferenceImages(value, { trimLabel: false });
         default:
             throw new Error(`Unsupported draft field "${field}".`);
     }
@@ -176,15 +156,13 @@ export function isStagedTempImagePath(imagePath) {
 export function collectRetainedTempPaths(profile) {
     const out = [];
     const seen = new Set();
-    for (const outfit of Array.isArray(profile?.outfits) ? profile.outfits : []) {
-        for (const imagePath of Array.isArray(outfit?.referenceImages) ? outfit.referenceImages : []) {
-            const trimmed = String(imagePath || '').trim();
-            if (!trimmed || !isStagedTempImagePath(trimmed)) continue;
-            const key = normalizeLocalImagePath(trimmed);
-            if (seen.has(key)) continue;
-            seen.add(key);
-            out.push(trimmed);
-        }
+    for (const item of Array.isArray(profile?.referenceImages) ? profile.referenceImages : []) {
+        const entry = normalizeReferenceImageEntry(item);
+        if (!entry || !isStagedTempImagePath(entry.path)) continue;
+        const key = normalizeLocalImagePath(entry.path);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(entry.path);
     }
     return out;
 }
@@ -194,42 +172,18 @@ export function createCharacterDraft(initialProfile = null) {
     const manualRevisions = Object.fromEntries(DRAFT_FIELD_KEYS.map(key => [key, 0]));
     const conflictsByPath = new Map();
 
-    function syncDefaultOutfitId() {
-        if (!Array.isArray(profile.outfits) || profile.outfits.length === 0) {
-            profile.defaultOutfitId = '';
-            return;
+    function applyReferenceImageSubPath(segments, value) {
+        const [, targetIndex, prop] = segments;
+        if (!/^\d+$/.test(String(targetIndex ?? '')) || prop !== 'label') {
+            throw new Error(`Unsupported draft path "referenceImages.${segments.slice(1).join('.')}".`);
         }
-        if (!profile.outfits.some(o => o.id === profile.defaultOutfitId)) {
-            profile.defaultOutfitId = profile.outfits[0].id;
+        const index = Number(targetIndex);
+        if (index < 0 || index >= profile.referenceImages.length) {
+            throw new Error(`Reference image at index ${index} was not found in the draft.`);
         }
-    }
-
-    function applyOutfitSubPath(segments, value) {
-        const [, targetKey, prop] = segments;
-        if (!targetKey || !prop) {
-            throw new Error(`Unsupported draft path "outfits.${segments.slice(1).join('.')}".`);
-        }
-        const index = /^\d+$/.test(targetKey)
-            ? Number(targetKey)
-            : profile.outfits.findIndex(o => o.id === targetKey);
-        if (index < 0 || index >= profile.outfits.length) {
-            throw new Error(`Outfit "${targetKey}" was not found in the draft.`);
-        }
-        const nextOutfits = deepClone(profile.outfits);
-        const outfit = nextOutfits[index];
-        if (prop === 'name') {
-            outfit.name = String(value ?? '');
-        } else if (prop === 'prose') {
-            outfit.prose = String(value ?? '');
-        } else if (prop === 'tags') {
-            outfit.tags = cleanStringList(value);
-        } else if (prop === 'referenceImages' || prop === 'reference_images') {
-            outfit.referenceImages = cleanStringList(value);
-        } else {
-            throw new Error(`Unsupported outfit field "${prop}".`);
-        }
-        profile.outfits = nextOutfits;
-        syncDefaultOutfitId();
+        const nextRefs = deepClone(profile.referenceImages);
+        nextRefs[index].label = String(value ?? '');
+        profile.referenceImages = nextRefs;
     }
 
     return {
@@ -252,13 +206,10 @@ export function createCharacterDraft(initialProfile = null) {
                 throw new Error(`Unsupported draft edit path "${rawPath}".`);
             }
 
-            if (topField === 'outfits' && segments.length > 1) {
-                applyOutfitSubPath(segments, value);
+            if (topField === 'referenceImages' && segments.length > 1) {
+                applyReferenceImageSubPath(segments, value);
             } else {
                 profile[topField] = normalizeFieldForManualEdit(topField, value);
-                if (topField === 'outfits') {
-                    syncDefaultOutfitId();
-                }
             }
 
             manualRevisions[topField] += 1;
@@ -323,13 +274,6 @@ export function createCharacterDraft(initialProfile = null) {
                 });
             }
 
-            if (resolvedFields.has('outfits') && !resolvedFields.has('defaultOutfitId')) {
-                const defaultManualChanged = manualRevisions.defaultOutfitId > Number(baseRevisions.defaultOutfitId || 0);
-                if (!defaultManualChanged) {
-                    syncDefaultOutfitId();
-                }
-            }
-
             return { changes, conflicts };
         },
 
@@ -343,9 +287,6 @@ export function createCharacterDraft(initialProfile = null) {
             }
             if (choice === 'accept_agent') {
                 profile[entry.path] = deepClone(entry.agentValue);
-                if (entry.path === 'outfits') {
-                    syncDefaultOutfitId();
-                }
             }
             conflictsByPath.delete(entry.path);
             return {
@@ -390,18 +331,15 @@ export async function commitCharacterDraft({
     }
 
     const profileToSave = deepClone(snapshot);
-    profileToSave.outfits = normalizeDraftOutfits(profileToSave.outfits).map(outfit => ({
-        ...outfit,
-        referenceImages: outfit.referenceImages.map(imagePath => {
-            const direct = promotedMap.get(imagePath);
-            if (direct) return direct;
-            if (isStagedTempImagePath(imagePath)) {
-                const normalized = promotedMap.get(normalizeLocalImagePath(imagePath));
-                if (normalized) return normalized;
-            }
-            return imagePath;
-        }),
-    }));
+    profileToSave.referenceImages = normalizeDraftReferenceImages(profileToSave.referenceImages).map(entry => {
+        const direct = promotedMap.get(entry.path);
+        if (direct) return { path: direct, label: entry.label };
+        if (isStagedTempImagePath(entry.path)) {
+            const normalized = promotedMap.get(normalizeLocalImagePath(entry.path));
+            if (normalized) return { path: normalized, label: entry.label };
+        }
+        return { path: entry.path, label: entry.label };
+    });
 
     let saved;
     try {

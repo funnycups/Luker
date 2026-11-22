@@ -201,12 +201,14 @@ describe('POST /api/sd/character-sources/search', () => {
         const data = await res.json();
         expect(data.candidates).toHaveLength(1);
         expect(data.candidates[0].work).toBe('sky_chronicles');
-        expect(data.candidates[0].canonicalTags).toEqual(
+        expect(data.candidates[0].characterTag).toBe('celeste_vance');
+        expect(data.candidates[0].tags).toEqual(
             expect.arrayContaining(['silver_hair', 'amber_eyes', 'navy_coat']),
         );
-        expect(data.candidates[0].canonicalTags).not.toContain('some_artist');
-        expect(data.candidates[0].canonicalTags).not.toContain('highres');
-        expect(data.candidates[0].canonicalTags).not.toContain('looking_at_viewer');
+        expect(data.candidates[0].tags).not.toContain('some_artist');
+        expect(data.candidates[0].tags).not.toContain('highres');
+        expect(data.candidates[0].tags).not.toContain('looking_at_viewer');
+        expect(data.formattedLines).toContain('character_tag=celeste_vance');
 
         // Upstream 403 / anti-bot challenge returns structured error immediately without retry/bypass
         fetchMock.mockReset();
@@ -306,7 +308,7 @@ describe('POST /api/sd/character-sources/fetch-image and /promote-local-image', 
     });
 
     test('character-sources-client bridges web source through getExtensionApi("search-tools") without cross-plugin imports', async () => {
-        const { searchCharacterSources } = await import('../public/scripts/extensions/stable-diffusion/character-sources-client.js');
+        const { searchCharacterSources, formatCharacterSourceCandidates } = await import('../public/scripts/extensions/stable-diffusion/character-sources-client.js');
         const searchImagesSpy = jest.fn(async ({ query }) => ({
             provider: 'serper',
             query,
@@ -339,5 +341,10 @@ describe('POST /api/sd/character-sources/fetch-image and /promote-local-image', 
         expect(out.candidates).toHaveLength(1);
         expect(out.formattedLines).toContain('1: [web] Celeste Official Art');
         expect(out.formattedLines).toContain('https://art.example.org/celeste.png');
+        expect(formatCharacterSourceCandidates('booru', [{
+            name: 'Celeste Vance',
+            characterTag: 'celeste_vance',
+            work: 'sky_chronicles',
+        }])).toContain('character_tag=celeste_vance');
     });
 });

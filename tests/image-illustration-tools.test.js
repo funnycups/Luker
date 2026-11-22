@@ -187,13 +187,14 @@ test('calls that differ only in LoRA selection are all kept', () => {
     ]);
 });
 
-test('character_refs and source_image_id tool schemas gate on preset capability switches while keeping v1 outfit_id', () => {
+test('character_refs and source_image_id tool schemas gate on preset capability switches and expose v2 image_paths', () => {
     const promptWithChar = buildAddImagePromptTool([], {
         capabilities: { supportsCharacterReference: true, maxCharacterReferences: 2 },
     });
     const promptCharProps = promptWithChar.function.parameters.properties.character_refs.items.properties;
     expect(promptCharProps).toHaveProperty('profile_id');
-    expect(promptCharProps).toHaveProperty('outfit_id');
+    expect(promptCharProps).toHaveProperty('image_paths');
+    expect(promptCharProps).not.toHaveProperty('outfit_id');
 
     const promptNoChar = buildAddImagePromptTool([], {
         capabilities: { supportsCharacterReference: false },
@@ -210,7 +211,8 @@ test('character_refs and source_image_id tool schemas gate on preset capability 
         includeStudioFields: true,
         capabilities: { supportsCharacterReference: true, supportsSourceImage: false, maxCharacterReferences: 3 },
     });
-    expect(studioWithChar.function.parameters.properties.character_refs.items.properties).toHaveProperty('outfit_id');
+    expect(studioWithChar.function.parameters.properties.character_refs.items.properties).toHaveProperty('image_paths');
+    expect(studioWithChar.function.parameters.properties.character_refs.items.properties).not.toHaveProperty('outfit_id');
     expect(studioWithChar.function.parameters.properties).not.toHaveProperty('source_image_id');
 
     const studioNoChar = buildGenerateImageTool([], {
@@ -222,31 +224,59 @@ test('character_refs and source_image_id tool schemas gate on preset capability 
     expect(studioNoChar.function.parameters.properties).toHaveProperty('source_image_id');
 });
 
-test('resolvePromptCharacterRefs and selectPromptCalls enforce switches, v1 outfits, 0-image profiles, and missing profileMap', () => {
+test('resolvePromptCharacterRefs and selectPromptCalls enforce switches, v2 image_paths subsets, 0-image profiles, and missing profileMap', () => {
     const profileMap = new Map([
         ['char_lyra', {
             id: 'char_lyra',
             name: 'Lyra',
-            negativeTags: ['glasses'],
-            outfits: [
-                { id: 'outfit_coat', name: 'Coat', referenceImages: ['/user/images/_references/lyra_1.png', '/user/images/_references/lyra_2.png'] },
-                { id: 'outfit_empty', name: 'Empty', referenceImages: [] },
+            description: 'Silver hair, amber eyes.',
+            referenceImages: [
+                { path: '/user/images/_references/lyra_1.png', label: 'Coat' },
+                { path: '/user/images/_references/lyra_2.png', label: '' },
             ],
-            defaultOutfitId: 'outfit_coat',
+        }],
+        ['char_empty', {
+            id: 'char_empty',
+            name: 'Empty',
+            description: 'Text-only profile.',
+            referenceImages: [],
         }],
     ]);
     const caps = { source: 'google', supportsCharacterReference: true, maxCharacterReferences: 2 };
 
-    expect(resolvePromptCharacterRefs([{ profile_id: 'char_lyra', outfit_id: 'outfit_coat' }], { profileMap, capabilities: caps })).toEqual({
+    // Omitting image_paths attaches all profile reference images with label formatting.
+    expect(resolvePromptCharacterRefs([{ profile_id: 'char_lyra' }], { profileMap, capabilities: caps })).toEqual({
         ok: true,
         references: [
             { imagePath: '/user/images/_references/lyra_1.png', role: 'character', label: 'Lyra — Coat' },
-            { imagePath: '/user/images/_references/lyra_2.png', role: 'character', label: 'Lyra — Coat' },
+            { imagePath: '/user/images/_references/lyra_2.png', role: 'character', label: 'Lyra' },
         ],
-        negativeTags: ['glasses'],
     });
 
-    expect(resolvePromptCharacterRefs([{ profile_id: 'char_lyra', outfit_id: 'outfit_empty' }], { profileMap, capabilities: caps }).ok).toBe(false);
+    // Specifying image_paths attaches only the requested subset.
+    expect(resolvePromptCharacterRefs([{
+        profile_id: 'char_lyra',
+        image_paths: ['/user/images/_references/lyra_1.png'],
+    }], {
+        profileMap,
+        capabilities: { source: 'comfy', supportsCharacterReference: true, maxCharacterReferences: 1 },
+    })).toEqual({
+        ok: true,
+        references: [
+            { imagePath: '/user/images/_references/lyra_1.png', role: 'character', label: 'Lyra — Coat' },
+        ],
+    });
+
+    // Rejects unknown image_paths, empty image_paths, 0-image profiles, limit overflow, and disabled capability.
+    expect(resolvePromptCharacterRefs([{
+        profile_id: 'char_lyra',
+        image_paths: ['/user/images/_references/unknown.png'],
+    }], { profileMap, capabilities: caps }).ok).toBe(false);
+    expect(resolvePromptCharacterRefs([{
+        profile_id: 'char_lyra',
+        image_paths: [],
+    }], { profileMap, capabilities: caps }).ok).toBe(false);
+    expect(resolvePromptCharacterRefs([{ profile_id: 'char_empty' }], { profileMap, capabilities: caps }).ok).toBe(false);
     expect(resolvePromptCharacterRefs([{ profile_id: 'char_lyra' }], {
         profileMap,
         capabilities: { source: 'comfy', supportsCharacterReference: true, maxCharacterReferences: 1 },

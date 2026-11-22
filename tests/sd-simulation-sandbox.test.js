@@ -16,17 +16,8 @@ describe('createSandboxProfileStore', () => {
                 name: 'Lyra',
                 aliases: ['Navigator'],
                 sourceWork: 'Horizon',
-                canonicalTags: ['1girl', 'silver braid'],
-                negativeTags: ['glasses'],
-                proseDescription: 'A calm navigator with a silver braid.',
-                outfits: [{
-                    id: 'outfit_coat',
-                    name: 'Naval Coat',
-                    tags: ['navy coat'],
-                    prose: 'Heavy navy coat with brass buttons.',
-                    referenceImages: ['/user/images/_references/lyra_coat.png'],
-                }],
-                defaultOutfitId: 'outfit_coat',
+                description: 'A calm navigator with a silver braid wearing a heavy navy coat with brass buttons.',
+                referenceImages: [{ path: '/user/images/_references/lyra_coat.png', label: 'Naval Coat' }],
                 createdAt: 1000,
                 updatedAt: 2000,
             },
@@ -58,14 +49,8 @@ describe('createSandboxProfileStore', () => {
             id: 'char_vesper',
             name: 'Vesper',
             sourceWork: 'Starlight',
-            canonicalTags: ['1girl', 'crimson eyes'],
-            outfits: [{
-                id: 'outfit_cloak',
-                name: 'Travel Cloak',
-                tags: ['dark cloak'],
-                referenceImages: ['/user/images/_sandbox_tmp/sess_1/vesper.png'],
-            }],
-            defaultOutfitId: 'outfit_cloak',
+            description: 'Crimson eyes, dark travel cloak.',
+            referenceImages: [{ path: '/user/images/_sandbox_tmp/sess_1/vesper.png', label: 'Travel Cloak' }],
         }, 3000, { expectedVersion: null });
 
         expect(await sandbox.getProfile(created.id)).toEqual(created);
@@ -106,14 +91,8 @@ describe('createSandboxProfileStore', () => {
                 id: 'char_lyra',
                 name: 'Lyra',
                 aliases: ['Navigator'],
-                canonicalTags: ['silver braid'],
-                outfits: [{
-                    id: 'outfit_coat',
-                    name: 'Naval Coat',
-                    tags: ['navy coat'],
-                    referenceImages: ['/user/images/_references/lyra.png'],
-                }],
-                defaultOutfitId: 'outfit_coat',
+                description: 'Silver braid, navy coat.',
+                referenceImages: [{ path: '/user/images/_references/lyra.png', label: 'Naval Coat' }],
                 createdAt: 100,
                 updatedAt: 200,
             },
@@ -123,34 +102,34 @@ describe('createSandboxProfileStore', () => {
 
         // Mutating original seed after store creation cannot alter sandbox.
         seed[0].name = 'Mutated Seed';
-        seed[0].outfits[0].tags.push('mutated');
+        seed[0].referenceImages[0].label = 'Mutated Label';
 
         const firstRead = await sandbox.getProfile('char_lyra');
         expect(firstRead.name).toBe('Lyra');
-        expect(firstRead.outfits[0].tags).toEqual(['navy coat']);
+        expect(firstRead.referenceImages[0].label).toBe('Naval Coat');
 
         // Mutating returned objects cannot alter internal sandbox state.
         firstRead.name = 'Mutated Read';
-        firstRead.outfits[0].tags.push('leaked');
+        firstRead.referenceImages[0].label = 'Leaked Label';
         expect((await sandbox.getProfile('char_lyra')).name).toBe('Lyra');
-        expect((await sandbox.getProfile('char_lyra')).outfits[0].tags).toEqual(['navy coat']);
+        expect((await sandbox.getProfile('char_lyra')).referenceImages[0].label).toBe('Naval Coat');
 
         // Mutating upsert input and recordedChanges return value cannot alias store.
         const input = {
             id: 'char_orion',
             name: 'Orion',
-            canonicalTags: ['1boy'],
-            outfits: [{ id: 'def', name: 'Default', tags: ['cape'], referenceImages: [] }],
-            defaultOutfitId: 'def',
+            aliases: ['Scout'],
+            description: 'Dark cape.',
+            referenceImages: [],
         };
         const created = await sandbox.upsertProfile(input, 500);
         input.name = 'Mutated Input';
-        input.canonicalTags.push('mutated');
+        input.aliases.push('Mutated');
         created.name = 'Mutated Output';
 
         const stored = await sandbox.getProfile('char_orion');
         expect(stored.name).toBe('Orion');
-        expect(stored.canonicalTags).toEqual(['1boy']);
+        expect(stored.aliases).toEqual(['Scout']);
 
         const changes = sandbox.getRecordedChanges();
         expect(changes).toEqual([stored]);

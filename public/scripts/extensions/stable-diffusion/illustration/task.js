@@ -59,18 +59,18 @@ export function formatCharacterReferencePolicyBlock(capabilities, { includeExplo
     const lines = [`mode: ${mode}`];
     if (mode === 'text_only') {
         lines.push(
-            '- Check <character_archive> for appearing characters. When a character matches an archived entry, call read_character_profiles for that id and weave the returned appearance and outfit details into your prompt adapted to the current pose, clothing, and camera angle.',
+            '- Check <character_archive> for appearing characters. When a character matches an archived entry, call read_character_profiles for that id and weave the returned plain-text description (and any Danbooru character tag if present) into your prompt adapted to the current pose, clothing, and camera angle.',
             '- Character reference images are disabled in this preset; do not pass character_refs.',
         );
     } else if (mode === 'image_only') {
         lines.push(
-            '- Check <character_archive> for appearing characters. When a character matches an archived entry, call read_character_profiles to inspect its outfits and reference image counts and attach matching reference(s) via character_refs ({ profile_id, outfit_id? }). Do not expand verbose appearance descriptions from the archive into the prompt; focus the prompt on pose, action, expression, outfit changes, and scene composition.',
-            '- Omit character_refs for profiles or outfits that have no reference images. Respect the per-prompt character_refs limit in <backend_capabilities>.',
+            '- Check <character_archive> for appearing characters. When a character matches an archived entry, call read_character_profiles to inspect its reference_images and attach matching image(s) via character_refs ({ profile_id, image_paths? }). Do not expand verbose appearance descriptions from the archive into the prompt; focus the prompt on pose, action, expression, outfit changes, and scene composition.',
+            '- Omit character_refs for profiles that have no reference images. Respect the per-prompt character_refs limit in <backend_capabilities>.',
         );
     } else {
         lines.push(
-            '- Check <character_archive> for appearing characters. When a character matches an archived entry, call read_character_profiles for that id, incorporate relevant appearance and outfit details into your prompt, and attach matching reference(s) via character_refs ({ profile_id, outfit_id? }).',
-            '- Omit character_refs for profiles or outfits that have no reference images. Respect the per-prompt character_refs limit in <backend_capabilities>.',
+            '- Check <character_archive> for appearing characters. When a character matches an archived entry, call read_character_profiles for that id, incorporate relevant plain-text details (and any Danbooru character tag if present) into your prompt, and attach matching reference image(s) via character_refs ({ profile_id, image_paths? }).',
+            '- Omit character_refs for profiles that have no reference images. Respect the per-prompt character_refs limit in <backend_capabilities>.',
         );
     }
 

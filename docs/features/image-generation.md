@@ -15,9 +15,9 @@ Open **Extensions → Image Generation** to select a **Generation preset** and *
 Under **References & Img2Img**, each **Generation preset** stores explicit switches that control how character profiles, style references, and source image editing are used by AI agents and UI actions:
 
 - **Enable character references** — Enables the global **Character Archive** for **AI Illustration** and **Image Studio**. When enabled, **Delivery mode** selects how archived character entries are supplied:
-  - **Text description only** — Incorporates archived appearance tags, prose descriptions, and outfit details into prompts without attaching character reference images.
+  - **Text description only** — Incorporates archived plain-text visual descriptions and Danbooru character tags into prompts without attaching character reference images.
   - **Reference images only** — Attaches archived reference images without expanding archived appearance descriptions into prompts.
-  - **Text description and reference images** — Supplies both archived appearance/outfit details and reference images.
+  - **Text description and reference images** — Supplies both archived plain-text descriptions and labeled reference images.
 - **Allow img2img editing (edit based on an existing image)** — Enables **Edit from this image** on inline chat illustrations and **Edit source** in **Image Studio**.
 - **Enable style & vibe references** — Controls whether attached style reference images or `.naiv4vibe` files are merged into generation requests. Click **Add style reference** to attach a file and enable the toggle automatically; turning the toggle off retains the saved list in a dimmed state without sending it.
 
@@ -43,8 +43,8 @@ Expand **AI Illustration** inside **Extensions → Image Generation** and enable
 When **Enable character references** is turned on, the illustration agent coordinates character visuals according to character familiarity and archive state:
 
 - **Well-known fanwork characters** — When a character is already recognized natively by the active image generation model, the illustration agent writes the prompt directly without launching web exploration.
-- **Unarchived fanwork characters** — When the scene introduces a public-work character whose appearance is unfamiliar to the active image model, the illustration agent invokes the **Character profile agent** to read the character card, bound world books, public character databases, and [Search Tools](/features/search-tools) image results, then archives verified tags, outfits, and reference images into the global **Character Archive**. Enable **Send downloaded reference previews to multimodal LLM for inspection** inside **Character profile agent** when your exploration model supports vision.
-- **Archived characters** — Characters already present in the **Character Archive** supply their stored appearance details and/or reference images according to the active **Delivery mode**.
+- **Unarchived fanwork characters** — When the scene introduces a public-work character whose appearance is unfamiliar to the active image model, the illustration agent invokes the **Character profile agent** to read public character databases, [Search Tools](/features/search-tools) image results, and any supplied source material, then archives a structured plain-text description, a Danbooru character name tag when one exists, and labeled reference images into the global **Character Archive**. Enable **Send downloaded reference previews to multimodal LLM for inspection** inside **Character profile agent** when your exploration model supports vision.
+- **Archived characters** — Characters already present in the **Character Archive** supply their stored plain-text description and/or labeled reference images according to the active **Delivery mode**.
 
 When **Enable character references** is turned off, **AI Illustration** writes prompts from the conversation, character card, and world book context without accessing the **Character Archive**.
 
@@ -64,9 +64,9 @@ Click any inline illustration in chat to open its action bar:
 Click **Open in Workbench** in **Extensions → Image Generation**, select **Image Studio** in the wand menu, or switch to the **Image Generation** tab inside [Workbench](/features/workbench):
 
 - **Image Studio** — Conversational workspace for free image generation and source image editing, with visual review, session branching with **Branch from here**, single-image gallery regeneration, **Edit source** when img2img editing is enabled, and persistent history across restarts.
-- **Character Archive** — Global library of character appearance tags, outfits, and local reference sheets:
-  - **AI Profile Builder** / **Refine with AI** — Opens a two-pane conversational dialog to create or update a character profile across multiple turns. Choose an explicit **Source material** option when you want the builder to read a specific character card or your user persona, or keep **Do not read a character card** selected. The builder can search public art databases, download candidate portraits, generate candidate reference sheets, and stage partial updates into the live editable draft on the right without overwriting concurrent manual edits. Click **Confirm & save to archive** to promote retained candidate images into formal archive references with **Change history** undo support; cancelling discards temporary images cleanly.
-  - **Manual editing** — Click **New character profile** to author tags, prose descriptions, outfits, and uploaded local reference images directly.
+- **Character Archive** — Global library of plain-text character descriptions and labeled local reference images, where each profile stores **Canonical display name**, **Aliases**, **Source work or franchise**, **Character visual description**, and a **Reference images** grid with optional **Reference label** notes:
+  - **AI Profile Builder** / **Refine with AI** — Opens a two-pane conversational dialog to create or update a character profile across multiple turns. Choose an explicit **Source material** option when you want the builder to read a specific character card or your user persona, or keep **Do not read a character card** selected. The builder can search public art databases, look up a Danbooru character name tag, download candidate portraits, generate candidate reference sheets, and stage partial updates to **Character visual description** and labeled **Reference images** in the live editable draft on the right without overwriting concurrent manual edits. Click **Confirm & save to archive** to promote retained candidate images into formal archive references with **Change history** undo support; cancelling discards temporary images cleanly.
+  - **Manual editing** — Click **New character profile** to author plain-text **Character visual description** entries and attach labeled local images via **Upload local reference image**.
 - **Run Traces** — Inspect live and recent illustration and exploration runs, export run JSON, or click **Diagnose with AI** to troubleshoot failed runs in Workbench **AI iteration**.
 
 ## Iterating ComfyUI Workflows with AI

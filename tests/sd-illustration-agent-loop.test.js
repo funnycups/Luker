@@ -186,7 +186,7 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
         expect(chat[0].extra.illustrations[0].status).toBe('ready');
     });
 
-    test('(b) resolves outfit referenceImages and merges negativeTags after read_character_profiles', async () => {
+    test('(b) resolves v2 profile referenceImages with image_paths after read_character_profiles', async () => {
         const chat = [makeMessage()];
         const taskCalls = [];
         const generated = [];
@@ -214,7 +214,10 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                             prompt: '1girl, silver braid, navy coat, holding brass spyglass',
                             negative_prompt: 'lowres',
                             aspect_ratio: '3:4',
-                            character_refs: [{ profile_id: 'char_lyra', outfit_id: 'outfit_coat' }],
+                            character_refs: [{
+                                profile_id: 'char_lyra',
+                                image_paths: ['/user/images/_references/lyra_coat.png'],
+                            }],
                             insert_after: 'laid the brass spyglass',
                             insert_before: 'on the chart table.',
                         },
@@ -230,15 +233,11 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
             id: 'char_lyra',
             name: 'Lyra',
             sourceWork: 'Horizon',
-            canonicalTags: ['1girl', 'silver braid'],
-            negativeTags: ['glasses', 'modern_clothes'],
-            outfits: [{
-                id: 'outfit_coat',
-                name: 'Naval Coat',
-                tags: ['navy coat', 'brass buttons'],
-                referenceImages: ['/user/images/_references/lyra_coat.png'],
-            }],
-            defaultOutfitId: 'outfit_coat',
+            description: 'Silver braid, navy naval coat with brass buttons.',
+            referenceImages: [
+                { path: '/user/images/_references/lyra_coat.png', label: 'Naval Coat' },
+                { path: '/user/images/_references/lyra_casual.png', label: 'Casual' },
+            ],
         });
 
         const settings = normalizeIllustrationSettings(undefined);
@@ -288,6 +287,7 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
         const toolMessage = taskCalls[1].taskMessages.find(m => m.role === 'tool');
         expect(toolMessage).toBeDefined();
         expect(toolMessage.content).toContain('Naval Coat');
+        expect(toolMessage.content).toContain('/user/images/_references/lyra_coat.png');
 
         expect(generated).toHaveLength(1);
         expect(generated[0].opts.aspectRatio).toBe('3:4');
@@ -298,9 +298,7 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                 label: 'Lyra — Naval Coat',
             },
         ]);
-        expect(generated[0].opts.negativePrompt).toContain('lowres');
-        expect(generated[0].opts.negativePrompt).toContain('glasses');
-        expect(generated[0].opts.negativePrompt).toContain('modern_clothes');
+        expect(generated[0].opts.negativePrompt).toBe('lowres');
         expect(chat[0].extra.illustrations[0].references).toEqual(generated[0].opts.references);
         expect(chat[0].extra.illustrations[0].aspectRatio).toBe('3:4');
     });
@@ -328,14 +326,10 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                                     id: 'char_explored',
                                     name: 'Vesper',
                                     source_work: 'Starlight',
-                                    canonical_tags: ['1girl', 'crimson eyes'],
-                                    outfits: [{
-                                        id: 'outfit_cloak',
-                                        name: 'Travel Cloak',
-                                        tags: ['dark cloak'],
-                                        reference_images: ['/user/images/_references/vesper_cloak.png'],
-                                    }],
-                                    default_outfit_id: 'outfit_cloak',
+                                    description: 'Crimson eyes, wearing a dark travel cloak.',
+                                    reference_images: [
+                                        { path: '/user/images/_references/vesper_cloak.png', label: 'Travel Cloak' },
+                                    ],
                                 },
                             }],
                             assistantText: '',
@@ -367,7 +361,7 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                         name: 'add_image_prompt',
                         args: {
                             prompt: '1girl, crimson eyes, dark cloak, brass spyglass',
-                            character_refs: [{ profile_id: 'char_explored', outfit_id: 'outfit_cloak' }],
+                            character_refs: [{ profile_id: 'char_explored' }],
                             insert_after: 'laid the brass spyglass',
                             insert_before: 'on the chart table.',
                         },
@@ -521,12 +515,14 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
         await profileStore.upsertProfile({
             id: 'char_a',
             name: 'Aria',
-            outfits: [{ id: 'def', name: 'Default', referenceImages: ['/user/images/_references/aria.png'] }],
+            description: 'Blonde hair.',
+            referenceImages: [{ path: '/user/images/_references/aria.png', label: 'Default' }],
         });
         await profileStore.upsertProfile({
             id: 'char_b',
             name: 'Bryn',
-            outfits: [{ id: 'def', name: 'Default', referenceImages: ['/user/images/_references/bryn.png'] }],
+            description: 'Black hair.',
+            referenceImages: [{ path: '/user/images/_references/bryn.png', label: 'Default' }],
         });
 
         const settings = normalizeIllustrationSettings(undefined);
@@ -590,15 +586,8 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
         const seedProfiles = [{
             id: 'char_lyra',
             name: 'Lyra',
-            canonicalTags: ['1girl', 'silver braid'],
-            negativeTags: ['glasses'],
-            outfits: [{
-                id: 'outfit_coat',
-                name: 'Naval Coat',
-                tags: ['navy coat'],
-                referenceImages: ['/user/images/_references/lyra_coat.png'],
-            }],
-            defaultOutfitId: 'outfit_coat',
+            description: 'Silver braid, navy naval coat.',
+            referenceImages: [{ path: '/user/images/_references/lyra_coat.png', label: 'Naval Coat' }],
         }];
         const sandboxStore = createSandboxProfileStore(seedProfiles);
         const generatedCalls = [];
@@ -642,12 +631,10 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                                 args: {
                                     id: 'char_vesper',
                                     name: 'Vesper',
-                                    outfits: [{
-                                        id: 'outfit_cloak',
-                                        name: 'Cloak',
-                                        reference_images: ['/user/images/_sandbox_tmp/sess_sandbox_1/vesper.png'],
-                                    }],
-                                    default_outfit_id: 'outfit_cloak',
+                                    description: 'Dark cloak.',
+                                    reference_images: [
+                                        { path: '/user/images/_sandbox_tmp/sess_sandbox_1/vesper.png', label: 'Cloak' },
+                                    ],
                                 },
                             }],
                             assistantText: '',
@@ -701,7 +688,7 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                             name: 'add_image_prompt',
                             args: {
                                 prompt: '1girl, harbor lantern',
-                                character_refs: [{ profile_id: 'char_vesper', outfit_id: 'outfit_cloak' }],
+                                character_refs: [{ profile_id: 'char_vesper' }],
                                 insert_after: 'watched the',
                                 insert_before: 'harbor lantern.',
                             },
@@ -817,10 +804,8 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
         await createCharacterProfileStore(ctxDisabled).upsertProfile({
             id: 'char_lyra',
             name: 'Lyra',
-            canonicalTags: ['silver_braid'],
-            proseDescription: 'Navigator in navy coat.',
-            outfits: [{ id: 'outfit_coat', name: 'Coat', tags: ['navy_coat'], referenceImages: ['/user/images/_references/lyra.png'] }],
-            defaultOutfitId: 'outfit_coat',
+            description: 'Silver braid. Navigator in tailored navy wool coat.',
+            referenceImages: [{ path: '/user/images/_references/lyra.png', label: 'Coat' }],
         });
 
         const settings = normalizeIllustrationSettings(undefined);
@@ -887,7 +872,7 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                             prompt: '1girl, brass spyglass',
                             insert_after: 'laid the brass spyglass',
                             insert_before: 'on the chart table.',
-                            ...(mode === 'image_only' ? { character_refs: [{ profile_id: 'char_lyra', outfit_id: 'outfit_coat' }] } : {}),
+                            ...(mode === 'image_only' ? { character_refs: [{ profile_id: 'char_lyra' }] } : {}),
                         },
                     }],
                     assistantText: '',
@@ -897,10 +882,8 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
             await createCharacterProfileStore(ctx).upsertProfile({
                 id: 'char_lyra',
                 name: 'Lyra',
-                canonicalTags: ['silver_braid'],
-                proseDescription: 'Navigator in navy coat.',
-                outfits: [{ id: 'outfit_coat', name: 'Coat', tags: ['navy_coat'], prose: 'Tailored wool coat', referenceImages: ['/user/images/_references/lyra.png'] }],
-                defaultOutfitId: 'outfit_coat',
+                description: 'Silver braid. Navigator in tailored navy wool coat.',
+                referenceImages: [{ path: '/user/images/_references/lyra.png', label: 'Coat' }],
             });
             const generated = [];
             const pipeline = createIllustrationPipeline({
@@ -946,18 +929,16 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
 
         const textOnlyRun = await runModeRead('text_only');
         const textToolBody = textOnlyRun.calls[1].taskMessages.find(m => m.role === 'tool').content;
-        expect(textToolBody).toContain('canonical_tags: silver_braid');
-        expect(textToolBody).toContain('Tailored wool coat');
-        expect(textToolBody).not.toContain('reference_images=');
+        expect(textToolBody).toContain('description: Silver braid. Navigator in tailored navy wool coat.');
+        expect(textToolBody).not.toContain('reference_images:');
+        expect(textOnlyRun.calls[0].taskMessages[1].content).not.toContain('refs=');
         expect(textOnlyRun.calls[0].tools[0].function.parameters.properties).not.toHaveProperty('character_refs');
 
         const imageOnlyRun = await runModeRead('image_only');
         const imageToolBody = imageOnlyRun.calls[1].taskMessages.find(m => m.role === 'tool').content;
-        expect(imageToolBody).toContain('id=outfit_coat');
-        expect(imageToolBody).toContain('reference_images=1');
-        expect(imageToolBody).not.toContain('canonical_tags:');
-        expect(imageToolBody).not.toContain('prose_description:');
-        expect(imageToolBody).not.toContain('Tailored wool coat');
+        expect(imageToolBody).toContain('path=/user/images/_references/lyra.png | label=Coat');
+        expect(imageToolBody).not.toContain('description:');
+        expect(imageToolBody).not.toContain('tailored navy wool coat');
         expect(imageOnlyRun.generated[0].opts.references).toEqual([
             { imagePath: '/user/images/_references/lyra.png', role: 'character', label: 'Lyra — Coat' },
         ]);

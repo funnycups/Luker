@@ -133,12 +133,12 @@ async function saveImageReference(api, imagePath) {
     const profile = normalizeCharacterProfile({
         id: 'profile_visual',
         name: 'Visual profile',
-        outfits: [{ id: 'outfit_default', name: 'Default', referenceImages: [imagePath] }],
-        defaultOutfitId: 'outfit_default',
+        description: 'Visual profile description.',
+        referenceImages: [{ path: imagePath, label: 'Default' }],
     });
     const response = await api.post('/api/state/set', {
         namespace: NAMESPACE,
-        data: { version: 1, profiles: { [profile.id]: profile } },
+        data: { version: 2, profiles: { [profile.id]: profile } },
     });
     expect(response.status()).toBe(200);
 }
@@ -483,7 +483,7 @@ describe('owned transient media sessions', () => {
         const promotion = await prepared.json();
         expect(promotion.images).toEqual([]);
         const saved = await admin.post('/api/state/set', {
-            namespace: NAMESPACE, data: { version: 1, profiles: {} },
+            namespace: NAMESPACE, data: { version: 2, profiles: {} },
         }, session.headers);
         expect(saved.status()).toBe(200);
         const patched = await admin.post('/api/state/patch', {

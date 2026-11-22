@@ -25,6 +25,27 @@ describe('character visual exploration agent', () => {
         ]));
         expect(names).not.toContain('generate_image');
         expect(names).not.toContain('generate_reference_image');
+
+        const saveDef = defs.find(t => t.function.name === 'save_character_profile');
+        const saveProps = saveDef.function.parameters.properties;
+        expect(saveDef.function.parameters.required).toEqual(['name']);
+        expect(Object.keys(saveProps)).toEqual(expect.arrayContaining([
+            'id',
+            'name',
+            'aliases',
+            'source_work',
+            'description',
+            'reference_images',
+        ]));
+        expect(saveProps).not.toHaveProperty('source_card_avatars');
+        expect(saveProps).not.toHaveProperty('canonical_tags');
+        expect(saveProps).not.toHaveProperty('negative_tags');
+        expect(saveProps).not.toHaveProperty('prose_description');
+        expect(saveProps).not.toHaveProperty('outfits');
+        expect(saveProps).not.toHaveProperty('default_outfit_id');
+        expect(saveProps.reference_images.type).toBe('array');
+        expect(saveProps.reference_images.items.required).toEqual(['path']);
+        expect(Object.keys(saveProps.reference_images.items.properties)).toEqual(expect.arrayContaining(['path', 'label']));
     });
 
     test('resolveExplorationLlm inherits preset.llm as a pair when empty and avoids mixing completion presets across connections', async () => {
@@ -98,12 +119,11 @@ describe('character visual exploration agent', () => {
                             args: {
                                 id: 'char_iris',
                                 name: 'Iris',
-                                outfits: [{
-                                    id: 'outfit_def',
-                                    name: 'Default',
-                                    reference_images: ['/user/images/_sandbox_tmp/sess_exp_1/iris.png'],
+                                description: 'Danbooru character tag: iris\nSilver-haired archivist wearing a navy coat.',
+                                reference_images: [{
+                                    path: '/user/images/_sandbox_tmp/sess_exp_1/iris.png',
+                                    label: 'Default',
                                 }],
-                                default_outfit_id: 'outfit_def',
                             },
                         }],
                         assistantText: '',
@@ -141,6 +161,12 @@ describe('character visual exploration agent', () => {
         expect(result.finalText).toBe('Archived Iris.');
         expect(seenPreviewRounds).toEqual([true]);
         expect(result.savedProfiles.map(p => p.id)).toEqual(['char_iris']);
+        expect(result.savedProfiles[0]).toMatchObject({
+            id: 'char_iris',
+            name: 'Iris',
+            description: 'Danbooru character tag: iris\nSilver-haired archivist wearing a navy coat.',
+            referenceImages: [{ path: '/user/images/_sandbox_tmp/sess_exp_1/iris.png', label: 'Default' }],
+        });
         expect(mediaFetchCalls).toHaveLength(1);
         expect(previewCalls).toEqual(['/user/images/_sandbox_tmp/sess_exp_1/iris.png']);
         expect(traceEvents.some(e => e.type === 'prepared_request')).toBe(true);

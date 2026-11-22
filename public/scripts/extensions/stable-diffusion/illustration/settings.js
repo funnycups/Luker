@@ -11,7 +11,7 @@ import {
     getDefaultPromptValues,
     makeIllustrationId,
 } from './presets.js';
-import { DEFAULT_EXPLORATION_PROMPT } from '../exploration/prompts.js';
+import { DEFAULT_EXPLORATION_PROMPT, V1_DEFAULT_EXPLORATION_PROMPT } from '../exploration/prompts.js';
 
 const STYLE_PROMPT_FIELDS = ['illustrationPrompt', 'studioPrompt'];
 const PROMPT_FIELDS = [...STYLE_PROMPT_FIELDS, 'explorationPrompt'];
@@ -177,6 +177,9 @@ export function migrateIllustrationPromptSettings(raw, options = {}) {
             preset.illustrationPrompt = DEFAULT_ILLUSTRATION_PROMPT;
         } else if (preset.illustrationPrompt === V1_DEFAULT_NATURAL_ILLUSTRATION_PROMPT) {
             preset.illustrationPrompt = DEFAULT_NATURAL_ILLUSTRATION_PROMPT;
+        }
+        if (preset.explorationPrompt === V1_DEFAULT_EXPLORATION_PROMPT) {
+            preset.explorationPrompt = DEFAULT_EXPLORATION_PROMPT;
         }
         if (preset.promptDefaultsInitialized) continue;
         const style = exactLegacyPromptStyle(preset);

@@ -80,8 +80,8 @@ export function createSandboxProfileStore(seedCharacters = []) {
             return out;
         },
 
-        buildCompactProfileIndex(list) {
-            return buildCompactProfileIndex(list);
+        buildCompactProfileIndex(list, options) {
+            return buildCompactProfileIndex(list, options);
         },
 
         async upsertProfile(input, now = Date.now(), { expectedVersion } = {}) {

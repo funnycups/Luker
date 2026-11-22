@@ -4,6 +4,7 @@ import {
     appendStandardToolRoundMessages,
     makeRuntimeToolCallId,
 } from '../../../lib/iter-tool-calling.js';
+import { formatCharacterProfileForAgent } from '../character-archive/store.js';
 import { runExplorationAgent } from '../exploration/agent.js';
 import {
     buildIllustrationTaskMessages,
@@ -19,39 +20,6 @@ function abortError() {
     const error = new Error('Illustration task cancelled.');
     error.name = 'AbortError';
     return error;
-}
-
-export function formatProfileDetailForIllustration(profile, mode = 'text_and_image') {
-    const resolvedMode = mode === 'text_only' || mode === 'image_only' ? mode : 'text_and_image';
-    const includeText = resolvedMode !== 'image_only';
-    const includeImages = resolvedMode !== 'text_only';
-    const lines = [
-        `id: ${profile.id}`,
-        `name: ${profile.name}`,
-    ];
-    if (profile.aliases?.length) lines.push(`aliases: ${profile.aliases.join(', ')}`);
-    if (profile.sourceWork) lines.push(`work: ${profile.sourceWork}`);
-    if (includeText) {
-        if (profile.canonicalTags?.length) lines.push(`canonical_tags: ${profile.canonicalTags.join(', ')}`);
-        if (profile.negativeTags?.length) lines.push(`negative_tags: ${profile.negativeTags.join(', ')}`);
-        if (profile.proseDescription) lines.push(`prose_description: ${profile.proseDescription}`);
-    }
-    if (profile.defaultOutfitId) lines.push(`default_outfit_id: ${profile.defaultOutfitId}`);
-    if (Array.isArray(profile.outfits) && profile.outfits.length > 0) {
-        lines.push('outfits:');
-        for (const outfit of profile.outfits) {
-            const parts = [`  - id=${outfit.id} name="${outfit.name}"`];
-            if (includeText) {
-                if (outfit.tags?.length) parts.push(`tags=[${outfit.tags.join(', ')}]`);
-                if (outfit.prose) parts.push(`prose="${outfit.prose}"`);
-            }
-            if (includeImages) {
-                parts.push(`reference_images=${outfit.referenceImages?.length || 0}`);
-            }
-            lines.push(parts.join(' | '));
-        }
-    }
-    return lines.join('\n');
 }
 
 function formatActionableRejectionError(reason) {
@@ -124,7 +92,9 @@ export async function runIllustrationAgent({
     if (activeProfileStore) {
         const existingProfiles = await activeProfileStore.listProfiles();
         profileMap = new Map(existingProfiles.map(p => [p.id, p]));
-        characterArchiveIndex = activeProfileStore.buildCompactProfileIndex(existingProfiles);
+        characterArchiveIndex = activeProfileStore.buildCompactProfileIndex(existingProfiles, {
+            includeImages: Boolean(capabilities?.supportsCharacterReference),
+        });
     }
 
     const taskMessages = buildIllustrationTaskMessages({
@@ -255,7 +225,7 @@ export async function runIllustrationAgent({
                     profileMap.set(p.id, p);
                 }
                 const body = profiles.length > 0
-                    ? profiles.map(p => formatProfileDetailForIllustration(p, profileAgentMode)).join('\n\n---\n\n')
+                    ? profiles.map(p => formatCharacterProfileForAgent(p, { mode: profileAgentMode })).join('\n\n---\n\n')
                     : `No character profiles found for ids: ${ids.join(', ')}`;
                 observe?.({
                     type: 'tool_done',
@@ -314,7 +284,7 @@ export async function runIllustrationAgent({
                 const refreshed = await activeProfileStore.listProfiles();
                 profileMap = new Map(refreshed.map(p => [p.id, p]));
                 const savedSummaries = expResult.savedProfiles
-                    .map(p => formatProfileDetailForIllustration(p, profileAgentMode))
+                    .map(p => formatCharacterProfileForAgent(p, { mode: profileAgentMode }))
                     .join('\n\n---\n\n');
                 const body = savedSummaries
                     ? `Saved character profiles:\n\n${savedSummaries}`

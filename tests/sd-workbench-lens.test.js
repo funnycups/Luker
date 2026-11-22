@@ -735,8 +735,7 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
                 args: {
                     id: 'char_iter_1',
                     name: 'Seren',
-                    canonical_tags: ['1girl', 'emerald eyes'],
-                    outfits: [{ id: 'outfit_1', name: 'Cloak', tags: ['green cloak'] }],
+                    description: 'Emerald eyes, wearing a green cloak.',
                 },
             }, draft);
 
@@ -893,9 +892,11 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             id: 'char_elena',
             name: 'Elena',
             sourceWork: 'Harbor',
-            canonicalTags: ['silver_bob', 'teal_eyes'],
-            outfits: [{ id: 'outfit_coat', name: 'Coat', tags: ['navy_coat'], referenceImages: ['/user/images/_references/elena_1.png', '/user/images/_references/elena_2.png'] }],
-            defaultOutfitId: 'outfit_coat',
+            description: 'Silver bob, teal eyes, wearing a navy coat.',
+            referenceImages: [
+                { path: '/user/images/_references/elena_1.png', label: 'Coat' },
+                { path: '/user/images/_references/elena_2.png', label: 'Coat' },
+            ],
         });
 
         let activeCaps = {
@@ -941,7 +942,7 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
                         name: 'generate_image',
                         args: {
                             prompt: '1girl, pier at dusk',
-                            character_refs: [{ profile_id: 'char_elena', outfit_id: 'outfit_coat' }],
+                            character_refs: [{ profile_id: 'char_elena' }],
                         },
                     }],
                     assistantText: '',
@@ -985,7 +986,7 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             expect(llmCalls[0].tools[0].function.parameters.properties).not.toHaveProperty('source_image_id');
             expect(container.querySelector('[data-studio-action="edit-source"]')).toBeNull();
 
-            // 2. Enable character references (image_only) -> exposes read_character_profiles & character_refs, hides canonical_tags.
+            // 2. Enable character references (image_only) -> exposes read_character_profiles & character_refs, hides description.
             activeCaps = {
                 ...activeCaps,
                 characterReferenceEnabled: true,
@@ -1007,8 +1008,8 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
                 { imagePath: '/user/images/_references/elena_2.png', role: 'character', label: 'Elena — Coat' },
             ]);
             const readToolReply = llmCalls.at(-1).taskMessages.findLast(m => m.role === 'tool')?.content || '';
-            expect(readToolReply).toContain('reference_images=2');
-            expect(readToolReply).not.toContain('canonical_tags:');
+            expect(readToolReply).toContain('path=/user/images/_references/elena_1.png | label=Coat');
+            expect(readToolReply).not.toContain('description:');
 
             // 3. Replay with character references disabled -> skips saved character refs and warns via toast.
             activeCaps = {
@@ -1089,22 +1090,19 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
         expect(readLabel('wb_read_sd')).toBe('Image Generation');
         expect(wsName('sd')).toBe('Image Generation');
 
-        // Important 4: Studio regeneration reconstructs references, single-image promote respects empty targetProfileId vs defaultOutfitId, and OC launch resets draftInput cleanly
+        // Important 4: Studio regeneration reconstructs references and zh-cn characters view localizes labels cleanly
         const profileStore = createCharacterProfileStore(ctx);
         await profileStore.upsertProfile({
             id: 'char_unrelated',
             name: 'Unrelated Hero',
-            outfits: [{ id: 'out_u', name: 'Armor', referenceImages: [] }],
-            defaultOutfitId: 'out_u',
+            description: 'Armored knight.',
+            referenceImages: [],
         });
         await profileStore.upsertProfile({
             id: 'char_target',
             name: 'Target Heroine',
-            outfits: [
-                { id: 'out_casual', name: 'Casual', referenceImages: [] },
-                { id: 'out_gala', name: 'Gala Gown', referenceImages: [] },
-            ],
-            defaultOutfitId: 'out_gala',
+            description: 'Wears casual attire or a gala gown.',
+            referenceImages: [],
         });
 
         globalThis.fetch = jest.fn(async (url, init) => {
@@ -1213,11 +1211,12 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             { imagePath: '/user/images/_studio/chr.png', role: 'character' },
         ]);
 
-        // Switch to characters & run views in zh-cn -> verify zero UNTRANSLATED:, no legacy launcher, and no raw outfit(s)/round(s)
+        // Switch to characters & run views in zh-cn -> verify zero UNTRANSLATED:, no legacy launcher, and no raw reference image(s)/outfit(s)/round(s)
         handle.update({ subview: 'characters' });
         await new Promise(r => setTimeout(r, 30));
         expect(container.textContent).not.toContain('UNTRANSLATED:');
         expect(container.textContent).not.toContain('outfit(s)');
+        expect(container.textContent).not.toContain('reference image(s)');
         expect(container.querySelector('.sdlens-launcher')).toBeNull();
         expect(container.querySelector('[data-sd-role="refine-in-studio"]')).toBeNull();
 

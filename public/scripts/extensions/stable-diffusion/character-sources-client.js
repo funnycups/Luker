@@ -13,11 +13,12 @@ export function formatCharacterSourceCandidates(source, candidates = []) {
     return candidates.map((item, idx) => {
         const parts = [`${idx + 1}: [${source}] ${normalizeSpace(item.name || 'Unknown')}`];
         if (item.work) parts.push(`work=${normalizeSpace(item.work)}`);
+        if (item.characterTag) parts.push(`character_tag=${normalizeSpace(item.characterTag)}`);
         if (Array.isArray(item.aliases) && item.aliases.length > 0) {
             parts.push(`aliases=${item.aliases.join(',')}`);
         }
-        if (Array.isArray(item.canonicalTags) && item.canonicalTags.length > 0) {
-            parts.push(`tags=${item.canonicalTags.join(',')}`);
+        if (Array.isArray(item.tags) && item.tags.length > 0) {
+            parts.push(`tags=${item.tags.join(',')}`);
         }
         if (Array.isArray(item.imageUrls) && item.imageUrls.length > 0) {
             parts.push(`images=${item.imageUrls.join(',')}`);
@@ -77,7 +78,7 @@ export async function searchCharacterSources({
             name: String(item?.title || cleanQuery),
             aliases: [],
             work: String(work || ''),
-            canonicalTags: [],
+            tags: [],
             imageUrls: item?.imageUrl ? [item.imageUrl] : [],
             pageUrl: String(item?.pageUrl || ''),
             summary: item?.width && item?.height ? `${item.width}x${item.height}` : '',

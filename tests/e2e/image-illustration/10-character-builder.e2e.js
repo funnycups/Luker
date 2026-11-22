@@ -164,18 +164,10 @@ test.describe.serial('conversational character builder dialog', () => {
                     arguments: {
                         name: 'AI Draft Name',
                         aliases: ['Navigator'],
-                        canonical_tags: ['copper_hair', 'green_eyes'],
-                        prose_description: 'Braided copper hair and emerald eyes.',
-                        outfits: [
-                            {
-                                id: 'outfit_default',
-                                name: 'Coastal Coat',
-                                tags: ['dark_coat'],
-                                prose: 'Heavy coastal coat.',
-                                reference_images: [generatedPath],
-                            },
+                        description: 'Braided copper hair and emerald eyes. Wears a heavy coastal coat.',
+                        reference_images: [
+                            { path: generatedPath, label: 'Coastal Coat' },
                         ],
-                        default_outfit_id: 'outfit_default',
                     },
                 };
             }
@@ -262,7 +254,8 @@ test.describe.serial('conversational character builder dialog', () => {
         const saved = Object.values(savedProfiles).find(p => p.name === manualName);
         expect(saved).toBeTruthy();
         expect(saved.sourceWork).toBe('Harbor Chronicles');
-        const formalImg = saved.outfits[0].referenceImages[0];
+        expect(saved.referenceImages[0].label).toBe('Coastal Coat');
+        const formalImg = saved.referenceImages[0].path;
         expect(formalImg).toMatch(/^\/user\/images\/_references\//);
         expect(existsSync(join(server.dataRoot, 'default-user', formalImg.replace(/^\//, '')))).toBe(true);
 
@@ -326,14 +319,9 @@ test.describe.serial('conversational character builder dialog', () => {
                 return {
                     tool: 'stage_character_profile',
                     arguments: {
-                        canonical_tags: ['copper_hair', 'teal_cloak'],
-                        outfits: [
-                            {
-                                id: existingProfile.outfits[0].id,
-                                name: 'Navigator Cloak',
-                                tags: ['teal_cloak'],
-                                reference_images: [fetchRes.imagePath],
-                            },
+                        description: 'Braided copper hair and green eyes, wearing a deep teal navigator cloak.',
+                        reference_images: [
+                            { path: fetchRes.imagePath, label: 'Navigator Cloak' },
                         ],
                     },
                 };
@@ -373,9 +361,9 @@ test.describe.serial('conversational character builder dialog', () => {
         await expect(dialog).toBeHidden({ timeout: 15_000 });
 
         const updated = (await readProfiles(page))[existingProfile.id];
-        expect(updated.canonicalTags).toEqual(['copper_hair', 'teal_cloak']);
-        expect(updated.outfits[0].name).toBe('Navigator Cloak');
-        expect(updated.outfits[0].referenceImages[0]).toMatch(/^\/user\/images\/_references\//);
+        expect(updated.description).toContain('deep teal navigator cloak');
+        expect(updated.referenceImages[0].label).toBe('Navigator Cloak');
+        expect(updated.referenceImages[0].path).toMatch(/^\/user\/images\/_references\//);
 
         // Restore desktop viewport and verify manual Delete still works.
         await page.setViewportSize({ width: 1280, height: 800 });

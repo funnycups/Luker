@@ -1,7 +1,7 @@
 import { describe, expect, test } from '@jest/globals';
 import * as illustrationSettings from '../public/scripts/extensions/stable-diffusion/illustration/settings.js';
 import * as promptDefaults from '../public/scripts/extensions/stable-diffusion/illustration/presets.js';
-import { DEFAULT_EXPLORATION_PROMPT } from '../public/scripts/extensions/stable-diffusion/exploration/prompts.js';
+import { DEFAULT_EXPLORATION_PROMPT, V1_DEFAULT_EXPLORATION_PROMPT } from '../public/scripts/extensions/stable-diffusion/exploration/prompts.js';
 import {
     normalizeIllustrationSettings,
     getPresetById,
@@ -333,7 +333,8 @@ describe('stored illustration prompt defaults', () => {
         expect(legacyInvalid.settings.presets[0].pendingStyleDefaults).toEqual(['studioPrompt']);
     });
 
-    test('upgrades exact V1 default illustration prompts even on already-initialized presets while preserving custom and cleared prompts', () => {
+    test('upgrades exact V1 default illustration and exploration prompts even on already-initialized presets while preserving custom and cleared prompts', () => {
+        const customExploration = 'Custom exploration guidelines.';
         const raw = {
             initialized: true,
             currentPresetId: 'v1_tag',
@@ -345,7 +346,7 @@ describe('stored illustration prompt defaults', () => {
                     promptDefaultsInitialized: true,
                     illustrationPrompt: promptDefaults.V1_DEFAULT_ILLUSTRATION_PROMPT,
                     studioPrompt: promptDefaults.DEFAULT_STUDIO_PROMPT,
-                    explorationPrompt: DEFAULT_EXPLORATION_PROMPT,
+                    explorationPrompt: V1_DEFAULT_EXPLORATION_PROMPT,
                 },
                 {
                     id: 'v1_natural',
@@ -354,7 +355,7 @@ describe('stored illustration prompt defaults', () => {
                     promptDefaultsInitialized: true,
                     illustrationPrompt: promptDefaults.V1_DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
                     studioPrompt: promptDefaults.DEFAULT_NATURAL_STUDIO_PROMPT,
-                    explorationPrompt: DEFAULT_EXPLORATION_PROMPT,
+                    explorationPrompt: customExploration,
                 },
                 {
                     id: 'cleared',
@@ -370,8 +371,11 @@ describe('stored illustration prompt defaults', () => {
         const first = migratePrompts(raw, { now: 80 });
         expect(first.changed).toBe(true);
         expect(first.settings.presets[0].illustrationPrompt).toBe(promptDefaults.DEFAULT_ILLUSTRATION_PROMPT);
+        expect(first.settings.presets[0].explorationPrompt).toBe(DEFAULT_EXPLORATION_PROMPT);
         expect(first.settings.presets[1].illustrationPrompt).toBe(promptDefaults.DEFAULT_NATURAL_ILLUSTRATION_PROMPT);
+        expect(first.settings.presets[1].explorationPrompt).toBe(customExploration);
         expect(first.settings.presets[2].illustrationPrompt).toBe('');
+        expect(first.settings.presets[2].explorationPrompt).toBe('');
 
         const second = migratePrompts(first.settings, { now: 90 });
         expect(second.changed).toBe(false);

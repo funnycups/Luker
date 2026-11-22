@@ -4,7 +4,6 @@ import { h, clear, put } from '../../../../lens-shared/util.js';
 import {
     button,
     formField,
-    iconButton,
     sectionTitle,
     selectInput,
 } from '../../../../lens-shared/ui.js';
@@ -34,10 +33,11 @@ function formatConflictValue(value) {
     if (Array.isArray(value)) {
         if (value.length === 0) return i18n('(empty)');
         if (typeof value[0] === 'string') return value.join(', ');
-        return value.map(outfit => {
-            const refs = Array.isArray(outfit?.referenceImages) ? outfit.referenceImages.length : 0;
-            return `${outfit?.name || outfit?.id || ''} (${refs})`;
-        }).join(' / ');
+        return value.map(ref => {
+            const path = String(ref?.path || '').trim();
+            const label = String(ref?.label || '').trim();
+            return label ? `${label} (${path})` : path;
+        }).filter(Boolean).join(', ') || i18n('(empty)');
     }
     const text = String(value ?? '').trim();
     return text || i18n('(empty)');
@@ -48,11 +48,8 @@ function conflictFieldLabel(path) {
         case 'name': return i18n('Canonical display name');
         case 'aliases': return i18n('Aliases (comma-separated)');
         case 'sourceWork': return i18n('Source work or franchise');
-        case 'canonicalTags': return i18n('Core appearance tags (comma-separated)');
-        case 'negativeTags': return i18n('Negative tags (comma-separated)');
-        case 'proseDescription': return i18n('Natural language appearance description');
-        case 'outfits': return i18n('Outfits & reference sheets');
-        case 'defaultOutfitId': return i18n('Default outfit');
+        case 'description': return i18n('Character visual description');
+        case 'referenceImages': return i18n('Reference images');
         default: return path;
     }
 }
@@ -227,7 +224,8 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
             if (Array.isArray(entry.images) && entry.images.length > 0) {
                 const strip = h('div', { class: 'sdlens-ref-strip' });
                 for (const imagePath of entry.images) {
-                    put(strip, h('div', { class: 'sdlens-ref-item' }, createManagedThumbnail(imagePath, 'Candidate reference')));
+                    put(strip, h('div', { class: 'sdlens-ref-item' },
+                        h('div', { class: 'sdlens-ref-thumb' }, createManagedThumbnail(imagePath, 'Candidate reference'))));
                 }
                 put(msgEl, strip);
             }
@@ -309,9 +307,9 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
             }));
     }
 
-    function renderDraftOutfit(snapshot, outfit, idx) {
-        const isDefault = snapshot.defaultOutfitId === outfit.id;
+    function renderDraftReferences(snapshot) {
         const disabled = saveBusy || closingBusy || Boolean(savedResult);
+        const refs = Array.isArray(snapshot.referenceImages) ? snapshot.referenceImages : [];
 
         const fileInput = h('input', {
             type: 'file',
@@ -325,17 +323,11 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
                 try {
                     const stagedPath = await tracker.upload(file);
                     const current = draft.getSnapshot();
-                    const nextOutfits = current.outfits.map(item => (
-                        item.id === outfit.id
-                            ? {
-                                ...item,
-                                referenceImages: item.referenceImages.includes(stagedPath)
-                                    ? item.referenceImages
-                                    : [...item.referenceImages, stagedPath],
-                            }
-                            : item
-                    ));
-                    draft.edit('outfits', nextOutfits);
+                    const existing = Array.isArray(current.referenceImages) ? current.referenceImages : [];
+                    const nextRefs = existing.some(item => item.path === stagedPath)
+                        ? existing
+                        : [...existing, { path: stagedPath, label: '' }];
+                    draft.edit('referenceImages', nextRefs);
                     errorBannerMessage = '';
                     renderDraftPane();
                     renderFooter();
@@ -355,77 +347,47 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
         });
         uploadBtn.dataset.sdRole = 'builder-upload-ref';
 
-        return h('div', { class: 'sdlens-outfit-card', dataset: { outfitId: outfit.id } },
-            h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' } },
-                h('strong', { text: `${outfit.name || outfit.id} (${outfit.id})` }),
-                h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center' } },
-                    isDefault
-                        ? h('span', { class: 'lw-pilltag is-ok', text: i18n('Default outfit') })
-                        : button(i18n('Set as default outfit'), () => {
-                            draft.edit('defaultOutfitId', outfit.id);
-                            renderDraftPane();
-                        }, { small: true, ghost: true, disabled }),
-                    snapshot.outfits.length > 1
-                        ? iconButton('trash', i18n('Delete'), () => {
-                            const current = draft.getSnapshot();
-                            const nextOutfits = current.outfits.filter((_, i) => i !== idx);
-                            draft.edit('outfits', nextOutfits);
-                            renderDraftPane();
-                        }, { className: 'is-sm', renderIcon: icon, disabled })
-                        : null)),
-            h('div', { class: 'sdlens-grid-2' },
-                formField(i18n('Outfit name'), h('input', {
-                    type: 'text',
-                    class: 'sdlens-input',
-                    value: outfit.name,
-                    disabled,
-                    dataset: { sdBuilderOutfitField: 'name' },
-                    onInput: e => { draft.edit(`outfits.${outfit.id}.name`, e.target.value); },
-                })),
-                formField(i18n('Outfit tags (comma-separated)'), h('input', {
-                    type: 'text',
-                    class: 'sdlens-input',
-                    value: (outfit.tags || []).join(', '),
-                    disabled,
-                    dataset: { sdBuilderOutfitField: 'tags' },
-                    onInput: e => { draft.edit(`outfits.${outfit.id}.tags`, parseCsvList(e.target.value)); },
-                }))),
-            formField(i18n('Outfit prose description'), (() => {
-                const ta = h('textarea', {
-                    class: 'sdlens-textarea',
-                    disabled,
-                    dataset: { sdBuilderOutfitField: 'prose' },
-                    onInput: e => { draft.edit(`outfits.${outfit.id}.prose`, e.target.value); },
-                });
-                ta.value = outfit.prose || '';
-                return ta;
-            })()),
-            h('div', { class: 'sdlens-ref-strip' },
-                (outfit.referenceImages || []).map((imgPath, refIdx) => h('div', {
+        const refGrid = refs.length === 0
+            ? h('div', { class: 'sdlens-ref-empty', text: i18n('No reference images added yet.') })
+            : h('div', { class: 'sdlens-ref-strip' },
+                refs.map((entry, idx) => h('div', {
                     class: 'sdlens-ref-item',
-                    dataset: { sdRole: 'builder-ref-item', imagePath: imgPath },
+                    dataset: { sdRole: 'builder-ref-item', imagePath: entry.path },
                 },
-                createManagedThumbnail(imgPath, outfit.name || 'Reference'),
-                h('button', {
-                    type: 'button',
-                    class: 'sdlens-ref-remove',
-                    title: i18n('Remove'),
-                    disabled,
-                    dataset: { sdRole: 'builder-ref-remove' },
-                    onClick: () => {
-                        const current = draft.getSnapshot();
-                        const nextOutfits = current.outfits.map(item => (
-                            item.id === outfit.id
-                                ? { ...item, referenceImages: item.referenceImages.filter((_, i) => i !== refIdx) }
-                                : item
-                        ));
-                        draft.edit('outfits', nextOutfits);
-                        renderDraftPane();
-                    },
-                }, icon('x', { size: 12 }))))),
-            h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' } },
-                uploadBtn,
-                fileInput));
+                h('div', { class: 'sdlens-ref-thumb' },
+                    createManagedThumbnail(entry.path, entry.label || 'Reference'),
+                    h('button', {
+                        type: 'button',
+                        class: 'sdlens-ref-remove',
+                        title: i18n('Remove'),
+                        'aria-label': i18n('Remove'),
+                        disabled,
+                        dataset: { sdRole: 'builder-ref-remove' },
+                        onClick: () => {
+                            const current = draft.getSnapshot();
+                            const nextRefs = (current.referenceImages || []).filter((_, i) => i !== idx);
+                            draft.edit('referenceImages', nextRefs);
+                            renderDraftPane();
+                        },
+                    }, icon('x', { size: 12 }))),
+                h('div', { class: 'sdlens-ref-body' },
+                    h('input', {
+                        type: 'text',
+                        class: 'sdlens-input sdlens-ref-label',
+                        value: entry.label || '',
+                        placeholder: i18n('Reference label (e.g. default outfit, side view)'),
+                        'aria-label': i18n('Reference label'),
+                        disabled,
+                        dataset: { sdBuilderRefLabel: String(idx) },
+                        onInput: e => {
+                            draft.edit(`referenceImages.${idx}.label`, e.target.value);
+                        },
+                    })))));
+
+        return h('section', { class: 'sdlens-refs-section' },
+            sectionTitle(i18n('Reference images')),
+            refGrid,
+            h('div', { class: 'sdlens-ref-controls' }, uploadBtn, fileInput));
     }
 
     function renderDraftPane() {
@@ -438,22 +400,14 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
             put(draftPaneEl, conflictsBlock);
         }
 
-        const addOutfitBtn = button(i18n('Add outfit'), () => {
-            const current = draft.getSnapshot();
-            const nextOutfits = [
-                ...current.outfits,
-                {
-                    id: makeIllustrationId('outfit'),
-                    name: `Outfit ${current.outfits.length + 1}`,
-                    tags: [],
-                    prose: '',
-                    referenceImages: [],
-                },
-            ];
-            draft.edit('outfits', nextOutfits);
-            renderDraftPane();
-        }, { small: true, iconName: 'plus', renderIcon: icon, disabled });
-        addOutfitBtn.dataset.sdRole = 'builder-add-outfit';
+        const descTextarea = h('textarea', {
+            class: 'sdlens-textarea sdlens-description-textarea',
+            placeholder: i18n('Describe appearance, Danbooru character tag if applicable, outfits, and visual notes…'),
+            disabled,
+            dataset: { sdBuilderField: 'description' },
+            onInput: e => { draft.edit('description', e.target.value); },
+        });
+        descTextarea.value = snapshot.description || '';
 
         put(draftPaneEl,
             sectionTitle(i18n('Editable profile draft')),
@@ -482,35 +436,8 @@ export async function openCharacterBuilderDialog({ app, initialProfile = null, o
                     dataset: { sdBuilderField: 'sourceWork' },
                     onInput: e => { draft.edit('sourceWork', e.target.value); },
                 }))),
-            h('div', { class: 'sdlens-grid-2' },
-                formField(i18n('Core appearance tags (comma-separated)'), h('input', {
-                    type: 'text',
-                    class: 'sdlens-input',
-                    value: (snapshot.canonicalTags || []).join(', '),
-                    disabled,
-                    dataset: { sdBuilderField: 'canonicalTags' },
-                    onInput: e => { draft.edit('canonicalTags', parseCsvList(e.target.value)); },
-                })),
-                formField(i18n('Negative tags (comma-separated)'), h('input', {
-                    type: 'text',
-                    class: 'sdlens-input',
-                    value: (snapshot.negativeTags || []).join(', '),
-                    disabled,
-                    dataset: { sdBuilderField: 'negativeTags' },
-                    onInput: e => { draft.edit('negativeTags', parseCsvList(e.target.value)); },
-                }))),
-            formField(i18n('Natural language appearance description'), (() => {
-                const ta = h('textarea', {
-                    class: 'sdlens-textarea',
-                    disabled,
-                    dataset: { sdBuilderField: 'proseDescription' },
-                    onInput: e => { draft.edit('proseDescription', e.target.value); },
-                });
-                ta.value = snapshot.proseDescription || '';
-                return ta;
-            })()),
-            sectionTitle(i18n('Outfits & reference sheets'), addOutfitBtn),
-            ...snapshot.outfits.map((outfit, idx) => renderDraftOutfit(snapshot, outfit, idx)));
+            formField(i18n('Character visual description'), descTextarea),
+            renderDraftReferences(snapshot));
     }
 
     function renderFooter() {

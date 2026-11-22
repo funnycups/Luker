@@ -17,19 +17,10 @@ function makeInitialProfile(overrides = {}) {
         name: 'Iris',
         aliases: ['Lamplighter'],
         sourceWork: 'Harbor Tales',
-        canonicalTags: ['silver_hair', 'amber_eyes'],
-        negativeTags: ['blurry'],
-        proseDescription: 'A calm archivist with silver hair.',
-        outfits: [
-            {
-                id: 'outfit_default',
-                name: 'Archivist Coat',
-                tags: ['navy_coat'],
-                prose: 'Long navy coat with brass buttons.',
-                referenceImages: ['/user/images/_references/iris_existing.png'],
-            },
+        description: 'A calm archivist with silver hair, amber eyes, and a long navy coat with brass buttons.',
+        referenceImages: [
+            { path: '/user/images/_references/iris_existing.png', label: 'Archivist Coat' },
         ],
-        defaultOutfitId: 'outfit_default',
         createdAt: 1000,
         updatedAt: 1000,
         ...overrides,
@@ -43,26 +34,25 @@ describe('dialog-draft', () => {
         const turn = draft.beginTurn();
 
         const result = draft.applyAgentPatch({
-            canonical_tags: ['silver_hair', 'crimson_eyes'],
+            description: 'A calm archivist with silver hair and crimson eyes in a long navy coat.',
         }, turn);
 
         expect(result.conflicts).toEqual([]);
-        expect(result.changes.map(item => item.path)).toEqual(['canonicalTags']);
+        expect(result.changes.map(item => item.path)).toEqual(['description']);
 
         const snapshot = draft.getSnapshot();
-        expect(snapshot.canonicalTags).toEqual(['silver_hair', 'crimson_eyes']);
+        expect(snapshot.description).toBe('A calm archivist with silver hair and crimson eyes in a long navy coat.');
         expect(snapshot.name).toBe('Iris');
         expect(snapshot.aliases).toEqual(['Lamplighter']);
         expect(snapshot.sourceWork).toBe('Harbor Tales');
-        expect(snapshot.negativeTags).toEqual(['blurry']);
-        expect(snapshot.proseDescription).toBe('A calm archivist with silver hair.');
-        expect(snapshot.outfits).toEqual(seed.outfits);
-        expect(snapshot.defaultOutfitId).toBe('outfit_default');
+        expect(snapshot.referenceImages).toEqual(seed.referenceImages);
 
         // Mutating snapshot or original seed must not alias internal draft state.
-        snapshot.canonicalTags.push('mutated');
+        snapshot.referenceImages.push({ path: '/mutated.png', label: 'Mutated' });
         seed.name = 'Mutated Seed';
-        expect(draft.getSnapshot().canonicalTags).toEqual(['silver_hair', 'crimson_eyes']);
+        expect(draft.getSnapshot().referenceImages).toEqual([
+            { path: '/user/images/_references/iris_existing.png', label: 'Archivist Coat' },
+        ]);
         expect(draft.getSnapshot().name).toBe('Iris');
     });
 
@@ -71,52 +61,45 @@ describe('dialog-draft', () => {
         const turn = draft.beginTurn();
 
         draft.edit('name', '手动名称');
-        draft.edit('outfits', [
-            {
-                id: 'outfit_default',
-                name: 'Archivist Coat',
-                tags: ['navy_coat'],
-                prose: 'Long navy coat with brass buttons.',
-                referenceImages: [],
-            },
-        ]);
+        draft.edit('referenceImages', []);
 
         const result = draft.applyAgentPatch({
             name: '候选名称',
             source_work: 'Updated Setting',
-            outfits: [
-                {
-                    id: 'outfit_default',
-                    name: 'Archivist Coat',
-                    tags: ['navy_coat'],
-                    prose: 'Long navy coat with brass buttons.',
-                    reference_images: ['/user/images/_references/iris_existing.png'],
-                },
+            reference_images: [
+                { path: '/user/images/_references/iris_existing.png', label: 'Archivist Coat' },
             ],
         }, turn);
 
-        expect(result.conflicts.map(c => c.path)).toEqual(['name', 'outfits']);
+        expect(result.conflicts.map(c => c.path)).toEqual(['name', 'referenceImages']);
         expect(draft.getSnapshot().name).toBe('手动名称');
         // Deleted reference image must not be restored by stale agent patch.
-        expect(draft.getSnapshot().outfits[0].referenceImages).toEqual([]);
+        expect(draft.getSnapshot().referenceImages).toEqual([]);
         // Uncontested sibling field still merges cleanly.
         expect(draft.getSnapshot().sourceWork).toBe('Updated Setting');
         expect(draft.getConflicts()).toHaveLength(2);
 
         const nameConflict = result.conflicts.find(c => c.path === 'name');
-        const outfitsConflict = result.conflicts.find(c => c.path === 'outfits');
+        const refsConflict = result.conflicts.find(c => c.path === 'referenceImages');
 
         draft.resolveConflict(nameConflict.id, 'keep_manual');
         expect(draft.getSnapshot().name).toBe('手动名称');
-        expect(draft.getConflicts().map(c => c.path)).toEqual(['outfits']);
+        expect(draft.getConflicts().map(c => c.path)).toEqual(['referenceImages']);
 
-        draft.resolveConflict(outfitsConflict.id, 'accept_agent');
-        expect(draft.getSnapshot().outfits[0].referenceImages).toEqual(['/user/images/_references/iris_existing.png']);
+        draft.resolveConflict(refsConflict.id, 'accept_agent');
+        expect(draft.getSnapshot().referenceImages).toEqual([
+            { path: '/user/images/_references/iris_existing.png', label: 'Archivist Coat' },
+        ]);
         expect(draft.getConflicts()).toEqual([]);
+
+        // Sub-path label editing updates label and increments manual revision cleanly.
+        draft.edit('referenceImages.0.label', 'Updated Coat Label');
+        expect(draft.getSnapshot().referenceImages[0].label).toBe('Updated Coat Label');
 
         // Subsequent turn snapshot carries manual edits forward.
         const nextTurn = draft.beginTurn();
         expect(nextTurn.profile.name).toBe('手动名称');
+        expect(nextTurn.profile.referenceImages[0].label).toBe('Updated Coat Label');
     });
 
     test('allowsRepeatedAgentUpdatesWithinTurn', () => {
@@ -125,21 +108,19 @@ describe('dialog-draft', () => {
 
         const first = draft.applyAgentPatch({
             name: 'Candidate One',
-            canonical_tags: ['short_hair'],
+            description: 'Short hair.',
         }, turn);
         expect(first.conflicts).toEqual([]);
         expect(draft.getSnapshot().name).toBe('Candidate One');
 
         const second = draft.applyAgentPatch({
             name: 'Candidate Refined',
-            canonical_tags: ['short_hair', 'green_eyes'],
-            prose_description: 'Refined description.',
+            description: 'Short hair, green eyes. Refined description.',
         }, turn);
         expect(second.conflicts).toEqual([]);
         expect(draft.getConflicts()).toEqual([]);
         expect(draft.getSnapshot().name).toBe('Candidate Refined');
-        expect(draft.getSnapshot().canonicalTags).toEqual(['short_hair', 'green_eyes']);
-        expect(draft.getSnapshot().proseDescription).toBe('Refined description.');
+        expect(draft.getSnapshot().description).toBe('Short hair, green eyes. Refined description.');
     });
 
     test('keepsDraftAfterFailedSave', async () => {
@@ -147,15 +128,7 @@ describe('dialog-draft', () => {
         const draft = createCharacterDraft(initial);
         const tempPath = '/user/images/_sandbox_tmp/sess-1/draft_1.png';
         draft.edit('name', 'Iris Revised');
-        draft.edit('outfits', [
-            {
-                id: 'outfit_default',
-                name: 'Archivist Coat',
-                tags: ['navy_coat'],
-                prose: 'Long navy coat.',
-                referenceImages: [tempPath],
-            },
-        ]);
+        draft.edit('referenceImages', [{ path: tempPath, label: 'Draft Coat' }]);
 
         const store = {
             upsertProfile: jest.fn(async () => {
@@ -193,7 +166,7 @@ describe('dialog-draft', () => {
         expect(tracker.cleanup).not.toHaveBeenCalled();
         // Draft and temporary staged path stay intact for retry.
         expect(draft.getSnapshot().name).toBe('Iris Revised');
-        expect(draft.getSnapshot().outfits[0].referenceImages).toEqual([tempPath]);
+        expect(draft.getSnapshot().referenceImages).toEqual([{ path: tempPath, label: 'Draft Coat' }]);
     });
 
     test('commitsOnlyRetainedImages', async () => {
@@ -204,28 +177,15 @@ describe('dialog-draft', () => {
         const turn = draft.beginTurn();
         draft.applyAgentPatch({
             name: 'Nora',
-            outfits: [
-                {
-                    id: 'outfit_default',
-                    name: 'Default',
-                    tags: ['red_scarf'],
-                    prose: 'Warm red scarf.',
-                    reference_images: [removedTemp, retainedTemp],
-                },
+            description: 'Warm red scarf.',
+            reference_images: [
+                { path: removedTemp, label: 'Discarded' },
+                { path: retainedTemp, label: 'Red Scarf' },
             ],
-            default_outfit_id: 'outfit_default',
         }, turn);
 
         // User removes discarded temp image before confirming.
-        draft.edit('outfits', [
-            {
-                id: 'outfit_default',
-                name: 'Default',
-                tags: ['red_scarf'],
-                prose: 'Warm red scarf.',
-                referenceImages: [retainedTemp],
-            },
-        ]);
+        draft.edit('referenceImages', [{ path: retainedTemp, label: 'Red Scarf' }]);
 
         const store = createSandboxProfileStore([]);
         const upsertSpy = jest.spyOn(store, 'upsertProfile');
@@ -258,10 +218,8 @@ describe('dialog-draft', () => {
         expect(upsertSpy).toHaveBeenCalledWith(
             expect.objectContaining({
                 name: 'Nora',
-                outfits: [
-                    expect.objectContaining({
-                        referenceImages: ['/user/images/_references/promo-2-0.png'],
-                    }),
+                referenceImages: [
+                    { path: '/user/images/_references/promo-2-0.png', label: 'Red Scarf' },
                 ],
             }),
             expect.any(Number),
@@ -269,7 +227,9 @@ describe('dialog-draft', () => {
         );
         expect(tracker.complete).toHaveBeenCalledWith('promo-2');
         expect(tracker.rollback).not.toHaveBeenCalled();
-        expect(committed.saved.outfits[0].referenceImages).toEqual(['/user/images/_references/promo-2-0.png']);
+        expect(committed.saved.referenceImages).toEqual([
+            { path: '/user/images/_references/promo-2-0.png', label: 'Red Scarf' },
+        ]);
 
         // Text-only save still authorizes an empty promotion batch.
         const textDraft = createCharacterDraft(null);
@@ -361,6 +321,7 @@ describe('runCharacterBuilderTurn', () => {
                     };
                 }
                 if (round === 2) {
+                    const genResult = JSON.parse(opts.taskMessages.findLast(m => m.role === 'tool').content);
                     return {
                         assistantText: 'Staging profile draft.',
                         toolCalls: [
@@ -368,16 +329,10 @@ describe('runCharacterBuilderTurn', () => {
                                 id: 'call_stage_1',
                                 name: 'stage_character_profile',
                                 args: {
-                                    canonical_tags: ['silver_hair', 'amber_eyes'],
-                                    outfits: [
-                                        {
-                                            id: 'outfit_default',
-                                            name: 'Default',
-                                            tags: ['navy_coat'],
-                                            reference_images: ['/user/images/_sandbox_tmp/sess-a/gen_1.png'],
-                                        },
+                                    description: 'Silver hair, amber eyes, navy coat.',
+                                    reference_images: [
+                                        { path: genResult.image_id, label: 'Navy Coat' },
                                     ],
-                                    default_outfit_id: 'outfit_default',
                                 },
                             },
                         ],
@@ -416,8 +371,10 @@ describe('runCharacterBuilderTurn', () => {
         expect(result.finalText).toBe('Draft updated with generated portrait.');
         expect(upsertSpy).not.toHaveBeenCalled();
         expect(draft.getSnapshot().name).toBe('Manual Seed Name');
-        expect(draft.getSnapshot().canonicalTags).toEqual(['silver_hair', 'amber_eyes']);
-        expect(draft.getSnapshot().outfits[0].referenceImages).toEqual(['/user/images/_sandbox_tmp/sess-a/gen_1.png']);
+        expect(draft.getSnapshot().description).toBe('Silver hair, amber eyes, navy coat.');
+        expect(draft.getSnapshot().referenceImages).toEqual([
+            { path: '/user/images/_sandbox_tmp/sess-a/gen_1.png', label: 'Navy Coat' },
+        ]);
 
         // Round 1 tool surface: no card/persona/lorebook tools when sourcePolicy is none, and never save_character_profile.
         const toolNames = recordedCalls[0].tools.map(t => t.function.name);

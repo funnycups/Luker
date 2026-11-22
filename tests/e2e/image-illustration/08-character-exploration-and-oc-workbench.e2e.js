@@ -59,11 +59,11 @@ async function openBuilderDialog(page) {
     return dialog;
 }
 
-function readIllustrationSettings() {
-    return JSON.parse(readFileSync(join(server.dataRoot, 'default-user/settings.json'), 'utf8')).extension_settings.sd.illustration;
+function readSdSettings() {
+    return JSON.parse(readFileSync(join(server.dataRoot, 'default-user/settings.json'), 'utf8')).extension_settings.sd;
 }
 
-async function configureSourceConnection(page, { visualInspection = true, illustrationEnabled = false } = {}) {
+async function configureSourceConnection(page, { visualInspection = true, illustrationEnabled = false, characterReferenceEnabled = false } = {}) {
     await page.locator('#API-status-top').click();
     await page.locator('#main_api').selectOption('openai');
     await page.locator('#chat_completion_source').selectOption('custom');
@@ -80,6 +80,12 @@ async function configureSourceConnection(page, { visualInspection = true, illust
     await page.locator('#API-status-top').click();
 
     await openExtensionsDrawer(page);
+    if (characterReferenceEnabled) {
+        await openInlineDrawer(page, 'sd_container');
+        await page.locator('#sd_character_reference_enabled').setChecked(true);
+        await expect(page.locator('#sd_character_reference_mode')).toBeVisible();
+        await page.locator('#sd_character_reference_mode').selectOption('text_only');
+    }
     await openInlineDrawer(page, 'sd_illustration_container');
     await page.locator('#sd_illustration_enabled').setChecked(illustrationEnabled);
     await page.locator('#sd_illustration_api_preset').selectOption({ label: profileName });
@@ -93,9 +99,16 @@ async function configureSourceConnection(page, { visualInspection = true, illust
     await page.locator('#sd_illustration_exploration_llm_preset').selectOption({ label: completionPreset });
     await page.locator('#sd_illustration_visual_inspection').setChecked(visualInspection);
     await expect.poll(() => {
-        const settings = readIllustrationSettings();
-        return settings.presets.find(preset => preset.id === settings.currentPresetId).explorationLlm;
-    }).toEqual({ apiPresetName: profileName, llmPresetName: completionPreset });
+        const sd = readSdSettings();
+        const settings = sd.illustration;
+        return {
+            explorationLlm: settings.presets.find(preset => preset.id === settings.currentPresetId).explorationLlm,
+            ...(characterReferenceEnabled ? { characterRef: Boolean(sd.character_reference_enabled) } : {}),
+        };
+    }).toEqual({
+        explorationLlm: { apiPresetName: profileName, llmPresetName: completionPreset },
+        ...(characterReferenceEnabled ? { characterRef: true } : {}),
+    });
     await closeAnyOpenTopSettingsDrawer(page);
 }
 
@@ -195,11 +208,7 @@ test('partial draft updates retain fields the builder agent did not edit', async
                     name: initialName,
                     aliases: ['Wanderer'],
                     source_work: 'Independent setting',
-                    canonical_tags: ['silver_hair'],
-                    negative_tags: ['extra_limbs'],
-                    prose_description: 'A traveler with silver hair.',
-                    outfits: [{ id: 'outfit_travel', name: 'Travel outfit', tags: ['blue_coat'], prose: 'A blue travel coat.' }],
-                    default_outfit_id: 'outfit_travel',
+                    description: 'Silver hair. A traveler wearing a blue travel coat.',
                 },
             };
         }
@@ -225,18 +234,15 @@ test('partial draft updates retain fields the builder agent did not edit', async
         name: revisedName,
         aliases: ['Wanderer'],
         sourceWork: 'Independent setting',
-        canonicalTags: ['silver_hair'],
-        negativeTags: ['extra_limbs'],
-        proseDescription: 'A traveler with silver hair.',
-        outfits: [{ id: 'outfit_travel', name: 'Travel outfit', tags: ['blue_coat'], prose: 'A blue travel coat.' }],
-        defaultOutfitId: 'outfit_travel',
+        description: 'Silver hair. A traveler wearing a blue travel coat.',
+        referenceImages: [],
     });
 });
 
 for (const directory of ['_sandbox_tmp', '_SANDBOX_TMP']) {
     test(`formal background profiles reject ${directory} references until images are promoted`, async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
-        await configureSourceConnection(page, { illustrationEnabled: true });
+        await configureSourceConnection(page, { illustrationEnabled: true, characterReferenceEnabled: true });
         await importSourceCard(page, `Background Card ${randomUUID()}`, '');
 
         const profileId = `temporary_reference_${randomUUID()}`;
@@ -265,7 +271,7 @@ for (const directory of ['_sandbox_tmp', '_SANDBOX_TMP']) {
                         arguments: {
                             id: profileId,
                             name: 'Uncommitted visual draft',
-                            outfits: [{ id: 'draft_outfit', name: 'Draft outfit', reference_images: [temporaryPath] }],
+                            reference_images: [{ path: temporaryPath, label: 'Draft' }],
                         },
                     };
                 }
@@ -355,9 +361,8 @@ test('a selected source reads only its saved books while another card draft is o
                 tool: 'stage_character_profile',
                 arguments: {
                     name: profileName,
-                    canonical_tags: ['silver_hair', 'amber_eyes'],
-                    outfits: [{ id: 'outfit_source', name: 'Travel outfit', reference_images: [image.imagePath] }],
-                    default_outfit_id: 'outfit_source',
+                    description: 'Silver hair, amber eyes.',
+                    reference_images: [{ path: image.imagePath, label: 'Travel outfit' }],
                 },
             };
         }
@@ -393,7 +398,8 @@ test('a selected source reads only its saved books while another card draft is o
     const saved = Object.values(await readProfiles(page)).find(p => p.name === profileName);
     expect(saved).toBeTruthy();
     expect(saved).not.toHaveProperty('sourceCardAvatars');
-    const imagePath = saved.outfits[0].referenceImages[0];
+    expect(saved.referenceImages[0].label).toBe('Travel outfit');
+    const imagePath = saved.referenceImages[0].path;
     expect(imagePath).toMatch(/^\/user\/images\/_references\//);
     expect(existsSync(join(server.dataRoot, 'default-user', imagePath.replace(/^\//, '')))).toBe(true);
 });
@@ -444,10 +450,10 @@ async function editInAnotherPage(context, profile) {
     await awaitMainUI(other, server.baseURL);
     const archive = await openArchive(other);
     await archive.locator(`[data-profile-id="${profile.id}"]`).click();
-    await archive.locator('[data-sd-field="canonical-tags"]').fill('silver_hair, amber_eyes');
+    await archive.locator('[data-sd-field="profile-description"]').fill('Silver hair, amber eyes.');
     await archive.locator('[data-sd-role="save-profile"]').click();
-    await expect.poll(async () => (await readProfiles(other))[profile.id]?.canonicalTags)
-        .toEqual(['silver_hair', 'amber_eyes']);
+    await expect.poll(async () => (await readProfiles(other))[profile.id]?.description)
+        .toBe('Silver hair, amber eyes.');
     return other;
 }
 

@@ -115,11 +115,12 @@ export function formatCandidatesAsGrepLines(source, candidates = []) {
     return candidates.map((item, idx) => {
         const fields = [`${idx + 1}: [${source}] ${normalizeSpace(item.name || 'Unknown')}`];
         if (item.work) fields.push(`work=${normalizeSpace(item.work)}`);
+        if (item.characterTag) fields.push(`character_tag=${normalizeSpace(item.characterTag)}`);
         if (Array.isArray(item.aliases) && item.aliases.length > 0) {
             fields.push(`aliases=${item.aliases.join(',')}`);
         }
-        if (Array.isArray(item.canonicalTags) && item.canonicalTags.length > 0) {
-            fields.push(`tags=${item.canonicalTags.join(',')}`);
+        if (Array.isArray(item.tags) && item.tags.length > 0) {
+            fields.push(`tags=${item.tags.join(',')}`);
         }
         if (Array.isArray(item.imageUrls) && item.imageUrls.length > 0) {
             fields.push(`images=${item.imageUrls.join(',')}`);
@@ -167,7 +168,7 @@ async function searchBangumiCharacters({ query, work = '' }) {
             name: String(row?.name || query),
             aliases: uniqueAliases,
             work: String(work || ''),
-            canonicalTags: [],
+            tags: [],
             imageUrls: [...new Set(imageUrls)],
             pageUrl: row?.id ? `https://bgm.tv/character/${row.id}` : '',
             summary: normalizeSpace(row?.summary || ''),
@@ -223,7 +224,7 @@ async function searchMediaWikiCharacters({ query, work = '', wikiHost = 'en.wiki
             name: String(page?.title || query),
             aliases: [],
             work: String(work || host),
-            canonicalTags: [],
+            tags: [],
             imageUrls: [...new Set(imageUrls)],
             pageUrl: String(page?.fullurl || `https://${host}/wiki/${encodeURIComponent(String(page?.title || '').replace(/\s+/g, '_'))}`),
             summary: normalizeSpace(page?.extract || ''),
@@ -299,7 +300,7 @@ async function searchBooruCharacters({ query, work = '', booruSite = 'safebooru'
     }
 
     const minOccurrences = posts.length >= 2 ? 2 : 1;
-    const canonicalTags = [...tagCounts.entries()]
+    const tags = [...tagCounts.entries()]
         .filter(([, count]) => count >= minOccurrences)
         .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
         .map(([tag]) => tag);
@@ -313,7 +314,8 @@ async function searchBooruCharacters({ query, work = '', booruSite = 'safebooru'
         name: query,
         aliases: charTag !== query ? [charTag] : [],
         work: detectedWork,
-        canonicalTags,
+        characterTag: charTag,
+        tags,
         imageUrls,
         pageUrl,
         summary: `Aggregated from ${posts.length} ${isDanbooru ? 'Danbooru' : 'Safebooru'} solo posts.`,

@@ -45,7 +45,7 @@ describe('explicit character source policy', () => {
     ])('profile saves reject unmanaged references before storage: %s', async (path) => {
         await expect(executeExplorationToolCall({
             name: 'save_character_profile',
-            args: { name: 'Requested profile', outfits: [{ reference_images: [path] }] },
+            args: { name: 'Requested profile', reference_images: [{ path }] },
         }, { sourcePolicy: cardPolicy })).rejects.toThrow('not_allowed');
     });
 
@@ -54,10 +54,8 @@ describe('explicit character source policy', () => {
             name: 'save_character_profile',
             args: {
                 name: 'Requested profile',
-                outfits: [{
-                    referenceImages: ['/characters/unselected-source.png'],
-                    reference_images: ['/user/images/_references/managed.png'],
-                }],
+                referenceImages: [{ path: '/characters/unselected-source.png' }],
+                reference_images: [{ path: '/user/images/_references/managed.png' }],
             },
         }, { sourcePolicy: cardPolicy })).rejects.toThrow('not_allowed');
     });

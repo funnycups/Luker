@@ -160,7 +160,7 @@ test.describe.serial('transient media sessions via character builder dialog', ()
             const profiles = await readProfiles(pageB);
             const saved = Object.values(profiles).find(p => p.name === profileName);
             expect(saved).toBeTruthy();
-            const promotedPath = saved.outfits[0].referenceImages[0];
+            const promotedPath = saved.referenceImages[0].path;
             expect(promotedPath).toMatch(/^\/user\/images\/_references\//);
             expect(existsSync(join(server.dataRoot, 'default-user', promotedPath.replace(/^\//, '')))).toBe(true);
         } finally {
@@ -193,12 +193,9 @@ test.describe.serial('transient media sessions via character builder dialog', ()
                     tool: 'stage_character_profile',
                     arguments: {
                         name: 'Cancelled Comfy Candidate',
-                        outfits: [
-                            {
-                                id: 'outfit_default',
-                                name: 'Default',
-                                reference_images: [parsed.imagePath],
-                            },
+                        description: 'Silver hair, studio portrait.',
+                        reference_images: [
+                            { path: parsed.imagePath, label: 'Studio portrait' },
                         ],
                     },
                 };
@@ -260,7 +257,7 @@ test.describe.serial('transient media sessions via character builder dialog', ()
 
         const saved = Object.values(await readProfiles(page)).find(p => p.name === profileName);
         expect(saved).toBeTruthy();
-        expect(saved.outfits[0].referenceImages[0]).toMatch(/^\/user\/images\/_references\//);
+        expect(saved.referenceImages[0].path).toMatch(/^\/user\/images\/_references\//);
     });
 
     test('cleanup failure displays retryable error and closes cleanly once retried', async ({ page }) => {

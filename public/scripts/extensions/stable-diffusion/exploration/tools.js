@@ -41,7 +41,7 @@ export function buildExplorationToolDefs({ sourcePolicy = { kind: 'none' } } = {
             type: 'function',
             function: {
                 name: EXPLORATION_TOOL_NAMES.READ_CHARACTER_PROFILES,
-                description: 'Read full visual profile details (tags, prose, outfits, reference image paths) by profile IDs.',
+                description: 'Read full visual profile details (description and reference image paths) by profile IDs.',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -61,7 +61,7 @@ export function buildExplorationToolDefs({ sourcePolicy = { kind: 'none' } } = {
             type: 'function',
             function: {
                 name: EXPLORATION_TOOL_NAMES.SEARCH_CHARACTER_SOURCES,
-                description: 'Search public character art databases (bangumi, mediawiki, booru) or general web image search (web) for official portraits and canonical visual tags.',
+                description: 'Search public character art databases (bangumi, mediawiki, booru) or general web image search (web) for official portraits, appearance details, and Danbooru character tags.',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -146,45 +146,29 @@ export function buildExplorationToolDefs({ sourcePolicy = { kind: 'none' } } = {
                         name: { type: 'string', description: 'Canonical character display name.' },
                         aliases: { type: 'array', items: { type: 'string' } },
                         source_work: { type: 'string', description: 'Source franchise / work title, or empty for original characters.' },
-                        canonical_tags: {
-                            type: 'array',
-                            items: { type: 'string' },
-                            description: 'Stable core appearance tags (hair, eyes, build, species traits).',
-                        },
-                        negative_tags: {
-                            type: 'array',
-                            items: { type: 'string' },
-                            description: 'Optional negative tags to avoid common visual mistakes.',
-                        },
-                        prose_description: {
+                        description: {
                             type: 'string',
-                            description: 'Concise natural-language appearance description for multimodal/prose image models.',
+                            description: 'Structured plain-text visual description (appearance, attire variants, distinguishing traits, and Danbooru character tag if one exists).',
                         },
-                        outfits: {
+                        reference_images: {
                             type: 'array',
+                            description: 'Verified /user/images/_references/... portraits with optional short labels.',
                             items: {
                                 type: 'object',
                                 properties: {
-                                    id: { type: 'string' },
-                                    name: { type: 'string' },
-                                    tags: { type: 'array', items: { type: 'string' } },
-                                    prose: { type: 'string' },
-                                    reference_images: {
-                                        type: 'array',
-                                        items: { type: 'string' },
-                                        description: 'Verified /user/images/_references/... paths from fetch_reference_image.',
+                                    path: {
+                                        type: 'string',
+                                        description: 'Verified /user/images/_references/... path from fetch_reference_image.',
                                     },
-                                    referenceImages: {
-                                        type: 'array',
-                                        items: { type: 'string' },
-                                        description: 'Verified /user/images/_references/... paths from fetch_reference_image.',
+                                    label: {
+                                        type: 'string',
+                                        description: 'Optional short portrait label (e.g. default attire, battle attire, close-up).',
                                     },
                                 },
-                                required: ['name'],
+                                required: ['path'],
                                 additionalProperties: false,
                             },
                         },
-                        default_outfit_id: { type: 'string' },
                     },
                     required: ['name'],
                     additionalProperties: false,
@@ -286,8 +270,14 @@ export async function executeExplorationToolCall(call, {
     }
 
     if (name === EXPLORATION_TOOL_NAMES.SAVE_CHARACTER_PROFILE) {
-        for (const outfit of args.outfits ?? []) {
-            for (const imagePath of outfit.referenceImages ?? outfit.reference_images ?? []) {
+        const hasRefImages = Object.hasOwn(args, 'referenceImages') || Object.hasOwn(args, 'reference_images');
+        const rawRefs = Object.hasOwn(args, 'referenceImages') ? args.referenceImages : args.reference_images;
+        if (hasRefImages) {
+            if (!Array.isArray(rawRefs)) {
+                throw new Error(`${name}: invalid_args — reference_images must be an array`);
+            }
+            for (const item of rawRefs) {
+                const imagePath = typeof item === 'string' ? item : item?.path;
                 assertSourceImagePath({ kind: 'none' }, imagePath, name);
             }
         }
@@ -297,13 +287,12 @@ export async function executeExplorationToolCall(call, {
             name: 'name',
             aliases: 'aliases',
             source_work: 'sourceWork',
-            canonical_tags: 'canonicalTags',
-            negative_tags: 'negativeTags',
-            prose_description: 'proseDescription',
-            outfits: 'outfits',
-            default_outfit_id: 'defaultOutfitId',
+            description: 'description',
         })) {
             if (Object.hasOwn(args, argument)) patch[field] = args[argument];
+        }
+        if (hasRefImages) {
+            patch.referenceImages = rawRefs;
         }
         const saved = await profileStore.upsertProfile(patch);
         return { ok: true, savedProfile: saved };

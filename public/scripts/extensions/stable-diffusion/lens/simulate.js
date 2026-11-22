@@ -167,10 +167,9 @@ async function loadImagePreviews(tracker, paths) {
 function collectProfileImagePaths(profiles) {
     const paths = [];
     for (const profile of Array.isArray(profiles) ? profiles : []) {
-        for (const outfit of Array.isArray(profile?.outfits) ? profile.outfits : []) {
-            for (const imagePath of Array.isArray(outfit?.referenceImages) ? outfit.referenceImages : []) {
-                if (imagePath) paths.push(imagePath);
-            }
+        for (const entry of Array.isArray(profile?.referenceImages) ? profile.referenceImages : []) {
+            const imagePath = typeof entry === 'string' ? entry.trim() : String(entry?.path || '').trim();
+            if (imagePath) paths.push(imagePath);
         }
     }
     return paths;

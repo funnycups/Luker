@@ -7804,4 +7804,13 @@
     ,"Reference configuration conflict": "參考圖配置衝突"
     ,"Checks whether active reference or img2img switches conflict with the current image backend or workflow": "檢查目前啟用的參考圖或圖生圖開關是否與生圖源或工作流衝突"
     ,"Reference settings conflict with the current image backend or workflow": "參考圖設定與目前生圖源或工作流存在衝突"
+    ,"${0} reference image(s)": "${0} 張參考圖"
+    ,"Character visual description": "角色說明"
+    ,"Describe appearance, Danbooru character tag if applicable, outfits, and visual notes…": "描述外貌特徵、適用的 Danbooru 角色名 tag、常見服裝與注意項…"
+    ,"Reference images": "參考圖"
+    ,"No reference images added yet.": "暫未新增參考圖。"
+    ,"Short label (optional)": "簡短說明（可選）"
+    ,"Reference label": "參考圖說明"
+    ,"Reference label (e.g. default outfit, side view)": "參考圖說明（如常服、側視圖）"
+    ,"Align character visual archive descriptions with bound lorebooks": "對照綁定世界書校準角色視覺庫說明"
 }
