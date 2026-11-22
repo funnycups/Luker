@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Buffer } from 'node:buffer';
+import { randomUUID } from 'node:crypto';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
@@ -8,6 +9,13 @@ import sanitize from 'sanitize-filename';
 import { clientRelativePath, removeFileExtension, getImages, isPathUnderParent } from '../util.js';
 import { MEDIA_EXTENSIONS, MEDIA_REQUEST_TYPE } from '../constants.js';
 import { appendMediaAttribution } from './media-attribution.js';
+import {
+    assertTransientMediaMutation,
+    deleteTransientImage,
+    getTransientSession,
+    TRANSIENT_MEDIA_DIRECTORY,
+    writeTransientImage,
+} from '../transient-sessions.js';
 
 /**
  * Ensure the directory for the provided file path exists.
@@ -53,13 +61,21 @@ router.post('/upload', async (request, response) => {
         if (!validFormat) {
             return response.status(400).send({ error: 'Invalid image format' });
         }
+        const transientSession = getTransientSession(request);
+        if (!transientSession && sanitize(String(request.body.ch_name || '')).toLowerCase() === TRANSIENT_MEDIA_DIRECTORY) {
+            return response.status(403).json({ error: 'The temporary media directory requires an owned session.' });
+        }
 
         // Constructing filename and path
         let filename;
         if (request.body.filename) {
             filename = `${removeFileExtension(request.body.filename)}.${format}`;
         } else {
-            filename = `${Date.now()}.${format}`;
+            filename = `${transientSession ? randomUUID() : Date.now()}.${format}`;
+        }
+        if (transientSession) {
+            const savedPath = await writeTransientImage(transientSession, sanitize(filename), Buffer.from(image, 'base64'));
+            return response.send({ path: savedPath });
         }
 
         // if character is defined, save to a sub folder for that character
@@ -82,7 +98,7 @@ router.post('/upload', async (request, response) => {
         response.send({ path: savedPath });
     } catch (error) {
         console.error(error);
-        response.status(500).send({ error: 'Failed to save the image' });
+        response.status(error.status || 500).send({ error: 'Failed to save the image', details: error.message });
     }
 });
 
@@ -99,6 +115,9 @@ router.post('/list/:folder?', (request, response) => {
 
         if (!request.body.folder) {
             return response.status(400).send({ error: 'No folder specified' });
+        }
+        if (sanitize(String(request.body.folder)).toLowerCase() === TRANSIENT_MEDIA_DIRECTORY) {
+            return response.status(403).send({ error: 'Temporary media cannot be listed in the gallery.' });
         }
 
         const directoryPath = path.join(request.user.directories.userImages, sanitize(request.body.folder));
@@ -129,7 +148,7 @@ router.post('/folders', (request, response) => {
         }
 
         const folders = fs.readdirSync(directoryPath, { withFileTypes: true })
-            .filter(dirent => dirent.isDirectory())
+            .filter(dirent => dirent.isDirectory() && dirent.name.toLowerCase() !== TRANSIENT_MEDIA_DIRECTORY)
             .map(dirent => dirent.name);
 
         return response.send(folders);
@@ -149,16 +168,21 @@ router.post('/delete', async (request, response) => {
         if (!isPathUnderParent(request.user.directories.userImages, pathToDelete)) {
             return response.status(400).send('Invalid path');
         }
+        const transientSession = assertTransientMediaMutation(request, pathToDelete);
 
         if (!fs.existsSync(pathToDelete)) {
             return response.status(404).send('File not found');
         }
 
-        fs.unlinkSync(pathToDelete);
+        if (transientSession) {
+            await deleteTransientImage(transientSession, pathToDelete);
+        } else {
+            fs.unlinkSync(pathToDelete);
+        }
         console.info(`Deleted image: ${request.body.path} from ${request.user.profile.handle}`);
         return response.sendStatus(200);
     } catch (error) {
         console.error(error);
-        return response.sendStatus(500);
+        return response.status(error.status || 500).send({ error: error.message });
     }
 });

@@ -10,6 +10,7 @@ import {
 import { getNamedDocRepo } from '../storage/index.js';
 import { assertSafeRepoName, assertSafeRepoNameShape } from '../storage/name-validation.js';
 import { sendJsonResource, sendResourceReadError } from '../http-resource-cache.js';
+import { runTransientStateWrite, TransientSessionError } from '../transient-sessions.js';
 
 const GLOBAL_STATE_BUCKET = 'globalStates';
 
@@ -150,9 +151,13 @@ router.post('/set', async function (request, response, next) {
             return response.status(400).send({ error: 'Expected body.data object.' });
         }
 
-        await getNamedDocRepo().save(request.user.profile.handle, GLOBAL_STATE_BUCKET, namespace, data);
+        await runTransientStateWrite(request, namespace, () =>
+            getNamedDocRepo().save(request.user.profile.handle, GLOBAL_STATE_BUCKET, namespace, data));
         return response.send({ ok: true });
     } catch (error) {
+        if (error instanceof TransientSessionError) {
+            return response.status(error.status).send({ error: error.message, code: error.code });
+        }
         if (error instanceof StorageReadOnlyError) {
             return next(error);
         }
@@ -183,18 +188,21 @@ router.post('/patch', async function (request, response, next) {
             return response.status(400).send({ error: 'No state patch operations found. Expected body.operations or body.operation.' });
         }
 
-        const result = await getNamedDocRepo().patch(
+        const result = await runTransientStateWrite(request, namespace, () => getNamedDocRepo().patch(
             request.user.profile.handle,
             GLOBAL_STATE_BUCKET,
             namespace,
             operations,
-        );
+        ));
         return response.send({
             ok: true,
             applied: result.applied,
             created: result.created,
         });
     } catch (error) {
+        if (error instanceof TransientSessionError) {
+            return response.status(error.status).send({ error: error.message, code: error.code });
+        }
         if (error instanceof StorageReadOnlyError) {
             return next(error);
         }
@@ -214,9 +222,13 @@ router.post('/delete', async function (request, response, next) {
             return response.status(400).send({ error: 'Expected body.namespace string.' });
         }
 
-        const deleted = await getNamedDocRepo().delete(request.user.profile.handle, GLOBAL_STATE_BUCKET, namespace);
+        const deleted = await runTransientStateWrite(request, null, () =>
+            getNamedDocRepo().delete(request.user.profile.handle, GLOBAL_STATE_BUCKET, namespace));
         return response.send({ ok: true, deleted });
     } catch (error) {
+        if (error instanceof TransientSessionError) {
+            return response.status(error.status).send({ error: error.message, code: error.code });
+        }
         if (error instanceof StorageReadOnlyError) {
             return next(error);
         }

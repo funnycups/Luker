@@ -117,6 +117,7 @@ import {
 } from './users.js';
 import { initStorage, getStorageEngine } from './storage/index.js';
 import { maybeFailFast } from './storage/fail-fast.js';
+import { recoverTransientSessions } from './transient-sessions.js';
 
 import getWebpackServeMiddleware from './middleware/webpack-serve.js';
 import basicAuthMiddleware from './middleware/basicAuth.js';
@@ -930,6 +931,7 @@ initUserStorage(globalThis.DATA_ROOT)
     // once and exit(1) on failure so the server doesn't accept traffic on a
     // broken storage stack. Default is false (lazy connect).
     .then(() => maybeFailFast(getStorageEngine(), getConfigValue('storage.failFast', false)))
+    .then(async () => recoverTransientSessions(await getUserDirectoriesList()))
     // Cross-mode restore scratch sweep — best-effort, runs in the background
     // so a slow disk doesn't block server start. Removes _xrestore_<id>
     // dirs under <dataRoot>/_storage-migrations/ older than 24h (left over

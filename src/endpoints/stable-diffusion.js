@@ -33,6 +33,7 @@ import { dispatchSdChatImage } from '../luker-dispatch/providers/sd/chat-image.j
 import { normalizeModelsUrl, resolveSdSecret } from '../luker-dispatch/providers/sd/sd-auth.js';
 import { createProxyBoundFetch, createRequestProxyAgent } from '../request-proxy.js';
 import { fetchComfyObjectInfo, inspectComfyNodes, searchComfyObjectInfo } from '../comfy-object-info.js';
+import { assertTransientMediaRead, trackTransientOperation } from '../transient-sessions.js';
 
 /**
  * Gets the comfy workflows.
@@ -595,18 +596,29 @@ comfy.post('/rename-workflow', getFileNameValidationFunction('old_name'), getFil
 
 comfy.post('/upload-references', async (request, response) => {
     try {
+        const refs = Array.isArray(request.body?.references) ? request.body.references : [];
+        let transientSession = null;
+        for (const entry of refs) {
+            if (entry && typeof entry.imagePath === 'string' && entry.imagePath.trim()) {
+                const owned = assertTransientMediaRead(request, entry.imagePath);
+                if (owned) transientSession = owned;
+            }
+        }
         const proxyFetch = createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy));
-        const filenames = await uploadComfyReferences({
+        const uploadPromise = uploadComfyReferences({
             directories: request.user?.directories,
             baseUrl: request.body?.url,
             auth: request.body?.auth,
             references: request.body?.references,
             fetchFn: proxyFetch,
         });
+        const filenames = transientSession
+            ? await trackTransientOperation(transientSession, uploadPromise)
+            : await uploadPromise;
         return response.json({ filenames });
     } catch (error) {
         console.error('ComfyUI reference upload failed:', error);
-        return response.status(400).send(String(error?.message || error));
+        return response.status(error?.status || 400).send(String(error?.message || error));
     }
 });
 

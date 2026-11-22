@@ -12,6 +12,7 @@ import { accountStorage } from './util/AccountStorage.js';
 import { SimpleMutex } from './util/SimpleMutex.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './state-errors.js';
 import { invalidateStateResources, readStateEnvelope } from './state-resource.js';
+import { transientSessionHeaders } from './lib/transient-session.js';
 import {
     formatHttpErrorHint,
     formatTransportErrorHint,
@@ -2643,10 +2644,11 @@ export async function getGlobalState(namespace) {
  * Write per-user global state for a given namespace.
  * @param {string} namespace - Storage namespace (e.g. 'my_extension')
  * @param {object} data - Plain object data to store
+ * @param {{transientSessionId?: string}} [options] - Optional media-session commit authority.
  * @returns {Promise<{ok: boolean, state?: object, reason?: string, hint?: string}>}
  *          Envelope: `{ok: true, state}` on success; `{ok: false, reason, hint}` on failure.
  */
-export async function setGlobalState(namespace, data) {
+export async function setGlobalState(namespace, data, options = {}) {
     const safeNamespace = normalizeGlobalStateNamespaceClient(namespace);
     if (!safeNamespace) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
@@ -2656,7 +2658,7 @@ export async function setGlobalState(namespace, data) {
     try {
         response = await fetch('/api/state/set', {
             method: 'POST',
-            headers: getRequestHeaders(),
+            headers: { ...getRequestHeaders(), ...transientSessionHeaders(options.transientSessionId) },
             body: JSON.stringify({ namespace: safeNamespace, data }),
             cache: 'no-cache',
         });
@@ -2687,9 +2689,10 @@ export async function setGlobalState(namespace, data) {
  *
  * @param {string} namespace - Storage namespace
  * @param {Array<object>} operations - RFC 6902 patch operations
+ * @param {{transientSessionId?: string}} [options] - Optional media-session commit authority.
  * @returns {Promise<{ok: boolean, applied?: number, created?: boolean, reason?: string, hint?: string}>}
  */
-export async function patchGlobalState(namespace, operations) {
+export async function patchGlobalState(namespace, operations, options = {}) {
     const safeNamespace = normalizeGlobalStateNamespaceClient(namespace);
     if (!safeNamespace) {
         return makeStateError(STATE_ERROR_REASONS.VALIDATION_ARGS,
@@ -2703,7 +2706,7 @@ export async function patchGlobalState(namespace, operations) {
     try {
         response = await fetch('/api/state/patch', {
             method: 'POST',
-            headers: getRequestHeaders(),
+            headers: { ...getRequestHeaders(), ...transientSessionHeaders(options.transientSessionId) },
             body: JSON.stringify({ namespace: safeNamespace, operations }),
             cache: 'no-cache',
         });
@@ -2805,6 +2808,7 @@ export async function getGlobalStateBatch(namespaces) {
  * @param {number} [options.maxOperations] - Cap on patch op count before falling back to a single replace op. Default 2000.
  * @param {number} [options.maxRetries] - Re-attempts on 409. Default 1.
  * @param {boolean} [options.asyncDiff] - When `false`, use the sync diff path (skips the worker).
+ * @param {string} [options.transientSessionId] - Optional media-session commit authority.
  * @returns {Promise<{ok: boolean, state?: object|null, updated?: boolean, created?: boolean, reason?: string, hint?: string}>}
  */
 export async function updateGlobalState(namespace, updater, options = {}) {
@@ -2861,7 +2865,7 @@ export async function updateGlobalState(namespace, updater, options = {}) {
             return makeStateOk({ state: nextState, updated: false });
         }
 
-        const patchResult = await patchGlobalState(safeNamespace, operations);
+        const patchResult = await patchGlobalState(safeNamespace, operations, options);
         if (patchResult.ok) {
             return makeStateOk({
                 state: nextState, updated: true, created: Boolean(patchResult.created),

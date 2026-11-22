@@ -17,6 +17,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Image generation
 
 - Show completed illustration images in the Run panel while the remaining images are still generating.
+- Added session-owned temporary image staging and cleanup.
 
 ### Themes
 

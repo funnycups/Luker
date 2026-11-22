@@ -10,6 +10,7 @@ import { clientRelativePath, isPathUnderParent } from '../util.js';
 import { extractLocalMediaPaths, resolveUserImagePath } from '../media-references.js';
 import { readCharacterFolderName, isCharacterFolderNameShared } from '../character-assets.js';
 import { MEDIA_ATTRIBUTION_NAMESPACE } from './media-attribution.js';
+import { assertTransientMediaMutation } from '../transient-sessions.js';
 
 export const router = express.Router();
 
@@ -227,9 +228,14 @@ router.post('/delete', async (request, response) => {
         }
         const userRoot = request.user.directories.root;
         const allowedRoots = [request.user.directories.userImages, request.user.directories.characters];
+        for (const rawPath of paths) {
+            if (typeof rawPath === 'string' && rawPath.startsWith('/')) {
+                assertTransientMediaMutation(request, path.normalize(path.join(userRoot, rawPath)));
+            }
+        }
         return response.send(await deleteGuardedMediaFiles(userRoot, allowedRoots, paths));
     } catch (error) {
         console.error('Error deleting media files:', error);
-        return response.status(500).send({ error: true });
+        return response.status(error.status || 500).send({ error: error.message });
     }
 });

@@ -14,6 +14,16 @@ import { Jimp, JimpMime } from '../jimp.js';
 import { loadManagedMediaInput } from '../media-input-loader.js';
 import { getUntrustedRequestAgent } from '../private-request-filter.js';
 import { validateVisitUrl } from './search.js';
+import {
+    assertTransientMediaRead,
+    completeTransientPromotion,
+    getTransientSession,
+    promoteTransientImages,
+    rollbackTransientPromotion,
+    trackTransientOperation,
+    TransientSessionError,
+    writeTransientImage,
+} from '../transient-sessions.js';
 
 export const router = express.Router();
 
@@ -317,7 +327,7 @@ function extensionFromMime(mimeType) {
     return 'png';
 }
 
-async function decodeAndPersistReferenceImage({ directories, buffer, profileId }) {
+async function decodeAndPersistReferenceImage({ directories, buffer, profileId, transientSession = null }) {
     if (!directories?.userImages) {
         throw new CharacterSourceError(500, 'USER_IMAGES_DIR_UNAVAILABLE', 'User images directory is unavailable.');
     }
@@ -353,12 +363,18 @@ async function decodeAndPersistReferenceImage({ directories, buffer, profileId }
         .replace(/^_+|_+$/g, '') || 'char';
     const filename = `${safeStem}_${sha256.slice(0, SHA256_FILENAME_PREFIX_LEN)}.${finalExt}`; // cap-ok: 64-bit SHA-256 hex prefix keeps _references filenames under OS 255-byte path limits
 
-    const refDir = path.join(directories.userImages, '_references');
-    fs.mkdirSync(refDir, { recursive: true });
-    writeFileAtomicSync(path.join(refDir, filename), outBuffer);
+    let imagePath;
+    if (transientSession) {
+        imagePath = await writeTransientImage(transientSession, filename, outBuffer);
+    } else {
+        const refDir = path.join(directories.userImages, '_references');
+        fs.mkdirSync(refDir, { recursive: true });
+        writeFileAtomicSync(path.join(refDir, filename), outBuffer);
+        imagePath = `/user/images/_references/${filename}`;
+    }
 
     return {
-        imagePath: `/user/images/_references/${filename}`,
+        imagePath,
         width,
         height,
         mimeType: finalMime,
@@ -412,63 +428,85 @@ router.post('/search', async (req, res) => {
     }
 });
 
+function runReferenceOperation(request, run) {
+    const session = getTransientSession(request);
+    if (request.body.staging !== undefined && typeof request.body.staging !== 'boolean') {
+        throw new TransientSessionError(400, 'INVALID_STAGING_MODE', 'staging must be a boolean.');
+    }
+    if (request.body.staging && !session) {
+        throw new TransientSessionError(403, 'TRANSIENT_SESSION_REQUIRED', 'Staging reference images requires an owned temporary session.');
+    }
+    if (session && request.body.staging === false) {
+        throw new TransientSessionError(400, 'INVALID_STAGING_MODE', 'A temporary session cannot save a formal reference image.');
+    }
+    const controller = new AbortController();
+    const pending = run(session, controller.signal);
+    return session
+        ? trackTransientOperation(session, pending, { abort: () => controller.abort() })
+        : pending;
+}
+
 router.post('/fetch-image', async (req, res) => {
     try {
-        const imageUrl = String(req.body?.imageUrl || '').trim();
-        const refererUrl = String(req.body?.refererUrl || '').trim();
-        const profileId = String(req.body?.profileId || 'char').trim();
+        return await runReferenceOperation(req, async (session, signal) => {
+            const imageUrl = String(req.body?.imageUrl || '').trim();
+            const refererUrl = String(req.body?.refererUrl || '').trim();
+            const profileId = String(req.body?.profileId || 'char').trim();
 
-        if (!imageUrl) {
-            return res.status(400).json({ error: 'imageUrl is required.', code: 'IMAGE_URL_REQUIRED' });
-        }
-
-        try {
-            validateVisitUrl(imageUrl);
-            if (refererUrl) {
-                validateVisitUrl(refererUrl);
+            if (!imageUrl) {
+                return res.status(400).json({ error: 'imageUrl is required.', code: 'IMAGE_URL_REQUIRED' });
             }
-        } catch (err) {
-            return res.status(400).json({ error: `Invalid URL: ${err.message}`, code: 'INVALID_URL' });
-        }
 
-        const response = await fetch(imageUrl, {
-            method: 'GET',
-            headers: {
-                'Accept': 'image/avif,image/webp,image/apng,image/png,image/jpeg,image/*,*/*;q=0.8',
-                'User-Agent': SOURCE_USER_AGENT,
-                ...(refererUrl ? { Referer: refererUrl } : {}),
-            },
-            agent: getUntrustedRequestAgent(),
-        });
+            try {
+                validateVisitUrl(imageUrl);
+                if (refererUrl) {
+                    validateVisitUrl(refererUrl);
+                }
+            } catch (err) {
+                return res.status(400).json({ error: `Invalid URL: ${err.message}`, code: 'INVALID_URL' });
+            }
 
-        if (!response.ok) {
-            const errText = await response.text().catch(() => '');
-            if (looksLikeAntiBotChallenge(response.status, errText)) {
+            const response = await fetch(imageUrl, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'image/avif,image/webp,image/apng,image/png,image/jpeg,image/*,*/*;q=0.8',
+                    'User-Agent': SOURCE_USER_AGENT,
+                    ...(refererUrl ? { Referer: refererUrl } : {}),
+                },
+                agent: getUntrustedRequestAgent(),
+                signal,
+            });
+
+            if (!response.ok) {
+                const errText = await response.text().catch(() => '');
+                if (looksLikeAntiBotChallenge(response.status, errText)) {
+                    return res.status(502).json({
+                        error: `Upstream image host returned HTTP ${response.status} or anti-bot challenge; pick another image URL.`,
+                        code: 'UPSTREAM_CHALLENGE_OR_FORBIDDEN',
+                    });
+                }
                 return res.status(502).json({
-                    error: `Upstream image host returned HTTP ${response.status} or anti-bot challenge; pick another image URL.`,
-                    code: 'UPSTREAM_CHALLENGE_OR_FORBIDDEN',
+                    error: `Image download failed with HTTP ${response.status}.`,
+                    code: 'IMAGE_DOWNLOAD_FAILED',
                 });
             }
-            return res.status(502).json({
-                error: `Image download failed with HTTP ${response.status}.`,
-                code: 'IMAGE_DOWNLOAD_FAILED',
+
+            const rawBytes = Buffer.from(await response.arrayBuffer());
+            if (rawBytes.length === 0) {
+                return res.status(422).json({ error: 'Downloaded image body is empty.', code: 'INVALID_IMAGE_DATA' });
+            }
+            if (rawBytes.length > MAX_REFERENCE_DOWNLOAD_BYTES) {
+                return res.status(413).json({ error: 'Downloaded image exceeds 25 MiB limit.', code: 'IMAGE_TOO_LARGE' });
+            }
+
+            const saved = await decodeAndPersistReferenceImage({
+                directories: req.user?.directories,
+                buffer: rawBytes,
+                profileId,
+                transientSession: session,
             });
-        }
-
-        const rawBytes = Buffer.from(await response.arrayBuffer());
-        if (rawBytes.length === 0) {
-            return res.status(422).json({ error: 'Downloaded image body is empty.', code: 'INVALID_IMAGE_DATA' });
-        }
-        if (rawBytes.length > MAX_REFERENCE_DOWNLOAD_BYTES) {
-            return res.status(413).json({ error: 'Downloaded image exceeds 25 MiB limit.', code: 'IMAGE_TOO_LARGE' });
-        }
-
-        const saved = await decodeAndPersistReferenceImage({
-            directories: req.user?.directories,
-            buffer: rawBytes,
-            profileId,
+            return res.json(saved);
         });
-        return res.json(saved);
     } catch (error) {
         const status = Number(error?.status) || 500;
         return res.status(status).json({
@@ -480,25 +518,29 @@ router.post('/fetch-image', async (req, res) => {
 
 router.post('/promote-local-image', async (req, res) => {
     try {
-        const sourcePath = String(req.body?.sourcePath || '').trim();
-        const profileId = String(req.body?.profileId || 'char').trim();
-        if (!sourcePath) {
-            return res.status(400).json({ error: 'sourcePath is required.', code: 'SOURCE_PATH_REQUIRED' });
-        }
+        return await runReferenceOperation(req, async (session) => {
+            const sourcePath = String(req.body?.sourcePath || '').trim();
+            const profileId = String(req.body?.profileId || 'char').trim();
+            if (!sourcePath) {
+                return res.status(400).json({ error: 'sourcePath is required.', code: 'SOURCE_PATH_REQUIRED' });
+            }
+            assertTransientMediaRead(req, sourcePath);
 
-        let loaded;
-        try {
-            loaded = await loadManagedMediaInput(req.user?.directories, sourcePath);
-        } catch (err) {
-            return res.status(400).json({ error: err.message, code: 'INVALID_LOCAL_MEDIA_PATH' });
-        }
+            let loaded;
+            try {
+                loaded = await loadManagedMediaInput(req.user?.directories, sourcePath);
+            } catch (err) {
+                return res.status(400).json({ error: err.message, code: 'INVALID_LOCAL_MEDIA_PATH' });
+            }
 
-        const saved = await decodeAndPersistReferenceImage({
-            directories: req.user?.directories,
-            buffer: loaded.buffer,
-            profileId,
+            const saved = await decodeAndPersistReferenceImage({
+                directories: req.user?.directories,
+                buffer: loaded.buffer,
+                profileId,
+                transientSession: session,
+            });
+            return res.json(saved);
         });
-        return res.json(saved);
     } catch (error) {
         const status = Number(error?.status) || 500;
         return res.status(status).json({
@@ -507,3 +549,25 @@ router.post('/promote-local-image', async (req, res) => {
         });
     }
 });
+
+for (const [route, execute] of [
+    ['/promote-staged', (session, body) => promoteTransientImages(session, body.paths, { namespace: body.namespace })],
+    ['/rollback-staged-promotion', (session, body) => rollbackTransientPromotion(session, body.promotionId)],
+    ['/complete-staged-promotion', (session, body) => completeTransientPromotion(session, body.promotionId)],
+]) {
+    router.post(route, async (req, res) => {
+        try {
+            const session = getTransientSession(req);
+            if (!session) {
+                throw new TransientSessionError(403, 'TRANSIENT_SESSION_REQUIRED', 'An owned temporary media session is required.');
+            }
+            return res.json(await execute(session, req.body));
+        } catch (error) {
+            console.error('Temporary reference image promotion failed:', error);
+            return res.status(error.status || 500).json({
+                error: error.message,
+                code: error.code || 'TRANSIENT_PROMOTION_FAILED',
+            });
+        }
+    });
+}

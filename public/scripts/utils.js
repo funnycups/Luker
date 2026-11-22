@@ -16,6 +16,7 @@ import { getTagsList } from './tags.js';
 import { groups, selected_group } from './group-chats.js';
 import { getCurrentLocale, t } from './i18n.js';
 import { importWorldInfo } from './world-info.js';
+import { transientSessionHeaders } from './lib/transient-session.js';
 
 export const shiftUpByOne = (e, i, a) => a[i] = e + 1;
 export const shiftDownByOne = (e, i, a) => a[i] = e - 1;
@@ -1824,11 +1825,12 @@ export async function getSanitizedFilename(fileName) {
  * @param {string} fileName - The name of the file to save the image as (without extension).
  * @param {string} extension - The file extension for the image (e.g., 'jpg', 'png', 'webp').
  * @param {object|null} [attribution] Optional chat attribution for the upload.
+ * @param {{transientSessionId?: string}} [options] Optional temporary-media ownership.
  *
  * @returns {Promise<string>} - Resolves to the saved image's path on the server.
  *                              Rejects with an error if the upload fails.
  */
-export async function saveBase64AsFile(base64Data, subFolder, fileName, extension, attribution = null) {
+export async function saveBase64AsFile(base64Data, subFolder, fileName, extension, attribution = null, { transientSessionId } = {}) {
     // Prepare the request body
     const requestBody = {
         image: base64Data,
@@ -1841,7 +1843,7 @@ export async function saveBase64AsFile(base64Data, subFolder, fileName, extensio
     // Send the data URL to your backend using fetch
     const response = await fetch('/api/images/upload', {
         method: 'POST',
-        headers: getRequestHeaders(),
+        headers: { ...getRequestHeaders(), ...transientSessionHeaders(transientSessionId) },
         body: JSON.stringify(requestBody),
     });
 

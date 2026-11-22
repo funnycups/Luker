@@ -1244,6 +1244,9 @@ export async function loginPageMiddleware(request, response) {
  */
 function createRouteHandler(directoryFn) {
     return async (req, res) => {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+            return res.sendStatus(405);
+        }
         try {
             const directory = directoryFn(req);
             const filePath = decodeURIComponent(req.params[0]);

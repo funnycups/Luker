@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { WebSocketServer } from 'ws';
+import { getUserDirectories } from './users.js';
+import { closeTransientOwnerSessions, closeTransientSession, createTransientSession } from './transient-sessions.js';
 import {
     getTaskByRequestId,
     subscribeToJob,
@@ -86,6 +88,24 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
     // help cleaning up.
     const activeSubscriptions = new Map();
 
+    async function openMediaSession(ws) {
+        try {
+            const session = await createTransientSession({
+                userHandle: ws.userHandle,
+                directories: getUserDirectories(ws.userHandle),
+                owner: ws,
+            });
+            if (ws.readyState !== ws.OPEN) {
+                await closeTransientSession(session);
+                return;
+            }
+            sendJson(ws, { type: 'session_opened', session_id: session.id });
+        } catch (error) {
+            console.error('Cannot open temporary media session:', error);
+            sendJson(ws, { type: 'session_error', code: error.code || 'TRANSIENT_SESSION_FAILED', message: error.message });
+        }
+    }
+
     function activeSubsKey(userHandle, requestId) {
         return `${userHandle}\u0000${requestId}`;
     }
@@ -143,6 +163,11 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
             // so the reaper below leaves this connection alone.
             if (msg.type === 'pong') {
                 ws.lastPongAt = Date.now();
+                return;
+            }
+
+            if (msg.type === 'session_open') {
+                void openMediaSession(ws);
                 return;
             }
 
@@ -208,6 +233,9 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
                 if (current && current.ws === ws) activeSubscriptions.delete(key);
             }
             ws.subscriptions.clear();
+            void closeTransientOwnerSessions(ws).catch(error => {
+                console.error('Temporary media cleanup after socket close failed:', error);
+            });
         });
     });
 

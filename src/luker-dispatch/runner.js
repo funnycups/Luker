@@ -16,6 +16,7 @@ import {
 } from '../request-inspector.js';
 import { createDispatchContext } from './context.js';
 import { createRequestProxyAgent } from '../request-proxy.js';
+import { assertTransientMediaRead } from '../transient-sessions.js';
 
 const TEXT_GENERATION_ENDPOINTS = new Set([
     'chat-completions',
@@ -52,6 +53,18 @@ function normalizeDispatchHeadEvent(event, { endpoint, isStream }) {
 }
 
 export async function runLukerDispatch(request, response, { endpoint, select }) {
+    try {
+        if (Array.isArray(request.body?.references)) {
+            for (const entry of request.body.references) {
+                if (entry && typeof entry.imagePath === 'string' && entry.imagePath.trim()) {
+                    assertTransientMediaRead(request, entry.imagePath);
+                }
+            }
+        }
+    } catch (error) {
+        response.status(error.status || 500).json({ error: error.message, code: error.code });
+        return;
+    }
     // Prefer the client-supplied job_id (from body.luker_generation.job_id)
     // when present so /jobs/status?id=<uuid> queries hit the same job the
     // runner created. Legacy client code (openai.js:4201) pre-generates a
