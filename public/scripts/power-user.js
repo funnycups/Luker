@@ -91,7 +91,8 @@ import { bindModelTemplates } from './chat-templates.js';
 import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { setFrontendConsoleDebugLoggingEnabled } from './frontend-log-manager.js';
 import { setAndroidDebugRecordingEnabled, isAndroidDebugTrailAvailable, getAndroidDebugRecordingActualState } from './luker-android-debug-trail.js';
-import { t } from './i18n.js';
+import { t, translate } from './i18n.js';
+import { initLensPalette, syncLensPaletteState } from './lens-palette.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { downloadCurrentSelfProfileReport, setSelfProfilerPreference, syncSelfProfilerEnabled } from './self-profiler.js';
 import { registerDebugMenuAction, setDebugMenuToggleState } from './debug-export.js';
@@ -2176,6 +2177,7 @@ function applyCustomCSS() {
         document.head.appendChild(style);
     }
     style.innerHTML = power_user.custom_css;
+    syncLensPaletteState();
     syncIosSystemBarsColor();
 }
 
@@ -4224,6 +4226,14 @@ export function forceCharacterEditorTokenize() {
 }
 
 jQuery(() => {
+    initLensPalette({
+        translate,
+        onPaletteChange: () => {
+            syncIosSystemBarsColor();
+            syncAndroidSystemBarsColor();
+        },
+    });
+
     const adjustAutocompleteDebounced = debounce(() => {
         $('.ui-autocomplete-input').each(function () {
             const isOpen = $(this).autocomplete('widget')[0].style.display !== 'none';
