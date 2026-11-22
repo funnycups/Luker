@@ -724,3 +724,120 @@ export async function getRunDock(page, opts = {}) {
     }
     return dock;
 }
+
+/**
+ * Wait for the topmost open Simulation Review dialog (`dialog.popup[open]` hosting `.luker-sim-review`),
+ * returning a locator pinned to that specific dialog's `data-id` so closing it never races with a
+ * subsequent Simulation Review popup opening immediately afterward.
+ */
+export async function waitForSimulationReview(page, { titlePattern = null, timeoutMs = 60_000 } = {}) {
+    const candidate = page.locator('dialog.popup[open]:not([closing]):has(.luker-sim-review)').last();
+    await expect(candidate).toBeVisible({ timeout: timeoutMs });
+    if (titlePattern) {
+        await expect(candidate.locator('.luker-sim-review-title')).toHaveText(titlePattern, { timeout: timeoutMs });
+    }
+    const dialogId = await candidate.getAttribute('data-id');
+    return dialogId
+        ? page.locator(`dialog.popup[data-id="${dialogId}"]`).first()
+        : candidate;
+}
+
+/**
+ * Enable Annotation mode in Simulation Review, drag-select a visible text snippet
+ * via real mouse events (using read-only DOM geometry lookup), and fill the inline comment.
+ */
+export async function annotateSimulationReviewText(page, dialog, snippet, comment = '') {
+    const toggle = dialog.locator('.sim-review-annot-toggle').first();
+    await expect(toggle).toBeVisible({ timeout: 10_000 });
+    if ((await toggle.getAttribute('data-state')) !== 'on') {
+        await toggle.click();
+    }
+    await expect(toggle).toHaveAttribute('data-state', 'on');
+
+    const host = dialog.locator('.luker-sim-review').first();
+    const target = host.locator('pre.luker-sim-pre').filter({ hasText: snippet }).first();
+    await expect(target).toBeVisible({ timeout: 10_000 });
+    await target.scrollIntoViewIfNeeded();
+
+    const coords = await target.evaluate((el, text) => {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+            const idx = node.nodeValue.indexOf(text);
+            if (idx < 0) continue;
+            const startRange = document.createRange();
+            startRange.setStart(node, idx);
+            startRange.setEnd(node, Math.min(idx + 1, node.nodeValue.length));
+            const endRange = document.createRange();
+            endRange.setStart(node, Math.max(idx, idx + text.length - 1));
+            endRange.setEnd(node, idx + text.length);
+            const startRect = startRange.getClientRects()[0] || startRange.getBoundingClientRect();
+            const endRect = endRange.getClientRects()[endRange.getClientRects().length - 1] || endRange.getBoundingClientRect();
+            return {
+                startX: startRect.left + 1,
+                startY: startRect.top + startRect.height / 2,
+                endX: endRect.right - 1,
+                endY: endRect.top + endRect.height / 2,
+            };
+        }
+        return null;
+    }, snippet);
+
+    if (!coords) {
+        throw new Error(`Simulation review text snippet not found: ${snippet}`);
+    }
+
+    const prevMarks = await host.locator('mark.luker-sim-annotation').count();
+    await page.mouse.move(coords.startX, coords.startY);
+    await page.mouse.down();
+    await page.mouse.move(coords.endX, coords.endY, { steps: 6 });
+    await page.mouse.up();
+
+    const marks = host.locator('mark.luker-sim-annotation');
+    await expect(marks).toHaveCount(prevMarks + 1, { timeout: 10_000 });
+    const latestMark = marks.last();
+    if (comment) {
+        const commentInput = latestMark.locator('input.sim-review-annot-comment');
+        await expect(commentInput).toBeVisible({ timeout: 5_000 });
+        await commentInput.fill(comment);
+    }
+    return latestMark;
+}
+
+/**
+ * Click Re-run simulation in Simulation Review and wait for the review DOM to re-mount.
+ */
+export async function rerunSimulationReview(dialog, { timeoutMs = 90_000 } = {}) {
+    const prevBtn = dialog.locator('.luker-sim-rerun-btn').first();
+    await expect(prevBtn).toBeVisible({ timeout: 10_000 });
+    await expect(prevBtn).toBeEnabled({ timeout: 10_000 });
+    const prevHandle = await dialog.locator('.luker-sim-review').first().elementHandle();
+    await prevBtn.click();
+    await expect.poll(async () => {
+        const isDetached = await prevHandle.evaluate(el => !el.isConnected).catch(() => true);
+        if (!isDetached) return false;
+        const nextBtn = dialog.locator('.luker-sim-rerun-btn').first();
+        return (await nextBtn.isVisible().catch(() => false)) && (await nextBtn.isEnabled().catch(() => false));
+    }, { timeout: timeoutMs, intervals: [150, 300, 500] }).toBe(true);
+    await prevHandle.dispose();
+}
+
+/**
+ * Click Submit in Simulation Review and wait for the popup to close.
+ */
+export async function submitSimulationReview(dialog, { timeoutMs = 30_000 } = {}) {
+    const okBtn = dialog.locator('.popup-button-ok').first();
+    await expect(okBtn).toBeVisible({ timeout: 10_000 });
+    await okBtn.click();
+    await expect(dialog).toBeHidden({ timeout: timeoutMs });
+}
+
+/**
+ * Click Cancel in Simulation Review and wait for the popup to close.
+ */
+export async function cancelSimulationReview(dialog, { timeoutMs = 30_000 } = {}) {
+    const cancelBtn = dialog.locator('.popup-button-cancel').first();
+    await expect(cancelBtn).toBeVisible({ timeout: 10_000 });
+    await cancelBtn.click();
+    await expect(dialog).toBeHidden({ timeout: timeoutMs });
+}

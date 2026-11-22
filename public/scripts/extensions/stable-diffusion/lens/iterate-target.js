@@ -32,11 +32,13 @@ import { patchGenerationPresetConfig } from '../generation-presets.js';
 import { getDefaultPromptValues, makeIllustrationId } from '../illustration/presets.js';
 import { getPresetById } from '../illustration/settings.js';
 import { i18n } from './i18n.js';
+import { simulateSdExploration, simulateSdIllustration } from './simulate.js';
 
 export const DEFAULT_SD_ITERATE_PROMPT = `You are a configuration, visual-archive, and ComfyUI workflow editor for Luker's Image Generation and AI Illustration system.
 
 Capabilities:
 - Edit AI illustration prompt presets (illustrationPrompt, studioPrompt, explorationPrompt, visualInspection) via sd_list_presets, sd_read_preset, and sd_update_preset.
+- Simulate unsaved prompt changes in an isolated sandbox and open the Simulation Review popup for user inspection and annotations via sd_simulate_illustration (for illustrationPrompt, optionally allowing sandbox character exploration) and sd_simulate_exploration (for explorationPrompt, choosing mode "background" with targets or mode "dialog" with user_turns).
 - Edit character visual archive profiles (canonicalTags, negativeTags, proseDescription, outfits) via sd_list_characters, sd_read_character, sd_upsert_character, and sd_delete_character, cross-checking bound lorebooks with world_book_list, lorebook_list, lorebook_query, and lorebook_get.
 - Edit ComfyUI API-format workflows and custom placeholders via sd_list_workflows, sd_read_workflow, sd_create_workflow, sd_upsert_workflow_nodes, sd_remove_workflow_nodes, sd_delete_workflow, and sd_update_comfy_config.
 - Query the user's connected ComfyUI server via sd_search_comfy_nodes and sd_inspect_comfy_node before wiring unfamiliar or custom nodes so class_type names, required inputs, enum filenames, and output slot indices match installed nodes.
@@ -60,6 +62,8 @@ const READ_TOOL_NAMES = new Set([
     'sd_search_comfy_nodes',
     'sd_inspect_comfy_node',
     'sd_test_workflow_draft',
+    'sd_simulate_illustration',
+    'sd_simulate_exploration',
 ]);
 
 const SD_ITERATE_TOOLS = Object.freeze([
@@ -218,6 +222,70 @@ const SD_ITERATE_TOOLS = Object.freeze([
                     height: { type: 'number' },
                     seed: { type: 'number' },
                 },
+                additionalProperties: false,
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'sd_simulate_illustration',
+            description: 'Run the illustration agent and image generation against the unsaved working draft in an isolated sandbox, open Simulation Review for user inspection and annotations, and return the tagged text result without modifying chat, global character archive, or formal image storage.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    preset_id: { type: 'string', description: 'Optional draft preset id (defaults to the current preset).' },
+                    message_index: { type: 'integer', description: 'Optional 0-based chat message index to illustrate.' },
+                    sample_message: { type: 'string', description: 'Optional sample assistant message text when testing without a chat or with custom text.' },
+                    allow_exploration: { type: 'boolean', description: 'Whether the illustration agent may invoke sandbox explore_characters (default true).' },
+                },
+                additionalProperties: false,
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'sd_simulate_exploration',
+            description: 'Run the character profile agent against the unsaved working draft in an isolated sandbox in either "background" mode (requires targets) or "dialog" mode (requires user_turns), open Simulation Review for user inspection and annotations, and return the tagged text result without leaking state.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    preset_id: { type: 'string', description: 'Optional draft preset id (defaults to the current preset).' },
+                    mode: { type: 'string', enum: ['background', 'dialog'], description: 'Required execution mode: "background" for automatic exploration or "dialog" for multi-turn conversational building.' },
+                    targets: {
+                        type: 'array',
+                        description: 'Required for mode "background": target characters to explore.',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                name: { type: 'string' },
+                                work: { type: 'string' },
+                                hint: { type: 'string' },
+                            },
+                            required: ['name'],
+                            additionalProperties: false,
+                        },
+                    },
+                    user_turns: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Required for mode "dialog": sequential user messages for real multi-turn replies.',
+                    },
+                    initial_profile_id: { type: 'string', description: 'Optional draft character profile id to refine in mode "dialog".' },
+                    source: {
+                        type: 'object',
+                        description: 'Optional explicit local source policy (defaults to { kind: "none" }).',
+                        properties: {
+                            kind: { type: 'string', enum: ['none', 'card', 'persona'] },
+                            card_avatar: { type: 'string' },
+                        },
+                        required: ['kind'],
+                        additionalProperties: false,
+                    },
+                    user_hint: { type: 'string', description: 'Optional extra guidance for mode "background".' },
+                },
+                required: ['mode'],
                 additionalProperties: false,
             },
         },
@@ -1218,6 +1286,24 @@ export function createSdIterateTarget(
                     seed: compiled.seed,
                     promptUsed,
                 };
+            }
+
+            if (name === 'sd_simulate_illustration') {
+                return await simulateSdIllustration({
+                    context: c,
+                    live,
+                    args,
+                    signal,
+                });
+            }
+
+            if (name === 'sd_simulate_exploration') {
+                return await simulateSdExploration({
+                    context: c,
+                    live,
+                    args,
+                    signal,
+                });
             }
 
             throw new SourceError('unknown_tool', `Unknown read tool: ${name}`);

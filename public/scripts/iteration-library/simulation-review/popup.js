@@ -7,6 +7,7 @@ import { render as renderSpec } from './renderers/orchestrator-spec.js';
 import { render as renderAgenda } from './renderers/orchestrator-agenda.js';
 import { render as renderLoop } from './renderers/orchestrator-loop.js';
 import { render as renderDirector } from './renderers/orchestrator-director.js';
+import { renderSdExploration, renderSdIllustration } from './renderers/sd.js';
 import { createAnnotationEngine } from './annotation-engine.js';
 import { openHostPopup } from './popup-host.js';
 
@@ -17,6 +18,8 @@ const RENDERERS = {
     'orch-agenda': renderAgenda,
     'orch-loop': renderLoop,
     'orch-director': renderDirector,
+    'sd-illustration': renderSdIllustration,
+    'sd-exploration': renderSdExploration,
 };
 
 const TITLES = {
@@ -26,6 +29,8 @@ const TITLES = {
     'orch-agenda': 'sim.title.orch_agenda',
     'orch-loop': 'sim.title.orch_loop',
     'orch-director': 'sim.title.orch_director',
+    'sd-illustration': 'sim.title.sd_illustration',
+    'sd-exploration': 'sim.title.sd_exploration',
 };
 
 const TITLE_FALLBACK = {
@@ -35,6 +40,8 @@ const TITLE_FALLBACK = {
     'orch-agenda': 'Simulation Review — Orchestrator (Agenda)',
     'orch-loop': 'Simulation Review — Orchestrator (Loop)',
     'orch-director': 'Simulation Review — Orchestrator (Director)',
+    'sd-illustration': 'Simulation Review — AI Illustration',
+    'sd-exploration': 'Simulation Review — Character Profile Agent',
 };
 
 let isOpen = false;

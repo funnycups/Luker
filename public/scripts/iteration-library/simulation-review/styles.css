@@ -101,6 +101,29 @@
     margin: 2px 0;
 }
 
+.luker-sim-review .luker-sim-image-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 6px 0;
+}
+
+.luker-sim-review .luker-sim-image-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 100%;
+}
+
+.luker-sim-review .luker-sim-image {
+    max-width: 100%;
+    max-height: 360px;
+    object-fit: contain;
+    border-radius: 6px;
+    border: 1px solid rgba(127, 127, 127, 0.35);
+    display: block;
+}
+
 mark.luker-sim-annotation,
 mark[data-ann-id] {
     background-color: rgba(255, 220, 100, 0.55);

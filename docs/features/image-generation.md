@@ -64,6 +64,13 @@ When **Source** is set to **ComfyUI**, click **Iterate workflow with AI** next t
 - **Template node wiring and tuning** — Ask the AI to clone an API-format workflow, insert a dynamic `%lora_name%` `LoraLoader` template, wire `%ref_image%` or numbered `%ref_image_1%` reference slots to installed conditioning nodes, or adjust sampling, upscaling, and custom `%placeholder%` bindings.
 - **Draft test generation and rollback** — The AI executes draft workflows directly against your ComfyUI server to verify links and render a preview image in the review pane before anything is saved. Review per-node changes in the **Change list** to apply, and revert any applied workflow edit from **Change history**.
 
+## Simulating Prompts in Workbench
+
+Open [Workbench](/features/workbench) **AI iteration** and select **Image Generation** to test unsaved illustration or character profile prompt edits in an isolated sandbox before applying them:
+
+- **Illustration and profile simulation** — The iteration AI runs the illustration agent, background character exploration, or conversational character profile building against the working draft and opens **Simulation Review** with rendered image previews, full prompts, and tool traces.
+- **Annotations and re-run loop** — Enable **Annotation mode** to highlight passages and add inline comments, or click **Re-run simulation** to run a fresh attempt from the original input snapshot. Clicking **Submit** sends the text trace and annotations back to the iteration AI, and closing the review cleans up temporary images automatically.
+
 ## Related Pages
 
 - [Workbench](/features/workbench) — unified workspace, AI iteration, Q&A, and Change history

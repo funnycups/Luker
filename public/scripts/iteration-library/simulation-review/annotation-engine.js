@@ -228,6 +228,9 @@ export function createAnnotationEngine({
                 // feedback-builder, not via inline chain segments.)
                 let p = node.parentElement;
                 while (p && p !== host) {
+                    if (p.getAttribute && p.getAttribute('data-sim-ignore') === 'true') {
+                        return NodeFilter.FILTER_REJECT;
+                    }
                     if (p.classList) {
                         if (p.classList.contains(ANN_REMOVE_CLASS)) return NodeFilter.FILTER_REJECT;
                         if (p.classList.contains(ANN_COMMENT_CLASS)) return NodeFilter.FILTER_REJECT;
