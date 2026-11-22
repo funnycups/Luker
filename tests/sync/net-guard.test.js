@@ -245,14 +245,25 @@ describe('connection-bound sync policy', () => {
     test.each([
         ['8.8.8.8', 4, { a: ['8.8.8.8'], aaaa: [] }],
         ['2001:4860::8888', 6, { a: [], aaaa: ['2001:4860::8888'] }],
-    ])('validates public %s before local port-zero refusal without Internet access', async (address, family, answers) => {
+    ])('validates public %s before stopping dial without Internet access', async (address, family, answers) => {
         dns.setAnswers('peer.sync.test', answers);
         const observations = [];
-        const agents = createSyncAgents({ owner, enableAccounts: true, network: { resolveAll: dns.resolveAll, onValidatedDial: observation => observations.push(observation) } });
+        const stopped = Object.assign(new Error('Public dial stopped after validation'), { code: 'TEST_PUBLIC_DIAL_STOPPED' });
+        const agents = createSyncAgents({
+            owner,
+            enableAccounts: true,
+            network: {
+                resolveAll: dns.resolveAll,
+                onValidatedDial: observation => {
+                    observations.push(observation);
+                    throw stopped;
+                },
+            },
+        });
         cleanup.push(agents.destroy);
         await expect(new Promise((resolve, reject) => {
             http.get({ hostname: 'peer.sync.test', port: '0', agent: agents.httpAgent }, resolve).on('error', reject);
-        })).rejects.toMatchObject({ code: expect.stringMatching(/EADDRNOTAVAIL|ENETUNREACH|EHOSTUNREACH|ECONNREFUSED/) });
+        })).rejects.toMatchObject({ code: 'TEST_PUBLIC_DIAL_STOPPED' });
         expect(observations).toEqual([expect.objectContaining({ hostname: 'peer.sync.test', address, family, port: 0 })]);
         expect(server.hits).toEqual([]);
     });
@@ -302,16 +313,29 @@ describe('connection-bound sync policy', () => {
         expect(dns.queries).toHaveLength(4);
     });
     test('DNS rebinding blocks the next request without any profile change', async () => {
-        const agents = createSyncAgents({ owner, enableAccounts: true, network: { resolveAll: dns.resolveAll } });
+        const observations = [];
+        const stopped = Object.assign(new Error('Public dial stopped after validation'), { code: 'TEST_PUBLIC_DIAL_STOPPED' });
+        const agents = createSyncAgents({
+            owner,
+            enableAccounts: true,
+            network: {
+                resolveAll: dns.resolveAll,
+                onValidatedDial: observation => {
+                    observations.push(observation);
+                    throw stopped;
+                },
+            },
+        });
         cleanup.push(agents.destroy);
         dns.setAnswers('peer.sync.test', { a: ['8.8.8.8'], aaaa: [] });
         await expect(new Promise((resolve, reject) => {
             http.get({ hostname: 'peer.sync.test', port: '0', agent: agents.httpAgent }, resolve).on('error', reject);
-        })).rejects.toMatchObject({ code: 'EADDRNOTAVAIL' });
+        })).rejects.toMatchObject({ code: 'TEST_PUBLIC_DIAL_STOPPED' });
         dns.setAnswers('peer.sync.test', { a: ['127.0.0.1'], aaaa: [] });
         await expect(new Promise((resolve, reject) => {
             http.get(nameUrl(), { agent: agents.httpAgent }, resolve).on('error', reject);
         })).rejects.toMatchObject({ code: 'SYNC_PRIVATE_ADDRESS' });
+        expect(observations).toEqual([expect.objectContaining({ hostname: 'peer.sync.test', address: '8.8.8.8', family: 4, port: 0 })]);
         expect(server.hits).toEqual([]);
         expect(dns.queries).toHaveLength(4);
     });
