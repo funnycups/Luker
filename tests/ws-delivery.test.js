@@ -11,7 +11,7 @@ async function startTestServer({ verifyTicket }) {
     const delivery = createDeliveryServer({ httpServer, verifyTicket });
     await new Promise(r => httpServer.listen(0, r));
     const port = httpServer.address().port;
-    return { port, close: async () => { delivery.close(); await new Promise(r => httpServer.close(r)); } };
+    return { port, close: async () => { await delivery.close(); await new Promise(r => httpServer.close(r)); } };
 }
 
 function connectWs(port, ticket) {

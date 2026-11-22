@@ -22,16 +22,30 @@ class MockWebSocket {
 MockWebSocket.OPEN = 1;
 MockWebSocket.CLOSED = 3;
 
+const openDeliveries = [];
+
+async function makeDelivery(opts) {
+    const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
+    const delivery = createLukerDelivery(opts);
+    openDeliveries.push(delivery);
+    return delivery;
+}
+
 beforeEach(() => {
     MockWebSocket.instances = [];
     global.WebSocket = MockWebSocket;
     global.location = { host: 'localhost:8000' };
 });
 
+afterEach(() => {
+    for (const delivery of openDeliveries.splice(0)) {
+        try { delivery.close(); } catch { /* already closed */ }
+    }
+});
+
 describe('lukerDelivery client', () => {
     test('connect opens WS with ticket protocol', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'test-ticket');
         expect(MockWebSocket.instances).toHaveLength(1);
         const ws = MockWebSocket.instances[0];
@@ -40,11 +54,11 @@ describe('lukerDelivery client', () => {
     });
 
     test('subscribe sends resume-from-1 to avoid race', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const ws = MockWebSocket.instances[0];
-        const { stream } = delivery.subscribe('req-1', {});
+        const { stream, headPromise } = delivery.subscribe('req-1', {});
+        headPromise.catch(() => {});
         // Public `subscribe` internally sends resume{from_seq:1} so events
         // emitted before the WS subscribe arrives (server dispatch runs on
         // setImmediate) are replayed from the start of the stream.
@@ -53,11 +67,11 @@ describe('lukerDelivery client', () => {
     });
 
     test('incoming chunk enqueued to stream', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const ws = MockWebSocket.instances[0];
-        const { stream } = delivery.subscribe('req-2', {});
+        const { stream, headPromise } = delivery.subscribe('req-2', {});
+        headPromise.catch(() => {});
         ws._receive({ type: 'chunk', request_id: 'req-2', seq: 1, data: 'QUJD' });  // 'ABC'
         ws._receive({ type: 'end', request_id: 'req-2', seq: 2 });
         const reader = stream.getReader();
@@ -69,8 +83,7 @@ describe('lukerDelivery client', () => {
     });
 
     test('error frame before head surfaces as 502 body via headPromise', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const ws = MockWebSocket.instances[0];
         const { stream, headPromise } = delivery.subscribe('req-3', {});
@@ -87,8 +100,7 @@ describe('lukerDelivery client', () => {
     });
 
     test('error frame after head errors the stream', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const ws = MockWebSocket.instances[0];
         const { stream, headPromise } = delivery.subscribe('req-3b', {});
@@ -102,8 +114,7 @@ describe('lukerDelivery client', () => {
     });
 
     test('abort frame before head rejects headPromise with AbortError and fires onServerAbort', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const ws = MockWebSocket.instances[0];
         const onServerAbort = jest.fn();
@@ -117,8 +128,7 @@ describe('lukerDelivery client', () => {
     });
 
     test('abort frame after head errors the stream with AbortError and fires onServerAbort', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const ws = MockWebSocket.instances[0];
         const onServerAbort = jest.fn();
@@ -133,11 +143,11 @@ describe('lukerDelivery client', () => {
     });
 
     test('reconnect after WS close, resume outstanding subs', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery({ reconnectBackoffMs: 5 });
+        const delivery = await makeDelivery({ reconnectBackoffMs: 5 });
         await delivery.connect(async () => 'tik');
         const ws1 = MockWebSocket.instances[0];
-        delivery.subscribe('req-4', {});
+        const sub = delivery.subscribe('req-4', {});
+        sub.headPromise.catch(() => {});
         ws1._receive({ type: 'chunk', request_id: 'req-4', seq: 1, data: 'QQ==' });
         // Kill WS
         ws1.close();
@@ -150,8 +160,7 @@ describe('lukerDelivery client', () => {
     });
 
     test('unsubscribe with Error reason rejects headPromise if head not yet resolved', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const { headPromise, unsubscribe } = delivery.subscribe('req-abort', {});
         // Abort before any frame arrives — this is the exact scenario that
@@ -163,8 +172,7 @@ describe('lukerDelivery client', () => {
     });
 
     test('unsubscribe without reason rejects headPromise with generic error', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const { headPromise, unsubscribe } = delivery.subscribe('req-cancel', {});
         unsubscribe();
@@ -172,8 +180,7 @@ describe('lukerDelivery client', () => {
     });
 
     test('unsubscribe after head resolved does not re-settle headPromise', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const ws = MockWebSocket.instances[0];
         const { headPromise, unsubscribe } = delivery.subscribe('req-post-head', {});
@@ -186,8 +193,7 @@ describe('lukerDelivery client', () => {
     });
 
     test('close rejects all pending headPromises', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const s1 = delivery.subscribe('req-c1', {});
         const s2 = delivery.subscribe('req-c2', {});
@@ -204,11 +210,11 @@ describe('lukerDelivery client', () => {
     // accumulates each chunk N times. Fix must ensure at most ONE reconnect
     // attempt in flight at any time — regardless of how many sources fire.
     test('concurrent reconnect triggers do not open multiple sockets', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery({ reconnectBackoffMs: 5 });
+        const delivery = await makeDelivery({ reconnectBackoffMs: 5 });
         await delivery.connect(async () => 'tik');
         const ws1 = MockWebSocket.instances[0];
-        delivery.subscribe('req-race', {});
+        const sub = delivery.subscribe('req-race', {});
+        sub.headPromise.catch(() => {});
         // Simulate all four reconnect sources firing while ws1 is dead:
         // 1. Underlying close (network flap) → scheduleReconnect
         // 2. `online` event → forceReconnect → scheduleReconnect
@@ -226,12 +232,13 @@ describe('lukerDelivery client', () => {
     });
 
     test('reconnect sends resume for each pending request exactly once', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery({ reconnectBackoffMs: 5 });
+        const delivery = await makeDelivery({ reconnectBackoffMs: 5 });
         await delivery.connect(async () => 'tik');
         const ws1 = MockWebSocket.instances[0];
-        delivery.subscribe('req-multi-1', {});
-        delivery.subscribe('req-multi-2', {});
+        const s1 = delivery.subscribe('req-multi-1', {});
+        const s2 = delivery.subscribe('req-multi-2', {});
+        s1.headPromise.catch(() => {});
+        s2.headPromise.catch(() => {});
         // Bump lastSeq for one so we can verify the resume from_seq math too.
         ws1._receive({ type: 'chunk', request_id: 'req-multi-1', seq: 5, data: 'QQ==' });
         ws1.close();
@@ -257,11 +264,11 @@ describe('lukerDelivery client', () => {
     // property (single copy of each chunk in the ReadableStream) that the
     // "你你你好好好" bug violates.
     test('chunks after reconnect are enqueued exactly once', async () => {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery({ reconnectBackoffMs: 5 });
+        const delivery = await makeDelivery({ reconnectBackoffMs: 5 });
         await delivery.connect(async () => 'tik');
         const ws1 = MockWebSocket.instances[0];
-        const { stream } = delivery.subscribe('req-once', {});
+        const { stream, headPromise } = delivery.subscribe('req-once', {});
+        headPromise.catch(() => {});
         // Fire multiple reconnect triggers to simulate the racy production
         // path (mobile tab-return + online event + stale-check all racing).
         ws1.close();
@@ -296,8 +303,7 @@ describe('lukerDelivery request inactivity timeout', () => {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
     async function setup() {
-        const { createLukerDelivery } = await import('../public/scripts/ws-delivery.js');
-        const delivery = createLukerDelivery();
+        const delivery = await makeDelivery();
         await delivery.connect(async () => 'tik');
         const ws = MockWebSocket.instances.at(-1);
         return { delivery, ws };
@@ -332,7 +338,8 @@ describe('lukerDelivery request inactivity timeout', () => {
     test('end clears the timer', async () => {
         const { delivery, ws } = await setup();
         const onTimeout = jest.fn();
-        delivery.subscribe('req-t3', {}, { timeoutMs: 40, onTimeout });
+        const { headPromise } = delivery.subscribe('req-t3', {}, { timeoutMs: 40, onTimeout });
+        headPromise.catch(() => {});
         ws._receive({ type: 'head', request_id: 'req-t3', status: 200, headers: {} });
         ws._receive({ type: 'end', request_id: 'req-t3', seq: 1 });
         await sleep(120);

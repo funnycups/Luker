@@ -264,7 +264,17 @@ export function createDeliveryServer({ httpServer, verifyTicket, path = '/api/ws
         close() {
             clearInterval(heartbeatTimer);
             httpServer.off('upgrade', onUpgrade);
-            wss.close();
+            const closing = [];
+            for (const client of wss.clients) {
+                if (client.readyState !== client.CLOSED) {
+                    closing.push(new Promise((resolve) => client.once('close', resolve)));
+                    client.terminate();
+                }
+            }
+            return Promise.all([
+                new Promise((resolve) => wss.close(resolve)),
+                ...closing,
+            ]);
         },
     };
 }
