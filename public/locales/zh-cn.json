@@ -7724,4 +7724,7 @@
     ,"Backend": "后端"
     ,"AI Illustration": "自动插图"
     ,"${0} profile(s)": "${0} 个档案"
+    ,"Unsaved profile changes": "角色档案有未保存改动"
+    ,"Save or discard your edits first.": "请先保存或放弃当前改动。"
+    ,"Discard changes": "放弃修改"
 }

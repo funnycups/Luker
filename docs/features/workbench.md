@@ -59,7 +59,11 @@ Embeds the full Memory Lens workspace directly inside Workbench:
 - **Timeline** — chronological story view grouped by summary tiers.
 - **Data table** — tabular view with inline field editing.
 - **Memory structure** — type and field editor, starter templates, import/export, persistent injection controls, and tag filtering.
-- **Settings** — extraction cadence, LLM or RAG recall, compression, token trace, and iteration AI selection.
+- **Settings** — extraction cadence and built-in floor hiding presets, LLM or RAG recall, compression, token trace, and iteration AI selection.
+
+### Unsaved changes indicators
+
+When a workspace has unsaved edits—such as Memory Graph settings or structure, Orchestration flow drafts, or Character Archive edits—Workbench highlights the save bar inside the view, marks the sub-tab and left-rail workspace tab with an amber indicator, displays an unsaved state on the collapsed pill, and shows a non-blocking reminder with a quick jump-back button when switching tabs or collapsing the window.
 
 ### Orchestration
 

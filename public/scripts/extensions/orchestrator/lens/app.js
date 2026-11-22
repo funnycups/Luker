@@ -435,9 +435,15 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
     }
 
     // ----- Drafts: save bar, save / undo ------------------------------------
+    let lastReportedDraftCount = 0;
     function renderSavebar() {
-        const count = draftsActive() ? drafts.count() : 0;
-        const foreign = !draftsActive() && drafts.count() > 0;
+        const totalDrafts = drafts.count();
+        if (totalDrafts !== lastReportedDraftCount) {
+            lastReportedDraftCount = totalDrafts;
+            hostApp?.refreshBadges?.();
+        }
+        const count = draftsActive() ? totalDrafts : 0;
+        const foreign = !draftsActive() && totalDrafts > 0;
         savebar.hidden = !count && !foreign;
         if (savebar.hidden) return;
         clear(savebar);
@@ -790,6 +796,7 @@ export function mountOrchestraLens({ source, container = document.body, hostApp 
             setupView.invalidate?.();
             scheduleReload();
         },
+        unsavedCount: () => drafts.count(),
         destroy,
         reload: () => app.reload(),
         app,

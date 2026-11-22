@@ -492,6 +492,12 @@ const ZH_CN = {
     'Image Generation settings': '图像生成设置',
     'Import example': '导入示例',
     'Derive from an existing preset': '从现有预设派生',
+    '"${0}" has unsaved changes': '「${0}」还有未保存改动',
+    '${0} workspaces have unsaved changes': '有 ${0} 个工作区存在未保存改动',
+    'Unsaved changes': '有未保存的修改',
+    'Unsaved': '未保存',
+    'Return to save': '返回保存',
+    'Reopen to save': '展开保存',
 };
 
 const ZH_TW = {
@@ -983,6 +989,12 @@ const ZH_TW = {
     'Image Generation settings': '圖像生成設定',
     'Import example': '匯入示例',
     'Derive from an existing preset': '從現有預設派生',
+    '"${0}" has unsaved changes': '「${0}」還有未儲存改動',
+    '${0} workspaces have unsaved changes': '有 ${0} 個工作區存在未儲存改動',
+    'Unsaved changes': '有未儲存的修改',
+    'Unsaved': '未儲存',
+    'Return to save': '返回儲存',
+    'Reopen to save': '展開儲存',
 };
 
 export function registerWorkbenchLocaleData(addLocaleData) {

@@ -66,6 +66,13 @@
 .wbench .wb-tab[aria-selected="true"] { background: var(--wb-active); color: var(--wb-text); font-weight: 600; }
 .wbench .wb-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .wbench .wb-tab-count { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--wb-amber); color: #1b1300; font-size: 11px; font-weight: 650; display: grid; place-items: center; }
+.wbench .wb-tab.is-dirty { color: var(--wb-text); }
+.wbench .wb-tab-dirty {
+    margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+    background: var(--wb-amber); color: #1b1300; font-size: 11px; font-weight: 700;
+    display: grid; place-items: center;
+    box-shadow: 0 0 0 2px var(--wb-amber-soft);
+}
 .wbench .wb-rail-foot { margin-top: auto; }
 
 .wbench .wb-main { position: relative; flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--wb-surface); padding: 18px 20px 24px; }
@@ -86,6 +93,8 @@
 }
 .wbench .wb-pill b { font-weight: 650; }
 .wbench .wb-pill .wb-pill-todo { color: var(--wb-amber); }
+.wbench .wb-pill.has-unsaved { box-shadow: 0 0 0 1.5px var(--wb-amber), var(--wb-shadow); }
+.wbench .wb-pill .wb-pill-unsaved { color: var(--wb-amber); font-weight: 600; }
 
 /* ---- Toast ---- */
 .wbench .wb-toast {
@@ -95,6 +104,12 @@
     font-size: 12.5px; animation: wb-in 160ms var(--wb-ease);
 }
 .wbench .wb-toast.is-error { color: var(--wb-danger); }
+.wbench .wb-toast.is-warn {
+    color: var(--wb-amber);
+    border: 1px solid color-mix(in srgb, var(--wb-amber) 45%, transparent);
+    background: color-mix(in srgb, var(--wb-amber) 12%, var(--wb-raised));
+}
+.wbench .wb-toast.is-warn .wb-toast-btn { background: var(--wb-amber-soft); color: var(--wb-amber); }
 .wbench .wb-toast-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--wb-accent-soft); color: var(--wb-accent); font-weight: 600; cursor: pointer; }
 
 /* ---- Phone: bottom sheet ---- */
@@ -107,7 +122,7 @@
 .wbench.is-compact .wb-body { flex-direction: column; background: var(--wb-surface); overflow: hidden; }
 .wbench.is-compact .wb-rail { width: auto; flex-direction: row; gap: 2px; padding: 6px; border-right: 0; border-bottom: 1px solid var(--wb-border); overflow-x: auto; scrollbar-width: none; }
 .wbench.is-compact .wb-tab { width: auto; flex: none; height: 32px; padding: 0 9px; gap: 6px; font-size: 12.5px; }
-.wbench.is-compact .wb-tab-count { margin-left: 2px; }
+.wbench.is-compact .wb-tab-count, .wbench.is-compact .wb-tab-dirty { margin-left: 2px; }
 .wbench.is-compact .wb-rail-foot { margin: 0; }
 .wbench.is-compact .wb-rail-foot .wb-tab-label { display: none; }
 .wbench.is-compact .wb-main { padding: 14px; }

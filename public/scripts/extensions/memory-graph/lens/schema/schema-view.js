@@ -34,8 +34,9 @@ function resolvePrimaryKeys(draft) {
     return identity;
 }
 
-export function createSchemaView(app, source) {
+export function createSchemaView(app, source, { onDirtyChange = null } = {}) {
     const access = source.schema || null;
+    let lastNotifiedDirty = false;
     const bar = h('header', { class: 'ml-schema-bar' });
     const list = h('aside', { class: 'ml-schema-list', 'aria-label': i18n('Memory types') });
     const editor = h('section', { class: 'ml-schema-editor' });
@@ -124,6 +125,10 @@ export function createSchemaView(app, source) {
     function paintBar() {
         clear(bar);
         const dirty = isDirty();
+        if (dirty !== lastNotifiedDirty) {
+            lastNotifiedDirty = dirty;
+            onDirtyChange?.(dirty);
+        }
         const statusLine = saving
             ? h('span', { class: 'ml-schema-state', text: i18n('Saving…') })
             : dirty ? h('span', { class: 'ml-schema-state is-dirty' }, h('span', { class: 'ml-schema-dot', 'aria-hidden': 'true' }), h('span', { text: i18n('Unsaved changes') })) : null;

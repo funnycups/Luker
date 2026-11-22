@@ -80,6 +80,10 @@ export function mountSdLens({
             activeView = 'studio';
             renderShell({ characterDesign: designReq });
         },
+        notifyDirty() {
+            renderTopBar();
+            hostApp?.refreshBadges?.();
+        },
     };
 
     const views = {
@@ -92,7 +96,7 @@ export function mountSdLens({
         clear(topBar);
         const navOptions = [
             { value: 'studio', label: i18n('Image Studio'), iconName: 'image', tone: 'sd' },
-            { value: 'characters', label: i18n('Character Archive'), iconName: 'users' },
+            { value: 'characters', label: i18n('Character Archive'), iconName: 'users', dirty: Boolean(views.characters.isDirty?.()) },
             { value: 'run', label: i18n('Run Traces'), iconName: 'run' },
         ];
         const seg = segmented(navOptions, activeView, (next) => {
@@ -135,6 +139,7 @@ export function mountSdLens({
             renderShell(nextOpts || {});
         },
         onEscape: () => false,
+        unsavedCount: () => (views.characters.isDirty?.() ? 1 : 0),
         destroy() {
             views.studio.destroy?.();
             views.characters.destroy?.();

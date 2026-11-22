@@ -294,6 +294,11 @@
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg-btn:disabled { color: var(--lw-faint); cursor: not-allowed; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg-badge { font-size: 11px; color: var(--lw-faint); font-variant-numeric: tabular-nums; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dirty-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex: none;
+    background: var(--lw-amber);
+    box-shadow: 0 0 0 2px var(--lw-amber-soft);
+}
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg.is-sm .lw-seg-btn { height: 24px; padding: 0 9px; font-size: 12px; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg.is-block { display: flex; }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-seg.is-block .lw-seg-btn { flex: 1; }
