@@ -5,6 +5,8 @@ import {
     DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
     LEGACY_DEFAULT_ILLUSTRATION_PROMPT,
     LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
+    V1_DEFAULT_ILLUSTRATION_PROMPT,
+    V1_DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
 } from '../public/scripts/extensions/stable-diffusion/illustration/presets.js';
 import { migrateIllustrationPromptSettings, normalizeIllustrationSettings } from '../public/scripts/extensions/stable-diffusion/illustration/settings.js';
 import { createIllustrationPipeline } from '../public/scripts/extensions/stable-diffusion/illustration/pipeline.js';
@@ -56,6 +58,8 @@ describe('one-time illustration prompt migration', () => {
         expect(typeof LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT).toBe('string');
         expect(DEFAULT_ILLUSTRATION_PROMPT).not.toBe(LEGACY_DEFAULT_ILLUSTRATION_PROMPT);
         expect(DEFAULT_NATURAL_ILLUSTRATION_PROMPT).not.toBe(LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT);
+        expect(DEFAULT_ILLUSTRATION_PROMPT).not.toBe(V1_DEFAULT_ILLUSTRATION_PROMPT);
+        expect(DEFAULT_NATURAL_ILLUSTRATION_PROMPT).not.toBe(V1_DEFAULT_NATURAL_ILLUSTRATION_PROMPT);
 
         const customPrompt = 'Custom user prompt crafted specifically for watercolor scenes.';
         const { settings: normalized } = migrateIllustrationPromptSettings({
@@ -77,6 +81,15 @@ describe('one-time illustration prompt migration', () => {
                     llm: { apiPresetName: '', llmPresetName: '' },
                 },
                 {
+                    id: 'preset_v1_tag',
+                    name: 'V1 tag',
+                    promptStyle: 'tag',
+                    promptDefaultsInitialized: true,
+                    illustrationPrompt: V1_DEFAULT_ILLUSTRATION_PROMPT,
+                    studioPrompt: 'studio v1',
+                    llm: { apiPresetName: '', llmPresetName: '' },
+                },
+                {
                     id: 'preset_custom',
                     name: 'Custom',
                     illustrationPrompt: customPrompt,
@@ -88,7 +101,8 @@ describe('one-time illustration prompt migration', () => {
 
         expect(normalized.presets[0].illustrationPrompt).toBe(DEFAULT_ILLUSTRATION_PROMPT);
         expect(normalized.presets[1].illustrationPrompt).toBe(DEFAULT_NATURAL_ILLUSTRATION_PROMPT);
-        expect(normalized.presets[2].illustrationPrompt).toBe(customPrompt);
+        expect(normalized.presets[2].illustrationPrompt).toBe(DEFAULT_ILLUSTRATION_PROMPT);
+        expect(normalized.presets[3].illustrationPrompt).toBe(customPrompt);
     });
 });
 
@@ -130,6 +144,9 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                     return {
                         source: 'google',
                         model: 'gemini-2.5-flash-image',
+                        characterReferenceEnabled: true,
+                        characterReferenceMode: 'text_and_image',
+                        supportsCharacterTextReference: true,
                         supportsCharacterReference: true,
                         maxCharacterReferences: null,
                         supportsStyleReference: true,
@@ -235,6 +252,9 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                     return {
                         source: 'google',
                         model: 'gemini-2.5-flash-image',
+                        characterReferenceEnabled: true,
+                        characterReferenceMode: 'text_and_image',
+                        supportsCharacterTextReference: true,
                         supportsCharacterReference: true,
                         maxCharacterReferences: null,
                         supportsStyleReference: true,
@@ -398,6 +418,9 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                     return {
                         source: 'openrouter',
                         model: 'google/gemini-2.5-flash-image',
+                        characterReferenceEnabled: true,
+                        characterReferenceMode: 'text_and_image',
+                        supportsCharacterTextReference: true,
                         supportsCharacterReference: true,
                         maxCharacterReferences: null,
                         supportsStyleReference: true,
@@ -517,6 +540,9 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                     return {
                         source: 'novel',
                         model: 'nai-diffusion-4-5-full',
+                        characterReferenceEnabled: true,
+                        characterReferenceMode: 'text_and_image',
+                        supportsCharacterTextReference: true,
                         supportsCharacterReference: true,
                         maxCharacterReferences: 1,
                         supportsStyleReference: true,
@@ -710,6 +736,9 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
                 capabilities: {
                     source: 'google',
                     model: 'gemini-image',
+                    characterReferenceEnabled: true,
+                    characterReferenceMode: 'text_and_image',
+                    supportsCharacterTextReference: true,
                     supportsCharacterReference: true,
                     maxCharacterReferences: null,
                     supportsMultiCharacterPrompts: false,
@@ -761,6 +790,236 @@ describe('dual-agent illustration loop and deterministic reference binding', () 
         expect(output.trace.rounds[0].reasoning).toBe('Need Vesper reference.');
         expect(output.trace.rounds[0].toolCalls[0].subTrace.length).toBeGreaterThan(0);
         expect(observedEvents.some(e => e.type === 'prepared_request')).toBe(true);
+    });
+
+    test('gates archive tools and profile detail by characterReferenceEnabled and delivery mode, and fails fast before confirmReplace on conflict', async () => {
+        const makeProfileContext = (chat, generateTask) => createMemoryGlobalStateContext({ chat, generateTask });
+
+        // 1. Disabled: no archive tools, no <character_archive> or <character_reference_policy>, no character_refs prop.
+        const chatDisabled = [makeMessage()];
+        const disabledCalls = [];
+        const ctxDisabled = makeProfileContext(chatDisabled, async opts => {
+            disabledCalls.push(structuredClone(opts));
+            return {
+                toolCalls: [{
+                    id: 'c_dis_1',
+                    name: 'add_image_prompt',
+                    args: {
+                        prompt: '1girl, spyglass',
+                        insert_after: 'laid the brass spyglass',
+                        insert_before: 'on the chart table.',
+                    },
+                }],
+                assistantText: '',
+                finishReason: 'tool_calls',
+            };
+        });
+        await createCharacterProfileStore(ctxDisabled).upsertProfile({
+            id: 'char_lyra',
+            name: 'Lyra',
+            canonicalTags: ['silver_braid'],
+            proseDescription: 'Navigator in navy coat.',
+            outfits: [{ id: 'outfit_coat', name: 'Coat', tags: ['navy_coat'], referenceImages: ['/user/images/_references/lyra.png'] }],
+            defaultOutfitId: 'outfit_coat',
+        });
+
+        const settings = normalizeIllustrationSettings(undefined);
+        settings.enabled = true;
+        const pipelineDisabled = createIllustrationPipeline({
+            context: ctxDisabled,
+            imageService: {
+                async getAvailableLoras() { return { names: [], includeWeight: false }; },
+                async getCapabilities() {
+                    return {
+                        source: 'google',
+                        model: 'gemini-2.5-flash-image',
+                        characterReferenceEnabled: false,
+                        characterReferenceMode: 'text_only',
+                        supportsCharacterTextReference: false,
+                        supportsCharacterReference: false,
+                        maxCharacterReferences: 0,
+                        supportsStyleReference: false,
+                        maxStyleReferences: 0,
+                        supportsSourceImage: false,
+                        supportsMultiCharacterPrompts: false,
+                        supportsDynamicAspectRatio: true,
+                        warnings: [],
+                    };
+                },
+                async generate() { return '/user/images/Narrator/disabled.png'; },
+            },
+            settings,
+            hooks: {
+                toast: () => {},
+                notifyError: err => { throw new Error(`Unexpected error: ${err}`); },
+                saveChat: async () => {},
+                updateMessageBlock: () => {},
+                ensureSwipes: () => {},
+                getChatId: () => 'chat_1',
+                getChat: () => chatDisabled,
+            },
+        });
+        await pipelineDisabled.runForMessage({ messageId: 0, source: 'manual' });
+        expect(disabledCalls).toHaveLength(1);
+        expect(disabledCalls[0].tools.map(t => t.function.name)).toEqual(['add_image_prompt']);
+        expect(disabledCalls[0].tools[0].function.parameters.properties).not.toHaveProperty('character_refs');
+        expect(disabledCalls[0].taskMessages[1].content).not.toContain('<character_archive>');
+        expect(disabledCalls[0].taskMessages[1].content).not.toContain('<character_reference_policy>');
+
+        // 2. text_only vs image_only formatting in read_character_profiles
+        const runModeRead = async (mode) => {
+            const chat = [makeMessage()];
+            const calls = [];
+            const ctx = makeProfileContext(chat, async opts => {
+                calls.push(structuredClone(opts));
+                if (calls.length === 1) {
+                    return {
+                        toolCalls: [{ id: 'r1', name: 'read_character_profiles', args: { ids: ['char_lyra'] } }],
+                        assistantText: '',
+                        finishReason: 'tool_calls',
+                    };
+                }
+                return {
+                    toolCalls: [{
+                        id: 'p1',
+                        name: 'add_image_prompt',
+                        args: {
+                            prompt: '1girl, brass spyglass',
+                            insert_after: 'laid the brass spyglass',
+                            insert_before: 'on the chart table.',
+                            ...(mode === 'image_only' ? { character_refs: [{ profile_id: 'char_lyra', outfit_id: 'outfit_coat' }] } : {}),
+                        },
+                    }],
+                    assistantText: '',
+                    finishReason: 'tool_calls',
+                };
+            });
+            await createCharacterProfileStore(ctx).upsertProfile({
+                id: 'char_lyra',
+                name: 'Lyra',
+                canonicalTags: ['silver_braid'],
+                proseDescription: 'Navigator in navy coat.',
+                outfits: [{ id: 'outfit_coat', name: 'Coat', tags: ['navy_coat'], prose: 'Tailored wool coat', referenceImages: ['/user/images/_references/lyra.png'] }],
+                defaultOutfitId: 'outfit_coat',
+            });
+            const generated = [];
+            const pipeline = createIllustrationPipeline({
+                context: ctx,
+                imageService: {
+                    async getAvailableLoras() { return { names: [], includeWeight: false }; },
+                    async getCapabilities() {
+                        return {
+                            source: 'google',
+                            model: 'gemini-2.5-flash-image',
+                            characterReferenceEnabled: true,
+                            characterReferenceMode: mode,
+                            supportsCharacterTextReference: mode !== 'image_only',
+                            supportsCharacterReference: mode !== 'text_only',
+                            maxCharacterReferences: mode === 'text_only' ? 0 : null,
+                            supportsStyleReference: false,
+                            maxStyleReferences: 0,
+                            supportsSourceImage: false,
+                            supportsMultiCharacterPrompts: false,
+                            supportsDynamicAspectRatio: true,
+                            warnings: [],
+                        };
+                    },
+                    async generate(prompt, opts) {
+                        generated.push({ prompt, opts });
+                        return '/user/images/Narrator/mode.png';
+                    },
+                },
+                settings,
+                hooks: {
+                    toast: () => {},
+                    notifyError: err => { throw new Error(`Unexpected error: ${err}`); },
+                    saveChat: async () => {},
+                    updateMessageBlock: () => {},
+                    ensureSwipes: () => {},
+                    getChatId: () => 'chat_1',
+                    getChat: () => chat,
+                },
+            });
+            await pipeline.runForMessage({ messageId: 0, source: 'manual' });
+            return { calls, generated };
+        };
+
+        const textOnlyRun = await runModeRead('text_only');
+        const textToolBody = textOnlyRun.calls[1].taskMessages.find(m => m.role === 'tool').content;
+        expect(textToolBody).toContain('canonical_tags: silver_braid');
+        expect(textToolBody).toContain('Tailored wool coat');
+        expect(textToolBody).not.toContain('reference_images=');
+        expect(textOnlyRun.calls[0].tools[0].function.parameters.properties).not.toHaveProperty('character_refs');
+
+        const imageOnlyRun = await runModeRead('image_only');
+        const imageToolBody = imageOnlyRun.calls[1].taskMessages.find(m => m.role === 'tool').content;
+        expect(imageToolBody).toContain('id=outfit_coat');
+        expect(imageToolBody).toContain('reference_images=1');
+        expect(imageToolBody).not.toContain('canonical_tags:');
+        expect(imageToolBody).not.toContain('prose_description:');
+        expect(imageToolBody).not.toContain('Tailored wool coat');
+        expect(imageOnlyRun.generated[0].opts.references).toEqual([
+            { imagePath: '/user/images/_references/lyra.png', role: 'character', label: 'Lyra — Coat' },
+        ]);
+
+        // 3. Conflict fast-fail BEFORE confirmReplace preserves existing illustrations and skips LLM calls.
+        const existingMsg = makeMessage('Before <img src="/user/images/keep.png" data-illustration-id="ill_keep"> after');
+        existingMsg.extra.illustrations = [{ id: 'ill_keep', status: 'ready', imageUrl: '/user/images/keep.png' }];
+        const conflictChat = [existingMsg];
+        let confirmCalls = 0;
+        let llmCalls = 0;
+        const errors = [];
+        const conflictCaps = {
+            source: 'comfy',
+            model: '',
+            characterReferenceEnabled: true,
+            characterReferenceMode: 'text_and_image',
+            supportsCharacterTextReference: true,
+            supportsCharacterReference: true,
+            maxCharacterReferences: 0,
+            warnings: [{
+                code: 'comfy_missing_ref_slots',
+                message: 'Current ComfyUI workflow does not contain any %ref_image% LoadImage nodes, so requests with reference images or img2img will fail.',
+                affects: ['character_image'],
+            }],
+        };
+        const conflictPipeline = createIllustrationPipeline({
+            context: makeProfileContext(conflictChat, async () => {
+                llmCalls += 1;
+                return { toolCalls: [] };
+            }),
+            imageService: {
+                async getAvailableLoras() { return { names: [], includeWeight: false }; },
+                async getCapabilities() { return conflictCaps; },
+                async generate() { throw new Error('must not generate'); },
+            },
+            settings,
+            hooks: {
+                toast: () => {},
+                notifyError: msg => errors.push(String(msg)),
+                confirmReplace: async () => { confirmCalls += 1; return true; },
+                saveChat: async () => {},
+                updateMessageBlock: () => {},
+                ensureSwipes: () => {},
+                getChatId: () => 'chat_1',
+                getChat: () => conflictChat,
+            },
+        });
+        await conflictPipeline.runForMessage({ messageId: 0, source: 'manual' });
+        expect(confirmCalls).toBe(0);
+        expect(llmCalls).toBe(0);
+        expect(conflictChat[0].mes).toContain('ill_keep');
+        expect(conflictChat[0].extra.illustrations).toHaveLength(1);
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toContain('%ref_image%');
+
+        // Shared runIllustrationAgent also fails fast on character_image conflict.
+        await expect(runIllustrationAgent({
+            context: { generateTask: async () => { throw new Error('must not call LLM'); } },
+            preset: { illustrationPrompt: 'TASK' },
+            input: { current: 'Scene text', snapshotText: 'Scene text', capabilities: conflictCaps },
+            media: { generate: async () => { throw new Error('must not generate'); } },
+        })).rejects.toMatchObject({ code: 'ref_config_conflict' });
     });
 });
 

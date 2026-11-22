@@ -1,8 +1,9 @@
 import { expect, test } from '@jest/globals';
 import {
     ADD_IMAGE_PROMPT_TOOL, GENERATE_IMAGE_TOOL,
-    buildAddImagePromptTool, buildGenerateImageTool,
-    validateAddImagePromptArgs, validateGenerateImageArgs, selectPromptCalls,
+    buildAddImagePromptTool, buildGenerateImageTool, buildIllustrationAgentTools,
+    validateAddImagePromptArgs, validateGenerateImageArgs,
+    resolvePromptCharacterRefs, selectPromptCalls, filterReplayReferences,
 } from '../public/scripts/extensions/stable-diffusion/illustration/tools.js';
 
 const LORA_NAMES = ['a.safetensors'];
@@ -184,4 +185,89 @@ test('calls that differ only in LoRA selection are all kept', () => {
         [{ name: 'a.safetensors', weight: 1 }],
         [],
     ]);
+});
+
+test('character_refs and source_image_id tool schemas gate on preset capability switches while keeping v1 outfit_id', () => {
+    const promptWithChar = buildAddImagePromptTool([], {
+        capabilities: { supportsCharacterReference: true, maxCharacterReferences: 2 },
+    });
+    const promptCharProps = promptWithChar.function.parameters.properties.character_refs.items.properties;
+    expect(promptCharProps).toHaveProperty('profile_id');
+    expect(promptCharProps).toHaveProperty('outfit_id');
+
+    const promptNoChar = buildAddImagePromptTool([], {
+        capabilities: { supportsCharacterReference: false },
+    });
+    expect(promptNoChar.function.parameters.properties).not.toHaveProperty('character_refs');
+
+    const disabledArchiveTools = buildIllustrationAgentTools({
+        includeArchiveTools: true,
+        capabilities: { characterReferenceEnabled: false, supportsCharacterReference: false },
+    });
+    expect(disabledArchiveTools.map(t => t.function.name)).toEqual(['add_image_prompt']);
+
+    const studioWithChar = buildGenerateImageTool([], {
+        includeStudioFields: true,
+        capabilities: { supportsCharacterReference: true, supportsSourceImage: false, maxCharacterReferences: 3 },
+    });
+    expect(studioWithChar.function.parameters.properties.character_refs.items.properties).toHaveProperty('outfit_id');
+    expect(studioWithChar.function.parameters.properties).not.toHaveProperty('source_image_id');
+
+    const studioNoChar = buildGenerateImageTool([], {
+        includeStudioFields: true,
+        capabilities: { supportsCharacterReference: false, supportsSourceImage: true },
+    });
+    expect(studioNoChar.function.parameters.properties).not.toHaveProperty('character_refs');
+    expect(studioNoChar.function.parameters.properties).not.toHaveProperty('character_image_ids');
+    expect(studioNoChar.function.parameters.properties).toHaveProperty('source_image_id');
+});
+
+test('resolvePromptCharacterRefs and selectPromptCalls enforce switches, v1 outfits, 0-image profiles, and missing profileMap', () => {
+    const profileMap = new Map([
+        ['char_lyra', {
+            id: 'char_lyra',
+            name: 'Lyra',
+            negativeTags: ['glasses'],
+            outfits: [
+                { id: 'outfit_coat', name: 'Coat', referenceImages: ['/user/images/_references/lyra_1.png', '/user/images/_references/lyra_2.png'] },
+                { id: 'outfit_empty', name: 'Empty', referenceImages: [] },
+            ],
+            defaultOutfitId: 'outfit_coat',
+        }],
+    ]);
+    const caps = { source: 'google', supportsCharacterReference: true, maxCharacterReferences: 2 };
+
+    expect(resolvePromptCharacterRefs([{ profile_id: 'char_lyra', outfit_id: 'outfit_coat' }], { profileMap, capabilities: caps })).toEqual({
+        ok: true,
+        references: [
+            { imagePath: '/user/images/_references/lyra_1.png', role: 'character', label: 'Lyra — Coat' },
+            { imagePath: '/user/images/_references/lyra_2.png', role: 'character', label: 'Lyra — Coat' },
+        ],
+        negativeTags: ['glasses'],
+    });
+
+    expect(resolvePromptCharacterRefs([{ profile_id: 'char_lyra', outfit_id: 'outfit_empty' }], { profileMap, capabilities: caps }).ok).toBe(false);
+    expect(resolvePromptCharacterRefs([{ profile_id: 'char_lyra' }], {
+        profileMap,
+        capabilities: { source: 'comfy', supportsCharacterReference: true, maxCharacterReferences: 1 },
+    }).ok).toBe(false);
+    expect(resolvePromptCharacterRefs([{ profile_id: 'char_lyra' }], {
+        profileMap,
+        capabilities: { source: 'google', supportsCharacterReference: false },
+    }).ok).toBe(false);
+
+    const unresolvedWithoutMap = selectPromptCalls([{
+        name: 'add_image_prompt',
+        args: { prompt: '1girl', insert_after: 'alpha', insert_before: 'beta', character_refs: [{ profile_id: 'char_lyra' }] },
+    }], { messageText: 'alpha beta', capabilities: caps, profileMap: null });
+    expect(unresolvedWithoutMap.accepted).toEqual([]);
+    expect(unresolvedWithoutMap.rejected).toHaveLength(1);
+
+    const filtered = filterReplayReferences([
+        { imagePath: '/user/images/c.png', role: 'character' },
+        { imagePath: '/user/images/s.png', role: 'source' },
+        { imagePath: '/user/images/st.png', role: 'style' },
+    ], { supportsCharacterReference: false, supportsSourceImage: true, supportsStyleReference: false });
+    expect(filtered.references).toEqual([{ imagePath: '/user/images/s.png', role: 'source' }]);
+    expect(filtered.skipped).toHaveLength(2);
 });

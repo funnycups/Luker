@@ -417,7 +417,8 @@ describe('workbench sd studio separation, legacy migration, and free drawing', (
             llmCalls.push(opts);
             const toolNames = (opts.tools || []).map(t => t.function.name);
             expect(toolNames).toEqual(['generate_image']);
-            expect(opts.taskMessages[0]).toEqual({ role: 'system', content: 'Studio instructions' });
+            expect(opts.taskMessages[0].role).toBe('system');
+            expect(opts.taskMessages[0].content).toContain('Studio instructions');
 
             if (round === 1) {
                 return {
@@ -860,8 +861,198 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
             sdSettings.generationPresets.presets[0].config.connection_profile = 'Valid Profile';
             const cleanSnap = await askProvider.getSnapshot(ctx);
             expect(missingConnRule.check({ providers: { sd: cleanSnap } })).toBeNull();
+
+            // sd.reference-config-conflict SuggestRule fires when switches conflict with backend protocol
+            const conflictRule = suggestProvider.rules.find(r => r.id === 'sd.reference-config-conflict');
+            expect(conflictRule).toBeDefined();
+            expect(conflictRule.check({ providers: { sd: cleanSnap } })).toBeNull();
+
+            sdSettings.source = 'google';
+            sdSettings.model = 'imagen-3.0-generate-002';
+            sdSettings.img2img_enabled = true;
+            const conflictSnap = await askProvider.getSnapshot(ctx);
+            expect(conflictSnap.img2imgEnabled).toBe(true);
+            expect(conflictSnap.referenceWarnings.map(w => w.code)).toContain('google_model_no_image_input');
+            const conflictHit = conflictRule.check({ providers: { sd: conflictSnap } });
+            expect(conflictHit).not.toBeNull();
+            expect(conflictHit.sig).toContain('google_model_no_image_input');
+
+            const capPayload = await askProvider.readers.wb_read_sd({ part: 'capabilities' }, ctx);
+            expect(capPayload.supportsSourceImage).toBe(true);
+            expect(capPayload.warnings.map(w => w.code)).toContain('google_model_no_image_input');
         } finally {
             globalThis.fetch = originalFetch;
+            cleanup();
+        }
+    });
+
+    test('Studio obeys reference switches, hides Edit source when img2img is off, filters disabled refs on replay, and enforces caps/conflicts', async () => {
+        const { ctx, reg } = createHarnessContext();
+        const profileStore = createCharacterProfileStore(ctx);
+        await profileStore.upsertProfile({
+            id: 'char_elena',
+            name: 'Elena',
+            sourceWork: 'Harbor',
+            canonicalTags: ['silver_bob', 'teal_eyes'],
+            outfits: [{ id: 'outfit_coat', name: 'Coat', tags: ['navy_coat'], referenceImages: ['/user/images/_references/elena_1.png', '/user/images/_references/elena_2.png'] }],
+            defaultOutfitId: 'outfit_coat',
+        });
+
+        let activeCaps = {
+            source: 'google',
+            model: 'gemini-2.5-flash-image',
+            characterReferenceEnabled: false,
+            characterReferenceMode: 'text_only',
+            supportsCharacterTextReference: false,
+            supportsCharacterReference: false,
+            maxCharacterReferences: 0,
+            supportsStyleReference: false,
+            maxStyleReferences: 0,
+            supportsSourceImage: false,
+            supportsMultiCharacterPrompts: false,
+            supportsDynamicAspectRatio: true,
+            availableLoras: { names: [], includeWeight: false },
+            warnings: [],
+        };
+
+        const generatedCalls = [];
+        const llmCalls = [];
+        let scriptStep = 'no_source';
+        let charModeRound = 0;
+        ctx.generateTask = async (opts) => {
+            llmCalls.push(JSON.parse(JSON.stringify(opts)));
+            if (scriptStep === 'no_source') {
+                return {
+                    toolCalls: [{ id: 'g1', name: 'generate_image', args: { prompt: '1girl, pier' } }],
+                    assistantText: '',
+                };
+            }
+            if (scriptStep === 'char_mode') {
+                charModeRound += 1;
+                if (charModeRound === 1) {
+                    return {
+                        toolCalls: [{ id: 'r1', name: 'read_character_profiles', args: { ids: ['char_elena'] } }],
+                        assistantText: '',
+                    };
+                }
+                return {
+                    toolCalls: [{
+                        id: 'g2',
+                        name: 'generate_image',
+                        args: {
+                            prompt: '1girl, pier at dusk',
+                            character_refs: [{ profile_id: 'char_elena', outfit_id: 'outfit_coat' }],
+                        },
+                    }],
+                    assistantText: '',
+                };
+            }
+            return { toolCalls: [], assistantText: '' };
+        };
+
+        const imageService = {
+            async getAvailableLoras() { return { names: [], includeWeight: false }; },
+            async getCapabilities() { return JSON.parse(JSON.stringify(activeCaps)); },
+            async generate(prompt, opts) {
+                generatedCalls.push({ prompt, opts });
+                return `/user/images/_studio/sw_${generatedCalls.length}.png`;
+            },
+        };
+
+        globalThis.Luker = { getContext: () => ctx };
+        const cleanup = initSdLens({ getContext: () => ctx, imageService });
+        const ws = reg.getWorkspaces().find(w => w.id === 'sd');
+        const container = document.createElement('div');
+        document.body.appendChild(container);
+        const toastMock = jest.fn();
+
+        try {
+            const handle = ws.mount(container, {
+                app: { toast: toastMock, isCompact: () => false },
+                opts: { ws: 'sd', subview: 'studio' },
+            });
+            await new Promise(r => setTimeout(r, 30));
+
+            // 1. With supportsSourceImage=false and characterReferenceEnabled=false: generate succeeds, Edit source is hidden.
+            const input = container.querySelector('[data-sd-role="studio-input"]');
+            input.value = 'Draw a quiet pier.';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            container.querySelector('[data-sd-role="studio-send"]').click();
+            await new Promise(r => setTimeout(r, 50));
+
+            expect(generatedCalls).toHaveLength(1);
+            expect(llmCalls[0].tools.map(t => t.function.name)).toEqual(['generate_image']);
+            expect(llmCalls[0].tools[0].function.parameters.properties).not.toHaveProperty('source_image_id');
+            expect(container.querySelector('[data-studio-action="edit-source"]')).toBeNull();
+
+            // 2. Enable character references (image_only) -> exposes read_character_profiles & character_refs, hides canonical_tags.
+            activeCaps = {
+                ...activeCaps,
+                characterReferenceEnabled: true,
+                characterReferenceMode: 'image_only',
+                supportsCharacterTextReference: false,
+                supportsCharacterReference: true,
+                maxCharacterReferences: 2,
+            };
+            scriptStep = 'char_mode';
+            const input2 = container.querySelector('[data-sd-role="studio-input"]');
+            input2.value = 'Draw Elena at dusk.';
+            input2.dispatchEvent(new Event('input', { bubbles: true }));
+            container.querySelector('[data-sd-role="studio-send"]').click();
+            await new Promise(r => setTimeout(r, 60));
+
+            expect(generatedCalls).toHaveLength(2);
+            expect(generatedCalls[1].opts.references).toEqual([
+                { imagePath: '/user/images/_references/elena_1.png', role: 'character', label: 'Elena — Coat' },
+                { imagePath: '/user/images/_references/elena_2.png', role: 'character', label: 'Elena — Coat' },
+            ]);
+            const readToolReply = llmCalls.at(-1).taskMessages.findLast(m => m.role === 'tool')?.content || '';
+            expect(readToolReply).toContain('reference_images=2');
+            expect(readToolReply).not.toContain('canonical_tags:');
+
+            // 3. Replay with character references disabled -> skips saved character refs and warns via toast.
+            activeCaps = {
+                ...activeCaps,
+                characterReferenceEnabled: false,
+                characterReferenceMode: 'text_only',
+                supportsCharacterReference: false,
+                maxCharacterReferences: 0,
+            };
+            container.querySelector('[data-studio-action="regenerate"]').click();
+            await new Promise(r => setTimeout(r, 50));
+
+            expect(generatedCalls).toHaveLength(3);
+            expect(generatedCalls[2].opts.references).toBeUndefined();
+            expect(toastMock).toHaveBeenCalledWith(
+                expect.stringContaining('Some saved reference images were skipped'),
+                expect.any(Object),
+            );
+
+            // 4. Conflict fast-fail blocks studio turn before sending to LLM.
+            activeCaps = {
+                ...activeCaps,
+                characterReferenceEnabled: true,
+                characterReferenceMode: 'text_and_image',
+                supportsCharacterReference: true,
+                maxCharacterReferences: 0,
+                warnings: [{
+                    code: 'comfy_missing_ref_slots',
+                    message: 'Current ComfyUI workflow does not contain any %ref_image% LoadImage nodes, so requests with reference images or img2img will fail.',
+                    affects: ['character_image'],
+                }],
+            };
+            const llmCountBeforeConflict = llmCalls.length;
+            const input3 = container.querySelector('[data-sd-role="studio-input"]');
+            input3.value = 'Should fail fast on conflict.';
+            input3.dispatchEvent(new Event('input', { bubbles: true }));
+            container.querySelector('[data-sd-role="studio-send"]').click();
+            await new Promise(r => setTimeout(r, 40));
+
+            expect(llmCalls).toHaveLength(llmCountBeforeConflict);
+            expect(toastMock).toHaveBeenCalledWith(expect.stringContaining('%ref_image%'), { error: true });
+
+            handle.destroy();
+        } finally {
             cleanup();
         }
     });

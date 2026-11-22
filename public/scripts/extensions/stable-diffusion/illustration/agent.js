@@ -5,7 +5,12 @@ import {
     makeRuntimeToolCallId,
 } from '../../../lib/iter-tool-calling.js';
 import { runExplorationAgent } from '../exploration/agent.js';
-import { buildIllustrationTaskMessages, requestIllustrationPrompts } from './task.js';
+import {
+    buildIllustrationTaskMessages,
+    findCharacterImageConflict,
+    requestIllustrationPrompts,
+    resolveCharacterReferenceMode,
+} from './task.js';
 import { ILLUSTRATION_AGENT_TOOL_NAMES, selectPromptCalls } from './tools.js';
 
 const MAX_VALIDATION_SELF_HEAL_RETRIES = 2; // cap-ok: bounds consecutive anchor or reference validation retries when model repeats invalid add_image_prompt arguments
@@ -16,24 +21,33 @@ function abortError() {
     return error;
 }
 
-export function formatProfileDetailForIllustration(profile) {
+export function formatProfileDetailForIllustration(profile, mode = 'text_and_image') {
+    const resolvedMode = mode === 'text_only' || mode === 'image_only' ? mode : 'text_and_image';
+    const includeText = resolvedMode !== 'image_only';
+    const includeImages = resolvedMode !== 'text_only';
     const lines = [
         `id: ${profile.id}`,
         `name: ${profile.name}`,
     ];
     if (profile.aliases?.length) lines.push(`aliases: ${profile.aliases.join(', ')}`);
     if (profile.sourceWork) lines.push(`work: ${profile.sourceWork}`);
-    if (profile.canonicalTags?.length) lines.push(`canonical_tags: ${profile.canonicalTags.join(', ')}`);
-    if (profile.negativeTags?.length) lines.push(`negative_tags: ${profile.negativeTags.join(', ')}`);
-    if (profile.proseDescription) lines.push(`prose_description: ${profile.proseDescription}`);
+    if (includeText) {
+        if (profile.canonicalTags?.length) lines.push(`canonical_tags: ${profile.canonicalTags.join(', ')}`);
+        if (profile.negativeTags?.length) lines.push(`negative_tags: ${profile.negativeTags.join(', ')}`);
+        if (profile.proseDescription) lines.push(`prose_description: ${profile.proseDescription}`);
+    }
     if (profile.defaultOutfitId) lines.push(`default_outfit_id: ${profile.defaultOutfitId}`);
     if (Array.isArray(profile.outfits) && profile.outfits.length > 0) {
         lines.push('outfits:');
         for (const outfit of profile.outfits) {
             const parts = [`  - id=${outfit.id} name="${outfit.name}"`];
-            if (outfit.tags?.length) parts.push(`tags=[${outfit.tags.join(', ')}]`);
-            if (outfit.prose) parts.push(`prose="${outfit.prose}"`);
-            parts.push(`reference_images=${outfit.referenceImages?.length || 0}`);
+            if (includeText) {
+                if (outfit.tags?.length) parts.push(`tags=[${outfit.tags.join(', ')}]`);
+                if (outfit.prose) parts.push(`prose="${outfit.prose}"`);
+            }
+            if (includeImages) {
+                parts.push(`reference_images=${outfit.referenceImages?.length || 0}`);
+            }
             lines.push(parts.join(' | '));
         }
     }
@@ -86,14 +100,31 @@ export async function runIllustrationAgent({
         ? { names: Array.isArray(input.loras.names) ? input.loras.names : [], includeWeight: Boolean(input.loras.includeWeight) }
         : { names: [], includeWeight: false };
     const capabilities = input?.capabilities ?? null;
+    const charImgConflict = findCharacterImageConflict(capabilities);
+    if (charImgConflict) {
+        const rawConflict = String(charImgConflict.message || '').trim();
+        const err = new Error(rawConflict || 'Character reference images are incompatible with the active image backend or workflow.');
+        err.code = 'ref_config_conflict';
+        throw err;
+    }
+
     const snapshotText = String(input?.snapshotText ?? input?.current ?? '');
+    const canUseCharacterArchive = Boolean(
+        profileStore
+        && (!capabilities
+            || capabilities.characterReferenceEnabled === true
+            || (capabilities.characterReferenceEnabled !== false
+                && Boolean(capabilities.supportsCharacterTextReference || capabilities.supportsCharacterReference))),
+    );
+    const activeProfileStore = canUseCharacterArchive ? profileStore : null;
+    const profileAgentMode = resolveCharacterReferenceMode(capabilities);
 
     let profileMap = null;
     let characterArchiveIndex;
-    if (profileStore) {
-        const existingProfiles = await profileStore.listProfiles();
+    if (activeProfileStore) {
+        const existingProfiles = await activeProfileStore.listProfiles();
         profileMap = new Map(existingProfiles.map(p => [p.id, p]));
-        characterArchiveIndex = profileStore.buildCompactProfileIndex(existingProfiles);
+        characterArchiveIndex = activeProfileStore.buildCompactProfileIndex(existingProfiles);
     }
 
     const taskMessages = buildIllustrationTaskMessages({
@@ -101,8 +132,9 @@ export async function runIllustrationAgent({
         context: input?.context || '',
         current: input?.current || '',
         memoryRecall: input?.memoryRecall || '',
-        ...(profileStore ? { characterArchiveIndex } : {}),
+        ...(activeProfileStore ? { characterArchiveIndex } : {}),
         capabilities,
+        allowExploration,
     });
 
     const acceptedPrompts = [];
@@ -137,7 +169,7 @@ export async function runIllustrationAgent({
             availableLoras: loras.names,
             includeWeight: loras.includeWeight,
             capabilities,
-            includeArchiveTools: Boolean(profileStore),
+            includeArchiveTools: Boolean(activeProfileStore),
             allowExploration,
             promptContext: input?.promptContext ?? null,
             transientSessionId,
@@ -207,7 +239,7 @@ export async function runIllustrationAgent({
             checkAlive?.();
 
             const callId = String(rawCall?.id || '').trim() || makeRuntimeToolCallId();
-            if (profileStore && rawCall.name === ILLUSTRATION_AGENT_TOOL_NAMES.READ_CHARACTER_PROFILES) {
+            if (activeProfileStore && rawCall.name === ILLUSTRATION_AGENT_TOOL_NAMES.READ_CHARACTER_PROFILES) {
                 hasQueryOrExplore = true;
                 const ids = Array.isArray(rawCall.args?.ids) ? rawCall.args.ids : [];
                 observe?.({
@@ -218,12 +250,12 @@ export async function runIllustrationAgent({
                     args: rawCall.args ?? {},
                     ids,
                 });
-                const profiles = await profileStore.getProfilesByIds(ids);
+                const profiles = await activeProfileStore.getProfilesByIds(ids);
                 for (const p of profiles) {
                     profileMap.set(p.id, p);
                 }
                 const body = profiles.length > 0
-                    ? profiles.map(formatProfileDetailForIllustration).join('\n\n---\n\n')
+                    ? profiles.map(p => formatProfileDetailForIllustration(p, profileAgentMode)).join('\n\n---\n\n')
                     : `No character profiles found for ids: ${ids.join(', ')}`;
                 observe?.({
                     type: 'tool_done',
@@ -249,7 +281,7 @@ export async function runIllustrationAgent({
                 continue;
             }
 
-            if (profileStore && allowExploration && rawCall.name === ILLUSTRATION_AGENT_TOOL_NAMES.EXPLORE_CHARACTERS) {
+            if (activeProfileStore && allowExploration && rawCall.name === ILLUSTRATION_AGENT_TOOL_NAMES.EXPLORE_CHARACTERS) {
                 hasQueryOrExplore = true;
                 const targets = Array.isArray(rawCall.args?.targets) ? rawCall.args.targets : [];
                 observe?.({
@@ -263,7 +295,7 @@ export async function runIllustrationAgent({
                 const subTrace = [];
                 const expResult = await runExplorationAgent({
                     context,
-                    profileStore,
+                    profileStore: activeProfileStore,
                     targets,
                     cardAvatar: String(input?.cardAvatar || ''),
                     preset,
@@ -279,9 +311,11 @@ export async function runIllustrationAgent({
                 for (const saved of expResult.savedProfiles) {
                     savedProfilesById.set(saved.id, saved);
                 }
-                const refreshed = await profileStore.listProfiles();
+                const refreshed = await activeProfileStore.listProfiles();
                 profileMap = new Map(refreshed.map(p => [p.id, p]));
-                const savedSummaries = expResult.savedProfiles.map(formatProfileDetailForIllustration).join('\n\n---\n\n');
+                const savedSummaries = expResult.savedProfiles
+                    .map(p => formatProfileDetailForIllustration(p, profileAgentMode))
+                    .join('\n\n---\n\n');
                 const body = savedSummaries
                     ? `Saved character profiles:\n\n${savedSummaries}`
                     : (expResult.finalText || 'Exploration finished with no new character profiles saved.');
@@ -316,7 +350,7 @@ export async function runIllustrationAgent({
                     availableLoras: loras.names,
                     includeWeight: loras.includeWeight,
                     capabilities,
-                    profileMap,
+                    profileMap: profileMap || new Map(),
                 });
                 if (selection.accepted.length > 0) {
                     const accepted = selection.accepted[0];
@@ -406,7 +440,7 @@ export async function runIllustrationAgent({
             continue;
         }
 
-        if (profileStore && roundRejected.length > 0 && validationRetries < MAX_VALIDATION_SELF_HEAL_RETRIES) {
+        if (activeProfileStore && roundRejected.length > 0 && validationRetries < MAX_VALIDATION_SELF_HEAL_RETRIES) {
             validationRetries += 1;
             appendStandardToolRoundMessages(taskMessages, executedCalls, assistantText, {
                 reasoning: promptResult.reasoning,

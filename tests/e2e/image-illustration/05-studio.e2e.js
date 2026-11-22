@@ -88,21 +88,35 @@ test.describe('Workbench embedded image studio', () => {
         expect(txt2img, 'SD mock should receive one txt2img request').toBeTruthy();
         expect(String(txt2img.body.prompt)).toContain('lighthouse');
 
+        // Edit source is hidden while #sd_img2img_enabled is off; enabling it via UI unlocks source editing in Studio.
+        await expect(studioRoot.locator('[data-studio-action="edit-source"]')).toHaveCount(0);
+        await page.locator('.wbench .wb-titlebar .lw-ibtn.is-close').click();
+        await expect(page.locator('.wbench .wb-win')).toBeHidden({ timeout: 10_000 });
+
+        await openExtensionsDrawer(page);
+        await openInlineDrawer(page, 'sd_container');
+        await page.locator('#sd_img2img_enabled').check();
+        await closeAnyOpenTopSettingsDrawer(page);
+
+        await openStudio(page);
+        const studioForImg2Img = page.locator('.wbench .wb-win:not([hidden]) [data-sd-view="studio"]');
+        await expect(studioForImg2Img.locator('[data-studio-action="edit-source"]')).toBeVisible({ timeout: 10_000 });
+
         // Second round: attach first image as source via Edit source and generate edited image via img2img.
-        await studioRoot.locator('[data-studio-action="edit-source"]').click();
-        await expect(studioRoot.locator('.sdlens-studio-source-banner')).toBeVisible();
-        await studioRoot.locator('[data-sd-role="studio-input"]').fill('把天空改成星空夜晚');
-        await studioRoot.locator('[data-sd-role="studio-send"]').click();
-        await expect(studioRoot.locator('[data-studio-image-id]')).toHaveCount(2, { timeout: 60_000 });
+        await studioForImg2Img.locator('[data-studio-action="edit-source"]').click();
+        await expect(studioForImg2Img.locator('.sdlens-studio-source-banner')).toBeVisible();
+        await studioForImg2Img.locator('[data-sd-role="studio-input"]').fill('把天空改成星空夜晚');
+        await studioForImg2Img.locator('[data-sd-role="studio-send"]').click();
+        await expect(studioForImg2Img.locator('[data-studio-image-id]')).toHaveCount(2, { timeout: 60_000 });
 
         const img2img = sdMock.requests.find(request => request.url === '/sdapi/v1/img2img');
         expect(img2img, 'SD mock should receive an img2img request when editing source image').toBeTruthy();
         expect(String(img2img.body.prompt)).toContain('starry night');
 
         // Third round: plain text reply, carrying previous assistant tool_calls and tool result.
-        await studioRoot.locator('[data-sd-role="studio-input"]').fill('构图很不错');
-        await studioRoot.locator('[data-sd-role="studio-send"]').click();
-        await expect(studioRoot.locator('.sdlens-studio-messages')).toContainText('已按你的反馈调整。', { timeout: 60_000 });
+        await studioForImg2Img.locator('[data-sd-role="studio-input"]').fill('构图很不错');
+        await studioForImg2Img.locator('[data-sd-role="studio-send"]').click();
+        await expect(studioForImg2Img.locator('.sdlens-studio-messages')).toContainText('已按你的反馈调整。', { timeout: 60_000 });
 
         const chatRequests = mock.requests.filter(request => String(request.url).includes('/chat/completions'));
         expect(chatRequests.length).toBeGreaterThanOrEqual(3);

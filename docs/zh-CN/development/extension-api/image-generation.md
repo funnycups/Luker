@@ -1,6 +1,6 @@
 # 图像生成 API
 
-`context.imageGeneration` 按三层一致性暴露 Luker 结构化图像生成能力，涵盖后端能力探测、生图预设切换、参考图多协议路由、多角色分区提示词以及图像归属控制。
+`context.imageGeneration` 按三层一致性暴露 Luker 结构化图像生成能力，涵盖预设层用户参考开关与后端底层协议探测、生图预设切换、参考图多协议路由、多角色分区提示词以及图像归属控制。
 
 ## 三层 API 暴露
 
@@ -25,22 +25,27 @@ imageGeneration.isAvailable(): boolean
 imageGeneration.getCapabilities(): Promise<ImageCapabilities>
 ```
 
-`ImageCapabilities` 描述当前生图后端与模型支持的结构化能力：
+`ImageCapabilities` 同时返回当前生图预设的用户开关状态、底层后端与工作流 `protocol` 能力以及配置冲突 `warnings`：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `source` | `string` | 当前生图源标识，例如 `'google'`、`'chat_image'`、`'openai'`、`'openrouter'`、`'xai'`、`'novel'`、`'comfy'`、`'auto'` 或 `'vlad'` |
 | `model` | `string` | 当前生图模型标识 |
-| `supportsCharacterReference` | `boolean` | 是否支持传入 `role: 'character'` 角色参考图 |
-| `maxCharacterReferences` | `number \| null` | 单次请求支持的角色参考图上限；协议无固定上限时为 `null` |
-| `supportsStyleReference` | `boolean` | 是否支持传入 `role: 'style'` 画风参考图 |
-| `maxStyleReferences` | `number \| null` | 单次请求支持的画风参考图上限；协议无固定上限时为 `null` |
-| `supportsSourceImage` | `boolean` | 是否支持传入 `role: 'source'` 底图执行图像修改 |
-| `supportsMultiCharacterPrompts` | `boolean` | 是否支持 `characterPrompts` 多角色分区提示词与坐标 |
-| `supportsDynamicAspectRatio` | `boolean` | 是否支持按次覆盖 `aspectRatio` 画幅比例 |
+| `characterReferenceEnabled` | `boolean` | 当前生图预设是否启用角色库参考 |
+| `characterReferenceMode` | `'text_only' \| 'image_only' \| 'text_and_image'` | 当前生图预设配置的角色参考传递方式 |
+| `supportsCharacterTextReference` | `boolean` | 当 `characterReferenceEnabled` 为 `true` 且 `characterReferenceMode` 为 `'text_only'` 或 `'text_and_image'` 时为 `true` |
+| `supportsCharacterReference` | `boolean` | 用户开关态能力：当 `characterReferenceEnabled` 为 `true` 且 `characterReferenceMode` 为 `'image_only'` 或 `'text_and_image'` 时为 `true` |
+| `maxCharacterReferences` | `number \| null` | 面向调用方的单次角色参考图上限：未启用时为 `0`；启用时取 `protocol.maxCharacterReferences`，且在 `protocol.sharedReferenceSlots` 为 `true` 时扣减当前已启用的画风参考数量；协议无固定上限时为 `null` |
+| `supportsStyleReference` | `boolean` | 用户开关态能力：当前生图预设是否启用画风与氛围参考 |
+| `maxStyleReferences` | `number \| null` | 未启用画风参考时为 `0`，启用时取 `protocol.maxStyleReferences` |
+| `supportsSourceImage` | `boolean` | 用户开关态能力：当前生图预设是否允许图生图底图编辑 |
+| `supportsMultiCharacterPrompts` | `boolean` | 映射 `protocol.supportsMultiCharacterPrompts`：是否支持 `characterPrompts` 多角色分区提示词与坐标 |
+| `supportsDynamicAspectRatio` | `boolean` | 映射 `protocol.supportsDynamicAspectRatio`：是否支持按次覆盖 `aspectRatio` 画幅比例 |
 | `availableLoras` | `{ names: string[], includeWeight: boolean }` | 当前 ComfyUI 工作流暴露的动态 LoRA 列表 |
+| `protocol` | `ProtocolCapabilities` | 独立于用户开关的后端与工作流协议能力，包含 `supportsCharacterReference`、`maxCharacterReferences`、`supportsStyleReference`、`maxStyleReferences`、`supportsSourceImage`、`supportsMultiCharacterPrompts`、`supportsDynamicAspectRatio`、`sharedReferenceSlots`、`maxTotalReferences`、`comfyReferenceSlotCount` 与 `comfyWorkflowError` |
+| `warnings` | `Array<{ code: string, message: string, affects: Array<'character_image' \| 'style' \| 'source'> }>` | 已开启的参考开关与当前生图后端 `protocol` 或 ComfyUI `%ref_image%` 节点之间的配置冲突列表 |
 
-传入超出 `getCapabilities()` 支持范围的参考图角色或数量时，`generate()` 会直接报错，不静默丢弃调用方参数。
+顶层 `supportsCharacterReference`、`supportsStyleReference` 与 `supportsSourceImage` 表示当前生图预设中由用户开关决定的能力状态，供 AI agent 与界面按钮门控读取；`protocol.supports*` 则表示当前生图后端、模型与 ComfyUI 工作流在协议层实际支持的输入能力。显式调用 `generate({ references })` 时，传入的 `references` 以及在 `supportsStyleReference` 与 `includePresetStyleReferences` 均开启时合并的预设 `style_references` 直接按 `protocol` 校验而非按用户开关校验，若角色、工作流槽位或上限超出 `protocol` 支持范围会直接报错，不静默丢弃调用方参数。
 
 ## 发起图像生成
 
@@ -66,11 +71,11 @@ imageGeneration.generate(
 | `width` / `height` | `number` | 显式像素宽高覆盖 |
 | `seed` | `number` | 随机种子 |
 | `loras` | `Array<{ name: string, weight?: number }>` | 标准 ComfyUI 工作流动态 LoRA 列表 |
-| `references` | `ImageReferenceInput[]` | 受管本地参考图数组 |
+| `references` | `ImageReferenceInput[]` | 受管本地参考图数组，按 `protocol` 校验 |
 | `characterPrompts` | `Array<{ prompt: string, negativePrompt?: string, center?: { x: number, y: number } }>` | 多角色独立提示词与归一化坐标，取值范围 `0` 至 `1` |
 | `attribution` | `'active_chat' \| 'none' \| { char_dir: string, chat_name: string, is_group: boolean }` | 控制写入清理索引的聊天归属元数据；画室草稿等跨聊天资产传 `'none'` |
 | `subdir` | `string` | `/user/images/` 下的输出子目录，例如 `'_studio'` |
-| `includePresetStyleReferences` | `boolean` | 默认为 `true`；后端支持画风参考时自动合并当前生图预设绑定的画风参考图 |
+| `includePresetStyleReferences` | `boolean` | 默认为 `true`；当当前预设开启 `supportsStyleReference` 时自动合并预设绑定的画风参考图 |
 | `skipPromptPrefix` | `boolean` | 为 `true` 时跳过全局正向提示词前缀拼接 |
 | `signal` | `AbortSignal` | 中止信号，触发后立即取消进行中的生成请求 |
 

@@ -1,6 +1,6 @@
 import { extension_settings, getContext } from '../../../extensions.js';
 import { ensureSwipes, eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
-import { t } from '../../../i18n.js';
+import { t, translate } from '../../../i18n.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 import { migrateIllustrationPromptSettings } from './settings.js';
 import { initSettingsUi } from './settings-ui.js';
@@ -145,6 +145,7 @@ export async function initIllustration(bridge) {
             toast: (message, type = 'error') => toastr[type]?.(message, t`Image Generation`),
             notifyError: notifyIllustrationError,
             t,
+            translate,
             beginActivityJob: typeof bridge.beginActivityJob === 'function'
                 ? options => {
                     clearIllustrationErrorToast();

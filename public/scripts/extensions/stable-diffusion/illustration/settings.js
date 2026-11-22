@@ -5,6 +5,8 @@ import {
     DEFAULT_NATURAL_STUDIO_PROMPT,
     LEGACY_DEFAULT_ILLUSTRATION_PROMPT,
     LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
+    V1_DEFAULT_ILLUSTRATION_PROMPT,
+    V1_DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
     createDefaultPresets,
     getDefaultPromptValues,
     makeIllustrationId,
@@ -144,9 +146,9 @@ function normalizePreset(raw, now) {
 function exactLegacyPromptStyle(preset) {
     if (preset.promptStyle) return preset.promptStyle;
     const styles = [];
-    if ([DEFAULT_ILLUSTRATION_PROMPT, LEGACY_DEFAULT_ILLUSTRATION_PROMPT].includes(preset.illustrationPrompt)
+    if ([DEFAULT_ILLUSTRATION_PROMPT, V1_DEFAULT_ILLUSTRATION_PROMPT, LEGACY_DEFAULT_ILLUSTRATION_PROMPT].includes(preset.illustrationPrompt)
         || preset.studioPrompt === DEFAULT_STUDIO_PROMPT) styles.push('tag');
-    if ([DEFAULT_NATURAL_ILLUSTRATION_PROMPT, LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT].includes(preset.illustrationPrompt)
+    if ([DEFAULT_NATURAL_ILLUSTRATION_PROMPT, V1_DEFAULT_NATURAL_ILLUSTRATION_PROMPT, LEGACY_DEFAULT_NATURAL_ILLUSTRATION_PROMPT].includes(preset.illustrationPrompt)
         || preset.studioPrompt === DEFAULT_NATURAL_STUDIO_PROMPT) styles.push('natural');
     return styles.length === 1 ? styles[0] : undefined;
 }
@@ -171,6 +173,11 @@ export function migrateIllustrationPromptSettings(raw, options = {}) {
 
     const settings = normalizeIllustrationSettings(raw, options);
     for (const preset of settings.presets) {
+        if (preset.illustrationPrompt === V1_DEFAULT_ILLUSTRATION_PROMPT) {
+            preset.illustrationPrompt = DEFAULT_ILLUSTRATION_PROMPT;
+        } else if (preset.illustrationPrompt === V1_DEFAULT_NATURAL_ILLUSTRATION_PROMPT) {
+            preset.illustrationPrompt = DEFAULT_NATURAL_ILLUSTRATION_PROMPT;
+        }
         if (preset.promptDefaultsInitialized) continue;
         const style = exactLegacyPromptStyle(preset);
         if (style) preset.promptStyle = style;

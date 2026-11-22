@@ -56,7 +56,34 @@ export const GENERATION_CONFIG_KEYS = Object.freeze([
     'novel_url',
     'chat_image_url',
     'style_references',
+    'character_reference_enabled',
+    'character_reference_mode',
+    'style_references_enabled',
+    'img2img_enabled',
 ]);
+
+export const CHARACTER_REFERENCE_MODES = Object.freeze(['text_only', 'image_only', 'text_and_image']);
+
+/**
+ * Normalizes preset-scoped reference and img2img switches to valid defaults.
+ * Legacy presets with non-empty `style_references` and omitted `style_references_enabled` migrate to `true`.
+ *
+ * @param {object} [raw]
+ * @returns {{ character_reference_enabled: boolean, character_reference_mode: 'text_only' | 'image_only' | 'text_and_image', style_references_enabled: boolean, img2img_enabled: boolean }}
+ */
+export function normalizeReferenceSettings(raw) {
+    const mode = raw?.character_reference_mode;
+    const hasLegacyStyleRefs = Array.isArray(raw?.style_references) && raw.style_references.length > 0;
+    const styleEnabled = raw?.style_references_enabled === undefined
+        ? hasLegacyStyleRefs
+        : Boolean(raw.style_references_enabled);
+    return {
+        character_reference_enabled: Boolean(raw?.character_reference_enabled),
+        character_reference_mode: CHARACTER_REFERENCE_MODES.includes(mode) ? mode : 'text_only',
+        style_references_enabled: styleEnabled,
+        img2img_enabled: Boolean(raw?.img2img_enabled),
+    };
+}
 
 function cloneConfigValue(key, value) {
     if (key === 'comfy_placeholders') {
@@ -98,7 +125,7 @@ function makeGenerationPresetId(presets, now) {
     return `${base}_${suffix}`;
 }
 
-function normalizeGenerationPreset(raw, now) {
+export function normalizeGenerationPreset(raw, now = Date.now()) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
         return null;
     }
@@ -109,10 +136,14 @@ function normalizeGenerationPreset(raw, now) {
     if (!raw.config || typeof raw.config !== 'object' || Array.isArray(raw.config)) {
         return null;
     }
+    const config = {
+        ...pickGenerationConfig(raw.config),
+        ...normalizeReferenceSettings(raw.config),
+    };
     return {
         id,
         name: String(raw.name ?? ''),
-        config: pickGenerationConfig(raw.config),
+        config,
         createdAt: Number.isFinite(Number(raw.createdAt)) ? Number(raw.createdAt) : now,
         updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : now,
     };
@@ -211,6 +242,10 @@ export function applyGenerationConfig(sd, config) {
         }
         sd[key] = cloneConfigValue(key, config[key]);
         applied.push(key);
+    }
+    const normalizedRefs = normalizeReferenceSettings(config);
+    for (const [key, value] of Object.entries(normalizedRefs)) {
+        sd[key] = value;
     }
     return applied;
 }

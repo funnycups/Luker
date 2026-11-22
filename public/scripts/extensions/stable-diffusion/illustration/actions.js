@@ -13,7 +13,10 @@ import { emitMessageChanged } from './message-events.js';
 import { makeIllustrationId } from './presets.js';
 import { messageFingerprint } from './pipeline.js';
 import { resolveReplayLoras } from '../lora/tool.js';
+import { filterReplayReferences } from '../capabilities.js';
 import { deleteMediaFromServer } from '../../../chats.js';
+
+export { filterReplayReferences };
 
 export function initIllustrationActions({ context, pipeline, imageService, settings, ensureSwipes, toast, notifyError, t }) {
     const actionControllers = new Map();
@@ -81,7 +84,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             throw new Error('Message not found.');
         }
         const savedLoras = Array.isArray(parent?.loras) ? parent.loras : [];
-        const savedReferences = overrideReferences !== undefined
+        const rawSavedReferences = overrideReferences !== undefined
             ? overrideReferences
             : (Array.isArray(parent?.references) ? parent.references : []);
         const savedNegative = String(parent?.negativePrompt || '');
@@ -96,8 +99,17 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         actionControllers.set(controllerKey, controller);
 
         let loras = [];
+        let savedReferences = rawSavedReferences;
         let imageUrl;
         try {
+            if (overrideReferences === undefined && rawSavedReferences.length > 0 && typeof imageService.getCapabilities === 'function') {
+                const caps = await imageService.getCapabilities();
+                const filtered = filterReplayReferences(rawSavedReferences, caps);
+                savedReferences = filtered.references;
+                if (filtered.skipped.length > 0) {
+                    toast(t`Some saved reference images were skipped because they are disabled in the current preset.`, 'warning');
+                }
+            }
             if (savedLoras.length > 0) {
                 const loraState = await imageService.getAvailableLoras();
                 loras = resolveReplayLoras(savedLoras, loraState.names, dropped => {

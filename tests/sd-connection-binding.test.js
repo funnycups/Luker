@@ -9,10 +9,13 @@ import {
     prepareGenerationExtraOptions,
 } from '../public/scripts/extensions/stable-diffusion/capabilities.js';
 import {
+    CHARACTER_REFERENCE_MODES,
     GENERATION_CONFIG_KEYS,
     applyGenerationConfig,
     createGenerationPreset,
+    normalizeGenerationPreset,
     normalizeGenerationPresets,
+    normalizeReferenceSettings,
     pickGenerationConfig,
 } from '../public/scripts/extensions/stable-diffusion/generation-presets.js';
 
@@ -196,5 +199,87 @@ describe('sd connection binding and preset isolation', () => {
             { source: 'comfy', comfy_type: 'runpod_serverless', model: 'flux' },
             { references: [{ imagePath: '/user/images/_references/a.png', role: 'character' }] },
         )).toThrow(/does not support character reference images/i);
+    });
+
+    test('GENERATION_CONFIG_KEYS includes reference switches and normalize/apply prevent legacy preset state leakage', () => {
+        expect(CHARACTER_REFERENCE_MODES).toEqual(['text_only', 'image_only', 'text_and_image']);
+        expect(GENERATION_CONFIG_KEYS).toEqual(expect.arrayContaining([
+            'character_reference_enabled',
+            'character_reference_mode',
+            'style_references_enabled',
+            'img2img_enabled',
+        ]));
+
+        expect(normalizeReferenceSettings(undefined)).toEqual({
+            character_reference_enabled: false,
+            character_reference_mode: 'text_only',
+            style_references_enabled: false,
+            img2img_enabled: false,
+        });
+        expect(normalizeReferenceSettings({
+            character_reference_enabled: 1,
+            character_reference_mode: 'invalid_mode',
+            style_references: [{ imagePath: '/user/images/_style_references/v1.png', strength: 0.6 }],
+            img2img_enabled: true,
+        })).toEqual({
+            character_reference_enabled: true,
+            character_reference_mode: 'text_only',
+            style_references_enabled: true,
+            img2img_enabled: true,
+        });
+        expect(normalizeReferenceSettings({
+            style_references: [{ imagePath: '/user/images/_style_references/v1.png', strength: 0.6 }],
+            style_references_enabled: false,
+        }).style_references_enabled).toBe(false);
+
+        const legacyWithStyle = normalizeGenerationPreset({
+            id: 'gp_legacy_style',
+            name: 'Legacy With Style',
+            config: {
+                source: 'novel',
+                model: 'nai-diffusion-4-5-full',
+                style_references: [{ imagePath: '/user/images/_style_references/s1.png', strength: 0.6 }],
+            },
+        }, 1000);
+        expect(legacyWithStyle.config).toMatchObject({
+            character_reference_enabled: false,
+            character_reference_mode: 'text_only',
+            style_references_enabled: true,
+            img2img_enabled: false,
+        });
+
+        const legacyEmptyStyle = normalizeGenerationPreset({
+            id: 'gp_legacy_empty',
+            name: 'Legacy Empty Style',
+            config: {
+                source: 'novel',
+                model: 'nai-diffusion-4-5-full',
+                style_references: [],
+            },
+        }, 1000);
+        expect(legacyEmptyStyle.config).toMatchObject({
+            character_reference_enabled: false,
+            character_reference_mode: 'text_only',
+            style_references_enabled: false,
+            img2img_enabled: false,
+        });
+
+        const sd = {
+            source: 'google',
+            model: 'gemini-3-pro-image',
+            character_reference_enabled: true,
+            character_reference_mode: 'text_and_image',
+            style_references_enabled: true,
+            img2img_enabled: true,
+        };
+        applyGenerationConfig(sd, { source: 'pollinations', model: 'flux' });
+        expect(sd).toMatchObject({
+            source: 'pollinations',
+            model: 'flux',
+            character_reference_enabled: false,
+            character_reference_mode: 'text_only',
+            style_references_enabled: false,
+            img2img_enabled: false,
+        });
     });
 });

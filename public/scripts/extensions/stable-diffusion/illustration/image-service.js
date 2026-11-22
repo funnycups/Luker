@@ -14,6 +14,9 @@ export function createImageService({ bridge, queue, getQueueConfig }) {
             return {
                 source: '',
                 model: '',
+                characterReferenceEnabled: false,
+                characterReferenceMode: 'text_only',
+                supportsCharacterTextReference: false,
                 supportsCharacterReference: false,
                 maxCharacterReferences: 0,
                 supportsStyleReference: false,
@@ -22,6 +25,20 @@ export function createImageService({ bridge, queue, getQueueConfig }) {
                 supportsMultiCharacterPrompts: false,
                 supportsDynamicAspectRatio: true,
                 availableLoras,
+                protocol: {
+                    supportsCharacterReference: false,
+                    maxCharacterReferences: 0,
+                    supportsStyleReference: false,
+                    maxStyleReferences: 0,
+                    supportsSourceImage: false,
+                    supportsMultiCharacterPrompts: false,
+                    supportsDynamicAspectRatio: true,
+                    sharedReferenceSlots: false,
+                    maxTotalReferences: null,
+                    comfyReferenceSlotCount: 0,
+                    comfyWorkflowError: '',
+                },
+                warnings: [],
             };
         },
         async generate(prompt, options = {}) {

@@ -70,6 +70,7 @@ import {
     deleteGenerationPreset,
     getGenerationPreset,
     normalizeGenerationPresets,
+    normalizeReferenceSettings,
     patchGenerationPresetConfig,
     pickGenerationConfig,
     renameGenerationPreset,
@@ -82,6 +83,7 @@ import { compileComfyWorkflowPromptPayload } from './comfy-workflow-graph.js';
 import { parseAspectRatio } from './aspect-ratio.js';
 import {
     computeImageCapabilities,
+    computeReferenceConfigWarnings,
     prepareGenerationExtraOptions,
     resolveAttributionPayload,
 } from './capabilities.js';
@@ -180,18 +182,21 @@ const loraCatalog = createLoraCatalog({
  * @param {{ force?: boolean }} [options]
  */
 let currentComfyReferenceSlotCount = 0;
+let currentComfyWorkflowError = '';
 
 async function refreshComfyReferenceSlots() {
-    if (extension_settings.sd.source !== sources.comfy || extension_settings.sd.comfy_type !== comfyTypes.standard) {
-        currentComfyReferenceSlotCount = 0;
-        return;
-    }
-    const wfName = extension_settings.sd.comfy_workflow;
-    if (!wfName) {
-        currentComfyReferenceSlotCount = 0;
-        return;
-    }
     try {
+        if (extension_settings.sd.source !== sources.comfy || extension_settings.sd.comfy_type !== comfyTypes.standard) {
+            currentComfyReferenceSlotCount = 0;
+            currentComfyWorkflowError = '';
+            return;
+        }
+        const wfName = extension_settings.sd.comfy_workflow;
+        if (!wfName) {
+            currentComfyReferenceSlotCount = 0;
+            currentComfyWorkflowError = '';
+            return;
+        }
         const response = await fetch('/api/sd/comfy/workflow', {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -199,12 +204,17 @@ async function refreshComfyReferenceSlots() {
         });
         if (!response.ok) {
             currentComfyReferenceSlotCount = 0;
+            currentComfyWorkflowError = '';
             return;
         }
         const rawWf = await response.json();
         currentComfyReferenceSlotCount = inspectReferenceSlots(rawWf).slotCount;
-    } catch {
+        currentComfyWorkflowError = '';
+    } catch (error) {
         currentComfyReferenceSlotCount = 0;
+        currentComfyWorkflowError = String(error?.message || error || 'Invalid ComfyUI workflow JSON.');
+    } finally {
+        renderReferenceConfigWarnings();
     }
 }
 
@@ -484,6 +494,10 @@ const defaultSettings = {
     novel_url: '',
     chat_image_url: '',
     style_references: [],
+    character_reference_enabled: false,
+    character_reference_mode: 'text_only',
+    style_references_enabled: false,
+    img2img_enabled: false,
 };
 
 const writePromptFieldsDebounced = debounce(writePromptFields, debounce_timeout.relaxed);
@@ -614,11 +628,78 @@ function refreshSdConnectionProfileUi() {
     }
 }
 
+const REFERENCE_WARNING_TEXT_BY_CODE = Object.freeze({
+    comfy_workflow_invalid: 'Current ComfyUI workflow JSON could not be parsed to inspect %ref_image% reference nodes, so requests with reference images or img2img will fail.',
+    comfy_missing_ref_slots: 'Current ComfyUI workflow does not contain any %ref_image% LoadImage nodes, so requests with reference images or img2img will fail.',
+    comfy_runpod_no_references: 'RunPod Serverless mode does not support uploading reference images. Disable reference images and img2img, or switch character reference mode to text-only.',
+    shared_style_exceeds_slots: 'Enabled style reference count exceeds the available reference slots in the current workflow or model, so generation will fail.',
+    shared_slots_exhausted_by_style: 'Enabled style references occupy all available reference slots, leaving no room for character reference images or img2img.',
+    backend_no_image_input: 'The selected image backend does not support image inputs. Switch character reference mode to text-only or disable reference images and img2img.',
+    webui_source_only: 'The selected WebUI backend only supports source image editing (img2img) and does not support character or style reference images.',
+    novel_char_ref_requires_v45: 'NovelAI character reference images require a V4.5 model. Switch to a V4.5 model or use text-only character descriptions.',
+    novel_style_ref_unsupported: 'The selected NovelAI model does not support style/vibe references.',
+    novel_style_exceeds_cap: 'NovelAI supports at most 4 style references, so generation will fail.',
+    google_model_no_image_input: 'The selected Google model uses :predict or video generation and does not support reference images or img2img.',
+    openai_model_no_image_input: 'The selected OpenAI model does not support image edits or reference image inputs.',
+});
+
+function getLocalizedReferenceWarningMessage(warning) {
+    const code = String(warning?.code || '');
+    const sourceText = REFERENCE_WARNING_TEXT_BY_CODE[code];
+    if (sourceText) {
+        return translate(sourceText);
+    }
+    const fallback = String(warning?.message || code);
+    return fallback ? translate(fallback) : '';
+}
+
+function syncCharacterReferenceModeRowVisibility(enabled = Boolean(extension_settings.sd.character_reference_enabled)) {
+    const visible = Boolean(enabled);
+    $('#sd_character_reference_mode_row').prop('hidden', !visible).toggle(visible);
+}
+
+function syncStyleReferenceListDisabledState() {
+    $('#sd_style_ref_list').toggleClass('is-disabled', !extension_settings.sd.style_references_enabled);
+}
+
+function renderReferenceConfigWarnings() {
+    const container = $('#sd_reference_warnings');
+    if (container.length === 0) {
+        return;
+    }
+    const warnings = computeReferenceConfigWarnings(extension_settings.sd, {
+        comfyReferenceSlotCount: currentComfyReferenceSlotCount,
+        comfyWorkflowError: currentComfyWorkflowError,
+    });
+    container.empty();
+    if (warnings.length === 0) {
+        container.prop('hidden', true).hide();
+        return;
+    }
+    for (const warning of warnings) {
+        const item = document.createElement('div');
+        item.className = 'sd_reference_warning_item';
+        item.dataset.warningCode = String(warning?.code || '');
+
+        const icon = document.createElement('i');
+        icon.className = 'fa-solid fa-triangle-exclamation';
+        icon.setAttribute('aria-hidden', 'true');
+
+        const text = document.createElement('span');
+        text.textContent = getLocalizedReferenceWarningMessage(warning);
+
+        item.append(icon, text);
+        container.append(item);
+    }
+    container.prop('hidden', false).show();
+}
+
 function renderStyleReferencesList() {
     const container = $('#sd_style_ref_list');
     if (container.length === 0) {
         return;
     }
+    syncStyleReferenceListDisabledState();
     container.empty();
     const refs = Array.isArray(extension_settings.sd.style_references)
         ? extension_settings.sd.style_references
@@ -661,6 +742,7 @@ function renderStyleReferencesList() {
             renderStyleReferencesList();
             syncGenerationPresetFromUi('style_references');
             saveSettingsDebounced();
+            renderReferenceConfigWarnings();
         });
 
         row.append(thumb, strengthInput, removeBtn);
@@ -873,6 +955,9 @@ async function loadSettings() {
         Object.assign(extension_settings.sd, defaultSettings);
     }
 
+    // Normalize reference switches before default backfill so legacy non-empty style_references migrate to enabled=true.
+    Object.assign(extension_settings.sd, normalizeReferenceSettings(extension_settings.sd));
+
     // Insert missing settings
     for (const [key, value] of Object.entries(defaultSettings)) {
         if (extension_settings.sd[key] === undefined) {
@@ -994,11 +1079,19 @@ function applySettingsToUiInner() {
     $('#sd_novel_url').val(extension_settings.sd.novel_url || '');
     $('#sd_chat_image_url').val(extension_settings.sd.chat_image_url || '');
     $('#sd_chat_image_custom_model').val(extension_settings.sd.source === sources.chat_image ? (extension_settings.sd.model || '') : '');
+    const normalizedRefs = normalizeReferenceSettings(extension_settings.sd);
+    Object.assign(extension_settings.sd, normalizedRefs);
+    $('#sd_character_reference_enabled').prop('checked', normalizedRefs.character_reference_enabled);
+    $('#sd_character_reference_mode').val(normalizedRefs.character_reference_mode);
+    syncCharacterReferenceModeRowVisibility(normalizedRefs.character_reference_enabled);
+    $('#sd_img2img_enabled').prop('checked', normalizedRefs.img2img_enabled);
+    $('#sd_style_references_enabled').prop('checked', normalizedRefs.style_references_enabled);
     if (!Array.isArray(extension_settings.sd.style_references)) {
         extension_settings.sd.style_references = [];
     }
     refreshSdConnectionProfileUi();
     renderStyleReferencesList();
+    renderReferenceConfigWarnings();
 
     $('#sd_style').empty();
     for (const style of extension_settings.sd.styles) {
@@ -1039,6 +1132,7 @@ export function createIllustrationBridge() {
             const availableLoras = loraCatalog.getCached();
             return computeImageCapabilities(extension_settings.sd, {
                 comfyReferenceSlotCount: currentComfyReferenceSlotCount,
+                comfyWorkflowError: currentComfyWorkflowError,
                 availableLoras,
             });
         },
@@ -1134,6 +1228,7 @@ export function createImageGenerationService() {
             const availableLoras = loraCatalog.getCached();
             return computeImageCapabilities(extension_settings.sd, {
                 comfyReferenceSlotCount: currentComfyReferenceSlotCount,
+                comfyWorkflowError: currentComfyWorkflowError,
                 availableLoras,
             });
         },
@@ -1837,7 +1932,9 @@ async function onSourceChange() {
     extension_settings.sd.sampler = null;
     extension_settings.sd.scheduler = null;
     extension_settings.sd.vae = null;
+    $('#sd_model, #sd_sampler, #sd_scheduler, #sd_vae').empty();
     toggleSourceControls();
+    renderReferenceConfigWarnings();
     saveSettingsDebounced();
     try {
         await loadSettingOptions();
@@ -2213,6 +2310,7 @@ async function onModelChange() {
     }
 
     switchModelSpecificControls(extension_settings.sd.model);
+    renderReferenceConfigWarnings();
 
     const updateRemoteModelSources = [
         sources.auto,
@@ -2728,6 +2826,7 @@ async function loadModels() {
             $('#sd_model').val(extension_settings.sd.model).trigger('change');
         });
     }
+    renderReferenceConfigWarnings();
 }
 
 /**
@@ -3963,8 +4062,8 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         // errors here are most likely due to text generation failure
         // sendGenerationRequest mostly deals with its own errors
         const reason = err.error?.message || err.message || 'Unknown error';
-        const isLoraError = typeof err?.code === 'string' && err.code.startsWith('lora_');
-        const errorText = isLoraError ? reason : 'SD prompt text generation failed. ' + reason;
+        const isDirectBackendError = typeof err?.code === 'string' && (err.code.startsWith('lora_') || err.code.startsWith('ref_'));
+        const errorText = isDirectBackendError ? reason : 'SD prompt text generation failed. ' + reason;
         activityJob.setError(errorText);
         activityJob.finish('failed');
         toastr.error(errorText, t`Image Generation`);
@@ -4219,11 +4318,16 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
         throw error;
     }
 
+    if (extension_settings.sd.source === sources.comfy && extension_settings.sd.comfy_type === comfyTypes.standard) {
+        await refreshComfyReferenceSlots();
+    }
+
     const { extraOptions } = prepareGenerationExtraOptions(
         extension_settings.sd,
         structuredOptions,
         {
             comfyReferenceSlotCount: currentComfyReferenceSlotCount,
+            comfyWorkflowError: currentComfyWorkflowError,
             availableLoras: loraCatalog.getCached(),
             novelUnlimited: Boolean(getNovelUnlimitedImageGeneration?.()),
         },
@@ -7167,7 +7271,39 @@ export async function init() {
             $('#sd_model').val(value);
             syncGenerationPresetFromUi('model');
             saveSettingsDebounced();
+            renderReferenceConfigWarnings();
         }
+    });
+    $('#sd_character_reference_enabled').on('input change', function () {
+        const enabled = Boolean($(this).prop('checked'));
+        extension_settings.sd.character_reference_enabled = enabled;
+        syncCharacterReferenceModeRowVisibility(enabled);
+        syncGenerationPresetFromUi('character_reference_enabled');
+        saveSettingsDebounced();
+        renderReferenceConfigWarnings();
+    });
+    $('#sd_character_reference_mode').on('change', function () {
+        const normalized = normalizeReferenceSettings({
+            ...extension_settings.sd,
+            character_reference_mode: String($(this).val() || ''),
+        });
+        extension_settings.sd.character_reference_mode = normalized.character_reference_mode;
+        syncGenerationPresetFromUi('character_reference_mode');
+        saveSettingsDebounced();
+        renderReferenceConfigWarnings();
+    });
+    $('#sd_img2img_enabled').on('input change', function () {
+        extension_settings.sd.img2img_enabled = Boolean($(this).prop('checked'));
+        syncGenerationPresetFromUi('img2img_enabled');
+        saveSettingsDebounced();
+        renderReferenceConfigWarnings();
+    });
+    $('#sd_style_references_enabled').on('input change', function () {
+        extension_settings.sd.style_references_enabled = Boolean($(this).prop('checked'));
+        syncStyleReferenceListDisabledState();
+        syncGenerationPresetFromUi('style_references_enabled');
+        saveSettingsDebounced();
+        renderReferenceConfigWarnings();
     });
     $('#sd_style_ref_upload').on('click', () => {
         $('#sd_style_ref_file').trigger('click');
@@ -7224,9 +7360,14 @@ export async function init() {
                     strength: 0.6,
                 });
             }
+            if (!extension_settings.sd.style_references_enabled) {
+                extension_settings.sd.style_references_enabled = true;
+                $('#sd_style_references_enabled').prop('checked', true);
+            }
             renderStyleReferencesList();
             syncGenerationPresetFromUi('style_references');
             saveSettingsDebounced();
+            renderReferenceConfigWarnings();
         } catch (error) {
             toastr.error(String(error?.message || error), t`Image Generation`);
         }

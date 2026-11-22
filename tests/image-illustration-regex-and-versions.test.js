@@ -5,23 +5,111 @@ import { describe, expect, jest, test } from '@jest/globals';
 
 globalThis.structuredClone ??= value => JSON.parse(JSON.stringify(value));
 
-import {
+const mockCallGenericPopup = jest.fn(async () => 'edited prompt');
+
+class MockPopup {
+    constructor(content) {
+        this.content = content;
+        this.el = null;
+    }
+
+    show() {
+        this.el = document.createElement('div');
+        this.el.className = 'mock-popup';
+        this.el.innerHTML = String(this.content || '');
+        document.body.appendChild(this.el);
+    }
+
+    async complete() {
+        this.el?.remove();
+        this.el = null;
+        return 1;
+    }
+}
+
+jest.unstable_mockModule('../public/scripts/popup.js', () => ({
+    Popup: MockPopup,
+    POPUP_TYPE: { TEXT: 1, CONFIRM: 2, INPUT: 3, DISPLAY: 4, CROP: 5 },
+    POPUP_RESULT: { AFFIRMATIVE: 1, NEGATIVE: 0, CANCELLED: null },
+    callGenericPopup: mockCallGenericPopup,
+}));
+
+jest.unstable_mockModule('../public/scripts/chats.js', () => ({
+    deleteMediaFromServer: jest.fn(async () => true),
+}));
+
+const {
     buildImageTag,
     buildFailedTag,
     buildIllustrationStripRegexScript,
     stripUnlockedIllustrationMarkup,
-} from '../public/scripts/extensions/stable-diffusion/illustration/message.js';
-import {
+} = await import('../public/scripts/extensions/stable-diffusion/illustration/message.js');
+const {
     buildIllustrationContext,
-} from '../public/scripts/extensions/stable-diffusion/illustration/task.js';
-import {
+} = await import('../public/scripts/extensions/stable-diffusion/illustration/task.js');
+const {
     createIllustrationRecord,
     collectVersionTree,
     switchMessageIllustrationVersion,
-} from '../public/scripts/extensions/stable-diffusion/illustration/records.js';
-import {
+} = await import('../public/scripts/extensions/stable-diffusion/illustration/records.js');
+const {
     createIllustrationPipeline,
-} from '../public/scripts/extensions/stable-diffusion/illustration/pipeline.js';
+} = await import('../public/scripts/extensions/stable-diffusion/illustration/pipeline.js');
+const {
+    filterReplayReferences,
+    initIllustrationActions,
+} = await import('../public/scripts/extensions/stable-diffusion/illustration/actions.js');
+
+function installDomJquery() {
+    function wrap(elements) {
+        const list = elements.filter(Boolean);
+        return {
+            length: list.length,
+            0: list[0],
+            on(eventName, selectorOrHandler, maybeHandler) {
+                const isDelegated = typeof selectorOrHandler === 'string';
+                const handler = isDelegated ? maybeHandler : selectorOrHandler;
+                for (const el of list) {
+                    el.addEventListener(eventName, event => {
+                        if (!isDelegated) {
+                            handler.call(el, event);
+                            return;
+                        }
+                        const matched = event.target?.closest?.(selectorOrHandler);
+                        if (matched && el.contains(matched)) {
+                            handler.call(matched, event);
+                        }
+                    });
+                }
+                return this;
+            },
+            find(selector) {
+                const found = [];
+                for (const el of list) {
+                    found.push(...el.querySelectorAll(selector));
+                }
+                return wrap(found);
+            },
+            attr(name) {
+                return list[0]?.getAttribute?.(name) ?? undefined;
+            },
+            prop(name) {
+                return list[0]?.[name];
+            },
+        };
+    }
+    const jq = selectorOrEl => {
+        if (typeof selectorOrEl === 'string') {
+            return wrap([...document.querySelectorAll(selectorOrEl)]);
+        }
+        if (selectorOrEl instanceof Element || selectorOrEl === document) {
+            return wrap([selectorOrEl]);
+        }
+        return wrap([]);
+    };
+    globalThis.$ = jq;
+    globalThis.jQuery = jq;
+}
 
 function compileScriptRegex(findRegex) {
     const match = /^\/([\s\S]+)\/([gimsuy]*)$/.exec(String(findRegex || ''));
@@ -297,5 +385,176 @@ describe('Illustration promptOnly regex, <img alt> context, version switching, l
         expect(switchedToV2).toBe(true);
         expect(msg.mes).toContain('data-illustration-id="v2"');
         expect(msg.mes).toContain('src="/user/images/v2.png"');
+    });
+
+    test('filterReplayReferences strips only roles disabled by current preset capabilities', () => {
+        const saved = [
+            { imagePath: '/user/images/_references/char.png', role: 'character', label: 'Lyra' },
+            { imagePath: '/user/images/src.png', role: 'source' },
+            { imagePath: '/user/images/style.png', role: 'style', strength: 0.7 },
+        ];
+
+        const onlyStyle = filterReplayReferences(saved, {
+            supportsCharacterReference: false,
+            supportsSourceImage: false,
+            supportsStyleReference: true,
+        });
+        expect(onlyStyle.references).toEqual([saved[2]]);
+        expect(onlyStyle.skipped).toEqual([saved[0], saved[1]]);
+
+        const allEnabled = filterReplayReferences(saved, {
+            supportsCharacterReference: true,
+            supportsSourceImage: true,
+            supportsStyleReference: true,
+        });
+        expect(allEnabled.references).toEqual(saved);
+        expect(allEnabled.skipped).toEqual([]);
+    });
+
+    test('initIllustrationActions filters disabled saved references on replay, warns, and toggles Edit from this image by supportsSourceImage', async () => {
+        installDomJquery();
+        document.body.innerHTML = '';
+        mockCallGenericPopup.mockReset();
+
+        const chatEl = document.createElement('div');
+        chatEl.id = 'chat';
+        document.body.appendChild(chatEl);
+
+        const savedRefs = [
+            { imagePath: '/user/images/_references/lyra.png', role: 'character', label: 'Lyra' },
+        ];
+        const imgTag = buildImageTag({
+            id: 'ill_saved',
+            imageUrl: '/user/images/saved.png',
+            prompt: '1girl on balcony',
+            width: 100,
+        });
+        const chat = [{
+            name: 'Narrator',
+            is_user: false,
+            is_system: false,
+            send_date: 1,
+            original_avatar: 'a.png',
+            mes: `Before ${imgTag} After`,
+            swipe_id: 0,
+            swipes: [`Before ${imgTag} After`],
+            swipe_info: [{ extra: {} }],
+            extra: {
+                illustrations: [
+                    createIllustrationRecord({
+                        id: 'ill_saved',
+                        prompt: '1girl on balcony',
+                        imageUrl: '/user/images/saved.png',
+                        references: savedRefs,
+                        anchorAfter: 'Before',
+                        anchorBefore: 'After',
+                    }),
+                ],
+            },
+        }];
+
+        chatEl.innerHTML = `<div class="mes" mesid="0"><div class="mes_text">${chat[0].mes}</div></div>`;
+
+        let currentCaps = {
+            supportsCharacterReference: false,
+            supportsSourceImage: false,
+            supportsStyleReference: false,
+        };
+        const generateCalls = [];
+        const toasts = [];
+        const actions = initIllustrationActions({
+            context: {
+                chatId: 'chat-replay',
+                chat,
+                updateMessageBlock() {},
+                saveChat: async () => {},
+                eventSource: { emit: jest.fn(async () => {}) },
+                eventTypes: { MESSAGE_EDITED: 'MESSAGE_EDITED', MESSAGE_UPDATED: 'MESSAGE_UPDATED' },
+            },
+            pipeline: { cancelForMessage() {} },
+            imageService: {
+                getAvailableLoras: async () => ({ names: [], includeWeight: false }),
+                getCapabilities: async () => currentCaps,
+                generate: async (prompt, opts) => {
+                    generateCalls.push({ prompt, opts });
+                    return `/user/images/replayed_${generateCalls.length}.png`;
+                },
+            },
+            settings: { imageDisplayWidth: 100 },
+            ensureSwipes: () => {},
+            toast: (msg, type) => toasts.push({ msg, type }),
+            notifyError: err => { throw new Error(`Unexpected error: ${err}`); },
+            t: (strings, ...values) => strings.reduce((out, s, i) => out + s + (values[i] ?? ''), ''),
+        });
+
+        // When supportsSourceImage is false, Edit from this image button is hidden and replay skips character ref
+        const imgEl = chatEl.querySelector('[data-illustration-id="ill_saved"]');
+        await actions.handleClick(imgEl);
+        expect(document.getElementById('sd_illustration_action_edit_from_image')).toBeNull();
+
+        document.getElementById('sd_illustration_action_regenerate').click();
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(generateCalls).toHaveLength(1);
+        expect(generateCalls[0].opts.references).toBeUndefined();
+        expect(toasts).toHaveLength(1);
+        expect(toasts[0].type).toBe('warning');
+        expect(chat[0].extra.illustrations.at(-1).references).toEqual([]);
+
+        // When supportsSourceImage is true, Edit from this image button is visible and sends role:'source'
+        currentCaps = {
+            supportsCharacterReference: false,
+            supportsSourceImage: true,
+            supportsStyleReference: false,
+        };
+        chat[0].extra.illustrations.push(createIllustrationRecord({
+            id: 'ill_source_saved',
+            prompt: '1girl with lantern',
+            imageUrl: '/user/images/lantern.png',
+            references: [{ imagePath: '/user/images/old_src.png', role: 'source' }],
+            anchorAfter: 'Before',
+            anchorBefore: 'After',
+        }));
+        const imgTag2 = buildImageTag({
+            id: 'ill_source_saved',
+            imageUrl: '/user/images/lantern.png',
+            prompt: '1girl with lantern',
+            width: 100,
+        });
+        chatEl.innerHTML = `<div class="mes" mesid="0"><div class="mes_text">Before ${imgTag2} After</div></div>`;
+        chat[0].mes = `Before ${imgTag2} After`;
+
+        await actions.handleClick(chatEl.querySelector('[data-illustration-id="ill_source_saved"]'));
+        const editFromBtn = document.getElementById('sd_illustration_action_edit_from_image');
+        expect(editFromBtn).not.toBeNull();
+
+        mockCallGenericPopup.mockResolvedValueOnce('Add moonlight');
+        editFromBtn.click();
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(generateCalls).toHaveLength(2);
+        expect(generateCalls[1].opts.references).toEqual([
+            { imagePath: '/user/images/lantern.png', role: 'source' },
+        ]);
+
+        // Replaying a saved source-ref illustration while supportsSourceImage is now false skips the source ref
+        currentCaps = {
+            supportsCharacterReference: false,
+            supportsSourceImage: false,
+            supportsStyleReference: false,
+        };
+        toasts.length = 0;
+        const latestImgEl = chatEl.querySelector('[data-illustration-id]');
+        await actions.handleClick(latestImgEl);
+        expect(document.getElementById('sd_illustration_action_edit_from_image')).toBeNull();
+
+        mockCallGenericPopup.mockResolvedValueOnce('1girl with brighter lantern');
+        document.getElementById('sd_illustration_action_edit_prompt').click();
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(generateCalls).toHaveLength(3);
+        expect(generateCalls[2].opts.references).toBeUndefined();
+        expect(toasts).toHaveLength(1);
+        expect(toasts[0].type).toBe('warning');
     });
 });

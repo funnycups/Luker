@@ -6,6 +6,7 @@ import { computeImageCapabilities } from '../capabilities.js';
 import { createCharacterProfileStore } from '../character-archive/store.js';
 import { formatWorkflowTopology } from '../comfy-workflow-graph.js';
 import { getPresetById } from '../illustration/settings.js';
+import { inspectReferenceSlots } from '../reference/workflow.js';
 import { i18n, i18nFormat } from './i18n.js';
 import { fetchDiskWorkflows } from './iterate-target.js';
 
@@ -108,6 +109,84 @@ function sanitizeRunForAsk(run) {
     };
 }
 
+async function resolveSanitizedCapabilities(ctx, sdSettings) {
+    const sanitizedStyleRefs = Array.isArray(sdSettings?.style_references)
+        ? sdSettings.style_references
+            .filter(entry => String(entry?.imagePath || '').trim())
+            .map(entry => ({
+                imagePath: redactSdString(entry.imagePath, sdSettings),
+                strength: entry.strength,
+            }))
+        : [];
+    // Explicitly pick only non-secret settings so zero auth or private URL fields enter capabilities.
+    const sanitizedSettings = {
+        source: sdSettings?.source,
+        model: sdSettings?.model,
+        comfy_type: sdSettings?.comfy_type,
+        character_reference_enabled: sdSettings?.character_reference_enabled,
+        character_reference_mode: sdSettings?.character_reference_mode,
+        style_references_enabled: sdSettings?.style_references_enabled,
+        img2img_enabled: sdSettings?.img2img_enabled,
+        style_references: sanitizedStyleRefs,
+    };
+
+    const runtimeInfo = {
+        comfyReferenceSlotCount: 0,
+        comfyWorkflowError: '',
+        availableLoras: undefined,
+    };
+
+    const imgApi = (
+        ctx?.imageGeneration
+        && (typeof ctx.imageGeneration.isAvailable !== 'function' || ctx.imageGeneration.isAvailable())
+    )
+        ? ctx.imageGeneration
+        : ctx?.getExtensionApi?.('sd');
+
+    if (typeof imgApi?.getCapabilities === 'function') {
+        try {
+            const liveCaps = await imgApi.getCapabilities();
+            if (liveCaps && typeof liveCaps === 'object') {
+                runtimeInfo.comfyReferenceSlotCount = Number(liveCaps.protocol?.comfyReferenceSlotCount || 0);
+                runtimeInfo.comfyWorkflowError = liveCaps.protocol?.comfyWorkflowError
+                    ? redactSdString(liveCaps.protocol.comfyWorkflowError, sdSettings)
+                    : '';
+                if (liveCaps.availableLoras) {
+                    runtimeInfo.availableLoras = liveCaps.availableLoras;
+                }
+                return computeImageCapabilities(sanitizedSettings, runtimeInfo);
+            }
+        } catch {
+            // Live service unavailable; fall through to direct workflow inspection below if needed.
+        }
+    }
+
+    const source = String(sdSettings?.source || '').trim();
+    const comfyType = String(sdSettings?.comfy_type || 'standard').trim() || 'standard';
+    const wfName = String(sdSettings?.comfy_workflow || '').trim();
+    if (source === 'comfy' && comfyType === 'standard' && wfName && typeof fetch === 'function') {
+        try {
+            const wfResp = await fetch('/api/sd/comfy/workflow', {
+                method: 'POST',
+                headers: ctx?.getRequestHeaders?.() || { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_name: wfName }),
+            });
+            if (wfResp.ok) {
+                const rawWf = await wfResp.json();
+                try {
+                    runtimeInfo.comfyReferenceSlotCount = inspectReferenceSlots(rawWf).slotCount;
+                } catch (wfErr) {
+                    runtimeInfo.comfyWorkflowError = redactSdString(String(wfErr?.message || wfErr), sdSettings);
+                }
+            }
+        } catch {
+            // Unreachable or unmocked workflow endpoint in lightweight snapshot calls; keep slot count 0.
+        }
+    }
+
+    return computeImageCapabilities(sanitizedSettings, runtimeInfo);
+}
+
 export async function buildSdSnapshot(ctx) {
     const sdSettings = ctx?.extensionSettings?.sd;
     if (!sdSettings || typeof sdSettings !== 'object') return null;
@@ -127,6 +206,7 @@ export async function buildSdSnapshot(ctx) {
     const latestRun = resolveLatestSdRun(ctx);
     const sanitizedRun = sanitizeRunForAsk(latestRun);
     const brokenConnectionProfile = detectBrokenConnectionProfile(ctx, sdSettings);
+    const caps = await resolveSanitizedCapabilities(ctx, sdSettings);
 
     return {
         installed: true,
@@ -138,6 +218,11 @@ export async function buildSdSnapshot(ctx) {
         activePresetName: String(activeIllPreset?.name || ''),
         characterCount,
         brokenConnectionProfile,
+        characterReferenceEnabled: caps.characterReferenceEnabled,
+        characterReferenceMode: caps.characterReferenceMode,
+        styleReferencesEnabled: caps.supportsStyleReference,
+        img2imgEnabled: caps.supportsSourceImage,
+        referenceWarnings: Array.isArray(caps.warnings) ? caps.warnings : [],
         lastRun: sanitizedRun,
     };
 }
@@ -213,12 +298,7 @@ export function createSdAskProvider(getContext = () => globalThis.Luker?.getCont
                 }
 
                 if (part === 'capabilities') {
-                    // Explicitly pick only source/model/comfy_type so zero auth or private URL fields enter capabilities.
-                    return computeImageCapabilities({
-                        source: sdSettings.source,
-                        model: sdSettings.model,
-                        comfy_type: sdSettings.comfy_type,
-                    });
+                    return await resolveSanitizedCapabilities(c, sdSettings);
                 }
 
                 if (part === 'presets') {
@@ -314,6 +394,33 @@ export function createSdSuggestRuleProvider(getContext = () => globalThis.Luker?
                             kind: 'ask',
                             label: i18n('Diagnose with AI'),
                             question: `Image generation is bound to deleted connection profile "${sd.brokenConnectionProfile}". Check wb_read_sd and explain which connection profile to select.`,
+                        }],
+                    };
+                },
+            },
+            {
+                id: 'sd.reference-config-conflict',
+                tone: 'sd',
+                get name() { return i18n('Reference configuration conflict'); },
+                get when() { return i18n('Checks whether active reference or img2img switches conflict with the current image backend or workflow'); },
+                defaultOn: true,
+                check(snap) {
+                    const sd = snap?.sd || snap?.providers?.sd;
+                    const warnings = Array.isArray(sd?.referenceWarnings) ? sd.referenceWarnings : [];
+                    if (warnings.length === 0) return null;
+                    const reasons = warnings
+                        .map(w => i18n(String(w?.message || w?.code || '').trim()))
+                        .filter(Boolean);
+                    const sig = warnings.map(w => String(w?.code || '')).sort().join('|') || String(warnings.length);
+                    return {
+                        text: i18n('Reference settings conflict with the current image backend or workflow'),
+                        why: reasons.join('\n'),
+                        source: i18n('Image Generation'),
+                        sig: `ref-conflict:${sig}`,
+                        actions: [{
+                            kind: 'ask',
+                            label: i18n('Diagnose with AI'),
+                            question: `Active image generation reference settings report configuration conflict(s): ${warnings.map(w => w?.code || '').filter(Boolean).join(', ')}. Inspect wb_read_sd (part: "capabilities" and "workflows") and explain how to resolve them.`,
                         }],
                     };
                 },

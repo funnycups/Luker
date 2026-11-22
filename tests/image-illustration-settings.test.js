@@ -332,4 +332,48 @@ describe('stored illustration prompt defaults', () => {
         expect(legacyInvalid.settings.presets[0]).not.toHaveProperty('promptStyle');
         expect(legacyInvalid.settings.presets[0].pendingStyleDefaults).toEqual(['studioPrompt']);
     });
+
+    test('upgrades exact V1 default illustration prompts even on already-initialized presets while preserving custom and cleared prompts', () => {
+        const raw = {
+            initialized: true,
+            currentPresetId: 'v1_tag',
+            presets: [
+                {
+                    id: 'v1_tag',
+                    name: 'Tag style',
+                    promptStyle: 'tag',
+                    promptDefaultsInitialized: true,
+                    illustrationPrompt: promptDefaults.V1_DEFAULT_ILLUSTRATION_PROMPT,
+                    studioPrompt: promptDefaults.DEFAULT_STUDIO_PROMPT,
+                    explorationPrompt: DEFAULT_EXPLORATION_PROMPT,
+                },
+                {
+                    id: 'v1_natural',
+                    name: 'Natural',
+                    promptStyle: 'natural',
+                    promptDefaultsInitialized: true,
+                    illustrationPrompt: promptDefaults.V1_DEFAULT_NATURAL_ILLUSTRATION_PROMPT,
+                    studioPrompt: promptDefaults.DEFAULT_NATURAL_STUDIO_PROMPT,
+                    explorationPrompt: DEFAULT_EXPLORATION_PROMPT,
+                },
+                {
+                    id: 'cleared',
+                    name: 'Cleared',
+                    promptStyle: 'tag',
+                    promptDefaultsInitialized: true,
+                    illustrationPrompt: '',
+                    studioPrompt: '',
+                    explorationPrompt: '',
+                },
+            ],
+        };
+        const first = migratePrompts(raw, { now: 80 });
+        expect(first.changed).toBe(true);
+        expect(first.settings.presets[0].illustrationPrompt).toBe(promptDefaults.DEFAULT_ILLUSTRATION_PROMPT);
+        expect(first.settings.presets[1].illustrationPrompt).toBe(promptDefaults.DEFAULT_NATURAL_ILLUSTRATION_PROMPT);
+        expect(first.settings.presets[2].illustrationPrompt).toBe('');
+
+        const second = migratePrompts(first.settings, { now: 90 });
+        expect(second.changed).toBe(false);
+    });
 });

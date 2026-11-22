@@ -1,6 +1,10 @@
 import { expect, test } from '@jest/globals';
 import {
-    buildIllustrationContext, buildIllustrationTaskMessages, requestIllustrationPrompts,
+    buildIllustrationContext,
+    buildIllustrationTaskMessages,
+    formatBackendCapabilitiesBlock,
+    formatCharacterReferencePolicyBlock,
+    requestIllustrationPrompts,
 } from '../public/scripts/extensions/stable-diffusion/illustration/task.js';
 import { applyMacroSubstitution } from '../public/scripts/generate-task.js';
 
@@ -106,4 +110,59 @@ test('illustration prompt requests only macro-substitute the system prompt and k
         { role: 'system', content: 'Illustrate Lyra' },
         { role: 'user', content: '=== CURRENT MESSAGE ===\nLiteral {{unclosed and {{unknown_macro}} prose.' },
     ]);
+});
+
+test('formatCharacterReferencePolicyBlock and buildIllustrationTaskMessages gate policy and archive blocks on characterReferenceEnabled', () => {
+    expect(formatCharacterReferencePolicyBlock({ characterReferenceEnabled: false })).toBe('');
+    expect(formatCharacterReferencePolicyBlock(null)).toBe('');
+
+    const textOnlyPolicy = formatCharacterReferencePolicyBlock({
+        characterReferenceEnabled: true,
+        characterReferenceMode: 'text_only',
+    });
+    const imageOnlyPolicy = formatCharacterReferencePolicyBlock({
+        characterReferenceEnabled: true,
+        characterReferenceMode: 'image_only',
+    });
+    const bothPolicy = formatCharacterReferencePolicyBlock({
+        characterReferenceEnabled: true,
+        characterReferenceMode: 'text_and_image',
+    });
+
+    expect(textOnlyPolicy).toContain('<character_reference_policy>');
+    expect(imageOnlyPolicy).toContain('<character_reference_policy>');
+    expect(bothPolicy).toContain('<character_reference_policy>');
+    expect(textOnlyPolicy).not.toBe(imageOnlyPolicy);
+    expect(imageOnlyPolicy).not.toBe(bothPolicy);
+
+    const disabledMsgs = buildIllustrationTaskMessages({
+        preset: { illustrationPrompt: 'TASK' },
+        current: 'now',
+        characterArchiveIndex: '1: id=char_1 | name=Lyra',
+        capabilities: {
+            source: 'google',
+            model: 'gemini',
+            characterReferenceEnabled: false,
+            characterReferenceMode: 'text_only',
+            supportsCharacterReference: false,
+        },
+    });
+    expect(disabledMsgs[1].content).not.toContain('<character_reference_policy>');
+    expect(disabledMsgs[1].content).not.toContain('<character_archive>');
+
+    const enabledMsgs = buildIllustrationTaskMessages({
+        preset: { illustrationPrompt: 'TASK' },
+        current: 'now',
+        characterArchiveIndex: '1: id=char_1 | name=Lyra',
+        capabilities: {
+            source: 'google',
+            model: 'gemini',
+            characterReferenceEnabled: true,
+            characterReferenceMode: 'text_only',
+            supportsCharacterReference: false,
+        },
+    });
+    expect(enabledMsgs[1].content).toContain('<character_reference_policy>');
+    expect(enabledMsgs[1].content).toContain('<character_archive>\n1: id=char_1 | name=Lyra\n</character_archive>');
+    expect(formatBackendCapabilitiesBlock({ source: 'google', characterReferenceEnabled: false })).toContain('<backend_capabilities>');
 });

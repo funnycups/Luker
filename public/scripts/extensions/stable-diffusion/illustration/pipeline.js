@@ -5,6 +5,7 @@ import {
     isAssistantIllustrationMessage,
 } from './execution-context.js';
 import { runIllustrationAgent } from './agent.js';
+import { findCharacterImageConflict } from './task.js';
 import { ILLUSTRATION_AGENT_TOOL_NAMES } from './tools.js';
 import { applyIllustrationResult, collectVersionTree, createIllustrationRecord, syncMessageSwipeData } from './records.js';
 import { getPresetById } from './settings.js';
@@ -102,6 +103,9 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
     const jobs = new Map();
     const handled = new Set();
     const t = hooks.t ?? defaultTranslate;
+    const translateKey = typeof hooks.translate === 'function'
+        ? hooks.translate
+        : (typeof context?.translate === 'function' ? context.translate : key => String(key ?? ''));
     const toast = (message, type = 'error') => hooks.toast?.(message, type);
     const notifyError = typeof hooks.notifyError === 'function'
         ? hooks.notifyError
@@ -162,13 +166,67 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
 
         const swipeId = message.swipe_id ?? 0;
         const key = buildJobKey({ chatId, messageId, swipeId });
-        const existing = jobs.get(key);
         const hadRecords = Array.isArray(message.extra?.illustrations) && message.extra.illustrations.length > 0;
 
         if (source === 'auto') {
-            if (existing || hadRecords) {
+            if (jobs.get(key) || hadRecords) {
                 return;
             }
+        }
+
+        const preCheckFingerprint = messageFingerprint(message);
+        let capabilities = null;
+        if (typeof imageService?.getCapabilities === 'function') {
+            try {
+                capabilities = await imageService.getCapabilities();
+            } catch (error) {
+                if (error?.name === 'AbortError') {
+                    return;
+                }
+                const failedActivityJob = typeof hooks.beginActivityJob === 'function'
+                    ? hooks.beginActivityJob({
+                        kind: 'illustration',
+                        messageIndex: messageId,
+                        abort: () => {},
+                    })
+                    : null;
+                failedActivityJob?.setError(String(error?.message || error));
+                failedActivityJob?.finish('failed');
+                console.error('Illustration task failed.', error);
+                notifyError(`${t`Illustration failed`}: ${error?.message || error}`);
+                return;
+            }
+        }
+        if (
+            hooks.getChatId() !== chatId
+            || hooks.getChat()?.[messageId] !== message
+            || (message.swipe_id ?? 0) !== swipeId
+            || messageFingerprint(message) !== preCheckFingerprint
+        ) {
+            return;
+        }
+
+        const charImgConflict = findCharacterImageConflict(capabilities);
+        if (charImgConflict) {
+            const existingOnConflict = jobs.get(key);
+            if (existingOnConflict) {
+                cancelJob(existingOnConflict);
+            }
+            const rawConflict = String(charImgConflict.message || '').trim();
+            const conflictMessage = rawConflict
+                ? translateKey(rawConflict)
+                : t`Character reference images are incompatible with the active image backend or workflow.`;
+            const failedActivityJob = typeof hooks.beginActivityJob === 'function'
+                ? hooks.beginActivityJob({
+                    kind: 'illustration',
+                    messageIndex: messageId,
+                    abort: () => {},
+                })
+                : null;
+            failedActivityJob?.setError(conflictMessage);
+            failedActivityJob?.finish('failed');
+            notifyError(`${t`Illustration failed`}: ${conflictMessage}`);
+            return;
         }
 
         if (source === 'manual' && hadRecords) {
@@ -204,6 +262,7 @@ export function createIllustrationPipeline({ context, imageService, settings, ho
             await hooks.saveChat();
         }
 
+        const existing = jobs.get(key);
         if (existing) {
             cancelJob(existing);
         }

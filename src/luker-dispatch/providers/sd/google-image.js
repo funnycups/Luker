@@ -14,7 +14,7 @@ const API_MAKERSUITE = 'https://generativelanguage.googleapis.com';
 
 export function isGeminiNativeImageModel(model) {
     const m = String(model || '').trim().toLowerCase();
-    return /^gemini-.*-image/.test(m) || m === 'gemini-2.0-flash-exp';
+    return Boolean(m) && !/^imagen|^imagegeneration|^veo/i.test(m);
 }
 
 async function buildGoogleDispatchTarget(ctx, model, endpoint) {

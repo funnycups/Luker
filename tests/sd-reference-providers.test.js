@@ -261,6 +261,50 @@ describe('Google Gemini native image and chat_image multimodal reference provide
         await dispatchSdGoogleImage(imagenRefCtx);
         expect(imagenRefCtx.errors).toHaveLength(1);
         expect(imagenRefCtx.errors[0].message).toMatch(/does not support reference images/i);
+
+        const imagenNoRefCtx = makeTestCtx({
+            directories,
+            body: {
+                model: 'imagen-4.0-generate-001',
+                api: 'makersuite',
+                api_url: upstreamUrl,
+                prompt: 'a cat',
+            },
+        });
+        await dispatchSdGoogleImage(imagenNoRefCtx);
+        expect(imagenNoRefCtx.errors).toHaveLength(0);
+        expect(imagenNoRefCtx.readJsonOutput()).toEqual({ image: PNG_1X1_B64, format: 'jpg' });
+        expect(receivedRequests[0].url).toBe('/v1beta/models/imagen-4.0-generate-001:predict');
+    });
+
+    test('dispatchSdGoogleImage routes future/custom Gemini models to :generateContent with reference parts', async () => {
+        const keyId = writeSecret(directories, SECRET_KEYS.MAKERSUITE, 'custom-gemini-key');
+        for (const modelName of ['gemini-4-preview', 'custom-gemini-alias']) {
+            receivedRequests.length = 0;
+            const ctx = makeTestCtx({
+                directories,
+                body: {
+                    model: modelName,
+                    api: 'makersuite',
+                    api_url: upstreamUrl,
+                    secret_id: keyId,
+                    prompt: 'moonlit rooftop',
+                    references: [
+                        { imagePath: '/user/images/_references/char1.png', role: 'character', label: 'Luna' },
+                    ],
+                },
+            });
+            await dispatchSdGoogleImage(ctx);
+            expect(ctx.errors).toHaveLength(0);
+            expect(ctx.readJsonOutput()).toEqual({ image: PNG_1X1_B64, format: 'png' });
+            expect(receivedRequests).toHaveLength(1);
+            expect(receivedRequests[0].url).toBe(`/v1beta/models/${modelName}:generateContent`);
+            expect(receivedRequests[0].body.contents[0].parts).toEqual([
+                { text: '[Character reference: Luna]' },
+                { inlineData: { mimeType: 'image/png', data: PNG_1X1_B64 } },
+                { text: 'moonlit rooftop' },
+            ]);
+        }
     });
 
     test('dispatchSdChatImage sends interleaved text + image_url parts and parses images from message.images and content[]', async () => {

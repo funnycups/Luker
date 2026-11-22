@@ -663,16 +663,40 @@
             <textarea id="sd_prompt_prefix" class="text_pole textarea_compact autoSetHeight" data-i18n="[placeholder]sd_prompt_prefix_placeholder" placeholder="Use {prompt} to specify where the generated prompt will be inserted"></textarea>
             <label for="sd_negative_prompt" data-i18n="Negative common prompt prefix">Negative common prompt prefix</label>
             <textarea id="sd_negative_prompt" class="text_pole textarea_compact autoSetHeight"></textarea>
-            <div id="sd_style_references_block" data-sd-source="google,chat_image,openrouter,openai,xai,novel,comfy" class="marginTopBot5">
-                <div class="flex-container alignItemsCenter justifySpaceBetween">
-                    <label data-i18n="sd_style_references_title">Style & Vibe References</label>
-                    <div id="sd_style_ref_upload" class="menu_button menu_button_icon">
-                        <i class="fa-solid fa-upload"></i>
-                        <span data-i18n="sd_style_ref_upload">Add style reference</span>
-                    </div>
-                    <input id="sd_style_ref_file" type="file" accept="image/*,.naiv4vibe" hidden />
+            <hr>
+            <div id="sd_references_section" class="sd_references_section marginTopBot5">
+                <h4 data-i18n="sd_references_section_title">References &amp; Img2Img</h4>
+                <label for="sd_character_reference_enabled" class="checkbox_label">
+                    <input id="sd_character_reference_enabled" type="checkbox" />
+                    <span data-i18n="sd_character_reference_enabled_txt">Enable character references</span>
+                </label>
+                <div id="sd_character_reference_mode_row" class="sd_character_reference_mode_row" hidden>
+                    <label for="sd_character_reference_mode" data-i18n="sd_character_reference_mode_label">Delivery mode</label>
+                    <select id="sd_character_reference_mode" class="text_pole">
+                        <option value="text_only" data-i18n="sd_character_reference_mode_text_only">Text description only</option>
+                        <option value="image_only" data-i18n="sd_character_reference_mode_image_only">Reference images only</option>
+                        <option value="text_and_image" data-i18n="sd_character_reference_mode_text_and_image">Text description and reference images</option>
+                    </select>
                 </div>
-                <div id="sd_style_ref_list" class="flex-container flexFlowColumn flexGap5 marginTop5"></div>
+                <label for="sd_img2img_enabled" class="checkbox_label">
+                    <input id="sd_img2img_enabled" type="checkbox" />
+                    <span data-i18n="sd_img2img_enabled_txt">Allow img2img editing (edit based on an existing image)</span>
+                </label>
+                <div class="sd_style_references_block marginTop5">
+                    <div class="flex-container alignItemsCenter justifySpaceBetween flexGap5">
+                        <label for="sd_style_references_enabled" class="checkbox_label flex1">
+                            <input id="sd_style_references_enabled" type="checkbox" />
+                            <span data-i18n="sd_style_references_enabled_txt">Enable style &amp; vibe references</span>
+                        </label>
+                        <div id="sd_style_ref_upload" class="menu_button menu_button_icon">
+                            <i class="fa-solid fa-upload"></i>
+                            <span data-i18n="sd_style_ref_upload">Add style reference</span>
+                        </div>
+                        <input id="sd_style_ref_file" type="file" accept="image/*,.naiv4vibe" hidden />
+                    </div>
+                    <div id="sd_style_ref_list" class="flex-container flexFlowColumn flexGap5 marginTop5"></div>
+                </div>
+                <div id="sd_reference_warnings" class="sd_reference_warnings" role="status" aria-live="polite" hidden></div>
             </div>
             <div id="sd_character_prompt_block">
                 <label for="sd_character_prompt" data-i18n="Character-specific prompt prefix">Character-specific prompt prefix</label>

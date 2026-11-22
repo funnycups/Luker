@@ -10,6 +10,23 @@ export function sessionTitleFromText(text) {
     return String(text ?? '').trim().slice(0, STUDIO_TITLE_LENGTH);
 }
 
+function normalizeCharacterRefs(raw) {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    return raw
+        .filter(entry => entry && typeof entry === 'object' && !Array.isArray(entry))
+        .map(entry => {
+            const profileId = String(entry.profileId ?? entry.profile_id ?? '').trim();
+            if (!profileId) {
+                return null;
+            }
+            const outfitId = String(entry.outfitId ?? entry.outfit_id ?? '').trim();
+            return outfitId ? { profileId, outfitId } : { profileId };
+        })
+        .filter(Boolean);
+}
+
 export function createStudioSession({
     presetId = '',
     visualReview = false,
@@ -35,20 +52,24 @@ export function normalizeStudioSession(raw, now = Date.now()) {
     }
     const id = String(raw.id || '').trim() || makeIllustrationId('studio');
     const messages = Array.isArray(raw.messages) ? JSON.parse(JSON.stringify(raw.messages)) : [];
-    const images = (Array.isArray(raw.images) ? raw.images : []).map(img => ({
-        id: String(img?.id || makeIllustrationId('img')),
-        messageId: String(img?.messageId || ''),
-        prompt: String(img?.prompt || ''),
-        negativePrompt: String(img?.negativePrompt || ''),
-        aspectRatio: String(img?.aspectRatio || ''),
-        imageUrl: String(img?.imageUrl || ''),
-        sourceImageId: String(img?.sourceImageId || ''),
-        characterImageIds: Array.isArray(img?.characterImageIds) ? img.characterImageIds.map(String) : [],
-        loras: Array.isArray(img?.loras) ? JSON.parse(JSON.stringify(img.loras)) : [],
-        status: img?.status === 'failed' ? 'failed' : 'ready',
-        error: String(img?.error || ''),
-        createdAt: Number.isFinite(Number(img?.createdAt)) ? Number(img.createdAt) : now,
-    }));
+    const images = (Array.isArray(raw.images) ? raw.images : []).map(img => {
+        const characterRefs = normalizeCharacterRefs(img?.characterRefs);
+        return {
+            id: String(img?.id || makeIllustrationId('img')),
+            messageId: String(img?.messageId || ''),
+            prompt: String(img?.prompt || ''),
+            negativePrompt: String(img?.negativePrompt || ''),
+            aspectRatio: String(img?.aspectRatio || ''),
+            imageUrl: String(img?.imageUrl || ''),
+            sourceImageId: String(img?.sourceImageId || ''),
+            characterImageIds: Array.isArray(img?.characterImageIds) ? img.characterImageIds.map(String) : [],
+            ...(characterRefs.length > 0 ? { characterRefs } : {}),
+            loras: Array.isArray(img?.loras) ? JSON.parse(JSON.stringify(img.loras)) : [],
+            status: img?.status === 'failed' ? 'failed' : 'ready',
+            error: String(img?.error || ''),
+            createdAt: Number.isFinite(Number(img?.createdAt)) ? Number(img.createdAt) : now,
+        };
+    });
 
     return {
         id,
@@ -115,6 +136,7 @@ export function appendStudioAssistantTurn(session, {
     });
     session.messages.push(message);
     for (const image of Array.isArray(images) ? images : []) {
+        const characterRefs = normalizeCharacterRefs(image?.characterRefs);
         session.images.push({
             id: String(image?.id || makeIllustrationId('img')),
             messageId: message.id,
@@ -124,6 +146,7 @@ export function appendStudioAssistantTurn(session, {
             imageUrl: String(image?.imageUrl || ''),
             sourceImageId: String(image?.sourceImageId || ''),
             characterImageIds: Array.isArray(image?.characterImageIds) ? image.characterImageIds.map(String) : [],
+            ...(characterRefs.length > 0 ? { characterRefs } : {}),
             loras: Array.isArray(image?.loras) ? JSON.parse(JSON.stringify(image.loras)) : [],
             status: image?.status === 'failed' ? 'failed' : 'ready',
             error: String(image?.error || ''),

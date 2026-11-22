@@ -136,6 +136,9 @@ function createSimContext({ chat = [], characterId = null, characters = [], gene
                 return {
                     source: 'comfy',
                     model: 'test-model',
+                    characterReferenceEnabled: true,
+                    characterReferenceMode: 'text_and_image',
+                    supportsCharacterTextReference: true,
                     supportsCharacterReference: true,
                     maxCharacterReferences: 4,
                     supportsStyleReference: false,

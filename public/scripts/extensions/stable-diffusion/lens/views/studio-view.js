@@ -15,12 +15,26 @@ import {
     makeRuntimeToolCallId,
     requestToolCallsWithRetry,
 } from '../../../../lib/iter-tool-calling.js';
+import {
+    buildCompactProfileIndex,
+    createCharacterProfileStore,
+} from '../../character-archive/store.js';
+import { filterReplayReferences, resolveCharacterReferenceMode } from '../../capabilities.js';
 import { defaultLoadVisualPreviewDataUrl } from '../../exploration/agent.js';
+import { formatProfileDetailForIllustration } from '../../illustration/agent.js';
 import { makeIllustrationId } from '../../illustration/presets.js';
 import { getPresetById, selectPreset } from '../../illustration/settings.js';
 import {
+    findCharacterImageConflict,
+    formatBackendCapabilitiesBlock,
+    formatCharacterReferencePolicyBlock,
+} from '../../illustration/task.js';
+import {
     GENERATE_IMAGE_TOOL,
+    READ_CHARACTER_PROFILES_TOOL,
     buildGenerateImageTool,
+    mergeNegativePrompts,
+    resolvePromptCharacterRefs,
     validateGenerateImageArgs,
 } from '../../illustration/tools.js';
 import { resolveReplayLoras } from '../../lora/tool.js';
@@ -45,10 +59,32 @@ function resolveGalleryOrManagedPath(idOrPath, session) {
     return '';
 }
 
+function formatConflictMessage(conflict) {
+    const raw = String(conflict?.message || '').trim();
+    return raw
+        ? i18n(raw)
+        : i18n('Character reference images are incompatible with the active image backend or workflow.');
+}
+
+function getCharacterRefLimitError(references, capabilities) {
+    const totalCharRefs = (Array.isArray(references) ? references : []).filter(r => r?.role === 'character').length;
+    if (
+        capabilities?.supportsCharacterReference
+        && capabilities.maxCharacterReferences !== null
+        && capabilities.maxCharacterReferences !== undefined
+        && totalCharRefs > capabilities.maxCharacterReferences
+    ) {
+        return `Selected character references resolve to ${totalCharRefs} image(s), exceeding limit of ${capabilities.maxCharacterReferences}.`;
+    }
+    return '';
+}
+
 export function createStudioView(app) {
     const el = h('div', { class: 'sdlens-studio', dataset: { sdView: 'studio' } });
     let sessions = [];
+    let profiles = [];
     let session = null;
+    let currentCapabilities = null;
     let selectedImageId = '';
     let draftInput = '';
     let busy = false;
@@ -65,13 +101,19 @@ export function createStudioView(app) {
     function resolveImageBackend() {
         if (app.imageService) return app.imageService;
         const ctx = getCtx();
+        const isApiAvailable = () => (
+            ctx?.imageGeneration
+            && (typeof ctx.imageGeneration.isAvailable !== 'function' || ctx.imageGeneration.isAvailable())
+        );
         return {
             async getAvailableLoras() {
-                const caps = await ctx?.imageGeneration?.getCapabilities?.();
+                if (!isApiAvailable()) return { names: [], includeWeight: false };
+                const caps = await ctx.imageGeneration.getCapabilities?.();
                 return caps?.availableLoras || { names: [], includeWeight: false };
             },
             async getCapabilities() {
-                return (await ctx?.imageGeneration?.getCapabilities?.()) || null;
+                if (!isApiAvailable()) return null;
+                return (await ctx.imageGeneration.getCapabilities?.()) || null;
             },
             async generate(prompt, opts) {
                 const res = await ctx.imageGeneration.generate({ prompt, ...opts });
@@ -80,15 +122,29 @@ export function createStudioView(app) {
         };
     }
 
+    async function refreshCapabilities() {
+        const imageBackend = resolveImageBackend();
+        try {
+            currentCapabilities = (await imageBackend.getCapabilities?.()) ?? null;
+        } catch {
+            currentCapabilities = null;
+        }
+        return currentCapabilities;
+    }
+
     async function refreshLists() {
         const ctx = getCtx();
         if (typeof ctx?.getGlobalState !== 'function') return;
         const sessionStore = createStudioSessionStore(ctx);
-        sessions = await sessionStore.listSessions();
+        const profileStore = createCharacterProfileStore(ctx);
+        [sessions, profiles] = await Promise.all([
+            sessionStore.listSessions(),
+            profileStore.listProfiles(),
+        ]);
     }
 
     async function ensureSessionLoaded() {
-        await refreshLists();
+        await Promise.all([refreshLists(), refreshCapabilities()]);
         const ill = getIllSettings();
         if (!session) {
             if (sessions.length > 0) {
@@ -136,18 +192,35 @@ export function createStudioView(app) {
     }
 
     function buildStudioTools(loraState, capabilities) {
-        return [buildGenerateImageTool(loraState.names, {
+        const genTool = buildGenerateImageTool(loraState.names, {
             includeWeight: loraState.includeWeight,
             capabilities,
             includeStudioFields: true,
-        })];
+        });
+        if (capabilities?.characterReferenceEnabled) {
+            return [genTool, JSON.parse(JSON.stringify(READ_CHARACTER_PROFILES_TOOL))];
+        }
+        return [genTool];
     }
 
-    function buildStudioSystemPrompt(preset) {
-        return requireStoredPrompt(preset.studioPrompt, i18n('Fill in the prompt or reset it to the default.'));
+    function buildStudioSystemPrompt(preset, { capabilities = null, characterArchiveIndex = undefined } = {}) {
+        const baseStudio = requireStoredPrompt(preset.studioPrompt, i18n('Fill in the prompt or reset it to the default.'));
+        const parts = [baseStudio];
+        if (capabilities) {
+            const capsBlock = formatBackendCapabilitiesBlock(capabilities);
+            if (capsBlock) parts.push(capsBlock);
+            if (capabilities.characterReferenceEnabled) {
+                const policyBlock = formatCharacterReferencePolicyBlock(capabilities, { includeExplore: false });
+                if (policyBlock) parts.push(policyBlock);
+                const archiveText = String(characterArchiveIndex || '').trim() || '(empty)';
+                parts.push(`<character_archive>\n${archiveText}\n</character_archive>`);
+            }
+        }
+        return parts.filter(Boolean).join('\n\n');
     }
 
     async function executeSingleStudioTool(rawCall, { loraState, capabilities, imageBackend, signal }) {
+        const ctx = getCtx();
         const name = String(rawCall?.name || '');
         const args = rawCall?.args || {};
 
@@ -161,12 +234,40 @@ export function createStudioView(app) {
                 return { toolResult: { status: 'failed', error: validation.error }, generatedImage: null };
             }
             const val = validation.value;
-            const references = [];
+            const allowSource = !capabilities || Boolean(capabilities.supportsSourceImage);
+            const allowCharacter = !capabilities || Boolean(capabilities.supportsCharacterReference);
 
-            // Explicit or attached source image
-            const sourceToken = val.sourceImageId
-                || session.attachedReferences.find(r => r.role === 'source')?.imagePath
-                || '';
+            if (!allowSource && val.sourceImageId) {
+                return {
+                    toolResult: {
+                        status: 'failed',
+                        error: 'Source image editing (img2img) is disabled in the current preset; omit source_image_id.',
+                    },
+                    generatedImage: null,
+                };
+            }
+            if (!allowCharacter && val.characterImageIds?.length > 0) {
+                return {
+                    toolResult: {
+                        status: 'failed',
+                        error: 'Character reference images are disabled in the current preset; omit character_image_ids.',
+                    },
+                    generatedImage: null,
+                };
+            }
+
+            const references = [];
+            const seenPaths = new Set();
+            const pushUniqueRef = (ref) => {
+                if (!ref?.imagePath || seenPaths.has(ref.imagePath)) return;
+                seenPaths.add(ref.imagePath);
+                references.push(ref);
+            };
+
+            // Explicit or attached source image (gated on supportsSourceImage)
+            const sourceToken = allowSource
+                ? (val.sourceImageId || session.attachedReferences.find(r => r.role === 'source')?.imagePath || '')
+                : '';
             if (sourceToken) {
                 const resolvedSource = resolveGalleryOrManagedPath(sourceToken, session);
                 if (!resolvedSource) {
@@ -175,24 +276,76 @@ export function createStudioView(app) {
                         generatedImage: null,
                     };
                 }
-                references.push({ imagePath: resolvedSource, role: 'source' });
+                pushUniqueRef({ imagePath: resolvedSource, role: 'source' });
             }
 
-            // Character reference images from gallery or attached references
-            for (const charToken of val.characterImageIds || []) {
-                const resolvedChar = resolveGalleryOrManagedPath(charToken, session);
-                if (!resolvedChar) {
+            const hasExplicitOrAttachedCharImgs = Boolean(
+                val.characterRefs?.length
+                || val.characterImageIds?.length
+                || (allowCharacter && session.attachedReferences.some(r => r.role === 'character')),
+            );
+            const charImgConflict = hasExplicitOrAttachedCharImgs ? findCharacterImageConflict(capabilities) : null;
+            if (charImgConflict) {
+                return {
+                    toolResult: { status: 'failed', error: formatConflictMessage(charImgConflict) },
+                    generatedImage: null,
+                };
+            }
+
+            let effectiveNegativePrompt = val.negativePrompt || '';
+
+            // Character archive refs (v1 character_refs)
+            if (Array.isArray(val.characterRefs) && val.characterRefs.length > 0) {
+                let profileMap = new Map(profiles.map(p => [p.id, p]));
+                if (typeof ctx?.getGlobalState === 'function') {
+                    const liveProfiles = await createCharacterProfileStore(ctx).listProfiles();
+                    profiles = liveProfiles;
+                    profileMap = new Map(liveProfiles.map(p => [p.id, p]));
+                }
+                const resolvedRefs = resolvePromptCharacterRefs(val.characterRefs, {
+                    profileMap,
+                    capabilities,
+                });
+                if (!resolvedRefs.ok) {
                     return {
-                        toolResult: { status: 'failed', error: `Unknown character_image_id "${charToken}".` },
+                        toolResult: { status: 'failed', error: resolvedRefs.error },
                         generatedImage: null,
                     };
                 }
-                references.push({ imagePath: resolvedChar, role: 'character' });
-            }
-            for (const att of session.attachedReferences.filter(r => r.role === 'character')) {
-                if (att?.imagePath && !references.some(r => r.imagePath === att.imagePath)) {
-                    references.push({ imagePath: att.imagePath, role: 'character', label: att.label || '' });
+                for (const ref of resolvedRefs.references) {
+                    pushUniqueRef(ref);
                 }
+                effectiveNegativePrompt = mergeNegativePrompts(effectiveNegativePrompt, resolvedRefs.negativeTags);
+            }
+
+            // Character reference images from gallery or attached references (gated on supportsCharacterReference)
+            if (allowCharacter) {
+                for (const charToken of val.characterImageIds || []) {
+                    const resolvedChar = resolveGalleryOrManagedPath(charToken, session);
+                    if (!resolvedChar) {
+                        return {
+                            toolResult: { status: 'failed', error: `Unknown character_image_id "${charToken}".` },
+                            generatedImage: null,
+                        };
+                    }
+                    pushUniqueRef({ imagePath: resolvedChar, role: 'character' });
+                }
+                for (const att of session.attachedReferences.filter(r => r.role === 'character')) {
+                    if (att?.imagePath) {
+                        pushUniqueRef({ imagePath: att.imagePath, role: 'character', label: att.label || '' });
+                    }
+                }
+            }
+
+            const capError = getCharacterRefLimitError(references, capabilities);
+            if (capError) {
+                return {
+                    toolResult: {
+                        status: 'failed',
+                        error: capError,
+                    },
+                    generatedImage: null,
+                };
             }
 
             const genOpts = {
@@ -201,7 +354,7 @@ export function createStudioView(app) {
                 loras: val.loras,
                 signal,
             };
-            if (val.negativePrompt) genOpts.negativePrompt = val.negativePrompt;
+            if (effectiveNegativePrompt) genOpts.negativePrompt = effectiveNegativePrompt;
             if (val.aspectRatio) genOpts.aspectRatio = val.aspectRatio;
             if (references.length > 0) genOpts.references = references;
 
@@ -209,15 +362,18 @@ export function createStudioView(app) {
             try {
                 const imageUrl = await imageBackend.generate(val.prompt, genOpts);
                 // Clear one-shot source attachment once used
-                session.attachedReferences = session.attachedReferences.filter(r => r.role !== 'source');
+                if (allowSource) {
+                    session.attachedReferences = session.attachedReferences.filter(r => r.role !== 'source');
+                }
                 const imgRecord = {
                     id: imgId,
                     prompt: val.prompt,
-                    negativePrompt: val.negativePrompt || '',
+                    negativePrompt: effectiveNegativePrompt,
                     aspectRatio: val.aspectRatio || '',
                     imageUrl,
-                    sourceImageId: val.sourceImageId || '',
-                    characterImageIds: val.characterImageIds || [],
+                    sourceImageId: sourceToken,
+                    characterImageIds: allowCharacter ? (val.characterImageIds || []) : [],
+                    characterRefs: allowCharacter ? (val.characterRefs || []) : [],
                     loras: val.loras,
                     status: 'ready',
                     error: '',
@@ -232,11 +388,12 @@ export function createStudioView(app) {
                 const imgRecord = {
                     id: imgId,
                     prompt: val.prompt,
-                    negativePrompt: val.negativePrompt || '',
+                    negativePrompt: effectiveNegativePrompt,
                     aspectRatio: val.aspectRatio || '',
                     imageUrl: '',
-                    sourceImageId: val.sourceImageId || '',
-                    characterImageIds: val.characterImageIds || [],
+                    sourceImageId: sourceToken,
+                    characterImageIds: allowCharacter ? (val.characterImageIds || []) : [],
+                    characterRefs: allowCharacter ? (val.characterRefs || []) : [],
                     loras: val.loras,
                     status: 'failed',
                     error: reason,
@@ -247,6 +404,23 @@ export function createStudioView(app) {
                     generatedImage: imgRecord,
                 };
             }
+        }
+
+        if (name === READ_CHARACTER_PROFILES_TOOL.function.name) {
+            if (!capabilities?.characterReferenceEnabled) {
+                return {
+                    toolResult: { status: 'failed', error: 'Character visual archive is disabled in the current preset.' },
+                    generatedImage: null,
+                };
+            }
+            const ids = Array.isArray(args.ids) ? args.ids : [];
+            const store = createCharacterProfileStore(ctx);
+            const found = await store.getProfilesByIds(ids);
+            const agentMode = resolveCharacterReferenceMode(capabilities);
+            const formatted = found.length > 0
+                ? found.map(p => formatProfileDetailForIllustration(p, agentMode)).join('\n\n---\n\n')
+                : `No character profiles found for ids: ${ids.join(', ')}`;
+            return { toolResult: formatted, generatedImage: null };
         }
 
         return {
@@ -265,9 +439,8 @@ export function createStudioView(app) {
             app.toast(i18n('No illustration preset is selected.'), { error: true });
             return;
         }
-        let systemPrompt;
         try {
-            systemPrompt = buildStudioSystemPrompt(preset);
+            requireStoredPrompt(preset.studioPrompt, i18n('Fill in the prompt or reset it to the default.'));
         } catch (error) {
             app.toast(String(error?.message || error), { error: true });
             return;
@@ -276,16 +449,35 @@ export function createStudioView(app) {
         const turnSession = session;
         busy = true;
         abortController = new AbortController();
-        draftInput = '';
-        appendStudioUserMessage(turnSession, text);
         paint();
 
+        let appendedUserMessage = false;
         try {
             const imageBackend = resolveImageBackend();
             const [loraState, capabilities] = await Promise.all([
                 imageBackend.getAvailableLoras(),
                 imageBackend.getCapabilities?.() ?? Promise.resolve(null),
+                refreshLists(),
             ]);
+            currentCapabilities = capabilities;
+
+            const charImgConflict = findCharacterImageConflict(capabilities);
+            if (charImgConflict) {
+                app.toast(`${i18n('Studio request failed')}: ${formatConflictMessage(charImgConflict)}`, { error: true });
+                return;
+            }
+
+            let characterArchiveIndex;
+            if (capabilities?.characterReferenceEnabled) {
+                characterArchiveIndex = buildCompactProfileIndex(profiles);
+            }
+            const systemPrompt = buildStudioSystemPrompt(preset, { capabilities, characterArchiveIndex });
+
+            draftInput = '';
+            appendStudioUserMessage(turnSession, text);
+            appendedUserMessage = true;
+            paint();
+
             const tools = buildStudioTools(loraState, capabilities);
             const allowedNames = tools.map(t => t.function.name);
             const taskMessages = [
@@ -418,7 +610,9 @@ export function createStudioView(app) {
             if (!abortController?.signal?.aborted) {
                 app.toast(`${i18n('Studio request failed')}: ${String(err?.message || err)}`, { error: true });
             }
-            await persistCurrentSession(turnSession);
+            if (appendedUserMessage) {
+                await persistCurrentSession(turnSession);
+            }
         } finally {
             busy = false;
             abortController = null;
@@ -431,7 +625,11 @@ export function createStudioView(app) {
     async function regenerateGalleryImage(image) {
         if (busy || !image?.prompt) return;
         try {
+            const ctx = getCtx();
             const imageBackend = resolveImageBackend();
+            const freshCapabilities = (await imageBackend.getCapabilities?.()) ?? null;
+            currentCapabilities = freshCapabilities;
+
             const savedLoras = Array.isArray(image.loras) ? image.loras : [];
             let loras = [];
             if (savedLoras.length > 0) {
@@ -442,27 +640,79 @@ export function createStudioView(app) {
                     app.toast(msg);
                 }).loras;
             }
+
             const reconstructedRefs = [];
+            const seenPaths = new Set();
+            const pushUniqueRef = (ref) => {
+                if (!ref?.imagePath || seenPaths.has(ref.imagePath)) return;
+                seenPaths.add(ref.imagePath);
+                reconstructedRefs.push(ref);
+            };
+
             if (image.sourceImageId) {
                 const resolvedSource = resolveGalleryOrManagedPath(image.sourceImageId, session);
                 if (resolvedSource) {
-                    reconstructedRefs.push({ imagePath: resolvedSource, role: 'source' });
+                    pushUniqueRef({ imagePath: resolvedSource, role: 'source' });
                 }
             }
             for (const charToken of Array.isArray(image.characterImageIds) ? image.characterImageIds : []) {
                 const resolvedChar = resolveGalleryOrManagedPath(charToken, session);
                 if (resolvedChar) {
-                    reconstructedRefs.push({ imagePath: resolvedChar, role: 'character' });
+                    pushUniqueRef({ imagePath: resolvedChar, role: 'character' });
                 }
             }
+            if (Array.isArray(image.characterRefs) && image.characterRefs.length > 0) {
+                if (freshCapabilities && !freshCapabilities.supportsCharacterReference) {
+                    reconstructedRefs.push({ imagePath: '', role: 'character' });
+                } else {
+                    let profileMap = new Map(profiles.map(p => [p.id, p]));
+                    if (typeof ctx?.getGlobalState === 'function') {
+                        const liveProfiles = await createCharacterProfileStore(ctx).listProfiles();
+                        profiles = liveProfiles;
+                        profileMap = new Map(liveProfiles.map(p => [p.id, p]));
+                    }
+                    const resolved = resolvePromptCharacterRefs(image.characterRefs, {
+                        profileMap,
+                        capabilities: freshCapabilities,
+                    });
+                    if (!resolved.ok) {
+                        throw new Error(resolved.error);
+                    }
+                    for (const ref of resolved.references) {
+                        pushUniqueRef(ref);
+                    }
+                }
+            }
+
+            const { references: filteredRefs, skipped } = filterReplayReferences(reconstructedRefs, freshCapabilities);
+            if (skipped.length > 0) {
+                const msg = i18n('Some saved reference images were skipped because they are disabled in the current preset.');
+                globalThis.toastr?.warning?.(msg, i18n('Image Generation'));
+                app.toast(msg);
+            }
+
+            const finalRefs = filteredRefs.filter(r => r.imagePath);
+            const capError = getCharacterRefLimitError(finalRefs, freshCapabilities);
+            if (capError) {
+                throw new Error(capError);
+            }
+            if (finalRefs.some(r => r.role === 'character')) {
+                const conflict = findCharacterImageConflict(freshCapabilities);
+                if (conflict) {
+                    throw new Error(formatConflictMessage(conflict));
+                }
+            }
+
             const imageUrl = await imageBackend.generate(image.prompt, {
                 attribution: 'none',
                 subdir: '_studio',
                 negativePrompt: image.negativePrompt || undefined,
                 aspectRatio: image.aspectRatio || undefined,
-                references: reconstructedRefs.length > 0 ? reconstructedRefs : undefined,
+                references: finalRefs.length > 0 ? finalRefs : undefined,
                 loras,
             });
+            const allowSource = !freshCapabilities || Boolean(freshCapabilities.supportsSourceImage);
+            const allowCharacter = !freshCapabilities || Boolean(freshCapabilities.supportsCharacterReference);
             const record = {
                 id: makeIllustrationId('img'),
                 messageId: image.messageId || '',
@@ -470,8 +720,9 @@ export function createStudioView(app) {
                 negativePrompt: image.negativePrompt || '',
                 aspectRatio: image.aspectRatio || '',
                 imageUrl,
-                sourceImageId: image.sourceImageId || '',
-                characterImageIds: image.characterImageIds || [],
+                sourceImageId: allowSource ? (image.sourceImageId || '') : '',
+                characterImageIds: allowCharacter ? (image.characterImageIds || []) : [],
+                characterRefs: allowCharacter ? (image.characterRefs || []) : [],
                 loras,
                 status: 'ready',
                 error: '',
@@ -497,7 +748,7 @@ export function createStudioView(app) {
                 try {
                     selectPreset(ill, nextId);
                     if (session) session.presetId = nextId;
-                    await persistCurrentSession();
+                    await Promise.all([persistCurrentSession(), refreshCapabilities()]);
                     paint();
                 } catch (err) {
                     app.toast(String(err?.message || err), { error: true });
@@ -584,7 +835,10 @@ export function createStudioView(app) {
                 })))
             : null));
 
-        const attachedSource = session?.attachedReferences?.find(r => r.role === 'source');
+        const allowSourceImage = !currentCapabilities || Boolean(currentCapabilities.supportsSourceImage);
+        const attachedSource = allowSourceImage
+            ? session?.attachedReferences?.find(r => r.role === 'source')
+            : null;
         const attachedBanner = attachedSource
             ? h('div', { class: 'sdlens-studio-source-banner' },
                 h('span', { title: attachedSource.imagePath, text: i18nFormat('Editing source image: ${0}', attachedSource.imagePath) }),
@@ -667,7 +921,7 @@ export function createStudioView(app) {
                         b.dataset.studioAction = 'regenerate';
                         return b;
                     })(),
-                    selected.status === 'ready' && selected.imageUrl
+                    selected.status === 'ready' && selected.imageUrl && (!currentCapabilities || currentCapabilities.supportsSourceImage)
                         ? (() => {
                             const b = button(i18n('Edit source'), () => {
                                 session.attachedReferences = [

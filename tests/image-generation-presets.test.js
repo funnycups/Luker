@@ -167,7 +167,13 @@ test('normalization drops invalid presets and repairs currentId', () => {
     }, { now: 20 });
     expect(bucket.presets).toHaveLength(1);
     expect(bucket.presets[0].id).toBe('genpreset_1');
-    expect(bucket.presets[0].config).toEqual({ steps: 12 });
+    expect(bucket.presets[0].config).toEqual({
+        steps: 12,
+        character_reference_enabled: false,
+        character_reference_mode: 'text_only',
+        style_references_enabled: false,
+        img2img_enabled: false,
+    });
     expect(bucket.currentId).toBe('genpreset_1');
 });
 
