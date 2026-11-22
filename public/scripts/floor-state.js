@@ -763,12 +763,12 @@ export function createFloorStateWithDeps(options, deps) {
      * anyway once they noticed the broken state.
      */
     async function recoverByTruncatingBrokenFloor(log, swipeMap, replayError) {
-        const probe = {};
+        let probe = {};
         let brokenIndex = -1;
         for (let i = 0; i < log.commits.length; i++) {
             const commit = log.commits[i];
             if (!shouldKeepCommit(commit, swipeMap)) continue;
-            try { applyPatch(probe, commit.patches, false, true); } catch (_) { brokenIndex = i; break; }
+            try { probe = applyPatch(probe, commit.patches, false, true).newDocument; } catch (_) { brokenIndex = i; break; }
         }
         if (brokenIndex < 0) {
             return { ok: false, state: null,

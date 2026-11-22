@@ -42,6 +42,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed a failed storage backend migration leaving the Storage Backend page locked as in progress until the server restarted.
 - Fixed settings save failures not displaying an error.
 - Fixed mid-chat message deletion, insertion, and reordering leaving subsequent floor-bound extension state out of sync.
+- Fixed broken state log recovery misidentifying the failing floor after a full-replacement patch.
 
 ## v2.9.0-rc.3 (2026-11-21)
 

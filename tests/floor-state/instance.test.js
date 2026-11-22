@@ -968,6 +968,38 @@ describe('broken-log recovery via floor truncate', () => {
         expect((await fs.get()).state).toEqual({ x: 1 });
         expect(store._raw.get('foo__orphans').tampered).toBe(true);
     });
+
+    test('recovery tracks root-level replace commits when locating brokenFloor', async () => {
+        // Commit #0 uses a root-level replace (path: ''), which returns a new
+        // document instead of mutating probe in place. Commit #1 cleanly builds
+        // on it, and only commit #2 is broken. Recovery must truncate at floor 2
+        // and preserve floors 0 and 1 (not falsely blame floor 1).
+        const chatRef = { value: [msg(0), msg(0), msg(0)] };
+        const { store, deps } = makeDeps(chatRef);
+        store._raw.set('foo__floor_log', {
+            version: 1,
+            commits: [
+                { floor: 0, swipeId: 0, patches: [{ op: 'replace', path: '', value: { x: 1 } }] },
+                { floor: 1, swipeId: 0, patches: [{ op: 'replace', path: '/x', value: 2 }] },
+                {
+                    floor: 2, swipeId: 0, patches: [
+                        { op: 'test', path: '/x', value: 999 },
+                        { op: 'replace', path: '/x', value: 3 },
+                    ],
+                },
+            ],
+        });
+
+        const fs = createFloorStateWithDeps({ namespace: 'foo' }, deps);
+        await fs.ready();
+
+        const result = await fs.get();
+        expect(result.ok).toBe(true);
+        expect(result.recovered).toBe(true);
+        expect(result.state).toEqual({ x: 2 });
+        expect(store._raw.get('foo__orphans').brokenFloor).toBe(2);
+        expect(store._raw.get('foo__floor_log').commits.map((c) => c.floor)).toEqual([0, 1]);
+    });
 });
 
 describe('concurrency: patch vs structural event', () => {
