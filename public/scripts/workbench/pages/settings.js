@@ -10,7 +10,7 @@ import { button, link, dot, checkRow, select, sectionTitle, loading } from '../u
 import { listRules } from '../model/suggest.js';
 import { resolveAiRow } from '../model/ai-source.js';
 import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../lens-shared/preset-examples.js';
-import { getRunDockPrefs, setRunDockPrefs, resetRunDockPosition, subscribeRunDockPrefs } from '../../run-panel/dock.js';
+import { getRunDockPrefs, setRunDockPrefs, resetRunDockPosition, subscribeRunDockPrefs } from '../../run-panel/index.js';
 
 export function knownRoles() {
     return [

@@ -90,7 +90,7 @@ store.finishRun({ runId, status: 'committed', finalText: 'Result' });
 | `getRunRecorder()` | 返回按帳號儲存近期執行歷史的共享記錄器。 |
 | `getRunDockPrefs()` | 讀取目前登入帳號的執行面板偏好（`{ autoOpen: boolean, defaultSize: 'small' \| 'large' }`）。 |
 | `setRunDockPrefs(patch)` | 更新執行面板偏好（`{ autoOpen?, defaultSize?, resetPosition? }`），同步存活面板實例並通知訂閱者。 |
-| `resetRunDockPosition()` | 清除目前帳號在桌面端與行動端儲存的面板及膠囊位置。 |
+| `resetRunDockPosition()` | 清除目前帳號在桌面端與行動端儲存的面板及膠囊位置，以及桌面端已儲存的視窗尺寸。 |
 | `subscribeRunDockPrefs(listener)` | 訂閱執行面板偏好變更；返回取消訂閱函式。 |
 
 使用者可以在懸浮窗選單、搜尋工具設定、編排設定或工作台**設定 → 視窗**中同步切換**執行時自動開啟**與**執行面板預設大小**（**小視窗** / **大視窗**；自動開啟預設開啟，關閉後非 quiet 執行僅顯示狀態膠囊，不會自動展開）。

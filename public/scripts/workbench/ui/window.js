@@ -128,20 +128,44 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
     let lastBarTapAt = 0;
     let lastBarTapPos = { x: 0, y: 0 };
     let lastTouchDblTapAt = 0;
+    let cancelBarDrag = null;
     bar.addEventListener('pointerdown', (event) => {
         if ((event.pointerType === 'mouse' && event.button !== 0) || event.target.closest('button')) return;
+        cancelBarDrag?.();
+        const pointerId = event.pointerId;
         const isMobile = compact;
         const cur = isMobile ? (mobileBox || compactDefaultBox(vw, vh)) : (box || defaultBox(vw, vh));
         const start = { x: event.clientX, y: event.clientY, left: cur.left, top: cur.top };
         let draggingBar = false;
+        let abortGesture = null;
+        const cleanup = () => {
+            bar.classList.remove('is-dragging');
+            globalThis.removeEventListener('pointermove', move);
+            globalThis.removeEventListener('pointerup', end);
+            globalThis.removeEventListener('pointercancel', cancel);
+            globalThis.removeEventListener('blur', onBlur);
+            if (cancelBarDrag === abortGesture) cancelBarDrag = null;
+        };
+        abortGesture = () => {
+            cleanup();
+            if (draggingBar) {
+                if (bar.hasPointerCapture?.(pointerId)) bar.releasePointerCapture?.(pointerId);
+                persist();
+            }
+        };
         const move = (e) => {
+            if (e.pointerId !== pointerId) return;
+            if (e.pointerType === 'mouse' && typeof e.buttons === 'number' && (e.buttons & 1) === 0) {
+                abortGesture();
+                return;
+            }
             if (maximised) return;
             const dx = e.clientX - start.x;
             const dy = e.clientY - start.y;
             if (!draggingBar) {
                 if (Math.hypot(dx, dy) < 6) return;
                 draggingBar = true;
-                bar.setPointerCapture?.(event.pointerId);
+                bar.setPointerCapture?.(pointerId);
                 bar.classList.add('is-dragging');
             }
             e.preventDefault();
@@ -156,10 +180,8 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
             }
         };
         const end = (e) => {
-            bar.classList.remove('is-dragging');
-            bar.removeEventListener('pointermove', move);
-            bar.removeEventListener('pointerup', end);
-            bar.removeEventListener('pointercancel', cancel);
+            if (e.pointerId !== pointerId) return;
+            cleanup();
             if (draggingBar) {
                 persist();
                 return;
@@ -176,16 +198,16 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
                 }
             }
         };
-        const cancel = () => {
-            bar.classList.remove('is-dragging');
-            bar.removeEventListener('pointermove', move);
-            bar.removeEventListener('pointerup', end);
-            bar.removeEventListener('pointercancel', cancel);
-            if (draggingBar) persist();
+        const cancel = (e) => {
+            if (e.pointerId !== pointerId) return;
+            abortGesture();
         };
-        bar.addEventListener('pointermove', move);
-        bar.addEventListener('pointerup', end);
-        bar.addEventListener('pointercancel', cancel);
+        const onBlur = () => abortGesture();
+        cancelBarDrag = abortGesture;
+        globalThis.addEventListener('pointermove', move);
+        globalThis.addEventListener('pointerup', end);
+        globalThis.addEventListener('pointercancel', cancel);
+        globalThis.addEventListener('blur', onBlur);
     });
     bar.addEventListener('dblclick', (event) => {
         if (event.target.closest('button')) return;
@@ -277,6 +299,7 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
     });
 
     function collapse() {
+        cancelBarDrag?.();
         const wasCollapsed = collapsed;
         collapsed = true;
         apply();
@@ -340,6 +363,7 @@ export function createWindow({ title, onThemeToggle, theme, defaultSize = null, 
         paintTheme,
         focus: () => win.focus({ preventScroll: true }),
         destroy() {
+            cancelBarDrag?.();
             fit.destroy();
             layer.remove();
         },

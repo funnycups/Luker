@@ -340,7 +340,10 @@ describe('orchestrator/lens zero innerHTML & no legacy dock/ai imports', () => {
         expect(panelsCss).toMatch(/\.olens\s+\.ol-mobilebar\s*\{[^}]*flex:\s*none;/);
         expect(shellCss).not.toMatch(/\.olens\s+\.ol-topbar\s*\{[^}]*z-index:/);
         expect(wbShellCss).toMatch(/\.wbench\s+\.wb-win\s*\{[^}]*transform:\s*translateZ\(0\)/);
-        expect(wbShellCss).toMatch(/\.wbench\.is-compact\s+\.wb-win\s*\{[^}]*box-shadow:\s*none;/);
+        expect(wbShellCss).toMatch(/\.wbench\.is-compact\s+\.wb-win\s*\{[^}]*border-radius:\s*0;[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;[^}]*overflow:\s*visible;/);
         expect(tokensCss).not.toMatch(/--lw-border(?:-strong)?:\s*rgba\(/);
+        const dockCss = fs.readFileSync(path.join(ROOT, 'public/scripts/run-panel/dock.css'), 'utf8');
+        expect(dockCss).toMatch(/\.rpdock\s+\.rp-dock-pill-main\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;/);
+        expect(dockCss).toMatch(/\.rpdock\s+\.rp-dock-pill-x\s*\{[^}]*flex:\s*none;/);
     });
 });

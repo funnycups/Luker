@@ -115,10 +115,10 @@
 .wbench .wb-toast-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--wb-accent-soft); color: var(--wb-accent); font-weight: 600; cursor: pointer; }
 
 /* ---- Phone: compact floating window (<= 640px) ---- */
-.wbench.is-compact .wb-win { min-width: 0; min-height: 0; border-radius: var(--wb-r-lg); border: 1px solid var(--wb-border-strong); box-shadow: none; animation: none; }
-.wbench.is-compact .wb-win.is-max { border-radius: 12px; }
+.wbench.is-compact .wb-win { min-width: 0; min-height: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; animation: none; }
 .wbench.is-compact .wb-title-ctx { display: none; }
-.wbench.is-compact .wb-titlebar { height: 46px; gap: 6px; padding: 0 6px 0 12px; }
+.wbench.is-compact .wb-titlebar { height: 46px; gap: 6px; padding: 0 6px 0 12px; border-radius: var(--wb-r-lg) var(--wb-r-lg) 0 0; border: 1px solid var(--wb-border-strong); border-bottom: 1px solid var(--wb-border); overflow: hidden; }
+.wbench.is-compact .wb-win.is-max .wb-titlebar { border-radius: 12px 12px 0 0; }
 .wbench.is-compact .wb-resize { width: 32px; height: 32px; }
 .wbench.is-compact .wb-resize::after { right: 6px; bottom: 6px; width: 8px; height: 8px; }
 .wbench.is-compact .wb-win:not(.is-max) .wb-resize-y {
@@ -129,7 +129,8 @@
     content: ''; position: absolute; left: 50%; bottom: 4px; width: 32px; height: 3px;
     margin-left: -16px; border-radius: 3px; background: var(--wb-border-strong); opacity: 0.75;
 }
-.wbench.is-compact .wb-body { flex-direction: column; background: var(--wb-surface); overflow: hidden; }
+.wbench.is-compact .wb-body { flex-direction: column; background: var(--wb-surface); border-radius: 0 0 var(--wb-r-lg) var(--wb-r-lg); border: 1px solid var(--wb-border-strong); border-top: 0; overflow: hidden; }
+.wbench.is-compact .wb-win.is-max .wb-body { border-radius: 0 0 12px 12px; }
 .wbench.is-compact .wb-rail { width: auto; flex-direction: row; gap: 4px; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--wb-border); overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
 .wbench.is-compact .wb-rail::-webkit-scrollbar { display: none; }
 .wbench.is-compact .wb-tab { width: auto; flex: none; height: 38px; padding: 0 12px; gap: 6px; font-size: 13px; }

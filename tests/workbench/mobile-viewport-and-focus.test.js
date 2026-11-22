@@ -108,6 +108,24 @@ describe('workbench mobile viewport & preventScroll focus', () => {
         firePtr(bar, 'pointerup', { clientX: 151, clientY: 160 });
         expect(win.win.classList.contains('is-max')).toBe(true);
 
+        // Regression 1: pointerdown on maximised titlebar followed by pointerup outside titlebar
+        // cleans up global drag listeners (even if a later move has buttons=1).
+        firePtr(bar, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 150, clientY: 20 });
+        firePtr(document.body, 'pointerup', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 150, clientY: 200 });
+        win.setMaximised(false);
+        const leftBeforeHover = win.win.style.left;
+        const topBeforeHover = win.win.style.top;
+        firePtr(bar, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 210, clientY: 240 });
+        expect(win.win.style.left).toBe(leftBeforeHover);
+        expect(win.win.style.top).toBe(topBeforeHover);
+
+        // Regression 2: if pointerup was missed completely (e.g. released outside browser), a mouse
+        // pointermove with buttons=0 aborts the stale gesture without dragging.
+        firePtr(bar, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 150, clientY: 160 });
+        firePtr(bar, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 210, clientY: 240 });
+        expect(win.win.style.left).toBe(leftBeforeHover);
+        expect(win.win.style.top).toBe(topBeforeHover);
+
         win.destroy();
     });
 
@@ -288,14 +306,34 @@ describe('workbench mobile viewport & preventScroll focus', () => {
             expect(dockEl.querySelector('.rp-dock-grip')).toBeNull();
 
             // 1) Test .rp-dock itself on compact mobile small mode + keyboard visualViewport shrink
+            // Default mobile bottom (150px) sits cleanly above Workbench's default mobile pill (bottom: 96px, height: 42px => 138px).
             dock.open();
             expect(dockEl.classList.contains('is-compact')).toBe(true);
             expect(dockEl.dataset.size).toBe('small');
-            expect(dockEl.style.bottom).toBe('96px');
+            expect(dockEl.style.bottom).toBe('150px');
 
             mockVV.height = 512; // 300px mobile keyboard opens
             for (const fn of vvListeners.get('resize') || []) fn();
-            expect(dockEl.style.bottom).toBe('396px');
+            expect(dockEl.style.bottom).toBe('450px');
+            expect(parseInt(dockEl.style.bottom, 10) - 300 + parseInt(dockEl.style.maxHeight, 10)).toBeLessThanOrEqual(512);
+
+            // Dragging upward to the extreme top edge must stay within the 12px top margin (no negative top overflow)
+            mockVV.height = 420;
+            for (const fn of vvListeners.get('resize') || []) fn();
+            const headEl = dockEl.querySelector('.rp-dock-head');
+            const fireHead = (type, clientY) => {
+                const ev = new Event(type, { bubbles: true, cancelable: true });
+                Object.assign(ev, { pointerId: 2, pointerType: 'touch', button: 0, clientX: 180, clientY });
+                headEl.dispatchEvent(ev);
+            };
+            fireHead('pointerdown', 350);
+            fireHead('pointermove', -350); // +700px upward drag hits clampMobilePos ceiling
+            fireHead('pointerup', -350);
+            const vvBottomAfter = 812 - 420;
+            const visibleBottom = parseInt(dockEl.style.bottom, 10) - vvBottomAfter;
+            const maxH = parseInt(dockEl.style.maxHeight, 10);
+            expect(visibleBottom).toBe(420 - 152);
+            expect(visibleBottom + maxH).toBeLessThanOrEqual(420 - 12);
 
             // 2) Test .rp-dock-scrim fitToViewport origin measurement in large mode
             mockVV.height = 812;

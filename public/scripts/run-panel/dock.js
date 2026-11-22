@@ -32,7 +32,7 @@ const WIDTH_RANGE = [240, 560];
 const MIN_HEIGHT = 160;
 const NARROW_WIDTH = 280;
 const DEFAULT_POS = { right: 20, bottom: 84 };
-const DEFAULT_MOBILE_POS = { right: 12, bottom: 96 };
+const DEFAULT_MOBILE_POS = { right: 12, bottom: 150 };
 const MOBILE_DEFAULT_WIDTH = 356;
 const SHRINK_AFTER_MS = 4000;
 
@@ -301,7 +301,6 @@ export function createDock({
         title: i18n('Close'),
         'aria-label': i18n('Close'),
         onClick: () => {
-            if (pillDragged) { pillDragged = false; return; }
             setState('closed');
         },
     }, icon('x', { size: 13 }));
@@ -349,7 +348,7 @@ export function createDock({
     function clampMobilePos(pos, width) {
         const { vw, vh } = viewportSize();
         const w = width ?? clampNum(MOBILE_DEFAULT_WIDTH, 220, Math.max(220, vw - 24));
-        return { right: clampNum(pos?.right, 8, Math.max(8, vw - w - 8)), bottom: clampNum(pos?.bottom, 8, Math.max(8, vh - 120)) };
+        return { right: clampNum(pos?.right, 8, Math.max(8, vw - w - 8)), bottom: clampNum(pos?.bottom, 8, Math.max(8, vh - 152)) };
     }
     function clampSize(sz, pos = floatPos) {
         const { vw, vh } = viewportSize();
@@ -475,25 +474,20 @@ export function createDock({
     resizer.addEventListener('pointercancel', endSize);
 
     let drag = null;
+    let cancelHeadDrag = null;
     let lastHeadTapAt = 0;
     let lastHeadTapPos = { x: 0, y: 0 };
     let lastHeadTouchDblAt = 0;
-    head.addEventListener('pointerdown', (event) => {
-        if ((event.pointerType === 'mouse' && event.button !== 0) || event.target.closest('button')) return;
-        const compact = isCompact();
-        drag = {
-            id: event.pointerId,
-            x: event.clientX,
-            y: event.clientY,
-            compact,
-            active: false,
-            pos: compact ? { ...mobileFloatPos } : { ...floatPos },
-        };
-    });
-    head.addEventListener('pointermove', (event) => {
-        if (!drag || event.pointerId !== drag.id || size !== 'small') return;
-        const dx = event.clientX - drag.x;
-        const dy = event.clientY - drag.y;
+    const eCoord = (v) => Number(v) || 0;
+    const onHeadMove = (event) => {
+        if (!drag || event.pointerId !== drag.id) return;
+        if (event.pointerType === 'mouse' && typeof event.buttons === 'number' && (event.buttons & 1) === 0) {
+            finishHeadGesture(event, true);
+            return;
+        }
+        if (size !== 'small') return;
+        const dx = eCoord(event.clientX) - drag.x;
+        const dy = eCoord(event.clientY) - drag.y;
         if (!drag.active) {
             if (Math.hypot(dx, dy) < 6) return;
             drag.active = true;
@@ -508,14 +502,29 @@ export function createDock({
             wantPos = clampPos(nextRaw);
         }
         placeFloat();
-    });
-    const finishHeadGesture = (event, cancelled = false) => {
+    };
+    const onHeadUp = (e) => finishHeadGesture(e, false);
+    const onHeadCancel = (e) => finishHeadGesture(e, true);
+    const onHeadBlur = () => {
+        if (drag) finishHeadGesture({ pointerId: drag.id }, true);
+    };
+    const detachHeadListeners = () => {
+        globalThis.removeEventListener('pointermove', onHeadMove);
+        globalThis.removeEventListener('pointerup', onHeadUp);
+        globalThis.removeEventListener('pointercancel', onHeadCancel);
+        globalThis.removeEventListener('blur', onHeadBlur);
+        cancelHeadDrag = null;
+    };
+    function finishHeadGesture(event, cancelled = false) {
         if (!drag || event.pointerId !== drag.id) return;
+        const pointerId = drag.id;
         const wasCompact = drag.compact;
         const wasActive = drag.active;
         drag = null;
+        detachHeadListeners();
         root.classList.remove('is-dragging');
         if (wasActive) {
+            if (cancelled && head.hasPointerCapture?.(pointerId)) head.releasePointerCapture?.(pointerId);
             if (wasCompact) {
                 const nextMobilePos = wantMobilePos;
                 syncPrefs();
@@ -532,19 +541,36 @@ export function createDock({
         }
         if (!cancelled && event.pointerType !== 'mouse') {
             const now = Date.now();
-            if (now - lastHeadTapAt < 320 && Math.hypot(event.clientX - lastHeadTapPos.x, eCoord(event.clientY) - lastHeadTapPos.y) < 28) {
+            const cx = eCoord(event.clientX);
+            const cy = eCoord(event.clientY);
+            if (now - lastHeadTapAt < 320 && Math.hypot(cx - lastHeadTapPos.x, cy - lastHeadTapPos.y) < 28) {
                 lastHeadTapAt = 0;
                 lastHeadTouchDblAt = now;
                 setSize(size === 'large' ? 'small' : 'large');
             } else {
                 lastHeadTapAt = now;
-                lastHeadTapPos = { x: event.clientX, y: eCoord(event.clientY) };
+                lastHeadTapPos = { x: cx, y: cy };
             }
         }
-    };
-    const eCoord = (v) => Number(v) || 0;
-    head.addEventListener('pointerup', (e) => finishHeadGesture(e, false));
-    head.addEventListener('pointercancel', (e) => finishHeadGesture(e, true));
+    }
+    head.addEventListener('pointerdown', (event) => {
+        if ((event.pointerType === 'mouse' && event.button !== 0) || event.target.closest('button')) return;
+        cancelHeadDrag?.();
+        const compact = isCompact();
+        drag = {
+            id: event.pointerId,
+            x: eCoord(event.clientX),
+            y: eCoord(event.clientY),
+            compact,
+            active: false,
+            pos: compact ? { ...mobileFloatPos } : { ...floatPos },
+        };
+        cancelHeadDrag = onHeadBlur;
+        globalThis.addEventListener('pointermove', onHeadMove);
+        globalThis.addEventListener('pointerup', onHeadUp);
+        globalThis.addEventListener('pointercancel', onHeadCancel);
+        globalThis.addEventListener('blur', onHeadBlur);
+    });
     head.addEventListener('dblclick', (event) => {
         if (event.target.closest('button')) return;
         if (Date.now() - lastHeadTouchDblAt < 450) return;
@@ -572,6 +598,7 @@ export function createDock({
             setRunDockPrefs({ defaultSize: normalized });
             setMenu(false);
         } else {
+            prefs.defaultSize = normalized;
             setSize(normalized);
         }
     }
@@ -593,6 +620,8 @@ export function createDock({
                 syncPrefs();
                 if (currentAccountHandle()) {
                     setRunDockPrefs({ autoOpen: !prefs.autoOpen });
+                } else {
+                    prefs.autoOpen = !prefs.autoOpen;
                 }
                 setMenu(true);
             }, { role: 'menuitemcheckbox', 'aria-checked': String(prefs.autoOpen) }),
@@ -659,7 +688,7 @@ export function createDock({
     }
     function currentPillMargin(compact, pillW, pillH) {
         const custom = compact ? wantMobilePillPos : wantPillPos;
-        const fallback = compact ? { right: 12, bottom: 96 } : floatPos;
+        const fallback = compact ? DEFAULT_MOBILE_POS : floatPos;
         return clampPillPos(custom || fallback, pillW, pillH);
     }
     function placePill() {
@@ -676,22 +705,61 @@ export function createDock({
         pill.style.top = `${vh - marginBottom - r.height - r.top + Math.round(vv?.offsetTop ?? 0)}px`;
     }
 
+    let cancelPillDrag = null;
+    let pillDragResetTimer = null;
     pill.addEventListener('pointerdown', (event) => {
-        if (event.pointerType === 'mouse' && event.button !== 0) return;
+        if ((event.pointerType === 'mouse' && event.button !== 0) || event.target?.closest?.('.rp-dock-pill-x')) return;
+        cancelPillDrag?.();
+        clearTimeout(pillDragResetTimer);
+        const pointerId = event.pointerId;
         const compact = isCompact();
         const r = pill.getBoundingClientRect();
         const startMargin = currentPillMargin(compact, r.width || 180, r.height || 38);
         const start = { x: event.clientX, y: event.clientY, ...startMargin, w: r.width || 180, h: r.height || 38 };
         let draggingPill = false;
         pillDragged = false;
+        let finish = null;
+        let onBlur = null;
+        const cleanup = () => {
+            pill.classList.remove('is-dragging');
+            globalThis.removeEventListener('pointermove', move);
+            globalThis.removeEventListener('pointerup', end);
+            globalThis.removeEventListener('pointercancel', cancel);
+            globalThis.removeEventListener('blur', onBlur);
+            if (cancelPillDrag === onBlur) cancelPillDrag = null;
+        };
+        finish = (cancelled = false) => {
+            cleanup();
+            if (!draggingPill) return;
+            if (cancelled && pill.hasPointerCapture?.(pointerId)) pill.releasePointerCapture?.(pointerId);
+            if (compact) {
+                const nextMobilePillPos = wantMobilePillPos;
+                syncPrefs();
+                wantMobilePillPos = nextMobilePillPos;
+                prefs.mobilePillPos = wantMobilePillPos;
+            } else {
+                const nextPillPos = wantPillPos;
+                syncPrefs();
+                wantPillPos = nextPillPos;
+                prefs.pillPos = wantPillPos;
+            }
+            savePrefs(prefStorage, prefs);
+            clearTimeout(pillDragResetTimer);
+            pillDragResetTimer = setTimeout(() => { pillDragged = false; }, 0);
+        };
         const move = (e) => {
+            if (e.pointerId !== pointerId) return;
+            if (e.pointerType === 'mouse' && typeof e.buttons === 'number' && (e.buttons & 1) === 0) {
+                finish(true);
+                return;
+            }
             const dx = e.clientX - start.x;
             const dy = e.clientY - start.y;
             if (!draggingPill) {
                 if (Math.hypot(dx, dy) < 6) return;
                 draggingPill = true;
                 pillDragged = true;
-                pill.setPointerCapture?.(event.pointerId);
+                pill.setPointerCapture?.(pointerId);
                 pill.classList.add('is-dragging');
             }
             e.preventDefault();
@@ -700,20 +768,20 @@ export function createDock({
             else wantPillPos = next;
             placePill();
         };
-        const end = () => {
-            pill.classList.remove('is-dragging');
-            pill.removeEventListener('pointermove', move);
-            pill.removeEventListener('pointerup', end);
-            pill.removeEventListener('pointercancel', end);
-            if (!draggingPill) return;
-            syncPrefs();
-            if (compact) prefs.mobilePillPos = wantMobilePillPos;
-            else prefs.pillPos = wantPillPos;
-            savePrefs(prefStorage, prefs);
+        const end = (e) => {
+            if (e.pointerId !== pointerId) return;
+            finish(false);
         };
-        pill.addEventListener('pointermove', move);
-        pill.addEventListener('pointerup', end);
-        pill.addEventListener('pointercancel', end);
+        const cancel = (e) => {
+            if (e.pointerId !== pointerId) return;
+            finish(true);
+        };
+        onBlur = () => finish(true);
+        cancelPillDrag = onBlur;
+        globalThis.addEventListener('pointermove', move);
+        globalThis.addEventListener('pointerup', end);
+        globalThis.addEventListener('pointercancel', cancel);
+        globalThis.addEventListener('blur', onBlur);
     });
     const onResize = () => { placeFloat(); placePill(); };
     globalThis.addEventListener('resize', onResize);
@@ -722,8 +790,12 @@ export function createDock({
 
     function setState(next) {
         syncPrefs();
-        if (next !== 'open') setMenu(false);
-        if (next !== 'open') clearTimeout(shrinkTimer);
+        if (next !== 'open') {
+            cancelHeadDrag?.();
+            setMenu(false);
+            clearTimeout(shrinkTimer);
+        }
+        if (next !== 'pill') cancelPillDrag?.();
         state = next;
         root.dataset.state = state;
         const compact = isCompact();
@@ -1095,6 +1167,9 @@ export function createDock({
         },
         destroy() {
             destroyed = true;
+            cancelHeadDrag?.();
+            cancelPillDrag?.();
+            clearTimeout(pillDragResetTimer);
             liveDocks.delete(api);
             unsubscribe();
             clearInterval(ticker);

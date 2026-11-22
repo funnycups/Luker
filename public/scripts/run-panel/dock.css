@@ -39,6 +39,7 @@
 .rpdock .rp-spacer { flex: 1 1 auto; }
 
 .rpdock .rp-pulse {
+    flex: none;
     display: inline-block; width: 8px; height: 8px; border-radius: 50%;
     background: var(--rp-running); box-shadow: 0 0 0 3px var(--rp-running-soft);
     animation: rp-pulse 1s ease-in-out infinite;
@@ -231,10 +232,11 @@
 .rpdock.rp-dock-pill:not([data-status="running"]) { border-color: var(--lw-border-strong); }
 .rpdock .rp-dock-pill-main {
     display: inline-flex; align-items: center; gap: 8px; height: 100%; padding: 0 14px;
+    min-width: 0; overflow: hidden;
     border: 0; border-radius: inherit; background: none; color: inherit; font: inherit; cursor: pointer;
 }
 .rpdock .rp-dock-pill-main:hover { background: var(--lw-hover); }
-.rpdock .rp-dock-pill-x { display: grid; place-items: center; width: 24px; height: 24px; margin: 0 5px 0 -8px; border: 0; border-radius: 50%; background: none; color: var(--lw-faint); cursor: pointer; }
+.rpdock .rp-dock-pill-x { flex: none; display: grid; place-items: center; width: 24px; height: 24px; margin: 0 5px 0 -8px; border: 0; border-radius: 50%; background: none; color: var(--lw-faint); cursor: pointer; }
 .rpdock .rp-dock-pill-x:hover { color: var(--lw-text); background: var(--lw-hover); }
 .rpdock .rp-dock-pill-x[hidden] { display: none; }
 .rpdock .rp-dock-pill-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--lw-accent); }
@@ -328,12 +330,13 @@
     .rpdock.rp-dock.is-compact[data-size="large"] .rp-dock-stats { padding-left: 30px; gap: 4px 10px; }
     .rpdock.rp-dock.is-compact .rp-menu { top: 44px; width: min(228px, calc(100vw - 24px)); }
     .rpdock.rp-dock.is-compact .rp-menu-item { min-height: 40px; padding: 9px 12px; font-size: 13.5px; }
-    .rpdock .rp-dock-agent-head { min-height: 42px; }
+    .rpdock.rp-dock .rp-dock-agent-head,
+    .rpdock.rp-dock[data-size="small"] .rp-dock-agent-head { height: auto; min-height: 42px; }
     .rpdock.rp-dock-pill.is-compact,
     .rpdock.rp-dock-pill { height: 40px; max-width: calc(100vw - 24px); }
     .rpdock.rp-dock-pill .rp-dock-pill-main { padding: 0 12px 0 14px; }
     .rpdock.rp-dock-pill .rp-dock-pill-x { width: 36px; height: 36px; margin: 0 2px 0 -4px; }
-    .rpdock .rp-dock-pill-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rpdock .rp-dock-pill-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {

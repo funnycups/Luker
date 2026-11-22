@@ -90,7 +90,7 @@ store.finishRun({ runId, status: 'committed', finalText: 'Result' });
 | `getRunRecorder()` | 返回按账号保存近期运行历史的共享记录器。 |
 | `getRunDockPrefs()` | 读取当前登录账号的运行面板偏好（`{ autoOpen: boolean, defaultSize: 'small' \| 'large' }`）。 |
 | `setRunDockPrefs(patch)` | 更新运行面板偏好（`{ autoOpen?, defaultSize?, resetPosition? }`），同步存活面板实例并通知订阅者。 |
-| `resetRunDockPosition()` | 清除当前账号在桌面端与移动端保存的面板及胶囊位置。 |
+| `resetRunDockPosition()` | 清除当前账号在桌面端与移动端保存的面板及胶囊位置，以及桌面端已保存的窗口尺寸。 |
 | `subscribeRunDockPrefs(listener)` | 订阅运行面板偏好变更；返回取消订阅函数。 |
 
 用户可以在悬浮窗菜单、搜索工具设置、编排设置或工作台**设置 → 窗口**中同步切换**运行时自动打开**与**运行面板默认大小**（**小窗** / **大窗**；自动打开默认开启，关闭后非 quiet 运行仅显示状态胶囊，不会自动展开）。

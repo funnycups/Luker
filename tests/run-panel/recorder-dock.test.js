@@ -662,6 +662,46 @@ describe('run-panel recorder & dock', () => {
             resetRunDockPosition();
             expect(JSON.parse(globalThis.localStorage.getItem('orchestraLens.dock.v1::alice')).mobilePillPos).toBeUndefined();
 
+            // Regression: releasing outside head (e.g. from large mode) must clear drag state independently of buttons guard
+            dock.setSize('large');
+            firePtr(headEl, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 180, clientY: 120 });
+            firePtr(document.body, 'pointerup', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 180, clientY: 300 });
+            dock.setSize('small');
+            const rightBeforeHeadHover = dockEl.style.right;
+            const bottomBeforeHeadHover = dockEl.style.bottom;
+            firePtr(headEl, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 100, clientY: 400 });
+            expect(dockEl.style.right).toBe(rightBeforeHeadHover);
+            expect(dockEl.style.bottom).toBe(bottomBeforeHeadHover);
+
+            // Missing pointerup + mouse buttons=0 move aborts head drag without moving dock
+            firePtr(headEl, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 180, clientY: 560 });
+            firePtr(headEl, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 100, clientY: 400 });
+            expect(dockEl.style.right).toBe(rightBeforeHeadHover);
+            expect(dockEl.style.bottom).toBe(bottomBeforeHeadHover);
+
+            // Regression: releasing outside pill after <6px move cleans up listeners,
+            // default mobile pill position (bottom: 150px) clears Workbench's compact entry pill (96..138px),
+            // and clicking .rp-dock-pill-x right after dragging the pill closes it on the first click.
+            const liveCollapseBtn = [...headEl.querySelectorAll('button')].find(b => b.title === 'Collapse');
+            liveCollapseBtn.click();
+            expect(pillEl.hidden).toBe(false);
+            expect(pillEl.style.top).toBe(`${844 - 150}px`);
+            const pillLeftBeforeHover = pillEl.style.left;
+            const pillTopBeforeHover = pillEl.style.top;
+            firePtr(pillEl, 'pointerdown', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 300, clientY: 660 });
+            firePtr(document.body, 'pointerup', { pointerType: 'mouse', pointerId: 1, buttons: 0, clientX: 302, clientY: 661 });
+            firePtr(pillEl, 'pointermove', { pointerType: 'mouse', pointerId: 1, buttons: 1, clientX: 200, clientY: 500 });
+            expect(pillEl.style.left).toBe(pillLeftBeforeHover);
+            expect(pillEl.style.top).toBe(pillTopBeforeHover);
+
+            // Drag pill (>=6px) without clicking pillMain, then click .rp-dock-pill-x -> closes on first click
+            firePtr(pillEl, 'pointerdown', { pointerType: 'touch', pointerId: 2, clientX: 300, clientY: 660 });
+            firePtr(pillEl, 'pointermove', { pointerType: 'touch', pointerId: 2, clientX: 240, clientY: 580 });
+            firePtr(pillEl, 'pointerup', { pointerType: 'touch', pointerId: 2, clientX: 240, clientY: 580 });
+            pillEl.querySelector('.rp-dock-pill-x').click();
+            expect(pillEl.hidden).toBe(true);
+            expect(dock.isOpen()).toBe(false);
+
             unsub();
             dock.destroy();
             recorder.detach();

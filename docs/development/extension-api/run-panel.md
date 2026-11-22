@@ -90,7 +90,7 @@ Listeners receive `{ type, ... }` payloads. Constants are exported from `run-pan
 | `getRunRecorder()` | Return the shared recorder holding live and recent per-account run history. |
 | `getRunDockPrefs()` | Read the signed-in account's Run Dock preferences (`{ autoOpen: boolean, defaultSize: 'small' \| 'large' }`). |
 | `setRunDockPrefs(patch)` | Update Run Dock preferences (`{ autoOpen?, defaultSize?, resetPosition? }`), sync live dock instances, and notify subscribers. |
-| `resetRunDockPosition()` | Clear saved desktop and mobile dock/pill coordinates for the signed-in account. |
+| `resetRunDockPosition()` | Clear saved desktop and mobile dock/pill coordinates and saved desktop size for the signed-in account. |
 | `subscribeRunDockPrefs(listener)` | Subscribe to Run Dock preference changes; returns an unsubscribe function. |
 
 Users control **Open automatically on run** and **Run panel default size** (`Small window` / `Large window`) from the dock menu, Search Tools settings, Orchestrator settings, or Workbench **Settings → Window** (auto-open is enabled by default; when turned off, non-quiet runs show the compact status pill instead of expanding automatically).
