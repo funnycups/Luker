@@ -30,6 +30,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed generation progress notifications playing the system notification sound when Luker moves to the background.
 - Fixed a failed storage backend migration leaving the Storage Backend page locked as in progress until the server restarted.
+- Fixed settings save failures not displaying an error.
 
 ## v2.9.0-rc.3 (2026-11-21)
 

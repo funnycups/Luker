@@ -488,7 +488,10 @@ router.post('/save', async function (request, response) {
         response.send({ result: 'ok' });
     } catch (err) {
         console.error(err);
-        response.send(err);
+        response.status(500).send({
+            error: 'Failed to save settings.',
+            details: String(err?.message || err),
+        });
     }
 });
 
