@@ -91,7 +91,8 @@ import { bindModelTemplates } from './chat-templates.js';
 import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { setFrontendConsoleDebugLoggingEnabled } from './frontend-log-manager.js';
 import { setAndroidDebugRecordingEnabled, isAndroidDebugTrailAvailable, getAndroidDebugRecordingActualState } from './luker-android-debug-trail.js';
-import { t } from './i18n.js';
+import { t, translate } from './i18n.js';
+import { getActiveThemePaletteColor, initThemePalettes, normalizeThemePalettes, syncThemePalettes } from './theme-palettes.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { downloadCurrentSelfProfileReport, setSelfProfilerPreference, syncSelfProfilerEnabled } from './self-profiler.js';
 import { registerDebugMenuAction, setDebugMenuToggleState } from './debug-export.js';
@@ -219,6 +220,7 @@ export const power_user = {
     border_color: `${getComputedStyle(document.documentElement).getPropertyValue('--SmartThemeBorderColor').trim()}`,
 
     custom_css: '',
+    palettes: null,
 
     waifuMode: false,
     movingUI: false,
@@ -514,6 +516,24 @@ function canUseAndroidBridgeProgressNotifications() {
         && typeof window.LukerAndroid.clearMessageProgressNotification === 'function';
 }
 
+function getEffectiveThemeColor() {
+    return getActiveThemePaletteColor() || power_user.blur_tint_color;
+}
+
+function syncMetaThemeColor() {
+    if (typeof document === 'undefined') {
+        return;
+    }
+    const color = getEffectiveThemeColor();
+    if (!color) {
+        return;
+    }
+    const metaThemeColor = document.querySelector('meta[name=theme-color]');
+    if (metaThemeColor) {
+        metaThemeColor.setAttribute('content', color);
+    }
+}
+
 function canUseAndroidSystemBarsColorBridge() {
     return typeof window !== 'undefined'
         && typeof window.LukerAndroid === 'object'
@@ -524,7 +544,7 @@ function syncAndroidSystemBarsColor() {
     if (!canUseAndroidSystemBarsColorBridge()) {
         return;
     }
-    const statusBarColor = power_user.blur_tint_color;
+    const statusBarColor = getEffectiveThemeColor();
     if (!statusBarColor) {
         return;
     }
@@ -612,7 +632,7 @@ function syncIosSystemBarsColor() {
     if (!canUseIosSystemBarsColorBridge()) {
         return;
     }
-    const fallback = power_user.blur_tint_color;
+    const fallback = getEffectiveThemeColor();
     const baseSelectors = [document.documentElement, document.body, '#bg1'];
     const topVisible = ['#top-bar', '#top-settings-holder'].some((sel) => {
         const el = document.querySelector(sel);
@@ -634,6 +654,12 @@ function syncIosSystemBarsColor() {
     } catch (error) {
         console.warn('Failed to sync iOS system bars color via bridge', error);
     }
+}
+
+function syncThemeChromeColors() {
+    syncMetaThemeColor();
+    syncAndroidSystemBarsColor();
+    syncIosSystemBarsColor();
 }
 
 function syncMobileKeepAliveCheckbox() {
@@ -2144,11 +2170,8 @@ function applyThemeColor(type) {
             document.documentElement.style.setProperty('--SmartThemeFastUIBGColor', power_user.fastui_bg_color);
         } */
     if (type === 'blurTint') {
-        let metaThemeColor = document.querySelector('meta[name=theme-color]');
         document.documentElement.style.setProperty('--SmartThemeBlurTintColor', power_user.blur_tint_color);
-        metaThemeColor.setAttribute('content', power_user.blur_tint_color);
-        syncAndroidSystemBarsColor();
-        syncIosSystemBarsColor();
+        syncThemeChromeColors();
     }
     if (type === 'chatTint') {
         document.documentElement.style.setProperty('--SmartThemeChatTintColor', power_user.chat_tint_color);
@@ -2461,6 +2484,9 @@ function applyTheme(name) {
         }
     }
 
+    power_user.palettes = normalizeThemePalettes(theme.palettes);
+    syncThemePalettes(theme.name, power_user.palettes);
+
     console.log('theme applied: ' + name);
 }
 
@@ -2516,13 +2542,14 @@ export function applyPowerUserSettings() {
     switchUiMode();
     applyFontScale('forced');
     applyThemeColor();
-    syncAndroidSystemBarsColor();
     syncExternalLinkPolicyUi();
     applyChatWidth('forced');
     applyAvatarStyle();
     applyBlurStrength();
     applyShadowWidth();
     applyCustomCSS();
+    syncThemePalettes(power_user.theme, power_user.palettes);
+    syncThemeChromeColors();
     switchMovingUI();
     applyNoShadows();
     switchHotswap();
@@ -2700,6 +2727,7 @@ export async function loadPowerUserSettings(settings, data) {
 
     power_user.counting_tokenizer = normalizePowerUserTokenizer(power_user.counting_tokenizer);
     power_user.encoding_tokenizer = normalizePowerUserTokenizer(power_user.encoding_tokenizer);
+    power_user.palettes = normalizeThemePalettes(power_user.palettes);
 
     // Clean up old/legacy settings
     if (power_user.import_card_tags !== undefined) {
@@ -3563,8 +3591,9 @@ async function importTheme(file) {
         }
     }
 
-    themes.push(parsed);
-    await saveTheme(parsed.name, getNewTheme(parsed));
+    const newTheme = getNewTheme(parsed);
+    themes.push(newTheme);
+    await saveTheme(parsed.name, newTheme);
     const option = document.createElement('option');
     option.selected = false;
     option.value = parsed.name;
@@ -3666,6 +3695,7 @@ export function getThemeObject(name) {
         enableLabMode: power_user.enableLabMode,
         hotswap_enabled: power_user.hotswap_enabled,
         custom_css: power_user.custom_css,
+        palettes: normalizeThemePalettes(power_user.palettes) ?? undefined,
         bogus_folders: power_user.bogus_folders,
         zoomed_avatar_magnification: power_user.zoomed_avatar_magnification,
         reduced_motion: power_user.reduced_motion,
@@ -3683,11 +3713,13 @@ export function getThemeObject(name) {
  */
 function getNewTheme(parsed) {
     const theme = getThemeObject(parsed.name);
+    theme.palettes = undefined;
     for (const key in parsed) {
         if (Object.hasOwn(theme, key)) {
             theme[key] = parsed[key];
         }
     }
+    theme.palettes = normalizeThemePalettes(theme.palettes) ?? undefined;
     return theme;
 }
 
@@ -4226,6 +4258,13 @@ export function forceCharacterEditorTokenize() {
 }
 
 jQuery(() => {
+    initThemePalettes({
+        translate,
+        onPaletteChange: () => {
+            syncThemeChromeColors();
+        },
+    });
+
     const adjustAutocompleteDebounced = debounce(() => {
         $('.ui-autocomplete-input').each(function () {
             const isOpen = $(this).autocomplete('widget')[0].style.display !== 'none';

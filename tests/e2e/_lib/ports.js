@@ -36,6 +36,7 @@ export const PORT_RANGES = {
     bulkdelete:     { base: 8691, count: 4 },
     'image-illustration': { base: 8701, count: 6 },
     workbench:      { base: 8711, count: 6 },
+    themes:         { base: 8721, count: 4 },
 };
 
 /**

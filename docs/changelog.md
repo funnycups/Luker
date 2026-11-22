@@ -18,6 +18,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Show completed illustration images in the Run panel while the remaining images are still generating.
 
+### Themes
+
+- Added declarative theme palette switching and the built-in Lens theme with Night, Mist, Ink, Paper, and system-following modes.
+
 ### Fixes
 
 - Fixed generation progress notifications playing the system notification sound when Luker moves to the background.
