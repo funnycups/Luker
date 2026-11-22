@@ -13,6 +13,7 @@ import { describe, test, expect } from '@jest/globals';
 
 import {
     ADVANCED_SETTING_DEFAULTS,
+    migrateLegacyWorldInfoToggle,
     normalizeAdvancedSettings,
     applyAdvancedSettings,
     normalizeExtractExcludeRecentTurns,
@@ -44,17 +45,20 @@ describe('ADVANCED_SETTING_DEFAULTS', () => {
 });
 
 describe('normalizeAdvancedSettings', () => {
-    test('returns the 24 registered keys with defaults when both sources are empty', () => {
+    test('returns the 25 registered keys with defaults when both sources are empty', () => {
         const normalized = normalizeAdvancedSettings({}, {});
-        expect(Object.keys(normalized)).toHaveLength(24);
+        expect(Object.keys(normalized)).toHaveLength(25);
         expect(normalized).toMatchObject({
             extractMode: 'oneshot',
             extractContextTurns: 2,
             extractConcurrent: false,
+            extractIncludeWorldInfo: true,
+            recallIncludeWorldInfo: true,
             extractTemplate: DEFAULT_EXTRACT_TEMPLATE,
             configIterSystemPrompt: DEFAULT_CONFIG_ITER_SYSTEM_PROMPT,
             recallRouteSystemPrompt: DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT,
         });
+        expect(normalized).not.toHaveProperty('includeWorldInfoWithPreset');
     });
 
     test('clamps integers to the field bounds', () => {
@@ -73,8 +77,10 @@ describe('normalizeAdvancedSettings', () => {
 
     test('accepts only booleans and otherwise falls back to base then default', () => {
         expect(normalizeAdvancedSettings({ extractConcurrent: 'yes' }, { extractConcurrent: true }).extractConcurrent).toBe(true);
-        expect(normalizeAdvancedSettings({ includeWorldInfoWithPreset: 'no' }, {}).includeWorldInfoWithPreset).toBe(true);
-        expect(normalizeAdvancedSettings({ includeWorldInfoWithPreset: false }, {}).includeWorldInfoWithPreset).toBe(false);
+        expect(normalizeAdvancedSettings({ extractIncludeWorldInfo: 'no' }, {}).extractIncludeWorldInfo).toBe(true);
+        expect(normalizeAdvancedSettings({ extractIncludeWorldInfo: false }, {}).extractIncludeWorldInfo).toBe(false);
+        expect(normalizeAdvancedSettings({ recallIncludeWorldInfo: 'no' }, {}).recallIncludeWorldInfo).toBe(true);
+        expect(normalizeAdvancedSettings({ recallIncludeWorldInfo: false }, {}).recallIncludeWorldInfo).toBe(false);
     });
 
     test('trims and lowercases enum input, falling back for unknown values', () => {
@@ -112,14 +118,15 @@ describe('normalizeAdvancedSettings', () => {
 });
 
 describe('applyAdvancedSettings', () => {
-    test('writes all 24 keys so the old whole-object semantics hold', () => {
+    test('writes all 25 keys so the old whole-object semantics hold', () => {
         const target = {};
-        applyAdvancedSettings(target, { extractMode: 'crawl', includeWorldInfoWithPreset: false });
+        applyAdvancedSettings(target, { extractMode: 'crawl', extractIncludeWorldInfo: false, recallIncludeWorldInfo: false });
         expect(target.extractMode).toBe('crawl');
-        expect(target.includeWorldInfoWithPreset).toBe(false);
+        expect(target.extractIncludeWorldInfo).toBe(false);
+        expect(target.recallIncludeWorldInfo).toBe(false);
         expect(target.configIterSystemPrompt).toBe(DEFAULT_CONFIG_ITER_SYSTEM_PROMPT);
         expect(target.extractTemplate).toBe(DEFAULT_EXTRACT_TEMPLATE);
-        expect(Object.keys(target)).toHaveLength(24);
+        expect(Object.keys(target)).toHaveLength(25);
     });
 
     test('reads the existing target as the fallback source', () => {
@@ -130,6 +137,27 @@ describe('applyAdvancedSettings', () => {
 
     test('ignores a non-object target', () => {
         expect(() => applyAdvancedSettings(null, { extractMode: 'crawl' })).not.toThrow();
+    });
+});
+
+describe('migrateLegacyWorldInfoToggle', () => {
+    test('migrates false legacy toggle into both new flags and deletes legacy key', () => {
+        const s = { includeWorldInfoWithPreset: false };
+        expect(migrateLegacyWorldInfoToggle(s)).toBe(true);
+        expect(s).toEqual({ extractIncludeWorldInfo: false, recallIncludeWorldInfo: false });
+        expect('includeWorldInfoWithPreset' in s).toBe(false);
+    });
+
+    test('preserves already-set split flags while removing legacy key', () => {
+        const s = { includeWorldInfoWithPreset: false, extractIncludeWorldInfo: true };
+        expect(migrateLegacyWorldInfoToggle(s)).toBe(true);
+        expect(s).toEqual({ extractIncludeWorldInfo: true, recallIncludeWorldInfo: false });
+    });
+
+    test('returns false when legacy key is absent', () => {
+        const s = { extractIncludeWorldInfo: true };
+        expect(migrateLegacyWorldInfoToggle(s)).toBe(false);
+        expect(s).toEqual({ extractIncludeWorldInfo: true });
     });
 });
 

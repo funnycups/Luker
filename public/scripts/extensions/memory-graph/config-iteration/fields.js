@@ -63,6 +63,7 @@ const REGISTRY = [
     textField('extractTemplate', 'extraction', 'Extraction Template', 'System template for the extraction request. Must keep the {{nodes}} and {{edges}} markers.', DEFAULT_EXTRACT_TEMPLATE, { markers: ['{{nodes}}', '{{edges}}'] }),
     textField('extractEdgeRules', 'extraction', 'Edge Rules', 'Edge rules appended to the extraction request.', DEFAULT_EXTRACT_EDGE_RULES),
     textField('extractCrawlSystemPrompt', 'extraction', 'Extraction Crawl Prompt', 'System prompt for the crawl-stage explorer that runs before extraction.', DEFAULT_CRAWL_SYSTEM_PROMPT),
+    boolField('extractIncludeWorldInfo', 'extraction', 'Include world info in extraction requests', 'Attach resolved world info to extraction requests.', true),
 
     // ---- recall -----------------------------------------------------------
     textField('recallRouteSystemPrompt', 'recall', 'Recall Routing Prompt', 'First-stage LLM recall prompt that plans and drills into candidate nodes.', DEFAULT_RECALL_ROUTE_SYSTEM_PROMPT),
@@ -71,6 +72,7 @@ const REGISTRY = [
     intField('recallQueryMessages', 'recall', 'Recall query recent assistant turns', 'Number of recent assistant turns used to build the recall query.', 2, { min: 0, max: 64 }),
     intField('persistentInjectionMaxSeqDistance', 'recall', 'Persistent injection recency horizon (assistant turns; 0 = no limit)', 'Recency horizon for always-injected nodes in assistant turns; 0 means no limit.', 0, { min: 0 }),
     intField('llmVisibleRecentMessages', 'recall', 'Visible recent message layers for generation (0 = disabled)', 'Number of recent message layers visible to the generation model; 0 disables hiding.', 5, { min: 0, max: 200 }),
+    boolField('recallIncludeWorldInfo', 'recall', 'Include world info in recall requests', 'Attach resolved world info to LLM recall requests.', true),
 
     // ---- query rewrite ----------------------------------------------------
     textField('ragRewriteSystemPrompt', 'query_rewrite', 'Query rewrite system prompt', 'System prompt for rewriting the recall query; used only by RAG recall with query rewrite enabled.', DEFAULT_RAG_REWRITE_SYSTEM_PROMPT),
@@ -82,7 +84,6 @@ const REGISTRY = [
     // ---- runtime ----------------------------------------------------------
     intField('toolCallRetryMax', 'runtime', 'Tool-call retries', 'Number of retries after a failed tool call.', 2, { min: 0, max: 10 }),
     intField('rpmLimit', 'runtime', 'RPM limit (0 = unlimited)', 'Requests per minute limit; 0 means unlimited.', 0, { min: 0 }),
-    boolField('includeWorldInfoWithPreset', 'runtime', 'Include world info', 'Attach resolved world info to extraction and recall requests.', true),
 ];
 
 /** `Record<string, FieldDef>` keyed by the full `settings.<key>` path. */
@@ -161,7 +162,7 @@ export function resolveSettingsForView(source = null) {
     return view;
 }
 
-/** The 24 code defaults, already resolved for display. */
+/** The 25 code defaults, already resolved for display. */
 export function getDefaultSettingsView() {
     const view = {};
     for (const def of Object.values(CONFIG_FIELDS)) {

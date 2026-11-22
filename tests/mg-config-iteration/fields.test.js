@@ -4,7 +4,7 @@
 /**
  * Structural tests for the configuration field registry.
  *
- * The registry is the single source of truth for the 24 settings keys the
+ * The registry is the single source of truth for the 25 settings keys the
  * configuration workbench can read and write: group, kind, bounds, enum
  * values, text markers, defaults, and the catalog handed to the AI.
  */
@@ -23,8 +23,21 @@ import { DEFAULT_EXTRACT_TEMPLATE } from '../../public/scripts/extensions/memory
 import { DEFAULT_CONFIG_ITER_SYSTEM_PROMPT } from '../../public/scripts/extensions/memory-graph/config-iteration/system-prompt.js';
 
 describe('CONFIG_FIELDS registry', () => {
-    test('registers exactly 24 fields', () => {
-        expect(Object.keys(CONFIG_FIELDS)).toHaveLength(24);
+    test('registers exactly 25 fields', () => {
+        expect(Object.keys(CONFIG_FIELDS)).toHaveLength(25);
+        expect(CONFIG_FIELDS['settings.includeWorldInfoWithPreset']).toBeUndefined();
+        expect(CONFIG_FIELDS['settings.extractIncludeWorldInfo']).toMatchObject({
+            key: 'extractIncludeWorldInfo',
+            group: 'extraction',
+            kind: 'bool',
+            defaultValue: true,
+        });
+        expect(CONFIG_FIELDS['settings.recallIncludeWorldInfo']).toMatchObject({
+            key: 'recallIncludeWorldInfo',
+            group: 'recall',
+            kind: 'bool',
+            defaultValue: true,
+        });
     });
 
     test('every entry key matches its full settings path', () => {
@@ -97,8 +110,10 @@ describe('validateFieldValue', () => {
     });
 
     test('rejects a string for a bool field', () => {
-        expect(validateFieldValue(CONFIG_FIELDS['settings.includeWorldInfoWithPreset'], 'true').ok).toBe(false);
-        expect(validateFieldValue(CONFIG_FIELDS['settings.includeWorldInfoWithPreset'], true)).toEqual({ ok: true, value: true });
+        expect(validateFieldValue(CONFIG_FIELDS['settings.extractIncludeWorldInfo'], 'true').ok).toBe(false);
+        expect(validateFieldValue(CONFIG_FIELDS['settings.extractIncludeWorldInfo'], true)).toEqual({ ok: true, value: true });
+        expect(validateFieldValue(CONFIG_FIELDS['settings.recallIncludeWorldInfo'], 'false').ok).toBe(false);
+        expect(validateFieldValue(CONFIG_FIELDS['settings.recallIncludeWorldInfo'], false)).toEqual({ ok: true, value: false });
     });
 
     test('rejects a text value missing a required marker', () => {
@@ -126,7 +141,8 @@ describe('resolveSettingsForView', () => {
     test('keeps bool and int defaults', () => {
         const view = resolveSettingsForView({});
         expect(view.extractConcurrent).toBe(false);
-        expect(view.includeWorldInfoWithPreset).toBe(true);
+        expect(view.extractIncludeWorldInfo).toBe(true);
+        expect(view.recallIncludeWorldInfo).toBe(true);
         expect(view.recallMaxIterations).toBe(3);
     });
 
@@ -155,9 +171,9 @@ describe('resolveSettingsForView', () => {
 });
 
 describe('getDefaultSettingsView', () => {
-    test('returns the 24 code defaults', () => {
+    test('returns the 25 code defaults', () => {
         const view = getDefaultSettingsView();
-        expect(Object.keys(view)).toHaveLength(24);
+        expect(Object.keys(view)).toHaveLength(25);
         expect(view.extractTemplate).toBe(DEFAULT_EXTRACT_TEMPLATE);
         expect(view.extractMode).toBe('oneshot');
     });
@@ -167,7 +183,7 @@ describe('buildConfigFieldCatalog', () => {
     test('lists groups, fields, schema indices, and schema text fields', () => {
         const catalog = buildConfigFieldCatalog({ schema: [{ id: 'event', label: 'Event' }] });
         expect(catalog.groups.map(group => group.id)).toEqual(['extraction', 'recall', 'query_rewrite', 'iteration', 'runtime']);
-        expect(catalog.fields).toHaveLength(24);
+        expect(catalog.fields).toHaveLength(25);
         expect(catalog.schema_index).toEqual([{ index: 0, id: 'event', label: 'Event' }]);
         expect(catalog.schema_text_fields).toEqual([
             { field: 'extractionInstructions', kind: 'text', summary: 'Per-type detailed extraction instructions.' },
@@ -198,9 +214,9 @@ describe('buildConfigFieldCatalog', () => {
         expect(catalog.schema_index).toEqual([]);
     });
 
-    test('an absent group lists all 24 fields', () => {
+    test('an absent group lists all 25 fields', () => {
         const catalog = buildConfigFieldCatalog({ schema: [] });
-        expect(catalog.fields).toHaveLength(24);
+        expect(catalog.fields).toHaveLength(25);
         expect(catalog.groups).toHaveLength(5);
     });
 
@@ -209,7 +225,7 @@ describe('buildConfigFieldCatalog', () => {
             schema: [{ id: 'event', label: 'Event' }],
             group: 'recall',
         });
-        expect(catalog.fields).toHaveLength(6);
+        expect(catalog.fields).toHaveLength(7);
         expect(new Set(catalog.fields.map(field => field.group))).toEqual(new Set(['recall']));
         expect(catalog.groups.map(group => group.id)).toEqual(['extraction', 'recall', 'query_rewrite', 'iteration', 'runtime']);
         expect(catalog.schema_index).toEqual([{ index: 0, id: 'event', label: 'Event' }]);
@@ -217,10 +233,10 @@ describe('buildConfigFieldCatalog', () => {
     });
 
     test('trims a group id and treats a blank one as no filter', () => {
-        expect(buildConfigFieldCatalog({ group: '  recall  ' }).fields).toHaveLength(6);
-        expect(buildConfigFieldCatalog({ group: '' }).fields).toHaveLength(24);
-        expect(buildConfigFieldCatalog({ group: '   ' }).fields).toHaveLength(24);
-        expect(buildConfigFieldCatalog({ group: null }).fields).toHaveLength(24);
+        expect(buildConfigFieldCatalog({ group: '  recall  ' }).fields).toHaveLength(7);
+        expect(buildConfigFieldCatalog({ group: '' }).fields).toHaveLength(25);
+        expect(buildConfigFieldCatalog({ group: '   ' }).fields).toHaveLength(25);
+        expect(buildConfigFieldCatalog({ group: null }).fields).toHaveLength(25);
     });
 
     test('an unknown group is invalid_args and lists the available groups', () => {

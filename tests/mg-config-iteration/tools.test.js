@@ -273,7 +273,10 @@ describe('MG config — mg_config_set_fields', () => {
             set: { 'settings.extractContextTurns': 33 },
         }, sandbox())).toThrow('mg_config_set_fields: invalid_args — ');
         expect(() => apply('mg_config_set_fields', {
-            set: { 'settings.includeWorldInfoWithPreset': 'true' },
+            set: { 'settings.extractIncludeWorldInfo': 'true' },
+        }, sandbox())).toThrow('mg_config_set_fields: invalid_args — ');
+        expect(() => apply('mg_config_set_fields', {
+            set: { 'settings.recallIncludeWorldInfo': 'false' },
         }, sandbox())).toThrow('mg_config_set_fields: invalid_args — ');
         expect(() => apply('mg_config_set_fields', {
             set: { 'settings.extractTemplate': 'no markers' },

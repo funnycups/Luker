@@ -105,6 +105,15 @@ describe('getEffectiveAdvancedSettings', () => {
         expect(effective.recallMaxIterations).toBe(4);
         expect(effective.extractContextTurns).toBe(2);
     });
+
+    test('upgrades legacy includeWorldInfoWithPreset in a character override into both split flags', () => {
+        const ctx = makeContext({ includeWorldInfoWithPreset: false });
+        const effective = getEffectiveAdvancedSettings(ctx, { extractIncludeWorldInfo: true, recallIncludeWorldInfo: true });
+
+        expect(effective.extractIncludeWorldInfo).toBe(false);
+        expect(effective.recallIncludeWorldInfo).toBe(false);
+        expect('includeWorldInfoWithPreset' in effective).toBe(false);
+    });
 });
 
 describe('getAdvancedScopeInfo', () => {
@@ -201,6 +210,22 @@ describe('persistCharacterAdvancedOverridePatch', () => {
         delete noWriter.writeExtensionField;
         await expect(persistCharacterAdvancedOverridePatch(noWriter, 'a.png', { set: { recallMaxIterations: 6 } }))
             .resolves.toBe(false);
+    });
+
+    test('migrates and removes legacy includeWorldInfoWithPreset when patching a character override', async () => {
+        const ctx = makeContext({ includeWorldInfoWithPreset: false });
+        await persistCharacterAdvancedOverridePatch(ctx, 'a.png', {
+            set: { recallIncludeWorldInfo: true },
+            unset: [],
+        });
+
+        const written = ctx.writeExtensionField.mock.calls[0][2];
+        expect(written.advancedOverride).toEqual({
+            extractIncludeWorldInfo: false,
+            recallIncludeWorldInfo: true,
+            promptDefaultsInitialized: true,
+        });
+        expect('includeWorldInfoWithPreset' in written.advancedOverride).toBe(false);
     });
 
     test('propagates write failures instead of swallowing them', async () => {

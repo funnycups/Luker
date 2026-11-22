@@ -406,6 +406,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
             fields(
                 pick('extractApiPresetName', i18n('Extract API preset (Connection profile)'), connectionOptions('extractApiPresetName')),
                 presetField('extractPresetName', i18n('Extract preset (params + prompt)'))),
+            advCheck('extractIncludeWorldInfo', i18n('Include world info in extraction requests')),
             h('div', { class: 'ml-preset-grid-block' },
                 h('div', { class: 'ml-aiset-label', text: i18n('Cadence & floor-hiding presets') }),
                 h('div', { class: 'ml-preset-grid', role: 'group', 'aria-label': i18n('Cadence & floor-hiding presets') },
@@ -449,7 +450,8 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                     presetField('ragRewriteLlmPresetName', i18n('Query rewrite prompt preset'))) : null,
                 !rag ? fields(
                     pick('recallApiPresetName', i18n('Recall API preset (Connection profile)'), connectionOptions('recallApiPresetName')),
-                    presetField('recallPresetName', i18n('Recall preset (params + prompt)'))) : null),
+                    presetField('recallPresetName', i18n('Recall preset (params + prompt)'))) : null,
+                !rag ? advCheck('recallIncludeWorldInfo', i18n('Include world info in recall requests')) : null),
             h('div', { class: 'ml-settings-subblock' },
                 h('div', { class: 'ml-aiset-label', text: i18n('Placement & Debug') }),
                 pick('recallInjectPosition', i18n('Injection position'), [
@@ -463,7 +465,6 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                     pick('recallInjectRole', i18n('Injection role'), [
                         [options.roles.SYSTEM, 'System'], [options.roles.USER, 'User'], [options.roles.ASSISTANT, 'Assistant'],
                     ].map(([value, label]) => ({ value: String(value), label: i18n(label) })))) : null,
-                advCheck('includeWorldInfoWithPreset', i18n('Include world info')),
                 formField(i18n('Recall debug query'), h('input', { class: 'ml-schema-input', type: 'text', value: debugQuery, onInput: (event) => { debugQuery = event.target.value; } })),
                 h('div', { class: 'ml-settings-actions' },
                     button(i18n('Run Recall Debug'), () => run(async () => {

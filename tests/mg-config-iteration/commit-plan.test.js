@@ -93,10 +93,10 @@ describe('planConfigCommit — settings diff against the inherited baseline', ()
         expect(plan.schema).toEqual([{ id: 'event', label: 'Event' }]);
     });
 
-    test('only the 24 registered keys participate — foreign keys never enter the plan', () => {
+    test('only the 25 registered keys participate — foreign keys never enter the plan', () => {
         const plan = planConfigCommit({
-            before: { schema: [], settings: { ...defaults, someForeignKey: 1 } },
-            next: { schema: [], settings: { ...defaults, someForeignKey: 2 } },
+            before: { schema: [], settings: { ...defaults, someForeignKey: 1, includeWorldInfoWithPreset: true } },
+            next: { schema: [], settings: { ...defaults, someForeignKey: 2, includeWorldInfoWithPreset: false } },
             scope: 'character',
             inheritedSettings: defaults,
         });

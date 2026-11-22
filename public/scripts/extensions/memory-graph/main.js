@@ -61,6 +61,7 @@ import {
     ADVANCED_SETTING_DEFAULTS,
     applyAdvancedSettings,
     migrateAdvancedPromptSettings,
+    migrateLegacyWorldInfoToggle,
     normalizeAdvancedSettings,
     normalizeCrawlCandidateLimit,
     normalizeExtractExcludeRecentTurns,
@@ -676,13 +677,14 @@ function ensureSettings() {
     );
 
     migrateConfigIterationPrompt(extension_settings[MODULE_NAME]);
+    const migratedWorldInfo = migrateLegacyWorldInfoToggle(extension_settings[MODULE_NAME]);
     for (const [key, value] of Object.entries(defaultSettings)) {
         if (extension_settings[MODULE_NAME][key] === undefined) {
             extension_settings[MODULE_NAME][key] = cloneDefault(value);
         }
     }
 
-    if (migrateAdvancedPromptSettings(extension_settings[MODULE_NAME])) {
+    if (migrateAdvancedPromptSettings(extension_settings[MODULE_NAME]) || migratedWorldInfo) {
         saveSettingsDebounced();
     }
 
@@ -2515,7 +2517,8 @@ function appendUniqueWorldInfoEntries(payload, field, incomingEntries = []) {
     return changed;
 }
 
-async function resolveMemoryGraphWorldInfo(context, settings, {
+async function resolveMemoryGraphWorldInfo(context, {
+    includeWorldInfo = true,
     worldInfoMessages = null,
     runtimeWorldInfo = null,
     forceWorldInfoResimulate = false,
@@ -2523,8 +2526,7 @@ async function resolveMemoryGraphWorldInfo(context, settings, {
     abortSignal = null,
     recallRunToken = 0,
 } = {}) {
-    const includeWorldInfoWithPreset = settings?.includeWorldInfoWithPreset !== false;
-    if (!includeWorldInfoWithPreset) {
+    if (includeWorldInfo === false) {
         return {};
     }
     if (!forceWorldInfoResimulate && hasEffectiveRuntimeWorldInfo(runtimeWorldInfo)) {
@@ -3085,6 +3087,7 @@ async function runFunctionCallTask(context, settings, {
     taskMessages: taskMessagesOverride = null,
     promptPresetName = '',
     apiPresetName = '',
+    includeWorldInfo = false,
     worldInfoMessages = null,
     runtimeWorldInfo = null,
     forceWorldInfoResimulate = false,
@@ -3102,7 +3105,8 @@ async function runFunctionCallTask(context, settings, {
     }
     throwIfRecallRunInvalid(recallRunToken, abortSignal, 'Memory recall aborted.');
 
-    const resolvedWorldInfo = await resolveMemoryGraphWorldInfo(context, settings, {
+    const resolvedWorldInfo = await resolveMemoryGraphWorldInfo(context, {
+        includeWorldInfo,
         worldInfoMessages,
         runtimeWorldInfo,
         forceWorldInfoResimulate,
@@ -4159,7 +4163,8 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
         nodesBlock: buildExtractionNodesBlock(schema, activeTypes),
         edgesBlock: includeEdges ? buildExtractionEdgesBlock(edgeRules) : '',
     });
-    const resolvedExtractWorldInfo = await resolveMemoryGraphWorldInfo(context, settings, {
+    const resolvedExtractWorldInfo = await resolveMemoryGraphWorldInfo(context, {
+        includeWorldInfo: settings?.extractIncludeWorldInfo !== false,
         worldInfoMessages: messages.map(item => ({
             role: item.role,
             content: item.text,
@@ -6901,6 +6906,7 @@ async function chooseRecallRoute(context, settings, recallState) {
             ],
             apiPresetName: settings.recallApiPresetName || '',
             promptPresetName: String(settings.recallPresetName || '').trim(),
+            includeWorldInfo: settings?.recallIncludeWorldInfo !== false,
             worldInfoMessages: Array.isArray(recallState?.worldInfoMessages) ? recallState.worldInfoMessages : null,
             runtimeWorldInfo: recallState?.runtimeWorldInfo && typeof recallState.runtimeWorldInfo === 'object'
                 ? recallState.runtimeWorldInfo
@@ -7107,6 +7113,7 @@ async function chooseFocusNodes(context, settings, recallState) {
             ],
             apiPresetName: settings.recallApiPresetName || '',
             promptPresetName: String(settings.recallPresetName || '').trim(),
+            includeWorldInfo: settings?.recallIncludeWorldInfo !== false,
             worldInfoMessages: Array.isArray(recallState?.worldInfoMessages) ? recallState.worldInfoMessages : null,
             runtimeWorldInfo: recallState?.runtimeWorldInfo && typeof recallState.runtimeWorldInfo === 'object'
                 ? recallState.runtimeWorldInfo
@@ -10701,8 +10708,14 @@ async function initializeCharacterPromptDefaults(context) {
     try {
         const avatar = getCurrentAvatar(context);
         const override = avatar ? getCharacterAdvancedOverrideByAvatar(context, avatar) : null;
-        if (!override || !migrateAdvancedPromptSettings(override, { sparse: true })) return;
-        await persistCharacterAdvancedOverridePatch(context, avatar, { set: override }, { requireSaved: true });
+        if (!override) return;
+        const migratedPrompts = migrateAdvancedPromptSettings(override, { sparse: true });
+        const migratedWorldInfo = migrateLegacyWorldInfoToggle(override);
+        if (!migratedPrompts && !migratedWorldInfo) return;
+        const patch = migratedWorldInfo
+            ? { set: override, unset: ['includeWorldInfoWithPreset'] }
+            : { set: override };
+        await persistCharacterAdvancedOverridePatch(context, avatar, patch, { requireSaved: true });
     } catch (error) {
         console.error(`[${MODULE_NAME}] Character prompt initialization failed`, error);
         toastr.error(String(error?.message || error), i18n('Failed to initialize character prompt defaults.'));

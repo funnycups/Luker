@@ -27,6 +27,31 @@ export function migrateAdvancedPromptSettings(settings, { sparse = false } = {})
     return initializePromptDefaults(settings, PROMPT_DEFAULTS, { sparse });
 }
 
+/**
+ * One-shot migration splitting the legacy `includeWorldInfoWithPreset` toggle
+ * into `extractIncludeWorldInfo` and `recallIncludeWorldInfo` and deleting the
+ * legacy key. Mutates `settings` in place and returns whether it changed.
+ */
+export function migrateLegacyWorldInfoToggle(settings) {
+    if (!settings || typeof settings !== 'object') {
+        return false;
+    }
+    if (!Object.prototype.hasOwnProperty.call(settings, 'includeWorldInfoWithPreset')) {
+        return false;
+    }
+    const legacy = settings.includeWorldInfoWithPreset;
+    if (typeof legacy === 'boolean') {
+        if (settings.extractIncludeWorldInfo === undefined) {
+            settings.extractIncludeWorldInfo = legacy;
+        }
+        if (settings.recallIncludeWorldInfo === undefined) {
+            settings.recallIncludeWorldInfo = legacy;
+        }
+    }
+    delete settings.includeWorldInfoWithPreset;
+    return true;
+}
+
 function pickBase(fallbackSource) {
     return fallbackSource && typeof fallbackSource === 'object'
         ? fallbackSource
@@ -117,7 +142,7 @@ export function normalizeAdvancedSettings(source = null, fallbackSource = null) 
 }
 
 /**
- * Normalize `values` against `target` and write all 24 keys back. Mutates
+ * Normalize `values` against `target` and write all 25 keys back. Mutates
  * `target` in place.
  */
 export function applyAdvancedSettings(target, values) {

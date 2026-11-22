@@ -62,7 +62,8 @@ function makeSettingsSnapshot(overrides = {}) {
                 extractCrawlCandidateLimit: 40,
                 extractCrawlMaxReads: 12,
                 persistentInjectionMaxSeqDistance: 0,
-                includeWorldInfoWithPreset: false,
+                extractIncludeWorldInfo: true,
+                recallIncludeWorldInfo: false,
                 recallMaxIterations: 3,
                 toolCallRetryMax: 2,
                 rpmLimit: 0,
@@ -210,6 +211,19 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect(techDetails.open).toBe(false);
         expect(techDetails.querySelector('[data-field-key="llmVisibleRecentMessages"]')).toBeNull();
         expect(view.el.querySelector('[data-field-key="recentRawTurns"]')).toBeNull();
+        expect(view.el.querySelector('[data-field-key="includeWorldInfoWithPreset"]')).toBeNull();
+    });
+
+    test('places extraction world-info toggle in extraction section and recall toggle in recall section only for LLM recall', () => {
+        const { view: ragView } = mountSettingsView({ snap: { values: { recallMethod: 'rag' } } });
+        expect(ragView.el.querySelector('[data-settings-section="extraction"] [data-field-key="extractIncludeWorldInfo"]')).toBeTruthy();
+        expect(ragView.el.querySelector('[data-settings-section="recall"] [data-field-key="recallIncludeWorldInfo"]')).toBeNull();
+        expect(ragView.el.querySelector('[data-field-key="includeWorldInfoWithPreset"]')).toBeNull();
+
+        const { view: llmView } = mountSettingsView({ snap: { values: { recallMethod: 'llm' } } });
+        expect(llmView.el.querySelector('[data-settings-section="extraction"] [data-field-key="extractIncludeWorldInfo"]')).toBeTruthy();
+        expect(llmView.el.querySelector('[data-settings-section="recall"] [data-field-key="recallIncludeWorldInfo"]')).toBeTruthy();
+        expect(llmView.el.querySelector('[data-field-key="includeWorldInfoWithPreset"]')).toBeNull();
     });
 
     test('renders 2x3 preset grid, live animated visualizer, and unified summary with no inline cadence inputs', () => {
