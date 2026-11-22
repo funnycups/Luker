@@ -17,13 +17,13 @@
  *    current swipe map, and applies surviving patches sequentially against
  *    `{}`. Patches are incremental — a commit's patches assume the prior
  *    surviving commits' patches have already been applied. This is sound
- *    because the only filtering that drops a commit is (a) truncate at a
- *    floor >= some N (drops a tail suffix) and (b) swipe-delete on the
- *    tail floor (drops only that floor's stale-swipe commits, no later
- *    commits exist by construction). Mid-chat swipe SWITCHING that leaves
- *    a stale-swipe commit between two active ones is unsupported by the
- *    chain-replay invariant; deleting a swipe in the middle of a chat is
- *    not a workflow this design accommodates.
+ *    because structural mutations drop a suffix from the earliest affected
+ *    floor onward: (a) deleting, inserting, cloning, or moving a message at
+ *    floor F truncates commits at floor >= F, and (b) deleting the active
+ *    swipe on floor F drops its commits and truncates commits at floor > F
+ *    (deleting an inactive swipe only shifts higher swipeIds on that floor).
+ *    Mid-chat swipe switching that leaves a stale-swipe commit between two
+ *    active ones is unsupported by the chain-replay invariant.
  *  - swipeMap: object {floor: activeSwipeId} derived from the live chat
  *    array; used to filter commits whose swipe is no longer active.
  */
@@ -125,16 +125,18 @@ export function computeTargetState(commits, swipeMap) {
 }
 
 /**
- * Truncate commits whose floor is at or beyond the new chat length.
- * Used when MESSAGE_DELETED reduces chat length to N.
+ * Truncate commits whose floor is at or beyond `fromFloor`.
+ * Used when deleting, inserting, cloning, or moving messages invalidates
+ * floor indices from `fromFloor` onward (for tail deletes, `fromFloor` equals
+ * the new chat length).
  *
  * @param {object[]} commits
- * @param {number} newChatLength
+ * @param {number} fromFloor
  * @returns {object[]} surviving commits
  */
-export function truncateCommits(commits, newChatLength) {
-    if (!Number.isInteger(newChatLength) || newChatLength < 0) return commits.slice();
-    return commits.filter((c) => c.floor < newChatLength);
+export function truncateCommits(commits, fromFloor) {
+    if (!Number.isInteger(fromFloor) || fromFloor < 0) return commits.slice();
+    return commits.filter((c) => c.floor < fromFloor);
 }
 
 /**
@@ -142,24 +144,25 @@ export function truncateCommits(commits, newChatLength) {
  * and decrement swipeId for commits whose swipeId is greater than the
  * deleted one. Used when MESSAGE_SWIPE_DELETED removes a swipe.
  *
- * Sound under incremental patch semantics because swipe deletion only ever
- * happens on the chat tail floor: there are no commits at higher floors
- * whose `prev` would have been computed against the deleted swipe's
- * contributions, so dropping its commits doesn't break any downstream
- * chain. Shifting `swipeId > deleted` down by 1 preserves the (floor,
- * swipeId) labels of survivors without touching their patches — those
- * patches were diffed against state-at-commit-time, which depended on the
- * swipe map THEN, not on the relabeling now.
+ * When `truncateAfter` is true (the deleted swipe was the currently active
+ * swipe on `floor`), commits at `c.floor > floor` are also dropped because
+ * their incremental patches depended on that deleted swipe. On the tail floor
+ * no later commits exist so `truncateAfter` is a no-op; on a non-tail floor
+ * (e.g. programmatic `deleteMessages(idx, { swipe })`) it prevents a mid-chain
+ * gap. Deleting an inactive swipe leaves `truncateAfter` false and only
+ * relabels higher swipeIds on `floor`.
  *
  * @param {object[]} commits
  * @param {number} floor
  * @param {number} deletedSwipeId
+ * @param {{truncateAfter?: boolean}} [options]
  * @returns {object[]}
  */
-export function removeSwipeFromCommits(commits, floor, deletedSwipeId) {
+export function removeSwipeFromCommits(commits, floor, deletedSwipeId, { truncateAfter = false } = {}) {
     if (!Number.isInteger(floor) || !Number.isInteger(deletedSwipeId)) return commits.slice();
     const out = [];
     for (const c of commits) {
+        if (truncateAfter && c.floor > floor) continue;
         if (c.floor !== floor) {
             out.push(c);
             continue;

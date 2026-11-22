@@ -270,6 +270,20 @@ describe('removeSwipeFromCommits', () => {
         expect(out[0]).toEqual(commits[0]); // floor 0 commit untouched
     });
 
+    test('truncates higher floors when truncateAfter is true (active mid-chat swipe deleted)', () => {
+        const commits = [
+            { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
+            { floor: 1, swipeId: 0, patches: [{ op: 'add', path: '/b', value: 2 }] },
+            { floor: 1, swipeId: 1, patches: [{ op: 'add', path: '/c', value: 3 }] },
+            { floor: 2, swipeId: 0, patches: [{ op: 'add', path: '/d', value: 4 }] },
+        ];
+        const out = removeSwipeFromCommits(commits, 1, 1, { truncateAfter: true });
+        expect(out).toEqual([
+            { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] },
+            { floor: 1, swipeId: 0, patches: [{ op: 'add', path: '/b', value: 2 }] },
+        ]);
+    });
+
     test('returns shallow copy on bad input', () => {
         const c = { floor: 0, swipeId: 0, patches: [{ op: 'add', path: '/a', value: 1 }] };
         expect(removeSwipeFromCommits([c], NaN, 0)).toEqual([c]);

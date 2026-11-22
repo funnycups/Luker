@@ -4079,7 +4079,7 @@ export async function deleteMessage(id, swipeDeletionIndex = undefined, askConfi
 
     refreshSwipeButtons();
 
-    await settleMessageDeleted(chat.length);
+    await settleMessageDeleted(firstMessageId);
     await eventSource.emit(event_types.MESSAGE_DELETED, chat.length, {
         kind: 'delete',
         deletedPlayableSeqFrom: deletedPlayableCount > 0 ? deletedPlayablePrefix + 1 : null,
@@ -10375,6 +10375,7 @@ export async function sendMessageAsUser(messageText, messageBias, insertAt = nul
             await saveChatConditional();
         }
         extractMessageById(insertAt);
+        await settleMessageDeleted(insertAt);
         await eventSource.emit(event_types.MESSAGE_SENT, insertAt);
         await reloadCurrentChat();
         await eventSource.emit(event_types.USER_MESSAGE_RENDERED, insertAt);
@@ -11252,6 +11253,7 @@ async function rollbackTakeoverPlaceholder(messageId, type, origText, origReason
         chat.splice(messageId, 1);
         const patched = await patchChatMessages([{ op: 'remove', path: `/${messageId}` }]);
         if (!patched) await saveChatConditional();
+        await settleMessageDeleted(messageId);
         await reloadCurrentChat();
         return;
     }
@@ -16807,6 +16809,7 @@ async function messageEditMove(sourceId, targetId) {
     if (!patched) {
         await saveChatConditional();
     }
+    await settleMessageDeleted(Math.min(Number(sourceId), Number(targetId)));
     return true;
 }
 
@@ -17908,7 +17911,7 @@ export async function deleteSwipe(swipeId = null, messageId = chat.length - 1) {
     messageId = Number(messageId);
     swipeId = Number(swipeId);
     message.swipe_id = newSwipeId;
-    await settleMessageSwipeDeleted({ messageId, swipeId, newSwipeId });
+    await settleMessageSwipeDeleted({ messageId, swipeId, newSwipeId, wasActive: swipeId === currentSwipeId });
     await eventSource.emit(event_types.MESSAGE_SWIPE_DELETED, { messageId, swipeId, newSwipeId });
 
     if (swipeId === currentSwipeId) {
@@ -21529,6 +21532,7 @@ jQuery(async function () {
             await saveChatConditional();
         }
 
+        await settleMessageDeleted(insertAt);
         await reloadCurrentChat();
 
         currentChatToolsSelectedIds.clear();
@@ -22173,12 +22177,14 @@ jQuery(async function () {
             clone.mes = clone.mes.trim();
         }
 
-        chat.splice(Number(this_edit_mes_id) + 1, 0, clone);
+        const insertAt = Number(this_edit_mes_id) + 1;
+        chat.splice(insertAt, 0, clone);
         const newMessageElement = updateMessageElement(clone);
         this_edit_mes_element.after(newMessageElement);
 
         updateViewMessageIds();
         await saveChatConditional();
+        await settleMessageDeleted(insertAt);
         chatElement[0].scrollTop = oldScroll;
         showSwipeButtons();
     });

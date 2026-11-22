@@ -254,47 +254,51 @@ export async function deleteMessages(index, options = {}) {
 
     refreshSwipeButtons();
 
-    // Emit events with proper sequence metadata
-    if (!silent && deletedMessages.length > 0) {
-    // Get valid deleted indices in ascending order
+    // Settle floor-state from the earliest deleted floor regardless of `silent`,
+    // then emit MESSAGE_DELETED when not silent.
+    if (deletedMessages.length > 0) {
+        // Get valid deleted indices in ascending order
         const ascendingIndices = [...snapshotByIndex.keys()].sort((a, b) => a - b);
         const minIdx = ascendingIndices[0];
-        const maxIdx = ascendingIndices[ascendingIndices.length - 1];
+        await settleMessageDeleted(minIdx);
 
-        let playableSeqBefore = 0;
-        let assistantSeqBefore = 0;
-        let deletedPlayableCount = 0;
-        let deletedAssistantCount = 0;
-        const deletedSet = new Set(ascendingIndices);
+        if (!silent) {
+            const maxIdx = ascendingIndices[ascendingIndices.length - 1];
 
-        for (let i = 0; i <= maxIdx && i < originalChatLength; i++) {
-            const msg = originalChat[i];
-            if (!msg) continue;
-            const isPlayable = !msg.is_system;
-            const isAssistant = !msg.is_user && !msg.is_system;
+            let playableSeqBefore = 0;
+            let assistantSeqBefore = 0;
+            let deletedPlayableCount = 0;
+            let deletedAssistantCount = 0;
+            const deletedSet = new Set(ascendingIndices);
 
-            if (deletedSet.has(i)) {
-                if (isPlayable) deletedPlayableCount++;
-                if (isAssistant) deletedAssistantCount++;
-            } else if (i < minIdx) {
-                if (isPlayable) playableSeqBefore++;
-                if (isAssistant) assistantSeqBefore++;
+            for (let i = 0; i <= maxIdx && i < originalChatLength; i++) {
+                const msg = originalChat[i];
+                if (!msg) continue;
+                const isPlayable = !msg.is_system;
+                const isAssistant = !msg.is_user && !msg.is_system;
+
+                if (deletedSet.has(i)) {
+                    if (isPlayable) deletedPlayableCount++;
+                    if (isAssistant) deletedAssistantCount++;
+                } else if (i < minIdx) {
+                    if (isPlayable) playableSeqBefore++;
+                    if (isAssistant) assistantSeqBefore++;
+                }
             }
+
+            const deletedPlayableSeqFrom = deletedPlayableCount > 0 ? (playableSeqBefore + 1) : null;
+            const deletedPlayableSeqTo = deletedPlayableSeqFrom !== null ? (deletedPlayableSeqFrom + deletedPlayableCount - 1) : null;
+            const deletedAssistantSeqFrom = deletedAssistantCount > 0 ? (assistantSeqBefore + 1) : null;
+            const deletedAssistantSeqTo = deletedAssistantSeqFrom !== null ? (deletedAssistantSeqFrom + deletedAssistantCount - 1) : null;
+
+            await eventSource.emit(event_types.MESSAGE_DELETED, chat.length, {
+                kind: 'delete',
+                deletedPlayableSeqFrom,
+                deletedPlayableSeqTo,
+                deletedAssistantSeqFrom,
+                deletedAssistantSeqTo,
+            });
         }
-
-        const deletedPlayableSeqFrom = deletedPlayableCount > 0 ? (playableSeqBefore + 1) : null;
-        const deletedPlayableSeqTo = deletedPlayableSeqFrom !== null ? (deletedPlayableSeqFrom + deletedPlayableCount - 1) : null;
-        const deletedAssistantSeqFrom = deletedAssistantCount > 0 ? (assistantSeqBefore + 1) : null;
-        const deletedAssistantSeqTo = deletedAssistantSeqFrom !== null ? (deletedAssistantSeqFrom + deletedAssistantCount - 1) : null;
-
-        await settleMessageDeleted(chat.length);
-        await eventSource.emit(event_types.MESSAGE_DELETED, chat.length, {
-            kind: 'delete',
-            deletedPlayableSeqFrom,
-            deletedPlayableSeqTo,
-            deletedAssistantSeqFrom,
-            deletedAssistantSeqTo,
-        });
     }
 
     // Restore original order (ascending) for the return value

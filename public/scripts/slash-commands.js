@@ -100,6 +100,7 @@ import { t } from './i18n.js';
 import { kai_settings } from './kai-settings.js';
 import { instruct_presets, selectContextPreset, selectInstructPreset } from './instruct-mode.js';
 import { debounce_timeout, SWIPE_DIRECTION, SWIPE_SOURCE } from './constants.js';
+import { settleMessageDeleted } from './floor-state.js';
 export {
     executeSlashCommands, executeSlashCommandsWithOptions, getSlashCommandsHelp, registerSlashCommand,
 };
@@ -5103,15 +5104,20 @@ async function deleteMessagesByNameCallback(_, name) {
         return;
     }
 
+    let minDeletedIndex = Infinity;
     for (const message of messagesToDelete) {
         const index = chat.indexOf(message);
         if (index !== -1) {
             console.debug(`/delname: Deleting message #${index}`, message);
+            minDeletedIndex = Math.min(minDeletedIndex, index);
             chat.splice(index, 1);
         }
     }
 
     await saveChatConditional();
+    if (Number.isInteger(minDeletedIndex)) {
+        await settleMessageDeleted(minDeletedIndex);
+    }
     await reloadCurrentChat();
 
     toastr.info(t`Deleted ${messagesToDelete.length} messages from ${name}`);
@@ -6041,6 +6047,7 @@ export async function sendMessageAs(args, text) {
     if (!isNaN(insertAt) && insertAt >= 0 && insertAt <= chat.length) {
         chat.splice(insertAt, 0, message);
         await saveChatConditional();
+        await settleMessageDeleted(insertAt);
         await eventSource.emit(event_types.MESSAGE_RECEIVED, insertAt, 'command');
         await reloadCurrentChat();
         await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, insertAt, 'command');
@@ -6093,6 +6100,7 @@ export async function sendNarratorMessage(args, text) {
     if (!isNaN(insertAt) && insertAt >= 0 && insertAt <= chat.length) {
         chat.splice(insertAt, 0, message);
         await saveChatConditional();
+        await settleMessageDeleted(insertAt);
         await eventSource.emit(event_types.MESSAGE_SENT, insertAt);
         await reloadCurrentChat();
         await eventSource.emit(event_types.USER_MESSAGE_RENDERED, insertAt);
@@ -6179,6 +6187,7 @@ async function sendCommentMessage(args, text) {
     if (!isNaN(insertAt) && insertAt >= 0 && insertAt <= chat.length) {
         chat.splice(insertAt, 0, message);
         await saveChatConditional();
+        await settleMessageDeleted(insertAt);
         await eventSource.emit(event_types.MESSAGE_SENT, insertAt);
         await reloadCurrentChat();
         await eventSource.emit(event_types.USER_MESSAGE_RENDERED, insertAt);

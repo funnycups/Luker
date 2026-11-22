@@ -84,19 +84,26 @@ async function makeDefaultDeps() {
 const allInstances = new Set();
 
 /**
- * Drive every live instance through a MESSAGE_DELETED settle.
- * Call BEFORE `eventSource.emit(MESSAGE_DELETED, ...)` from core.
+ * Drive every live instance through a floor-truncation settle (deleting,
+ * inserting, cloning, or moving messages from `fromFloor` onward).
+ * Call BEFORE `eventSource.emit(MESSAGE_DELETED, ...)` / `reloadCurrentChat()`
+ * from core.
+ *
+ * For tail truncations `fromFloor` equals the new `chat.length`; for mid-chat
+ * structural edits `fromFloor` is the earliest mutated message index so every
+ * commit at `floor >= fromFloor` is dropped while `floor < fromFloor` stays
+ * intact.
  *
  * Serial loop: instances live in independent namespaces and don't depend
  * on each other, but the underlying chat-state writer typically serializes
  * per-chat anyway, so a parallel `Promise.all` would not buy speed.
  *
- * @param {number} newChatLength
+ * @param {number} fromFloor
  * @returns {Promise<void>}
  */
-export async function settleMessageDeleted(newChatLength) {
+export async function settleMessageDeleted(fromFloor) {
     for (const inst of allInstances) {
-        await inst.__handleMessageDeleted(newChatLength);
+        await inst.__handleMessageDeleted(fromFloor);
     }
 }
 
@@ -114,7 +121,7 @@ export async function settleMessageSwiped() {
  * Drive every live instance through a MESSAGE_SWIPE_DELETED settle.
  * Call BEFORE `eventSource.emit(MESSAGE_SWIPE_DELETED, ...)` from core.
  *
- * @param {{messageId: number, swipeId: number}} payload
+ * @param {{messageId: number, swipeId: number, newSwipeId?: number, wasActive?: boolean}} payload
  */
 export async function settleMessageSwipeDeleted(payload) {
     for (const inst of allInstances) {
@@ -333,19 +340,19 @@ export function createFloorStateWithDeps(options, deps) {
     }
 
     /**
-     * Truncate commits at floor >= newChatLength, then invalidate the cache.
+     * Truncate commits at floor >= fromFloor, then invalidate the cache.
      *
      * Enqueued through `updateQueue` so it can't observe / clobber an
      * in-flight update/patch/reset — same contract as every other write.
      */
-    async function handleMessageDeleted(newChatLength) {
+    async function handleMessageDeleted(fromFloor) {
         if (destroyed) return;
         return enqueueWrite(async () => {
             if (destroyed) return;
             beginPending();
             try {
                 const log = await readLog();
-                const survivors = truncateCommits(log.commits, Number(newChatLength));
+                const survivors = truncateCommits(log.commits, Number(fromFloor));
                 if (survivors.length !== log.commits.length) {
                     const writeResult = await writeLog({ version: LOG_VERSION, commits: survivors });
                     if (!writeResult.ok) {
@@ -364,6 +371,8 @@ export function createFloorStateWithDeps(options, deps) {
 
     /**
      * Drop deleted swipe and shift higher swipeIds down on that floor.
+     * When the deleted swipe was active, also truncate commits at higher floors
+     * so deleting an active mid-chat swipe cannot leave a gap in the chain.
      *
      * Enqueued through `updateQueue`; see handleMessageDeleted note.
      */
@@ -371,13 +380,14 @@ export function createFloorStateWithDeps(options, deps) {
         if (destroyed) return;
         const messageId = Number(payload?.messageId);
         const swipeId = Number(payload?.swipeId);
+        const truncateAfter = Boolean(payload?.wasActive);
         if (!Number.isInteger(messageId) || !Number.isInteger(swipeId)) return;
         return enqueueWrite(async () => {
             if (destroyed) return;
             beginPending();
             try {
                 const log = await readLog();
-                const next = removeSwipeFromCommits(log.commits, messageId, swipeId);
+                const next = removeSwipeFromCommits(log.commits, messageId, swipeId, { truncateAfter });
                 if (next.length !== log.commits.length || next.some((c, i) => c !== log.commits[i])) {
                     const writeResult = await writeLog({ version: LOG_VERSION, commits: next });
                     if (!writeResult.ok) {
@@ -447,7 +457,7 @@ export function createFloorStateWithDeps(options, deps) {
         if (destroyed) return;
         invalidateCache();
     };
-    const __handleMessageDeleted = (newChatLength) => handleMessageDeleted(newChatLength);
+    const __handleMessageDeleted = (fromFloor) => handleMessageDeleted(fromFloor);
     const __handleSwipeDeleted = (payload) => handleSwipeDeleted(payload);
     const __handleBranchCreated = (payload) => handleBranchCreated(payload);
 
