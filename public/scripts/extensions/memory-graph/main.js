@@ -341,7 +341,6 @@ export const defaultSettings = {
     autoExtractionEnabled: true,
     autoCompressionEnabled: true,
     ...ADVANCED_SETTING_DEFAULTS,
-    updateEvery: 1,
     maxTurns: 900,
     recallEnabled: true,
     recallMethod: 'llm',
@@ -724,10 +723,6 @@ function ensureSettings() {
         extension_settings[MODULE_NAME].autoExtractionEnabled !== false;
     extension_settings[MODULE_NAME].autoCompressionEnabled =
         extension_settings[MODULE_NAME].autoCompressionEnabled !== false;
-    extension_settings[MODULE_NAME].updateEvery = Math.max(
-        1,
-        Math.floor(Number(extension_settings[MODULE_NAME].updateEvery) || defaultSettings.updateEvery),
-    );
     // RAG per-type quota default. 0 disables bucketing (single shared pool).
     const ragDefaultPerTypeKRaw = Number(extension_settings[MODULE_NAME].ragDefaultPerTypeK);
     extension_settings[MODULE_NAME].ragDefaultPerTypeK = Math.max(
@@ -774,10 +769,9 @@ export function normalizeLegacyRecallSettings(settings) {
     delete settings.diffusionTopK;
     delete settings.diffusionTeleportAlpha;
     delete settings.enableRerank;
-    // Legacy: mainInjectionAssistantTurnsWindow was a separate setting that
-    // duplicated recentRawTurns' meaning ("how many trailing assistant turns
-    // are already visible as raw text"). Collapsed into recentRawTurns alone.
+    // Legacy recent-window injection exclusion settings: removed.
     delete settings.mainInjectionAssistantTurnsWindow;
+    delete settings.recentRawTurns;
     return settings;
 }
 
@@ -5370,7 +5364,7 @@ async function buildExtractionCrawlGraph(context, store, settings, schema, messa
         // short clause of content to be worth prompt tokens.
         .filter(item => item.trim().length > 8)
         .join('\n');
-    const candidatePool = Array.from(readApi.listVisibleCandidates({ excludeRecentMessages: 0, seqWindow: maxSeq === null ? undefined : { to: maxSeq } }) || [])
+    const candidatePool = Array.from(readApi.listVisibleCandidates({ seqWindow: maxSeq === null ? undefined : { to: maxSeq } }) || [])
         .filter(isAsOfNode);
     const visibleCandidates = limit > 0 ? candidatePool.slice(0, limit) : candidatePool;
     const candidates = visibleCandidates
@@ -6283,7 +6277,7 @@ function buildRecallDebugCoreChat(context, queryText, settings = null) {
     const source = Array.isArray(context?.chat) ? context.chat : [];
     const recentTurns = Math.max(
         1,
-        Math.min(60, Math.floor(Number(settings?.recentRawTurns ?? defaultSettings.recentRawTurns))),
+        sanitizeRecallQueryMessages(settings?.recallQueryMessages, defaultSettings.recallQueryMessages),
     );
     const recentMessageLimit = Math.max(2, recentTurns * 2);
     const history = [];
@@ -6801,17 +6795,13 @@ export function buildRecallRouteCandidatePool(rootCandidates, alwaysInjectSet, s
     return picked;
 }
 
-export function collectRootCandidates(store, settings, queryBundle = { fullText: '' }, alwaysInjectNodes = [], context = null, {
-    latestSeqIndex = -1,
-    excludeMessages = 0,
-} = {}) {
+export function collectRootCandidates(store, settings, queryBundle = { fullText: '' }, alwaysInjectNodes = [], context = null) {
     void queryBundle;
     const schema = getEffectiveNodeTypeSchema(context, settings);
     const visibleRows = buildGraphNodeHints(store, schema, 0);
     const visibleNodes = visibleRows
         .map((row) => store?.nodes?.[String(row?.id || '')] || null)
-        .filter((node) => Boolean(node) && !node.archived && !isRecallDiagnosticNode(node))
-        .filter((node) => !isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages));
+        .filter((node) => Boolean(node) && !node.archived && !isRecallDiagnosticNode(node));
     const merged = [
         ...getSortedNodesByRecency(alwaysInjectNodes.filter(Boolean)),
         ...getSortedNodesByRecency(visibleNodes),
@@ -6901,8 +6891,6 @@ async function chooseRecallRoute(context, settings, recallState) {
             alwaysInjectNodeIds: alwaysInjectIds,
             schemaOverview,
             selectionConstraints: {
-                recent_message_window: Math.max(3, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
-                injection_exclude_recent_messages: Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
                 recall_query_recent_messages: sanitizeRecallQueryMessages(settings.recallQueryMessages),
             },
         });
@@ -7108,8 +7096,6 @@ async function chooseFocusNodes(context, settings, recallState) {
             selectionConstraints: {
                 include_non_event_nodes: true,
                 require_event_continuity: true,
-                recent_message_window: Math.max(3, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
-                injection_exclude_recent_messages: Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns)),
                 recall_query_recent_messages: sanitizeRecallQueryMessages(settings.recallQueryMessages),
                 min_event_nodes_if_available: 2,
             },
@@ -7246,41 +7232,20 @@ export function selectVisibleNodesForType(store, typeNodes, type, compressionMod
 }
 
 export function collectAlwaysInjectNodes(store, settings, context = null, options = {}) {
-    // `options.seqWindowFrom?: number` — when set, post-filter the picked nodes
-    // to DROP those whose `node.seqTo >= seqWindowFrom` (boundary exclusive on
-    // the kept side: keep `seqTo < seqWindowFrom` only). When unset / non-finite,
-    // behavior is unchanged. The window is applied after per-type selection so
-    // type / compression behavior is preserved.
-    //
-    // Caller intent: `seqWindowFrom` is the lower bound of the raw-visible
-    // recent-turns window. Nodes whose seqTo lands inside that window are
-    // already covered by raw text in the prompt, so injecting their semantic
-    // summary again is redundant; only nodes that end strictly before the
-    // raw-visible region carry information the main context cannot otherwise
-    // see.
-    //
     // `options.seqCutoffFrom?: number` — when finite, DROP any picked node
     // whose `seqTo < seqCutoffFrom`. Kept side is inclusive on the lower
-    // bound: keep `seqTo >= seqCutoffFrom` only. Unlike `seqWindowFrom`
-    // (which drops NEW nodes because raw text already covers them), this
-    // filter drops OLD nodes past a user-configured recency horizon —
-    // they fall back to recall-only. Applied uniformly to ALL always-inject
-    // types INCLUDING `event_table` AND latestOnly types (character_sheet
-    // etc.): if a latestOnly entity has not been updated within the recency
-    // horizon, its snapshot is not injected persistently and must be
-    // recalled on demand.
+    // bound: keep `seqTo >= seqCutoffFrom` only. This filter drops OLD nodes
+    // past a user-configured recency horizon — they fall back to recall-only.
+    // Applied uniformly to ALL always-inject types INCLUDING `event_table`
+    // AND latestOnly types (character_sheet etc.): if a latestOnly entity has
+    // not been updated within the recency horizon, its snapshot is not
+    // injected persistently and must be recalled on demand.
     //
     // Dropped nodes remain in the recall candidate pool automatically
     // because the caller derives the "always-inject id set" from THIS
     // function's return value — a node not in that set is not excluded
     // from recall route candidates (see `routeCandidates` filter in
     // `runRecallPipeline`).
-    //
-    // latestOnly types (character_sheet / location_state / thread) are
-    // intentionally exempt from `seqWindowFrom` only — their picked nodes
-    // are current-truth snapshots that must inject even when their seqTo
-    // overlaps the raw-visible window, otherwise the main context loses
-    // authoritative state. They are NOT exempt from `seqCutoffFrom`.
     const alwaysSpecs = getEffectiveNodeTypeSchema(context, settings)
         .filter((spec) => {
             const tableName = String(spec?.tableName || '').trim().toLowerCase();
@@ -7289,7 +7254,6 @@ export function collectAlwaysInjectNodes(store, settings, context = null, option
         })
         .map(spec => ({
             type: String(spec.id || '').toLowerCase(),
-            latestOnly: Boolean(spec?.latestOnly),
             compression: getSemanticCompressionConfig(settings, String(spec.id || '').toLowerCase(), context),
         }))
         .filter(spec => spec.type);
@@ -7297,7 +7261,6 @@ export function collectAlwaysInjectNodes(store, settings, context = null, option
         return [];
     }
 
-    const latestOnlyTypes = new Set(alwaysSpecs.filter(spec => spec.latestOnly).map(spec => spec.type));
     const picked = [];
     const seen = new Set();
     for (const spec of alwaysSpecs) {
@@ -7318,30 +7281,17 @@ export function collectAlwaysInjectNodes(store, settings, context = null, option
         }
     }
 
-    const seqWindowFromRaw = Number(options?.seqWindowFrom);
-    const windowed = Number.isFinite(seqWindowFromRaw)
-        ? picked.filter((node) => {
-            const nodeType = String(node?.type || '').toLowerCase();
-            // latestOnly types are exempt — their snapshots are current truth
-            // and must inject even when seqTo overlaps the raw-visible window.
-            if (latestOnlyTypes.has(nodeType)) {
-                return true;
-            }
-            return Number.isFinite(Number(node?.seqTo)) && Number(node.seqTo) < seqWindowFromRaw;
-        })
-        : picked;
-
     // Recency horizon cutoff: within any type (latestOnly INCLUDED), drop
     // nodes whose seqTo is strictly less than seqCutoffFrom. Dropped nodes
     // fall back to recall-only (see class comment above).
     const seqCutoffFromRaw = Number(options?.seqCutoffFrom);
     const capped = Number.isFinite(seqCutoffFromRaw)
-        ? windowed.filter((node) => {
+        ? picked.filter((node) => {
             const toSeq = Number(node?.seqTo);
             if (!Number.isFinite(toSeq)) return false;
             return toSeq >= seqCutoffFromRaw;
         })
-        : windowed;
+        : picked;
 
     return capped.sort(compareNodesByTimeline);
 }
@@ -7355,27 +7305,6 @@ function getNodeSeqRange(node) {
 
 export function getLatestSeqIndex(store) {
     return Math.max(-1, getStoreCoveredSeqTo(store));
-}
-
-// Compute the seq-based lower bound for the raw-visible recent-turns window.
-// Nodes whose seqTo lands at or above this bound are already covered by
-// raw dialogue in the main prompt, so persistent injection of their
-// semantic form is redundant.
-//
-// Returns `undefined` when `recentRawTurns <= 0` — callers should omit the
-// option from `collectAlwaysInjectNodes` in that case.
-//
-// PASSED BY: syncPersistentLorebookProjection only. Recall pipeline callers
-// intentionally do NOT pass this (recall candidate pool must remain
-// unaffected by the injection window so new always-inject nodes stay
-// recallable when relevant).
-function computeRecentRawWindowFrom(store, settings) {
-    const recentRawTurns = Math.max(
-        0,
-        Math.floor(Number(settings?.recentRawTurns ?? defaultSettings.recentRawTurns)),
-    );
-    if (recentRawTurns <= 0) return undefined;
-    return Math.max(0, getLatestSeqIndex(store) - recentRawTurns + 1);
 }
 
 // Compute the seq-based lower bound for the persistent-injection recency
@@ -7411,14 +7340,8 @@ export function computePersistentInjectionSeqCutoff(store, settings) {
 
 // Build the `options` object recall pipelines pass to
 // `collectAlwaysInjectNodes`. Includes `seqCutoffFrom` (persistent-injection
-// recency horizon, so horizon-dropped nodes leave the always-inject set and
-// become recall candidates) but NEVER `seqWindowFrom` — the recall
-// candidate pool must be unaffected by the raw-visible recent-turns window
-// so new always-inject nodes remain recallable when relevant.
-//
-// Sync-persistent-injection uses `computeRecentRawWindowFrom` +
-// `computePersistentInjectionSeqCutoff` directly, not this helper — it
-// passes BOTH windows.
+// recency horizon) so horizon-dropped nodes leave the always-inject set and
+// become recall candidates.
 export function computeRecallAlwaysInjectOptions(store, settings) {
     const options = {};
     const seqCutoffFrom = computePersistentInjectionSeqCutoff(store, settings);
@@ -7463,19 +7386,6 @@ function getRecentMessagesByAssistantTurns(messages, keepAssistantTurns) {
     }
 
     return source.slice(startIndex);
-}
-
-export function isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages) {
-    const windowSize = Math.max(0, Number(excludeMessages || 0));
-    if (windowSize <= 0 || latestSeqIndex < 0 || !node) {
-        return false;
-    }
-    const toSeq = Number(node?.seqTo ?? NaN);
-    if (!Number.isFinite(toSeq)) {
-        return false;
-    }
-    const cutoff = latestSeqIndex - windowSize + 1;
-    return Number.isFinite(cutoff) && toSeq >= cutoff;
 }
 
 function toMarkdownTable(headers, rows) {
@@ -7864,16 +7774,12 @@ async function syncPersistentLorebookProjection(context, settings, store) {
             alwaysInjectNodes: [],
         };
     }
-    // seqWindowFrom (raw-visible recent-turns window) and seqCutoffFrom
-    // (persistent-injection recency horizon) are both derived from settings
-    // via the exported helpers so recall pipeline call sites can compute
-    // the same seqCutoffFrom bound — that's how horizon-dropped nodes
-    // fall back to being recallable instead of vanishing from both
-    // channels. See computePersistentInjectionSeqCutoff docs.
-    const seqWindowFrom = computeRecentRawWindowFrom(store, settings);
+    // seqCutoffFrom (persistent-injection recency horizon) is derived via
+    // computePersistentInjectionSeqCutoff so sync and recall sides share the
+    // exact same bound — horizon-dropped nodes fall back to recall instead of
+    // vanishing from both channels.
     const seqCutoffFrom = computePersistentInjectionSeqCutoff(store, settings);
     const collectOptions = {};
-    if (seqWindowFrom !== undefined) collectOptions.seqWindowFrom = seqWindowFrom;
     if (seqCutoffFrom !== undefined) collectOptions.seqCutoffFrom = seqCutoffFrom;
     const alwaysInjectNodes = collectAlwaysInjectNodes(
         store,
@@ -7978,8 +7884,8 @@ async function runLLMDrivenRecall(context, store, payload) {
     const runtimeWorldInfo = buildRuntimeWorldInfoFromPayload(payload);
     const forceWorldInfoResimulate = Boolean(payload?.forceWorldInfoResimulate);
     const worldInfoMessages = Array.isArray(payload?.coreChat) ? payload.coreChat : [];
-    // Recall-side always-inject set is horizon-adjusted (seqCutoffFrom) but
-    // NOT window-adjusted (seqWindowFrom) — see computeRecallAlwaysInjectOptions.
+    // Recall-side always-inject set is horizon-adjusted (seqCutoffFrom)
+    // via computeRecallAlwaysInjectOptions.
     const alwaysInjectNodes = collectAlwaysInjectNodes(
         store,
         settings,
@@ -7987,11 +7893,7 @@ async function runLLMDrivenRecall(context, store, payload) {
         computeRecallAlwaysInjectOptions(store, settings),
     );
     const latestSeqIndex = getLatestSeqIndex(store);
-    const excludeMessages = Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns));
-    const rootCandidates = collectRootCandidates(store, settings, queryBundle, alwaysInjectNodes, context, {
-        latestSeqIndex,
-        excludeMessages,
-    });
+    const rootCandidates = collectRootCandidates(store, settings, queryBundle, alwaysInjectNodes, context);
     const maxIterations = Math.max(2, Math.min(6, Number(settings.recallMaxIterations || 3)));
     const trace = [];
     const alwaysInjectIds = alwaysInjectNodes.map(node => String(node?.id || '')).filter(Boolean);
@@ -8002,7 +7904,6 @@ async function runLLMDrivenRecall(context, store, payload) {
         trace.push({
             step: 'skip_recall_route_no_candidates',
             latest_seq: latestSeqIndex,
-            exclude_messages: excludeMessages,
             always_inject_count: alwaysInjectNodes.length,
         });
         if (alwaysInjectNodes.length > 0) {
@@ -8154,25 +8055,10 @@ async function runLLMDrivenRecall(context, store, payload) {
         });
     }
 
-    const excludedNodeIds = [];
-    const filteredSelectedNodes = selectedNodes.filter((node) => {
-        const excluded = isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages);
-        if (excluded && node?.id) {
-            excludedNodeIds.push(node.id);
-        }
-        return !excluded;
-    }).sort(compareNodesByTimeline);
-    if (excludeMessages > 0 && excludedNodeIds.length > 0) {
-        trace.push({
-            step: 'exclude_recent_window',
-            exclude_messages: excludeMessages,
-            latest_seq: latestSeqIndex,
-            excluded_node_ids: excludedNodeIds,
-        });
-    }
+    const sortedSelectedNodes = selectedNodes.slice().sort(compareNodesByTimeline);
 
     return {
-        selectedNodes: filteredSelectedNodes,
+        selectedNodes: sortedSelectedNodes,
         alwaysInjectNodes,
         query,
         trace,
@@ -8509,20 +8395,11 @@ async function collectRecallSelection(context, store, payload, settings, {
         const rerankProfile = useRerank ? getRerankProfileFromSettings(settings) : null;
         const { perTypeK, defaultPerTypeK } = buildRagPerTypeQuotas(context, settings);
 
-        // Nodes already covered by persistent injection or raw dialogue must
-        // not consume per-type quota slots. Build the exclusion set before
-        // retrieval so `runRagRecall` filters it out ahead of bucketing.
+        // Nodes already covered by persistent injection must not consume
+        // per-type quota slots. Build the exclusion set before retrieval so
+        // `runRagRecall` filters it out ahead of bucketing.
         const alwaysInjectSet = new Set(alwaysInjectNodes.map(n => n?.id).filter(Boolean));
-        const latestSeqIndex = getLatestSeqIndex(store);
-        const excludeMessages = Math.max(0, Number(settings.recentRawTurns ?? defaultSettings.recentRawTurns));
         const excludeNodeIds = new Set(alwaysInjectSet);
-        if (excludeMessages > 0) {
-            for (const node of Object.values(store.nodes || {})) {
-                if (isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages)) {
-                    excludeNodeIds.add(node.id);
-                }
-            }
-        }
 
         const ragResult = await runRagRecall(store, queryText, chatKey, settings, {
             maxResults: Number(settings.hybridMaxResults) || 15,
@@ -8555,7 +8432,6 @@ async function collectRecallSelection(context, store, payload, settings, {
             selectedNodes = ragResult.candidates
                 .map(c => store.nodes?.[c.nodeId])
                 .filter(node => node && !node.archived && !alwaysInjectSet.has(node.id))
-                .filter(node => !isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages))
                 .sort(compareNodesByTimeline);
 
             // Structured recall diagnostic. Emits one row per RAG recall so users
@@ -8564,7 +8440,7 @@ async function collectRecallSelection(context, store, payload, settings, {
             // small — actual candidate lists are already in `store.lastRecallTrace`.
             // Stage counts:
             //   vector_hits              → returned by the embedding backend
-            //   vector.excludedBeforeBucketing → always-inject / recent-window hits removed before quotas
+            //   vector.excludedBeforeBucketing → always-inject hits removed before quotas
             //   rag_candidates           → after per-type bucketing + optional rerank + maxResults trim
             //   selected                 → after the post-retrieval safety-net filters (normally 0 dropped)
             try {
@@ -8576,11 +8452,6 @@ async function collectRecallSelection(context, store, payload, settings, {
                 const droppedAlwaysInject = ragResult.candidates.filter((c) => {
                     const n = store.nodes?.[c.nodeId];
                     return n && alwaysInjectSet.has(n.id);
-                }).length;
-                const droppedRecentWindow = ragResult.candidates.filter((c) => {
-                    const n = store.nodes?.[c.nodeId];
-                    return n && !alwaysInjectSet.has(n.id)
-                        && isNodeInRecentExcludeWindow(n, latestSeqIndex, excludeMessages);
                 }).length;
                 const droppedArchivedOrMissing = ragResult.candidates.filter((c) => {
                     const n = store.nodes?.[c.nodeId];
@@ -8616,11 +8487,9 @@ async function collectRecallSelection(context, store, payload, settings, {
                     dropped: {
                         archivedOrMissing: droppedArchivedOrMissing,
                         alwaysInjectOverlap: droppedAlwaysInject,
-                        recentTurnsWindow: droppedRecentWindow,
                     },
                     selected: {
                         count: selectedNodes.length,
-                        recentTurnsWindowSize: excludeMessages,
                         alwaysInjectSetSize: alwaysInjectSet.size,
                     },
                     skipReasons: ragResult.meta?.skipReasons || [],
@@ -9741,7 +9610,6 @@ const MEMORY_SETTING_RULES = {
     extractPresetName: plainPreset,
     requestApiPresetName: plainPreset,
     requestLlmPresetName: plainPreset,
-    updateEvery: { read: (v) => Math.max(1, Math.floor(Number(v) || defaultSettings.updateEvery)) },
 };
 
 /** Writes one drawer-level setting with the side effects of its native control. */
@@ -10122,16 +9990,7 @@ export async function runRecallDebug(context, query = '') {
             computeRecallAlwaysInjectOptions(store, effectiveSettings),
         );
         const alwaysInjectSet = new Set(alwaysInjectNodes.map(n => n?.id).filter(Boolean));
-        const latestSeqIndex = getLatestSeqIndex(store);
-        const excludeMessages = Math.max(0, Number(effectiveSettings.recentRawTurns ?? defaultSettings.recentRawTurns));
         const excludeNodeIds = new Set(alwaysInjectSet);
-        if (excludeMessages > 0) {
-            for (const node of Object.values(store.nodes || {})) {
-                if (isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages)) {
-                    excludeNodeIds.add(node.id);
-                }
-            }
-        }
 
         const ragResult = await runRagRecall(store, queryText, chatKey, effectiveSettings, {
             maxResults: Number(effectiveSettings.hybridMaxResults) || 15,
@@ -10148,7 +10007,6 @@ export async function runRecallDebug(context, query = '') {
         selectedNodes = ragResult.candidates
             .map(c => store.nodes?.[c.nodeId])
             .filter(node => node && !node.archived && !alwaysInjectSet.has(node.id))
-            .filter(node => !isNodeInRecentExcludeWindow(node, latestSeqIndex, excludeMessages))
             .sort(compareNodesByTimeline);
 
         trace = [{

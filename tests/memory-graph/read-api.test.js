@@ -710,21 +710,11 @@ describe('Layer C: recall primitives (spec §4.4)', () => {
         expect(ids).toEqual(['char_alice', 'char_root', 'evt_leaf_c', 'loc_castle']);
     });
 
-    test('listVisibleCandidates({excludeRecentMessages:2}) excludes recent-window nodes', () => {
-        // Real getLatestSeqIndex() = getStoreCoveredSeqTo() = max of
-        // appliedSeqTo(8), loggedSeqTo(8), getSemanticCoverageSeq(store).
-        // getSemanticCoverageSeq scans all active semantic nodes, including
-        // the recall_state diagnostic at seqTo=9 (semantic level), so the
-        // real watermark is 9. With excludeMessages=2 the cutoff is
-        // 9 - 2 + 1 = 8, so only char_root (seqTo=8) gets excluded;
-        // char_alice (seqTo=7) survives. Episodic epi_log1 is filtered out
-        // by buildGraphNodeHints' semantic-only pass.
+    test('listVisibleCandidates() keeps newest semantic nodes without recent-window exclusion', () => {
         const result = api.listVisibleCandidates({ excludeRecentMessages: 2 });
         const ids = result.map(n => n.id);
-        expect(ids).not.toContain('char_root');
-        // char_alice still present (seqTo=7 < cutoff=8).
+        expect(ids).toContain('char_root');
         expect(ids).toContain('char_alice');
-        // Older semantic nodes still present (event leaves a/b project up to evt_rollup1).
         expect(ids).toEqual(expect.arrayContaining(['evt_leaf_c', 'evt_rollup1', 'loc_castle']));
     });
 

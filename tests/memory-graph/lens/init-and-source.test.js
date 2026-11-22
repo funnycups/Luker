@@ -263,7 +263,6 @@ describe('lens index registration & source-luker fixes', () => {
                     recallInjectPosition: 1,
                     recallInjectDepth: 4,
                     recallInjectRole: 0,
-                    updateEvery: updateEveryValue,
                 },
                 options: {
                     connections: [],
@@ -275,7 +274,7 @@ describe('lens index registration & source-luker fixes', () => {
                     compressibleTypes: [],
                 },
                 advanced: {
-                    values: { extractBatchTurns: 1, extractContextTurns: 4, extractExcludeRecentTurns: 0, extractMode: 'oneshot', recentRawTurns: 2 },
+                    values: { updateEvery: updateEveryValue, extractBatchTurns: 2, extractContextTurns: 2, extractExcludeRecentTurns: 0, extractMode: 'oneshot', llmVisibleRecentMessages: 5 },
                     defaults: {},
                     scope: 'global',
                     hasAvatar: false,
@@ -333,8 +332,8 @@ describe('lens index registration & source-luker fixes', () => {
             // Switching back to settings must re-read settings because load() catch invalidated views.settings
             lens.app.setState({ view: 'settings' });
             expect(readSettingsSpy).toHaveBeenCalledTimes(callsBeforeFail + 1);
-            const input = host.querySelector('[data-field-key="updateEvery"] input');
-            expect(input.value).toBe('7');
+            const summary = host.querySelector('.ml-settings-cadence-summary');
+            expect(summary.textContent).toContain('7');
             lens.destroy();
         } finally {
             warnSpy.mockRestore();

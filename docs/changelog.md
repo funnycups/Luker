@@ -8,6 +8,11 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Fixed the mobile Orchestration mode selector and header area failing to render and the mode menu opening outside the Workbench window.
 
+### Memory Graph
+
+- Redesigned extraction cadence and built-in floor-hiding settings with quick presets, a custom configuration modal, a live animated preview, and visibility-gap warnings, defaulting to extracting every 2 AI replies and hiding messages past 5 floors.
+- Removed recent-turn exclusion filtering from memory injection and recall, resolving odd-turn event gaps under multi-turn batching and freshly updated entity sheets being excluded from recall.
+
 ### Image generation
 
 - Show completed illustration images in the Run panel while the remaining images are still generating.

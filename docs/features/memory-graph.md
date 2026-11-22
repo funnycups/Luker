@@ -31,7 +31,13 @@ The **Memory graph** workspace inside Workbench provides five views:
 - **Timeline** — chronological story view grouped by summary tiers.
 - **Data table** — tabular view of nodes with inline field editing.
 - **Memory structure** — edit memory types, record items, extraction rules, persistent injection toggles, templates, import/export, and the **Tag filter** (which strips thinking blocks or status bars before extraction and recall read AI replies).
-- **Settings** — extraction cadence and context window, LLM or RAG vector recall, compression thresholds, token usage trace, and iteration AI settings.
+- **Settings** — extraction cadence and built-in floor hiding presets with live animated preview, LLM or RAG vector recall, compression thresholds, token usage trace, and iteration AI settings.
+
+### Extraction cadence and floor hiding
+
+Under **Memory graph → Settings**, extraction frequency and old-floor hiding are configured together under **Extraction Cadence & Floor Hiding**. By default, Memory Graph uses **Balanced · Recommended**: it extracts every 2 AI replies in one batch and hides chat messages older than the latest 5 floors from the generation model so older history is supplied by the memory graph while the latest 2 turns plus the newest user message remain verbatim.
+
+Pick another preset card to trade between update frequency and raw context length, choose **No floor hiding** to keep full raw chat history visible, or click **Custom…** to enter exact numbers and extraction mode in a modal with a live timeline preview and gap warning.
 
 ![Memory Graph view in Workbench](/images/memory-graph/memory-graph-view.png)
 

@@ -579,12 +579,11 @@ console.log(projected.length, 'projected semantic edges');
 
 ### listVisibleCandidates(options?)
 
-**簽名：** `listVisibleCandidates(options?: { seqWindow?: { from?: number, to?: number }, types?: string[], excludeRecentMessages?: number }): ReadonlyArray<NodeView>`
+**簽名：** `listVisibleCandidates(options?: { seqWindow?: { from?: number, to?: number }, types?: string[] }): ReadonlyArray<NodeView>`
 
 **契約：**
 
 - 回傳與 `chooseRecallRoute` 透過 `collectRootCandidates` 建構的同一份候選池 —— 但形式是深凍結的 `NodeView`。
-- `excludeRecentMessages` 與原生 `isNodeInRecentExcludeWindow` 語意一致：過濾掉最近 N 條使用者訊息視窗內的節點。預設 0。
 - `seqWindow` 與 `types` 在原生候選建構**之後**生效，用來收窄結果池。
 - **按 `compareNodesByRecency` 排序**（seq_to 降序 → semantic_depth 降序 → id 字典序）—— 這是路由 LLM 看到的順序，與 `listNodes` **不同**。
 

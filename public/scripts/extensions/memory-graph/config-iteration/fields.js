@@ -52,7 +52,8 @@ function textField(key, group, label, summary, defaultValue, extra = {}) {
 const REGISTRY = [
     // ---- extraction -------------------------------------------------------
     field('extractMode', 'extraction', 'enum', 'Extraction graph mode', 'Extraction input strategy: oneshot sends the full graph input in one pass, crawl shows a compact index and reads selected nodes first.', 'oneshot', { values: ['oneshot', 'crawl'] }),
-    intField('extractBatchTurns', 'extraction', 'Extract batch assistant turns', 'Number of assistant turns covered by one extraction batch.', 1, { min: 1 }),
+    intField('updateEvery', 'extraction', 'Update every N assistant turns', 'Trigger automatic extraction after N unextracted assistant turns accumulate.', 2, { min: 1 }),
+    intField('extractBatchTurns', 'extraction', 'Extract batch assistant turns', 'Number of assistant turns covered by one extraction batch.', 2, { min: 1 }),
     intField('extractContextTurns', 'extraction', 'Extract context assistant turns', 'Number of preceding assistant turns attached to each extraction batch as context.', 2, { min: 1, max: 32 }),
     intField('extractExcludeRecentTurns', 'extraction', 'Exclude latest N assistant turns from graph extraction', 'Number of newest assistant turns withheld from extraction.', 0, { min: 0 }),
     boolField('extractConcurrent', 'extraction', 'Concurrent extraction', 'Run extraction for different node types concurrently instead of sequentially.', false),
@@ -68,9 +69,8 @@ const REGISTRY = [
     textField('recallFinalizeSystemPrompt', 'recall', 'Recall Stage 2 Prompt (Finalize)', 'Second-stage LLM recall prompt that picks the final node set.', DEFAULT_RECALL_FINALIZE_SYSTEM_PROMPT, { fillDefaultOnNormalize: true }),
     intField('recallMaxIterations', 'recall', 'Recall max iterations', 'Maximum number of tool rounds for LLM recall.', 3, { min: 2, max: 6 }),
     intField('recallQueryMessages', 'recall', 'Recall query recent assistant turns', 'Number of recent assistant turns used to build the recall query.', 2, { min: 0, max: 64 }),
-    intField('recentRawTurns', 'recall', 'Exclude latest N assistant turns from memory injection', 'Number of trailing assistant turns kept as raw text; recall excludes events derived from them.', 2, { min: 0 }),
     intField('persistentInjectionMaxSeqDistance', 'recall', 'Persistent injection recency horizon (assistant turns; 0 = no limit)', 'Recency horizon for always-injected nodes in assistant turns; 0 means no limit.', 0, { min: 0 }),
-    intField('llmVisibleRecentMessages', 'recall', 'Visible recent message layers for generation (0 = disabled)', 'Number of recent message layers visible to the generation model; 0 hides them.', 5, { min: 0, max: 200 }),
+    intField('llmVisibleRecentMessages', 'recall', 'Visible recent message layers for generation (0 = disabled)', 'Number of recent message layers visible to the generation model; 0 disables hiding.', 5, { min: 0, max: 200 }),
 
     // ---- query rewrite ----------------------------------------------------
     textField('ragRewriteSystemPrompt', 'query_rewrite', 'Query rewrite system prompt', 'System prompt for rewriting the recall query; used only by RAG recall with query rewrite enabled.', DEFAULT_RAG_REWRITE_SYSTEM_PROMPT, { fillDefaultOnNormalize: true }),

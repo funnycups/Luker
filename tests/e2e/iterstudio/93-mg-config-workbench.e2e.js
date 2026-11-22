@@ -155,7 +155,7 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
         await closeIterStudio(page);
     });
 
-    test('character-scope commit stores only the sparse recentRawTurns override and survives restart', async ({ page }) => {
+    test('character-scope commit stores only the sparse persistentInjectionMaxSeqDistance override and survives restart', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
         await selectCharacterByName(page, ASH_NAME);
 
@@ -166,8 +166,8 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
         expect(avatar).toBe(ASH_AVATAR);
 
         await openIterStudio(page, 'mg', { scope: 'character' });
-        mock.scriptToolCall({ name: 'mg_config_set_fields', arguments: { set: { 'settings.recentRawTurns': 9 } } });
-        await sendIterPrompt(page, 'mg', 'Keep the last 9 assistant turns as raw text for this character.');
+        mock.scriptToolCall({ name: 'mg_config_set_fields', arguments: { set: { 'settings.persistentInjectionMaxSeqDistance': 9 } } });
+        await sendIterPrompt(page, 'mg', 'Limit persistent injection lookback to 9 assistant turns for this character.');
         await applyIterBatch(page, 'mg');
 
         await expect.poll(async () => {
@@ -176,18 +176,18 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
                 const character = ctx?.characters?.[ctx?.characterId];
                 return character?.data?.extensions?.memory_graph?.advancedOverride ?? null;
             });
-        }, { timeout: 10_000 }).toEqual({ recentRawTurns: 9 });
+        }, { timeout: 10_000 }).toEqual({ persistentInjectionMaxSeqDistance: 9 });
         await expect.poll(async () => {
             return readAshCard(server.dataRoot)?.extensions?.memory_graph?.advancedOverride ?? null;
-        }, { timeout: 10_000 }).toEqual({ recentRawTurns: 9 });
+        }, { timeout: 10_000 }).toEqual({ persistentInjectionMaxSeqDistance: 9 });
 
-        const globalRecentRawTurns = await page.evaluate(() => {
-            return window.Luker.getContext().extensionSettings?.memory_graph?.recentRawTurns ?? null;
+        const globalHorizon = await page.evaluate(() => {
+            return window.Luker.getContext().extensionSettings?.memory_graph?.persistentInjectionMaxSeqDistance ?? null;
         });
-        expect(globalRecentRawTurns).toBe(2);
+        expect(globalHorizon).toBe(0);
 
         const lens = await openMemoryWorkspace(page, { subview: 'settings' });
-        await expect(lens.locator('[data-field-key="recentRawTurns"] input')).toHaveValue('9');
+        await expect(lens.locator('[data-field-key="persistentInjectionMaxSeqDistance"] input')).toHaveValue('9');
         await closeIterStudio(page);
 
         await server.restart();
@@ -199,8 +199,8 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
             const character = ctx?.characters?.[ctx?.characterId];
             return character?.data?.extensions?.memory_graph?.advancedOverride ?? null;
         });
-        expect(afterRestart).toEqual({ recentRawTurns: 9 });
-        expect(readAshCard(server.dataRoot)?.extensions?.memory_graph?.advancedOverride ?? null).toEqual({ recentRawTurns: 9 });
+        expect(afterRestart).toEqual({ persistentInjectionMaxSeqDistance: 9 });
+        expect(readAshCard(server.dataRoot)?.extensions?.memory_graph?.advancedOverride ?? null).toEqual({ persistentInjectionMaxSeqDistance: 9 });
     });
 
     test('unsaved Advanced edits survive a workbench commit round-trip', async ({ page }) => {
@@ -208,10 +208,10 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
         await selectCharacterByName(page, ASH_NAME);
         const lens = await openMemoryWorkspace(page, { subview: 'settings' });
 
-        const rawTurnsInput = lens.locator('[data-field-key="recentRawTurns"] input').first();
-        await expect(rawTurnsInput).toHaveValue('2');
+        const horizonInput = lens.locator('[data-field-key="persistentInjectionMaxSeqDistance"] input').first();
+        await expect(horizonInput).toHaveValue('0');
 
-        await rawTurnsInput.fill('13');
+        await horizonInput.fill('13');
 
         await openIterStudio(page, 'mg', { scope: 'character' });
         mock.scriptToolCall({ name: 'mg_config_set_fields', arguments: { set: { 'settings.recallMaxIterations': 4 } } });
@@ -219,7 +219,7 @@ test.describe('#93 — Memory Graph configuration workbench (real UI)', () => {
         await applyIterBatch(page, 'mg');
 
         await openMemoryWorkspace(page, { subview: 'settings' });
-        await expect(lens.locator('[data-field-key="recentRawTurns"] input').first()).toHaveValue('13');
+        await expect(lens.locator('[data-field-key="persistentInjectionMaxSeqDistance"] input').first()).toHaveValue('13');
         await closeIterStudio(page);
     });
 });
