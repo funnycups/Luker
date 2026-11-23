@@ -1,0 +1,220 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+ * Post-update "What's New" modal built on lens-shared tokens (.lw-dialog).
+ */
+
+body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
+    z-index: 30010;
+    align-items: center;
+    padding: 20px 16px;
+}
+
+.wn-backdrop .wn-dialog {
+    width: min(620px, 100%);
+    max-height: min(82vh, 720px);
+}
+
+.wn-backdrop .wn-head {
+    gap: 12px;
+    padding: 14px 14px 14px 18px;
+}
+
+.wn-backdrop .wn-head-badge {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: var(--lw-accent-soft);
+    color: var(--lw-accent);
+}
+
+.wn-backdrop .wn-head-main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    flex: 1;
+    min-width: 0;
+}
+
+.wn-backdrop .wn-title {
+    flex: 0 1 auto;
+    font-size: 15px;
+    line-height: 1.3;
+    color: var(--lw-text);
+}
+
+.wn-backdrop .wn-meta-pills {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.wn-backdrop .wn-range-pill {
+    font-family: var(--lw-mono);
+    font-size: 11px;
+}
+
+.wn-backdrop .wn-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 18px;
+    overflow: auto;
+}
+
+.wn-backdrop .wn-version {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 13px 15px;
+    border-radius: var(--lw-r);
+    background: var(--lw-surface-2);
+    border: 1px solid var(--lw-border);
+}
+
+.wn-backdrop .wn-version-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--lw-border);
+}
+
+.wn-backdrop .wn-version-label {
+    font-family: var(--lw-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--lw-text);
+}
+
+.wn-backdrop .wn-version-date {
+    font-size: 11.5px;
+    color: var(--lw-faint);
+    font-variant-numeric: tabular-nums;
+}
+
+.wn-backdrop .wn-md {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--lw-text);
+}
+
+.wn-backdrop .wn-md h4 {
+    margin: 4px 0 0;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--lw-muted);
+}
+
+.wn-backdrop .wn-md h4:first-child {
+    margin-top: 0;
+}
+
+.wn-backdrop .wn-md p {
+    margin: 0;
+}
+
+.wn-backdrop .wn-md ul,
+.wn-backdrop .wn-md ol {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.wn-backdrop .wn-md li {
+    overflow-wrap: anywhere;
+}
+
+.wn-backdrop .wn-md code {
+    padding: 1px 5px;
+    border-radius: var(--lw-r-xs);
+    background: var(--lw-hover);
+    border: 1px solid var(--lw-border);
+    color: var(--lw-text);
+    line-height: inherit;
+    font-family: var(--lw-mono);
+    font-size: 12px;
+}
+
+.wn-backdrop .wn-md a.lw-link {
+    display: inline;
+    font-size: inherit;
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.wn-backdrop .wn-md a.lw-link:hover,
+.wn-backdrop .wn-foot-links a.lw-link:hover {
+    text-decoration: underline;
+    filter: none;
+}
+
+.wn-backdrop .wn-empty-note {
+    margin: 0;
+    padding: 6px 2px;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--lw-muted);
+}
+
+.wn-backdrop .wn-foot {
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    padding: 12px 18px 14px;
+}
+
+.wn-backdrop .wn-foot-links {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+}
+
+.wn-backdrop .wn-foot-links a.lw-link {
+    text-decoration: none;
+    font-size: 12.5px;
+}
+
+.wn-backdrop .wn-foot-links a.lw-link:hover {
+    text-decoration: underline;
+}
+
+@media (max-width: 720px) {
+    body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
+        padding: 16px 12px;
+    }
+
+    .wn-backdrop .wn-dialog {
+        max-height: calc(100dvh - 32px);
+    }
+
+    .wn-backdrop .wn-head {
+        padding: 12px 12px 12px 14px;
+    }
+
+    .wn-backdrop .wn-body {
+        padding: 12px 14px;
+    }
+
+    .wn-backdrop .wn-foot {
+        padding: 10px 14px 12px;
+    }
+
+    .wn-backdrop .wn-foot .lw-btn {
+        height: 36px;
+        padding: 0 16px;
+        font-size: 13px;
+    }
+}

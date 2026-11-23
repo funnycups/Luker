@@ -24,6 +24,7 @@ import { filterValidIpPatterns, getIpFromRequest } from './express-common.js';
 import { extensionsEnabledFeatureGuard } from './endpoints/extensions.js';
 import { getStorageEngine } from './storage/index.js';
 import { ENGINE_META_ENTRY, ENGINE_DUMP_ENTRY } from './storage/engine-backup-entries.js';
+import { getInitialSeenVersionFields } from './whats-new.js';
 
 export const KEY_PREFIX = 'user:';
 const AVATAR_PREFIX = 'avatar:';
@@ -668,7 +669,8 @@ export async function initUserStorage(dataRoot) {
 
     // If there are no users, create the default user
     if (keys.length === 0) {
-        await storage.setItem(toKey(DEFAULT_USER.handle), DEFAULT_USER);
+        const initialSeen = await getInitialSeenVersionFields();
+        await storage.setItem(toKey(DEFAULT_USER.handle), { ...DEFAULT_USER, ...initialSeen });
     }
 }
 

@@ -10,6 +10,7 @@ import { getAdminSettings } from '../admin-settings.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
 import { KEY_PREFIX, getUserAvatar, toKey, toAvatarKey, getPasswordHash, getPasswordSalt, getAccountVersion, getAllUserHandles, getUserDirectories, ensurePublicDirectoriesExist, createBackupArchive } from '../users.js';
 import { consumeLanMigrationOffer } from '../lan-migration.js';
+import { getInitialSeenVersionFields } from '../whats-new.js';
 
 const DISCREET_LOGIN = getConfigValue('enableDiscreetLogin', false, 'boolean');
 const PREFER_REAL_IP_HEADER = getConfigValue('rateLimiting.preferRealIpHeader', false, 'boolean');
@@ -148,7 +149,7 @@ async function fetchAvatarAsDataUrl(url) {
     }
 }
 
-async function createUserFromOAuth(provider, profile, adminSettings) {
+export async function createUserFromOAuth(provider, profile, adminSettings) {
     const handles = await getAllUserHandles();
     const seed = provider === 'github'
         ? (profile?.login || profile?.name || profile?.email || 'github-user')
@@ -175,6 +176,8 @@ async function createUserFromOAuth(provider, profile, adminSettings) {
             email: String(profile.email || ''),
         };
 
+    const initialSeen = await getInitialSeenVersionFields();
+
     /** @type {import('../users.js').User} */
     const newUser = {
         handle,
@@ -188,6 +191,7 @@ async function createUserFromOAuth(provider, profile, adminSettings) {
             [provider]: identity,
         },
         storageQuotaBytes: Number.isFinite(defaultQuotaBytes) && defaultQuotaBytes >= 0 ? Math.floor(defaultQuotaBytes) : undefined,
+        ...initialSeen,
     };
 
     await storage.setItem(toKey(handle), newUser);
@@ -385,6 +389,7 @@ router.post('/register', parseAccountBody, async (request, response) => {
 
         const salt = getPasswordSalt();
         const defaultQuotaBytes = Number(settings?.storage?.defaultUserQuotaBytes);
+        const initialSeen = await getInitialSeenVersionFields();
 
         /** @type {import('../users.js').User} */
         const newUser = {
@@ -396,6 +401,7 @@ router.post('/register', parseAccountBody, async (request, response) => {
             admin: false,
             enabled: true,
             storageQuotaBytes: Number.isFinite(defaultQuotaBytes) && defaultQuotaBytes >= 0 ? Math.floor(defaultQuotaBytes) : undefined,
+            ...initialSeen,
         };
 
         await storage.setItem(toKey(handle), newUser);

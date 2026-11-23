@@ -7831,4 +7831,13 @@
     ,"Allow users to download full data backups": "允許使用者下載完整資料備份"
     ,"Backup settings saved.": "備份設定已儲存。"
     ,"Please enter a valid non-negative integer.": "請輸入大於或等於 0 的整數。"
+    ,"Updated to Luker v${0}": "已更新至 Luker v${0}"
+    ,"Updated to Luker dev build ${0}": "已更新至 Luker 測試版 ${0}"
+    ,"Unreleased": "未發布"
+    ,"Your Luker installation has been updated to v${0}.": "你的 Luker 已成功更新至 v${0}。"
+    ,"Your Luker installation has been updated to the latest dev build.": "你的 Luker 已成功更新至最新測試版提交。"
+    ,"View full changelog": "查看完整更新日誌"
+    ,"View commit diff": "查看提交對比"
+    ,"Failed to save update notice state": "儲存更新提示狀態失敗"
+    ,"Update Notice": "更新提示"
 }

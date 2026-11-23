@@ -269,7 +269,7 @@ import {
     formatInstructModeStoryString,
     getInstructStoppingSequences,
 } from './scripts/instruct-mode.js';
-import { initLocales, t } from './scripts/i18n.js';
+import { getCurrentLocale, initLocales, t, translate } from './scripts/i18n.js';
 import { getFriendlyTokenizerName, getTokenCount, getTokenCountAsync, initTokenizers, saveTokenCacheDebounced, flushTokenCacheSave } from './scripts/tokenizers.js';
 import { consumeLastUsage } from './scripts/last-usage.js';
 import {
@@ -334,7 +334,8 @@ import { fetchRecentChatsSnapshot, initWelcomeScreen, openPermanentAssistantChat
 import { initDataMaid } from './scripts/data-maid.js';
 import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPrompts, findItemizedPromptSet, flushItemizedPromptsSave, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts, saveItemizedPromptsDebounced, swapItemizedPrompts } from './scripts/itemized-prompts.js';
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
-import { initAnnouncements } from './scripts/announcements.js';
+import { initAnnouncements, whenCriticalAnnouncementsDone } from './scripts/announcements.js';
+import { initWhatsNew } from './scripts/whats-new.js';
 import { event_types, eventSource } from './scripts/events.js';
 import {
     settleChatChanged,
@@ -2355,6 +2356,14 @@ async function firstLoadInit() {
         () => initTextGenModelSelects(),
         () => initSystemMessages(),
         () => initAnnouncements(),
+        () => {
+            void initWhatsNew({
+                getRequestHeaders,
+                getLocale: getCurrentLocale,
+                translate,
+                waitForAnnouncements: whenCriticalAnnouncementsDone,
+            });
+        },
         () => initExtensions(),
         () => bootstrapExtensions(),
         () => initExtensionSlashCommands(),

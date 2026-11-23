@@ -21,6 +21,7 @@ import { color, Cache, getConfigValue, ensureDirectory, isValidUrl, normalizeZip
 import { getIpAddress, retryAfter } from '../express-common.js';
 import { createLanMigrationOffer, LAN_MIGRATION_PATH_PREFIX } from '../lan-migration.js';
 import { listForUser, mergeReadIds } from '../announcements.js';
+import { evaluateWhatsNew, getRuntimeIdentity, shouldApplyAck } from '../whats-new.js';
 import { getStorageEngine } from '../storage/index.js';
 import { ENGINE_META_ENTRY, ENGINE_DUMP_ENTRY } from '../storage/engine-backup-entries.js';
 import { crossModeRestore } from '../storage/migration/cross-mode-restore.js';
@@ -1813,6 +1814,33 @@ router.post('/announcements/me/list', async (request, response) => {
     }
 });
 
+/** @type {Map<string, Promise<any>>} */
+const USER_RECORD_WRITE_QUEUES = new Map();
+
+/**
+ * Serializes read-modify-write mutations on a user's `node-persist` record so
+ * concurrent endpoints (e.g. whats-new ack + announcements mark-read) do not
+ * clobber each other's sibling fields.
+ * @template T
+ * @param {string} handle
+ * @param {(userRecord: Record<string, any> | undefined) => Promise<T> | T} mutator
+ * @returns {Promise<T>}
+ */
+function enqueueUserRecordWrite(handle, mutator) {
+    const prev = USER_RECORD_WRITE_QUEUES.get(handle) || Promise.resolve();
+    const run = prev.catch(() => undefined).then(async () => {
+        const userRecord = await storage.getItem(toKey(handle));
+        return await mutator(userRecord);
+    });
+    const tracked = run.finally(() => {
+        if (USER_RECORD_WRITE_QUEUES.get(handle) === tracked) {
+            USER_RECORD_WRITE_QUEUES.delete(handle);
+        }
+    });
+    USER_RECORD_WRITE_QUEUES.set(handle, tracked);
+    return run;
+}
+
 router.post('/announcements/me/mark-read', async (request, response) => {
     try {
         if (!request.user) {
@@ -1820,19 +1848,80 @@ router.post('/announcements/me/mark-read', async (request, response) => {
         }
         const ids = Array.isArray(request.body?.ids) ? request.body.ids : [];
         const handle = request.user.profile.handle;
-        const userRecord = await storage.getItem(toKey(handle));
-        if (!userRecord) {
+        const found = await enqueueUserRecordWrite(handle, async (userRecord) => {
+            if (!userRecord) {
+                return false;
+            }
+            const next = mergeReadIds({
+                existing: userRecord.readAnnouncementIds,
+                ids,
+            });
+            userRecord.readAnnouncementIds = next;
+            await storage.setItem(toKey(handle), userRecord);
+            return true;
+        });
+        if (!found) {
             return response.sendStatus(404);
         }
-        const next = mergeReadIds({
-            existing: userRecord.readAnnouncementIds,
-            ids,
-        });
-        userRecord.readAnnouncementIds = next;
-        await storage.setItem(toKey(handle), userRecord);
         return response.sendStatus(204);
     } catch (error) {
         console.error('Announcements me/mark-read failed:', error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/whats-new', async (request, response) => {
+    try {
+        if (!request.user) {
+            return response.sendStatus(403);
+        }
+        const handle = request.user.profile.handle;
+        const locale = typeof request.body?.locale === 'string' ? request.body.locale : '';
+        const current = await getRuntimeIdentity();
+        const userRecord = await storage.getItem(toKey(handle));
+        if (!userRecord) {
+            return response.json({ show: false });
+        }
+        const { payload, silentSync } = evaluateWhatsNew({ userRecord, current, locale });
+        if (silentSync) {
+            await enqueueUserRecordWrite(handle, async (latest) => {
+                if (!latest) return;
+                latest.lastSeenVersion = silentSync.lastSeenVersion;
+                latest.lastSeenRevision = silentSync.lastSeenRevision;
+                await storage.setItem(toKey(handle), latest);
+            });
+        }
+        return response.json(payload);
+    } catch (error) {
+        console.error('Whats-new evaluation failed:', error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/whats-new/ack', async (request, response) => {
+    try {
+        if (!request.user) {
+            return response.sendStatus(403);
+        }
+        const ackVersion = typeof request.body?.version === 'string' ? request.body.version.trim() : '';
+        if (!ackVersion) {
+            return response.status(400).json({ error: 'version is required' });
+        }
+        const ackRevision = typeof request.body?.revision === 'string' ? request.body.revision.trim() : null;
+        const current = await getRuntimeIdentity();
+        if (!shouldApplyAck({ ackVersion, ackRevision, current })) {
+            return response.sendStatus(204);
+        }
+        const handle = request.user.profile.handle;
+        await enqueueUserRecordWrite(handle, async (userRecord) => {
+            if (!userRecord) return;
+            userRecord.lastSeenVersion = current.version;
+            userRecord.lastSeenRevision = current.revision ?? null;
+            await storage.setItem(toKey(handle), userRecord);
+        });
+        return response.sendStatus(204);
+    } catch (error) {
+        console.error('Whats-new ack failed:', error);
         return response.sendStatus(500);
     }
 });

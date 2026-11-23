@@ -4,6 +4,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Update Notice
+
+- Added a post-update modal displaying localized changelog summaries for all versions and dev builds since the previous login.
+
 ### Fixes
 
 - Fixed login sessions expiring after updating a Docker image.
