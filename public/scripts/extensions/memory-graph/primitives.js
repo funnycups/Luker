@@ -85,3 +85,32 @@ export function isExtractableAssistantMessage(message) {
     // whitespace, and is semantically equivalent for this truthiness check.
     return raw.trim().length > 0;
 }
+
+/**
+ * Resolve a 0-based chat floor index to the first 1-based extractable assistant
+ * seq at or after that floor.
+ *
+ * `assistantFloors` is the strictly increasing list of 0-based `chat[]` indices
+ * for extractable assistant turns `seq = 1..latestSeq`. Entering a user floor
+ * resolves to the next extractable assistant turn (whose extraction frame
+ * includes that preceding user message). Returns `null` when `startFloor` is
+ * not a non-negative integer or lies past the last extractable floor.
+ *
+ * @param {number[]} assistantFloors
+ * @param {number} startFloor
+ * @returns {number | null}
+ */
+export function resolveStartSeqFromFloor(assistantFloors, startFloor) {
+    if (!Array.isArray(assistantFloors) || assistantFloors.length === 0) {
+        return null;
+    }
+    if (typeof startFloor !== 'number' || !Number.isInteger(startFloor) || startFloor < 0) {
+        return null;
+    }
+    for (let i = 0; i < assistantFloors.length; i += 1) {
+        if (assistantFloors[i] >= startFloor) {
+            return i + 1;
+        }
+    }
+    return null;
+}

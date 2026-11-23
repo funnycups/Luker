@@ -174,11 +174,13 @@ describe('settings-view UX reorganization & bug fixes', () => {
                 status: () => 'Idle',
                 onStatus: () => () => {},
                 stats: () => ({ nodeCount: 10, edgeCount: 4, messageCount: 8, sourceMessageCount: 8, levelCount: { semantic: 10 } }),
-                latestSeq: () => 5,
+                latestSeq: () => 3,
+                rebuildRange: overrides.rebuildRange || (() => ({ latestSeq: 3, minFloor: 0, maxFloor: 4, assistantFloors: [0, 2, 4] })),
                 stop: jest.fn(),
                 fill: overrides.fill || jest.fn(async () => {}),
                 rebuild: jest.fn(async () => {}),
-                rebuildRecent: jest.fn(async () => {}),
+                rebuildRecent: overrides.rebuildRecent || jest.fn(async () => {}),
+                rebuildFromFloor: overrides.rebuildFromFloor || jest.fn(async () => {}),
                 compress: jest.fn(async () => {}),
                 reset: jest.fn(async () => {}),
                 vectors: jest.fn(async () => {}),
@@ -447,6 +449,93 @@ describe('settings-view UX reorganization & bug fixes', () => {
         listeners[0]();
         const connSelect = view.el.querySelector('[data-field-key="extractApiPresetName"] select');
         expect([...connSelect.options].some(o => o.value === 'BrandNewProfile')).toBe(true);
+    });
+
+    test('partial rebuild modal supports both recent N turns and starting from floor N', async () => {
+        const rebuildRecent = jest.fn(async () => {});
+        const rebuildFromFloor = jest.fn(async () => {});
+        const { app, view } = mountSettingsView({ rebuildRecent, rebuildFromFloor });
+
+        const opsBtn = [...view.el.querySelectorAll('[data-settings-section="operations"] button')]
+            .find(b => b.dataset.rebuildRange === 'true');
+        expect(opsBtn).toBeTruthy();
+
+        // 1) Recent mode submits rebuildRecent(2)
+        opsBtn.click();
+        let modal = app.root.querySelector('.ml-dialog');
+        expect(modal).toBeTruthy();
+        const modeBtns = [...modal.querySelectorAll('.lw-seg-btn')];
+        expect(modeBtns).toHaveLength(2);
+        expect(modeBtns[0].getAttribute('aria-pressed')).toBe('true');
+
+        let input = modal.querySelector('input[type="number"]');
+        input.value = '2';
+        input.dispatchEvent(new Event('input'));
+        expect(modal.querySelector('.ml-settings-note').textContent).toContain('2-4');
+
+        let okBtn = [...modal.querySelectorAll('footer button')].find(b => b.classList.contains('is-primary'));
+        okBtn.click();
+        await flushMicrotasks();
+        expect(rebuildRecent).toHaveBeenCalledWith(2);
+        expect(app.root.querySelector('.ml-dialog')).toBeNull();
+
+        // 2) Switch to from-floor mode, verify validation (blank & out-of-range), then submit floor 0 and user floor 1
+        opsBtn.click();
+        modal = app.root.querySelector('.ml-dialog');
+        modal.querySelectorAll('.lw-seg-btn')[1].click();
+        expect(modal.querySelectorAll('.lw-seg-btn')).toHaveLength(2);
+        expect(modal.querySelectorAll('.lw-seg-btn')[1].getAttribute('aria-pressed')).toBe('true');
+
+        input = modal.querySelector('input[type="number"]');
+        expect(input.min).toBe('0');
+        expect(input.max).toBe('4');
+        expect(input.value).toBe('4');
+
+        // Blank input must NOT coerce to 0
+        input.value = '';
+        input.dispatchEvent(new Event('input'));
+        okBtn = [...modal.querySelectorAll('footer button')].find(b => b.classList.contains('is-primary'));
+        okBtn.click();
+        await flushMicrotasks();
+        expect(rebuildFromFloor).not.toHaveBeenCalled();
+        expect(app.notify).toHaveBeenCalled();
+        expect(app.root.querySelector('.ml-dialog')).toBeTruthy();
+
+        // Floor 0 is valid and invokes rebuildFromFloor(0)
+        app.notify.mockClear();
+        input.value = '0';
+        input.dispatchEvent(new Event('input'));
+        expect(modal.querySelector('.ml-settings-note').textContent).toContain('0-4');
+        okBtn.click();
+        await flushMicrotasks();
+        expect(rebuildFromFloor).toHaveBeenCalledWith(0);
+        expect(app.root.querySelector('.ml-dialog')).toBeNull();
+
+        // User floor 1 is valid and maps to 2 assistant turns (floors 1-4)
+        opsBtn.click();
+        modal = app.root.querySelector('.ml-dialog');
+        modal.querySelectorAll('.lw-seg-btn')[1].click();
+        input = modal.querySelector('input[type="number"]');
+        input.value = '1';
+        input.dispatchEvent(new Event('input'));
+        expect(modal.querySelector('.ml-settings-note').textContent).toContain('1-4');
+        expect(modal.querySelector('.ml-settings-note').textContent).toContain('2');
+        okBtn = [...modal.querySelectorAll('footer button')].find(b => b.classList.contains('is-primary'));
+        okBtn.click();
+        await flushMicrotasks();
+        expect(rebuildFromFloor).toHaveBeenCalledWith(1);
+    });
+
+    test('partial rebuild surfaces error when no assistant turns are rebuildable', () => {
+        const { app, view } = mountSettingsView({
+            rebuildRange: () => ({ latestSeq: 0, minFloor: 0, maxFloor: -1, assistantFloors: [] }),
+        });
+        const opsBtn = [...view.el.querySelectorAll('[data-settings-section="operations"] button')]
+            .find(b => b.dataset.rebuildRange === 'true');
+        expect(opsBtn).toBeTruthy();
+        opsBtn.click();
+        expect(app.root.querySelector('.ml-dialog')).toBeNull();
+        expect(app.showToast).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ error: true }));
     });
 });
 

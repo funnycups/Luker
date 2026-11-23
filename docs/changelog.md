@@ -8,6 +8,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Added a post-update modal displaying localized changelog summaries for all versions and dev builds since the previous login.
 
+### Memory Graph
+
+- Added a from-floor rebuild mode alongside recent-turn rebuild in the Memory Graph range rebuild modal, with live range preview.
+
 ### Fixes
 
 - Fixed login sessions expiring after updating a Docker image.

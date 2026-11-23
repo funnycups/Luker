@@ -7,8 +7,9 @@
 
 import { h, clear, put } from '../../../../lens-shared/util.js';
 import { CONFIG_FIELDS } from '../../config-iteration/fields.js';
+import { resolveStartSeqFromFloor } from '../../primitives.js';
 import { i18n, i18nFormat } from '../i18n.js';
-import { button, checkRow, sectionTitle, switchControl } from '../ui/components.js';
+import { button, checkRow, sectionTitle, segmented, switchControl } from '../ui/components.js';
 import { confirmText, formField, openModal, selectInput } from '../panels/modal.js';
 import {
     CADENCE_PRESETS,
@@ -503,26 +504,128 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
 
     const action = (label, task, options = {}) => button(label, task, { disabled: busy, className: 'ml-btn-ghost', ...options });
 
-    function askRebuildRecent() {
-        const latest = source.ops.latestSeq();
+    function askRebuildRange() {
+        const range = source.ops.rebuildRange();
+        const latest = Number(range?.latestSeq || 0);
         if (latest <= 0) {
             surfaceError(new Error(i18n('No assistant turns available to rebuild.')));
             return;
         }
-        // cap-ok: initial default input value clamped to available chat turns; max is latest
-        const input = h('input', { class: 'ml-schema-input', type: 'number', min: 1, max: latest, step: 1, value: String(Math.min(20, latest)) });
+        const minFloor = Number.isInteger(range.minFloor) ? range.minFloor : 0;
+        const maxFloor = Number.isInteger(range.maxFloor) ? range.maxFloor : 0;
+        const assistantFloors = Array.isArray(range.assistantFloors) ? range.assistantFloors : [];
+
+        let mode = 'recent';
+        let recentValue = String(Math.min(20, latest)); // cap-ok: initial default input value clamped to available chat turns; max is latest
+        let floorValue = String(maxFloor);
+
+        const modeOptions = [
+            { value: 'recent', label: i18n('Rebuild Recent') },
+            { value: 'from_floor', label: i18n('From Floor') },
+        ];
+        const modeSlot = h('div');
+        const labelEl = h('span', { class: 'lw-field-label' });
+        const input = h('input', { class: 'ml-schema-input', type: 'number', step: 1 });
+        const field = h('label', { class: 'lw-field' }, labelEl, input);
+        const previewEl = h('div', { class: 'ml-settings-note' });
+
+        function parseNonNegInt(raw) {
+            const trimmed = String(raw ?? '').trim();
+            return /^\d+$/.test(trimmed) ? Number(trimmed) : null;
+        }
+
+        function updatePreview() {
+            const parsed = parseNonNegInt(input.value);
+            if (parsed === null) {
+                previewEl.textContent = '';
+                previewEl.hidden = true;
+                return;
+            }
+            let fromFloor = null;
+            let toFloor = maxFloor;
+            let turnCount = 0;
+            if (mode === 'recent') {
+                if (parsed < 1 || parsed > latest) {
+                    previewEl.textContent = '';
+                    previewEl.hidden = true;
+                    return;
+                }
+                const startSeq = latest - parsed + 1;
+                fromFloor = assistantFloors[startSeq - 1];
+                toFloor = assistantFloors[latest - 1];
+                turnCount = parsed;
+            } else {
+                const startSeq = resolveStartSeqFromFloor(assistantFloors, parsed);
+                if (startSeq === null) {
+                    previewEl.textContent = '';
+                    previewEl.hidden = true;
+                    return;
+                }
+                fromFloor = parsed;
+                toFloor = assistantFloors[latest - 1];
+                turnCount = latest - startSeq + 1;
+            }
+            if (!Number.isInteger(fromFloor) || !Number.isInteger(toFloor)) {
+                previewEl.textContent = '';
+                previewEl.hidden = true;
+                return;
+            }
+            previewEl.textContent = fromFloor === toFloor
+                ? i18nFormat('Will rebuild floor ${0} (${1} assistant turn(s)).', fromFloor, turnCount)
+                : i18nFormat('Will rebuild floors ${0}-${1} (${2} assistant turn(s)).', fromFloor, toFloor, turnCount);
+            previewEl.hidden = false;
+        }
+
+        function syncModeUi() {
+            put(clear(modeSlot), segmented(modeOptions, mode, (nextMode) => {
+                if (mode === 'recent') recentValue = input.value;
+                else floorValue = input.value;
+                mode = nextMode;
+                syncModeUi();
+                input.focus();
+            }, { ariaLabel: i18n('Rebuild mode') }));
+
+            if (mode === 'recent') {
+                labelEl.textContent = i18nFormat('Rebuild recent assistant turns: enter N (1-${0}).', latest);
+                input.min = '1';
+                input.max = String(latest);
+                input.value = recentValue;
+            } else {
+                labelEl.textContent = i18nFormat('Rebuild from floor N (${0}-${1}).', minFloor, maxFloor);
+                input.min = String(minFloor);
+                input.max = String(maxFloor);
+                input.value = floorValue;
+            }
+            updatePreview();
+        }
+
+        input.addEventListener('input', () => {
+            if (mode === 'recent') recentValue = input.value;
+            else floorValue = input.value;
+            updatePreview();
+        });
+        syncModeUi();
+
         openModal(app, {
-            title: i18n('Rebuild Recent'),
-            content: formField(i18nFormat('Rebuild recent assistant turns: enter N (1-${0}).', latest), input),
-            okLabel: i18n('Rebuild Recent'),
+            title: i18n('Rebuild Range'),
+            content: h('div', { class: 'ml-aiset' }, modeSlot, field, previewEl),
+            okLabel: i18n('Start Rebuild'),
             wide: false,
             onOk() {
-                const turns = Number(input.value);
-                if (!Number.isInteger(turns) || turns < 1 || turns > latest) {
-                    app.notify(i18nFormat('Please enter a valid integer between 1 and ${0}.', latest));
+                const value = parseNonNegInt(input.value);
+                if (mode === 'recent') {
+                    if (value === null || value < 1 || value > latest) {
+                        app.notify(i18nFormat('Please enter a valid integer between 1 and ${0}.', latest));
+                        return false;
+                    }
+                    void run(() => source.ops.rebuildRecent(value));
+                    return true;
+                }
+                if (value === null || resolveStartSeqFromFloor(assistantFloors, value) === null) {
+                    app.notify(i18nFormat('Please enter a valid integer between ${0} and ${1}.', minFloor, maxFloor));
                     return false;
                 }
-                void run(() => source.ops.rebuildRecent(turns));
+                void run(() => source.ops.rebuildFromFloor(value));
                 return true;
             },
         });
@@ -608,13 +711,15 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
     function operationsSection() {
         const ops = source.ops;
         const actions = (...children) => h('div', { class: 'ml-settings-actions' }, children);
+        const rebuildRangeBtn = action(i18n('Rebuild Range'), askRebuildRange);
+        rebuildRangeBtn.dataset.rebuildRange = 'true';
         return h('section', { class: 'ml-aiset-group ml-settings-section', dataset: { settingsSection: 'operations' } },
             sectionTitle(i18n('Graph Operations & Data')),
             h('div', { class: 'ml-settings-stats', text: statsLine() }),
             actions(
                 action(i18n('Fill Graph'), () => run(ops.fill)),
                 action(i18n('Rebuild Graph'), () => confirmText(app, { title: i18n('Rebuild Graph'), lines: [i18n('Rebuild the whole graph from this chat?')], okLabel: i18n('Rebuild Graph'), danger: true, onOk: () => { void run(ops.rebuild); } })),
-                action(i18n('Rebuild Recent'), askRebuildRecent),
+                rebuildRangeBtn,
                 action(i18n('Manual Compress'), askCompress),
                 action(i18n('Fill Missing'), () => run(() => ops.vectors('incremental'))),
                 action(i18n('Full Rebuild'), () => run(() => ops.vectors('full')))),

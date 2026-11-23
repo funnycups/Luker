@@ -143,7 +143,9 @@ import {
     normalizeMultilineText,
     ensureNodeFieldsObject,
     isExtractableAssistantMessage,
+    resolveStartSeqFromFloor,
 } from './primitives.js';
+export { resolveStartSeqFromFloor };
 import {
     cloneRollbackNodeSnapshot,
     cloneRollbackEdgeSnapshot,
@@ -9550,8 +9552,24 @@ export function stopMemoryExtraction() {
     }
 }
 
+export function getRebuildableRange(context, settings = getSettings()) {
+    const runtimeSettings = getEffectiveSettings(context, settings);
+    const frames = buildPlayableFramesFromContext(context);
+    const latestSeq = getExtractableLatestSeq(frames.length, runtimeSettings);
+    if (latestSeq <= 0) {
+        return { latestSeq: 0, minFloor: 0, maxFloor: -1, assistantFloors: [] };
+    }
+    const assistantFloors = frames.slice(0, latestSeq).map(frame => frame.source_index);
+    return {
+        latestSeq,
+        minFloor: 0,
+        maxFloor: assistantFloors[assistantFloors.length - 1],
+        assistantFloors,
+    };
+}
+
 export function getRebuildableLatestSeq(context, settings = getSettings()) {
-    return getExtractableLatestSeq(buildPlayableFramesFromContext(context).length, getEffectiveSettings(context, settings));
+    return getRebuildableRange(context, settings).latestSeq;
 }
 
 /** Routes to Workbench AI iteration for the chat memory graph. */
@@ -9768,24 +9786,14 @@ export async function resetMemoryGraphForChat(context, settings = getSettings())
     updateUiStatus(i18n('Reset memory graph for current chat.'));
 }
 
-/** Re-extracts the latest N assistant turns. */
-export async function runRebuildRecent(context, recentTurns, settings = getSettings()) {
-    await ensureMemoryStoreLoaded(context);
-    const chatKey = getChatKey(context);
-    let store = memoryStoreCache.get(chatKey);
-    if (!store) {
-        notifyError(i18n('No active chat selected.'));
-        return;
-    }
-    const runtimeSettings = getEffectiveSettings(context, settings);
-    alignStoreCoverageToChat(store, context, runtimeSettings);
-    const latestSeq = getExtractableLatestSeq(buildPlayableFramesFromContext(context).length, runtimeSettings);
-    if (latestSeq <= 0) {
-        notifyError(i18n('No assistant turns available to rebuild.'));
-        return;
-    }
-
-    const startSeq = Math.max(1, latestSeq - recentTurns + 1);
+async function runPartialRebuildFromSeq(context, startSeq, {
+    store,
+    chatKey,
+    runtimeSettings,
+    latestSeq,
+    operationName,
+    onComplete,
+}) {
     const workingStore = normalizeStoreForRuntime(store);
     truncateStoreFromSeq(workingStore, startSeq);
     updateStoreSourceState(workingStore, context);
@@ -9861,23 +9869,95 @@ export async function runRebuildRecent(context, recentTurns, settings = getSetti
         );
         const persistedStore = persistResult.store;
         const committedDebug = persistedStore?.lastExtractionDebug || debug;
+        const committedLatestSeq = Number(committedDebug.latestSeq || latestSeq);
         refreshUiStats();
-        notifySuccess(i18nFormat('Memory graph rebuilt for recent ${0} assistant turn(s).', recentTurns));
-        updateUiStatus(i18nFormat('Rebuilt recent memory graph range: seq ${0}-${1}.', startSeq, Number(committedDebug.latestSeq || latestSeq)));
+        onComplete({ committedLatestSeq });
     } catch (error) {
         if (isAbortError(error, rebuildAbortController.signal)) {
             updateUiStatus(i18n('Memory graph update cancelled by user.'));
             refreshUiStats();
             return;
         }
-        console.warn(`[${MODULE_NAME}] Recent rebuild failed`, error);
-        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild_recent', String(error?.message || error)));
+        console.warn(`[${MODULE_NAME}] Partial rebuild (${operationName}) failed`, error);
+        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', operationName, String(error?.message || error)));
     } finally {
         if (activeExtractionAbortController === rebuildAbortController) {
             activeExtractionAbortController = null;
         }
         clearRuntimeInfoToast('extraction');
     }
+}
+
+/** Re-extracts the latest N assistant turns. */
+export async function runRebuildRecent(context, recentTurns, settings = getSettings()) {
+    await ensureMemoryStoreLoaded(context);
+    const chatKey = getChatKey(context);
+    const store = memoryStoreCache.get(chatKey);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
+        return;
+    }
+    const runtimeSettings = getEffectiveSettings(context, settings);
+    alignStoreCoverageToChat(store, context, runtimeSettings);
+    const range = getRebuildableRange(context, runtimeSettings);
+    if (range.latestSeq <= 0) {
+        notifyError(i18n('No assistant turns available to rebuild.'));
+        return;
+    }
+    if (typeof recentTurns !== 'number' || !Number.isInteger(recentTurns) || recentTurns < 1 || recentTurns > range.latestSeq) {
+        notifyError(i18nFormat('Please enter a valid integer between 1 and ${0}.', range.latestSeq));
+        return;
+    }
+
+    const startSeq = Math.max(1, range.latestSeq - recentTurns + 1);
+    await runPartialRebuildFromSeq(context, startSeq, {
+        store,
+        chatKey,
+        runtimeSettings,
+        latestSeq: range.latestSeq,
+        operationName: 'rebuild_recent',
+        onComplete: ({ committedLatestSeq }) => {
+            notifySuccess(i18nFormat('Memory graph rebuilt for recent ${0} assistant turn(s).', recentTurns));
+            updateUiStatus(i18nFormat('Rebuilt recent memory graph range: seq ${0}-${1}.', startSeq, committedLatestSeq));
+        },
+    });
+}
+
+/** Re-extracts from the specified 0-based chat floor through the latest extractable turn. */
+export async function runRebuildFromFloor(context, startFloor, settings = getSettings()) {
+    await ensureMemoryStoreLoaded(context);
+    const chatKey = getChatKey(context);
+    const store = memoryStoreCache.get(chatKey);
+    if (!store) {
+        notifyError(i18n('No active chat selected.'));
+        return;
+    }
+    const runtimeSettings = getEffectiveSettings(context, settings);
+    alignStoreCoverageToChat(store, context, runtimeSettings);
+    const range = getRebuildableRange(context, runtimeSettings);
+    if (range.latestSeq <= 0) {
+        notifyError(i18n('No assistant turns available to rebuild.'));
+        return;
+    }
+
+    const startSeq = resolveStartSeqFromFloor(range.assistantFloors, startFloor);
+    if (startSeq === null) {
+        notifyError(i18nFormat('Please enter a valid integer between ${0} and ${1}.', range.minFloor, range.maxFloor));
+        return;
+    }
+
+    await runPartialRebuildFromSeq(context, startSeq, {
+        store,
+        chatKey,
+        runtimeSettings,
+        latestSeq: range.latestSeq,
+        operationName: 'rebuild_from_floor',
+        onComplete: ({ committedLatestSeq }) => {
+            const endFloor = seqToFloor(context, committedLatestSeq) ?? range.maxFloor;
+            notifySuccess(i18nFormat('Memory graph rebuilt from floor ${0}.', startFloor));
+            updateUiStatus(i18nFormat('Rebuilt memory graph from floor ${0} to ${1}.', startFloor, endFloor));
+        },
+    });
 }
 
 /** Rebuilds the whole graph from the current chat. */
