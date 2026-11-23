@@ -159,13 +159,26 @@ export function prefersReducedMotion() {
     return Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 }
 
+// Opaque / non-hierarchical schemes cannot serve as a base for relative URLs.
+const NON_HIERARCHICAL_BASE_PROTOCOLS = new Set(['about:', 'data:', 'blob:', 'javascript:']);
+
+/**
+ * Picks the first candidate base URL that can actually resolve relative paths
+ * (e.g. `http:`, `https:`, `file:`), skipping `about:`, `data:` and `blob:`.
+ * @param {Document | null | undefined} doc
+ * @returns {string}
+ */
 function resolveValidBaseUrl(doc) {
     const candidates = [doc?.baseURI, globalThis.location?.href, 'http://localhost/'];
     for (const candidate of candidates) {
         const raw = String(candidate || '').trim();
-        if (!raw || raw.toLowerCase().startsWith('about:')) continue;
+        if (!raw) continue;
         try {
-            return new URL(raw).href;
+            const parsed = new URL(raw);
+            if (NON_HIERARCHICAL_BASE_PROTOCOLS.has(parsed.protocol)) continue;
+            // Throws for bases that cannot resolve relative references.
+            new URL('.', parsed);
+            return parsed.href;
         } catch {
             // Try the next candidate.
         }
@@ -173,21 +186,52 @@ function resolveValidBaseUrl(doc) {
     return 'http://localhost/';
 }
 
+/**
+ * @param {string} href
+ * @param {Document | null | undefined} doc
+ * @returns {{ protocol: string, origin: string, pathname: string } | null}
+ */
 function normalizeStylesheetUrl(href, doc) {
     const raw = String(href || '').trim();
     if (!raw) return null;
     try {
         const parsed = new URL(raw, resolveValidBaseUrl(doc));
-        return { origin: parsed.origin, pathname: parsed.pathname };
+        return { protocol: parsed.protocol, origin: parsed.origin, pathname: parsed.pathname };
     } catch {
         return null;
     }
+}
+
+function isSameStylesheetUrl(a, b) {
+    return a.protocol === b.protocol && a.origin === b.origin && a.pathname === b.pathname;
+}
+
+/**
+ * Whether `el` is a `<link>` that currently applies as a stylesheet: `rel`
+ * contains `stylesheet` but not `alternate`, it is not disabled, and its
+ * `media` is empty, `all` or `screen`.
+ *
+ * @param {Element | null | undefined} el
+ * @returns {boolean}
+ */
+export function isActiveStylesheetLink(el) {
+    if (!el || String(el.tagName || '').toUpperCase() !== 'LINK') return false;
+    const link = /** @type {HTMLLinkElement} */ (el);
+    const rel = String(link.getAttribute?.('rel') ?? link.rel ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (!rel.includes('stylesheet') || rel.includes('alternate')) return false;
+    if (link.disabled || link.hasAttribute?.('disabled')) return false;
+    const media = String(link.getAttribute?.('media') ?? link.media ?? '').trim().toLowerCase();
+    return media === '' || media === 'all' || media === 'screen';
 }
 
 /**
  * Ensures a built-in stylesheet is attached to `doc.head` using exact ID and
  * normalized URL matching (never substring matching, so third-party extensions
  * such as `third-party/luker-workbench/style.css` cannot suppress built-in CSS).
+ * Only active stylesheet links (see {@link isActiveStylesheetLink}) whose
+ * protocol, origin and pathname match `href` are reused.
+ *
+ * Only supports a `Document` with a `head` (not a `ShadowRoot`).
  *
  * @param {Document | null | undefined} doc
  * @param {string} id
@@ -196,26 +240,30 @@ function normalizeStylesheetUrl(href, doc) {
  */
 export function ensureStylesheet(doc, id, href) {
     if (!doc?.head || !href) return null;
-    const byId = id ? doc.getElementById(id) : null;
-    if (byId) return /** @type {HTMLLinkElement} */ (byId);
-
     const target = normalizeStylesheetUrl(href, doc);
-    for (const existing of doc.querySelectorAll('link[href]')) {
-        const rel = String(existing.getAttribute('rel') || existing.rel || '').toLowerCase().split(/\s+/);
-        if (!rel.includes('stylesheet')) continue;
-        const rawHref = existing.getAttribute('href') || existing.href || '';
+    const matchesTarget = (el) => {
+        const rawHref = el.getAttribute?.('href') || el.href || '';
         const candidate = normalizeStylesheetUrl(rawHref, doc);
-        if (target && candidate) {
-            if (candidate.origin === target.origin && candidate.pathname === target.pathname) {
-                return /** @type {HTMLLinkElement} */ (existing);
-            }
-        } else if (rawHref === href) {
+        if (target && candidate) return isSameStylesheetUrl(candidate, target);
+        return rawHref === href;
+    };
+
+    // The ID may be taken by an inactive, mismatched or non-link element; then
+    // fall through to the URL scan and avoid writing a duplicate ID below.
+    const byId = id ? doc.getElementById(id) : null;
+    if (byId && isActiveStylesheetLink(byId) && matchesTarget(byId)) {
+        return /** @type {HTMLLinkElement} */ (byId);
+    }
+
+    for (const existing of doc.querySelectorAll('link[href]')) {
+        if (existing === byId || !isActiveStylesheetLink(existing)) continue;
+        if (matchesTarget(existing)) {
             return /** @type {HTMLLinkElement} */ (existing);
         }
     }
 
     const link = doc.createElement('link');
-    if (id) link.id = id;
+    if (id && !byId) link.id = id;
     link.rel = 'stylesheet';
     link.href = href;
     doc.head.appendChild(link);

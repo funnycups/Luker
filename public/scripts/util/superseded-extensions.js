@@ -29,32 +29,63 @@ export const SUPERSEDED_THIRD_PARTY_EXTENSIONS = Object.freeze([
     }),
 ]);
 
+// scp-style SSH remotes, e.g. `git@github.com:owner/repo.git`.
+const SCP_REMOTE_RE = /^[\w.-]+@([^:/\s]+):(?!\/\/)(.+)$/;
+
+/**
+ * Normalizes a repository home page to `host/owner/repo` (lowercase, no
+ * `www.`, `.git`, query, hash or trailing slash). Accepts https / http / ssh
+ * URLs, scp-style `git@host:owner/repo(.git)` remotes and scheme-less values,
+ * and keeps only the first two path segments so repository sub-paths such as
+ * `/tree/main` still match.
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
 function normalizeHomePage(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';
-    try {
-        const parsed = new URL(raw);
-        const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
-        const pathname = parsed.pathname
-            .toLowerCase()
-            .replace(/\/+$/, '')
-            .replace(/\.git$/, '')
-            .replace(/\/+$/, '');
-        return `${host}${pathname}`;
-    } catch {
-        return raw
-            .toLowerCase()
-            .replace(/^https?:\/\/(www\.)?/, '')
-            .replace(/[?#].*$/, '')
-            .replace(/\/+$/, '')
-            .replace(/\.git$/, '')
-            .replace(/\/+$/, '');
+
+    let host = '';
+    let pathname = '';
+    const scp = raw.match(SCP_REMOTE_RE);
+    if (scp) {
+        host = scp[1];
+        pathname = scp[2];
+    } else {
+        try {
+            const parsed = new URL(raw);
+            host = parsed.hostname;
+            pathname = parsed.pathname;
+        } catch {
+            const stripped = raw.replace(/^[a-z][a-z\d+.-]*:\/\//i, '').replace(/^[^/@]*@/, '');
+            const slash = stripped.indexOf('/');
+            host = slash < 0 ? stripped : stripped.slice(0, slash);
+            pathname = slash < 0 ? '' : stripped.slice(slash);
+        }
     }
+
+    host = host.toLowerCase().replace(/^www\./, '');
+    const segments = pathname
+        .replace(/[?#].*$/, '')
+        .toLowerCase()
+        .split('/')
+        .filter(Boolean)
+        .slice(0, 2);
+    if (segments.length > 0) {
+        segments[segments.length - 1] = segments[segments.length - 1].replace(/\.git$/, '');
+    }
+    return [host, ...segments].filter(Boolean).join('/');
 }
 
 /**
  * Returns the superseded descriptor if `name` / `manifest` refers to a legacy
  * third-party extension that is now built into Luker, or `null` otherwise.
+ *
+ * Matching by folder name is intentionally broad: any `third-party/<folder>`
+ * whose folder equals a superseded extension id is blocked regardless of its
+ * author, because it would clash with the built-in CSS prefixes / UI anyway.
+ * The manifest home page is a fallback for renamed folders.
  *
  * @param {string} name Extension identifier (e.g. `third-party/luker-workbench`)
  * @param {object | null | undefined} [manifest] Parsed extension manifest
@@ -76,4 +107,36 @@ export function findSupersededExtension(name, manifest = null) {
         }
     }
     return null;
+}
+
+/**
+ * Computes the extension-manager toggle state, locking superseded extensions
+ * so they can only be disabled (never re-enabled).
+ *
+ * @param {{ isSuperseded?: boolean, isActive?: boolean, isDisabled?: boolean, canActivate?: boolean }} state
+ *   `canActivate` is whether manifest dependencies / client version are satisfied.
+ * @returns {{ canActivate: boolean, canBeToggled: boolean, isLocked: boolean }}
+ *   `isLocked` is true when a superseded extension is disabled and its toggle is locked.
+ */
+export function getSupersededUiState({ isSuperseded = false, isActive = false, isDisabled = false, canActivate = false } = {}) {
+    const effectiveCanActivate = !isSuperseded && Boolean(canActivate);
+    const canBeToggled = isSuperseded
+        ? !isDisabled
+        : Boolean(isActive || isDisabled || effectiveCanActivate);
+    return {
+        canActivate: effectiveCanActivate,
+        canBeToggled,
+        isLocked: Boolean(isSuperseded) && !canBeToggled,
+    };
+}
+
+/**
+ * Whether the bulk "Toggle extensions" action must skip an extension:
+ * superseded extensions are never re-enabled in bulk, but may be bulk-disabled.
+ *
+ * @param {{ enable?: boolean, isSuperseded?: boolean }} options
+ * @returns {boolean}
+ */
+export function shouldSkipToggleAll({ enable = false, isSuperseded = false } = {}) {
+    return Boolean(enable) && Boolean(isSuperseded);
 }

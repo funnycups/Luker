@@ -10,7 +10,7 @@ import { addLocaleData, getCurrentLocale, t } from './i18n.js';
 import { debounce_timeout } from './constants.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { SimpleMutex } from './util/SimpleMutex.js';
-import { findSupersededExtension } from './util/superseded-extensions.js';
+import { findSupersededExtension, getSupersededUiState, shouldSkipToggleAll } from './util/superseded-extensions.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './state-errors.js';
 import { invalidateStateResources, readStateEnvelope } from './state-resource.js';
 import { transientSessionHeaders } from './lib/transient-session.js';
@@ -354,6 +354,10 @@ function onToggleAllExtensions(extensionsToToggle, toggleContainer) {
     const toggleHandler = enable ? enableExtension : disableExtension;
 
     for (const name of thirdPartyExtensions) {
+        // Superseded (built-in) extensions must never be re-enabled in bulk; bulk-disable is still allowed.
+        if (shouldSkipToggleAll({ enable, isSuperseded: Boolean(findSupersededExtension(name, manifests[name])) })) {
+            continue;
+        }
         const isDisabled = checkIfDisabled(name);
         const doToggleExtension = enable ? isDisabled : !isDisabled;
 
@@ -408,6 +412,12 @@ async function callExtensionHook(name, hookName) {
 
     if (!manifest) {
         console.debug(`callExtensionHook: Extension "${name}" has no manifest, skipping hook "${hookName}"`);
+        return;
+    }
+
+    // Never import a superseded extension's entry module (its top-level side effects would run).
+    if (findSupersededExtension(name, manifest)) {
+        console.debug(`callExtensionHook: Extension "${name}" is built into Luker, skipping hook "${hookName}"`);
         return;
     }
 
@@ -611,9 +621,11 @@ async function activateExtensions() {
                 // Check if all dependencies exist
                 meetsExtensionDeps = isSubsetOf(extensionNames, extensionDependencies);
                 missingDependencies = extensionDependencies.filter(dep => !extensionNames.includes(dep));
-                // Check for disabled dependencies
+                // Check for disabled dependencies (superseded extensions are never loaded, so treat them as disabled)
                 if (meetsExtensionDeps) {
-                    disabledDependencies = extensionDependencies.filter(dep => extension_settings.disabledExtensions.includes(dep));
+                    disabledDependencies = extensionDependencies.filter(dep =>
+                        extension_settings.disabledExtensions.includes(dep) || Boolean(findSupersededExtension(dep, manifests[dep])),
+                    );
                     if (disabledDependencies.length > 0) {
                         // Fail if any dependencies are disabled
                         meetsExtensionDeps = false;
@@ -894,7 +906,7 @@ function canExtensionBeActivated(manifest) {
     const deps = manifest?.dependencies;
     if (Array.isArray(deps)) {
         if (!isSubsetOf(extensionNames, deps)) return false;
-        if (deps.some(dep => extension_settings.disabledExtensions.includes(dep))) return false;
+        if (deps.some(dep => extension_settings.disabledExtensions.includes(dep) || findSupersededExtension(dep, manifests[dep]))) return false;
     }
     return true;
 }
@@ -950,9 +962,13 @@ function generateExtensionElement(name, manifest, isActive, isDisabled, isExtern
     // re-renders during the pending-reload window don't drop a freshly toggled state.
     const shouldBeEnabled = !isDisabled;
     const isSuperseded = Boolean(findSupersededExtension(name, manifest));
-    const canActivate = !isSuperseded && canExtensionBeActivated(manifest);
     // Superseded extensions cannot be re-enabled, but if still enabled can be disabled (or deleted).
-    const canBeToggled = isSuperseded ? !isDisabled : (isActive || isDisabled || canActivate);
+    const { canActivate, canBeToggled, isLocked } = getSupersededUiState({
+        isSuperseded,
+        isActive,
+        isDisabled,
+        canActivate: canExtensionBeActivated(manifest),
+    });
 
     const toggleDiv = document.createElement('div');
     toggleDiv.classList.add('extension_toggle');
@@ -965,7 +981,7 @@ function generateExtensionElement(name, manifest, isActive, isDisabled, isExtern
         if (checkboxClass) toggle.classList.add(checkboxClass);
         toggle.checked = shouldBeEnabled;
     } else {
-        toggle.title = t`Cannot enable extension`;
+        toggle.title = isLocked ? t`Built into Luker — please uninstall` : t`Cannot enable extension`;
         toggle.classList.add('extension_missing');
         if (checkboxClass) toggle.classList.add(checkboxClass);
         toggle.disabled = true;
@@ -2010,6 +2026,10 @@ async function checkForExtensionUpdates(force) {
     const promises = [];
 
     for (const [id, manifest] of Object.entries(manifests)) {
+        if (findSupersededExtension(id, manifest)) {
+            console.debug(`Skipping superseded extension: ${manifest.display_name} (${id}) is built into Luker`);
+            continue;
+        }
         const isDisabled = extension_settings.disabledExtensions.includes(id);
         if (isDisabled) {
             console.debug(`Skipping extension: ${manifest.display_name} (${id}) for non-admin user`);
@@ -2061,6 +2081,10 @@ async function autoUpdateExtensions(forceAll) {
     const promises = [];
     const autoUpdateTimeout = 60 * 1000;
     for (const [id, manifest] of Object.entries(manifests)) {
+        if (findSupersededExtension(id, manifest)) {
+            console.debug(`Skipping superseded extension: ${manifest.display_name} (${id}) is built into Luker`);
+            continue;
+        }
         const isDisabled = extension_settings.disabledExtensions.includes(id);
         if (!forceAll && isDisabled) {
             console.debug(`Skipping extension: ${manifest.display_name} (${id}) for non-admin user`);

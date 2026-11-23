@@ -1,4 +1,5 @@
-import { disableExtension, enableExtension, extensionNames, findExtension } from './extensions.js';
+import { disableExtension, enableExtension, extensionNames, findExtension, getExtensionManifest } from './extensions.js';
+import { findSupersededExtension } from './util/superseded-extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from './slash-commands/SlashCommandArgument.js';
 import { SlashCommandClosure } from './slash-commands/SlashCommandClosure.js';
@@ -40,6 +41,12 @@ function getExtensionActionCallback(action) {
 
         if (action === 'toggle') {
             action = extension.enabled ? 'disable' : 'enable';
+        }
+
+        // Superseded legacy extensions are built into Luker and must not be re-enabled.
+        if (action === 'enable' && findSupersededExtension(extension.name, getExtensionManifest(extension.name))) {
+            toastr.warning(`Extension ${extension.name} is now built into Luker and cannot be enabled. Please uninstall it from Manage Extensions.`);
+            return '';
         }
 
         if (reload) {

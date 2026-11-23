@@ -4588,6 +4588,7 @@
     "Extension \"${displayName}\" did not load. Requires ST client version ${minClientVersion}, but current version is ${clientVersion}.": "扩展 \"${displayName}\" 未加载。需要 ST 客户端版本 ${minClientVersion}，但当前版本是 ${clientVersion}。",
     "Extension \"${displayName}\" failed to load: ${err}": "扩展 \"${displayName}\" 加载失败：${err}",
     "Extension \"${0}\" was skipped because it is now built into Luker. Please uninstall it from Manage Extensions.": "已跳过加载扩展「${0}」，因为该功能现已内置到 Luker 中。请在「管理扩展」中卸载它。",
+    "Built into Luker — please uninstall": "已内置到 Luker，请卸载",
     "Extension \"${name}\" did not load. Missing required Extras module(s): \"${missingModules.join(', ')}\"": "扩展 \"${name}\" 未加载。缺少必需的 Extras 模块：\"${missingModules.join(', ')}\"",
     "Extension \"${name}\" did not load. Missing required extensions: \"${missingDependencies.join(', ')}\"": "扩展 \"${name}\" 未加载。缺少必需扩展：\"${missingDependencies.join(', ')}\"",
     "Extension \"${name}\" did not load. Required extensions exist but are disabled: \"${disabledDependencies.join(', ')}\". Enable them first, then reload.": "扩展 \"${name}\" 未加载。所需扩展存在但已禁用：\"${disabledDependencies.join(', ')}\"。请先启用它们，再重新加载。",
