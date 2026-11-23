@@ -119,10 +119,21 @@ export function restoreSummaryLayout(text) {
 
 const SENTENCE_END = /[。！？!?；;，,.]/;
 const CJK = /[\u3000-\u9fff]/;
+const ANCHOR_CONNECTOR = /^(?:→|->|—>|=>|⇒|\/|至)$/;
+const LEADING_ARROW = /^(?:→|->|—>|=>|⇒)/;
+const TRAILING_ARROW = /(?:→|->|—>|=>|⇒)$/;
+const PAREN_TOKEN = /^[（(][^。！？!?；;]+[)）]$/;
+
+function isCjkAnchorToken(token) {
+    if (!token) return false;
+    const bare = token.replace(/[（(][^）)]*[)）]/g, '');
+    return !SENTENCE_END.test(bare);
+}
 
 /**
  * Split "<anchor value> <prose…>" that were flattened onto one line.
- * Heuristic: CJK anchor values are a single short token; Latin values are
+ * Heuristic: CJK anchor values are unpunctuated place/time tokens (optionally
+ * joined by arrows/connectors or parenthetical sub-locations); Latin values are
  * a run of Capitalized words, ending before a "Subject verb" pair.
  * Returns null when no confident split exists (the line is kept whole).
  */
@@ -130,8 +141,23 @@ function splitAnchorValue(rest) {
     const words = rest.split(/\s+/).filter(Boolean);
     if (words.length < 2) return null;
     if (CJK.test(words[0])) {
-        if (SENTENCE_END.test(words[0]) || words[0].length > 16) return null;
-        return [words[0], words.slice(1).join(' ')];
+        if (!isCjkAnchorToken(words[0])) return null;
+        let end = 1;
+        while (end < words.length) {
+            const cur = words[end];
+            if (ANCHOR_CONNECTOR.test(cur)) {
+                if (end + 1 >= words.length || !isCjkAnchorToken(words[end + 1])) break;
+                end += 2;
+                continue;
+            }
+            if (PAREN_TOKEN.test(cur) || ((LEADING_ARROW.test(cur) || TRAILING_ARROW.test(words[end - 1])) && isCjkAnchorToken(cur))) {
+                end += 1;
+                continue;
+            }
+            break;
+        }
+        if (end >= words.length) return null;
+        return [words.slice(0, end).join(' '), words.slice(end).join(' ')];
     }
     let end = 0;
     // cap-ok: header anchor phrase token span for flattened single-line summary recovery

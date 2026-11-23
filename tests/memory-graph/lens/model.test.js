@@ -148,6 +148,28 @@ test('flattened summaries (whitespace-collapsed by memory-graph) still parse', (
     expect(plain.prose.length).toBe(1);
 });
 
+test('flattened CJK summaries keep arrow-separated and parenthesized places intact', () => {
+    const moved = parseEventSummary('时间: 9月16日 地点: 北岭·石洞 → 白崖堡·主殿 晨间启程后，旅人沿着山道前行。');
+    expect(moved.place).toBe('北岭·石洞 → 白崖堡·主殿');
+    expect(moved.prose).toEqual(['晨间启程后，旅人沿着山道前行。']);
+
+    const movedWithSub = parseEventSummary('时间: 9月18日 地点: 北岭·石洞 → 白崖堡·望海楼（西厢、后院、回廊） 两人在廊下争执不休。');
+    expect(movedWithSub.place).toBe('北岭·石洞 → 白崖堡·望海楼（西厢、后院、回廊）');
+    expect(movedWithSub.prose).toEqual(['两人在廊下争执不休。']);
+
+    const longParen = parseEventSummary('时间: 9月19日 地点: 白崖堡·望海楼（观星台、西厢、地下石室、正厅主殿） 夜色降临后，海面雾气散去。');
+    expect(longParen.place).toBe('白崖堡·望海楼（观星台、西厢、地下石室、正厅主殿）');
+    expect(longParen.prose).toEqual(['夜色降临后，海面雾气散去。']);
+
+    const spacedParen = parseEventSummary('时间: 9月19日 地点: 望海楼 （西厢、回廊） 众人返回驻地。');
+    expect(spacedParen.place).toBe('望海楼 （西厢、回廊）');
+    expect(spacedParen.prose).toEqual(['众人返回驻地。']);
+
+    const placeOnly = parseEventSummary('时间: 9月19日 地点: 北岭石洞 → 望海楼');
+    expect(placeOnly.place).toBe('北岭石洞 → 望海楼');
+    expect(placeOnly.prose).toEqual([]);
+});
+
 test('neighbors and event entities', () => {
     const model = buildModel(createMockSnapshot());
     const { characters, locations } = entitiesOfEvent(model, 'e14');
