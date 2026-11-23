@@ -164,7 +164,35 @@ test.describe('#75 — Memory Lens search and locate switches to Graph tab when 
         await expect(timelineView).toBeHidden();
         await expect(graphTab).toHaveAttribute('aria-pressed', 'true');
 
-        // 4. Wide desktop layout: Timeline -> topbar Search button -> character switches back to Graph.
+        // 4. Wide desktop layout (1280px maximized -> mid width tier): verify topbar sections
+        //    do not overlap, Settings tab is unobstructed, and topbar Search from Settings &
+        //    Timeline switches cleanly to Graph.
+        const topbarGeom1280 = await lens.evaluate((el) => {
+            const bar = el.querySelector('.ml-topbar').getBoundingClientRect();
+            const left = el.querySelector('.ml-topbar-left').getBoundingClientRect();
+            const mid = el.querySelector('.ml-viewswitch').getBoundingClientRect();
+            const right = el.querySelector('.ml-topbar-right').getBoundingClientRect();
+            const tabs = [...el.querySelectorAll('.ml-viewswitch .lw-seg-btn')].map(b => b.getBoundingClientRect());
+            return {
+                tier: el.dataset.widthTier,
+                leftClear: left.right <= mid.left + 1,
+                rightClear: mid.right <= right.left + 1,
+                tabsInsideBar: tabs.every(t => t.left >= bar.left - 1 && t.right <= right.left + 1),
+            };
+        });
+        expect(topbarGeom1280.leftClear).toBe(true);
+        expect(topbarGeom1280.rightClear).toBe(true);
+        expect(topbarGeom1280.tabsInsideBar).toBe(true);
+
+        await settingsTab.click();
+        await expect(settingsView).toBeVisible();
+        await lens.locator('.ml-searchbtn').click();
+        await expect(paletteInput).toBeVisible();
+        await paletteInput.fill('Bryn watchpost');
+        await lens.locator('.ml-palette-item[role="option"]').filter({ hasText: 'Bryn watchpost' }).first().click();
+        await expect(graphView).toBeVisible();
+        await expect(lens.locator('.ml-inspector .ml-insp-title')).toHaveText('Bryn watchpost');
+
         await timelineTab.click();
         await expect(timelineView).toBeVisible();
         await lens.locator('.ml-searchbtn').click();
@@ -176,5 +204,22 @@ test.describe('#75 — Memory Lens search and locate switches to Graph tab when 
         await expect(timelineView).toBeHidden();
         await expect(graphTab).toHaveAttribute('aria-pressed', 'true');
         await expect(lens.locator('.ml-inspector .ml-insp-title')).toHaveText('Seraphina');
+
+        // 5. Narrow desktop layout (1120px maximized -> .mlens ~940px narrow tier): topbar
+        //    still stays non-overlapping and Settings + icon-only Search remain clickable.
+        await page.setViewportSize({ width: 1120, height: 720 });
+        await expect(lens).toHaveAttribute('data-width-tier', 'narrow');
+        const topbarGeomNarrow = await lens.evaluate((el) => {
+            const left = el.querySelector('.ml-topbar-left').getBoundingClientRect();
+            const mid = el.querySelector('.ml-viewswitch').getBoundingClientRect();
+            const right = el.querySelector('.ml-topbar-right').getBoundingClientRect();
+            return {
+                leftClear: left.right <= mid.left + 1,
+                rightClear: mid.right <= right.left + 1,
+            };
+        });
+        expect(topbarGeomNarrow).toEqual({ leftClear: true, rightClear: true });
+        await settingsTab.click();
+        await expect(settingsView).toBeVisible();
     });
 });

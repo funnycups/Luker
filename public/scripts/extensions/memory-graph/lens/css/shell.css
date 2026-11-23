@@ -130,7 +130,7 @@
     position: relative;
     flex: 0 0 var(--ml-topbar-h);
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
     padding: 0 10px 0 8px;
@@ -138,7 +138,10 @@
     background: var(--ml-surface);
 }
 .mlens .ml-topbar-left, .mlens .ml-topbar-right { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.mlens .ml-topbar-right { justify-content: flex-end; }
+.mlens .ml-topbar-right { justify-content: flex-end; flex: none; }
+.mlens .ml-viewswitch { display: flex; justify-content: center; min-width: 0; overflow: hidden; }
+.mlens .ml-viewswitch .lw-seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.mlens .ml-viewswitch .lw-seg::-webkit-scrollbar { display: none; }
 .mlens .ml-brand { display: flex; align-items: center; gap: 8px; min-width: 0; padding-left: 4px; }
 .mlens .ml-brand-mark {
     display: grid; place-items: center;
@@ -149,7 +152,7 @@
 }
 .mlens .ml-brand-name { font-weight: 650; font-size: 14px; white-space: nowrap; }
 .mlens .ml-brand-chat {
-    color: var(--ml-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+    color: var(--ml-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 120px;
     padding-left: 10px; border-left: 1px solid var(--ml-border-strong);
 }
 .mlens .ml-brand-badge {
@@ -159,7 +162,7 @@
 
 .mlens .ml-searchbtn {
     display: flex; align-items: center; gap: 8px;
-    height: 32px; width: clamp(160px, 22vw, 280px); padding: 0 6px 0 10px;
+    height: 32px; width: clamp(160px, 16vw, 240px); padding: 0 6px 0 10px;
     border: 1px solid var(--ml-border); border-radius: var(--ml-radius);
     background: var(--ml-surface-2); color: var(--ml-text-faint);
     cursor: pointer; transition: border-color var(--ml-dur), background var(--ml-dur);
@@ -167,6 +170,26 @@
 }
 .mlens .ml-searchbtn:hover { border-color: var(--ml-border-strong); color: var(--ml-text-muted); }
 .mlens .ml-searchbtn-text { flex: 1; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* Mid & narrow desktop widths (measured against .mlens container width): prevent topbar overlap. */
+.mlens:not(.is-compact)[data-width-tier="mid"] .ml-topbar,
+.mlens:not(.is-compact)[data-width-tier="narrow"] .ml-topbar { gap: 8px; }
+.mlens:not(.is-compact)[data-width-tier="mid"] .ml-viewswitch .lw-seg-btn,
+.mlens:not(.is-compact)[data-width-tier="narrow"] .ml-viewswitch .lw-seg-btn { padding: 0 9px; }
+.mlens:not(.is-compact)[data-width-tier="mid"] .ml-brand-chat,
+.mlens:not(.is-compact)[data-width-tier="mid"] .ml-sync-text,
+.mlens:not(.is-compact)[data-width-tier="mid"] .ml-searchbtn .ml-kbd-group { display: none; }
+.mlens:not(.is-compact)[data-width-tier="mid"] .ml-searchbtn { width: 150px; margin-right: 2px; }
+.mlens:not(.is-compact)[data-width-tier="narrow"] .ml-brand-name,
+.mlens:not(.is-compact)[data-width-tier="narrow"] .ml-brand-chat,
+.mlens:not(.is-compact)[data-width-tier="narrow"] .ml-sync-text,
+.mlens:not(.is-compact)[data-width-tier="narrow"] .ml-searchbtn-text,
+.mlens:not(.is-compact)[data-width-tier="narrow"] .ml-searchbtn .ml-kbd-group { display: none; }
+.mlens:not(.is-compact)[data-width-tier="narrow"] .ml-searchbtn {
+    width: 30px; height: 30px; padding: 0; margin-right: 0;
+    justify-content: center; border-color: transparent; background: transparent; color: var(--ml-text-muted);
+}
+.mlens:not(.is-compact)[data-width-tier="narrow"] .ml-searchbtn:hover { background: var(--ml-hover); color: var(--ml-text); }
 
 .mlens .ml-sync { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--ml-text-faint); font-size: 12px; white-space: nowrap; }
 .mlens .ml-sync-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ml-accent); box-shadow: 0 0 0 3px var(--ml-accent-soft); }
