@@ -2,7 +2,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import os from 'node:os';
 import process from 'node:process';
 import { Buffer } from 'node:buffer';
 
@@ -74,6 +73,7 @@ const TRUSTED_PROXIES = filterValidIpPatterns(getConfigValue('sso.trustedProxies
 const DIRECTORIES_CACHE = new Map();
 const PUBLIC_USER_AVATAR = '/img/user-default.png';
 const COOKIE_SECRET_PATH = 'cookie-secret.txt';
+const COOKIE_SESSION_NAME_CONTEXT = 'luker-cookie-session-name';
 
 const STORAGE_KEYS = {
     csrfSecret: 'csrfSecret',
@@ -709,13 +709,20 @@ export function getPasswordSalt() {
 }
 
 /**
- * Get the session name for the current server.
- * @returns {string} The session name
+ * Derive the session cookie name from the persisted cookie secret so the
+ * cookie name stays stable across container recreations and host renames
+ * while isolating distinct data roots on the same host.
+ * @param {string} cookieSecret The persisted cookie signing secret
+ * @returns {string} The session cookie name
  */
-export function getCookieSessionName() {
-    // Get server hostname and hash it to generate a session suffix
-    const hostname = os.hostname() || 'localhost';
-    const suffix = crypto.createHash('sha256').update(hostname).digest('hex').slice(0, 8);
+export function getCookieSessionName(cookieSecret) {
+    if (typeof cookieSecret !== 'string' || cookieSecret.length === 0) {
+        throw new Error('Cookie secret is required to derive the session cookie name.');
+    }
+    const suffix = crypto.createHmac('sha256', cookieSecret)
+        .update(COOKIE_SESSION_NAME_CONTEXT)
+        .digest('hex')
+        .slice(0, 8);
     return `session-${suffix}`;
 }
 

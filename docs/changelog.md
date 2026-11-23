@@ -2,6 +2,12 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
+## Unreleased
+
+### Fixes
+
+- Fixed login sessions expiring after updating a Docker image.
+
 ## v2.9.0-rc.4 (2026-11-23)
 
 ### Workbench

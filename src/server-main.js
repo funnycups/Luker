@@ -282,12 +282,13 @@ if (cliArgs.listen) {
     app.use(accessLoggerMiddleware());
 }
 
+const cookieSecret = getCookieSecret(globalThis.DATA_ROOT);
 app.use(cookieSession({
-    name: getCookieSessionName(),
+    name: getCookieSessionName(cookieSecret),
     sameSite: 'lax',
     httpOnly: true,
     maxAge: getSessionCookieAge(),
-    secret: getCookieSecret(globalThis.DATA_ROOT),
+    secret: cookieSecret,
 }));
 
 app.use(setUserDataMiddleware);
