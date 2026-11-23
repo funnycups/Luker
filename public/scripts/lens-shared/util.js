@@ -159,12 +159,25 @@ export function prefersReducedMotion() {
     return Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 }
 
+function resolveValidBaseUrl(doc) {
+    const candidates = [doc?.baseURI, globalThis.location?.href, 'http://localhost/'];
+    for (const candidate of candidates) {
+        const raw = String(candidate || '').trim();
+        if (!raw || raw.toLowerCase().startsWith('about:')) continue;
+        try {
+            return new URL(raw).href;
+        } catch {
+            // Try the next candidate.
+        }
+    }
+    return 'http://localhost/';
+}
+
 function normalizeStylesheetUrl(href, doc) {
     const raw = String(href || '').trim();
     if (!raw) return null;
     try {
-        const base = doc?.baseURI || globalThis.location?.href || 'http://localhost/';
-        const parsed = new URL(raw, base);
+        const parsed = new URL(raw, resolveValidBaseUrl(doc));
         return { origin: parsed.origin, pathname: parsed.pathname };
     } catch {
         return null;

@@ -31,6 +31,22 @@ describe('legacy third-party lens/workbench conflict protection', () => {
         expect(document.head.querySelectorAll('link[rel="stylesheet"]').length).toBe(2);
     });
 
+    test('ensureStylesheet deduplicates cleanly on about:blank HTMLDocuments', () => {
+        const blankDoc = document.implementation.createHTMLDocument('blank');
+        const legacy = blankDoc.createElement('link');
+        legacy.rel = 'stylesheet';
+        legacy.href = '/scripts/extensions/third-party/luker-workbench/style.css';
+        blankDoc.head.appendChild(legacy);
+
+        const injected = ensureStylesheet(blankDoc, 'luker-workbench-style-css', '/scripts/workbench/style.css');
+        expect(injected).not.toBeNull();
+        expect(injected).not.toBe(legacy);
+
+        const repeat = ensureStylesheet(blankDoc, 'other-id', '/scripts/workbench/style.css?v=99');
+        expect(repeat).toBe(injected);
+        expect(blankDoc.head.querySelectorAll('link[rel="stylesheet"]').length).toBe(2);
+    });
+
     test('ensureWorkbenchStyles still injects built-in CSS when third-party luker-workbench stylesheet is present', () => {
         const legacy = document.createElement('link');
         legacy.id = 'third-party_luker-workbench-css';
@@ -79,9 +95,12 @@ describe('legacy third-party lens/workbench conflict protection', () => {
         expect(findSupersededExtension('third-party/memory-lens')?.id).toBe('memory-lens');
         expect(findSupersededExtension('third-party/orchestra-lens')?.id).toBe('orchestra-lens');
 
-        // Renamed folders still match via manifest homePage (with trailing slash / .git / mixed case).
+        // Renamed folders still match via manifest homePage (with http/www/query/hash/.git/trailing slash).
         expect(findSupersededExtension('third-party/my-old-wb', {
             homePage: 'https://github.com/xzhouzhou758/luker-workbench.git/',
+        })?.id).toBe('luker-workbench');
+        expect(findSupersededExtension('Third-Party/my-old-wb-http', {
+            homePage: 'http://www.github.com/xzhouzhou758/luker-workbench?tab=readme-ov-file#readme',
         })?.id).toBe('luker-workbench');
         expect(findSupersededExtension('third-party/my-ml', {
             homePage: 'https://github.com/XZHOUZHOU758/memory-lens/',

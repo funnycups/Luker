@@ -949,8 +949,10 @@ function generateExtensionElement(name, manifest, isActive, isDisabled, isExtern
     // Toggle reflects user intent (!isDisabled), not runtime activation — so popup
     // re-renders during the pending-reload window don't drop a freshly toggled state.
     const shouldBeEnabled = !isDisabled;
-    const canActivate = canExtensionBeActivated(manifest);
-    const canBeToggled = isActive || isDisabled || canActivate;
+    const isSuperseded = Boolean(findSupersededExtension(name, manifest));
+    const canActivate = !isSuperseded && canExtensionBeActivated(manifest);
+    // Superseded extensions cannot be re-enabled, but if still enabled can be disabled (or deleted).
+    const canBeToggled = isSuperseded ? !isDisabled : (isActive || isDisabled || canActivate);
 
     const toggleDiv = document.createElement('div');
     toggleDiv.classList.add('extension_toggle');

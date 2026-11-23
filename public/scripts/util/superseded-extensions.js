@@ -15,24 +15,41 @@ export const SUPERSEDED_THIRD_PARTY_EXTENSIONS = Object.freeze([
     Object.freeze({
         id: 'luker-workbench',
         folders: Object.freeze(['luker-workbench']),
-        homePages: Object.freeze(['https://github.com/xzhouzhou758/luker-workbench']),
+        homePages: Object.freeze(['github.com/xzhouzhou758/luker-workbench']),
     }),
     Object.freeze({
         id: 'memory-lens',
         folders: Object.freeze(['memory-lens']),
-        homePages: Object.freeze(['https://github.com/xzhouzhou758/memory-lens']),
+        homePages: Object.freeze(['github.com/xzhouzhou758/memory-lens']),
     }),
     Object.freeze({
         id: 'orchestra-lens',
         folders: Object.freeze(['orchestra-lens']),
-        homePages: Object.freeze(['https://github.com/xzhouzhou758/orchestra-lens']),
+        homePages: Object.freeze(['github.com/xzhouzhou758/orchestra-lens']),
     }),
 ]);
 
 function normalizeHomePage(value) {
-    const raw = String(value || '').trim().toLowerCase();
+    const raw = String(value || '').trim();
     if (!raw) return '';
-    return raw.replace(/\/+$/, '').replace(/\.git$/, '');
+    try {
+        const parsed = new URL(raw);
+        const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+        const pathname = parsed.pathname
+            .toLowerCase()
+            .replace(/\/+$/, '')
+            .replace(/\.git$/, '')
+            .replace(/\/+$/, '');
+        return `${host}${pathname}`;
+    } catch {
+        return raw
+            .toLowerCase()
+            .replace(/^https?:\/\/(www\.)?/, '')
+            .replace(/[?#].*$/, '')
+            .replace(/\/+$/, '')
+            .replace(/\.git$/, '')
+            .replace(/\/+$/, '');
+    }
 }
 
 /**
@@ -44,7 +61,7 @@ function normalizeHomePage(value) {
  * @returns {Readonly<{ id: string, folders: ReadonlyArray<string>, homePages: ReadonlyArray<string> }> | null}
  */
 export function findSupersededExtension(name, manifest = null) {
-    if (typeof name !== 'string' || !name.startsWith(THIRD_PARTY_PREFIX)) {
+    if (typeof name !== 'string' || !name.toLowerCase().startsWith(THIRD_PARTY_PREFIX)) {
         return null;
     }
     const folder = name.slice(THIRD_PARTY_PREFIX.length).trim().toLowerCase();
