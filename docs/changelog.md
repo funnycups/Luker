@@ -6,31 +6,32 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Workbench
 
-- Fixed Workbench AI iteration controls overlapping under the mobile keyboard or narrow windows and the Workbench window failing to restore its height after closing the keyboard.
+- Replaced mobile bottom sheets with a draggable, resizable floating Workbench window and a draggable floating Run panel, added default small and large window size preferences, synchronized Run panel settings across panels, and made position reset take effect immediately.
+- Added example import, re-import with confirmation, and derivation actions below plugin preset selectors, and reworked Workbench Settings to show the shared AI configuration, per-target overrides, and the resolved source of each connection and preset.
 - Added Workbench-wide unsaved-changes indicators across view save bars, sub-tabs, left-rail workspace tabs, the collapsed pill, and non-blocking return reminders when switching tabs or collapsing the window.
 - Fixed the mobile Orchestration mode selector and header area failing to render and the mode menu opening outside the Workbench window.
+- Fixed Workbench AI iteration controls overlapping under the mobile keyboard or in narrow windows.
 
 ### Memory Graph
 
-- Fixed mobile Memory Graph views rendering blank, dialogs overflowing the Workbench window, and the sticky settings header covering top settings controls.
-- Fixed the Memory Graph topbar search box overlapping view tabs at medium desktop widths.
-- Fixed searching a node or clicking Locate in graph from non-graph Memory Graph tabs failing to switch to the Graph tab and center the node.
+- Redesigned extraction cadence and built-in floor-hiding settings with quick presets, a custom configuration modal, a live animated preview, and visibility-gap warnings, updating the default extraction cadence to every 2 AI replies.
+- Removed recent-turn exclusion filtering from memory injection and recall.
 - Split the world info toggle into separate controls for extraction and LLM recall requests under their respective settings sections.
 - Fixed full graph rebuild omitting edit and delete tools for editable node types.
-- Redesigned extraction cadence and built-in floor-hiding settings with quick presets, a custom configuration modal, a live animated preview, and visibility-gap warnings, defaulting to extracting every 2 AI replies and hiding messages past 5 floors.
-- Removed recent-turn exclusion filtering from memory injection and recall, resolving odd-turn event gaps under multi-turn batching and freshly updated entity sheets being excluded from recall.
+- Fixed Memory Graph extraction ignoring or rejecting title changes during node edits.
+- Fixed searching for a node outside the current tab or clicking Locate in graph from non-graph Memory Graph tabs failing to switch to the Graph tab and center the node.
+- Fixed the Memory Graph topbar search box overlapping view tabs at medium desktop widths.
+- Fixed mobile Memory Graph views rendering blank, dialogs overflowing the Workbench window, and the sticky settings save bar covering settings controls.
 
 ### Image generation
 
 - Simplified Character Archive profiles to a unified plain-text description and flat labeled reference images with automatic one-time migration and Danbooru character name tag lookup.
 - Added preset-scoped switches for character reference delivery modes, style references, and img2img editing with live backend compatibility conflict warnings.
-- Show completed illustration images in the Run panel while the remaining images are still generating.
-- Added session-owned temporary image staging and cleanup.
-- Added image prompt style selection and reset controls with stored defaults.
-- Unified illustration and background character exploration execution across formal runs and isolated sandbox contexts.
-- Added a conversational AI character profile builder dialog with an explicit source selector, editable draft conflict resolution, and transactional reference image saving.
-- Focused Image Studio on free image generation and source image editing, retired the legacy character design prompt override with an export/discard review dialog, and unified wand-menu naming to Image Studio.
-- Added sandboxed illustration and character profile prompt simulation with Simulation Review inspection, inline annotations, and re-run support in Workbench AI iteration.
+- Added a default prompt style selector alongside visible stored default prompts and per-field reset controls in Image Generation settings.
+- Added a conversational AI Character Profile Builder dialog with an explicit source selector, live draft editing and conflict handling, reference image saving on confirmation, and automatic cleanup of unsaved temporary images.
+- Focused Image Studio on free image generation and source image editing, retired the legacy character design prompt override with an export or discard migration dialog, and unified the wand menu label to Image Studio.
+- Added sandboxed illustration and character profile prompt simulation in Workbench Image Generation AI iteration with image previews, trace inspection, inline annotations, and re-run support in Simulation Review.
+- Displayed completed illustration images in the Run panel while remaining images are still generating.
 
 ### Themes
 
@@ -40,18 +41,24 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Added visible stored defaults and individual reset controls to extension prompt settings.
 
-### Extension API
-
-- Added `captureTaskPromptContext` and session-isolated task generation with final request inspection hooks across `generateTask`, `generateTaskStream`, `context`, and CardApp `ctx`.
-
 ### Storage & Sync
 
 - Added an admin Backup Settings page in the Account window for editing `config.yaml` backup retention, chat auto-backup, integrity check, and full-data download settings with immediate runtime reload.
+- Fixed a failed storage backend migration leaving the Storage Backend page locked as in progress until the server restarted, and added a Reset migration state action.
+
+### Client Apps
+
+- Fixed the HarmonyOS app system bars and safe areas not following the active interface theme color or adapting system bar icon contrast.
+
+### Extension API
+
+- Added `captureTaskPromptContext` on `context` and CardApp `ctx`, and added isolated prompt-context snapshots and prepared-request inspection hooks to `generateTask` and `generateTaskStream`.
+- Added Run panel preference reading, updating, subscription, and position-reset helpers on `context.runPanel`.
 
 ### Fixes
 
+- Fixed the loading screen getting stuck on iOS and iPadOS Safari.
 - Fixed generation progress notifications playing the system notification sound when Luker moves to the background.
-- Fixed a failed storage backend migration leaving the Storage Backend page locked as in progress until the server restarted.
 - Fixed settings save failures not displaying an error.
 - Fixed mid-chat message deletion, insertion, and reordering leaving subsequent floor-bound extension state out of sync.
 - Fixed broken state log recovery misidentifying the failing floor after a full-replacement patch.
@@ -62,7 +69,6 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 - Added the responsive floating Workbench window with prompt token breakdown, local configuration suggestions, and read-only AI Q&A.
 - Unified AI iteration for Memory Graph, Memory Structure, Multi-Agent Orchestrator, Image Generation, presets, character cards, and world books inside Workbench, with diff review, Change history undo, and automatic migration of historical iteration sessions.
-- Added example import, re-import with confirmation, and derivation actions beside plugin preset selectors, and reworked Workbench Settings to show the shared AI configuration, per-target overrides, and the resolved source of each connection and preset.
 
 ### Multi-Agent Orchestrator
 
