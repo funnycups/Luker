@@ -77,12 +77,13 @@
 }
 .wbench .wb-rail-foot { margin-top: auto; }
 
-.wbench .wb-main { position: relative; flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; background: var(--wb-surface); padding: 18px 20px 24px; }
-.wbench .wb-main.is-flush { padding: 0; overflow: hidden; }
+.wbench .wb-main { position: relative; flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; background: var(--wb-surface); padding: 18px 20px 24px; }
+.wbench .wb-main.is-flush { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 .wbench .wb-page { display: flex; flex-direction: column; gap: 18px; min-width: 0; animation: wb-page 160ms var(--wb-ease); }
 .wbench .wb-page:not(.is-split) > * { min-width: 0; }
-.wbench .wb-page.is-split { flex-direction: row; gap: 0; height: 100%; }
-.wbench .wb-ws-host { height: 100%; min-height: 0; gap: 0; }
+.wbench .wb-page.is-split { flex: 1 1 0%; min-height: 0; flex-direction: row; gap: 0; height: 100%; }
+.wbench .wb-ws-host { flex: 1 1 0%; min-height: 0; height: 100%; gap: 0; }
+.wbench .wb-ws-host > * { flex: 1 1 0%; min-height: 0; }
 @keyframes wb-page { from { opacity: 0; transform: translateY(3px); } }
 
 /* ---- Collapsed pill ---- */

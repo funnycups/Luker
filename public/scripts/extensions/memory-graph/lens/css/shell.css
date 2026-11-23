@@ -57,8 +57,10 @@
     --ml-edge-hierarchy: rgba(160, 168, 186, 0.22);
 
     position: relative;
+    flex: 1 1 0%;
     width: 100%;
     height: 100%;
+    min-height: 0;
     overflow: hidden;
     overscroll-behavior: contain;
     display: flex;
@@ -198,7 +200,7 @@
 @keyframes ml-pulse { 50% { opacity: 0.35; } }
 
 /* Body */
-.mlens .ml-body { position: relative; flex: 1 1 auto; display: flex; min-height: 0; min-width: 0; overflow: hidden; }
+.mlens .ml-body { position: relative; flex: 1 1 0%; display: flex; min-height: 0; min-width: 0; overflow: hidden; }
 .mlens .ml-sidebar, .mlens .ml-inspector {
     flex: none;
     min-height: 0;
@@ -213,10 +215,10 @@
 .mlens .ml-sidebar-inner { width: var(--ml-side-w); }
 .mlens .ml-inspector-body { width: var(--ml-insp-w); }
 
-.mlens .ml-stagewrap { position: relative; flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-.mlens .ml-stage { position: relative; flex: 1 1 auto; min-height: 0; }
-.mlens .ml-view { position: absolute; inset: 0; display: flex; flex-direction: column; }
-.mlens .ml-view > * { flex: 1 1 auto; min-height: 0; }
+.mlens .ml-stagewrap { position: relative; flex: 1 1 0%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.mlens .ml-stage { position: relative; flex: 1 1 0%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.mlens .ml-view { flex: 1 1 0%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.mlens .ml-view > * { flex: 1 1 0%; min-height: 0; }
 .mlens .ml-statelayer { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; background: var(--ml-bg); }
 .mlens .ml-loading { display: flex; flex-direction: column; align-items: center; gap: 14px; color: var(--ml-text-muted); }
 .mlens .ml-spinner { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--ml-border-strong); border-top-color: var(--ml-accent); animation: ml-spin 0.8s linear infinite; }

@@ -385,7 +385,7 @@
 .lw-dialog-backdrop.lw-surface {
     position: absolute; inset: 0; z-index: 30;
     display: flex; justify-content: center; align-items: flex-start;
-    padding: min(14vh, 120px) 16px 16px;
+    padding: min(10%, 96px) 16px 16px;
     background: var(--lw-scrim);
     animation: lw-fade 140ms ease-out;
 }
@@ -394,7 +394,7 @@ body > .lw-dialog-backdrop.lw-surface {
     position: fixed;
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog {
-    display: flex; flex-direction: column; width: min(480px, 100%); max-height: 80vh;
+    display: flex; flex-direction: column; width: min(480px, 100%); max-height: 100%;
     border-radius: var(--lw-r-lg); background: var(--lw-raised); box-shadow: var(--lw-shadow-3);
     overflow: hidden; outline: none; animation: lw-pop 160ms var(--lw-ease);
 }

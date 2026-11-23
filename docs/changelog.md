@@ -11,6 +11,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Memory Graph
 
+- Fixed mobile Memory Graph views rendering blank, dialogs overflowing the Workbench window, and the sticky settings header covering top settings controls.
 - Fixed the Memory Graph topbar search box overlapping view tabs at medium desktop widths.
 - Fixed searching a node or clicking Locate in graph from non-graph Memory Graph tabs failing to switch to the Graph tab and center the node.
 - Split the world info toggle into separate controls for extraction and LLM recall requests under their respective settings sections.

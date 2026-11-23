@@ -2,7 +2,7 @@
 .mlens .ml-palette-backdrop, .mlens .ml-dialog-backdrop {
     position: absolute; inset: 0; z-index: 20;
     display: flex; justify-content: center; align-items: flex-start;
-    padding: min(14vh, 120px) 16px 16px;
+    padding: min(10%, 96px) 16px 16px;
     background: var(--ml-scrim);
     animation: ml-fade 140ms ease-out;
 }
@@ -10,7 +10,7 @@
 @keyframes ml-pop { from { opacity: 0; transform: translateY(-6px) scale(0.985); } }
 
 .mlens .ml-palette {
-    display: flex; flex-direction: column; width: min(640px, 100%); max-height: min(560px, 76vh);
+    display: flex; flex-direction: column; width: min(640px, 100%); max-height: min(560px, 100%);
     border-radius: var(--ml-radius-lg); background: var(--ml-raised); box-shadow: var(--ml-shadow-3);
     overflow: hidden; animation: ml-pop 160ms var(--ml-ease);
 }
@@ -39,7 +39,7 @@
 .mlens .ml-palette-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--ml-border); background: var(--ml-surface-2); }
 
 .mlens .ml-dialog {
-    display: flex; flex-direction: column; width: min(760px, 100%); max-height: 80vh;
+    display: flex; flex-direction: column; width: min(760px, 100%); max-height: 100%;
     border-radius: var(--ml-radius-lg); background: var(--ml-raised); box-shadow: var(--ml-shadow-3);
     overflow: hidden; outline: none; animation: ml-pop 160ms var(--ml-ease);
 }

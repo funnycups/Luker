@@ -122,7 +122,8 @@
 .mlens.is-compact .ml-palette-foot { display: none; }
 .mlens.is-compact .ml-palette-meta { display: none; }
 .mlens.is-compact .ml-dialog-backdrop { padding: 10px; align-items: flex-end; }
-.mlens.is-compact .ml-dialog { max-height: 86vh; border-radius: 16px 16px 12px 12px; }
+.mlens.is-compact .ml-dialog { max-height: 100%; border-radius: 16px 16px 12px 12px; }
+.mlens.is-compact .ml-settings-sticky { position: static; margin: 0; border-radius: var(--ml-radius); border: 1px solid var(--ml-border); }
 
 /* Schema editor: one pane at a time (list → editor) */
 .mlens.is-compact .ml-schema-bar { padding: 8px 12px; gap: 8px; }
