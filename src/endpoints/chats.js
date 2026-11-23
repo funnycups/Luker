@@ -30,10 +30,22 @@ import { ConflictError, InvalidArgumentError, NotFoundError, StorageReadOnlyErro
 import { assertSafeRepoName, stripJsonlExt } from '../storage/name-validation.js';
 import { sendJsonResource, sendResourceReadError } from '../http-resource-cache.js';
 
-const isBackupEnabled = !!getConfigValue('backups.chat.enabled', true, 'boolean');
-const maxTotalChatBackups = Number(getConfigValue('backups.chat.maxTotalBackups', -1, 'number'));
-const throttleInterval = Number(getConfigValue('backups.chat.throttleInterval', 10_000, 'number'));
-const checkIntegrity = !!getConfigValue('backups.chat.checkIntegrity', true, 'boolean');
+function isChatBackupEnabled() {
+    return !!getConfigValue('backups.chat.enabled', true, 'boolean');
+}
+
+function getMaxTotalChatBackups() {
+    return Number(getConfigValue('backups.chat.maxTotalBackups', -1, 'number'));
+}
+
+function getChatBackupThrottleInterval() {
+    const value = Number(getConfigValue('backups.chat.throttleInterval', 10_000, 'number'));
+    return Number.isFinite(value) && value >= 0 ? value : 10_000;
+}
+
+function isChatIntegrityCheckEnabled() {
+    return !!getConfigValue('backups.chat.checkIntegrity', true, 'boolean');
+}
 
 export const CHAT_BACKUPS_PREFIX = 'chat_';
 const CHAT_STATE_FILE_PREFIX = '.luker-state.';
@@ -81,7 +93,7 @@ export function getBackupKey(name) {
  */
 function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
     try {
-        if (!isBackupEnabled) { return; }
+        if (!isChatBackupEnabled()) { return; }
         if (!fs.existsSync(directory)) {
             console.error(`The chat couldn't be backed up because no directory exists at ${directory}!`);
         }
@@ -91,6 +103,7 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
 
         tryWriteFileSync(backupFile, data);
         removeOldBackups(directory, `${backupPrefix}${name}_`);
+        const maxTotalChatBackups = getMaxTotalChatBackups();
         if (isNaN(maxTotalChatBackups) || maxTotalChatBackups < 0) {
             return;
         }
@@ -101,7 +114,7 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
 }
 
 /**
- * @type {Map<string, import('lodash').DebouncedFunc<typeof backupChat>>}
+ * @type {Map<string, { fn: typeof backupChat | import('lodash').DebouncedFunc<typeof backupChat>, interval: number }>}
  */
 const backupFunctions = new Map();
 
@@ -109,16 +122,32 @@ const backupFunctions = new Map();
  * Gets a backup function for a user and chat.
  * Throttling is keyed per user and chat so that rapid saves in one chat cannot
  * swallow the throttled backup of another chat saved in the same window.
+ * Rebuilds the wrapper when `backups.chat.throttleInterval` changes at runtime.
  * @param {string} handle User handle
  * @param {string} name The name of the chat, as passed to backupChat
  * @returns {typeof backupChat} Backup function
  */
 function getBackupFunction(handle, name) {
     const key = `${handle} ${name}`;
-    if (!backupFunctions.has(key)) {
-        backupFunctions.set(key, _.throttle(backupChat, throttleInterval, { leading: true, trailing: true }));
+    const existing = backupFunctions.get(key);
+    if (!isChatBackupEnabled()) {
+        if (existing && typeof /** @type {any} */ (existing.fn).cancel === 'function') {
+            /** @type {any} */ (existing.fn).cancel();
+        }
+        backupFunctions.delete(key);
+        return () => { };
     }
-    return backupFunctions.get(key) || (() => { });
+    const currentInterval = getChatBackupThrottleInterval();
+    if (!existing || existing.interval !== currentInterval) {
+        if (existing && typeof /** @type {any} */ (existing.fn).cancel === 'function') {
+            /** @type {any} */ (existing.fn).cancel();
+        }
+        const fn = currentInterval === 0
+            ? backupChat
+            : _.throttle(backupChat, currentInterval, { leading: true, trailing: true });
+        backupFunctions.set(key, { fn, interval: currentInterval });
+    }
+    return backupFunctions.get(key)?.fn || (() => { });
 }
 
 /**
@@ -538,8 +567,10 @@ export function isPathUnderDirectory(candidatePath, directoryPath) {
 }
 
 process.on('exit', () => {
-    for (const func of backupFunctions.values()) {
-        func.flush();
+    for (const entry of backupFunctions.values()) {
+        if (typeof /** @type {any} */ (entry.fn).flush === 'function') {
+            /** @type {any} */ (entry.fn).flush();
+        }
     }
 });
 
@@ -552,8 +583,10 @@ process.on('exit', () => {
  * dir. Exported for tests in tests/storage/endpoints/.
  */
 export function _resetChatBackupThrottlesForTests() {
-    for (const func of backupFunctions.values()) {
-        try { func.cancel(); } catch { /* best-effort */ }
+    for (const entry of backupFunctions.values()) {
+        if (typeof /** @type {any} */ (entry.fn).cancel === 'function') {
+            try { /** @type {any} */ (entry.fn).cancel(); } catch { /* best-effort */ }
+        }
     }
     backupFunctions.clear();
 }
@@ -2085,7 +2118,7 @@ export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false
         throw new Error('Cannot save empty chat payload.');
     }
 
-    const doIntegrityCheck = (checkIntegrity && !skipIntegrityCheck);
+    const doIntegrityCheck = (isChatIntegrityCheckEnabled() && !skipIntegrityCheck);
     const chatIntegritySlug = doIntegrityCheck ? chatData?.[0]?.chat_metadata?.integrity : undefined;
 
     if (chatIntegritySlug && !await checkChatIntegrity(filePath, chatIntegritySlug)) {
@@ -2128,7 +2161,7 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
         const headerInput = _.isObjectLike(chatData[0]) ? chatData[0] : createChatHeader({});
         const body = chatData.slice(1);
 
-        const doIntegrityCheck = (checkIntegrity && !force);
+        const doIntegrityCheck = (isChatIntegrityCheckEnabled() && !force);
         const slugFromHeader = doIntegrityCheck
             ? String(headerInput?.chat_metadata?.integrity ?? '').trim()
             : '';
