@@ -172,6 +172,9 @@ class AccountWindow extends DataPages {
         if (this.top.view === 'snapshots') {
             return `<button class="dw-btn primary sm${this.snaps.busy ? ' busy' : ''}" data-act="snap-make">${this.snaps.busy ? ic('sync', 'dw-spin') : ic('camera')}${t`Make a Snapshot`}</button>`;
         }
+        if (this.top.view === 'backup' && !this.otherUser && isAdmin()) {
+            return `<button class="dw-btn sm" data-act="backup-settings">${ic('gear')}${t`Backup Settings`}</button>`;
+        }
         return this.isAccountView ? '' : super.headExtra();
     }
 
@@ -630,6 +633,12 @@ class AccountWindow extends DataPages {
                 this.storageKind = el.dataset.kind;
                 return this.rerender();
             case 'data-dir-change': return this.changeDataDirectory();
+            case 'backup-settings':
+                if (!isAdmin() || this.otherUser) return;
+                this.admin.seg = 'server';
+                this.stack.users = [{ view: 'users' }, { view: 'adminBackups' }];
+                this.tab = 'users';
+                return this.render();
             case 'reset-code': return this.sendResetCode(this.top);
             case 'reset-settings-go': return this.resetSettingsGo();
             case 'reset-all-go': return this.resetAllGo();

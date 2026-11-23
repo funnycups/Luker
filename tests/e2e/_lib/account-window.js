@@ -115,7 +115,7 @@ export async function showAdminSegment(page, seg) {
 /**
  * Open one of the server pages listed on the user management page.
  * @param {import('@playwright/test').Page} page
- * @param {'adminOverview'|'adminSecurity'|'adminAuth'|'adminNotices'|'adminPlugins'|'adminConfig'|'adminBackend'|'adminStorage'} view
+ * @param {'adminOverview'|'adminSecurity'|'adminAuth'|'adminNotices'|'adminPlugins'|'adminBackups'|'adminConfig'|'adminBackend'|'adminStorage'} view
  */
 export async function openAdminPage(page, view) {
     await openUserManagement(page);

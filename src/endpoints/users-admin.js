@@ -48,6 +48,7 @@ import {
     ValidationError as AnnouncementValidationError,
 } from '../announcements.js';
 import { ensureDirectory, getConfigFilePath, getConfigValue, normalizeZipEntryPath, reloadConfigCache } from '../util.js';
+import { persistBackupConfig, readBackupConfigState, validateBackupConfigPayload } from '../backup-config.js';
 import {
     installServerPlugin,
     listInstalledServerPlugins,
@@ -511,6 +512,57 @@ router.post('/config/save', requireAdminMiddleware, async (request, response) =>
             return response.status(400).json({ error: error.message });
         }
         console.error('Config save failed:', error);
+        return response.status(500).json({ error: String(error?.message || error) });
+    }
+});
+
+router.post('/backups/config/get', requireAdminMiddleware, async (_request, response) => {
+    try {
+        const configPath = getConfigFilePath();
+        if (!configPath) {
+            return response.status(500).json({ error: 'Config path not initialized' });
+        }
+
+        const state = await readBackupConfigState(configPath);
+        return response.json(state);
+    } catch (error) {
+        console.error('Backup config get failed:', error);
+        return response.status(500).json({ error: String(error?.message || error) });
+    }
+});
+
+router.post('/backups/config/save', requireAdminMiddleware, async (request, response) => {
+    try {
+        const validated = validateBackupConfigPayload(request.body);
+        if (!validated.ok) {
+            return response.status(400).json({ error: validated.error });
+        }
+
+        const configPath = getConfigFilePath();
+        if (!configPath) {
+            return response.status(500).json({ error: 'Config path not initialized' });
+        }
+
+        const result = await persistBackupConfig({
+            configPath,
+            safetyCheck: validateConfigSafety,
+            config: validated.value,
+        });
+        if (!result.ok) {
+            if (Array.isArray(result.codes) && result.codes.length > 0) {
+                return response.status(400).json({ error: result.error, codes: result.codes });
+            }
+            return response.status(500).json({ error: result.error });
+        }
+
+        reloadConfigCache();
+        const state = await readBackupConfigState(configPath);
+        return response.json({
+            ok: true,
+            ...state,
+        });
+    } catch (error) {
+        console.error('Backup config save failed:', error);
         return response.status(500).json({ error: String(error?.message || error) });
     }
 });

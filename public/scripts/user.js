@@ -1071,6 +1071,31 @@ export async function requestSaveRuntimeConfig(content) {
 }
 
 /**
+ * Reads backup settings from config.yaml along with active env overrides.
+ * @returns {Promise<{fileConfig: any, effectiveConfig: any, envOverrides: Record<string, {envKey: string, value: boolean|number}>}>}
+ */
+export async function fetchBackupConfig() {
+    const response = await postUserApi('/api/users/backups/config/get');
+    return response.json();
+}
+
+/**
+ * Saves backup settings to config.yaml and applies them live.
+ * @param {any} config Backup config payload
+ * @returns {Promise<{ok: boolean, fileConfig: any, effectiveConfig: any, envOverrides: Record<string, {envKey: string, value: boolean|number}>}>}
+ */
+export async function requestSaveBackupConfig(config) {
+    try {
+        const response = await postUserApi('/api/users/backups/config/save', config);
+        return response.json();
+    } catch (error) {
+        const localized = localizeConfigValidationCodes(error.data?.codes);
+        if (localized) error.message = localized;
+        throw error;
+    }
+}
+
+/**
  * Lists the installed server plugins.
  * @returns {Promise<{ok: boolean, enabled: boolean, pluginsPath: string, plugins: Array<any>}>} Plugins
  */

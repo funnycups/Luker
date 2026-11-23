@@ -196,6 +196,22 @@ svg.dw-ic.dw-adm-chev {
     border-top: 0;
 }
 
+.dw-adm-env {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--dw-mono);
+    font-size: 11.5px;
+    color: var(--dw-amber);
+    overflow-wrap: anywhere;
+}
+
+.dw-adm-env svg.dw-ic {
+    flex: none;
+    width: 12px;
+    height: 12px;
+}
+
 .dw-adm-preview {
     min-height: 60px;
     padding: 12px 14px;

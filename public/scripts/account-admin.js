@@ -13,6 +13,7 @@ import {
     fetchAdminOverview,
     fetchAdminSettings,
     fetchAnnouncementsAdmin,
+    fetchBackupConfig,
     fetchRuntimeConfig,
     fetchServerPlugins,
     fetchStorageBackendStatus,
@@ -28,6 +29,7 @@ import {
     requestInstallServerPlugin,
     requestRemoveServerPlugin,
     requestSaveAdminSettings,
+    requestSaveBackupConfig,
     requestSaveRuntimeConfig,
     requestSetUserAdmin,
     requestSetUserEnabled,
@@ -53,6 +55,7 @@ const adminTitles = () => ({
     adminAuth: t`Auth & Limits`,
     adminNotices: t`Announcements`,
     adminPlugins: t`Server Plugins`,
+    adminBackups: t`Backup Settings`,
     adminConfig: t`Runtime Config (config.yaml)`,
     adminBackend: t`Storage Backend`,
     adminStorage: t`Storage Management`,
@@ -75,6 +78,10 @@ const adminHelp = () => ({
     adminNotices: [t`Announcements are shown to every user. The body supports Markdown.`],
     adminNotice: [t`The body supports Markdown.`],
     adminPlugins: [t`Installing a server plugin grants backend code execution. Install only repositories you trust.`, t`New installs are picked up after backend restart.`],
+    adminBackups: [
+        t`Changes are saved to config.yaml and take effect immediately for subsequent backups.`,
+        t`Lowering retention limits does not delete existing backup files on disk right away.`,
+    ],
     adminConfig: [t`Changes are validated as YAML before save. Some settings may require backend restart.`],
     adminBackend: [
         translate('This will copy ALL user data to the target backend and switch the live server to it. A backup is preserved at <dataRoot>/_storage-migrations/ and is NEVER auto-deleted.', 'storageBackendMigrationWarning'),
@@ -152,6 +159,51 @@ export function formToSettings(f) {
 }
 
 /**
+ * Parses a strict non-negative integer string from a numeric form input.
+ * @param {unknown} raw Raw input text
+ * @returns {number | null} Parsed integer, or null if invalid
+ */
+function parseNonNegativeInt(raw) {
+    const text = String(raw ?? '').trim();
+    if (!/^\d+$/.test(text)) return null;
+    const value = Number(text);
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Converts server backup config state into the Backup Settings form state.
+ * Binds to `fileConfig` so temporary env overrides are not baked back into config.yaml.
+ * @param {any} data Response from fetchBackupConfig
+ * @returns {object} Form state
+ */
+function backupConfigToForm(data) {
+    const fc = data?.fileConfig || {};
+    const common = fc.common || {};
+    const chat = fc.chat || {};
+    const maxTotal = Number(chat.maxTotalBackups);
+    const unlimitedTotal = !(Number.isFinite(maxTotal) && maxTotal >= 0);
+    return {
+        numberOfBackups: String(Number.isFinite(Number(common.numberOfBackups)) ? Math.floor(Number(common.numberOfBackups)) : 50),
+        chatEnabled: chat.enabled !== false,
+        unlimitedTotal,
+        maxTotalBackups: unlimitedTotal ? '' : String(Math.floor(maxTotal)),
+        throttleInterval: String(Number.isFinite(Number(chat.throttleInterval)) ? Math.floor(Number(chat.throttleInterval)) : 10000),
+        checkIntegrity: chat.checkIntegrity !== false,
+        allowFullDataBackup: fc.allowFullDataBackup !== false,
+    };
+}
+
+/**
+ * Formats an env-override scalar for display.
+ * @param {boolean | number} value Effective runtime value
+ * @returns {string} Display text
+ */
+function formatEnvValue(value) {
+    if (typeof value === 'boolean') return value ? 'true' : 'false';
+    return String(value);
+}
+
+/**
  * Reads a dotted path from an object.
  * @param {object} obj Root
  * @param {string[]} parts Path segments
@@ -222,6 +274,7 @@ export class AdminPages {
             overview: fetchAdminOverview,
             settings: fetchAdminSettings,
             plugins: fetchServerPlugins,
+            backups: fetchBackupConfig,
             config: fetchRuntimeConfig,
             backend: fetchStorageBackendStatus,
             notices: fetchAnnouncementsAdmin,
@@ -250,6 +303,7 @@ export class AdminPages {
         r.error = null;
         try {
             r.data = await this.loaders()[key]();
+            if (key === 'backups') this.syncBackupCaps(r.data);
         } catch (err) {
             r.error = errText(err);
         } finally {
@@ -317,6 +371,7 @@ export class AdminPages {
             case 'adminStorage':
                 return reload('overview');
             case 'adminPlugins': return reload('plugins');
+            case 'adminBackups': return reload('backups');
             case 'adminBackend': return this.migrating ? '' : reload('backend');
             case 'adminConfig': return `<button class="dw-btn sm" data-act="adm-config-reload">${ic('sync')}${t`Reload`}</button>`;
             case 'adminNotices': return `<button class="dw-btn primary sm" data-act="adm-push" data-view="adminNotice">${ic('plus')}${t`New announcement`}</button>`;
@@ -339,6 +394,7 @@ export class AdminPages {
             case 'adminNotices': return this.viewNotices();
             case 'adminNotice': return this.viewNotice();
             case 'adminPlugins': return this.viewPlugins();
+            case 'adminBackups': return this.viewBackups();
             case 'adminConfig': return this.viewConfig();
             case 'adminBackend': return this.viewBackend();
             case 'adminStorage': return this.viewStorage();
@@ -434,6 +490,7 @@ export class AdminPages {
                     ${this.option('adminAuth', 'key', t`Auth & Limits`)}
                     ${this.option('adminNotices', 'chat', t`Announcements`)}
                     ${this.option('adminStorage', 'db', t`Storage Management`)}
+                    ${this.option('adminBackups', 'restore', t`Backup Settings`)}
                 </div>
                 <div class="dw-options">
                     ${this.option('adminPlugins', 'branch', t`Server Plugins`, 'blue')}
@@ -1089,6 +1146,114 @@ export class AdminPages {
         await this.load('plugins');
     }
 
+    /** Syncs the Account window's full-data backup download capability flag from server config. */
+    syncBackupCaps(data) {
+        const allow = data?.effectiveConfig?.allowFullDataBackup;
+        const snap = this.w.p?.snapshot?.();
+        if (snap?.caps && typeof allow === 'boolean') {
+            snap.caps.allowFullBackup = allow;
+        }
+    }
+
+    // ---------- backup settings ----------
+
+    viewBackups() {
+        const wait = this.state('backups');
+        if (wait) return wait;
+        const tp = this.top;
+        const data = this.res.backups.data;
+        tp.form ??= backupConfigToForm(data);
+        const f = tp.form;
+        const overrides = data?.envOverrides || {};
+        const hasOverrides = Object.keys(overrides).length > 0;
+        const envNote = dotKey => {
+            const ov = overrides[dotKey];
+            if (!ov) return '';
+            const val = formatEnvValue(ov.value);
+            return `<div class="dw-adm-env" data-env-key="${esc(dotKey)}">${ic('warn')}<span>${esc(t`Overridden by ${ov.envKey} (${val})`)}</span></div>`;
+        };
+        return `
+            ${hasOverrides ? `<div class="dw-banner warning" data-role="env-overrides-banner">${ic('warn')}<span>${t`Some backup settings are overridden by environment variables at runtime. Saving still updates config.yaml.`}</span></div>` : ''}
+            <div class="dw-group">
+                <div class="dw-sec-title">${ic('restore')}${t`Retention`}</div>
+                <div class="dw-setrow dw-adm-inline"><span>${t`Backups to keep per chat and settings file`}</span>
+                    <span class="dw-num"><input class="dw-inp num" type="number" min="0" step="1" data-model="top.form.numberOfBackups" value="${esc(f.numberOfBackups)}"></span></div>
+                ${envNote('backups.common.numberOfBackups')}
+            </div>
+            <div class="dw-group">
+                <div class="dw-sec-title">${ic('chat')}${t`Automatic Chat Backups`}</div>
+                ${this.toggle('top.form.chatEnabled', f.chatEnabled, t`Enable automatic chat backups`)}
+                ${envNote('backups.chat.enabled')}
+                ${f.chatEnabled ? `
+                    ${this.toggle('top.form.unlimitedTotal', f.unlimitedTotal, t`Unlimited total chat backups`)}
+                    ${f.unlimitedTotal ? '' : `<div class="dw-setrow dw-adm-inline"><span>${t`Maximum total chat backups per user`}</span>
+                        <span class="dw-num"><input class="dw-inp num" type="number" min="0" step="1" data-model="top.form.maxTotalBackups" value="${esc(f.maxTotalBackups)}"></span></div>`}
+                    ${envNote('backups.chat.maxTotalBackups')}
+                    <div class="dw-setrow dw-adm-inline"><span>${t`Backup throttle interval`}</span>
+                        <span class="dw-num"><input class="dw-inp num" type="number" min="0" step="1" data-model="top.form.throttleInterval" value="${esc(f.throttleInterval)}"><span class="dw-unit">ms</span></span></div>
+                    ${envNote('backups.chat.throttleInterval')}
+                ` : `${envNote('backups.chat.maxTotalBackups')}${envNote('backups.chat.throttleInterval')}`}
+                ${this.toggle('top.form.checkIntegrity', f.checkIntegrity, t`Check chat file integrity before saving`)}
+                ${envNote('backups.chat.checkIntegrity')}
+            </div>
+            <div class="dw-group">
+                <div class="dw-sec-title">${ic('download')}${t`Full Data Backup`}</div>
+                ${this.toggle('top.form.allowFullDataBackup', f.allowFullDataBackup, t`Allow users to download full data backups`)}
+                ${envNote('backups.allowFullDataBackup')}
+            </div>
+            ${this.w.errorLine()}
+            ${this.w.foot(`<button class="dw-btn primary big${tp.busy ? ' busy' : ''}" data-act="adm-backups-save">${this.w.busyIcon('check')}${t`Save`}</button>`)}`;
+    }
+
+    async backupsSave() {
+        const tp = this.top;
+        const f = tp.form;
+        const savedChat = this.res.backups?.data?.fileConfig?.chat || {};
+
+        const numberOfBackups = parseNonNegativeInt(f.numberOfBackups);
+        if (numberOfBackups === null) return this.w.formError(t`Please enter a valid non-negative integer.`);
+
+        let maxTotalBackups;
+        let throttleInterval;
+        if (f.chatEnabled) {
+            if (f.unlimitedTotal) {
+                maxTotalBackups = -1;
+            } else {
+                const parsedMax = parseNonNegativeInt(f.maxTotalBackups);
+                if (parsedMax === null) return this.w.formError(t`Please enter a valid non-negative integer.`);
+                maxTotalBackups = parsedMax;
+            }
+            const parsedThrottle = parseNonNegativeInt(f.throttleInterval);
+            if (parsedThrottle === null) return this.w.formError(t`Please enter a valid non-negative integer.`);
+            throttleInterval = parsedThrottle;
+        } else {
+            const parsedMax = f.unlimitedTotal ? -1 : parseNonNegativeInt(f.maxTotalBackups);
+            maxTotalBackups = parsedMax !== null ? parsedMax : (Number.isInteger(savedChat.maxTotalBackups) ? savedChat.maxTotalBackups : -1);
+            const parsedThrottle = parseNonNegativeInt(f.throttleInterval);
+            throttleInterval = parsedThrottle !== null ? parsedThrottle : (Number.isInteger(savedChat.throttleInterval) ? savedChat.throttleInterval : 10000);
+        }
+
+        const payload = {
+            allowFullDataBackup: Boolean(f.allowFullDataBackup),
+            common: { numberOfBackups },
+            chat: {
+                enabled: Boolean(f.chatEnabled),
+                checkIntegrity: Boolean(f.checkIntegrity),
+                maxTotalBackups,
+                throttleInterval,
+            },
+        };
+
+        await this.w.runForm(async () => {
+            const saved = await requestSaveBackupConfig(payload);
+            this.res.backups = { data: saved };
+            tp.form = backupConfigToForm(saved);
+            this.stale('config');
+            this.syncBackupCaps(saved);
+            this.w.toast(t`Backup settings saved.`);
+        });
+    }
+
     // ---------- config.yaml ----------
 
     viewConfig() {
@@ -1118,6 +1283,8 @@ export class AdminPages {
         await this.w.runForm(async () => {
             const result = await requestSaveRuntimeConfig(String(tp.content || ''));
             this.res.config.data = { ...this.res.config.data, content: tp.content };
+            this.stale('backups');
+            await this.load('backups');
             this.w.toast(result?.restartRecommended ? t`Config file saved. Some settings may require a backend restart to fully apply.` : t`Config file saved.`);
         });
     }
@@ -1393,7 +1560,14 @@ export class AdminPages {
             case 'adm-filter':
                 this.filter = el.dataset.filter;
                 return this.w.rerender();
-            case 'adm-reload': return this.load(el.dataset.key);
+            case 'adm-reload': {
+                const key = el.dataset.key;
+                if (key === 'backups' && this.top.view === 'adminBackups') {
+                    delete this.top.form;
+                    this.top.error = null;
+                }
+                return this.load(key);
+            }
             case 'adm-push': return this.pushFor(el.dataset.view);
             case 'adm-user': return this.w.push('adminUser', { handle: el.dataset.handle });
             case 'adm-toggle': {
@@ -1425,6 +1599,7 @@ export class AdminPages {
             case 'adm-plugin-update': return this.pluginUpdate(el.dataset.dir);
             case 'adm-plugin-remove': return this.pluginRemove(el.dataset.dir);
             case 'adm-plugin-deps': return this.pluginDeps(el.dataset.dir);
+            case 'adm-backups-save': return this.backupsSave();
             case 'adm-config-reload': return this.configReload();
             case 'adm-config-save': return this.configSave();
             case 'adm-backend-target':
