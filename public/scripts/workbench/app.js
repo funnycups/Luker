@@ -4,7 +4,7 @@
 // switching, shared state (snapshot, settings), toasts, and live refresh.
 
 import { i18n, i18nFormat } from './i18n.js';
-import { h, put, clear, debounce, formatTokens } from '../lens-shared/util.js';
+import { h, put, clear, debounce, formatTokens, ensureStylesheet } from '../lens-shared/util.js';
 import { emptyState } from '../lens-shared/ui.js';
 import { icon } from './icons.js';
 import { createWindow } from './ui/window.js';
@@ -32,20 +32,8 @@ const FOOTER_PAGE = { id: 'settings', label: () => i18n('Settings'), iconName: '
 
 export function ensureWorkbenchStyles(doc = globalThis.document) {
     if (!doc?.head) return;
-    if (!doc.getElementById(TOKENS_CSS_ID) && !doc.querySelector('link[href*="lens-shared/tokens.css"]')) {
-        const link = doc.createElement('link');
-        link.id = TOKENS_CSS_ID;
-        link.rel = 'stylesheet';
-        link.href = new URL('../lens-shared/tokens.css', import.meta.url).href;
-        doc.head.appendChild(link);
-    }
-    if (!doc.getElementById(WORKBENCH_CSS_ID) && !doc.querySelector('link[href*="workbench/style.css"]')) {
-        const link = doc.createElement('link');
-        link.id = WORKBENCH_CSS_ID;
-        link.rel = 'stylesheet';
-        link.href = new URL('./style.css', import.meta.url).href;
-        doc.head.appendChild(link);
-    }
+    ensureStylesheet(doc, TOKENS_CSS_ID, new URL('../lens-shared/tokens.css', import.meta.url).href);
+    ensureStylesheet(doc, WORKBENCH_CSS_ID, new URL('./style.css', import.meta.url).href);
 }
 
 function detectTheme() {

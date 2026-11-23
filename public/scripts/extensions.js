@@ -10,6 +10,7 @@ import { addLocaleData, getCurrentLocale, t } from './i18n.js';
 import { debounce_timeout } from './constants.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { SimpleMutex } from './util/SimpleMutex.js';
+import { findSupersededExtension } from './util/superseded-extensions.js';
 import { STATE_ERROR_REASONS, makeStateError, makeStateOk } from './state-errors.js';
 import { invalidateStateResources, readStateEnvelope } from './state-resource.js';
 import { transientSessionHeaders } from './lib/transient-session.js';
@@ -624,6 +625,14 @@ async function activateExtensions() {
         }
 
         const isDisabled = extension_settings.disabledExtensions.includes(name);
+        const superseded = findSupersededExtension(name, manifest);
+        if (superseded) {
+            if (!isDisabled) {
+                console.warn(`Extension "${name}" was skipped because it is now built into Luker. Please uninstall it from Manage Extensions.`);
+                extensionLoadErrors.add(t`Extension "${displayName}" was skipped because it is now built into Luker. Please uninstall it from Manage Extensions.`);
+            }
+            return;
+        }
 
         if (meetsExtensionDeps && meetsClientMinimumVersion && !isDisabled) {
             try {

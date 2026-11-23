@@ -4,7 +4,7 @@
 // RunStore (orchestrator, search-tools, …) in one floating window across
 // desktop and mobile viewports, with configurable small/large default size.
 
-import { h, clear, put, copyText, debounce } from '../lens-shared/util.js';
+import { h, clear, put, copyText, debounce, ensureStylesheet } from '../lens-shared/util.js';
 import { accountLocalStorage, currentAccountHandle } from '../lens-shared/current-account.js';
 import { button, iconButton } from '../lens-shared/ui.js';
 import { icon } from './dock-icons.js';
@@ -117,20 +117,8 @@ export function subscribeRunDockPrefs(listener) {
 
 export function ensureDockStyles(doc = globalThis.document) {
     if (!doc?.head) return;
-    if (!doc.getElementById(TOKENS_CSS_ID) && !doc.querySelector('link[href*="lens-shared/tokens.css"]')) {
-        const link = doc.createElement('link');
-        link.id = TOKENS_CSS_ID;
-        link.rel = 'stylesheet';
-        link.href = new URL('../lens-shared/tokens.css', import.meta.url).href;
-        doc.head.appendChild(link);
-    }
-    if (!doc.getElementById(DOCK_CSS_ID) && !doc.querySelector('link[href*="run-panel/dock.css"]')) {
-        const link = doc.createElement('link');
-        link.id = DOCK_CSS_ID;
-        link.rel = 'stylesheet';
-        link.href = new URL('./dock.css', import.meta.url).href;
-        doc.head.appendChild(link);
-    }
+    ensureStylesheet(doc, TOKENS_CSS_ID, new URL('../lens-shared/tokens.css', import.meta.url).href);
+    ensureStylesheet(doc, DOCK_CSS_ID, new URL('./dock.css', import.meta.url).href);
 }
 
 function fitToViewport(root, { layout = null } = {}) {

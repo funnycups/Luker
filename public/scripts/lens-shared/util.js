@@ -158,3 +158,53 @@ export async function copyText(text) {
 export function prefersReducedMotion() {
     return Boolean(globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 }
+
+function normalizeStylesheetUrl(href, doc) {
+    const raw = String(href || '').trim();
+    if (!raw) return null;
+    try {
+        const base = doc?.baseURI || globalThis.location?.href || 'http://localhost/';
+        const parsed = new URL(raw, base);
+        return { origin: parsed.origin, pathname: parsed.pathname };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Ensures a built-in stylesheet is attached to `doc.head` using exact ID and
+ * normalized URL matching (never substring matching, so third-party extensions
+ * such as `third-party/luker-workbench/style.css` cannot suppress built-in CSS).
+ *
+ * @param {Document | null | undefined} doc
+ * @param {string} id
+ * @param {string} href
+ * @returns {HTMLLinkElement | null}
+ */
+export function ensureStylesheet(doc, id, href) {
+    if (!doc?.head || !href) return null;
+    const byId = id ? doc.getElementById(id) : null;
+    if (byId) return /** @type {HTMLLinkElement} */ (byId);
+
+    const target = normalizeStylesheetUrl(href, doc);
+    for (const existing of doc.querySelectorAll('link[href]')) {
+        const rel = String(existing.getAttribute('rel') || existing.rel || '').toLowerCase().split(/\s+/);
+        if (!rel.includes('stylesheet')) continue;
+        const rawHref = existing.getAttribute('href') || existing.href || '';
+        const candidate = normalizeStylesheetUrl(rawHref, doc);
+        if (target && candidate) {
+            if (candidate.origin === target.origin && candidate.pathname === target.pathname) {
+                return /** @type {HTMLLinkElement} */ (existing);
+            }
+        } else if (rawHref === href) {
+            return /** @type {HTMLLinkElement} */ (existing);
+        }
+    }
+
+    const link = doc.createElement('link');
+    if (id) link.id = id;
+    link.rel = 'stylesheet';
+    link.href = href;
+    doc.head.appendChild(link);
+    return link;
+}
