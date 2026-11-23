@@ -61,6 +61,8 @@
 .mlens .ml-insp-rellist { display: flex; flex-wrap: wrap; gap: 5px; }
 .mlens .ml-insp-eventlist { display: grid; gap: 4px; flex-basis: 100%; }
 .mlens .ml-insp-eventlist .ml-nodelink { width: 100%; }
+.mlens .ml-insp-eventlist .ml-nodelink-title { flex: 1 1 0; }
+.mlens .ml-insp-more { justify-self: start; }
 
 .mlens .ml-insp-muted { color: var(--ml-text-faint); font-size: 12.5px; }
 .mlens .ml-insp-pre {

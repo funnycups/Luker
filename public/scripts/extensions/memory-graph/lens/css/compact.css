@@ -28,6 +28,10 @@
 .mlens.is-compact .ml-relchip { height: 32px; padding: 0 11px; }
 .mlens.is-compact .ml-nodelink { height: 34px; }
 .mlens.is-compact .ml-nodelink.is-compact { height: 28px; }
+.mlens.is-compact .ml-insp-eventlist .ml-nodelink { flex-wrap: wrap; height: auto; min-height: 34px; padding: 6px 10px; row-gap: 4px; }
+.mlens.is-compact .ml-insp-eventlist .ml-nodelink-title { flex: 1 1 calc(100% - 20px); }
+.mlens.is-compact .ml-insp-eventlist .ml-nodelink-tags { margin-left: 15px; flex-wrap: wrap; }
+.mlens.is-compact .ml-insp-eventlist .ml-nodelink-meta { margin-left: auto; }
 .mlens.is-compact .lw-seg-compact .lw-seg-btn[aria-pressed="false"] .lw-seg-label { display: none; }
 .mlens.is-compact .ml-sync { padding: 0 6px; }
 .mlens.is-compact .lw-ibtn { width: 36px; height: 36px; }

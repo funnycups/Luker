@@ -7,15 +7,20 @@
 import { h, clear, copyText, put } from '../../../../lens-shared/util.js';
 import { icon } from '../icons.js';
 import { i18n, typeLabel, relationLabel, fieldLabel, depthLabel } from '../i18n.js';
-import { neighborsOf, entitiesOfEvent, contextState, formatFloor, fieldText, compareTimeline, typeVisual } from '../model.js';
+import { neighborsOf, entitiesOfEvent, eventsOfEntity, contextState, formatFloor, fieldText, compareTimeline, typeVisual } from '../model.js';
 import { iconButton, nodeLink, contextBadge, sectionTitle, typeChip, emptyState, button, isTouch, withMod } from '../ui/components.js';
 import { editable } from '../edit/inline-edit.js';
 import { confirmDeleteNode, openEdgeManager, openNodeProperties } from '../edit/node-forms.js';
+
+const EVENT_PREVIEW_LIMIT = 12;
 
 export function createInspector(app) {
     const body = h('div', { class: 'ml-inspector-body' });
     const el = h('aside', { class: 'ml-inspector', 'aria-label': i18n('Details') }, body);
     const history = [];
+    const expandedEvents = new Set();
+    let lastChatKey = '';
+    let lastRenderedId = '';
 
     function block(title, ...content) {
         const items = content.flat().filter(Boolean);
@@ -77,17 +82,16 @@ export function createInspector(app) {
         const keys = [...new Set([...columns, ...Object.keys(node.fields)])]
             .filter(key => key !== 'title' && (fieldText(node.fields[key]).trim() || (editing && columns.includes(key))));
         const groups = new Map();
-        const events = [];
         for (const item of neighborsOf(model, node.id)) {
-            if (item.node.type === 'event') {
-                events.push(item.node);
-                continue;
-            }
+            if (item.node.type === 'event') continue;
             const key = item.edge.type;
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key).push(item);
         }
-        events.sort(compareTimeline);
+        const events = eventsOfEntity(model, node.id);
+        const showAllEvents = expandedEvents.has(node.id);
+        const visibleEvents = (showAllEvents ? events : events.slice(-EVENT_PREVIEW_LIMIT)).slice().reverse();
+        const hiddenEventCount = events.length - visibleEvents.length;
         const fieldList = keys.length
             ? h('dl', { class: 'ml-insp-fields' }, keys.map(key => [
                 h('dt', { text: fieldLabel(key, node.type) }),
@@ -104,11 +108,16 @@ export function createInspector(app) {
             events.length
                 ? h('section', { class: 'ml-insp-block' },
                     sectionTitle(`${i18n('Events')} · ${events.length}`,
-                        node.type === 'character_sheet' || node.type === 'location_state'
+                        node.type === 'character_sheet' || node.type === 'location_state' || node.type === 'thread'
                             ? h('button', { type: 'button', class: 'ml-linkbtn', onClick: () => app.focusEntity(node.id) }, icon('timeline', { size: 12 }), h('span', { text: i18n('View in timeline') }))
                             : null),
-                    h('ol', { class: 'ml-insp-eventlist' }, events.slice(-12).reverse().map(ev => h('li', null, nodeLink(ev, select, { meta: formatFloor(ev) })))),
-                    events.length > 12 ? h('div', { class: 'ml-insp-muted', text: `+${events.length - 12}` }) : null)
+                    h('ol', { class: 'ml-insp-eventlist' }, visibleEvents.map(({ node: ev, relations }) => h('li', null, nodeLink(ev, select, {
+                        meta: formatFloor(ev),
+                        tags: [...new Set(relations.map(relationLabel))],
+                    })))),
+                    hiddenEventCount > 0
+                        ? button(`${i18n('Show more')} (${hiddenEventCount})`, () => { expandedEvents.add(node.id); render(); }, { className: 'ml-btn-ghost ml-btn-sm ml-insp-more' })
+                        : null)
                 : null,
         ];
     }
@@ -141,9 +150,14 @@ export function createInspector(app) {
         const model = app.model();
         clear(body);
         if (!model) return;
+        if (model.chatKey !== lastChatKey) {
+            expandedEvents.clear();
+            lastChatKey = model.chatKey;
+        }
         const { selectedId } = app.state();
         const node = selectedId ? model.nodes.get(selectedId) : null;
         if (!node) {
+            lastRenderedId = '';
             if (selectedId) put(body, emptyState('search', i18n('No matching results')));
             else put(body, ...overview(model).filter(Boolean));
             return;
@@ -152,6 +166,16 @@ export function createInspector(app) {
         if (history.length > 30) history.shift();
         const ctx = contextState(model, node.id);
         const canBack = history.length > 1;
+        const degreeChip = !node.degree
+            ? null
+            : app.canEdit()
+                ? h('button', {
+                    type: 'button',
+                    class: 'ml-chip ml-chip-btn',
+                    title: i18n('Relationships'),
+                    onClick: () => openEdgeManager(app, node),
+                }, icon('link', { size: 12 }), h('span', { text: String(node.degree) }))
+                : h('span', { class: 'ml-chip', title: i18n('Relationships') }, icon('link', { size: 12 }), h('span', { text: String(node.degree) }));
         const header = h('header', { class: 'ml-insp-head', dataset: { tone: typeVisual(node.type).tone } },
             h('div', { class: 'ml-insp-toprow' },
                 canBack ? iconButton('arrowLeft', i18n('Back'), () => {
@@ -174,7 +198,7 @@ export function createInspector(app) {
             h('div', { class: 'ml-insp-meta' },
                 contextBadge(ctx),
                 formatFloor(node) ? h('span', { class: 'ml-chip' }, icon('clock', { size: 12 }), h('span', { text: formatFloor(node) })) : null,
-                node.degree ? h('span', { class: 'ml-chip' }, icon('link', { size: 12 }), h('span', { text: String(node.degree) })) : null,
+                degreeChip,
                 h('button', {
                     type: 'button',
                     class: 'ml-chip ml-chip-btn',
@@ -188,7 +212,10 @@ export function createInspector(app) {
                     },
                 }, icon('copy', { size: 12 }), h('span', { class: 'ml-chip-mono', text: node.id }), h('span', { class: 'ml-chip-copied', text: i18n('Copied') }))));
         put(body, header, ...(node.type === 'event' ? eventBody(model, node) : entityBody(model, node)).filter(Boolean));
-        body.scrollTop = 0;
+        if (node.id !== lastRenderedId) {
+            body.scrollTop = 0;
+            lastRenderedId = node.id;
+        }
     }
 
     return { el, render };

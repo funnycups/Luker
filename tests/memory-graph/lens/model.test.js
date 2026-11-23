@@ -2,7 +2,7 @@ import './_mocks/luker-zh.js';
 import { test, expect } from '@jest/globals';
 import {
     buildModel, parseEventSummary, isPlaceholderTitle, searchNodes, visibleSubgraph, buildChapters,
-    defaultFilters, neighborsOf, entitiesOfEvent, contextState, formatFloor, isDefaultFilters,
+    defaultFilters, neighborsOf, entitiesOfEvent, eventsOfEntity, contextState, formatFloor, isDefaultFilters,
 } from '../../../public/scripts/extensions/memory-graph/lens/model.js';
 import { forceLayout, chronoLayout, nodeRadius } from '../../../public/scripts/extensions/memory-graph/lens/graph/layout.js';
 import { createMockSnapshot, createLargeSnapshot } from './_mocks/mock-data.js';
@@ -157,6 +157,35 @@ test('neighbors and event entities', () => {
     expect(linNeighbors.some(n => n.node.id === 'c_wen' && n.direction === 'both')).toBeTruthy();
     expect(linNeighbors.some(n => n.node.id === 'c_gu' && n.edge.type === 'deceiving' && n.direction === 'in')).toBeTruthy();
     expect(!neighborsOf(model, 'r1_a').some(n => n.edge.internal)).toBeTruthy();
+});
+
+test('eventsOfEntity deduplicates multi-relation events and aggregates unique relations', () => {
+    const model = buildModel({
+        nodes: [
+            { id: 't1', type: 'thread', title: '夺宝', seq_to: 30, fields: { status: 'active', note: '进行中' } },
+            { id: 'e1', type: 'event', title: '初遇', seq_to: 10, fields: { summary: '初遇。' } },
+            { id: 'e2', type: 'event', title: '再战', seq_to: 20, fields: { summary: '再战。' } },
+            { id: 'e3', type: 'event', title: '收尾', seq_to: 30, fields: { summary: '收尾。' } },
+            { id: 'c1', type: 'character_sheet', title: '甲', seq_to: 30, fields: {} },
+        ],
+        edges: [
+            { from: 'e1', to: 't1', type: 'advances' },
+            { from: 'e2', to: 't1', type: 'updates' },
+            { from: 'e2', to: 't1', type: 'advances' },
+            { from: 'e3', to: 't1', type: 'advances' },
+            { from: 't1', to: 'e3', type: 'advances' },
+            { from: 'e3', to: 't1', type: 'updates' },
+            { from: 't1', to: 'e3', type: 'updates' },
+            { from: 'c1', to: 't1', type: 'related' },
+        ],
+    });
+    const list = eventsOfEntity(model, 't1');
+    expect(list.map(entry => entry.node.id)).toEqual(['e1', 'e2', 'e3']);
+    expect(list.map(entry => entry.relations)).toEqual([
+        ['advances'],
+        ['advances', 'updates'],
+        ['advances', 'updates'],
+    ]);
 });
 
 test('filters: types, depth, archived, context, hierarchy', () => {

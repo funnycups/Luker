@@ -435,6 +435,34 @@ export function entitiesOfEvent(model, id) {
     return { characters, locations, threads };
 }
 
+const EVENT_RELATION_ORDER = ['advances', 'updates', 'involved_in', 'occurred_at', 'mentions', 'evidence', 'related'];
+
+function compareEventRelations(a, b) {
+    const ai = EVENT_RELATION_ORDER.indexOf(a);
+    const bi = EVENT_RELATION_ORDER.indexOf(b);
+    return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi) || a.localeCompare(b);
+}
+
+/** Unique event neighbours of an entity with their aggregated relation types, chronologically ordered. */
+export function eventsOfEntity(model, id) {
+    const byId = new Map();
+    for (const item of neighborsOf(model, id)) {
+        if (item.node.type !== 'event') continue;
+        let entry = byId.get(item.node.id);
+        if (!entry) {
+            entry = { node: item.node, relations: [] };
+            byId.set(item.node.id, entry);
+        }
+        if (!entry.relations.includes(item.edge.type)) {
+            entry.relations.push(item.edge.type);
+        }
+    }
+    const out = [...byId.values()];
+    for (const entry of out) entry.relations.sort(compareEventRelations);
+    out.sort((a, b) => compareTimeline(a.node, b.node));
+    return out;
+}
+
 export function defaultFilters() {
     return {
         hiddenTypes: new Set(),
