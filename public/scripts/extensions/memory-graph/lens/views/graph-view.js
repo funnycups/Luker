@@ -28,6 +28,9 @@ export function createGraphView(app) {
     let lastSignature = '';
     let lastLayout = '';
     let destroyed = false;
+    let rendering = false;
+    let renderToken = 0;
+    let pendingLocateId = '';
 
     const ensureCy = () => {
         if (cy) return Promise.resolve(cy);
@@ -167,7 +170,7 @@ export function createGraphView(app) {
         cy.animate({
             zoom: level,
             pan: { x: width / 2 - p.x * level, y: height / 2 - p.y * level },
-        }, { duration: animMs() });
+        }, { duration: animMs(), queue: false });
     }
 
     function applyMatches() {
@@ -291,57 +294,74 @@ export function createGraphView(app) {
         const state = app.state();
         renderToolbar();
         if (!model) return;
-        const sub = visibleSubgraph(model, state.filters, { maxNodes: app.isCompact() ? 220 : 450 });
-        notice.hidden = !sub.truncated;
-        if (sub.truncated) {
-            put(clear(notice), icon('layers', { size: 14 }), h('span', { text: i18nFormat('Too many nodes, showing only the latest ${0}. Narrow it down with the filters on the left.', sub.nodes.length) }));
-        }
-        renderLegend(model, sub);
-
-        if (!sub.nodes.length) {
-            overlay.hidden = false;
-            put(clear(overlay), model.nodes.size
-                ? emptyState('filter', i18n('No nodes match the current filters.'), '', isDefaultFilters(state.filters) ? null : button(i18n('Reset filters'), () => app.resetFilters(), { iconName: 'refresh' }))
-                : emptyState('graph', i18n('This chat has no memory nodes yet.'), i18n('The memory graph extracts them automatically as the conversation goes on.')));
-            if (cy) cy.elements().remove();
-            lastSignature = '';
-            return;
-        }
-        overlay.hidden = true;
-
-        let instance;
+        const token = ++renderToken;
+        rendering = true;
         try {
-            instance = await ensureCy();
-        } catch (err) {
-            overlay.hidden = false;
-            put(clear(overlay), emptyState('graph', String(err?.message || err)));
-            return;
-        }
-        if (!instance || destroyed) return;
+            const sub = visibleSubgraph(model, state.filters, { maxNodes: app.isCompact() ? 220 : 450 });
+            notice.hidden = !sub.truncated;
+            if (sub.truncated) {
+                put(clear(notice), icon('layers', { size: 14 }), h('span', { text: i18nFormat('Too many nodes, showing only the latest ${0}. Narrow it down with the filters on the left.', sub.nodes.length) }));
+            }
+            renderLegend(model, sub);
 
-        const signature = signatureOf(model, sub, state.graphLayout);
-        const layoutChanged = lastLayout !== state.graphLayout;
-        if (signature !== lastSignature) {
-            const elements = buildElements(model, sub, state.graphLayout);
-            const firstRender = !lastSignature;
-            cy.batch(() => {
-                cy.elements().remove();
-                cy.add(elements);
-            });
-            lastSignature = signature;
-            lastLayout = state.graphLayout;
-            if (firstRender || layoutChanged) fit(false);
-        } else {
-            // Same topology: refresh data that can change without structure changes.
-            cy.batch(() => {
-                for (const node of sub.nodes) {
-                    const el = cy.getElementById(node.id);
-                    if (el.nonempty()) el.data('ctx', contextState(model, node.id));
+            if (!sub.nodes.length) {
+                overlay.hidden = false;
+                put(clear(overlay), model.nodes.size
+                    ? emptyState('filter', i18n('No nodes match the current filters.'), '', isDefaultFilters(state.filters) ? null : button(i18n('Reset filters'), () => app.resetFilters(), { iconName: 'refresh' }))
+                    : emptyState('graph', i18n('This chat has no memory nodes yet.'), i18n('The memory graph extracts them automatically as the conversation goes on.')));
+                if (cy) cy.elements().remove();
+                lastSignature = '';
+                if (token === renderToken) pendingLocateId = '';
+                return;
+            }
+            overlay.hidden = true;
+
+            let instance;
+            try {
+                instance = await ensureCy();
+            } catch (err) {
+                if (token === renderToken) {
+                    pendingLocateId = '';
+                    overlay.hidden = false;
+                    put(clear(overlay), emptyState('graph', String(err?.message || err)));
                 }
-            });
+                return;
+            }
+            if (!instance || destroyed || token !== renderToken) return;
+
+            const signature = signatureOf(model, sub, state.graphLayout);
+            const layoutChanged = lastLayout !== state.graphLayout;
+            if (signature !== lastSignature) {
+                const elements = buildElements(model, sub, state.graphLayout);
+                const firstRender = !lastSignature;
+                cy.batch(() => {
+                    cy.elements().remove();
+                    cy.add(elements);
+                });
+                lastSignature = signature;
+                lastLayout = state.graphLayout;
+                if (firstRender || layoutChanged) fit(false);
+            } else {
+                // Same topology: refresh data that can change without structure changes.
+                cy.batch(() => {
+                    for (const node of sub.nodes) {
+                        const el = cy.getElementById(node.id);
+                        if (el.nonempty()) el.data('ctx', contextState(model, node.id));
+                    }
+                });
+            }
+            applyMatches();
+            const locateId = pendingLocateId;
+            pendingLocateId = '';
+            applySelection({ animate: !layoutChanged && !locateId });
+            if (locateId) {
+                cy.resize();
+                const target = cy.getElementById(locateId);
+                if (target.nonempty()) revealNode(target, { zoom: Math.max(cy.zoom(), 1.1) });
+            }
+        } finally {
+            if (token === renderToken) rendering = false;
         }
-        applyMatches();
-        applySelection({ animate: !layoutChanged });
     }
 
     function restyle() {
@@ -371,9 +391,18 @@ export function createGraphView(app) {
             }
         },
         locate(id) {
-            if (!cy) return;
-            const node = cy.getElementById(id);
-            if (node.nonempty()) revealNode(node, { zoom: Math.max(cy.zoom(), 1.1) });
+            const targetId = String(id || '');
+            if (!targetId) return false;
+            if (!cy || rendering) {
+                pendingLocateId = targetId;
+                return true;
+            }
+            const node = cy.getElementById(targetId);
+            if (node.nonempty()) {
+                revealNode(node, { zoom: Math.max(cy.zoom(), 1.1) });
+                return true;
+            }
+            return false;
         },
         fit: () => fit(true),
         invalidate() {
@@ -381,6 +410,8 @@ export function createGraphView(app) {
         },
         destroy() {
             destroyed = true;
+            rendering = false;
+            pendingLocateId = '';
             cy?.destroy();
             cy = null;
         },

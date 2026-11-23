@@ -20,6 +20,7 @@ export function createTableView(app) {
     let activeType = '';
     let sort = { key: 'seq', dir: 'desc' };
     let limit = PAGE;
+    let lastSortedIds = [];
     const rows = new Map();
 
     function columnsFor(model, type) {
@@ -65,6 +66,7 @@ export function createTableView(app) {
         clear(head);
         clear(scroller);
         rows.clear();
+        lastSortedIds = [];
         if (!activeType) {
             put(scroller, emptyState('table', model.nodes.size ? i18n('No nodes match the current filters.') : i18n('This chat has no memory nodes yet.')));
             return;
@@ -86,6 +88,7 @@ export function createTableView(app) {
             if (av > bv) return dir;
             return compareTimeline(a, b) * -1;
         });
+        lastSortedIds = nodes.map(node => node.id);
         if (!nodes.length) {
             put(scroller, emptyState('filter', i18n('No nodes match the current filters.')));
             return;
@@ -137,21 +140,36 @@ export function createTableView(app) {
         }
     }
 
-    function syncSelection() {
-        const { selectedId } = app.state();
+    function syncSelection(targetId = app.state().selectedId) {
+        const selectedId = String(targetId || '');
         for (const [id, row] of rows) row.setAttribute('aria-selected', String(id === selectedId));
-        const node = app.model()?.nodes.get(selectedId);
+        if (!selectedId) return false;
+        const model = app.model();
+        const node = model?.nodes.get(selectedId);
         if (node && node.type !== activeType && !app.state().filters.hiddenTypes.has(node.type)) {
             activeType = node.type;
+            limit = PAGE;
             render();
         }
-        rows.get(selectedId)?.scrollIntoView({ block: 'nearest' });
+        let row = rows.get(selectedId);
+        if (!row && node && node.type === activeType) {
+            const idx = lastSortedIds.indexOf(selectedId);
+            if (idx >= limit) {
+                limit = idx + 1;
+                render();
+                row = rows.get(selectedId);
+            }
+        }
+        if (!row) return false;
+        row.scrollIntoView?.({ block: 'nearest' });
+        return true;
     }
 
     return {
         id: 'table',
         el: root,
         render,
-        onSelectionChange: syncSelection,
+        onSelectionChange: () => syncSelection(),
+        locate: (id) => syncSelection(id),
     };
 }

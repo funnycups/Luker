@@ -18,6 +18,7 @@ export function createTimelineView(app) {
     const root = h('div', { class: 'ml-timeline' }, head, scroller);
     const collapsed = new Set();
     let looseLimit = LOOSE_PAGE;
+    let lastLooseIds = [];
     const cards = new Map();
 
     function eventCard(model, node, { nested = false } = {}) {
@@ -106,6 +107,7 @@ export function createTimelineView(app) {
         if (!model) return;
         const state = app.state();
         cards.clear();
+        lastLooseIds = [];
         renderHead(model);
         const { chapters, loose } = buildChapters(model, state.filters);
         clear(scroller);
@@ -122,6 +124,7 @@ export function createTimelineView(app) {
         for (const chapter of orderedChapters) blocks.push(renderTree(model, chapter));
         if (loose.length) {
             const orderedLoose = desc ? [...loose].reverse() : loose;
+            lastLooseIds = orderedLoose.map(tree => tree.node.id);
             const shown = orderedLoose.slice(0, looseLimit);
             const section = h('section', { class: 'ml-tl-chapter is-loose' },
                 h('div', { class: 'ml-tl-loose-head' }, icon('sparkle', { size: 14 }), h('span', { text: i18n('Not in a summary') }), h('span', { class: 'ml-tl-count', text: i18nFormat('${0} items', loose.length) })),
@@ -136,26 +139,37 @@ export function createTimelineView(app) {
         syncSelection(false);
     }
 
-    function syncSelection(scroll = true) {
-        const { selectedId } = app.state();
+    function syncSelection(scroll = true, targetId = app.state().selectedId) {
+        const selectedId = String(targetId || '');
         for (const [id, card] of cards) card.setAttribute('aria-selected', String(id === selectedId));
-        if (!scroll || !selectedId) return;
+        if (!scroll || !selectedId) return false;
         let card = cards.get(selectedId);
         if (!card) {
-            // A collapsed ancestor may hide it: expand the chain and re-render.
             const model = app.model();
-            let parentId = model?.nodes.get(selectedId)?.parentId;
-            let expanded = false;
-            while (parentId) {
-                if (collapsed.delete(parentId)) expanded = true;
+            const node = model?.nodes.get(selectedId);
+            if (!node || node.type !== 'event') return false;
+            // A collapsed ancestor or loose pagination may hide it: reveal and re-render.
+            let needsRender = false;
+            const seen = new Set();
+            let parentId = node.parentId;
+            while (parentId && !seen.has(parentId)) {
+                seen.add(parentId);
+                if (collapsed.delete(parentId)) needsRender = true;
                 parentId = model.nodes.get(parentId)?.parentId;
             }
-            if (expanded) {
+            const looseIndex = lastLooseIds.indexOf(selectedId);
+            if (looseIndex >= looseLimit) {
+                looseLimit = looseIndex + 1;
+                needsRender = true;
+            }
+            if (needsRender) {
                 render();
                 card = cards.get(selectedId);
             }
         }
-        card?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        if (!card) return false;
+        card.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+        return true;
     }
 
     return {

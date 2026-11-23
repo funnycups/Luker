@@ -163,7 +163,7 @@ export function createInspector(app) {
                 node.isRollup ? h('span', { class: 'ml-tl-tag', text: depthLabel(node.depth) }) : null,
                 node.archived ? h('span', { class: 'ml-tag-muted', text: i18n('Archived') }) : null,
                 h('span', { class: 'ml-spacer' }),
-                iconButton('crosshair', i18n('Locate in graph'), () => app.locate(node.id), { className: 'ml-iconbtn-sm' }),
+                iconButton('crosshair', i18n('Locate in graph'), () => app.locate(node.id, { inGraph: true }), { className: 'ml-iconbtn-sm' }),
                 app.canEdit() ? iconButton('gear', i18n('Node properties'), () => openNodeProperties(app, node), { className: 'ml-iconbtn-sm' }) : null,
                 app.canEdit() ? iconButton('link', i18n('Relationships'), () => openEdgeManager(app, node), { className: 'ml-iconbtn-sm' }) : null,
                 app.canEdit() ? iconButton('trash', i18n('Delete'), () => confirmDeleteNode(app, node), { className: 'ml-iconbtn-sm' }) : null,

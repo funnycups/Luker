@@ -101,10 +101,16 @@ export function mountMemoryLens({ source, container, hostApp = null, opts = null
         focusEntity(id) {
             store.set({ filters: { ...store.get().filters, focusEntityId: id }, view: 'timeline', drawer: '' });
         },
-        locate(id) {
-            const view = views[store.get().view];
-            if (store.get().compact) store.set({ drawer: '' });
-            view.locate?.(id);
+        locate(id, { inGraph = false } = {}) {
+            const targetId = String(id || '');
+            if (!targetId) return;
+            if (store.get().compact && store.get().drawer) store.set({ drawer: '' });
+            const state = store.get();
+            if (!inGraph && state.view !== 'graph' && views[state.view]?.locate?.(targetId)) {
+                return;
+            }
+            if (state.view !== 'graph') store.set({ view: 'graph' });
+            views.graph.locate?.(targetId);
         },
         fitGraph: () => views.graph.fit?.(),
         toggleTheme() {
