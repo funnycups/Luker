@@ -91,6 +91,7 @@ export function mountWorkbench({
     let destroyed = false;
     let toastTimer = 0;
     let shown = !startCollapsed;
+    let current = null;
 
     const win = createWindow({
         title: i18n('Workbench'),
@@ -102,6 +103,9 @@ export function mountWorkbench({
         onExpand: () => {
             if (!shown) { shown = true; showPage(); }
             load();
+        },
+        onLayout: (info) => {
+            current?.onLayout?.(info);
         },
         onCollapse: () => {
             for (const p of Object.values(corePages)) p.onCollapse?.();
@@ -352,7 +356,6 @@ export function mountWorkbench({
         return view;
     }
 
-    let current = null;
     function showPage(opts = {}) {
         let next = corePages[activeTab];
         if (!next && activeTab.startsWith('ws:')) {

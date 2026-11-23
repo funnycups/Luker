@@ -6,6 +6,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Workbench
 
+- Fixed Workbench AI iteration controls overlapping under the mobile keyboard or narrow windows and the Workbench window failing to restore its height after closing the keyboard.
 - Added Workbench-wide unsaved-changes indicators across view save bars, sub-tabs, left-rail workspace tabs, the collapsed pill, and non-blocking return reminders when switching tabs or collapsing the window.
 - Fixed the mobile Orchestration mode selector and header area failing to render and the mode menu opening outside the Workbench window.
 

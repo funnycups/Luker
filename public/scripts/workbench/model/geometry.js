@@ -36,13 +36,16 @@ export function maxBox(vw, vh) {
     return { left: m, top: m, width: Math.max(0, vw - m * 2), height: Math.max(0, vh - m * 2) };
 }
 
-/** Phone floating window default box: centred with breathing margin around all edges. */
+/** Phone floating window default box: centred with breathing margin, expanding to fit short IME viewports. */
 export function compactDefaultBox(vw, vh) {
     const width = Math.max(Math.min(MIN_COMPACT_W, vw), vw - 24);
-    const height = Math.min(520, Math.max(Math.min(MIN_COMPACT_H, vh), Math.round(vh * 0.62))); // cap-ok: viewport hardware default compact floating window size
+    const shortViewport = vh <= 540; // cap-ok: viewport hardware threshold where mobile IME or landscape leaves no room for floating margins
+    const height = shortViewport
+        ? Math.min(520, vh) // cap-ok: viewport hardware default compact floating window size
+        : Math.min(520, Math.max(Math.min(MIN_COMPACT_H, vh), Math.round(vh * 0.62))); // cap-ok: viewport hardware default compact floating window size
     return {
         left: Math.round((vw - width) / 2),
-        top: Math.round(Math.max(16, (vh - height) * 0.42)),
+        top: shortViewport ? Math.max(0, Math.round((vh - height) / 2)) : Math.round(Math.max(16, (vh - height) * 0.42)),
         width,
         height,
     };

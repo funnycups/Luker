@@ -444,7 +444,7 @@ export function createIteratePage(app) {
     function paintPreview() {
         clear(previewPane);
         const t = selectDefaultTarget();
-        if (!t || typeof t.renderPreview !== 'function' || blocked() || disabled()) {
+        if (app.isCompact?.() || !t || typeof t.renderPreview !== 'function' || blocked() || disabled()) {
             previewPane.hidden = true;
             return;
         }
@@ -559,6 +559,13 @@ export function createIteratePage(app) {
             h('span', { class: 'wb-scope-note', text: blocked() ? '' : scopeNoteText(t, scope) }));
 
         paintControls();
+        if (app.isCompact?.()) {
+            globalThis.requestAnimationFrame?.(() => {
+                try {
+                    head.querySelector('.wb-ws-seg [aria-pressed="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'center' });
+                } catch { /* ignore in test DOM */ }
+            });
+        }
     }
 
     // ----- body -----------------------------------------------------------
@@ -1479,6 +1486,9 @@ export function createIteratePage(app) {
             const run = currentRun();
             if (run) { run.abort?.abort(); return true; }
             return false;
+        },
+        onLayout() {
+            paintPreview();
         },
         onCollapse() {
             return firePendingCancelHook();

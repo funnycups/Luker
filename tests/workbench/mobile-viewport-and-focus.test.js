@@ -8,6 +8,7 @@ import { fitToViewport } from '../../public/scripts/workbench/viewport.js';
 import { createWindow } from '../../public/scripts/workbench/ui/window.js';
 import { createAskPage } from '../../public/scripts/workbench/pages/ask.js';
 import { createHomePage } from '../../public/scripts/workbench/pages/home.js';
+import { createIteratePage } from '../../public/scripts/workbench/pages/iterate.js';
 import { confirmDialog } from '../../public/scripts/lens-shared/ui.js';
 import { createDock } from '../../public/scripts/run-panel/dock.js';
 import { createRecorder, createMemoryStorage } from '../../public/scripts/run-panel/recorder.js';
@@ -180,6 +181,131 @@ describe('workbench mobile viewport & preventScroll focus', () => {
         expect(JSON.parse(localStorage.getItem('workbench.prefs.v1')).maximised).toBeUndefined();
 
         winSavedMax.destroy();
+    });
+
+    test('createWindow preserves preferred mobileBox height across transient IME shrinks and updates responsive layout classes', async () => {
+        Object.defineProperty(window, 'innerWidth', { value: 412, configurable: true });
+        Object.defineProperty(window, 'innerHeight', { value: 915, configurable: true });
+        const layoutEvents = [];
+        const flushViewport = () => new Promise(resolve => requestAnimationFrame(() => queueMicrotask(resolve)));
+
+        const win = createWindow({
+            title: 'Workbench',
+            theme: () => 'dark',
+            onThemeToggle: () => {},
+            onLayout: (info) => layoutEvents.push(info),
+        });
+        document.body.appendChild(win.layer);
+        try {
+            const normalHeight = parseInt(win.win.style.height, 10);
+            expect(normalHeight).toBe(520);
+            expect(win.layer.classList.contains('is-compact')).toBe(true);
+            expect(win.layer.classList.contains('is-short')).toBe(false);
+
+            // Simulate mobile IME opening: viewport shrinks to 360px tall
+            Object.defineProperty(window, 'innerHeight', { value: 360, configurable: true });
+            win.refresh();
+            await flushViewport();
+            expect(parseInt(win.win.style.height, 10)).toBe(360);
+            expect(win.layer.classList.contains('is-short')).toBe(true);
+
+            // Simulate mobile IME closing: preferred height restores to 520px instead of staying stuck at 360px
+            Object.defineProperty(window, 'innerHeight', { value: 915, configurable: true });
+            win.refresh();
+            await flushViewport();
+            expect(parseInt(win.win.style.height, 10)).toBe(normalHeight);
+            expect(win.layer.classList.contains('is-short')).toBe(false);
+
+            // Explicit user-resized mobileBox (e.g. 580px) also survives a transient IME shrink cleanly
+            const bottomGrip = win.win.querySelector('.wb-resize-y');
+            const firePtr = (type, clientY) => {
+                const ev = new Event(type, { bubbles: true, cancelable: true });
+                Object.assign(ev, { pointerId: 3, pointerType: 'touch', button: 0, clientX: 180, clientY });
+                bottomGrip.dispatchEvent(ev);
+            };
+            firePtr('pointerdown', 500);
+            firePtr('pointermove', 560);
+            firePtr('pointerup', 560);
+            expect(parseInt(win.win.style.height, 10)).toBe(normalHeight + 60);
+
+            Object.defineProperty(window, 'innerHeight', { value: 360, configurable: true });
+            win.refresh();
+            await flushViewport();
+            expect(parseInt(win.win.style.height, 10)).toBe(360);
+
+            Object.defineProperty(window, 'innerHeight', { value: 915, configurable: true });
+            win.refresh();
+            await flushViewport();
+            expect(parseInt(win.win.style.height, 10)).toBe(normalHeight + 60);
+
+            // Mid-width non-compact window (680x380) sets narrow-main, drawer-side, and is-short
+            Object.defineProperty(window, 'innerWidth', { value: 680, configurable: true });
+            Object.defineProperty(window, 'innerHeight', { value: 380, configurable: true });
+            win.refresh();
+            await flushViewport();
+            expect(win.layer.classList.contains('is-compact')).toBe(false);
+            expect(win.layer.classList.contains('is-narrow-main')).toBe(true);
+            expect(win.layer.classList.contains('is-drawer-side')).toBe(true);
+            expect(win.layer.classList.contains('is-short')).toBe(true);
+
+            // Wide desktop window (1280x800) clears narrow-main, drawer-side, and is-short
+            Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+            Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true });
+            win.refresh();
+            await flushViewport();
+            expect(win.layer.classList.contains('is-narrow-main')).toBe(false);
+            expect(win.layer.classList.contains('is-drawer-side')).toBe(false);
+            expect(win.layer.classList.contains('is-short')).toBe(false);
+            expect(layoutEvents.length).toBeGreaterThanOrEqual(1);
+        } finally {
+            win.destroy();
+        }
+    });
+
+    test('Iterate page hides previewPane in compact mode and restores it on layout switch to desktop', async () => {
+        let compact = true;
+        const target = {
+            id: 'memory',
+            label: () => 'Memory graph',
+            scopes: async () => ({ global: true }),
+            load: async () => ({ live: { schema: [{ id: 'event', label: 'Event' }] }, target: { scope: 'global' }, title: 'Global' }),
+            renderPreview: () => {
+                const div = document.createElement('div');
+                div.textContent = 'Schema Preview';
+                return div;
+            },
+            units: () => new Map(),
+            rebuild: (_b, a) => a,
+        };
+        const app = {
+            sessions: { list: async () => [], get: async () => null },
+            settings: () => ({}),
+            saveSettings: jest.fn(),
+            snapshot: () => ({}),
+            isCompact: () => compact,
+            iterateTargets: () => [target],
+            toast: jest.fn(),
+            reload: jest.fn(),
+            refreshBadges: jest.fn(),
+            source: {},
+        };
+
+        const page = createIteratePage(app);
+        document.body.appendChild(page.el);
+        await page.show({ ws: 'memory', scope: 'global' });
+        await new Promise(r => setTimeout(r, 0));
+
+        const previewPane = page.el.querySelector('.wb-iter-preview');
+        expect(previewPane.hidden).toBe(true);
+
+        compact = false;
+        page.onLayout?.();
+        expect(previewPane.hidden).toBe(false);
+        expect(previewPane.textContent).toContain('Schema Preview');
+
+        compact = true;
+        page.onLayout?.();
+        expect(previewPane.hidden).toBe(true);
     });
 
     test('Ask page show() focuses composer input with preventScroll: true', async () => {

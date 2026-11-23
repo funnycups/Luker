@@ -69,10 +69,20 @@
 .wbench .wb-hist-lines { margin-top: 6px; padding-left: 16px; list-style: disc; font-size: 12px; color: var(--wb-muted); line-height: 1.7; }
 
 .wbench.is-compact .wb-chat-head { flex-wrap: wrap; }
-.wbench.is-compact .wb-ws-seg { order: 3; width: 100%; }
+.wbench.is-compact .wb-ws-seg {
+    order: 3;
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+.wbench.is-compact .wb-ws-seg::-webkit-scrollbar { display: none; }
 .wbench.is-compact .wb-ws-seg .lw-seg-btn,
-.wbench.is-compact .wb-ws-seg .wb-seg-btn { flex: 1; justify-content: center; }
+.wbench.is-compact .wb-ws-seg .wb-seg-btn { flex: none; justify-content: center; }
 .wbench.is-compact .wb-scope-note { display: none; }
 .wbench.is-compact .wb-scope-seg .lw-seg-btn span,
 .wbench.is-compact .wb-scope-seg .wb-seg-btn span { max-width: 150px; }
-.wbench.is-compact .wb-iter-preview { display: none; }
+.wbench.is-compact .wb-iter-preview,
+.wbench.is-narrow-main .wb-iter-preview { display: none; }

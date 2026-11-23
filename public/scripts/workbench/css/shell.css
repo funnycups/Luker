@@ -142,6 +142,9 @@
 .wbench.is-compact .wb-main.is-flush { padding: 0; }
 .wbench.is-compact .wb-page { animation: none; }
 .wbench.is-compact .wb-page.is-split { flex-direction: column; }
+.wbench.is-compact.is-short .wb-titlebar { height: 40px; }
+.wbench.is-compact.is-short .wb-rail { padding: 4px 8px; }
+.wbench.is-compact.is-short .wb-tab { height: 32px; }
 
 @media (prefers-reduced-motion: reduce) {
     .wbench *, .wbench *::before, .wbench *::after { animation: none !important; transition: none !important; }
