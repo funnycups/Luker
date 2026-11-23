@@ -93,6 +93,14 @@ describe('stage-mobile-runtime', () => {
         fs.mkdirSync(path.join(repoRoot, 'plugins'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, 'plugins', 'keep.txt'), 'plugin\n');
 
+        fs.mkdirSync(path.join(repoRoot, 'docs', 'zh-CN'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'docs', 'zh-TW'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'docs', 'guide'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'changelog.md'), '# Changelog\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'zh-CN', 'changelog.md'), '# Changelog\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'zh-TW', 'changelog.md'), '# Changelog\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'guide', 'getting-started.md'), '# Guide\n');
+
         fs.mkdirSync(path.join(repoRoot, 'dist'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, 'dist', 'lib.core.bundle.js'), '// core\n');
         fs.writeFileSync(path.join(repoRoot, 'dist', 'lib.optional.bundle.js'), '// optional\n');
@@ -140,6 +148,10 @@ describe('stage-mobile-runtime', () => {
         expect(fs.existsSync(path.join(outputDir, '_prebuilt-bundles', 'lib.core.bundle.js'))).toBe(true);
         expect(fs.existsSync(path.join(outputDir, 'public', 'scripts', 'app.js'))).toBe(true);
         expect(fs.existsSync(path.join(outputDir, 'public', 'untracked-junk.tmp'))).toBe(false);
+        expect(fs.existsSync(path.join(outputDir, 'docs', 'changelog.md'))).toBe(true);
+        expect(fs.existsSync(path.join(outputDir, 'docs', 'zh-CN', 'changelog.md'))).toBe(true);
+        expect(fs.existsSync(path.join(outputDir, 'docs', 'zh-TW', 'changelog.md'))).toBe(true);
+        expect(fs.existsSync(path.join(outputDir, 'docs', 'guide', 'getting-started.md'))).toBe(false);
 
         // prod-pkg kept, pruned artifacts removed, LICENSE.md kept, dev-pkg excluded
         expect(fs.existsSync(path.join(outputDir, 'node_modules', 'prod-pkg', 'index.js'))).toBe(true);
@@ -170,6 +182,14 @@ describe('stage-mobile-runtime', () => {
         fs.writeFileSync(path.join(repoRoot, 'default', 'config.yaml'), 'port: 8000\n');
         fs.mkdirSync(path.join(repoRoot, 'plugins'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, 'plugins', 'keep.txt'), 'plugin\n');
+
+        fs.mkdirSync(path.join(repoRoot, 'docs', 'zh-CN'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'docs', 'zh-TW'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'docs', 'guide'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'changelog.md'), '# Changelog\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'zh-CN', 'changelog.md'), '# Changelog\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'zh-TW', 'changelog.md'), '# Changelog\n');
+        fs.writeFileSync(path.join(repoRoot, 'docs', 'guide', 'getting-started.md'), '# Guide\n');
         fs.mkdirSync(path.join(repoRoot, 'dist'), { recursive: true });
         for (const bundle of ['lib.core.bundle.js', 'lib.optional.bundle.js', 'codemirror.bundle.js']) {
             fs.writeFileSync(path.join(repoRoot, 'dist', bundle), `// ${bundle}\n`);

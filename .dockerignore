@@ -36,6 +36,9 @@
 # --- Documentation ---
 readme*
 *.md
+!/docs/changelog.md
+!/docs/zh-CN/changelog.md
+!/docs/zh-TW/changelog.md
 Update-Instructions.txt
 
 # --- OS & System Junk ---
