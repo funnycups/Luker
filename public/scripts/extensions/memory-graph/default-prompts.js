@@ -498,11 +498,10 @@ export const DEFAULT_EXTRACT_EDGE_RULES = `### Edge mechanics
 - ❌ **禁** thread 端: 用 mentions / advances / updates 之一
 - 不确定时优先选更具体的 relation, related 只是真正没有专门 relation 时的兜底
 
-#### Symmetric relations (allied_with / hostile_to / family_of / partner_of)
-- 这四种关系是**天然对称**的 (A allied B ⇔ B allied A 是同一件事)
-- **只写一条 edge**, 不要写两条 (即不要既写 A→B 又写 B→A 的同类型边)
-- **方向选择**: 用 \`direction: bidirectional\` (默认)
-- 其他关系 (sworn_to / debt_owed_to / mentor_of / deceiving) 有明确方向, 按动作发出者→接受者写一条
+#### Symmetric relations (allied_with / hostile_to / family_of / partner_of / related)
+- 这些关系是**天然对称**的 (A allied B ⇔ B allied A 是同一件事)
+- **只写一条 edge**, 不要写两条 (即不要既写 A→B 又写 B→A 的同类型边); 系统会自动归一化为单条无向边
+- 其他有向关系 (involved_in / occurred_at / mentions / advances / updates / evidence / sworn_to / debt_owed_to / mentor_of / deceiving) 默认为 \`direction: outgoing\` (source → target), 按动作发出者→接受者写一条
 `;
 
 // Extraction template: the fixed text of the extraction system message plus

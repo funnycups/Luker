@@ -897,7 +897,7 @@ const SCHEMAS = [
                             target_node_id: { type: 'string' },
                             target_ref: { type: 'string' },
                             relation: { type: 'string' },
-                            direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
+                            direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'], description: 'Edge direction relative to source. Default: outgoing.' },
                         },
                         additionalProperties: false,
                     },
@@ -957,7 +957,7 @@ const SCHEMAS = [
                         properties: {
                             target_node_id: { type: 'string' },
                             relation: { type: 'string' },
-                            direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
+                            direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'], description: 'Edge direction relative to source. Default: outgoing.' },
                         },
                         required: ['target_node_id', 'relation'],
                         additionalProperties: false,

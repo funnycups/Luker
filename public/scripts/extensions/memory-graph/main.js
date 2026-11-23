@@ -109,6 +109,7 @@ const SYMMETRIC_RELATIONS = new Set([
     'hostile_to',
     'family_of',
     'partner_of',
+    'related',
 ]);
 import {
     getFloorStateInstance,
@@ -3291,7 +3292,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
                         target_ref: { type: 'string', description: 'Optional. Use either target_ref or target_node_id. When referencing an existing node, use only an id that appears in graph_data.nodes.' },
                         target_node_id: { type: 'string', description: 'Optional. Use either target_node_id or target_ref. When referencing an existing node, use only an id that appears in graph_data.nodes.' },
                         relation: { type: 'string', description: `Canonical relation type only. Allowed values: ${CANONICAL_EXTRACT_RELATION_TYPES_TEXT}.` },
-                        direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
+                        direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'], description: 'Edge direction relative to source. Default: \'outgoing\' (source→target). Symmetric relations (allied_with, hostile_to, family_of, partner_of, related) always collapse into one canonical edge.' },
                     },
                     additionalProperties: false,
                 },
@@ -3445,7 +3446,7 @@ function buildDynamicExtractTools(schema = [], options = {}) {
                                     target_ref: { type: 'string', description: 'Optional. Use either target_ref or target_node_id. When referencing an existing node, use only an id that appears in graph_data.nodes.' },
                                     target_node_id: { type: 'string', description: 'Optional. Use either target_node_id or target_ref. When referencing an existing node, use only an id that appears in graph_data.nodes.' },
                                     relation: { type: 'string', description: `Canonical relation type only. Allowed values: ${CANONICAL_EXTRACT_RELATION_TYPES_TEXT}.` },
-                                    direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'] },
+                                    direction: { type: 'string', enum: ['outgoing', 'incoming', 'bidirectional'], description: 'Edge direction relative to source. Default: \'outgoing\' (source→target). Symmetric relations (allied_with, hostile_to, family_of, partner_of, related) always collapse into one canonical edge.' },
                                 },
                                 additionalProperties: false,
                             },
@@ -3530,10 +3531,10 @@ function normalizeExtractLinks(rawLinks) {
             continue;
         }
         const relation = normalizeText(link?.relation || 'related') || 'related';
-        const directionRaw = String(link?.direction || 'bidirectional').toLowerCase();
+        const directionRaw = String(link?.direction || 'outgoing').toLowerCase();
         const direction = ['outgoing', 'incoming', 'bidirectional'].includes(directionRaw)
             ? directionRaw
-            : 'bidirectional';
+            : 'outgoing';
         normalized.push({
             targetRef,
             targetNodeId,
@@ -4633,7 +4634,7 @@ function applyExtractedLinks(store, sourceNode, rawLinks, options = {}) {
         }
 
         const relation = normalizeText(link?.relation || 'related') || 'related';
-        const direction = String(link?.direction || 'bidirectional').toLowerCase();
+        const direction = String(link?.direction || 'outgoing').toLowerCase();
 
         // Symmetric relations collapse to ONE canonical edge (sorted-id
         // from→to). Direction directive is ignored — "A allied_with B" and
@@ -6632,9 +6633,9 @@ export function buildProjectedEdges(store, {
             continue;
         }
         // Symmetric relations (allied_with / hostile_to / family_of /
-        // partner_of) collapse direction: A→B and B→A merge into a single row
-        // with canonical from = lexicographically smaller id. Non-symmetric
-        // relations keep direction in the key.
+        // partner_of / related) collapse direction: A→B and B→A merge into a
+        // single row with canonical from = lexicographically smaller id.
+        // Non-symmetric relations keep direction in the key.
         const isSymmetric = SYMMETRIC_RELATIONS.has(edgeType);
         const canonicalFrom = isSymmetric && fromVisible > toVisible ? toVisible : fromVisible;
         const canonicalTo = isSymmetric && fromVisible > toVisible ? fromVisible : toVisible;

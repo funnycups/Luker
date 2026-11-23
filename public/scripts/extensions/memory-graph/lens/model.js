@@ -7,7 +7,7 @@
 import { i18nFormat, listSeparator } from './i18n.js';
 
 export const INTERNAL_EDGE_TYPES = new Set(['contains', 'semantic_contains']);
-export const SYMMETRIC_RELATIONS = new Set(['partner_of', 'family_of', 'allied_with', 'hostile_to']);
+export const SYMMETRIC_RELATIONS = new Set(['partner_of', 'family_of', 'allied_with', 'hostile_to', 'related']);
 export const BOND_RELATIONS = new Set(['partner_of', 'family_of', 'allied_with', 'mentor_of', 'sworn_to', 'debt_owed_to']);
 export const CONFLICT_RELATIONS = new Set(['hostile_to', 'deceiving']);
 export const KNOWN_TYPE_ORDER = ['event', 'character_sheet', 'location_state', 'thread', 'rule_constraint'];

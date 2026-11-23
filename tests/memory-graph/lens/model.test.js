@@ -170,6 +170,20 @@ test('flattened CJK summaries keep arrow-separated and parenthesized places inta
     expect(placeOnly.prose).toEqual([]);
 });
 
+test('related edges are treated as undirected symmetric edges in buildModel', () => {
+    const model = buildModel({
+        nodes: [
+            { id: 'c1', type: 'character_sheet', title: '甲' },
+            { id: 'c2', type: 'character_sheet', title: '乙' },
+        ],
+        edges: [
+            { from: 'c1', to: 'c2', type: 'related' },
+        ],
+    });
+    expect(model.edges.length).toBe(1);
+    expect(model.edges[0].directed).toBe(false);
+});
+
 test('neighbors and event entities', () => {
     const model = buildModel(createMockSnapshot());
     const { characters, locations } = entitiesOfEvent(model, 'e14');

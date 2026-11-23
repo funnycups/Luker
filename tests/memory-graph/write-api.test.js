@@ -421,6 +421,54 @@ describe('write-api upsertLinks / deleteLinks', () => {
         expect(edge).toBeDefined();
     });
 
+    test('upsertLinks defaults missing direction to outgoing for directed relations', async () => {
+        const ctx = makeContext({
+            nodes: {
+                evt: { id: 'evt', type: 'event', level: 'semantic', title: 'E1', fields: {} },
+                thr: { id: 'thr', type: 'thread', level: 'semantic', title: 'T1', fields: {} },
+                chr: { id: 'chr', type: 'character_sheet', level: 'semantic', title: 'C1', fields: {} },
+            },
+            edges: [],
+            seqCounter: 0,
+        });
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
+        const res = await api.upsertLinks({
+            source: { id: 'evt' },
+            links: [
+                { targetNodeId: 'thr', relation: 'advances' },
+                { targetNodeId: 'chr', relation: 'involved_in' },
+            ],
+        });
+        expect(res.applied).toBe(2);
+        expect(ctx.__memoryStore.edges).toEqual([
+            { from: 'evt', to: 'thr', type: 'advances', seqTo: 0 },
+            { from: 'evt', to: 'chr', type: 'involved_in', seqTo: 0 },
+        ]);
+    });
+
+    test('upsertLinks collapses symmetric related relation to one canonical edge regardless of direction', async () => {
+        const ctx = makeContext({
+            nodes: {
+                n_4: { id: 'n_4', type: 'character_sheet', level: 'semantic', title: 'A', fields: {} },
+                n_5: { id: 'n_5', type: 'character_sheet', level: 'semantic', title: 'B', fields: {} },
+            },
+            edges: [],
+            seqCounter: 0,
+        });
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
+        await api.upsertLinks({
+            source: { id: 'n_5' },
+            links: [{ targetNodeId: 'n_4', relation: 'related', direction: 'bidirectional' }],
+        });
+        await api.upsertLinks({
+            source: { id: 'n_4' },
+            links: [{ targetNodeId: 'n_5', relation: 'related' }],
+        });
+        expect(ctx.__memoryStore.edges).toEqual([
+            { from: 'n_4', to: 'n_5', type: 'related', seqTo: 0 },
+        ]);
+    });
+
     test('deleteLinks requires source/target/relation', async () => {
         const ctx = makeContext();
         const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
