@@ -2,7 +2,7 @@
 
 本更新日志覆盖 Luker 自 v1.0.0 起的每一个版本，直至当前开发版。
 
-## 未发布
+## v2.9.0-rc.4 (2026-11-23)
 
 ### 工作台
 
@@ -62,6 +62,12 @@
 - 修复了设置保存失败时未提示错误的问题。
 - 修复了删除、插入或移动中间消息时，后续楼层保存的扩展状态不同步的问题。
 - 修复了损坏状态日志恢复在整份替换补丁之后误判故障楼层的问题。
+
+### 新贡献者
+* @Archeb 在 https://github.com/funnycups/Luker/pull/64 中完成了第一次贡献
+* @suyunxing 在 https://github.com/funnycups/Luker/pull/69 中完成了第一次贡献
+
+**完整更新日志**：https://github.com/funnycups/Luker/compare/v2.9.0-rc.3...v2.9.0-rc.4
 
 ## v2.9.0-rc.3 (2026-11-21)
 

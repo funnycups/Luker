@@ -2,7 +2,7 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
-## Unreleased
+## v2.9.0-rc.4 (2026-11-23)
 
 ### Workbench
 
@@ -62,6 +62,12 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed settings save failures not displaying an error.
 - Fixed mid-chat message deletion, insertion, and reordering leaving subsequent floor-bound extension state out of sync.
 - Fixed broken state log recovery misidentifying the failing floor after a full-replacement patch.
+
+### New Contributors
+* @Archeb made their first contribution in https://github.com/funnycups/Luker/pull/64
+* @suyunxing made their first contribution in https://github.com/funnycups/Luker/pull/69
+
+**Full Changelog**: https://github.com/funnycups/Luker/compare/v2.9.0-rc.3...v2.9.0-rc.4
 
 ## v2.9.0-rc.3 (2026-11-21)
 

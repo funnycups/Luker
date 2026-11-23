@@ -2,7 +2,7 @@
 
 本更新日誌涵蓋 Luker 自 v1.0.0 起的每一個版本，直至目前開發版。
 
-## 未發布
+## v2.9.0-rc.4 (2026-11-23)
 
 ### 工作台
 
@@ -62,6 +62,12 @@
 - 修復了設定儲存失敗時未提示錯誤的問題。
 - 修復了刪除、插入或移動中間訊息時，後續樓層儲存的擴充狀態不同步的問題。
 - 修復了損壞狀態日誌恢復在整份取代補丁之後誤判故障樓層的問題。
+
+### 新貢獻者
+* @Archeb 在 https://github.com/funnycups/Luker/pull/64 中完成了第一次貢獻
+* @suyunxing 在 https://github.com/funnycups/Luker/pull/69 中完成了第一次貢獻
+
+**完整更新日誌**：https://github.com/funnycups/Luker/compare/v2.9.0-rc.3...v2.9.0-rc.4
 
 ## v2.9.0-rc.3 (2026-11-21)
 
