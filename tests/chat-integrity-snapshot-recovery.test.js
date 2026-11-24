@@ -692,6 +692,66 @@ describe('聊天快照完整性与 409 冲突恢复防护', () => {
         await hostSave.context.saveChatInternal({});
         expect(hostSave.context.getChatMessageSnapshot(soloTarget)).toBeNull();
         expect(hostSave.helpers.getChatMetadata().integrity).toBe('tok-1');
+        expect(hostSave.toasts.error.some(t => t.title.includes('Chat could not be saved'))).toBe(true);
+    });
+
+    test('边缘回归：群聊元数据 snapshot 409 读失败回退 saveGroupChat 不带 force、loadGroupChat 拒非对象首元素、saveChatInternal 早退清 force', async () => {
+        const msg0 = { name: 'Alice', is_user: false, mes: '群聊首条' };
+
+        // 1) 群聊 saveChatMetadataForContext 遇 snapshot 409 且 /api/chats/group/get 失败：
+        //    saveChatMetadataInternal 必须清掉 pendingForceOverwriteTargets，回退到 saveGroupChat 时不得带 force:true
+        const groupSaveBodies = [];
+        const hostGroupMeta409 = createHost({
+            selectedGroup: 'grp-1',
+            chat: [msg0],
+            chatMetadata: { integrity: 'gtok-1', note: 'changed' },
+            fetchImpl: async (url, body) => {
+                if (url === '/api/chats/group/meta/patch') {
+                    return makeResponse({ status: 409, json: { error: 'snapshot' } });
+                }
+                if (url === '/api/chats/group/get') {
+                    return makeResponse({ status: 500, json: { error: 'disk error' } });
+                }
+                if (url === '/api/chats/group/save') {
+                    groupSaveBodies.push(body);
+                    return makeResponse({ status: 200, json: { ok: true, integrity: 'gtok-2' } });
+                }
+                throw new Error(`Unexpected url: ${url}`);
+            },
+        });
+        hostGroupMeta409.context.seedChatMessageSnapshot(groupTarget, [msg0]);
+        hostGroupMeta409.context.seedChatMetadataSnapshot(groupTarget, { integrity: 'gtok-1', note: 'old' });
+        const metaSaved = await hostGroupMeta409.context.saveChatMetadata({ note: 'changed' });
+        expect(metaSaved).toBe(true);
+        expect(groupSaveBodies).toHaveLength(1);
+        expect(groupSaveBodies[0].force).toBe(false);
+        expect(hostGroupMeta409.helpers.getPendingForce(groupTarget)).toBeUndefined();
+
+        // 2) loadGroupChat() 收到非空数组首元素非普通对象（[null] / ['bad'] / [[]]）必须抛错
+        for (const badPayload of [[null], ['bad'], [[]]]) {
+            const hostBadGroup = createHost({
+                selectedGroup: 'grp-1',
+                fetchImpl: async () => makeResponse({ status: 200, json: badPayload }),
+            });
+            await expect(hostBadGroup.context.loadGroupChat('group-chat-1')).rejects.toThrow('Expected a chat message array');
+            expect(hostBadGroup.toasts.error.some(t => t.title.includes('Chat load failed'))).toBe(true);
+        }
+
+        // 3) saveChatInternal 早退（如 fileName 为空或缺少角色身份）时清理残留 pendingForceOverwriteTargets
+        const hostEarlyExit = createHost({
+            chat: [msg0],
+            chatMetadata: { integrity: 'tok-1' },
+            characters: [{ name: '', avatar: '', chat: '' }],
+            fetchImpl: async () => {
+                throw new Error('Should not fetch on early exit');
+            },
+        });
+        hostEarlyExit.context.markTargetForForceOverwriteOnNextSave(soloTarget, 'stale-409');
+        expect(hostEarlyExit.helpers.getPendingForce(soloTarget)).toBe('stale-409');
+        await hostEarlyExit.context.saveChatInternal({
+            _context: { target: soloTarget, fileName: '', charName: '', avatarUrl: '', metadataSnapshot: { integrity: 'tok-1' } },
+        });
+        expect(hostEarlyExit.helpers.getPendingForce(soloTarget)).toBeUndefined();
     });
 
     test('getChat() 拒绝非预期 200 payload 避免覆盖服务端数据，且正常加载单聊/群聊时清理残留 pendingForceOverwriteTargets', async () => {

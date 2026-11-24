@@ -14960,6 +14960,7 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
         return false;
     }
 
+    let resolvedTarget = null;
     try {
         const saveContext = context ?? buildActiveChatSaveContext({ withMetadata });
         if (!saveContext?.target) {
@@ -14969,6 +14970,7 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
             ? saveContext.metadataSnapshot
             : {};
         const target = saveContext.target;
+        resolvedTarget = target;
         // Consume the force-overwrite marker set by a prior 409 recovery so
         // this metadata save carries force:true. See saveChatInternal for
         // full rationale.
@@ -15023,8 +15025,15 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
                 },
             });
             if (conflictResolution !== 'none') {
-                if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
+                if (conflictResolution === 'integrity') {
                     await applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadata);
+                } else if (conflictResolution === 'snapshot' && conflictSnapshot.attempted) {
+                    if (conflictSnapshot.error) {
+                        throw conflictSnapshot.error;
+                    }
+                    if (conflictSnapshot.snapshot) {
+                        applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
+                    }
                 }
                 return await saveChatMetadataInternal(withMetadata, retryCount + 1, {
                     ...(saveContext ?? {}),
@@ -15073,8 +15082,15 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
                 },
             });
             if (conflictResolution !== 'none') {
-                if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
+                if (conflictResolution === 'integrity') {
                     await applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadata);
+                } else if (conflictResolution === 'snapshot' && conflictSnapshot.attempted) {
+                    if (conflictSnapshot.error) {
+                        throw conflictSnapshot.error;
+                    }
+                    if (conflictSnapshot.snapshot) {
+                        applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
+                    }
                 }
                 return await saveChatMetadataInternal(withMetadata, retryCount + 1, {
                     ...(saveContext ?? {}),
@@ -15085,6 +15101,11 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
 
         return false;
     } catch (error) {
+        if (resolvedTarget) {
+            // 冲突恢复读取快照失败时清除待强写标记，避免调用方回退全量保存误带 force:true。
+            invalidateChatWriteSnapshot(resolvedTarget);
+            consumePendingForceOverwrite(resolvedTarget);
+        }
         console.warn('Incremental chat metadata save failed', error);
         return false;
     }
@@ -15144,6 +15165,10 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
             console.debug('[ChatWrite] Save dropped: no active chat target.');
             return;
         }
+        const guardTarget = arguments?.[0]?._context?.target ?? resolveChatStateTarget();
+        if (guardTarget) {
+            consumePendingForceOverwrite(guardTarget);
+        }
         console.error('[ChatWrite] Save refused: chat not fully loaded (integrity missing).');
         toastr.error(
             t`Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.`,
@@ -15157,6 +15182,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
     const target = saveContext?.target ?? resolveChatStateTarget();
 
     if (target?.is_group) {
+        consumePendingForceOverwrite(target);
         toastr.error(t`Operation was aborted to prevent data corruption.`, t`saveChat called for a group chat`);
         throw new Error('saveChat called for a group chat');
     }
@@ -15172,11 +15198,13 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
     const fileName = String(saveContext?.fileName ?? chatName ?? characters[this_chid]?.chat ?? '').trim();
 
     if (!fileName && name2 === neutralCharacterName) {
+        if (target) consumePendingForceOverwrite(target);
         // TODO: Do something for a temporary chat with no character.
         return;
     }
 
     if (!fileName) {
+        if (target) consumePendingForceOverwrite(target);
         console.warn('saveChat called without chat_name and no chat file found');
         return;
     }
@@ -15184,6 +15212,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
     const charName = String(saveContext?.charName || target?.char_name || getCharacterName(characters[this_chid]) || '').trim();
     const avatar = String(saveContext?.avatarUrl || target?.avatar_url || characters[this_chid]?.avatar || '').trim();
     if (!charName || !avatar) {
+        if (target) consumePendingForceOverwrite(target);
         console.warn('saveChat called without active character identity');
         return;
     }
@@ -15264,8 +15293,8 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                         rememberChatMetadataSnapshot(writeTarget, metadata);
                         return;
                     }
-                    invalidateChatWriteSnapshot(writeTarget);
-                    return;
+                    // 与群聊 saveGroupChatInternal 对称：200 响应截断或缺少 integrity 视为未确认写入，交由 catch 失效快照并提示用户。
+                    throw new Error('Invalid chat write acknowledgement');
                 }
 
                 if (!effectiveForce) {
@@ -15324,8 +15353,8 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
                 rememberChatMetadataSnapshot(writeTarget, metadata);
                 return;
             }
-            invalidateChatWriteSnapshot(writeTarget);
-            return;
+            // 与群聊 saveGroupChatInternal 对称：200 响应截断或缺少 integrity 视为未确认写入，交由 catch 失效快照并提示用户。
+            throw new Error('Invalid chat write acknowledgement');
         }
 
         if (!effectiveForce) {

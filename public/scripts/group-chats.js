@@ -235,7 +235,7 @@ export async function loadGroupChat(chatId) {
         const data = await response.json().catch(() => {
             throw new Error('Invalid JSON response');
         });
-        if (!Array.isArray(data)) {
+        if (!Array.isArray(data) || (data.length > 0 && (!data[0] || typeof data[0] !== 'object' || Array.isArray(data[0])))) {
             throw new Error('Expected a chat message array');
         }
         return data;
