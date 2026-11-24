@@ -60,10 +60,6 @@ const CUSTOM_MODAL_KEYS = new Set([
     'extractContextTurns',
     'extractExcludeRecentTurns',
     'llmVisibleRecentMessages',
-    'extractMode',
-    'extractCrawlMaxRounds',
-    'extractCrawlCandidateLimit',
-    'extractCrawlMaxReads',
 ]);
 
 const TECHNICAL_KEYS = new Set([
@@ -156,8 +152,8 @@ export async function setMgSettings(page, settings, { saveScope = 'global', clos
         if (CUSTOM_MODAL_KEYS.has(key)) modalEntries.push([key, value]);
         else inlineEntries.push([key, value]);
     }
-    // Apply extractMode before crawl-only numeric inputs so crawl inputs are rendered inside the modal.
-    modalEntries.sort(([a], [b]) => (a === 'extractMode' ? -1 : b === 'extractMode' ? 1 : 0));
+    // Apply extractMode before crawl-only numeric inputs so crawl inputs are rendered in the section.
+    inlineEntries.sort(([a], [b]) => (a === 'extractMode' ? -1 : b === 'extractMode' ? 1 : 0));
 
     let touchedAdvanced = false;
 

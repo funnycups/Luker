@@ -203,10 +203,10 @@ describe('settings-view UX reorganization & bug fixes', () => {
         return { app, source, view, snap, listeners, onDirtyChange };
     }
 
-    test('groups settings into 4 lifecycle sections with collapsed technical tuning', () => {
+    test('groups settings into 5 lifecycle sections with standalone extraction-mode and collapsed technical tuning', () => {
         const { view } = mountSettingsView();
         const sections = [...view.el.querySelectorAll('[data-settings-section]')].map(el => el.dataset.settingsSection);
-        expect(sections).toEqual(['extraction', 'recall', 'operations', 'technical']);
+        expect(sections).toEqual(['extraction', 'extraction-mode', 'recall', 'operations', 'technical']);
 
         const techDetails = view.el.querySelector('[data-settings-section="technical"]');
         expect(techDetails.tagName).toBe('DETAILS');
@@ -265,7 +265,44 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect(view.el.querySelector('[data-cadence-preset="balanced"]').getAttribute('aria-pressed')).toBe('true');
     });
 
-    test('Custom card opens modal with all cadence/visibility/crawl inputs, live gap warning, and Cancel/Apply behavior', async () => {
+    test('renders extraction mode and crawl inputs in standalone section independent of cadence presets', () => {
+        const { view } = mountSettingsView();
+        const modeSection = view.el.querySelector('[data-settings-section="extraction-mode"]');
+        expect(modeSection).toBeTruthy();
+        expect(modeSection.querySelector('[data-field-key="extractMode"] select').value).toBe('oneshot');
+        expect(modeSection.querySelector('[data-field-key="extractCrawlMaxRounds"]')).toBeNull();
+        expect(modeSection.querySelector('[data-field-key="extractCrawlCandidateLimit"]')).toBeNull();
+        expect(modeSection.querySelector('[data-field-key="extractCrawlMaxReads"]')).toBeNull();
+
+        // Switching to crawl reveals all 3 crawl inputs and marks sticky bar dirty
+        const modeSelect = modeSection.querySelector('[data-field-key="extractMode"] select');
+        modeSelect.value = 'crawl';
+        modeSelect.dispatchEvent(new Event('change'));
+
+        const updatedSection = view.el.querySelector('[data-settings-section="extraction-mode"]');
+        const roundsInput = updatedSection.querySelector('[data-field-key="extractCrawlMaxRounds"] input');
+        const candInput = updatedSection.querySelector('[data-field-key="extractCrawlCandidateLimit"] input');
+        const readsInput = updatedSection.querySelector('[data-field-key="extractCrawlMaxReads"] input');
+        expect(roundsInput).toBeTruthy();
+        expect(candInput).toBeTruthy();
+        expect(readsInput).toBeTruthy();
+        expect(view.dirtyCount()).toBe(1);
+
+        // Editing a crawl input keeps focus and updates dirty count in place
+        readsInput.focus();
+        readsInput.value = '18';
+        readsInput.dispatchEvent(new Event('input'));
+        expect(document.activeElement).toBe(readsInput);
+        expect(view.dirtyCount()).toBe(2);
+
+        // Clicking a cadence preset leaves extractMode and crawl parameters untouched
+        view.el.querySelector('[data-cadence-preset="saver"]').click();
+        const afterPreset = view.el.querySelector('[data-settings-section="extraction-mode"]');
+        expect(afterPreset.querySelector('[data-field-key="extractMode"] select').value).toBe('crawl');
+        expect(afterPreset.querySelector('[data-field-key="extractCrawlMaxReads"] input').value).toBe('18');
+    });
+
+    test('Custom card opens modal with only cadence/visibility inputs, live gap warning, and Cancel/Apply behavior', async () => {
         const { app, view } = mountSettingsView();
         view.el.querySelector('[data-cadence-custom]').click();
 
@@ -278,12 +315,9 @@ describe('settings-view UX reorganization & bug fixes', () => {
         expect(modal.querySelector('[data-field-key="extractExcludeRecentTurns"] input')).toBeTruthy();
         expect(modal.querySelector('.ml-cadence-demo')).toBeTruthy();
 
-        // Crawl inputs hidden until extractMode === 'crawl'
+        // Extraction mode & crawl inputs live in their own section, not inside the cadence modal
+        expect(modal.querySelector('[data-field-key="extractMode"]')).toBeNull();
         expect(modal.querySelector('[data-field-key="extractCrawlMaxRounds"]')).toBeNull();
-        const modeSelect = modal.querySelector('[data-field-key="extractMode"] select');
-        modeSelect.value = 'crawl';
-        modeSelect.dispatchEvent(new Event('change'));
-        expect(modal.querySelector('[data-field-key="extractCrawlMaxRounds"]')).toBeTruthy();
 
         // Enter gapped combo (updateEvery = 3, llmVisibleRecentMessages = 3)
         const everyInput = modal.querySelector('[data-field-key="updateEvery"] input');

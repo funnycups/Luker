@@ -5,7 +5,7 @@
 //
 // What this test pins (through real user gestures + a scripted mock LLM):
 //   1. Enable MG + auto extraction via the real checkboxes, flip
-//      extractMode to 'crawl' via the Custom Cadence modal, send
+//      extractMode to 'crawl' via the Extraction Mode & Crawl section, send
 //      RP turns through the composer.
 //   2. The mock LLM must see crawl tool requests whose tools array contains
 //      luker_rpg_extract_crawl_inspect / _neighbors / _search / _done and

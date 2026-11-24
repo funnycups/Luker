@@ -14,6 +14,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed the Memory Graph inspector listing the same event multiple times across different relation edges, merging them into one row with relation tags.
 - Fixed flattened CJK event summaries with arrow-separated or parenthesized locations failing to split the place header from the prose body.
 - Fixed Memory Graph extraction writing duplicate reverse edges when link direction is omitted or uses the related relation.
+- Moved the extraction graph mode and crawl parameters out of the custom cadence modal into a standalone Extraction Mode & Crawl section.
 
 ### Background Keep-Alive
 

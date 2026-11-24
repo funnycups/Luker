@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Settings page: 4 lifecycle-aligned sections (Extraction Cadence & Floor
+// Settings page: 5 lifecycle-aligned sections (Extraction Cadence & Floor
 // Hiding with 2x3 preset grid + live animated visualizer + Custom modal,
-// Prompt Injection & Recall, Graph Operations & Data, collapsed Technical
-// Tuning & Custom Prompts) plus value-diff dirty tracking and error surfacing.
+// Extraction Mode & Crawl, Prompt Injection & Recall, Graph Operations & Data,
+// collapsed Technical Tuning & Custom Prompts) plus value-diff dirty tracking
+// and error surfacing.
 
 import { h, clear, put } from '../../../../lens-shared/util.js';
 import { CONFIG_FIELDS } from '../../config-iteration/fields.js';
@@ -31,10 +32,6 @@ const CUSTOM_MODAL_KEYS = [
     'extractBatchTurns',
     'extractContextTurns',
     'extractExcludeRecentTurns',
-    'extractMode',
-    'extractCrawlMaxRounds',
-    'extractCrawlCandidateLimit',
-    'extractCrawlMaxReads',
 ];
 const clone = (value) => (value == null ? value : JSON.parse(JSON.stringify(value)));
 
@@ -251,7 +248,6 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
         const modalSummaryEl = h('p', { class: 'ml-settings-cadence-summary', text: formatCadenceSummary(draft) });
         const initialGapText = formatGapWarning(detectVisibilityGap(draft));
         const modalGapEl = h('div', { class: 'ml-settings-gap-warning', role: 'alert', hidden: !initialGapText, text: initialGapText });
-        const crawlWrap = h('div', { class: 'ml-aiset-fields' });
 
         function resolvedDraftPreview() {
             return {
@@ -285,28 +281,6 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
             },
         })));
 
-        function paintCrawlFields() {
-            clear(crawlWrap);
-            const isCrawl = String(draft.extractMode || 'oneshot') === 'crawl';
-            crawlWrap.hidden = !isCrawl;
-            if (!isCrawl) return;
-            put(crawlWrap,
-                modalNumber('extractCrawlMaxRounds', i18n('Crawl max rounds'), CONFIG_FIELDS['settings.extractCrawlMaxRounds'].min, CONFIG_FIELDS['settings.extractCrawlMaxRounds'].max),
-                modalNumber('extractCrawlCandidateLimit', i18n('Crawl candidate limit'), CONFIG_FIELDS['settings.extractCrawlCandidateLimit'].min, CONFIG_FIELDS['settings.extractCrawlCandidateLimit'].max),
-                modalNumber('extractCrawlMaxReads', i18n('Crawl read budget'), CONFIG_FIELDS['settings.extractCrawlMaxReads'].min, CONFIG_FIELDS['settings.extractCrawlMaxReads'].max),
-            );
-        }
-
-        const modeField = fieldWrap('extractMode', formField(i18n('Extraction graph mode'), selectInput([
-            { value: 'oneshot', label: i18n('One-shot (full graph input)') },
-            { value: 'crawl', label: i18n('Crawl (LLM-explored local slice)') },
-        ], String(draft.extractMode || 'oneshot'), (value) => {
-            draft.extractMode = value;
-            paintCrawlFields();
-        })));
-
-        paintCrawlFields();
-
         const content = h('div', { class: 'ml-aiset ml-custom-cadence-modal' },
             fields(
                 modalNumber('llmVisibleRecentMessages', i18n('Hide old floors — keep latest N messages visible (0 = off)'), CONFIG_FIELDS['settings.llmVisibleRecentMessages'].min, CONFIG_FIELDS['settings.llmVisibleRecentMessages'].max),
@@ -315,8 +289,6 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                 modalNumber('extractContextTurns', i18n('Extract context assistant turns'), CONFIG_FIELDS['settings.extractContextTurns'].min, CONFIG_FIELDS['settings.extractContextTurns'].max),
                 modalNumber('extractExcludeRecentTurns', i18n('Exclude latest N assistant turns from graph extraction'), CONFIG_FIELDS['settings.extractExcludeRecentTurns'].min, undefined),
             ),
-            fields(modeField),
-            crawlWrap,
             modalViz.el,
             modalSummaryEl,
             modalGapEl,
@@ -333,10 +305,6 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                 advanced.extractBatchTurns = clampByField('extractBatchTurns', draft.extractBatchTurns, advanced.extractBatchTurns);
                 advanced.extractContextTurns = clampByField('extractContextTurns', draft.extractContextTurns, advanced.extractContextTurns);
                 advanced.extractExcludeRecentTurns = clampByField('extractExcludeRecentTurns', draft.extractExcludeRecentTurns, advanced.extractExcludeRecentTurns);
-                advanced.extractMode = String(draft.extractMode || 'oneshot') === 'crawl' ? 'crawl' : 'oneshot';
-                advanced.extractCrawlMaxRounds = clampByField('extractCrawlMaxRounds', draft.extractCrawlMaxRounds, advanced.extractCrawlMaxRounds);
-                advanced.extractCrawlCandidateLimit = clampByField('extractCrawlCandidateLimit', draft.extractCrawlCandidateLimit, advanced.extractCrawlCandidateLimit);
-                advanced.extractCrawlMaxReads = clampByField('extractCrawlMaxReads', draft.extractCrawlMaxReads, advanced.extractCrawlMaxReads);
                 modalViz.destroy();
                 cadenceVisualizer.setParams(advanced);
                 paint();
@@ -371,7 +339,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
             : i18n('Manual numbers');
         const customLine2 = isCustomActive
             ? (customVisible <= 0 ? i18n('Keep full history') : i18nFormat('Hide past ${0} msgs', customVisible))
-            : i18n('Context & mode');
+            : i18n('Context & exclusions');
 
         const presetCards = CADENCE_PRESETS.map(preset => h('button', {
             type: 'button',
@@ -418,7 +386,31 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
             gapWarningEl);
     }
 
-    // ---- Section 2: Prompt Injection & Recall ----------------------------
+    // ---- Section 2: Extraction Mode & Crawl ------------------------------
+    function extractionModeSection() {
+        const isCrawl = String(advanced.extractMode || 'oneshot') === 'crawl';
+        const modeField = fieldWrap('extractMode', formField(i18n('Extraction graph mode'), selectInput([
+            { value: 'oneshot', label: i18n('One-shot (full graph input)') },
+            { value: 'crawl', label: i18n('Crawl (LLM-explored local slice)') },
+        ], isCrawl ? 'crawl' : 'oneshot', (value) => {
+            advanced.extractMode = value === 'crawl' ? 'crawl' : 'oneshot';
+            paint();
+            notifyDirtyIfChanged();
+        })));
+
+        return h('section', { class: 'ml-aiset-group ml-settings-section', dataset: { settingsSection: 'extraction-mode' } },
+            sectionTitle(i18n('Extraction Mode & Crawl')),
+            h('p', { class: 'ml-settings-note', text: i18n('One-shot sends all visible graph nodes in one extraction pass. Crawl runs a bounded read-only exploration loop first so the model pulls only the local slice it needs.') }),
+            fields(modeField),
+            isCrawl ? fields(
+                advNumber('extractCrawlMaxRounds', i18n('Crawl max rounds'), CONFIG_FIELDS['settings.extractCrawlMaxRounds'].min, CONFIG_FIELDS['settings.extractCrawlMaxRounds'].max),
+                advNumber('extractCrawlCandidateLimit', i18n('Crawl candidate limit (0 = unlimited)'), CONFIG_FIELDS['settings.extractCrawlCandidateLimit'].min, CONFIG_FIELDS['settings.extractCrawlCandidateLimit'].max),
+                advNumber('extractCrawlMaxReads', i18n('Crawl read budget'), CONFIG_FIELDS['settings.extractCrawlMaxReads'].min, CONFIG_FIELDS['settings.extractCrawlMaxReads'].max),
+            ) : null,
+            isCrawl ? h('p', { class: 'ml-settings-note', text: i18n('Max rounds caps exploration loops. Candidate limit caps the initial node index and, when positive, caps the final slice at candidate limit + 2 × read budget. Read budget caps total successful inspect, neighbor, and search calls.') }) : null);
+    }
+
+    // ---- Section 3: Prompt Injection & Recall ----------------------------
     function recallSection() {
         const { values, options } = view;
         const rag = values.recallMethod === 'rag';
@@ -480,7 +472,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                     button(i18n('View Last Injection'), () => app.showInjection(), { className: 'ml-btn-ghost' }))));
     }
 
-    // ---- Section 3: Graph Operations & Data ------------------------------
+    // ---- Section 4: Graph Operations & Data ------------------------------
     async function run(task) {
         if (busy) return;
         clearError();
@@ -739,7 +731,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                 button(i18n('AI Edit Graph'), () => openStudio(ops.openGraphStudio), { iconName: 'sparkle', disabled: busy })));
     }
 
-    // ---- Section 4: Technical Tuning & Custom Prompts (collapsed) --------
+    // ---- Section 5: Technical Tuning & Custom Prompts (collapsed) --------
     function technicalControl(field) {
         const label = i18n(field.label);
         if (field.kind === 'bool') {
@@ -880,6 +872,7 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                 busy ? button(i18n('Stop'), () => source.ops.stop(), { iconName: 'x', className: 'ml-btn-danger' }) : null,
                 h('p', { class: 'ml-settings-note', text: i18n('The AI Workbench uses to edit these settings is selected in Workbench → Settings.') })),
             extractionSection(),
+            extractionModeSection(),
             recallSection(),
             operationsSection(),
             technicalSection(),
