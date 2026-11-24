@@ -21,6 +21,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed Memory Graph extraction writing duplicate reverse edges when link direction is omitted or uses the related relation.
 - Moved the extraction graph mode and crawl parameters out of the custom cadence modal into a standalone Extraction Mode & Crawl section.
 
+### Multi-Agent Orchestrator
+
+- Fixed agenda and director orchestration profiles ignoring configured worker concurrency, run count, and abort-discard limits.
+
 ### Background Keep-Alive
 
 - Unified page-leave protection, mobile background keep-alive, and in-app chat-switch confirmation with cancellation of active chat-scoped tasks across message generation, group chats, Memory Graph, image generation, CardApp Studio, Workbench, vectorization, translation, image captioning, and data sync.
@@ -32,6 +36,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Fixes
 
+- Fixed non-streaming Gemini, Claude, and Cohere requests converting HTTP 200 error payloads into empty replies.
 - Fixed login sessions expiring after updating a Docker image.
 - Fixed iOS background action menu buttons closing without triggering when tapped.
 

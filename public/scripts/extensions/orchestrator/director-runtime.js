@@ -29,7 +29,7 @@
  */
 
 import { ORCH_EXECUTION_MODE_DIRECTOR } from './director-defaults.js';
-import { isAbortError, raceAbortSignal, throwIfAborted } from './abort-utils.js';
+import { isAbortError, isAbortSignalLike, raceAbortSignal, throwIfAborted } from './abort-utils.js';
 import { resolveAgentToolFlags } from './persistence.js';
 // Resolved lazily inside `handleDirectorDispatch` so test environments
 // can import this module without first installing a SillyTavern global —
@@ -126,6 +126,20 @@ function resolveAgentPromptPresetName(settings, agentConfig) {
 const SUPPORTED_TYPES = new Set(['normal', 'regenerate', 'swipe', 'continue']);
 
 /**
+ * Resolve the director configuration object from either the post-flatten
+ * profile shape or the legacy `{ mode, director: {...} }` wrapper.
+ *
+ * @param {object|null|undefined} profile
+ * @returns {object}
+ */
+function resolveDirectorConfig(profile) {
+    const safeProfile = profile && typeof profile === 'object' ? profile : {};
+    return safeProfile.director && typeof safeProfile.director === 'object'
+        ? safeProfile.director
+        : safeProfile;
+}
+
+/**
  * Event subscriber entry point. Inspects the active profile and, when
  * appropriate, claims the takeover handle for director mode.
  *
@@ -178,16 +192,38 @@ export async function handleDirectorDispatch(eventData, deps) {
     // (script.js takeover branch) subscribes to setOnUpdate and is
     // responsible for mirroring text/reasoning back into chat[slot]
     // plus repainting the DOM. Tests install their own adapter.
+    const director = resolveDirectorConfig(profile);
+    const discardOnAbort = Boolean(director.discardOnAbort);
     const slot = chat && Number.isInteger(messageId) ? chat[messageId] : null;
     const createMessageEditorHandle = getCreateMessageEditorHandle();
     const handle = createMessageEditorHandle({
         generationType: eventData.type,
         originalText: String(slot?.mes ?? ''),
         originalReasoning: String(slot?.extra?.reasoning ?? ''),
-        abortSignal: eventData.abortSignal,
+        // When discardOnAbort is true, suppress the handle's built-in
+        // auto-abort listener (which settles to 'aborted' and locks out
+        // subsequent handle.discard()) and wire a signal-driven discard below.
+        abortSignal: discardOnAbort ? undefined : eventData.abortSignal,
         owner: 'orchestrator-director',
     });
     eventData.takeoverHandle = handle;
+
+    let cleanupAbortDiscard = null;
+    if (discardOnAbort && isAbortSignalLike(eventData?.abortSignal)) {
+        const onAbortDiscard = () => {
+            if (!handle.complete._settled) {
+                void handle.discard().catch(() => {});
+            }
+        };
+        if (eventData.abortSignal.aborted) {
+            onAbortDiscard();
+        } else if (typeof eventData.abortSignal.addEventListener === 'function') {
+            eventData.abortSignal.addEventListener('abort', onAbortDiscard, { once: true });
+            cleanupAbortDiscard = () => {
+                eventData.abortSignal.removeEventListener('abort', onAbortDiscard);
+            };
+        }
+    }
 
     const runMainLoop = typeof deps.runMainLoop === 'function' ? deps.runMainLoop : runMainAgentLoop;
 
@@ -240,15 +276,19 @@ export async function handleDirectorDispatch(eventData, deps) {
                 // so the original seeded reasoning is preserved.
                 try {
                     if (userAborted) {
-                        // User stop: preserve partial output but signal
-                        // the kernel to skip the finalize pipeline
-                        // (MESSAGE_RECEIVED emit, persistence,
-                        // autoContinue) — those are for natural
-                        // completion, not user-driven cancel. Same
-                        // contract as ST core streaming's
-                        // `isStreamFinished` gate: stopped → partial
-                        // visible, no save, no emit.
-                        await handle.abort();
+                        if (discardOnAbort) {
+                            await handle.discard();
+                        } else {
+                            // User stop: preserve partial output but signal
+                            // the kernel to skip the finalize pipeline
+                            // (MESSAGE_RECEIVED emit, persistence,
+                            // autoContinue) — those are for natural
+                            // completion, not user-driven cancel. Same
+                            // contract as ST core streaming's
+                            // `isStreamFinished` gate: stopped → partial
+                            // visible, no save, no emit.
+                            await handle.abort();
+                        }
                     } else {
                         // Real error (network drop, backend 500, etc.):
                         // commit so the kernel runs the full pipeline.
@@ -265,6 +305,7 @@ export async function handleDirectorDispatch(eventData, deps) {
                 }
             }
         } finally {
+            if (cleanupAbortDiscard) cleanupAbortDiscard();
             // Finalize the runtime trace AND the run-panel store with the
             // resolved handle status so both back-ends settle into a
             // terminal state instead of staying "running". Trace creation
@@ -372,9 +413,8 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
     // Legacy callers may still pass `{ mode, director: {...} }`; auto-detect
     // so both shapes round-trip cleanly during the migration window.
     const safeProfile = profile && typeof profile === 'object' ? profile : {};
-    const director = safeProfile.director && typeof safeProfile.director === 'object'
-        ? safeProfile.director
-        : safeProfile;
+    const director = resolveDirectorConfig(safeProfile);
+    const discardOnAbort = Boolean(director.discardOnAbort);
     const limits = {
         maxRounds: Number(director.maxRounds) > 0 ? Number(director.maxRounds) : 40,
         maxConcurrentSubagents: Number(director.maxConcurrentSubagents) > 0 ? Number(director.maxConcurrentSubagents) : 4,
@@ -536,15 +576,14 @@ export async function runMainAgentLoop({ handle, profile, eventData, deps }) {
 
     for (let round = 0; round < limits.maxRounds; round++) {
         if (eventData?.abortSignal?.aborted) {
-            // User clicked stop between rounds. Use handle.abort() to
-            // preserve whatever sub-agent reasoning + partial main-agent
-            // output the user has been watching, but signal the kernel
-            // to skip its natural-completion finalize pipeline (no
-            // emit / persist / autoContinue). Discarding here would
-            // wipe the entire reasoning fold, which is the opposite of
-            // what the user wants when they stop mid-orchestration.
             if (!handle.complete._settled) {
-                try { await handle.abort(); } catch (_) { /* abort is idempotent / best-effort */ }
+                try {
+                    if (discardOnAbort) {
+                        await handle.discard();
+                    } else {
+                        await handle.abort();
+                    }
+                } catch (_) { /* abort/discard is idempotent / best-effort */ }
             }
             return;
         }
