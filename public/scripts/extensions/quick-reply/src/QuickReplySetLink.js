@@ -57,10 +57,13 @@ export class QuickReplySetLink {
                 const cb = document.createElement('input'); {
                     cb.type = 'checkbox';
                     cb.checked = this.isVisible;
-                    cb.addEventListener('click', () => {
+                    const syncVisibility = () => {
+                        if (this.isVisible === cb.checked) return;
                         this.isVisible = cb.checked;
                         this.update();
-                    });
+                    };
+                    cb.addEventListener('click', syncVisibility);
+                    cb.addEventListener('change', syncVisibility);
                     visible.append(cb);
                 }
                 visible.append('Buttons');

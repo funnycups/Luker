@@ -4,6 +4,15 @@
 import { saveSettingsDebounced } from '../../../script.js';
 import { extension_settings, getContext } from '../../extensions.js';
 import { addLocaleData, translate } from '../../i18n.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildHookOrderSummaryModel } from './behavior-summary-model.js';
+
+const HOOK_ORDER_SUMMARY_FIELDS = Object.freeze({
+    hookList: '#luker_hook_order_list',
+    customHooks: '.luker_hook_order_card[data-custom-order="1"]',
+});
+
+let summaryHandle = null;
 
 const MODULE_NAME = 'hook_order';
 const UI_BLOCK_ID = 'hook_order_settings';
@@ -57,8 +66,13 @@ function registerLocaleData() {
         'Reset To Detected Order': '重置为检测到的顺序',
         'No extension listeners detected for this hook.': '该 Hook 未检测到扩展监听器。',
         'Hook listener list refreshed.': 'Hook 监听器列表已刷新。',
-        'Core event ordering for extension listeners. Reorder plugins per hook.': '用于扩展监听器的核心事件顺序。可按 Hook 重排插件。',
         'Refresh Detected List': '刷新检测列表',
+        'Hook Order behavior summary': 'Hook 顺序行为摘要',
+        'Hook order': 'Hook 顺序',
+        '${detectedCount} hooks with detected listeners — custom ordering is inactive.': '${detectedCount} 个 Hook 检测到监听器 —— 自定义执行顺序未启用。',
+        'detected default order': '检测到的默认顺序',
+        '${detectedCount} hooks with detected listeners — all use ${orderMode}.': '${detectedCount} 个 Hook 检测到监听器 —— 均按${orderMode}执行。',
+        '${detectedCount} hooks with detected listeners — ${customCount} custom execution order, ${defaultCount} detected default order.': '${detectedCount} 个 Hook 检测到监听器 —— ${customCount} 个使用自定义执行顺序，${defaultCount} 个按检测到的默认顺序执行。',
     });
     addLocaleData('zh-tw', {
         'Hook Order': 'Hook 順序',
@@ -81,8 +95,13 @@ function registerLocaleData() {
         'Reset To Detected Order': '重設為偵測到的順序',
         'No extension listeners detected for this hook.': '此 Hook 未偵測到擴充監聽器。',
         'Hook listener list refreshed.': 'Hook 監聽器列表已刷新。',
-        'Core event ordering for extension listeners. Reorder plugins per hook.': '用於擴充監聽器的核心事件順序。可按 Hook 重排插件。',
         'Refresh Detected List': '刷新偵測列表',
+        'Hook Order behavior summary': 'Hook 順序行為摘要',
+        'Hook order': 'Hook 順序',
+        '${detectedCount} hooks with detected listeners — custom ordering is inactive.': '${detectedCount} 個 Hook 偵測到監聽器 —— 自訂執行順序未啟用。',
+        'detected default order': '偵測到的預設順序',
+        '${detectedCount} hooks with detected listeners — all use ${orderMode}.': '${detectedCount} 個 Hook 偵測到監聽器 —— 均按${orderMode}執行。',
+        '${detectedCount} hooks with detected listeners — ${customCount} custom execution order, ${defaultCount} detected default order.': '${detectedCount} 個 Hook 偵測到監聽器 —— ${customCount} 個使用自訂執行順序，${defaultCount} 個按偵測到的預設順序執行。',
     });
 }
 
@@ -241,6 +260,7 @@ function renderEventCard(context, eventDef) {
         return '';
     }
     const plugins = getOrderedPluginList(context, eventName);
+    const hasCustomOrder = getStoredPluginOrder(eventName).length > 0;
     const rows = plugins.length > 0
         ? plugins.map((pluginId, index) => `
 <div class="luker_hook_order_row" data-event-name="${escapeHtml(eventName)}" data-plugin-id="${escapeHtml(pluginId)}">
@@ -254,7 +274,7 @@ function renderEventCard(context, eventDef) {
         : `<div class="luker_hook_order_empty">${escapeHtml(i18n('No extension listeners detected for this hook.'))}</div>`;
 
     return `
-<div class="luker_hook_order_card" data-event-name="${escapeHtml(eventName)}">
+<div class="luker_hook_order_card" data-event-name="${escapeHtml(eventName)}" data-custom-order="${hasCustomOrder ? '1' : '0'}">
     <div class="luker_hook_order_title">${escapeHtml(i18n(eventDef.label))}</div>
     <small class="luker_hook_order_event">${escapeHtml(eventName)}</small>
     <div class="luker_hook_order_list">${rows}</div>
@@ -262,6 +282,53 @@ function renderEventCard(context, eventDef) {
         <div class="menu_button" data-luker-action="reset-event" data-event-name="${escapeHtml(eventName)}">${escapeHtml(i18n('Reset To Detected Order'))}</div>
     </div>
 </div>`;
+}
+
+function readSummaryState() {
+    const context = getContext();
+    const hooks = [];
+    for (const eventDef of TARGET_EVENTS) {
+        const eventName = getEventName(context, eventDef.key);
+        if (!eventName) {
+            continue;
+        }
+        hooks.push({
+            eventName,
+            label: eventDef.label,
+            discoveredPlugins: getDiscoveredPluginsForEvent(context, eventName),
+            customOrder: getStoredPluginOrder(eventName),
+        });
+    }
+    return { hooks, i18n };
+}
+
+function mountSummary(root) {
+    const rootEl = root?.[0];
+    if (typeof Element === 'undefined' || !(rootEl instanceof Element)) {
+        summaryHandle?.destroy?.();
+        summaryHandle = null;
+        return;
+    }
+    if (summaryHandle?.el && rootEl.contains(summaryHandle.el)) {
+        summaryHandle.refresh();
+        return;
+    }
+    summaryHandle?.destroy?.();
+    summaryHandle = null;
+    const anchor = rootEl.querySelector('.inline-drawer-content');
+    if (!anchor) {
+        return;
+    }
+    summaryHandle = mountBehaviorSummary({
+        id: 'hook-order-summary',
+        root: rootEl,
+        anchor,
+        position: 'prepend',
+        fields: HOOK_ORDER_SUMMARY_FIELDS,
+        ariaLabel: i18n('Hook Order behavior summary'),
+        readState: readSummaryState,
+        build: buildHookOrderSummaryModel,
+    });
 }
 
 function renderUi(root, context) {
@@ -277,10 +344,16 @@ function bindUi() {
     }
 
     renderUi(root, context);
+    mountSummary(root);
     root.off('.lukerHookOrder');
 
     root.on('click.lukerHookOrder', '[data-luker-action]', function () {
         const action = String(jQuery(this).data('luker-action') || '');
+        if (action === 'refresh') {
+            bindUi();
+            notifySuccess(i18n('Hook listener list refreshed.'));
+            return;
+        }
         const row = jQuery(this).closest('.luker_hook_order_row');
         const eventName = String(row.data('event-name') || jQuery(this).data('event-name') || '');
         const pluginId = String(row.data('plugin-id') || '');
@@ -303,12 +376,6 @@ function bindUi() {
             applyOrderConfig(context);
             saveSettingsDebounced();
             bindUi();
-            return;
-        }
-
-        if (action === 'refresh') {
-            bindUi();
-            notifySuccess(i18n('Hook listener list refreshed.'));
         }
     });
 }
@@ -374,7 +441,6 @@ function ensureUi() {
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-            <small style="opacity:0.85">${escapeHtml(i18n('Core event ordering for extension listeners. Reorder plugins per hook.'))}</small>
             <div id="luker_hook_order_list" class="flex-container flexFlowColumn flexNoGap"></div>
             <div class="flex-container">
                 <div class="menu_button" data-luker-action="refresh">${escapeHtml(i18n('Refresh Detected List'))}</div>

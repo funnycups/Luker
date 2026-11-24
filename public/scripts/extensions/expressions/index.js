@@ -21,6 +21,8 @@ import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-
 import { removeReasoningFromString } from '../../reasoning.js';
 import { macros } from '../../macros/macro-system.js';
 import { MacrosParser } from '/scripts/macros.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildExpressionsSummaryModel } from './behavior-summary-model.js';
 export { MODULE_NAME };
 
 /**
@@ -40,6 +42,62 @@ export { MODULE_NAME };
  */
 
 const MODULE_NAME = 'expressions';
+
+let expressionsSummaryHandle = null;
+
+function translateSummary(text, key = null) {
+    const fn = getContext()?.translate ?? globalThis.__i18n?.translate;
+    return typeof fn === 'function' ? fn(String(text ?? ''), key) : String(text ?? '');
+}
+
+function refreshExpressionsBehaviorSummary() {
+    expressionsSummaryHandle?.refresh();
+}
+
+function mountExpressionsBehaviorSummary() {
+    expressionsSummaryHandle?.destroy();
+    expressionsSummaryHandle = null;
+
+    const container = document.getElementById('expressions_container') || document;
+    const drawerContent = container.querySelector('.expression_settings .inline-drawer-content');
+    if (!drawerContent) {
+        return null;
+    }
+
+    expressionsSummaryHandle = mountBehaviorSummary({
+        id: 'expressions-settings',
+        root: drawerContent,
+        anchor: drawerContent,
+        position: 'prepend',
+        ariaLabel: translateSummary('Character expressions behavior summary'),
+        fields: {
+            translate: { selector: '#expression_translate', highlight: '.checkbox_label' },
+            allowMultiple: { selector: '#expressions_allow_multiple', highlight: '.checkbox_label' },
+            rerollIfSame: { selector: '#expressions_reroll_if_same', highlight: '.checkbox_label' },
+            api: { selector: '#expression_api', highlight: '.expression_api_block' },
+            filterAvailable: { selector: '#expressions_filter_available', highlight: '.checkbox_label' },
+            llmPrompt: '#expression_llm_prompt',
+            promptType: { selector: 'input[name="expression_prompt_type"]', highlight: '.expression_prompt_type_block' },
+            fallback: { selector: '#expression_fallback', highlight: '.expression_fallback_block' },
+        },
+        readState: (rootEl) => ({
+            api: rootEl.querySelector('#expression_api')?.value ?? extension_settings.expressions?.api ?? EXPRESSION_API.none,
+            promptType: rootEl.querySelector('input[name="expression_prompt_type"]:checked')?.value
+                || extension_settings.expressions?.promptType
+                || PROMPT_TYPE.raw,
+            translate: Boolean(rootEl.querySelector('#expression_translate')?.checked),
+            allowMultiple: Boolean(rootEl.querySelector('#expressions_allow_multiple')?.checked),
+            rerollIfSame: Boolean(rootEl.querySelector('#expressions_reroll_if_same')?.checked),
+            filterAvailable: Boolean(rootEl.querySelector('#expressions_filter_available')?.checked),
+            llmPrompt: String(rootEl.querySelector('#expression_llm_prompt')?.value ?? ''),
+            fallback: String(rootEl.querySelector('#expression_fallback')?.value ?? ''),
+            i18n: translateSummary,
+        }),
+        build: buildExpressionsSummaryModel,
+    });
+
+    return expressionsSummaryHandle;
+}
 const UPDATE_INTERVAL = 2000;
 const STREAMING_UPDATE_INTERVAL = 10000;
 const DEFAULT_FALLBACK_EXPRESSION = 'joy';
@@ -1373,6 +1431,7 @@ async function getSpritesList(name) {
 async function renderAdditionalExpressionSettings() {
     renderCustomExpressions();
     await renderFallbackExpressionPicker();
+    refreshExpressionsBehaviorSummary();
 }
 
 function renderCustomExpressions() {
@@ -1800,6 +1859,7 @@ function onExpressionApiChanged() {
         spriteCache = {};
         moduleWorker();
         saveSettingsDebounced();
+        refreshExpressionsBehaviorSummary();
     }
 }
 
@@ -1832,6 +1892,7 @@ async function onExpressionFallbackChanged() {
     }
 
     saveSettingsDebounced();
+    refreshExpressionsBehaviorSummary();
 }
 
 /**
@@ -2283,6 +2344,7 @@ export async function init() {
             $('#expression_llm_prompt').val(DEFAULT_LLM_PROMPT);
             extension_settings.expressions.llmPrompt = DEFAULT_LLM_PROMPT;
             saveSettingsDebounced();
+            refreshExpressionsBehaviorSummary();
         });
         $('#expression_prompt_raw').on('input', function () {
             extension_settings.expressions.promptType = PROMPT_TYPE.raw;
@@ -2299,12 +2361,16 @@ export async function init() {
         $('#expression_custom_remove').on('click', onClickExpressionRemoveCustom);
         $('#expression_fallback').on('change', onExpressionFallbackChanged);
         $('#expression_api').on('change', onExpressionApiChanged);
+        mountExpressionsBehaviorSummary();
     }
 
     addExpressionImage();
     addVisualNovelMode();
     migrateSettings();
     await addSettings();
+    if (event_types?.APP_READY) {
+        eventSource.on(event_types.APP_READY, refreshExpressionsBehaviorSummary);
+    }
     const wrapper = new ModuleWorkerWrapper(moduleWorker);
     const updateFunction = wrapper.update.bind(wrapper);
     setInterval(updateFunction, UPDATE_INTERVAL);

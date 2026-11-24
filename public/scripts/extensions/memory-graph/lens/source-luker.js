@@ -403,6 +403,7 @@ function createSchemaAccess(resolveApi) {
         async read() {
             const { ctx, api: mg } = resolveApi();
             const settings = getSettings();
+            const effective = getEffectiveSettings(ctx, settings) || settings;
             const info = mg.getSchemaScopeInfo(ctx, settings);
             return {
                 scope: info.hasOverride ? 'character' : 'global',
@@ -412,6 +413,12 @@ function createSchemaAccess(resolveApi) {
                 types: structuredClone(normalizeNodeTypeSchema(info.schema)),
                 defaults: structuredClone(normalizeNodeTypeSchema(getDefaultNodeTypeSchema() || null)),
                 labels: sanitizeMemoryLensLabels(labelStore(ctx)),
+                globalSettings: {
+                    autoCompressionEnabled: Boolean(settings.autoCompressionEnabled),
+                    persistentInjectionMaxSeqDistance: Math.max(0, Math.floor(Number(effective?.persistentInjectionMaxSeqDistance) || 0)),
+                    recallMethod: String(settings.recallMethod || 'llm'),
+                    ragDefaultPerTypeK: Math.max(0, Math.floor(Number(settings.ragDefaultPerTypeK) || 0)),
+                },
             };
         },
 

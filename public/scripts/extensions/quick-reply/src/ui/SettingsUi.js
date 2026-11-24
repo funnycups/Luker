@@ -4,6 +4,56 @@ import { log, warn } from '../../index.js';
 import { QuickReply } from '../QuickReply.js';
 import { QuickReplySet } from '../QuickReplySet.js';
 import { QuickReplySettings } from '../QuickReplySettings.js';
+import { mountBehaviorSummary } from '../../../../lens-shared/behavior-summary.js';
+import {
+    buildQuickReplyGlobalSummary,
+    buildQuickReplySetSummary,
+} from '../behavior-summary-models.js';
+
+function translateSummary(text, key = null) {
+    const fn = globalThis.Luker?.getContext?.()?.translate ?? globalThis.__i18n?.translate;
+    return typeof fn === 'function' ? fn(String(text ?? ''), key) : String(text ?? '');
+}
+
+function countConfigSets(config) {
+    if (!Array.isArray(config?.setList)) {
+        return { visible: 0, hidden: 0 };
+    }
+    let visible = 0;
+    let hidden = 0;
+    for (const link of config.setList) {
+        if (!link?.set || link.set.isDeleted) {
+            continue;
+        }
+        if (link.isVisible === false) {
+            hidden += 1;
+        } else {
+            visible += 1;
+        }
+    }
+    return { visible, hidden };
+}
+
+function getConfigSetLinkState(config, targetSet, setName) {
+    if (!Array.isArray(config?.setList)) {
+        return { linked: false, visible: false };
+    }
+    let linked = false;
+    let visible = false;
+    for (const link of config.setList) {
+        const linkedSet = link?.set;
+        if (!linkedSet || linkedSet.isDeleted) {
+            continue;
+        }
+        if (linkedSet === targetSet || (Boolean(setName) && linkedSet.name === setName)) {
+            linked = true;
+            if (link.isVisible !== false) {
+                visible = true;
+            }
+        }
+    }
+    return { linked, visible };
+}
 
 export class SettingsUi {
     /** @type {QuickReplySettings} */ settings;
@@ -28,6 +78,10 @@ export class SettingsUi {
     /**@type {HTMLInputElement}*/ onlyBorderColor;
     /**@type {HTMLSelectElement}*/ currentSet;
 
+    globalSummaryHandle = null;
+    setSummaryHandle = null;
+    settingsUnsubscribe = null;
+
 
     constructor(/**@type {QuickReplySettings}*/settings) {
         this.settings = settings;
@@ -46,6 +100,7 @@ export class SettingsUi {
         this.prepareDom();
     }
     unrender() {
+        this.destroyBehaviorSummaries();
         this.dom?.remove();
         this.dom = null;
     }
@@ -86,6 +141,7 @@ export class SettingsUi {
         // @ts-ignore
         this.settings.config.renderSettingsInto(clone);
         this.dom.querySelector('#qr--global').replaceWith(clone);
+        this.refreshBehaviorSummaries();
     }
     prepareChatSetList() {
         const dom = this.template.querySelector('#qr--chat');
@@ -101,6 +157,7 @@ export class SettingsUi {
             }
         }
         this.dom.querySelector('#qr--chat').replaceWith(clone);
+        this.refreshBehaviorSummaries();
     }
     prepareCharacterSetList() {
         const dom = this.template.querySelector('#qr--character');
@@ -120,6 +177,7 @@ export class SettingsUi {
 
         // Replace the old DOM element with our newly prepared clone.
         this.dom.querySelector('#qr--character').replaceWith(clone);
+        this.refreshBehaviorSummaries();
     }
 
     prepareQrEditor() {
@@ -173,18 +231,21 @@ export class SettingsUi {
             const qrs = this.currentQrSet;
             qrs.disableSend = this.disableSend.checked;
             qrs.save();
+            this.refreshBehaviorSummaries();
         });
         this.placeBeforeInput = this.dom.querySelector('#qr--placeBeforeInput');
         this.placeBeforeInput.addEventListener('click', () => {
             const qrs = this.currentQrSet;
             qrs.placeBeforeInput = this.placeBeforeInput.checked;
             qrs.save();
+            this.refreshBehaviorSummaries();
         });
         this.injectInput = this.dom.querySelector('#qr--injectInput');
         this.injectInput.addEventListener('click', () => {
             const qrs = this.currentQrSet;
             qrs.injectInput = this.injectInput.checked;
             qrs.save();
+            this.refreshBehaviorSummaries();
         });
         let initialColorChange = true;
         this.color = this.dom.querySelector('#qr--color');
@@ -203,6 +264,7 @@ export class SettingsUi {
             qrs.color = evt.detail.rgb;
             qrs.save();
             this.currentQrSet.updateColor();
+            this.refreshBehaviorSummaries();
         });
         // @ts-ignore
         this.dom.querySelector('#qr--colorClear').addEventListener('click', (evt) => {
@@ -211,6 +273,7 @@ export class SettingsUi {
             this.color.color = 'transparent';
             qrs.save();
             this.currentQrSet.updateColor();
+            this.refreshBehaviorSummaries();
         });
         this.onlyBorderColor = this.dom.querySelector('#qr--onlyBorderColor');
         this.onlyBorderColor.addEventListener('click', () => {
@@ -218,6 +281,7 @@ export class SettingsUi {
             qrs.onlyBorderColor = this.onlyBorderColor.checked;
             qrs.save();
             this.currentQrSet.updateColor();
+            this.refreshBehaviorSummaries();
         });
         this.onQrSetChange();
     }
@@ -238,6 +302,123 @@ export class SettingsUi {
             handle: '.drag-handle',
             stop: () => this.onQrListSort(),
         });
+        this.refreshBehaviorSummaries();
+    }
+
+
+    destroyBehaviorSummaries() {
+        if (typeof this.settingsUnsubscribe === 'function') {
+            this.settingsUnsubscribe();
+            this.settingsUnsubscribe = null;
+        }
+        this.globalSummaryHandle?.destroy();
+        this.globalSummaryHandle = null;
+        this.setSummaryHandle?.destroy();
+        this.setSummaryHandle = null;
+    }
+
+    refreshBehaviorSummaries() {
+        this.globalSummaryHandle?.refresh();
+        this.setSummaryHandle?.refresh();
+    }
+
+    mountBehaviorSummaries() {
+        this.destroyBehaviorSummaries();
+        if (!this.dom) {
+            return;
+        }
+
+        if (typeof this.settings?.subscribe === 'function') {
+            this.settingsUnsubscribe = this.settings.subscribe(() => this.refreshBehaviorSummaries());
+        }
+
+        const drawerContent = this.dom.querySelector('.inline-drawer-content');
+        if (drawerContent) {
+            this.globalSummaryHandle = mountBehaviorSummary({
+                id: 'quick-reply-global',
+                root: drawerContent,
+                anchor: drawerContent,
+                position: 'prepend',
+                ariaLabel: translateSummary('Quick Reply global settings summary'),
+                fields: {
+                    isEnabled: { selector: '#qr--isEnabled', highlight: 'label' },
+                    isCombined: { selector: '#qr--isCombined', highlight: 'label' },
+                    showPopoutButton: { selector: '#qr--showPopoutButton', highlight: 'label' },
+                    globalSets: { selector: '#qr--global-setListAdd', highlight: '#qr--global' },
+                    chatSets: { selector: '#qr--chat-setListAdd', highlight: '#qr--chat' },
+                    charSets: { selector: '#qr--character-setListAdd', highlight: '#qr--character' },
+                },
+                readState: (rootEl) => {
+                    const globalCounts = countConfigSets(this.settings?.config);
+                    const chatCounts = countConfigSets(this.settings?.chatConfig);
+                    const charCounts = countConfigSets(this.settings?.charConfig);
+                    return {
+                        isEnabled: Boolean(rootEl.querySelector('#qr--isEnabled')?.checked),
+                        isCombined: Boolean(rootEl.querySelector('#qr--isCombined')?.checked),
+                        showPopoutButton: Boolean(rootEl.querySelector('#qr--showPopoutButton')?.checked),
+                        globalCount: globalCounts.visible,
+                        chatCount: chatCounts.visible,
+                        charCount: charCounts.visible,
+                        hiddenCount: globalCounts.hidden + chatCounts.hidden + charCounts.hidden,
+                        hasChat: Boolean(this.settings?.chatConfig),
+                        hasCharacter: Boolean(this.settings?.charConfig),
+                        i18n: translateSummary,
+                    };
+                },
+                build: buildQuickReplyGlobalSummary,
+            });
+        }
+
+        const editorEl = this.dom.querySelector('#qr--editor');
+        const setSettingsEl = this.dom.querySelector('#qr--set-settings');
+        if (editorEl && setSettingsEl) {
+            this.setSummaryHandle = mountBehaviorSummary({
+                id: 'quick-reply-set',
+                root: editorEl,
+                anchor: setSettingsEl,
+                position: 'prepend',
+                ariaLabel: translateSummary('Quick Reply per-set behavior summary'),
+                fields: {
+                    setName: '#qr--set',
+                    disableSend: { selector: '#qr--disableSend', highlight: 'label' },
+                    placeBeforeInput: { selector: '#qr--placeBeforeInput', highlight: 'label' },
+                    injectInput: { selector: '#qr--injectInput', highlight: 'label' },
+                    onlyBorderColor: { selector: '#qr--onlyBorderColor', highlight: 'label' },
+                },
+                readState: (rootEl) => {
+                    const qrs = this.currentQrSet;
+                    const setName = String(qrs?.name ?? rootEl.querySelector('#qr--set')?.value ?? '').trim();
+                    const linkedScopes = [];
+                    const visibleScopes = [];
+                    if (setName) {
+                        const scopes = [
+                            ['global', this.settings?.config],
+                            ['chat', this.settings?.chatConfig],
+                            ['character', this.settings?.charConfig],
+                        ];
+                        for (const [scopeName, cfg] of scopes) {
+                            const linkState = getConfigSetLinkState(cfg, qrs, setName);
+                            if (linkState.linked) {
+                                linkedScopes.push(scopeName);
+                                if (linkState.visible) {
+                                    visibleScopes.push(scopeName);
+                                }
+                            }
+                        }
+                    }
+                    return {
+                        setName,
+                        disableSend: Boolean(rootEl.querySelector('#qr--disableSend')?.checked),
+                        placeBeforeInput: Boolean(rootEl.querySelector('#qr--placeBeforeInput')?.checked),
+                        injectInput: Boolean(rootEl.querySelector('#qr--injectInput')?.checked),
+                        linkedScopes,
+                        visibleScopes,
+                        i18n: translateSummary,
+                    };
+                },
+                build: buildQuickReplySetSummary,
+            });
+        }
     }
 
 
@@ -247,22 +428,26 @@ export class SettingsUi {
         this.prepareChatSetList();
         this.prepareCharacterSetList();
         this.prepareQrEditor();
+        this.mountBehaviorSummaries();
     }
 
 
     async onIsEnabled() {
         this.settings.isEnabled = this.isEnabled.checked;
         this.settings.save();
+        this.refreshBehaviorSummaries();
     }
 
     async onIsCombined() {
         this.settings.isCombined = this.isCombined.checked;
         this.settings.save();
+        this.refreshBehaviorSummaries();
     }
 
     async onShowPopoutButton() {
         this.settings.showPopoutButton = this.showPopoutButton.checked;
         this.settings.save();
+        this.refreshBehaviorSummaries();
     }
 
     async onGlobalSetListSort() {

@@ -23,6 +23,7 @@ export class QuickReplySettings {
     /**@type {{[key:string]: QuickReplyConfig}}*/ characterConfigs = {};
     /**@type {QuickReplyConfig}*/ _chatConfig;
     /**@type {QuickReplyConfig}*/ _charConfig;
+    /**@type {Set<Function>}*/ _changeListeners = new Set();
     get chatConfig() {
         return this._chatConfig;
     }
@@ -31,6 +32,7 @@ export class QuickReplySettings {
             this.unhookConfig(this._chatConfig);
             this._chatConfig = value;
             this.hookConfig(this._chatConfig);
+            this.notifyChange();
         }
     }
     get charConfig() {
@@ -41,12 +43,29 @@ export class QuickReplySettings {
             this.unhookConfig(this._charConfig);
             this._charConfig = value;
             this.hookConfig(this._charConfig);
+            this.notifyChange();
         }
     }
 
     /**@type {Function}*/ onSave;
     /**@type {Function}*/ onRequestEditSet;
 
+
+    subscribe(listener) {
+        if (typeof listener !== 'function') {
+            return () => {};
+        }
+        this._changeListeners.add(listener);
+        return () => {
+            this._changeListeners.delete(listener);
+        };
+    }
+
+    notifyChange() {
+        for (const listener of this._changeListeners) {
+            listener();
+        }
+    }
 
     init() {
         this.hookConfig(this.config);
@@ -78,6 +97,7 @@ export class QuickReplySettings {
         if (this.onSave) {
             this.onSave();
         }
+        this.notifyChange();
     }
 
     requestEditSet(qrs) {

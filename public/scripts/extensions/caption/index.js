@@ -14,9 +14,96 @@ import { callGenericPopup, Popup, POPUP_TYPE } from '../../popup.js';
 import { debounce_timeout, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '../../constants.js';
 import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-values.js';
 import { t } from '../../i18n.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildCaptionSummaryModel } from './behavior-summary-model.js';
 export { MODULE_NAME };
 
 const MODULE_NAME = 'caption';
+
+let captionSummaryHandle = null;
+
+function translateSummary(text, key = null) {
+    const fn = getContext()?.translate ?? globalThis.__i18n?.translate;
+    return typeof fn === 'function' ? fn(String(text ?? ''), key) : String(text ?? '');
+}
+
+function readSelectDisplayLabel(selectEl) {
+    if (!(selectEl instanceof HTMLSelectElement) || !selectEl.value) {
+        return '';
+    }
+    const selected = selectEl.selectedOptions?.[0]
+        || (selectEl.selectedIndex >= 0 ? selectEl.options?.[selectEl.selectedIndex] : null);
+    return String(selected?.textContent || '').trim();
+}
+
+function refreshCaptionBehaviorSummary() {
+    captionSummaryHandle?.refresh();
+}
+
+function mountCaptionBehaviorSummary() {
+    captionSummaryHandle?.destroy();
+    captionSummaryHandle = null;
+
+    const container = document.getElementById('caption_container') || document;
+    const drawerContent = container.querySelector('.caption_settings .inline-drawer-content');
+    if (!drawerContent) {
+        return null;
+    }
+
+    captionSummaryHandle = mountBehaviorSummary({
+        id: 'caption-settings',
+        root: drawerContent,
+        anchor: drawerContent,
+        position: 'prepend',
+        ariaLabel: translateSummary('Image captioning behavior summary'),
+        fields: {
+            source: '#caption_source',
+            multimodalApi: { selector: '#caption_multimodal_api', highlight: '.flex-container.flexFlowColumn' },
+            multimodalModel: { selector: '#caption_multimodal_model', highlight: '.flex-container.flexFlowColumn' },
+            customModel: { selector: '#caption_custom_model', highlight: '[data-type="custom"]' },
+            ollamaCustomModel: { selector: '#caption_ollama_custom_model', highlight: '.marginTop5' },
+            allowReverseProxy: { selector: '#caption_allow_reverse_proxy', highlight: '.checkbox_label' },
+            altEndpointEnabled: { selector: '#caption_altEndpoint_enabled', highlight: '.checkbox_label' },
+            altEndpointUrl: '#caption_altEndpoint_url',
+            prompt: '#caption_prompt',
+            promptAsk: { selector: '#caption_prompt_ask', highlight: '.checkbox_label' },
+            template: '#caption_template',
+            autoMode: { selector: '#caption_auto_mode', highlight: '.checkbox_label' },
+            refineMode: { selector: '#caption_refine_mode', highlight: '.checkbox_label' },
+            showInChat: { selector: '#caption_show_in_chat', highlight: '.checkbox_label' },
+        },
+        readState: (rootEl) => {
+            const apiSel = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('#caption_multimodal_api'));
+            const modelSel = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('#caption_multimodal_model'));
+            return {
+                source: String(rootEl.querySelector('#caption_source')?.value || extension_settings.caption?.source || 'local'),
+                multimodalApi: String(apiSel?.value || extension_settings.caption?.multimodal_api || 'openai'),
+                multimodalApiLabel: readSelectDisplayLabel(apiSel),
+                multimodalModel: String(modelSel?.value || extension_settings.caption?.multimodal_model || ''),
+                multimodalModelLabel: readSelectDisplayLabel(modelSel),
+                customModel: String(rootEl.querySelector('#caption_custom_model')?.value ?? ''),
+                ollamaCustomModel: String(rootEl.querySelector('#caption_ollama_custom_model')?.value ?? ''),
+                currentOllamaModel: String(textgenerationwebui_settings?.ollama_model ?? ''),
+                currentVllmModel: String(textgenerationwebui_settings?.vllm_model ?? ''),
+                currentCustomModel: String(oai_settings?.custom_model ?? ''),
+                allowReverseProxy: Boolean(rootEl.querySelector('#caption_allow_reverse_proxy')?.checked),
+                reverseProxyConfigured: Boolean(oai_settings?.reverse_proxy),
+                altEndpointEnabled: Boolean(rootEl.querySelector('#caption_altEndpoint_enabled')?.checked),
+                altEndpointUrl: String(rootEl.querySelector('#caption_altEndpoint_url')?.value ?? ''),
+                prompt: String(rootEl.querySelector('#caption_prompt')?.value ?? ''),
+                promptAsk: Boolean(rootEl.querySelector('#caption_prompt_ask')?.checked),
+                template: String(rootEl.querySelector('#caption_template')?.value ?? ''),
+                autoMode: Boolean(rootEl.querySelector('#caption_auto_mode')?.checked),
+                refineMode: Boolean(rootEl.querySelector('#caption_refine_mode')?.checked),
+                showInChat: Boolean(rootEl.querySelector('#caption_show_in_chat')?.checked),
+                i18n: translateSummary,
+            };
+        },
+        build: buildCaptionSummaryModel,
+    });
+
+    return captionSummaryHandle;
+}
 
 async function withCaptionActivity(fn) {
     const guard = getContext()?.activityGuard;
@@ -583,6 +670,7 @@ export async function init() {
             const types = type.split(',');
             $(this).toggle(types.includes(extension_settings.caption.multimodal_api));
         });
+        refreshCaptionBehaviorSummary();
     }
     async function addSettings() {
         const html = await renderExtensionTemplateAsync('caption', 'settings', { TEMPLATE_DEFAULT, PROMPT_DEFAULT });
@@ -662,6 +750,7 @@ export async function init() {
         extension_settings.caption.prompt = PROMPT_DEFAULT;
         $('#caption_prompt').val(PROMPT_DEFAULT);
         saveSettingsDebounced();
+        refreshCaptionBehaviorSummary();
     });
     $('#caption_template').on('input', () => {
         extension_settings.caption.template = String($('#caption_template').val());
@@ -723,6 +812,11 @@ export async function init() {
         await switchMultimodalBlocks();
         saveSettingsDebounced();
     });
+
+    mountCaptionBehaviorSummary();
+    if (event_types?.APP_READY) {
+        eventSource.on(event_types.APP_READY, refreshCaptionBehaviorSummary);
+    }
 
     const onMessageEvent = async (/** @type {number} */ messageId) => {
         if (!extension_settings.caption.auto_mode) {

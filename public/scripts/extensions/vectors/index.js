@@ -45,7 +45,14 @@ import {
 } from '../connection-manager/embed-rerank.js';
 import { EmbeddingService } from '../../embedding-service.js';
 import { initializePromptDefaults, requireStoredPrompt } from '../../lib/prompt-values.js';
-import { t } from '../../i18n.js';
+import { t, translate } from '../../i18n.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import {
+    buildVectorsSharedSummary,
+    buildVectorsWorldInfoSummary,
+    buildVectorsFilesSummary,
+    buildVectorsChatsSummary,
+} from './behavior-summary-models.js';
 
 /**
  * @typedef {object} HashedMessage
@@ -1396,19 +1403,225 @@ function refreshRerankProfileSelect() {
     updateProfileButtonStates();
 }
 
+let summaryHandles = [];
+
+function destroyVectorBehaviorSummaries() {
+    for (const handle of summaryHandles) {
+        handle.destroy();
+    }
+    summaryHandles = [];
+}
+
+export function refreshVectorBehaviorSummaries() {
+    for (const handle of summaryHandles) {
+        handle.refresh();
+    }
+}
+
+function readSelectOptionLabel(selectEl) {
+    if (!(selectEl instanceof HTMLSelectElement) || !selectEl.value) {
+        return '';
+    }
+    const selected = selectEl.selectedOptions?.[0]
+        || (selectEl.selectedIndex >= 0 ? selectEl.options?.[selectEl.selectedIndex] : null);
+    return String(selected?.textContent || '').trim();
+}
+
+function readRadioNumber(rootEl, name, fallback) {
+    const checked = rootEl.querySelector(`input[name="${name}"]:checked`);
+    if (!checked) {
+        return fallback;
+    }
+    const num = Number(checked.value);
+    return Number.isFinite(num) ? num : fallback;
+}
+
+function mountVectorBehaviorSummaries(containerEl = document.getElementById('vectors_container')) {
+    destroyVectorBehaviorSummaries();
+    const vectorsRoot = containerEl?.querySelector?.('.vectors_settings') || containerEl;
+    const drawerContent = vectorsRoot?.querySelector?.('.inline-drawer-content');
+    if (!drawerContent) {
+        return [];
+    }
+
+    const wiHeading = drawerContent.querySelector('h4[data-i18n="World Info settings"]');
+    const filesHeading = drawerContent.querySelector('h4[data-i18n="File vectorization settings"]');
+    const chatsHeading = drawerContent.querySelector('h4[data-i18n="Chat vectorization settings"]');
+
+    summaryHandles.push(mountBehaviorSummary({
+        id: 'vectors-shared',
+        root: drawerContent,
+        anchor: drawerContent,
+        position: 'prepend',
+        ariaLabel: translate('Vector Storage shared retrieval and rerank summary'),
+        fields: {
+            embeddingProfileId: { selector: '#vectors_embedding_profile', highlight: '.flex-container.flexFlowColumn' },
+            query: { selector: '#vectors_query', highlight: '.flex-container.flexFlowColumn' },
+            scoreThreshold: { selector: '#vectors_score_threshold', highlight: '.flex-container.flexFlowColumn' },
+            forceChunkDelimiter: { selector: '#vectors_force_chunk_delimiter', highlight: '.flex-container.flexFlowColumn' },
+            includeWi: { selector: '#vectors_include_wi', highlight: '.checkbox_label' },
+            rerankEnabled: { selector: '#vectors_rerank_enabled', highlight: '.checkbox_label' },
+            rerankProfileId: { selector: '#vectors_rerank_profile', highlight: '#vectors_rerank_settings' },
+            enabledWorldInfo: { selector: '#vectors_enabled_world_info', highlight: '.checkbox_label' },
+            enabledFiles: { selector: '#vectors_enabled_files', highlight: '.checkbox_label' },
+            enabledChats: { selector: '#vectors_enabled_chats', highlight: '.checkbox_label' },
+        },
+        readState: (rootEl) => {
+            const embedSel = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('#vectors_embedding_profile'));
+            const rerankSel = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('#vectors_rerank_profile'));
+            return {
+                enabledWorldInfo: Boolean(rootEl.querySelector('#vectors_enabled_world_info')?.checked),
+                enabledFiles: Boolean(rootEl.querySelector('#vectors_enabled_files')?.checked),
+                enabledChats: Boolean(rootEl.querySelector('#vectors_enabled_chats')?.checked),
+                embeddingProfileId: String(embedSel?.value ?? ''),
+                embeddingProfileLabel: readSelectOptionLabel(embedSel),
+                query: rootEl.querySelector('#vectors_query')?.value,
+                scoreThreshold: rootEl.querySelector('#vectors_score_threshold')?.value,
+                forceChunkDelimiter: String(rootEl.querySelector('#vectors_force_chunk_delimiter')?.value ?? ''),
+                includeWi: Boolean(rootEl.querySelector('#vectors_include_wi')?.checked),
+                rerankEnabled: Boolean(rootEl.querySelector('#vectors_rerank_enabled')?.checked),
+                rerankProfileId: String(rerankSel?.value ?? ''),
+                rerankProfileLabel: readSelectOptionLabel(rerankSel),
+                translate,
+            };
+        },
+        build: buildVectorsSharedSummary,
+    }));
+
+    if (wiHeading) {
+        summaryHandles.push(mountBehaviorSummary({
+            id: 'vectors-world-info',
+            root: drawerContent,
+            anchor: wiHeading,
+            position: 'after',
+            ariaLabel: translate('Vector Storage World Info summary'),
+            fields: {
+                enabledWorldInfo: { selector: '#vectors_enabled_world_info', highlight: '.checkbox_label' },
+                enabledForAll: { selector: '#vectors_enabled_for_all', highlight: '.checkbox_label' },
+                maxEntries: { selector: '#vectors_max_entries', highlight: '.flex1' },
+            },
+            readState: (rootEl) => ({
+                enabledWorldInfo: Boolean(rootEl.querySelector('#vectors_enabled_world_info')?.checked),
+                enabledForAll: Boolean(rootEl.querySelector('#vectors_enabled_for_all')?.checked),
+                maxEntries: rootEl.querySelector('#vectors_max_entries')?.value,
+                translate,
+            }),
+            build: buildVectorsWorldInfoSummary,
+        }));
+    }
+
+    if (filesHeading) {
+        summaryHandles.push(mountBehaviorSummary({
+            id: 'vectors-files',
+            root: drawerContent,
+            anchor: filesHeading,
+            position: 'after',
+            ariaLabel: translate('Vector Storage file vectorization summary'),
+            fields: {
+                enabledFiles: { selector: '#vectors_enabled_files', highlight: '.checkbox_label' },
+                onlyCustomBoundary: { selector: '#vectors_only_custom_boundary', highlight: '.checkbox_label' },
+                forceChunkDelimiter: { selector: '#vectors_force_chunk_delimiter', highlight: '.flex-container.flexFlowColumn' },
+                translateFiles: { selector: '#vectors_translate_files', highlight: '.checkbox_label' },
+                sizeThreshold: { selector: '#vectors_size_threshold', highlight: '.flex1' },
+                chunkSize: { selector: '#vectors_chunk_size', highlight: '.flex1' },
+                overlapPercent: { selector: '#vectors_overlap_percent', highlight: '.flex1' },
+                chunkCount: { selector: '#vectors_chunk_count', highlight: '.flex1' },
+                sizeThresholdDb: { selector: '#vectors_size_threshold_db', highlight: '.flex1' },
+                chunkSizeDb: { selector: '#vectors_chunk_size_db', highlight: '.flex1' },
+                overlapPercentDb: { selector: '#vectors_overlap_percent_db', highlight: '.flex1' },
+                chunkCountDb: { selector: '#vectors_chunk_count_db', highlight: '.flex1' },
+                fileTemplateDb: '#vectors_file_template_db',
+                filePositionDb: { selector: 'input[name="vectors_file_position_db"]', highlight: '.radio_group' },
+                fileDepthDb: '#vectors_file_depth_db',
+                fileDepthRoleDb: '#vectors_file_depth_role_db',
+            },
+            readState: (rootEl) => ({
+                enabledFiles: Boolean(rootEl.querySelector('#vectors_enabled_files')?.checked),
+                onlyCustomBoundary: Boolean(rootEl.querySelector('#vectors_only_custom_boundary')?.checked),
+                forceChunkDelimiter: String(rootEl.querySelector('#vectors_force_chunk_delimiter')?.value ?? ''),
+                translateFiles: Boolean(rootEl.querySelector('#vectors_translate_files')?.checked),
+                translationAvailable: typeof globalThis.translate === 'function',
+                sizeThreshold: rootEl.querySelector('#vectors_size_threshold')?.value,
+                chunkSize: rootEl.querySelector('#vectors_chunk_size')?.value,
+                overlapPercent: rootEl.querySelector('#vectors_overlap_percent')?.value,
+                chunkCount: rootEl.querySelector('#vectors_chunk_count')?.value,
+                sizeThresholdDb: rootEl.querySelector('#vectors_size_threshold_db')?.value,
+                chunkSizeDb: rootEl.querySelector('#vectors_chunk_size_db')?.value,
+                overlapPercentDb: rootEl.querySelector('#vectors_overlap_percent_db')?.value,
+                chunkCountDb: rootEl.querySelector('#vectors_chunk_count_db')?.value,
+                fileTemplateDb: String(rootEl.querySelector('#vectors_file_template_db')?.value ?? ''),
+                filePositionDb: readRadioNumber(rootEl, 'vectors_file_position_db', settings.file_position_db),
+                fileDepthDb: rootEl.querySelector('#vectors_file_depth_db')?.value,
+                fileDepthRoleDb: rootEl.querySelector('#vectors_file_depth_role_db')?.value,
+                translate,
+            }),
+            build: buildVectorsFilesSummary,
+        }));
+    }
+
+    if (chatsHeading) {
+        summaryHandles.push(mountBehaviorSummary({
+            id: 'vectors-chats',
+            root: drawerContent,
+            anchor: chatsHeading,
+            position: 'after',
+            ariaLabel: translate('Vector Storage chat vectorization summary'),
+            fields: {
+                enabledChats: { selector: '#vectors_enabled_chats', highlight: '.checkbox_label' },
+                keepHidden: { selector: '#vectors_keep_hidden', highlight: '.checkbox_label' },
+                template: '#vectors_template',
+                position: { selector: 'input[name="vectors_position"]', highlight: '.radio_group' },
+                depth: '#vectors_depth',
+                messageChunkSize: { selector: '#vectors_message_chunk_size', highlight: '.flex1' },
+                protect: { selector: '#vectors_protect', highlight: '.flex1' },
+                insert: { selector: '#vectors_insert', highlight: '.flex1' },
+                summarize: { selector: '#vectors_summarize', highlight: '.checkbox_label' },
+                summarizeSent: { selector: '#vectors_summarize_user', highlight: '.checkbox_label' },
+                summarySource: '#vectors_summary_source',
+                summaryPrompt: '#vectors_summary_prompt',
+                summaryRetries: '#vectors_summary_retries',
+                summaryThreshold: '#vectors_summary_threshold',
+            },
+            readState: (rootEl) => ({
+                enabledChats: Boolean(rootEl.querySelector('#vectors_enabled_chats')?.checked),
+                keepHidden: Boolean(rootEl.querySelector('#vectors_keep_hidden')?.checked),
+                template: String(rootEl.querySelector('#vectors_template')?.value ?? ''),
+                position: readRadioNumber(rootEl, 'vectors_position', settings.position),
+                depth: rootEl.querySelector('#vectors_depth')?.value,
+                messageChunkSize: rootEl.querySelector('#vectors_message_chunk_size')?.value,
+                protect: rootEl.querySelector('#vectors_protect')?.value,
+                insert: rootEl.querySelector('#vectors_insert')?.value,
+                summarize: Boolean(rootEl.querySelector('#vectors_summarize')?.checked),
+                summarizeSent: Boolean(rootEl.querySelector('#vectors_summarize_user')?.checked),
+                summarySource: String(rootEl.querySelector('#vectors_summary_source')?.value ?? 'main'),
+                summaryPrompt: String(rootEl.querySelector('#vectors_summary_prompt')?.value ?? ''),
+                summaryRetries: rootEl.querySelector('#vectors_summary_retries')?.value,
+                summaryThreshold: rootEl.querySelector('#vectors_summary_threshold')?.value,
+                translate,
+            }),
+            build: buildVectorsChatsSummary,
+        }));
+    }
+
+    return summaryHandles;
+}
+
 function updateProfileButtonStates() {
     $('#vectors_rerank_settings').toggle(!!settings.rerank_enabled);
+    refreshVectorBehaviorSummaries();
 }
 
 function persistSettings() {
     Object.assign(extension_settings.vectors, settings);
     saveSettingsDebounced();
+    refreshVectorBehaviorSummaries();
 }
 
 function toggleSectionVisibility() {
     $('#vectors_files_settings').toggle(!!settings.enabled_files);
     $('#vectors_chats_settings').toggle(!!settings.enabled_chats);
     $('#vectors_world_info_settings').toggle(!!settings.enabled_world_info);
+    refreshVectorBehaviorSummaries();
 }
 
 export async function init() {
@@ -1542,6 +1755,7 @@ export async function init() {
         settings.summary_prompt = DEFAULT_SUMMARY_PROMPT;
         $('#vectors_summary_prompt').val(DEFAULT_SUMMARY_PROMPT);
         persistSettings();
+        refreshVectorBehaviorSummaries();
     });
     $('#vectors_summary_retries').val(settings.summary_retries).on('input', () => {
         const parsed = Number($('#vectors_summary_retries').val());
@@ -1631,6 +1845,11 @@ export async function init() {
 
     toggleSectionVisibility();
     updateProfileButtonStates();
+    mountVectorBehaviorSummaries();
+
+    if (event_types?.APP_READY) {
+        eventSource.on(event_types.APP_READY, refreshVectorBehaviorSummaries);
+    }
 
     eventSource.on(event_types.MESSAGE_DELETED, onChatEvent);
     eventSource.on(event_types.MESSAGE_EDITED, onChatEvent);

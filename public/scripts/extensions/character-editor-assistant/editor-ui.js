@@ -1,4 +1,12 @@
 import { importPresetExample, openPresetDerivation, PRESET_EXAMPLES } from '../../lens-shared/preset-examples.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildCeaSummaryModel } from './behavior-summary-model.js';
+
+const CEA_SUMMARY_FIELDS = Object.freeze({
+    requestApiPresetName: '#cea_sync_api_preset',
+    requestLlmPresetName: '#cea_sync_llm_preset',
+    toolCallRetryMax: '#cea_tool_retries',
+});
 
 export function createCharacterEditorUi(deps) {
     const {
@@ -62,7 +70,6 @@ export function createCharacterEditorUi(deps) {
         style.id = STYLE_ID;
         style.textContent = `
 #${UI_BLOCK_ID} .cea_row { display:flex; gap:8px; align-items:center; margin:6px 0; flex-wrap:wrap; }
-#${UI_BLOCK_ID} .cea_preset_note { display:block; margin:8px 0 4px; opacity:0.78; }
 #${UI_BLOCK_ID} .cea_preset_actions { margin:4px 0 8px; }
 #${UI_BLOCK_ID} .cea_panel { border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 22%, transparent); border-radius:8px; padding:8px; margin:8px 0; }
 #${UI_BLOCK_ID} .cea_item { border:1px solid color-mix(in oklab, var(--SmartThemeBodyColor) 16%, transparent); border-radius:8px; padding:8px; margin:6px 0; }
@@ -260,7 +267,6 @@ export function createCharacterEditorUi(deps) {
                 <div class="menu_button" id="cea_open_editor_popup">${escapeHtml(i18n('Open Editor'))}</div>
                 <div class="menu_button" id="cea_open_cardapp_studio"><i class="fa-solid fa-code"></i> ${escapeHtml(i18n('CardApp Studio'))}</div>
             </div>
-            <small class="cea_preset_note">${escapeHtml(i18n('The AI Workbench uses to edit these settings is selected in Workbench → Settings.'))}</small>
             <label for="cea_sync_llm_preset">${escapeHtml(i18n('Iteration AI prompt preset (params + prompt)'))}</label>
             <select id="cea_sync_llm_preset" class="text_pole"></select>
             <div class="cea_row cea_preset_actions">
@@ -302,6 +308,51 @@ export function createCharacterEditorUi(deps) {
         bindUi();
     }
 
+    let summaryHandle = null;
+
+    function readSummaryState(rootEl) {
+        const settings = getSettings();
+        const readValue = (selector, fallback) => {
+            const el = rootEl.querySelector(selector);
+            return el ? String(el.value ?? '') : String(fallback ?? '');
+        };
+        return {
+            requestApiPresetName: readValue('#cea_sync_api_preset', settings.requestApiPresetName),
+            requestLlmPresetName: readValue('#cea_sync_llm_preset', settings.requestLlmPresetName),
+            toolCallRetryMax: readValue('#cea_tool_retries', settings.toolCallRetryMax ?? defaultSettings.toolCallRetryMax),
+            i18n,
+        };
+    }
+
+    function mountSummary(root) {
+        const rootEl = root?.[0];
+        if (typeof Element === 'undefined' || !(rootEl instanceof Element)) {
+            summaryHandle?.destroy?.();
+            summaryHandle = null;
+            return;
+        }
+        if (summaryHandle?.el && rootEl.contains(summaryHandle.el)) {
+            summaryHandle.refresh();
+            return;
+        }
+        summaryHandle?.destroy?.();
+        summaryHandle = null;
+        const anchor = rootEl.querySelector('.inline-drawer-content > .cea_row');
+        if (!anchor) {
+            return;
+        }
+        summaryHandle = mountBehaviorSummary({
+            id: 'cea-settings-summary',
+            root: rootEl,
+            anchor,
+            position: 'after',
+            fields: CEA_SUMMARY_FIELDS,
+            ariaLabel: i18n('Character Editor Assistant behavior summary'),
+            readState: readSummaryState,
+            build: buildCeaSummaryModel,
+        });
+    }
+
     function setStatus(message) {
         jQuery('#cea_status').text(String(message || ''));
     }
@@ -316,6 +367,7 @@ export function createCharacterEditorUi(deps) {
         root.find('#cea_editor_system_prompt').val(String(settings.editorIterationSystemPrompt || ''));
         root.find('#cea_cardapp_studio_system_prompt').val(String(settings.cardAppStudioSystemPrompt || ''));
         refreshPresetSelectors(root, context, settings);
+        summaryHandle?.refresh?.();
 
         try {
             const state = await loadOperationState(context);
@@ -372,6 +424,7 @@ export function createCharacterEditorUi(deps) {
                 settings.requestLlmPresetName = PRESET_EXAMPLES.pluginOnly;
                 saveSettingsDebounced();
                 refreshPresetSelectors(root, getContext(), settings);
+                summaryHandle?.refresh?.();
             } catch (err) {
                 toastr.error(String(err?.message || err));
             }
@@ -453,6 +506,8 @@ export function createCharacterEditorUi(deps) {
                 toastr.error(String(err?.message || err));
             }
         });
+
+        mountSummary(root);
     }
 
     return {

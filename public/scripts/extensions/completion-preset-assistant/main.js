@@ -17,6 +17,8 @@ import {
 } from './cpa-iteration/system-prompts.js';
 import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
 import { initializePromptDefaults } from '../../lib/prompt-values.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildCpaSummaryModel } from './behavior-summary-model.js';
 
 const DEFAULT_CPA_BASE_SYSTEM_PROMPT = buildBaseSystemPrompt();
 const DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE = buildOrchestratorOptimizeModeBlock();
@@ -45,6 +47,14 @@ const PROMPT_FIELDS = [
     { key: 'iterModePromptOrchestratorOptimize', id: 'cpa_iter_mode_orchestrator_prompt', label: 'Orchestrator optimization mode prompt' },
     { key: 'iterModePromptJailbreakOnly', id: 'cpa_iter_mode_jailbreak_prompt', label: 'Jailbreak-only mode prompt' },
 ];
+
+const CPA_SUMMARY_FIELDS = Object.freeze({
+    iterBaseSystemPrompt: '#cpa_iter_base_system_prompt',
+    iterModePromptOrchestratorOptimize: '#cpa_iter_mode_orchestrator_prompt',
+    iterModePromptJailbreakOnly: '#cpa_iter_mode_jailbreak_prompt',
+});
+
+let summaryHandle = null;
 
 function clone(value, fallback = {}) {
     return cloneJsonValue(value, fallback);
@@ -217,6 +227,11 @@ function registerLocaleData() {
         'View raw record': '查看原始记录',
         'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
             '会话「${0}」无法迁移到新格式，已跳过，该会话不可用。',
+        'Completion Preset Assistant behavior summary': '聊天补全预设助手行为摘要',
+        'Prompts & AI': '提示词与 AI',
+        'All 3 iteration prompts': '全部 3 项迭代提示词',
+        '${promptStatus} use built-in defaults — AI connection and preset are configured in Workbench → Settings.': '${promptStatus}均使用内置默认值 —— 连接与预设在工作台 → 设置中配置。',
+        '${customCount} iteration prompts use custom overrides — AI connection and preset are configured in Workbench → Settings.': '${customCount} 项迭代提示词使用了自定义覆盖 —— 连接与预设在工作台 → 设置中配置。',
     });
     addLocaleData('zh-tw', {
         'Completion Preset Assistant': '聊天補全預設助手',
@@ -338,6 +353,11 @@ function registerLocaleData() {
         'View raw record': '檢視原始記錄',
         'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
             '會話「${0}」無法遷移到新格式，已跳過，該會話不可用。',
+        'Completion Preset Assistant behavior summary': '聊天補全預設助手行為摘要',
+        'Prompts & AI': '提示詞與 AI',
+        'All 3 iteration prompts': '全部 3 項迭代提示詞',
+        '${promptStatus} use built-in defaults — AI connection and preset are configured in Workbench → Settings.': '${promptStatus}均使用內建預設值 —— 連線與預設在工作台 → 設定中設定。',
+        '${customCount} iteration prompts use custom overrides — AI connection and preset are configured in Workbench → Settings.': '${customCount} 項迭代提示詞使用了自訂覆寫 —— 連線與預設在工作台 → 設定中設定。',
     });
 }
 
@@ -479,10 +499,57 @@ function ensureOpenAiToolbarButton() {
 </div>`);
 }
 
+function readSummaryState(rootEl) {
+    const settings = ensureSettings();
+    const readPrompt = (selector, fallback) => {
+        const el = rootEl.querySelector(selector);
+        return el ? String(el.value ?? '') : String(fallback ?? '');
+    };
+    return {
+        iterBaseSystemPrompt: readPrompt('#cpa_iter_base_system_prompt', settings.iterBaseSystemPrompt),
+        iterModePromptOrchestratorOptimize: readPrompt('#cpa_iter_mode_orchestrator_prompt', settings.iterModePromptOrchestratorOptimize),
+        iterModePromptJailbreakOnly: readPrompt('#cpa_iter_mode_jailbreak_prompt', settings.iterModePromptJailbreakOnly),
+        defaultPrompts: {
+            iterBaseSystemPrompt: defaultSettings.iterBaseSystemPrompt,
+            iterModePromptOrchestratorOptimize: defaultSettings.iterModePromptOrchestratorOptimize,
+            iterModePromptJailbreakOnly: defaultSettings.iterModePromptJailbreakOnly,
+        },
+        i18n,
+    };
+}
+
+function mountSummary(root) {
+    const rootEl = root?.[0];
+    if (typeof Element === 'undefined' || !(rootEl instanceof Element)) {
+        summaryHandle?.destroy?.();
+        summaryHandle = null;
+        return;
+    }
+    if (summaryHandle?.el && rootEl.contains(summaryHandle.el)) {
+        summaryHandle.refresh();
+        return;
+    }
+    summaryHandle?.destroy?.();
+    summaryHandle = null;
+    const anchor = rootEl.querySelector('.inline-drawer-content > .cpa_row');
+    if (!anchor) return;
+    summaryHandle = mountBehaviorSummary({
+        id: 'cpa-settings-summary',
+        root: rootEl,
+        anchor,
+        position: 'after',
+        fields: CPA_SUMMARY_FIELDS,
+        ariaLabel: i18n('Completion Preset Assistant behavior summary'),
+        readState: readSummaryState,
+        build: buildCpaSummaryModel,
+    });
+}
+
 function refreshUiState() {
     const settings = ensureSettings();
     for (const { key, id } of PROMPT_FIELDS) jQuery(`#${id}`).val(settings[key] ?? '');
     ensureOpenAiToolbarButton();
+    summaryHandle?.refresh?.();
 }
 
 function bindUi() {
@@ -515,6 +582,8 @@ function bindUi() {
     jQuery(document).on('click.cpaOpen', `#${OPENAI_BUTTON_ID}`, async function () {
         await openCpaIteration();
     });
+
+    mountSummary(root);
 }
 
 function ensureUi(context = getContext()) {

@@ -13,6 +13,8 @@ import { REGEX_ALLOW_SLOW_SCRIPT_EVENT, REGEX_HARD_THRESHOLD_MS, REGEX_OPEN_SCRI
 import { getCurrentLocale, t, translate } from '../../i18n.js';
 import { accountStorage } from '../../util/AccountStorage.js';
 import { getPresetManager } from '../../preset-manager.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildRegexBehaviorSummary } from './behavior-summary-model.js';
 
 // Re-exports for legacy extensions
 export { getRegexScripts };
@@ -1332,7 +1334,70 @@ function fillRegexEditorFields(editorHtml, script) {
     return true;
 }
 
-async function onReadonlyRegexViewOpenClick(script, displayName = '') {
+const REGEX_EDITOR_SUMMARY_FIELDS = Object.freeze({
+    placements: { selector: 'input[name="replace_position"]', highlight: 'label.checkbox' },
+    placementWorldInfo: { selector: 'input[name="replace_position"][value="5"]', highlight: 'label.checkbox' },
+    placementSlashCommand: { selector: 'input[name="replace_position"][value="3"]', highlight: 'label.checkbox' },
+    placementReasoning: { selector: 'input[name="replace_position"][value="6"]', highlight: 'label.checkbox' },
+    pluginRequest: { selector: 'input[name="plugin_request"]', highlight: 'label.checkbox' },
+    pluginReply: { selector: 'input[name="plugin_reply"]', highlight: 'label.checkbox' },
+    minDepth: { selector: 'input[name="min_depth"]', highlight: '.flex1' },
+    maxDepth: { selector: 'input[name="max_depth"]', highlight: '.flex1' },
+    disabled: { selector: 'input[name="disabled"]', highlight: 'label.checkbox' },
+    runOnEdit: { selector: 'input[name="run_on_edit"]', highlight: 'label.checkbox' },
+    substituteRegex: { selector: 'select[name="substitute_regex"]', highlight: 'label.checkbox' },
+    markdownOnly: { selector: 'input[name="only_format_display"]', highlight: 'label.checkbox' },
+    promptOnly: { selector: 'input[name="only_format_prompt"]', highlight: 'label.checkbox' },
+});
+
+function readRegexEditorSummaryState(rootEl) {
+    const placements = Array.from(rootEl.querySelectorAll('input[name="replace_position"]:checked'))
+        .map((el) => Number.parseInt(String(el.value), 10))
+        .filter((num) => Number.isFinite(num));
+
+    const minDepthInput = /** @type {HTMLInputElement|null} */ (rootEl.querySelector('input[name="min_depth"]'));
+    const maxDepthInput = /** @type {HTMLInputElement|null} */ (rootEl.querySelector('input[name="max_depth"]'));
+    const substituteSelect = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('select[name="substitute_regex"]'));
+
+    return {
+        disabled: Boolean(/** @type {HTMLInputElement|null} */ (rootEl.querySelector('input[name="disabled"]'))?.checked),
+        placements,
+        pluginRequest: Boolean(/** @type {HTMLInputElement|null} */ (rootEl.querySelector('input[name="plugin_request"]'))?.checked),
+        pluginReply: Boolean(/** @type {HTMLInputElement|null} */ (rootEl.querySelector('input[name="plugin_reply"]'))?.checked),
+        minDepthRaw: String(minDepthInput?.value ?? ''),
+        maxDepthRaw: String(maxDepthInput?.value ?? ''),
+        runOnEdit: Boolean(/** @type {HTMLInputElement|null} */ (rootEl.querySelector('input[name="run_on_edit"]'))?.checked),
+        substituteRegex: Number(substituteSelect?.value ?? substitute_find_regex.NONE),
+        markdownOnly: Boolean(/** @type {HTMLInputElement|null} */ (rootEl.querySelector('input[name="only_format_display"]'))?.checked),
+        promptOnly: Boolean(/** @type {HTMLInputElement|null} */ (rootEl.querySelector('input[name="only_format_prompt"]'))?.checked),
+        translate,
+    };
+}
+
+function mountRegexEditorBehaviorSummary(editorHtml) {
+    const rootEl = editorHtml?.get?.(0) || editorHtml?.[0] || null;
+    if (!(rootEl instanceof Element)) {
+        return null;
+    }
+    const editorBody = rootEl.matches('.regex_editor') ? rootEl : (rootEl.querySelector('.regex_editor') || rootEl);
+    const affectsColumn = editorBody.querySelector('input[name="replace_position"]')?.closest('.wi-enter-footer-text');
+    const twoColumnGrid = affectsColumn?.parentElement;
+    const anchor = twoColumnGrid || editorBody;
+    const position = twoColumnGrid ? 'before' : 'prepend';
+
+    return mountBehaviorSummary({
+        id: 'regex-editor',
+        root: editorBody,
+        anchor,
+        position,
+        fields: REGEX_EDITOR_SUMMARY_FIELDS,
+        ariaLabel: translate('Regex rule scope and conflict summary'),
+        readState: readRegexEditorSummaryState,
+        build: buildRegexBehaviorSummary,
+    });
+}
+
+export async function onReadonlyRegexViewOpenClick(script, displayName = '') {
     const editorHtml = $(await renderExtensionTemplateAsync('regex', 'editor'));
     if (!fillRegexEditorFields(editorHtml, script)) {
         toastr.error('This script doesn\'t have a name! Please delete it.');
@@ -1341,12 +1406,30 @@ async function onReadonlyRegexViewOpenClick(script, displayName = '') {
     editorHtml.find('#regex_test_mode_toggle').remove();
     editorHtml.find('#regex_test_mode').remove();
     editorHtml.find('input, textarea, select').prop('disabled', true);
-    await callGenericPopup(
-        editorHtml,
-        POPUP_TYPE.TEXT,
-        displayName || String(script?.scriptName || ''),
-        { okButton: t`Close`, wide: true, large: true, allowVerticalScrolling: true },
-    );
+    let summaryHandle = mountRegexEditorBehaviorSummary(editorHtml);
+    try {
+        await callGenericPopup(
+            editorHtml,
+            POPUP_TYPE.TEXT,
+            displayName || String(script?.scriptName || ''),
+            {
+                okButton: t`Close`,
+                wide: true,
+                large: true,
+                allowVerticalScrolling: true,
+                onOpen: () => {
+                    summaryHandle?.refresh?.();
+                },
+                onClose: () => {
+                    summaryHandle?.destroy?.();
+                    summaryHandle = null;
+                },
+            },
+        );
+    } finally {
+        summaryHandle?.destroy?.();
+        summaryHandle = null;
+    }
 }
 
 /**
@@ -1355,7 +1438,7 @@ async function onReadonlyRegexViewOpenClick(script, displayName = '') {
  * @param {SCRIPT_TYPES} scriptType Type of the script
  * @returns {Promise<void>}
  */
-async function onRegexEditorOpenClick(existingId, scriptType) {
+export async function onRegexEditorOpenClick(existingId, scriptType) {
     const editorHtml = $(await renderExtensionTemplateAsync('regex', 'editor'));
     const array = getScriptsByType(scriptType);
     const scriptTypeLabel = REGEX_SCRIPT_TYPE_LABELS[scriptType] || String(scriptType);
@@ -1448,6 +1531,7 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
 
     editorHtml.find('input, textarea, select').on('input', updateTestResult);
     updateInfoBlock(editorHtml);
+    let summaryHandle = mountRegexEditorBehaviorSummary(editorHtml);
 
     logEditorState('popup_show_requested');
 
@@ -1458,6 +1542,7 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
             cancelButton: t`Cancel`,
             allowVerticalScrolling: true,
             onOpen: (popup) => {
+                summaryHandle?.refresh?.();
                 logEditorState('popup_opened');
                 popup.okButton?.addEventListener('click', () => {
                     logEditorState('save_button_clicked');
@@ -1474,6 +1559,8 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
                 return true;
             },
             onClose: (popup) => {
+                summaryHandle?.destroy?.();
+                summaryHandle = null;
                 logEditorState('popup_closed', {
                     popupResult: popup.result ?? null,
                     popupValue: popup.value ?? null,
@@ -1490,6 +1577,9 @@ async function onRegexEditorOpenClick(existingId, scriptType) {
             domState: summarizeRegexEditorDomStateForLog(editorHtml),
         }, error);
         throw error;
+    } finally {
+        summaryHandle?.destroy?.();
+        summaryHandle = null;
     }
 
     logEditorState('popup_returned', { popupResult: popupResult ?? null });

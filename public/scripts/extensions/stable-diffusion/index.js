@@ -58,6 +58,8 @@ import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnum
 import { ToolManager } from '../../tool-calling.js';
 import { macros, MacroCategory } from '../../macros/macro-system.js';
 import { t, translate } from '../../i18n.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildSdModeSummary } from './behavior-summary-models.js';
 import { withProfileRetry } from '../connection-manager/profile-retry.js';
 import { oai_settings } from '../../openai.js';
 import { power_user } from '/scripts/power-user.js';
@@ -664,9 +666,14 @@ function syncStyleReferenceListDisabledState() {
     $('#sd_style_ref_list').toggleClass('is-disabled', !extension_settings.sd.style_references_enabled);
 }
 
+function notifySdCapabilitiesUpdated() {
+    document.getElementById('sd_container')?.dispatchEvent(new CustomEvent('sd:capabilities-updated'));
+}
+
 function renderReferenceConfigWarnings() {
     const container = $('#sd_reference_warnings');
     if (container.length === 0) {
+        notifySdCapabilitiesUpdated();
         return;
     }
     const warnings = computeReferenceConfigWarnings(extension_settings.sd, {
@@ -676,6 +683,7 @@ function renderReferenceConfigWarnings() {
     container.empty();
     if (warnings.length === 0) {
         container.prop('hidden', true).hide();
+        notifySdCapabilitiesUpdated();
         return;
     }
     for (const warning of warnings) {
@@ -694,6 +702,7 @@ function renderReferenceConfigWarnings() {
         container.append(item);
     }
     container.prop('hidden', false).show();
+    notifySdCapabilitiesUpdated();
 }
 
 function renderStyleReferencesList() {
@@ -1106,6 +1115,62 @@ function applySettingsToUiInner() {
 
     const resolutionId = getClosestKnownResolution();
     $('#sd_resolution').val(resolutionId);
+    sdModeSummary?.refresh();
+}
+
+const SD_MODE_SUMMARY_FIELDS = Object.freeze({
+    refineMode: { selector: '#sd_refine_mode', highlight: '.checkbox_label' },
+    functionTool: { selector: '#sd_function_tool', highlight: '.checkbox_label' },
+    interactiveMode: { selector: '#sd_interactive_mode', highlight: '.checkbox_label' },
+    multimodalCaptioning: { selector: '#sd_multimodal_captioning', highlight: '.checkbox_label' },
+    freeExtend: { selector: '#sd_free_extend', highlight: '.checkbox_label' },
+    snap: { selector: '#sd_snap', highlight: '.checkbox_label' },
+    minimalPromptProcessing: { selector: '#sd_minimal_prompt_processing', highlight: '.checkbox_label' },
+});
+
+let sdModeSummary = null;
+
+function readSdModeSummaryState(rootEl) {
+    const sd = extension_settings.sd || {};
+    const readCheckbox = (selector, fallback) => {
+        const el = rootEl?.querySelector?.(selector);
+        return el ? Boolean(el.checked) : Boolean(fallback);
+    };
+    return {
+        functionTool: readCheckbox('#sd_function_tool', sd.function_tool),
+        interactiveMode: readCheckbox('#sd_interactive_mode', sd.interactive_mode),
+        toolCallingSupported: Boolean(ToolManager.isToolCallingSupported?.()),
+        refineMode: readCheckbox('#sd_refine_mode', sd.refine_mode),
+        freeExtend: readCheckbox('#sd_free_extend', sd.free_extend),
+        minimalPromptProcessing: readCheckbox('#sd_minimal_prompt_processing', sd.minimal_prompt_processing),
+        multimodalCaptioning: readCheckbox('#sd_multimodal_captioning', sd.multimodal_captioning),
+        snap: readCheckbox('#sd_snap', sd.snap),
+        translate,
+    };
+}
+
+export function mountSdModeSummary(containerEl = document.getElementById('sd_container')) {
+    const sdSettingsEl = containerEl?.querySelector?.('.sd_settings');
+    if (!sdSettingsEl) {
+        return null;
+    }
+    const presetHr = sdSettingsEl.querySelector('.sd_generation_preset_block + hr');
+    const drawerContent = sdSettingsEl.querySelector('.inline-drawer-content');
+    const anchor = presetHr || drawerContent;
+    if (!anchor) {
+        return null;
+    }
+    sdModeSummary = mountBehaviorSummary({
+        id: 'sd-mode-summary',
+        root: sdSettingsEl,
+        anchor,
+        position: presetHr ? 'after' : 'prepend',
+        fields: SD_MODE_SUMMARY_FIELDS,
+        ariaLabel: translate('Image generation mode summary'),
+        readState: readSdModeSummaryState,
+        build: buildSdModeSummary,
+    });
+    return sdModeSummary;
 }
 
 /**
@@ -1128,6 +1193,14 @@ export function createIllustrationBridge() {
             const state = await loraCatalog.refresh({ force: true });
             registerFunctionTool();
             return { names: state.names, includeWeight: state.includeWeight };
+        },
+        getCapabilitiesSnapshot() {
+            const availableLoras = loraCatalog.getCached();
+            return computeImageCapabilities(extension_settings.sd, {
+                comfyReferenceSlotCount: currentComfyReferenceSlotCount,
+                comfyWorkflowError: currentComfyWorkflowError,
+                availableLoras,
+            });
         },
         async getCapabilities() {
             await refreshComfyReferenceSlots();
@@ -7502,6 +7575,29 @@ export async function init() {
     generationPresetState.bucket = initializeGenerationPresets();
     refreshGenerationPresetOptions();
     bindGenerationPresetControls();
+    mountSdModeSummary();
+    [
+        event_types.MAIN_API_CHANGED,
+        event_types.CHATCOMPLETION_SOURCE_CHANGED,
+        event_types.CHATCOMPLETION_MODEL_CHANGED,
+        event_types.CHATCOMPLETION_MODEL_LIST_LOADED,
+        event_types.OAI_PRESET_CHANGED_AFTER,
+        event_types.CONNECTION_PROFILE_LOADED,
+        event_types.SETTINGS_UPDATED,
+    ].forEach(event => {
+        eventSource.on(event, () => {
+            sdModeSummary?.refresh();
+        });
+    });
+    $('.sd_settings .inline-drawer-toggle').on('click', () => {
+        sdModeSummary?.refresh();
+    });
+    $('#openai_function_calling').on('input', () => {
+        sdModeSummary?.refresh();
+    });
+    $('#custom_prompt_post_processing').on('change', () => {
+        sdModeSummary?.refresh();
+    });
     const imageGenerationService = createImageGenerationService();
     setImageGenerationProvider(imageGenerationService);
     getContext().registerExtensionApi('sd', imageGenerationService);

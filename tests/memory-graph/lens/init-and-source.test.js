@@ -201,6 +201,12 @@ describe('lens index registration & source-luker fixes', () => {
         const source = createLukerSource();
         const readInfo = await source.schema.read();
         expect(readInfo.avatar).toBe('alice.png');
+        expect(readInfo.globalSettings).toEqual({
+            autoCompressionEnabled: false,
+            persistentInjectionMaxSeqDistance: 0,
+            recallMethod: 'llm',
+            ragDefaultPerTypeK: 0,
+        });
 
         await source.schema.write([{ id: 'event', tableColumns: ['summary'] }], {
             scope: 'character',
@@ -334,7 +340,7 @@ describe('lens index registration & source-luker fixes', () => {
             // Switching back to settings must re-read settings because load() catch invalidated views.settings
             lens.app.setState({ view: 'settings' });
             expect(readSettingsSpy).toHaveBeenCalledTimes(callsBeforeFail + 1);
-            const summary = host.querySelector('.ml-settings-cadence-summary');
+            const summary = host.querySelector('[data-settings-section="extraction"] .luker-bsum');
             expect(summary.textContent).toContain('7');
             lens.destroy();
         } finally {

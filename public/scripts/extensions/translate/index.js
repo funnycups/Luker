@@ -20,6 +20,76 @@ import { enumTypes, SlashCommandEnumValue } from '../../slash-commands/SlashComm
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { splitRecursive } from '../../utils.js';
 import { t } from '../../i18n.js';
+import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { buildTranslateSummaryModel } from './behavior-summary-model.js';
+
+let translateSummaryHandle = null;
+
+function translateSummary(text, key = null) {
+    const fn = getContext()?.translate ?? globalThis.__i18n?.translate;
+    return typeof fn === 'function' ? fn(String(text ?? ''), key) : String(text ?? '');
+}
+
+function readSelectDisplayLabel(selectEl) {
+    if (!(selectEl instanceof HTMLSelectElement) || !selectEl.value) {
+        return '';
+    }
+    const selected = selectEl.selectedOptions?.[0]
+        || (selectEl.selectedIndex >= 0 ? selectEl.options?.[selectEl.selectedIndex] : null);
+    return String(selected?.textContent || '').trim();
+}
+
+function refreshTranslateBehaviorSummary() {
+    translateSummaryHandle?.refresh();
+}
+
+function mountTranslateBehaviorSummary() {
+    translateSummaryHandle?.destroy();
+    translateSummaryHandle = null;
+
+    const container = document.getElementById('translation_container') || document;
+    const drawerContent = container.querySelector('.translation_settings .inline-drawer-content');
+    if (!drawerContent) {
+        return null;
+    }
+
+    translateSummaryHandle = mountBehaviorSummary({
+        id: 'translate-settings',
+        root: drawerContent,
+        anchor: drawerContent,
+        position: 'prepend',
+        ariaLabel: translateSummary('Chat translation behavior summary'),
+        fields: {
+            autoMode: '#translation_auto_mode',
+            provider: '#translation_provider',
+            deeplEndpoint: '#deepl_api_endpoint',
+            keyButton: '#translate_key_button',
+            urlButton: '#translate_url_button',
+            targetLanguage: '#translation_target_language',
+        },
+        readState: (rootEl) => {
+            const autoSel = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('#translation_auto_mode'));
+            const providerSel = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('#translation_provider'));
+            const langSel = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('#translation_target_language'));
+            const deeplSel = /** @type {HTMLSelectElement|null} */ (rootEl.querySelector('#deepl_api_endpoint'));
+            const provider = String(providerSel?.value || extension_settings.translate?.provider || 'google').trim();
+            return {
+                autoMode: String(autoSel?.value || extension_settings.translate?.auto_mode || 'none').trim(),
+                provider,
+                providerLabel: readSelectDisplayLabel(providerSel),
+                deeplEndpoint: String(deeplSel?.value || extension_settings.translate?.deepl_endpoint || 'free').trim(),
+                targetLanguage: String(langSel?.value || extension_settings.translate?.target_language || 'en').trim(),
+                targetLanguageLabel: readSelectDisplayLabel(langSel),
+                hasKey: Boolean(secret_state[provider]),
+                hasUrl: Boolean(secret_state[`${provider}_url`]),
+                i18n: translateSummary,
+            };
+        },
+        build: buildTranslateSummaryModel,
+    });
+
+    return translateSummaryHandle;
+}
 
 async function withTranslateActivity(fn) {
     const guard = getContext()?.activityGuard;
@@ -185,6 +255,7 @@ function loadSettings() {
     $(`#translation_auto_mode option[value="${extension_settings.translate.auto_mode}"]`).attr('selected', 'true');
     $('#deepl_api_endpoint').val(extension_settings.translate.deepl_endpoint).toggle(extension_settings.translate.provider === 'deepl');
     showKeysButton();
+    refreshTranslateBehaviorSummary();
 }
 
 /**
@@ -830,10 +901,15 @@ export async function init() {
             if (key === `${extension_settings.translate.provider}_url`) {
                 $('#translate_url_button').toggleClass('success', !!secret_state[`${extension_settings.translate.provider}_url`]);
             }
+            refreshTranslateBehaviorSummary();
         });
     });
 
     loadSettings();
+    mountTranslateBehaviorSummary();
+    if (event_types?.APP_READY) {
+        eventSource.on(event_types.APP_READY, refreshTranslateBehaviorSummary);
+    }
 
     eventSource.makeFirst(event_types.CHARACTER_MESSAGE_RENDERED, handleIncomingMessage);
     eventSource.makeFirst(event_types.USER_MESSAGE_RENDERED, handleOutgoingMessage);

@@ -5,6 +5,7 @@
 // custom tools apply right away, like their counterparts in the orchestrator.
 
 import { h, clear, put } from '../../../../lens-shared/util.js';
+import { createBehaviorSummary } from '../../../../lens-shared/behavior-summary.js';
 import { i18n, i18nFormat, modeInfo, MODE_IDS, toolGroupName, toolName } from '../i18n.js';
 import { button, iconButton, checkRow, switchControl, sectionTitle, emptyState } from '../ui/components.js';
 import {
@@ -12,6 +13,7 @@ import {
     removeAgendaAgent, removeNode, removePresetEntry, removeStage, removeSubAgent, setDefaultTools,
     setNodeProp, setStageProp, withToolFlag,
 } from '../model/edit.js';
+import { buildOrchToolsSummary, buildOrchLorebookFilterSummary } from '../model/behavior-summary-models.js';
 
 const TOOL_GROUPS = [
     { id: 'note', verbs: ['open', 'close'] },
@@ -25,12 +27,27 @@ const DIRECTOR_GROUPS = [
 
 export const isEditing = (el) => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '') && el.contains(document.activeElement);
 
-export function textInput(value, onCommit, { placeholder = '', type = 'text', disabled = false } = {}) {
-    return h('input', { class: 'ol-input', type, value: value ?? '', placeholder, disabled, onChange: (event) => onCommit(event.target.value) });
+export function textInput(value, onCommit, { placeholder = '', type = 'text', disabled = false, onInput = null } = {}) {
+    return h('input', {
+        class: 'ol-input',
+        type,
+        value: value ?? '',
+        placeholder,
+        disabled,
+        ...(typeof onInput === 'function' ? { onInput: (event) => onInput(event.target.value) } : {}),
+        onChange: (event) => onCommit(event.target.value),
+    });
 }
 
 export function textArea(value, onCommit, { rows = 4, disabled = false, onInput = false } = {}) {
-    const el = h('textarea', { class: 'ol-textarea', rows, disabled, [onInput ? 'onInput' : 'onChange']: (event) => onCommit(event.target.value) });
+    const props = { class: 'ol-textarea', rows, disabled };
+    if (typeof onInput === 'function') {
+        props.onInput = (event) => onInput(event.target.value);
+        props.onChange = (event) => onCommit(event.target.value);
+    } else {
+        props[onInput ? 'onInput' : 'onChange'] = (event) => onCommit(event.target.value);
+    }
+    const el = h('textarea', props);
     el.value = value ?? '';
     return el;
 }
@@ -221,6 +238,68 @@ export function createSetupView(app) {
                 customNames().map(name => flag(`custom.${name}`, name, value.custom?.[name] !== false))) : null);
     }
 
+    function countToolOverrides(m, p) {
+        const ids = [];
+        if (m === 'spec') {
+            for (const stage of Array.isArray(p?.spec?.stages) ? p.spec.stages : []) {
+                for (const node of Array.isArray(stage?.nodes) ? stage.nodes : []) {
+                    const id = typeof node === 'string' ? node : String(node?.id || node?.preset || '');
+                    if (id && !ids.includes(id)) ids.push(id);
+                }
+            }
+        } else if (m === 'agenda') {
+            for (const id of Object.keys(p?.agents || {})) {
+                if (id) ids.push(id);
+            }
+        } else if (m === 'director') {
+            ids.push('main');
+            for (const sub of Array.isArray(p?.subAgents) ? p.subAgents : []) {
+                const id = String(sub?.id || '');
+                if (id) ids.push(id);
+            }
+        }
+        const agentOverrideCount = ids.filter(id => jsonOf(id, 'tools') !== null).length;
+        return { agentOverrideCount, totalAgents: ids.length };
+    }
+
+    const toolsSummary = createBehaviorSummary({
+        id: 'orch-default-tools',
+        ariaLabel: i18n('Default tools summary'),
+        build: () => {
+            const t = target();
+            if (!t || t.mode === 'loop' || t.mode === 'single') {
+                return { tone: 'dormant', rows: [] };
+            }
+            const m = t.mode;
+            const slot = m === 'spec' ? 'spec/defaultTools' : m === 'agenda' ? 'defaultTools' : 'tools';
+            const { agentOverrideCount, totalAgents } = countToolOverrides(m, profile() || {});
+            return buildOrchToolsSummary({
+                mode: m,
+                defaultTools: jsonOf(PROFILE, slot),
+                agentOverrideCount,
+                totalAgents,
+                customToolNames: customNames(),
+            });
+        },
+    });
+
+    const lorebookSummary = createBehaviorSummary({
+        id: 'orch-lorebook-filter',
+        ariaLabel: i18n('Lorebook filter summary'),
+        build: () => {
+            const t = target();
+            if (!t || t.mode === 'single') {
+                return { tone: 'dormant', rows: [] };
+            }
+            const slot = t.mode === 'spec' ? 'spec/lorebookFilter' : 'lorebookFilter';
+            const value = jsonOf(PROFILE, slot) || {};
+            return buildOrchLorebookFilterSummary({
+                bookPattern: value.bookPattern,
+                entryPattern: value.entryPattern,
+            });
+        },
+    });
+
     function defaultToolsSection(t) {
         const m = t.mode;
         if (m === 'loop' || m === 'single') return null;
@@ -228,11 +307,17 @@ export function createSetupView(app) {
         const tools = jsonOf(PROFILE, slot);
         const clearOverrides = m !== 'director';
         const edit = app.source.edit;
+        const grid = toolGrid(tools || {}, (id, on) => {
+            commit(PROFILE, slot, JSON.stringify(withToolFlag(jsonOf(PROFILE, slot) || {}, id, on)));
+            toolsSummary.update();
+        }, m);
+        grid.dataset.fieldKey = 'defaultTools';
         return h('section', { class: 'ol-setup-section' },
             sectionTitle(i18n('Default tools'), h('span', { class: 'ol-insp-actions' },
                 button(i18n('Enable all'), () => structure(p => setDefaultTools(m, p, edit.allTools(m, true))), { className: 'ol-btn-sm ol-btn-ghost' }),
                 button(i18n('Disable all'), () => structure(p => setDefaultTools(m, p, m === 'director' ? edit.allTools(m, false) : null, { clearOverrides })), { className: 'ol-btn-sm ol-btn-ghost' }))),
-            toolGrid(tools || {}, (id, on) => commit(PROFILE, slot, JSON.stringify(withToolFlag(jsonOf(PROFILE, slot) || {}, id, on))), m));
+            toolsSummary.el,
+            grid);
     }
 
     function agentExtras(agentIdOrGetter, t, { tools = true, skills = true, inherit = null } = {}) {
@@ -414,11 +499,18 @@ export function createSetupView(app) {
     function lorebookSection(t) {
         const slot = t.mode === 'spec' ? 'spec/lorebookFilter' : 'lorebookFilter';
         const value = jsonOf(PROFILE, slot) || {};
-        const set = (key, text) => commit(PROFILE, slot, JSON.stringify({ ...(jsonOf(PROFILE, slot) || {}), [key]: text }));
+        const set = (key, text) => {
+            commit(PROFILE, slot, JSON.stringify({ ...(jsonOf(PROFILE, slot) || {}), [key]: text }));
+            lorebookSummary.update();
+        };
         const disabled = !editable();
-        return h('section', { class: 'ol-setup-section' }, sectionTitle(i18n('Lorebook filter')), h('div', { class: 'ol-form' },
-            formRow(i18n('Book name pattern'), textInput(value.bookPattern, v => set('bookPattern', v), { disabled })),
-            formRow(i18n('Entry name pattern'), textInput(value.entryPattern, v => set('entryPattern', v), { disabled }))));
+        const bookRow = formRow(i18n('Book name pattern'), textInput(value.bookPattern, v => set('bookPattern', v), { disabled, onInput: v => set('bookPattern', v) }));
+        bookRow.dataset.fieldKey = 'bookPattern';
+        const entryRow = formRow(i18n('Entry name pattern'), textInput(value.entryPattern, v => set('entryPattern', v), { disabled, onInput: v => set('entryPattern', v) }));
+        entryRow.dataset.fieldKey = 'entryPattern';
+        return h('section', { class: 'ol-setup-section' }, sectionTitle(i18n('Lorebook filter')), lorebookSummary.el, h('div', { class: 'ol-form' },
+            bookRow,
+            entryRow));
     }
 
     // ----- Custom tools -----------------------------------------------------
@@ -476,6 +568,8 @@ export function createSetupView(app) {
         clear(el);
         const t = target();
         if (!t) {
+            toolsSummary.bindScope(null);
+            lorebookSummary.bindScope(null);
             put(el, emptyState('flow', i18n('Reading orchestration settings…')));
             return;
         }
@@ -484,10 +578,18 @@ export function createSetupView(app) {
         if (t.mode === 'agenda') put(el, agendaSection(t));
         if (t.mode === 'director') put(el, directorSection(t));
         if (t.mode === 'loop') put(el, loopSection(t));
+        let defaultToolsSec = null;
+        let lorebookSec = null;
         if (t.mode !== 'single') {
-            put(el, defaultToolsSection(t), customToolsSection(t), lorebookSection(t),
+            defaultToolsSec = defaultToolsSection(t);
+            lorebookSec = lorebookSection(t);
+            put(el, defaultToolsSec, customToolsSection(t), lorebookSec,
                 h('section', { class: 'ol-setup-section' }, sectionTitle(i18n('Skills')), skillChips(PROFILE, modeSkillSlot(t.mode), t)));
         }
+        toolsSummary.bindScope(defaultToolsSec);
+        if (defaultToolsSec) toolsSummary.update();
+        lorebookSummary.bindScope(lorebookSec);
+        if (lorebookSec) lorebookSummary.update();
         el.querySelectorAll('details').forEach((node) => { if (open.has(detailKeyOf(node))) node.open = true; });
     }
 
@@ -497,6 +599,10 @@ export function createSetupView(app) {
         invalidate: invalidateInventory,
         onDraftChange() {
             if (!quiet) render(true);
+        },
+        destroy() {
+            toolsSummary.destroy();
+            lorebookSummary.destroy();
         },
     };
 }

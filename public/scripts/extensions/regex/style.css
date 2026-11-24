@@ -307,3 +307,7 @@ input.enable_scoped {
 .regex-script-label:not(:has(input[name="regex_expand"]:checked)) .regex_script_buttons {
     display: none;
 }
+
+.regex_editor .luker-bsum[data-bsum-id="regex-editor"] {
+    margin-top: 8px;
+}

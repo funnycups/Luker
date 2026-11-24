@@ -30,8 +30,13 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Unified page-leave protection, mobile background keep-alive, and in-app chat-switch confirmation with cancellation of active chat-scoped tasks across message generation, group chats, Memory Graph, image generation, CardApp Studio, Workbench, vectorization, translation, image captioning, and data sync.
 - Replaced the Leave-page confirmation setting with automatic page-leave warnings whenever active tasks, pending saves, open message edits, or unsent input are present.
 
+### Plugin Settings
+
+- Added live behavioral summary cards with bidirectional control highlighting, click-to-focus navigation, dormant-field dimming, and inline configuration conflict warnings across built-in plugin settings panels.
+
 ### Extension API
 
+- Exposed shared live behavioral summary builders on `context.behaviorSummary` for extensions.
 - Added a unified background activity guard API for extensions and lifecycle-scoped CardApps, alongside automatic request activity protection with per-call opt-out and overrides across core generation APIs.
 
 ### Fixes

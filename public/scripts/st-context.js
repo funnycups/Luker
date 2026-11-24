@@ -225,6 +225,7 @@ import { readPluginFloors, floorRecordToTaskMessage } from './lib/plugin-floors.
 import * as ITERATION_LIBRARY_API_NS from './iteration-library/index.js';
 import * as LUKER_TABS_API from './extensions/luker-tabs.js';
 import * as FIELD_HELP_API from './extensions/field-help.js';
+import * as BEHAVIOR_SUMMARY_API from './lens-shared/behavior-summary.js';
 import { skillsApi } from './skills/api.js';
 import { imageGenerationApi } from './image-generation/registry.js';
 import * as RUN_PANEL_API_NS from './run-panel/index.js';
@@ -2643,6 +2644,7 @@ export function getContext() {
         edits: EDITS_API,
         renderLukerTabs: LUKER_TABS_API.renderLukerTabs,
         renderFieldHelpButton: FIELD_HELP_API.renderFieldHelpButton,
+        behaviorSummary: BEHAVIOR_SUMMARY_API,
         skills: skillsApi,
         imageGeneration: imageGenerationApi,
         activityGuard: ACTIVITY_GUARD_API,
