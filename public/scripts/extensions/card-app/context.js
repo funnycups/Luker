@@ -81,6 +81,69 @@ function regexScopeToScriptType(scope) {
 }
 
 /**
+ * Wrap a Layer 2 activityGuard API with CardApp-scoped defaults (`scope: 'chat'`)
+ * and automatic cleanup registration on unmount.
+ * @param {object|undefined|null} baseGuard
+ * @param {(fn: () => void) => (() => void)|void} registerDispose
+ * @returns {object|undefined}
+ */
+export function createScopedActivityGuard(baseGuard, registerDispose) {
+    if (!baseGuard) return undefined;
+
+    function wrapTrackedCleanup(rawCleanup) {
+        let done = false;
+        let unregister = () => {};
+        const wrapped = () => {
+            if (done) {
+                return;
+            }
+            done = true;
+            unregister();
+            unregister = () => {};
+            rawCleanup();
+        };
+        const maybeUnregister = typeof registerDispose === 'function' ? registerDispose(wrapped) : null;
+        if (typeof maybeUnregister === 'function') {
+            unregister = maybeUnregister;
+        }
+        return wrapped;
+    }
+
+    function acquire(options) {
+        const normalizedOptions = (options && typeof options === 'object')
+            ? (options.scope === undefined ? { ...options, scope: 'chat' } : options)
+            : options;
+        return wrapTrackedCleanup(baseGuard.acquire(normalizedOptions));
+    }
+
+    async function run(options, fn) {
+        if (typeof fn !== 'function') {
+            throw new TypeError('activityGuard.run: fn must be a function');
+        }
+        const release = acquire(options);
+        try {
+            return await fn();
+        } finally {
+            release();
+        }
+    }
+
+    function subscribe(listener) {
+        return wrapTrackedCleanup(baseGuard.subscribe(listener));
+    }
+
+    return Object.freeze({
+        acquire,
+        run,
+        hasUnloadGuard: () => baseGuard.hasUnloadGuard(),
+        hasChatSwitchGuard: () => baseGuard.hasChatSwitchGuard(),
+        hasKeepAliveHold: (options) => baseGuard.hasKeepAliveHold(options),
+        list: () => baseGuard.list(),
+        subscribe,
+    });
+}
+
+/**
  * Build the context object for a CardApp.
  * @param {HTMLElement} container - The CardApp container element
  * @param {string} charId - Character ID
@@ -93,6 +156,17 @@ export function buildContext(container, charId, config) {
     const timeouts = [];
     const eventListeners = [];
     const disposeCallbacks = [];
+    const registerDispose = (fn) => {
+        disposeCallbacks.push(fn);
+        return () => {
+            const idx = disposeCallbacks.indexOf(fn);
+            if (idx !== -1) {
+                disposeCallbacks.splice(idx, 1);
+            }
+        };
+    };
+    let scopedActivityGuard = null;
+    let scopedActivityGuardBase = null;
 
     // Renderer registered by the CardApp
     let renderer = null;
@@ -158,6 +232,22 @@ export function buildContext(container, charId, config) {
                 switchPreset: (idOrName) => base.switchPreset(idOrName),
                 getAvailableLoras: () => base.getAvailableLoras(),
             };
+        },
+
+        /**
+         * Lifecycle-scoped Activity Guard API. Mirrors `getContext().activityGuard`,
+         * defaults `scope` to `'chat'`, and automatically releases active leases
+         * and unsubscribes listeners when the CardApp disposes.
+         */
+        get activityGuard() {
+            const base = getContext().activityGuard;
+            if (!base) return undefined;
+            if (scopedActivityGuard && scopedActivityGuardBase === base) {
+                return scopedActivityGuard;
+            }
+            scopedActivityGuardBase = base;
+            scopedActivityGuard = createScopedActivityGuard(base, registerDispose);
+            return scopedActivityGuard;
         },
 
         // ==================== Renderer ====================
@@ -1408,8 +1498,8 @@ export function buildContext(container, charId, config) {
      * Called internally when the CardApp is deactivated.
      */
     ctx._dispose = function () {
-        // Run user-registered dispose callbacks
-        for (const fn of disposeCallbacks) {
+        // Run user-registered dispose callbacks (snapshot so self-unregistering callbacks don't skip siblings)
+        for (const fn of [...disposeCallbacks]) {
             try {
                 fn();
             } catch (err) {

@@ -4434,7 +4434,6 @@
     "Latest release does not include a valid desktop installer.": "最新發布中不包含有效的桌面端安裝包。",
     "HarmonyOS update bridge is unavailable.": "HarmonyOS 更新橋接不可用。",
     "Latest release does not include a release page URL.": "最新發布中不包含發布頁面地址。",
-    "Leave-page confirmation": "離開頁面確認",
     "Limited Context": "Limited Context",
     "Log source": "日誌來源",
     "Logs": "日誌",
@@ -4463,7 +4462,6 @@
     "No chat completion preset selected.": "未選擇對話補全預設。",
     "No messages in current chat.": "當前聊天沒有訊息。",
     "No messages matched.": "未找到匹配訊息。",
-    "Only when risky": "僅在有風險時",
     "Opening the release page...": "正在打開發布頁面…",
     "Overwrite mode will clear existing selected data before LAN migration. Continue?": "覆蓋模式會在區域網遷移前清空當前所選資料。是否繼續？",
     "Paste a migration link first.": "請先貼上遷移連結。",
@@ -4532,7 +4530,6 @@
     "Used in Default position only.": "僅在預設位置使用。",
     "Used in addition to JSON schemas and function calling.": "Used in addition to JSON schemas and function calling.",
     "Variety+": "Variety+",
-    "Warn before closing/reloading this page.": "關閉或重新整理頁面前提示確認。",
     "Whether to perform upsampling on the prompt. If active, automatically modifies the prompt for more creative generation.": "是否對提示詞使用提示詞增強（Upsampling）。若開啟，則會自動修改提示詞，使回覆更有創造力。",
     "Works best when: Pass Asterisks to TTS Engine is enabled, and both Only narrate quotes and Ignore *text, even 'quotes', inside asterisks* are disabled.": "Works best when: Pass Asterisks to TTS Engine is enabled, and both Only narrate quotes and Ignore *text, even 'quotes', inside asterisks* are disabled.",
     "bind_model_templates_desc": "當連線到一個API或選擇一個模型，且它們的名字與當前的指導和上下文模板名字匹配時，自動啟用當前的指導和上下文模板。",
@@ -7846,4 +7843,21 @@
     ,"Expand notifications": "展開全部通知"
     ,"Collapse notifications": "收起通知"
     ,"Drag to move": "按住可拖動"
+    ,"Message generation": "回覆生成"
+    ,"Background generation": "後台生成"
+    ,"Group chat generation": "群聊生成"
+    ,"Background AI request": "後台 AI 請求"
+    ,"Tasks still in progress": "仍有任務進行中"
+    ,"Switching chats will interrupt the following in-progress work:": "切換聊天將中斷以下正在進行的工作："
+    ,"Switch anyway": "仍然切換"
+    ,"Unsaved message edit": "未儲存的訊息編輯"
+    ,"Image generation": "圖像生成"
+    ,"Illustration generation": "插圖生成"
+    ,"CardApp Studio AI": "CardApp Studio AI"
+    ,"Chat vectorization": "聊天向量化"
+    ,"File vectorization": "檔案向量化"
+    ,"Data sync": "資料同步"
+    ,"Image captioning": "圖片註解"
+    ,"Message translation": "訊息翻譯"
+    ,"Background task": "後台任務"
 }

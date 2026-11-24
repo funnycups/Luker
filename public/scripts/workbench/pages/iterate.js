@@ -29,6 +29,7 @@ import {
 import { groupSessions, titleFrom } from '../model/sessions.js';
 import { importLegacySessionsOnce } from '../model/legacy-import.js';
 import { isReplayableIterationMessage } from '../../iteration-library/iter-message-filter.js';
+import { withActivityLease } from '../../activity-guard.js';
 
 const DEFAULT_CHIPS = {
     memory: () => [
@@ -1104,69 +1105,76 @@ export function createIteratePage(app) {
     /** One model turn. Never throws: failures become the turn's error text. */
     async function runTurn({ run, runTargetObj, runWs, runScope, current, draft, userContent, controller, saveTo }) {
         try {
-            const ctx = getCtx();
-            const wrapper = wrapperPrompt({
-                wsName: targetLabel(runTargetObj),
-                scopeText: draft.title,
-                builtin: app.settings().builtinPrompt !== false,
-            });
-            const system = typeof runTargetObj.systemPrompt === 'function'
-                ? await runTargetObj.systemPrompt(runScope, draft.ai, { wrapper, ctx, target: draft.target })
-                : [wrapper, await runTargetObj.prompt(draft.ai, runScope, ctx, { wrapper, target: draft.target })].filter(Boolean).join('\n\n');
-            const history = replayMessagesForApi(current.messages);
-            const messages = trimMessages([{ role: 'system', content: system }, ...history, { role: 'user', content: userContent }]);
-            const tools = await runTargetObj.tools(draft.ai, runScope, ctx, { target: draft.target });
-            const result = await runIterateTurn({
-                messages,
-                live: draft.ai,
-                tools,
-                bus: draft.bus,
-                proposalKinds: runTargetObj.proposalKinds || null,
-                targetRef: draft.target,
-                isRead: (n) => runTargetObj.isRead(n),
-                runRead: (call, live, helpers) => runTargetObj.runRead(call, live, helpers),
-                runEdit: (call, live, helpers) => runTargetObj.runEdit(call, live, helpers),
-                request: (msgs, t) => app.source.aiRequest(runWs, { messages: msgs, tools: t, signal: controller.signal }),
-                onRound: (info) => {
-                    run.liveStep = i18nFormat('Read ${0} times, edited ${1} times…', info.reads, info.edits);
-                    if (session?.id === run.sessionId) paintBody();
-                },
-                signal: controller.signal,
-            });
-            draft.ai = result.live;
-            draft.bus = result.bus;
-            draft.proposalIds = result.proposalIds || [];
-            const changes = buildTurnChanges({
-                base: draft.base,
-                ai: draft.ai,
-                units: runTargetObj.units,
-                bus: draft.bus,
-                proposalIds: draft.proposalIds,
-                kindAdapters: runTargetObj.proposalKinds,
-                targetRef: draft.target,
-            });
-            draft.changes = changes;
-            if (!changes.length) drafts.delete(run.sessionId);
+            return await withActivityLease({
+                source: 'workbench:iterate',
+                label: i18n('Workbench AI iteration'),
+                scope: runScope === 'chat' ? 'chat' : 'global',
+                onCancel: () => controller.abort(),
+            }, async () => {
+                const ctx = getCtx();
+                const wrapper = wrapperPrompt({
+                    wsName: targetLabel(runTargetObj),
+                    scopeText: draft.title,
+                    builtin: app.settings().builtinPrompt !== false,
+                });
+                const system = typeof runTargetObj.systemPrompt === 'function'
+                    ? await runTargetObj.systemPrompt(runScope, draft.ai, { wrapper, ctx, target: draft.target })
+                    : [wrapper, await runTargetObj.prompt(draft.ai, runScope, ctx, { wrapper, target: draft.target })].filter(Boolean).join('\n\n');
+                const history = replayMessagesForApi(current.messages);
+                const messages = trimMessages([{ role: 'system', content: system }, ...history, { role: 'user', content: userContent }]);
+                const tools = await runTargetObj.tools(draft.ai, runScope, ctx, { target: draft.target });
+                const result = await runIterateTurn({
+                    messages,
+                    live: draft.ai,
+                    tools,
+                    bus: draft.bus,
+                    proposalKinds: runTargetObj.proposalKinds || null,
+                    targetRef: draft.target,
+                    isRead: (n) => runTargetObj.isRead(n),
+                    runRead: (call, live, helpers) => runTargetObj.runRead(call, live, helpers),
+                    runEdit: (call, live, helpers) => runTargetObj.runEdit(call, live, helpers),
+                    request: (msgs, t) => app.source.aiRequest(runWs, { messages: msgs, tools: t, signal: controller.signal }),
+                    onRound: (info) => {
+                        run.liveStep = i18nFormat('Read ${0} times, edited ${1} times…', info.reads, info.edits);
+                        if (session?.id === run.sessionId) paintBody();
+                    },
+                    signal: controller.signal,
+                });
+                draft.ai = result.live;
+                draft.bus = result.bus;
+                draft.proposalIds = result.proposalIds || [];
+                const changes = buildTurnChanges({
+                    base: draft.base,
+                    ai: draft.ai,
+                    units: runTargetObj.units,
+                    bus: draft.bus,
+                    proposalIds: draft.proposalIds,
+                    kindAdapters: runTargetObj.proposalKinds,
+                    targetRef: draft.target,
+                });
+                draft.changes = changes;
+                if (!changes.length) drafts.delete(run.sessionId);
 
-            const all = result.messages.filter(m => m.role !== 'system');
-            const msgKeep = history.length;
-            await saveTo({ messages: all });
+                const all = result.messages.filter(m => m.role !== 'system');
+                const msgKeep = history.length;
+                await saveTo({ messages: all });
 
-            return {
-                role: 'ai',
-                text: result.text || (changes.length ? '' : i18n('(The AI made no changes)')),
-                ...(result.reasoning ? { reasoning: result.reasoning } : {}),
-                ...(result.toolCalls?.length ? { toolCalls: result.toolCalls } : {}),
-                reads: result.reads.length,
-                edits: result.edits.length,
-                failed: result.failed.length,
-                changes,
-                proposalIds: draft.proposalIds,
-                state: changes.length ? 'pending' : '',
-                target: draft.title,
-                msgKeep,
-                at: Date.now(),
-            };
+                return {
+                    role: 'ai',
+                    text: result.text || (changes.length ? '' : i18n('(The AI made no changes)')),
+                    ...(result.reasoning ? { reasoning: result.reasoning } : {}),
+                    ...(result.toolCalls?.length ? { toolCalls: result.toolCalls } : {}),
+                    reads: result.reads.length,
+                    edits: result.edits.length,
+                    failed: result.failed.length,
+                    changes,
+                    proposalIds: draft.proposalIds,
+                    state: changes.length ? 'pending' : '',
+                    target: draft.title,
+                    msgKeep,
+                    at: Date.now(),
+                };
+            });
         } catch (err) {
             drafts.delete(run.sessionId);
             return {

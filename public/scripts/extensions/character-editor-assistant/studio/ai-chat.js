@@ -1676,6 +1676,7 @@ Same operations as the Studio tools (\`regex_*\`, \`character_*_orchestrator\`, 
 - ctx.onDispose(fn) — Register cleanup callback
 - ctx.renderText(rawText, messageId?) — Render text through Luker's formatting pipeline
 - ctx.executeSlashCommand(command) — Execute a slash command
+- ctx.activityGuard — Lifecycle-scoped Activity Guard (\`acquire\`, \`run\`, \`hasUnloadGuard\`, \`hasChatSwitchGuard\`, \`hasKeepAliveHold\`, \`list\`, \`subscribe\`). Wrap async tasks via \`ctx.activityGuard.run({ source, label, scope?, onCancel? }, fn)\` to guard page unload, mobile keep-alive, and chat switches; \`scope\` defaults to \`'chat'\` (pass \`'global'\` for cross-chat work), \`onCancel\` runs only on confirmed chat switch, and leases/subscribers auto-clean on unmount.
 
 ## Required UX (don't strand the user)
 
@@ -2469,279 +2470,293 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
 
     let lastAssistantText = '';
 
-    // Multi-round tool calling loop. Program-driven: any tool call this round
-    // reruns the loop, a plain-text response (no tool calls) exits it.
-    while (true) {
-        if (abortSignal?.aborted) {
-            throw new Error('Request aborted');
-        }
-
-        // Studio is a dev/authoring tool — the character card is visible (so the
-        // AI knows the persona it's authoring without GETting first), but world
-        // info stays empty: world books are content the Studio AI edits, not
-        // context it should reason against. substituteMacros:false keeps
-        // {{user}}/{{char}}/etc. in conversation messages literal so the AI sees
-        // the source text it is asked to edit, not the rendered version.
-        const generateTaskOpts = {
-            taskMessages: [
-                { role: 'system', content: systemPrompt },
-                ...conversationMessages,
-            ],
-            includeCharacterCard: true,
-            worldInfoSource: 'none',
-            runtimeWorldInfo: {},
-            apiPresetName: String(apiPresetName || '').trim(),
-            llmPresetName: String(llmPresetName || '').trim(),
-            tools,
-            toolChoice: 'auto',
-            functionCallMode: 'auto',
-            functionCallOptions: {
-                protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
-            },
-            abortSignal: abortSignal || undefined,
-            substituteMacros: false,
-        };
-        const result = await ctx.generateTask(generateTaskOpts);
-
-        if (abortSignal?.aborted) {
-            throw new Error('Request aborted');
-        }
-
-        const assistantText = String(result?.assistantText || '').trim();
-        const resultReasoning = String(result?.reasoning || '');
-        const resultReasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
-            ? result.reasoningBlocks
-            : null;
-        const resultReasoningDetails = Array.isArray(result?.reasoningDetails) && result.reasoningDetails.length > 0
-            ? result.reasoningDetails
-            : null;
-        const rawCalls = (Array.isArray(result?.toolCalls) ? result.toolCalls : [])
-            .map(call => ({
-                id: String(call?.raw?.id || '').trim() || makeCallId(),
-                name: String(call?.name || '').trim(),
-                args: call?.args && typeof call.args === 'object' ? call.args : {},
-            }))
-            .filter(call => allowedNames.has(call.name));
-
-        lastAssistantText = assistantText;
-
-        // Surface the assistant's prose BEFORE running tools so the chat shows
-        // text → tool approval/result, matching the AI's actual generation order.
-        // Otherwise the approval dialog pops first with no explanatory context.
-        if (assistantText && onAssistantText) {
-            onAssistantText(assistantText);
-        }
-
-        // No tool calls — conversation turn is done
-        if (rawCalls.length === 0) {
-            if (assistantText) {
-                conversationMessages.push({
-                    role: 'assistant',
-                    content: assistantText,
-                    ...(resultReasoning ? { reasoning: resultReasoning } : {}),
-                    ...(resultReasoningBlocks ? { reasoning_blocks: resultReasoningBlocks } : {}),
-                    ...(resultReasoningDetails ? { reasoning_details: resultReasoningDetails } : {}),
-                });
-            }
-            break;
-        }
-
-        // Execute tool calls in three steps:
-        //  (a) run every tool; file-op tools defer into pendingFileOpItems while
-        //      non-file-op tools resolve immediately.
-        //  (b) resolve the file-op batch at round end: applyEdits → conflict UI →
-        //      single approval card → commit walker.
-        //  (c) append assistant message + tool results.
-        const toolCallsForMessage = [];
-        const toolResults = [];
-        const pendingFileOpItems = [];
-
-        // Step (a): execute tools
-        for (const call of rawCalls) {
+    const runLoop = async () => {
+        // Multi-round tool calling loop. Program-driven: any tool call this round
+        // reruns the loop, a plain-text response (no tool calls) exits it.
+        while (true) {
             if (abortSignal?.aborted) {
                 throw new Error('Request aborted');
             }
 
-            const name = String(call.name || '').trim();
-            const args = call.args && typeof call.args === 'object' ? call.args : {};
-            const callId = String(call.id || '').trim() || makeCallId();
+            // Studio is a dev/authoring tool — the character card is visible (so the
+            // AI knows the persona it's authoring without GETting first), but world
+            // info stays empty: world books are content the Studio AI edits, not
+            // context it should reason against. substituteMacros:false keeps
+            // {{user}}/{{char}}/etc. in conversation messages literal so the AI sees
+            // the source text it is asked to edit, not the rendered version.
+            const generateTaskOpts = {
+                taskMessages: [
+                    { role: 'system', content: systemPrompt },
+                    ...conversationMessages,
+                ],
+                includeCharacterCard: true,
+                worldInfoSource: 'none',
+                runtimeWorldInfo: {},
+                apiPresetName: String(apiPresetName || '').trim(),
+                llmPresetName: String(llmPresetName || '').trim(),
+                tools,
+                toolChoice: 'auto',
+                functionCallMode: 'auto',
+                functionCallOptions: {
+                    protocolStyle: TOOL_PROTOCOL_STYLE.JSON_SCHEMA,
+                },
+                abortSignal: abortSignal || undefined,
+                substituteMacros: false,
+            };
+            const result = await ctx.generateTask(generateTaskOpts);
 
-            // file-op tools always defer; the round-end batch handles both
-            // auto-apply and approval modes uniformly through edits-lib.
-            const result = await executeTool(charId, name, args, { deferWriteOps: true });
+            if (abortSignal?.aborted) {
+                throw new Error('Request aborted');
+            }
 
-            toolCallsForMessage.push({
-                id: callId,
-                type: 'function',
-                function: { name, arguments: JSON.stringify(args) },
+            const assistantText = String(result?.assistantText || '').trim();
+            const resultReasoning = String(result?.reasoning || '');
+            const resultReasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length > 0
+                ? result.reasoningBlocks
+                : null;
+            const resultReasoningDetails = Array.isArray(result?.reasoningDetails) && result.reasoningDetails.length > 0
+                ? result.reasoningDetails
+                : null;
+            const rawCalls = (Array.isArray(result?.toolCalls) ? result.toolCalls : [])
+                .map(call => ({
+                    id: String(call?.raw?.id || '').trim() || makeCallId(),
+                    name: String(call?.name || '').trim(),
+                    args: call?.args && typeof call.args === 'object' ? call.args : {},
+                }))
+                .filter(call => allowedNames.has(call.name));
+
+            lastAssistantText = assistantText;
+
+            // Surface the assistant's prose BEFORE running tools so the chat shows
+            // text → tool approval/result, matching the AI's actual generation order.
+            // Otherwise the approval dialog pops first with no explanatory context.
+            if (assistantText && onAssistantText) {
+                onAssistantText(assistantText);
+            }
+
+            // No tool calls — conversation turn is done
+            if (rawCalls.length === 0) {
+                if (assistantText) {
+                    conversationMessages.push({
+                        role: 'assistant',
+                        content: assistantText,
+                        ...(resultReasoning ? { reasoning: resultReasoning } : {}),
+                        ...(resultReasoningBlocks ? { reasoning_blocks: resultReasoningBlocks } : {}),
+                        ...(resultReasoningDetails ? { reasoning_details: resultReasoningDetails } : {}),
+                    });
+                }
+                break;
+            }
+
+            // Execute tool calls in three steps:
+            //  (a) run every tool; file-op tools defer into pendingFileOpItems while
+            //      non-file-op tools resolve immediately.
+            //  (b) resolve the file-op batch at round end: applyEdits → conflict UI →
+            //      single approval card → commit walker.
+            //  (c) append assistant message + tool results.
+            const toolCallsForMessage = [];
+            const toolResults = [];
+            const pendingFileOpItems = [];
+
+            // Step (a): execute tools
+            for (const call of rawCalls) {
+                if (abortSignal?.aborted) {
+                    throw new Error('Request aborted');
+                }
+
+                const name = String(call.name || '').trim();
+                const args = call.args && typeof call.args === 'object' ? call.args : {};
+                const callId = String(call.id || '').trim() || makeCallId();
+
+                // file-op tools always defer; the round-end batch handles both
+                // auto-apply and approval modes uniformly through edits-lib.
+                const result = await executeTool(charId, name, args, { deferWriteOps: true });
+
+                toolCallsForMessage.push({
+                    id: callId,
+                    type: 'function',
+                    function: { name, arguments: JSON.stringify(args) },
+                });
+
+                if (result.pending_edit) {
+                    const slot = toolResults.length;
+                    toolResults.push({ role: 'tool', tool_call_id: callId, content: null });
+                    pendingFileOpItems.push({
+                        edit: result.edit,
+                        displayPath: result.displayPath,
+                        tool: result.tool,
+                        args,
+                        callId,
+                        slot,
+                    });
+                } else {
+                    if (onToolCall) onToolCall(name, args, result);
+                    toolResults.push({
+                        role: 'tool',
+                        tool_call_id: callId,
+                        content: JSON.stringify(result),
+                    });
+                }
+            }
+
+            // Step (b): resolve file-op batch (if any)
+            if (pendingFileOpItems.length > 0) {
+                const batchEdits = pendingFileOpItems.map(it => it.edit);
+                const live = await loadCardAppFilesLive(charId, batchEdits);
+
+                let batchOutcome = '';
+                let batchError = '';
+                let resolvedClean = [];
+                let resolvedNewLive = null;
+
+                let applyResult;
+                try {
+                    applyResult = applyEdits(batchEdits, live);
+                    resolvedClean = applyResult.clean;
+                    resolvedNewLive = applyResult.newLive;
+                } catch (e) {
+                    batchOutcome = 'apply_failed';
+                    batchError = String(e?.message || e);
+                }
+
+                if (applyResult && applyResult.conflicts.length > 0) {
+                    if (!onPendingApproval) {
+                        // Auto-apply mode: don't pop a modal mid-stream. Conflicts can't
+                        // be silently swallowed — fail the batch so the AI sees it.
+                        batchOutcome = 'conflict_cancelled';
+                        batchError = 'Auto-apply detected drift between AI proposal and current files.';
+                    } else {
+                        const resolutions = await showConflictResolution(applyResult.conflicts);
+                        if (!resolutions) {
+                            batchOutcome = 'conflict_cancelled';
+                            batchError = 'User cancelled conflict resolution.';
+                        } else {
+                            const resolved = [...applyResult.clean];
+                            for (const r of resolutions) {
+                                if (r.decision === 'apply-mine') resolved.push(r.edit);
+                                else if (r.decision === 'manual') {
+                                    if (r.edit.op === 'set') resolved.push({ ...r.edit, newValue: r.newValue });
+                                    else resolved.push(r.edit);
+                                }
+                                // 'keep-theirs' = drop
+                            }
+                            try {
+                                applyResult = applyEdits(resolved, live);
+                                resolvedClean = applyResult.clean;
+                                resolvedNewLive = applyResult.newLive;
+                            } catch (e) {
+                                batchOutcome = 'apply_failed';
+                                batchError = `apply after resolution failed: ${String(e?.message || e)}`;
+                            }
+                        }
+                    }
+                }
+
+                if (!batchOutcome) {
+                    // No conflicts (or all resolved). Ask for approval if a callback is
+                    // wired; otherwise auto-commit.
+                    const approved = onPendingApproval
+                        ? await onPendingApproval({
+                            items: pendingFileOpItems.map(it => ({
+                                edit: it.edit,
+                                displayPath: it.displayPath,
+                                tool: it.tool,
+                            })),
+                            live,
+                            newLive: resolvedNewLive,
+                        })
+                        : true;
+                    if (approved) {
+                        try {
+                            await commitFileOpEdits(charId, resolvedClean, resolvedNewLive);
+                            batchOutcome = 'approved';
+                        } catch (e) {
+                            batchOutcome = 'commit_failed';
+                            batchError = String(e?.message || e);
+                        }
+                    } else {
+                        batchOutcome = 'rejected';
+                        batchError = 'User rejected the batch of file modifications.';
+                    }
+                }
+
+                // Fill toolResults placeholders + fire onToolCall per item.
+                // Per-item outcome reflects the truth of THIS edit's apply:
+                // `clean` ⇒ applied, `alreadyDone` ⇒ target was already in the
+                // desired state (no write), otherwise something dropped via
+                // conflict resolution (keep-theirs or manual replacement). Without
+                // this distinction the model thinks every edit it proposed landed,
+                // even when half the batch was already-done no-ops — same silent-
+                // failure class CPA had pre-fix.
+                const cleanRefs = new Set(resolvedClean);
+                const alreadyDoneRefs = new Set(applyResult?.alreadyDone || []);
+                for (const item of pendingFileOpItems) {
+                    let r;
+                    if (batchOutcome === 'approved') {
+                        if (alreadyDoneRefs.has(item.edit)) {
+                            r = { ok: true, alreadyDone: true, message: `${item.displayPath}: no change needed (target was already in the desired state).` };
+                        } else if (cleanRefs.has(item.edit)) {
+                            r = { ok: true, message: `${item.displayPath} applied.` };
+                        } else {
+                            // Edit isn't in clean or alreadyDone — must have been
+                            // dropped via keep-theirs in the conflict modal, or
+                            // replaced by a manual-resolution edit at the same path.
+                            // Surface the latter as applied (some change landed for
+                            // this path), the former as skipped.
+                            const resolvedAtPath = item.edit?.path
+                                && resolvedClean.some(e => e?.path === item.edit.path);
+                            r = resolvedAtPath
+                                ? { ok: true, message: `${item.displayPath} applied (via conflict resolution).` }
+                                : { ok: true, skipped: true, message: `${item.displayPath}: skipped via conflict resolution (keep-theirs).` };
+                        }
+                    } else if (batchOutcome === 'commit_failed') {
+                        r = { ok: false, error: `commit failed: ${batchError}` };
+                    } else if (batchOutcome === 'apply_failed') {
+                        r = { ok: false, error: `apply failed: ${batchError}` };
+                    } else {
+                        r = { ok: false, error: batchError || 'Batch failed.' };
+                    }
+                    toolResults[item.slot].content = JSON.stringify(r);
+                    if (onToolCall) onToolCall(item.tool, item.args, r);
+                }
+
+                // modifiedFiles tracking — derive from applied clean edits.
+                if (batchOutcome === 'approved') {
+                    for (const e of resolvedClean) {
+                        for (const p of extractPathsFromEdit(e)) {
+                            if (p && !modifiedFiles.includes(p)) modifiedFiles.push(p);
+                        }
+                    }
+                }
+            }
+
+            // Append assistant message with tool calls
+            conversationMessages.push({
+                role: 'assistant',
+                content: assistantText || '',
+                ...(resultReasoning ? { reasoning: resultReasoning } : {}),
+                ...(resultReasoningBlocks ? { reasoning_blocks: resultReasoningBlocks } : {}),
+                ...(resultReasoningDetails ? { reasoning_details: resultReasoningDetails } : {}),
+                tool_calls: toolCallsForMessage,
             });
 
-            if (result.pending_edit) {
-                const slot = toolResults.length;
-                toolResults.push({ role: 'tool', tool_call_id: callId, content: null });
-                pendingFileOpItems.push({
-                    edit: result.edit,
-                    displayPath: result.displayPath,
-                    tool: result.tool,
-                    args,
-                    callId,
-                    slot,
-                });
-            } else {
-                if (onToolCall) onToolCall(name, args, result);
-                toolResults.push({
-                    role: 'tool',
-                    tool_call_id: callId,
-                    content: JSON.stringify(result),
-                });
+            // Append tool results
+            for (const result of toolResults) {
+                conversationMessages.push(result);
             }
         }
+    };
 
-        // Step (b): resolve file-op batch (if any)
-        if (pendingFileOpItems.length > 0) {
-            const batchEdits = pendingFileOpItems.map(it => it.edit);
-            const live = await loadCardAppFilesLive(charId, batchEdits);
-
-            let batchOutcome = '';
-            let batchError = '';
-            let resolvedClean = [];
-            let resolvedNewLive = null;
-
-            let applyResult;
-            try {
-                applyResult = applyEdits(batchEdits, live);
-                resolvedClean = applyResult.clean;
-                resolvedNewLive = applyResult.newLive;
-            } catch (e) {
-                batchOutcome = 'apply_failed';
-                batchError = String(e?.message || e);
-            }
-
-            if (applyResult && applyResult.conflicts.length > 0) {
-                if (!onPendingApproval) {
-                    // Auto-apply mode: don't pop a modal mid-stream. Conflicts can't
-                    // be silently swallowed — fail the batch so the AI sees it.
-                    batchOutcome = 'conflict_cancelled';
-                    batchError = 'Auto-apply detected drift between AI proposal and current files.';
-                } else {
-                    const resolutions = await showConflictResolution(applyResult.conflicts);
-                    if (!resolutions) {
-                        batchOutcome = 'conflict_cancelled';
-                        batchError = 'User cancelled conflict resolution.';
-                    } else {
-                        const resolved = [...applyResult.clean];
-                        for (const r of resolutions) {
-                            if (r.decision === 'apply-mine') resolved.push(r.edit);
-                            else if (r.decision === 'manual') {
-                                if (r.edit.op === 'set') resolved.push({ ...r.edit, newValue: r.newValue });
-                                else resolved.push(r.edit);
-                            }
-                            // 'keep-theirs' = drop
-                        }
-                        try {
-                            applyResult = applyEdits(resolved, live);
-                            resolvedClean = applyResult.clean;
-                            resolvedNewLive = applyResult.newLive;
-                        } catch (e) {
-                            batchOutcome = 'apply_failed';
-                            batchError = `apply after resolution failed: ${String(e?.message || e)}`;
-                        }
-                    }
-                }
-            }
-
-            if (!batchOutcome) {
-                // No conflicts (or all resolved). Ask for approval if a callback is
-                // wired; otherwise auto-commit.
-                const approved = onPendingApproval
-                    ? await onPendingApproval({
-                        items: pendingFileOpItems.map(it => ({
-                            edit: it.edit,
-                            displayPath: it.displayPath,
-                            tool: it.tool,
-                        })),
-                        live,
-                        newLive: resolvedNewLive,
-                    })
-                    : true;
-                if (approved) {
-                    try {
-                        await commitFileOpEdits(charId, resolvedClean, resolvedNewLive);
-                        batchOutcome = 'approved';
-                    } catch (e) {
-                        batchOutcome = 'commit_failed';
-                        batchError = String(e?.message || e);
-                    }
-                } else {
-                    batchOutcome = 'rejected';
-                    batchError = 'User rejected the batch of file modifications.';
-                }
-            }
-
-            // Fill toolResults placeholders + fire onToolCall per item.
-            // Per-item outcome reflects the truth of THIS edit's apply:
-            // `clean` ⇒ applied, `alreadyDone` ⇒ target was already in the
-            // desired state (no write), otherwise something dropped via
-            // conflict resolution (keep-theirs or manual replacement). Without
-            // this distinction the model thinks every edit it proposed landed,
-            // even when half the batch was already-done no-ops — same silent-
-            // failure class CPA had pre-fix.
-            const cleanRefs = new Set(resolvedClean);
-            const alreadyDoneRefs = new Set(applyResult?.alreadyDone || []);
-            for (const item of pendingFileOpItems) {
-                let r;
-                if (batchOutcome === 'approved') {
-                    if (alreadyDoneRefs.has(item.edit)) {
-                        r = { ok: true, alreadyDone: true, message: `${item.displayPath}: no change needed (target was already in the desired state).` };
-                    } else if (cleanRefs.has(item.edit)) {
-                        r = { ok: true, message: `${item.displayPath} applied.` };
-                    } else {
-                        // Edit isn't in clean or alreadyDone — must have been
-                        // dropped via keep-theirs in the conflict modal, or
-                        // replaced by a manual-resolution edit at the same path.
-                        // Surface the latter as applied (some change landed for
-                        // this path), the former as skipped.
-                        const resolvedAtPath = item.edit?.path
- && resolvedClean.some(e => e?.path === item.edit.path);
-                        r = resolvedAtPath
-                            ? { ok: true, message: `${item.displayPath} applied (via conflict resolution).` }
-                            : { ok: true, skipped: true, message: `${item.displayPath}: skipped via conflict resolution (keep-theirs).` };
-                    }
-                } else if (batchOutcome === 'commit_failed') {
-                    r = { ok: false, error: `commit failed: ${batchError}` };
-                } else if (batchOutcome === 'apply_failed') {
-                    r = { ok: false, error: `apply failed: ${batchError}` };
-                } else {
-                    r = { ok: false, error: batchError || 'Batch failed.' };
-                }
-                toolResults[item.slot].content = JSON.stringify(r);
-                if (onToolCall) onToolCall(item.tool, item.args, r);
-            }
-
-            // modifiedFiles tracking — derive from applied clean edits.
-            if (batchOutcome === 'approved') {
-                for (const e of resolvedClean) {
-                    for (const p of extractPathsFromEdit(e)) {
-                        if (p && !modifiedFiles.includes(p)) modifiedFiles.push(p);
-                    }
-                }
-            }
-        }
-
-        // Append assistant message with tool calls
-        conversationMessages.push({
-            role: 'assistant',
-            content: assistantText || '',
-            ...(resultReasoning ? { reasoning: resultReasoning } : {}),
-            ...(resultReasoningBlocks ? { reasoning_blocks: resultReasoningBlocks } : {}),
-            ...(resultReasoningDetails ? { reasoning_details: resultReasoningDetails } : {}),
-            tool_calls: toolCallsForMessage,
-        });
-
-        // Append tool results
-        for (const result of toolResults) {
-            conversationMessages.push(result);
-        }
+    const guard = ctx?.activityGuard;
+    if (typeof guard?.run === 'function') {
+        const translator = typeof ctx?.translate === 'function' ? ctx : __ctx;
+        await guard.run({
+            source: 'cea:studio-chat',
+            label: translator.translate('CardApp Studio AI'),
+            scope: 'global',
+        }, runLoop);
+    } else {
+        await runLoop();
     }
 
     return {

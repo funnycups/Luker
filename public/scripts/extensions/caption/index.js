@@ -18,6 +18,18 @@ export { MODULE_NAME };
 
 const MODULE_NAME = 'caption';
 
+async function withCaptionActivity(fn) {
+    const guard = getContext()?.activityGuard;
+    if (typeof guard?.run !== 'function') {
+        return await fn();
+    }
+    return await guard.run({
+        source: 'caption:run',
+        label: t`Image captioning`,
+        scope: 'chat',
+    }, fn);
+}
+
 const PROMPT_DEFAULT = 'What\'s in this image?';
 const TEMPLATE_DEFAULT = '[{{user}} sends {{char}} a picture that contains: {{caption}}]';
 const GOOGLE_MODEL_MIGRATIONS = new Map([
@@ -158,32 +170,34 @@ async function captionExistingMessage(message, mediaIndex) {
         throw new Error('Captioning videos is not supported for the current source.');
     }
 
-    const imageData = await fetch(mediaAttachment.url);
-    const blob = await imageData.blob();
-    const fileName = mediaAttachment.url.split('/').pop().split('?')[0] || 'image.jpg';
-    const file = new File([blob], fileName, { type: blob.type });
-    const caption = await getCaptionForFile(file, null, true);
+    await withCaptionActivity(async () => {
+        const imageData = await fetch(mediaAttachment.url);
+        const blob = await imageData.blob();
+        const fileName = mediaAttachment.url.split('/').pop().split('?')[0] || 'image.jpg';
+        const file = new File([blob], fileName, { type: blob.type });
+        const caption = await getCaptionForFile(file, null, true);
 
-    if (!caption) {
-        console.warn('Failed to generate a caption for the image.');
-        return;
-    }
+        if (!caption) {
+            console.warn('Failed to generate a caption for the image.');
+            return;
+        }
 
-    const wrappedCaption = await wrapCaptionTemplate(caption);
+        const wrappedCaption = await wrapCaptionTemplate(caption);
 
-    const messageText = String(message.mes).trim();
+        const messageText = String(message.mes).trim();
 
-    if (!messageText) {
-        message.extra.inline_image = false;
-        message.mes = wrappedCaption;
-        mediaAttachment.title = wrappedCaption;
-        mediaAttachment.captioned = true;
-    } else {
-        message.extra.inline_image = true;
-        mediaAttachment.append_title = true;
-        mediaAttachment.title = wrappedCaption;
-        mediaAttachment.captioned = true;
-    }
+        if (!messageText) {
+            message.extra.inline_image = false;
+            message.mes = wrappedCaption;
+            mediaAttachment.title = wrappedCaption;
+            mediaAttachment.captioned = true;
+        } else {
+            message.extra.inline_image = true;
+            mediaAttachment.append_title = true;
+            mediaAttachment.title = wrappedCaption;
+            mediaAttachment.captioned = true;
+        }
+    });
 }
 
 /**
@@ -391,29 +405,31 @@ async function captionCommandCallback(args, prompt) {
         /** @type {ChatMessage} */
         const message = getContext().chat[messageId];
         if (Array.isArray(message?.extra?.media) && message.extra.media.length > 0) {
-            try {
-                const mediaAttachment = message.extra.media[index] || message.extra.media[0];
-                if (!mediaAttachment || !mediaAttachment.url) {
-                    toastr.error('The specified message does not contain an image.');
-                    return '';
-                }
-                if (mediaAttachment.type === MEDIA_TYPE.AUDIO) {
-                    toastr.error('The specified media is an audio file. Captioning audio files is not supported.');
-                    return '';
-                }
-                if (mediaAttachment.type === MEDIA_TYPE.VIDEO && !isVideoCaptioningAvailable()) {
-                    toastr.error('The specified media is a video. Captioning videos is not supported for the current source.');
-                    return '';
-                }
-                const fetchResult = await fetch(mediaAttachment.url);
-                const blob = await fetchResult.blob();
-                const fileName = mediaAttachment.url.split('/').pop().split('?')[0] || 'image.jpg';
-                const file = new File([blob], fileName, { type: blob.type });
-                return await getCaptionForFile(file, prompt, quiet);
-            } catch (error) {
-                toastr.error('Failed to get image from the message. Make sure the image is accessible.');
+            const mediaAttachment = message.extra.media[index] || message.extra.media[0];
+            if (!mediaAttachment || !mediaAttachment.url) {
+                toastr.error('The specified message does not contain an image.');
                 return '';
             }
+            if (mediaAttachment.type === MEDIA_TYPE.AUDIO) {
+                toastr.error('The specified media is an audio file. Captioning audio files is not supported.');
+                return '';
+            }
+            if (mediaAttachment.type === MEDIA_TYPE.VIDEO && !isVideoCaptioningAvailable()) {
+                toastr.error('The specified media is a video. Captioning videos is not supported for the current source.');
+                return '';
+            }
+            return await withCaptionActivity(async () => {
+                try {
+                    const fetchResult = await fetch(mediaAttachment.url);
+                    const blob = await fetchResult.blob();
+                    const fileName = mediaAttachment.url.split('/').pop().split('?')[0] || 'image.jpg';
+                    const file = new File([blob], fileName, { type: blob.type });
+                    return await getCaptionForFile(file, prompt, quiet);
+                } catch (error) {
+                    toastr.error('Failed to get image from the message. Make sure the image is accessible.');
+                    return '';
+                }
+            });
         }
     }
 
@@ -422,8 +438,14 @@ async function captionCommandCallback(args, prompt) {
         input.type = 'file';
         input.accept = 'image/*,video/*';
         input.onchange = async (e) => {
-            const caption = await onSelectImage(e, prompt, quiet);
-            resolve(caption);
+            let caption = '';
+            try {
+                caption = await withCaptionActivity(() => onSelectImage(e, prompt, quiet));
+            } catch (error) {
+                console.error(error);
+            } finally {
+                resolve(caption);
+            }
         };
         input.oncancel = () => resolve('');
         input.click();
@@ -537,7 +559,7 @@ export async function init() {
         imgInput.id = 'img_file';
         imgInput.accept = 'image/*,video/*';
         imgInput.hidden = true;
-        imgInput.addEventListener('change', (e) => onSelectImage(e, '', false));
+        imgInput.addEventListener('change', (e) => withCaptionActivity(() => onSelectImage(e, '', false)));
         const imgForm = document.createElement('form');
         imgForm.id = 'img_form';
         imgForm.appendChild(imgInput);

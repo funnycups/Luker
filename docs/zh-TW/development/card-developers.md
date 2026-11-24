@@ -212,6 +212,24 @@ CardApp 的上下文物件提供以下 API：
 | `ctx.setInterval(fn, ms)` | `setInterval` 的封裝，卸載時控制代碼自動清理。 |
 | `ctx.setTimeout(fn, ms)` | `setTimeout` 的封裝，卸載時控制代碼自動清理。 |
 | `ctx.onDispose(fn)` | 註冊清理回呼，CardApp 卸載（切換聊天、熱重載、切換角色）時執行。 |
+| `ctx.activityGuard` | 繫結生命週期的[後台活動保護](/zh-TW/development/extension-api/plugin-integration#後台活動保護)介面，提供 `acquire`、`run`、`hasUnloadGuard`、`hasChatSwitchGuard`、`hasKeepAliveHold`、`list` 與 `subscribe` 方法。`acquire` 與 `run` 預設將 `scope` 設為 `'chat'`，跨聊天任務需顯式傳 `scope: 'global'`；活躍租約與 `subscribe` 監聽器均在 CardApp 卸載時自動釋放。 |
+
+範例 —— 為非同步 CardApp 任務啟用離開提醒、行動端後台保活與切換聊天確認：
+
+```javascript
+const controller = new AbortController();
+
+await ctx.activityGuard.run({
+    source: 'my-cardapp:turn-sim',
+    label: '推演回合狀態',
+    onCancel: () => controller.abort(),
+}, async () => {
+    await ctx.lukerContext.generateTask({
+        taskMessages: [{ role: 'user', content: '計算下一回合狀態。' }],
+        abortSignal: controller.signal,
+    });
+});
+```
 
 範例 —— 聊天切換或當前 swipe 改變時重新整理面板：
 

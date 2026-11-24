@@ -9,6 +9,7 @@ import {
     chat,
     chatElement,
     chat_metadata,
+    closeCurrentChat,
     comment_avatar,
     deactivateSendButtons,
     default_avatar,
@@ -70,7 +71,7 @@ import { getMessageTimeStamp, isMobile } from './RossAscends-mods.js';
 import { hideChatMessageRange } from './chats.js';
 import { getContext, saveMetadataDebounced } from './extensions.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
-import { findGroupMemberId, groups, is_group_generating, openGroupById, regenerateGroup, resetSelectedGroup, saveGroupChat, selected_group, getGroupMembers } from './group-chats.js';
+import { findGroupMemberId, groups, is_group_generating, openGroupById, regenerateGroup, saveGroupChat, selected_group, getGroupMembers } from './group-chats.js';
 import { chat_completion_sources, MINIMAX_ENDPOINT, oai_settings, POLLINATIONS_ENDPOINT, promptManager, SILICONFLOW_ENDPOINT, ZAI_ENDPOINT } from './openai.js';
 import { user_avatar } from './personas.js';
 import { addEphemeralStoppingString, chat_styles, context_presets, flushEphemeralStoppingStrings, playMessageSound, power_user } from './power-user.js';
@@ -478,30 +479,21 @@ export function initDefaultSlashCommands() {
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'closechat',
-        callback: function () {
-            $('#option_close_chat').trigger('click');
+        callback: async function () {
+            await closeCurrentChat();
             return '';
         },
         helpString: t`Closes the current chat.`,
     }));
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'tempchat',
-        callback: () => {
-            return new Promise((resolve, reject) => {
-                const eventCallback = async (chatId) => {
-                    if (chatId) {
-                        return reject(t`Not in a temporary chat`);
-                    }
-                    await newAssistantChat({ temporary: true });
-                    return resolve('');
-                };
-                eventSource.once(event_types.CHAT_CHANGED, eventCallback);
-                $('#option_close_chat').trigger('click');
-                setTimeout(() => {
-                    reject(t`Failed to open temporary chat`);
-                    eventSource.removeListener(event_types.CHAT_CHANGED, eventCallback);
-                }, debounce_timeout.relaxed);
-            });
+        callback: async () => {
+            const closed = await closeCurrentChat();
+            if (!closed) {
+                return '';
+            }
+            await newAssistantChat({ temporary: true, skipSwitchGuard: true });
+            return '';
         },
         helpString: t`Opens a temporary chat with Assistant.`,
     }));
@@ -5133,27 +5125,24 @@ async function goToCharacterCallback(_, name) {
     const character = findChar({ name: name });
     if (character) {
         const chid = getCharIndex(character);
-        await openChat(String(chid));
+        if (!await selectCharacterById(chid)) {
+            return '';
+        }
         setActiveCharacter(character.avatar);
         setActiveGroup(null);
         return character.name;
     }
     const group = groups.find(it => equalsIgnoreCaseAndAccents(it.name, name));
     if (group) {
-        await openGroupById(group.id);
+        if (!await openGroupById(group.id)) {
+            return '';
+        }
         setActiveCharacter(null);
         setActiveGroup(group.id);
         return group.name;
     }
     console.warn(`No matches found for name "${name}"`);
     return '';
-}
-
-async function openChat(chid) {
-    resetSelectedGroup();
-    setCharacterId(chid);
-    await delay(1);
-    await reloadCurrentChat();
 }
 
 /**

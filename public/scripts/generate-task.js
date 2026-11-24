@@ -5,6 +5,7 @@
  * resolveChatCompletionRequestProfile.
  */
 
+import { acquireActivityLease, resolveRequestActivityLeaseOptions, withActivityLease } from './activity-guard.js';
 import { regexAgentPluginOutput } from './lib/chat-regex.js';
 import { transientSessionHeaders } from './lib/transient-session.js';
 
@@ -1040,6 +1041,10 @@ const RESPONSE_MODES = { TEXT: 'text', TOOL: 'tool', JSON: 'json' };
  *   editor, character card editor, lorebook diff analysis); see the
  *   "When to opt out" section in
  *   `docs/development/extension-api/generation.md`.
+ * @param {object} [params.promptContext]
+ * @param {string} [params.transientSessionId]
+ * @param {function} [params.onPreparedRequest]
+ * @param {boolean|object} [params.activity=true] - Activity guard lease override or `false` to opt out
  * @param {object} [internal] - injection seam for tests; do not pass from extension code
  * @returns {Promise<object>} unified result shape (see spec)
  */
@@ -1064,6 +1069,7 @@ export async function generateTask({
     promptContext = null,
     transientSessionId = undefined,
     onPreparedRequest = null,
+    activity = true,
 } = {}, { _injected = null } = {}) {
     // ── 1. Input validation ──
     const hasTools = Array.isArray(tools) && tools.length > 0;
@@ -1081,151 +1087,156 @@ export async function generateTask({
     const senders = _injected?.senders || getDefaultSenders();
     const substituteParamsFn = _injected?.substituteParams || getDefaultSubstituteParams();
 
-    // ── 2. Profile resolution ──
-    const profile = resolveProfile(apiPresetName, {
-        resolver: profileResolver,
-        defaultApi: _injected?.defaultApi || 'openai',
-        defaultSource: _injected?.defaultSource || '',
-    });
+    const leaseOptions = resolveRequestActivityLeaseOptions(activity, 'core:generate-task');
+    const runTask = async () => {
+        // ── 2. Profile resolution ──
+        const profile = resolveProfile(apiPresetName, {
+            resolver: profileResolver,
+            defaultApi: _injected?.defaultApi || 'openai',
+            defaultSource: _injected?.defaultSource || '',
+        });
 
-    // ── 3. llmPresetName cross-family check ──
-    let effectiveLlmPresetName = String(llmPresetName || '').trim();
-    if (effectiveLlmPresetName && profile.requestApi !== 'openai') {
-        console.warn(`[generate-task] llmPresetName='${effectiveLlmPresetName}' ignored on non-openai requestApi='${profile.requestApi}'`);
-        effectiveLlmPresetName = '';
-    }
+        // ── 3. llmPresetName cross-family check ──
+        let effectiveLlmPresetName = String(llmPresetName || '').trim();
+        if (effectiveLlmPresetName && profile.requestApi !== 'openai') {
+            console.warn(`[generate-task] llmPresetName='${effectiveLlmPresetName}' ignored on non-openai requestApi='${profile.requestApi}'`);
+            effectiveLlmPresetName = '';
+        }
 
-    // ── 4. World info ──
-    const wi = await resolveWorldInfo({
-        worldInfoSource,
-        taskMessages,
-        customWorldInfoMessages,
-        runtimeWorldInfo,
-        forceWorldInfoResimulate,
-        worldInfoType,
-        postActivationHook,
-        promptContext: validatedPromptContext,
-    }, { worldInfoResolver });
+        // ── 4. World info ──
+        const wi = await resolveWorldInfo({
+            worldInfoSource,
+            taskMessages,
+            customWorldInfoMessages,
+            runtimeWorldInfo,
+            forceWorldInfoResimulate,
+            worldInfoType,
+            postActivationHook,
+            promptContext: validatedPromptContext,
+        }, { worldInfoResolver });
 
-    // ── 4.5 Macro substitution on caller-supplied task messages ──
-    // Preset-supplied prompt entries are substituted later inside
-    // buildPresetAwarePromptMessages, but caller-supplied taskMessages bypass
-    // that path; without this step, plugin requests ship `{{user}}` /
-    // `{{getvar::}}` / etc. as literal text. skipSideEffects:true is mandatory
-    // — otherwise every plugin call would re-fire setvar/addvar macros and
-    // mutate chat_metadata.variables on each dispatch.
-    const effectiveSubstituteFn = validatedPromptContext
-        ? (content, options) => {
-            const capturedSubstitute = _injected?.substituteCapturedMacros || getDefaultCapturedSubstituteParams();
-            if (typeof capturedSubstitute !== 'function') {
-                throw new GenerateTaskError('unknown', 'Captured task macro substitution is unavailable.');
+        // ── 4.5 Macro substitution on caller-supplied task messages ──
+        // Preset-supplied prompt entries are substituted later inside
+        // buildPresetAwarePromptMessages, but caller-supplied taskMessages bypass
+        // that path; without this step, plugin requests ship `{{user}}` /
+        // `{{getvar::}}` / etc. as literal text. skipSideEffects:true is mandatory
+        // — otherwise every plugin call would re-fire setvar/addvar macros and
+        // mutate chat_metadata.variables on each dispatch.
+        const effectiveSubstituteFn = validatedPromptContext
+            ? (content, options) => {
+                const capturedSubstitute = _injected?.substituteCapturedMacros || getDefaultCapturedSubstituteParams();
+                if (typeof capturedSubstitute !== 'function') {
+                    throw new GenerateTaskError('unknown', 'Captured task macro substitution is unavailable.');
+                }
+                return capturedSubstitute(content, validatedPromptContext.macroEnv, options);
             }
-            return capturedSubstitute(content, validatedPromptContext.macroEnv, options);
+            : substituteParamsFn;
+        const effectiveTaskMessages = substituteMacros
+            ? applyMacroSubstitution(taskMessages, effectiveSubstituteFn)
+            : taskMessages;
+
+        // ── 5. Assemble messages (envelope-aware, chat-completion shape) ──
+        const messages = assembleMessages({
+            taskMessages: effectiveTaskMessages,
+            includeCharacterCard: validatedPromptContext
+                ? Boolean(validatedPromptContext.envelope?.characterCard)
+                : includeCharacterCard,
+            llmPresetName: effectiveLlmPresetName,
+            requestApi: profile.requestApi,
+            runtimeWorldInfo: wi,
+            promptContext: validatedPromptContext,
+        }, { builder });
+
+        // ── 6. Render per-family ──
+        const payload = renderForApi(profile.requestApi, messages, { rawPromptBuilder });
+
+        // ── 7. Dispatch ──
+        // OpenAI-family: when the resolved preset has `stream_openai: true`, run
+        // the streaming sender and accumulate frames into the same chat-completion
+        // shape `normalizeResponse` expects. This keeps the wire-level transport
+        // tied to the user-selected preset while leaving `generateTask`'s contract
+        // — `Promise<terminal>` — unchanged. `generateTaskStream` remains the
+        // entry point for callers that want chunk-by-chunk delivery.
+        const mode = hasJsonSchema ? RESPONSE_MODES.JSON : (hasTools ? RESPONSE_MODES.TOOL : RESPONSE_MODES.TEXT);
+        const promptNames = validatedPromptContext
+            ? {
+                userName: String(validatedPromptContext.macroEnv?.names?.user ?? ''),
+                charName: String(validatedPromptContext.macroEnv?.names?.char ?? ''),
+                groupNames: Array.isArray(validatedPromptContext.macroEnv?.contextSnapshot?.groupNames)
+                    ? validatedPromptContext.macroEnv.contextSnapshot.groupNames
+                    : [],
+            }
+            : null;
+        const useStreamingTransport = profile.requestApi === 'openai'
+            && resolveOpenAiStreamFlag(senders?.getOpenAiRuntime?.(), effectiveLlmPresetName);
+        let raw;
+        try {
+            if (useStreamingTransport) {
+                const { stream: innerStream, rawTerminal } = dispatchToSenderStreaming({
+                    requestApi: profile.requestApi,
+                    payload,
+                    tools,
+                    toolChoice,
+                    jsonSchema,
+                    llmPresetName: effectiveLlmPresetName,
+                    apiPresetName,
+                    apiSettingsOverride: profile.apiSettingsOverride,
+                    functionCallMode,
+                    functionCallOptions,
+                    abortSignal,
+                    transientSessionId,
+                    onPreparedRequest,
+                    promptNames,
+                }, { senders });
+                // Drain inner stream so the producer is not blocked waiting for a
+                // consumer (chunks are dropped per channel spec when no consumer
+                // attaches, but we attach defensively to avoid back-pressure
+                // surprises if that contract ever changes).
+                (async () => { try { for await (const _ of innerStream) { /* drop */ } } catch { /* surfaced via rawTerminal */ } })();
+                raw = await rawTerminal;
+            } else {
+                raw = await dispatchToSender({
+                    requestApi: profile.requestApi,
+                    payload,
+                    tools,
+                    toolChoice,
+                    jsonSchema,
+                    llmPresetName: effectiveLlmPresetName,
+                    apiPresetName,
+                    apiSettingsOverride: profile.apiSettingsOverride,
+                    functionCallMode,
+                    functionCallOptions,
+                    abortSignal,
+                    transientSessionId,
+                    onPreparedRequest,
+                    promptNames,
+                }, { senders });
+            }
+        } catch (e) {
+            throw _wrapSenderError(e, abortSignal);
         }
-        : substituteParamsFn;
-    const effectiveTaskMessages = substituteMacros
-        ? applyMacroSubstitution(taskMessages, effectiveSubstituteFn)
-        : taskMessages;
 
-    // ── 5. Assemble messages (envelope-aware, chat-completion shape) ──
-    const messages = assembleMessages({
-        taskMessages: effectiveTaskMessages,
-        includeCharacterCard: validatedPromptContext
-            ? Boolean(validatedPromptContext.envelope?.characterCard)
-            : includeCharacterCard,
-        llmPresetName: effectiveLlmPresetName,
-        requestApi: profile.requestApi,
-        runtimeWorldInfo: wi,
-        promptContext: validatedPromptContext,
-    }, { builder });
+        // ── 8. Normalize response ──
+        const result = normalizeResponse({ requestApi: profile.requestApi, mode, raw });
 
-    // ── 6. Render per-family ──
-    const payload = renderForApi(profile.requestApi, messages, { rawPromptBuilder });
-
-    // ── 7. Dispatch ──
-    // OpenAI-family: when the resolved preset has `stream_openai: true`, run
-    // the streaming sender and accumulate frames into the same chat-completion
-    // shape `normalizeResponse` expects. This keeps the wire-level transport
-    // tied to the user-selected preset while leaving `generateTask`'s contract
-    // — `Promise<terminal>` — unchanged. `generateTaskStream` remains the
-    // entry point for callers that want chunk-by-chunk delivery.
-    const mode = hasJsonSchema ? RESPONSE_MODES.JSON : (hasTools ? RESPONSE_MODES.TOOL : RESPONSE_MODES.TEXT);
-    const promptNames = validatedPromptContext
-        ? {
-            userName: String(validatedPromptContext.macroEnv?.names?.user ?? ''),
-            charName: String(validatedPromptContext.macroEnv?.names?.char ?? ''),
-            groupNames: Array.isArray(validatedPromptContext.macroEnv?.contextSnapshot?.groupNames)
-                ? validatedPromptContext.macroEnv.contextSnapshot.groupNames
-                : [],
-        }
-        : null;
-    const useStreamingTransport = profile.requestApi === 'openai'
-        && resolveOpenAiStreamFlag(senders?.getOpenAiRuntime?.(), effectiveLlmPresetName);
-    let raw;
-    try {
-        if (useStreamingTransport) {
-            const { stream: innerStream, rawTerminal } = dispatchToSenderStreaming({
-                requestApi: profile.requestApi,
-                payload,
-                tools,
-                toolChoice,
-                jsonSchema,
-                llmPresetName: effectiveLlmPresetName,
-                apiPresetName,
-                apiSettingsOverride: profile.apiSettingsOverride,
-                functionCallMode,
-                functionCallOptions,
-                abortSignal,
-                transientSessionId,
-                onPreparedRequest,
-                promptNames,
-            }, { senders });
-            // Drain inner stream so the producer is not blocked waiting for a
-            // consumer (chunks are dropped per channel spec when no consumer
-            // attaches, but we attach defensively to avoid back-pressure
-            // surprises if that contract ever changes).
-            (async () => { try { for await (const _ of innerStream) { /* drop */ } } catch { /* surfaced via rawTerminal */ } })();
-            raw = await rawTerminal;
+        // ── 9. Plugin output-direction regex pass ──
+        // Rules with the plugin reply lane (`pluginLanes: ['reply']`) cook the
+        // assistant text a plugin request returns. toolCalls payloads are never touched.
+        if (_injected?.regexOutputApplier) {
+            result.assistantText = _injected.regexOutputApplier(result.assistantText);
+        } else if (validatedPromptContext) {
+            const capturedReplyRegex = _injected?.applyCapturedReplyRegex || getDefaultCapturedReplyRegex();
+            if (typeof capturedReplyRegex === 'function') {
+                result.assistantText = capturedReplyRegex(result.assistantText, validatedPromptContext);
+            }
         } else {
-            raw = await dispatchToSender({
-                requestApi: profile.requestApi,
-                payload,
-                tools,
-                toolChoice,
-                jsonSchema,
-                llmPresetName: effectiveLlmPresetName,
-                apiPresetName,
-                apiSettingsOverride: profile.apiSettingsOverride,
-                functionCallMode,
-                functionCallOptions,
-                abortSignal,
-                transientSessionId,
-                onPreparedRequest,
-                promptNames,
-            }, { senders });
+            result.assistantText = regexAgentPluginOutput(result.assistantText);
         }
-    } catch (e) {
-        throw _wrapSenderError(e, abortSignal);
-    }
 
-    // ── 8. Normalize response ──
-    const result = normalizeResponse({ requestApi: profile.requestApi, mode, raw });
+        return result;
+    };
 
-    // ── 9. Plugin output-direction regex pass ──
-    // Rules with the plugin reply lane (`pluginLanes: ['reply']`) cook the
-    // assistant text a plugin request returns. toolCalls payloads are never touched.
-    if (_injected?.regexOutputApplier) {
-        result.assistantText = _injected.regexOutputApplier(result.assistantText);
-    } else if (validatedPromptContext) {
-        const capturedReplyRegex = _injected?.applyCapturedReplyRegex || getDefaultCapturedReplyRegex();
-        if (typeof capturedReplyRegex === 'function') {
-            result.assistantText = capturedReplyRegex(result.assistantText, validatedPromptContext);
-        }
-    } else {
-        result.assistantText = regexAgentPluginOutput(result.assistantText);
-    }
-
-    return result;
+    return leaseOptions ? await withActivityLease(leaseOptions, runTask) : await runTask();
 }
 
 /**
@@ -1257,6 +1268,7 @@ export function generateTaskStream({
     promptContext = null,
     transientSessionId = undefined,
     onPreparedRequest = null,
+    activity = true,
 } = {}, { _injected = null } = {}) {
     // ── 1. Input validation ──
     const hasTools = Array.isArray(tools) && tools.length > 0;
@@ -1299,6 +1311,9 @@ export function generateTaskStream({
     // Inner-stream forwarding queue (consumer-facing AsyncIterable).
     const channel = _createAsyncChunkChannel();
     const stream = channel.iterable;
+
+    const leaseOptions = resolveRequestActivityLeaseOptions(activity, 'core:generate-task');
+    const releaseLease = leaseOptions ? acquireActivityLease(leaseOptions) : () => {};
 
     (async () => {
         try {
@@ -1411,6 +1426,8 @@ export function generateTaskStream({
             const wrapped = _wrapSenderError(e, abortSignal);
             channel.fail(wrapped);
             rejectResult(wrapped);
+        } finally {
+            releaseLease();
         }
     })();
 

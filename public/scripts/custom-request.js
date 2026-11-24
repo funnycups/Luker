@@ -6,6 +6,53 @@ import { formatInstructModeChat, formatInstructModePrompt, getInstructStoppingSe
 import { getStreamingReply, tryParseStreamingError, createGenerationParameters, isOpenAIConnectionPresetField, settingsToUpdate, oai_settings } from './openai.js';
 import { unescapeMacroBracesInRequestData } from './macros/util/escape.js';
 import EventSourceStream from './sse-stream.js';
+import { acquireActivityLease, resolveRequestActivityLeaseOptions, withActivityLease } from './activity-guard.js';
+
+function resolveCustomRequestLeaseOptions(requestOptions) {
+    const activity = requestOptions && typeof requestOptions === 'object' ? requestOptions.activity : undefined;
+    return resolveRequestActivityLeaseOptions(activity, 'core:custom-request');
+}
+
+function runWithRequestActivityLease(leaseOptions, fn) {
+    return leaseOptions ? withActivityLease(leaseOptions, fn) : fn();
+}
+
+function wrapStreamFactoryWithActivityLease(leaseOptions, createStream) {
+    if (!leaseOptions) {
+        return createStream;
+    }
+    return async function* streamData() {
+        const release = acquireActivityLease(leaseOptions);
+        try {
+            yield* createStream();
+        } finally {
+            release();
+        }
+    };
+}
+
+async function openSseStreamWithLease(url, sanitizedData, signal, leaseOptions) {
+    return await runWithRequestActivityLease(leaseOptions, async () => {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            cache: 'no-cache',
+            body: JSON.stringify(sanitizedData),
+            signal: signal ?? new AbortController().signal,
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            tryParseStreamingError(response, text, { quiet: true });
+
+            throw new Error(`Got response status ${response.status}`);
+        }
+
+        const eventStream = new EventSourceStream();
+        response.body.pipeThrough(eventStream);
+        return { response, reader: eventStream.readable.getReader() };
+    });
+}
 
 // #region Type Definitions
 /**
@@ -113,58 +160,45 @@ export class TextCompletionService {
      * @param {TextCompletionPayload} data Request data
      * @param {boolean?} extractData Extract message from the response. Default true
      * @param {AbortSignal?} signal
+     * @param {{ activity?: boolean|object }} [requestOptions]
      * @returns {Promise<ExtractedData | (() => AsyncGenerator<StreamResponse>)>} If not streaming, returns extracted data; if streaming, returns a function that creates an AsyncGenerator
      * @throws {Error}
      */
-    static async sendRequest(data, extractData = true, signal = null) {
+    static async sendRequest(data, extractData = true, signal = null, requestOptions = {}) {
         const sanitizedData = unescapeMacroBracesInRequestData(data);
+        const leaseOptions = resolveCustomRequestLeaseOptions(requestOptions);
         if (!data.stream) {
-            const response = await fetch(getGenerateUrl(this.TYPE), {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                cache: 'no-cache',
-                body: JSON.stringify(sanitizedData),
-                signal: signal ?? new AbortController().signal,
+            return await runWithRequestActivityLease(leaseOptions, async () => {
+                const response = await fetch(getGenerateUrl(this.TYPE), {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    cache: 'no-cache',
+                    body: JSON.stringify(sanitizedData),
+                    signal: signal ?? new AbortController().signal,
+                });
+
+                const json = await response.json();
+                if (!response.ok || json.error) {
+                    throw new Error(String(json.error?.message || 'Response not OK'));
+                }
+
+                if (!extractData) {
+                    return json;
+                }
+
+                return {
+                    content: extractMessageFromData(json, this.TYPE),
+                    reasoning: extractReasoningFromData(json, {
+                        mainApi: this.TYPE,
+                        textGenType: data.api_type,
+                        ignoreShowThoughts: true,
+                    }),
+                };
             });
-
-            const json = await response.json();
-            if (!response.ok || json.error) {
-                throw new Error(String(json.error?.message || 'Response not OK'));
-            }
-
-            if (!extractData) {
-                return json;
-            }
-
-            return {
-                content: extractMessageFromData(json, this.TYPE),
-                reasoning: extractReasoningFromData(json, {
-                    mainApi: this.TYPE,
-                    textGenType: data.api_type,
-                    ignoreShowThoughts: true,
-                }),
-            };
         }
 
-        const response = await fetch('/api/backends/text-completions/generate', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            cache: 'no-cache',
-            body: JSON.stringify(sanitizedData),
-            signal: signal ?? new AbortController().signal,
-        });
-
-        if (!response.ok) {
-            const text = await response.text();
-            tryParseStreamingError(response, text, { quiet: true });
-
-            throw new Error(`Got response status ${response.status}`);
-        }
-
-        const eventStream = new EventSourceStream();
-        response.body.pipeThrough(eventStream);
-        const reader = eventStream.readable.getReader();
-        return async function* streamData() {
+        const { response, reader } = await openSseStreamWithLease('/api/backends/text-completions/generate', sanitizedData, signal, leaseOptions);
+        return wrapStreamFactoryWithActivityLease(leaseOptions, async function* streamData() {
             let text = '';
             const swipes = [];
             const state = { reasoning: '', finishReason: null };
@@ -193,7 +227,7 @@ export class TextCompletionService {
 
                 yield { text, swipes, state };
             }
-        };
+        });
     }
 
     /**
@@ -288,7 +322,7 @@ export class TextCompletionService {
      * @throws {Error}
      */
     static async processRequest(requestData, options = {}, extractData = true, signal = null) {
-        const { presetName, instructName } = options;
+        const { presetName, instructName, instructSettings, activity } = options || {};
 
         // remove any undefined params in given request data
         requestData = this.createRequestData(requestData);
@@ -302,7 +336,7 @@ export class TextCompletionService {
                 const instructPresetManager = getPresetManager('instruct');
                 instructPreset = instructPresetManager?.getCompletionPresetByName(instructName);
                 if (instructPreset) {
-                    requestData.prompt = this.constructPrompt(prompt, instructPreset, options.instructSettings);
+                    requestData.prompt = this.constructPrompt(prompt, instructPreset, instructSettings);
                     const stoppingStrings = getInstructStoppingSequences({ customInstruct: instructPreset, useStopStrings: false });
                     requestData.stop = stoppingStrings;
                     requestData.stopping_strings = stoppingStrings;
@@ -333,7 +367,7 @@ export class TextCompletionService {
             }
         }
 
-        const response = await this.sendRequest(requestData, extractData, signal);
+        const response = await this.sendRequest(requestData, extractData, signal, { activity });
 
         // Remove stopping strings from the end
         if (!requestData.stream && extractData) {
@@ -463,54 +497,50 @@ export class ChatCompletionService {
      * @param {ChatCompletionPayload} data Request data
      * @param {boolean?} extractData Extract message from the response. Default true
      * @param {AbortSignal?} signal Abort signal
+     * @param {{ activity?: boolean|object }} [requestOptions]
      * @returns {Promise<ExtractedData | (() => AsyncGenerator<StreamResponse>)>} If not streaming, returns extracted data; if streaming, returns a function that creates an AsyncGenerator
      * @throws {Error}
      */
-    static async sendRequest(data, extractData = true, signal = null) {
-        const response = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            cache: 'no-cache',
-            body: JSON.stringify(unescapeMacroBracesInRequestData(data)),
-            signal: signal ?? new AbortController().signal,
-        });
-
+    static async sendRequest(data, extractData = true, signal = null, requestOptions = {}) {
+        const sanitizedData = unescapeMacroBracesInRequestData(data);
+        const leaseOptions = resolveCustomRequestLeaseOptions(requestOptions);
         if (!data.stream) {
-            const json = await response.json();
-            if (!response.ok || json.error) {
-                throw new Error(String(json.error?.message || 'Response not OK'));
-            }
+            return await runWithRequestActivityLease(leaseOptions, async () => {
+                const response = await fetch('/api/backends/chat-completions/generate', {
+                    method: 'POST',
+                    headers: getRequestHeaders(),
+                    cache: 'no-cache',
+                    body: JSON.stringify(sanitizedData),
+                    signal: signal ?? new AbortController().signal,
+                });
 
-            if (!extractData) {
-                return json;
-            }
+                const json = await response.json();
+                if (!response.ok || json.error) {
+                    throw new Error(String(json.error?.message || 'Response not OK'));
+                }
 
-            const result = {
-                content: extractMessageFromData(json, this.TYPE),
-                reasoning: extractReasoningFromData(json, {
-                    mainApi: this.TYPE,
-                    textGenType: data.chat_completion_source,
-                    ignoreShowThoughts: true,
-                }),
-            };
-            // Try parse JSON
-            if (data.json_schema) {
-                result.content = JSON.parse(extractJsonFromData(json, { mainApi: this.TYPE, chatCompletionSource: data.chat_completion_source }));
-            }
-            return result;
+                if (!extractData) {
+                    return json;
+                }
+
+                const result = {
+                    content: extractMessageFromData(json, this.TYPE),
+                    reasoning: extractReasoningFromData(json, {
+                        mainApi: this.TYPE,
+                        textGenType: data.chat_completion_source,
+                        ignoreShowThoughts: true,
+                    }),
+                };
+                // Try parse JSON
+                if (data.json_schema) {
+                    result.content = JSON.parse(extractJsonFromData(json, { mainApi: this.TYPE, chatCompletionSource: data.chat_completion_source }));
+                }
+                return result;
+            });
         }
 
-        if (!response.ok) {
-            const text = await response.text();
-            tryParseStreamingError(response, text, { quiet: true });
-
-            throw new Error(`Got response status ${response.status}`);
-        }
-
-        const eventStream = new EventSourceStream();
-        response.body.pipeThrough(eventStream);
-        const reader = eventStream.readable.getReader();
-        return async function* streamData() {
+        const { response, reader } = await openSseStreamWithLease('/api/backends/chat-completions/generate', sanitizedData, signal, leaseOptions);
+        return wrapStreamFactoryWithActivityLease(leaseOptions, async function* streamData() {
             let text = '';
             const swipes = [];
             const state = { reasoning: '', images: [], signature: '', toolSignatures: {}, finishReason: null };
@@ -542,7 +572,7 @@ export class ChatCompletionService {
 
                 yield { text, swipes: swipes, state };
             }
-        };
+        });
     }
 
     /**
@@ -550,13 +580,14 @@ export class ChatCompletionService {
      * @param {ChatCompletionPayload} requestData - payload data, overriding preset if given
      * @param {Object} options - Configuration options
      * @param {string?} [options.presetName] - Name of the preset to use for generation settings
+     * @param {boolean|object} [options.activity] - Activity guard lease override or `false` to opt out
      * @param {boolean} [extractData=true] - Whether to extract structured data from response
      * @param {AbortSignal?} [signal] - Abort signal
      * @returns {Promise<ExtractedData | (() => AsyncGenerator<StreamResponse>)>} If not streaming, returns extracted data; if streaming, returns a function that creates an AsyncGenerator
      * @throws {Error}
      */
-    static async processRequest(requestData, options, extractData = true, signal = null) {
-        const { presetName } = options;
+    static async processRequest(requestData, options = {}, extractData = true, signal = null) {
+        const { presetName, activity } = options || {};
         requestData = this.createRequestData(requestData);
 
         // Apply generation preset if specified
@@ -575,7 +606,7 @@ export class ChatCompletionService {
             }
         }
 
-        return await this.sendRequest(requestData, extractData, signal);
+        return await this.sendRequest(requestData, extractData, signal, { activity });
     }
 
     /**

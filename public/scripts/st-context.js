@@ -229,6 +229,15 @@ import { skillsApi } from './skills/api.js';
 import { imageGenerationApi } from './image-generation/registry.js';
 import * as RUN_PANEL_API_NS from './run-panel/index.js';
 import * as WORKBENCH_REGISTRY from './workbench/registry.js';
+import {
+    acquireActivityLease,
+    withActivityLease,
+    hasUnloadGuard,
+    hasChatSwitchGuard,
+    hasKeepAliveHold,
+    getActiveActivities,
+    subscribeActivityGuard,
+} from './activity-guard.js';
 import { SECRET_KEYS, secret_state } from './secrets.js';
 import { EmbeddingService } from './embedding-service.js';
 import { accountsEnabled, currentUser } from './user.js';
@@ -287,6 +296,16 @@ const WORKBENCH_API = Object.freeze({
     getAskProviders: WORKBENCH_REGISTRY.getAskProviders,
     getSuggestRuleProviders: WORKBENCH_REGISTRY.getSuggestRuleProviders,
     subscribe: WORKBENCH_REGISTRY.subscribe,
+});
+
+const ACTIVITY_GUARD_API = Object.freeze({
+    acquire: acquireActivityLease,
+    run: withActivityLease,
+    hasUnloadGuard,
+    hasChatSwitchGuard,
+    hasKeepAliveHold,
+    list: getActiveActivities,
+    subscribe: subscribeActivityGuard,
 });
 
 function safeClone(value, fallback = {}) {
@@ -2626,6 +2645,7 @@ export function getContext() {
         renderFieldHelpButton: FIELD_HELP_API.renderFieldHelpButton,
         skills: skillsApi,
         imageGeneration: imageGenerationApi,
+        activityGuard: ACTIVITY_GUARD_API,
         get onlineStatus() { return online_status; },
         get maxContext() { return Number(max_context); },
         get chatMetadata() { return chat_metadata; },

@@ -115,10 +115,22 @@ export function createStudioView(app) {
                 return (await ctx.imageGeneration.getCapabilities?.()) || null;
             },
             async generate(prompt, opts) {
-                const res = await ctx.imageGeneration.generate({ prompt, ...opts });
+                const res = await ctx.imageGeneration.generate({ attribution: 'none', ...opts, prompt });
                 return res.imagePath;
             },
         };
+    }
+
+    async function runWithStudioActivity(ctx, fn) {
+        const run = ctx?.activityGuard?.run;
+        if (typeof run !== 'function') {
+            return await fn();
+        }
+        return await run({
+            source: 'sd:studio',
+            label: i18n('Image Studio'),
+            scope: 'global',
+        }, fn);
     }
 
     async function refreshCapabilities() {
@@ -348,6 +360,7 @@ export function createStudioView(app) {
 
             const genOpts = {
                 attribution: 'none',
+                skipActivityLease: true,
                 subdir: '_studio',
                 loras: val.loras,
                 signal,
@@ -450,291 +463,296 @@ export function createStudioView(app) {
         paint();
 
         let appendedUserMessage = false;
-        try {
-            const imageBackend = resolveImageBackend();
-            const [loraState, capabilities] = await Promise.all([
-                imageBackend.getAvailableLoras(),
-                imageBackend.getCapabilities?.() ?? Promise.resolve(null),
-                refreshLists(),
-            ]);
-            currentCapabilities = capabilities;
+        await runWithStudioActivity(ctx, async () => {
+            try {
+                const imageBackend = resolveImageBackend();
+                const [loraState, capabilities] = await Promise.all([
+                    imageBackend.getAvailableLoras(),
+                    imageBackend.getCapabilities?.() ?? Promise.resolve(null),
+                    refreshLists(),
+                ]);
+                currentCapabilities = capabilities;
 
-            const charImgConflict = findCharacterImageConflict(capabilities);
-            if (charImgConflict) {
-                app.toast(`${i18n('Studio request failed')}: ${formatConflictMessage(charImgConflict)}`, { error: true });
-                return;
-            }
-
-            let characterArchiveIndex;
-            if (capabilities?.characterReferenceEnabled) {
-                characterArchiveIndex = buildCompactProfileIndex(profiles, {
-                    includeImages: Boolean(capabilities.supportsCharacterReference),
-                });
-            }
-            const systemPrompt = buildStudioSystemPrompt(preset, { capabilities, characterArchiveIndex });
-
-            draftInput = '';
-            appendStudioUserMessage(turnSession, text);
-            appendedUserMessage = true;
-            paint();
-
-            const tools = buildStudioTools(loraState, capabilities);
-            const allowedNames = tools.map(t => t.function.name);
-            const taskMessages = [
-                { role: 'system', content: systemPrompt },
-                ...buildStudioHistoryMessages(turnSession),
-            ];
-
-            while (true) {
-                const response = await requestToolCallsWithRetry(ctx, { toolCallRetryMax: 1 }, {
-                    taskMessages,
-                    apiPresetName: preset.llm?.apiPresetName || '',
-                    llmPresetName: preset.llm?.llmPresetName || '',
-                    tools,
-                    allowedNames,
-                    allowNoToolCalls: true,
-                    includeAssistantText: true,
-                    substituteMacros: true,
-                    abortSignal: abortController.signal,
-                });
-
-                const calls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
-                const assistantText = String(response?.assistantText || '');
-
-                if (calls.length === 0) {
-                    if (assistantText || turnSession.messages.at(-1)?.role === 'user') {
-                        appendStudioAssistantTurn(turnSession, {
-                            text: assistantText,
-                            toolCalls: [],
-                            toolResults: [],
-                            images: [],
-                        });
-                    }
-                    break;
+                const charImgConflict = findCharacterImageConflict(capabilities);
+                if (charImgConflict) {
+                    app.toast(`${i18n('Studio request failed')}: ${formatConflictMessage(charImgConflict)}`, { error: true });
+                    return;
                 }
 
-                const roundImages = [];
-                const toolResultsForPersist = [];
-                const executedForHistory = [];
-                const generatedPathsForPreview = [];
-
-                for (const call of calls) {
-                    const callId = String(call?.id || '').trim() || makeRuntimeToolCallId();
-                    let toolResult;
-                    let generatedImage = null;
-                    try {
-                        const out = await executeSingleStudioTool(call, {
-                            loraState,
-                            capabilities,
-                            imageBackend,
-                            signal: abortController.signal,
-                        });
-                        toolResult = out.toolResult;
-                        generatedImage = out.generatedImage;
-                    } catch (toolErr) {
-                        if (abortController.signal.aborted) {
-                            throw toolErr;
-                        }
-                        toolResult = { status: 'failed', error: String(toolErr?.message || toolErr) };
-                    }
-                    const serialized = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-                    toolResultsForPersist.push({ tool_call_id: callId, content: serialized });
-                    executedForHistory.push({
-                        id: callId,
-                        name: call.name,
-                        args: call.args,
-                        result: toolResult,
+                let characterArchiveIndex;
+                if (capabilities?.characterReferenceEnabled) {
+                    characterArchiveIndex = buildCompactProfileIndex(profiles, {
+                        includeImages: Boolean(capabilities.supportsCharacterReference),
                     });
-                    if (generatedImage) {
-                        roundImages.push(generatedImage);
-                        if (generatedImage.status === 'ready' && generatedImage.imageUrl && turnSession.visualReview) {
-                            generatedPathsForPreview.push(generatedImage.imageUrl);
-                        }
-                    }
                 }
+                const systemPrompt = buildStudioSystemPrompt(preset, { capabilities, characterArchiveIndex });
 
-                appendStudioAssistantTurn(turnSession, {
-                    text: assistantText,
-                    toolCalls: calls.map((c, idx) => ({
-                        id: toolResultsForPersist[idx].tool_call_id,
-                        name: c.name,
-                        arguments: c.args,
-                    })),
-                    toolResults: toolResultsForPersist,
-                    images: roundImages,
-                });
+                draftInput = '';
+                appendStudioUserMessage(turnSession, text);
+                appendedUserMessage = true;
+                paint();
 
-                if (roundImages.length > 0 && session === turnSession) {
-                    selectedImageId = roundImages.at(-1).id;
-                }
+                const tools = buildStudioTools(loraState, capabilities);
+                const allowedNames = tools.map(t => t.function.name);
+                const taskMessages = [
+                    { role: 'system', content: systemPrompt },
+                    ...buildStudioHistoryMessages(turnSession),
+                ];
 
-                appendStandardToolRoundMessages(taskMessages, executedForHistory, assistantText, {
-                    reasoning: response?.reasoning,
-                    reasoningBlocks: response?.reasoningBlocks,
-                    reasoningDetails: response?.reasoningDetails,
-                });
+                while (true) {
+                    const response = await requestToolCallsWithRetry(ctx, { toolCallRetryMax: 1 }, {
+                        taskMessages,
+                        apiPresetName: preset.llm?.apiPresetName || '',
+                        llmPresetName: preset.llm?.llmPresetName || '',
+                        tools,
+                        allowedNames,
+                        allowNoToolCalls: true,
+                        includeAssistantText: true,
+                        substituteMacros: true,
+                        abortSignal: abortController.signal,
+                    });
 
-                if (turnSession.visualReview && generatedPathsForPreview.length > 0) {
-                    const previewParts = [];
-                    for (const imgPath of generatedPathsForPreview) {
-                        try {
-                            const dataUrl = await defaultLoadVisualPreviewDataUrl(imgPath, ctx);
-                            if (dataUrl) {
-                                previewParts.push({ type: 'text', text: `[Visual preview: ${imgPath}]` });
-                                previewParts.push({ type: 'image_url', image_url: { url: dataUrl } });
-                            }
-                        } catch (err) {
-                            previewParts.push({
-                                type: 'text',
-                                text: `[Visual preview unavailable for ${imgPath}: ${String(err?.message || err)}]`,
+                    const calls = Array.isArray(response?.toolCalls) ? response.toolCalls : [];
+                    const assistantText = String(response?.assistantText || '');
+
+                    if (calls.length === 0) {
+                        if (assistantText || turnSession.messages.at(-1)?.role === 'user') {
+                            appendStudioAssistantTurn(turnSession, {
+                                text: assistantText,
+                                toolCalls: [],
+                                toolResults: [],
+                                images: [],
                             });
                         }
+                        break;
                     }
-                    if (previewParts.length > 0) {
-                        taskMessages.push({ role: 'user', content: previewParts });
+
+                    const roundImages = [];
+                    const toolResultsForPersist = [];
+                    const executedForHistory = [];
+                    const generatedPathsForPreview = [];
+
+                    for (const call of calls) {
+                        const callId = String(call?.id || '').trim() || makeRuntimeToolCallId();
+                        let toolResult;
+                        let generatedImage = null;
+                        try {
+                            const out = await executeSingleStudioTool(call, {
+                                loraState,
+                                capabilities,
+                                imageBackend,
+                                signal: abortController.signal,
+                            });
+                            toolResult = out.toolResult;
+                            generatedImage = out.generatedImage;
+                        } catch (toolErr) {
+                            if (abortController.signal.aborted) {
+                                throw toolErr;
+                            }
+                            toolResult = { status: 'failed', error: String(toolErr?.message || toolErr) };
+                        }
+                        const serialized = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+                        toolResultsForPersist.push({ tool_call_id: callId, content: serialized });
+                        executedForHistory.push({
+                            id: callId,
+                            name: call.name,
+                            args: call.args,
+                            result: toolResult,
+                        });
+                        if (generatedImage) {
+                            roundImages.push(generatedImage);
+                            if (generatedImage.status === 'ready' && generatedImage.imageUrl && turnSession.visualReview) {
+                                generatedPathsForPreview.push(generatedImage.imageUrl);
+                            }
+                        }
+                    }
+
+                    appendStudioAssistantTurn(turnSession, {
+                        text: assistantText,
+                        toolCalls: calls.map((c, idx) => ({
+                            id: toolResultsForPersist[idx].tool_call_id,
+                            name: c.name,
+                            arguments: c.args,
+                        })),
+                        toolResults: toolResultsForPersist,
+                        images: roundImages,
+                    });
+
+                    if (roundImages.length > 0 && session === turnSession) {
+                        selectedImageId = roundImages.at(-1).id;
+                    }
+
+                    appendStandardToolRoundMessages(taskMessages, executedForHistory, assistantText, {
+                        reasoning: response?.reasoning,
+                        reasoningBlocks: response?.reasoningBlocks,
+                        reasoningDetails: response?.reasoningDetails,
+                    });
+
+                    if (turnSession.visualReview && generatedPathsForPreview.length > 0) {
+                        const previewParts = [];
+                        for (const imgPath of generatedPathsForPreview) {
+                            try {
+                                const dataUrl = await defaultLoadVisualPreviewDataUrl(imgPath, ctx);
+                                if (dataUrl) {
+                                    previewParts.push({ type: 'text', text: `[Visual preview: ${imgPath}]` });
+                                    previewParts.push({ type: 'image_url', image_url: { url: dataUrl } });
+                                }
+                            } catch (err) {
+                                previewParts.push({
+                                    type: 'text',
+                                    text: `[Visual preview unavailable for ${imgPath}: ${String(err?.message || err)}]`,
+                                });
+                            }
+                        }
+                        if (previewParts.length > 0) {
+                            taskMessages.push({ role: 'user', content: previewParts });
+                        }
+                    }
+
+                    await persistCurrentSession(turnSession);
+                    if (session === turnSession) {
+                        paint();
+                    }
+
+                    if (!turnSession.visualReview && roundImages.length > 0) {
+                        break;
                     }
                 }
 
                 await persistCurrentSession(turnSession);
+            } catch (err) {
+                if (!abortController?.signal?.aborted) {
+                    app.toast(`${i18n('Studio request failed')}: ${String(err?.message || err)}`, { error: true });
+                }
+                if (appendedUserMessage) {
+                    await persistCurrentSession(turnSession);
+                }
+            } finally {
+                busy = false;
+                abortController = null;
                 if (session === turnSession) {
                     paint();
                 }
-
-                if (!turnSession.visualReview && roundImages.length > 0) {
-                    break;
-                }
             }
-
-            await persistCurrentSession(turnSession);
-        } catch (err) {
-            if (!abortController?.signal?.aborted) {
-                app.toast(`${i18n('Studio request failed')}: ${String(err?.message || err)}`, { error: true });
-            }
-            if (appendedUserMessage) {
-                await persistCurrentSession(turnSession);
-            }
-        } finally {
-            busy = false;
-            abortController = null;
-            if (session === turnSession) {
-                paint();
-            }
-        }
+        });
     }
 
     async function regenerateGalleryImage(image) {
         if (busy || !image?.prompt) return;
-        try {
-            const ctx = getCtx();
-            const imageBackend = resolveImageBackend();
-            const freshCapabilities = (await imageBackend.getCapabilities?.()) ?? null;
-            currentCapabilities = freshCapabilities;
+        const ctx = getCtx();
+        await runWithStudioActivity(ctx, async () => {
+            try {
+                const imageBackend = resolveImageBackend();
+                const freshCapabilities = (await imageBackend.getCapabilities?.()) ?? null;
+                currentCapabilities = freshCapabilities;
 
-            const savedLoras = Array.isArray(image.loras) ? image.loras : [];
-            let loras = [];
-            if (savedLoras.length > 0) {
-                const loraState = await imageBackend.getAvailableLoras();
-                loras = resolveReplayLoras(savedLoras, loraState.names, (dropped) => {
-                    const msg = i18nFormat('Some LoRAs are unavailable and were skipped: ${0}', dropped.join(', '));
+                const savedLoras = Array.isArray(image.loras) ? image.loras : [];
+                let loras = [];
+                if (savedLoras.length > 0) {
+                    const loraState = await imageBackend.getAvailableLoras();
+                    loras = resolveReplayLoras(savedLoras, loraState.names, (dropped) => {
+                        const msg = i18nFormat('Some LoRAs are unavailable and were skipped: ${0}', dropped.join(', '));
+                        globalThis.toastr?.warning?.(msg, i18n('Image Generation'));
+                        app.toast(msg);
+                    }).loras;
+                }
+
+                const reconstructedRefs = [];
+                const seenPaths = new Set();
+                const pushUniqueRef = (ref) => {
+                    if (!ref?.imagePath || seenPaths.has(ref.imagePath)) return;
+                    seenPaths.add(ref.imagePath);
+                    reconstructedRefs.push(ref);
+                };
+
+                if (image.sourceImageId) {
+                    const resolvedSource = resolveGalleryOrManagedPath(image.sourceImageId, session);
+                    if (resolvedSource) {
+                        pushUniqueRef({ imagePath: resolvedSource, role: 'source' });
+                    }
+                }
+                for (const charToken of Array.isArray(image.characterImageIds) ? image.characterImageIds : []) {
+                    const resolvedChar = resolveGalleryOrManagedPath(charToken, session);
+                    if (resolvedChar) {
+                        pushUniqueRef({ imagePath: resolvedChar, role: 'character' });
+                    }
+                }
+                if (Array.isArray(image.characterRefs) && image.characterRefs.length > 0) {
+                    if (freshCapabilities && !freshCapabilities.supportsCharacterReference) {
+                        reconstructedRefs.push({ imagePath: '', role: 'character' });
+                    } else {
+                        let profileMap = new Map(profiles.map(p => [p.id, p]));
+                        if (typeof ctx?.getGlobalState === 'function') {
+                            const liveProfiles = await createCharacterProfileStore(ctx).listProfiles();
+                            profiles = liveProfiles;
+                            profileMap = new Map(liveProfiles.map(p => [p.id, p]));
+                        }
+                        const resolved = resolvePromptCharacterRefs(image.characterRefs, {
+                            profileMap,
+                            capabilities: freshCapabilities,
+                        });
+                        if (!resolved.ok) {
+                            throw new Error(resolved.error);
+                        }
+                        for (const ref of resolved.references) {
+                            pushUniqueRef(ref);
+                        }
+                    }
+                }
+
+                const { references: filteredRefs, skipped } = filterReplayReferences(reconstructedRefs, freshCapabilities);
+                if (skipped.length > 0) {
+                    const msg = i18n('Some saved reference images were skipped because they are disabled in the current preset.');
                     globalThis.toastr?.warning?.(msg, i18n('Image Generation'));
                     app.toast(msg);
-                }).loras;
-            }
-
-            const reconstructedRefs = [];
-            const seenPaths = new Set();
-            const pushUniqueRef = (ref) => {
-                if (!ref?.imagePath || seenPaths.has(ref.imagePath)) return;
-                seenPaths.add(ref.imagePath);
-                reconstructedRefs.push(ref);
-            };
-
-            if (image.sourceImageId) {
-                const resolvedSource = resolveGalleryOrManagedPath(image.sourceImageId, session);
-                if (resolvedSource) {
-                    pushUniqueRef({ imagePath: resolvedSource, role: 'source' });
                 }
-            }
-            for (const charToken of Array.isArray(image.characterImageIds) ? image.characterImageIds : []) {
-                const resolvedChar = resolveGalleryOrManagedPath(charToken, session);
-                if (resolvedChar) {
-                    pushUniqueRef({ imagePath: resolvedChar, role: 'character' });
+
+                const finalRefs = filteredRefs.filter(r => r.imagePath);
+                const capError = getCharacterRefLimitError(finalRefs, freshCapabilities);
+                if (capError) {
+                    throw new Error(capError);
                 }
-            }
-            if (Array.isArray(image.characterRefs) && image.characterRefs.length > 0) {
-                if (freshCapabilities && !freshCapabilities.supportsCharacterReference) {
-                    reconstructedRefs.push({ imagePath: '', role: 'character' });
-                } else {
-                    let profileMap = new Map(profiles.map(p => [p.id, p]));
-                    if (typeof ctx?.getGlobalState === 'function') {
-                        const liveProfiles = await createCharacterProfileStore(ctx).listProfiles();
-                        profiles = liveProfiles;
-                        profileMap = new Map(liveProfiles.map(p => [p.id, p]));
-                    }
-                    const resolved = resolvePromptCharacterRefs(image.characterRefs, {
-                        profileMap,
-                        capabilities: freshCapabilities,
-                    });
-                    if (!resolved.ok) {
-                        throw new Error(resolved.error);
-                    }
-                    for (const ref of resolved.references) {
-                        pushUniqueRef(ref);
+                if (finalRefs.some(r => r.role === 'character')) {
+                    const conflict = findCharacterImageConflict(freshCapabilities);
+                    if (conflict) {
+                        throw new Error(formatConflictMessage(conflict));
                     }
                 }
-            }
 
-            const { references: filteredRefs, skipped } = filterReplayReferences(reconstructedRefs, freshCapabilities);
-            if (skipped.length > 0) {
-                const msg = i18n('Some saved reference images were skipped because they are disabled in the current preset.');
-                globalThis.toastr?.warning?.(msg, i18n('Image Generation'));
-                app.toast(msg);
+                const imageUrl = await imageBackend.generate(image.prompt, {
+                    attribution: 'none',
+                    skipActivityLease: true,
+                    subdir: '_studio',
+                    negativePrompt: image.negativePrompt || undefined,
+                    aspectRatio: image.aspectRatio || undefined,
+                    references: finalRefs.length > 0 ? finalRefs : undefined,
+                    loras,
+                });
+                const allowSource = !freshCapabilities || Boolean(freshCapabilities.supportsSourceImage);
+                const allowCharacter = !freshCapabilities || Boolean(freshCapabilities.supportsCharacterReference);
+                const record = {
+                    id: makeIllustrationId('img'),
+                    messageId: image.messageId || '',
+                    prompt: image.prompt,
+                    negativePrompt: image.negativePrompt || '',
+                    aspectRatio: image.aspectRatio || '',
+                    imageUrl,
+                    sourceImageId: allowSource ? (image.sourceImageId || '') : '',
+                    characterImageIds: allowCharacter ? (image.characterImageIds || []) : [],
+                    characterRefs: allowCharacter ? (image.characterRefs || []) : [],
+                    loras,
+                    status: 'ready',
+                    error: '',
+                    createdAt: Date.now(),
+                };
+                session.images.push(record);
+                selectedImageId = record.id;
+                await persistCurrentSession();
+                paint();
+            } catch (err) {
+                app.toast(String(err?.message || err), { error: true });
             }
-
-            const finalRefs = filteredRefs.filter(r => r.imagePath);
-            const capError = getCharacterRefLimitError(finalRefs, freshCapabilities);
-            if (capError) {
-                throw new Error(capError);
-            }
-            if (finalRefs.some(r => r.role === 'character')) {
-                const conflict = findCharacterImageConflict(freshCapabilities);
-                if (conflict) {
-                    throw new Error(formatConflictMessage(conflict));
-                }
-            }
-
-            const imageUrl = await imageBackend.generate(image.prompt, {
-                attribution: 'none',
-                subdir: '_studio',
-                negativePrompt: image.negativePrompt || undefined,
-                aspectRatio: image.aspectRatio || undefined,
-                references: finalRefs.length > 0 ? finalRefs : undefined,
-                loras,
-            });
-            const allowSource = !freshCapabilities || Boolean(freshCapabilities.supportsSourceImage);
-            const allowCharacter = !freshCapabilities || Boolean(freshCapabilities.supportsCharacterReference);
-            const record = {
-                id: makeIllustrationId('img'),
-                messageId: image.messageId || '',
-                prompt: image.prompt,
-                negativePrompt: image.negativePrompt || '',
-                aspectRatio: image.aspectRatio || '',
-                imageUrl,
-                sourceImageId: allowSource ? (image.sourceImageId || '') : '',
-                characterImageIds: allowCharacter ? (image.characterImageIds || []) : [],
-                characterRefs: allowCharacter ? (image.characterRefs || []) : [],
-                loras,
-                status: 'ready',
-                error: '',
-                createdAt: Date.now(),
-            };
-            session.images.push(record);
-            selectedImageId = record.id;
-            await persistCurrentSession();
-            paint();
-        } catch (err) {
-            app.toast(String(err?.message || err), { error: true });
-        }
+        });
     }
 
     function renderSessionsPane() {

@@ -2,6 +2,7 @@ import {
     addOneMessage,
     characters,
     chat,
+    confirmChatSwitchGuard,
     deleteCharacterChatByName,
     displayVersion,
     doNewChat,
@@ -13,6 +14,7 @@ import {
     getSystemMessageByType,
     getThumbnailUrl,
     is_send_press,
+    name2,
     neutralCharacterName,
     newAssistantChat,
     openCharacterChat,
@@ -31,7 +33,7 @@ import {
     getCharacterName,
 } from '../script.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
-import { deleteGroupChatByName, getGroupAvatar, groups, is_group_generating, openGroupById, openGroupChat } from './group-chats.js';
+import { deleteGroupChatByName, getGroupAvatar, groups, is_group_generating, openGroupById, openGroupChat, selected_group } from './group-chats.js';
 import { t } from './i18n.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { getMessageTimeStamp } from './RossAscends-mods.js';
@@ -554,6 +556,13 @@ async function openRecentCharacterChat(avatarId, fileName) {
         return;
     }
 
+    const inTempChat = !selected_group && this_chid === undefined && name2 === neutralCharacterName;
+    if (selected_group || this_chid !== undefined || inTempChat) {
+        if (!await confirmChatSwitchGuard()) {
+            return;
+        }
+    }
+
     try {
         // Pin the target chat onto the character record BEFORE the
         // selection runs. selectCharacterById internally awaits
@@ -573,7 +582,9 @@ async function openRecentCharacterChat(avatarId, fileName) {
             characters[characterId].chat = fileName;
         }
 
-        await selectCharacterById(characterId);
+        if (!await selectCharacterById(characterId, { skipSwitchGuard: true })) {
+            return;
+        }
         setActiveCharacter(avatarId);
         saveSettingsDebounced();
 
@@ -600,7 +611,7 @@ async function openRecentCharacterChat(avatarId, fileName) {
             await updateRemoteChatName(characterId, fileName);
             return;
         }
-        await openCharacterChat(fileName);
+        await openCharacterChat(fileName, { skipSwitchGuard: true });
     } catch (error) {
         console.error('Error opening recent chat:', error);
         toastr.error(t`Failed to open recent chat. See console for details.`);
@@ -619,8 +630,17 @@ async function openRecentGroupChat(groupId, fileName) {
         return;
     }
 
+    const inTempChat = !selected_group && this_chid === undefined && name2 === neutralCharacterName;
+    if (selected_group || this_chid !== undefined || inTempChat) {
+        if (!await confirmChatSwitchGuard()) {
+            return;
+        }
+    }
+
     try {
-        await openGroupById(groupId);
+        if (!await openGroupById(groupId, { skipSwitchGuard: true })) {
+            return;
+        }
         setActiveGroup(groupId);
         saveSettingsDebounced();
         const currentChatId = getCurrentChatId();
@@ -628,7 +648,7 @@ async function openRecentGroupChat(groupId, fileName) {
             console.debug(`Chat ${fileName} is already open.`);
             return;
         }
-        await openGroupChat(groupId, fileName);
+        await openGroupChat(groupId, fileName, { skipSwitchGuard: true });
     } catch (error) {
         console.error('Error opening recent group chat:', error);
         toastr.error(t`Failed to open recent group chat. See console for details.`);
@@ -950,35 +970,46 @@ export async function fetchRecentChatsSnapshot() {
     return Array.isArray(data) ? data : [];
 }
 
-export async function openPermanentAssistantChat({ tryCreate = true, created = false } = {}) {
+export async function openPermanentAssistantChat({ tryCreate = true, created = false, skipSwitchGuard = false } = {}) {
+    const inTempChat = !selected_group && this_chid === undefined && name2 === neutralCharacterName;
+    if (selected_group || this_chid !== undefined || inTempChat) {
+        if (!await confirmChatSwitchGuard({ skipConfirmation: skipSwitchGuard })) {
+            return false;
+        }
+    }
+
     const avatar = getPermanentAssistantAvatar();
     const characterId = characters.findIndex(x => x.avatar === avatar);
     if (characterId === -1) {
         if (!tryCreate) {
             console.error(`Character not found for avatar ID: ${avatar}. Cannot create.`);
-            return;
+            return false;
         }
 
         try {
             console.log(`Character not found for avatar ID: ${avatar}. Creating new assistant.`);
             await createPermanentAssistant();
-            return openPermanentAssistantChat({ tryCreate: false, created: true });
+            return await openPermanentAssistantChat({ tryCreate: false, created: true, skipSwitchGuard: true });
         } catch (error) {
             console.error('Error creating permanent assistant:', error);
             toastr.error(t`Failed to create ${neutralCharacterName}. See console for details.`);
-            return;
+            return false;
         }
     }
 
     try {
-        await selectCharacterById(characterId);
+        if (!await selectCharacterById(characterId, { skipSwitchGuard: true })) {
+            return false;
+        }
         if (!created) {
-            await doNewChat({ deleteCurrentChat: false });
+            await doNewChat({ deleteCurrentChat: false, skipSwitchGuard: true });
         }
         console.log(`Opened permanent assistant chat for ${neutralCharacterName}.`, getCurrentChatId());
+        return true;
     } catch (error) {
         console.error('Error opening permanent assistant chat:', error);
         toastr.error(t`Failed to open permanent assistant chat. See console for details.`);
+        return false;
     }
 }
 

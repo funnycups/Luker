@@ -14,6 +14,7 @@ import { renderMarkdown } from '../ui/markdown.js';
 import { runAsk, readsSummary, buildAskHistory } from '../model/ask.js';
 import { finishOverview } from '../model/requests.js';
 import { titleFrom } from '../model/sessions.js';
+import { withActivityLease } from '../../activity-guard.js';
 
 const CHIP_KEYS = [
     'Why was this reply written this way',
@@ -472,7 +473,12 @@ export function createAskPage(app) {
             const history = buildAskHistory(priorTurns, 6);
             let turn;
             try {
-                const result = await runAsk({
+                const result = await withActivityLease({
+                    source: 'workbench:ask',
+                    label: i18n('Workbench AI ask'),
+                    scope: 'global',
+                    onCancel: () => controller.abort(),
+                }, () => runAsk({
                     question,
                     overview,
                     history,
@@ -485,7 +491,7 @@ export function createAskPage(app) {
                         run.steps.push(step);
                         if (session?.id === ownerId) paintBody();
                     },
-                });
+                }));
                 turn = { role: 'ai', ...result, at: Date.now() };
             } catch (err) {
                 turn = {

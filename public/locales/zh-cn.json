@@ -3895,9 +3895,6 @@
     "Prompts removed from order.": "提示词已从顺序中移除。",
     "WS Proxy": "WS 代理",
     "WebSocket connection failed. Request will fall back to HTTP (possibly due to authentication failure).": "WebSocket 连接失败，请求将回退到 HTTP（可能因鉴权失败）。",
-    "Warn before closing/reloading this page.": "关闭或刷新页面前提示确认。",
-    "Leave-page confirmation": "离开页面确认",
-    "Only when risky": "仅在有风险时",
     "Persona Lore Alt+Click to open the lorebook": "Persona Lore\nAlt+Click to open the lorebook",
     "Chat Lore Alt+Click to open the lorebook": "聊天世界书\nAlt+单击打开世界书",
     "Scenario Override": "场景覆盖",
@@ -7856,4 +7853,21 @@
     ,"Expand notifications": "展开全部通知"
     ,"Collapse notifications": "收起通知"
     ,"Drag to move": "按住可拖动"
+    ,"Message generation": "回复生成"
+    ,"Background generation": "后台生成"
+    ,"Group chat generation": "群聊生成"
+    ,"Background AI request": "后台 AI 请求"
+    ,"Tasks still in progress": "仍有任务进行中"
+    ,"Switching chats will interrupt the following in-progress work:": "切换聊天将中断以下正在进行的工作："
+    ,"Switch anyway": "仍然切换"
+    ,"Unsaved message edit": "未保存的消息编辑"
+    ,"Image generation": "图像生成"
+    ,"Illustration generation": "插图生成"
+    ,"CardApp Studio AI": "CardApp Studio AI"
+    ,"Chat vectorization": "聊天向量化"
+    ,"File vectorization": "文件向量化"
+    ,"Data sync": "数据同步"
+    ,"Image captioning": "图像描述"
+    ,"Message translation": "消息翻译"
+    ,"Background task": "后台任务"
 }

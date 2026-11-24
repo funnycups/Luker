@@ -1,6 +1,6 @@
 # Plugin Integration
 
-APIs that connect plugins to Luker's pipelines and to each other: regex processing, search tools, the cross-plugin API registry, and the event system.
+APIs that connect plugins to Luker's pipelines and to each other: regex processing, search tools, the cross-plugin API registry, the event system, and the background activity guard.
 
 ## Regex Runtime API
 
@@ -197,6 +197,85 @@ All event types are accessed via `context.eventTypes`. The full set covers chat 
 | App-level | `APP_READY`, `SETTINGS_LOADED_AFTER`, `EXTENSIONS_FIRST_LOAD` |
 
 For full event payload shapes, see [Frontend Plugin Development → Event System](/development/frontend-plugin#event-system).
+
+## Background Activity Guard
+
+`context.activityGuard` (also published on `lukerContext.activityGuard`) provides a lease-based registry that unifies browser `beforeunload` warnings, mobile background keep-alive, and in-app chat-switch confirmation prompts. Register long-running extension tasks as activity leases instead of adding custom `beforeunload` listeners or manipulating keep-alive internals directly.
+
+### `context.activityGuard`
+
+```ts
+interface ActivityLeaseOptions {
+    source: string;                      // required non-empty identifier, e.g. 'my-plugin:sync'
+    label?: string;                      // display label shown in chat-switch confirmation dialogs
+    scope?: 'global' | 'chat';           // default: 'global'
+    guardUnload?: boolean;               // default: true
+    guardChatSwitch?: boolean;           // default: scope === 'chat'
+    keepAlive?: boolean;                 // default: true
+    ambient?: boolean;                   // default: false
+    onCancel?: (() => void) | null;      // invoked only on confirmed in-app chat switch
+}
+
+interface ActivitySnapshot {
+    readonly source: string;
+    readonly label: string;
+    readonly scope: 'global' | 'chat';
+    readonly guardUnload: boolean;
+    readonly guardChatSwitch: boolean;
+    readonly keepAlive: boolean;
+    readonly ambient: boolean;
+    readonly startedAt: number;
+}
+
+context.activityGuard: {
+    acquire(options: ActivityLeaseOptions): () => void;
+    run<T>(options: ActivityLeaseOptions, fn: () => T | Promise<T>): Promise<T>;
+    hasUnloadGuard(): boolean;
+    hasChatSwitchGuard(): boolean;
+    hasKeepAliveHold(options?: {
+        excludeAmbient?: boolean;
+        excludeSources?: Iterable<string>;
+    }): boolean;
+    list(): Array<Readonly<ActivitySnapshot>>;
+    subscribe(listener: () => void): () => void;
+}
+```
+
+### Lease options and methods
+
+| Field / Method | Default / Return | Behavior |
+|---|---|---|
+| `source` | Required string | Non-empty trimmed identifier; throws `TypeError` if missing or blank. |
+| `label` | `''` | Localized task description listed in the chat-switch confirmation dialog when `guardChatSwitch` is true and non-empty. |
+| `scope` | `'global'` | `'chat'` for work tied to the active chat; `'global'` for workspace, file, or account-level tasks that survive chat switches. |
+| `guardUnload` | `true` | Contributes to `hasUnloadGuard()` and triggers the browser `beforeunload` warning while active. |
+| `guardChatSwitch` | `scope === 'chat'` | Contributes to `hasChatSwitchGuard()` and triggers the in-app chat-switch confirmation dialog when opening, creating, closing, branching, or deleting a chat. |
+| `keepAlive` | `true` | Contributes to `hasKeepAliveHold()` to hold mobile background keep-alive while active. |
+| `ambient` | `false` | Marks implicit request-level leases. `hasKeepAliveHold({ excludeAmbient: true })` skips ambient leases, and chat-switch dialogs suppress ambient labels whenever a non-ambient chat-switch lease is active. |
+| `onCancel` | `null` | Called only when the user confirms an in-app chat switch — never on `beforeunload`. Abort controllers or cancel chat-bound work here. |
+| `acquire(options)` | `() => void` | Registers a lease and returns an idempotent `release()` callback. |
+| `run(options, fn)` | `Promise<T>` | Acquires a lease, awaits `fn()`, and guarantees release in `finally`. |
+| `list()` | `Readonly<ActivitySnapshot>[]` | Returns shallow-frozen snapshots of active leases without internal tokens or `onCancel`. |
+| `subscribe(listener)` | `() => void` | Fires `listener()` on every acquire or release and returns an idempotent `unsubscribe()` callback. |
+
+```js
+const ctx = Luker.getContext();
+const controller = new AbortController();
+
+const summary = await ctx.activityGuard.run({
+    source: 'my-plugin:summarize',
+    label: ctx.translate('Chat summary'),
+    scope: 'chat',
+    onCancel: () => controller.abort(),
+}, async () => {
+    return await ctx.generateTask({
+        taskMessages: [{ role: 'user', content: 'Summarize the latest scene.' }],
+        abortSignal: controller.signal,
+    });
+});
+```
+
+Core LLM request helpers (`generateTask`, `generateTaskStream`, `generateRaw`, `generateRawData`, `ChatCompletionService`, and `TextCompletionService`) acquire an ambient global lease automatically unless you pass `activity: false` or an override object. See [Generation → Background Activity Guard](/development/extension-api/generation#background-activity-guard).
 
 ## Internationalization (i18n)
 

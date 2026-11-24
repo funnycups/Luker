@@ -1,6 +1,7 @@
 import { createActivityPill } from './activity-pill.js';
 import { createSyncActivityState } from './sync-activity-state.js';
 import { t } from './i18n.js';
+import { acquireActivityLease } from './activity-guard.js';
 
 const state = createSyncActivityState();
 let observer = null;
@@ -74,9 +75,23 @@ export function initializeSyncActivity() {
 export function beginSyncActivity({ backendId, label }) {
     initializeSyncActivity();
     const token = state.beginRequest({ backendId, label });
-    observer.render();
+    const releaseLease = acquireActivityLease({
+        source: 'core:sync',
+        label: t`Data sync`,
+        scope: 'global',
+    });
+    try {
+        observer.render();
+    } catch (err) {
+        releaseLease();
+        throw err;
+    }
     return outcome => {
-        state.finishRequest(token, outcome);
-        observer?.render();
+        try {
+            state.finishRequest(token, outcome);
+            observer?.render();
+        } finally {
+            releaseLease();
+        }
     };
 }

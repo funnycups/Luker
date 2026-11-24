@@ -15,6 +15,15 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed flattened CJK event summaries with arrow-separated or parenthesized locations failing to split the place header from the prose body.
 - Fixed Memory Graph extraction writing duplicate reverse edges when link direction is omitted or uses the related relation.
 
+### Background Keep-Alive
+
+- Unified page-leave protection, mobile background keep-alive, and in-app chat-switch confirmation with cancellation of active chat-scoped tasks across message generation, group chats, Memory Graph, image generation, CardApp Studio, Workbench, vectorization, translation, image captioning, and data sync.
+- Replaced the Leave-page confirmation setting with automatic page-leave warnings whenever active tasks, pending saves, open message edits, or unsent input are present.
+
+### Extension API
+
+- Added a unified background activity guard API for extensions and lifecycle-scoped CardApps, alongside automatic request activity protection with per-call opt-out and overrides across core generation APIs.
+
 ### Fixes
 
 - Fixed login sessions expiring after updating a Docker image.

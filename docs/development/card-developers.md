@@ -212,6 +212,24 @@ The CardApp context object provides the following APIs:
 | `ctx.setInterval(fn, ms)` | `setInterval` whose handle is cleared automatically on dispose. |
 | `ctx.setTimeout(fn, ms)` | `setTimeout` whose handle is cleared automatically on dispose. |
 | `ctx.onDispose(fn)` | Register a cleanup callback that runs when the CardApp unmounts (chat switch, hot reload, character switch). |
+| `ctx.activityGuard` | Lifecycle-aware [Background Activity Guard](/development/extension-api/plugin-integration#background-activity-guard) wrapper exposing `acquire`, `run`, `hasUnloadGuard`, `hasChatSwitchGuard`, `hasKeepAliveHold`, `list`, and `subscribe`. `acquire` and `run` default `scope` to `'chat'` (enabling chat-switch confirmation by default; pass `scope: 'global'` for cross-chat tasks), and active leases plus `subscribe` listeners are automatically released when the CardApp unmounts. |
+
+Example — guard an async CardApp task against unload, mobile suspension, and accidental chat switches:
+
+```javascript
+const controller = new AbortController();
+
+await ctx.activityGuard.run({
+    source: 'my-cardapp:turn-sim',
+    label: 'Simulating turn',
+    onCancel: () => controller.abort(),
+}, async () => {
+    await ctx.lukerContext.generateTask({
+        taskMessages: [{ role: 'user', content: 'Compute next turn state.' }],
+        abortSignal: controller.signal,
+    });
+});
+```
 
 Example — refresh a panel when the chat or active swipe changes:
 

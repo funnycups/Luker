@@ -500,6 +500,8 @@ const ZH_CN = {
     'Unsaved': '未保存',
     'Return to save': '返回保存',
     'Reopen to save': '展开保存',
+    'Workbench AI iteration': '工作台 AI 迭代',
+    'Workbench AI ask': '工作台 AI 问问',
 };
 
 const ZH_TW = {
@@ -999,6 +1001,8 @@ const ZH_TW = {
     'Unsaved': '未儲存',
     'Return to save': '返回儲存',
     'Reopen to save': '展開儲存',
+    'Workbench AI iteration': '工作台 AI 迭代',
+    'Workbench AI ask': '工作台 AI 問問',
 };
 
 export function registerWorkbenchLocaleData(addLocaleData) {

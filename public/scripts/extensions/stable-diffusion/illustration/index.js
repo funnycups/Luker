@@ -128,6 +128,7 @@ export async function initIllustration(bridge) {
             maxConcurrent: settings.maxConcurrentGenerations,
             minInterval: settings.minGenerationInterval,
         }),
+        context,
     });
 
     initSdLens({

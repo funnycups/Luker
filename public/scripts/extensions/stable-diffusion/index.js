@@ -110,6 +110,8 @@ let activeGenerations = 0;
 /** @type {AbortController[]} */
 const generationAbortControllers = [];
 const trackedGenerationControllers = new Set();
+const controllerActivityLeases = new Map();
+const untrackedActivityLeases = [];
 
 const sources = {
     horde: 'horde',
@@ -1149,6 +1151,7 @@ export function createIllustrationBridge() {
             subdir = undefined,
             transientSessionId = undefined,
             skipActivityTracking = false,
+            skipActivityLease = false,
             signal = undefined,
             loras = [],
         } = {}) {
@@ -1170,8 +1173,9 @@ export function createIllustrationBridge() {
             const trackActivity = !skipActivityTracking && transientSessionId === undefined;
             let capturedError = null;
             if (trackActivity) {
+                const scope = attribution === 'none' ? 'global' : 'chat';
                 registerAbortController(controller);
-                startGenerationTracking(controller);
+                startGenerationTracking(controller, { scope, skipActivityLease: Boolean(skipActivityLease) });
             }
             try {
                 const preparedPrompt = await getPrompt(generationMode.FREE, prompt, prompt, '', null);
@@ -1304,8 +1308,9 @@ export function createImageGenerationService() {
             let capturedMeta = { format: 'png', prefixedPrompt: prompt };
             const trackActivity = !req.skipActivityTracking && req.transientSessionId === undefined;
             if (trackActivity) {
+                const scope = req.attribution === 'none' ? 'global' : 'chat';
                 registerAbortController(controller);
-                startGenerationTracking(controller);
+                startGenerationTracking(controller, { scope, skipActivityLease: Boolean(req.skipActivityLease) });
             }
             try {
                 const preparedPrompt = req.skipPromptPrefix
@@ -3851,7 +3856,59 @@ function syncGenerationTrackingState() {
     console.debug(`SD: syncGenerationTrackingState, controllers=${generationAbortControllers.length}, activeGenerations: ${prevActive} → ${activeGenerations}`);
 }
 
-function startGenerationTracking(controller = null) {
+function acquireGenerationActivityLease(controller, { scope = 'chat', label = t`Image generation`, skipActivityLease = false } = {}) {
+    if (skipActivityLease) {
+        return;
+    }
+    const acquire = getContext()?.activityGuard?.acquire;
+    if (typeof acquire !== 'function') {
+        return;
+    }
+    const leaseOptions = {
+        source: 'sd:image',
+        label,
+        scope,
+    };
+    if (scope === 'chat' && controller instanceof AbortController) {
+        leaseOptions.onCancel = () => {
+            if (!controller.signal.aborted) {
+                controller.abort('Aborted by user');
+            }
+        };
+    }
+    const release = acquire(leaseOptions);
+    if (typeof release !== 'function') {
+        return;
+    }
+    if (controller instanceof AbortController) {
+        const previous = controllerActivityLeases.get(controller);
+        if (typeof previous === 'function') {
+            previous();
+        }
+        controllerActivityLeases.set(controller, release);
+    } else {
+        untrackedActivityLeases.push(release);
+    }
+}
+
+function releaseGenerationActivityLease(controller) {
+    if (controller instanceof AbortController) {
+        const release = controllerActivityLeases.get(controller);
+        if (release) {
+            controllerActivityLeases.delete(controller);
+            release();
+        }
+        return;
+    }
+    if (controller === null || controller === undefined) {
+        const release = untrackedActivityLeases.pop();
+        if (typeof release === 'function') {
+            release();
+        }
+    }
+}
+
+function startGenerationTracking(controller = null, { scope = 'chat', label = t`Image generation`, skipActivityLease = false } = {}) {
     let added = false;
     if (controller instanceof AbortController) {
         const before = trackedGenerationControllers.size;
@@ -3861,6 +3918,9 @@ function startGenerationTracking(controller = null) {
         // Untracked invocation (no controller) — still counts as one job for
         // lifecycle bookkeeping so STARTED/ENDED stay paired.
         added = true;
+    }
+    if (added) {
+        acquireGenerationActivityLease(controller, { scope, label, skipActivityLease });
     }
     syncGenerationTrackingState();
     if (added) eventSource.emit(event_types.IMAGE_GENERATION_STARTED);
@@ -3873,6 +3933,7 @@ function endGenerationTracking(controller = null) {
     } else {
         removed = true;
     }
+    releaseGenerationActivityLease(controller);
     syncGenerationTrackingState();
     if (removed) eventSource.emit(event_types.IMAGE_GENERATION_ENDED);
 }
@@ -3883,8 +3944,16 @@ function endGenerationTrackingEarly(controller) {
         return;
     }
     console.debug('SD: endGenerationTrackingEarly called (abort event listener)');
+    releaseGenerationActivityLease(controller);
     syncGenerationTrackingState();
 }
+
+export {
+    startGenerationTracking as _startGenerationTrackingForTest,
+    endGenerationTracking as _endGenerationTrackingForTest,
+    endGenerationTrackingEarly as _endGenerationTrackingEarlyForTest,
+    generateMediaSwipe as _generateMediaSwipeForTest,
+};
 
 function registerAbortController(controller) {
     if (!(controller instanceof AbortController)) {
@@ -6498,6 +6567,7 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
 
     try {
         registerAbortController(abortController);
+        startGenerationTracking(abortController);
         $(stopButton).show();
         const callback = (_a, _b, _c, _d, _e, _f, format) => { result.type = isVideo(format) ? MEDIA_TYPE.VIDEO : MEDIA_TYPE.IMAGE; };
         const savedPrompt = mediaAttachment.title ?? message.extra.title ?? '';
@@ -6531,6 +6601,7 @@ async function generateMediaSwipe(mediaAttachment, message, onStart, onComplete,
     } finally {
         onComplete();
         $(stopButton).hide();
+        endGenerationTracking(abortController);
         unregisterAbortController(abortController);
         restoreOriginalDimensions(dimensions);
         extension_settings.sd.seed = extension_settings.sd.original_seed;

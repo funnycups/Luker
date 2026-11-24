@@ -50,6 +50,7 @@ context.generateTask({
     functionCallOptions?: object | null = null,   // 例如 { protocolStyle, requiredFunctionName }
     abortSignal?: AbortSignal | null = null,
     substituteMacros?: boolean = true,            // 解析 taskMessages.content 中的 {{...}};編輯器類流程需關閉
+    activity?: boolean | object = true,           // 預設附帶全域隱式活動租約;傳 false 退出或傳物件覆寫設定
 }): Promise<{
     assistantText: string,
     toolCalls: Array<{ name, args, raw }>,
@@ -309,6 +310,16 @@ type StreamChunk =
 
 直接 `await result` 也是合法的。在任何消費方掛接之前到達的增量會被丟棄（不為延遲消費快取），但內部累加器仍會構造出完整的終態 `result`。當你只想取得回應形態、不需要逐 token 渲染時使用此模式。
 
+### 後台活動保護
+
+`generateTask` 與 `generateTaskStream` 均接受 `activity` 選項，預設為 `true`：
+
+- **`true`（預設）** —— 自動申請一條全域隱式活動租約，欄位為 `source: 'core:generate-task'`、`scope: 'global'`、`ambient: true`、`guardUnload: true`、`keepAlive: true`，在請求執行期間維持瀏覽器離開頁面提醒與行動端後台保活，但不觸發應用內切換聊天確認。
+- **`false`** —— 本次呼叫不自動申請活動租約。
+- **純物件** —— 覆寫預設租約選項中的任意欄位：`source`、`label`、`scope`、`guardUnload`、`guardChatSwitch`、`keepAlive`、`ambient`、`onCancel`。若傳入 `scope: 'chat'`，同時會納入應用內切換聊天確認保護。
+
+對於 `generateTaskStream`，租約從呼叫開始持續持有，直至終態 `result` 解決或拒絕為止。詳見[外掛整合 → 後台活動保護](/zh-TW/development/extension-api/plugin-integration#後台活動保護)。
+
 ## 訊息接管
 
 對於希望由插件直接產出助理訊息、而非引導主 LLM 的場景，參見 **[訊息接管 API](./message-takeover.md)**。該 API 允許插件接管訊息本體的完整產出過程，跳過主 LLM 呼叫。
@@ -537,14 +548,15 @@ generateRaw(params: {
     llmPresetName?: string,
     apiPresetName?: string,
     apiSettingsOverride?: object | null,
+    activity?: boolean | object,
 }): Promise<string>
 ```
 
-把字面量 `prompt` 發到當前後端，不涉及聊天歷史、世界書、角色卡或擴充提示詞。回傳後處理過的回應文字。用於工具型呼叫——標題化、分類、改寫——這時你想對輸入有完全控制。
+把字面量 `prompt` 發到當前後端，不涉及聊天歷史、世界書、角色卡或擴充提示詞。回傳後處理過的回應文字。用於工具型呼叫——標題化、分類、改寫——這時你想對輸入有完全控制。`activity` 預設為 `true`，即 `source: 'core:generate-raw'` 的全域隱式租約；傳 `false` 可退出，或傳入租約選項物件覆寫設定。
 
 ### generateRawData
 
-參數同 `generateRaw`，但回傳原始 API 回應物件而非後處理過的字串。當你需要 `generateRaw` 折疊掉的欄位（例如 `reasoning`）時使用。
+參數同 `generateRaw` 且同樣支援 `activity`，但回傳原始 API 回應物件而非後處理過的字串。當你需要 `generateRaw` 折疊掉的欄位（例如 `reasoning`）時使用。
 
 ### generateQuietPrompt
 
@@ -627,24 +639,36 @@ class-as-namespace 輔助類別暴露不經 `Generate` 的請求生命週期。�
 
 ```ts
 ChatCompletionService.createRequestData(custom: object): object
-ChatCompletionService.sendRequest(data: object, extractData?: boolean, signal?: AbortSignal): Promise<{ content, reasoning } | object | AsyncGenerator>
-ChatCompletionService.processRequest(requestData: object, options: object, extractData?: boolean, signal?: AbortSignal): Promise<...>
+ChatCompletionService.sendRequest(
+    data: object,
+    extractData?: boolean,
+    signal?: AbortSignal,
+    requestOptions?: { activity?: boolean | object },
+): Promise<{ content, reasoning } | object | (() => AsyncGenerator)>
+ChatCompletionService.processRequest(
+    requestData: object,
+    options: { presetName?: string, activity?: boolean | object },
+    extractData?: boolean,
+    signal?: AbortSignal,
+): Promise<...>
 ```
 
 包裹 `/api/backends/chat-completions/generate` 端點。`processRequest` 透過 `getPresetManager('openai')` 加上具名預設應用。
 
 非串流回傳 `{ content, reasoning }`（`extractData: false` 時回傳原始 JSON）。串流回傳一個 async-generator factory，產出 `{ text, swipes, state }`。
 
+`sendRequest` 透過第 4 個引數 `requestOptions`、`processRequest` 透過 `options.activity` 均預設附帶 `source: 'core:custom-request'` 的全域隱式租約，且該引數絕不會序列化進請求體；傳入 `false` 可退出，傳入物件可覆寫租約欄位。串流請求採用兩階段租約：第一階段在 `sendRequest` 建立 SSE 連線期間持有租約；第二階段僅在呼叫並疊代回傳的 async-generator factory 時才申請租約並在 `finally` 中釋放，未呼叫的串流 factory 不會洩漏租約。
+
 ### TextCompletionService
 
 ```ts
 TextCompletionService.createRequestData({ stream, prompt, ... }): object
-TextCompletionService.sendRequest(data, extractData?, signal?): Promise<...>
+TextCompletionService.sendRequest(data, extractData?, signal?, requestOptions?): Promise<...>
 TextCompletionService.constructPrompt(prompt: ChatMessage[], instructPreset, instructSettings): string
 TextCompletionService.processRequest(requestData, options, extractData?, signal?): Promise<...>
 ```
 
-`ChatCompletionService` 對 text-completion 後端的鏡像。`constructPrompt` 把聊天訊息陣列格式化為單一的 instruct 格式字串。
+`ChatCompletionService` 對 text-completion 後端的鏡像，具備相同的第 4 引數 `requestOptions.activity`（不進入請求體）、`processRequest` 的 `options.activity` 以及兩階段串流租約行為。`constructPrompt` 把聊天訊息陣列格式化為單一的 instruct 格式字串。
 
 ### ConnectionManagerRequestService
 

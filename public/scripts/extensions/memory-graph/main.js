@@ -385,6 +385,24 @@ let activeRecallToast = null;
 let activePersistentRuntimeNoticeToast = null;
 let activeRecallAbortController = null;
 let activeExtractionAbortController = null;
+let activeVectorAbortController = null;
+
+async function runWithMemoryActivity(context, { source, label, abortController }, fn) {
+    const guard = context?.activityGuard ?? getContext()?.activityGuard;
+    if (typeof guard?.run !== 'function') {
+        return await fn();
+    }
+    return await guard.run({
+        source,
+        label,
+        scope: 'chat',
+        onCancel: () => {
+            if (abortController && !abortController.signal.aborted) {
+                abortController.abort();
+            }
+        },
+    }, fn);
+}
 // Scope of the in-flight scheduled extraction pass, keyed to
 // `activeExtractionAbortController`. Only `runScheduledExtractionPass`
 // populates it; fill / rebuild / rebuild_recent / compression passes
@@ -8920,198 +8938,204 @@ async function runScheduledExtractionPass(chatKey) {
     if (!store) {
         return;
     }
-    const extractionAbortController = new AbortController();
-    activeExtractionAbortController = extractionAbortController;
-    try {
-        const settings = getEffectiveSettings(runtimeContext, getSettings());
-        if (!settings.enabled) {
-            refreshUiStats();
-            return;
-        }
-        alignStoreCoverageToChat(store, runtimeContext, settings);
-        const preview = computeExtractionWindow(runtimeContext, store, null, settings);
-        if (preview.beginSeq > preview.latestSeq || preview.gap < Number(settings.updateEvery || 1)) {
-            store.lastExtractionDebug = {
-                beginSeq: preview.beginSeq,
-                latestSeq: preview.latestSeq,
-                coveredSeqTo: preview.coveredSeqTo,
-                extracted: false,
-                reason: preview.beginSeq > preview.latestSeq ? 'already_up_to_date' : 'gap_below_threshold',
-                at: Date.now(),
-            };
-            const debug = store.lastExtractionDebug || {};
-            updateUiStatus(i18nFormat(
-                'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
-                'skip',
-                Number(debug.beginSeq || 0),
-                Number(debug.latestSeq || 0),
-                Number(debug.coveredSeqTo || 0),
-            ));
-            refreshUiStats();
-            return;
-        }
-        const workingStore = normalizeStoreForRuntime(store);
-        let committedStore = normalizeStoreForRuntime(store);
-        // Publish the pass's scope so `applyMutationInvalidationImpl`
-        // can decide per-mutation whether to abort, shrink the tail, or
-        // leave the pass alone. Stays live for the whole
-        // runExtractionForStore call and is cleared in the outer
-        // `finally` alongside `activeExtractionAbortController`.
-        activeExtractionScope = {
-            beginSeq: Number(preview.beginSeq || 0),
-            latestSeq: Number(preview.latestSeq || 0),
-            committedSeq: Number(preview.beginSeq || 0) - 1,
-            inFlightSeqFrom: null,
-            inFlightSeqTo: null,
+    const settings = getEffectiveSettings(runtimeContext, getSettings());
+    if (!settings.enabled) {
+        refreshUiStats();
+        return;
+    }
+    alignStoreCoverageToChat(store, runtimeContext, settings);
+    const preview = computeExtractionWindow(runtimeContext, store, null, settings);
+    if (preview.beginSeq > preview.latestSeq || preview.gap < Number(settings.updateEvery || 1)) {
+        store.lastExtractionDebug = {
+            beginSeq: preview.beginSeq,
+            latestSeq: preview.latestSeq,
+            coveredSeqTo: preview.coveredSeqTo,
+            extracted: false,
+            reason: preview.beginSeq > preview.latestSeq ? 'already_up_to_date' : 'gap_below_threshold',
+            at: Date.now(),
         };
-        const extractBatchTurns = Math.max(
-            1,
-            Math.floor(Number(settings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
-        );
-        const initialEndSeq = Math.min(
-            Number(preview.latestSeq || 0),
-            Number(preview.beginSeq || 1) + extractBatchTurns - 1,
-        );
-        showRuntimeInfoToast(formatExtractionRangeToast(preview.beginSeq, initialEndSeq, preview.latestSeq), {
-            stopLabel: i18n('Stop'),
-            onStop: () => {
-                if (!extractionAbortController.signal.aborted) {
-                    extractionAbortController.abort();
-                }
-            },
-        });
-        // Each batch + each compression round commit anchors at the floor of
-        // the triggering batch (seqToFloor(batchEndSeq)). Compression runs
-        // inline after every batch and uses the batch's endSeq, never the
-        // rollup parent's own seqTo — the parent can fold in pre-existing
-        // older nodes whose seqTo predates the current batch, which would
-        // anchor the commit at a much earlier floor and break log-append
-        // monotonicity (see tests/floor-state/compaction-floor-anchor.test.js
-        // for the failure mode this avoids).
-        await runExtractionForStore(runtimeContext, workingStore, {
-            abortSignal: extractionAbortController.signal,
-            getEffectiveLatestSeq: () => activeExtractionScope?.latestSeq ?? Number(preview.latestSeq || 0),
-            onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
-                if (activeExtractionScope) {
-                    activeExtractionScope.inFlightSeqFrom = Number(beginSeq || 0);
-                    activeExtractionScope.inFlightSeqTo = Number(endSeq || 0);
-                }
-                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
-            },
-            onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
-                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
-            },
-            onBatchApplied: async ({ endSeq }) => {
-                const batchResult = await commitMemoryStoreDiffByChatKey(
-                    runtimeContext,
-                    chatKey,
-                    committedStore,
-                    workingStore,
-                    endSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, endSeq) },
-                );
-                committedStore = batchResult.store;
-                if (activeExtractionScope) {
-                    activeExtractionScope.committedSeq = Math.max(
-                        activeExtractionScope.committedSeq,
-                        Number(endSeq || 0),
-                    );
-                    activeExtractionScope.inFlightSeqFrom = null;
-                    activeExtractionScope.inFlightSeqTo = null;
-                }
-            },
-            onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
-                const compactionResult = await commitMemoryStoreDiffByChatKey(
-                    runtimeContext,
-                    chatKey,
-                    beforeStore,
-                    workingStore,
-                    batchEndSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, batchEndSeq) },
-                );
-                committedStore = compactionResult.store;
-                if (activeExtractionScope) {
-                    activeExtractionScope.committedSeq = Math.max(
-                        activeExtractionScope.committedSeq,
-                        Number(batchEndSeq || 0),
-                    );
-                }
-            },
-        });
-        // A mutation may have shrunk the pass below its launch-time bound, or
-        // a batch may have bailed without processing. Anchor the tail commit
-        // at the last batch that actually committed — `preview.latestSeq` can
-        // point past extracted coverage and, after a tail delete, no longer
-        // map to an existing floor.
-        const finalSeq = Number(activeExtractionScope ? activeExtractionScope.committedSeq : preview.latestSeq);
-        const finalResult = await commitMemoryStoreDiffByChatKey(
-            runtimeContext,
-            chatKey,
-            committedStore,
-            workingStore,
-            finalSeq,
-            { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, finalSeq) },
-        );
-        const finalStore = finalResult.store;
-        // Sync vector index after extraction (only when RAG recall is enabled)
-        const effectiveStore = finalStore || workingStore;
-        const recallMethod = String(settings.recallMethod || 'llm').trim().toLowerCase();
-        if (recallMethod !== 'llm' && effectiveStore) {
-            try {
-                const vectorConfig = getVectorConfigFromSettings(settings);
-                if (validateVectorConfig(vectorConfig).valid) {
-                    const chatIdForVector = String(chatKey || '').trim();
-                    const effectiveSchema = settings.nodeTypeSchema || defaultSettings.nodeTypeSchema;
-                    await syncVectorIndex(effectiveStore, vectorConfig, chatIdForVector, {
-                        signal: extractionAbortController.signal,
-                        schema: effectiveSchema,
-                    });
-                    // syncVectorIndex mutates effectiveStore.vectorIndexState
-                    // in place. That field is meta-sidecar after Commit B, so
-                    // we explicitly persist here — the preceding
-                    // commitMemoryStoreDiffByChatKey ran *before* the sync and
-                    // already wrote its meta snapshot without the new hashes.
-                    try {
-                        await persistMemoryStoreByChatKey(runtimeContext, chatKey, effectiveStore, { syncPersistentProjection: false });
-                    } catch (persistError) {
-                        console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after extraction-tail sync: ${persistError?.message || persistError}`);
-                    }
-                }
-            } catch (vecError) {
-                if (!isAbortError(vecError, extractionAbortController.signal)) {
-                    console.warn(`[${MODULE_NAME}] Vector index sync after extraction failed`, vecError);
-                }
-            }
-        }
-
-        const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
+        const debug = store.lastExtractionDebug || {};
         updateUiStatus(i18nFormat(
             'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
-            debug.extracted ? 'ok' : 'skip',
+            'skip',
             Number(debug.beginSeq || 0),
             Number(debug.latestSeq || 0),
             Number(debug.coveredSeqTo || 0),
         ));
-        clearPersistentRuntimeNotice();
         refreshUiStats();
-    } catch (error) {
-        if (isAbortError(error, extractionAbortController.signal)) {
-            updateUiStatus(i18n('Memory graph update cancelled by user.'));
+        return;
+    }
+    const extractionAbortController = new AbortController();
+    activeExtractionAbortController = extractionAbortController;
+    await runWithMemoryActivity(runtimeContext, {
+        source: 'memory-graph:update',
+        label: i18n('Memory graph update'),
+        abortController: extractionAbortController,
+    }, async () => {
+        try {
+            const workingStore = normalizeStoreForRuntime(store);
+            let committedStore = normalizeStoreForRuntime(store);
+            // Publish the pass's scope so `applyMutationInvalidationImpl`
+            // can decide per-mutation whether to abort, shrink the tail, or
+            // leave the pass alone. Stays live for the whole
+            // runExtractionForStore call and is cleared in the outer
+            // `finally` alongside `activeExtractionAbortController`.
+            activeExtractionScope = {
+                beginSeq: Number(preview.beginSeq || 0),
+                latestSeq: Number(preview.latestSeq || 0),
+                committedSeq: Number(preview.beginSeq || 0) - 1,
+                inFlightSeqFrom: null,
+                inFlightSeqTo: null,
+            };
+            const extractBatchTurns = Math.max(
+                1,
+                Math.floor(Number(settings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
+            );
+            const initialEndSeq = Math.min(
+                Number(preview.latestSeq || 0),
+                Number(preview.beginSeq || 1) + extractBatchTurns - 1,
+            );
+            showRuntimeInfoToast(formatExtractionRangeToast(preview.beginSeq, initialEndSeq, preview.latestSeq), {
+                stopLabel: i18n('Stop'),
+                onStop: () => {
+                    if (!extractionAbortController.signal.aborted) {
+                        extractionAbortController.abort();
+                    }
+                },
+            });
+            // Each batch + each compression round commit anchors at the floor of
+            // the triggering batch (seqToFloor(batchEndSeq)). Compression runs
+            // inline after every batch and uses the batch's endSeq, never the
+            // rollup parent's own seqTo — the parent can fold in pre-existing
+            // older nodes whose seqTo predates the current batch, which would
+            // anchor the commit at a much earlier floor and break log-append
+            // monotonicity (see tests/floor-state/compaction-floor-anchor.test.js
+            // for the failure mode this avoids).
+            await runExtractionForStore(runtimeContext, workingStore, {
+                abortSignal: extractionAbortController.signal,
+                getEffectiveLatestSeq: () => activeExtractionScope?.latestSeq ?? Number(preview.latestSeq || 0),
+                onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
+                    if (activeExtractionScope) {
+                        activeExtractionScope.inFlightSeqFrom = Number(beginSeq || 0);
+                        activeExtractionScope.inFlightSeqTo = Number(endSeq || 0);
+                    }
+                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
+                },
+                onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
+                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+                },
+                onBatchApplied: async ({ endSeq }) => {
+                    const batchResult = await commitMemoryStoreDiffByChatKey(
+                        runtimeContext,
+                        chatKey,
+                        committedStore,
+                        workingStore,
+                        endSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, endSeq) },
+                    );
+                    committedStore = batchResult.store;
+                    if (activeExtractionScope) {
+                        activeExtractionScope.committedSeq = Math.max(
+                            activeExtractionScope.committedSeq,
+                            Number(endSeq || 0),
+                        );
+                        activeExtractionScope.inFlightSeqFrom = null;
+                        activeExtractionScope.inFlightSeqTo = null;
+                    }
+                },
+                onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
+                    const compactionResult = await commitMemoryStoreDiffByChatKey(
+                        runtimeContext,
+                        chatKey,
+                        beforeStore,
+                        workingStore,
+                        batchEndSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, batchEndSeq) },
+                    );
+                    committedStore = compactionResult.store;
+                    if (activeExtractionScope) {
+                        activeExtractionScope.committedSeq = Math.max(
+                            activeExtractionScope.committedSeq,
+                            Number(batchEndSeq || 0),
+                        );
+                    }
+                },
+            });
+            // A mutation may have shrunk the pass below its launch-time bound, or
+            // a batch may have bailed without processing. Anchor the tail commit
+            // at the last batch that actually committed — `preview.latestSeq` can
+            // point past extracted coverage and, after a tail delete, no longer
+            // map to an existing floor.
+            const finalSeq = Number(activeExtractionScope ? activeExtractionScope.committedSeq : preview.latestSeq);
+            const finalResult = await commitMemoryStoreDiffByChatKey(
+                runtimeContext,
+                chatKey,
+                committedStore,
+                workingStore,
+                finalSeq,
+                { syncPersistentProjection: true, floor: seqToFloor(runtimeContext, finalSeq) },
+            );
+            const finalStore = finalResult.store;
+            // Sync vector index after extraction (only when RAG recall is enabled)
+            const effectiveStore = finalStore || workingStore;
+            const recallMethod = String(settings.recallMethod || 'llm').trim().toLowerCase();
+            if (recallMethod !== 'llm' && effectiveStore) {
+                try {
+                    const vectorConfig = getVectorConfigFromSettings(settings);
+                    if (validateVectorConfig(vectorConfig).valid) {
+                        const chatIdForVector = String(chatKey || '').trim();
+                        const effectiveSchema = settings.nodeTypeSchema || defaultSettings.nodeTypeSchema;
+                        await syncVectorIndex(effectiveStore, vectorConfig, chatIdForVector, {
+                            signal: extractionAbortController.signal,
+                            schema: effectiveSchema,
+                        });
+                        // syncVectorIndex mutates effectiveStore.vectorIndexState
+                        // in place. That field is meta-sidecar after Commit B, so
+                        // we explicitly persist here — the preceding
+                        // commitMemoryStoreDiffByChatKey ran *before* the sync and
+                        // already wrote its meta snapshot without the new hashes.
+                        try {
+                            await persistMemoryStoreByChatKey(runtimeContext, chatKey, effectiveStore, { syncPersistentProjection: false });
+                        } catch (persistError) {
+                            console.warn(`[${MODULE_NAME}] Failed to persist vectorIndexState after extraction-tail sync: ${persistError?.message || persistError}`);
+                        }
+                    }
+                } catch (vecError) {
+                    if (!isAbortError(vecError, extractionAbortController.signal)) {
+                        console.warn(`[${MODULE_NAME}] Vector index sync after extraction failed`, vecError);
+                    }
+                }
+            }
+
+            const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
+            updateUiStatus(i18nFormat(
+                'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
+                debug.extracted ? 'ok' : 'skip',
+                Number(debug.beginSeq || 0),
+                Number(debug.latestSeq || 0),
+                Number(debug.coveredSeqTo || 0),
+            ));
             clearPersistentRuntimeNotice();
             refreshUiStats();
-            return;
+        } catch (error) {
+            if (isAbortError(error, extractionAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                clearPersistentRuntimeNotice();
+                refreshUiStats();
+                return;
+            }
+            console.warn(`[${MODULE_NAME}] Extraction failed`, error);
+            const failureText = i18nFormat('Recall injection failed (${0}): ${1}', 'extract', String(error?.message || error));
+            updateUiStatus(failureText);
+            showPersistentRuntimeNotice(failureText);
+        } finally {
+            if (activeExtractionAbortController === extractionAbortController) {
+                activeExtractionAbortController = null;
+                activeExtractionScope = null;
+            }
+            clearRuntimeInfoToast('extraction');
         }
-        console.warn(`[${MODULE_NAME}] Extraction failed`, error);
-        const failureText = i18nFormat('Recall injection failed (${0}): ${1}', 'extract', String(error?.message || error));
-        updateUiStatus(failureText);
-        showPersistentRuntimeNotice(failureText);
-    } finally {
-        if (activeExtractionAbortController === extractionAbortController) {
-            activeExtractionAbortController = null;
-            activeExtractionScope = null;
-        }
-        clearRuntimeInfoToast('extraction');
-    }
+    });
 }
 
 function scheduleExtraction(context) {
@@ -9370,6 +9394,9 @@ async function stopMemoryRuntimeWork() {
     if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
         activeExtractionAbortController.abort();
     }
+    if (activeVectorAbortController && !activeVectorAbortController.signal.aborted) {
+        activeVectorAbortController.abort();
+    }
 
     if (recallRunToken > 0) {
         await abortActiveRecallRequests(recallRunToken);
@@ -9491,35 +9518,55 @@ async function runVectorRecompute(context, settings, store, chatKey, { mode }) {
         progressToast = null;
     };
 
+    const vectorAbortController = new AbortController();
+    activeVectorAbortController = vectorAbortController;
     notifyInfo(i18n('Starting vector recompute…'));
-    try {
-        const result = await syncVectorIndex(store, vectorConfig, chatKey, {
-            schema,
-            purge,
-            tolerateErrors: true,
-            onProgress: ({ current, total }) => updateProgressToast(current, total),
-        });
-        await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
-        const total = Number(result?.stats?.total || 0);
-        const inserted = Number(result?.insertedCount || 0);
-        const deleted = Number(result?.deletedCount || 0);
-        const failed = Array.isArray(result?.failedNodeIds) ? result.failedNodeIds.length : 0;
-        if (total === 0) {
-            notifyInfo(i18n('No eligible nodes to embed.'));
-        } else if (inserted === 0 && deleted === 0 && failed === 0) {
-            notifySuccess(i18n('Vector index already up to date.'));
-        } else if (failed > 0) {
-            notifyError(i18nFormat('Vector recompute complete: ${0} indexed, ${1} failed (see console).', inserted, failed));
-        } else {
-            notifySuccess(i18nFormat('Vector recompute complete: ${0} indexed.', inserted));
+    await runWithMemoryActivity(context, {
+        source: 'memory-graph:vector-recompute',
+        label: i18n('Memory graph vector recompute'),
+        abortController: vectorAbortController,
+    }, async () => {
+        try {
+            const result = await syncVectorIndex(store, vectorConfig, chatKey, {
+                schema,
+                purge,
+                tolerateErrors: true,
+                signal: vectorAbortController.signal,
+                onProgress: ({ current, total }) => updateProgressToast(current, total),
+            });
+            if (vectorAbortController.signal.aborted) {
+                updateUiStatus(i18n('Memory graph vector recompute cancelled by user.'));
+                return;
+            }
+            await persistMemoryStoreByChatKey(context, chatKey, store, { syncPersistentProjection: false });
+            const total = Number(result?.stats?.total || 0);
+            const inserted = Number(result?.insertedCount || 0);
+            const deleted = Number(result?.deletedCount || 0);
+            const failed = Array.isArray(result?.failedNodeIds) ? result.failedNodeIds.length : 0;
+            if (total === 0) {
+                notifyInfo(i18n('No eligible nodes to embed.'));
+            } else if (inserted === 0 && deleted === 0 && failed === 0) {
+                notifySuccess(i18n('Vector index already up to date.'));
+            } else if (failed > 0) {
+                notifyError(i18nFormat('Vector recompute complete: ${0} indexed, ${1} failed (see console).', inserted, failed));
+            } else {
+                notifySuccess(i18nFormat('Vector recompute complete: ${0} indexed.', inserted));
+            }
+        } catch (error) {
+            if (isAbortError(error, vectorAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph vector recompute cancelled by user.'));
+                return;
+            }
+            console.error(`[${MODULE_NAME}] Vector recompute (${mode}) failed:`, error);
+            notifyError(i18nFormat('Vector recompute failed: ${0}', String(error?.message || error)));
+        } finally {
+            if (activeVectorAbortController === vectorAbortController) {
+                activeVectorAbortController = null;
+            }
+            dismissProgressToast();
+            refreshUiStats();
         }
-    } catch (error) {
-        console.error(`[${MODULE_NAME}] Vector recompute (${mode}) failed:`, error);
-        notifyError(i18nFormat('Vector recompute failed: ${0}', String(error?.message || error)));
-    } finally {
-        dismissProgressToast();
-        refreshUiStats();
-    }
+    });
 }
 
 // ---- Shared by the settings drawer and Memory Lens --------------------------
@@ -9801,93 +9848,99 @@ async function runPartialRebuildFromSeq(context, startSeq, {
     updateStoreSourceState(workingStore, context);
     const rebuildAbortController = new AbortController();
     activeExtractionAbortController = rebuildAbortController;
-    let hasCommittedBatch = false;
-    const extractBatchTurns = Math.max(
-        1,
-        Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
-    );
-    const initialEndSeq = Math.min(
-        latestSeq,
-        startSeq + extractBatchTurns - 1,
-    );
-    showRuntimeInfoToast(formatExtractionRangeToast(startSeq, initialEndSeq, latestSeq), {
-        stopLabel: i18n('Stop'),
-        onStop: () => {
-            if (!rebuildAbortController.signal.aborted) {
-                rebuildAbortController.abort();
-            }
-        },
-    });
-    try {
-        const extracted = await runExtractionForStore(context, workingStore, {
-            force: true,
-            startSeq,
-            abortSignal: rebuildAbortController.signal,
-            onBatchStart: ({ beginSeq, endSeq, latestSeq: latest }) => {
-                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latest));
-            },
-            onPhaseProgress: ({ beginSeq, endSeq, latestSeq: latest, stage, done, total }) => {
-                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latest)} · ${formatExtractionPhaseToast(stage, done, total)}`);
-            },
-            onBatchApplied: async ({ endSeq }) => {
-                if (!hasCommittedBatch) {
-                    const currentBatchEntries = getRollbackHistory(chatKey)
-                        .filter(entry => Number(entry?.seqTo || 0) === Number(endSeq || 0));
-                    trimRollbackHistoryFromSeq(chatKey, startSeq);
-                    for (const entry of currentBatchEntries) {
-                        recordRollbackEntry(chatKey, entry);
-                    }
-                    hasCommittedBatch = true;
+    await runWithMemoryActivity(context, {
+        source: 'memory-graph:update',
+        label: i18n('Memory graph update'),
+        abortController: rebuildAbortController,
+    }, async () => {
+        let hasCommittedBatch = false;
+        const extractBatchTurns = Math.max(
+            1,
+            Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
+        );
+        const initialEndSeq = Math.min(
+            latestSeq,
+            startSeq + extractBatchTurns - 1,
+        );
+        showRuntimeInfoToast(formatExtractionRangeToast(startSeq, initialEndSeq, latestSeq), {
+            stopLabel: i18n('Stop'),
+            onStop: () => {
+                if (!rebuildAbortController.signal.aborted) {
+                    rebuildAbortController.abort();
                 }
-                await commitMemoryStoreReplaceByChatKey(
-                    context,
-                    chatKey,
-                    workingStore,
-                    endSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
-                );
-            },
-            onCompressionApplied: async ({ batchEndSeq }) => {
-                await commitMemoryStoreReplaceByChatKey(
-                    context,
-                    chatKey,
-                    workingStore,
-                    batchEndSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
-                );
             },
         });
-        const debug = workingStore.lastExtractionDebug || {};
-        if (!extracted && Number(debug.latestSeq || 0) >= startSeq && String(debug.reason || '') !== 'no_graph_changes') {
-            throw new Error('Memory extraction returned no graph updates. Existing graph preserved.');
-        }
-        const finalSeq = Number(latestSeq || debug.latestSeq || 0);
-        const persistResult = await commitMemoryStoreReplaceByChatKey(
-            context,
-            chatKey,
-            workingStore,
-            finalSeq,
-            { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
-        );
-        const persistedStore = persistResult.store;
-        const committedDebug = persistedStore?.lastExtractionDebug || debug;
-        const committedLatestSeq = Number(committedDebug.latestSeq || latestSeq);
-        refreshUiStats();
-        onComplete({ committedLatestSeq });
-    } catch (error) {
-        if (isAbortError(error, rebuildAbortController.signal)) {
-            updateUiStatus(i18n('Memory graph update cancelled by user.'));
+        try {
+            const extracted = await runExtractionForStore(context, workingStore, {
+                force: true,
+                startSeq,
+                abortSignal: rebuildAbortController.signal,
+                onBatchStart: ({ beginSeq, endSeq, latestSeq: latest }) => {
+                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latest));
+                },
+                onPhaseProgress: ({ beginSeq, endSeq, latestSeq: latest, stage, done, total }) => {
+                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latest)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+                },
+                onBatchApplied: async ({ endSeq }) => {
+                    if (!hasCommittedBatch) {
+                        const currentBatchEntries = getRollbackHistory(chatKey)
+                            .filter(entry => Number(entry?.seqTo || 0) === Number(endSeq || 0));
+                        trimRollbackHistoryFromSeq(chatKey, startSeq);
+                        for (const entry of currentBatchEntries) {
+                            recordRollbackEntry(chatKey, entry);
+                        }
+                        hasCommittedBatch = true;
+                    }
+                    await commitMemoryStoreReplaceByChatKey(
+                        context,
+                        chatKey,
+                        workingStore,
+                        endSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
+                    );
+                },
+                onCompressionApplied: async ({ batchEndSeq }) => {
+                    await commitMemoryStoreReplaceByChatKey(
+                        context,
+                        chatKey,
+                        workingStore,
+                        batchEndSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
+                    );
+                },
+            });
+            const debug = workingStore.lastExtractionDebug || {};
+            if (!extracted && Number(debug.latestSeq || 0) >= startSeq && String(debug.reason || '') !== 'no_graph_changes') {
+                throw new Error('Memory extraction returned no graph updates. Existing graph preserved.');
+            }
+            const finalSeq = Number(latestSeq || debug.latestSeq || 0);
+            const persistResult = await commitMemoryStoreReplaceByChatKey(
+                context,
+                chatKey,
+                workingStore,
+                finalSeq,
+                { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
+            );
+            const persistedStore = persistResult.store;
+            const committedDebug = persistedStore?.lastExtractionDebug || debug;
+            const committedLatestSeq = Number(committedDebug.latestSeq || latestSeq);
             refreshUiStats();
-            return;
+            onComplete({ committedLatestSeq });
+        } catch (error) {
+            if (isAbortError(error, rebuildAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                refreshUiStats();
+                return;
+            }
+            console.warn(`[${MODULE_NAME}] Partial rebuild (${operationName}) failed`, error);
+            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', operationName, String(error?.message || error)));
+        } finally {
+            if (activeExtractionAbortController === rebuildAbortController) {
+                activeExtractionAbortController = null;
+            }
+            clearRuntimeInfoToast('extraction');
         }
-        console.warn(`[${MODULE_NAME}] Partial rebuild (${operationName}) failed`, error);
-        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', operationName, String(error?.message || error)));
-    } finally {
-        if (activeExtractionAbortController === rebuildAbortController) {
-            activeExtractionAbortController = null;
-        }
-        clearRuntimeInfoToast('extraction');
-    }
+    });
 }
 
 /** Re-extracts the latest N assistant turns. */
@@ -9972,46 +10025,52 @@ export async function runRebuildGraph(context, settings = getSettings()) {
     }
     const rebuildAbortController = new AbortController();
     activeExtractionAbortController = rebuildAbortController;
-    showRuntimeInfoToast(formatExtractionRangeToast(1, Math.min(1, rebuildLatestSeq || 1), Math.max(1, rebuildLatestSeq)), {
-        stopLabel: i18n('Stop'),
-        onStop: () => {
-            if (!rebuildAbortController.signal.aborted) {
-                rebuildAbortController.abort();
-            }
-        },
-    });
-    try {
-        const store = await rebuildStoreFromCurrentChat(context, {
-            abortSignal: rebuildAbortController.signal,
-            onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
-                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
-            },
-            onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
-                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+    await runWithMemoryActivity(context, {
+        source: 'memory-graph:update',
+        label: i18n('Memory graph update'),
+        abortController: rebuildAbortController,
+    }, async () => {
+        showRuntimeInfoToast(formatExtractionRangeToast(1, Math.min(1, rebuildLatestSeq || 1), Math.max(1, rebuildLatestSeq)), {
+            stopLabel: i18n('Stop'),
+            onStop: () => {
+                if (!rebuildAbortController.signal.aborted) {
+                    rebuildAbortController.abort();
+                }
             },
         });
-        if (!store) {
-            notifyError(i18n('No active chat selected.'));
-            return;
-        }
-        refreshUiStats();
-        notifySuccess(i18n('Memory graph rebuilt from current chat.'));
-        notifyEventCompressionIfAny(store?.lastExtractionDebug?.compression);
-        updateUiStatus(i18n('Rebuilt memory graph and compression from chat.'));
-    } catch (error) {
-        if (isAbortError(error, rebuildAbortController.signal)) {
-            updateUiStatus(i18n('Memory graph update cancelled by user.'));
+        try {
+            const store = await rebuildStoreFromCurrentChat(context, {
+                abortSignal: rebuildAbortController.signal,
+                onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
+                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
+                },
+                onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
+                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+                },
+            });
+            if (!store) {
+                notifyError(i18n('No active chat selected.'));
+                return;
+            }
             refreshUiStats();
-            return;
+            notifySuccess(i18n('Memory graph rebuilt from current chat.'));
+            notifyEventCompressionIfAny(store?.lastExtractionDebug?.compression);
+            updateUiStatus(i18n('Rebuilt memory graph and compression from chat.'));
+        } catch (error) {
+            if (isAbortError(error, rebuildAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                refreshUiStats();
+                return;
+            }
+            console.warn(`[${MODULE_NAME}] Rebuild failed`, error);
+            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild', String(error?.message || error)));
+        } finally {
+            if (activeExtractionAbortController === rebuildAbortController) {
+                activeExtractionAbortController = null;
+            }
+            clearRuntimeInfoToast('extraction');
         }
-        console.warn(`[${MODULE_NAME}] Rebuild failed`, error);
-        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild', String(error?.message || error)));
-    } finally {
-        if (activeExtractionAbortController === rebuildAbortController) {
-            activeExtractionAbortController = null;
-        }
-        clearRuntimeInfoToast('extraction');
-    }
+    });
 }
 
 /** Runs recall for a test query without injecting anything. */
@@ -10106,100 +10165,106 @@ export async function runFillGraph(context, settings = getSettings()) {
     }
     const runtimeSettings = getEffectiveSettings(context, settings);
     alignStoreCoverageToChat(store, context, runtimeSettings);
+    const preview = computeExtractionWindow(context, store, null, runtimeSettings);
+    if (preview.beginSeq > preview.latestSeq) {
+        notifySuccess(i18n('Memory graph is already up to date.'));
+        updateUiStatus(i18n('Memory graph is already up to date.'));
+        refreshUiStats();
+        return;
+    }
     const fillAbortController = new AbortController();
     activeExtractionAbortController = fillAbortController;
-    try {
-        const preview = computeExtractionWindow(context, store, null, runtimeSettings);
-        if (preview.beginSeq > preview.latestSeq) {
-            notifySuccess(i18n('Memory graph is already up to date.'));
-            updateUiStatus(i18n('Memory graph is already up to date.'));
+    await runWithMemoryActivity(context, {
+        source: 'memory-graph:update',
+        label: i18n('Memory graph update'),
+        abortController: fillAbortController,
+    }, async () => {
+        try {
+            const extractBatchTurns = Math.max(
+                1,
+                Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
+            );
+            const initialEndSeq = Math.min(
+                Number(preview.latestSeq || 0),
+                Number(preview.beginSeq || 1) + extractBatchTurns - 1,
+            );
+            showRuntimeInfoToast(formatExtractionRangeToast(preview.beginSeq, initialEndSeq, preview.latestSeq), {
+                stopLabel: i18n('Stop'),
+                onStop: () => {
+                    if (!fillAbortController.signal.aborted) {
+                        fillAbortController.abort();
+                    }
+                },
+            });
+            const workingStore = normalizeStoreForRuntime(store);
+            let committedStore = normalizeStoreForRuntime(store);
+            await runExtractionForStore(context, workingStore, {
+                force: true,
+                abortSignal: fillAbortController.signal,
+                onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
+                    updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
+                },
+                onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
+                    updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
+                },
+                onBatchApplied: async ({ endSeq }) => {
+                    const batchResult = await commitMemoryStoreDiffByChatKey(
+                        context,
+                        chatKey,
+                        committedStore,
+                        workingStore,
+                        endSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
+                    );
+                    committedStore = batchResult.store;
+                },
+                onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
+                    const compactionResult = await commitMemoryStoreDiffByChatKey(
+                        context,
+                        chatKey,
+                        beforeStore,
+                        workingStore,
+                        batchEndSeq,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
+                    );
+                    committedStore = compactionResult.store;
+                },
+            });
+            const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
+            const finalResult = await commitMemoryStoreDiffByChatKey(
+                context,
+                chatKey,
+                committedStore,
+                workingStore,
+                finalSeq,
+                { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
+            );
+            const finalStore = finalResult.store;
+            const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
+            updateUiStatus(i18nFormat(
+                'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
+                debug.extracted ? 'ok' : 'skip',
+                Number(debug.beginSeq || 0),
+                Number(debug.latestSeq || 0),
+                Number(debug.coveredSeqTo || 0),
+            ));
             refreshUiStats();
-            return;
+            notifySuccess(i18n('Memory graph incremental fill completed.'));
+        } catch (error) {
+            if (isAbortError(error, fillAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                refreshUiStats();
+                return;
+            }
+            console.warn(`[${MODULE_NAME}] Incremental fill failed`, error);
+            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'fill', String(error?.message || error)));
+        } finally {
+            if (activeExtractionAbortController === fillAbortController) {
+                activeExtractionAbortController = null;
+            }
+            clearRuntimeInfoToast('extraction');
         }
-        const extractBatchTurns = Math.max(
-            1,
-            Math.floor(Number(runtimeSettings?.extractBatchTurns || defaultSettings.extractBatchTurns || 1)),
-        );
-        const initialEndSeq = Math.min(
-            Number(preview.latestSeq || 0),
-            Number(preview.beginSeq || 1) + extractBatchTurns - 1,
-        );
-        showRuntimeInfoToast(formatExtractionRangeToast(preview.beginSeq, initialEndSeq, preview.latestSeq), {
-            stopLabel: i18n('Stop'),
-            onStop: () => {
-                if (!fillAbortController.signal.aborted) {
-                    fillAbortController.abort();
-                }
-            },
-        });
-        const workingStore = normalizeStoreForRuntime(store);
-        let committedStore = normalizeStoreForRuntime(store);
-        await runExtractionForStore(context, workingStore, {
-            force: true,
-            abortSignal: fillAbortController.signal,
-            onBatchStart: ({ beginSeq, endSeq, latestSeq }) => {
-                updateRuntimeInfoToastMessage(formatExtractionRangeToast(beginSeq, endSeq, latestSeq));
-            },
-            onPhaseProgress: ({ beginSeq, endSeq, latestSeq, stage, done, total }) => {
-                updateRuntimeInfoToastMessage(`${formatExtractionRangeToast(beginSeq, endSeq, latestSeq)} · ${formatExtractionPhaseToast(stage, done, total)}`);
-            },
-            onBatchApplied: async ({ endSeq }) => {
-                const batchResult = await commitMemoryStoreDiffByChatKey(
-                    context,
-                    chatKey,
-                    committedStore,
-                    workingStore,
-                    endSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(context, endSeq) },
-                );
-                committedStore = batchResult.store;
-            },
-            onCompressionApplied: async ({ beforeStore, batchEndSeq }) => {
-                const compactionResult = await commitMemoryStoreDiffByChatKey(
-                    context,
-                    chatKey,
-                    beforeStore,
-                    workingStore,
-                    batchEndSeq,
-                    { syncPersistentProjection: true, floor: seqToFloor(context, batchEndSeq) },
-                );
-                committedStore = compactionResult.store;
-            },
-        });
-        const finalSeq = Number(preview.latestSeq || workingStore?.lastExtractionDebug?.latestSeq || 0);
-        const finalResult = await commitMemoryStoreDiffByChatKey(
-            context,
-            chatKey,
-            committedStore,
-            workingStore,
-            finalSeq,
-            { syncPersistentProjection: true, floor: seqToFloor(context, finalSeq) },
-        );
-        const finalStore = finalResult.store;
-        const debug = finalStore?.lastExtractionDebug || workingStore.lastExtractionDebug || {};
-        updateUiStatus(i18nFormat(
-            'Extraction ${0}: begin=${1} latest=${2} covered=${3}',
-            debug.extracted ? 'ok' : 'skip',
-            Number(debug.beginSeq || 0),
-            Number(debug.latestSeq || 0),
-            Number(debug.coveredSeqTo || 0),
-        ));
-        refreshUiStats();
-        notifySuccess(i18n('Memory graph incremental fill completed.'));
-    } catch (error) {
-        if (isAbortError(error, fillAbortController.signal)) {
-            updateUiStatus(i18n('Memory graph update cancelled by user.'));
-            refreshUiStats();
-            return;
-        }
-        console.warn(`[${MODULE_NAME}] Incremental fill failed`, error);
-        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'fill', String(error?.message || error)));
-    } finally {
-        if (activeExtractionAbortController === fillAbortController) {
-            activeExtractionAbortController = null;
-        }
-        clearRuntimeInfoToast('extraction');
-    }
+    });
 }
 
 /** Routes to Workbench AI iteration for Memory Graph configuration. */
@@ -10244,73 +10309,83 @@ export async function runManualCompression(context, settings, values) {
     const compressionStats = createCompressionStats();
     const compressionAbortController = new AbortController();
     activeExtractionAbortController = compressionAbortController;
-    showRuntimeInfoToast(i18n('Memory graph update running...'), {
-        stopLabel: i18n('Stop'),
-        onStop: () => {
-            if (!compressionAbortController.signal.aborted) {
-                compressionAbortController.abort();
-            }
-        },
-    });
-    try {
-        // Manual compression collapses into a single tail commit after all
-        // rounds finish. Per-round commits would form a non-monotonic anchor
-        // sequence (each round's roundSeqTo can jump backwards across types),
-        // and floor-state's incremental patch model can't replay such a log
-        // after truncation. The covered seq advances by the highest roundSeqTo
-        // observed, which yields the same anchor as the legacy "one commit at
-        // tail" shape.
-        let highestRoundSeqTo = getStoreCoveredSeqTo(store);
-        const changed = await runCompressionLoop(context, store, settings, {
-            typeIds: values.selectedTypeIds,
-            force: values.mode === 'force' || values.mode === 'flat',
-            flatten: values.mode === 'flat',
-            maxRoundsPerType: values.maxRoundsPerType,
-            maxSeq,
-            compressionStats,
-            abortSignal: compressionAbortController.signal,
-            onRoundApplied: ({ roundSeqTo }) => {
-                const candidate = Number(roundSeqTo || 0);
-                if (Number.isFinite(candidate) && candidate > highestRoundSeqTo) {
-                    highestRoundSeqTo = candidate;
+    await runWithMemoryActivity(context, {
+        source: 'memory-graph:update',
+        label: i18n('Memory graph update'),
+        abortController: compressionAbortController,
+    }, async () => {
+        showRuntimeInfoToast(i18n('Memory graph update running...'), {
+            stopLabel: i18n('Stop'),
+            onStop: () => {
+                if (!compressionAbortController.signal.aborted) {
+                    compressionAbortController.abort();
                 }
             },
         });
-        if (!changed) {
-            notifySuccess(i18n('Manual compression made no changes.'));
-            return;
+        try {
+            // Manual compression collapses into a single tail commit after all
+            // rounds finish. Per-round commits would form a non-monotonic anchor
+            // sequence (each round's roundSeqTo can jump backwards across types),
+            // and floor-state's incremental patch model can't replay such a log
+            // after truncation. The covered seq advances by the highest roundSeqTo
+            // observed, which yields the same anchor as the legacy "one commit at
+            // tail" shape.
+            let highestRoundSeqTo = getStoreCoveredSeqTo(store);
+            const changed = await runCompressionLoop(context, store, settings, {
+                typeIds: values.selectedTypeIds,
+                force: values.mode === 'force' || values.mode === 'flat',
+                flatten: values.mode === 'flat',
+                maxRoundsPerType: values.maxRoundsPerType,
+                maxSeq,
+                compressionStats,
+                abortSignal: compressionAbortController.signal,
+                onRoundApplied: ({ roundSeqTo }) => {
+                    const candidate = Number(roundSeqTo || 0);
+                    if (Number.isFinite(candidate) && candidate > highestRoundSeqTo) {
+                        highestRoundSeqTo = candidate;
+                    }
+                },
+            });
+            if (compressionAbortController.signal.aborted) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                return;
+            }
+            if (!changed) {
+                notifySuccess(i18n('Manual compression made no changes.'));
+                return;
+            }
+            await commitMemoryStoreDiffByChatKey(
+                context,
+                getChatKey(context),
+                beforeStore,
+                store,
+                highestRoundSeqTo,
+                { syncPersistentProjection: true, floor: seqToFloor(context, highestRoundSeqTo) },
+            );
+            const afterNodes = Object.values(store.nodes || {});
+            const afterNodeCount = afterNodes.length;
+            const afterArchivedCount = afterNodes.filter(node => Boolean(node?.archived)).length;
+            const createdDelta = Math.max(0, afterNodeCount - beforeNodeCount);
+            const archivedDelta = Math.max(0, afterArchivedCount - beforeArchivedCount);
+            refreshUiStats();
+            const summary = i18nFormat('Manual compression completed. Created=${0}, archived=${1}', createdDelta, archivedDelta);
+            notifySuccess(summary);
+            notifyEventCompressionIfAny(compressionStats);
+            updateUiStatus(summary);
+        } catch (error) {
+            if (isAbortError(error, compressionAbortController.signal)) {
+                updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                return;
+            }
+            console.warn(`[${MODULE_NAME}] Manual compression failed`, error);
+            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'compress', String(error?.message || error)));
+        } finally {
+            if (activeExtractionAbortController === compressionAbortController) {
+                activeExtractionAbortController = null;
+            }
+            clearRuntimeInfoToast('extraction');
         }
-        await commitMemoryStoreDiffByChatKey(
-            context,
-            getChatKey(context),
-            beforeStore,
-            store,
-            highestRoundSeqTo,
-            { syncPersistentProjection: true, floor: seqToFloor(context, highestRoundSeqTo) },
-        );
-        const afterNodes = Object.values(store.nodes || {});
-        const afterNodeCount = afterNodes.length;
-        const afterArchivedCount = afterNodes.filter(node => Boolean(node?.archived)).length;
-        const createdDelta = Math.max(0, afterNodeCount - beforeNodeCount);
-        const archivedDelta = Math.max(0, afterArchivedCount - beforeArchivedCount);
-        refreshUiStats();
-        const summary = i18nFormat('Manual compression completed. Created=${0}, archived=${1}', createdDelta, archivedDelta);
-        notifySuccess(summary);
-        notifyEventCompressionIfAny(compressionStats);
-        updateUiStatus(summary);
-    } catch (error) {
-        if (isAbortError(error, compressionAbortController.signal)) {
-            updateUiStatus(i18n('Memory graph update cancelled by user.'));
-            return;
-        }
-        console.warn(`[${MODULE_NAME}] Manual compression failed`, error);
-        notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'compress', String(error?.message || error)));
-    } finally {
-        if (activeExtractionAbortController === compressionAbortController) {
-            activeExtractionAbortController = null;
-        }
-        clearRuntimeInfoToast('extraction');
-    }
+    });
 }
 
 export function getRawGraphJson(context) {
@@ -10785,6 +10860,7 @@ export function _setPersistentDrainHookForTest(hook) {
     __testPersistentDrainHook = (typeof hook === 'function') ? hook : null;
 }
 export { buildRoleSplitChatMessages as _buildRoleSplitChatMessagesForTest };
+export { runScheduledExtractionPass as _runScheduledExtractionPassForTest };
 
 async function initializeCharacterPromptDefaults(context) {
     try {
@@ -10843,6 +10919,12 @@ jQuery(async () => {
     // early on every chat switch; (b) run an explicit migration for the
     // initial chat before mounting the singleton.
     context.eventSource.on(context.eventTypes.CHAT_CHANGED, async () => {
+        if (activeExtractionAbortController && !activeExtractionAbortController.signal.aborted) {
+            activeExtractionAbortController.abort();
+        }
+        if (activeVectorAbortController && !activeVectorAbortController.signal.aborted) {
+            activeVectorAbortController.abort();
+        }
         await initializeCharacterPromptDefaults(getContext());
         latestRecallSnapshot = null;
         void ensureMemoryStoreLoaded(getContext()).catch(() => {});
