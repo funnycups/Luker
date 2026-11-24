@@ -2,7 +2,7 @@ import './_mocks/luker-zh.js';
 import { test, expect } from '@jest/globals';
 import {
     buildModel, parseEventSummary, isPlaceholderTitle, searchNodes, visibleSubgraph, buildChapters,
-    defaultFilters, neighborsOf, entitiesOfEvent, eventsOfEntity, contextState, formatFloor, isDefaultFilters,
+    defaultFilters, nodePassesFilters, neighborsOf, entitiesOfEvent, eventsOfEntity, contextState, formatFloor, isDefaultFilters,
 } from '../../../public/scripts/extensions/memory-graph/lens/model.js';
 import { forceLayout, chronoLayout, nodeRadius } from '../../../public/scripts/extensions/memory-graph/lens/graph/layout.js';
 import { createMockSnapshot, createLargeSnapshot } from './_mocks/mock-data.js';
@@ -368,4 +368,51 @@ test('buildChapters handles cyclic parentId/childrenIds without infinite recursi
     expect(chapters[0].node.id).toBe('r0');
     expect(chapters[0].leafCount).toBe(1);
     expect(loose).toEqual([]);
+});
+
+test('non-event rollups are indexed, placeholder titles resolved, filtered by depth, and excluded from buildChapters', () => {
+    expect(isPlaceholderTitle('难忘瞬间 Summary L1 #1')).toBe(true);
+    expect(isPlaceholderTitle('Summary of the battle')).toBe(false);
+    expect(isPlaceholderTitle('第一卷总结')).toBe(false);
+
+    const model = buildModel({
+        nodes: [
+            { id: 'm1', type: 'moment', title: '海边初约', fields: { summary: '初约。' }, seq_to: 1 },
+            {
+                id: 'mr1',
+                type: 'moment',
+                semantic_rollup: true,
+                semantic_depth: 1,
+                title: '难忘瞬间 Summary L1 #1',
+                fields: { summary: '从海边初约到天台告白。两人确立关系。' },
+                seq_to: 2,
+                children_ids: ['m1'],
+            },
+            { id: 'c1', type: 'character_sheet', title: '林栖', fields: { note: '主角' }, seq_to: 1 },
+            { id: 'e1', type: 'event', title: '灯塔夜巡', fields: { summary: '灯塔夜巡。' }, seq_to: 3 },
+        ],
+        edges: [],
+    });
+
+    const rollup = model.nodes.get('mr1');
+    expect(rollup.isRollup).toBe(true);
+    expect(rollup.depth).toBe(1);
+    expect(rollup.title).toBe('从海边初约到天台告白。');
+    expect(rollup.autoTitle).toBe('难忘瞬间 Summary L1 #1');
+    expect(model.rollupTypes.has('moment')).toBe(true);
+
+    const base = defaultFilters();
+    const rollupFilter = { ...base, depth: 'rollup' };
+    expect(nodePassesFilters(model, rollup, rollupFilter)).toBe(true);
+    expect(nodePassesFilters(model, model.nodes.get('m1'), rollupFilter)).toBe(false);
+    expect(nodePassesFilters(model, model.nodes.get('c1'), rollupFilter)).toBe(true);
+
+    const leafFilter = { ...base, depth: 'leaf' };
+    expect(nodePassesFilters(model, rollup, leafFilter)).toBe(false);
+    expect(nodePassesFilters(model, model.nodes.get('m1'), leafFilter)).toBe(true);
+    expect(nodePassesFilters(model, model.nodes.get('c1'), leafFilter)).toBe(true);
+
+    const { chapters, loose } = buildChapters(model, base);
+    expect(chapters).toEqual([]);
+    expect(loose.map(entry => entry.node.id)).toEqual(['e1']);
 });

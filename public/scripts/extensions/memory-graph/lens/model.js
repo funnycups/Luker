@@ -223,7 +223,7 @@ export function parseEventSummary(raw) {
     return result;
 }
 
-const PLACEHOLDER_TITLE = /^(?:[\w\s-]*\s)?(?:summary|摘要)(?:\s+L\d+)?\s*#?\s*\d+$/i;
+const PLACEHOLDER_TITLE = /^(?:[^\n]*\s)?(?:summary|摘要)(?:\s+L\d+)?\s*#?\s*\d+$/i;
 
 export function isPlaceholderTitle(title) {
     return PLACEHOLDER_TITLE.test(str(title).trim());
@@ -246,12 +246,14 @@ function firstSentence(text, max = 42) {
  */
 export function buildModel(snapshot = {}) {
     const nodes = new Map();
+    const rollupTypes = new Set();
     for (const raw of toArray(snapshot.nodes)) {
         if (!raw || !raw.id) continue;
         const type = str(raw.type).trim() || 'unknown';
         if (type === 'recall' || type.startsWith('recall_')) continue;
         const fields = raw.fields && typeof raw.fields === 'object' ? { ...raw.fields } : {};
         const depth = Number.isFinite(Number(raw.semantic_depth)) ? Math.max(0, Math.floor(Number(raw.semantic_depth))) : 0;
+        const isRollup = Boolean(raw.semantic_rollup) || depth > 0;
         const floorRange = raw.floor_range && Number.isFinite(raw.floor_range.start) && Number.isFinite(raw.floor_range.end)
             ? { start: raw.floor_range.start, end: raw.floor_range.end }
             : null;
@@ -268,7 +270,7 @@ export function buildModel(snapshot = {}) {
             childrenIds: toArray(raw.children_ids).map(str).filter(Boolean),
             archived: Boolean(raw.archived),
             depth,
-            isRollup: type === 'event' && (Boolean(raw.semantic_rollup) || depth > 0),
+            isRollup,
             parsed: null,
             title: '',
             summaryText: '',
@@ -277,9 +279,9 @@ export function buildModel(snapshot = {}) {
         };
         node.summaryText = fieldText(fields.summary ?? fields.note ?? fields.state ?? '');
         if (type === 'event') node.parsed = parseEventSummary(node.summaryText);
-        // memory-graph auto-names events "Summary 3" / "Event Summary L1 #2";
-        // those carry no meaning, so prefer the prose's first sentence.
-        const placeholder = type === 'event' && isPlaceholderTitle(node.rawTitle);
+        // memory-graph auto-names rollups/events "Summary 3" / "Event Summary L1 #2";
+        // those carry no meaning, so prefer the summary prose's first sentence.
+        const placeholder = (type === 'event' || isRollup) && isPlaceholderTitle(node.rawTitle);
         node.title = (placeholder ? '' : node.rawTitle)
             || fieldText(fields.title)
             || (node.parsed ? firstSentence(node.parsed.prose[0] || node.summaryText) : '')
@@ -288,6 +290,7 @@ export function buildModel(snapshot = {}) {
             || node.id;
         node.autoTitle = placeholder ? node.rawTitle : '';
         node.searchText = [node.title, node.id, ...Object.values(fields).map(fieldText)].join('\n').toLowerCase();
+        if (node.isRollup) rollupTypes.add(node.type);
         nodes.set(node.id, node);
     }
 
@@ -396,6 +399,7 @@ export function buildModel(snapshot = {}) {
         adjacency,
         typeCounts: types,
         typeList,
+        rollupTypes,
         relationCounts: relations,
         injection,
         schemaColumns,
@@ -515,7 +519,7 @@ export function nodePassesFilters(model, node, filters) {
     if (!node) return false;
     if (filters.hiddenTypes.has(node.type)) return false;
     if (node.archived && !filters.showArchived) return false;
-    if (node.type === 'event') {
+    if (node.type === 'event' || model.rollupTypes?.has(node.type)) {
         if (filters.depth === 'leaf' && node.isRollup) return false;
         if (filters.depth === 'rollup' && !node.isRollup) return false;
     }

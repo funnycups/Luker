@@ -117,35 +117,95 @@ function makeManyEventsSnapshot(count = 15) {
     };
 }
 
+let lens = null;
+let host = null;
+let origCytoscape;
+let origScrollIntoView;
+
+beforeEach(() => {
+    document.body.innerHTML = '';
+    if (typeof globalThis.structuredClone !== 'function') {
+        globalThis.structuredClone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
+    }
+    globalThis.localStorage?.clear?.();
+    globalThis.requestAnimationFrame = (cb) => { cb(); return 1; };
+    origScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = jest.fn();
+    origCytoscape = globalThis.cytoscape;
+    globalThis.cytoscape = (opts) => cytoscape({ ...opts, container: undefined, headless: true });
+
+    host = document.createElement('div');
+    document.body.appendChild(host);
+});
+
+afterEach(() => {
+    lens?.destroy?.();
+    lens = null;
+    if (origCytoscape === undefined) delete globalThis.cytoscape;
+    else globalThis.cytoscape = origCytoscape;
+    Element.prototype.scrollIntoView = origScrollIntoView;
+});
+
+function makeMomentRollupSnapshot() {
+    return {
+        chatKey: 'chat-moment-rollup',
+        chatLabel: 'Moment rollup test',
+        nodes: [
+            {
+                id: 'm_r1',
+                type: 'moment',
+                level: 'semantic',
+                semantic_rollup: true,
+                semantic_depth: 1,
+                title: '灯塔顶层盟约',
+                seq_to: 20,
+                children_ids: ['m_1', 'm_2'],
+                fields: { summary: '两人于灯塔顶层交换旧信物，确立长期同盟。\n\n此后双方共同守望海域。' },
+            },
+            {
+                id: 'm_1',
+                type: 'moment',
+                level: 'semantic',
+                title: '交换铜匙',
+                seq_to: 10,
+                parent_id: 'm_r1',
+                archived: true,
+                fields: { when: '首日入夜', detail: '递出半枚铜匙', meaning: '互信起点' },
+            },
+            {
+                id: 'm_2',
+                type: 'moment',
+                level: 'semantic',
+                title: '立下守望之约',
+                seq_to: 20,
+                parent_id: 'm_r1',
+                archived: true,
+                fields: { when: '次日拂晓', detail: '在塔顶立誓', meaning: '同盟成形' },
+            },
+            {
+                id: 'c_1',
+                type: 'character_sheet',
+                level: 'semantic',
+                title: '林栖',
+                seq_to: 20,
+                fields: { identity: '守塔人' },
+            },
+        ],
+        edges: [
+            { from: 'm_r1', to: 'm_1', type: 'semantic_contains' },
+            { from: 'm_r1', to: 'm_2', type: 'semantic_contains' },
+            { from: 'm_r1', to: 'c_1', type: 'mentions' },
+        ],
+        schema: {
+            types: [
+                { id: 'moment', label: '瞬间', tableColumns: ['title', 'when', 'detail', 'meaning'] },
+                { id: 'character_sheet', tableColumns: ['title', 'identity'] },
+            ],
+        },
+    };
+}
+
 describe('Memory Lens inspector entity events view', () => {
-    let lens = null;
-    let host = null;
-    let origCytoscape;
-    let origScrollIntoView;
-
-    beforeEach(() => {
-        document.body.innerHTML = '';
-        if (typeof globalThis.structuredClone !== 'function') {
-            globalThis.structuredClone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
-        }
-        globalThis.localStorage?.clear?.();
-        globalThis.requestAnimationFrame = (cb) => { cb(); return 1; };
-        origScrollIntoView = Element.prototype.scrollIntoView;
-        Element.prototype.scrollIntoView = jest.fn();
-        origCytoscape = globalThis.cytoscape;
-        globalThis.cytoscape = (opts) => cytoscape({ ...opts, container: undefined, headless: true });
-
-        host = document.createElement('div');
-        document.body.appendChild(host);
-    });
-
-    afterEach(() => {
-        lens?.destroy?.();
-        lens = null;
-        if (origCytoscape === undefined) delete globalThis.cytoscape;
-        else globalThis.cytoscape = origCytoscape;
-        Element.prototype.scrollIntoView = origScrollIntoView;
-    });
 
     test('deduplicates events with multiple relation edges and displays aggregated relation tags', async () => {
         lens = mountMemoryLens({ source: makeSource(makeThreadMultiEdgeSnapshot), container: host, opts: { subview: 'graph' } });
@@ -250,5 +310,94 @@ describe('Memory Lens inspector entity events view', () => {
             { title: '离开洞府', tags: ['发生于'] },
             { title: '初入洞府', tags: ['发生于', '相关'] },
         ]);
+    });
+});
+
+describe('Memory Lens inspector non-event rollups', () => {
+    test('renders editable prose summary, depth badge, relations, and clickable children for non-event rollup without empty leaf fields', async () => {
+        const updateNode = jest.fn(async () => ({}));
+        const source = makeSource(makeMomentRollupSnapshot);
+        source.edit = {
+            forChat: () => ({
+                updateNode,
+                createNode: jest.fn(async () => ({})),
+                removeNode: jest.fn(async () => ({})),
+                addEdge: jest.fn(async () => ({})),
+                updateEdge: jest.fn(async () => ({})),
+                removeEdge: jest.fn(async () => ({})),
+                restore: jest.fn(async () => {}),
+            }),
+        };
+        lens = mountMemoryLens({ source, container: host, opts: { subview: 'graph' } });
+        await flushAsync();
+
+        lens.app.select('m_r1');
+
+        expect(host.querySelector('.ml-insp-toprow .ml-tl-tag')).not.toBeNull();
+        expect(host.querySelector('.ml-insp-fields')).toBeNull();
+
+        const prose = host.querySelector('.ml-insp-prose');
+        expect(prose).not.toBeNull();
+        expect(prose.classList.contains('ml-editable')).toBe(true);
+        expect(prose.dataset.editable).toBe('true');
+        expect([...prose.querySelectorAll('p')].map(p => p.textContent)).toEqual([
+            '两人于灯塔顶层交换旧信物，确立长期同盟。',
+            '此后双方共同守望海域。',
+        ]);
+
+        const relTitles = [...host.querySelectorAll('.ml-insp-rellist .ml-nodelink-title')].map(el => el.textContent);
+        expect(relTitles).toContain('林栖');
+
+        const childLinks = [...host.querySelectorAll('.ml-insp-children .ml-nodelink')];
+        expect(childLinks).toHaveLength(2);
+        expect(childLinks.map(btn => btn.querySelector('.ml-nodelink-title')?.textContent)).toEqual(['交换铜匙', '立下守望之约']);
+
+        // Editing rollup summary commits to fields.summary
+        prose.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        const summaryEditor = host.querySelector('.ml-inline-input');
+        expect(summaryEditor).not.toBeNull();
+        summaryEditor.value = '修改后的阶段摘要。';
+        host.querySelector('.ml-inline-actions .lw-btn.is-primary').click();
+        await flushAsync();
+        expect(updateNode).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'm_r1' }),
+            { fields: { summary: '修改后的阶段摘要。' } },
+        );
+
+        // Editing rollup header title commits to node.title (key: '') even if fields.title exists or not
+        const titleEl = host.querySelector('.ml-insp-title');
+        titleEl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        const titleEditor = host.querySelector('.ml-inline-input');
+        expect(titleEditor).not.toBeNull();
+        titleEditor.value = '新盟约标题';
+        host.querySelector('.ml-inline-actions .lw-btn.is-primary').click();
+        await flushAsync();
+        expect(updateNode).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'm_r1' }),
+            { title: '新盟约标题' },
+        );
+
+        childLinks[0].click();
+        expect(lens.app.state().selectedId).toBe('m_1');
+    });
+
+    test('renders normal leaf fields plus Hierarchy block with clickable parent link for compressed non-event leaf', async () => {
+        lens = mountMemoryLens({ source: makeSource(makeMomentRollupSnapshot), container: host, opts: { subview: 'graph' } });
+        await flushAsync();
+
+        lens.app.select('m_1');
+
+        const fields = host.querySelector('.ml-insp-fields');
+        expect(fields).not.toBeNull();
+        const values = [...fields.querySelectorAll('dd')].map(dd => dd.textContent);
+        expect(values).toEqual(['首日入夜', '递出半枚铜匙', '互信起点']);
+
+        const parentLinks = [...host.querySelectorAll('.ml-insp-block .ml-nodelink')];
+        const parentBtn = parentLinks.find(btn => btn.querySelector('.ml-nodelink-title')?.textContent === '灯塔顶层盟约');
+        expect(parentBtn).toBeDefined();
+        expect(parentBtn.querySelector('.ml-nodelink-meta')?.textContent).toBeTruthy();
+
+        parentBtn.click();
+        expect(lens.app.state().selectedId).toBe('m_r1');
     });
 });

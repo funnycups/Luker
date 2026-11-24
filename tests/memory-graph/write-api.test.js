@@ -564,6 +564,7 @@ describe('write-api compactNodes', () => {
         expect(rollup.semanticRollup).toBe(true);
         expect(rollup.semanticDepth).toBe(1);
         expect(rollup.fields.summary).toContain('A and B and C');
+        expect(Object.keys(rollup.fields)).toEqual(['summary']);
 
         // Children reparented to the rollup
         expect(ctx.__memoryStore.nodes.e1.parentId).toBe(result.rollupNodeId);
@@ -573,6 +574,19 @@ describe('write-api compactNodes', () => {
         // semantic_contains edges added
         const containsEdges = ctx.__memoryStore.edges.filter(e => e.type === 'semantic_contains');
         expect(containsEdges.length).toBe(3);
+    });
+
+    test('compactNodes writes strictly fields.summary even when extra fields are supplied', async () => {
+        const ctx = makeContext(makeStoreWithLeaves());
+        const api = getMemoryGraphWriteApi(ctx.__memoryStore, ctx);
+        const result = await api.compactNodes({
+            type: 'event',
+            childIds: ['e1', 'e2', 'e3'],
+            summary: 'time: D1-D3; A and B and C.',
+            fields: { extra: 'ignored', status: 'resolved' },
+        });
+        const rollup = ctx.__memoryStore.nodes[result.rollupNodeId];
+        expect(Object.keys(rollup.fields)).toEqual(['summary']);
     });
 
     test('compactNodes throws CHILD_HAS_PARENT when a child already has a rollup parent', async () => {

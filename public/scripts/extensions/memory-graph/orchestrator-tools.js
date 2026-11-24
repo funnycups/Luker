@@ -557,7 +557,6 @@ async function execMemoryCompactNodes(args, context) {
         type: String(args?.type || ''),
         childIds: Array.isArray(args?.child_ids) ? args.child_ids : [],
         summary: String(args?.summary || ''),
-        fields: args?.fields || undefined,
     });
     return { ok: true, rollup_node_id: result.rollupNodeId };
 }
@@ -998,7 +997,6 @@ const SCHEMAS = [
                 type: { type: 'string' },
                 child_ids: { type: 'array', items: { type: 'string' } },
                 summary: { type: 'string', description: 'Telegraphic-style summary per the compression style standard.' },
-                fields: { type: 'object', description: 'Optional additional fields beyond summary.' },
             },
             required: ['type', 'child_ids', 'summary'],
             additionalProperties: false,

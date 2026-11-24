@@ -2442,40 +2442,27 @@ export function archiveNode(store, oldId, replacementId = null) {
     store.edges = next;
 }
 
-function summarizeTextHeuristic(lines) {
-    return lines
-        .map(line => normalizeText(line))
-        .filter(Boolean)
-        .join('\n');
+function isRollupNode(node) {
+    return Boolean(node?.semanticRollup) || Number(node?.semanticDepth || 0) > 0;
 }
 
 function buildCompressionSummaryInstruction(baseInstruction, options = {}) {
     const base = normalizeText(baseInstruction || '');
     const defaultInstruction = 'Compress semantic nodes into concise higher-level memory while preserving stage-shifting facts.';
     const instruction = base || defaultInstruction;
+    const type = String(options?.type || '').trim() || 'semantic';
     const fanIn = Math.max(2, Math.floor(Number(options?.fanIn) || 2));
     const depth = Math.max(1, Math.floor(Number(options?.depth) || 1));
     const childDepth = depth - 1;
     const childDepthDesc = childDepth === 0
-        ? 'leaf events (direct from dialogue)'
-        : `depth-${childDepth} rollup events`;
+        ? 'leaf nodes'
+        : `depth-${childDepth} rollup summaries`;
     return [
         instruction,
         '',
-        `Compression context (HARD, from code — do not infer): rollup_depth=${depth}, children=${fanIn} (each child is a ${childDepthDesc}). Apply the depth-${depth} rules from the writing standard above. KEEP ≤ 3 hard bound applies regardless of fanIn; total chars ≤ 60 + 50 × (KEEP count).`,
-        'Never copy-paste or concatenate child summaries — re-synthesize. Do not continue story or predict future events.',
+        `Compression context (HARD, from code — do not infer): type=${type}, rollup_depth=${depth}, children=${fanIn} (each child is ${childDepthDesc}).`,
+        'Synthesize the child records into one concise summary preserving enduring facts and unresolved hooks. Never copy-paste or concatenate child records verbatim. Do not continue story or predict future events.',
     ].join('\n');
-}
-
-function getCompressionColumnNames(spec) {
-    const columns = Array.isArray(spec?.tableColumns)
-        ? spec.tableColumns.map(column => String(column || '').trim().toLowerCase()).filter(Boolean)
-        : [];
-    const deduped = Array.from(new Set(columns));
-    if (!deduped.includes('summary')) {
-        deduped.unshift('summary');
-    }
-    return deduped;
 }
 
 function rewriteDepthWorldInfoToAfter(payload = {}) {
@@ -2615,93 +2602,61 @@ function buildRuntimeWorldInfoFromPayload(payload = null) {
     return hasEffectiveRuntimeWorldInfo(rewritten) ? rewritten : null;
 }
 
-async function summarizeTextWithLLM(context, settings, instruction, lines, abortSignal = null) {
-    const joined = summarizeTextHeuristic(lines);
-    if (!joined) {
-        return '';
-    }
-
-    try {
-        const result = await runFunctionCallTask(context, settings, {
-            systemPrompt: instruction,
-            userPrompt: joined,
-            apiPresetName: settings.extractApiPresetName || '',
-            promptPresetName: settings.extractPresetName || '',
-            functionName: 'luker_rpg_summary',
-            functionDescription: 'Return compressed memory summary text.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    summary: { type: 'string' },
-                },
-                required: ['summary'],
-                additionalProperties: false,
-            },
-            abortSignal,
-            allowPreamble: true,
-        });
-        return normalizeText(result?.summary || '');
-    } catch (error) {
-        console.warn(`[${MODULE_NAME}] LLM summary failed`, error);
-        return '';
-    }
-}
-
-async function summarizeRollupFieldsWithLLM(context, settings, spec, instruction, group, abortSignal = null) {
-    const columns = getCompressionColumnNames(spec);
-    const rows = (Array.isArray(group) ? group : []).map((node) => {
-        const row = {
-            id: String(node?.id || ''),
-            title: String(node?.title || ''),
-            seq_to: String(node?.seqTo ?? ''),
-        };
-        for (const column of columns) {
-            row[column] = getTableCellValueFromNode(node, column);
-        }
-        return row;
-    });
-    if (rows.length === 0) {
-        return {};
-    }
-    const properties = {};
-    for (const column of columns) {
-        properties[column] = { type: 'string' };
-    }
-    const userPrompt = rows.map(row => JSON.stringify(row)).join('\n');
-    try {
-        const result = await runFunctionCallTask(context, settings, {
-            systemPrompt: [
-                instruction,
-                'Return only compressed rollup fields.',
-                'Keep each field concise and high-signal.',
-                'Do not continue story.',
-            ].join('\n'),
-            userPrompt,
-            apiPresetName: settings.extractApiPresetName || '',
-            promptPresetName: settings.extractPresetName || '',
-            functionName: 'luker_rpg_summary_fields',
-            functionDescription: 'Return compressed rollup fields for the higher-level memory node.',
-            parameters: {
-                type: 'object',
-                properties,
-                required: ['summary'],
-                additionalProperties: false,
-            },
-            abortSignal,
-            allowPreamble: true,
-        });
-        const out = {};
-        for (const column of columns) {
-            const normalized = normalizeText(result?.[column] ?? '');
-            if (normalized) {
-                out[column] = normalized;
+async function summarizeRollupWithLLM(context, settings, spec, instruction, group, abortSignal = null) {
+    const leafColumns = Array.from(new Set(
+        (Array.isArray(spec?.tableColumns) ? spec.tableColumns : [])
+            .map(column => String(column || '').trim())
+            .filter(Boolean),
+    ));
+    const rows = (Array.isArray(group) ? group : [])
+        .filter(Boolean)
+        .map((node) => {
+            const row = {
+                id: String(node?.id || ''),
+                title: String(node?.title || ''),
+                seq_to: String(node?.seqTo ?? ''),
+            };
+            if (isRollupNode(node)) {
+                row.summary = getNodeSummary(node);
+            } else {
+                const columns = leafColumns.length > 0
+                    ? leafColumns
+                    : Object.keys(node?.fields && typeof node.fields === 'object' && !Array.isArray(node.fields) ? node.fields : {});
+                for (const column of columns) {
+                    row[column] = getTableCellValueFromNode(node, column);
+                }
             }
-        }
-        return out;
-    } catch (error) {
-        console.warn(`[${MODULE_NAME}] LLM rollup fields failed`, error);
-        return {};
+            return row;
+        });
+    if (rows.length === 0) {
+        throw new Error('summarizeRollupWithLLM requires non-empty group.');
     }
+
+    const userPrompt = rows.map(row => JSON.stringify(row)).join('\n');
+    const result = await runFunctionCallTask(context, settings, {
+        systemPrompt: [
+            instruction,
+            'Return one concise synthesized summary via luker_rpg_summary.',
+            'Do not continue story.',
+        ].join('\n'),
+        userPrompt,
+        apiPresetName: settings.extractApiPresetName || '',
+        promptPresetName: settings.extractPresetName || '',
+        functionName: 'luker_rpg_summary',
+        functionDescription: 'Return compressed memory summary text for the higher-level rollup node.',
+        parameters: {
+            type: 'object',
+            properties: {
+                summary: { type: 'string' },
+            },
+            required: ['summary'],
+            additionalProperties: false,
+        },
+        abortSignal,
+        allowPreamble: true,
+        validateArgs: (args) => (normalizeText(args?.summary || '') ? '' : 'Compression summary must be a non-empty string.'),
+    });
+    return normalizeText(result.summary);
 }
 
 function isAbortSignalLike(value) {
@@ -2923,6 +2878,7 @@ async function requestSingleFunctionCallWithRetry(context, settings, {
     recallRunToken = 0,
     allowPreamble = false,
     retriesOverride = null,
+    validateArgs = null,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
@@ -2989,6 +2945,12 @@ async function requestSingleFunctionCallWithRetry(context, settings, {
             const matched = filteredCalls.find(call => call.name === fnName);
             if (!matched) {
                 throw markToolCallValidationError(new Error(`Model returned tool call, but not '${fnName}'.`));
+            }
+            if (typeof validateArgs === 'function') {
+                const argError = validateArgs(matched.args);
+                if (argError) {
+                    throw markToolCallValidationError(new Error(argError));
+                }
             }
             return matched.args;
         } catch (error) {
@@ -3119,6 +3081,7 @@ async function runFunctionCallTask(context, settings, {
     abortSignal = null,
     recallRunToken = 0,
     allowPreamble = false,
+    validateArgs = null,
 } = {}) {
     const fnName = String(functionName || '').trim();
     if (!fnName) {
@@ -3155,6 +3118,7 @@ async function runFunctionCallTask(context, settings, {
         abortSignal,
         recallRunToken,
         allowPreamble,
+        validateArgs,
     });
 }
 
@@ -3888,7 +3852,7 @@ function buildGraphNodeRow(node, schemaMap) {
         semantic_depth: Number(node?.semanticDepth ?? node?.metadata?.semantic_depth ?? 0),
         parent_id: String(node?.parentId || ''),
         child_count: Array.isArray(node?.childrenIds) ? node.childrenIds.length : 0,
-        editable: Boolean(spec?.editable),
+        editable: isRollupNode(node) ? false : Boolean(spec?.editable),
     };
 }
 
@@ -4206,6 +4170,9 @@ async function extractNodesWithLLM(context, store, settings, schema, messageBatc
                 if (!node || node.archived || !node.id) {
                     return false;
                 }
+                if (isRollupNode(node)) {
+                    return false;
+                }
                 if (extractionMaxSeq !== null) {
                     const seq = Number(node?.seqTo ?? NaN);
                     if (Number.isFinite(seq) && seq > extractionMaxSeq) {
@@ -4510,6 +4477,7 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
         const explicitTarget = store?.nodes?.[explicitNodeId];
         if (
             isNodeVisibleAtSeq(explicitTarget)
+            && !isRollupNode(explicitTarget)
             && String(explicitTarget.type || '').toLowerCase() === type
         ) {
             target = explicitTarget;
@@ -4543,6 +4511,7 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
     if (!target && latestOnlyConfig.enabled) {
         const candidates = Object.values(store.nodes)
             .filter(node => isNodeVisibleAtSeq(node))
+            .filter(node => !isRollupNode(node))
             .filter(node => String(node.type || '').toLowerCase() === type)
             .map(node => ({ node, score: computeLatestOnlyMatchScore(node) }))
             .filter(entry => entry.score > 0)
@@ -4563,7 +4532,11 @@ function upsertSemanticNode(store, item, settings = null, options = {}) {
         }
     } else if (!target) {
         const normalizedKey = `${type}::${title.toLowerCase()}`;
-        target = Object.values(store.nodes).find(node => isNodeVisibleAtSeq(node) && `${node.type}::${node.title.toLowerCase()}` === normalizedKey);
+        target = Object.values(store.nodes).find(
+            node => isNodeVisibleAtSeq(node)
+                && !isRollupNode(node)
+                && `${String(node.type || '').toLowerCase()}::${String(node.title || '').toLowerCase()}` === normalizedKey,
+        );
     }
 
     if (!target) {
@@ -4793,13 +4766,24 @@ function parseCompressionRuleClause(rawClause) {
     return { field, op, values };
 }
 
+const ROLLUP_RULE_FIELDS = new Set([
+    'summary',
+    'seq',
+    'seq_to',
+    'semantic_depth',
+    'depth',
+    'semantic_rollup',
+    'rollup',
+    'is_rollup',
+]);
+
 function getCompressionRuleFieldValue(node, field) {
     const key = String(field || '').trim().toLowerCase();
     if (!key) {
         return '';
     }
     if (key === 'semantic_rollup' || key === 'rollup' || key === 'is_rollup') {
-        return String(Boolean(node?.semanticRollup)).toLowerCase();
+        return String(isRollupNode(node)).toLowerCase();
     }
     if (key === 'semantic_depth' || key === 'depth') {
         return String(Number.isFinite(Number(node?.semanticDepth)) ? Number(node.semanticDepth) : 0);
@@ -4843,7 +4827,11 @@ function buildCompressionRuleMatcher(ruleText) {
         valid: true,
         invalid: [],
         test: (node) => {
+            const rollup = isRollupNode(node);
             for (const clause of clauses) {
+                if (rollup && !ROLLUP_RULE_FIELDS.has(clause.field)) {
+                    continue;
+                }
                 const actual = getCompressionRuleFieldValue(node, clause.field);
                 if (clause.op === 'exists') {
                     if (!actual) {
@@ -4912,18 +4900,24 @@ function getNextSemanticRollupOrdinal(store, type, depth) {
 }
 
 /**
- * Create a rollup node with the given children. Used by both:
- *   - compressSemanticHierarchical (internal compression loop)
+ * Create a single-summary rollup node with the given children. Used by both:
+ *   - compressSemanticHierarchical / compressSemanticFlat (internal compression loop)
  *   - write-api.js::compactNodes (external agent-driven compaction)
  *
  * Throws structured errors:
- *   - { code: 'BAD_ARGS' } when type or childIds missing/empty
+ *   - { code: 'BAD_ARGS' } when type, childIds, or normalized summary missing/empty
  *   - { code: 'CHILD_NOT_FOUND' } when a child id is not in the store
  *   - { code: 'CHILD_HAS_PARENT' } when a child already has a rollup parent of the same type
  */
-export function createRollupWithChildren(store, { type, childIds, summary, fields = {}, label = '' } = {}) {
+export function createRollupWithChildren(store, { type, childIds, summary, label = '' } = {}) {
     if (!type || !Array.isArray(childIds) || childIds.length === 0) {
         const err = new Error('createRollupWithChildren requires type and non-empty childIds.');
+        err.code = 'BAD_ARGS';
+        throw err;
+    }
+    const normalizedSummary = normalizeText(summary || '');
+    if (!normalizedSummary) {
+        const err = new Error('createRollupWithChildren requires a non-empty summary.');
         err.code = 'BAD_ARGS';
         throw err;
     }
@@ -4943,7 +4937,7 @@ export function createRollupWithChildren(store, { type, childIds, summary, field
     const childDepths = children.map(c => Number(c.semanticDepth || 0));
     const rollupDepth = Math.max(...childDepths) + 1;
     const ordinal = getNextSemanticRollupOrdinal(store, type, rollupDepth);
-    const finalFields = { summary: String(summary || ''), ...fields };
+    const finalFields = { summary: normalizedSummary };
     // Partial-coverage rollup: union the floorRange of children that have a
     // well-formed one, and skip the rest. Legacy children pre-dating the
     // floor-anchor schema flag don't veto the parent's anchor — they just
@@ -4972,6 +4966,46 @@ export function createRollupWithChildren(store, { type, childIds, summary, field
     for (const child of children) {
         reparentNode(store, child.id, parent.id);
         addEdge(store, parent.id, child.id, 'semantic_contains');
+    }
+    return parent;
+}
+
+async function applyRollupCompressionRound(context, store, settings, spec, type, config, group, {
+    rollupDepth,
+    eventDepth,
+    options,
+} = {}) {
+    const roundBeforeStore = typeof options?.onRoundApplied === 'function'
+        ? normalizeStoreForRuntime(store)
+        : null;
+    const instruction = buildCompressionSummaryInstruction(
+        config.summarizeInstruction
+        || `Compress semantic type "${type}" into a higher-level summary node. Keep enduring facts and unresolved hooks.`,
+        { type, depth: rollupDepth, fanIn: group.length },
+    );
+    const summary = await summarizeRollupWithLLM(
+        context,
+        settings,
+        spec,
+        instruction,
+        group,
+        options?.abortSignal || null,
+    );
+
+    const parent = createRollupWithChildren(store, {
+        type: String(type || 'semantic'),
+        childIds: group.map(n => n.id),
+        summary,
+        label: config.label,
+    });
+    recordCompressionRound(options?.compressionStats, type, 1);
+    if (typeof options?.onRoundApplied === 'function' && roundBeforeStore) {
+        await options.onRoundApplied({
+            type: String(type || ''),
+            depth: eventDepth,
+            roundSeqTo: Number(parent?.seqTo ?? 0),
+            beforeStore: roundBeforeStore,
+        });
     }
     return parent;
 }
@@ -5023,58 +5057,13 @@ async function compressSemanticHierarchical(context, store, settings, spec, type
                 break;
             }
 
-            const roundBeforeStore = typeof options?.onRoundApplied === 'function'
-                ? normalizeStoreForRuntime(store)
-                : null;
-            const rollupDepth = depth + 1;
-            const lines = group.map(node => `${node.id} | ${node.title}: ${getNodeSummary(node)}`);
-            const instruction = buildCompressionSummaryInstruction(
-                config.summarizeInstruction
-                || `Compress semantic type "${type}" into a higher-level summary node. Keep enduring facts and unresolved hooks.`,
-                { depth: rollupDepth, fanIn: group.length },
-            );
-            const rollupFields = await summarizeRollupFieldsWithLLM(
-                context,
-                settings,
-                spec,
-                instruction,
-                group,
-                options?.abortSignal || null,
-            );
-            if (!normalizeText(rollupFields?.summary || '')) {
-                const fallbackSummary = await summarizeTextWithLLM(
-                    context,
-                    settings,
-                    instruction,
-                    lines,
-                    options?.abortSignal || null,
-                );
-                if (fallbackSummary) {
-                    rollupFields.summary = fallbackSummary;
-                }
-            }
-            if (!normalizeText(rollupFields?.summary || '')) {
-                break;
-            }
-
-            const parent = createRollupWithChildren(store, {
-                type,
-                childIds: group.map(n => n.id),
-                summary: rollupFields.summary,
-                fields: rollupFields,
-                label: config.label,
+            await applyRollupCompressionRound(context, store, settings, spec, type, config, group, {
+                rollupDepth: depth + 1,
+                eventDepth: depth,
+                options,
             });
             changed = true;
             compressedRounds += 1;
-            recordCompressionRound(options?.compressionStats, type, 1);
-            if (typeof options?.onRoundApplied === 'function' && roundBeforeStore) {
-                await options.onRoundApplied({
-                    type: String(type || ''),
-                    depth,
-                    roundSeqTo: Number(parent?.seqTo ?? 0),
-                    beforeStore: roundBeforeStore,
-                });
-            }
         }
         if (compressedRounds >= maxRoundsPerType) {
             break;
@@ -5121,9 +5110,6 @@ async function compressSemanticFlat(context, store, settings, spec, type, config
         }
         const group = candidates.slice(0, groupSize);
 
-        const roundBeforeStore = typeof options?.onRoundApplied === 'function'
-            ? normalizeStoreForRuntime(store)
-            : null;
         // Parent depth follows the "max(child)+1" invariant so subsequent
         // hierarchical compression and depth-based sorts remain coherent.
         const maxChildDepth = group.reduce((max, node) => {
@@ -5131,63 +5117,13 @@ async function compressSemanticFlat(context, store, settings, spec, type, config
             return Number.isFinite(d) && d > max ? d : max;
         }, 0);
         const rollupDepth = maxChildDepth + 1;
-        const lines = group.map(node => `${node.id} | ${node.title}: ${getNodeSummary(node)}`);
-        const instruction = buildCompressionSummaryInstruction(
-            config.summarizeInstruction
-            || `Compress semantic type "${type}" into a higher-level summary node. Keep enduring facts and unresolved hooks.`,
-            { depth: rollupDepth, fanIn: group.length },
-        );
-        const rollupFields = await summarizeRollupFieldsWithLLM(
-            context,
-            settings,
-            spec,
-            instruction,
-            group,
-            options?.abortSignal || null,
-        );
-        if (!normalizeText(rollupFields?.summary || '')) {
-            const fallbackSummary = await summarizeTextWithLLM(
-                context,
-                settings,
-                instruction,
-                lines,
-                options?.abortSignal || null,
-            );
-            if (fallbackSummary) {
-                rollupFields.summary = fallbackSummary;
-            }
-        }
-        if (!normalizeText(rollupFields?.summary || '')) {
-            break;
-        }
-
-        const rollupOrdinal = getNextSemanticRollupOrdinal(store, type, rollupDepth);
-        const parent = createNode(store, {
-            type: String(type || 'semantic'),
-            level: LEVEL.SEMANTIC,
-            title: `${String(config.label || type || 'Semantic')} Summary L${rollupDepth} #${rollupOrdinal}`,
-            fields: rollupFields,
-            archived: false,
-            semanticRollup: true,
-            semanticDepth: rollupDepth,
-            seqTo: Math.max(...group.map(node => Number(node.seqTo ?? 0))),
+        await applyRollupCompressionRound(context, store, settings, spec, type, config, group, {
+            rollupDepth,
+            eventDepth: rollupDepth - 1,
+            options,
         });
-
-        for (const child of group) {
-            reparentNode(store, child.id, parent.id);
-            addEdge(store, parent.id, child.id, 'semantic_contains');
-        }
         changed = true;
         compressedRounds += 1;
-        recordCompressionRound(options?.compressionStats, type, 1);
-        if (typeof options?.onRoundApplied === 'function' && roundBeforeStore) {
-            await options.onRoundApplied({
-                type: String(type || ''),
-                depth: rollupDepth - 1,
-                roundSeqTo: Number(parent?.seqTo ?? 0),
-                beforeStore: roundBeforeStore,
-            });
-        }
     }
 
     return changed;
@@ -5860,6 +5796,23 @@ export function applyExtractionOpsImpl(store, operations, {
                 const clearFields = Array.isArray(item?.clearFields)
                     ? item.clearFields.map(key => String(key || '').trim()).filter(Boolean)
                     : [];
+                if (isRollupNode(targetNode)) {
+                    const disallowedSetKeys = Object.entries(setFields)
+                        .filter(([key, value]) => value !== undefined && value !== null && key !== 'summary')
+                        .map(([key]) => key);
+                    const disallowedClearKeys = clearFields.filter(key => key !== 'summary');
+                    const disallowedKeys = [...disallowedSetKeys, ...disallowedClearKeys];
+                    if (disallowedKeys.length > 0) {
+                        rejected.push({
+                            op: item,
+                            error: {
+                                code: 'ROLLUP_FIELDS_RESTRICTED',
+                                message: `edit: rollup node ${nodeId} only permits editing title or summary (disallowed: ${disallowedKeys.join(', ')}).`,
+                            },
+                        });
+                        continue;
+                    }
+                }
                 if (!targetNode.fields || typeof targetNode.fields !== 'object' || Array.isArray(targetNode.fields)) {
                     targetNode.fields = {};
                 }
@@ -6239,7 +6192,7 @@ export function formatNodeBrief(node, settings = null, context = null, extra = {
         semantic_depth: Number(node?.semanticDepth ?? node?.metadata?.semantic_depth ?? 0),
         parent_id: String(node?.parentId || ''),
         child_count: Array.isArray(node?.childrenIds) ? node.childrenIds.length : 0,
-        editable: Boolean(spec?.editable),
+        editable: isRollupNode(node) ? false : Boolean(spec?.editable),
         ...extra,
     };
     // Carry node.floorRange through as `floor_range` so every brief row is
@@ -6268,7 +6221,7 @@ function formatNodeDetail(node, settings = null, context = null, extra = {}) {
         parent_id: String(node?.parentId || ''),
         child_count: Array.isArray(node?.childrenIds) ? node.childrenIds.length : 0,
         children: Array.isArray(node?.childrenIds) ? node.childrenIds : [],
-        editable: Boolean(spec?.editable),
+        editable: isRollupNode(node) ? false : Boolean(spec?.editable),
         ...extra,
     };
 }
@@ -7500,11 +7453,29 @@ function buildFocusTablesText(nodes, settings, options = {}, context = null) {
             const semanticType = String(bucket.slice('semantic:'.length) || '').trim().toLowerCase();
             const spec = schemaMap.get(semanticType);
             const columns = Array.isArray(spec?.tableColumns) ? spec.tableColumns : [];
+            bucketTitle = `${tablePrefix} ${spec?.tableName || semanticType || bucket}`;
             if (columns.length > 0) {
+                const isSingleSummarySchema = columns.length === 1 && String(columns[0] || '').trim().toLowerCase() === 'summary';
+                if (!isSingleSummarySchema) {
+                    const rollupNodes = bucketNodes.filter(isRollupNode);
+                    const leafNodes = bucketNodes.filter(node => !isRollupNode(node));
+                    if (rollupNodes.length > 0) {
+                        const rollupTable = toMarkdownTable(['summary'], rollupNodes.map(node => [getNodeSummary(node)]));
+                        if (rollupTable) {
+                            blocks.push(`[Table: ${bucketTitle} (Summaries)]\n${rollupTable}`);
+                        }
+                    }
+                    if (leafNodes.length > 0) {
+                        const leafTable = toMarkdownTable(columns, leafNodes.map(node => columns.map(column => getTableCellValueFromNode(node, column))));
+                        if (leafTable) {
+                            blocks.push(`[Table: ${bucketTitle}]\n${leafTable}`);
+                        }
+                    }
+                    continue;
+                }
                 headers = columns;
                 rows = bucketNodes.map(node => columns.map(column => getTableCellValueFromNode(node, column)));
             }
-            bucketTitle = `${tablePrefix} ${spec?.tableName || semanticType || bucket}`;
         }
 
         const table = toMarkdownTable(headers, rows);
@@ -9125,7 +9096,7 @@ async function runScheduledExtractionPass(chatKey) {
                 return;
             }
             console.warn(`[${MODULE_NAME}] Extraction failed`, error);
-            const failureText = i18nFormat('Recall injection failed (${0}): ${1}', 'extract', String(error?.message || error));
+            const failureText = i18nFormat('Memory graph operation failed (${0}): ${1}', 'extract', String(error?.message || error));
             updateUiStatus(failureText);
             showPersistentRuntimeNotice(failureText);
         } finally {
@@ -9933,7 +9904,7 @@ async function runPartialRebuildFromSeq(context, startSeq, {
                 return;
             }
             console.warn(`[${MODULE_NAME}] Partial rebuild (${operationName}) failed`, error);
-            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', operationName, String(error?.message || error)));
+            notifyError(i18nFormat('Memory graph operation failed (${0}): ${1}', operationName, String(error?.message || error)));
         } finally {
             if (activeExtractionAbortController === rebuildAbortController) {
                 activeExtractionAbortController = null;
@@ -10063,7 +10034,7 @@ export async function runRebuildGraph(context, settings = getSettings()) {
                 return;
             }
             console.warn(`[${MODULE_NAME}] Rebuild failed`, error);
-            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'rebuild', String(error?.message || error)));
+            notifyError(i18nFormat('Memory graph operation failed (${0}): ${1}', 'rebuild', String(error?.message || error)));
         } finally {
             if (activeExtractionAbortController === rebuildAbortController) {
                 activeExtractionAbortController = null;
@@ -10257,7 +10228,7 @@ export async function runFillGraph(context, settings = getSettings()) {
                 return;
             }
             console.warn(`[${MODULE_NAME}] Incremental fill failed`, error);
-            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'fill', String(error?.message || error)));
+            notifyError(i18nFormat('Memory graph operation failed (${0}): ${1}', 'fill', String(error?.message || error)));
         } finally {
             if (activeExtractionAbortController === fillAbortController) {
                 activeExtractionAbortController = null;
@@ -10302,10 +10273,11 @@ export async function runManualCompression(context, settings, values) {
         }
     }
 
-    const beforeNodes = Object.values(store.nodes || {});
+    const beforeStore = normalizeStoreForRuntime(store);
+    const workingStore = normalizeStoreForRuntime(store);
+    const beforeNodes = Object.values(beforeStore.nodes || {});
     const beforeNodeCount = beforeNodes.length;
     const beforeArchivedCount = beforeNodes.filter(node => Boolean(node?.archived)).length;
-    const beforeStore = normalizeStoreForRuntime(store);
     const compressionStats = createCompressionStats();
     const compressionAbortController = new AbortController();
     activeExtractionAbortController = compressionAbortController;
@@ -10322,16 +10294,17 @@ export async function runManualCompression(context, settings, values) {
                 }
             },
         });
+        // Manual compression collapses into a single tail commit after all
+        // rounds finish. Per-round commits would form a non-monotonic anchor
+        // sequence (each round's roundSeqTo can jump backwards across types),
+        // and floor-state's incremental patch model can't replay such a log
+        // after truncation. The covered seq advances by the highest roundSeqTo
+        // observed, which yields the same anchor as the legacy "one commit at
+        // tail" shape.
+        let highestRoundSeqTo = getStoreCoveredSeqTo(workingStore);
+        let completedRounds = 0;
         try {
-            // Manual compression collapses into a single tail commit after all
-            // rounds finish. Per-round commits would form a non-monotonic anchor
-            // sequence (each round's roundSeqTo can jump backwards across types),
-            // and floor-state's incremental patch model can't replay such a log
-            // after truncation. The covered seq advances by the highest roundSeqTo
-            // observed, which yields the same anchor as the legacy "one commit at
-            // tail" shape.
-            let highestRoundSeqTo = getStoreCoveredSeqTo(store);
-            const changed = await runCompressionLoop(context, store, settings, {
+            const changed = await runCompressionLoop(context, workingStore, settings, {
                 typeIds: values.selectedTypeIds,
                 force: values.mode === 'force' || values.mode === 'flat',
                 flatten: values.mode === 'flat',
@@ -10340,6 +10313,7 @@ export async function runManualCompression(context, settings, values) {
                 compressionStats,
                 abortSignal: compressionAbortController.signal,
                 onRoundApplied: ({ roundSeqTo }) => {
+                    completedRounds += 1;
                     const candidate = Number(roundSeqTo || 0);
                     if (Number.isFinite(candidate) && candidate > highestRoundSeqTo) {
                         highestRoundSeqTo = candidate;
@@ -10348,6 +10322,7 @@ export async function runManualCompression(context, settings, values) {
             });
             if (compressionAbortController.signal.aborted) {
                 updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                refreshUiStats();
                 return;
             }
             if (!changed) {
@@ -10358,11 +10333,11 @@ export async function runManualCompression(context, settings, values) {
                 context,
                 getChatKey(context),
                 beforeStore,
-                store,
+                workingStore,
                 highestRoundSeqTo,
                 { syncPersistentProjection: true, floor: seqToFloor(context, highestRoundSeqTo) },
             );
-            const afterNodes = Object.values(store.nodes || {});
+            const afterNodes = Object.values(workingStore.nodes || {});
             const afterNodeCount = afterNodes.length;
             const afterArchivedCount = afterNodes.filter(node => Boolean(node?.archived)).length;
             const createdDelta = Math.max(0, afterNodeCount - beforeNodeCount);
@@ -10375,10 +10350,27 @@ export async function runManualCompression(context, settings, values) {
         } catch (error) {
             if (isAbortError(error, compressionAbortController.signal)) {
                 updateUiStatus(i18n('Memory graph update cancelled by user.'));
+                refreshUiStats();
                 return;
             }
+            if (completedRounds > 0) {
+                try {
+                    await commitMemoryStoreDiffByChatKey(
+                        context,
+                        getChatKey(context),
+                        beforeStore,
+                        workingStore,
+                        highestRoundSeqTo,
+                        { syncPersistentProjection: true, floor: seqToFloor(context, highestRoundSeqTo) },
+                    );
+                } catch (commitError) {
+                    console.error(`[${MODULE_NAME}] Failed to commit partial manual compression rounds`, commitError);
+                    notifyError(i18nFormat('Failed to save completed compression rounds: ${0}', String(commitError?.message || commitError)));
+                }
+            }
+            refreshUiStats();
             console.warn(`[${MODULE_NAME}] Manual compression failed`, error);
-            notifyError(i18nFormat('Recall injection failed (${0}): ${1}', 'compress', String(error?.message || error)));
+            notifyError(i18nFormat('Memory graph operation failed (${0}): ${1}', 'compress', String(error?.message || error)));
         } finally {
             if (activeExtractionAbortController === compressionAbortController) {
                 activeExtractionAbortController = null;
@@ -10861,6 +10853,13 @@ export function _setPersistentDrainHookForTest(hook) {
 }
 export { buildRoleSplitChatMessages as _buildRoleSplitChatMessagesForTest };
 export { runScheduledExtractionPass as _runScheduledExtractionPassForTest };
+export { isRollupNode as _isRollupNodeForTest };
+export { summarizeRollupWithLLM as _summarizeRollupWithLLMForTest };
+export { buildCompressionRuleMatcher as _buildCompressionRuleMatcherForTest };
+export { runCompressionLoop as _runCompressionLoopForTest };
+export { runExtractionForStore as _runExtractionForStoreForTest };
+export { buildGraphNodeRow as _buildGraphNodeRowForTest };
+export { buildFocusTablesText as _buildFocusTablesTextForTest };
 
 async function initializeCharacterPromptDefaults(context) {
     try {

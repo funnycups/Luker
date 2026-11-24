@@ -71,7 +71,7 @@ export function buildStylesheet(tokens, { compact = false } = {}) {
                 'corner-radius': 4,
             },
         },
-        { selector: 'node[?rollup]', style: { 'border-width': 2, 'border-color': tokens.tones.event, 'background-opacity': 0.35, color: tokens.text } },
+        { selector: 'node[?rollup]', style: { 'border-width': 2, 'border-color': 'data(color)', 'background-opacity': 0.35, color: tokens.text } },
         { selector: 'node[?archived]', style: { opacity: 0.38, 'border-style': 'dashed' } },
         {
             selector: 'node[ctx = "recalled"]',

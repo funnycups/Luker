@@ -97,7 +97,7 @@ export function createSidebar(app) {
             h('div', { class: 'ml-sidebar-section' },
                 sectionTitle(i18n('Node types'), isDefaultFilters(filters) ? null : h('button', { type: 'button', class: 'ml-linkbtn', onClick: () => app.resetFilters() }, h('span', { text: i18n('Reset filters') }))),
                 typeFilters(model, filters)),
-            events
+            events > 0 || (model.rollupTypes?.size || 0) > 0
                 ? h('div', { class: 'ml-sidebar-section' },
                     sectionTitle(i18n('Event level')),
                     segmented([

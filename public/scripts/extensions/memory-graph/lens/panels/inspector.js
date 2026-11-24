@@ -33,11 +33,34 @@ export function createInspector(app) {
         return match ? nodeLink(match, select) : h('span', { class: 'ml-insp-muted', text: title });
     }
 
+    function hierarchyBlock(model, node, childLabel) {
+        const parent = node.parentId ? model.nodes.get(node.parentId) : null;
+        const children = node.childrenIds.map(id => model.nodes.get(id)).filter(Boolean).sort(compareTimeline);
+        if (!parent && !children.length) return null;
+        return block(i18n('Hierarchy'),
+            parent ? h('div', { class: 'ml-insp-sub', text: i18n('Parent summary') }) : null,
+            parent ? nodeLink(parent, select, { meta: depthLabel(parent.depth) }) : null,
+            children.length ? h('div', { class: 'ml-insp-sub', text: `${childLabel} · ${children.length}` }) : null,
+            children.length ? h('div', { class: 'ml-insp-children' }, children.map(child => nodeLink(child, select, { meta: formatFloor(child) }))) : null);
+    }
+
+    function nonEventRelationBlock(model, node) {
+        const groups = new Map();
+        for (const item of neighborsOf(model, node.id)) {
+            if (item.node.type === 'event') continue;
+            const key = item.edge.type;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(item);
+        }
+        const relationBlocks = [...groups.entries()].map(([type, items]) => h('div', { class: 'ml-insp-relgroup', dataset: { category: items[0].edge.category } },
+            h('div', { class: 'ml-insp-reltitle' }, h('span', { class: 'ml-insp-relbar', 'aria-hidden': 'true' }), h('span', { text: relationLabel(type) }), h('span', { class: 'ml-insp-count', text: String(items.length) })),
+            h('div', { class: 'ml-insp-rellist' }, items.map(item => nodeLink(item.node, select, { meta: item.direction === 'in' ? '←' : item.direction === 'out' ? '→' : '' })))));
+        return relationBlocks.length ? block(i18n('Relationships'), relationBlocks) : null;
+    }
+
     function eventBody(model, node) {
         const parsed = node.parsed || { time: '', place: '', prose: [node.summaryText], irreversible: [], open: [], quotes: [] };
         const { characters, locations, threads } = entitiesOfEvent(model, node.id);
-        const parent = node.parentId ? model.nodes.get(node.parentId) : null;
-        const children = node.childrenIds.map(id => model.nodes.get(id)).filter(Boolean).sort(compareTimeline);
         return [
             (parsed.time || parsed.place)
                 ? h('div', { class: 'ml-insp-anchors' },
@@ -66,13 +89,18 @@ export function createInspector(app) {
             block(i18n('Characters involved'), characters.map(c => nodeLink(c, select))),
             block(i18n('Locations'), locations.map(c => nodeLink(c, select))),
             threads.length ? block(typeLabel('thread'), threads.map(c => nodeLink(c, select))) : null,
-            (parent || children.length)
-                ? block(i18n('Hierarchy'),
-                    parent ? h('div', { class: 'ml-insp-sub', text: i18n('Parent summary') }) : null,
-                    parent ? nodeLink(parent, select, { meta: depthLabel(parent.depth) }) : null,
-                    children.length ? h('div', { class: 'ml-insp-sub', text: `${i18n('Child events')} · ${children.length}` }) : null,
-                    children.length ? h('div', { class: 'ml-insp-children' }, children.map(child => nodeLink(child, select, { meta: formatFloor(child) }))) : null)
-                : null,
+            hierarchyBlock(model, node, i18n('Child events')),
+        ];
+    }
+
+    function rollupEntityBody(model, node) {
+        const summary = fieldText(node.fields.summary ?? node.summaryText).trim();
+        const paragraphs = summary ? summary.split(/\n+/).map(p => p.trim()).filter(Boolean) : [];
+        return [
+            editable(h('div', { class: 'ml-insp-prose' }, paragraphs.length ? paragraphs.map(p => h('p', { text: p })) : h('p', { class: 'ml-insp-muted', text: i18n('(empty)') })),
+                { app, node, key: 'summary', value: node.fields.summary ?? node.summaryText, label: fieldLabel('summary', node.type) }),
+            nonEventRelationBlock(model, node),
+            hierarchyBlock(model, node, i18n('Child items')),
         ];
     }
 
@@ -81,13 +109,6 @@ export function createInspector(app) {
         const editing = app.canEdit();
         const keys = [...new Set([...columns, ...Object.keys(node.fields)])]
             .filter(key => key !== 'title' && (fieldText(node.fields[key]).trim() || (editing && columns.includes(key))));
-        const groups = new Map();
-        for (const item of neighborsOf(model, node.id)) {
-            if (item.node.type === 'event') continue;
-            const key = item.edge.type;
-            if (!groups.has(key)) groups.set(key, []);
-            groups.get(key).push(item);
-        }
         const events = eventsOfEntity(model, node.id);
         const showAllEvents = expandedEvents.has(node.id);
         const visibleEvents = (showAllEvents ? events : events.slice(-EVENT_PREVIEW_LIMIT)).slice().reverse();
@@ -99,12 +120,9 @@ export function createInspector(app) {
                     { app, node, key, value: node.fields[key], label: fieldLabel(key, node.type) }),
             ]))
             : null;
-        const relationBlocks = [...groups.entries()].map(([type, items]) => h('div', { class: 'ml-insp-relgroup', dataset: { category: items[0].edge.category } },
-            h('div', { class: 'ml-insp-reltitle' }, h('span', { class: 'ml-insp-relbar', 'aria-hidden': 'true' }), h('span', { text: relationLabel(type) }), h('span', { class: 'ml-insp-count', text: String(items.length) })),
-            h('div', { class: 'ml-insp-rellist' }, items.map(item => nodeLink(item.node, select, { meta: item.direction === 'in' ? '←' : item.direction === 'out' ? '→' : '' })))));
         return [
             block(i18n('Record items'), fieldList),
-            relationBlocks.length ? block(i18n('Relationships'), relationBlocks) : null,
+            nonEventRelationBlock(model, node),
             events.length
                 ? h('section', { class: 'ml-insp-block' },
                     sectionTitle(`${i18n('Events')} · ${events.length}`,
@@ -119,6 +137,7 @@ export function createInspector(app) {
                         ? button(`${i18n('Show more')} (${hiddenEventCount})`, () => { expandedEvents.add(node.id); render(); }, { className: 'ml-btn-ghost ml-btn-sm ml-insp-more' })
                         : null)
                 : null,
+            (node.parentId || node.childrenIds.length) ? hierarchyBlock(model, node, i18n('Child items')) : null,
         ];
     }
 
@@ -192,7 +211,7 @@ export function createInspector(app) {
                 app.canEdit() ? iconButton('link', i18n('Relationships'), () => openEdgeManager(app, node), { className: 'ml-iconbtn-sm' }) : null,
                 app.canEdit() ? iconButton('trash', i18n('Delete'), () => confirmDeleteNode(app, node), { className: 'ml-iconbtn-sm' }) : null,
                 iconButton('x', i18n('Close'), () => select(''), { className: 'ml-iconbtn-sm ml-insp-close' })),
-            node.type !== 'event' && node.fields.title !== undefined
+            node.type !== 'event' && !node.isRollup && node.fields.title !== undefined
                 ? editable(h('h2', { class: 'ml-insp-title', text: node.title }), { app, node, key: 'title', value: node.fields.title, label: i18n('Name') })
                 : editable(h('h2', { class: 'ml-insp-title', text: node.title }), { app, node, key: '', value: node.rawTitle || node.title, label: i18n('Name') }),
             h('div', { class: 'ml-insp-meta' },
@@ -211,7 +230,10 @@ export function createInspector(app) {
                         }
                     },
                 }, icon('copy', { size: 12 }), h('span', { class: 'ml-chip-mono', text: node.id }), h('span', { class: 'ml-chip-copied', text: i18n('Copied') }))));
-        put(body, header, ...(node.type === 'event' ? eventBody(model, node) : entityBody(model, node)).filter(Boolean));
+        const bodyItems = node.type === 'event'
+            ? eventBody(model, node)
+            : (node.isRollup ? rollupEntityBody(model, node) : entityBody(model, node));
+        put(body, header, ...bodyItems.filter(Boolean));
         if (node.id !== lastRenderedId) {
             body.scrollTop = 0;
             lastRenderedId = node.id;
