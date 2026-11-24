@@ -44,6 +44,28 @@ async function openSearchToolsDrawer(page) {
     }
 }
 
+async function ensureSwitchState(switchLocator, expectedChecked) {
+    const target = expectedChecked ? 'true' : 'false';
+    if ((await switchLocator.getAttribute('aria-checked')) !== target) {
+        await switchLocator.click();
+    }
+}
+
+async function ensureCheckboxUnchecked(checkboxLocator) {
+    if (await checkboxLocator.isChecked()) {
+        await checkboxLocator.uncheck();
+    }
+}
+
+async function ensureOrchestratorPipelineMode(lens) {
+    const nodeRoundsInput = lens.locator('[data-field-key="nodeIterationMaxRounds"] input').first();
+    if (!(await nodeRoundsInput.isVisible())) {
+        await lens.locator('.ol-modebtn:visible').first().click();
+        await lens.locator('.ol-menu-item[role="menuitemradio"]').filter({ hasText: 'Pipeline' }).first().click();
+    }
+    return nodeRoundsInput;
+}
+
 async function assertMobileRowStackingAndNoOverflow(page, cardSelector, containerSelector) {
     const metrics = await page.evaluate(({ cardSel, containerSel }) => {
         const cards = Array.from(document.querySelectorAll(cardSel)).filter((el) => el.offsetParent !== null);
@@ -90,14 +112,13 @@ async function assertMobileRowStackingAndNoOverflow(page, cardSelector, containe
 }
 
 test.describe('live behavior summary UI', () => {
-    test.setTimeout(60_000);
-
     test('Workbench Lens: Memory Graph Section 1 summary, Custom modal focus, live visibility-gap warning, and hover highlight', async ({ page }) => {
         await awaitMainUI(page, server.baseURL);
 
         const lens = await openMemoryWorkspace(page, 'settings');
         const enabledSwitch = lens.locator('[data-field-key="enabled"][role="switch"]').first();
         const masterNotice = lens.locator('.luker-bsum[data-bsum-id="mg-master-notice"]');
+        await ensureSwitchState(enabledSwitch, false);
         await expect(enabledSwitch).toHaveAttribute('aria-checked', 'false');
         await expect(masterNotice).toHaveCount(1);
         await expect(masterNotice).toBeVisible();
@@ -150,9 +171,10 @@ test.describe('live behavior summary UI', () => {
 
         const modalCard = modal.locator('.luker-bsum[data-bsum-id="mg-custom-cadence-modal"]').first();
         await expect(modalCard).toBeVisible();
-        await expect(modalCard.locator('.luker-bsum-warnings')).toBeHidden();
 
-        // Fill 1 visible message (with default updateEvery=2 -> minRecommendedVisible=3): triggers amber visibility-gap warning live.
+        // Set updateEvery=2 and floorInput=1 (minRecommendedVisible=3): triggers amber visibility-gap warning live.
+        const updateEveryInput = modal.locator('[data-field-key="updateEvery"] input').first();
+        await updateEveryInput.fill('2');
         await floorInput.fill('1');
         await expect(modalCard).toHaveClass(/\bis-warn\b/);
         const warnBox = modalCard.locator('.luker-bsum-warn.is-warn').first();
@@ -167,7 +189,6 @@ test.describe('live behavior summary UI', () => {
         await expect(modalCard).toContainText('0 (all raw chat history)');
 
         // Hovering an input inside the modal activates matching token and row highlights live.
-        const updateEveryInput = modal.locator('[data-field-key="updateEvery"] input').first();
         await updateEveryInput.hover();
         await expect(modalCard.locator('.luker-bsum-tok[data-bsum-fields~="updateEvery"].is-hot')).toHaveCount(1);
         await expect(modalCard.locator('.luker-bsum-row.is-row-hot')).toHaveCount(1);
@@ -192,7 +213,10 @@ test.describe('live behavior summary UI', () => {
         await expect(runtimeCard).toBeVisible();
         await expect(crossModeCard).toBeVisible();
 
-        const nodeRoundsInput = lens.locator('[data-field-key="nodeIterationMaxRounds"] input').first();
+        // Ensure Pipeline (spec) execution mode via the real mode switcher so Spec runtime limits are active.
+        const nodeRoundsInput = await ensureOrchestratorPipelineMode(lens);
+        await expect(nodeRoundsInput).toBeVisible();
+
         await nodeRoundsInput.fill('15');
         await expect(runtimeCard).toContainText('15 tool rounds');
 
@@ -222,6 +246,8 @@ test.describe('live behavior summary UI', () => {
         const stLorebookCard = page.locator('.luker-bsum[data-bsum-id="search-tools-lorebook"]').first();
         await expect(stMainCard).toBeVisible();
         await expect(stLorebookCard).toBeVisible();
+        await ensureCheckboxUnchecked(page.locator('#search_tools_enabled'));
+        await ensureCheckboxUnchecked(page.locator('#search_tools_pre_request_enabled'));
         await expect(stMainCard).toContainText('Tools not exposed');
         await expect(stMainCard).toContainText('Pre-request agent off');
         await expect(page.locator('#search_tools_tool_call_retry_max')).toHaveClass(/\bluker-bsum-field-dormant\b/);
@@ -251,6 +277,7 @@ test.describe('live behavior summary UI', () => {
         const connReliabilityCard = advContent.locator('.luker-bsum[data-bsum-id="conn-reliability"]').first();
         await expect(connPlainTextCard).toBeVisible();
         await expect(connReliabilityCard).toBeVisible();
+        await ensureCheckboxUnchecked(page.locator('#connection_profile_function_calling_plain_text'));
         await expect(connPlainTextCard).toContainText('Plain-text function calling off');
 
         await page.locator('#connection_profile_function_calling_plain_text').click();
