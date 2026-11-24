@@ -6,7 +6,7 @@
 
 import { getFrontendLogsSnapshot } from '../frontend-log-manager.js';
 import { accountLocalStorage } from '../lens-shared/current-account.js';
-import { describeToolChoice, normalizeWireTools } from '../request-inspector-tools.js';
+import { describeToolChoice, normalizeRequestId, normalizeWireTools } from '../request-inspector-tools.js';
 import { joinReasoningDetailsText } from '../util/reasoning-details.js';
 import { i18n, i18nFormat } from './i18n.js';
 import { askSystemPrompt } from './model/ask.js';
@@ -418,10 +418,16 @@ async function inspectorList() {
 }
 
 export async function inspectorDetail(id) {
+    const safeId = normalizeRequestId(id);
+    if (!safeId) throw new SourceError('inspector', i18n('Invalid request ID'));
     const ctx = getContext();
-    const res = await fetch(`/api/request-inspector/${encodeURIComponent(id)}`, { headers: ctx?.getRequestHeaders?.() || {} });
+    const res = await fetch(`/api/request-inspector/${encodeURIComponent(safeId)}`, { headers: ctx?.getRequestHeaders?.() || {} });
     if (!res.ok) throw new SourceError('inspector', i18nFormat('This request is unreadable (HTTP ${0})', res.status));
-    return res.json();
+    const data = await res.json();
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        throw new SourceError('inspector', i18n('This request returned an invalid response'));
+    }
+    return data;
 }
 
 /** Request list, newest first, with a guessed source. */
@@ -1181,11 +1187,23 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
                 if (d.routeKind) out.routeKind = d.routeKind;
                 if (d.collectionId != null) out.collectionId = d.collectionId;
                 if (Array.isArray(d.collectionIds) && d.collectionIds.length) out.collectionIds = d.collectionIds;
-                if (d.query) out.query = String(d.query).slice(0, 1000); // cap-ok: 向量查询词上限
+                if (d.query) out.query = String(d.query).slice(0, 1000); // cap-ok: 重排查询词上限
                 if (d.inputCount != null) out.inputCount = d.inputCount;
+                if (d.inputCharTotal != null) out.inputCharTotal = d.inputCharTotal;
+                if (Array.isArray(d.inputTexts) && d.inputTexts.length) {
+                    out.inputTexts = d.inputTexts.slice(0, 12).map((item, idx) => ({ // cap-ok: 最多展示前 12 条向量输入文本预览
+                        index: item?.index ?? idx,
+                        text: String(typeof item === 'string' ? item : (item?.text ?? '')).slice(0, 400), // cap-ok: 单条输入文本预览上限
+                    }));
+                }
+                if (d.topK != null) out.topK = d.topK;
+                if (d.threshold != null) out.threshold = d.threshold;
                 if (d.resultCount != null) out.resultCount = d.resultCount;
+                if (d.vectorDim != null) out.vectorDim = d.vectorDim;
                 if (Array.isArray(d.hits) && d.hits.length) {
                     out.hits = d.hits.slice(0, 20).map(hit => ({ // cap-ok: 最多展示前 20 条向量命中摘要
+                        ...(hit?.collectionId != null ? { collectionId: hit.collectionId } : {}),
+                        ...(hit?.index != null ? { index: hit.index } : {}),
                         ...(hit?.hash != null ? { hash: hit.hash } : {}),
                         ...(hit?.score != null ? { score: hit.score } : {}),
                         text: String(hit?.text ?? '').slice(0, 400), // cap-ok: 单条命中文本预览上限
@@ -1340,9 +1358,13 @@ export async function askOverview({
         if (localVarCount > 0 || varOpFloors > 0) {
             raw.变量 = { 聊天变量数: localVarCount, 含操作日志楼层数: varOpFloors };
         }
-        if (ctx.regex?.getScripts) {
+        const regexExtensionDisabled = Array.isArray(ctx.extensionSettings?.disabledExtensions)
+            && ctx.extensionSettings.disabledExtensions.includes('regex');
+        if (regexExtensionDisabled) {
+            raw.正则 = '扩展已关闭';
+        } else if (ctx.regex?.getScripts) {
             try {
-                const enabledRegex = (ctx.regex.getScripts({ allowedOnly: false }) || []).filter(s => s && !s.disabled).length;
+                const enabledRegex = (ctx.regex.getScripts({ allowedOnly: true }) || []).filter(s => s && !s.disabled).length;
                 raw.正则 = `启用 ${enabledRegex} 条`;
             } catch { /* 忽略正则读取异常 */ }
         }

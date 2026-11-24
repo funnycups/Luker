@@ -22,6 +22,7 @@ jest.unstable_mockModule('../../public/script.js', () => ({
 
 /** Minimal DOM-backed jQuery stand-in covering openInspectorPanel() interactions. */
 function makeMiniJQuery() {
+    const delegated = new WeakMap();
     function wrap(el) {
         const wrapper = {
             0: el,
@@ -35,16 +36,34 @@ function makeMiniJQuery() {
                 if (!el) return wrapper;
                 const fn = typeof selector === 'function' ? selector : handler;
                 const sel = typeof selector === 'function' ? null : selector;
-                el.addEventListener(eventName, (ev) => {
-                    if (!sel) {
-                        fn.call(el, ev);
-                        return;
-                    }
-                    const target = ev.target?.closest?.(sel);
-                    if (target && el.contains(target)) {
-                        fn.call(target, ev);
-                    }
-                });
+                if (!sel) {
+                    el.addEventListener(eventName, (ev) => fn.call(el, ev));
+                    return wrapper;
+                }
+                let byEvent = delegated.get(el);
+                if (!byEvent) {
+                    byEvent = new Map();
+                    delegated.set(el, byEvent);
+                }
+                let list = byEvent.get(eventName);
+                if (!list) {
+                    list = [];
+                    byEvent.set(eventName, list);
+                    el.addEventListener(eventName, (ev) => {
+                        let stopped = false;
+                        const origStop = ev.stopPropagation.bind(ev);
+                        ev.stopPropagation = () => { stopped = true; origStop(); };
+                        for (let node = ev.target; node && node !== el && !stopped; node = node.parentElement) {
+                            for (const item of list) {
+                                if (node.matches?.(item.sel)) {
+                                    item.fn.call(node, ev);
+                                    if (stopped) break;
+                                }
+                            }
+                        }
+                    });
+                }
+                list.push({ sel, fn });
                 return wrapper;
             },
             find(selector) {
@@ -135,7 +154,7 @@ describe('request-inspector openRequestInspector security & 404 fallback', () =>
             throw new Error(`Unexpected detail fetch: ${url}`);
         });
 
-        for (const badId of ['../secrets', 'foo/bar', 'a\\b', 'req?x=1', 'req#hash', 'list', '.', '..', 'bad id']) {
+        for (const badId of ['../secrets', 'foo/bar', 'a\\b', 'req?x=1', 'req#hash', 'list', 'LIST', 'List', '.', '..', 'bad id']) {
             fetchedUrls.length = 0;
             globalThis.toastr.info.mockClear();
             callGenericPopupMock.mockClear();
@@ -230,5 +249,73 @@ describe('request-inspector openRequestInspector security & 404 fallback', () =>
 
         exportBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
         expect(clickedHref).toBe(`/api/request-inspector/${encodedId}/export`);
+    });
+
+    test('reopening without initialRequestId resets cachedDetail and currentDetailSearch', async () => {
+        const fetchedUrls = [];
+        globalThis.fetch = jest.fn(async (url, opts) => {
+            const target = String(url);
+            fetchedUrls.push(`${opts?.method || 'GET'} ${target}`);
+            if (target === '/api/request-inspector/req_prev_1') {
+                return {
+                    ok: true,
+                    json: async () => ({
+                        id: 'req_prev_1',
+                        type: 'chat',
+                        source: 'openai',
+                        model: 'gpt-4o',
+                        status: 'success',
+                        httpStatus: 200,
+                        durationMs: 300,
+                        timestamp: Date.now(),
+                        fullMessages: [{ role: 'user', content: 'old detail' }],
+                        responseText: 'old reply',
+                    }),
+                };
+            }
+            if (target === '/api/request-inspector/list') {
+                return {
+                    ok: true,
+                    json: async () => [{
+                        id: 'req_running_2',
+                        type: 'chat',
+                        source: 'openai',
+                        model: 'gpt-4o',
+                        status: 'running',
+                        abortKind: 'request',
+                        timestamp: Date.now(),
+                    }],
+                };
+            }
+            if (target === '/api/request-inspector/req_running_2/abort') {
+                return { ok: true, json: async () => ({ ok: true }) };
+            }
+            throw new Error(`Unexpected fetch: ${target}`);
+        });
+
+        await openRequestInspector('req_prev_1');
+        const firstContent = callGenericPopupMock.mock.calls[0][0];
+        const detailSearch = firstContent[0].querySelector('.ri-detail-search');
+        if (detailSearch) {
+            detailSearch.value = 'stale-query';
+            detailSearch.dispatchEvent(new window.Event('input', { bubbles: true }));
+        }
+
+        // Reopen in list mode (no initialRequestId) and trigger refresh via abort button
+        fetchedUrls.length = 0;
+        callGenericPopupMock.mockClear();
+        await openRequestInspector();
+        const listContent = callGenericPopupMock.mock.calls[0][0];
+        const abortBtn = listContent[0].querySelector('.ri-abort-btn');
+        expect(abortBtn).not.toBeNull();
+        abortBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+        await new Promise(r => setTimeout(r, 10));
+
+        expect(fetchedUrls).toEqual([
+            'GET /api/request-inspector/list',
+            'POST /api/request-inspector/req_running_2/abort',
+            'GET /api/request-inspector/list',
+        ]);
+        expect(fetchedUrls.some(u => u.includes('req_prev_1'))).toBe(false);
     });
 });

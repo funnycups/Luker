@@ -509,6 +509,8 @@ const ZH_CN = {
     '${0} enabled': '启用 ${0} 条',
     'Inspect request ${0}': '在请求检查器中查看 ${0}',
     'Request ID copied': '已复制请求 ID',
+    'Invalid request ID': '请求 ID 不合法',
+    'This request returned an invalid response': '这条请求返回了无效数据',
     'Why did world book or variables not work': '世界书或变量为何没生效',
     'Memory structure': '记忆结构',
 };
@@ -1019,6 +1021,8 @@ const ZH_TW = {
     '${0} enabled': '啟用 ${0} 條',
     'Inspect request ${0}': '在請求檢查器中檢視 ${0}',
     'Request ID copied': '已複製請求 ID',
+    'Invalid request ID': '請求 ID 不合法',
+    'This request returned an invalid response': '這條請求回傳了無效資料',
     'Why did world book or variables not work': '世界書或變數為何沒生效',
     'Memory structure': '記憶結構',
 };

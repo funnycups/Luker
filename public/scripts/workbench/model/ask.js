@@ -245,7 +245,7 @@ export async function runAsk({ question, overview, readers, request, sources = {
         try {
             resp = await request(requestMessages, offered);
         } catch (err) {
-            if (lastRound && !signal?.aborted && err?.name !== 'AbortError') {
+            if (lastRound && !signal?.aborted && err?.name !== 'AbortError' && err?.code !== 'aborted') {
                 return {
                     answer: lastAssistantText || i18n('(The AI read a lot without reaching a conclusion — try asking something more specific)'),
                     suggest: '',

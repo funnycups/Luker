@@ -4,6 +4,14 @@
 // overview privacy gating. Pure.
 
 const RULES = [
+    // workbench Ask & connection test (must precede domain rules so Ask's own
+    // system prompt and tool outputs mentioning orchestrator/search/image/memory
+    // are not hijacked)
+    {
+        kind: 'workbench',
+        label: '工作台',
+        test: /你是 Luker 原生「工作台」.*助手「问问」|「工作台」插件的只读助手「问问」|这是连接测试。调用\s*wb_ok\b/,
+    },
     // memory-graph
     { kind: 'memory', label: '记忆图 · 召回规划', test: /memory recall planner|recall_query_context|candidate_nodes/i },
     { kind: 'memory', label: '记忆图 · 提取', test: /dialogue_batch|memory (graph )?extract|extract(ion)? (batch|schema)|mg_upsert|luker_rpg_memory/i },

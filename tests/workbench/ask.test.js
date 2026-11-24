@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import { MAX_ROUNDS, askSystemPrompt, askTools, runAsk, readsSummary, readLabel, clip, buildAskHistory } from '../../public/scripts/workbench/model/ask.js';
+import { MAX_ROUNDS, askSystemPrompt, askUserMessage, askTools, runAsk, readsSummary, readLabel, clip, buildAskHistory } from '../../public/scripts/workbench/model/ask.js';
 import { searchLukerDocs, listLukerDocTopics } from '../../public/scripts/workbench/model/luker-docs.js';
 import { attribute, groupByGeneration, describeRequest } from '../../public/scripts/workbench/model/requests.js';
-import { aiRequest, askOverview, askReaders, listAiChoices } from '../../public/scripts/workbench/source-luker.js';
+import { SourceError, aiRequest, askOverview, askReaders, listAiChoices } from '../../public/scripts/workbench/source-luker.js';
 import { createMemoryAskProvider } from '../../public/scripts/extensions/memory-graph/lens/providers.js';
 import { createOrchAskProvider } from '../../public/scripts/extensions/orchestrator/lens/providers.js';
 
@@ -159,7 +159,41 @@ describe('workbench Ask model & source readers', () => {
 
     test('request attribution, grouping, clip, and tools filtering', () => {
         expect(askTools({ inspector: false }).map(t => t.function.name)).not.toContain('wb_list_requests');
+
+        // Real Ask first-round & multi-round searchText must attribute to workbench, not orch/search/image/memory
+        const askRound1Search = [
+            'openai',
+            'claude-sonnet-4',
+            askSystemPrompt(),
+            askUserMessage('为什么刚才报错了？', { 编排: { 启用: true, 模式: 'agenda' } }),
+        ].join(' ').slice(0, 8192);
+        expect(attribute({ searchText: askRound1Search })).toEqual({ kind: 'workbench', label: '工作台', guessed: true });
+
+        const askMultiRoundSearch = [
+            'openai',
+            'claude-sonnet-4',
+            askSystemPrompt(),
+            askUserMessage('帮我查一下编排和联网搜索', {}),
+            '{"tool":"wb_read_luker_env","search_tools":{"enabled":true},"luker_orch":true,"sd_read_run":"x","memory recall planner":"y"}',
+        ].join(' ').slice(0, 8192);
+        expect(attribute({ searchText: askMultiRoundSearch })).toEqual({ kind: 'workbench', label: '工作台', guessed: true });
+
+        expect(attribute({
+            searchText: '你是「工作台」插件的只读助手「问问」。orchestrator search_tools',
+        })).toEqual({ kind: 'workbench', label: '工作台', guessed: true });
+
+        expect(attribute({
+            searchText: 'openai gpt-4o 这是连接测试。调用 wb_ok 工具一次，不要输出别的。 测试连接',
+        })).toEqual({ kind: 'workbench', label: '工作台', guessed: true });
+
+        // Normal domain and AI-iteration requests remain unaffected
         expect(attribute({ searchText: 'You are a memory recall planner' }).kind).toBe('memory');
+        expect(attribute({ searchText: 'You are the agenda_planner for luker_orch' }).kind).toBe('orch');
+        expect(attribute({ searchText: 'luker_search_agent using search_tools' }).kind).toBe('search');
+        expect(attribute({ searchText: 'Call sd_read_run to inspect illustration_prompt' }).kind).toBe('image');
+        expect(attribute({
+            searchText: '【工作台说明】你在 Luker「工作台」里帮用户修改「预设」 cpa_list_entries',
+        }).kind).toBe('iterate');
         expect(attribute({ id: 'a' }, { mainReplyIds: new Set(['a']) }).guessed).toBe(false);
         expect(attribute({ messageCount: 30 }).kind).toBe('main');
         expect(attribute({ messageCount: 2 }).kind).toBe('other');
@@ -456,6 +490,20 @@ describe('workbench Ask model & source readers', () => {
         expect(lastRoundMessages.at(-1).content).toContain('wb_answer');
         expect(degraded.answer).toBe('Partial finding before limit');
         expect(degraded.reads).toHaveLength(MAX_ROUNDS - 1);
+
+        // Final-round abort with GenerateTaskError('aborted') shape must rethrow instead of degrading
+        let abortRound = 0;
+        const abortErr = Object.assign(new Error('request aborted'), { name: 'GenerateTaskError', code: 'aborted' });
+        await expect(runAsk({
+            question: 'Abort on last round',
+            overview: {},
+            readers: { wb_read_chat: async () => ({ floor: 1 }) },
+            request: async () => {
+                abortRound++;
+                if (abortRound === MAX_ROUNDS) throw abortErr;
+                return { text: 'Partial before abort', calls: [{ id: `ab_${abortRound}`, name: 'wb_read_chat', args: {} }] };
+            },
+        })).rejects.toBe(abortErr);
     });
 
     test('wb_read_request reads real inspector responseParts, wireRequest tools, image/embedding types, and rejects empty/boolean message_index', async () => {
@@ -531,28 +579,69 @@ describe('workbench Ask model & source readers', () => {
                     }),
                 };
             }
-            if (target.includes('/api/request-inspector/req-embed')) {
+            if (target.includes('/api/request-inspector/req-embed-query')) {
                 return {
                     ok: true,
                     json: async () => ({
-                        id: 'req-embed',
+                        id: 'req-embed-query',
                         type: 'embedding',
                         source: 'openai',
                         model: 'text-embedding-3-large',
                         status: 'success',
                         httpStatus: 200,
                         durationMs: 210,
-                        operation: 'query',
-                        routeKind: 'memory-rag',
+                        operation: 'embed',
+                        routeKind: 'query',
                         collectionId: 'chat-42',
-                        collectionIds: ['chat-42', 'lore-1'],
-                        query: 'silver key vault',
+                        collectionIds: null,
+                        query: '',
                         inputCount: 1,
-                        resultCount: 2,
+                        inputCharTotal: 16,
+                        inputTexts: [{ index: 0, text: 'silver key vault' }],
+                        topK: 10,
+                        threshold: 0,
+                        resultCount: 1,
+                        vectorDim: 3072,
                         hits: [
-                            { hash: 'h1', score: 0.91, text: 'The silver key unlocks the clocktower vault.' },
+                            { collectionId: 'chat-42', hash: 'h1', score: 0.91, text: 'The silver key unlocks the clocktower vault.' },
                         ],
                     }),
+                };
+            }
+            if (target.includes('/api/request-inspector/req-embed-rerank')) {
+                const longDoc = 'R'.repeat(500);
+                return {
+                    ok: true,
+                    json: async () => ({
+                        id: 'req-embed-rerank',
+                        type: 'embedding',
+                        source: 'cohere',
+                        model: 'rerank-v3.5',
+                        status: 'success',
+                        httpStatus: 200,
+                        durationMs: 185,
+                        operation: 'rerank',
+                        routeKind: 'rerank',
+                        collectionId: null,
+                        collectionIds: null,
+                        query: 'clocktower promise',
+                        inputCount: 15,
+                        inputCharTotal: 1200,
+                        inputTexts: Array.from({ length: 15 }, (_, idx) => ({ index: idx, text: idx === 0 ? longDoc : `doc ${idx}` })),
+                        topK: 5,
+                        threshold: null,
+                        resultCount: 1,
+                        vectorDim: null,
+                        hits: [
+                            { index: 3, hash: 'h2', score: 0.95, text: 'We promised to meet at the clocktower.' },
+                        ],
+                    }),
+                };
+            }
+            if (target.includes('/api/request-inspector/req-array')) {
+                return {
+                    ok: true,
+                    json: async () => [{ id: 'unexpected-list-item' }],
                 };
             }
             return { ok: false, status: 404 };
@@ -607,19 +696,48 @@ describe('workbench Ask model & source readers', () => {
             sampler: 'euler_ancestral',
         });
 
-        const embRes = await readers.wb_read_request({ id: 'req-embed' });
-        expect(embRes).toMatchObject({
-            id: 'req-embed',
+        const embQueryRes = await readers.wb_read_request({ id: 'req-embed-query' });
+        expect(embQueryRes).toMatchObject({
+            id: 'req-embed-query',
             type: 'embedding',
-            operation: 'query',
-            routeKind: 'memory-rag',
+            operation: 'embed',
+            routeKind: 'query',
             collectionId: 'chat-42',
-            collectionIds: ['chat-42', 'lore-1'],
-            query: 'silver key vault',
             inputCount: 1,
-            resultCount: 2,
-            hits: [{ hash: 'h1', score: 0.91, text: 'The silver key unlocks the clocktower vault.' }],
+            inputCharTotal: 16,
+            inputTexts: [{ index: 0, text: 'silver key vault' }],
+            topK: 10,
+            threshold: 0,
+            resultCount: 1,
+            vectorDim: 3072,
+            hits: [{ collectionId: 'chat-42', hash: 'h1', score: 0.91, text: 'The silver key unlocks the clocktower vault.' }],
         });
+        expect(embQueryRes.query).toBeUndefined();
+
+        const embRerankRes = await readers.wb_read_request({ id: 'req-embed-rerank' });
+        expect(embRerankRes).toMatchObject({
+            id: 'req-embed-rerank',
+            type: 'embedding',
+            operation: 'rerank',
+            routeKind: 'rerank',
+            query: 'clocktower promise',
+            inputCount: 15,
+            inputCharTotal: 1200,
+            topK: 5,
+            resultCount: 1,
+            hits: [{ index: 3, hash: 'h2', score: 0.95, text: 'We promised to meet at the clocktower.' }],
+        });
+        expect(embRerankRes.inputTexts).toHaveLength(12);
+        expect(embRerankRes.inputTexts[0]).toEqual({ index: 0, text: 'R'.repeat(400) });
+
+        // Reject invalid/reserved/traversal IDs before calling fetch, and reject array payloads
+        globalThis.fetch.mockClear();
+        for (const badId of ['', '   ', '.', '..', '../x', 'list', 'LIST', 'foo/bar', 'a\\b', 'req?x=1', 'req#hash', 'bad id', 'a\u0007b']) {
+            await expect(readers.wb_read_request({ id: badId })).rejects.toThrow(SourceError);
+        }
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+
+        await expect(readers.wb_read_request({ id: 'req-array' })).rejects.toThrow(SourceError);
     });
 
     test('wb_read_preset, wb_read_regex, wb_read_variables, wb_read_world_info_trace, and wb_read_chat use real Luker runtime structures', async () => {
@@ -1148,10 +1266,16 @@ describe('workbench Ask model & source readers', () => {
                             endedAt: 4000,
                             rounds: [{
                                 id: 'node-story-scout-investigate-1',
-                                status: 'error',
+                                status: 'failed',
                                 startedAt: 1000,
                                 endedAt: 4000,
-                                sections: [{ id: 'out-1', kind: 'output', title: 'Story Scout', status: 'error', error: 'Upstream 504' }],
+                                sections: [
+                                    { id: 'node-story-scout', kind: 'text', title: 'Text', status: 'failed', body: '', meta: { err: 'Upstream 504' } },
+                                    { id: 'tool-result-0', kind: 'tool_result', title: 'Tool result: finalize', status: 'failed', body: '', meta: { ok: false, err: 'finalize requires a non-empty capsule_text.', code: 'FINALIZE_EMPTY' } },
+                                    { id: 'tool-0', kind: 'tool_call', title: 'Tool: chat_search', status: 'done', body: '', meta: { args: { query: 'silver key', limit: 5 }, source: 'native' } },
+                                    { id: 'planner', kind: 'note', title: 'Note', status: 'done', body: '', meta: { output: { finalize: false, dispatches: [{ agent: 'story-scout', task_brief: 'X'.repeat(400) }] } } },
+                                    { id: 'text-partial', kind: 'text', title: 'Text', status: 'failed', body: 'Draft without tool', meta: { err: 'no tool call' } },
+                                ],
                             }],
                         },
                     ],
@@ -1187,11 +1311,18 @@ describe('workbench Ask model & source readers', () => {
         expect(noChatRes).toEqual({ available: false, notes: [] });
         expect(noChatSnapSpy).not.toHaveBeenCalled();
 
-        // last_run filters by chatId and resolves hyphenated Agenda agent id ('story-scout')
+        // last_run filters by chatId, resolves hyphenated Agenda agent id ('story-scout'), and extracts real store.js meta previews
         const lastRun = await orchProvider.readers.wb_read_orch({ part: 'last_run' }, orchCtx);
         expect(lastRun.runId).toBe('run-cur-chat');
         expect(lastRun.lanes[0].agentId).toBe('story-scout');
-        expect(lastRun.lanes[0].segments[0].sections[0].preview).toContain('Upstream 504');
+        const previews = lastRun.lanes[0].segments[0].sections.map(s => s.preview);
+        expect(previews[0]).toBe('Upstream 504');
+        expect(previews[1]).toBe('[FINALIZE_EMPTY] finalize requires a non-empty capsule_text.');
+        expect(previews[2]).toContain('"query":"silver key"');
+        expect(previews[3]).toContain('"agent":"story-scout"');
+        expect(previews[3].length).toBeLessThanOrEqual(320);
+        expect(previews[4]).toContain('no tool call');
+        expect(previews[4]).toContain('Draft without tool');
     });
 
     test('searchLukerDocs accurately ranks tricky colloquial queries and enforces word boundaries for short ASCII tokens', () => {
@@ -1319,6 +1450,70 @@ describe('workbench Ask model & source readers', () => {
             expect(goSpy).toHaveBeenCalledWith('ai', expect.objectContaining({ ws: 'memory', draft: 'Adjust event tableColumns' }));
 
             page.destroy();
+
+            // When no chat is open, memory_graph jump button is hidden while memory remains available;
+            // side panel regex stats honor allowedOnly: true and disabledExtensions.includes('regex').
+            const getScriptsSpy = jest.fn(({ allowedOnly } = {}) => (
+                allowedOnly
+                    ? [{ id: 'g1', disabled: false }, { id: 'g2', disabled: true }]
+                    : [{ id: 'g1', disabled: false }, { id: 'g2', disabled: true }, { id: 'unapproved', disabled: false }]
+            ));
+            let disabledExts = [];
+            globalThis.Luker = {
+                getContext: () => ({
+                    chat: [],
+                    characters: [],
+                    chatMetadata: { variables: {} },
+                    regex: { getScripts: getScriptsSpy },
+                    extensionSettings: { disabledExtensions: disabledExts },
+                }),
+            };
+
+            const overviewEnabled = await askOverview({
+                sources: { content: true, plugins: false, inspector: false, frontLogs: false },
+                redactText: false,
+            });
+            expect(getScriptsSpy).toHaveBeenCalledWith({ allowedOnly: true });
+            expect(overviewEnabled.正则).toBe('启用 1 条');
+
+            const noChatApp = {
+                ...app,
+                snapshot: () => ({ chat: { chatId: '', label: '', floors: 0 }, card: { name: '', books: [] }, preset: { name: 'Default' }, connection: 'Main' }),
+            };
+            const noChatPage = createAskPage(noChatApp);
+            dom.window.document.body.appendChild(noChatPage.el);
+            await noChatPage.show();
+            const noChatSel = noChatPage.el.querySelector('.wb-chat-hist');
+            noChatSel.value = 's1';
+            noChatSel.dispatchEvent(new dom.window.Event('change'));
+            await new Promise(r => setTimeout(r, 10));
+
+            const noChatJumpBtns = [...noChatPage.el.querySelectorAll('.wb-ans-acts button')];
+            expect(noChatJumpBtns).toHaveLength(1);
+            expect(noChatJumpBtns[0].textContent).toContain('Memory structure');
+
+            const sideRegexItem = [...noChatPage.el.querySelectorAll('.wb-src-item')]
+                .find(el => el.querySelector('.wb-src-name')?.textContent === 'Regex scripts');
+            expect(sideRegexItem.querySelector('.wb-src-n').textContent).toBe('1 enabled');
+
+            // Disabling the regex extension marks overview as '扩展已关闭' and side panel as 'Off'
+            disabledExts = ['regex'];
+            getScriptsSpy.mockClear();
+            const overviewDisabled = await askOverview({
+                sources: { content: true, plugins: false, inspector: false, frontLogs: false },
+                redactText: false,
+            });
+            expect(overviewDisabled.正则).toBe('扩展已关闭');
+            expect(getScriptsSpy).not.toHaveBeenCalled();
+
+            noChatPage.onSnapshot();
+            const sideRegexOff = [...noChatPage.el.querySelectorAll('.wb-src-item')]
+                .find(el => el.querySelector('.wb-src-name')?.textContent === 'Regex scripts');
+            expect(sideRegexOff.querySelector('.wb-src-n').textContent).toBe('Off');
+            expect(sideRegexOff.querySelector('.wb-src-st').classList.contains('is-off')).toBe(true);
+            expect(getScriptsSpy).not.toHaveBeenCalled();
+
+            noChatPage.destroy();
         } finally {
             globalThis.window = prevWindow;
             globalThis.document = prevDocument;

@@ -180,10 +180,12 @@ export function createAskPage(app) {
 
         const ctx = globalThis.Luker?.getContext?.() ?? globalThis.lukerContext ?? null;
         const varKeysCount = Object.keys(ctx?.chatMetadata?.variables || {}).length;
+        const regexExtensionDisabled = Array.isArray(ctx?.extensionSettings?.disabledExtensions)
+            && ctx.extensionSettings.disabledExtensions.includes('regex');
         let regexEnabledCount = null;
-        if (typeof ctx?.regex?.getScripts === 'function') {
+        if (!regexExtensionDisabled && typeof ctx?.regex?.getScripts === 'function') {
             try {
-                regexEnabledCount = (ctx.regex.getScripts({ allowedOnly: false }) || []).filter(s => s && !s.disabled).length;
+                regexEnabledCount = (ctx.regex.getScripts({ allowedOnly: true }) || []).filter(s => s && !s.disabled).length;
             } catch { regexEnabledCount = null; }
         }
         const anySourceOn = allowed.inspector !== false || allowed.frontLogs !== false || allowed.serverLogs !== false || allowed.content !== false || allowed.plugins !== false;
@@ -209,7 +211,12 @@ export function createAskPage(app) {
                 item(i18n('World book'), snap?.card?.books?.length ? i18nFormat('${0} book(s)', snap.card.books.length) : '—', 'content'),
                 item(i18n('Preset'), snap?.preset?.name || '—', 'content'),
                 item(i18n('Variables'), varKeysCount > 0 ? i18nFormat('${0} keys', varKeysCount) : '—', 'content'),
-                item(i18n('Regex scripts'), regexEnabledCount == null ? '—' : i18nFormat('${0} enabled', regexEnabledCount), 'content'),
+                item(
+                    i18n('Regex scripts'),
+                    regexExtensionDisabled ? i18n('Off') : (regexEnabledCount == null ? '—' : i18nFormat('${0} enabled', regexEnabledCount)),
+                    'content',
+                    regexExtensionDisabled ? 'off' : 'ok',
+                ),
                 item(i18n('Connection profile'), snap?.connection || '—', 'content'),
                 h('div', { class: 'wb-src-group', text: i18n('Installed extensions') }),
                 providerItems,
@@ -402,10 +409,13 @@ export function createAskPage(app) {
             copyText(reqId);
             app.toast(i18n('Request ID copied'));
         };
+        const snap = app.snapshot?.();
+        const hasOpenChat = Boolean(snap?.chat?.chatId || snap?.chat?.label);
         const registeredTargets = app.iterateTargets?.() || [];
         const canJumpSuggest = Boolean(
             t.suggest
             && wsName(t.suggest)
+            && (t.suggest !== 'memory_graph' || hasOpenChat)
             && (!registeredTargets.length || registeredTargets.some(target => target?.id === t.suggest)),
         );
         return h('div', { class: 'wb-msg-ai' },

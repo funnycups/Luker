@@ -15,6 +15,39 @@ function activeChatId(ctx) {
     return id ? String(id).trim() : '';
 }
 
+function serializePreviewValue(value) {
+    if (value == null) return '';
+    if (typeof value === 'string') return value.trim();
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
+}
+
+function sectionPreview(sec) {
+    if (!sec || typeof sec !== 'object') return '';
+    const body = typeof sec.body === 'string' ? sec.body.trim() : '';
+    const meta = sec.meta && typeof sec.meta === 'object' ? sec.meta : null;
+    const err = meta?.err ? String(meta.err).trim() : '';
+    const code = meta?.code ? String(meta.code).trim() : '';
+    const formattedErr = err ? (code ? `[${code}] ${err}` : err) : '';
+    if (body) {
+        if (formattedErr && !body.includes(err)) {
+            return `${formattedErr}: ${body}`.slice(0, 320); // cap-ok: section body preview cap
+        }
+        return body.slice(0, 320); // cap-ok: section body preview cap
+    }
+    if (formattedErr) return formattedErr.slice(0, 320); // cap-ok: section error preview cap
+    if (meta?.output !== undefined && meta?.output !== null) {
+        return serializePreviewValue(meta.output).slice(0, 320); // cap-ok: section output preview cap
+    }
+    if (meta?.args !== undefined && meta?.args !== null) {
+        return serializePreviewValue(meta.args).slice(0, 320); // cap-ok: section args preview cap
+    }
+    return '';
+}
+
 function findLatestOrchRun(ctx) {
     const rec = ctx?.runPanel?.getRunRecorder?.();
     const allRuns = Array.isArray(rec?.history?.()) ? rec.history() : [];
@@ -210,11 +243,11 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
                         return {
                             total: list.length,
                             openCount: list.filter(n => n.status !== 'closed').length,
-                            notes: list.slice(-40).map(n => ({ // cap-ok: 最多返回最近 40 条编排笔记
+                            notes: list.slice(-40).map(n => ({ // cap-ok: return at most the latest 40 orchestration notes
                                 id: n.id,
                                 status: n.status,
-                                text: n.text.slice(0, 400), // cap-ok: 单条笔记预览上限
-                                ...(n.closure_reason ? { closureReason: n.closure_reason.slice(0, 200) } : {}), // cap-ok: 关闭原因预览上限
+                                text: n.text.slice(0, 400), // cap-ok: per-note preview cap
+                                ...(n.closure_reason ? { closureReason: n.closure_reason.slice(0, 200) } : {}), // cap-ok: closure reason preview cap
                             })),
                         };
                     } catch (err) {
@@ -242,11 +275,11 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
                                 key: s.key,
                                 status: s.status,
                                 duration: s.duration,
-                                sections: (s.sections || []).slice(0, 6).map(sec => ({ // cap-ok: 单段最多返回 6 个子节摘要
+                                sections: (s.sections || []).slice(0, 6).map(sec => ({ // cap-ok: at most 6 section summaries per segment
                                     kind: sec?.kind || '',
                                     title: sec?.title || '',
                                     status: sec?.status || '',
-                                    preview: String(sec?.body || sec?.text || sec?.error || '').slice(0, 320), // cap-ok: 单子节正文摘要上限
+                                    preview: sectionPreview(sec),
                                 })),
                             })),
                         })),

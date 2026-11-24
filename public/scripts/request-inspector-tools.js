@@ -170,3 +170,20 @@ export function countToolParams(parameters) {
     if (!isSchema(parameters) || !isSchema(parameters.properties)) return 0;
     return Object.keys(parameters.properties).length;
 }
+
+/**
+ * Validate and normalize a request-inspector entry ID before interpolating it
+ * into `/api/request-inspector/:id`. Rejects empty strings, `.`/`..`, reserved
+ * `list` (case-insensitive), slashes, query/hash delimiters, whitespace, and
+ * ASCII control characters.
+ *
+ * @param {any} id
+ * @returns {string|null}
+ */
+export function normalizeRequestId(id) {
+    if (typeof id !== 'string' && typeof id !== 'number') return null;
+    const trimmed = String(id).trim();
+    if (!trimmed || trimmed === '.' || trimmed === '..' || trimmed.toLowerCase() === 'list') return null;
+    if (trimmed.includes('..') || /[/\\?#\s\u0000-\u001f\u007f]/.test(trimmed)) return null;
+    return trimmed;
+}

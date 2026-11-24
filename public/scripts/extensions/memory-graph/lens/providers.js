@@ -42,7 +42,7 @@ function truncateFieldMap(record, maxLen = 300) {
             }
         }
         if (typeof text !== 'string') continue;
-        out[k] = text.length > maxLen ? text.slice(0, maxLen) : text; // cap-ok: 单列字段值预览上限
+        out[k] = text.length > maxLen ? text.slice(0, maxLen) : text; // cap-ok: per-field value preview cap
     }
     return out;
 }
@@ -241,8 +241,8 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                         types: (Array.isArray(schema) ? schema : []).map(t => ({
                             id: t?.id,
                             label: t?.label || t?.name || t?.id,
-                            extractHint: String(t?.extractHint || '').slice(0, 300), // cap-ok: 单类型提取提示预览上限
-                            extractionInstructions: String(t?.extractionInstructions || '').slice(0, 300), // cap-ok: 单类型提取指令预览上限
+                            extractHint: String(t?.extractHint || '').slice(0, 300), // cap-ok: per-type extract hint preview cap
+                            extractionInstructions: String(t?.extractionInstructions || '').slice(0, 300), // cap-ok: per-type extraction instructions preview cap
                             alwaysInject: Boolean(t?.alwaysInject ?? t?.persistent),
                             tableColumns: Array.isArray(t?.tableColumns) ? t.tableColumns.filter(Boolean).map(String) : [],
                             columnHints: truncateFieldMap(t?.columnHints, 200),
@@ -250,7 +250,7 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                                 ? {
                                     ...t.compression,
                                     ...(typeof t.compression.summarizeInstruction === 'string'
-                                        ? { summarizeInstruction: t.compression.summarizeInstruction.slice(0, 240) } // cap-ok: 压缩指令预览上限
+                                        ? { summarizeInstruction: t.compression.summarizeInstruction.slice(0, 240) } // cap-ok: summarize instruction preview cap
                                         : {}),
                                 }
                                 : null,
@@ -259,14 +259,14 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                 }
                 if (part === 'search' || part === 'nodes') {
                     if (!activeChatId(c) || typeof deps.ensureMemoryStoreLoaded !== 'function' || typeof deps.getMemoryGraphReadApi !== 'function') {
-                        return { error: '当前没有打开的聊天或记忆存储不可读', nodes: [] };
+                        return { error: 'No open chat or memory store is unreadable', nodes: [] };
                     }
                     const store = await deps.ensureMemoryStoreLoaded(c);
                     const read = store ? deps.getMemoryGraphReadApi(store, c) : null;
                     const allNodes = read?.listNodes?.({ activeOnly: !include_archived }) || [];
                     const needle = String(query || '').trim().toLowerCase();
                     const typeNeedle = String(type || '').trim().toLowerCase();
-                    const maxItems = Math.max(1, Math.min(50, Math.floor(Number(limit) || 20))); // cap-ok: 限制单次返回记忆节点条数
+                    const maxItems = Math.max(1, Math.min(50, Math.floor(Number(limit) || 20))); // cap-ok: cap memory nodes returned per call
                     const matched = allNodes.filter(node => {
                         if (!node || typeof node !== 'object') return false;
                         if (typeNeedle && String(node.type || '').toLowerCase() !== typeNeedle) return false;
@@ -283,7 +283,7 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                         ].filter(Boolean).join(' ').toLowerCase();
                         return hay.includes(needle);
                     });
-                    // 按楼层范围末尾 / 节点水位倒序，优先呈现最新节点。
+                    // Sort descending by floor range end / node seq watermark so newest nodes appear first.
                     matched.sort((a, b) => nodeRecencyKey(b) - nodeRecencyKey(a));
                     return {
                         totalInGraph: allNodes.length,
@@ -291,7 +291,7 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                         nodes: matched.slice(0, maxItems).map(n => {
                             const fields = truncateFieldMap(n.fields, 300);
                             const rawPreview = n?.fields?.summary ?? n?.fields?.note ?? '';
-                            const summaryPreview = (typeof rawPreview === 'string' ? rawPreview : String(rawPreview)).slice(0, 300); // cap-ok: 节点摘要预览上限
+                            const summaryPreview = (typeof rawPreview === 'string' ? rawPreview : String(rawPreview)).slice(0, 300); // cap-ok: node summary preview cap
                             return {
                                 id: n.id,
                                 type: n.type,

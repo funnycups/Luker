@@ -12,6 +12,7 @@ import {
     describeToolChoice,
     buildToolParamRows,
     countToolParams,
+    normalizeRequestId,
 } from './request-inspector-tools.js';
 import {
     extractMessageReasoning,
@@ -189,14 +190,6 @@ async function fetchList() {
         cachedList = [];
     }
     return cachedList;
-}
-
-function normalizeRequestId(id) {
-    if (typeof id !== 'string' && typeof id !== 'number') return null;
-    const trimmed = String(id).trim();
-    if (!trimmed || trimmed === '.' || trimmed === 'list') return null;
-    if (trimmed.includes('..') || /[/\\?#\s\u0000-\u001f]/.test(trimmed)) return null;
-    return trimmed;
 }
 
 async function fetchDetail(id) {
@@ -1080,9 +1073,9 @@ export async function openRequestInspector(requestId = '') {
 async function openInspectorPanel(initialRequestId = '') {
     const targetId = String(initialRequestId || '').trim();
     const content = $('<div class="ri-container"></div>');
+    currentDetailSearch = '';
+    cachedDetail = null;
     if (targetId) {
-        currentDetailSearch = '';
-        cachedDetail = null;
         content.html(`<div class="ri-loading">${t`Loading...`}</div>`);
         const detail = await fetchDetail(targetId);
         if (detail) {
