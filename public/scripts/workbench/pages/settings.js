@@ -15,7 +15,8 @@ import { getRunDockPrefs, setRunDockPrefs, resetRunDockPosition, subscribeRunDoc
 export function knownRoles() {
     return [
         { key: 'ask', label: i18n('Q&A'), tone: 'other' },
-        { key: 'memory', label: i18n('Memory graph'), tone: 'memory' },
+        { key: 'memory', label: i18n('Memory graph config'), tone: 'memory' },
+        { key: 'memory_graph', label: i18n('Memory graph content'), tone: 'memory' },
         { key: 'orch', label: i18n('Orchestration'), tone: 'orch' },
         { key: 'preset', label: i18n('Preset'), tone: 'preset' },
         { key: 'card', label: i18n('Character card'), tone: 'card' },
@@ -26,7 +27,8 @@ export function knownRoles() {
 
 const AI_ROLE_LABELS = {
     ask: 'Q&A',
-    memory: 'Edit memory graph settings',
+    memory: 'Edit memory graph config',
+    memory_graph: 'Edit memory graph content',
     orch: 'Edit orchestration settings',
     preset: 'Edit preset',
     card: 'Edit character card',
@@ -36,6 +38,7 @@ const AI_ROLE_LABELS = {
 
 const PLUGIN_LABELS = {
     memory: 'Memory graph settings',
+    memory_graph: 'Memory graph settings',
     orch: 'Orchestration settings',
     preset: 'Preset Assistant settings',
     card: 'Character Assistant settings',

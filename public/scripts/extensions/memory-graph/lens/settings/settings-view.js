@@ -727,8 +727,8 @@ export function createSettingsView(app, source, { onDirtyChange = null } = {}) {
                 action(i18n('Edit graph JSON'), askRawEdit),
                 action(i18n('Reset Chat'), () => confirmText(app, { title: i18n('Reset Chat'), lines: [i18n('Reset current chat memory graph? This cannot be undone.')], okLabel: i18n('Reset'), danger: true, onOk: () => { void run(ops.reset); } }), { className: 'ml-btn-danger' })),
             actions(
-                button(i18n('AI Configure Memory Graph'), () => openStudio(ops.openConfigStudio), { iconName: 'sparkle', disabled: busy }),
-                button(i18n('AI Edit Graph'), () => openStudio(ops.openGraphStudio), { iconName: 'sparkle', disabled: busy })));
+                button(i18n('AI Edit Memory Graph Config'), () => openStudio(ops.openConfigStudio), { iconName: 'sparkle', disabled: busy }),
+                button(i18n('AI Edit Memory Graph Content'), () => openStudio(ops.openGraphStudio), { iconName: 'sparkle', disabled: busy })));
     }
 
     // ---- Section 5: Technical Tuning & Custom Prompts (collapsed) --------

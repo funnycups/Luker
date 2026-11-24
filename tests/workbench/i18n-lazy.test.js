@@ -46,12 +46,15 @@ describe('lazy i18n evaluation after Luker locale registration', () => {
         expect(baseRules().find(r => r.id === 'preset.dup')?.name).toBe('预设条目重复');
 
         expect(chips()).toContain('这条回复为什么会这样写');
-        expect(wsName('memory')).toBe('记忆图');
+        expect(wsName('memory')).toBe('记忆图配置');
+        expect(wsName('memory_graph')).toBe('记忆图内容');
 
         expect(nameMap().orch).toBe('编排');
-        expect(formatChangeName('memory')).toBe('记忆图');
+        expect(formatChangeName('memory')).toBe('记忆图配置');
+        expect(formatChangeName('memory_graph')).toBe('记忆图内容');
 
-        expect(knownRoles().find(r => r.key === 'memory')?.label).toBe('记忆图');
+        expect(knownRoles().find(r => r.key === 'memory')?.label).toBe('记忆图配置');
+        expect(knownRoles().find(r => r.key === 'memory_graph')?.label).toBe('记忆图内容');
         expect(sourceDefs().find(s => s.key === 'frontLogs')?.name).toBe('前端日志');
 
         expect(toneLabel('memory')).toBe('记忆图');

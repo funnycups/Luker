@@ -12,7 +12,8 @@ const RULES = [
     { kind: 'orch', label: '编排', test: /luker_orch|orchestrat|agenda_planner|\bdirector\b.*\bdispatch/i },
     { kind: 'search', label: '联网搜索', test: /search_tools|web_search|search agent/i },
     // iteration studios
-    { kind: 'iterate', label: 'AI 迭代 · 记忆结构', test: /mg_schema_|schema iteration/i },
+    { kind: 'iterate', label: 'AI 迭代 · 记忆图配置', test: /mg_schema_|mg_config_|schema iteration|configuration-editor ai/i },
+    { kind: 'iterate', label: 'AI 迭代 · 记忆图内容', test: /mg_graph_|graph-editor ai|graph revision/i },
     { kind: 'iterate', label: 'AI 迭代 · 预设', test: /cpa_|completion preset assistant/i },
     { kind: 'iterate', label: 'AI 迭代 · 角色卡', test: /cea_|character editor assistant/i },
     { kind: 'workbench', label: '工作台', test: /wb_(read|ask|ok)|工作台/ },

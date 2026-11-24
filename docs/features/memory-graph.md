@@ -51,8 +51,8 @@ In **Data table** or **Graph**, you can edit fields, titles, and links directly;
 
 For broader edits, switch to **Workbench → AI iteration** and choose:
 
-- **Memory graph** — describe repairs in plain language, such as merging duplicate character nodes, updating outdated location states, or adding missing relationships in the current chat.
-- **Memory structure** — describe new memory types, record items, extraction instructions, or injection/compression adjustments globally or for the active character.
+- **Memory graph config** — describe new memory types, record items, extraction instructions, or injection/compression adjustments globally or for the active character.
+- **Memory graph content** — describe repairs in plain language, such as merging duplicate character nodes, updating outdated location states, or adding missing relationships in the current chat.
 
 Proposed changes appear in the **Change list** with before/after diffs. Tick what to apply, or undo applied steps in **Change history**.
 
@@ -60,7 +60,7 @@ Proposed changes appear in the **Change list** with before/after diffs. Tick wha
 
 ## Fitting the structure to your world
 
-Under **Memory graph → Memory structure**, or via **AI iteration → Memory structure**, you can add types and record items tailored to your setting—such as magic systems, factions, or investigation clues—or start from a built-in template.
+Under **Memory graph → Memory structure**, or via **AI iteration → Memory graph config**, you can add types and record items tailored to your setting—such as magic systems, factions, or investigation clues—or start from a built-in template.
 
 ![Memory structure editor](/images/memory-graph/memory-schema-editor.png)
 
@@ -74,7 +74,7 @@ World laws, inviolable character traits, and core plot threads belong in the pro
 
 ### Memories are wrong or duplicated
 
-Describe the issue in **Workbench → AI iteration → Memory graph** to merge duplicate nodes, fix fields, or update links.
+Describe the issue in **Workbench → AI iteration → Memory graph content** to merge duplicate nodes, fix fields, or update links.
 
 ### What happens when I edit or delete a message
 

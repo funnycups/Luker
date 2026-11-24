@@ -88,8 +88,8 @@ export function askTools(sources = {}, extraPluginTools = []) {
         text: { type: 'string', description: 'The answer in Chinese, plain and concrete. Markdown tables allowed.' },
         suggest: {
             type: 'string',
-            enum: ['', 'memory', 'orch', 'sd', 'preset', 'card', 'world'],
-            description: 'If fixing this needs editing one workbench, name it so the user can jump there.',
+            enum: ['', 'memory', 'memory_graph', 'orch', 'sd', 'preset', 'card', 'world'],
+            description: 'If fixing this needs editing one workbench target, name it so the user can jump there (memory = memory graph config, schema and settings; memory_graph = memory graph content, nodes and links in this chat).',
         },
         fix_prompt: { type: 'string', description: 'If suggest is set: what to ask that workbench\'s AI to change, in Chinese.' },
         request_ids: { type: 'array', items: { type: 'string' }, description: 'Requests your answer is about (shown as links).' },

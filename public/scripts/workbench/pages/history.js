@@ -9,12 +9,17 @@ import { h, put, clear, relativeTime } from '../../lens-shared/util.js';
 import { button } from '../ui/components.js';
 
 const NAME_KEYS = {
-    memory: 'Memory graph',
+    memory: 'Memory graph config',
+    memory_graph: 'Memory graph content',
     orch: 'Orchestration',
     preset: 'Preset',
     card: 'Character card',
     world: 'World book',
     sd: 'Image Generation',
+};
+
+const TONE_FALLBACK = {
+    memory_graph: 'memory',
 };
 
 export function nameMap() {
@@ -46,7 +51,8 @@ export function createHistoryPage(app) {
             put(el, h('p', { class: 'wb-note', text: filter ? i18n('No changes for this workbench yet.') : i18n('No changes yet. Changes applied in AI iteration or through a suggestion button are recorded here.') }));
             return;
         }
-        put(el, h('div', { class: 'wb-hist' }, list.map(e => h('div', { class: `wb-hist-item ${e.undone ? 'is-undone' : ''}`, style: { '--tone': `var(--wb-t-${e.ws})` } },
+        const toneOf = (ws) => app.iterateTargets?.().find(t => t.id === ws)?.tone || TONE_FALLBACK[ws] || ws;
+        put(el, h('div', { class: 'wb-hist' }, list.map(e => h('div', { class: `wb-hist-item ${e.undone ? 'is-undone' : ''}`, style: { '--tone': `var(--wb-t-${toneOf(e.ws)})` } },
             h('span', { class: 'wb-hist-dot', 'aria-hidden': 'true' }),
             h('div', { class: 'wb-hist-card' },
                 h('div', { class: 'wb-hist-top' },

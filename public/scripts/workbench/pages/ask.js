@@ -25,7 +25,8 @@ const CHIP_KEYS = [
 ];
 
 const WS_NAME_KEYS = {
-    memory: 'Memory graph',
+    memory: 'Memory graph config',
+    memory_graph: 'Memory graph content',
     orch: 'Orchestration',
     sd: 'Image Generation',
     preset: 'Preset',

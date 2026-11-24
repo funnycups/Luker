@@ -66,8 +66,11 @@ const DEFAULT_CHIPS = {
 
 const DEFAULT_SCOPE_NOTE = {
     memory: {
-        global: () => i18n('Edit the memory structure shared by all characters'),
-        character: () => i18n('Edit only this character\'s own memory structure (created on save if there is none)'),
+        global: () => i18n('Edit the memory structure and settings shared by all characters'),
+        character: () => i18n('Edit only this character\'s own memory structure and settings (created on save if there is none)'),
+    },
+    memory_graph: {
+        chat: () => i18n('Edit the memory nodes and relationships stored in this chat'),
     },
     orch: {
         global: () => i18n('Edit the orchestration profile shared by all characters'),
@@ -358,7 +361,7 @@ export function createIteratePage(app) {
                             'aria-current': String(s.id === session?.id),
                             onClick: () => openSession(s.id),
                         },
-                        dot(s.ws || 'other'),
+                        dot(targetById(s.ws)?.tone || (s.ws === 'memory_graph' ? 'memory' : s.ws) || 'other'),
                         h('span', { class: 'wb-sess-main' },
                             h('span', { class: 'wb-sess-t', text: s.title }),
                             h('span', { class: 'wb-sess-m' },

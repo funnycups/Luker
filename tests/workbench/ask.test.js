@@ -156,7 +156,13 @@ describe('workbench Ask model & source readers', () => {
 
     test('request attribution, grouping, clip, and tools filtering', () => {
         expect(askTools({ inspector: false }).map(t => t.function.name)).not.toContain('wb_list_requests');
+        const answerTool = askTools().find(t => t.function.name === 'wb_answer');
+        expect(answerTool.function.parameters.properties.suggest.enum).toEqual(
+            expect.arrayContaining(['memory', 'memory_graph']),
+        );
         expect(attribute({ searchText: 'You are a memory recall planner' }).kind).toBe('memory');
+        expect(attribute({ searchText: 'call mg_config_set_fields to tune extraction' }).label).toBe('AI 迭代 · 记忆图配置');
+        expect(attribute({ searchText: 'call mg_graph_edit_node to fix character state' }).label).toBe('AI 迭代 · 记忆图内容');
         expect(attribute({ id: 'a' }, { mainReplyIds: new Set(['a']) }).guessed).toBe(false);
         expect(attribute({ messageCount: 30 }).kind).toBe('main');
         expect(attribute({ messageCount: 2 }).kind).toBe('other');

@@ -488,7 +488,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
 
     return {
         id: 'memory',
-        get label() { return i18n('Memory graph'); },
+        get label() { return i18n('Memory graph config'); },
         tone: 'memory',
         order: 10,
         chips: () => [
@@ -498,8 +498,8 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             i18n('Make the field descriptions clearer'),
         ],
         scopeNotes: {
-            global: () => i18n('Edit the memory structure shared by all characters'),
-            character: () => i18n('Edit only this character\'s own memory structure (created on save if there is none)'),
+            global: () => i18n('Edit the memory structure and settings shared by all characters'),
+            character: () => i18n('Edit only this character\'s own memory structure and settings (created on save if there is none)'),
         },
         async scopes(ctx) {
             const c = resolveCtx(ctx);
@@ -602,7 +602,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
                     live,
                     target,
                     title: i18nFormat(
-                        'Memory structure for "${0}" only${1}',
+                        'Memory graph config for "${0}" only${1}',
                         characterName,
                         info?.hasOverride ? '' : i18n(' (none yet, created on save)'),
                     ),
@@ -617,7 +617,7 @@ export function createMemoryConfigTarget(getCtx = defaultGetContext, deps = {}) 
             return {
                 live,
                 target,
-                title: i18n('Memory structure shared by all characters'),
+                title: i18n('Memory graph config shared by all characters'),
             };
         },
         async prompt(live, scope, ctx, extra = {}) {
@@ -950,7 +950,7 @@ function renderMemoryGraphPreview({ base, ai }) {
     const totalLinks = Object.keys(stagedLinks).length;
     put(container,
         h('div', { class: 'wb-sec-title' },
-            h('span', { text: i18n('Graph') }),
+            h('span', { text: i18n('Memory graph content') }),
             h('span', { class: 'wb-note', text: i18nFormat('${0} node(s), ${1} link(s)', totalNodes, totalLinks) })));
 
     if (totalNodes === 0 && removedNodes.size === 0) {
@@ -1102,7 +1102,7 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
                 return 'change';
             },
             label: summarizeGraphEntry,
-            group: () => i18n('Memory graph'),
+            group: () => i18n('Memory graph content'),
             beforeText: (entry) => {
                 const before = entry?.meta?.before;
                 const after = entry?.meta?.after;
@@ -1122,7 +1122,7 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
 
     return {
         id: 'memory_graph',
-        get label() { return i18n('Graph'); },
+        get label() { return i18n('Memory graph content'); },
         tone: 'memory',
         order: 15,
         proposalKinds,
@@ -1133,7 +1133,7 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
             i18n('Check the graph against recent chat messages'),
         ],
         scopeNotes: {
-            chat: () => i18n('Edit the memory graph stored in this chat'),
+            chat: () => i18n('Edit the memory nodes and relationships stored in this chat'),
         },
         async scopes(ctx) {
             const c = resolveCtx(ctx);
@@ -1175,7 +1175,7 @@ export function createMemoryGraphTarget(getCtx = defaultGetContext, deps = {}) {
             return {
                 live: canonicalFromStore(liveStore),
                 target: { scope: 'chat', chatKey, ...(chatTarget ? { target: clone(chatTarget) } : {}) },
-                title: label ? i18nFormat('Memory graph of "${0}"', label) : i18n('Memory graph'),
+                title: label ? i18nFormat('Memory graph content of "${0}"', label) : i18n('Memory graph content'),
             };
         },
         async prompt(_live, _scope, ctx) {

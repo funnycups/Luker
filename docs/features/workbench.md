@@ -1,6 +1,6 @@
 # Workbench
 
-Workbench is Luker's unified workspace for inspecting prompts, diagnosing issues, visualizing Memory Graph, Orchestrator, and Image Generation activity, and tuning presets, character cards, world books, memory structures, orchestration profiles, and image generation profiles with AI.
+Workbench is Luker's unified workspace for inspecting prompts, diagnosing issues, visualizing Memory Graph, Orchestrator, and Image Generation activity, and tuning presets, character cards, world books, memory graph config, memory graph content, orchestration profiles, and image generation profiles with AI.
 
 ## Opening Workbench
 
@@ -33,8 +33,8 @@ Q&A reads local data on demand: recent chat floors, character card, bound world 
 
 A single conversational workspace for editing Luker artifacts with diff review and rollback. Choose what to edit at the top:
 
-- **Memory graph** — inspect and repair nodes, fields, and relationships in the current chat's graph.
-- **Memory structure** — add, edit, reorder, or remove memory types, record items, extraction rules, and injection settings, either globally or for the active character.
+- **Memory graph config** — add, edit, reorder, or remove memory types, record items, extraction rules, and injection settings, either globally or for the active character.
+- **Memory graph content** — inspect and repair nodes, fields, and relationships in the current chat's graph.
 - **Orchestration** — tune Spec, Agenda, Loop, and Director profiles, test changes with simulation, diagnose slow or failing runs, author skills, and create custom tools.
 - **Preset** — edit the active Chat Completion preset's parameters and prompt entries, compare against a reference preset, adapt a preset for orchestration or tool tasks, and extract reusable skills.
 - **Character card** — edit the active character card's fields and bound world books.

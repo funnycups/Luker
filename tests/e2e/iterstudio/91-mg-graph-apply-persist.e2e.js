@@ -188,13 +188,13 @@ test.describe('#91 — MG graph studio apply / persist', () => {
         await closeIterStudio(page);
     });
 
-    test('Memory Lens Settings AI Edit Graph button opens Workbench on Graph target', async ({ page }) => {
+    test('Memory Lens Settings AI Edit Memory Graph Content button opens Workbench on Memory graph content target', async ({ page }) => {
         await seedChatAndGraph(page);
         const lens = await openMemoryWorkspace(page, { subview: 'settings' });
-        await lens.locator('[data-settings-section="operations"] button').filter({ hasText: /^(AI Edit Graph|AI 编辑图谱|AI 編輯圖譜)$/ }).first().click();
+        await lens.locator('[data-settings-section="operations"] button').filter({ hasText: /^(AI Edit Memory Graph Content|AI 编辑记忆图内容|AI 編輯記憶圖內容)$/ }).first().click();
 
         const win = workbenchWindow(page);
-        await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]')).toHaveText(/^(Graph|图谱|圖譜)$/, { timeout: 15_000 });
+        await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]')).toHaveText(/^(Memory graph content|记忆图内容|記憶圖內容)$/, { timeout: 15_000 });
         await expect(win.locator('.wb-chat .wb-input')).toBeVisible({ timeout: 15_000 });
         await closeIterStudio(page);
     });

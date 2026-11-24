@@ -4,6 +4,10 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ## Unreleased
 
+### Workbench
+
+- Renamed the Memory Graph AI iteration targets to Memory graph config and Memory graph content across Workbench, and added settings source resolution and Change history filtering for Memory graph content.
+
 ### Update Notice
 
 - Added a post-update modal displaying localized changelog summaries for all versions and dev builds since the previous login.
