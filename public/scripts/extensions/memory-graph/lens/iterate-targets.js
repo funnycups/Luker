@@ -873,7 +873,14 @@ function formatGraphRecordsText(doc, nodeIds, linkKeys) {
         const n = doc?.nodes?.[id];
         if (!n) continue;
         const fields = n.fields && typeof n.fields === 'object' ? JSON.stringify(n.fields) : '{}';
-        lines.push(`[node ${id}] ${n.type || ''} · ${n.title || ''}${n.archived ? ' (archived)' : ''} ${fields}`);
+        const depth = Number(n.semanticDepth ?? 0);
+        const tags = [];
+        if (n.semanticRollup || depth > 0) tags.push(`L${depth || 1} rollup`);
+        if (n.parentId) tags.push(`parent=${n.parentId}`);
+        if (Array.isArray(n.childrenIds) && n.childrenIds.length) tags.push(`children=${n.childrenIds.join(',')}`);
+        if (n.archived) tags.push('archived');
+        const tagText = tags.length ? ` (${tags.join(', ')})` : '';
+        lines.push(`[node ${id}] ${n.type || ''} · ${n.title || ''}${tagText} ${fields}`);
     }
     for (const k of linkKeys) {
         const e = doc?.links?.[k];
@@ -969,10 +976,15 @@ function renderMemoryGraphPreview({ base, ai }) {
                     ? 'is-del'
                     : (addedNodes.has(id) ? 'is-add' : (modifiedNodes.has(id) ? 'is-change' : ''));
                 const marker = state === 'is-add' ? '+' : state === 'is-del' ? '-' : state === 'is-change' ? '~' : '';
+                const depth = Number(node?.semanticDepth ?? 0);
+                const isRollup = Boolean(node?.semanticRollup) || depth > 0;
+                const metaParts = [id];
+                if (isRollup) metaParts.push(`L${depth || 1}`);
+                if (node?.archived) metaParts.push(i18n('Archived'));
                 return h('div', { class: `wb-mg-preview-row ${state}`.trim(), dataset: { mgGraphNodeId: id } },
                     marker ? h('span', { class: 'wb-chg-tag', text: marker }) : null,
                     h('span', { class: 'wb-mg-preview-label', text: node?.title || id }),
-                    h('span', { class: 'wb-note', text: node?.archived ? `${id} · ${i18n('Archived')}` : id }));
+                    h('span', { class: 'wb-note', text: metaParts.join(' · ') }));
             })));
     }
 

@@ -40,6 +40,8 @@ const CHAT_TURNS = [
 
 const EDITED_STATE = '夜间执勤；信号灯已重新修剪。';
 const EDITED_IDENTITY = 'Bryn 断崖的常驻海图官，前盐礁灯塔守备（近期补充）。';
+const COMPACT_TITLE = '断崖守夜阶段';
+const COMPACT_SUMMARY = '两夜间于 Bryn 断崖点亮信号灯，漂泊者北行，两人决定留守至三更。';
 
 test.beforeAll(async () => {
     mock = await startMockLLM({
@@ -61,7 +63,7 @@ test.beforeAll(async () => {
     importPath = resolve(tmpDir, 'seed-store.json');
     writeFileSync(importPath, JSON.stringify({
         version: 2,
-        nodeSeq: 3,
+        nodeSeq: 4,
         seqCounter: 3,
         appliedSeqTo: 3,
         loggedSeqTo: 3,
@@ -84,6 +86,12 @@ test.beforeAll(async () => {
                 fields: { title: 'Bryn headland watchpost', controller: 'Seraphina', state: '夜间执勤；信号灯已修剪。' },
                 seqTo: 3,
             },
+            n_4: {
+                id: 'n_4', type: 'event', level: 'semantic',
+                title: 'Summary 2', parentId: '', childrenIds: [],
+                fields: { summary: '第二夜，漂泊者船队悄然北行，两人决定留守至三更。' },
+                seqTo: 3,
+            },
         },
         edges: [],
     }, null, 2));
@@ -94,13 +102,18 @@ test.afterAll(async () => {
     await mock?.stop();
 });
 
-async function readNodeFields(page, nodeId) {
+async function readNodeView(page, nodeId) {
     return await page.evaluate(async (id) => {
         const ctx = window.Luker.getContext();
         const mg = ctx.getExtensionApi('memory-graph');
         const node = await mg.getNodeById(ctx, id);
-        return node ? { ...node.fields } : null;
+        return node ? { ...node, fields: { ...node.fields }, children_ids: [...node.children_ids] } : null;
     }, nodeId);
+}
+
+async function readNodeFields(page, nodeId) {
+    const node = await readNodeView(page, nodeId);
+    return node ? node.fields : null;
 }
 
 async function seedChatAndGraph(page) {
@@ -197,5 +210,62 @@ test.describe('#91 — MG graph studio apply / persist', () => {
         await expect(win.locator('.wb-ws-seg .lw-seg-btn[aria-pressed="true"]')).toHaveText(/^(Memory graph content|记忆图内容|記憶圖內容)$/, { timeout: 15_000 });
         await expect(win.locator('.wb-chat .wb-input')).toBeVisible({ timeout: 15_000 });
         await closeIterStudio(page);
+    });
+
+    test('compact_nodes creates a single-summary rollup, reparents children, and survives restart', async ({ page }) => {
+        await seedChatAndGraph(page);
+
+        await openIterStudio(page, 'mg-graph');
+        mock.scriptToolCall({
+            name: 'mg_graph_compact_nodes',
+            arguments: {
+                type: 'event',
+                child_ids: ['n_1', 'n_4'],
+                title: COMPACT_TITLE,
+                summary: COMPACT_SUMMARY,
+            },
+        });
+        await sendIterPrompt(page, 'mg-graph', 'Compact the two headland watch events into one summary rollup node.');
+        await applyIterBatch(page, 'mg-graph');
+
+        await expect.poll(async () => (await readNodeView(page, 'n_1'))?.parent_id, { timeout: 15_000 })
+            .toBeTruthy();
+
+        const child1 = await readNodeView(page, 'n_1');
+        const child2 = await readNodeView(page, 'n_4');
+        expect(child1.parent_id).toBeTruthy();
+        expect(child2.parent_id).toBe(child1.parent_id);
+
+        const rollupId = child1.parent_id;
+        const rollup = await readNodeView(page, rollupId);
+        expect(rollup).toMatchObject({
+            id: rollupId,
+            type: 'event',
+            title: COMPACT_TITLE,
+            semantic_rollup: true,
+            semantic_depth: 1,
+            fields: { summary: COMPACT_SUMMARY },
+            children_ids: ['n_1', 'n_4'],
+        });
+
+        await closeIterStudio(page);
+
+        await server.restart();
+        await reloadAndAwait(page, server.baseURL);
+        await selectCharacterByName(page, 'Seraphina');
+        await setMgSettings(page, { enabled: true }, { closeAfter: true });
+
+        const persistedRollup = await readNodeView(page, rollupId);
+        expect(persistedRollup).toMatchObject({
+            id: rollupId,
+            type: 'event',
+            title: COMPACT_TITLE,
+            semantic_rollup: true,
+            semantic_depth: 1,
+            fields: { summary: COMPACT_SUMMARY },
+            children_ids: ['n_1', 'n_4'],
+        });
+        expect((await readNodeView(page, 'n_1'))?.parent_id).toBe(rollupId);
+        expect((await readNodeView(page, 'n_4'))?.parent_id).toBe(rollupId);
     });
 });

@@ -3,7 +3,7 @@
 
 /**
  * MG graph-iteration tool-display map — feeds renderToolCallChip's
- * `opts.toolDisplay`. Keys are the 14 tool names registered in tools.js;
+ * `opts.toolDisplay`. Keys are the 15 tool names registered in tools.js;
  * values are { icon, label, type, summarize?(args, result, i18n) }.
  *
  * `label` and the `summarize` templates are English source strings. The
@@ -34,6 +34,7 @@ export const MG_GRAPH_TOOL_DISPLAY = {
     mg_graph_edit_node: { icon: '✏️', label: 'Edit node',         type: 'edit', summarize: (a) => String(a?.node_id || '') },
     mg_graph_delete_node: { icon: '🗑️', label: 'Delete node',       type: 'edit', summarize: (a) => `${a?.node_id || ''}${a?.recursive ? ' (recursive)' : ''}` },
     mg_graph_merge_nodes: { icon: '🔀', label: 'Merge nodes',       type: 'edit', summarize: (a) => `${(a?.loser_ids || []).length} → ${a?.survivor_id || ''}` },
+    mg_graph_compact_nodes: { icon: '📦', label: 'Compact nodes',   type: 'edit', summarize: (a) => [a?.type, Array.isArray(a?.child_ids) ? `×${a.child_ids.length}` : ''].filter(Boolean).join(' ') },
     mg_graph_upsert_links: { icon: '🔗', label: 'Upsert links',      type: 'edit', summarize: (a) => `${a?.source_node_id || ''} ×${(a?.links || []).length}` },
     mg_graph_edit_link: { icon: '↔️', label: 'Edit link',         type: 'edit', summarize: (a) => `${a?.source_node_id || ''}→${a?.target_node_id || ''} ${a?.relation || ''}→${a?.new_relation || ''}` },
     mg_graph_delete_link: { icon: '✂️', label: 'Delete link',       type: 'edit', summarize: (a) => `${a?.source_node_id || ''}→${a?.target_node_id || ''} ${a?.relation || ''}` },

@@ -38,6 +38,7 @@ export const GRAPH_WRITE_TOOL_NAMES = new Set([
     'mg_graph_edit_node',
     'mg_graph_delete_node',
     'mg_graph_merge_nodes',
+    'mg_graph_compact_nodes',
     'mg_graph_upsert_links',
     'mg_graph_edit_link',
     'mg_graph_delete_link',
@@ -84,7 +85,7 @@ export const GRAPH_TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'mg_graph_list_nodes',
-            description: 'Enumerate compact node rows (id, type, title, seqTo, archived, summary), optionally filtered by type. Archived nodes are hidden unless include_archived is true.',
+            description: 'Enumerate compact node rows (id, type, title, seqTo, archived, summary; plus semanticRollup/semanticDepth for rollups and parentId for children), optionally filtered by type. Archived nodes are hidden unless include_archived is true.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -140,7 +141,7 @@ export const GRAPH_TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'mg_graph_schema',
-            description: 'List the active node-type schema (ids, columns, required/primary-key columns, latestOnly, alwaysInject).',
+            description: 'List the active node-type schema (ids, columns, required/primary-key columns, latestOnly, alwaysInject, and compression settings including summarizeInstruction).',
             parameters: { type: 'object', properties: {} },
         },
     },
@@ -189,7 +190,7 @@ export const GRAPH_TOOL_DEFS = [
         type: 'function',
         function: {
             name: 'mg_graph_edit_node',
-            description: 'Patch a node in place: title, fields (set/clear), or type. seqTo watermarks are preserved. Archived nodes are refused unless archived:false is passed.',
+            description: 'Patch a node in place: title, fields (set/clear), or type. seqTo watermarks are preserved. Archived nodes are refused unless archived:false is passed. Rollup nodes only allow editing title and fields.summary.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -230,6 +231,27 @@ export const GRAPH_TOOL_DEFS = [
                     summary: { type: 'string' },
                 },
                 required: ['survivor_id', 'loser_ids'],
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'mg_graph_compact_nodes',
+            description: 'Compact un-parented active nodes of the same type into one higher-level single-summary rollup node. Reparents every child under the new rollup and adds contains/semantic_contains edges. Rollup nodes store only fields.summary (and optional title). Returns { id, title, type, semantic_depth, child_ids }.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    type: { type: 'string', description: 'Node type id from the active schema (must match every child).' },
+                    child_ids: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Existing un-parented, non-archived node ids of the same type to compact.',
+                    },
+                    summary: { type: 'string', description: 'Synthesized summary text stored in the rollup node\'s fields.summary.' },
+                    title: { type: 'string', description: 'Optional custom title; omit to use the standard auto-generated rollup title.' },
+                },
+                required: ['type', 'child_ids', 'summary'],
             },
         },
     },
@@ -330,14 +352,23 @@ function normalizeDirection(value, tool, fallback = 'outgoing') {
     return direction;
 }
 
+function isRollupNode(node) {
+    return Boolean(node?.semanticRollup) || Number(node?.semanticDepth || 0) > 0;
+}
+
 function nodeRow(node) {
     const summary = String(node?.fields?.summary ?? '');
+    const depth = Number(node?.semanticDepth ?? 0);
+    const rollup = isRollupNode(node);
+    const parentId = String(node?.parentId || '');
     return {
         id: String(node.id),
         type: String(node.type || ''),
         title: String(node.title || ''),
         seqTo: Number(node.seqTo ?? 0),
         archived: Boolean(node.archived),
+        ...(rollup ? { semanticRollup: true, semanticDepth: depth } : {}),
+        ...(parentId ? { parentId } : {}),
         ...(summary ? { summary } : {}),
     };
 }
@@ -471,6 +502,8 @@ function execNodeDetail(args, env) {
         node: {
             ...nodeRow(node),
             fields: node.fields || {},
+            semanticRollup: isRollupNode(node),
+            semanticDepth: Number(node.semanticDepth ?? 0),
             parentId: node.parentId || '',
             childrenIds: [...(node.childrenIds || [])],
         },
@@ -519,16 +552,27 @@ function execNeighbors(args, env) {
 
 function execSchema(_args, env) {
     return {
-        types: schemaSpecs(env).map((spec) => ({
-            id: String(spec?.id || ''),
-            label: String(spec?.label || ''),
-            tableName: String(spec?.tableName || ''),
-            tableColumns: Array.isArray(spec?.tableColumns) ? [...spec.tableColumns] : [],
-            requiredColumns: Array.isArray(spec?.requiredColumns) ? [...spec.requiredColumns] : [],
-            primaryKeyColumns: Array.isArray(spec?.primaryKeyColumns) ? [...spec.primaryKeyColumns] : [],
-            latestOnly: Boolean(spec?.latestOnly),
-            alwaysInject: Boolean(spec?.alwaysInject),
-        })),
+        types: schemaSpecs(env).map((spec) => {
+            const compression = spec?.compression && typeof spec.compression === 'object'
+                ? {
+                    mode: String(spec.compression.mode || 'none'),
+                    ...(spec.compression.summarizeInstruction
+                        ? { summarizeInstruction: String(spec.compression.summarizeInstruction) }
+                        : {}),
+                }
+                : null;
+            return {
+                id: String(spec?.id || ''),
+                label: String(spec?.label || ''),
+                tableName: String(spec?.tableName || ''),
+                tableColumns: Array.isArray(spec?.tableColumns) ? [...spec.tableColumns] : [],
+                requiredColumns: Array.isArray(spec?.requiredColumns) ? [...spec.requiredColumns] : [],
+                primaryKeyColumns: Array.isArray(spec?.primaryKeyColumns) ? [...spec.primaryKeyColumns] : [],
+                latestOnly: Boolean(spec?.latestOnly),
+                alwaysInject: Boolean(spec?.alwaysInject),
+                ...(compression ? { compression } : {}),
+            };
+        }),
     };
 }
 
@@ -596,6 +640,30 @@ async function execEditNode(args, env) {
     if (nextType && !schemaHasType(nextType, env)) {
         throw new GraphToolError(tool, 'invalid_args', `type "${nextType}" is not in the active schema`, 'call mg_graph_schema for the legal type ids');
     }
+    if (isRollupNode(node) && nextType && nextType !== String(node.type || '').toLowerCase()) {
+        throw new GraphToolError(tool, 'not_allowed', `cannot change type of rollup node ${nodeId}`, 'rollup nodes must keep the same type as their children');
+    }
+    const setFields = normalizeFields(args?.set_fields, tool);
+    const clearFields = Array.isArray(args?.clear_fields)
+        ? args.clear_fields.map((k) => String(k).trim()).filter(Boolean)
+        : [];
+    const hasTitle = args?.title !== undefined;
+    if (isRollupNode(node)) {
+        const disallowed = [
+            ...Object.entries(setFields)
+                .filter(([k, v]) => v !== undefined && v !== null && k !== 'summary')
+                .map(([k]) => k),
+            ...clearFields.filter((k) => k !== 'summary'),
+        ];
+        if (disallowed.length > 0) {
+            throw new GraphToolError(
+                tool,
+                'not_allowed',
+                `rollup node ${nodeId} only permits editing title or summary (disallowed: ${disallowed.join(', ')})`,
+                'use set_fields: { summary: "..." } and/or title',
+            );
+        }
+    }
     let changed = false;
     if (wantsUnarchive && node.archived) {
         node.archived = false;
@@ -605,11 +673,6 @@ async function execEditNode(args, env) {
         node.type = nextType;
         changed = true;
     }
-    const setFields = normalizeFields(args?.set_fields, tool);
-    const clearFields = Array.isArray(args?.clear_fields)
-        ? args.clear_fields.map((k) => String(k).trim()).filter(Boolean)
-        : [];
-    const hasTitle = args?.title !== undefined;
     if (Object.keys(setFields).length > 0 || clearFields.length > 0 || hasTitle) {
         let res;
         try {
@@ -721,6 +784,73 @@ async function execMergeNodes(args, env) {
     return payload;
 }
 
+async function execCompactNodes(args, env) {
+    const tool = 'mg_graph_compact_nodes';
+    const type = requireString(args?.type, 'type', tool).toLowerCase();
+    if (!schemaHasType(type, env)) {
+        throw new GraphToolError(tool, 'invalid_args', `type "${type}" is not in the active schema`, 'call mg_graph_schema for the legal type ids');
+    }
+    const summary = requireString(args?.summary, 'summary', tool);
+    const title = String(args?.title ?? '').replace(/\s+/g, ' ').trim();
+    if (!Array.isArray(args?.child_ids)) {
+        throw new GraphToolError(tool, 'invalid_args', 'child_ids must be a non-empty array of node ids');
+    }
+    const childIds = [...new Set(
+        args.child_ids.map((id) => String(id ?? '').trim()).filter(Boolean),
+    )];
+    if (childIds.length === 0) {
+        throw new GraphToolError(tool, 'invalid_args', 'child_ids must be a non-empty array of node ids');
+    }
+    const store = env.working;
+    for (const id of childIds) {
+        const child = store.nodes?.[id];
+        if (!child) {
+            throw new GraphToolError(tool, 'not_found', `child node ${id} does not exist`, NODE_ID_HINT);
+        }
+        if (child.archived) {
+            throw new GraphToolError(tool, 'not_allowed', `child node ${id} is archived`, 'pick active (non-archived) nodes to compact');
+        }
+        if (child.level && child.level !== 'semantic') {
+            throw new GraphToolError(tool, 'not_allowed', `child node ${id} is not a semantic node`);
+        }
+        if (String(child.type || '').toLowerCase() !== type) {
+            throw new GraphToolError(tool, 'invalid_args', `child node ${id} has type "${child.type}", expected "${type}"`, 'all child_ids must match the rollup type');
+        }
+        if (child.parentId) {
+            throw new GraphToolError(tool, 'not_allowed', `child node ${id} already has parent ${child.parentId}`, 'only un-parented nodes can be compacted; compact the parent rollup instead');
+        }
+    }
+    if (typeof env.writeApi?.compactNodes !== 'function') {
+        throw new GraphToolError(tool, 'not_allowed', 'compactNodes write API is unavailable');
+    }
+    let res;
+    try {
+        res = await env.writeApi.compactNodes({ type, childIds, summary });
+    } catch (err) {
+        const code = err?.code === 'CHILD_NOT_FOUND'
+            ? 'not_found'
+            : (err?.code === 'BAD_ARGS' ? 'invalid_args' : 'not_allowed');
+        throw new GraphToolError(tool, code, String(err?.message || err));
+    }
+    const rollupId = String(res?.rollupNodeId || '');
+    const rollup = store.nodes?.[rollupId];
+    if (!rollup) {
+        throw new GraphToolError(tool, 'not_allowed', 'created rollup node could not be resolved');
+    }
+    if (title) {
+        rollup.title = title;
+    }
+    return {
+        ok: true,
+        changed: true,
+        id: rollupId,
+        title: String(rollup.title || ''),
+        type: String(rollup.type || type),
+        semantic_depth: Number(rollup.semanticDepth || 1),
+        child_ids: [...childIds],
+    };
+}
+
 async function execUpsertLinks(args, env) {
     const tool = 'mg_graph_upsert_links';
     const sourceId = requireString(args?.source_node_id, 'source_node_id', tool);
@@ -827,6 +957,7 @@ export async function executeGraphWriteTool({ name, args } = {}, env = {}) {
         case 'mg_graph_edit_node': return await execEditNode(args, env);
         case 'mg_graph_delete_node': return await execDeleteNode(args, env);
         case 'mg_graph_merge_nodes': return await execMergeNodes(args, env);
+        case 'mg_graph_compact_nodes': return await execCompactNodes(args, env);
         case 'mg_graph_upsert_links': return await execUpsertLinks(args, env);
         case 'mg_graph_edit_link': return await execEditLink(args, env);
         case 'mg_graph_delete_link': return await execDeleteLink(args, env);
