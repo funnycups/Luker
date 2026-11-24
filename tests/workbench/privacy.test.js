@@ -171,9 +171,14 @@ describe('workbench privacy and redaction', () => {
         const gatedReaders = askReaders({ sources: disabledSources, suggestions: () => [{ text: 'Leaked suggestion', why: 'secret' }] });
         expect(gatedReaders.wb_read_chat).toBeUndefined();
         expect(gatedReaders.wb_read_character).toBeUndefined();
+        expect(gatedReaders.wb_read_world_info_trace).toBeUndefined();
+        expect(gatedReaders.wb_read_variables).toBeUndefined();
+        expect(gatedReaders.wb_read_regex).toBeUndefined();
         expect(gatedReaders.wb_list_requests).toBeUndefined();
         expect(gatedReaders.wb_read_frontend_logs).toBeUndefined();
+        expect(gatedReaders.wb_read_luker_env).toBeUndefined();
         expect(gatedReaders.wb_read_suggestions).toBeUndefined();
+        expect(gatedReaders.wb_search_luker_docs).toBeUndefined();
 
         // Even if someone passes a reader directly to runAsk while sources.content is false, runAsk refuses to invoke it.
         const chatSpy = jest.fn(async () => ({ messages: [{ text: 'Leaked!' }] }));

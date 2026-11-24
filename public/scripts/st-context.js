@@ -3018,6 +3018,14 @@ export function getContext() {
             getNames: getChatWorldInfoNames,
             setSelection: setChatWorldInfoSelection,
             get globalSelection() { return selected_world_info; },
+            getActivationTrace: async (scopeKey) => {
+                const mod = await import('./world-info.js');
+                return mod.getActivationTraceSnapshot?.(scopeKey) ?? null;
+            },
+        },
+        openRequestInspector: async (requestId = '') => {
+            const mod = await import('./request-inspector.js');
+            return mod.openRequestInspector?.(requestId);
         },
         openai: {
             get proxies() { return proxies; },

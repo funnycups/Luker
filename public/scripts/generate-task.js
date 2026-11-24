@@ -409,7 +409,15 @@ export function assembleMessages({
     requestApi = 'openai',
     runtimeWorldInfo = null,
     promptContext = null,
+    bypassPresetEnvelope = false,
 } = {}, { builder } = {}) {
+    // 当调用方（例如工作台「问问」）不需要外层角色扮演预设与角色卡信封时，
+    // 直接保留原始任务消息列表，避免预设文风指令或角色设定污染诊断上下文。
+    if (bypassPresetEnvelope) {
+        return Array.isArray(taskMessages)
+            ? taskMessages.filter(msg => msg && typeof msg === 'object')
+            : [];
+    }
     if (typeof builder !== 'function') {
         throw new GenerateTaskError(
             'unknown',
@@ -1062,6 +1070,7 @@ export async function generateTask({
     abortSignal = undefined,
     substituteMacros = true,
     promptContext = null,
+    bypassPresetEnvelope = false,
     transientSessionId = undefined,
     onPreparedRequest = null,
 } = {}, { _injected = null } = {}) {
@@ -1137,6 +1146,7 @@ export async function generateTask({
         requestApi: profile.requestApi,
         runtimeWorldInfo: wi,
         promptContext: validatedPromptContext,
+        bypassPresetEnvelope: Boolean(bypassPresetEnvelope),
     }, { builder });
 
     // ── 6. Render per-family ──
@@ -1255,6 +1265,7 @@ export function generateTaskStream({
     abortSignal = undefined,
     substituteMacros = true,
     promptContext = null,
+    bypassPresetEnvelope = false,
     transientSessionId = undefined,
     onPreparedRequest = null,
 } = {}, { _injected = null } = {}) {
@@ -1338,6 +1349,7 @@ export function generateTaskStream({
                 requestApi: profile.requestApi,
                 runtimeWorldInfo: wi,
                 promptContext: validatedPromptContext,
+                bypassPresetEnvelope: Boolean(bypassPresetEnvelope),
             }, { builder });
 
             // ── 6. Render per-family ──

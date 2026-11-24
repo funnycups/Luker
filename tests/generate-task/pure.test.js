@@ -201,6 +201,18 @@ describe('assembleMessages', () => {
             code: 'unknown',
         }));
     });
+
+    test('bypassPresetEnvelope returns taskMessages directly without invoking builder', () => {
+        let called = false;
+        const fakeBuilder = () => { called = true; return []; };
+        const msgs = [{ role: 'system', content: 'sys' }, { role: 'user', content: 'hi' }];
+        const out = assembleMessages({
+            taskMessages: msgs,
+            bypassPresetEnvelope: true,
+        }, { builder: fakeBuilder });
+        expect(called).toBe(false);
+        expect(out).toEqual(msgs);
+    });
 });
 
 describe('renderForApi', () => {

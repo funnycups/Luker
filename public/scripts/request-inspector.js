@@ -1057,10 +1057,35 @@ async function refreshInspectorView(content) {
     content.html(buildListHtml(items));
 }
 
-async function openInspectorPanel() {
-    const items = await fetchList();
+/**
+ * 打开请求检查器弹窗；传入 requestId 时直接定位并展示对应请求详情。
+ *
+ * @param {string} [requestId='']
+ */
+export async function openRequestInspector(requestId = '') {
+    return openInspectorPanel(requestId);
+}
+
+async function openInspectorPanel(initialRequestId = '') {
+    const targetId = String(initialRequestId || '').trim();
     const content = $('<div class="ri-container"></div>');
-    content.html(buildListHtml(items));
+    if (targetId) {
+        currentDetailSearch = '';
+        cachedDetail = null;
+        content.html(`<div class="ri-loading">${t`Loading...`}</div>`);
+        try {
+            const detail = await fetchDetail(targetId);
+            cachedDetail = detail;
+            content.html(buildDetailHtml(detail));
+            bindLazyImagePreviews(content[0]);
+        } catch {
+            const items = await fetchList();
+            content.html(buildListHtml(items));
+        }
+    } else {
+        const items = await fetchList();
+        content.html(buildListHtml(items));
+    }
 
     content.on('click', '.ri-filter-btn', function () {
         currentFilter = $(this).data('filter');

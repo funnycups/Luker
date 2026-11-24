@@ -500,6 +500,16 @@ const ZH_CN = {
     'Unsaved': '未保存',
     'Return to save': '返回保存',
     'Reopen to save': '展开保存',
+    'World book trace': '世界书追踪',
+    'Variables': '变量',
+    'Luker environment': 'Luker 环境',
+    'Luker docs': 'Luker 文档',
+    'Built-in': '内置',
+    '${0} keys': '${0} 项',
+    '${0} enabled': '启用 ${0} 条',
+    'Inspect request ${0}': '在请求检查器中查看 ${0}',
+    'Request ID copied': '已复制请求 ID',
+    'Why did world book or variables not work': '世界书或变量为何没生效',
 };
 
 const ZH_TW = {
@@ -999,6 +1009,16 @@ const ZH_TW = {
     'Unsaved': '未儲存',
     'Return to save': '返回儲存',
     'Reopen to save': '展開儲存',
+    'World book trace': '世界書追蹤',
+    'Variables': '變數',
+    'Luker environment': 'Luker 環境',
+    'Luker docs': 'Luker 文件',
+    'Built-in': '內建',
+    '${0} keys': '${0} 項',
+    '${0} enabled': '啟用 ${0} 條',
+    'Inspect request ${0}': '在請求檢查器中檢視 ${0}',
+    'Request ID copied': '已複製請求 ID',
+    'Why did world book or variables not work': '世界書或變數為何沒生效',
 };
 
 export function registerWorkbenchLocaleData(addLocaleData) {

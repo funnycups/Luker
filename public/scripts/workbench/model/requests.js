@@ -8,14 +8,16 @@ const RULES = [
     { kind: 'memory', label: '记忆图 · 召回规划', test: /memory recall planner|recall_query_context|candidate_nodes/i },
     { kind: 'memory', label: '记忆图 · 提取', test: /dialogue_batch|memory (graph )?extract|extract(ion)? (batch|schema)|mg_upsert|luker_rpg_memory/i },
     { kind: 'memory', label: '记忆图 · 压缩', test: /rollup|summarize the (following|child)|compress(ion)? (rule|instruction)/i },
-    // orchestrator / search
+    // orchestrator / search / sd illustration
     { kind: 'orch', label: '编排', test: /luker_orch|orchestrat|agenda_planner|\bdirector\b.*\bdispatch/i },
-    { kind: 'search', label: '联网搜索', test: /search_tools|web_search|search agent/i },
+    { kind: 'search', label: '联网搜索', test: /search_tools|luker_web_search|luker_search_agent|web_search|search agent/i },
+    { kind: 'image', label: 'AI 插图 / 画室', test: /sd_read_run|sd_propose_|illustration_prompt|character_exploration|visualInspection/i },
     // iteration studios
     { kind: 'iterate', label: 'AI 迭代 · 记忆结构', test: /mg_schema_|schema iteration/i },
     { kind: 'iterate', label: 'AI 迭代 · 预设', test: /cpa_|completion preset assistant/i },
     { kind: 'iterate', label: 'AI 迭代 · 角色卡', test: /cea_|character editor assistant/i },
-    { kind: 'workbench', label: '工作台', test: /wb_(read|ask|ok)|工作台/ },
+    { kind: 'iterate', label: 'AI 迭代 · 世界书', test: /lorebook_write|wb_world_|worldbook assistant/i },
+    { kind: 'workbench', label: '工作台', test: /wb_(read|list|search|answer|ask|ok)|工作台/ },
 ];
 
 function textOf(messages) {
@@ -143,10 +145,10 @@ export function redactReaders(readers, enabled) {
     }]));
 }
 
-const CONTENT_OVERVIEW_KEYS = ['聊天', '角色卡', '预设', '连接', '提示词', 'chat', 'character', 'preset', 'connection', 'promptBudget'];
+const CONTENT_OVERVIEW_KEYS = ['聊天', '角色卡', '预设', '连接', '提示词', '世界书', '变量', '正则', 'chat', 'character', 'preset', 'connection', 'promptBudget', 'worldBooks', 'variables', 'regex'];
 const INSPECTOR_OVERVIEW_KEYS = ['最近的请求', 'requests'];
 const FRONT_LOGS_OVERVIEW_KEYS = ['调试日志开关', 'frontendLogs', 'debugLogging'];
-const PLUGIN_OVERVIEW_KEYS = ['记忆图', '编排', '扩展', 'extensions', 'plugins'];
+const PLUGIN_OVERVIEW_KEYS = ['记忆图', '编排', '图像生成', '扩展', '环境', 'extensions', 'plugins', 'environment'];
 
 /** Applies the Ask settings (sources + redaction) to an overview before sending. */
 export function finishOverview(overview, {

@@ -2,6 +2,7 @@
 //
 // Workbench AskProvider & SuggestRuleProvider definitions for Orchestrator.
 
+import { attachNotesFloorState } from '../loop-runtime.js';
 import { i18n, i18nFormat, modeInfo } from './i18n.js';
 import { buildFlow } from './model/profile.js';
 import { buildRunView, displayStatus, formatDuration } from './model/run.js';
@@ -139,11 +140,11 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
             type: 'function',
             function: {
                 name: 'wb_read_orch',
-                description: 'Orchestrator: current execution mode, active profile summary, latest injected capsule, and latest run timeline.',
+                description: 'Orchestrator: current execution mode, active profile summary, latest injected capsule, latest run timeline with per-agent output/errors, or current chat plot notes.',
                 parameters: {
                     type: 'object',
                     properties: {
-                        part: { type: 'string', enum: ['summary', 'profile', 'capsule', 'last_run'], description: 'Default summary.' },
+                        part: { type: 'string', enum: ['summary', 'profile', 'capsule', 'last_run', 'notes'], description: 'Default summary.' },
                     },
                     additionalProperties: false,
                 },
@@ -161,6 +162,28 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
                 if (part === 'profile') {
                     return resolveProfileSummary(c, settings, deps);
                 }
+                if (part === 'notes') {
+                    if (typeof c?.createFloorState !== 'function') {
+                        return { available: false, notes: [] };
+                    }
+                    try {
+                        const adapter = await attachNotesFloorState(c);
+                        const entries = await adapter?.listAcrossFloors?.();
+                        const list = Array.isArray(entries) ? entries : [];
+                        return {
+                            total: list.length,
+                            openCount: list.filter(n => n?.status !== 'closed').length,
+                            notes: list.slice(-40).map(n => ({ // cap-ok: 最多返回最近 40 条编排笔记
+                                id: n?.id || '',
+                                status: n?.status || 'open',
+                                text: String(n?.text || '').slice(0, 400), // cap-ok: 单条笔记预览上限
+                                ...(n?.closure_reason ? { closureReason: String(n.closure_reason).slice(0, 200) } : {}),
+                            })),
+                        };
+                    } catch (err) {
+                        return { available: false, error: String(err?.message || err), notes: [] };
+                    }
+                }
                 if (part === 'last_run') {
                     const rec = c?.runPanel?.getRunRecorder?.();
                     const latest = (rec?.history?.() || []).find(r => (r.source || 'orchestrator') === 'orchestrator' && !r.quiet);
@@ -169,13 +192,24 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
                     return {
                         runId: view.runId,
                         mode: view.mode,
+                        floor: view.floor,
                         status: view.status,
                         duration: view.duration,
                         tokens: view.tokens,
                         error: view.error,
                         lanes: view.lanes.map(l => ({
                             agentId: l.agentId,
-                            segments: l.segments.map(s => ({ key: s.key, status: s.status, duration: s.duration })),
+                            segments: l.segments.map(s => ({
+                                key: s.key,
+                                status: s.status,
+                                duration: s.duration,
+                                sections: (s.sections || []).slice(0, 6).map(sec => ({ // cap-ok: 单段最多返回 6 个子节摘要
+                                    kind: sec?.kind || '',
+                                    title: sec?.title || '',
+                                    status: sec?.status || '',
+                                    preview: String(sec?.body || sec?.text || sec?.error || '').slice(0, 320), // cap-ok: 单子节正文摘要上限
+                                })),
+                            })),
                         })),
                         finalText: view.finalText,
                     };
