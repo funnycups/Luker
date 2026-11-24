@@ -1,5 +1,5 @@
 import { describe, expect, test } from '@jest/globals';
-import { GenerateTaskError, resolveProfile, resolveWorldInfo, assembleMessages, renderForApi, generateTask, applyMacroSubstitution, resolveOpenAiStreamFlag } from '../../public/scripts/generate-task.js';
+import { GenerateTaskError, resolveProfile, resolveWorldInfo, assembleMessages, renderForApi, generateTask, generateTaskStream, applyMacroSubstitution, resolveOpenAiStreamFlag } from '../../public/scripts/generate-task.js';
 
 describe('GenerateTaskError', () => {
     test('stores code, message, cause, details', () => {
@@ -202,16 +202,32 @@ describe('assembleMessages', () => {
         }));
     });
 
-    test('bypassPresetEnvelope returns taskMessages directly without invoking builder', () => {
+    test('bypassPresetEnvelope returns shallow-copied taskMessages without invoking builder and strips internal keys', () => {
         let called = false;
         const fakeBuilder = () => { called = true; return []; };
-        const msgs = [{ role: 'system', content: 'sys' }, { role: 'user', content: 'hi' }];
+        const msgs = [
+            { role: 'system', content: 'sys', sourceFloorIndex: 0, substituteMacros: false },
+            { role: 'user', content: 'hi', sourceFloorIndex: 3, substituteMacros: true, name: 'Alice' },
+        ];
         const out = assembleMessages({
             taskMessages: msgs,
             bypassPresetEnvelope: true,
         }, { builder: fakeBuilder });
         expect(called).toBe(false);
-        expect(out).toEqual(msgs);
+        expect(out).toEqual([
+            { role: 'system', content: 'sys' },
+            { role: 'user', content: 'hi', name: 'Alice' },
+        ]);
+        // Shallow copy must not share references with caller's message objects
+        expect(out).not.toBe(msgs);
+        expect(out[0]).not.toBe(msgs[0]);
+        expect(out[1]).not.toBe(msgs[1]);
+        expect('sourceFloorIndex' in out[0]).toBe(false);
+        expect('substituteMacros' in out[0]).toBe(false);
+        expect('sourceFloorIndex' in out[1]).toBe(false);
+        expect('substituteMacros' in out[1]).toBe(false);
+        out[0].content = 'mutated-downstream';
+        expect(msgs[0].content).toBe('sys');
     });
 });
 
@@ -320,6 +336,74 @@ describe('generateTask — input validation', () => {
             console.warn = origWarn;
         }
         expect(warns.some(w => /llmPresetName.*non-openai|non-openai.*llmPresetName|kobold/i.test(w))).toBe(true);
+    });
+
+    test('bypassPresetEnvelope skips worldInfoResolver in generateTask and forwards cleaned message copies', async () => {
+        let wiCalled = false;
+        let builderCalled = false;
+        let sentPayload = null;
+        const inputMsgs = [
+            { role: 'system', content: 'diag sys', sourceFloorIndex: 1, substituteMacros: false },
+            { role: 'user', content: 'diag user', sourceFloorIndex: 2, substituteMacros: false },
+        ];
+        const result = await generateTask({
+            taskMessages: inputMsgs,
+            worldInfoSource: 'chat',
+            bypassPresetEnvelope: true,
+            substituteMacros: false,
+            apiPresetName: 'TestProfile',
+        }, {
+            _injected: {
+                profileResolver: () => ({ requestApi: 'openai', apiSettingsOverride: null }),
+                worldInfoResolver: async () => { wiCalled = true; return { worldInfoBeforeEntries: [{ id: 'leaked' }] }; },
+                builder: () => { builderCalled = true; return []; },
+                senders: {
+                    sendOpenAIRequest: async (_type, payload) => {
+                        sentPayload = payload;
+                        return { choices: [{ message: { content: 'diag reply' } }] };
+                    },
+                },
+            },
+        });
+
+        expect(wiCalled).toBe(false);
+        expect(builderCalled).toBe(false);
+        expect(result.assistantText).toBe('diag reply');
+        expect(sentPayload).toEqual([
+            { role: 'system', content: 'diag sys' },
+            { role: 'user', content: 'diag user' },
+        ]);
+        expect(sentPayload[0]).not.toBe(inputMsgs[0]);
+        expect('sourceFloorIndex' in sentPayload[0]).toBe(false);
+        expect('substituteMacros' in sentPayload[0]).toBe(false);
+    });
+
+    test('bypassPresetEnvelope skips worldInfoResolver in generateTaskStream', async () => {
+        let wiCalled = false;
+        let builderCalled = false;
+        const { result } = generateTaskStream({
+            taskMessages: [{ role: 'user', content: 'stream diag', sourceFloorIndex: 0, substituteMacros: false }],
+            worldInfoSource: 'task',
+            bypassPresetEnvelope: true,
+            substituteMacros: false,
+            apiPresetName: 'TestProfile',
+        }, {
+            _injected: {
+                profileResolver: () => ({ requestApi: 'openai', apiSettingsOverride: null }),
+                worldInfoResolver: async () => { wiCalled = true; return {}; },
+                builder: () => { builderCalled = true; return []; },
+                senders: {
+                    sendOpenAIRequest: async () => async function* () {
+                        yield { text: 'stream ok', toolCalls: [], state: { reasoning: '', signature: '', images: [], toolSignatures: {} } };
+                    },
+                },
+            },
+        });
+
+        const out = await result;
+        expect(wiCalled).toBe(false);
+        expect(builderCalled).toBe(false);
+        expect(out.assistantText).toBe('stream ok');
     });
 });
 

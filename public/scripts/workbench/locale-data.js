@@ -397,8 +397,8 @@ const ZH_CN = {
     'Full content, duration and status of the last 200 requests': '最近 200 次请求的完整内容、用时、状态',
     'Browser console output, cleared on reload': '浏览器控制台输出，刷新页面后清空',
     'Only admins can read these in multi-user mode': '开了多用户时只有管理员能读',
-    'Chat, character card, world books, preset, connection profile': '聊天、角色卡、世界书、预设、连接配置',
-    'Memory graph, orchestration, token records, suggestions': '记忆图、编排、token 记录、小建议',
+    'Chat, character card, world books, preset, variables (including optional global), regex, connection profile': '聊天、角色卡、世界书、预设、变量（含可选全局变量）、正则、连接配置',
+    'Memory graph, orchestration, image generation, environment & extensions, suggestions': '记忆图、编排、图像生成、运行环境与扩展状态、小建议',
     'Reading connection profiles…': '读取连接配置…',
     'Generation preset': '生成预设',
     'Testing…': '测试中…',
@@ -510,6 +510,7 @@ const ZH_CN = {
     'Inspect request ${0}': '在请求检查器中查看 ${0}',
     'Request ID copied': '已复制请求 ID',
     'Why did world book or variables not work': '世界书或变量为何没生效',
+    'Memory structure': '记忆结构',
 };
 
 const ZH_TW = {
@@ -906,8 +907,8 @@ const ZH_TW = {
     'Full content, duration and status of the last 200 requests': '最近 200 次請求的完整內容、耗時、狀態',
     'Browser console output, cleared on reload': '瀏覽器主控台輸出，重新整理頁面後清空',
     'Only admins can read these in multi-user mode': '啟用多使用者帳號時只有管理員能讀',
-    'Chat, character card, world books, preset, connection profile': '聊天、角色卡、世界書、預設、連線設定',
-    'Memory graph, orchestration, token records, suggestions': '記憶圖、編排、token 記錄、小建議',
+    'Chat, character card, world books, preset, variables (including optional global), regex, connection profile': '聊天、角色卡、世界書、預設、變數（含可選全域變數）、正則、連線設定',
+    'Memory graph, orchestration, image generation, environment & extensions, suggestions': '記憶圖、編排、圖像生成、執行環境與擴充狀態、小建議',
     'Reading connection profiles…': '讀取連線設定…',
     'Generation preset': '生成預設',
     'Testing…': '測試中…',
@@ -1019,6 +1020,7 @@ const ZH_TW = {
     'Inspect request ${0}': '在請求檢查器中檢視 ${0}',
     'Request ID copied': '已複製請求 ID',
     'Why did world book or variables not work': '世界書或變數為何沒生效',
+    'Memory structure': '記憶結構',
 };
 
 export function registerWorkbenchLocaleData(addLocaleData) {

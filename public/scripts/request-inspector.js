@@ -191,11 +191,22 @@ async function fetchList() {
     return cachedList;
 }
 
+function normalizeRequestId(id) {
+    if (typeof id !== 'string' && typeof id !== 'number') return null;
+    const trimmed = String(id).trim();
+    if (!trimmed || trimmed === '.' || trimmed === 'list') return null;
+    if (trimmed.includes('..') || /[/\\?#\s\u0000-\u001f]/.test(trimmed)) return null;
+    return trimmed;
+}
+
 async function fetchDetail(id) {
+    const safeId = normalizeRequestId(id);
+    if (!safeId) return null;
     try {
-        const res = await fetch(`/api/request-inspector/${id}`);
+        const res = await fetch(`/api/request-inspector/${encodeURIComponent(safeId)}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
+        const data = await res.json();
+        return data && typeof data === 'object' && !Array.isArray(data) ? data : null;
     } catch (err) {
         console.error(`[${MODULE_NAME}] Failed to fetch detail:`, err);
         return null;
@@ -1073,14 +1084,16 @@ async function openInspectorPanel(initialRequestId = '') {
         currentDetailSearch = '';
         cachedDetail = null;
         content.html(`<div class="ri-loading">${t`Loading...`}</div>`);
-        try {
-            const detail = await fetchDetail(targetId);
+        const detail = await fetchDetail(targetId);
+        if (detail) {
             cachedDetail = detail;
             content.html(buildDetailHtml(detail));
             bindLazyImagePreviews(content[0]);
-        } catch {
+        } else {
+            cachedDetail = null;
             const items = await fetchList();
             content.html(buildListHtml(items));
+            globalThis.toastr?.info?.(t`Request record not found or expired.`, t`Request Inspector`);
         }
     } else {
         const items = await fetchList();
@@ -1151,10 +1164,10 @@ async function openInspectorPanel(initialRequestId = '') {
     });
 
     content.on('click', '.ri-export', function () {
-        const id = $(this).data('id');
+        const id = normalizeRequestId($(this).data('id'));
         if (!id) return;
         const a = document.createElement('a');
-        a.href = `/api/request-inspector/${id}/export`;
+        a.href = `/api/request-inspector/${encodeURIComponent(id)}/export`;
         a.download = '';
         document.body.appendChild(a);
         a.click();

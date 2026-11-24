@@ -2,12 +2,50 @@
 //
 // Workbench AskProvider & SuggestRuleProvider definitions for Orchestrator.
 
-import { attachNotesFloorState } from '../loop-runtime.js';
 import { i18n, i18nFormat, modeInfo } from './i18n.js';
 import { buildFlow } from './model/profile.js';
 import { buildRunView, displayStatus, formatDuration } from './model/run.js';
 
 const SLOW_RUN_MS = 25000; // cap-ok: UX threshold flagging slow multi-agent turns for optional user review
+const NOTES_NAMESPACE = 'luker_orch_loop_notes';
+
+function activeChatId(ctx) {
+    if (!ctx) return '';
+    const id = typeof ctx.getCurrentChatId === 'function' ? ctx.getCurrentChatId() : ctx.chatId;
+    return id ? String(id).trim() : '';
+}
+
+function findLatestOrchRun(ctx) {
+    const rec = ctx?.runPanel?.getRunRecorder?.();
+    const allRuns = Array.isArray(rec?.history?.()) ? rec.history() : [];
+    const chatId = activeChatId(ctx);
+    return allRuns.find(r =>
+        r && (r.source || 'orchestrator') === 'orchestrator'
+        && !r.quiet
+        && (!chatId || !r.chatId || r.chatId === chatId),
+    ) || null;
+}
+
+function normalizeReadOnlyNotes(rawEntries) {
+    if (!Array.isArray(rawEntries)) return [];
+    const out = [];
+    for (const entry of rawEntries) {
+        if (typeof entry === 'string') {
+            out.push({ id: '', status: 'open', text: entry });
+        } else if (entry && typeof entry === 'object' && typeof entry.text === 'string') {
+            const normalized = {
+                id: typeof entry.id === 'string' ? entry.id : '',
+                status: typeof entry.status === 'string' && entry.status ? entry.status : 'open',
+                text: entry.text,
+            };
+            if (typeof entry.closure_reason === 'string' && entry.closure_reason) {
+                normalized.closure_reason = entry.closure_reason;
+            }
+            out.push(normalized);
+        }
+    }
+    return out;
+}
 
 function resolveMode(settings) {
     const m = String(settings?.executionMode || 'spec').trim().toLowerCase();
@@ -57,15 +95,7 @@ export async function buildOrchSnapshot(ctx, deps = {}) {
         ? deps.getLatestOrchestrationEntry(ctx)
         : null;
 
-    const rec = ctx?.runPanel?.getRunRecorder?.();
-    const allRuns = Array.isArray(rec?.history?.()) ? rec.history() : [];
-    const chatId = String(ctx?.chatId || ctx?.getCurrentChatId?.() || '');
-    const matching = allRuns.filter(r =>
-        r && (r.source || 'orchestrator') === 'orchestrator'
-        && !r.quiet
-        && (!chatId || !r.chatId || r.chatId === chatId),
-    );
-    const latest = matching[0] || null;
+    const latest = findLatestOrchRun(ctx);
     const latestView = latest ? buildRunView(latest, Object.keys(flow?.agents || {})) : null;
 
     return {
@@ -163,21 +193,28 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
                     return resolveProfileSummary(c, settings, deps);
                 }
                 if (part === 'notes') {
-                    if (typeof c?.createFloorState !== 'function') {
+                    if (!activeChatId(c) || typeof c?.readFloorStateSnapshot !== 'function') {
                         return { available: false, notes: [] };
                     }
                     try {
-                        const adapter = await attachNotesFloorState(c);
-                        const entries = await adapter?.listAcrossFloors?.();
-                        const list = Array.isArray(entries) ? entries : [];
+                        const snap = await c.readFloorStateSnapshot({ namespace: NOTES_NAMESPACE });
+                        if (!snap || snap.ok === false) {
+                            return {
+                                available: false,
+                                ...(snap?.reason ? { reason: snap.reason } : {}),
+                                ...(snap?.hint ? { error: snap.hint } : {}),
+                                notes: [],
+                            };
+                        }
+                        const list = normalizeReadOnlyNotes(snap.state?.entries);
                         return {
                             total: list.length,
-                            openCount: list.filter(n => n?.status !== 'closed').length,
+                            openCount: list.filter(n => n.status !== 'closed').length,
                             notes: list.slice(-40).map(n => ({ // cap-ok: 最多返回最近 40 条编排笔记
-                                id: n?.id || '',
-                                status: n?.status || 'open',
-                                text: String(n?.text || '').slice(0, 400), // cap-ok: 单条笔记预览上限
-                                ...(n?.closure_reason ? { closureReason: String(n.closure_reason).slice(0, 200) } : {}),
+                                id: n.id,
+                                status: n.status,
+                                text: n.text.slice(0, 400), // cap-ok: 单条笔记预览上限
+                                ...(n.closure_reason ? { closureReason: n.closure_reason.slice(0, 200) } : {}), // cap-ok: 关闭原因预览上限
                             })),
                         };
                     } catch (err) {
@@ -185,10 +222,12 @@ export function createOrchAskProvider(getCtx = () => globalThis.Luker?.getContex
                     }
                 }
                 if (part === 'last_run') {
-                    const rec = c?.runPanel?.getRunRecorder?.();
-                    const latest = (rec?.history?.() || []).find(r => (r.source || 'orchestrator') === 'orchestrator' && !r.quiet);
+                    const latest = findLatestOrchRun(c);
                     if (!latest) return { empty: true };
-                    const view = buildRunView(latest, []);
+                    const { mode, scope, presetName, profile } = resolveProfileSummary(c, settings, deps);
+                    const flow = buildFlow(profile, { mode, source: scope, presetName, settings });
+                    const knownAgentIds = Object.keys(flow?.agents || {});
+                    const view = buildRunView(latest, knownAgentIds);
                     return {
                         runId: view.runId,
                         mode: view.mode,

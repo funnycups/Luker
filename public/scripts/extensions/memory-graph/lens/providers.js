@@ -26,6 +26,35 @@ function activeChatId(ctx) {
     return id ? String(id) : '';
 }
 
+function truncateFieldMap(record, maxLen = 300) {
+    if (!record || typeof record !== 'object') return {};
+    const out = {};
+    for (const [k, v] of Object.entries(record)) {
+        if (v === null || v === undefined) continue;
+        let text;
+        if (typeof v === 'string') {
+            text = v;
+        } else {
+            try {
+                text = JSON.stringify(v);
+            } catch {
+                text = String(v);
+            }
+        }
+        if (typeof text !== 'string') continue;
+        out[k] = text.length > maxLen ? text.slice(0, maxLen) : text; // cap-ok: 单列字段值预览上限
+    }
+    return out;
+}
+
+function nodeRecencyKey(node) {
+    const end = node?.floor_range?.end;
+    if (typeof end === 'number' && Number.isFinite(end)) return end;
+    const seq = node?.seq_to;
+    if (typeof seq === 'number' && Number.isFinite(seq)) return seq;
+    return -1;
+}
+
 export async function buildMemorySnapshot(ctx, deps = {}) {
     const mg = ctx?.getExtensionApi?.('memory-graph');
     if (!mg) return null;
@@ -49,8 +78,10 @@ export async function buildMemorySnapshot(ctx, deps = {}) {
         compression: false,
         threshold: 0,
         maxSeqDistance: null,
-        recallMode: '',
-        extractionInterval: null,
+        recallMethod: '',
+        recallEnabled: true,
+        autoExtractionEnabled: true,
+        updateEvery: null,
         floors: chatFloors(ctx),
         types: 0,
         scope: 'global',
@@ -58,14 +89,17 @@ export async function buildMemorySnapshot(ctx, deps = {}) {
 
     const settings = typeof getSettings === 'function' ? getSettings() : {};
     out.enabled = settings?.enabled !== false;
-    out.recallMode = String(settings?.recallMode || settings?.recall?.mode || '');
-    if (Number.isFinite(Number(settings?.extractionInterval))) {
-        out.extractionInterval = Number(settings.extractionInterval);
-    }
+    out.recallMethod = String(settings?.recallMethod || '');
+    out.recallEnabled = settings?.recallEnabled !== false;
+    out.autoExtractionEnabled = settings?.autoExtractionEnabled !== false;
     const adv = mg.getAdvancedScopeInfo?.(ctx, settings);
     if (adv) {
         out.maxSeqDistance = Number(adv?.settings?.[HORIZON_KEY] ?? settings?.[HORIZON_KEY] ?? 0);
         out.scope = adv?.scope || 'global';
+    }
+    const rawUpdateEvery = adv?.settings?.updateEvery ?? settings?.updateEvery;
+    if (rawUpdateEvery !== null && rawUpdateEvery !== undefined && rawUpdateEvery !== '' && Number.isFinite(Number(rawUpdateEvery))) {
+        out.updateEvery = Number(rawUpdateEvery);
     }
     const schemaInfo = mg.getSchemaScopeInfo?.(ctx, settings);
     if (schemaInfo) {
@@ -176,7 +210,7 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                             enum: ['summary', 'core', 'focus', 'search', 'nodes', 'schema'],
                             description: 'Default summary. Use search/nodes to find specific memory entries or schema to inspect memory types and compression rules.',
                         },
-                        query: { type: 'string', description: 'Keyword to match against node title, summary, content, fields, or tags (used with search/nodes).' },
+                        query: { type: 'string', description: 'Keyword to match against node id, type, title, or fields (used with search/nodes).' },
                         type: { type: 'string', description: 'Optional node type id filter (used with search/nodes).' },
                         include_archived: { type: 'boolean', description: 'Include archived nodes when searching/listing (default true).' },
                         limit: { type: 'integer', description: 'Max nodes to return (1-50, default 20).' },
@@ -207,10 +241,19 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                         types: (Array.isArray(schema) ? schema : []).map(t => ({
                             id: t?.id,
                             label: t?.label || t?.name || t?.id,
-                            description: String(t?.description || '').slice(0, 240), // cap-ok: 单类型说明预览上限
-                            persistent: Boolean(t?.persistent ?? t?.alwaysInject),
-                            compression: t?.compression || null,
-                            fields: Array.isArray(t?.fields) ? t.fields.map(f => f?.key || f?.id || f?.name).filter(Boolean) : [],
+                            extractHint: String(t?.extractHint || '').slice(0, 300), // cap-ok: 单类型提取提示预览上限
+                            extractionInstructions: String(t?.extractionInstructions || '').slice(0, 300), // cap-ok: 单类型提取指令预览上限
+                            alwaysInject: Boolean(t?.alwaysInject ?? t?.persistent),
+                            tableColumns: Array.isArray(t?.tableColumns) ? t.tableColumns.filter(Boolean).map(String) : [],
+                            columnHints: truncateFieldMap(t?.columnHints, 200),
+                            compression: t?.compression && typeof t.compression === 'object'
+                                ? {
+                                    ...t.compression,
+                                    ...(typeof t.compression.summarizeInstruction === 'string'
+                                        ? { summarizeInstruction: t.compression.summarizeInstruction.slice(0, 240) } // cap-ok: 压缩指令预览上限
+                                        : {}),
+                                }
+                                : null,
                         })),
                     };
                 }
@@ -228,35 +271,42 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                         if (!node || typeof node !== 'object') return false;
                         if (typeNeedle && String(node.type || '').toLowerCase() !== typeNeedle) return false;
                         if (!needle) return true;
+                        let fieldsText = '';
+                        if (node.fields && typeof node.fields === 'object') {
+                            try { fieldsText = JSON.stringify(node.fields); } catch { fieldsText = ''; }
+                        }
                         const hay = [
                             node.id,
                             node.type,
                             node.title,
-                            node.name,
-                            node.summary,
-                            node.content,
-                            Array.isArray(node.tags) ? node.tags.join(' ') : '',
-                            node.fields ? JSON.stringify(node.fields) : '',
-                            node.attributes ? JSON.stringify(node.attributes) : '',
+                            fieldsText,
                         ].filter(Boolean).join(' ').toLowerCase();
                         return hay.includes(needle);
                     });
-                    // 按楼层/更新时间倒序，优先呈现最新节点。
-                    matched.sort((a, b) => (Number(b?.last_seq ?? b?.seq ?? 0) - Number(a?.last_seq ?? a?.seq ?? 0)));
+                    // 按楼层范围末尾 / 节点水位倒序，优先呈现最新节点。
+                    matched.sort((a, b) => nodeRecencyKey(b) - nodeRecencyKey(a));
                     return {
                         totalInGraph: allNodes.length,
                         matched: matched.length,
-                        nodes: matched.slice(0, maxItems).map(n => ({
-                            id: n.id,
-                            type: n.type,
-                            title: n.title || n.name || '',
-                            summary: String(n.summary || n.content || '').slice(0, 500), // cap-ok: 单节点摘要上限
-                            seq: n.last_seq ?? n.seq ?? null,
-                            archived: Boolean(n.archived),
-                            parentId: n.parent_id || null,
-                            depth: Number(n.semantic_depth || 0),
-                            tags: Array.isArray(n.tags) ? n.tags.slice(0, 10) : [], // cap-ok: 单节点标签预览上限
-                        })),
+                        nodes: matched.slice(0, maxItems).map(n => {
+                            const fields = truncateFieldMap(n.fields, 300);
+                            const rawPreview = n?.fields?.summary ?? n?.fields?.note ?? '';
+                            const summaryPreview = (typeof rawPreview === 'string' ? rawPreview : String(rawPreview)).slice(0, 300); // cap-ok: 节点摘要预览上限
+                            return {
+                                id: n.id,
+                                type: n.type,
+                                level: n.level || 'episodic',
+                                title: n.title || '',
+                                fields,
+                                summaryPreview,
+                                seqTo: (Number.isFinite(n.seq_to) && n.seq_to >= 0) ? n.seq_to : null,
+                                floorRange: n.floor_range || null,
+                                archived: Boolean(n.archived),
+                                parentId: n.parent_id || null,
+                                depth: Number(n.semantic_depth || 0),
+                                semanticRollup: Boolean(n.semantic_rollup),
+                            };
+                        }),
                     };
                 }
                 const proj = await mg.getLastRecallProjection?.(c);

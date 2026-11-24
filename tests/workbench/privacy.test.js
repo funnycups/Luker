@@ -206,4 +206,59 @@ describe('workbench privacy and redaction', () => {
         expect(out.text).not.toContain('dXNlcjpwYXNz');
         expect(out.accessToken).toBe('***');
     });
+
+    test('wb_read_luker_env blocks connections, hides summary connection fields, and filters character/preset skills when sources.content is false', async () => {
+        globalThis.Luker = {
+            getContext: () => ({
+                chatCompletionSettings: { chat_completion_source: 'openai' },
+                connectionProfiles: {
+                    list: () => [{
+                        name: 'SecretProfile',
+                        api: 'openai',
+                        model: 'gpt-secret-4o',
+                        'api-url': 'https://internal.secret.local/v1',
+                        'network-proxy': 'http://user:pass@proxy.secret.local:8080',
+                    }],
+                },
+                listExtensionNames: () => ['memory-graph', 'orchestrator', 'search-tools'],
+                skills: {
+                    list: async () => [
+                        { name: 'global-style', scope: { kind: 'global' }, description: 'Global writing guide' },
+                        { name: 'orch-flow', scope: { kind: 'orch-preset', presetId: 'p1' }, description: 'Orch preset skill' },
+                        { name: 'char-secret', scope: { kind: 'character', avatar: 'alice.png' }, description: 'Character private skill' },
+                        { name: 'preset-secret', scope: { kind: 'preset', presetName: 'MyRP' }, description: 'Preset private skill' },
+                    ],
+                },
+                extensionSettings: {
+                    workbench: {},
+                    search_tools: { enabled: false, preRequestEnabled: true, provider: 'tavily' },
+                    disabledExtensions: [],
+                },
+            }),
+        };
+
+        const readers = askReaders({
+            sources: { content: false, plugins: true, inspector: false, frontLogs: false, serverLogs: false },
+            redactText: true,
+        });
+
+        expect(typeof readers.wb_read_luker_env).toBe('function');
+
+        const conns = await readers.wb_read_luker_env({ part: 'connections' });
+        expect(conns).toEqual({ error: 'Source disabled: content' });
+        expect(JSON.stringify(conns)).not.toContain('SecretProfile');
+
+        const summary = await readers.wb_read_luker_env({ part: 'summary' });
+        expect(summary.activeConnection).toBeUndefined();
+        expect(summary.connectionProfileCount).toBeUndefined();
+        expect(JSON.stringify(summary)).not.toContain('SecretProfile');
+        expect(JSON.stringify(summary)).not.toContain('gpt-secret-4o');
+
+        const skills = await readers.wb_read_luker_env({ part: 'skills' });
+        expect(skills.available).toBe(true);
+        expect(skills.total).toBe(2);
+        expect(skills.skills.map(s => s.name)).toEqual(['global-style', 'orch-flow']);
+        expect(JSON.stringify(skills)).not.toContain('char-secret');
+        expect(JSON.stringify(skills)).not.toContain('preset-secret');
+    });
 });

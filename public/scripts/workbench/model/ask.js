@@ -6,7 +6,7 @@
 
 import { i18n } from '../i18n.js';
 
-export const MAX_ROUNDS = 10; // cap-ok: 只读问答工具循环轮数上限，最后一轮强制调用 wb_answer 收尾
+export const MAX_ROUNDS = 10; // cap-ok: 只读问答工具循环轮数上限，最后一轮引导调用 wb_answer 收尾
 const MAX_TOOL_CHARS = 16000; // cap-ok: 单次工具返回字符上限，防止单条大读取挤爆模型上下文窗口
 
 const fn = (name, description, properties = {}, required = []) => ({
@@ -121,12 +121,12 @@ export function askTools(sources = {}, extraPluginTools = []) {
             limit: { type: 'integer', description: 'Max topics to return (1-10, default 5).' },
         }));
     }
-    list.push(fn('wb_answer', 'Give the final answer to the user. Call exactly once, after reading what you need.', {
+    list.push(fn('wb_answer', 'Give the final answer to the user. Call exactly once, after reading what you need (never in the same turn as read tools).', {
         text: { type: 'string', description: 'The answer in Simplified Chinese, plain and concrete. Markdown tables allowed.' },
         suggest: {
             type: 'string',
-            enum: ['', 'memory', 'orch', 'sd', 'preset', 'card', 'world'],
-            description: 'If fixing this needs editing one workbench target, name it so the user gets a jump button.',
+            enum: ['', 'memory_graph', 'memory', 'orch', 'sd', 'preset', 'card', 'world'],
+            description: 'If fixing this needs editing one workbench target, name it so the user gets a jump button: memory_graph = edit current chat memory nodes/relations (requires an open chat); memory = edit memory structure/schema and extraction/injection settings; orch = orchestration; sd = image generation; preset = preset; card = character card; world = world book.',
         },
         fix_prompt: { type: 'string', description: 'If suggest is set: a concrete Chinese instruction for that workbench\'s AI.' },
         request_ids: { type: 'array', items: { type: 'string' }, description: 'Request IDs your answer references (rendered as clickable inspector links).' },
@@ -139,7 +139,7 @@ const SYSTEM = [
     '',
     '【Luker 核心架构速查（切勿套用旧版 SillyTavern 经验瞎猜）】',
     '- Luker 是基于 SillyTavern 深度重构的平台，内置多项独有机制：',
-    '  1. 工作台（Alt+W / 魔杖菜单 / 右下角胶囊）：统一集成总览、问问、AI 迭代（memory/orch/sd/preset/card/world）、改动记录，以及嵌入的记忆图、编排、图像生成面板。',
+    '  1. 工作台（Alt+W / 魔杖菜单 / 右下角胶囊）：统一集成总览、问问、AI 迭代（memory_graph 改当前聊天记忆节点与关系，memory 改记忆结构与提取/注入配置，另有 orch/sd/preset/card/world）、改动记录，以及嵌入的记忆图、编排、图像生成面板。',
     '  2. 预设解耦与绑定：Chat Completion 预设与 API 连接配置分离，切预设不改连接；角色卡可绑定推荐预设与人设；预设可关联世界书。',
     '  3. 世界书与激活追踪：支持全局/角色主辅书/聊天书/预设世界书，Luker 记录每次扫描的激活链路追踪（命中词、扫描深度、未激活原因）。',
     '  4. 逐楼层变量（Variable Op Log）：AI 回复里的 {{setvar}}/{{addvar}}/{{incvar}}/{{decvar}}/{{pushvar}}/{{popvar}}/{{deletevar}} 会被自动提取到 extra.var_ops 并从正文隐藏，删除或切 swipe 会自动重放；世界书/预设里的 {{setvar}} 每轮组装提示词时都会覆盖同名变量。',
@@ -159,8 +159,8 @@ const SYSTEM = [
     '- 问「帮我写个 bug 报告」：汇总 wb_read_luker_env(part="summary")、报错请求摘要与前后端关键日志，给出结构化、脱敏后的问题报告。',
     '',
     '【工作纪律】',
-    '1. 你严格只读，不能直接修改任何配置；如果需要修改，在 wb_answer 里通过 suggest 与 fix_prompt 指引用户跳转到对应 AI 迭代工作台，并在 request_ids 填入你引用的请求 ID。',
-    '2. 先看首条消息里的 <概况> 再按需调用工具；同一轮可以并行调用多个必要工具，不要一次把所有无关工具都读一遍。',
+    '1. 你严格只读，不能直接修改任何配置；如果需要修改，在 wb_answer 里通过 suggest 与 fix_prompt 指引用户跳转到对应 AI 迭代工作台，并在 request_ids 填入你引用的请求 ID。注意区分 memory_graph（修改当前聊天的记忆节点与关系，仅在有打开聊天时可用，无聊天时勿建议）与 memory（修改记忆结构/类型及提取注入配置）。',
+    '2. 先看当前用户消息里的 <概况> 再按需调用工具；仅调用当前 tools 列表中实际提供的工具（缺某工具即说明该数据源已被关闭或对应插件未启用，不要强行调用未提供的工具）。同一轮可以并行调用多个必要读取工具，不要一次把所有无关工具都读一遍；调用读取工具的同一轮不要同时调用 wb_answer，等工具返回后再调用 wb_answer 汇总结论。',
     '3. 结论必须有实证：引用具体的数字、楼层号、条目名、变量名、正则名、报错原文或请求 ID。某类数据源被关闭或查不到时直接说查不到（必要时告知可在设置里开启哪个数据源或调试日志），严禁脑补猜测。',
     '4. 请求列表里的「来源」带有「（推测）」字样时说明是工作台基于内容规则推测的，提到时说「看起来是」。',
     '5. 查清后调用一次 wb_answer 结束。用简体中文回答，先给结论，再列依据与建议，平实直白不客套；这是排查与咨询任务，严禁角色扮演。',
@@ -231,20 +231,43 @@ export async function runAsk({ question, overview, readers, request, sources = {
     ];
     const reads = [];
     let sent = messages.reduce((n, m) => n + String(m.content || '').length, 0);
+    let lastAssistantText = '';
+    const lastRoundHint = '已达到工具读取轮数上限，不要再调用读取工具。请直接调用一次 wb_answer 汇总已有发现并给出最终回答。';
     for (let round = 0; round < MAX_ROUNDS; round++) {
         if (signal?.aborted) throw new Error(i18n('Stopped'));
         const lastRound = round === MAX_ROUNDS - 1;
         const offered = lastRound ? tools.filter(t => t.function.name === 'wb_answer') : tools;
-        const resp = await request(messages, offered);
+        const requestMessages = lastRound
+            ? [...messages, { role: 'user', content: lastRoundHint }]
+            : messages;
+        if (lastRound) sent += lastRoundHint.length;
+        let resp;
+        try {
+            resp = await request(requestMessages, offered);
+        } catch (err) {
+            if (lastRound && !signal?.aborted && err?.name !== 'AbortError') {
+                return {
+                    answer: lastAssistantText || i18n('(The AI read a lot without reaching a conclusion — try asking something more specific)'),
+                    suggest: '',
+                    fixPrompt: '',
+                    requestIds: [],
+                    reads,
+                    sent,
+                };
+            }
+            throw err;
+        }
         const text = String(resp?.text || '');
+        if (text.trim()) lastAssistantText = text.trim();
         const calls = Array.isArray(resp?.calls) ? resp.calls : [];
         const answer = calls.find(c => c.name === 'wb_answer');
-        if (answer) {
+        const hasOtherCalls = calls.some(c => c.name !== 'wb_answer');
+        if (answer && (lastRound || !hasOtherCalls)) {
             return {
-                answer: String(answer.args.text || text || '').trim(),
-                suggest: String(answer.args.suggest || ''),
-                fixPrompt: String(answer.args.fix_prompt || ''),
-                requestIds: Array.isArray(answer.args.request_ids) ? answer.args.request_ids.map(String).filter(Boolean) : [],
+                answer: String(answer.args?.text || text || '').trim(),
+                suggest: String(answer.args?.suggest || ''),
+                fixPrompt: String(answer.args?.fix_prompt || ''),
+                requestIds: Array.isArray(answer.args?.request_ids) ? answer.args.request_ids.map(String).filter(Boolean) : [],
                 reads,
                 sent,
             };
@@ -253,9 +276,20 @@ export async function runAsk({ question, overview, readers, request, sources = {
             // 模型直接以纯文本作答。
             return { answer: text || i18n('(The AI gave no answer)'), suggest: '', fixPrompt: '', requestIds: [], reads, sent };
         }
-        const readCalls = calls.filter(c => allowedReadNames.has(c.name) && readers[c.name]);
-        const blockedCalls = calls.filter(c => c.name !== 'wb_answer' && (!allowedReadNames.has(c.name) || !readers[c.name]));
-        const executedCalls = [...readCalls, ...blockedCalls];
+        if (lastRound) {
+            // 末轮仍未调用 wb_answer，不再执行新读取，优雅降级返回已有文本或超轮数提示。
+            return {
+                answer: text.trim() || lastAssistantText || i18n('(The AI read a lot without reaching a conclusion — try asking something more specific)'),
+                suggest: '',
+                fixPrompt: '',
+                requestIds: [],
+                reads,
+                sent,
+            };
+        }
+        // 非末轮若同轮混调 wb_answer 与其他调用，保留原序全部写入 tool_calls（防止删掉首位调用破坏 Gemini 签名位置）；
+        // 非混调场景同样按原序保留，不对读取与禁用调用重新排序。
+        const executedCalls = answer ? calls : calls.filter(c => c.name !== 'wb_answer');
         if (!executedCalls.length) {
             return { answer: text || i18n('(The AI gave no answer)'), suggest: '', fixPrompt: '', requestIds: [], reads, sent };
         }
@@ -266,12 +300,12 @@ export async function runAsk({ question, overview, readers, request, sources = {
                 id: c.id,
                 type: 'function',
                 function: { name: c.name, arguments: JSON.stringify(c.args || {}) },
-                ...(c.thoughtSignature ? { thoughtSignature: c.thoughtSignature } : {}),
+                ...(c.signature ? { signature: c.signature } : {}),
                 ...(c.extra_content ? { extra_content: c.extra_content } : {}),
             })),
         };
-        if (typeof resp?.reasoning === 'string' && resp.reasoning.trim()) {
-            assistantMsg.reasoning = resp.reasoning.trim();
+        if (typeof resp?.reasoning === 'string' && resp.reasoning.length > 0) {
+            assistantMsg.reasoning = resp.reasoning;
         }
         if (Array.isArray(resp?.reasoningBlocks) && resp.reasoningBlocks.length) {
             assistantMsg.reasoning_blocks = resp.reasoningBlocks;
@@ -281,6 +315,15 @@ export async function runAsk({ question, overview, readers, request, sources = {
         }
         messages.push(assistantMsg);
         for (const call of executedCalls) {
+            if (call.name === 'wb_answer') {
+                const deferredContent = JSON.stringify({
+                    deferred: true,
+                    note: 'Read tools executed first; now call wb_answer with the findings.',
+                });
+                sent += deferredContent.length;
+                messages.push({ role: 'tool', tool_call_id: call.id, content: deferredContent });
+                continue;
+            }
             if (!allowedReadNames.has(call.name) || !readers[call.name]) {
                 const blockedContent = JSON.stringify({ error: 'Source disabled or unavailable' });
                 sent += blockedContent.length;
@@ -296,7 +339,7 @@ export async function runAsk({ question, overview, readers, request, sources = {
             messages.push({ role: 'tool', tool_call_id: call.id, content });
         }
     }
-    return { answer: i18n('(The AI read a lot without reaching a conclusion — try asking something more specific)'), suggest: '', fixPrompt: '', requestIds: [], reads, sent };
+    return { answer: lastAssistantText || i18n('(The AI read a lot without reaching a conclusion — try asking something more specific)'), suggest: '', fixPrompt: '', requestIds: [], reads, sent };
 }
 
 const READ_LABEL_KEYS = {

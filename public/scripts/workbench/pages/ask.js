@@ -24,7 +24,8 @@ const CHIP_KEYS = [
 ];
 
 const WS_NAME_KEYS = {
-    memory: 'Memory graph',
+    memory_graph: 'Memory graph',
+    memory: 'Memory structure',
     orch: 'Orchestration',
     sd: 'Image Generation',
     preset: 'Preset',
@@ -401,6 +402,12 @@ export function createAskPage(app) {
             copyText(reqId);
             app.toast(i18n('Request ID copied'));
         };
+        const registeredTargets = app.iterateTargets?.() || [];
+        const canJumpSuggest = Boolean(
+            t.suggest
+            && wsName(t.suggest)
+            && (!registeredTargets.length || registeredTargets.some(target => target?.id === t.suggest)),
+        );
         return h('div', { class: 'wb-msg-ai' },
             reads ? h('div', { class: 'wb-reads' }, icon('eye', { size: 12 }), h('span', { text: i18nFormat('Read ${0}', reads) })) : null,
             t.error ? h('div', { class: 'wb-msg-error', text: t.error }) : renderMarkdown(t.answer),
@@ -411,7 +418,7 @@ export function createAskPage(app) {
                     title: i18nFormat('Inspect request ${0}', id),
                     onClick: () => void openReq(id),
                 }, icon('eye', { size: 11 }), h('span', { text: id.length > 18 ? `${id.slice(0, 16)}…` : id })))) : null,
-            t.suggest && wsName(t.suggest) ? h('div', { class: 'wb-ans-acts' },
+            canJumpSuggest ? h('div', { class: 'wb-ans-acts' },
                 button(i18nFormat('Go edit ${0}', wsName(t.suggest)), () => app.go('ai', { ws: t.suggest, draft: t.fixPrompt || '', from: t.answer }), { iconName: 'spark' })) : null,
             t.sent ? h('details', { class: 'wb-sent' },
                 h('summary', null, icon('up', { size: 12 }), h('span', { text: i18nFormat('Sent to the AI (about ${0} tokens)', formatTokens(Math.round(t.sent / 1.6))) })),
