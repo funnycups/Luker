@@ -108,6 +108,9 @@
 
     .bg_example.mobile-menu-open .jg-menu {
         display: flex;
+        opacity: 1;
+        visibility: visible;
+        transform: scale(1);
         z-index: 4;
     }
 

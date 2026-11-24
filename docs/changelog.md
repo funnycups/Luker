@@ -32,6 +32,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 ### Fixes
 
 - Fixed login sessions expiring after updating a Docker image.
+- Fixed iOS background action menu buttons closing without triggering when tapped.
 
 ## v2.9.0-rc.4 (2026-11-23)
 

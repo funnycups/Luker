@@ -1891,9 +1891,16 @@ export function initBackgrounds() {
                 $context.addClass('mobile-menu-open');
             }
         })
-        .off('blur', '.bg_example.mobile-menu-open').on('blur', '.bg_example.mobile-menu-open', function () {
-            if (!$(this).is(':focus-within')) {
+        .off('blur', '.bg_example.mobile-menu-open, .bg_folder_tile.mobile-menu-open')
+        .on('blur', '.bg_example.mobile-menu-open, .bg_folder_tile.mobile-menu-open', function (e) {
+            const nextTarget = e.relatedTarget ?? e.originalEvent?.relatedTarget;
+            if (nextTarget instanceof Node && !this.contains(nextTarget)) {
                 $(this).removeClass('mobile-menu-open');
+            }
+        })
+        .off('click.bgMobileMenu').on('click.bgMobileMenu', function (e) {
+            if (!$(e.target).closest('.jg-menu, .mobile-only-menu-toggle').length) {
+                $('.bg_example.mobile-menu-open, .bg_folder_tile.mobile-menu-open').removeClass('mobile-menu-open');
             }
         })
         .off('click', '.jg-button').on('click', '.jg-button', function (e) {
