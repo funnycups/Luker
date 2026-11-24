@@ -7840,4 +7840,10 @@
     ,"View commit diff": "查看提交對比"
     ,"Failed to save update notice state": "儲存更新提示狀態失敗"
     ,"Update Notice": "更新提示"
+    ,"Minimize notification": "最小化通知"
+    ,"Restore notification": "展開通知"
+    ,"Close notification": "關閉通知"
+    ,"Expand notifications": "展開全部通知"
+    ,"Collapse notifications": "收起通知"
+    ,"Drag to move": "按住可拖動"
 }

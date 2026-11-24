@@ -1276,7 +1276,8 @@ function showRunInfoToast(message, { stopLabel = '', onStop = null } = {}) {
         timeOut: 0,
         extendedTimeOut: 0,
         tapToDismiss: false,
-        closeButton: true,
+        closeButton: false,
+        closable: false,
         progressBar: false,
     });
     if (activeRunInfoToast && typeof onStop === 'function') {

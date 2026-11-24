@@ -9290,7 +9290,8 @@ function showRuntimeInfoToast(message, { stopLabel = '', onStop = null, kind = '
         timeOut: 0,
         extendedTimeOut: 0,
         tapToDismiss: false,
-        closeButton: true,
+        closeButton: false,
+        closable: false,
         progressBar: false,
     });
     if (kind === 'recall') { activeRecallToast = toastRef; } else { activeExtractionToast = toastRef; }

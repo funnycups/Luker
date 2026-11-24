@@ -616,7 +616,7 @@ async function vectorizeFile(fileText, fileName, collectionId, chunkSize, overla
 
         const batchSize = getBatchSize();
         const toastBody = $('<span>').text('This may take a while. Please wait...');
-        toast = toastr.info(toastBody, `Ingesting file ${escapeHtml(fileName)}`, { closeButton: false, escapeHtml: false, timeOut: 0, extendedTimeOut: 0 });
+        toast = toastr.info(toastBody, `Ingesting file ${escapeHtml(fileName)}`, { closeButton: false, tapToDismiss: false, escapeHtml: false, timeOut: 0, extendedTimeOut: 0 });
         const overlapSize = Math.round(chunkSize * overlapPercent / 100);
         const delimiters = getChunkDelimiters();
         chunkSize = overlapSize > 0 ? (chunkSize - overlapSize) : chunkSize;

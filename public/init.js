@@ -96,6 +96,7 @@ async function initializeApplication() {
         safePerfMeasure('luker:init:import:lib', 'luker:init:import:lib:start', 'luker:init:import:lib:end');
 
         safePerfMark('luker:init:import:app:start');
+        await import('./scripts/luker-toast.js');
         await import('./script.js');
         safePerfMark('luker:init:import:app:end');
         safePerfMeasure('luker:init:import:app', 'luker:init:import:app:start', 'luker:init:import:app:end');

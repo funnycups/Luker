@@ -909,7 +909,7 @@ export class ToolManager {
             const displayName = ToolManager.getDisplayName(name);
             const isStealth = ToolManager.isStealthTool(name);
             const message = await ToolManager.formatToolCallMessage(name, parameters);
-            const toast = message && toastr.info(message, 'Tool Calling', { timeOut: 0 });
+            const toast = message && toastr.info(message, 'Tool Calling', { timeOut: 0, tapToDismiss: false });
             const toolResult = await ToolManager.invokeFunctionTool(name, parameters);
             toastr.clear(toast);
             console.log('[ToolManager] Function tool result:', result);

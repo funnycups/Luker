@@ -270,6 +270,7 @@ import {
     getInstructStoppingSequences,
 } from './scripts/instruct-mode.js';
 import { getCurrentLocale, initLocales, t, translate } from './scripts/i18n.js';
+import { setToastTranslator } from './scripts/luker-toast.js';
 import { getFriendlyTokenizerName, getTokenCount, getTokenCountAsync, initTokenizers, saveTokenCacheDebounced, flushTokenCacheSave } from './scripts/tokenizers.js';
 import { consumeLastUsage } from './scripts/last-usage.js';
 import {
@@ -440,6 +441,7 @@ function waitForPageLoad() {
 }
 
 // Configure toast library:
+setToastTranslator(translate);
 toastr.options = {
     positionClass: 'toast-top-center',
     closeButton: false,
@@ -459,34 +461,6 @@ toastr.options = {
         fixToastrForDialogs();
     },
 };
-
-// Run once during startup
-toastr.subscribe(function (args) {
-    if (args.state !== 'visible') {
-        return;
-    }
-
-    const $container = toastr.getContainer(args.options, false);
-    if (!$container || !$container.length) {
-        return;
-    }
-
-    // toastr has already inserted the element at this point
-    const $toast = args.options.newestOnTop
-        ? $container.children().first()
-        : $container.children().last();
-
-    // Meaning of "clickable":
-    // Interactable unless tapToDismiss was explicitly false
-    const isInteractable = args.options.tapToDismiss !== false;
-    $toast.toggleClass('interactable', isInteractable);
-    if (isInteractable) {
-        $toast.attr('title', t`Tap to close`);
-    } else {
-        $toast.removeAttr('title');
-        $toast.addClass('toast-non-interactable');
-    }
-});
 
 export const characterGroupOverlay = new BulkEditOverlay();
 
