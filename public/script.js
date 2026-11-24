@@ -13000,8 +13000,11 @@ function syncCurrentChatIntegrityFromMetadata(metadata = null) {
     if (!chat_metadata || typeof chat_metadata !== 'object') {
         return;
     }
-    // A late response cannot authorize a group cleared by a pending or failed load.
-    if (selected_group && !chat_metadata.integrity) {
+    // 迟到的写回响应或快照刷新不得给尚未加载完成或加载失败的半开态聊天重新授权。
+    const currentIntegrity = typeof chat_metadata.integrity === 'string'
+        ? chat_metadata.integrity.trim()
+        : '';
+    if (!currentIntegrity) {
         return;
     }
 
@@ -13009,10 +13012,9 @@ function syncCurrentChatIntegrityFromMetadata(metadata = null) {
         ? metadata.integrity.trim()
         : '';
 
+    // 仅在服务端明确返回非空新令牌时轮换；绝不因快照缺令牌而删空内存令牌，避免防丢数据守卫永久锁死。
     if (nextIntegrity) {
         chat_metadata.integrity = nextIntegrity;
-    } else {
-        delete chat_metadata.integrity;
     }
 }
 
@@ -13067,14 +13069,11 @@ export function refreshSnapshotIntegrityFromActiveLive(target, metadata) {
     const liveIntegrity = typeof chat_metadata.integrity === 'string'
         ? chat_metadata.integrity.trim()
         : '';
-    if (target?.is_group && !liveIntegrity) {
+    // 单聊与群聊对称：活动聊天的实时令牌为空时保留队列写任务已捕获的令牌，不剥离令牌以免绕过服务端校验。
+    if (!liveIntegrity) {
         return;
     }
-    if (liveIntegrity) {
-        metadata.integrity = liveIntegrity;
-    } else {
-        delete metadata.integrity;
-    }
+    metadata.integrity = liveIntegrity;
 }
 
 async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget()) {
@@ -13085,12 +13084,21 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget())
 
     if (resolvedTarget.is_group) {
         const payload = await loadGroupChat(resolvedTarget.id);
+        if (payload.length === 0) {
+            return {
+                target: resolvedTarget,
+                metadata: {},
+                messages: [],
+                existsOnServer: false,
+            };
+        }
         const hasHeader = Object.hasOwn(payload[0] ?? {}, 'chat_metadata');
         return {
             target: resolvedTarget,
             metadata: isPlainObject(payload[0]?.chat_metadata) ? cloneAsJsonWire(payload[0].chat_metadata) : {},
             // Snapshot guards use stored bytes, not rendering-time media migration.
             messages: hasHeader ? payload.slice(1) : payload,
+            existsOnServer: true,
         };
     }
 
@@ -13115,13 +13123,29 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget())
             return null;
         }
 
-        const payload = await response.json().catch(() => null);
-        if (!Array.isArray(payload) || payload.length === 0) {
+        // 绝不吞掉 JSON 解析异常：响应流截断必须进入 catch 返回 null，不能伪装成空聊天。
+        const payload = await response.json();
+
+        // /api/chats/get 在磁盘文件损坏时可能以 HTTP 200 返回 { corrupted: true }。
+        if (payload?.corrupted) {
+            console.warn('Server reported corrupted chat while fetching snapshot', resolvedTarget);
+            return null;
+        }
+
+        // 仅当服务端显式返回 { new_chat: true } 时表示该聊天尚未落盘。
+        if (isPlainObject(payload) && payload.new_chat === true) {
             return {
                 target: resolvedTarget,
                 metadata: {},
                 messages: [],
+                existsOnServer: false,
             };
+        }
+
+        // 已有聊天必须返回非空数组，且首元素为合法对象头。
+        if (!Array.isArray(payload) || payload.length === 0 || !isPlainObject(payload[0])) {
+            console.warn('Unexpected server chat snapshot payload', resolvedTarget);
+            return null;
         }
 
         const [header, ...rawMessages] = payload;
@@ -13138,6 +13162,7 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget())
             target: resolvedTarget,
             metadata,
             messages,
+            existsOnServer: true,
         };
     } catch (error) {
         console.warn('Failed to fetch current server chat snapshot', error);
@@ -13145,20 +13170,53 @@ async function fetchCurrentServerChatSnapshot(target = resolveChatStateTarget())
     }
 }
 
-export async function refreshChatWriteSnapshotsFromServer(target = resolveChatStateTarget()) {
-    const snapshot = await fetchCurrentServerChatSnapshot(target);
+function applyServerChatSnapshot(snapshot, metadataToSync = null) {
     if (!snapshot) {
         return null;
     }
 
+    // 服务端尚无该聊天（单聊 { new_chat: true } 或群聊 []）时，不把缓存污染成 []，
+    // 也不删空内存 integrity，改为失效缓存以让后续写入走完整建档保存。
+    if (snapshot.existsOnServer === false) {
+        invalidateChatWriteSnapshot(snapshot.target);
+        return snapshot;
+    }
+
     rememberChatMetadataSnapshot(snapshot.target, snapshot.metadata);
     rememberChatMessageSnapshot(snapshot.target, snapshot.messages);
+
+    if (metadataToSync && typeof metadataToSync === 'object') {
+        const nextIntegrity = typeof snapshot.metadata?.integrity === 'string'
+            ? snapshot.metadata.integrity.trim()
+            : '';
+        if (nextIntegrity) {
+            metadataToSync.integrity = nextIntegrity;
+        }
+    }
 
     if (getChatStateTargetKey(snapshot.target) === getChatStateTargetKey(resolveChatStateTarget())) {
         syncCurrentChatIntegrityFromMetadata(snapshot.metadata);
     }
 
     return snapshot;
+}
+
+async function applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadataToSync = null) {
+    // 复用 resolveChatWriteConflictForTarget 阶段已发起的单次快照请求，避免 409 恢复连续拉取两次全量聊天。
+    if (conflictSnapshot?.attempted) {
+        if (conflictSnapshot.error) {
+            throw conflictSnapshot.error;
+        }
+        return applyServerChatSnapshot(conflictSnapshot.snapshot, metadataToSync);
+    }
+
+    const refreshed = await fetchCurrentServerChatSnapshot(target);
+    return applyServerChatSnapshot(refreshed, metadataToSync);
+}
+
+export async function refreshChatWriteSnapshotsFromServer(target = resolveChatStateTarget()) {
+    const snapshot = await fetchCurrentServerChatSnapshot(target);
+    return applyServerChatSnapshot(snapshot);
 }
 
 /**
@@ -14296,9 +14354,15 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
     const clientSnapshot = snapshotKey ? chatMessageSnapshotCache.get(snapshotKey) : null;
     let divergenceSummary = null;
     let divergenceDetails = null;
+    const onServerSnapshot = typeof requestContext?.onServerSnapshot === 'function'
+        ? requestContext.onServerSnapshot
+        : null;
     if (Array.isArray(clientSnapshot)) {
         try {
             const serverSnapshot = await fetchCurrentServerChatSnapshot(target);
+            if (onServerSnapshot) {
+                onServerSnapshot({ snapshot: serverSnapshot, error: null });
+            }
             if (Array.isArray(serverSnapshot?.messages)) {
                 const result = summarizeChatStateDivergence(clientSnapshot, serverSnapshot.messages);
                 if (result) {
@@ -14307,6 +14371,9 @@ export async function resolveChatWriteConflictForTarget(response, target = null,
                 }
             }
         } catch (error) {
+            if (onServerSnapshot) {
+                onServerSnapshot({ snapshot: null, error });
+            }
             // Diagnostic refresh is best-effort; never fail conflict resolution because of it.
             console.warn('[ChatWriteConflict] server snapshot refresh failed', error);
         }
@@ -14457,7 +14524,12 @@ async function appendChatMessagesInternal(messages, retryCount = 0, context = nu
 
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
-                const appendedCount = Number(payload?.appended || 0);
+                if (payload?.ok !== true || typeof payload.appended !== 'number' || !Number.isFinite(payload.appended)) {
+                    // 200 响应体被截断或格式异常：不能误判成服务端去重而触发全量快照拉取，清空乐观快照让调用方回退。
+                    invalidateChatWriteSnapshot(target);
+                    return false;
+                }
+                const appendedCount = payload.appended;
                 const skippedCount = Number(payload?.skipped || 0);
                 console.debug('[ChatWrite]', {
                     phase: 'append_result',
@@ -14476,7 +14548,15 @@ async function appendChatMessagesInternal(messages, retryCount = 0, context = nu
                     // from server truth to realign before the next write builds
                     // diffs against a snapshot BE can't match.
                     const refreshed = await refreshChatWriteSnapshotsFromServer(target);
-                    return Boolean(refreshed && lodash.isEqual(refreshed.messages, context.messagesSnapshot));
+                    if (!refreshed) {
+                        invalidateChatWriteSnapshot(target);
+                        return false;
+                    }
+                    return Boolean(lodash.isEqual(refreshed.messages, context.messagesSnapshot));
+                }
+                if (typeof payload.integrity !== 'string' || !payload.integrity.trim()) {
+                    invalidateChatWriteSnapshot(target);
+                    return false;
                 }
                 applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
                 // Snapshot already committed optimistically before the fetch.
@@ -14519,7 +14599,12 @@ async function appendChatMessagesInternal(messages, retryCount = 0, context = nu
 
         if (response.ok) {
             const payload = await response.json().catch(() => null);
-            const appendedCount = Number(payload?.appended || 0);
+            if (payload?.ok !== true || typeof payload.appended !== 'number' || !Number.isFinite(payload.appended)) {
+                // 200 响应体被截断或格式异常：不能误判成服务端去重而触发全量快照拉取，清空乐观快照让调用方回退。
+                invalidateChatWriteSnapshot(target);
+                return false;
+            }
+            const appendedCount = payload.appended;
             const skippedCount = Number(payload?.skipped || 0);
             console.debug('[ChatWrite]', {
                 phase: 'append_result',
@@ -14538,7 +14623,16 @@ async function appendChatMessagesInternal(messages, retryCount = 0, context = nu
                 // from server truth to realign before the next write builds
                 // diffs against a snapshot BE can't match.
                 const refreshed = await refreshChatWriteSnapshotsFromServer(target);
-                return Boolean(refreshed && lodash.isEqual(refreshed.messages, chat));
+                if (!refreshed) {
+                    // 刷新失败时必须清理已乐观提交的快照，避免后续 fallback diff 为空而漏存消息。
+                    invalidateChatWriteSnapshot(target);
+                    return false;
+                }
+                return Boolean(lodash.isEqual(refreshed.messages, chat));
+            }
+            if (typeof payload.integrity !== 'string' || !payload.integrity.trim()) {
+                invalidateChatWriteSnapshot(target);
+                return false;
             }
             applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
             // Snapshot already committed optimistically before the fetch.
@@ -14658,6 +14752,10 @@ async function patchChatMessagesInternal(operations, retryCount = 0, context = n
 
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
+                if (payload?.ok !== true || typeof payload.integrity !== 'string' || !payload.integrity.trim()) {
+                    invalidateChatWriteSnapshot(target);
+                    return false;
+                }
                 applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
                 // Snapshot already committed optimistically before the fetch.
                 return true;
@@ -14699,6 +14797,10 @@ async function patchChatMessagesInternal(operations, retryCount = 0, context = n
 
         if (response.ok) {
             const payload = await response.json().catch(() => null);
+            if (payload?.ok !== true || typeof payload.integrity !== 'string' || !payload.integrity.trim()) {
+                invalidateChatWriteSnapshot(target);
+                return false;
+            }
             applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
             // Snapshot already committed optimistically before the fetch.
             return true;
@@ -14901,18 +15003,28 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
 
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
+                if (payload?.ok !== true || typeof payload.integrity !== 'string' || !payload.integrity.trim()) {
+                    invalidateChatWriteSnapshot(target);
+                    return false;
+                }
                 applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
                 rememberChatMetadataSnapshot(target, metadata);
                 return true;
             }
+            const conflictSnapshot = { attempted: false, snapshot: null, error: null };
             const conflictResolution = await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
                 endpoint: 'chats/group/meta/patch',
                 opSummary: summarizeJsonPatchOperations(operations),
                 sentIntegrity: metadata?.integrity,
+                onServerSnapshot: (result) => {
+                    conflictSnapshot.attempted = true;
+                    conflictSnapshot.snapshot = result?.snapshot ?? null;
+                    conflictSnapshot.error = result?.error ?? null;
+                },
             });
             if (conflictResolution !== 'none') {
                 if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
-                    await refreshChatWriteSnapshotsFromServer(target);
+                    await applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadata);
                 }
                 return await saveChatMetadataInternal(withMetadata, retryCount + 1, {
                     ...(saveContext ?? {}),
@@ -14941,18 +15053,28 @@ async function saveChatMetadataInternal(withMetadata = undefined, retryCount = 0
 
             if (response.ok) {
                 const payload = await response.json().catch(() => null);
+                if (payload?.ok !== true || typeof payload.integrity !== 'string' || !payload.integrity.trim()) {
+                    invalidateChatWriteSnapshot(target);
+                    return false;
+                }
                 applyIntegrityFromWritePayloadToTarget(payload, target, metadata);
                 rememberChatMetadataSnapshot(target, metadata);
                 return true;
             }
+            const conflictSnapshot = { attempted: false, snapshot: null, error: null };
             const conflictResolution = await resolveChatWriteConflictForTarget(response, target, metadata, retryCount, {
                 endpoint: 'chats/meta/patch',
                 opSummary: summarizeJsonPatchOperations(operations),
                 sentIntegrity: metadata?.integrity,
+                onServerSnapshot: (result) => {
+                    conflictSnapshot.attempted = true;
+                    conflictSnapshot.snapshot = result?.snapshot ?? null;
+                    conflictSnapshot.error = result?.error ?? null;
+                },
             });
             if (conflictResolution !== 'none') {
                 if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
-                    await refreshChatWriteSnapshotsFromServer(target);
+                    await applyOrRefreshConflictSnapshot(target, conflictSnapshot, metadata);
                 }
                 return await saveChatMetadataInternal(withMetadata, retryCount + 1, {
                     ...(saveContext ?? {}),
@@ -15137,20 +15259,33 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
 
                 if (patchResult.ok) {
                     const payload = await patchResult.json().catch(() => null);
-                    applyIntegrityFromWritePayloadToTarget(payload, writeTarget, metadata);
-                    rememberChatMetadataSnapshot(writeTarget, metadata);
+                    if (payload?.ok === true && typeof payload.integrity === 'string' && payload.integrity.trim()) {
+                        applyIntegrityFromWritePayloadToTarget(payload, writeTarget, metadata);
+                        rememberChatMetadataSnapshot(writeTarget, metadata);
+                        return;
+                    }
+                    invalidateChatWriteSnapshot(writeTarget);
                     return;
                 }
 
                 if (!effectiveForce) {
+                    const conflictSnapshot = { attempted: false, snapshot: null, error: null };
                     const conflictResolution = await resolveChatWriteConflictForTarget(patchResult, writeTarget, metadata, _retryAttempt, {
                         endpoint: 'chats/patch (save-internal)',
                         opSummary: summarizeJsonPatchOperations(operations),
                         sentIntegrity: metadata?.integrity,
+                        onServerSnapshot: (result) => {
+                            conflictSnapshot.attempted = true;
+                            conflictSnapshot.snapshot = result?.snapshot ?? null;
+                            conflictSnapshot.error = result?.error ?? null;
+                        },
                     });
                     if (conflictResolution !== 'none') {
-                        if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
-                            await refreshChatWriteSnapshotsFromServer(writeTarget);
+                        if (conflictResolution === 'integrity') {
+                            await applyOrRefreshConflictSnapshot(writeTarget, conflictSnapshot, metadata);
+                        } else if (conflictResolution === 'snapshot' && conflictSnapshot.attempted && conflictSnapshot.snapshot) {
+                            // snapshot 409 已标记下一次重试走 force:true 全量保存，绝不发起额外全量拉取；若诊断已拿到快照则零开销复用。
+                            applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
                         }
                         await saveChatInternal({ chatName, withMetadata, mesId, force, _retryAttempt: _retryAttempt + 1, _context: { ...(saveContext ?? {}), metadataSnapshot: cloneAsJsonWire(metadata) ?? metadata, messagesSnapshot: cloneAsJsonWire(trimmedChat) ?? trimmedChat } });
                         return;
@@ -15184,20 +15319,32 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
 
         if (result.ok) {
             const payload = await result.json().catch(() => null);
-            applyIntegrityFromWritePayloadToTarget(payload, writeTarget, metadata);
-            rememberChatMetadataSnapshot(writeTarget, metadata);
+            if (payload?.ok === true && typeof payload.integrity === 'string' && payload.integrity.trim()) {
+                applyIntegrityFromWritePayloadToTarget(payload, writeTarget, metadata);
+                rememberChatMetadataSnapshot(writeTarget, metadata);
+                return;
+            }
+            invalidateChatWriteSnapshot(writeTarget);
             return;
         }
 
         if (!effectiveForce) {
+            const conflictSnapshot = { attempted: false, snapshot: null, error: null };
             const conflictResolution = await resolveChatWriteConflictForTarget(result, writeTarget, metadata, _retryAttempt, {
                 endpoint: 'chats/save (full)',
                 opSummary: `full ${Array.isArray(trimmedChat) ? trimmedChat.length : 0} msgs`,
                 sentIntegrity: metadata?.integrity,
+                onServerSnapshot: (snapshotResult) => {
+                    conflictSnapshot.attempted = true;
+                    conflictSnapshot.snapshot = snapshotResult?.snapshot ?? null;
+                    conflictSnapshot.error = snapshotResult?.error ?? null;
+                },
             });
             if (conflictResolution !== 'none') {
-                if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
-                    await refreshChatWriteSnapshotsFromServer(writeTarget);
+                if (conflictResolution === 'integrity') {
+                    await applyOrRefreshConflictSnapshot(writeTarget, conflictSnapshot, metadata);
+                } else if (conflictResolution === 'snapshot' && conflictSnapshot.attempted && conflictSnapshot.snapshot) {
+                    applyServerChatSnapshot(conflictSnapshot.snapshot, metadata);
                 }
                 await saveChatInternal({ chatName, withMetadata, mesId, force, _retryAttempt: _retryAttempt + 1, _context: { ...(saveContext ?? {}), metadataSnapshot: cloneAsJsonWire(metadata) ?? metadata, messagesSnapshot: cloneAsJsonWire(trimmedChat) ?? trimmedChat } });
                 return;
@@ -15226,6 +15373,7 @@ async function saveChatInternal({ chatName, withMetadata, mesId, force = false, 
         // for the full rationale.
         if (writeTarget) {
             invalidateChatWriteSnapshot(writeTarget);
+            consumePendingForceOverwrite(writeTarget);
         }
     }
 }
@@ -15438,14 +15586,20 @@ export async function getChat() {
         }
 
         if (Array.isArray(data) && data.length > 0) {
+            if (!isPlainObject(data[0])) {
+                throw new Error('Unexpected chat payload');
+            }
             /** @type {ChatHeader} */
             const chatHeader = data.shift();
-            chat_metadata = chatHeader?.chat_metadata ?? {};
+            chat_metadata = isPlainObject(chatHeader?.chat_metadata) ? chatHeader.chat_metadata : {};
             chat.splice(0, chat.length, ...data);
-        } else {
+        } else if (data?.new_chat === true || (Array.isArray(data) && data.length === 0)) {
             // New chat (data.new_chat === true) or legacy empty response
             chat.splice(0, chat.length);
             chat_metadata = {};
+        } else {
+            // 非预期的 200 响应结构不能误当空聊天覆盖服务端数据。
+            throw new Error('Unexpected chat payload');
         }
         chat.forEach(ensureMessageMediaIsArray);
 
@@ -15453,6 +15607,7 @@ export async function getChat() {
             chat_metadata.integrity = uuidv4();
         }
         endChatTransition();
+        consumePendingForceOverwrite(resolveChatStateTarget());
         rememberChatMetadataSnapshot();
         rememberChatMessageSnapshot();
         await getChatResult();

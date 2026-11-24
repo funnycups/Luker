@@ -333,6 +333,7 @@ export async function getGroupChat(groupId, reload = false) {
         metadata.integrity = uuidv4();
     }
     updateChatMetadata(metadata, true);
+    consumePendingForceOverwrite(target);
     if (freshChat) {
         invalidateChatWriteSnapshot(target);
     } else {
@@ -845,21 +846,48 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     }
 
     if (!response.ok) {
+        const conflictSnapshot = { attempted: false, snapshot: null, error: null };
         const conflictResolution = !effectiveForce
             ? await resolveChatWriteConflictForTarget(response, target, metadataSnapshot, retryAttempt, {
                 endpoint: requestSummary?.endpoint ?? 'group save',
                 opSummary: requestSummary?.opSummary ?? null,
                 sentIntegrity: metadataSnapshot?.integrity,
+                onServerSnapshot: (result) => {
+                    conflictSnapshot.attempted = true;
+                    conflictSnapshot.snapshot = result?.snapshot ?? null;
+                    conflictSnapshot.error = result?.error ?? null;
+                },
             })
             : 'none';
         if (conflictResolution !== 'none') {
             if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
-                const loaded = await loadGroupChat(chatId);
-                const loadedMetadata = loaded[0]?.chat_metadata ?? {};
-                const loadedMessages = Object.hasOwn(loaded[0] ?? {}, 'chat_metadata') ? loaded.slice(1) : loaded;
-                seedChatMetadataSnapshot(target, loadedMetadata);
-                seedChatMessageSnapshot(target, loadedMessages);
-                applyIntegrityFromWritePayloadToTarget(loadedMetadata, target, metadataSnapshot);
+                // 复用 resolveChatWriteConflictForTarget 阶段的单次拉取结果，避免连续两次 /api/chats/group/get；
+                // 若该次读取失败则直接复抛错误中止本次冲突重试，保护并发服务端修改不被覆盖。
+                let serverSnapshot = null;
+                if (conflictSnapshot.attempted) {
+                    if (conflictSnapshot.error) {
+                        throw conflictSnapshot.error;
+                    }
+                    serverSnapshot = conflictSnapshot.snapshot;
+                } else if (conflictResolution === 'integrity') {
+                    const loaded = await loadGroupChat(chatId);
+                    if (loaded.length === 0) {
+                        serverSnapshot = { metadata: {}, messages: [], existsOnServer: false };
+                    } else {
+                        const loadedMetadata = loaded[0]?.chat_metadata ?? {};
+                        const loadedMessages = Object.hasOwn(loaded[0] ?? {}, 'chat_metadata') ? loaded.slice(1) : loaded;
+                        serverSnapshot = { metadata: loadedMetadata, messages: loadedMessages, existsOnServer: true };
+                    }
+                }
+                if (serverSnapshot) {
+                    if (serverSnapshot.existsOnServer === false) {
+                        invalidateChatWriteSnapshot(target);
+                    } else {
+                        seedChatMetadataSnapshot(target, serverSnapshot.metadata);
+                        seedChatMessageSnapshot(target, serverSnapshot.messages);
+                        applyIntegrityFromWritePayloadToTarget(serverSnapshot.metadata, target, metadataSnapshot);
+                    }
+                }
             }
             return await saveGroupChatInternal(resolvedGroupId, shouldSaveGroup, force, retryAttempt + 1, {
                 ...(saveContext ?? {}),
@@ -876,6 +904,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
             // but force=true skipped the resolver. Invalidate explicitly here
             // so the next save re-syncs from BE truth.
             invalidateChatWriteSnapshot(target);
+            consumePendingForceOverwrite(target);
             toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Group Chat could not be saved`);
             console.error('Group chat could not be saved', response);
             return false;
@@ -883,6 +912,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
         // 409 + resolver returned 'none' (retryAttempt > 0): the resolver's
         // early-return doesn't invalidate, but the optimistic commit is stale.
         invalidateChatWriteSnapshot(target);
+        consumePendingForceOverwrite(target);
         toastr.error(t`Group chat changed on server. Reloaded once and save still failed.`, t`Group Chat could not be saved`);
         return false;
     }
@@ -909,6 +939,7 @@ async function saveGroupChat(groupId, shouldSaveGroup, force = false, retryAttem
             return await saveGroupChatInternal(groupId, shouldSaveGroup, force, retryAttempt, saveContext);
         } catch (error) {
             invalidateChatWriteSnapshot(saveContext.target);
+            consumePendingForceOverwrite(saveContext.target);
             const chatId = saveContext.target.id;
             toastr.error(t`Group chat ${chatId} could not be saved. Check the server connection and retry saving.`, t`Group Chat could not be saved`, { escapeHtml: true });
             console.error(`Group chat ${chatId} could not be saved`, error);

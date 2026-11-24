@@ -249,4 +249,42 @@ describe.each(ENDPOINT_HARNESSES)('group chat endpoints on $name', ({ mode }) =>
         expect(merged).not.toBeNull();
         expect(merged.body).toHaveLength(SAMPLE_MESSAGES.length);
     });
+
+    test('REGRESSION: /api/chats/group/get returns empty array for missing chat', async () => {
+        const missingRes = await request(harness.server)
+            .post('/api/chats/group/get')
+            .send({ id: 'group-does-not-exist' })
+            .expect(200);
+        expect(missingRes.body).toEqual([]);
+    });
+});
+
+describe('/api/chats/group/get corrupted file handling on fs', () => {
+    let harness;
+
+    beforeEach(async () => {
+        harness = await makeEndpointHarness({
+            mode: 'fs',
+            mount: (app) => { app.use('/api/chats', chatsRouter); },
+        });
+    });
+
+    afterEach(async () => {
+        if (harness) await harness.cleanup();
+    });
+
+    test('REGRESSION: /api/chats/group/get returns 500 corrupted for unreadable group chat file', async () => {
+        const fs = await import('node:fs');
+        const path = await import('node:path');
+        const corruptedId = 'group-corrupted-file';
+        const groupChatsDir = path.join(harness.dataRoot, harness.handle, 'group chats');
+        fs.mkdirSync(groupChatsDir, { recursive: true });
+        fs.writeFileSync(path.join(groupChatsDir, `${corruptedId}.jsonl`), '{not valid json', 'utf8');
+
+        const corruptedRes = await request(harness.server)
+            .post('/api/chats/group/get')
+            .send({ id: corruptedId })
+            .expect(500);
+        expect(corruptedRes.body).toEqual({ corrupted: true });
+    });
 });
