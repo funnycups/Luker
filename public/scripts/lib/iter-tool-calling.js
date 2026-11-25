@@ -83,7 +83,6 @@ export async function requestToolCallWithRetry(context, settings, {
     parameters = {},
     abortSignal = null,
     includeCharacterCard = true,
-    bypassPresetEnvelope = false,
     promptContext = null,
     transientSessionId = undefined,
     onPreparedRequest = null,
@@ -119,7 +118,6 @@ export async function requestToolCallWithRetry(context, settings, {
             const generateTaskOpts = {
                 taskMessages,
                 includeCharacterCard: includeCharacterCard !== false,
-                ...(bypassPresetEnvelope ? { bypassPresetEnvelope: true } : {}),
                 worldInfoSource: 'none',
                 runtimeWorldInfo: runtimeWorldInfo || {},
                 apiPresetName: String(apiPresetName || '').trim(),
@@ -196,7 +194,6 @@ export async function requestToolCallsWithRetry(context, settings, {
     onUsage = null,
     isControlCall = null,
     includeCharacterCard = true,
-    bypassPresetEnvelope = false,
     promptContext = null,
     transientSessionId = undefined,
     onPreparedRequest = null,
@@ -234,7 +231,6 @@ export async function requestToolCallsWithRetry(context, settings, {
             const generateTaskOpts = {
                 taskMessages,
                 includeCharacterCard: includeCharacterCard !== false,
-                ...(bypassPresetEnvelope ? { bypassPresetEnvelope: true } : {}),
                 worldInfoSource: 'none',
                 runtimeWorldInfo: runtimeWorldInfo || {},
                 apiPresetName: String(apiPresetName || '').trim(),

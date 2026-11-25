@@ -421,7 +421,7 @@ describe('workbench Ask model & source readers', () => {
         expect(history[1].content).toContain('req-429');
     });
 
-    test('aiRequest for ask bypasses preset envelope, normalizes signature from raw.signature/raw.thoughtSignature, and keeps raw reasoning', async () => {
+    test('aiRequest for ask omits character card while honoring preset envelope, normalizes signature from raw.signature/raw.thoughtSignature, and keeps raw reasoning', async () => {
         const rawReasoning = '\n  keep leading & trailing spaces  ';
         const runnerMock = jest.fn(async () => ({
             assistantText: 'ok',
@@ -445,7 +445,7 @@ describe('workbench Ask model & source readers', () => {
         expect(runnerMock).toHaveBeenCalledTimes(1);
         const callOpts = runnerMock.mock.calls[0][2];
         expect(callOpts.includeCharacterCard).toBe(false);
-        expect(callOpts.bypassPresetEnvelope).toBe(true);
+        expect(callOpts.bypassPresetEnvelope).toBeUndefined();
         expect(out.reasoning).toBe(rawReasoning);
         expect(out.calls[0].signature).toBe('gem-ts-9');
         expect(out.calls[0].thoughtSignature).toBeUndefined();

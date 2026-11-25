@@ -410,18 +410,7 @@ export function assembleMessages({
     requestApi = 'openai',
     runtimeWorldInfo = null,
     promptContext = null,
-    bypassPresetEnvelope = false,
 } = {}, { builder } = {}) {
-    // 当调用方（例如工作台「问问」）不需要外层角色扮演预设与角色卡信封时，
-    // 直接浅拷贝保留原始任务消息并剥离内部控制键，避免预设文风指令污染诊断上下文，
-    // 也防止下游（如非 OpenAI 家族 createRawPrompt）原地篡改调用方消息数组或向 API 泄漏内部字段。
-    if (bypassPresetEnvelope) {
-        return Array.isArray(taskMessages)
-            ? taskMessages
-                .filter(msg => msg && typeof msg === 'object')
-                .map(({ sourceFloorIndex: _s, substituteMacros: _m, ...clean }) => ({ ...clean }))
-            : [];
-    }
     if (typeof builder !== 'function') {
         throw new GenerateTaskError(
             'unknown',
@@ -1078,7 +1067,6 @@ export async function generateTask({
     abortSignal = undefined,
     substituteMacros = true,
     promptContext = null,
-    bypassPresetEnvelope = false,
     transientSessionId = undefined,
     onPreparedRequest = null,
     activity = true,
@@ -1116,18 +1104,16 @@ export async function generateTask({
         }
 
         // ── 4. World info ──
-        const wi = bypassPresetEnvelope
-            ? {}
-            : await resolveWorldInfo({
-                worldInfoSource,
-                taskMessages,
-                customWorldInfoMessages,
-                runtimeWorldInfo,
-                forceWorldInfoResimulate,
-                worldInfoType,
-                postActivationHook,
-                promptContext: validatedPromptContext,
-            }, { worldInfoResolver });
+        const wi = await resolveWorldInfo({
+            worldInfoSource,
+            taskMessages,
+            customWorldInfoMessages,
+            runtimeWorldInfo,
+            forceWorldInfoResimulate,
+            worldInfoType,
+            postActivationHook,
+            promptContext: validatedPromptContext,
+        }, { worldInfoResolver });
 
         // ── 4.5 Macro substitution on caller-supplied task messages ──
         // Preset-supplied prompt entries are substituted later inside
@@ -1159,7 +1145,6 @@ export async function generateTask({
             requestApi: profile.requestApi,
             runtimeWorldInfo: wi,
             promptContext: validatedPromptContext,
-            bypassPresetEnvelope: Boolean(bypassPresetEnvelope),
         }, { builder });
 
         // ── 6. Render per-family ──
@@ -1281,7 +1266,6 @@ export function generateTaskStream({
     abortSignal = undefined,
     substituteMacros = true,
     promptContext = null,
-    bypassPresetEnvelope = false,
     transientSessionId = undefined,
     onPreparedRequest = null,
     activity = true,
@@ -1334,18 +1318,16 @@ export function generateTaskStream({
     (async () => {
         try {
             // ── 4. World info ──
-            const wi = bypassPresetEnvelope
-                ? {}
-                : await resolveWorldInfo({
-                    worldInfoSource,
-                    taskMessages,
-                    customWorldInfoMessages,
-                    runtimeWorldInfo,
-                    forceWorldInfoResimulate,
-                    worldInfoType,
-                    postActivationHook,
-                    promptContext: validatedPromptContext,
-                }, { worldInfoResolver });
+            const wi = await resolveWorldInfo({
+                worldInfoSource,
+                taskMessages,
+                customWorldInfoMessages,
+                runtimeWorldInfo,
+                forceWorldInfoResimulate,
+                worldInfoType,
+                postActivationHook,
+                promptContext: validatedPromptContext,
+            }, { worldInfoResolver });
 
             // ── 4.5 Macro substitution ──
             const effectiveSubstituteFn = validatedPromptContext
@@ -1371,7 +1353,6 @@ export function generateTaskStream({
                 requestApi: profile.requestApi,
                 runtimeWorldInfo: wi,
                 promptContext: validatedPromptContext,
-                bypassPresetEnvelope: Boolean(bypassPresetEnvelope),
             }, { builder });
 
             // ── 6. Render per-family ──

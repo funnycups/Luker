@@ -390,8 +390,8 @@ export async function aiRequest(role, { messages, tools = [], signal = null, act
         abortSignal: signal,
         includeAssistantText: true,
         allowNoToolCalls: true,
-        // 「问问」属于纯诊断问答，不塞入角色卡与角色扮演预设外壳，避免指令冲突与 token 浪费。
-        ...(isAsk ? { includeCharacterCard: false, bypassPresetEnvelope: true } : {}),
+        // 「问问」属于诊断与咨询任务，不附带角色卡槽位，同时保留用户配置的生成预设（如 plugin-only / 纯破限预设）。
+        ...(isAsk ? { includeCharacterCard: false } : {}),
         ...(activity !== undefined ? { activity } : {}),
     });
     const calls = (Array.isArray(result?.toolCalls) ? result.toolCalls : []).map((c, i) => {
