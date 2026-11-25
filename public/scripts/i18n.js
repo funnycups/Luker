@@ -1,5 +1,6 @@
 import { registerDebugFunction } from './power-user.js';
 import { updateSecretDisplay } from './secrets.js';
+import { buildScopedI18n } from './lib/scoped-i18n.js';
 import { registerLensSharedLocaleData } from './lens-shared/locale-data.js';
 import { registerRunPanelLocaleData } from './run-panel/locale-data.js';
 import { registerWorkbenchLocaleData } from './workbench/locale-data.js';
@@ -128,6 +129,18 @@ export function translate(text, key = null) {
         trackMissingDynamicTranslate.add(translationKey);
     }
     return localeData?.[translationKey] || text;
+}
+
+/**
+ * Creates a translator bound to an extension's own translation tables.
+ * Lookups read the tables first, merged in the core locale load order
+ * (fallback locale, then the active locale), and fall back to `translate`.
+ * The tables never enter the global locale data.
+ * @param {Record<string, Record<string, string>>} tables Locale ID → key → translation
+ * @returns {Readonly<{ t: typeof t, translate: typeof translate, format: (template: string, ...values: any[]) => string, has: (key: string) => boolean }>}
+ */
+export function createScopedI18n(tables) {
+    return buildScopedI18n({ tables, loadOrder: getLocaleLoadOrder(localeFile), fallback: translate });
 }
 
 // Expose i18n helpers for early-loaded classic scripts and third-party
