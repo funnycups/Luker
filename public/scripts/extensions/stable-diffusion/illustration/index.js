@@ -139,6 +139,11 @@ export async function initIllustration(bridge) {
         imageService,
         getRunStore: () => getImageActivityStore(),
         comfyBridge: bridge?.comfyBridge || null,
+        onPresetsCommitted: () => {
+            settingsUi?.refreshPresetOptions?.();
+            settingsUi?.refreshConnectionOptions?.();
+            settingsUi?.refreshLlmPresetOptions?.();
+        },
     });
     let actions = null;
     const beginActivityJob = typeof bridge.beginActivityJob === 'function'

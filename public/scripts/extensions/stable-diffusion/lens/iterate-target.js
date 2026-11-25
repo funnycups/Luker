@@ -38,7 +38,7 @@ import { simulateSdExploration, simulateSdIllustration } from './simulate.js';
 export const DEFAULT_SD_ITERATE_PROMPT = `You are a configuration, visual-archive, and ComfyUI workflow editor for Luker's Image Generation and AI Illustration system.
 
 Capabilities:
-- Edit AI illustration prompt presets (illustrationPrompt, studioPrompt, explorationPrompt, visualInspection) via sd_list_presets, sd_read_preset, and sd_update_preset.
+- Manage AI illustration prompt presets (name, promptStyle, illustrationPrompt, studioPrompt, explorationPrompt, visualInspection) via sd_list_presets, sd_read_preset, sd_create_preset, sd_update_preset, and sd_delete_preset.
 - Simulate unsaved prompt changes in an isolated sandbox and open the Simulation Review popup for user inspection and annotations via sd_simulate_illustration (for illustrationPrompt, optionally allowing sandbox character exploration) and sd_simulate_exploration (for explorationPrompt, choosing mode "background" with targets or mode "dialog" with user_turns).
 - Edit character visual archive profiles (description and reference_images) via sd_list_characters, sd_read_character, sd_upsert_character, and sd_delete_character, cross-checking bound lorebooks with world_book_list, lorebook_list, lorebook_query, and lorebook_get.
 - Edit ComfyUI API-format workflows and custom placeholders via sd_list_workflows, sd_read_workflow, sd_create_workflow, sd_upsert_workflow_nodes, sd_remove_workflow_nodes, sd_delete_workflow, and sd_update_comfy_config.
@@ -294,17 +294,59 @@ const SD_ITERATE_TOOLS = Object.freeze([
     {
         type: 'function',
         function: {
+            name: 'sd_create_preset',
+            description: 'Create a new AI illustration prompt preset in the draft, optionally cloning an existing preset or seeding defaults from prompt_style.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    preset_id: { type: 'string', description: 'Optional unique preset id. Omit to auto-generate one.' },
+                    name: { type: 'string', description: 'Display name for the new prompt preset.' },
+                    prompt_style: {
+                        type: 'string',
+                        enum: ['tag', 'natural'],
+                        description: 'Default prompt style ("tag" or "natural"). Inherits from clone_from when omitted, or defaults to "tag".',
+                    },
+                    clone_from: { type: 'string', description: 'Optional existing draft preset_id to clone prompts and options from.' },
+                    illustration_prompt: { type: 'string' },
+                    studio_prompt: { type: 'string' },
+                    exploration_prompt: { type: 'string' },
+                    visual_inspection: { type: 'boolean' },
+                },
+                required: ['name'],
+                additionalProperties: false,
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
             name: 'sd_update_preset',
-            description: 'Update prompt fields or visualInspection on an existing illustration preset in the draft.',
+            description: 'Update prompt fields, promptStyle, or visualInspection on an existing illustration preset in the draft.',
             parameters: {
                 type: 'object',
                 properties: {
                     preset_id: { type: 'string' },
                     name: { type: 'string' },
+                    prompt_style: { type: 'string', enum: ['tag', 'natural'] },
                     illustration_prompt: { type: 'string' },
                     studio_prompt: { type: 'string' },
                     exploration_prompt: { type: 'string' },
                     visual_inspection: { type: 'boolean' },
+                },
+                required: ['preset_id'],
+                additionalProperties: false,
+            },
+        },
+    },
+    {
+        type: 'function',
+        function: {
+            name: 'sd_delete_preset',
+            description: 'Delete an AI illustration prompt preset from the draft (cannot delete the last remaining preset).',
+            parameters: {
+                type: 'object',
+                properties: {
+                    preset_id: { type: 'string' },
                 },
                 required: ['preset_id'],
                 additionalProperties: false,
@@ -470,10 +512,11 @@ function normalizePlaceholdersList(list) {
 function formatPresetUnitText(fields) {
     const lines = [
         `name: ${fields.name || ''}`,
+        fields.promptStyle ? `promptStyle: ${fields.promptStyle}` : '',
         `visualInspection: ${Boolean(fields.visualInspection)}`,
         `--- illustrationPrompt ---\n${fields.illustrationPrompt || ''}`,
         `--- studioPrompt ---\n${fields.studioPrompt || ''}`,
-    ];
+    ].filter(Boolean);
     if (fields.explorationPrompt) {
         lines.push(`--- explorationPrompt ---\n${fields.explorationPrompt}`);
     }
@@ -588,6 +631,7 @@ export function buildSdUnits(doc) {
         if (!preset?.id) continue;
         const fields = {
             name: String(preset.name || ''),
+            promptStyle: (preset.promptStyle === 'tag' || preset.promptStyle === 'natural') ? preset.promptStyle : '',
             illustrationPrompt: String(preset.illustrationPrompt || ''),
             studioPrompt: String(preset.studioPrompt || ''),
             explorationPrompt: String(preset.explorationPrompt || ''),
@@ -647,7 +691,7 @@ export function buildSdUnits(doc) {
     return map;
 }
 
-function applyOpsToSdDoc(doc, ops) {
+function applyOpsToSdDoc(doc, ops, { defaultLlm = null, defaultExplorationLlm = null } = {}) {
     const next = clone(doc || { presets: [], characters: [], workflows: [], comfyConfig: { activeWorkflow: '', placeholders: [] } });
     next.presets = Array.isArray(next.presets) ? next.presets : [];
     next.characters = Array.isArray(next.characters) ? next.characters : [];
@@ -668,19 +712,30 @@ function applyOpsToSdDoc(doc, ops) {
             }
             let target = next.presets.find(p => p.id === id);
             if (!target) {
-                const defaults = getDefaultPromptValues('tag');
+                const styleChange = op.changes.find(c => c.field === 'promptStyle')?.after;
+                const style = styleChange === 'natural' ? 'natural' : 'tag';
+                const defaults = getDefaultPromptValues(style);
+                const fallbackTemplate = next.presets[0] || null;
+                const llmSource = defaultLlm || fallbackTemplate?.llm;
+                const expLlmSource = defaultExplorationLlm || fallbackTemplate?.explorationLlm;
                 target = {
                     id,
                     name: id,
-                    promptStyle: 'tag',
+                    promptStyle: style,
                     promptDefaultsInitialized: true,
                     createdAt: Date.now(),
                     updatedAt: Date.now(),
                     illustrationPrompt: defaults.illustrationPrompt,
                     studioPrompt: defaults.studioPrompt,
                     explorationPrompt: defaults.explorationPrompt,
-                    llm: { apiPresetName: '', llmPresetName: '' },
-                    explorationLlm: { apiPresetName: '', llmPresetName: '' },
+                    llm: {
+                        apiPresetName: String(llmSource?.apiPresetName || ''),
+                        llmPresetName: String(llmSource?.llmPresetName || ''),
+                    },
+                    explorationLlm: {
+                        apiPresetName: String(expLlmSource?.apiPresetName || ''),
+                        llmPresetName: String(expLlmSource?.llmPresetName || ''),
+                    },
                     visualInspection: false,
                 };
                 next.presets.push(target);
@@ -689,6 +744,14 @@ function applyOpsToSdDoc(doc, ops) {
                 if (op.kind === 'add'
                     && (c.field === 'illustrationPrompt' || c.field === 'studioPrompt' || c.field === 'explorationPrompt')
                     && !String(c.after ?? '').trim()) {
+                    continue;
+                }
+                if (c.field === 'promptStyle') {
+                    if (c.after === 'tag' || c.after === 'natural') {
+                        target.promptStyle = c.after;
+                    } else if (op.kind !== 'add') {
+                        delete target.promptStyle;
+                    }
                     continue;
                 }
                 target[c.field] = clone(c.after);
@@ -846,9 +909,17 @@ function resolveTargetWorkflow(live, rawFileName) {
 
 export function createSdIterateTarget(
     getContext = () => globalThis.Luker?.getContext?.(),
-    { comfyBridge = null } = {},
+    { comfyBridge = null, onPresetsCommitted = null } = {},
 ) {
     const resolveCtx = (override) => override || getContext();
+    const resolveDefaultPresetLlm = (ctx) => {
+        const ill = ctx?.extensionSettings?.sd?.illustration;
+        const active = getPresetById(ill, ill?.currentPresetId) || ill?.presets?.[0] || null;
+        return {
+            defaultLlm: active?.llm || null,
+            defaultExplorationLlm: active?.explorationLlm || null,
+        };
+    };
     /** @type {{ fileName: string, graphSig: string, imagePath: string, seed: number, promptUsed: string } | null} */
     let latestDraftPreview = null;
 
@@ -996,6 +1067,7 @@ export function createSdIterateTarget(
                 return (live?.presets || []).map(p => ({
                     id: p.id,
                     name: p.name,
+                    promptStyle: p.promptStyle || '',
                     visualInspection: Boolean(p.visualInspection),
                 }));
             }
@@ -1320,16 +1392,127 @@ export function createSdIterateTarget(
                 ? next.comfyConfig
                 : { activeWorkflow: '', placeholders: [] };
 
+            if (name === 'sd_create_preset') {
+                if (typeof args.name !== 'string' || !args.name.trim()) {
+                    throw new SourceError('invalid_args', 'name must be a non-empty string.');
+                }
+                const presetName = args.name.trim();
+                let presetId = '';
+                if (args.preset_id !== undefined) {
+                    if (typeof args.preset_id !== 'string' || !args.preset_id.trim()) {
+                        throw new SourceError('invalid_args', 'preset_id must be a non-empty string when provided.');
+                    }
+                    presetId = args.preset_id.trim();
+                    if (next.presets.some(p => p.id === presetId)) {
+                        throw new SourceError('invalid_args', `Preset id already exists in draft: ${presetId}`);
+                    }
+                } else {
+                    presetId = makeIllustrationId('preset');
+                }
+
+                let cloneTarget = null;
+                if (args.clone_from !== undefined) {
+                    if (typeof args.clone_from !== 'string' || !args.clone_from.trim()) {
+                        throw new SourceError('invalid_args', 'clone_from must be a non-empty preset id when provided.');
+                    }
+                    const cloneFromId = args.clone_from.trim();
+                    cloneTarget = next.presets.find(p => p.id === cloneFromId) || null;
+                    if (!cloneTarget) {
+                        throw new SourceError('not_found', `clone_from preset not found in draft: ${cloneFromId}`);
+                    }
+                }
+
+                if (args.prompt_style !== undefined && args.prompt_style !== 'tag' && args.prompt_style !== 'natural') {
+                    throw new SourceError('invalid_args', 'prompt_style must be "tag" or "natural".');
+                }
+                const style = args.prompt_style
+                    || (cloneTarget?.promptStyle === 'natural' ? 'natural' : 'tag');
+                const defaults = getDefaultPromptValues(style);
+
+                const resolvePromptField = (argVal, fieldName, clonedVal, defaultVal) => {
+                    if (argVal !== undefined) {
+                        if (typeof argVal !== 'string') {
+                            throw new SourceError('invalid_args', `${fieldName} must be a string.`);
+                        }
+                        if (argVal.trim()) return argVal;
+                    }
+                    if (typeof clonedVal === 'string' && clonedVal.trim()) return clonedVal;
+                    return defaultVal;
+                };
+
+                const { defaultLlm, defaultExplorationLlm } = resolveDefaultPresetLlm(resolveCtx());
+                const llmSource = cloneTarget?.llm || defaultLlm || next.presets[0]?.llm;
+                const expLlmSource = cloneTarget?.explorationLlm || defaultExplorationLlm || next.presets[0]?.explorationLlm;
+                const now = Date.now();
+                next.presets.push({
+                    id: presetId,
+                    name: presetName,
+                    promptStyle: style,
+                    promptDefaultsInitialized: true,
+                    createdAt: now,
+                    updatedAt: now,
+                    illustrationPrompt: resolvePromptField(
+                        args.illustration_prompt,
+                        'illustration_prompt',
+                        cloneTarget?.illustrationPrompt,
+                        defaults.illustrationPrompt,
+                    ),
+                    studioPrompt: resolvePromptField(
+                        args.studio_prompt,
+                        'studio_prompt',
+                        cloneTarget?.studioPrompt,
+                        defaults.studioPrompt,
+                    ),
+                    explorationPrompt: resolvePromptField(
+                        args.exploration_prompt,
+                        'exploration_prompt',
+                        cloneTarget?.explorationPrompt,
+                        defaults.explorationPrompt,
+                    ),
+                    llm: {
+                        apiPresetName: String(llmSource?.apiPresetName || ''),
+                        llmPresetName: String(llmSource?.llmPresetName || ''),
+                    },
+                    explorationLlm: {
+                        apiPresetName: String(expLlmSource?.apiPresetName || ''),
+                        llmPresetName: String(expLlmSource?.llmPresetName || ''),
+                    },
+                    visualInspection: args.visual_inspection !== undefined
+                        ? Boolean(args.visual_inspection)
+                        : Boolean(cloneTarget?.visualInspection),
+                });
+                return next;
+            }
+
             if (name === 'sd_update_preset') {
                 const target = next.presets.find(p => p.id === String(args.preset_id || ''));
                 if (!target) {
                     throw new SourceError('not_found', `Preset not found: ${args.preset_id}`);
+                }
+                if (args.prompt_style !== undefined) {
+                    if (args.prompt_style !== 'tag' && args.prompt_style !== 'natural') {
+                        throw new SourceError('invalid_args', 'prompt_style must be "tag" or "natural".');
+                    }
+                    target.promptStyle = args.prompt_style;
                 }
                 if (args.name !== undefined) target.name = String(args.name);
                 if (args.illustration_prompt !== undefined) target.illustrationPrompt = String(args.illustration_prompt);
                 if (args.studio_prompt !== undefined) target.studioPrompt = String(args.studio_prompt);
                 if (args.exploration_prompt !== undefined) target.explorationPrompt = String(args.exploration_prompt);
                 if (args.visual_inspection !== undefined) target.visualInspection = Boolean(args.visual_inspection);
+                return next;
+            }
+
+            if (name === 'sd_delete_preset') {
+                const presetId = String(args.preset_id || '').trim();
+                const idx = next.presets.findIndex(p => p.id === presetId);
+                if (idx < 0) {
+                    throw new SourceError('not_found', `Preset not found: ${args.preset_id}`);
+                }
+                if (next.presets.length <= 1) {
+                    throw new SourceError('invalid_args', 'Cannot delete the last remaining prompt preset; at least one preset must exist.');
+                }
+                next.presets.splice(idx, 1);
                 return next;
             }
 
@@ -1506,7 +1689,7 @@ export function createSdIterateTarget(
         units: (live) => buildSdUnits(live),
         rebuild(base, ai, keys) {
             const ops = fieldPlan(buildSdUnits(base), buildSdUnits(ai), keys);
-            return applyOpsToSdDoc(base, ops);
+            return applyOpsToSdDoc(base, ops, resolveDefaultPresetLlm(resolveCtx()));
         },
         async commit(_targetRef, base, next, keys) {
             const c = resolveCtx();
@@ -1516,6 +1699,7 @@ export function createSdIterateTarget(
             const touchesWorkflows = ops.some(op => op.key.startsWith('workflow:'));
             const touchesComfyConfig = ops.some(op => op.key === 'comfy:config');
             const initialActiveWorkflow = String(c?.extensionSettings?.sd?.comfy_workflow || '');
+            const defaultLlmOpts = resolveDefaultPresetLlm(c);
 
             let lastReadDoc = null;
 
@@ -1525,7 +1709,7 @@ export function createSdIterateTarget(
                     return lastReadDoc;
                 },
                 units: buildSdUnits,
-                apply: applyOpsToSdDoc,
+                apply: (doc, applyOps) => applyOpsToSdDoc(doc, applyOps, defaultLlmOpts),
                 write: async (nextDoc, { undoing } = {}) => {
                     const headers = c?.getRequestHeaders?.() || { 'Content-Type': 'application/json' };
                     let needSettingsSave = false;
@@ -1629,6 +1813,10 @@ export function createSdIterateTarget(
 
                     if (needSettingsSave) {
                         await saveSettingsChecked(c);
+                    }
+
+                    if (touchesPresets) {
+                        await onPresetsCommitted?.();
                     }
 
                     if (touchesWorkflows || touchesComfyConfig) {

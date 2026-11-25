@@ -820,6 +820,181 @@ describe('workbench sd IterateTarget, AskProvider, and SuggestRuleProvider', () 
         }
     });
 
+    test('IterateTarget supports sd_create_preset, sd_update_preset prompt_style, sd_delete_preset, UI refresh callback, and undo', async () => {
+        const { ctx, reg, sdSettings } = createHarnessContext();
+        let saveCount = 0;
+        ctx.saveSettings = async (_delay, opts) => {
+            saveCount += 1;
+            opts?.onSaved?.();
+        };
+        sdSettings.illustration.presets[0].llm = {
+            apiPresetName: 'Claude Connection',
+            llmPresetName: 'Plugin Preset',
+        };
+        sdSettings.illustration.presets[0].explorationLlm = {
+            apiPresetName: 'Explore Connection',
+            llmPresetName: 'Explore Preset',
+        };
+
+        const onPresetsCommitted = jest.fn();
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = async (url) => {
+            if (url === '/api/sd/comfy/workflows') {
+                return { ok: true, status: 200, json: async () => [] };
+            }
+            throw new Error(`Unexpected fetch URL: ${url}`);
+        };
+        globalThis.Luker = { getContext: () => ctx };
+        const cleanup = initSdLens({ getContext: () => ctx, onPresetsCommitted });
+
+        try {
+            const target = reg.getIterateTargets().find(t => t.id === 'sd');
+            const toolNames = (await target.tools()).map(t => t.function.name);
+            expect(toolNames).toEqual(expect.arrayContaining([
+                'sd_list_presets',
+                'sd_read_preset',
+                'sd_create_preset',
+                'sd_update_preset',
+                'sd_delete_preset',
+            ]));
+
+            const loaded = await target.load('global', ctx);
+            const base = JSON.parse(JSON.stringify(loaded.live));
+
+            // Cannot delete the last remaining preset.
+            await expect(target.runEdit({
+                name: 'sd_delete_preset',
+                args: { preset_id: 'preset_1' },
+            }, JSON.parse(JSON.stringify(base)))).rejects.toThrow(/last remaining/i);
+
+            // Validation rejects empty name, bad prompt_style, missing clone_from, and duplicate preset_id.
+            await expect(target.runEdit({
+                name: 'sd_create_preset',
+                args: { name: '   ' },
+            }, JSON.parse(JSON.stringify(base)))).rejects.toThrow(/non-empty string/i);
+            await expect(target.runEdit({
+                name: 'sd_create_preset',
+                args: { name: 'Bad Style', prompt_style: 'comic' },
+            }, JSON.parse(JSON.stringify(base)))).rejects.toThrow(/tag.*natural/i);
+            await expect(target.runEdit({
+                name: 'sd_create_preset',
+                args: { name: 'Missing Clone', clone_from: 'preset_missing' },
+            }, JSON.parse(JSON.stringify(base)))).rejects.toThrow(/not found/i);
+            await expect(target.runEdit({
+                name: 'sd_create_preset',
+                args: { name: 'Dup', preset_id: 'preset_1' },
+            }, JSON.parse(JSON.stringify(base)))).rejects.toThrow(/already exists/i);
+
+            // Create a fresh natural-style preset and a cloned preset with overrides.
+            let draft = await target.runEdit({
+                name: 'sd_create_preset',
+                args: {
+                    preset_id: 'preset_natural_custom',
+                    name: 'Watercolor Natural',
+                    prompt_style: 'natural',
+                    illustration_prompt: 'Describe scenes as watercolor paintings.',
+                    visual_inspection: true,
+                },
+            }, JSON.parse(JSON.stringify(base)));
+
+            const createdNatural = draft.presets.find(p => p.id === 'preset_natural_custom');
+            expect(createdNatural).toMatchObject({
+                id: 'preset_natural_custom',
+                name: 'Watercolor Natural',
+                promptStyle: 'natural',
+                illustrationPrompt: 'Describe scenes as watercolor paintings.',
+                studioPrompt: getDefaultPromptValues('natural').studioPrompt,
+                explorationPrompt: getDefaultPromptValues('natural').explorationPrompt,
+                visualInspection: true,
+                llm: { apiPresetName: 'Claude Connection', llmPresetName: 'Plugin Preset' },
+                explorationLlm: { apiPresetName: 'Explore Connection', llmPresetName: 'Explore Preset' },
+            });
+
+            draft = await target.runEdit({
+                name: 'sd_create_preset',
+                args: {
+                    preset_id: 'preset_cloned',
+                    name: 'Cloned Style',
+                    clone_from: 'preset_natural_custom',
+                    studio_prompt: 'Custom cloned studio instructions.',
+                },
+            }, draft);
+            expect(draft.presets.find(p => p.id === 'preset_cloned')).toMatchObject({
+                promptStyle: 'natural',
+                illustrationPrompt: 'Describe scenes as watercolor paintings.',
+                studioPrompt: 'Custom cloned studio instructions.',
+                visualInspection: true,
+            });
+
+            // sd_list_presets surfaces promptStyle on draft presets.
+            const listed = await target.runRead({ name: 'sd_list_presets', args: {} }, draft);
+            expect(listed.find(p => p.id === 'preset_natural_custom')).toMatchObject({
+                name: 'Watercolor Natural',
+                promptStyle: 'natural',
+                visualInspection: true,
+            });
+
+            // Update preset_1 style and delete the cloned preset before commit.
+            draft = await target.runEdit({
+                name: 'sd_update_preset',
+                args: { preset_id: 'preset_1', prompt_style: 'natural' },
+            }, draft);
+            draft = await target.runEdit({
+                name: 'sd_delete_preset',
+                args: { preset_id: 'preset_cloned' },
+            }, draft);
+            expect(draft.presets.map(p => p.id)).toEqual(['preset_1', 'preset_natural_custom']);
+
+            // Commit creation + style update, verify persistence, inherited llm, and onPresetsCommitted callback.
+            const keys = ['preset:preset_1', 'preset:preset_natural_custom'];
+            const rebuilt = target.rebuild(base, draft, keys);
+            const committed = await target.commit(loaded.target, base, rebuilt, keys);
+            expect(committed.applied).toEqual(expect.arrayContaining(keys));
+            expect(saveCount).toBeGreaterThanOrEqual(1);
+            expect(onPresetsCommitted).toHaveBeenCalledTimes(1);
+
+            const persistedNew = sdSettings.illustration.presets.find(p => p.id === 'preset_natural_custom');
+            expect(persistedNew).toMatchObject({
+                name: 'Watercolor Natural',
+                promptStyle: 'natural',
+                illustrationPrompt: 'Describe scenes as watercolor paintings.',
+                studioPrompt: getDefaultPromptValues('natural').studioPrompt,
+                visualInspection: true,
+                llm: { apiPresetName: 'Claude Connection', llmPresetName: 'Plugin Preset' },
+                explorationLlm: { apiPresetName: 'Explore Connection', llmPresetName: 'Explore Preset' },
+            });
+            expect(sdSettings.illustration.presets.find(p => p.id === 'preset_1')?.promptStyle).toBe('natural');
+
+            // Delete the active preset (preset_1) via commit -> currentPresetId falls back to remaining preset.
+            const baseAfterCreate = JSON.parse(JSON.stringify((await target.load('global', ctx)).live));
+            const draftAfterDelete = await target.runEdit({
+                name: 'sd_delete_preset',
+                args: { preset_id: 'preset_1' },
+            }, JSON.parse(JSON.stringify(baseAfterCreate)));
+            const delKeys = ['preset:preset_1'];
+            const deleteCommit = await target.commit(
+                loaded.target,
+                baseAfterCreate,
+                target.rebuild(baseAfterCreate, draftAfterDelete, delKeys),
+                delKeys,
+            );
+            expect(sdSettings.illustration.presets.map(p => p.id)).toEqual(['preset_natural_custom']);
+            expect(sdSettings.illustration.currentPresetId).toBe('preset_natural_custom');
+            expect(onPresetsCommitted).toHaveBeenCalledTimes(2);
+
+            // Undo delete restores preset_1; undo create removes preset_natural_custom and restores preset_1 promptStyle.
+            await deleteCommit.undo();
+            expect(sdSettings.illustration.presets.map(p => p.id)).toEqual(expect.arrayContaining(['preset_1', 'preset_natural_custom']));
+            await committed.undo();
+            expect(sdSettings.illustration.presets.map(p => p.id)).toEqual(['preset_1']);
+            expect(sdSettings.illustration.presets[0].promptStyle).toBe('tag');
+            expect(onPresetsCommitted).toHaveBeenCalledTimes(4);
+        } finally {
+            globalThis.fetch = originalFetch;
+            cleanup();
+        }
+    });
+
     test('AskProvider wb_read_sd strips credentials and private endpoint URLs while SuggestRuleProvider detects broken profile and failed run', async () => {
         const { ctx, reg, rec, sdSettings } = createHarnessContext();
         Object.assign(sdSettings, {

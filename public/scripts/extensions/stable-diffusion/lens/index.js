@@ -14,6 +14,7 @@ export function initSdLens({
     imageService = null,
     getRunStore = null,
     comfyBridge = null,
+    onPresetsCommitted = null,
 } = {}) {
     const ctx = getContext?.();
     const { addLocaleData, workbench } = ctx || {};
@@ -61,7 +62,7 @@ export function initSdLens({
         }
         if (typeof workbench.registerIterateTarget === 'function') {
             activeUnregisters.push(
-                workbench.registerIterateTarget(createSdIterateTarget(getContext, { comfyBridge })),
+                workbench.registerIterateTarget(createSdIterateTarget(getContext, { comfyBridge, onPresetsCommitted })),
             );
         }
         if (typeof workbench.registerAskProvider === 'function') {
