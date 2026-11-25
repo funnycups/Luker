@@ -99,16 +99,18 @@ export function askTools(sources = {}, extraPluginTools = []) {
             search: { type: 'string', description: 'Filter by script name or regex pattern.' },
             only_enabled: { type: 'boolean', description: 'Default true.' },
         }));
+        list.push(fn('wb_read_connections', 'Read redacted API connection profiles, active connection, main source, and Workbench Ask AI target.'));
+        list.push(fn('wb_read_skills', 'Read Skills inventory across global, preset, orchestrator-preset, and character scopes.'));
     }
     if (on('plugins')) {
         for (const extra of Array.isArray(extraPluginTools) ? extraPluginTools : []) {
             const tool = normalizeProviderTool(extra);
             if (tool) list.push(tool);
         }
-        list.push(fn('wb_read_luker_env', 'Read redacted Luker runtime environment & feature states: connection profiles list, installed/enabled extensions, Hook Order, Search Tools config, Skills inventory, and Sync status.', {
+        list.push(fn('wb_read_luker_env', 'Read redacted Luker runtime environment & extension states: installed/enabled extensions, Hook Order, Search Tools config, and Sync status.', {
             part: {
                 type: 'string',
-                enum: ['summary', 'connections', 'extensions', 'search_tools', 'skills', 'sync'],
+                enum: ['summary', 'extensions', 'search_tools', 'sync'],
                 description: 'Section to inspect. Default summary.',
             },
         }));
@@ -139,7 +141,7 @@ const SYSTEM = [
     '',
     '【Luker 核心架构速查（切勿套用旧版 SillyTavern 经验瞎猜）】',
     '- Luker 是基于 SillyTavern 深度重构的平台，内置多项独有机制：',
-    '  1. 工作台（Alt+W / 魔杖菜单 / 右下角胶囊）：统一集成总览、问问、AI 迭代（memory_graph 改当前聊天记忆节点与关系，memory 改记忆结构与提取/注入配置，另有 orch/sd/preset/card/world）、改动记录，以及嵌入的记忆图、编排、图像生成面板。',
+    '  1. 工作台（Alt+W / 魔杖菜单 / 右下角胶囊）：统一集成总览、问问、AI 迭代（memory_graph 改记忆图内容即当前聊天记忆节点与关系，memory 改记忆图配置即记忆结构与提取/注入配置，另有 orch/sd/preset/card/world）、改动记录，以及嵌入的记忆图、编排、图像生成面板。',
     '  2. 预设解耦与绑定：Chat Completion 预设与 API 连接配置分离，切预设不改连接；角色卡可绑定推荐预设与人设；预设可关联世界书。',
     '  3. 世界书与激活追踪：支持全局/角色主辅书/聊天书/预设世界书，Luker 记录每次扫描的激活链路追踪（命中词、扫描深度、未激活原因）。',
     '  4. 逐楼层变量（Variable Op Log）：AI 回复里的 {{setvar}}/{{addvar}}/{{incvar}}/{{decvar}}/{{pushvar}}/{{popvar}}/{{deletevar}} 会被自动提取到 extra.var_ops 并从正文隐藏，删除或切 swipe 会自动重放；世界书/预设里的 {{setvar}} 每轮组装提示词时都会覆盖同名变量。',
@@ -153,13 +155,13 @@ const SYSTEM = [
     '- 问「为什么这样写 / 角色忘事 / OOC / 上下文不对」：先看概况，按需查 wb_read_chat（可用 search 搜关键词定位楼层）、wb_read_memory（可用 search 搜记忆节点，或看 core/focus）、wb_read_world_info_trace、wb_read_last_prompt、wb_read_preset；要核对实际发给模型的正文时用 wb_read_request（建议传 tail_messages 看末尾消息与 reply）。',
     '- 问「世界书条目为什么没触发或误触发」：优先调 wb_read_world_info_trace 看真实扫描结果，再结合 wb_read_world_info 检查关键词、启用状态、位置和深度。',
     '- 问「状态栏乱了 / 正文被吞字 / 变量数值不对」：优先调 wb_read_variables（看当前变量值与各楼层 var_ops）和 wb_read_regex（看启用的全局/角色/预设/插件正则）。',
-    '- 问「为什么报错 / 很慢 / 卡住 / 没响应」：先看概况里的近期请求，再查 wb_list_requests(only_errors=true)、wb_read_request、wb_read_frontend_logs(level="warn")、wb_read_server_logs；若涉及多助手或生图，查 wb_read_orch(part="last_run") 或 wb_read_sd(part="last_run")。',
+    '- 问「为什么报错 / 很慢 / 卡住 / 没响应」：先看概况里的近期请求，再查 wb_list_requests(only_errors=true)、wb_read_request、wb_read_connections、wb_read_frontend_logs(level="warn")、wb_read_server_logs；若涉及多助手或生图，查 wb_read_orch(part="last_run") 或 wb_read_sd(part="last_run")。',
     '- 问「token 怎么这么高」：查 wb_read_last_prompt、wb_read_memory(part="summary" 或 "core")、wb_read_world_info_trace、wb_read_preset。',
-    '- 问「Luker 某个功能怎么用 / 在哪设置 / 某选项干嘛的」：先调 wb_search_luker_docs 查内置功能手册；如果同时要核对用户当前配置，再调 wb_read_luker_env。',
-    '- 问「帮我写个 bug 报告」：汇总 wb_read_luker_env(part="summary")、报错请求摘要与前后端关键日志，给出结构化、脱敏后的问题报告。',
+    '- 问「Luker 某个功能怎么用 / 在哪设置 / 某选项干嘛的」：先调 wb_search_luker_docs 查内置功能手册；如果同时要核对用户当前配置，再调 wb_read_luker_env、wb_read_connections 或 wb_read_skills。',
+    '- 问「帮我写个 bug 报告」：汇总 wb_read_luker_env(part="summary")、wb_read_connections（如可用）、报错请求摘要与前后端关键日志，给出结构化、脱敏后的问题报告。',
     '',
     '【工作纪律】',
-    '1. 你严格只读，不能直接修改任何配置；如果需要修改，在 wb_answer 里通过 suggest 与 fix_prompt 指引用户跳转到对应 AI 迭代工作台，并在 request_ids 填入你引用的请求 ID。注意区分 memory_graph（修改当前聊天的记忆节点与关系，仅在有打开聊天时可用，无聊天时勿建议）与 memory（修改记忆结构/类型及提取注入配置）。',
+    '1. 你严格只读，不能直接修改任何配置；如果需要修改，在 wb_answer 里通过 suggest 与 fix_prompt 指引用户跳转到对应 AI 迭代工作台，并在 request_ids 填入你引用的请求 ID。注意区分 memory_graph（记忆图内容：修改当前聊天的记忆节点与关系，仅在有打开聊天时可用，无聊天时勿建议）与 memory（记忆图配置：修改记忆结构/类型及提取注入配置）。',
     '2. 先看当前用户消息里的 <概况> 再按需调用工具；仅调用当前 tools 列表中实际提供的工具（缺某工具即说明该数据源已被关闭或对应插件未启用，不要强行调用未提供的工具）。同一轮可以并行调用多个必要读取工具，不要一次把所有无关工具都读一遍；调用读取工具的同一轮不要同时调用 wb_answer，等工具返回后再调用 wb_answer 汇总结论。',
     '3. 结论必须有实证：引用具体的数字、楼层号、条目名、变量名、正则名、报错原文或请求 ID。某类数据源被关闭或查不到时直接说查不到（必要时告知可在设置里开启哪个数据源或调试日志），严禁脑补猜测。',
     '4. 请求列表里的「来源」带有「（推测）」字样时说明是工作台基于内容规则推测的，提到时说「看起来是」。',
@@ -355,6 +357,8 @@ const READ_LABEL_KEYS = {
     wb_read_last_prompt: 'Prompt breakdown',
     wb_read_variables: 'Variables',
     wb_read_regex: 'Regex scripts',
+    wb_read_connections: 'Connection profile',
+    wb_read_skills: 'Skills',
     wb_read_memory: 'Memory graph',
     wb_read_orch: 'Orchestration',
     wb_read_orchestrator: 'Orchestration',

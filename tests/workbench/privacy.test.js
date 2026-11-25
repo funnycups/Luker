@@ -174,6 +174,8 @@ describe('workbench privacy and redaction', () => {
         expect(gatedReaders.wb_read_world_info_trace).toBeUndefined();
         expect(gatedReaders.wb_read_variables).toBeUndefined();
         expect(gatedReaders.wb_read_regex).toBeUndefined();
+        expect(gatedReaders.wb_read_connections).toBeUndefined();
+        expect(gatedReaders.wb_read_skills).toBeUndefined();
         expect(gatedReaders.wb_list_requests).toBeUndefined();
         expect(gatedReaders.wb_read_frontend_logs).toBeUndefined();
         expect(gatedReaders.wb_read_luker_env).toBeUndefined();
@@ -207,7 +209,7 @@ describe('workbench privacy and redaction', () => {
         expect(out.accessToken).toBe('***');
     });
 
-    test('wb_read_luker_env blocks connections, hides summary connection fields, and filters character/preset skills when sources.content is false', async () => {
+    test('content and plugins source toggles own disjoint tools without cross-source leakage', async () => {
         globalThis.Luker = {
             getContext: () => ({
                 chatCompletionSettings: { chat_completion_source: 'openai' },
@@ -230,35 +232,56 @@ describe('workbench privacy and redaction', () => {
                     ],
                 },
                 extensionSettings: {
-                    workbench: {},
+                    workbench: { ai: { ask: { connection: 'SecretAskConn', preset: 'SecretAskPreset' } } },
                     search_tools: { enabled: false, preRequestEnabled: true, provider: 'tavily' },
                     disabledExtensions: [],
                 },
             }),
         };
 
-        const readers = askReaders({
-            sources: { content: false, plugins: true, inspector: false, frontLogs: false, serverLogs: false },
-            redactText: true,
-        });
+        // plugins=true, content=false -> wb_read_luker_env is present and reveals no connections/skills/askTarget
+        const pluginsOnlySources = { content: false, plugins: true, inspector: false, frontLogs: false, serverLogs: false };
+        const pluginsOnlyToolNames = askTools(pluginsOnlySources).map(t => t.function.name);
+        expect(pluginsOnlyToolNames).toContain('wb_read_luker_env');
+        expect(pluginsOnlyToolNames).not.toContain('wb_read_connections');
+        expect(pluginsOnlyToolNames).not.toContain('wb_read_skills');
 
-        expect(typeof readers.wb_read_luker_env).toBe('function');
+        const pluginsOnlyReaders = askReaders({ sources: pluginsOnlySources, redactText: true });
+        expect(typeof pluginsOnlyReaders.wb_read_luker_env).toBe('function');
+        expect(pluginsOnlyReaders.wb_read_connections).toBeUndefined();
+        expect(pluginsOnlyReaders.wb_read_skills).toBeUndefined();
 
-        const conns = await readers.wb_read_luker_env({ part: 'connections' });
-        expect(conns).toEqual({ error: 'Source disabled: content' });
-        expect(JSON.stringify(conns)).not.toContain('SecretProfile');
-
-        const summary = await readers.wb_read_luker_env({ part: 'summary' });
+        const summary = await pluginsOnlyReaders.wb_read_luker_env({ part: 'summary' });
         expect(summary.activeConnection).toBeUndefined();
         expect(summary.connectionProfileCount).toBeUndefined();
-        expect(JSON.stringify(summary)).not.toContain('SecretProfile');
-        expect(JSON.stringify(summary)).not.toContain('gpt-secret-4o');
+        expect(summary.workbenchAskTarget).toBeUndefined();
+        const summaryJson = JSON.stringify(summary);
+        expect(summaryJson).not.toContain('SecretProfile');
+        expect(summaryJson).not.toContain('SecretAskConn');
+        expect(summaryJson).not.toContain('SecretAskPreset');
+        expect(summaryJson).not.toContain('gpt-secret-4o');
 
-        const skills = await readers.wb_read_luker_env({ part: 'skills' });
+        // content=true, plugins=false -> wb_read_connections & wb_read_skills are present, wb_read_luker_env is absent
+        const contentOnlySources = { content: true, plugins: false, inspector: false, frontLogs: false, serverLogs: false };
+        const contentOnlyToolNames = askTools(contentOnlySources).map(t => t.function.name);
+        expect(contentOnlyToolNames).toContain('wb_read_connections');
+        expect(contentOnlyToolNames).toContain('wb_read_skills');
+        expect(contentOnlyToolNames).not.toContain('wb_read_luker_env');
+
+        const contentOnlyReaders = askReaders({ sources: contentOnlySources, redactText: true });
+        expect(typeof contentOnlyReaders.wb_read_connections).toBe('function');
+        expect(typeof contentOnlyReaders.wb_read_skills).toBe('function');
+        expect(contentOnlyReaders.wb_read_luker_env).toBeUndefined();
+
+        const conns = await contentOnlyReaders.wb_read_connections({});
+        expect(conns.profiles[0].name).toBe('SecretProfile');
+        expect(conns.workbenchAskTarget).toEqual({ apiPresetName: 'SecretAskConn', llmPresetName: 'SecretAskPreset' });
+        expect(JSON.stringify(conns)).not.toContain('internal.secret.local');
+        expect(JSON.stringify(conns)).not.toContain('proxy.secret.local');
+
+        const skills = await contentOnlyReaders.wb_read_skills({});
         expect(skills.available).toBe(true);
-        expect(skills.total).toBe(2);
-        expect(skills.skills.map(s => s.name)).toEqual(['global-style', 'orch-flow']);
-        expect(JSON.stringify(skills)).not.toContain('char-secret');
-        expect(JSON.stringify(skills)).not.toContain('preset-secret');
+        expect(skills.total).toBe(4);
+        expect(skills.skills.map(s => s.name)).toEqual(['global-style', 'orch-flow', 'char-secret', 'preset-secret']);
     });
 });

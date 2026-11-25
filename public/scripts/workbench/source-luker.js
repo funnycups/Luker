@@ -873,27 +873,57 @@ function parseProfileBool(value) {
     return norm === 'true' || norm === '1' || norm === 'yes' || norm === 'on';
 }
 
-/** 读取脱敏后的 Luker 运行环境与功能状态（连接配置、扩展、搜索工具、技能、同步）。 */
-async function readLukerEnv({ part = 'summary' } = {}, registry = defaultRegistry, sources = null) {
+/** 读取脱敏后的 API 连接配置列表、当前活动连接与工作台问问目标。 */
+function readConnections(registry = defaultRegistry) {
     const ctx = getContext();
     if (!ctx) return { error: 'Luker 上下文不可用' };
-    const contentAllowed = !sources || sources.content !== false;
-
-    const safeConnections = () => {
-        const list = ctx.connectionProfiles?.list?.() || [];
-        return list.map(p => ({
-            name: String(p?.name || ''),
-            api: String(p?.api || p?.mode || ''),
-            model: String(p?.model || ''),
-            proxy: String(p?.proxy || ''),
-            plainTextFunctionCalling: parseProfileBool(p?.['function-calling-plain-text']),
-            rpmLimit: p?.['rpm-limit'] ?? null,
-            requestTimeout: p?.['request-timeout'] ?? null,
-            maxRetries: p?.['max-request-retries'] ?? null,
-            hasCustomUrl: Boolean(String(p?.['api-url'] || '').trim()),
-            hasNetworkProxy: Boolean(String(p?.['network-proxy'] || '').trim()),
-        }));
+    const list = ctx.connectionProfiles?.list?.() || [];
+    const profiles = list.map(p => ({
+        name: String(p?.name || ''),
+        api: String(p?.api || p?.mode || ''),
+        model: String(p?.model || ''),
+        proxy: String(p?.proxy || ''),
+        plainTextFunctionCalling: parseProfileBool(p?.['function-calling-plain-text']),
+        rpmLimit: p?.['rpm-limit'] ?? null,
+        requestTimeout: p?.['request-timeout'] ?? null,
+        maxRetries: p?.['max-request-retries'] ?? null,
+        hasCustomUrl: Boolean(String(p?.['api-url'] || '').trim()),
+        hasNetworkProxy: Boolean(String(p?.['network-proxy'] || '').trim()),
+    }));
+    return {
+        activeConnection: connectionName(ctx),
+        mainSource: String(ctx.chatCompletionSettings?.chat_completion_source || ''),
+        workbenchAskTarget: aiTarget('ask', readSettings(ctx), registry),
+        profiles,
     };
+}
+
+/** 读取跨作用域（全局/预设/编排方案/角色卡）的 Skills 技能清单。 */
+async function readSkills() {
+    const ctx = getContext();
+    if (!ctx) return { error: 'Luker 上下文不可用' };
+    if (typeof ctx.skills?.list !== 'function') return { available: false };
+    try {
+        const items = await ctx.skills.list({ scope: 'all' });
+        const list = Array.isArray(items) ? items : [];
+        return {
+            available: true,
+            total: list.length,
+            skills: list.slice(0, 60).map(s => ({ // cap-ok: 限制技能清单返回条数
+                name: String(s?.name || ''),
+                scope: s?.scope || null,
+                description: String(s?.description || '').slice(0, 160), // cap-ok: 技能简述上限
+            })),
+        };
+    } catch (err) {
+        return { available: false, error: String(err?.message || err) };
+    }
+}
+
+/** 读取脱敏后的 Luker 运行环境与扩展状态（扩展清单、Hook Order、搜索工具、同步）。 */
+async function readLukerEnv({ part = 'summary' } = {}, registry = defaultRegistry) {
+    const ctx = getContext();
+    if (!ctx) return { error: 'Luker 上下文不可用' };
 
     const safeExtensions = () => {
         const installed = ctx.listExtensionNames?.() || [];
@@ -921,28 +951,6 @@ async function readLukerEnv({ part = 'summary' } = {}, registry = defaultRegistr
             lorebookPosition: st.lorebookPosition ?? null,
             lorebookDepth: st.lorebookDepth ?? null,
         };
-    };
-
-    const safeSkills = async () => {
-        if (typeof ctx.skills?.list !== 'function') return { available: false };
-        try {
-            const items = await ctx.skills.list({ scope: 'all' });
-            const rawList = Array.isArray(items) ? items : [];
-            const list = contentAllowed
-                ? rawList
-                : rawList.filter(s => s?.scope?.kind !== 'character' && s?.scope?.kind !== 'preset');
-            return {
-                available: true,
-                total: list.length,
-                skills: list.slice(0, 60).map(s => ({ // cap-ok: 限制技能清单返回条数
-                    name: String(s?.name || ''),
-                    scope: s?.scope || null,
-                    description: String(s?.description || '').slice(0, 160), // cap-ok: 技能简述上限
-                })),
-            };
-        } catch (err) {
-            return { available: false, error: String(err?.message || err) };
-        }
     };
 
     const safeSync = async () => {
@@ -983,18 +991,8 @@ async function readLukerEnv({ part = 'summary' } = {}, registry = defaultRegistr
         }
     };
 
-    if (part === 'connections') {
-        if (!contentAllowed) return { error: 'Source disabled: content' };
-        return {
-            activeConnection: connectionName(ctx),
-            mainSource: String(ctx.chatCompletionSettings?.chat_completion_source || ''),
-            workbenchAskTarget: aiTarget('ask', readSettings(ctx), registry),
-            profiles: safeConnections(),
-        };
-    }
     if (part === 'extensions') return safeExtensions();
     if (part === 'search_tools') return safeSearchTools();
-    if (part === 'skills') return safeSkills();
     if (part === 'sync') return safeSync();
 
     const ext = safeExtensions();
@@ -1003,11 +1001,6 @@ async function readLukerEnv({ part = 'summary' } = {}, registry = defaultRegistr
         accountsEnabled: Boolean(ctx.accountsEnabled),
         isMobile: typeof ctx.isMobile === 'function' ? Boolean(ctx.isMobile()) : false,
         locale: typeof ctx.getCurrentLocale === 'function' ? ctx.getCurrentLocale() : '',
-        ...(contentAllowed ? {
-            activeConnection: connectionName(ctx),
-            connectionProfileCount: safeConnections().length,
-        } : {}),
-        workbenchAskTarget: aiTarget('ask', readSettings(ctx), registry),
         enabledExtensionsCount: ext.enabled.length,
         disabledExtensionsCount: ext.disabled.length,
         searchTools: st,
@@ -1292,10 +1285,12 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
         };
         readers.wb_read_variables = async (args) => readVariables(args);
         readers.wb_read_regex = async (args) => readRegexScripts(args);
+        readers.wb_read_connections = async () => readConnections(registry);
+        readers.wb_read_skills = async () => readSkills();
     }
 
     if (on('plugins')) {
-        readers.wb_read_luker_env = async (args) => readLukerEnv(args, registry, sources);
+        readers.wb_read_luker_env = async (args) => readLukerEnv(args, registry);
         readers.wb_read_suggestions = async () => suggestions().map(s => ({ text: s.text, why: s.why }));
         const ctx = getContext();
         for (const p of registry.getAskProviders()) {

@@ -930,7 +930,7 @@ describe('workbench Ask model & source readers', () => {
         expect(presetFuzzy.content).toBe('Be vivid.');
     });
 
-    test('wb_read_luker_env and askOverview handle Search Tools dual switch, real Sync fields, safe Connections, and content gating', async () => {
+    test('wb_read_luker_env, wb_read_connections, wb_read_skills, and askOverview handle Search Tools dual switch, real Sync fields, and safe Connections', async () => {
         globalThis.Luker = {
             getContext: () => ({
                 chat: [],
@@ -1021,7 +1021,7 @@ describe('workbench Ask model & source readers', () => {
             lorebookDepth: 4,
         });
 
-        const envConns = await fullReaders.wb_read_luker_env({ part: 'connections' });
+        const envConns = await fullReaders.wb_read_connections({});
         expect(envConns.profiles[0]).toEqual({
             name: 'MainAPI',
             api: 'openai',
@@ -1040,6 +1040,11 @@ describe('workbench Ask model & source readers', () => {
         expect(JSON.stringify(envConns)).not.toContain('private-gateway.internal');
         expect(JSON.stringify(envConns)).not.toContain('proxy.internal');
         expect(JSON.stringify(envConns)).not.toContain('sk-should-never-appear');
+
+        const skillsRes = await fullReaders.wb_read_skills({});
+        expect(skillsRes.available).toBe(true);
+        expect(skillsRes.total).toBe(4);
+        expect(skillsRes.skills.map(s => s.name)).toEqual(['anti-cliche', 'orch-helper', 'alice-private', 'rp-preset-skill']);
 
         const envSync = await fullReaders.wb_read_luker_env({ part: 'sync' });
         expect(envSync).toEqual({
@@ -1060,17 +1065,11 @@ describe('workbench Ask model & source readers', () => {
             errors: [{ backendId: 's3_primary', code: 'E_SYNC', message: 'timeout' }],
         });
 
-        // Content disabled + plugins enabled: reject connections, hide summary connection info, filter character/preset skills
-        const noContentReaders = askReaders({
-            redactText: true,
-            sources: { content: false, plugins: true, inspector: false, frontLogs: false, serverLogs: false },
-        });
-        expect(await noContentReaders.wb_read_luker_env({ part: 'connections' })).toEqual({ error: 'Source disabled: content' });
-        const gatedSummary = await noContentReaders.wb_read_luker_env({ part: 'summary' });
-        expect(gatedSummary.activeConnection).toBeUndefined();
-        expect(gatedSummary.connectionProfileCount).toBeUndefined();
-        const gatedSkills = await noContentReaders.wb_read_luker_env({ part: 'skills' });
-        expect(gatedSkills.skills.map(s => s.name)).toEqual(['anti-cliche', 'orch-helper']);
+        const envSummary = await fullReaders.wb_read_luker_env({ part: 'summary' });
+        expect(envSummary.activeConnection).toBeUndefined();
+        expect(envSummary.connectionProfileCount).toBeUndefined();
+        expect(envSummary.workbenchAskTarget).toBeUndefined();
+        expect(envSummary.enabledExtensionsCount).toBe(4);
     });
 
     test('wb_read_memory uses real read-api node shape, schema shape, settings keys, recency sort, seq_to=-1, and field truncation', async () => {

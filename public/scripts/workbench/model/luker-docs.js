@@ -16,10 +16,10 @@ export const LUKER_DOCS = Object.freeze([
         keywords: ['工作台', 'workbench', '总览', '问问', 'ai 迭代', 'ai迭代', '改动记录', '改动清单', '撤销', '回滚', '小建议', 'alt+w', '胶囊', 'plugin-only', '未保存'],
         entryPoint: '输入框旁魔杖菜单 → 工作台；或点击右下角常驻胶囊；或按快捷键 Alt+W',
         scope: '工作台设置跟随账号（extensionSettings.workbench）；会话按当前聊天/全局隔离',
-        summary: 'Luker 原生统一工作区，集成总览（最近一次提示词 token 分解与本地规则小建议）、问问（只读诊断助手）、AI 迭代（记忆图/记忆结构/编排/预设/角色卡/世界书/图像生成的对话式差异编辑）、改动记录（当前页面会话内逐条撤销）以及嵌入式记忆图、编排、图像生成面板。',
+        summary: 'Luker 原生统一工作区，集成总览（最近一次提示词 token 分解与本地规则小建议）、问问（只读诊断助手）、AI 迭代（记忆图内容/记忆图配置/编排/预设/角色卡/世界书/图像生成的对话式差异编辑）、改动记录（当前页面会话内逐条撤销）以及嵌入式记忆图、编排、图像生成面板。',
         troubleshooting: [
             '工作台 AI 配置支持「单独指定 → 插件设置 → 共用设置 → 内置示例」解析；生成预设默认优先选用 plugin-only（如已导入），否则回退当前预设。',
-            '「问问」严格只读且默认自动脱敏 API 密钥与 URL；修改配置请通过回答底部的「去改 XXX」跳转到对应 AI 迭代工作台（区分「记忆图」改聊天节点与「记忆结构」改类型配置）。',
+            '「问问」严格只读且默认自动脱敏 API 密钥与 URL；修改配置请通过回答底部的「去改 XXX」跳转到对应 AI 迭代工作台（区分「记忆图内容」改聊天节点与「记忆图配置」改类型与提取设置）。',
             '误应用了 AI 迭代改动：在工作台左侧「改动记录」里可按工作台筛选并在当前页面会话内逐条撤销（刷新页面前有效）。',
             '在群聊中工作台按「未选择单一角色卡」处理，角色卡专属字段与单卡绑定项不可用。',
         ],
@@ -46,7 +46,7 @@ export const LUKER_DOCS = Object.freeze([
         keywords: ['记忆图', 'memory-graph', 'memory', '记忆', '记住', '记不住', '忘事', '忘记', '想不起来', '常驻注入', 'core', 'focus', '召回', '压缩', '合并', '回溯', 'schema', '记忆结构', '节点', '向量', 'rag', '嵌入', 'embedding', '重排', 'rerank'],
         entryPoint: '工作台 → 记忆图（含图谱/时间线/数据表/记忆结构/设置），或 扩展 → 记忆',
         scope: '记忆节点数据按聊天独立；记忆结构（Schema）与高级设置支持「全局」或「当前角色单独覆盖」两种作用域',
-        summary: '后台自动从对话提取带类型的结构化记忆节点与关系，并在生成前分成两路注入提示词：core（常驻注入，受回溯楼层上限与自动压缩控制）与 focus（按需召回，支持 LLM 召回或 RAG 向量检索与可选重排）。修改节点走「AI 迭代 → 记忆图」，修改类型与提取规则走「AI 迭代 → 记忆结构」。',
+        summary: '后台自动从对话提取带类型的结构化记忆节点与关系，并在生成前分成两路注入提示词：core（常驻注入，受回溯楼层上限与自动压缩控制）与 focus（按需召回，支持 LLM 召回或 RAG 向量检索与可选重排）。修改节点走「AI 迭代 → 记忆图内容」，修改类型与提取规则走「AI 迭代 → 记忆图配置」。',
         troubleshooting: [
             '角色「记不住 / 突然忘了某件事」排查顺序：先用 wb_read_memory(part="search", query=...) 查图谱里有没有该节点 → 若无，检查自动提取是否开启、提取间隔（updateEvery）及最近请求是否报错；若有，看它是否被归档、是否超出常驻回溯楼层上限（persistentInjectionMaxSeqDistance）且未被本次 focus 召回。',
             '开启 RAG 向量召回步骤：先在顶栏「API 连接」面板的「嵌入」（以及可选「重排」）选项卡创建配置并测试连接，再回到「记忆图 → 设置」选中该配置、构建向量索引并切换到 RAG 召回。',
@@ -163,7 +163,7 @@ export const LUKER_DOCS = Object.freeze([
         scope: '连接配置独立于生成预设管理，按连接配置保存 API/模型/网络代理/RPM 限速/请求超时/重试次数/纯文本函数调用开关；流式开关位于生成预设；WebSocket 代理对用户透明无需配置',
         summary: 'Luker 将 API 连接配置与生成预设解耦，在 API 连接抽屉统一管理聊天补全、嵌入（Embedding）与重排（Rerank）配置，内置统一生成层与函数调用运行时（支持原生 tool call 与纯文本 XML 协议自动降级），并自动启用透明的 WebSocket 持久代理（心跳保活、断线自动重连与断点续传，无需额外配置）。',
         troubleshooting: [
-            '报 401/403/404/429/5xx 或工具调用失败：先调 wb_list_requests(only_errors=true) 与 wb_read_request 查看精确 HTTP 状态码和报错原文，再调 wb_read_luker_env(part="connections") 核对连接配置、plainTextFunctionCalling、rpmLimit、requestTimeout 与 maxRetries。',
+            '报 401/403/404/429/5xx 或工具调用失败：先调 wb_list_requests(only_errors=true) 与 wb_read_request 查看精确 HTTP 状态码和报错原文，再调 wb_read_connections 核对连接配置、plainTextFunctionCalling、rpmLimit、requestTimeout 与 maxRetries。',
             '移动端锁屏或切到后台导致生成中断：WebSocket 代理默认透明生效无需配置；请在「用户设置 → UI主题 → 移动端后台保活」开启保活（手机浏览器可选「画中画」或「音频」，Android/鸿蒙应用由原生层维持），流式开关请在生成预设中核对。',
             '配置或排查 Embedding / Rerank（供记忆图 RAG 召回与向量存储使用）：在顶栏「API 连接」切换到「嵌入」或「重排」选项卡创建配置、拉取模型并测试连接，报错可在请求检查器中查看 type="embedding" 的请求记录。',
         ],
@@ -205,7 +205,7 @@ export const LUKER_DOCS = Object.freeze([
         scope: '4 级作用域：global（全局）、preset（对话预设）、orch-preset（编排方案）、character（角色卡）',
         summary: 'Skill 是以目录和 SKILL.md 组织的按需读取知识包，用于把写作规则、口吻规范、反八股清单、剧情摘要规则等模块化拆分，挂载到指定编排 Agent 后由 Agent 按需读取，避免塞爆主系统提示词。',
         troubleshooting: [
-            'Agent 没遵循某条 Skill：调 wb_read_luker_env(part="skills") 核实该 Skill 是否存在及其作用域，再调 wb_read_orch(part="profile") 检查对应 Agent 是否挂载了该 Skill。',
+            'Agent 没遵循某条 Skill：调 wb_read_skills 核实该 Skill 是否存在及其作用域，再调 wb_read_orch(part="profile") 检查对应 Agent 是否挂载了该 Skill。',
         ],
         docPath: 'docs/zh-CN/features/skills/index.md',
     },
@@ -408,7 +408,7 @@ export function listLukerDocTopics() {
 export function searchLukerDocs({ query = '', category = '', limit = 5 } = {}) {
     const q = String(query || '').trim();
     const cat = String(category || '').trim().toLowerCase();
-    const maxItems = Math.max(1, Math.min(20, Number(limit) || 5));
+    const maxItems = Math.max(1, Math.min(10, Math.floor(Number(limit) || 5))); // cap-ok: 对齐 wb_search_luker_docs 工具声明的 1-10 返回主题数上限
 
     const pool = cat
         ? LUKER_DOCS.filter(d => d.category.toLowerCase().includes(cat) || d.id.toLowerCase().includes(cat))
