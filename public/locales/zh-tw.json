@@ -5100,6 +5100,7 @@
     "Delete ${0} selected lorebooks?": "要刪除已選的 ${0} 個世界書嗎？",
     "Inspector": "請求檢查器",
     "Request Inspector": "請求檢查器",
+    "Request record not found or expired.": "請求記錄不存在或已過期。",
     "Abort Request": "中斷請求",
     "Abort": "中斷",
     "Request aborted.": "請求已中斷。",

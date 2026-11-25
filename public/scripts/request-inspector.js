@@ -1076,7 +1076,6 @@ async function openInspectorPanel(initialRequestId = '') {
     currentDetailSearch = '';
     cachedDetail = null;
     if (targetId) {
-        content.html(`<div class="ri-loading">${t`Loading...`}</div>`);
         const detail = await fetchDetail(targetId);
         if (detail) {
             cachedDetail = detail;
