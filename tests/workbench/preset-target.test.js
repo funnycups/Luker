@@ -681,4 +681,64 @@ describe('platform preset target (controls, modes, reference, proposal-bus, cust
         );
         expect(updated.temperature).toBe(0.5);
     });
+
+    test('in-flight prompt, runRead, and preset_clone_to_new use captured session target even after live preset switches', async () => {
+        const sourceBody = {
+            temperature: 0.6,
+            prompts: [{ identifier: 'main', name: 'Main', role: 'system', content: 'Source prompt' }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }],
+        };
+        const otherBody = {
+            temperature: 1.4,
+            prompts: [{ identifier: 'main', name: 'Main', role: 'system', content: 'Other prompt' }],
+            prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }] }],
+        };
+        const { ctx, stored } = createMockPresetCtx({
+            selectedName: 'SourcePreset',
+            presets: { SourcePreset: sourceBody, OtherPreset: otherBody },
+        });
+        ctx.skills.list = jest.fn(async () => [
+            { name: 'source-skill', scope: { kind: 'preset', name: 'SourcePreset' }, description: 'Belongs to source' },
+            { name: 'other-skill', scope: { kind: 'preset', name: 'OtherPreset' }, description: 'Belongs to other' },
+        ]);
+
+        const target = createPresetTarget({ getContext: () => ctx });
+        const loaded = await target.load('preset', ctx);
+        target.applyLaunch({ presetMode: 'orchestrator-optimize' });
+
+        // Switch live selected preset to OtherPreset mid-turn
+        await ctx.presets.save({ collection: 'openai', name: 'OtherPreset' }, otherBody, { select: true });
+        expect(ctx.presets.getSelected('openai').name).toBe('OtherPreset');
+
+        const promptText = await target.prompt(loaded.live, 'preset', ctx, { target: loaded.target });
+        expect(promptText).toContain('SourcePreset');
+        expect(promptText).not.toContain('OtherPreset');
+
+        const readRes = await target.runRead(
+            { id: 'r_captured', name: 'preset_read_live_fields', args: { paths: ['temperature'] } },
+            loaded.live,
+            { target: loaded.target },
+        );
+        expect(readRes.presetName).toBe('SourcePreset');
+
+        const bus = createIterateBus({ proposalKinds: target.proposalKinds });
+        const proposedIds = [];
+        await target.runEdit(
+            { id: 'c_captured', name: 'preset_clone_to_new', args: { new_name: 'ForkedFromSource' } },
+            loaded.live,
+            {
+                target: loaded.target,
+                bus,
+                propose: async (input) => {
+                    const res = await bus.propose({ sourceCallId: 'c_captured', ...input });
+                    proposedIds.push(res.id);
+                    return res;
+                },
+            },
+        );
+        expect(proposedIds).toHaveLength(1);
+        const approved = await bus.approve(proposedIds[0]);
+        expect(approved).toEqual({ ok: true, status: 'committed' });
+        expect(stored.get('ForkedFromSource').body).toEqual(sourceBody);
+    });
 });

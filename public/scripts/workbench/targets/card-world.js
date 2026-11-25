@@ -423,7 +423,10 @@ export async function mergeCharacterAttributes(context, avatar, patch) {
         await context.updateCharacterData(characterIndex, formPatch, { immediate: true });
     }
     for (const [topKey, value] of Object.entries(extPatchesByTopKey)) {
-        await context.writeExtensionField(characterIndex, topKey, value);
+        const saved = await context.writeExtensionField(characterIndex, topKey, value, { requireSaved: true });
+        if (saved === false) {
+            throw new Error(`Failed to save character extension field "${topKey}".`);
+        }
     }
 }
 
@@ -476,51 +479,6 @@ export async function commitCharacterOperations(context, avatar, edits, opts = {
     let persisted = false;
     if (clean.length > 0 && Object.keys(patch).length > 0) {
         await mergeCharacterAttributes(context, avatar, patch);
-        persisted = true;
-    }
-    return { applied: clean.length, conflicts, alreadyDone, persisted };
-}
-
-export async function commitLorebookOperations(bookName, liveBook, edits, opts = {}) {
-    if (!Array.isArray(edits) || edits.length === 0) {
-        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
-    }
-    const safeName = String(bookName || '').trim();
-    if (!safeName) {
-        return { applied: 0, conflicts: [], alreadyDone: [], persisted: false };
-    }
-    const context = opts?.context;
-    if (!context || typeof context.saveWorldInfo !== 'function') {
-        throw new TypeError('commitLorebookOperations: opts.context.saveWorldInfo is required');
-    }
-    const renameEdit = edits.find((e) =>
-        e && e.op === 'set'
-        && (e.path === 'bookName' || e.path === 'lorebook.bookName')
-        && String(e.newValue || '').trim() !== ''
-        && String(e.newValue || '').trim() !== safeName,
-    );
-    if (renameEdit) {
-        throw new Error(
-            'Renaming lorebooks via cea_set_lorebook_metadata is not supported. '
-            + `Use the world-info panel to rename "${safeName}" → "${String(renameEdit.newValue).trim()}".`,
-        );
-    }
-
-    const lodash = resolveLodash(context);
-    const applyFn = getLocalCardApplyEdits(context);
-    const before = liveBook ? safeClone(liveBook) : { entries: {} };
-    const result = applyFn(edits, before) || {};
-    const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
-    const alreadyDone = Array.isArray(result.alreadyDone) ? result.alreadyDone : [];
-    const clean = Array.isArray(result.clean) ? result.clean : [];
-    if (conflicts.length > 0) {
-        // eslint-disable-next-line no-console
-        console.warn(`[workbench/card-world] commitLorebookOperations conflicts for ${safeName}`, conflicts);
-    }
-    const after = result.newLive || before;
-    let persisted = false;
-    if (clean.length > 0 && !lodash.isEqual(before, after)) {
-        await context.saveWorldInfo(safeName, after, true, { refreshEditor: true });
         persisted = true;
     }
     return { applied: clean.length, conflicts, alreadyDone, persisted };

@@ -23,6 +23,7 @@ import { SourceError } from '../model/errors.js';
 import { requireStoredPrompt } from '../../lib/prompt-values.js';
 import { commitFields, fieldPlan } from '../model/patch.js';
 import { presetUnits, applyPresetOps, presetRebuild } from '../model/adapters.js';
+import { diffUnits } from '../model/units.js';
 import { select } from '../ui/components.js';
 import {
     buildBaseSystemPrompt,
@@ -296,6 +297,19 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
                 text,
             };
         },
+        renderPreview({ base, ai }) {
+            if (!ai) return null;
+            const units = presetUnits(ai);
+            const changed = new Set(diffUnits(presetUnits(base), units).map(change => change.key));
+            return h('div', { class: 'wb-preset-preview' },
+                ...Array.from(units.values(), (unit) => h('details', {
+                    class: changed.has(unit.key) ? 'is-change' : '',
+                    open: unit.key === 'settings',
+                },
+                h('summary', {}, h('span', { text: unit.label }),
+                    changed.has(unit.key) ? h('span', { class: 'wb-chg-tag', text: '~' }) : null),
+                h('pre', { text: unit.text }))));
+        },
         applyLaunch(launch = {}) {
             const mode = String(launch?.presetMode || '').trim();
             if (mode) state.mode = sanitizeSessionMode(mode);
@@ -356,12 +370,12 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
                 title: i18nFormat('Preset "${0}"${1}', snapshot.ref.name, snapshot.ref.origin?.kind === 'character' ? i18n(' (bound to the character card)') : ''),
             };
         },
-        async prompt(_live, _scope, ctx) {
+        async prompt(_live, _scope, ctx, opts = {}) {
             const c = resolveCtx(ctx);
             const parts = buildPromptText(c, { includeRuntimeContext: true });
             const mode = sanitizeSessionMode(state.mode);
             if (mode === 'orchestrator-optimize') {
-                const presetName = String(c?.presets?.getSelected?.('openai')?.name || '').trim();
+                const presetName = String(opts?.target?.ref?.name || c?.presets?.getSelected?.('openai')?.name || '').trim();
                 const listFn = typeof c?.skills?.list === 'function'
                     ? async () => {
                         const all = await c.skills.list({ scope: 'all' });
@@ -385,7 +399,7 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
             });
         },
         isRead: (name) => PRESET_READ_TOOLS.has(String(name || '')) || isCpaSkillReadTool(name),
-        async runRead(call, live) {
+        async runRead(call, live, helpers = {}) {
             const name = String(call?.name || '');
             if (isCpaSkillReadTool(name)) {
                 const out = await runCpaSkillTool({
@@ -399,7 +413,7 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
             const ctx = resolveCtx();
             const referenceName = state.referenceName;
             const reference = referenceName ? await loadReferenceBody(ctx, referenceName) : null;
-            const presetName = String(ctx?.presets?.getSelected?.('openai')?.name || '').trim();
+            const presetName = String(helpers?.target?.ref?.name || ctx?.presets?.getSelected?.('openai')?.name || '').trim();
             const res = await runCpaReadTool(
                 { id: call.id, name, args: call.args || {} },
                 {
@@ -416,14 +430,14 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
             }
             return res?.toolResultText || res?.result;
         },
-        async runEdit(call, live, helpers) {
+        async runEdit(call, live, helpers = {}) {
             const ctx = resolveCtx();
             const name = String(call?.name || '');
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
 
             if (name === 'preset_clone_to_new') {
-                const selectedRef = ctx?.presets?.getSelected?.('openai') || null;
-                const presetName = String(selectedRef?.name || '').trim();
+                const targetRef = helpers?.target?.ref || ctx?.presets?.getSelected?.('openai') || null;
+                const presetName = String(targetRef?.name || '').trim();
                 const out = await runCpaReadTool(
                     { id: call.id, name, args },
                     {
@@ -448,7 +462,7 @@ export function createPresetTarget({ getContext = defaultGetContext } = {}) {
                     const cloneOp = {
                         sourceName,
                         newName,
-                        sourceRef: clone(selectedRef),
+                        sourceRef: clone(targetRef),
                     };
                     await helpers.propose({
                         kind: 'preset-clone',

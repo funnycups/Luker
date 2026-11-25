@@ -97,6 +97,39 @@ export function createIterateBus({ proposalKinds = null, onChange = null, onComm
     return bus;
 }
 
+/** Captures the executable working copy alongside its owning persisted turn. */
+export function serializeIterationDraft(draft) {
+    return cloneValue({
+        version: 1,
+        base: draft.base,
+        ai: draft.ai,
+        target: draft.target,
+        title: draft.title,
+        workKey: draft.workKey,
+        ws: draft.ws,
+        proposalIds: draft.proposalIds,
+        busState: draft.bus ? draft.bus.serialize() : null,
+    });
+}
+
+/** Restores stored state without sharing mutable objects with the session cache. */
+export function restoreIterationDraft(snapshot, { proposalKinds = null, sessionId = '', turnIndex = -1 } = {}) {
+    const corrupted = (detail) => new SourceError('storage-error', `Draft corrupted in session "${sessionId}" turn[${turnIndex}]: ${detail}`);
+    if (snapshot?.version !== 1) {
+        throw corrupted(`unsupported version ${snapshot?.version}`);
+    }
+    const { version: _version, busState, ...draft } = cloneValue(snapshot);
+    let bus = null;
+    if (busState !== null) {
+        if (busState?.version !== 3) {
+            throw corrupted(`unsupported proposal bus version ${busState?.version}`);
+        }
+        bus = createIterateBus({ proposalKinds });
+        bus.hydrate(busState);
+    }
+    return { ...draft, bus };
+}
+
 /**
  * Runs one user turn to completion (no round cap; stops only on 0 tool calls or abort).
  * @param {{
@@ -149,7 +182,16 @@ export async function runIterateTurn({
         const calls = Array.isArray(res?.calls) ? res.calls : [];
         if (!calls.length) {
             if (res?.text) {
-                const finalMsg = { role: 'assistant', content: res.text };
+                const finalMsg = {
+                    role: 'assistant',
+                    content: res.text,
+                    ...(res?.signature ? { signature: res.signature } : {}),
+                    ...(Array.isArray(res?.reasoningBlocks) && res.reasoningBlocks.length ? { reasoning_blocks: res.reasoningBlocks } : {}),
+                    ...(Array.isArray(res?.reasoningDetails) && res.reasoningDetails.length ? { reasoning_details: res.reasoningDetails } : {}),
+                    ...(Array.isArray(res?.nativeParts) && res.nativeParts.length ? { native_parts: res.nativeParts } : {}),
+                    ...(Array.isArray(res?.nativeContentBlocks) && res.nativeContentBlocks.length ? { native_content_blocks: res.nativeContentBlocks } : {}),
+                    ...(Array.isArray(res?.responsesOutputItems) && res.responsesOutputItems.length ? { responses_output_items: res.responsesOutputItems } : {}),
+                };
                 if (roundReasoning) finalMsg.reasoning = roundReasoning;
                 msgs.push(finalMsg);
             }
@@ -158,10 +200,18 @@ export async function runIterateTurn({
         const assistantMsg = {
             role: 'assistant',
             content: res?.text || '',
+            ...(res?.signature ? { signature: res.signature } : {}),
+            ...(Array.isArray(res?.reasoningBlocks) && res.reasoningBlocks.length ? { reasoning_blocks: res.reasoningBlocks } : {}),
+            ...(Array.isArray(res?.reasoningDetails) && res.reasoningDetails.length ? { reasoning_details: res.reasoningDetails } : {}),
+            ...(Array.isArray(res?.nativeParts) && res.nativeParts.length ? { native_parts: res.nativeParts } : {}),
+            ...(Array.isArray(res?.nativeContentBlocks) && res.nativeContentBlocks.length ? { native_content_blocks: res.nativeContentBlocks } : {}),
+            ...(Array.isArray(res?.responsesOutputItems) && res.responsesOutputItems.length ? { responses_output_items: res.responsesOutputItems } : {}),
             tool_calls: calls.map(c => ({
                 id: c.id,
                 type: 'function',
                 function: { name: c.name, arguments: JSON.stringify(c.args || {}) },
+                ...(c.signature ? { signature: c.signature } : {}),
+                ...(c.extra_content ? { extra_content: c.extra_content } : {}),
             })),
         };
         if (roundReasoning) assistantMsg.reasoning = roundReasoning;
@@ -188,7 +238,7 @@ export async function runIterateTurn({
                     reads.push({ name: call.name, args: call.args });
                 } else {
                     const beforeIds = activeBus
-                        ? new Set(activeBus._testOnly_entries().map(e => e.id))
+                        ? new Set(activeBus.listEntries().map(e => e.id))
                         : new Set();
                     const rawOutcome = await runEdit(call, current, helpers);
                     let next = rawOutcome;
@@ -199,7 +249,7 @@ export async function runIterateTurn({
                         }
                     }
                     const newEntries = activeBus
-                        ? activeBus._testOnly_entries().filter(e => !beforeIds.has(e.id))
+                        ? activeBus.listEntries().filter(e => !beforeIds.has(e.id))
                         : [];
                     for (const e of newEntries) proposalIds.push(e.id);
                     const liveChanged = next !== current && JSON.stringify(next) !== JSON.stringify(current);
@@ -347,7 +397,7 @@ export function buildTurnChanges({ base, ai, units = null, bus = null, proposalI
     if (!bus) return fieldChanges;
     const adapters = normalizeProposalAdapters(kindAdapters);
     const wanted = Array.isArray(proposalIds) ? new Set(proposalIds) : null;
-    const entries = bus._testOnly_entries().filter(e =>
+    const entries = bus.listEntries().filter(e =>
         (e.status === 'pending' || e.status === 'conflict') && (!wanted || wanted.has(e.id)));
     const busChanges = entries.map(e => proposalToChange(e, adapters.get(e.kind) || null));
     return [...fieldChanges, ...busChanges];
@@ -382,7 +432,7 @@ export async function commitTurnBatch({
         fieldHandle = await target.commit(targetRef, base, next, fieldKeys);
     }
 
-    const entriesById = new Map((bus?._testOnly_entries?.() || []).map(e => [e.id, e]));
+    const entriesById = new Map((bus?.listEntries?.() || []).map(e => [e.id, e]));
     // Execute rollbackable bus proposals before non-rollbackable ones (e.g. preset-clone)
     // so a failure never strands an un-rollbackable side effect on disk.
     const orderedBusIds = [...selectedBusIds].sort((a, b) => {
@@ -435,8 +485,8 @@ export async function commitTurnBatch({
     if (bus) {
         const selectedSet = new Set(selectedBusIds);
         const turnSet = new Set(proposalIds);
-        for (const entry of bus._testOnly_entries()) {
-            if (entry.status === 'pending' && (!proposalIds.length || turnSet.has(entry.id)) && !selectedSet.has(entry.id)) {
+        for (const entry of bus.listEntries()) {
+            if (entry.status === 'pending' && turnSet.has(entry.id) && !selectedSet.has(entry.id)) {
                 bus.reject(entry.id);
             }
         }

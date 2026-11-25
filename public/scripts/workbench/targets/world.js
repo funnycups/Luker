@@ -145,16 +145,18 @@ export function createWorldTarget({ getContext = defaultGetContext, bookIo = nul
             return set.filter((d) => WORLD_TOOL.test(String(fnName(d) || '')));
         },
         isRead: (name) => /^(lorebook_|world_book_|simulate_)/.test(String(name || '')),
-        async runRead(call, live) {
+        async runRead(call, live, helpers) {
             const c = resolveCtx();
-            const cur = resolveCurrentCharacter(c);
+            const avatar = helpers?.target
+                ? String(helpers.target.avatar || '').trim()
+                : (resolveCurrentCharacter(c)?.avatar || '');
             const settings = c?.extensionSettings?.character_editor_assistant || {};
             const res = await runCeaEditorReadTool(
                 { id: call?.id, name: call?.name, args: call?.args || {} },
                 {
                     context: c,
                     settings,
-                    avatar: cur?.avatar || '',
+                    avatar,
                     state: { live },
                     restrictToLiveBooks: true,
                     defaultSource: 'world',

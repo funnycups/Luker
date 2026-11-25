@@ -15,6 +15,7 @@ import { requireStoredPrompt } from '../../lib/prompt-values.js';
 import { cardUnits, cardRebuild, cardEditsFor } from '../model/adapters.js';
 import { commitCardAndBooks } from '../model/commit.js';
 import { DEFAULT_CARD_SYSTEM_PROMPT } from './card-prompts.js';
+import { renderCardPreview } from './card-preview.js';
 import {
     buildCardLiveSnapshot,
     commitCharacterOperations,
@@ -25,6 +26,7 @@ import {
 } from './card-world.js';
 import {
     buildCeaEditorToolSet,
+    buildBookNotFoundError,
     normalizeToolCallToEdit,
     resolveBookNameFromArgsOrSingle,
     runCeaEditorReadTool,
@@ -68,6 +70,7 @@ export function createCardTarget({ getContext = defaultGetContext, bookIo = null
         get label() { return i18n('Character card'); },
         tone: 'card',
         order: 40,
+        renderPreview: renderCardPreview,
         chips: () => [
             i18n('This reply is not like her — find out why'),
             i18n('Tighten the description and remove repetition'),
@@ -131,17 +134,19 @@ export function createCardTarget({ getContext = defaultGetContext, bookIo = null
             return searchReady ? set : set.filter((d) => fnName(d) !== 'web_search');
         },
         isRead: (name) => /^(cea_read_|lorebook_|world_book_|simulate_|inspect_|web_search$)/.test(String(name || '')),
-        async runRead(call, live) {
+        async runRead(call, live, helpers) {
             const c = resolveCtx();
-            const cur = resolveCurrentCharacter(c);
+            const targetAvatar = String(helpers?.target?.avatar || live?.character?.avatar || '').trim();
+            const avatar = targetAvatar || resolveCurrentCharacter(c)?.avatar || '';
             const settings = c?.extensionSettings?.character_editor_assistant || {};
             const res = await runCeaEditorReadTool(
                 { id: call?.id, name: call?.name, args: call?.args || {} },
                 {
                     context: c,
                     settings,
-                    avatar: cur?.avatar || live?.character?.avatar || '',
+                    avatar,
                     state: { live },
+                    abortSignal: helpers?.signal ?? null,
                 },
             );
             if (res?.cancelled) {
@@ -158,9 +163,8 @@ export function createCardTarget({ getContext = defaultGetContext, bookIo = null
             const c = resolveCtx();
             const name = String(call?.name || '');
             const args = call?.args && typeof call.args === 'object' ? call.args : {};
-            if (name.startsWith('cea_') && name.includes('lorebook')) {
-                const allowedBooks = Object.keys(live?.lorebooks || {});
-                const book = resolveBookNameFromArgsOrSingle(args, live);
+            const assertEditableBook = (book, booksObj, { useBookNotFound = false } = {}) => {
+                const allowedBooks = Object.keys(booksObj || {});
                 if (!book) {
                     throw new SourceError(
                         'bad-args',
@@ -169,12 +173,14 @@ export function createCardTarget({ getContext = defaultGetContext, bookIo = null
                             : 'missing book_name: no world books are bound to this character',
                     );
                 }
-                if (!Object.hasOwn(live?.lorebooks || {}, book)) {
-                    throw new SourceError(
-                        'book',
-                        i18nFormat('Only these can be edited: ${0}', allowedBooks.join(listSeparator())),
-                    );
+                if (!Object.hasOwn(booksObj || {}, book)) {
+                    throw useBookNotFound
+                        ? buildBookNotFoundError(name, book, allowedBooks)
+                        : new SourceError('book', i18nFormat('Only these can be edited: ${0}', allowedBooks.join(listSeparator())));
                 }
+            };
+            if (name.startsWith('cea_') && name.includes('lorebook')) {
+                assertEditableBook(resolveBookNameFromArgsOrSingle(args, live), live?.lorebooks, { useBookNotFound: true });
             }
             const edits = await normalizeToolCallToEdit(
                 { id: call?.id, name, args },
@@ -188,21 +194,7 @@ export function createCardTarget({ getContext = defaultGetContext, bookIo = null
             for (const e of edits) {
                 if (e?.target?.kind === 'lorebook') {
                     const book = String(e.target.bookName || '').trim();
-                    const allowedBooks = Object.keys(next.lorebooks);
-                    if (!book) {
-                        throw new SourceError(
-                            'bad-args',
-                            allowedBooks.length
-                                ? `missing book_name: specify one of ${allowedBooks.join(', ')}`
-                                : 'missing book_name: no world books are bound to this character',
-                        );
-                    }
-                    if (!Object.hasOwn(next.lorebooks, book)) {
-                        throw new SourceError(
-                            'book',
-                            i18nFormat('Only these can be edited: ${0}', allowedBooks.join(listSeparator())),
-                        );
-                    }
+                    assertEditableBook(book, next.lorebooks);
                     const rel = { ...e, path: String(e.path).replace(/^lorebook\./, '') };
                     next.lorebooks[book] = applyEditsTo([rel], next.lorebooks[book], c);
                 } else {

@@ -8,9 +8,11 @@
  */
 
 import { CHARACTER_PRESET_READ_TOOL_DEFS, runCharacterPresetReadTool } from '../../iteration-library/tools/character-presets-reads.js';
-import { lorebookHelpers as H } from '../../iteration-library/tools/_lorebook-helpers.js';
+import { LOREBOOK_READ_TOOL_DEFS } from '../../iteration-library/tools/lorebook-reads.js';
+import { LorebookError, lorebookHelpers as H } from '../../iteration-library/tools/_lorebook-helpers.js';
 import { readFieldsByEnum } from '../../iteration-library/read-fields-helper.js';
 import { diagnoseAnchorMiss } from '../../iteration-library/anchor-diagnostic.js';
+import { STATE_ERROR_REASONS } from '../../lib/state-errors.js';
 import {
     CEA_CARD_FIELD_ENUM,
     isKnownCardField,
@@ -185,6 +187,26 @@ function parseArgs(call) {
     }
 }
 
+function buildEntryNotFoundError(toolName, bookName, uid) {
+    const detail = `lorebook entry ${uid} does not exist in world book "${bookName}". An entry added by an edit that is still awaiting approval exists only in that pending proposal until it is approved.`;
+    const nextStep = `Call lorebook_list({ book_name: '${bookName}' }) to see the current entries, then re-issue the call.`;
+    const err = new Error(`${toolName}: not_found — ${detail} ${nextStep}`);
+    err.envelope = { ok: false, error: 'not_found', detail, next_step: nextStep };
+    err.code = 'not_found';
+    return err;
+}
+
+export function buildBookNotFoundError(toolName, bookName, editableBooks = null) {
+    const detail = editableBooks
+        ? `world book "${bookName}" is not in the editable books: ${editableBooks.join(', ')}.`
+        : `world book "${bookName}" does not exist.`;
+    const nextStep = 'Call world_book_list to see the available books.';
+    const err = new Error(`${toolName}: not_found — ${detail} ${nextStep}`);
+    err.envelope = { ok: false, error: 'not_found', detail, next_step: nextStep };
+    err.code = 'not_found';
+    return err;
+}
+
 export function resolveBookNameFromArgsOrSingle(args, live = null) {
     let bookName = String(args?.book_name ?? args?.world_name ?? '').trim();
     if (!bookName && live && typeof live === 'object') {
@@ -326,6 +348,9 @@ async function normalizeUnifiedToolCallToEdit(call, ctx) {
 
     if (name === 'cea_update_lorebook_entry') {
         const cur = liveBook?.entries?.[args.uid];
+        if (!cur) {
+            throw buildEntryNotFoundError(name, bookName, args.uid);
+        }
         const before = {};
         for (const k of Object.keys(args.patch || {})) {
             before[k] = cur?.[k];
@@ -376,11 +401,14 @@ async function normalizeUnifiedToolCallToEdit(call, ctx) {
 
     if (name === 'cea_remove_lorebook_entry') {
         const entry = liveBook?.entries?.[args.uid];
+        if (!entry) {
+            throw buildEntryNotFoundError(name, bookName, args.uid);
+        }
         return [{
             op: 'lorebook_entry_remove',
             path: 'lorebook.entries',
             uid: args.uid,
-            entry: entry ? JSON.parse(JSON.stringify(entry)) : undefined,
+            entry: JSON.parse(JSON.stringify(entry)),
         }];
     }
 
@@ -403,27 +431,16 @@ async function normalizeUnifiedToolCallToEdit(call, ctx) {
     return [];
 }
 
-export const CONTROL_TOOL_NAMES = Object.freeze({});
-const CONTROL_TOOL_NAME_SET = new Set();
-
-export function isCeaEditorControlCall(call) {
-    return CONTROL_TOOL_NAME_SET.has(String(call?.name || ''));
-}
-
-export const CONTROL_TOOL_DEFS = [];
-
-const READ_TOOL_LEGACY_NAMES = Object.freeze({
-    cea_read_card_fields: null,
-    lorebook_query: 'luker_card_query_lorebook_entries',
-    lorebook_list: 'luker_card_list_lorebook_entries',
-    lorebook_get: 'luker_card_get_lorebook_entries',
-    world_book_list: 'luker_card_list_world_books',
-    simulate_prompt: 'luker_card_simulate_prompt',
-    inspect_bound_preset: 'inspect_bound_preset',
-    web_search: null,
-});
-
-const READ_TOOL_NAME_SET = new Set(Object.keys(READ_TOOL_LEGACY_NAMES));
+const READ_TOOL_NAME_SET = new Set([
+    'cea_read_card_fields',
+    'lorebook_query',
+    'lorebook_list',
+    'lorebook_get',
+    'world_book_list',
+    'simulate_prompt',
+    'inspect_bound_preset',
+    'web_search',
+]);
 
 export function isCeaEditorReadTool(name) {
     return READ_TOOL_NAME_SET.has(String(name || ''));
@@ -450,92 +467,19 @@ const READ_TOOL_DEFS = [
             },
         },
     },
-    {
-        type: 'function',
-        function: {
-            name: 'lorebook_list',
-            description: 'List compact lorebook entry index rows (uid, name, enabled) for a world book. Call world_book_list first to know which book names exist. Optional range narrows the inclusive UID window, for example 0~100.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    book_name: { type: 'string', description: 'Required. Target world book.' },
-                    range: { type: 'string', description: 'Optional inclusive UID range such as 0~100, 50~, ~100, or a single uid like 42.' },
-                },
-                required: ['book_name'],
-                additionalProperties: false,
-            },
-        },
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'lorebook_query',
-            description: 'Search a world book and return lightweight matching entries. Call world_book_list first to know which book names exist. Use this before lorebook_get to narrow candidates.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    book_name: { type: 'string', description: 'Required. Target world book.' },
-                    text: { type: 'string' },
-                    search_mode: { type: 'string', enum: ['any', 'activation'] },
-                    constant: { type: 'boolean' },
-                    enabled: { type: 'boolean' },
-                    limit: { type: 'integer', minimum: 1, maximum: H.QUERY_LIMIT_MAX },
-                },
-                required: ['book_name'],
-                additionalProperties: false,
-            },
-        },
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'lorebook_get',
-            description: 'Fetch full lorebook entries from a world book by uid after narrowing candidates with lorebook_query.',
-            parameters: {
-                type: 'object',
-                properties: {
-                    book_name: { type: 'string', description: 'Required. Target world book.' },
-                    uids: { type: 'array', items: { type: 'integer' }, minItems: 1, maxItems: H.DETAIL_LIMIT_MAX },
-                },
-                required: ['book_name', 'uids'],
-                additionalProperties: false,
-            },
-        },
-    },
-    {
-        type: 'function',
-        function: {
-            name: 'world_book_list',
-            description: 'List world book names visible to the character being edited, tagged with their scope (character, character_aux, chat, global).',
-            parameters: { type: 'object', properties: {}, additionalProperties: false },
-        },
-    },
+    ...LOREBOOK_READ_TOOL_DEFS,
     ...CHARACTER_PRESET_READ_TOOL_DEFS,
     {
         type: 'function',
         function: {
             name: 'simulate_prompt',
-            description: 'Simulate current prompt assembly with character card and world info. Prefer text to append one user turn to the current chat. Use messages only when the user explicitly supplied a structured message array.',
+            description: 'Simulate the current card under the live chat, world info, and preset. The simulator appends `text` to the active chat as the next user turn, runs a real non-persisted generation, and opens a popup for the user to review the output.',
             parameters: {
                 type: 'object',
                 properties: {
-                    text: { type: 'string', description: 'Preferred. Append this user text to the current chat and simulate with world info activation.' },
-                    messages: {
-                        type: 'array',
-                        description: 'Explicit message array. Use only when the user already gave structured records/messages.',
-                        items: {
-                            type: 'object',
-                            properties: {
-                                role: { type: 'string' },
-                                content: { type: 'string' },
-                                mes: { type: 'string' },
-                                is_user: { type: 'boolean' },
-                                is_system: { type: 'boolean' },
-                            },
-                            additionalProperties: true,
-                        },
-                    },
+                    text: { type: 'string', description: 'The user turn to append to the current chat before simulating.' },
                 },
+                required: ['text'],
                 additionalProperties: false,
             },
         },
@@ -567,7 +511,6 @@ export function buildCeaEditorToolSet(_context, _settings, opts = {}) {
     return [
         ...CEA_EDIT_TOOL_DEFS,
         ...readTools,
-        ...CONTROL_TOOL_DEFS,
     ];
 }
 
@@ -596,12 +539,46 @@ function annotateTarget(edit, call, live = null) {
     return edit;
 }
 
+function isLorebookEditTool(name) {
+    const normalized = String(name || '');
+    return normalized.startsWith('cea_') && normalized.includes('lorebook');
+}
+
+async function loadEditBookIntoLive(toolName, bookName, live, loadLorebook) {
+    if (live?.lorebooks && Object.hasOwn(live.lorebooks, bookName)) return;
+    if (typeof loadLorebook !== 'function') return;
+    let book;
+    try {
+        book = await loadLorebook(bookName);
+    } catch (err) {
+        if (err?.reason === STATE_ERROR_REASONS.VALIDATION_TARGET) {
+            throw buildBookNotFoundError(toolName, bookName);
+        }
+        throw new Error(`${toolName}: load_failed — world book "${bookName}" could not be loaded: ${String(err?.message || err)}`);
+    }
+    live.lorebooks = { ...(live.lorebooks || {}), [bookName]: book };
+}
+
+export function rebasePathToTarget(edit) {
+    if (!edit || typeof edit.path !== 'string') return edit;
+    const kind = String(edit?.target?.kind || '');
+    if (kind === 'character' && edit.path.startsWith('card.')) {
+        return { ...edit, path: edit.path.slice('card.'.length) };
+    }
+    if (kind === 'lorebook' && edit.path.startsWith('lorebook.')) {
+        return { ...edit, path: edit.path.slice('lorebook.'.length) };
+    }
+    return edit;
+}
+
 export async function normalizeToolCallToEdit(call, opts = {}) {
-    if (call?.args !== undefined && call?.args !== null && typeof call.args !== 'object') {
-        if (typeof call.args === 'string') {
+    let args = call?.args;
+    if (args !== undefined && args !== null && typeof args !== 'object') {
+        if (typeof args === 'string') {
             try {
-                const parsed = JSON.parse(call.args);
+                const parsed = JSON.parse(args);
                 if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+                args = parsed;
             } catch {
                 return null;
             }
@@ -609,18 +586,29 @@ export async function normalizeToolCallToEdit(call, opts = {}) {
             return null;
         }
     }
+    const normalizedArgs = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+    const live = opts?.live ?? {};
+    let resolvedCall = { ...call, args: normalizedArgs };
+    if (isLorebookEditTool(call?.name)) {
+        const bookName = resolveBookNameFromArgsOrSingle(normalizedArgs, live);
+        if (!bookName) {
+            throw new Error(`${call.name}: invalid_args — book_name is required. Call world_book_list to see the available books.`);
+        }
+        await loadEditBookIntoLive(call.name, bookName, live, opts?.loadLorebook);
+        resolvedCall = { ...call, args: { ...normalizedArgs, book_name: bookName } };
+    }
     let adapted;
     try {
-        adapted = adaptCallToOpenAiShape(call);
+        adapted = adaptCallToOpenAiShape(resolvedCall);
     } catch {
         return null;
     }
-    const ctx = { live: opts?.live ?? {}, context: opts?.context };
+    const ctx = { live, context: opts?.context };
     const edits = await normalizeUnifiedToolCallToEdit(adapted, ctx);
     if (!Array.isArray(edits)) {
         return null;
     }
-    return edits.map((edit) => annotateTarget(edit, call, opts?.live));
+    return edits.map((edit) => annotateTarget(edit, resolvedCall, live));
 }
 
 // ---------------------------------------------------------------------------
@@ -630,7 +618,7 @@ export async function normalizeToolCallToEdit(call, opts = {}) {
 async function resolveLorebookStateForRead(args, opts = {}) {
     const bookName = String(args?.book_name || '').trim();
     if (!bookName) {
-        throw new Error('book_name is required.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'book_name is required.' });
     }
     const liveBooks = opts?.state?.live?.lorebooks;
     if (liveBooks && typeof liveBooks === 'object' && Object.hasOwn(liveBooks, bookName)) {
@@ -641,7 +629,7 @@ async function resolveLorebookStateForRead(args, opts = {}) {
         return { bookName, lorebookData, fromDraft: true };
     }
     if (opts?.restrictToLiveBooks) {
-        throw new Error(`World book "${bookName}" not found.`);
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_TARGET, hint: `World book "${bookName}" not found.` });
     }
     return H.loadBookByName(opts?.context, bookName);
 }
@@ -668,7 +656,7 @@ function queryEntriesFromBookState(state, args) {
     const hasConstantFilter = typeof args?.constant === 'boolean';
     const hasEnabledFilter = typeof args?.enabled === 'boolean';
     if (!queryText && !hasConstantFilter && !hasEnabledFilter) {
-        throw new Error('lorebook_query requires text, constant, or enabled.');
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_query requires text, constant, or enabled.' });
     }
     const limit = H.normalizeQueryLimit(args?.limit);
     const entries = state?.lorebookData?.entries && typeof state.lorebookData.entries === 'object'
@@ -709,7 +697,7 @@ function queryEntriesFromBookState(state, args) {
     return {
         book_name: state.bookName,
         total_hits: hits.length,
-        entries: hits.slice(0, limit).map(({ _score, ...entry }) => entry),
+        entries: (limit === null ? hits : hits.slice(0, limit)).map(({ _score, ...entry }) => entry),
     };
 }
 
@@ -795,12 +783,8 @@ function getSearchApi() {
     return api;
 }
 
-function resolveWebSearchLegacyName(helperApis) {
-    for (const api of Array.isArray(helperApis) ? helperApis : []) {
-        const name = String(api?.toolNames?.SEARCH || '').trim();
-        if (name) return name;
-    }
-    return '';
+export function hasCeaSearchTools() {
+    return getSearchApi() !== null;
 }
 
 export async function runCeaEditorReadTool(call, opts = {}) {
@@ -819,98 +803,55 @@ export async function runCeaEditorReadTool(call, opts = {}) {
         }
     }
 
-    const helperApis = Array.isArray(opts?.helperApis) ? opts.helperApis : [];
-    const hasLegacyRunner = typeof opts?.legacyRunner === 'function';
-    const liveBooks = opts?.state?.live?.lorebooks;
-    const bookName = String(args?.book_name || '').trim();
-
     if (shortName === 'lorebook_list' || shortName === 'lorebook_query' || shortName === 'lorebook_get') {
-        const inDraft = Boolean(liveBooks && typeof liveBooks === 'object' && bookName && Object.hasOwn(liveBooks, bookName));
-        if (!inDraft && !opts?.restrictToLiveBooks && hasLegacyRunner && typeof opts?.context?.loadWorldInfo !== 'function') {
-            const legacyName = READ_TOOL_LEGACY_NAMES[shortName];
-            try {
-                const raw = await opts.legacyRunner({ id: call?.id, name: legacyName, args }, helperApis);
-                const result = raw && typeof raw === 'object' && Object.hasOwn(raw, 'result') ? raw.result : raw;
-                return { ok: true, result };
-            } catch (err) {
-                return { ok: false, error: String(err?.message || err || 'unknown error') };
-            }
-        }
         try {
             const state = await resolveLorebookStateForRead(args, opts);
             if (shortName === 'lorebook_list') return { ok: true, result: listEntriesFromBookState(state, args) };
             if (shortName === 'lorebook_query') return { ok: true, result: queryEntriesFromBookState(state, args) };
             return { ok: true, result: getEntriesFromBookState(state, args) };
         } catch (err) {
-            return { ok: false, error: String(err?.message || err || 'unknown error') };
+            return {
+                ok: false,
+                ...(err?.reason ? { reason: err.reason } : {}),
+                ...(err?.hint ? { hint: err.hint } : {}),
+                error: String(err?.message || err || 'unknown error'),
+            };
         }
     }
 
     if (shortName === 'world_book_list') {
-        if (!opts?.restrictToLiveBooks && hasLegacyRunner && !liveBooks && !opts?.context?.characters) {
-            try {
-                const raw = await opts.legacyRunner({ id: call?.id, name: READ_TOOL_LEGACY_NAMES[shortName], args }, helperApis);
-                const result = raw && typeof raw === 'object' && Object.hasOwn(raw, 'result') ? raw.result : raw;
-                return { ok: true, result };
-            } catch (err) {
-                return { ok: false, error: String(err?.message || err || 'unknown error') };
-            }
-        }
         try {
             return { ok: true, result: listWorldBooksFromContextAndDraft(opts?.context, opts) };
         } catch (err) {
-            return { ok: false, error: String(err?.message || err || 'unknown error') };
+            return {
+                ok: false,
+                ...(err?.reason ? { reason: err.reason } : {}),
+                ...(err?.hint ? { hint: err.hint } : {}),
+                error: String(err?.message || err || 'unknown error'),
+            };
         }
     }
 
     if (shortName === 'inspect_bound_preset') {
-        if (hasLegacyRunner && !opts?.context?.character?.presets) {
-            try {
-                const raw = await opts.legacyRunner({ id: call?.id, name: READ_TOOL_LEGACY_NAMES[shortName], args }, helperApis);
-                const result = raw && typeof raw === 'object' && Object.hasOwn(raw, 'result') ? raw.result : raw;
-                return { ok: true, result };
-            } catch (err) {
-                return { ok: false, error: String(err?.message || err || 'unknown error') };
-            }
-        }
         const avatar = String(opts?.avatar || opts?.state?.live?.character?.avatar || '').trim();
         return runCharacterPresetReadTool({ id: call?.id, name: shortName, args }, { context: opts?.context, avatar });
     }
 
     if (shortName === 'simulate_prompt') {
-        if (hasLegacyRunner && !opts?.context?.buildPresetAwarePromptMessages) {
-            try {
-                const raw = await opts.legacyRunner({ id: call?.id, name: READ_TOOL_LEGACY_NAMES[shortName], args }, helperApis);
-                const result = raw && typeof raw === 'object' && Object.hasOwn(raw, 'result') ? raw.result : raw;
-                return { ok: true, result };
-            } catch (err) {
-                return { ok: false, error: String(err?.message || err || 'unknown error') };
-            }
-        }
         return runCardSimulatePrompt(opts?.context, args);
     }
 
     if (shortName === 'web_search') {
-        if (hasLegacyRunner) {
-            const legacyName = resolveWebSearchLegacyName(helperApis);
-            if (!legacyName) {
-                return { ok: false, error: 'web_search is not wired (Luker.searchTools missing).' };
-            }
-            try {
-                const raw = await opts.legacyRunner({ id: call?.id, name: legacyName, args }, helperApis);
-                const result = raw && typeof raw === 'object' && Object.hasOwn(raw, 'result') ? raw.result : raw;
-                return { ok: true, result };
-            } catch (err) {
-                return { ok: false, error: String(err?.message || err || 'unknown error') };
-            }
-        }
         const searchApi = getSearchApi();
         if (!searchApi) {
             return { ok: false, error: 'web_search is not wired (Luker.searchTools missing).' };
         }
         try {
             const legacyName = String(searchApi.toolNames.SEARCH);
-            const result = await searchApi.invoke({ id: call?.id, name: legacyName, args });
+            const result = await searchApi.invoke(
+                { name: legacyName, args: { ...args, max_results: args.max_results ?? args.limit } },
+                { abortSignal: opts?.abortSignal ?? null },
+            );
             return { ok: true, result };
         } catch (err) {
             return { ok: false, error: String(err?.message || err || 'unknown error') };

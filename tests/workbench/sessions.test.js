@@ -345,4 +345,94 @@ describe('workbench state-backed session store', () => {
         expect(store.character.has(`alice.png::${sessionBodyNamespace(keep.id)}`)).toBe(true);
         expect((await sessions.list('iterate', { scope: 'character', avatar: 'alice.png' })).map(s => s.id)).toEqual([keep.id]);
     });
+
+    test('update() preserves concurrent body edits on CAS 409 retry and cleans up orphaned body if session disappears on index retry', async () => {
+        const { ctx, store } = makeMockStateContext();
+        const sessions = createSessionStore(ctx);
+        const created = await sessions.create({ kind: 'ask', title: 'Initial', note: 'n0' }, { scope: 'global' });
+        const bodyNs = sessionBodyNamespace(created.id);
+
+        // 1) Body CAS 409 retry: concurrent writer changes title before retry; our note patch must preserve it
+        const realUpdate = ctx.updateGlobalState.getMockImplementation();
+        let retriedBody = false;
+        ctx.updateGlobalState = jest.fn(async (ns, updater) => {
+            if (ns === bodyNs && !retriedBody) {
+                retriedBody = true;
+                const first = store.global.get(ns);
+                await updater(JSON.parse(JSON.stringify(first)));
+                // Concurrent writer updates title before retry
+                const concurrent = { ...JSON.parse(JSON.stringify(first)), title: 'Concurrent Title' };
+                store.global.set(ns, concurrent);
+                const second = await updater(JSON.parse(JSON.stringify(concurrent)));
+                store.global.set(ns, JSON.parse(JSON.stringify(second)));
+                return { ok: true, state: JSON.parse(JSON.stringify(second)), updated: true };
+            }
+            return realUpdate(ns, updater);
+        });
+
+        const updated = await sessions.update(created.id, { note: 'patched-note' }, { scope: 'global' });
+        expect(updated.title).toBe('Concurrent Title');
+        expect(updated.note).toBe('patched-note');
+        expect(store.global.get(bodyNs).title).toBe('Concurrent Title');
+        expect(store.global.get(SESSIONS_NAMESPACE).sessions[0].title).toBe('Concurrent Title');
+
+        // 2) Index CAS 409 retry: attempt 1 finds session in index, concurrent delete removes it before attempt 2
+        let retriedIndex = false;
+        let indexFirstNext = null;
+        let indexSecondNext = 'not-called';
+        ctx.updateGlobalState = jest.fn(async (ns, updater) => {
+            if (ns === SESSIONS_NAMESPACE && !retriedIndex) {
+                retriedIndex = true;
+                const first = store.global.get(ns);
+                indexFirstNext = await updater(JSON.parse(JSON.stringify(first)));
+                // Concurrent delete strips session from index before retry
+                const emptyIdx = { ...JSON.parse(JSON.stringify(first)), sessions: [] };
+                store.global.set(ns, emptyIdx);
+                indexSecondNext = await updater(JSON.parse(JSON.stringify(emptyIdx)));
+                return { ok: true, state: emptyIdx, updated: false };
+            }
+            return realUpdate(ns, updater);
+        });
+
+        const deletedResult = await sessions.update(created.id, { note: 'late-patch' }, { scope: 'global' });
+        expect(indexFirstNext).not.toBeNull();
+        expect(indexSecondNext).toBeNull();
+        expect(deletedResult).toBeNull();
+        expect(store.global.has(bodyNs)).toBe(false);
+    });
+
+    test('removeMany() resets removedIds on CAS 409 retry instead of accumulating stale or duplicate ids', async () => {
+        const { ctx, store } = makeMockStateContext();
+        const sessions = createSessionStore(ctx);
+        const a = await sessions.create({ kind: 'iterate', ws: 'card', title: 'A' }, { scope: 'global' });
+        const b = await sessions.create({ kind: 'iterate', ws: 'card', title: 'B' }, { scope: 'global' });
+        const keep = await sessions.create({ kind: 'iterate', ws: 'memory', title: 'Keep' }, { scope: 'global' });
+
+        const realUpdate = ctx.updateGlobalState.getMockImplementation();
+        let retried = false;
+        let removeFirstNext = null;
+        ctx.updateGlobalState = jest.fn(async (ns, updater) => {
+            if (ns === SESSIONS_NAMESPACE && !retried) {
+                retried = true;
+                const before = store.global.get(ns);
+                // Attempt 1 sees both a and b
+                removeFirstNext = await updater(JSON.parse(JSON.stringify(before)));
+                // Concurrent writer already removed a before retry
+                const mid = {
+                    ...JSON.parse(JSON.stringify(before)),
+                    sessions: before.sessions.filter(s => s.id !== a.id),
+                };
+                store.global.set(ns, mid);
+                const secondNext = await updater(JSON.parse(JSON.stringify(mid)));
+                store.global.set(ns, JSON.parse(JSON.stringify(secondNext)));
+                return { ok: true, state: JSON.parse(JSON.stringify(secondNext)), updated: true };
+            }
+            return realUpdate(ns, updater);
+        });
+
+        const res = await sessions.removeMany([a.id, b.id], { scope: 'global' });
+        expect(removeFirstNext.sessions.map(s => s.id)).toEqual([keep.id]);
+        expect(res.removed).toEqual([b.id]);
+        expect((await sessions.list('iterate', { scope: 'global' })).map(s => s.id)).toEqual([keep.id]);
+    });
 });

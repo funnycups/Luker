@@ -120,12 +120,6 @@ export const TOOL_DISPLAY = Object.freeze({
     skill_extract_from_text: '✂️ Extract skill from text',
 });
 
-export const CONTROL_TOOL_NAMES = Object.freeze({});
-export const CONTROL_TOOL_NAME_SET = new Set();
-export function isCpaControlCall(toolCall) {
-    return CONTROL_TOOL_NAME_SET.has(String(toolCall?.name || ''));
-}
-
 export const READ_TOOL_NAMES = new Set([
     'preset_read_live_fields',
     'preset_read_reference_fields',
@@ -967,18 +961,12 @@ function buildPresetFieldReadResult(body, paths, lodash = resolveLodash()) {
 
 function cloneValue(value) {
     if (value == null || typeof value !== 'object') return value;
-    if (typeof structuredClone === 'function') {
-        try { return structuredClone(value); } catch { /* fall through */ }
-    }
-    try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+    return JSON.parse(JSON.stringify(value));
 }
 
 function cloneJsonish(value) {
-    if (value === undefined) return null;
-    if (typeof structuredClone === 'function') {
-        try { return structuredClone(value); } catch { /* fall through */ }
-    }
-    try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
+    if (value === undefined || typeof value === 'function' || typeof value === 'symbol') return null;
+    return JSON.parse(JSON.stringify(value));
 }
 
 function computeDifferingPaths(live, reference, narrowPaths, lodash = resolveLodash()) {

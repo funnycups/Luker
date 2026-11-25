@@ -17,7 +17,6 @@ import { attribute, describeRequest, finishOverview, redactReaders } from './mod
 import { resolveAiRow } from './model/ai-source.js';
 import { createSessionStore } from './model/sessions.js';
 import { runRules } from './model/suggest.js';
-import { hasTextCalls, salvageTextCalls } from './model/textcalls.js';
 import { defaultRegistry } from './registry.js';
 
 const SETTINGS_KEY = 'workbench';
@@ -132,29 +131,28 @@ async function budgetPart(memoryTokens = 0) {
         const idx = itemizedPrompts.length - 1;
         const params = await itemizedParams(itemizedPrompts, idx, itemizedPrompts[idx]?.mesId);
         return buildBudget(params, { memory: memoryTokens });
-    } catch {
+    } catch (err) {
+        console.error('[workbench] failed to load prompt budget:', err);
         return null;
     }
 }
 
 function presetPart(ctx) {
-    try {
-        const live = ctx.presets?.getLive?.('openai');
-        const body = live?.body || {};
-        const order = (body.prompt_order || []).find(o => Number(o.character_id) === 100001) || (body.prompt_order || [])[0];
-        const enabledIds = new Set((order?.order || []).filter(o => o.enabled).map(o => o.identifier));
-        const prompts = (body.prompts || [])
-            .filter(p => p && !p.marker)
-            .map(p => ({ id: p.identifier, name: p.name || p.identifier, text: String(p.content || ''), enabled: enabledIds.has(p.identifier) }));
-        return {
-            name: live?.ref?.name || ctx.chatCompletionSettings?.preset_settings_openai || '',
-            ref: live?.ref ? clone(live.ref) : null,
-            prompts,
-            enabled: prompts.filter(p => p.enabled).length,
-        };
-    } catch {
-        return null;
-    }
+    const live = ctx.presets?.getLive?.('openai');
+    if (!live) return null;
+    const body = live.body && typeof live.body === 'object' ? live.body : {};
+    const promptOrder = Array.isArray(body.prompt_order) ? body.prompt_order : [];
+    const order = promptOrder.find(o => Number(o?.character_id) === 100001) || promptOrder[0];
+    const enabledIds = new Set((Array.isArray(order?.order) ? order.order : []).filter(o => o?.enabled).map(o => o.identifier));
+    const prompts = (Array.isArray(body.prompts) ? body.prompts : [])
+        .filter(p => p && !p.marker)
+        .map(p => ({ id: p.identifier, name: p.name || p.identifier, text: String(p.content || ''), enabled: enabledIds.has(p.identifier) }));
+    return {
+        name: live.ref?.name || ctx.chatCompletionSettings?.preset_settings_openai || '',
+        ref: live.ref ? clone(live.ref) : null,
+        prompts,
+        enabled: prompts.filter(p => p.enabled).length,
+    };
 }
 
 function cardPart(ctx, chat) {
@@ -169,8 +167,10 @@ function cardPart(ctx, chat) {
 }
 
 function worldPart(ctx, card) {
-    let global = [];
-    try { global = [...(ctx.chatWorldInfo?.globalSelection || [])].map(String).filter(Boolean); } catch { global = []; }
+    const rawGlobal = ctx.chatWorldInfo?.globalSelection;
+    const global = rawGlobal && typeof rawGlobal[Symbol.iterator] === 'function'
+        ? [...rawGlobal].map(String).filter(Boolean)
+        : [];
     return { global, character: card?.books || [] };
 }
 
@@ -189,17 +189,18 @@ function regexPart(ctx) {
     if (!disabled && typeof ctx?.regex?.getScripts === 'function') {
         try {
             enabledCount = (ctx.regex.getScripts({ allowedOnly: true }) || []).filter(s => s && !s.disabled).length;
-        } catch { enabledCount = null; }
+        } catch (err) {
+            console.error('[workbench] failed to read regex scripts:', err);
+            enabledCount = null;
+        }
     }
     return { disabled, enabledCount };
 }
 
 export function connectionName(ctx = getContext()) {
-    try {
-        const sel = typeof document !== 'undefined' ? document.getElementById('connection_profiles') : null;
-        const text = sel?.selectedOptions?.[0]?.textContent?.trim();
-        if (text && sel.value) return text;
-    } catch { /* no DOM */ }
+    const sel = typeof document !== 'undefined' ? document.getElementById('connection_profiles') : null;
+    const text = sel?.selectedOptions?.[0]?.textContent?.trim();
+    if (text && sel.value) return text;
     return String(ctx?.chatCompletionSettings?.chat_completion_source || '');
 }
 
@@ -305,7 +306,9 @@ export async function listAiChoices(registry = defaultRegistry) {
             try {
                 const info = p.getNativeAi(ctx);
                 if (info) native[p.id] = { connection: String(info.connection || '').trim(), preset: String(info.preset || '').trim() };
-            } catch { /* ignore */ }
+            } catch (err) {
+                console.error(`[workbench] getNativeAi failed for "${p.id}":`, err);
+            }
         }
     }
 
@@ -320,13 +323,9 @@ export async function listAiChoices(registry = defaultRegistry) {
 
 function hasPreset(name) {
     const ctx = getContext();
-    try {
-        const refs = ctx?.presets?.list?.('openai');
-        if (Array.isArray(refs) && refs.some(r => String(r?.name || r || '').trim() === name)) return true;
-        return (ctx?.getPresetManager?.('openai')?.getAllPresets?.() || []).map(n => String(n).trim()).includes(name);
-    } catch {
-        return false;
-    }
+    const refs = ctx?.presets?.list?.('openai');
+    if (Array.isArray(refs) && refs.some(r => String(r?.name || r || '').trim() === name)) return true;
+    return (ctx?.getPresetManager?.('openai')?.getAllPresets?.() || []).map(n => String(n).trim()).includes(name);
 }
 
 /** Default generation preset when none is picked: Luker's plugin-only if installed. */
@@ -337,7 +336,9 @@ export function aiTarget(role, settings = readSettings(), registry = defaultRegi
     const ctx = getContext();
     for (const p of [...registry.getIterateTargets(), ...registry.getAskProviders()]) {
         if (p.id === role && typeof p.getNativeAi === 'function') {
-            try { nat = p.getNativeAi(ctx) || nat; } catch { /* ignore */ }
+            try { nat = p.getNativeAi(ctx) || nat; } catch (err) {
+                console.error(`[workbench] getNativeAi failed for "${p.id}":`, err);
+            }
             break;
         }
     }
@@ -395,28 +396,39 @@ export async function aiRequest(role, { messages, tools = [], signal = null, act
         ...(activity !== undefined ? { activity } : {}),
     });
     const calls = (Array.isArray(result?.toolCalls) ? result.toolCalls : []).map((c, i) => {
-        const sig = c?.raw?.signature || c?.raw?.thoughtSignature;
+        const callSig = typeof c?.signature === 'string' && c.signature.length > 0
+            ? c.signature
+            : (typeof c?.raw?.signature === 'string' && c.raw.signature.length > 0
+                ? c.raw.signature
+                : (typeof c?.raw?.thoughtSignature === 'string' && c.raw.thoughtSignature.length > 0 ? c.raw.thoughtSignature : undefined));
+        const callExtra = c?.extra_content && typeof c.extra_content === 'object'
+            ? structuredClone(c.extra_content)
+            : (c?.raw?.extra_content && typeof c.raw.extra_content === 'object' ? structuredClone(c.raw.extra_content) : undefined);
         return {
             id: String(c?.id || `wb_${Date.now().toString(36)}_${i}`),
             name: String(c?.name || ''),
             args: c?.args && typeof c.args === 'object' ? c.args : {},
-            ...(sig ? { signature: sig } : {}),
-            ...(c?.raw?.extra_content ? { extra_content: c.raw.extra_content } : {}),
+            ...(callSig ? { signature: callSig } : {}),
+            ...(callExtra ? { extra_content: callExtra } : {}),
         };
     });
     const reasoning = typeof result?.reasoning === 'string' && result.reasoning.length > 0 ? result.reasoning : '';
+    const signature = typeof result?.signature === 'string' && result.signature.length > 0 ? result.signature : undefined;
     const reasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length ? result.reasoningBlocks : undefined;
     const reasoningDetails = Array.isArray(result?.reasoningDetails) && result.reasoningDetails.length ? result.reasoningDetails : undefined;
+    const nativeParts = Array.isArray(result?.nativeParts) && result.nativeParts.length ? result.nativeParts : undefined;
+    const nativeContentBlocks = Array.isArray(result?.nativeContentBlocks) && result.nativeContentBlocks.length ? result.nativeContentBlocks : undefined;
+    const responsesOutputItems = Array.isArray(result?.responsesOutputItems) && result.responsesOutputItems.length ? result.responsesOutputItems : undefined;
     const reasoningMeta = {
         ...(reasoning ? { reasoning } : {}),
+        ...(signature ? { signature } : {}),
         ...(reasoningBlocks ? { reasoningBlocks } : {}),
         ...(reasoningDetails ? { reasoningDetails } : {}),
+        ...(nativeParts ? { nativeParts } : {}),
+        ...(nativeContentBlocks ? { nativeContentBlocks } : {}),
+        ...(responsesOutputItems ? { responsesOutputItems } : {}),
     };
     const text = String(result?.assistantText || result?.text || '').trim();
-    if (hasTextCalls(text)) {
-        const salvaged = salvageTextCalls(text, tools.map(t => t?.function?.name).filter(Boolean));
-        return { text: salvaged.text, calls: calls.length ? calls : salvaged.calls, ...reasoningMeta };
-    }
     return { text, calls, ...reasoningMeta };
 }
 
@@ -643,10 +655,18 @@ export async function boundBooks(ctx = getContext()) {
     if (c) {
         const full = ctx.characters[c.index];
         if (full?.data?.extensions?.world) names.add(String(full.data.extensions.world));
-        try { for (const n of ctx.getCharaAuxWorlds?.(full?.avatar?.replace(/\.[^.]+$/, '')) || []) names.add(String(n)); } catch { /* ignore */ }
+        const charaFile = full?.avatar?.replace(/\.[^.]+$/, '');
+        if (charaFile && typeof ctx.getCharaAuxWorlds === 'function') {
+            for (const n of ctx.getCharaAuxWorlds(charaFile) || []) names.add(String(n));
+        }
     }
-    try { for (const n of ctx.chatWorldInfo?.getNames?.() || []) names.add(String(n)); } catch { /* ignore */ }
-    try { for (const n of ctx.chatWorldInfo?.globalSelection || []) names.add(String(n)); } catch { /* ignore */ }
+    if (typeof ctx.chatWorldInfo?.getNames === 'function') {
+        for (const n of ctx.chatWorldInfo.getNames() || []) names.add(String(n));
+    }
+    const globalSel = ctx.chatWorldInfo?.globalSelection;
+    if (globalSel && typeof globalSel[Symbol.iterator] === 'function') {
+        for (const n of globalSel) names.add(String(n));
+    }
     return [...names].filter(Boolean);
 }
 
@@ -735,7 +755,9 @@ async function worldInfoTrace({ search = '', only_activated = false, limit = 40 
                     keys: [...(entry.key || []), ...(entry.keysecondary || [])].map(String),
                 });
             }
-        } catch { /* 单本世界书读取失败不影响追踪摘要 */ }
+        } catch (err) {
+            console.error(`[workbench] failed to load world book "${bookName}" for activation trace:`, err);
+        }
     }));
 
     const rows = [];
@@ -1090,8 +1112,8 @@ function presetDetail({ entry = '' } = {}) {
     let presetLorebook = null;
     if (pl && typeof pl === 'object' && (pl.name || pl.data)) {
         const plName = String(pl.name || '');
-        let globalSel = [];
-        try { globalSel = [...(ctx?.chatWorldInfo?.globalSelection || [])].map(String); } catch { globalSel = []; }
+        const rawGlobal = ctx?.chatWorldInfo?.globalSelection;
+        const globalSel = rawGlobal && typeof rawGlobal[Symbol.iterator] === 'function' ? [...rawGlobal].map(String) : [];
         presetLorebook = {
             name: plName,
             entryCount: pl.data?.entries && typeof pl.data.entries === 'object' ? Object.keys(pl.data.entries).length : 0,
@@ -1459,7 +1481,8 @@ export async function askOverview({
             try {
                 const value = await p.getOverview(ctx);
                 if (value !== undefined && value !== null) raw[key] = value;
-            } catch {
+            } catch (err) {
+                console.error(`[workbench] AskProvider overview failed for "${p.id}":`, err);
                 raw[key] = i18n('Unreadable');
             }
         }
@@ -1478,7 +1501,8 @@ export async function askOverview({
     if (effectiveSources.inspector) {
         try {
             raw.最近的请求 = (await listRequests({ limit: 8 })).map(e => describeRequest(e, e.attr));
-        } catch {
+        } catch (err) {
+            console.error('[workbench] failed to list recent requests for overview:', err);
             raw.最近的请求 = i18n('Unreadable');
         }
     }

@@ -271,6 +271,7 @@ export function createSessionStore(ctxOrProvider = null) {
         return {
             sessions,
             legacyImported: isPlainObject(state.legacyImported) ? clone(state.legacyImported) : {},
+            ...(isPlainObject(state.legacyImportedSettings) ? { legacyImportedSettings: clone(state.legacyImportedSettings) } : {}),
             state: clone(state),
         };
     }
@@ -342,7 +343,9 @@ export function createSessionStore(ctxOrProvider = null) {
                 assertOk(idxRes, 'create');
                 rememberScopes(scopeOpts, normalizeSessions(idxRes.state));
             } catch (err) {
-                await adapter.del(bodyNs).catch(() => {});
+                await adapter.del(bodyNs).catch((delErr) => {
+                    console.warn('[workbench/sessions] failed to remove orphaned session body:', delErr);
+                });
                 throw err;
             }
             idToScope.set(session.id, clone(scopeOpts));
@@ -353,33 +356,46 @@ export function createSessionStore(ctxOrProvider = null) {
             const effectiveScope = scopeOpts || idToScope.get(id) || { scope: 'global' };
             const adapter = resolveAdapter(getCtx(), effectiveScope);
             const bodyNs = sessionBodyNamespace(id);
+            const patchCopy = clone(patch);
+            const isValidBody = (state) => isPlainObject(state) && (state.id === id || Array.isArray(state.turns));
 
-            let currentBody = null;
-            const bodyRes = await adapter.read(bodyNs);
-            assertOk(bodyRes, 'read');
-            if (isPlainObject(bodyRes.state) && (bodyRes.state.id === id || Array.isArray(bodyRes.state.turns))) {
-                currentBody = bodyRes.state;
-            } else {
+            const mergePatch = (baseBody) => {
+                const next = {
+                    ...clone(baseBody),
+                    ...clone(patchCopy),
+                    updatedAt: Date.now(),
+                };
+                next.pendingCount = computePendingCount(next);
+                return next;
+            };
+
+            let updatedSession = null;
+            const writeBodyRes = await adapter.update(bodyNs, (existing) => {
+                updatedSession = null;
+                if (!isValidBody(existing)) return null;
+                updatedSession = mergePatch(existing);
+                return updatedSession;
+            });
+            assertOk(writeBodyRes, 'update');
+
+            if (!updatedSession) {
+                // Fallback for unmigrated v1 inline sessions before list() has run.
                 const idxRead = await adapter.read(SESSIONS_NAMESPACE);
                 assertOk(idxRead, 'read');
                 const inlineHit = normalizeSessions(idxRead.state).find(s => s?.id === id && isInlineSession(s));
-                if (inlineHit) currentBody = inlineHit;
+                if (!inlineHit) return null;
+
+                const inlineBodyRes = await adapter.update(bodyNs, (existing) => {
+                    updatedSession = mergePatch(isValidBody(existing) ? existing : inlineHit);
+                    return updatedSession;
+                });
+                assertOk(inlineBodyRes, 'update');
             }
-            if (!currentBody) return null;
 
-            const updatedSession = {
-                ...clone(currentBody),
-                ...clone(patch),
-                updatedAt: Date.now(),
-            };
-            updatedSession.pendingCount = computePendingCount(updatedSession);
             const summary = toSessionSummary(updatedSession);
-
             let foundInIndex = false;
-            const writeBodyRes = await adapter.update(bodyNs, () => updatedSession);
-            assertOk(writeBodyRes, 'update');
-
             const idxRes = await adapter.update(SESSIONS_NAMESPACE, (current) => {
+                foundInIndex = false;
                 const base = isPlainObject(current) ? current : {};
                 const list = normalizeSessions(base);
                 const idx = list.findIndex(s => s?.id === id);
@@ -396,7 +412,9 @@ export function createSessionStore(ctxOrProvider = null) {
             assertOk(idxRes, 'update');
             if (!foundInIndex) {
                 // Session was deleted concurrently; remove orphaned body instead of resurrecting it.
-                await adapter.del(bodyNs).catch(() => {});
+                await adapter.del(bodyNs).catch((delErr) => {
+                    console.warn('[workbench/sessions] failed to remove orphaned session body:', delErr);
+                });
                 idToScope.delete(id);
                 return null;
             }
@@ -430,20 +448,22 @@ export function createSessionStore(ctxOrProvider = null) {
 
             const adapter = resolveAdapter(getCtx(), scopeOpts);
             const targetSet = new Set(uniqueIds);
-            const removedIds = [];
+            let removedIds = [];
 
             const res = await adapter.update(SESSIONS_NAMESPACE, (current) => {
                 const base = isPlainObject(current) ? current : {};
                 const list = normalizeSessions(base);
                 const nextList = [];
+                const attemptRemoved = [];
                 for (const item of list) {
                     if (item?.id && targetSet.has(item.id)) {
-                        removedIds.push(item.id);
+                        attemptRemoved.push(item.id);
                     } else {
                         nextList.push(item);
                     }
                 }
-                if (!removedIds.length) return null;
+                removedIds = attemptRemoved;
+                if (!attemptRemoved.length) return null;
                 return { ...base, sessions: nextList };
             });
             assertOk(res, 'remove');

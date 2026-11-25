@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Best-effort lazy importer for legacy iter-studio conversation histories.
-// Reads readable { id, title, updatedAt, messages } from legacy character,
-// chat, preset sidecars and global settings buckets once per (targetId, scope),
-// writing per-session bodies into `workbench_session_<id>` and lightweight
-// summaries into `workbench_sessions`, preserving existing workbench sessions
-// and cleaning up migrated legacy global buckets from `extension_settings`.
+// Imports conversation history once per target and scope. Executable legacy
+// drafts are excluded; failed reads leave the import unacknowledged.
+// Full session bodies are stored in `workbench_session_<id>` and lightweight
+// summaries in `workbench_sessions`. Migrated legacy settings buckets are
+// pruned only after confirmed persistence.
 
-import { i18n } from '../i18n.js';
+import { i18n, i18nFormat } from '../i18n.js';
 import { SourceError } from './errors.js';
+import { saveSettingsChecked } from './patch.js';
 import {
     SESSIONS_NAMESPACE,
     SESSIONS_INDEX_VERSION,
@@ -51,10 +51,111 @@ const LEGACY_NAMESPACES = {
     },
 };
 
-function extractSessionObjects(rawState, { mode = null } = {}) {
-    if (!rawState || typeof rawState !== 'object') return [];
+const LEGACY_SETTINGS = {
+    orch: { plugin: 'orchestrator', key: 'iterStudioV2', scopes: new Set(['global', 'character']) },
+    card: { plugin: 'character_editor_assistant', key: 'unified_cea_editor_sessions', scopes: new Set(['character']) },
+    memory: { plugin: 'memory_graph', key: 'iterStudioV2Schema', scopes: new Set(['global']) },
+};
+
+function readLegacySettings(ctx, targetId, scope, avatar, mode) {
+    const sessions = [];
+    const plans = [];
+    const legacySettingsSessions = [];
+    const legacySettingsPlans = [];
+    const invalid = source => new SourceError('source', i18nFormat('Legacy state "${0}" has an invalid session collection.', source));
+    const collect = (plugin, key, paths, { isLegacySettings = false } = {}) => {
+        const root = ctx.extensionSettings?.[plugin];
+        const bucket = root?.[key];
+        if (bucket === undefined) return;
+        if (bucket !== null && (typeof bucket !== 'object' || Array.isArray(bucket))) throw invalid(`${plugin}.${key}`);
+        const owned = paths.filter(path => path.reduce((value, part) => value?.[part], bucket) !== undefined);
+        for (const path of owned) {
+            const value = path.reduce((value, part) => value?.[part], bucket);
+            const extracted = extractSessionObjects(value, { mode, source: [plugin, key, ...path].join('.') });
+            if (isLegacySettings) legacySettingsSessions.push(...extracted);
+            else sessions.push(...extracted);
+        }
+        if (owned.length) {
+            const plan = { root, key, paths: owned, source: `${plugin}.${key}` };
+            if (isLegacySettings) legacySettingsPlans.push(plan);
+            else plans.push(plan);
+        }
+    };
+    const global = LEGACY_NAMESPACES[targetId]?.global;
+    if (scope === 'global' && global) {
+        collect(global.plugin, global.key, targetId === 'orch' && mode ? [[mode]] : [[]]);
+    }
+    const format = LEGACY_SETTINGS[targetId];
+    if (format && format.scopes.has(scope)) {
+        const bucket = ctx.extensionSettings?.[format.plugin]?.[format.key];
+        if (bucket !== undefined) {
+            if (bucket !== null && (typeof bucket !== 'object' || Array.isArray(bucket))) throw invalid(`${format.plugin}.${format.key}`);
+            if (targetId === 'orch') {
+                const paths = [];
+                const scopeKey = scope === 'global' ? 'global' : `character_${avatar}`;
+                for (const [name, scopes] of Object.entries(bucket || {})) {
+                    if (mode && name !== mode) continue;
+                    if (scopes !== null && (typeof scopes !== 'object' || Array.isArray(scopes))) throw invalid(`${format.plugin}.${format.key}.${name}`);
+                    paths.push(!scopes || !Object.keys(scopes).length ? [name] : [name, scopeKey]);
+                }
+                collect(format.plugin, format.key, bucket && Object.keys(bucket).length ? paths : [[]], { isLegacySettings: true });
+            } else if (targetId === 'card' && scope === 'character') {
+                collect(format.plugin, format.key, bucket && Object.keys(bucket).length ? [[`char_${avatar}`]] : [[]], { isLegacySettings: true });
+            } else if (targetId === 'memory' && scope === 'global') {
+                collect(format.plugin, format.key, [[]], { isLegacySettings: true });
+            }
+        }
+    }
+    return {
+        sessions,
+        plans,
+        legacySettingsSessions,
+        legacySettingsPlans,
+    };
+}
+
+function withoutLegacyPath(bucket, path) {
+    if (!path.length) return undefined;
+    const [key, ...rest] = path;
+    if (bucket == null || !Object.hasOwn(bucket, key)) return bucket;
+    const next = { ...bucket };
+    const child = withoutLegacyPath(bucket[key], rest);
+    if (child === undefined) delete next[key];
+    else next[key] = child;
+    return Object.keys(next).length ? next : undefined;
+}
+
+async function pruneLegacySettings(ctx, plans) {
+    const writes = [];
+    for (const { root, key, paths } of plans) {
+        const previous = root[key];
+        const next = paths.reduce(withoutLegacyPath, previous);
+        if (previous === next) continue;
+        if (next === undefined) delete root[key];
+        else root[key] = next;
+        writes.push({ root, key, previous, next });
+    }
+    if (!writes.length) return;
+    try {
+        await saveSettingsChecked(ctx);
+    } catch (error) {
+        for (const { root, key, previous, next } of writes) {
+            if (root[key] === next) root[key] = previous;
+        }
+        throw new SourceError('storage-error', i18nFormat(
+            'Imported conversations are saved. Could not confirm cleanup of "${0}": ${1}',
+            plans.map(plan => plan.source).join(', '),
+            String(error?.message || error),
+        ));
+    }
+}
+
+function extractSessionObjects(rawState, { mode = null, source = '' } = {}) {
+    if (rawState == null) return [];
+    const invalid = () => new SourceError('source', i18nFormat('Legacy state "${0}" has an invalid session collection.', source));
+    if (typeof rawState !== 'object') throw invalid();
     const bag = 'sessions' in rawState ? rawState.sessions : rawState;
-    if (!bag || typeof bag !== 'object') return [];
+    if (!bag || typeof bag !== 'object') throw invalid();
     if (Array.isArray(bag)) {
         return bag.filter(s => s && typeof s === 'object' && !Array.isArray(s));
     }
@@ -150,7 +251,7 @@ export function normalizeLegacySession(raw, { targetId, scope, scopeName = '' } 
     const updatedAt = Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : Date.now();
     const createdAt = Number.isFinite(Number(raw.createdAt)) ? Number(raw.createdAt) : updatedAt;
     const messages = raw.messages.map(m => normalizeLegacyMessage(m, updatedAt)).filter(Boolean);
-    if (!messages.length) return null;
+    if (!messages.length && raw.messages.length) return null;
 
     const firstUser = messages.find(m => m.role === 'user')?.content || '';
     const legacyId = String(raw.id || `leg_${updatedAt.toString(36)}_${Math.random().toString(36).slice(2, 6)}`);
@@ -175,70 +276,44 @@ export function normalizeLegacySession(raw, { targetId, scope, scopeName = '' } 
     };
 }
 
-/**
- * Best-effort read of raw legacy sessions for a (targetId, scope).
- * Never throws; logs warnings and returns [] on missing/corrupt/error reads.
- */
+/** Read legacy histories without converting failed reads into empty imports. */
 export async function readLegacySessions({ ctx, targetId, scope, avatar = '', target = null, mode = null } = {}) {
     const spec = LEGACY_NAMESPACES[targetId];
     if (!ctx || !spec) return [];
     const results = [];
 
-    try {
-        if (scope === 'character' && Array.isArray(spec.character)) {
-            const charAvatar = String(avatar || ctx.characters?.[ctx.characterId]?.avatar || '').trim();
-            if (!charAvatar || typeof ctx.getCharacterState !== 'function') return [];
-            for (const ns of spec.character) {
-                try {
-                    const res = await ctx.getCharacterState(charAvatar, ns);
-                    if (!res?.ok) {
-                        console.warn(`[workbench/legacy-import] character sidecar read failed (${ns}):`, res?.hint || res?.reason || 'unknown');
-                        continue;
-                    }
-                    if (res.state) results.push(...extractSessionObjects(res.state, { mode }));
-                } catch (err) {
-                    console.warn(`[workbench/legacy-import] character sidecar read threw (${ns}):`, err);
-                }
-            }
-        } else if (scope === 'chat' && Array.isArray(spec.chat)) {
-            if (typeof ctx.getChatState !== 'function') return [];
-            const opts = target ? { target } : {};
-            for (const ns of spec.chat) {
-                try {
-                    const res = await ctx.getChatState(ns, opts);
-                    if (!res?.ok) {
-                        console.warn(`[workbench/legacy-import] chat sidecar read failed (${ns}):`, res?.hint || res?.reason || 'unknown');
-                        continue;
-                    }
-                    if (res.state) results.push(...extractSessionObjects(res.state, { mode }));
-                } catch (err) {
-                    console.warn(`[workbench/legacy-import] chat sidecar read threw (${ns}):`, err);
-                }
-            }
-        } else if (scope === 'preset' && Array.isArray(spec.preset)) {
-            if (typeof ctx.presets?.state?.get !== 'function') return [];
-            const opts = target ? { target } : { collection: 'openai' };
-            for (const ns of spec.preset) {
-                try {
-                    const res = await ctx.presets.state.get(ns, opts);
-                    if (!res?.ok) {
-                        console.warn(`[workbench/legacy-import] preset sidecar read failed (${ns}):`, res?.hint || res?.reason || 'unknown');
-                        continue;
-                    }
-                    if (res.state) results.push(...extractSessionObjects(res.state, { mode }));
-                } catch (err) {
-                    console.warn(`[workbench/legacy-import] preset sidecar read threw (${ns}):`, err);
-                }
-            }
-        } else if (scope === 'global' && spec.global) {
-            const bucket = ctx.extensionSettings?.[spec.global.plugin]?.[spec.global.key];
-            if (bucket && typeof bucket === 'object') {
-                results.push(...extractSessionObjects(bucket, { mode }));
-            }
+    const readNamespace = async (namespace, read) => {
+        const result = await read();
+        if (!result?.ok) {
+            throw new SourceError('storage-error', i18nFormat(
+                'Legacy state "${0}" could not be read: ${1}',
+                namespace,
+                result?.hint || result?.reason || i18n('Invalid state response'),
+            ));
         }
-    } catch (err) {
-        console.warn('[workbench/legacy-import] readLegacySessions failed:', err);
-        return [];
+        return extractSessionObjects(result.state, { mode, source: namespace });
+    };
+    if (scope === 'character' && Array.isArray(spec.character)) {
+        const charAvatar = String(avatar || ctx.characters?.[ctx.characterId]?.avatar || '').trim();
+        if (!charAvatar || typeof ctx.getCharacterState !== 'function') return [];
+        for (const ns of spec.character) {
+            results.push(...await readNamespace(ns, () => ctx.getCharacterState(charAvatar, ns)));
+        }
+    } else if (scope === 'chat' && Array.isArray(spec.chat)) {
+        if (typeof ctx.getChatState !== 'function') return [];
+        const opts = target ? { target } : {};
+        for (const ns of spec.chat) {
+            results.push(...await readNamespace(ns, () => ctx.getChatState(ns, opts)));
+        }
+    } else if (scope === 'preset' && Array.isArray(spec.preset)) {
+        if (typeof ctx.presets?.state?.get !== 'function') return [];
+        const opts = target ? { target } : { collection: 'openai' };
+        for (const ns of spec.preset) {
+            results.push(...await readNamespace(ns, () => ctx.presets.state.get(ns, opts)));
+        }
+    } else if (scope === 'global' && spec.global) {
+        const bucket = ctx.extensionSettings?.[spec.global.plugin]?.[spec.global.key];
+        results.push(...extractSessionObjects(bucket, { mode, source: spec.global.key }));
     }
 
     return results;
@@ -286,36 +361,71 @@ function resolveStateBucketAccess(ctx, scopeOpts = {}) {
     return null;
 }
 
-/**
- * Removes an already-migrated legacy global session bucket from extensionSettings
- * so settings.json stops carrying multi-MB legacy iteration histories across reloads.
- */
-function purgeLegacyGlobalBucket(ctx, targetId) {
-    const spec = LEGACY_NAMESPACES[targetId]?.global;
-    if (!spec) return false;
-    const pluginRoot = ctx?.extensionSettings?.[spec.plugin];
-    if (!isPlainObject(pluginRoot) || !Object.hasOwn(pluginRoot, spec.key)) {
-        return false;
-    }
-    delete pluginRoot[spec.key];
-    try {
-        ctx.saveSettingsDebounced?.();
-    } catch (err) {
-        console.warn('[workbench/legacy-import] saveSettingsDebounced failed after purging legacy bucket:', err);
-    }
-    return true;
-}
-
 /** Checks whether any legacy global iteration session bucket still sits in extensionSettings. */
 export function hasLegacyGlobalSettingsSessions(ctx, targetId = null) {
     const targets = targetId ? [targetId] : ['memory', 'orch'];
     for (const id of targets) {
-        const spec = LEGACY_NAMESPACES[id]?.global;
-        if (!spec) continue;
-        const pluginRoot = ctx?.extensionSettings?.[spec.plugin];
-        if (isPlainObject(pluginRoot) && Object.hasOwn(pluginRoot, spec.key)) {
-            return true;
+        const globalSpec = LEGACY_NAMESPACES[id]?.global;
+        if (globalSpec) {
+            const pluginRoot = ctx?.extensionSettings?.[globalSpec.plugin];
+            if (isPlainObject(pluginRoot) && Object.hasOwn(pluginRoot, globalSpec.key) && pluginRoot[globalSpec.key] !== undefined) {
+                return true;
+            }
         }
+        const settingsSpec = LEGACY_SETTINGS[id];
+        if (settingsSpec?.scopes.has('global')) {
+            const pluginRoot = ctx?.extensionSettings?.[settingsSpec.plugin];
+            if (!isPlainObject(pluginRoot) || !Object.hasOwn(pluginRoot, settingsSpec.key) || pluginRoot[settingsSpec.key] === undefined) continue;
+            const bucket = pluginRoot[settingsSpec.key];
+            if (id !== 'orch') {
+                return true;
+            }
+            if (!isPlainObject(bucket) || Object.keys(bucket).length === 0) {
+                return true;
+            }
+            for (const scopes of Object.values(bucket)) {
+                if (!isPlainObject(scopes) || Object.keys(scopes).length === 0 || (Object.hasOwn(scopes, 'global') && scopes.global !== undefined)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/** Checks whether any legacy settings session bucket for (targetId, scope, avatar) still sits in extensionSettings. */
+export function hasLegacySettingsSessions(ctx, targetId, scope = 'global', avatar = '') {
+    if (!ctx || !targetId) return false;
+    const effectiveScope = String(scope || 'global').toLowerCase();
+    if (effectiveScope === 'global') {
+        return hasLegacyGlobalSettingsSessions(ctx, targetId);
+    }
+    if (effectiveScope !== 'character') return false;
+    const settingsSpec = LEGACY_SETTINGS[targetId];
+    if (!settingsSpec?.scopes.has('character')) return false;
+    const pluginRoot = ctx?.extensionSettings?.[settingsSpec.plugin];
+    if (!isPlainObject(pluginRoot) || !Object.hasOwn(pluginRoot, settingsSpec.key) || pluginRoot[settingsSpec.key] === undefined) {
+        return false;
+    }
+    const bucket = pluginRoot[settingsSpec.key];
+    if (!isPlainObject(bucket) || Object.keys(bucket).length === 0) {
+        return true;
+    }
+    if (targetId === 'card') {
+        const key = `char_${avatar}`;
+        return Boolean(avatar && Object.hasOwn(bucket, key) && bucket[key] !== undefined);
+    }
+    if (targetId === 'orch') {
+        const scopeKey = `character_${avatar}`;
+        for (const scopes of Object.values(bucket)) {
+            if (!isPlainObject(scopes) || Object.keys(scopes).length === 0) {
+                return true;
+            }
+            if (avatar && Object.hasOwn(scopes, scopeKey) && scopes[scopeKey] !== undefined) {
+                return true;
+            }
+        }
+        return false;
     }
     return false;
 }
@@ -324,8 +434,9 @@ export function hasLegacyGlobalSettingsSessions(ctx, targetId = null) {
  * Lazily imports legacy iter-studio sessions for (targetId, scope) at most once,
  * storing full session bodies in `workbench_session_<id>` and lightweight
  * summaries plus `legacyImported[targetId]` in `workbench_sessions`.
- * For global scope, deletes the migrated bucket from `extensionSettings` once
- * persistence in GlobalState is confirmed.
+ * Existing workbench sessions are preserved. Failed reads and invalid histories
+ * leave the import marker unchanged; legacy settings buckets are pruned only
+ * after confirmed persistence.
  */
 export async function importLegacySessionsOnce({
     ctx,
@@ -357,27 +468,48 @@ export async function importLegacySessionsOnce({
         if (!currentRes?.ok) {
             const detail = currentRes?.hint || currentRes?.reason || 'workbench_sessions read failed';
             console.warn('[workbench/legacy-import] workbench_sessions read failed:', detail);
-            throw new SourceError('storage-error', String(detail));
+            throw new SourceError('storage-error', i18nFormat('Legacy state "${0}" could not be read: ${1}', SESSIONS_NAMESPACE, String(detail)));
         }
         currentState = isPlainObject(currentRes.state) ? currentRes.state : {};
     }
 
-    if (currentState.legacyImported?.[targetId]) {
-        if (effectiveScope === 'global') {
-            purgeLegacyGlobalBucket(ctx, targetId);
+    const settingsSource = readLegacySettings(ctx, targetId, effectiveScope, effectiveOpts.avatar || access.avatar || '', mode);
+    const markerKey = mode ? `${targetId}:${mode}` : targetId;
+    const legacyImportedMap = isPlainObject(currentState.legacyImported) ? currentState.legacyImported : {};
+    const legacySettingsImportedMap = isPlainObject(currentState.legacyImportedSettings) ? currentState.legacyImportedSettings : {};
+    const alreadyImportedNamespaces = Boolean(legacyImportedMap[markerKey] || legacyImportedMap[targetId]);
+    const alreadyImportedSettings = Boolean(legacySettingsImportedMap[markerKey] || legacySettingsImportedMap[targetId]);
+    const hasUnimportedLegacySettings = settingsSource.legacySettingsPlans.length > 0 && !alreadyImportedSettings;
+
+    if (alreadyImportedNamespaces && !hasUnimportedLegacySettings) {
+        const plansToPrune = [...settingsSource.plans, ...settingsSource.legacySettingsPlans];
+        if (plansToPrune.length) {
+            await pruneLegacySettings(ctx, plansToPrune);
         }
         return { imported: [], alreadyImported: true };
     }
 
-    const rawSessions = await readLegacySessions({
-        ctx,
-        targetId,
-        scope: effectiveScope,
-        avatar: effectiveOpts.avatar || access.avatar || '',
-        target: effectiveOpts.target || access.target || null,
-        mode,
-    });
+    const namespaced = (alreadyImportedNamespaces || effectiveScope === 'global')
+        ? []
+        : await readLegacySessions({
+            ctx,
+            targetId,
+            scope: effectiveScope,
+            avatar: effectiveOpts.avatar || access.avatar || '',
+            target: effectiveOpts.target || access.target || null,
+            mode,
+        });
+    const rawSessions = [
+        ...namespaced,
+        ...(alreadyImportedNamespaces ? [] : settingsSource.sessions),
+        ...(alreadyImportedSettings ? [] : settingsSource.legacySettingsSessions),
+    ];
 
+    for (const raw of rawSessions) {
+        if (!Array.isArray(raw.messages)) {
+            throw new SourceError('source', i18nFormat('Legacy session "${0}" has invalid messages.', String(raw.id || '')));
+        }
+    }
     const normalized = rawSessions
         .map(raw => normalizeLegacySession(raw, { targetId, scope: effectiveScope, scopeName }))
         .filter(Boolean);
@@ -415,9 +547,20 @@ export async function importLegacySessionsOnce({
     }
 
     let added = [];
+    let alreadyImported = false;
     const writeRes = await access.update(SESSIONS_NAMESPACE, (current) => {
+        added = [];
+        alreadyImported = false;
         const base = isPlainObject(current) ? clone(current) : {};
-        if (base.legacyImported?.[targetId]) return null;
+        const baseImported = isPlainObject(base.legacyImported) ? base.legacyImported : {};
+        const baseSettingsImported = isPlainObject(base.legacyImportedSettings) ? base.legacyImportedSettings : {};
+        const nsDone = Boolean(baseImported[markerKey] || baseImported[targetId]);
+        const settingsDone = Boolean(baseSettingsImported[markerKey] || baseSettingsImported[targetId]);
+        const needsSettingsMark = settingsSource.legacySettingsPlans.length > 0 && !settingsDone;
+        if (nsDone && !needsSettingsMark) {
+            alreadyImported = true;
+            return null;
+        }
         const existing = Array.isArray(base.sessions) ? base.sessions : [];
         const seenIds = new Set(existing.map(s => s?.id).filter(Boolean));
         const seenScopedLegacy = new Set(
@@ -433,27 +576,32 @@ export async function importLegacySessionsOnce({
             return true;
         });
         added = fresh;
+        const now = Date.now();
         return {
             ...base,
             version: SESSIONS_INDEX_VERSION,
             sessions: [...existing, ...fresh.map(toSessionSummary)],
             legacyImported: {
-                ...(isPlainObject(base.legacyImported) ? base.legacyImported : {}),
-                [targetId]: Date.now(),
+                ...baseImported,
+                [markerKey]: baseImported[markerKey] || now,
             },
+            ...(needsSettingsMark || !settingsDone ? {
+                legacyImportedSettings: {
+                    ...baseSettingsImported,
+                    [markerKey]: baseSettingsImported[markerKey] || now,
+                },
+            } : {}),
         };
     });
     if (!writeRes?.ok) {
         const detail = writeRes?.hint || writeRes?.reason || 'workbench_sessions update failed';
         console.warn('[workbench/legacy-import] workbench_sessions update failed:', detail);
-        throw new SourceError('storage-error', String(detail));
+        throw new SourceError('storage-error', i18nFormat('Could not confirm conversation import into "${0}": ${1}', SESSIONS_NAMESPACE, String(detail)));
     }
 
-    if (effectiveScope === 'global') {
-        purgeLegacyGlobalBucket(ctx, targetId);
-    }
-
-    return { imported: added, alreadyImported: false };
+    const plansToPrune = [...settingsSource.plans, ...settingsSource.legacySettingsPlans];
+    await pruneLegacySettings(ctx, plansToPrune);
+    return { imported: added, alreadyImported };
 }
 
 /**

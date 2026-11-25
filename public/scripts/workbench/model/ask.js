@@ -239,6 +239,7 @@ export async function runAsk({ question, overview, readers, request, sources = {
             }
             throw err;
         }
+        if (signal?.aborted) throw new Error(i18n('Stopped'));
         const text = String(resp?.text || '');
         if (text.trim()) lastAssistantText = text.trim();
         const calls = Array.isArray(resp?.calls) ? resp.calls : [];
@@ -278,6 +279,13 @@ export async function runAsk({ question, overview, readers, request, sources = {
         const assistantMsg = {
             role: 'assistant',
             content: text || '',
+            ...(typeof resp?.reasoning === 'string' && resp.reasoning.length > 0 ? { reasoning: resp.reasoning } : {}),
+            ...(resp?.signature ? { signature: resp.signature } : {}),
+            ...(Array.isArray(resp?.reasoningBlocks) && resp.reasoningBlocks.length ? { reasoning_blocks: resp.reasoningBlocks } : {}),
+            ...(Array.isArray(resp?.reasoningDetails) && resp.reasoningDetails.length ? { reasoning_details: resp.reasoningDetails } : {}),
+            ...(Array.isArray(resp?.nativeParts) && resp.nativeParts.length ? { native_parts: resp.nativeParts } : {}),
+            ...(Array.isArray(resp?.nativeContentBlocks) && resp.nativeContentBlocks.length ? { native_content_blocks: resp.nativeContentBlocks } : {}),
+            ...(Array.isArray(resp?.responsesOutputItems) && resp.responsesOutputItems.length ? { responses_output_items: resp.responsesOutputItems } : {}),
             tool_calls: executedCalls.map(c => ({
                 id: c.id,
                 type: 'function',
@@ -286,17 +294,9 @@ export async function runAsk({ question, overview, readers, request, sources = {
                 ...(c.extra_content ? { extra_content: c.extra_content } : {}),
             })),
         };
-        if (typeof resp?.reasoning === 'string' && resp.reasoning.length > 0) {
-            assistantMsg.reasoning = resp.reasoning;
-        }
-        if (Array.isArray(resp?.reasoningBlocks) && resp.reasoningBlocks.length) {
-            assistantMsg.reasoning_blocks = resp.reasoningBlocks;
-        }
-        if (Array.isArray(resp?.reasoningDetails) && resp.reasoningDetails.length) {
-            assistantMsg.reasoning_details = resp.reasoningDetails;
-        }
         messages.push(assistantMsg);
         for (const call of executedCalls) {
+            if (signal?.aborted) throw new Error(i18n('Stopped'));
             if (call.name === 'wb_answer') {
                 const deferredContent = JSON.stringify({
                     deferred: true,
@@ -314,6 +314,7 @@ export async function runAsk({ question, overview, readers, request, sources = {
             }
             let result;
             try { result = await readers[call.name](call.args || {}); } catch (err) { result = { error: String(err?.message || err) }; }
+            if (signal?.aborted) throw new Error(i18n('Stopped'));
             const content = clip(result);
             sent += content.length;
             reads.push({ name: call.name, args: call.args || {}, chars: content.length });

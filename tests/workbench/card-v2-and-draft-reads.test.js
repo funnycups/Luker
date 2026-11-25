@@ -606,4 +606,88 @@ describe('simulate_prompt & custom CEA prompts', () => {
         expect(card.getNativeAi(ctx)).toEqual({ connection: 'MyConn', preset: 'MyPreset' });
         expect(world.getNativeAi(ctx)).toEqual({ connection: 'MyConn', preset: 'MyPreset' });
     });
+
+    test('in-flight card.runRead uses captured session target avatar even after live character switches', async () => {
+        const { ctx } = createMockRuntime({
+            character: {
+                avatar: 'Alice.png',
+                name: 'Alice',
+                data: { name: 'Alice', extensions: { world: 'AliceBook' } },
+            },
+            books: {
+                AliceBook: { entries: {} },
+                AliceAux: { entries: {} },
+                BobBook: { entries: {} },
+                BobAux: { entries: {} },
+            },
+            auxWorlds: { Alice: ['AliceAux'], Bob: ['BobAux'] },
+        });
+        ctx.characters.push({
+            avatar: 'Bob.png',
+            name: 'Bob',
+            data: { name: 'Bob', extensions: { world: 'BobBook' } },
+        });
+        ctx.character = {
+            presets: {
+                list: (ch) => (ch?.avatar === 'Alice.png' ? [{ name: 'AlicePreset', isDefault: true, preset: {} }] : [{ name: 'BobPreset', isDefault: true, preset: {} }]),
+                get: () => null,
+            },
+        };
+
+        const card = createCardTarget({ getContext: () => ctx });
+        const loaded = await card.load('character', ctx);
+
+        // User switches active character to Bob mid-turn
+        ctx.characterId = 1;
+
+        const booksOut = await card.runRead(
+            { id: 'wbl_1', name: 'world_book_list', args: {} },
+            loaded.live,
+            { target: loaded.target },
+        );
+        expect(booksOut.books).toContain('AliceBook');
+        expect(booksOut.books).toContain('AliceAux');
+        expect(booksOut.books).not.toContain('BobBook');
+        expect(booksOut.books).not.toContain('BobAux');
+
+        const presetOut = await card.runRead(
+            { id: 'insp_2', name: 'inspect_bound_preset', args: { action: 'list' } },
+            loaded.live,
+            { target: loaded.target },
+        );
+        expect(presetOut).toEqual([{ name: 'AlicePreset', isDefault: true, hasBody: true }]);
+    });
+
+    test('card target draft lorebook_query returns all >20 matches when limit is omitted and honors limit > 20', async () => {
+        const entries = {};
+        for (let i = 0; i < 28; i++) {
+            entries[i] = { uid: i, comment: `rule-${i}`, key: ['rule'], content: `Body ${i}`, disable: false };
+        }
+        const { ctx } = createMockRuntime({
+            character: {
+                avatar: 'Many.png',
+                name: 'Many',
+                data: { name: 'Many', extensions: { world: 'BigLore' } },
+            },
+            books: { BigLore: { entries } },
+        });
+        const card = createCardTarget({ getContext: () => ctx });
+        const loaded = await card.load('character', ctx);
+
+        const allRes = await card.runRead(
+            { id: 'q_all', name: 'lorebook_query', args: { book_name: 'BigLore', text: 'rule' } },
+            loaded.live,
+            { target: loaded.target },
+        );
+        expect(allRes.total_hits).toBe(28);
+        expect(allRes.entries).toHaveLength(28);
+
+        const lim25 = await card.runRead(
+            { id: 'q_25', name: 'lorebook_query', args: { book_name: 'BigLore', text: 'rule', limit: 25 } },
+            loaded.live,
+            { target: loaded.target },
+        );
+        expect(lim25.total_hits).toBe(28);
+        expect(lim25.entries).toHaveLength(25);
+    });
 });

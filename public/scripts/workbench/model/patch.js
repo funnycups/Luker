@@ -147,6 +147,10 @@ export async function saveSettingsChecked(ctx = null) {
         throw new SourceError('write-failed', i18n('Failed to save the settings'));
     }
     let saved = false;
-    await target.saveSettings(0, { onSaved: () => { saved = true; } });
+    const outcome = await target.saveSettings(0, { onSaved: () => { saved = true; } });
+    if (outcome !== undefined) {
+        if (!outcome?.ok) throw new SourceError('write-failed', i18n('Failed to save the settings'));
+        return;
+    }
     if (!saved) throw new SourceError('write-failed', i18n('Failed to save the settings'));
 }

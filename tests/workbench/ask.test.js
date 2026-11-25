@@ -1702,4 +1702,306 @@ describe('workbench Ask model & source readers', () => {
             globalThis.requestAnimationFrame = prevRAF;
         }
     });
+
+    test('runAsk checks signal.aborted right after request() resolves and around async readers', async () => {
+        // 1) Aborted while request() is in flight -> throws Stopped without running readers or returning answer
+        const ac1 = new AbortController();
+        const readerSpy = jest.fn(async () => ({ ok: true }));
+        await expect(runAsk({
+            question: 'Check abort after request',
+            overview: {},
+            sources: { content: true },
+            readers: { wb_read_chat: readerSpy },
+            signal: ac1.signal,
+            request: async () => {
+                ac1.abort();
+                return { text: '', calls: [{ id: 'c1', name: 'wb_read_chat', args: {} }] };
+            },
+        })).rejects.toThrow(/Stopped/);
+        expect(readerSpy).not.toHaveBeenCalled();
+
+        // 2) Aborted while first reader is running -> stops before second reader and onStep
+        const ac2 = new AbortController();
+        const onStep = jest.fn();
+        const secondReader = jest.fn(async () => ({ ok: true }));
+        await expect(runAsk({
+            question: 'Check abort during readers',
+            overview: {},
+            sources: { content: true },
+            readers: {
+                wb_read_chat: async () => {
+                    ac2.abort();
+                    return { messages: [] };
+                },
+                wb_read_character: secondReader,
+            },
+            signal: ac2.signal,
+            onStep,
+            request: async () => ({
+                text: '',
+                calls: [
+                    { id: 'c1', name: 'wb_read_chat', args: {} },
+                    { id: 'c2', name: 'wb_read_character', args: {} },
+                ],
+            }),
+        })).rejects.toThrow(/Stopped/);
+        expect(secondReader).not.toHaveBeenCalled();
+        expect(onStep).not.toHaveBeenCalled();
+    });
+
+    test('ask page guards concurrent session deletion in send() and increments selectionVersion on scope change even when session is null', async () => {
+        const { JSDOM } = await import('jsdom');
+        const dom = new JSDOM('<!doctype html><html><body></body></html>');
+        const prevWindow = globalThis.window;
+        const prevDocument = globalThis.document;
+        const prevHTMLElement = globalThis.HTMLElement;
+        const prevNode = globalThis.Node;
+        const prevRAF = globalThis.requestAnimationFrame;
+        const prevLuker = globalThis.Luker;
+        globalThis.window = dom.window;
+        globalThis.document = dom.window.document;
+        globalThis.HTMLElement = dom.window.HTMLElement;
+        globalThis.Node = dom.window.Node;
+        globalThis.requestAnimationFrame = (cb) => cb();
+        delete globalThis.Luker;
+        try {
+            const { createAskPage } = await import('../../public/scripts/workbench/pages/ask.js');
+
+            // 1) Scope change while session === null and send() is awaiting overview:
+            //    syncScopeChange must increment selectionVersion so Chat B isn't stuck busy or hijacked.
+            let activeChat = { chatId: 'chatA.jsonl', label: 'Chat A', floors: 1, target: { is_group: false, avatar_url: 'a.png', file_name: 'chatA.jsonl' } };
+            let resolveOverview;
+            const createdInA = { id: 'sess_A', kind: 'ask', title: 'From A', turns: [], updatedAt: Date.now() };
+            const byId = new Map();
+            const aiRequestSpy = jest.fn(async () => ({ text: 'Reply A', calls: [] }));
+            const app = {
+                sessions: {
+                    list: jest.fn(async () => []),
+                    get: jest.fn(async (id) => byId.get(id) ?? null),
+                    create: jest.fn(async (fields) => {
+                        const s = { ...createdInA, ...fields };
+                        byId.set(s.id, s);
+                        return s;
+                    }),
+                    update: jest.fn(async (id, patch) => {
+                        const cur = byId.get(id);
+                        if (!cur) return null;
+                        const next = { ...cur, ...patch };
+                        byId.set(id, next);
+                        return next;
+                    }),
+                },
+                source: {
+                    listRequests: async () => [],
+                    frontendLogCount: () => 0,
+                    debugLoggingOn: () => true,
+                    askOverview: jest.fn(() => new Promise((r) => { resolveOverview = r; })),
+                    askReaders: () => ({}),
+                    askToolsForProviders: () => [],
+                    aiRequest: aiRequestSpy,
+                },
+                snapshot: () => ({ chat: activeChat, card: { name: 'A', books: [] }, preset: { name: 'P' }, connection: 'C' }),
+                settings: () => ({ ask: { sources: {} } }),
+                suggestions: () => [],
+                askProviders: () => [],
+                iterateTargets: () => [],
+                go: jest.fn(),
+                toast: jest.fn(),
+                saveSettings: jest.fn(),
+            };
+
+            const page = createAskPage(app);
+            dom.window.document.body.appendChild(page.el);
+            await page.show();
+
+            const input = page.el.querySelector('textarea.wb-input');
+            const sendBtn = page.el.querySelector('button.wb-send');
+            input.value = 'Question in Chat A';
+            sendBtn.click();
+            await Promise.resolve();
+            expect(sendBtn.disabled).toBe(true);
+
+            // Switch to Chat B while session === null and overview is still pending
+            activeChat = { chatId: 'chatB.jsonl', label: 'Chat B', floors: 1, target: { is_group: false, avatar_url: 'b.png', file_name: 'chatB.jsonl' } };
+            page.onSnapshot();
+            await new Promise(r => setTimeout(r, 10));
+            expect(sendBtn.disabled).toBe(false);
+
+            // Chat A's send finishes; it must NOT hijack Chat B's empty view
+            resolveOverview({});
+            await new Promise(r => setTimeout(r, 20));
+            expect(page.el.textContent).not.toContain('Reply A');
+            page.destroy();
+
+            // 2) Concurrent deletion before store.update(userTurn) returns null -> exits cleanly without calling aiRequest or toasting TypeError
+            const aiSpy2 = jest.fn(async () => ({ text: 'Should not run', calls: [] }));
+            const toastSpy2 = jest.fn();
+            const existing = { id: 'del_sess', kind: 'ask', title: 'Soon deleted', turns: [], updatedAt: Date.now() };
+            const app2 = {
+                ...app,
+                sessions: {
+                    list: jest.fn(async () => [existing]),
+                    get: jest.fn(async () => existing),
+                    create: jest.fn(async () => existing),
+                    update: jest.fn(async () => null),
+                },
+                source: {
+                    ...app.source,
+                    askOverview: jest.fn(async () => ({})),
+                    aiRequest: aiSpy2,
+                },
+                toast: toastSpy2,
+            };
+            const page2 = createAskPage(app2);
+            dom.window.document.body.appendChild(page2.el);
+            await page2.show();
+            const hist = page2.el.querySelector('.wb-chat-hist');
+            hist.value = 'del_sess';
+            hist.dispatchEvent(new dom.window.Event('change'));
+            await new Promise(r => setTimeout(r, 10));
+
+            const input2 = page2.el.querySelector('textarea.wb-input');
+            const sendBtn2 = page2.el.querySelector('button.wb-send');
+            input2.value = 'After delete';
+            sendBtn2.click();
+            await new Promise(r => setTimeout(r, 20));
+            expect(aiSpy2).not.toHaveBeenCalled();
+            expect(toastSpy2).not.toHaveBeenCalled();
+            expect(input2.value).toBe('After delete');
+            page2.destroy();
+        } finally {
+            globalThis.window = prevWindow;
+            globalThis.document = prevDocument;
+            globalThis.HTMLElement = prevHTMLElement;
+            globalThis.Node = prevNode;
+            globalThis.requestAnimationFrame = prevRAF;
+            if (prevLuker === undefined) delete globalThis.Luker;
+            else globalThis.Luker = prevLuker;
+        }
+    });
+
+    test('ask page locks existing session pre-run via pendingSessions and bails regenerate() when store.update returns null', async () => {
+        const { JSDOM } = await import('jsdom');
+        const dom = new JSDOM('<!doctype html><html><body></body></html>');
+        const prevWindow = globalThis.window;
+        const prevDocument = globalThis.document;
+        const prevHTMLElement = globalThis.HTMLElement;
+        const prevNode = globalThis.Node;
+        const prevRAF = globalThis.requestAnimationFrame;
+        const prevLuker = globalThis.Luker;
+        globalThis.window = dom.window;
+        globalThis.document = dom.window.document;
+        globalThis.HTMLElement = dom.window.HTMLElement;
+        globalThis.Node = dom.window.Node;
+        globalThis.requestAnimationFrame = (cb) => cb();
+        delete globalThis.Luker;
+        try {
+            const { createAskPage } = await import('../../public/scripts/workbench/pages/ask.js');
+
+            const byId = new Map();
+            const existing = {
+                id: 'ask_existing',
+                kind: 'ask',
+                title: 'Existing Ask',
+                updatedAt: Date.now(),
+                turns: [
+                    { role: 'user', text: 'First Q', at: 1 },
+                    { role: 'ai', answer: 'First A', reads: [], at: 2 },
+                ],
+            };
+            byId.set(existing.id, JSON.parse(JSON.stringify(existing)));
+
+            let resolveOverview;
+            const askOverviewSpy = jest.fn(() => new Promise((resolve) => { resolveOverview = resolve; }));
+            const aiRequestSpy = jest.fn(async () => ({ text: 'Second A', calls: [] }));
+            const updateSpy = jest.fn(async (id, patch) => {
+                const cur = byId.get(id);
+                if (!cur) return null;
+                const next = { ...cur, ...JSON.parse(JSON.stringify(patch)), updatedAt: Date.now() };
+                byId.set(id, next);
+                return JSON.parse(JSON.stringify(next));
+            });
+
+            const app = {
+                sessions: {
+                    list: jest.fn(async () => [...byId.values()].map(s => JSON.parse(JSON.stringify(s)))),
+                    get: jest.fn(async (id) => (byId.has(id) ? JSON.parse(JSON.stringify(byId.get(id))) : null)),
+                    create: jest.fn(async (fields) => ({ id: 'unexpected', turns: [], ...fields })),
+                    update: updateSpy,
+                },
+                source: {
+                    listRequests: async () => [],
+                    frontendLogCount: () => 0,
+                    debugLoggingOn: () => true,
+                    askOverview: askOverviewSpy,
+                    askReaders: () => ({}),
+                    askToolsForProviders: () => [],
+                    aiRequest: aiRequestSpy,
+                },
+                snapshot: () => ({ chat: { label: 'Chat 1', floors: 2 }, card: { name: 'Alice', books: [] }, preset: { name: 'Default' }, connection: 'Main' }),
+                settings: () => ({ ask: { sources: {} } }),
+                suggestions: () => [],
+                askProviders: () => [],
+                iterateTargets: () => [],
+                go: jest.fn(),
+                toast: jest.fn(),
+                saveSettings: jest.fn(),
+            };
+
+            const page = createAskPage(app);
+            dom.window.document.body.appendChild(page.el);
+            await page.show();
+
+            const hist = page.el.querySelector('.wb-chat-hist');
+            hist.value = existing.id;
+            hist.dispatchEvent(new dom.window.Event('change'));
+            await new Promise(r => setTimeout(r, 10));
+
+            const input = page.el.querySelector('textarea.wb-input');
+            const sendBtn = page.el.querySelector('button.wb-send');
+            input.value = 'Second Q';
+            sendBtn.click();
+
+            // Existing session must lock immediately while askOverview() is pending
+            expect(sendBtn.disabled).toBe(true);
+            expect(input.disabled).toBe(true);
+
+            // Second click + Enter keydown must NOT trigger a second concurrent send()
+            sendBtn.click();
+            input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+            await Promise.resolve();
+            expect(askOverviewSpy).toHaveBeenCalledTimes(1);
+            expect(aiRequestSpy).not.toHaveBeenCalled();
+
+            resolveOverview({});
+            await new Promise(r => setTimeout(r, 20));
+            expect(askOverviewSpy).toHaveBeenCalledTimes(1);
+            expect(aiRequestSpy).toHaveBeenCalledTimes(1);
+            expect(sendBtn.disabled).toBe(false);
+            expect(input.disabled).toBe(false);
+            expect(byId.get(existing.id).turns).toHaveLength(4);
+
+            // regenerate() must bail cleanly without overwriting input.value or calling send() when store.update returns null
+            updateSpy.mockResolvedValueOnce(null);
+            aiRequestSpy.mockClear();
+            input.value = 'Keep my unsent draft';
+            const regenBtn = [...page.el.querySelectorAll('.wb-msg-acts button')].find(b => b.textContent.includes('Answer again'));
+            expect(regenBtn).toBeTruthy();
+            regenBtn.click();
+            await new Promise(r => setTimeout(r, 20));
+
+            expect(input.value).toBe('Keep my unsent draft');
+            expect(aiRequestSpy).not.toHaveBeenCalled();
+            expect(sendBtn.disabled).toBe(false);
+            page.destroy();
+        } finally {
+            globalThis.window = prevWindow;
+            globalThis.document = prevDocument;
+            globalThis.HTMLElement = prevHTMLElement;
+            globalThis.Node = prevNode;
+            globalThis.requestAnimationFrame = prevRAF;
+            if (prevLuker === undefined) delete globalThis.Luker;
+            else globalThis.Luker = prevLuker;
+        }
+    });
 });

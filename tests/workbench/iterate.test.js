@@ -14,6 +14,7 @@ import {
     trimMessages,
 } from '../../public/scripts/workbench/model/iterate.js';
 import { createIteratePage } from '../../public/scripts/workbench/pages/iterate.js';
+import { createSessionStore, SESSIONS_NAMESPACE, SESSIONS_INDEX_VERSION } from '../../public/scripts/workbench/model/sessions.js';
 import { mountWorkbench } from '../../public/scripts/workbench/app.js';
 import { createWorkbenchRegistry } from '../../public/scripts/workbench/registry.js';
 import { aiRequest } from '../../public/scripts/workbench/source-luker.js';
@@ -237,6 +238,7 @@ describe('workbench iterate engine', () => {
         const proposalKinds = [
             {
                 ...skillAuthor,
+                inverseAvailable: true,
                 targetHandler: {
                     read: async () => JSON.parse(JSON.stringify(diskSkills)),
                     write: async (_target, next) => {
@@ -386,7 +388,7 @@ describe('workbench iterate engine', () => {
         expect(diskProfile.description).toBe('Sharper description');
         expect(diskSkills['my-skill'].content).toBe('new skill');
         expect(clonedPresets).toEqual([]); // preset-clone was NOT selected -> rejected
-        const cloneEntry = bus._testOnly_entries().find(e => e.kind === 'preset-clone');
+        const cloneEntry = bus.listEntries().find(e => e.kind === 'preset-clone');
         expect(cloneEntry.status).toBe('rejected');
 
         // 3) Undo reverses both skill-author and field-diff
@@ -638,10 +640,10 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
         await flushMicrotasks();
         await flushMicrotasks();
 
-        // Legacy auto:true dropped, toolCalls/reasoning normalized to clean {role, content}
+        // Legacy auto:true and legacy toolCalls dropped while assistant reasoning metadata is preserved
         expect(sentPayloads[0].some(m => m.content === 'AUTO CONTINUE')).toBe(false);
         expect(sentPayloads[0][1]).toEqual({ role: 'user', content: 'Old user msg' });
-        expect(sentPayloads[0][2]).toEqual({ role: 'assistant', content: 'Old AI msg' });
+        expect(sentPayloads[0][2]).toEqual({ role: 'assistant', content: 'Old AI msg', reasoning: 'Old reasoning' });
 
         expect(page.pendingCount()).toBe(1);
         expect(page.pendingInfo()).toMatchObject({ pending: 1, sessionTitle: 'Imported Card Chat' });
@@ -1488,6 +1490,82 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
         wb.close();
     });
 
+    test('reserves the preview column with a loading state while initial target work loads and hides it on load error', async () => {
+        const sessions = createMemorySessionStore();
+        let resolveLoad;
+        let rejectLoad;
+        let loadAttempt = 0;
+
+        const target = {
+            id: 'preset',
+            label: 'Preset',
+            tone: 'preset',
+            scopes: async () => ({ global: true }),
+            load: () => new Promise((resolve, reject) => {
+                loadAttempt += 1;
+                resolveLoad = resolve;
+                rejectLoad = reject;
+            }),
+            renderPreview: ({ ai }) => {
+                if (!ai) return null;
+                const el = document.createElement('div');
+                el.className = 'wb-test-preview';
+                el.textContent = `Preview:${ai.name}`;
+                return el;
+            },
+            prompt: async () => 'sys',
+            tools: async () => [],
+            isRead: () => false,
+            runRead: async () => ({}),
+            runEdit: async (_c, live) => live,
+            units: () => new Map(),
+            rebuild: (_b, ai) => ai,
+            commit: async () => ({ applied: [], skipped: [], failure: '' }),
+        };
+
+        const app = {
+            sessions,
+            history: { record: () => 'h1', canUndo: () => false, undo: async () => {} },
+            iterateTargets: () => [target],
+            snapshot: () => ({}),
+            settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+            saveSettings: () => {},
+            toast: jest.fn(),
+            reload: jest.fn(),
+            refreshBadges: jest.fn(),
+            source: { lastReply: async () => '', aiRequest: jest.fn() },
+        };
+
+        const page = createIteratePage(app);
+        document.body.appendChild(page.el);
+        await page.show({ ws: 'preset', scope: 'global' });
+
+        const previewPane = page.el.querySelector('.wb-iter-preview');
+        expect(loadAttempt).toBe(1);
+        expect(previewPane.hidden).toBe(false);
+        expect(previewPane.querySelector('.wb-loading')).not.toBeNull();
+
+        resolveLoad({ live: { name: 'Default' }, target: { scope: 'global' }, title: 'Preset "Default"' });
+        await flushMicrotasks();
+
+        expect(previewPane.hidden).toBe(false);
+        expect(previewPane.querySelector('.wb-loading')).toBeNull();
+        expect(previewPane.querySelector('.wb-test-preview')?.textContent).toBe('Preview:Default');
+
+        // Reload with a failing load hides the preview pane once loadError is set.
+        const failingPage = createIteratePage(app);
+        document.body.appendChild(failingPage.el);
+        await failingPage.show({ ws: 'preset', scope: 'global' });
+        const failingPreview = failingPage.el.querySelector('.wb-iter-preview');
+        expect(failingPreview.hidden).toBe(false);
+        expect(failingPreview.querySelector('.wb-loading')).not.toBeNull();
+
+        rejectLoad(new Error('Preset unreadable'));
+        await flushMicrotasks();
+
+        expect(failingPreview.hidden).toBe(true);
+    });
+
     test('lazy-loads sessions only when AI iteration is opened, skipping reads while collapsed or on another tab', async () => {
         const sessions = createMemorySessionStore();
         await sessions.create({
@@ -1694,5 +1772,743 @@ describe('workbench iterate page (scopes, controls, preview, runId isolation)', 
         expect(page.el.querySelectorAll('.wb-sess-row')).toHaveLength(0);
         expect(await sessions.get(cardB.id, { scope: 'character', avatar: 'alice.png' })).toBeNull();
         expect(await sessions.get(otherTarget.id, { scope: 'character', avatar: 'alice.png' })).not.toBeNull();
+    });
+
+    test('imports and prunes character-scoped LEGACY_SETTINGS buckets even when meta.legacyImported[targetId] is already set', async () => {
+        const charStore = new Map();
+        charStore.set(`alice.png::${SESSIONS_NAMESPACE}`, {
+            version: SESSIONS_INDEX_VERSION,
+            sessions: [],
+            legacyImported: { card: 1700000000000, orch: 1700000000000 },
+        });
+        const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
+        const mockCtx = {
+            characters: [{ avatar: 'alice.png', name: 'Alice' }],
+            characterId: 0,
+            groupId: null,
+            extensionSettings: {
+                character_editor_assistant: {
+                    unified_cea_editor_sessions: {
+                        'char_alice.png': {
+                            c_old: { id: 'c_old', title: 'Alice legacy card', messages: [{ role: 'user', content: 'tighten card' }] },
+                        },
+                        'char_bob.png': {
+                            b_old: { id: 'b_old', title: 'Bob untouched', messages: [{ role: 'user', content: 'keep bob' }] },
+                        },
+                    },
+                },
+                orchestrator: {
+                    iterStudioV2: {
+                        spec: {
+                            'character_alice.png': {
+                                o_old: { id: 'o_old', title: 'Alice legacy orch', messages: [{ role: 'user', content: 'tune spec' }] },
+                            },
+                        },
+                    },
+                },
+            },
+            saveSettings: jest.fn(async (_delay, opts) => { opts?.onSaved?.(); }),
+            saveSettingsDebounced: jest.fn(),
+            getCharacterState: jest.fn(async (avatar, ns) => ({ ok: true, state: clone(charStore.get(`${avatar}::${ns}`) ?? null) })),
+            updateCharacterState: jest.fn(async (avatar, ns, updater) => {
+                const key = `${avatar}::${ns}`;
+                const cur = charStore.get(key) ?? {};
+                const next = await updater(clone(cur));
+                if (next == null) return { ok: true, state: clone(cur), updated: false };
+                charStore.set(key, clone(next));
+                return { ok: true, state: clone(next), updated: true };
+            }),
+            deleteCharacterState: jest.fn(async (avatar, ns) => {
+                charStore.delete(`${avatar}::${ns}`);
+                return { ok: true };
+            }),
+        };
+        const savedLuker = globalThis.Luker;
+        globalThis.Luker = { getContext: () => mockCtx };
+        try {
+            const sessions = createSessionStore(() => mockCtx);
+            const makeTarget = (id) => ({
+                id,
+                label: id,
+                tone: id,
+                scopes: async () => ({ character: true }),
+                load: async () => ({ live: {}, target: { scope: 'character', avatar: 'alice.png' }, title: `Alice ${id}` }),
+                prompt: async () => 'sys',
+                tools: async () => [{ type: 'function', function: { name: 'noop' } }],
+                isRead: () => true,
+                runRead: async () => ({}),
+                runEdit: async (_c, l) => l,
+                units: () => new Map(),
+                rebuild: (_b, a) => a,
+                commit: async () => ({ applied: [], skipped: [], failure: '' }),
+            });
+            const app = {
+                sessions,
+                layer: document.body,
+                iterateTargets: () => [makeTarget('card'), makeTarget('orch')],
+                snapshot: () => ({ chat: { character: { avatar: 'alice.png', name: 'Alice' } }, card: { name: 'Alice', avatar: 'alice.png' } }),
+                settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+                history: { record: jest.fn(), canUndo: () => false, undo: jest.fn() },
+                toast: jest.fn(),
+                reload: jest.fn(),
+                refreshBadges: jest.fn(),
+                source: { aiRequest: jest.fn() },
+            };
+            const page = createIteratePage(app);
+            document.body.appendChild(page.el);
+
+            await page.show({ ws: 'card', scope: 'character' });
+            await flushMicrotasks();
+            expect(page.el.textContent).toContain('Alice legacy card');
+            expect(mockCtx.extensionSettings.character_editor_assistant.unified_cea_editor_sessions['char_alice.png']).toBeUndefined();
+            expect(mockCtx.extensionSettings.character_editor_assistant.unified_cea_editor_sessions['char_bob.png']).toBeDefined();
+
+            await page.show({ ws: 'orch', scope: 'character' });
+            await flushMicrotasks();
+            expect(page.el.textContent).toContain('Alice legacy orch');
+            expect(mockCtx.extensionSettings.orchestrator.iterStudioV2).toBeUndefined();
+            page.destroy();
+        } finally {
+            if (savedLuker === undefined) delete globalThis.Luker;
+            else globalThis.Luker = savedLuker;
+        }
+    });
+
+    test('discard() rebases later pending turn onto current saved state (preserving intervening applied turn) instead of stale draft.base', async () => {
+        const savedLuker = globalThis.Luker;
+        delete globalThis.Luker;
+        try {
+            let disk = { a: 'a0', b: 'b0', c: 'c0' };
+            const clone = (v) => JSON.parse(JSON.stringify(v));
+            const target = {
+                id: 'card',
+                label: 'Card',
+                tone: 'card',
+                scopes: async () => ({ global: true }),
+                load: async () => ({ live: clone(disk), target: { scope: 'global', id: 'same' }, title: 'Doc' }),
+                targetKey: (t) => t?.id || 'same',
+                prompt: async () => 'sys',
+                tools: async () => [{ type: 'function', function: { name: 'set_field' } }],
+                isRead: () => false,
+                runRead: async () => ({}),
+                runEdit: async (call, live) => ({ ...live, [call.args.k]: call.args.v }),
+                units: (live) => new Map(Object.entries(live || {}).map(([k, v]) => [k, { key: k, label: k, group: 'Fields', text: String(v), raw: v }])),
+                rebuild: (base, ai, keys) => {
+                    const out = clone(base);
+                    for (const k of keys) out[k] = ai[k];
+                    return out;
+                },
+                commit: async (_t, base, next, keys) => {
+                    const prev = clone(disk);
+                    for (const k of keys) {
+                        if (disk[k] !== base[k]) {
+                            throw new Error(`Conflict on ${k}: disk=${disk[k]} base=${base[k]}`);
+                        }
+                        disk[k] = next[k];
+                    }
+                    return { applied: keys, skipped: [], failure: '', undo: async () => { disk = prev; } };
+                },
+            };
+
+            const sessions = createMemorySessionStore();
+            const historyUndo = new Map();
+            let histSeq = 0;
+            const scriptedEdits = [
+                { k: 'a', v: 'a1' },
+                { k: 'b', v: 'b1' },
+                { k: 'c', v: 'c1' },
+            ];
+            let reqIdx = 0;
+            let editPhase = true;
+            const app = {
+                sessions,
+                layer: document.body,
+                iterateTargets: () => [target],
+                snapshot: () => ({}),
+                settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+                history: {
+                    record: (entry) => {
+                        const id = `h_${++histSeq}`;
+                        if (entry.undo) historyUndo.set(id, entry.undo);
+                        return id;
+                    },
+                    canUndo: (id) => historyUndo.has(id),
+                    undo: async (id) => { await historyUndo.get(id)?.(); historyUndo.delete(id); },
+                },
+                toast: jest.fn(),
+                reload: jest.fn(),
+                refreshBadges: jest.fn(),
+                source: {
+                    aiRequest: jest.fn(async () => {
+                        if (editPhase) {
+                            editPhase = false;
+                            const e = scriptedEdits[reqIdx++];
+                            return { text: '', calls: [{ id: `c_${reqIdx}`, name: 'set_field', args: e }] };
+                        }
+                        editPhase = true;
+                        return { text: `Done ${reqIdx}`, calls: [] };
+                    }),
+                },
+            };
+
+            const page = createIteratePage(app);
+            document.body.appendChild(page.el);
+            await page.show({ ws: 'card', scope: 'global' });
+            await flushMicrotasks();
+
+            const sendMsg = async (msg) => {
+                const ta = page.el.querySelector('textarea.wb-input');
+                const btn = page.el.querySelector('button.wb-send');
+                ta.value = msg;
+                btn.click();
+                await flushMicrotasks();
+                await flushMicrotasks();
+            };
+
+            // Stack 3 pending turns: Turn 1 edits a, Turn 2 edits b, Turn 3 edits c
+            await sendMsg('edit a');
+            await sendMsg('edit b');
+            await sendMsg('edit c');
+
+            // Apply Turn 2 (writes b: 'b1' to disk while Turn 1 and Turn 3 stay pending)
+            const changeCardsBefore = [...page.el.querySelectorAll('.wb-chg')];
+            expect(changeCardsBefore).toHaveLength(3);
+            changeCardsBefore[1].querySelector('.wb-chg-foot button.is-primary').click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(disk).toEqual({ a: 'a0', b: 'b1', c: 'c0' });
+
+            // Discard Turn 1 -> Turn 3 must rebase onto { a: 'a0', b: 'b1', c: 'c0' } (NOT stale b: 'b0'!)
+            const cardsAfterApply = [...page.el.querySelectorAll('.wb-chg')];
+            cardsAfterApply[0].querySelector('.wb-chg-foot button.is-ghost').click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            // Verify Turn 3's persisted draft has base.b === 'b1' and Apply succeeds cleanly
+            const listed = await sessions.list('iterate', { scope: 'global' });
+            const fullSess = await sessions.get(listed[0].id, { scope: 'global' });
+            const turn3 = fullSess.turns[5];
+            expect(turn3.state).toBe('pending');
+            expect(turn3.draft.base).toEqual({ a: 'a0', b: 'b1', c: 'c0' });
+            expect(turn3.draft.ai).toEqual({ a: 'a0', b: 'b1', c: 'c1' });
+
+            const cardsAfterDiscard = [...page.el.querySelectorAll('.wb-chg')];
+            cardsAfterDiscard[2].querySelector('.wb-chg-foot button.is-primary').click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(disk).toEqual({ a: 'a0', b: 'b1', c: 'c1' });
+            page.destroy();
+        } finally {
+            if (savedLuker !== undefined) globalThis.Luker = savedLuker;
+        }
+    });
+
+    test('guards concurrent deletion in send(), completes reviews on onSnapshot scope change, and guards + cleans bus entries in undoTurn()', async () => {
+        const savedLuker = globalThis.Luker;
+        delete globalThis.Luker;
+        try {
+            // 1) Concurrent session deletion returning null from store.update in send() exits cleanly without crashing
+            const baseSession = { id: 's_del', kind: 'iterate', ws: 'card', scope: 'global', title: 'Del', turns: [], messages: [], updatedAt: Date.now() };
+            const delToast = jest.fn();
+            const delAi = jest.fn();
+            const delTarget = {
+                id: 'card',
+                label: 'Card',
+                tone: 'card',
+                scopes: async () => ({ global: true }),
+                load: async () => ({ live: { a: 1 }, target: { scope: 'global' }, title: 'Doc' }),
+                prompt: async () => 'sys',
+                tools: async () => [{ type: 'function', function: { name: 'noop' } }],
+                isRead: () => true,
+                runRead: async () => ({}),
+                runEdit: async (_c, l) => l,
+                units: () => new Map(),
+                rebuild: (_b, a) => a,
+                commit: async () => ({ applied: [], skipped: [], failure: '' }),
+            };
+            const delPage = createIteratePage({
+                sessions: {
+                    list: async () => [baseSession],
+                    get: async () => baseSession,
+                    create: async () => baseSession,
+                    update: async () => null,
+                },
+                layer: document.body,
+                iterateTargets: () => [delTarget],
+                snapshot: () => ({}),
+                settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+                history: { record: jest.fn(), canUndo: () => false, undo: jest.fn() },
+                toast: delToast,
+                reload: jest.fn(),
+                refreshBadges: jest.fn(),
+                source: { aiRequest: delAi },
+            });
+            document.body.appendChild(delPage.el);
+            await delPage.show({ ws: 'card', scope: 'global', sessionId: 's_del' });
+            await flushMicrotasks();
+            delPage.el.querySelector('textarea.wb-input').value = 'Edit deleted';
+            delPage.el.querySelector('button.wb-send').click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(delAi).not.toHaveBeenCalled();
+            expect(delToast).not.toHaveBeenCalled();
+            delPage.destroy();
+
+            // 2) onSnapshot scope change completes active review (fires onCancelWithoutApply & resolves waitForClose)
+            let activeChar = { avatar: 'alice.png', name: 'Alice' };
+            const onCancel = jest.fn();
+            const reviewTarget = {
+                ...delTarget,
+                scopes: async () => ({ character: true }),
+                load: async () => ({ live: {}, target: { scope: 'character', avatar: activeChar.avatar }, title: activeChar.name }),
+            };
+            const revPage = createIteratePage({
+                sessions: createMemorySessionStore(),
+                layer: document.body,
+                iterateTargets: () => [reviewTarget],
+                snapshot: () => ({ chat: { character: activeChar }, card: activeChar }),
+                settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+                history: { record: jest.fn(), canUndo: () => false, undo: jest.fn() },
+                toast: jest.fn(),
+                reload: jest.fn(),
+                refreshBadges: jest.fn(),
+                source: { aiRequest: jest.fn() },
+            });
+            document.body.appendChild(revPage.el);
+            const reviewDone = revPage.show({ ws: 'card', scope: 'character', onCancelWithoutApply: onCancel, waitForClose: true });
+            await flushMicrotasks();
+            expect(onCancel).not.toHaveBeenCalled();
+
+            activeChar = { avatar: 'bob.png', name: 'Bob' };
+            revPage.onSnapshot();
+            await reviewDone;
+            expect(onCancel).toHaveBeenCalledTimes(1);
+            revPage.destroy();
+
+            // 3) undoTurn applies applying guard against concurrent double-click AND discards later pending turn's bus entries
+            let disk = { a: 'v0' };
+            let resolveUndo;
+            const undoMock = jest.fn(() => new Promise((r) => { resolveUndo = r; }));
+            const historyUndo = new Map();
+            let hSeq = 0;
+            const proposalTarget = {
+                id: 'preset',
+                label: 'Preset',
+                tone: 'preset',
+                proposalKinds: {
+                    'skill-author': {
+                        ...skillAuthor,
+                        inverseAvailable: false,
+                        targetHandler: {
+                            read: async () => ({ skill: 's' }),
+                            write: async () => {},
+                            describe: () => 's',
+                        },
+                    },
+                },
+                scopes: async () => ({ global: true }),
+                load: async () => ({ live: { ...disk }, target: { scope: 'global', id: 'p1' }, title: 'P1' }),
+                targetKey: (t) => t?.id || 'p1',
+                prompt: async () => 'sys',
+                tools: async () => [
+                    { type: 'function', function: { name: 'edit_a' } },
+                    { type: 'function', function: { name: 'propose_skill' } },
+                ],
+                isRead: () => false,
+                runRead: async () => ({}),
+                runEdit: async (call, live, helpers) => {
+                    if (call.name === 'edit_a') return { ...live, a: call.args.v };
+                    await helpers.propose({
+                        kind: 'skill-author',
+                        target: { type: 'skill-registry', name: 'later-skill', path: 'SKILL.md' },
+                        before: { skill: 'later-skill' },
+                        after: { skill: 'later-skill' },
+                        meta: { kind: 'create', skillName: 'later-skill', before: '', after: 'body' },
+                    });
+                    return live;
+                },
+                units: (live) => new Map([['a', { key: 'a', label: 'A', group: 'Fields', text: String(live.a), raw: live.a }]]),
+                rebuild: (base, ai, keys) => ({ ...base, ...(keys.includes('a') ? { a: ai.a } : {}) }),
+                commit: async (_t, _b, next, keys) => {
+                    const prev = { ...disk };
+                    disk = { ...next };
+                    return {
+                        applied: keys,
+                        skipped: [],
+                        failure: '',
+                        undo: async () => { await undoMock(); disk = prev; },
+                    };
+                },
+            };
+
+            const undoSessions = createMemorySessionStore();
+            let step = 0;
+            const undoPage = createIteratePage({
+                sessions: undoSessions,
+                layer: document.body,
+                iterateTargets: () => [proposalTarget],
+                snapshot: () => ({}),
+                settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+                history: {
+                    record: (entry) => {
+                        const id = `hu_${++hSeq}`;
+                        if (entry.undo) historyUndo.set(id, entry.undo);
+                        return id;
+                    },
+                    canUndo: (id) => historyUndo.has(id),
+                    undo: async (id) => { await historyUndo.get(id)?.(); historyUndo.delete(id); },
+                },
+                toast: jest.fn(),
+                reload: jest.fn(),
+                refreshBadges: jest.fn(),
+                source: {
+                    aiRequest: jest.fn(async () => {
+                        step++;
+                        if (step === 1) return { text: '', calls: [{ id: 'ea1', name: 'edit_a', args: { v: 'v1' } }] };
+                        if (step === 2) return { text: 'Turn 1', calls: [] };
+                        if (step === 3) return { text: '', calls: [{ id: 'ps2', name: 'propose_skill', args: {} }] };
+                        return { text: 'Turn 2', calls: [] };
+                    }),
+                },
+            });
+            document.body.appendChild(undoPage.el);
+            await undoPage.show({ ws: 'preset', scope: 'global' });
+            await flushMicrotasks();
+
+            const sendU = async (msg) => {
+                undoPage.el.querySelector('textarea.wb-input').value = msg;
+                undoPage.el.querySelector('button.wb-send').click();
+                await flushMicrotasks();
+                await flushMicrotasks();
+            };
+
+            // Turn 1 edits `a`, apply Turn 1; then Turn 2 creates a pending skill-author proposal
+            await sendU('change a');
+            undoPage.el.querySelector('.wb-chg-foot button.is-primary').click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(disk.a).toBe('v1');
+
+            await sendU('add skill');
+            const undoBtn = [...undoPage.el.querySelectorAll('.wb-chg button')].find(b => b.textContent.includes('Undo'));
+            expect(undoBtn).toBeTruthy();
+
+            // Double-click Undo rapidly -> applying guard ensures history.undo runs only once
+            undoBtn.click();
+            undoBtn.click();
+            await flushMicrotasks();
+            expect(undoMock).toHaveBeenCalledTimes(1);
+
+            resolveUndo();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(disk.a).toBe('v0');
+
+            // Later pending turn (Turn 2) is discarded and its proposal bus entry cleaned up
+            const [sSummary] = await undoSessions.list('iterate', { scope: 'global' });
+            const savedAfterUndo = await undoSessions.get(sSummary.id, { scope: 'global' });
+            expect(savedAfterUndo.turns[1].state).toBe('discarded');
+            expect(savedAfterUndo.turns[3].state).toBe('discarded');
+            expect(savedAfterUndo.turns[3].draft).toBeNull();
+            undoPage.destroy();
+        } finally {
+            if (savedLuker !== undefined) globalThis.Luker = savedLuker;
+        }
+    });
+
+    test('locks existing session pre-run via pendingSessions so rapid double-send and Enter cannot start duplicate runs', async () => {
+        const savedLuker = globalThis.Luker;
+        delete globalThis.Luker;
+        try {
+            const sessions = createMemorySessionStore();
+            const sessionA = await sessions.create({
+                kind: 'iterate',
+                ws: 'card',
+                scope: 'global',
+                title: 'Existing A',
+                turns: [{ role: 'user', text: 'A0', at: 1 }, { role: 'ai', text: 'A0 reply', at: 2 }],
+                messages: [{ role: 'user', content: 'A0' }, { role: 'assistant', content: 'A0 reply' }],
+            }, { scope: 'global' });
+            const sessionB = await sessions.create({
+                kind: 'iterate',
+                ws: 'card',
+                scope: 'global',
+                title: 'Existing B',
+                turns: [{ role: 'user', text: 'B0', at: 1 }, { role: 'ai', text: 'B0 reply', at: 2 }],
+                messages: [{ role: 'user', content: 'B0' }, { role: 'assistant', content: 'B0 reply' }],
+            }, { scope: 'global' });
+
+            let deferNextLoad = false;
+            let resolveDeferredLoad;
+            let sendLoadCalls = 0;
+            const target = {
+                id: 'card',
+                label: 'Card',
+                tone: 'card',
+                scopes: async () => ({ global: true }),
+                load: jest.fn(async () => {
+                    if (deferNextLoad) {
+                        sendLoadCalls += 1;
+                        return new Promise((resolve) => { resolveDeferredLoad = resolve; });
+                    }
+                    return { live: { description: 'Init' }, target: { scope: 'global', id: 'doc1' }, title: 'Doc 1' };
+                }),
+                targetKey: (t) => t?.id || 'doc1',
+                prompt: async () => 'sys',
+                tools: async () => [],
+                isRead: () => false,
+                runRead: async () => ({}),
+                runEdit: async (_c, l) => l,
+                units: () => new Map(),
+                rebuild: (_b, a) => a,
+                commit: async () => ({ applied: [], skipped: [], failure: '' }),
+            };
+
+            const aiRequest = jest.fn(async () => ({ text: 'Single reply', calls: [] }));
+            const page = createIteratePage({
+                sessions,
+                layer: document.body,
+                iterateTargets: () => [target],
+                snapshot: () => ({}),
+                settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+                history: { record: jest.fn(), canUndo: () => false, undo: jest.fn() },
+                toast: jest.fn(),
+                reload: jest.fn(),
+                refreshBadges: jest.fn(),
+                source: { aiRequest },
+            });
+            document.body.appendChild(page.el);
+            await page.show({ ws: 'card', scope: 'global' });
+            await flushMicrotasks();
+
+            const openA = () => [...page.el.querySelectorAll('.wb-sess-item')].find(b => b.textContent.includes('Existing A'));
+            const openB = () => [...page.el.querySelectorAll('.wb-sess-item')].find(b => b.textContent.includes('Existing B'));
+            openA().click();
+            await flushMicrotasks();
+
+            const textarea = page.el.querySelector('textarea.wb-input');
+            const sendBtn = page.el.querySelector('button.wb-send');
+            deferNextLoad = true;
+            textarea.value = 'Refine once';
+            sendBtn.click();
+
+            // Synchronously locked before target.load() settles
+            expect(sendBtn.disabled).toBe(true);
+            expect(textarea.disabled).toBe(true);
+
+            // Second click + Enter keydown must not start a duplicate send
+            sendBtn.click();
+            textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+            await flushMicrotasks();
+            expect(sendLoadCalls).toBe(1);
+            expect(aiRequest).not.toHaveBeenCalled();
+
+            // Switching to session B must remain unblocked; returning to session A keeps busy state
+            openB().click();
+            await flushMicrotasks();
+            expect(sendBtn.disabled).toBe(false);
+            expect(textarea.disabled).toBe(false);
+
+            openA().click();
+            await flushMicrotasks();
+            expect(sendBtn.disabled).toBe(true);
+            expect(textarea.disabled).toBe(true);
+
+            deferNextLoad = false;
+            resolveDeferredLoad({ live: { description: 'Init' }, target: { scope: 'global', id: 'doc1' }, title: 'Doc 1' });
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            expect(sendLoadCalls).toBe(1);
+            expect(aiRequest).toHaveBeenCalledTimes(1);
+            expect(sendBtn.disabled).toBe(false);
+            expect(textarea.disabled).toBe(false);
+            const updatedA = await sessions.get(sessionA.id, { scope: 'global' });
+            expect(updatedA.turns).toHaveLength(4);
+            expect(updatedA.turns[3].text).toBe('Single reply');
+            const untouchedB = await sessions.get(sessionB.id, { scope: 'global' });
+            expect(untouchedB.turns).toHaveLength(2);
+            page.destroy();
+        } finally {
+            if (savedLuker !== undefined) globalThis.Luker = savedLuker;
+        }
+    });
+
+    test('regenerate() holds applying across truncation, stages bus/draft mutation until store.update persists, bails on null update, and clears undoTurn note', async () => {
+        const savedLuker = globalThis.Luker;
+        delete globalThis.Luker;
+        try {
+            let disk = { a: 'v0' };
+            let diskSkill = { skill: 'old' };
+            const skillWriteSpy = jest.fn(async (_t, next) => { diskSkill = JSON.parse(JSON.stringify(next)); });
+            const commitSpy = jest.fn(async (_t, _b, next, keys) => {
+                const prev = { ...disk };
+                disk = { ...next };
+                return { applied: keys, skipped: [], failure: '', undo: async () => { disk = prev; } };
+            });
+            const target = {
+                id: 'preset',
+                label: 'Preset',
+                tone: 'preset',
+                proposalKinds: {
+                    'skill-author': {
+                        ...skillAuthor,
+                        inverseAvailable: true,
+                        targetHandler: {
+                            read: async () => JSON.parse(JSON.stringify(diskSkill)),
+                            write: skillWriteSpy,
+                            describe: () => 'skill:demo',
+                        },
+                    },
+                },
+                scopes: async () => ({ global: true }),
+                load: async () => ({ live: { ...disk }, target: { scope: 'global', id: 'p_reg' }, title: 'Preset Reg' }),
+                targetKey: (t) => t?.id || 'p_reg',
+                prompt: async () => 'sys',
+                tools: async () => [
+                    { type: 'function', function: { name: 'edit_a' } },
+                    { type: 'function', function: { name: 'propose_skill' } },
+                ],
+                isRead: () => false,
+                runRead: async () => ({}),
+                runEdit: async (call, live, helpers) => {
+                    if (call.name === 'edit_a') return { ...live, a: call.args.v };
+                    await helpers.propose({
+                        kind: 'skill-author',
+                        target: { type: 'skill-registry', name: 'demo', path: 'SKILL.md' },
+                        before: { skill: 'old' },
+                        after: { skill: 'new' },
+                        meta: { kind: 'content', skillName: 'demo', before: 'old', after: 'new' },
+                    });
+                    return live;
+                },
+                units: (live) => new Map([['a', { key: 'a', label: 'A', group: 'Fields', text: String(live.a), raw: live.a }]]),
+                rebuild: (base, ai, keys) => ({ ...base, ...(keys.includes('a') ? { a: ai.a } : {}) }),
+                commit: commitSpy,
+            };
+
+            const sessions = createMemorySessionStore();
+            const historyUndo = new Map();
+            let hSeq = 0;
+            const sentMessages = [];
+            let round = 0;
+            const aiRequest = jest.fn(async (_ws, { messages }) => {
+                sentMessages.push(JSON.parse(JSON.stringify(messages)));
+                round += 1;
+                if (round === 1) {
+                    return {
+                        text: '',
+                        calls: [
+                            { id: 'c1', name: 'edit_a', args: { v: 'v1' } },
+                            { id: 'c2', name: 'propose_skill', args: {} },
+                        ],
+                    };
+                }
+                if (round === 2) return { text: 'Initial proposal', calls: [] };
+                return { text: 'Regenerated answer', calls: [] };
+            });
+
+            const toast = jest.fn();
+            const page = createIteratePage({
+                sessions,
+                layer: document.body,
+                iterateTargets: () => [target],
+                snapshot: () => ({}),
+                settings: () => ({ builtinPrompt: false, reviewChanges: true }),
+                history: {
+                    record: (entry) => {
+                        const id = `hr_${++hSeq}`;
+                        if (entry.undo) historyUndo.set(id, entry.undo);
+                        return id;
+                    },
+                    canUndo: (id) => historyUndo.has(id),
+                    undo: async (id) => { await historyUndo.get(id)?.(); historyUndo.delete(id); },
+                },
+                toast,
+                reload: jest.fn(),
+                refreshBadges: jest.fn(),
+                source: { aiRequest },
+            });
+            document.body.appendChild(page.el);
+            await page.show({ ws: 'preset', scope: 'global' });
+            await flushMicrotasks();
+
+            const textarea = page.el.querySelector('textarea.wb-input');
+            const sendBtn = page.el.querySelector('button.wb-send');
+            textarea.value = 'Refine field a';
+            sendBtn.click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            // 1) Hold store.update pending during regenerate() on a pending turn:
+            //    applying lock must block concurrent delete/apply/regenerate, and rejection must preserve live bus & draft.
+            const origUpdate = sessions.update;
+            let rejectRegenUpdate;
+            let interceptedUpdates = 0;
+            sessions.update = jest.fn((id, patch, opts) => {
+                interceptedUpdates += 1;
+                return new Promise((_resolve, reject) => { rejectRegenUpdate = reject; });
+            });
+
+            const findRegenBtn = () => [...page.el.querySelectorAll('.wb-msg-acts button')].find(b => b.textContent.includes('Answer again'));
+            const findApplyBtn = () => [...page.el.querySelectorAll('.wb-chg-foot button')].find(b => b.textContent.includes('Apply selected'));
+            findRegenBtn().click();
+            await Promise.resolve();
+
+            expect(interceptedUpdates).toBe(1);
+            expect(page.el.querySelector('.wb-sess-del')?.disabled).toBe(true);
+
+            // Concurrent regenerate & apply while store.update is in flight must be ignored
+            findRegenBtn().click();
+            findApplyBtn().click();
+            await flushMicrotasks();
+            expect(interceptedUpdates).toBe(1);
+            expect(commitSpy).not.toHaveBeenCalled();
+
+            // Fail store.update: live proposal bus and turn draft must remain intact so Apply still commits both
+            sessions.update = origUpdate;
+            rejectRegenUpdate(new Error('storage offline'));
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(toast).toHaveBeenCalledWith(expect.stringContaining('storage offline'), expect.objectContaining({ error: true }));
+            expect(page.el.querySelector('.wb-sess-del')?.disabled).toBe(false);
+
+            findApplyBtn().click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            expect(disk.a).toBe('v1');
+            expect(skillWriteSpy).toHaveBeenCalledTimes(1);
+
+            // 2) Regenerate an applied turn: undoTurn runs, regenerate clears undoTurn's note, and re-sent user message has no undo note prepended
+            const preRegenSentCount = sentMessages.length;
+            sessions.update.mockClear();
+            findRegenBtn().click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            expect(disk.a).toBe('v0');
+            expect(diskSkill).toEqual({ skill: 'old' });
+            expect(sentMessages.length).toBeGreaterThan(preRegenSentCount);
+            const regenMessages = sentMessages[preRegenSentCount];
+            const lastUserMsg = regenMessages.filter(m => m.role === 'user').at(-1);
+            expect(lastUserMsg.content).toBe('Refine field a');
+            const clearingCall = sessions.update.mock.calls.find(([, patch]) => patch.note === '' && Array.isArray(patch.messages));
+            expect(clearingCall).toBeTruthy();
+
+            // 3) Regenerate when store.update returns null (concurrently deleted session): bail without overwriting input.value or calling send()
+            const aiCallsBeforeNull = aiRequest.mock.calls.length;
+            sessions.update = jest.fn(async () => null);
+            textarea.value = 'User draft must survive';
+            findRegenBtn().click();
+            await flushMicrotasks();
+            await flushMicrotasks();
+
+            expect(textarea.value).toBe('User draft must survive');
+            expect(aiRequest).toHaveBeenCalledTimes(aiCallsBeforeNull);
+            page.destroy();
+        } finally {
+            if (savedLuker !== undefined) globalThis.Luker = savedLuker;
+        }
     });
 });

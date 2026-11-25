@@ -6,6 +6,8 @@ import {
     normalizeLegacySession,
     importLegacySessionsOnce,
     cleanupLegacyGlobalSettingsSessions,
+    hasLegacyGlobalSettingsSessions,
+    hasLegacySettingsSessions,
 } from '../../public/scripts/workbench/model/legacy-import.js';
 import { SESSIONS_NAMESPACE, SESSIONS_INDEX_VERSION, sessionBodyNamespace } from '../../public/scripts/workbench/model/sessions.js';
 
@@ -33,6 +35,9 @@ function makeMockCtx({
 
     const ctx = {
         extensionSettings: clone(extensionSettings),
+        saveSettings: jest.fn(async (_delay, opts) => {
+            opts?.onSaved?.();
+        }),
         saveSettingsDebounced: jest.fn(),
         characters: [{ avatar: 'alice.png', name: 'Alice' }],
         characterId: 0,
@@ -85,6 +90,31 @@ function makeMockCtx({
 }
 
 describe('workbench legacy iter-studio import', () => {
+    test('preserves an unopened legacy conversation with its saved title', () => {
+        expect(normalizeLegacySession({
+            id: 's-unopened',
+            title: 'Lantern watch notes',
+            createdAt: 1000,
+            updatedAt: 2000,
+            pendingCount: 0,
+            messages: [],
+        }, { targetId: 'card', scope: 'character', scopeName: 'Lantern keeper' })).toEqual({
+            id: 'legacy_card_s-unopened',
+            legacyId: 's-unopened',
+            kind: 'iterate',
+            ws: 'card',
+            scope: 'character',
+            scopeName: 'Lantern keeper',
+            title: 'Lantern watch notes',
+            createdAt: 1000,
+            updatedAt: 2000,
+            pendingCount: 0,
+            messages: [],
+            turns: [],
+            importedFromLegacy: true,
+        });
+    });
+
     test('reads legacy messages (role, content, toolCalls, reasoning) from character, chat, and preset sidecars once and marks import flag', async () => {
         const chatTarget = { is_group: false, avatar_url: 'alice.png', file_name: 'chat1.jsonl' };
         const presetRef = { collection: 'openai', name: 'MyPreset' };
@@ -242,7 +272,7 @@ describe('workbench legacy iter-studio import', () => {
         expect(wbPreset.get(`${JSON.stringify(presetRef)}::${SESSIONS_NAMESPACE}`).legacyImported.preset).toBeTruthy();
     });
 
-    test('ignores corrupt, throwing, or missing legacy blobs gracefully without overwriting workbench state', async () => {
+    test('rejects invalid or failed legacy reads without overwriting workbench history', async () => {
         const presetRef = { collection: 'openai', name: 'BrokenPreset' };
         const { ctx, wbChar } = makeMockCtx({
             characterStates: {
@@ -264,44 +294,36 @@ describe('workbench legacy iter-studio import', () => {
             sessions: [{ id: 'keep_me', kind: 'iterate', ws: 'memory', scope: 'character', title: 'Keep', updatedAt: 123, turns: [] }],
         }));
 
-        const r1 = await importLegacySessionsOnce({
+        await expect(importLegacySessionsOnce({
             ctx,
             targetId: 'memory',
             scope: 'character',
             scopeOpts: { scope: 'character', avatar: 'alice.png' },
-        });
-        expect(r1.imported).toEqual([]);
+        })).rejects.toThrow(/memory_graph_schema_iter_history/);
         expect(wbChar.get(`alice.png::${SESSIONS_NAMESPACE}`).sessions.map(s => s.id)).toEqual(['keep_me']);
-        expect(wbChar.get(`alice.png::${SESSIONS_NAMESPACE}`).legacyImported.memory).toBeTruthy();
+        expect(wbChar.get(`alice.png::${SESSIONS_NAMESPACE}`).legacyImported).toBeUndefined();
 
-        const r2 = await importLegacySessionsOnce({
+        await expect(importLegacySessionsOnce({
             ctx,
             targetId: 'orch',
             scope: 'character',
             scopeOpts: { scope: 'character', avatar: 'alice.png' },
-        });
-        expect(r2.imported).toEqual([]);
+        })).rejects.toThrow(/bad2/);
         expect(wbChar.get(`alice.png::${SESSIONS_NAMESPACE}`).sessions.map(s => s.id)).toEqual(['keep_me']);
+        expect(wbChar.get(`alice.png::${SESSIONS_NAMESPACE}`).legacyImported).toBeUndefined();
 
-        // Missing or failing preset sidecar warns and does not throw
-        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-        const rawPreset = await readLegacySessions({ ctx, targetId: 'preset', scope: 'preset', target: presetRef });
-        expect(rawPreset).toEqual([]);
-        expect(warnSpy).toHaveBeenCalled();
-        warnSpy.mockClear();
-        const r3 = await importLegacySessionsOnce({
+        await expect(readLegacySessions({ ctx, targetId: 'preset', scope: 'preset', target: presetRef }))
+            .rejects.toThrow(/completion_preset_assistant_session.*bad json/);
+        await expect(importLegacySessionsOnce({
             ctx,
             targetId: 'preset',
             scope: 'preset',
             scopeOpts: { scope: 'preset', target: presetRef },
-        });
-        expect(r3.imported).toEqual([]);
-        expect(warnSpy).toHaveBeenCalled();
-        warnSpy.mockRestore();
+        })).rejects.toThrow(/completion_preset_assistant_session.*bad json/);
 
-        // normalizeLegacySession ignores stale blobs and null inputs
         expect(normalizeLegacySession(null, { targetId: 'card', scope: 'character' })).toBeNull();
-        expect(normalizeLegacySession({ id: 'x', messages: [] }, { targetId: 'card', scope: 'character' })).toBeNull();
+        expect(normalizeLegacySession({ id: 'x', messages: [] }, { targetId: 'card', scope: 'character' }))
+            .toMatchObject({ legacyId: 'x', messages: [], turns: [] });
     });
 
     test('supports memory_graph targetId, orchestrator mode-nested global bucket, cross-target same legacyId, and surfaces workbench_sessions errors', async () => {
@@ -341,20 +363,42 @@ describe('workbench legacy iter-studio import', () => {
         expect(mgRes.imported[0].title).toBe('Graph chat');
         expect(wbChat.get(`${JSON.stringify(chatTarget)}::${SESSIONS_NAMESPACE}`).legacyImported.memory_graph).toBeTruthy();
 
-        // 2) orchestrator mode-nested global bucket — migrated to GlobalState AND purged from extensionSettings
+        // 2) orchestrator mode-nested global bucket — migrated to GlobalState AND pruned after confirmed settings save
         const orchRes = await importLegacySessionsOnce({
             ctx,
             targetId: 'orch',
             scope: 'global',
             scopeOpts: { scope: 'global' },
         });
-        expect(orchRes.imported.map(s => s.title).sort()).toEqual(['Orch loop', 'Orch spec']);
+        expect(wbGlobal.get(SESSIONS_NAMESPACE).sessions.map(s => s.title).sort()).toEqual(['Orch loop', 'Orch spec']);
         expect(wbGlobal.get(SESSIONS_NAMESPACE).legacyImported.orch).toBeTruthy();
         expect(ctx.extensionSettings.orchestrator.iter_studio_global_sessions).toBeUndefined();
-        expect(ctx.saveSettingsDebounced).toHaveBeenCalled();
+        expect(ctx.saveSettings).toHaveBeenCalled();
         for (const s of orchRes.imported) {
             expect(wbGlobal.get(sessionBodyNamespace(s.id))?.turns).toHaveLength(1);
         }
+
+        // 2b) unconfirmed settings save rolls back pruning and surfaces storage-error
+        const unconfirmed = makeMockCtx({
+            extensionSettings: {
+                orchestrator: {
+                    iter_studio_global_sessions: {
+                        spec: { o1: { id: 'o1', title: 'Orch spec', messages: [{ role: 'user', content: 'Tune spec' }] } },
+                    },
+                },
+            },
+        });
+        unconfirmed.ctx.saveSettings = jest.fn(async () => {});
+        await expect(importLegacySessionsOnce({
+            ctx: unconfirmed.ctx,
+            targetId: 'orch',
+            scope: 'global',
+            scopeOpts: { scope: 'global' },
+        })).rejects.toMatchObject({ code: 'storage-error' });
+        expect(unconfirmed.wbGlobal.get(SESSIONS_NAMESPACE).legacyImported.orch).toBeTruthy();
+        expect(unconfirmed.ctx.extensionSettings.orchestrator.iter_studio_global_sessions).toEqual({
+            spec: { o1: { id: 'o1', title: 'Orch spec', messages: [{ role: 'user', content: 'Tune spec' }] } },
+        });
 
         // 3) same legacyId 's1' in both card and memory under same character scope does NOT collide
         const cardRes = await importLegacySessionsOnce({
@@ -424,7 +468,7 @@ describe('workbench legacy iter-studio import', () => {
         const noop = await cleanupLegacyGlobalSettingsSessions(cleanMock.ctx);
         expect(noop.cleaned).toEqual([]);
         expect(cleanMock.ctx.getGlobalState).not.toHaveBeenCalled();
-        expect(cleanMock.ctx.saveSettingsDebounced).not.toHaveBeenCalled();
+        expect(cleanMock.ctx.saveSettings).not.toHaveBeenCalled();
 
         // 2) Legacy memory_graph global bucket present + orchestrator already marked imported from an earlier version -> both purged from settings
         const dirtyMock = makeMockCtx({
@@ -451,8 +495,187 @@ describe('workbench legacy iter-studio import', () => {
         expect(cleanedRes.cleaned.sort()).toEqual(['memory', 'orch']);
         expect(dirtyMock.ctx.extensionSettings.memory_graph.schema_iter_global_sessions).toBeUndefined();
         expect(dirtyMock.ctx.extensionSettings.orchestrator.iter_studio_global_sessions).toBeUndefined();
-        expect(dirtyMock.ctx.saveSettingsDebounced).toHaveBeenCalled();
+        expect(dirtyMock.ctx.saveSettings).toHaveBeenCalled();
         expect(dirtyMock.wbGlobal.get(SESSIONS_NAMESPACE).sessions.map(s => s.id)).toEqual(['legacy_memory_m1']);
         expect(dirtyMock.wbGlobal.get(sessionBodyNamespace('legacy_memory_m1'))?.turns).toHaveLength(1);
+    });
+
+    test('imports unmigrated LEGACY_SETTINGS before pruning even when legacyImported was already set, and ignores character-only iterStudioV2 in global check', async () => {
+        const charOnlyMock = makeMockCtx({
+            extensionSettings: {
+                orchestrator: {
+                    iterStudioV2: {
+                        spec: {
+                            character_alice: { s1: { id: 's1', title: 'Char only', messages: [{ role: 'user', content: 'hi' }] } },
+                        },
+                    },
+                },
+            },
+        });
+        expect(hasLegacyGlobalSettingsSessions(charOnlyMock.ctx, 'orch')).toBe(false);
+
+        const unmigratedMock = makeMockCtx({
+            extensionSettings: {
+                orchestrator: {
+                    iterStudioV2: {
+                        spec: {
+                            global: { g1: { id: 'g1', title: 'Global v2', messages: [{ role: 'user', content: 'migrate me' }] } },
+                        },
+                    },
+                },
+            },
+        });
+        unmigratedMock.wbGlobal.set(SESSIONS_NAMESPACE, {
+            version: SESSIONS_INDEX_VERSION,
+            sessions: [],
+            legacyImported: { orch: 1700000000000 },
+        });
+        expect(hasLegacyGlobalSettingsSessions(unmigratedMock.ctx, 'orch')).toBe(true);
+
+        const res = await importLegacySessionsOnce({
+            ctx: unmigratedMock.ctx,
+            targetId: 'orch',
+            scope: 'global',
+            scopeOpts: { scope: 'global' },
+            scopeName: 'Global',
+        });
+        expect(res.imported.map(s => s.id)).toEqual(['legacy_orch_g1']);
+        expect(unmigratedMock.wbGlobal.get(SESSIONS_NAMESPACE).sessions.map(s => s.id)).toEqual(['legacy_orch_g1']);
+        expect(unmigratedMock.ctx.extensionSettings.orchestrator.iterStudioV2).toBeUndefined();
+    });
+
+    test('hasLegacySettingsSessions detects character-scoped unified_cea_editor_sessions and iterStudioV2 per avatar without false positives on other characters', () => {
+        const { ctx } = makeMockCtx({
+            extensionSettings: {
+                character_editor_assistant: {
+                    unified_cea_editor_sessions: {
+                        'char_alice.png': {
+                            s1: { id: 's1', title: 'Alice CEA', messages: [{ role: 'user', content: 'hi' }] },
+                        },
+                    },
+                },
+                orchestrator: {
+                    iterStudioV2: {
+                        spec: {
+                            'character_alice.png': {
+                                o1: { id: 'o1', title: 'Alice Orch', messages: [{ role: 'user', content: 'hi' }] },
+                            },
+                        },
+                    },
+                },
+            },
+        });
+
+        expect(hasLegacySettingsSessions(ctx, 'card', 'character', 'alice.png')).toBe(true);
+        expect(hasLegacySettingsSessions(ctx, 'card', 'character', 'bob.png')).toBe(false);
+        expect(hasLegacySettingsSessions(ctx, 'orch', 'character', 'alice.png')).toBe(true);
+        expect(hasLegacySettingsSessions(ctx, 'orch', 'character', 'bob.png')).toBe(false);
+        expect(hasLegacySettingsSessions(ctx, 'orch', 'global')).toBe(false);
+    });
+
+    test('importLegacySessionsOnce resets added across CAS 409 retries when another writer completes the import first', async () => {
+        const { ctx, wbChar } = makeMockCtx({
+            characterStates: {
+                'alice.png::character_editor_assistant_iter_sessions': {
+                    sessions: {
+                        s1: { id: 's1', title: 'Race session', messages: [{ role: 'user', content: 'hello' }] },
+                    },
+                },
+            },
+        });
+
+        const baseUpdate = ctx.updateCharacterState.getMockImplementation();
+        let indexAttempt = 0;
+        ctx.updateCharacterState = jest.fn(async (avatar, ns, updater) => {
+            if (ns !== SESSIONS_NAMESPACE) {
+                return baseUpdate(avatar, ns, updater);
+            }
+            // Simulate a 409 retry: attempt 1 computes fresh additions against empty state,
+            // then a concurrent writer completes the import before attempt 2 runs.
+            indexAttempt += 1;
+            const firstDraft = await updater({});
+            expect(firstDraft?.sessions?.map(s => s.id)).toEqual(['legacy_card_s1']);
+
+            const concurrentState = {
+                version: SESSIONS_INDEX_VERSION,
+                sessions: firstDraft.sessions,
+                legacyImported: { card: 1700000000001 },
+                legacyImportedSettings: { card: 1700000000001 },
+            };
+            wbChar.set(`${avatar}::${ns}`, concurrentState);
+            const secondDraft = await updater(JSON.parse(JSON.stringify(concurrentState)));
+            expect(secondDraft).toBeNull();
+            return { ok: true, state: concurrentState, updated: false };
+        });
+
+        const res = await importLegacySessionsOnce({
+            ctx,
+            targetId: 'card',
+            scope: 'character',
+            scopeOpts: { scope: 'character', avatar: 'alice.png' },
+            scopeName: 'Alice',
+        });
+
+        expect(indexAttempt).toBe(1);
+        expect(res.imported).toEqual([]);
+        expect(res.alreadyImported).toBe(true);
+    });
+
+    test('legacy settings scope checks and reads stay strictly scoped to targets that own each scope bucket', async () => {
+        for (const memBucket of [{}, { s1: { id: 's1', title: 'Global schema', messages: [{ role: 'user', content: 'hi' }] } }, 'corrupt']) {
+            const { ctx } = makeMockCtx({
+                extensionSettings: {
+                    memory_graph: { iterStudioV2Schema: memBucket },
+                },
+            });
+            expect(hasLegacySettingsSessions(ctx, 'memory', 'character', 'alice.png')).toBe(false);
+            expect(hasLegacySettingsSessions(ctx, 'memory', 'global')).toBe(true);
+            expect(hasLegacyGlobalSettingsSessions(ctx, 'memory')).toBe(true);
+
+            const charImport = await importLegacySessionsOnce({
+                ctx,
+                targetId: 'memory',
+                scope: 'character',
+                scopeOpts: { scope: 'character', avatar: 'alice.png' },
+                scopeName: 'Alice',
+            });
+            expect(charImport.imported).toEqual([]);
+            expect(ctx.extensionSettings.memory_graph.iterStudioV2Schema).toEqual(memBucket);
+        }
+
+        for (const cardBucket of [
+            {},
+            { 'char_alice.png': { c1: { id: 'c1', title: 'Alice card', messages: [{ role: 'user', content: 'hi' }] } } },
+            'corrupt',
+        ]) {
+            const { ctx } = makeMockCtx({
+                extensionSettings: {
+                    character_editor_assistant: { unified_cea_editor_sessions: cardBucket },
+                },
+            });
+            expect(hasLegacyGlobalSettingsSessions(ctx, 'card')).toBe(false);
+            expect(hasLegacySettingsSessions(ctx, 'card', 'global')).toBe(false);
+            expect(hasLegacySettingsSessions(ctx, 'card', 'character', 'alice.png')).toBe(true);
+
+            const globalImport = await importLegacySessionsOnce({
+                ctx,
+                targetId: 'card',
+                scope: 'global',
+                scopeOpts: { scope: 'global' },
+                scopeName: 'Global',
+            });
+            expect(globalImport.imported).toEqual([]);
+            expect(ctx.extensionSettings.character_editor_assistant.unified_cea_editor_sessions).toEqual(cardBucket);
+        }
+
+        const { ctx: presetCtx } = makeMockCtx({
+            extensionSettings: {
+                character_editor_assistant: { unified_cea_editor_sessions: {} },
+                memory_graph: { iterStudioV2Schema: {} },
+            },
+        });
+        expect(hasLegacyGlobalSettingsSessions(presetCtx, 'preset')).toBe(false);
+        expect(hasLegacySettingsSessions(presetCtx, 'preset', 'global')).toBe(false);
+        expect(hasLegacySettingsSessions(presetCtx, 'preset', 'character', 'alice.png')).toBe(false);
     });
 });

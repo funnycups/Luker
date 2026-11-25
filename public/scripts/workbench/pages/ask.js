@@ -79,6 +79,7 @@ export function createAskPage(app) {
     let pendingNewSelection = -1;
     let refreshVersion = 0;
     const activeRuns = new Map();
+    const pendingSessions = new Set();
     let sideOpen = false;
     let deleting = false;
     let counts = null;
@@ -133,7 +134,10 @@ export function createAskPage(app) {
     }
 
     function currentBusy() {
-        return Boolean((session?.id && activeRunForSession(session.id)) || (!session && pendingNewSelection === selectionVersion));
+        return Boolean(
+            (session?.id && (activeRunForSession(session.id) || pendingSessions.has(session.id)))
+            || (!session && pendingNewSelection === selectionVersion),
+        );
     }
 
     function grow() {
@@ -393,7 +397,7 @@ export function createAskPage(app) {
     }
 
     async function editQuestion(i) {
-        if (!session) return;
+        if (!session || currentBusy()) return;
         const text = session.turns[i].text;
         const created = await forkAt(i);
         if (!created) return;
@@ -410,14 +414,23 @@ export function createAskPage(app) {
         const q = turns[turns.length - 2];
         if (currentBusy() || !q || q.role !== 'user') return;
         const scope = scopeOf(session);
+        pendingSessions.add(targetId);
+        paintOpts();
+        let readyToSend = false;
         try {
             const updated = await store.update(targetId, { turns: turns.slice(0, -2) }, scope);
-            if (version !== selectionVersion || session?.id !== targetId) return;
-            if (updated) session = updated;
-            input.value = q.text;
-            await send();
+            if (!updated || version !== selectionVersion || session?.id !== targetId) return;
+            session = updated;
+            readyToSend = true;
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
+        } finally {
+            pendingSessions.delete(targetId);
+            paintOpts();
+        }
+        if (readyToSend) {
+            input.value = q.text;
+            await send();
         }
     }
 
@@ -497,10 +510,11 @@ export function createAskPage(app) {
         const startingSession = session;
         const ownerScope = startingSession ? scopeOf(startingSession) : currentScope();
         const stillViewingStart = () => selection === selectionVersion && session === startingSession;
-        if (!startingSession) pendingNewSelection = selection;
+        let ownerId = startingSession?.id || '';
+        if (ownerId) pendingSessions.add(ownerId);
+        else pendingNewSelection = selection;
         paintOpts();
 
-        let ownerId = startingSession?.id || '';
         let runId = '';
         let controller = null;
         try {
@@ -520,11 +534,13 @@ export function createAskPage(app) {
 
             const owner = startingSession || await store.create({ kind: 'ask', title: titleFrom(question) }, ownerScope);
             ownerId = owner.id;
+            pendingSessions.add(ownerId);
             sessionScopes.set(ownerId, ownerScope);
             if (pendingNewSelection === selection) pendingNewSelection = -1;
             if (!startingSession && stillViewingStart()) session = owner;
 
-            const started = (await store.get(ownerId, ownerScope)) || owner;
+            const started = await store.get(ownerId, ownerScope);
+            if (!started) return;
             const saveTo = async (patch) => {
                 const updated = await store.update(ownerId, patch, ownerScope);
                 if (updated) {
@@ -540,7 +556,8 @@ export function createAskPage(app) {
             };
 
             const priorTurns = Array.isArray(started.turns) ? started.turns : [];
-            await saveTo({ turns: [...priorTurns, { role: 'user', text: question, at: Date.now() }] });
+            const saved = await saveTo({ turns: [...priorTurns, { role: 'user', text: question, at: Date.now() }] });
+            if (!saved) return;
             if (session?.id === ownerId && input.value.trim() === question) {
                 input.value = '';
                 grow();
@@ -550,6 +567,7 @@ export function createAskPage(app) {
             controller = new AbortController();
             const run = { runId, sessionId: ownerId, abort: controller, steps: [] };
             activeRuns.set(runId, run);
+            pendingSessions.delete(ownerId);
             if (session?.id === ownerId) {
                 paintHead();
                 paintBody();
@@ -594,6 +612,7 @@ export function createAskPage(app) {
             app.toast(String(err?.message || err), { error: true });
         } finally {
             if (pendingNewSelection === selection) pendingNewSelection = -1;
+            if (ownerId) pendingSessions.delete(ownerId);
             if (runId) activeRuns.delete(runId);
             await refreshRecent();
             paintHead();
@@ -613,13 +632,13 @@ export function createAskPage(app) {
         const nextKey = scopeKey(nextScope);
         if (nextKey === activeScopeKey) return;
         activeScopeKey = nextKey;
+        selectionVersion++;
         if (session && scopeKey(scopeOf(session)) !== nextKey) {
-            selectionVersion++;
             session = null;
-            if (fetchRecent) paintBody();
         }
         recentSessions = [];
         if (!fetchRecent) return;
+        paintBody();
         paintHead();
         await refreshRecent();
         if (activeScopeKey === nextKey) paintHead();
@@ -657,6 +676,7 @@ export function createAskPage(app) {
         destroy() {
             for (const run of activeRuns.values()) run.abort?.abort();
             activeRuns.clear();
+            pendingSessions.clear();
         },
     };
 }

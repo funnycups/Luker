@@ -14,13 +14,16 @@ import { i18n, i18nFormat, listSeparator } from '../i18n.js';
 import { h, put, clear, relativeTime, copyText } from '../../lens-shared/util.js';
 import { confirmDialog } from '../../lens-shared/ui.js';
 import { icon } from '../icons.js';
-import { button, iconButton, checkRow, segmented, dot, msgActions } from '../ui/components.js';
+import { button, iconButton, checkRow, segmented, dot, msgActions, loading } from '../ui/components.js';
 import { renderMarkdown } from '../ui/markdown.js';
 import { changeList } from '../ui/change-list.js';
-import { approvalMatches } from '../model/units.js';
+import { approvalMatches, diffUnits } from '../model/units.js';
+import { same } from '../model/patch.js';
 import {
     runIterateTurn,
     createIterateBus,
+    serializeIterationDraft,
+    restoreIterationDraft,
     buildTurnChanges,
     commitTurnBatch,
     wrapperPrompt,
@@ -28,8 +31,9 @@ import {
     trimMessages,
 } from '../model/iterate.js';
 import { groupSessions, titleFrom, computePendingCount, toSessionSummary } from '../model/sessions.js';
-import { importLegacySessionsOnce, hasLegacyGlobalSettingsSessions } from '../model/legacy-import.js';
+import { importLegacySessionsOnce, hasLegacySettingsSessions } from '../model/legacy-import.js';
 import { isReplayableIterationMessage } from '../../iteration-library/iter-message-filter.js';
+import { attachZoomOverlay } from '../../iteration-library/zoom-overlay.js';
 import { withActivityLease } from '../../activity-guard.js';
 
 const DEFAULT_CHIPS = {
@@ -94,6 +98,92 @@ const SCOPE_ORDER = ['character', 'preset', 'chat', 'global'];
 
 const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
 
+function createSessionDraftStore() {
+    /** @type {Map<string, Map<number, object>>} */
+    const bySession = new Map();
+    return {
+        get(sessionId, turnIndex) {
+            return bySession.get(sessionId)?.get(turnIndex) || null;
+        },
+        set(sessionId, turnIndex, draft) {
+            let map = bySession.get(sessionId);
+            if (!map) {
+                map = new Map();
+                bySession.set(sessionId, map);
+            }
+            map.set(turnIndex, draft);
+        },
+        deleteTurn(sessionId, turnIndex) {
+            const map = bySession.get(sessionId);
+            if (!map) return;
+            map.delete(turnIndex);
+            if (map.size === 0) bySession.delete(sessionId);
+        },
+        deleteSession(sessionId) {
+            bySession.delete(sessionId);
+        },
+    };
+}
+
+function createReviewLifetimeController({ onCancelError }) {
+    let active = null;
+
+    function create(options) {
+        let resolve;
+        const promise = new Promise(done => { resolve = done; });
+        return {
+            fn: typeof options.onCancelWithoutApply === 'function' ? options.onCancelWithoutApply : null,
+            owner: null,
+            sessionId: options.sessionId || '',
+            cancellation: null,
+            promise,
+            resolve,
+        };
+    }
+
+    function fireCancelHook(review = active) {
+        if (!review) return;
+        if (!review.cancellation) {
+            const fn = review.fn;
+            review.fn = null;
+            review.cancellation = Promise.resolve().then(() => fn?.()).catch(err => {
+                onCancelError?.(err);
+            });
+        }
+        return review.cancellation;
+    }
+
+    async function complete(review = active) {
+        if (!review) return;
+        if (active === review) active = null;
+        await fireCancelHook(review);
+        review.resolve();
+    }
+
+    return {
+        get current() { return active; },
+        set current(review) { active = review; },
+        create,
+        complete,
+        suppressCancel(sessionId) {
+            if (active?.sessionId === sessionId) active.fn = null;
+        },
+        bindSession(owner, sessionId) {
+            if (active && !active.sessionId && same(active.owner, owner)) {
+                active.sessionId = sessionId;
+            }
+        },
+    };
+}
+
+function shallowTupleEqual(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+        if (!Object.is(a[i], b[i])) return false;
+    }
+    return true;
+}
+
 export function createIteratePage(app) {
     const store = app.sessions;
     const sess = h('aside', { class: 'wb-sess' });
@@ -113,12 +203,14 @@ export function createIteratePage(app) {
     const chat = h('section', { class: 'wb-chat' }, head, body, composer);
     const previewPane = h('aside', { class: 'wb-iter-preview', hidden: true });
     const el = h('div', { class: 'wb-page is-split' }, sess, chat, previewPane);
+    const detachDiffOverlay = attachZoomOverlay(previewPane, { namespace: '.workbench_iteration_diff', i18n });
 
     let ws = '';
     let scope = 'character';
     let userPickedScope = false;
     let scopesByTarget = {};
     let session = null;
+    let previewOpen = false;
     let recentSessions = [];
     const sessionScopes = new Map();
     let selectionVersion = 0;
@@ -129,34 +221,72 @@ export function createIteratePage(app) {
     let activeScopeKey = '';
     let loadedSessionsScopeKey = '';
     const activeRuns = new Map();
+    const pendingSessions = new Set();
     const applying = new Set();
     const deleting = new Set();
     let clearing = false;
     const importedScopeTargets = new Set();
+    const importingScopeTargets = new Map();
+    let previewDeps = null;
 
     // Saved copies per target+scope key: { base, target, title }
     const work = new Map();
-    // Pending drafts per session id: { base, ai, target, title, workKey, ws, bus, changes, proposalIds }
-    const drafts = new Map();
+    // Working copies belong to individual turns; pending turns share their session's bus.
+    const draftStore = createSessionDraftStore();
+    const draftOf = (id, index) => draftStore.get(id, index);
+    const hasPendingDecision = owner => owner?.turns.some((_turn, index) => draftOf(owner.id, index)?.decision);
+
+    function latestDraft(owner = session) {
+        if (!owner) return null;
+        const run = activeRunForSession(owner.id);
+        if (run) return draftOf(owner.id, run.turnIndex);
+        const index = owner.turns.findLastIndex(turn => turn.state === 'pending');
+        return index < 0 ? null : draftOf(owner.id, index);
+    }
+
+    function restoreSessionDrafts(owner) {
+        const target = targetById(owner.ws);
+        if (!target) return;
+        const restored = [];
+        for (const [index, turn] of owner.turns.entries()) {
+            if (turn.state !== 'pending' || !turn.draft) continue;
+            const draft = draftOf(owner.id, index) || {
+                ...restoreIterationDraft(turn.draft, { proposalKinds: target.proposalKinds, sessionId: owner.id, turnIndex: index }),
+                changes: turn.changes,
+            };
+            if (targetIdFor(draft.target, target) !== owner.targetId) {
+                throw new Error(`Draft target differs from session "${owner.id}" turn[${index}]`);
+            }
+            restored.push([index, draft]);
+        }
+        const bus = restored.at(-1)?.[1].bus || null;
+        for (const [index, draft] of restored) {
+            draft.bus = bus;
+            draftStore.set(owner.id, index, draft);
+        }
+    }
+
+    function capturePendingDrafts(id, turns) {
+        return turns.map((turn, index) => {
+            const draft = draftOf(id, index);
+            return turn.state === 'pending' && draft
+                ? { ...turn, draft: serializeIterationDraft(draft) }
+                : turn;
+        });
+    }
 
     let withReply = true;
     let sessOpen = false;
     let loadError = '';
-    let pendingCancelHook = null;
+    const reviews = createReviewLifetimeController({
+        onCancelError: (err) => {
+            app.toast(i18nFormat('Could not cancel this review: ${0}', String(err?.message || err)), { error: true });
+        },
+    });
     let pendingLaunch = null;
 
-    async function firePendingCancelHook() {
-        const hook = pendingCancelHook;
-        pendingCancelHook = null;
-        if (!hook || hook.applied || typeof hook.fn !== 'function') return;
-        try {
-            await hook.fn();
-        } catch (err) {
-            console.warn('[workbench/iterate] onCancelWithoutApply failed:', err);
-        }
-    }
-
     const getCtx = () => globalThis.Luker?.getContext?.() ?? globalThis.lukerContext ?? null;
+    const hasNativeContext = () => typeof globalThis.Luker?.getContext === 'function' || Boolean(globalThis.lukerContext);
     const getTargets = () => app.iterateTargets?.() || [];
     const targetById = (id) => (id ? getTargets().find(t => t.id === id) || null : null);
     const selectDefaultTarget = () => targetById(ws) || getTargets()[0] || null;
@@ -167,26 +297,30 @@ export function createIteratePage(app) {
     };
     const charName = () => app.snapshot()?.card?.name || app.snapshot()?.chat?.character?.name || '';
     const charAvatar = () => {
+        if (hasNativeContext()) {
+            const ctx = getCtx();
+            return ctx?.groupId ? '' : String(ctx?.characters?.[ctx?.characterId]?.avatar || '').trim();
+        }
         const snap = app.snapshot();
-        const ctx = getCtx();
-        return String(snap?.chat?.character?.avatar || snap?.card?.avatar || ctx?.characters?.[ctx?.characterId]?.avatar || '').trim();
+        return String(snap?.chat?.character?.avatar || snap?.card?.avatar || '').trim();
     };
     const presetRef = () => {
+        if (hasNativeContext()) {
+            const selected = getCtx()?.presets?.getSelected?.('openai');
+            return selected?.name ? selected : null;
+        }
         const snap = app.snapshot();
-        const ctx = getCtx();
         if (snap?.preset?.ref?.name) return snap.preset.ref;
-        const selected = ctx?.presets?.getSelected?.('openai');
-        if (selected?.name) return selected;
         return snap?.preset?.name ? { collection: 'openai', name: snap.preset.name } : null;
     };
     const presetName = () => String(presetRef()?.name || '');
     const chatTarget = () => {
-        const snap = app.snapshot();
-        const ctx = getCtx();
-        return snap?.chat?.target || ctx?.resolveChatStateTarget?.() || null;
+        if (hasNativeContext()) return getCtx()?.resolveChatStateTarget?.() || null;
+        return app.snapshot()?.chat?.target || null;
     };
+    const chatIdentity = () => chatTarget() || (hasNativeContext() ? '' : app.snapshot()?.chat?.chatId || '');
     const chatLabel = () => String(app.snapshot()?.chat?.label || '');
-    const hasChatScope = () => Boolean(chatTarget() || app.snapshot()?.chat?.chatId || getCtx()?.getCurrentChatId?.());
+    const hasChatScope = () => Boolean(chatIdentity());
 
     // ----- scope helpers --------------------------------------------------
     function rawScopesFor(w = ws) {
@@ -288,7 +422,11 @@ export function createIteratePage(app) {
     }
 
     const currentRun = () => (session?.id ? activeRunForSession(session.id) : null);
-    const currentBusy = () => Boolean(currentRun() || (!session && pendingNewSelection === selectionVersion));
+    const currentBusy = () => Boolean(
+        currentRun()
+        || (session?.id && pendingSessions.has(session.id))
+        || (!session && pendingNewSelection === selectionVersion),
+    );
 
     // ----- sessions -------------------------------------------------------
     const isVisible = () => Boolean(el.isConnected && app.isOpen?.() !== false);
@@ -315,6 +453,25 @@ export function createIteratePage(app) {
 
         const importKey = currentScopeKey(t.id, scope);
         const ctx = getCtx();
+        const runImportOnce = async (prefetchedState = undefined) => {
+            if (!ctx || importedScopeTargets.has(importKey)) return null;
+            let importing = importingScopeTargets.get(importKey);
+            if (!importing) {
+                importing = importLegacySessionsOnce({
+                    ctx,
+                    targetId: t.id,
+                    scope,
+                    scopeOpts: sOpts,
+                    scopeName: scopeDisplayName(scope),
+                    ...(prefetchedState !== undefined ? { prefetchedState } : {}),
+                }).then((res) => {
+                    importedScopeTargets.add(importKey);
+                    return res;
+                }).finally(() => importingScopeTargets.delete(importKey));
+                importingScopeTargets.set(importKey, importing);
+            }
+            return await importing;
+        };
 
         try {
             let list;
@@ -323,43 +480,28 @@ export function createIteratePage(app) {
                 if (ver !== refreshVersion) return;
                 const needsImport = !importedScopeTargets.has(importKey)
                     && ctx
-                    && (!meta.legacyImported?.[t.id] || (scope === 'global' && hasLegacyGlobalSettingsSessions(ctx, t.id)));
-                importedScopeTargets.add(importKey);
+                    && (!meta.legacyImported?.[t.id] || hasLegacySettingsSessions(ctx, t.id, scope, sOpts.avatar || ''));
                 if (needsImport) {
                     try {
-                        const imp = await importLegacySessionsOnce({
-                            ctx,
-                            targetId: t.id,
-                            scope,
-                            scopeOpts: sOpts,
-                            scopeName: scopeDisplayName(scope),
-                            prefetchedState: meta.state,
-                        });
+                        const imp = await runImportOnce(meta.state);
                         if (ver !== refreshVersion) return;
                         if (imp?.imported?.length) {
                             meta = await store.listWithMeta('iterate', sOpts);
                             if (ver !== refreshVersion) return;
                         }
                     } catch (err) {
-                        console.warn('[workbench/iterate] legacy import failed:', err);
+                        app.toast(String(err?.message || err), { error: true });
                     }
+                } else if (ctx) {
+                    importedScopeTargets.add(importKey);
                 }
                 list = meta.sessions;
             } else {
-                if (!importedScopeTargets.has(importKey)) {
-                    importedScopeTargets.add(importKey);
-                    if (ctx) {
-                        try {
-                            await importLegacySessionsOnce({
-                                ctx,
-                                targetId: t.id,
-                                scope,
-                                scopeOpts: sOpts,
-                                scopeName: scopeDisplayName(scope),
-                            });
-                        } catch (err) {
-                            console.warn('[workbench/iterate] legacy import failed:', err);
-                        }
+                if (!importedScopeTargets.has(importKey) && ctx) {
+                    try {
+                        await runImportOnce();
+                    } catch (err) {
+                        app.toast(String(err?.message || err), { error: true });
                     }
                 }
                 list = await store.list('iterate', sOpts);
@@ -445,11 +587,11 @@ export function createIteratePage(app) {
             activeRunForSession(id)?.abort?.abort();
             const isCurrent = session?.id === id;
             if (isCurrent) {
-                void firePendingCancelHook();
+                void reviews.complete();
             }
             const sOpts = sessionScopes.get(id) || scopeOptsFor(targetSession.scope) || { scope: 'global' };
             await store.remove(id, sOpts);
-            drafts.delete(id);
+            draftStore.deleteSession(id);
             sessionScopes.delete(id);
             recentSessions = recentSessions.filter(x => x.id !== id);
             if (isCurrent) {
@@ -490,7 +632,7 @@ export function createIteratePage(app) {
             }
             const clearedCurrent = Boolean(session?.id && idSet.has(session.id));
             if (clearedCurrent) {
-                void firePendingCancelHook();
+                void reviews.complete();
             }
             const sOpts = scopeOptsFor() || { scope: 'global' };
             if (typeof store.removeMany === 'function') {
@@ -501,7 +643,7 @@ export function createIteratePage(app) {
                 }
             }
             for (const id of ids) {
-                drafts.delete(id);
+                draftStore.deleteSession(id);
                 sessionScopes.delete(id);
             }
             recentSessions = recentSessions.filter(x => !idSet.has(x.id));
@@ -524,7 +666,7 @@ export function createIteratePage(app) {
     }
 
     function newChat() {
-        void firePendingCancelHook();
+        void reviews.complete();
         selectionVersion++;
         session = null;
         sessOpen = false;
@@ -533,7 +675,7 @@ export function createIteratePage(app) {
     }
 
     async function openSession(id) {
-        void firePendingCancelHook();
+        void reviews.complete();
         const version = ++selectionVersion;
         const sOpts = sessionScopes.get(id) || scopeOptsFor() || { scope: 'global' };
         let loaded = store ? null : (recentSessions.find(x => x.id === id) || null);
@@ -548,6 +690,12 @@ export function createIteratePage(app) {
             }
         }
         if (!loaded || version !== selectionVersion) return;
+        try {
+            restoreSessionDrafts(loaded);
+        } catch (err) {
+            app.toast(String(err?.message || err), { error: true });
+            return;
+        }
         session = loaded;
         if (loaded.ws && targetById(loaded.ws)) ws = loaded.ws;
         if (loaded.scope) {
@@ -575,7 +723,7 @@ export function createIteratePage(app) {
             controlsSlot.hidden = true;
             return;
         }
-        const currentDraft = session?.id ? drafts.get(session.id) : null;
+        const currentDraft = latestDraft();
         const w = work.get(keyOf());
         const live = currentDraft?.ai ?? w?.base ?? null;
         try {
@@ -598,27 +746,46 @@ export function createIteratePage(app) {
     }
 
     function paintPreview() {
-        clear(previewPane);
         const t = selectDefaultTarget();
-        if (app.isCompact?.() || !t || typeof t.renderPreview !== 'function' || blocked() || disabled()) {
+        if ((app.isCompact?.() && !previewOpen) || !t || typeof t.renderPreview !== 'function' || blocked() || disabled()) {
+            clear(previewPane);
+            previewDeps = null;
             previewPane.hidden = true;
+            if (!t || typeof t.renderPreview !== 'function' || blocked() || disabled()) {
+                previewOpen = false;
+            }
+            el.classList.remove('is-preview-open');
             return;
         }
-        const currentDraft = session?.id ? drafts.get(session.id) : null;
+        const currentDraft = latestDraft();
         const w = work.get(keyOf());
         const base = currentDraft?.base ?? w?.base ?? null;
         const ai = currentDraft?.ai ?? w?.base ?? null;
         const target = currentDraft?.target ?? w?.target ?? null;
+        const isPendingWork = !w && !currentDraft && !loadError;
         try {
-            const node = t.renderPreview({ base, ai, target });
+            const nextDeps = [
+                currentScopeKey(), session?.id, base, ai, target, session?.context, getCtx()?.getCurrentLocale?.(), isPendingWork,
+            ];
+            if (shallowTupleEqual(nextDeps, previewDeps)) {
+                previewPane.hidden = !previewPane.firstChild;
+                return;
+            }
+            const node = t.renderPreview({ base, ai, target, context: session?.context });
+            clear(previewPane);
             if (node instanceof Node) {
                 put(previewPane, node);
+                previewPane.hidden = false;
+            } else if (isPendingWork) {
+                put(previewPane, loading());
                 previewPane.hidden = false;
             } else {
                 previewPane.hidden = true;
             }
+            previewDeps = nextDeps;
         } catch (err) {
-            console.warn('[workbench/iterate] renderPreview failed:', err);
+            app.toast(String(err?.message || err), { error: true });
+            previewDeps = null;
             previewPane.hidden = true;
         }
     }
@@ -684,7 +851,7 @@ export function createIteratePage(app) {
                 })),
                 ws,
                 (v) => {
-                    void firePendingCancelHook();
+                    void reviews.complete();
                     selectionVersion++;
                     ws = v;
                     userPickedScope = false;
@@ -700,7 +867,7 @@ export function createIteratePage(app) {
                 scopeOptions,
                 scope,
                 (v) => {
-                    void firePendingCancelHook();
+                    void reviews.complete();
                     selectionVersion++;
                     scope = v;
                     userPickedScope = true;
@@ -712,6 +879,13 @@ export function createIteratePage(app) {
                 { ariaLabel: i18n('Which copy to edit'), className: 'wb-scope-seg' },
             ) : null,
             controlsSlot,
+            typeof t.renderPreview === 'function' ? iconButton('eye', i18n('Preview'), async () => {
+                if (!await ensureWork()) return;
+                previewOpen = !previewOpen;
+                el.classList.toggle('is-preview-open', previewOpen);
+                paintHead();
+                paintPreview();
+            }, { className: 'wb-preview-toggle', pressed: previewOpen }) : null,
             h('span', { class: 'wb-scope-note', text: blocked() ? '' : scopeNoteText(t, scope) }));
 
         paintControls();
@@ -826,7 +1000,7 @@ export function createIteratePage(app) {
         if (!store || !session) return null;
         const src = session;
         const sOpts = sessionScopes.get(src.id) || scopeOptsFor(src.scope) || { scope: 'global' };
-        const turns = src.turns.slice(0, upto).map(t => (t.state === 'pending' ? { ...t, state: 'discarded' } : t));
+        const turns = src.turns.slice(0, upto).map(t => (t.state === 'pending' ? { ...t, state: 'discarded', draft: null } : t));
         const messages = turns.flatMap(t => (t.role === 'user'
             ? [{ role: 'user', content: t.text }]
             : (t.text || t.changes?.length ? [{ role: 'assistant', content: turnText(t) }] : [])));
@@ -856,7 +1030,7 @@ export function createIteratePage(app) {
     }
 
     async function editMessage(i) {
-        if (!session) return;
+        if (!session || currentBusy()) return;
         const text = session.turns[i].text;
         const created = await forkAt(i);
         if (!created) return;
@@ -865,31 +1039,77 @@ export function createIteratePage(app) {
         input.focus({ preventScroll: true });
     }
 
-    const canRegen = (t) => !t.changes?.length || t.state === 'pending' || t.state === 'discarded';
+    const canRegen = (t) => !t.changes?.length || t.state === 'pending' || t.state === 'discarded'
+        || ((t.state === 'applied' || t.state === 'partial')
+            && (t.requiresUndo === false || app.history.canUndo(t.historyId)));
 
     async function regenerate() {
         if (!session || !store) return;
+        if (hasPendingDecision(session)) {
+            app.toast(i18n('Save the pending review decision before continuing.'), { error: true });
+            return;
+        }
         const version = selectionVersion;
         const targetSessionId = session.id;
         const turns = session.turns;
         const last = turns[turns.length - 1];
         const q = turns[turns.length - 2];
-        if (currentBusy() || !q || q.role !== 'user' || !canRegen(last)) return;
+        if (currentBusy() || applying.has(targetSessionId) || !q || q.role !== 'user' || !canRegen(last)) return;
         const sOpts = sessionScopes.get(targetSessionId) || scopeOptsFor(session.scope) || { scope: 'global' };
-        drafts.delete(targetSessionId);
         const keep = Number.isInteger(last.msgKeep) ? last.msgKeep : Math.max(0, (session.messages || []).length - 2);
+        let readyToSend = false;
         try {
-            const updated = await store.update(targetSessionId, {
-                turns: turns.slice(0, -2),
-                messages: (session.messages || []).slice(0, keep),
-            }, sOpts);
-            if (version !== selectionVersion || session?.id !== targetSessionId) return;
-            if (updated) session = updated;
-            if (q.hidden) {
-                await send({ promptText: q.text, hideFromUi: true });
-            } else {
-                input.value = q.text;
-                await send();
+            if ((last.state === 'applied' || last.state === 'partial') && app.history.canUndo(last.historyId)) {
+                if (!await undoTurn(targetSessionId, turns.length - 1)) return;
+                if (version !== selectionVersion || session?.id !== targetSessionId) return;
+                if (currentBusy() || applying.has(targetSessionId) || session.turns.length !== turns.length) return;
+            }
+            applying.add(targetSessionId);
+            paintSessions();
+            try {
+                const lastIndex = turns.length - 1;
+                const outcomeDraft = last.state === 'pending'
+                    ? draftOf(targetSessionId, lastIndex)
+                    : latestDraft();
+                const discardIds = Array.isArray(last.proposalIds) && last.proposalIds.length
+                    ? last.proposalIds
+                    : (last.state === 'pending' && Array.isArray(outcomeDraft?.proposalIds) ? outcomeDraft.proposalIds : []);
+                let nextBusState = null;
+                if (outcomeDraft?.bus && discardIds.length) {
+                    const sessionTarget = targetById(session.ws);
+                    const stagedBus = createIterateBus({ proposalKinds: sessionTarget?.proposalKinds });
+                    stagedBus.hydrate(outcomeDraft.bus.serialize());
+                    stagedBus.discardEntries(discardIds);
+                    nextBusState = stagedBus.serialize();
+                }
+                const nextTurns = capturePendingDrafts(targetSessionId, turns.slice(0, -2))
+                    .map(x => (nextBusState && x.state === 'pending' && x.draft
+                        ? { ...x, draft: { ...x.draft, busState: nextBusState } }
+                        : x));
+                const updated = await store.update(targetSessionId, {
+                    turns: nextTurns,
+                    messages: (session.messages || []).slice(0, keep),
+                    note: '',
+                }, sOpts);
+                if (!updated) return;
+                if (outcomeDraft?.bus && discardIds.length) {
+                    outcomeDraft.bus.discardEntries(discardIds);
+                }
+                draftStore.deleteTurn(targetSessionId, lastIndex);
+                if (version !== selectionVersion || session?.id !== targetSessionId) return;
+                session = updated;
+                readyToSend = true;
+            } finally {
+                applying.delete(targetSessionId);
+                paintSessions();
+            }
+            if (readyToSend) {
+                if (q.hidden) {
+                    await send({ promptText: q.text, hideFromUi: true });
+                } else {
+                    input.value = q.text;
+                    await send();
+                }
             }
         } catch (err) {
             app.toast(String(err?.message || err), { error: true });
@@ -934,7 +1154,7 @@ export function createIteratePage(app) {
             ].filter(Boolean).join(listSeparator());
         }
         const owner = session.id;
-        const draft = drafts.get(owner);
+        const draft = draftOf(owner, index);
         const changes = turn.state === 'pending' && draft?.changes ? draft.changes : turn.changes;
         const node = h('div', { class: 'wb-msg-ai' },
             reads ? h('div', { class: 'wb-reads' }, icon('eye', { size: 12 }), h('span', { text: reads })) : null,
@@ -950,7 +1170,7 @@ export function createIteratePage(app) {
             last ? {
                 iconName: 'refresh',
                 label: i18n('Answer again'),
-                title: canRegen(turn) ? i18n('Discard this round and let the AI redo it') : i18n('This round has been applied — undo it first to answer again'),
+                title: canRegen(turn) ? i18n('Discard this round and let the AI redo it') : i18n('This change was made in an earlier session and can no longer be undone here'),
                 disabled: busy || !canRegen(turn),
                 onClick: () => regenerate(),
             } : null,
@@ -1024,7 +1244,7 @@ export function createIteratePage(app) {
     const keyOf = (w = ws, s = scope) => {
         if (s === 'character') return `${w}:${s}:${charAvatar()}`;
         if (s === 'preset') return `${w}:${s}:${presetName()}`;
-        if (s === 'chat') return `${w}:${s}:${JSON.stringify(chatTarget() || app.snapshot()?.chat?.chatId || '')}`;
+        if (s === 'chat') return `${w}:${s}:${JSON.stringify(chatIdentity())}`;
         return `${w}:${s}`;
     };
 
@@ -1060,6 +1280,7 @@ export function createIteratePage(app) {
             if (ver === workLoadVersion) {
                 loadError = String(err?.message || err);
                 paintBody();
+                paintPreview();
             }
             return null;
         }
@@ -1084,10 +1305,23 @@ export function createIteratePage(app) {
             if (!m || typeof m !== 'object') continue;
             if (m.role === 'system') continue;
             if (m.role === 'user' && m.auto === true) continue;
-            if (m.role === 'assistant' && !m.tool_calls && String(m.content ?? '').trim() === '') continue;
+            const hasNativeReplay = (Array.isArray(m.native_parts) && m.native_parts.length > 0)
+                || (Array.isArray(m.native_content_blocks) && m.native_content_blocks.length > 0)
+                || (Array.isArray(m.responses_output_items) && m.responses_output_items.length > 0);
+            if (m.role === 'assistant' && !m.tool_calls && !hasNativeReplay && String(m.content ?? '').trim() === '') continue;
             if ((m.role === 'user' || m.role === 'assistant') && !m.tool_calls && ('toolCalls' in m || 'reasoning' in m)) {
-                if (isReplayableIterationMessage(m)) {
-                    out.push({ role: m.role, content: String(m.content ?? '') });
+                if (isReplayableIterationMessage(m) || hasNativeReplay) {
+                    const replayed = { role: m.role, content: String(m.content ?? '') };
+                    if (m.role === 'assistant') {
+                        if (typeof m.reasoning === 'string' && m.reasoning.length > 0) replayed.reasoning = m.reasoning;
+                        if (typeof m.signature === 'string' && m.signature.length > 0) replayed.signature = m.signature;
+                        if (Array.isArray(m.reasoning_blocks) && m.reasoning_blocks.length > 0) replayed.reasoning_blocks = m.reasoning_blocks;
+                        if (Array.isArray(m.reasoning_details) && m.reasoning_details.length > 0) replayed.reasoning_details = m.reasoning_details;
+                        if (Array.isArray(m.native_parts) && m.native_parts.length > 0) replayed.native_parts = m.native_parts;
+                        if (Array.isArray(m.native_content_blocks) && m.native_content_blocks.length > 0) replayed.native_content_blocks = m.native_content_blocks;
+                        if (Array.isArray(m.responses_output_items) && m.responses_output_items.length > 0) replayed.responses_output_items = m.responses_output_items;
+                    }
+                    out.push(replayed);
                 }
                 continue;
             }
@@ -1102,6 +1336,10 @@ export function createIteratePage(app) {
         const hideFromUi = Boolean(sendOpts?.hideFromUi);
         const runTargetObj = selectDefaultTarget();
         if (!text || !runTargetObj || currentBusy() || applying.has(session?.id) || blocked() || !store) return;
+        if (hasPendingDecision(session)) {
+            app.toast(i18n('Save the pending review decision before continuing.'), { error: true });
+            return;
+        }
 
         const selection = selectionVersion;
         const startingSession = session;
@@ -1114,10 +1352,11 @@ export function createIteratePage(app) {
         const stillViewingStart = () => selection === selectionVersion && runWs === ws && runScope === scope && session === startingSession;
         const stillViewingRunScope = () => runWs === ws && runScope === scope && currentScopeKey(ws, scope) === runScopeKey;
 
-        if (!startingSession) pendingNewSelection = selection;
+        let ownerId = startingSession?.id || '';
+        if (ownerId) pendingSessions.add(ownerId);
+        else pendingNewSelection = selection;
         paintOpts();
 
-        let ownerId = startingSession?.id || '';
         let runId = '';
         let controller = null;
 
@@ -1138,7 +1377,8 @@ export function createIteratePage(app) {
             work.set(runKey, w);
             const id = targetIdFor(w.target, runTargetObj);
 
-            let current = startingSession ? ((await store.get(startingSession.id, runScopeOpts)) || startingSession) : null;
+            let current = startingSession ? await store.get(startingSession.id, runScopeOpts) : null;
+            if (startingSession && !current) return;
             if (current?.targetId && current.targetId !== id) {
                 app.toast(i18nFormat('This chat was editing something else (${0}). Start a new conversation to edit the current selection.', current.scopeName || targetName(runWs)), { error: true, duration: 7000 });
                 return;
@@ -1152,8 +1392,10 @@ export function createIteratePage(app) {
                     title: titleFrom(text),
                     messages: [],
                     targetId: id,
+                    ...(sendOpts?.context ? { context: clone(sendOpts.context) } : {}),
                 }, runScopeOpts);
                 ownerId = current.id;
+                pendingSessions.add(ownerId);
                 sessionScopes.set(ownerId, clone(runScopeOpts));
                 if (pendingNewSelection === selection) pendingNewSelection = -1;
                 if (stillViewingStart()) session = current;
@@ -1162,9 +1404,11 @@ export function createIteratePage(app) {
                 sessionScopes.set(ownerId, clone(runScopeOpts));
                 if (!current.targetId) {
                     current = await store.update(ownerId, { targetId: id }, runScopeOpts);
-                    if (session?.id === ownerId && current) session = current;
+                    if (!current) return;
+                    if (session?.id === ownerId) session = current;
                 }
             }
+            reviews.bindSession({ ws: runWs, scope: runScopeOpts }, ownerId);
 
             const saveTo = async (patch) => {
                 const updated = await store.update(ownerId, patch, runScopeOpts);
@@ -1180,14 +1424,33 @@ export function createIteratePage(app) {
                 return updated;
             };
 
-            const priorTurns = (Array.isArray(current.turns) ? current.turns : [])
-                .map(t => (t.state === 'pending' ? { ...t, state: 'discarded' } : t));
-            const bus = runTargetObj.proposalKinds
+            restoreSessionDrafts(current);
+            const priorTurns = current.turns;
+            const pendingIndex = priorTurns.findLastIndex(turn => turn.state === 'pending');
+            const previous = pendingIndex < 0 ? null : draftOf(ownerId, pendingIndex);
+            if (pendingIndex >= 0 && !previous) {
+                throw new Error(i18n('This draft is no longer available. Ask the AI again.'));
+            }
+            const bus = previous ? previous.bus : runTargetObj.proposalKinds
                 ? createIterateBus({ proposalKinds: runTargetObj.proposalKinds })
                 : null;
+            let base = w.base;
+            for (const [index, turn] of priorTurns.entries()) {
+                if (turn.state !== 'pending') continue;
+                const pending = draftOf(ownerId, index);
+                if (!pending) {
+                    throw new Error(i18n('This draft is no longer available. Ask the AI again.'));
+                }
+                const keys = diffUnits(
+                    runTargetObj.units(pending.base, pending.target),
+                    runTargetObj.units(pending.ai, pending.target),
+                ).map(change => change.key);
+                base = runTargetObj.rebuild(base, pending.ai, keys, pending.target);
+            }
+            const turnIndex = priorTurns.length + 1;
             const draft = {
-                base: clone(w.base),
-                ai: clone(w.base),
+                base: clone(base),
+                ai: clone(base),
                 target: w.target,
                 title: w.title,
                 workKey: runKey,
@@ -1196,7 +1459,7 @@ export function createIteratePage(app) {
                 changes: [],
                 proposalIds: [],
             };
-            drafts.set(ownerId, draft);
+            draftStore.set(ownerId, turnIndex, draft);
 
             let userContent = current.note ? `${current.note}\n\n${text}` : text;
             if (!isProgrammatic && session?.id === ownerId && input.value.trim() === text) {
@@ -1211,15 +1474,21 @@ export function createIteratePage(app) {
                 turns: [...priorTurns, { role: 'user', text, ...(hideFromUi ? { hidden: true } : {}), at: Date.now() }],
                 note: '',
             });
+            if (!current) {
+                draftStore.deleteTurn(ownerId, turnIndex);
+                return;
+            }
 
             runId = `it_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
             controller = new AbortController();
-            const run = { runId, sessionId: ownerId, ws: runWs, scope: runScope, abort: controller, liveStep: '' };
+            const run = { runId, sessionId: ownerId, turnIndex, ws: runWs, scope: runScope, abort: controller, liveStep: '' };
             activeRuns.set(runId, run);
+            pendingSessions.delete(ownerId);
             if (session?.id === ownerId) {
                 paintHead();
                 paintBody();
                 paintOpts();
+                paintPreview();
             }
 
             const { turn, messages: nextMessages } = await runTurn({
@@ -1245,6 +1514,7 @@ export function createIteratePage(app) {
             app.toast(String(err?.message || err), { error: true });
         } finally {
             if (pendingNewSelection === selection) pendingNewSelection = -1;
+            if (ownerId) pendingSessions.delete(ownerId);
             if (runId) activeRuns.delete(runId);
             if (isVisible()) {
                 await refreshSessions();
@@ -1266,6 +1536,7 @@ export function createIteratePage(app) {
 
     /** One model turn. Never throws: failures become the turn's error text. */
     async function runTurn({ run, runTargetObj, runWs, runScope, current, draft, userContent, controller }) {
+        const priorProposalIds = new Set(draft.bus?.listEntries().map(entry => entry.id) || []);
         try {
             return await withActivityLease({
                 source: 'workbench:iterate',
@@ -1282,7 +1553,7 @@ export function createIteratePage(app) {
                 const system = typeof runTargetObj.systemPrompt === 'function'
                     ? await runTargetObj.systemPrompt(runScope, draft.ai, { wrapper, ctx, target: draft.target })
                     : [wrapper, await runTargetObj.prompt(draft.ai, runScope, ctx, { wrapper, target: draft.target })].filter(Boolean).join('\n\n');
-                const history = replayMessagesForApi(current.messages);
+                const history = replayMessagesForApi(current?.messages);
                 const messages = trimMessages([{ role: 'system', content: system }, ...history, { role: 'user', content: userContent }]);
                 const tools = await runTargetObj.tools(draft.ai, runScope, ctx, { target: draft.target });
                 const result = await runIterateTurn({
@@ -1315,7 +1586,7 @@ export function createIteratePage(app) {
                     targetRef: draft.target,
                 });
                 draft.changes = changes;
-                if (!changes.length) drafts.delete(run.sessionId);
+                if (!changes.length) draftStore.deleteTurn(run.sessionId, run.turnIndex);
 
                 const all = result.messages.filter(m => m.role !== 'system');
                 const msgKeep = history.length;
@@ -1333,6 +1604,7 @@ export function createIteratePage(app) {
                         changes,
                         proposalIds: draft.proposalIds,
                         state: changes.length ? 'pending' : '',
+                        ...(changes.length ? { draft: serializeIterationDraft(draft) } : {}),
                         target: draft.title,
                         msgKeep,
                         at: Date.now(),
@@ -1340,14 +1612,19 @@ export function createIteratePage(app) {
                 };
             });
         } catch (err) {
-            drafts.delete(run.sessionId);
+            if (draft.bus) {
+                draft.bus.discardEntries(draft.bus.listEntries()
+                    .filter(entry => !priorProposalIds.has(entry.id))
+                    .map(entry => entry.id));
+            }
+            draftStore.deleteTurn(run.sessionId, run.turnIndex);
             return {
                 messages: null,
                 turn: {
                     role: 'ai',
                     text: '',
                     error: controller.signal.aborted ? i18n('Stopped.') : i18nFormat('Not changed: ${0}', err?.message || err),
-                    msgKeep: (current.messages || []).length,
+                    msgKeep: (current?.messages || []).length,
                     at: Date.now(),
                 },
             };
@@ -1360,90 +1637,105 @@ export function createIteratePage(app) {
         const owner = store ? await store.get(id, sOpts) : null;
         const turn = owner?.turns?.[index];
         if (!turn?.changes || applying.has(id)) return;
-        const draft = drafts.get(id);
+        const draft = draftOf(id, index);
         const sessionTarget = targetById(owner.ws);
         if (!draft || !sessionTarget) {
             app.toast(i18n('This draft is no longer available. Ask the AI again.'), { error: true, duration: 7000 });
             return;
         }
-        const liveChanges = buildTurnChanges({
-            base: draft.base,
-            ai: draft.ai,
-            units: sessionTarget.units,
-            bus: draft.bus,
-            proposalIds: turn.proposalIds || draft.proposalIds || [],
-            kindAdapters: sessionTarget.proposalKinds,
-            targetRef: draft.target,
-        });
-        if (!approvalMatches(turn.changes, liveChanges, keys)) {
-            app.toast(i18n('This draft is no longer available. Ask the AI again.'), { error: true, duration: 7000 });
-            return;
+        if (!draft.decision) {
+            const liveChanges = buildTurnChanges({
+                base: draft.base,
+                ai: draft.ai,
+                units: sessionTarget.units,
+                bus: draft.bus,
+                proposalIds: turn.proposalIds || draft.proposalIds || [],
+                kindAdapters: sessionTarget.proposalKinds,
+                targetRef: draft.target,
+            });
+            if (!approvalMatches(turn.changes, liveChanges, keys)) {
+                app.toast(i18n('This draft is no longer available. Ask the AI again.'), { error: true, duration: 7000 });
+                return;
+            }
         }
 
         applying.add(id);
         try {
-            const handle = await commitTurnBatch({
-                target: sessionTarget,
-                targetRef: draft.target,
-                base: draft.base,
-                ai: draft.ai,
-                keys,
-                bus: draft.bus,
-                proposalIds: turn.proposalIds || draft.proposalIds || [],
-                kindAdapters: sessionTarget.proposalKinds,
-            });
-            const saved = new Set(handle.applied ?? keys);
-            if (saved.size > 0 && pendingCancelHook) {
-                pendingCancelHook.applied = true;
-                pendingCancelHook = null;
-            }
-            const skipped = handle.skipped ?? [];
-            const failure = handle.failure ?? '';
-            const labelOf = (key) => turn.changes.find(c => c.key === key)?.label ?? key;
-            const unsaved = skipped.map(s => labelOf(s.key));
-            const labels = turn.changes.filter(c => saved.has(c.key)).map(c => c.label);
-            const dropped = turn.changes.filter(c => !keys.includes(c.key)).map(c => c.label);
-            const busOutcomes = draft.bus?.drainOutcomes?.() || [];
-            const { workKey } = draft;
-            const historyId = app.history.record({
-                ws: owner.ws,
-                title: `${owner.title}`,
-                scope: draft.title,
-                lines: turn.changes.filter(c => saved.has(c.key)).map(c => i18nFormat('${0} "${1}"', { add: i18n('Added'), remove: i18n('Removed item'), change: i18n('Edited') }[c.kind], c.label)),
-                from: i18n('AI chat'),
-                undo: handle.nonRollbackable && saved.size === 1
-                    ? undefined
-                    : async () => { await handle.undo(); work.delete(workKey); },
-            });
-            work.delete(workKey);
-            drafts.delete(id);
-
-            const fresh = await store.get(id, sOpts);
-            if (fresh) {
-                const updated = await store.update(id, {
-                    turns: fresh.turns.map((x, i) => (i === index
-                        ? { ...x, state: dropped.length || unsaved.length ? 'partial' : 'applied', historyId }
-                        : x)),
+            if (!draft.decision) {
+                const handle = await commitTurnBatch({
+                    target: sessionTarget,
+                    targetRef: draft.target,
+                    base: draft.base,
+                    ai: draft.ai,
+                    keys,
+                    bus: draft.bus,
+                    proposalIds: turn.proposalIds || draft.proposalIds || [],
+                    kindAdapters: sessionTarget.proposalKinds,
+                });
+                const saved = new Set(handle.applied ?? keys);
+                if (saved.size > 0) {
+                    reviews.suppressCancel(id);
+                }
+                const skipped = handle.skipped ?? [];
+                const labelOf = (key) => turn.changes.find(c => c.key === key)?.label ?? key;
+                const unsaved = skipped.map(s => labelOf(s.key));
+                const labels = turn.changes.filter(c => saved.has(c.key)).map(c => c.label);
+                const dropped = turn.changes.filter(c => !keys.includes(c.key)).map(c => c.label);
+                const busOutcomes = draft.bus?.drainOutcomes?.() || [];
+                const { workKey } = draft;
+                const requiresUndo = !(handle.nonRollbackable && saved.size === 1);
+                const historyId = app.history.record({
+                    ws: owner.ws,
+                    title: `${owner.title}`,
+                    scope: draft.title,
+                    lines: turn.changes.filter(c => saved.has(c.key)).map(c => i18nFormat('${0} "${1}"', { add: i18n('Added'), remove: i18n('Removed item'), change: i18n('Edited') }[c.kind], c.label)),
+                    from: i18n('AI chat'),
+                    undo: requiresUndo ? async () => { await handle.undo(); work.delete(workKey); } : undefined,
+                });
+                draft.decision = {
+                    state: dropped.length || unsaved.length ? 'partial' : 'applied',
+                    historyId, requiresUndo, savedCount: saved.size, unsaved,
+                    failure: handle.failure ?? '',
                     note: decisionNote({ applied: labels, discarded: dropped, unsaved, busOutcomes }),
-                }, sOpts);
-                if (updated && session?.id === id) session = updated;
+                };
             }
+            const { state, historyId, requiresUndo, savedCount, unsaved, failure, note } = draft.decision;
+            const fresh = await store.get(id, sOpts);
+            if (!fresh) throw new Error(i18nFormat('Session "${0}" no longer exists. The review decision was not saved.', id));
+            const updated = await store.update(id, {
+                turns: capturePendingDrafts(id, fresh.turns.map((x, i) => (i === index
+                    ? { ...x, state, historyId, requiresUndo, draft: null }
+                    : x))),
+                note,
+            }, sOpts);
+            if (!updated) throw new Error(i18nFormat('Session "${0}" no longer exists. The review decision was not saved.', id));
+            if (session?.id === id) session = updated;
+            work.delete(draft.workKey);
+            draftStore.deleteTurn(id, index);
             if (unsaved.length) {
-                app.toast([i18nFormat('Saved ${0}, not saved: ${1}', saved.size, unsaved.join(listSeparator())), failure].filter(Boolean).join(' · '), {
+                app.toast([i18nFormat('Saved ${0}, not saved: ${1}', savedCount, unsaved.join(listSeparator())), failure].filter(Boolean).join(' · '), {
                     error: true,
                     duration: 7000,
                     action: i18n('Undo'),
                     onAction: () => undoTurn(id, index),
                 });
             } else {
-                app.toast(i18nFormat('Applied ${0}', saved.size), handle.nonRollbackable && saved.size === 1 ? {} : {
+                app.toast(i18nFormat('Applied ${0}', savedCount), !requiresUndo ? {} : {
                     action: i18n('Undo'),
                     onAction: () => undoTurn(id, index),
                 });
             }
             app.reload?.();
         } catch (err) {
-            app.toast(i18nFormat('Not saved: ${0}', err?.message || err), { error: true, duration: 7000 });
+            const detail = err?.message || err;
+            app.toast(draft.decision
+                ? i18nFormat(draft.decision.savedCount
+                    ? 'Changes saved. Could not save the review decision: ${0}'
+                    : 'Could not save the review decision: ${0}', detail)
+                : i18nFormat('Not saved: ${0}', detail), {
+                error: true, duration: 7000,
+                ...(draft.decision ? { action: i18n('Retry'), onAction: () => apply(id, index, keys) } : {}),
+            });
         } finally {
             applying.delete(id);
         }
@@ -1455,50 +1747,206 @@ export function createIteratePage(app) {
     async function discard(id, index) {
         const sOpts = sessionScopes.get(id) || scopeOptsFor() || { scope: 'global' };
         const owner = store ? await store.get(id, sOpts) : null;
-        if (!owner) return;
+        if (!owner || applying.has(id)) return;
         const turn = owner.turns[index];
-        const draft = drafts.get(id);
-        if (draft?.bus) {
-            for (const pid of turn?.proposalIds || draft.proposalIds || []) {
-                draft.bus.reject(pid);
-            }
+        const draft = draftOf(id, index);
+        if (draft?.decision) {
+            app.toast(i18n('Changes are already saved. Retry Apply to finish recording the review decision.'), { error: true });
+            return;
         }
-        const busOutcomes = draft?.bus?.drainOutcomes?.() || [];
-        drafts.delete(id);
-        const turns = owner.turns.map((x, i) => (i === index ? { ...x, state: 'discarded' } : x));
-        const updated = await store.update(id, {
-            turns,
-            note: decisionNote({ discarded: (turn?.changes || []).map(c => c.label), busOutcomes }),
-        }, sOpts);
-        if (updated && session?.id === id) session = updated;
+        applying.add(id);
+        try {
+            const sessionTarget = targetById(owner.ws);
+            const staged = draft && sessionTarget ? restoreIterationDraft(serializeIterationDraft(draft), {
+                proposalKinds: sessionTarget.proposalKinds, sessionId: id, turnIndex: index,
+            }) : null;
+            const proposalIds = turn?.proposalIds || draft?.proposalIds || [];
+            if (staged?.bus) {
+                for (const pid of proposalIds) staged.bus.reject(pid);
+            }
+            const busOutcomes = staged?.bus?.drainOutcomes?.() || [];
+            const busState = staged?.bus?.serialize?.() || null;
+
+            // Rebase any later stacked pending turns onto the current saved base
+            // plus earlier remaining pending turns so their diffs reflect any
+            // applied/external changes while dropping only the discarded turn.
+            const rebasedDrafts = new Map();
+            const hasLaterPending = Boolean(
+                draft
+                && sessionTarget
+                && typeof sessionTarget.units === 'function'
+                && typeof sessionTarget.rebuild === 'function'
+                && owner.turns.slice(index + 1).some((t, offset) => t?.state === 'pending' && Boolean(draftOf(id, index + 1 + offset))),
+            );
+            if (hasLaterPending) {
+                let savedBase;
+                if (typeof sessionTarget.load === 'function') {
+                    const loaded = await sessionTarget.load(owner.scope, getCtx());
+                    if (owner.targetId && targetIdFor(loaded.target, sessionTarget) !== owner.targetId) {
+                        throw new Error(i18nFormat('This chat was editing something else (${0}). Start a new conversation to edit the current selection.', owner.scopeName || targetName(owner.ws)));
+                    }
+                    savedBase = loaded.live;
+                    work.set(draft.workKey, { base: loaded.live, target: loaded.target, title: loaded.title });
+                } else {
+                    savedBase = work.get(draft.workKey)?.base ?? draft.base;
+                }
+                let runningBase = clone(savedBase);
+                for (let i = 0; i < index; i++) {
+                    if (owner.turns[i]?.state !== 'pending') continue;
+                    const earlierDraft = draftOf(id, i);
+                    if (!earlierDraft) continue;
+                    const earlierKeys = diffUnits(
+                        sessionTarget.units(earlierDraft.base, earlierDraft.target),
+                        sessionTarget.units(earlierDraft.ai, earlierDraft.target),
+                    ).map(change => change.key);
+                    if (earlierKeys.length) {
+                        runningBase = sessionTarget.rebuild(runningBase, earlierDraft.ai, earlierKeys, earlierDraft.target);
+                    }
+                }
+                for (let i = index + 1; i < owner.turns.length; i++) {
+                    const laterTurn = owner.turns[i];
+                    if (laterTurn?.state !== 'pending') continue;
+                    const laterDraft = draftOf(id, i);
+                    if (!laterDraft) continue;
+                    const ownKeys = diffUnits(
+                        sessionTarget.units(laterDraft.base, laterDraft.target),
+                        sessionTarget.units(laterDraft.ai, laterDraft.target),
+                    ).map(change => change.key);
+                    const nextBase = clone(runningBase);
+                    const nextAi = ownKeys.length
+                        ? sessionTarget.rebuild(clone(nextBase), laterDraft.ai, ownKeys, laterDraft.target)
+                        : clone(nextBase);
+                    const nextChanges = buildTurnChanges({
+                        base: nextBase,
+                        ai: nextAi,
+                        units: sessionTarget.units,
+                        bus: staged?.bus ?? laterDraft.bus,
+                        proposalIds: laterTurn.proposalIds || laterDraft.proposalIds || [],
+                        kindAdapters: sessionTarget.proposalKinds,
+                        targetRef: laterDraft.target,
+                    });
+                    rebasedDrafts.set(i, {
+                        draft: laterDraft,
+                        base: nextBase,
+                        ai: nextAi,
+                        changes: nextChanges,
+                    });
+                    runningBase = nextAi;
+                }
+            }
+
+            const turns = owner.turns.map((x, i) => {
+                if (i === index) return { ...x, state: 'discarded', draft: null };
+                const rebased = rebasedDrafts.get(i);
+                if (rebased) {
+                    const updatedDraft = { ...rebased.draft, base: rebased.base, ai: rebased.ai, changes: rebased.changes };
+                    return rebased.changes.length
+                        ? { ...x, changes: rebased.changes, draft: serializeIterationDraft(updatedDraft) }
+                        : { ...x, changes: [], state: 'discarded', draft: null };
+                }
+                const existingDraft = draftOf(id, i);
+                return x.state === 'pending' && existingDraft
+                    ? { ...x, draft: serializeIterationDraft(existingDraft) }
+                    : x;
+            }).map(x => busState && x.state === 'pending' && x.draft ? { ...x, draft: { ...x.draft, busState } } : x);
+
+            const updated = await store.update(id, {
+                turns,
+                note: decisionNote({ discarded: (turn?.changes || []).map(c => c.label), busOutcomes }),
+            }, sOpts);
+            if (!updated) throw new Error(i18nFormat('Session "${0}" no longer exists. The review decision was not saved.', id));
+            if (draft?.bus) {
+                for (const pid of proposalIds) draft.bus.reject(pid);
+                draft.bus.drainOutcomes?.();
+            }
+            for (const [laterIdx, rebased] of rebasedDrafts.entries()) {
+                if (rebased.changes.length) {
+                    rebased.draft.base = rebased.base;
+                    rebased.draft.ai = rebased.ai;
+                    rebased.draft.changes = rebased.changes;
+                } else {
+                    draftStore.deleteTurn(id, laterIdx);
+                }
+            }
+            draftStore.deleteTurn(id, index);
+            if (session?.id === id) session = updated;
+        } catch (err) {
+            app.toast(i18nFormat('Could not save the review decision: ${0}', err?.message || err), { error: true, duration: 7000 });
+        } finally {
+            applying.delete(id);
+        }
         await refreshSessions();
         paintAll();
         app.refreshBadges?.();
     }
 
     async function undoTurn(id, index) {
+        if (applying.has(id)) return false;
         const sOpts = sessionScopes.get(id) || scopeOptsFor() || { scope: 'global' };
         const owner = store ? await store.get(id, sOpts) : null;
         const turn = owner?.turns?.[index];
-        if (!turn?.historyId) return;
+        if (!turn?.historyId || applying.has(id)) return false;
+        applying.add(id);
+        paintSessions();
+        let undone = false;
         try {
             await app.history.undo(turn.historyId);
             const fresh = await store.get(id, sOpts);
             if (fresh) {
+                // Later pending turns were based on the now-undone state; clear
+                // their stale drafts and bus entries so they cannot silently
+                // re-apply undone edits.
+                const stalePendingIndices = [];
+                const staleProposalIds = [];
+                let sharedBus = null;
+                for (let i = index + 1; i < fresh.turns.length; i++) {
+                    if (fresh.turns[i]?.state === 'pending') {
+                        stalePendingIndices.push(i);
+                        const staleDraft = draftOf(id, i);
+                        if (!sharedBus && staleDraft?.bus) sharedBus = staleDraft.bus;
+                        const pids = fresh.turns[i]?.proposalIds || staleDraft?.proposalIds || [];
+                        staleProposalIds.push(...pids);
+                    }
+                }
+                let nextBusState = null;
+                if (sharedBus && staleProposalIds.length) {
+                    const sessionTarget = targetById(fresh.ws);
+                    const stagedBus = createIterateBus({ proposalKinds: sessionTarget?.proposalKinds });
+                    stagedBus.hydrate(sharedBus.serialize());
+                    stagedBus.discardEntries(staleProposalIds);
+                    nextBusState = stagedBus.serialize();
+                }
+                const nextTurns = capturePendingDrafts(id, fresh.turns.map((x, i) => {
+                    if (i === index) return { ...x, state: 'discarded' };
+                    if (i > index && x?.state === 'pending') return { ...x, state: 'discarded', draft: null };
+                    return x;
+                })).map(x => (nextBusState && x.state === 'pending' && x.draft
+                    ? { ...x, draft: { ...x.draft, busState: nextBusState } }
+                    : x));
                 const updated = await store.update(id, {
-                    turns: fresh.turns.map((x, i) => (i === index ? { ...x, state: 'discarded' } : x)),
+                    turns: nextTurns,
                     note: `（用户撤销了上一轮应用的改动：${turn.changes.map(c => c.label).join(listSeparator())}。现在是改之前的样子。）`,
                 }, sOpts);
+                if (sharedBus && staleProposalIds.length) {
+                    sharedBus.discardEntries(staleProposalIds);
+                }
+                for (const staleIdx of stalePendingIndices) {
+                    draftStore.deleteTurn(id, staleIdx);
+                }
                 if (updated && session?.id === id) session = updated;
             }
             app.toast(i18n('Undone'));
             app.reload?.();
+            undone = true;
         } catch (err) {
             app.toast(i18nFormat('Could not undo: ${0}', err?.message || err), { error: true });
+        } finally {
+            applying.delete(id);
         }
         await refreshSessions();
         paintAll();
         app.refreshBadges?.();
+        return undone;
     }
 
     // ----- refresh when Luker or registry changes -------------------------
@@ -1531,7 +1979,7 @@ export function createIteratePage(app) {
     function evictStaleWork() {
         const avatar = charAvatar();
         const pName = presetName();
-        const chatKey = JSON.stringify(chatTarget() || app.snapshot()?.chat?.chatId || '');
+        const chatKey = JSON.stringify(chatIdentity());
         for (const k of [...work.keys()]) {
             if (k.includes(':character:') && !k.endsWith(`:${avatar}`)) work.delete(k);
             else if (k.includes(':preset:') && !k.endsWith(`:${pName}`)) work.delete(k);
@@ -1544,6 +1992,14 @@ export function createIteratePage(app) {
         flush: true,
         async show(o = {}) {
             const version = ++selectionVersion;
+            let launchReview = null;
+            const launchOwner = o.scopeOwner ? clone(o.scopeOwner) : null;
+            const launchOwnerChanged = () => launchOwner && (scope !== launchOwner.scope || charAvatar() !== launchOwner.avatar);
+            const rejectChangedLaunch = async () => {
+                await reviews.complete(launchReview);
+                app.toast(i18n('The iteration target changed before the editor opened. Select the intended target and retry.'), { error: true });
+                paintAll();
+            };
             const targets = getTargets();
             if (!ws && targets.length) ws = targets[0].id;
             const seed = typeof o.seedPrompt === 'string' ? o.seedPrompt.trim() : '';
@@ -1555,17 +2011,32 @@ export function createIteratePage(app) {
                 || o.ws
                 || (o.scope && o.scope !== scope),
             );
-            if (hasLaunchReset) {
-                void firePendingCancelHook();
+            if (hasLaunchReset && reviews.current) {
+                await reviews.complete(reviews.current);
             }
-            if (typeof o.onCancelWithoutApply === 'function') {
-                pendingCancelHook = { fn: o.onCancelWithoutApply, applied: false };
+            let newReview = null;
+            if (typeof o.onCancelWithoutApply === 'function' || o.waitForClose) {
+                if (!hasLaunchReset && reviews.current) launchReview = reviews.current;
+                else launchReview = newReview = reviews.create(o);
             }
+            if (version !== selectionVersion) {
+                if (newReview) await reviews.complete(newReview);
+                return;
+            }
+            if (newReview) reviews.current = newReview;
+            const launchCompletion = o.waitForClose ? launchReview : null;
             if (o.sessionId) {
                 const sOpts = sessionScopes.get(o.sessionId) ?? null;
                 const s = store ? await store.get(o.sessionId, sOpts) : null;
-                if (version !== selectionVersion) return;
+                if (version !== selectionVersion) return launchCompletion?.promise;
                 if (s) {
+                    try {
+                        restoreSessionDrafts(s);
+                    } catch (err) {
+                        app.toast(String(err?.message || err), { error: true });
+                        await reviews.complete(launchReview);
+                        return;
+                    }
                     session = s;
                     if (s.ws) ws = s.ws;
                     if (s.scope) {
@@ -1597,27 +2068,40 @@ export function createIteratePage(app) {
                 session = null;
             }
             await refreshScopes();
-            if (version !== selectionVersion) return;
+            if (version !== selectionVersion) return launchCompletion?.promise;
             fixScope();
             activeScopeKey = currentScopeKey();
+            if (launchOwnerChanged()) {
+                await rejectChangedLaunch();
+                return;
+            }
+            if (newReview) newReview.owner = { ws, scope: clone(scopeOptsFor()) };
             paintAll();
             await refreshSessions();
-            if (version !== selectionVersion) return;
+            if (version !== selectionVersion) return launchCompletion?.promise;
             if (o.autoSend && seed) {
                 await ensureWork();
-                if (version !== selectionVersion) return;
-                await send({ promptText: seed, hideFromUi: Boolean(o.hideSeedFromUi) });
+                if (version !== selectionVersion) return launchCompletion?.promise;
+                if (launchOwnerChanged()) {
+                    await rejectChangedLaunch();
+                    return;
+                }
+                const sending = send({ promptText: seed, hideFromUi: Boolean(o.hideSeedFromUi), context: o.iterationContext });
+                if (launchCompletion) await Promise.race([sending, launchCompletion.promise]);
+                else await sending;
             } else if (seed || o.draft) {
                 input.value = seed || o.draft;
                 grow();
             }
             requestAnimationFrame(() => input.focus({ preventScroll: true }));
+            return launchCompletion?.promise;
         },
         onSnapshot() {
             evictStaleWork();
             if (!isVisible()) {
                 const nextKey = currentScopeKey();
                 if (activeScopeKey && nextKey !== activeScopeKey) {
+                    void reviews.complete();
                     activeScopeKey = '';
                     loadedSessionsScopeKey = '';
                     selectionVersion++;
@@ -1634,6 +2118,7 @@ export function createIteratePage(app) {
                 const nextKey = currentScopeKey();
                 const scopeChanged = nextKey !== activeScopeKey;
                 if (scopeChanged) {
+                    void reviews.complete();
                     activeScopeKey = nextKey;
                     loadedSessionsScopeKey = '';
                     selectionVersion++;
@@ -1685,12 +2170,14 @@ export function createIteratePage(app) {
         },
         onCollapse() {
             loadedSessionsScopeKey = '';
-            return firePendingCancelHook();
+            return reviews.complete();
         },
         destroy() {
+            detachDiffOverlay();
             for (const run of activeRuns.values()) run.abort?.abort();
             activeRuns.clear();
-            return firePendingCancelHook();
+            pendingSessions.clear();
+            return reviews.complete();
         },
     };
 }

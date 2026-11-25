@@ -1,24 +1,11 @@
+/**
+ * @jest-environment jsdom
+ */
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups
 
-/**
- * replace-diff-overview.js — structured post-replace diff model builder
- * and full-screen HTML renderer for the CEA editor topbar's
- * "View full replace diff" button.
- *
- * Verified here:
- *   - buildReplaceDiffModel: emits card + book diff structures matching
- *     the mirrored prev/next inputs
- *   - renderReplaceDiffOverview: produces sectioned HTML with per-field
- *     card diffs, per-entry book diff cards, and expected summary chips
- *   - Empty / no-op inputs render an "empty" placeholder card and stay
- *     hasChanges=false so the studio topbar button can suppress itself
- */
-
-// Under test — pure ESM module, no ST context deps
-const { buildReplaceDiffModel, renderReplaceDiffOverview } = await import(
-    '../../public/scripts/extensions/character-editor-assistant/replace-diff-overview.js'
-);
+import { buildReplaceDiffModel } from '../../public/scripts/workbench/model/card-replacement.js';
+import { renderReplacementOverview } from '../../public/scripts/workbench/targets/card-preview.js';
 
 function mkCard({ name, description, world = '', bookEntries = null }) {
     const character = {
@@ -41,8 +28,10 @@ function mkCard({ name, description, world = '', bookEntries = null }) {
     return character;
 }
 
-function mkEntry(uid, { comment = '', content = '', keys = [], constant = false } = {}) {
-    return { uid, comment, content, keys, secondary_keys: [], constant, selective: true, enabled: true, position: 0, insertion_order: 100 };
+// World-info entry shape — what the pre-replace disk snapshot and
+// convertCharacterBook / loadWorldInfo produce.
+function mkEntry(uid, { comment = '', content = '', key = [], constant = false, disable = false, order = 100 } = {}) {
+    return { uid, comment, content, key, keysecondary: [], constant, selective: true, disable, position: 0, order };
 }
 
 describe('buildReplaceDiffModel', () => {
@@ -131,20 +120,15 @@ describe('buildReplaceDiffModel', () => {
     });
 });
 
-describe('renderReplaceDiffOverview', () => {
-    const noOpRenderLineDiff = (before, after, label) =>
-        `<!-- line diff placeholder: label=${label}, before=${String(before ?? '').slice(0, 20)}, after=${String(after ?? '').slice(0, 20)} -->`;
-
+describe('renderReplacementOverview', () => {
     test('renders "empty" placeholder when hasChanges is false', () => {
-        const html = renderReplaceDiffOverview(
+        const node = renderReplacementOverview(
             { hasChanges: false, card: { previousName: '', nextName: '', fields: [] }, book: { previousName: '', nextName: '', renamed: false, added: [], removed: [], changed: [], unchangedCount: 0 } },
-            { renderLineDiffHtml: noOpRenderLineDiff },
         );
-        expect(html).toContain('cea_replace_diff_overview');
-        expect(html).toContain('cea_replace_diff_empty');
+        expect(node.querySelector('.wb-note').textContent).toContain('No structural changes detected');
     });
 
-    test('emits sectioned HTML with card fields + book summary + entry groups', () => {
+    test('renders card fields, book statistics and entry groups', () => {
         const prev = mkCard({ name: 'Sable', description: 'old', world: 'b' });
         const next = mkCard({ name: 'Sable', description: 'new', world: 'b' });
         const model = buildReplaceDiffModel({
@@ -164,29 +148,19 @@ describe('renderReplaceDiffOverview', () => {
                 },
             },
         });
-        const html = renderReplaceDiffOverview(model, { renderLineDiffHtml: noOpRenderLineDiff });
-
-        expect(html).toContain('cea_replace_diff_section');
-        // card section — description diff card should be present
-        expect(html).toContain('cea_replace_diff_card_field');
-        expect(html).toMatch(/description/);
-        // book summary chips
-        expect(html).toContain('cea_replace_diff_stat_add');
-        expect(html).toContain('+1'); // 1 added
-        expect(html).toContain('cea_replace_diff_stat_del');
-        expect(html).toContain('−1'); // 1 removed
-        expect(html).toContain('cea_replace_diff_stat_mod');
-        expect(html).toContain('~1'); // 1 changed
-        // entry groups
-        expect(html).toContain('cea_replace_diff_group_add');
-        expect(html).toContain('cea_replace_diff_group_del');
-        expect(html).toContain('cea_replace_diff_group_mod');
-        // line-diff placeholder wired for description AND changed entry.2.content
-        expect(html).toContain('label=card.description');
-        expect(html).toContain('label=entry.2.content');
+        const node = renderReplacementOverview(model);
+        expect(node.querySelectorAll(':scope > section')).toHaveLength(2);
+        expect(node.textContent).toContain('card.description');
+        expect(node.textContent).toContain('entry.2.content');
+        expect(node.querySelector('.wb-replace-stats').textContent).toBe('+1 added−1 removed~1 changed=0 unchanged');
+        expect(node.querySelector('[data-change-kind="add"]').textContent).toContain('new body');
+        expect(node.querySelector('[data-change-kind="del"]').textContent).toContain('gone body');
+        const changed = node.querySelector('[data-change-kind="mod"]');
+        expect(changed.querySelector('.luker_lib_diff_text.old').textContent).toBe('v1');
+        expect(changed.querySelector('.luker_lib_diff_text.new').textContent).toBe('v2');
     });
 
-    test('falls back to simple prev/next blocks when no renderLineDiffHtml provided', () => {
+    test('renders complete previous and current field values', () => {
         const prev = mkCard({ name: 'Sable', description: 'old', world: 'b' });
         const next = mkCard({ name: 'Sable', description: 'new', world: 'b' });
         const model = buildReplaceDiffModel({
@@ -195,18 +169,56 @@ describe('renderReplaceDiffOverview', () => {
             previousLorebookSnapshot: { bookName: 'b', entries: {} },
             nextLorebookData: { entries: {} },
         });
-        const html = renderReplaceDiffOverview(model, {});
-        // fallback path renders cea_replace_diff_prev_next grid
-        expect(html).toContain('cea_replace_diff_prev_next');
-        // shows both prev and current values inline
-        expect(html).toContain('>old<');
-        expect(html).toContain('>new<');
+        const node = renderReplacementOverview(model);
+        expect(node.querySelector('.luker_lib_diff_text.old').textContent).toBe('old');
+        expect(node.querySelector('.luker_lib_diff_text.new').textContent).toBe('new');
     });
 
-    test('accepts i18n hooks and passes messages through', () => {
-        const model = { hasChanges: false, card: { previousName: '', nextName: '', fields: [] }, book: { previousName: '', nextName: '', renamed: false, added: [], removed: [], changed: [], unchangedCount: 0 } };
-        const t = (s) => `[TR:${s}]`;
-        const html = renderReplaceDiffOverview(model, { i18n: t });
-        expect(html).toContain('[TR:No structural changes detected');
+    test('renders markup-shaped card values as text', () => {
+        const payload = '<img src="invalid" onerror="throw new Error()">';
+        const model = buildReplaceDiffModel({
+            previousCharacter: mkCard({ name: 'Sable', description: 'old' }),
+            nextCharacter: mkCard({ name: 'Sable', description: payload }),
+        });
+        const node = renderReplacementOverview(model);
+        expect(node.querySelector('img')).toBeNull();
+        expect(node.querySelector('.luker_lib_diff_text.new').textContent).toBe(payload);
+    });
+});
+
+describe('world-info entry fields', () => {
+    function diffOf(prevEntry, nextEntry) {
+        const card = mkCard({ name: 'Ash', world: 'bryn-headland' });
+        return buildReplaceDiffModel({
+            previousCharacter: card,
+            nextCharacter: card,
+            previousLorebookSnapshot: { bookName: 'bryn-headland', entries: { '0': prevEntry } },
+            nextLorebookData: { entries: { '0': nextEntry } },
+        });
+    }
+
+    test('a key-only change is reported', () => {
+        const model = diffOf(
+            mkEntry('0', { comment: 'reef', key: ['reef'] }),
+            mkEntry('0', { comment: 'reef', key: ['reef', 'breakers'] }),
+        );
+        expect(model.book.changed.map(c => c.changedFields)).toEqual([['key']]);
+    });
+
+    test('order and enable changes are reported', () => {
+        const model = diffOf(
+            mkEntry('0', { comment: 'reef', order: 100 }),
+            mkEntry('0', { comment: 'reef', order: 250, disable: true }),
+        );
+        expect(model.book.changed[0].changedFields).toEqual(['disable', 'order']);
+    });
+
+    test('an uncommented entry is titled by its keys', () => {
+        const model = diffOf(
+            mkEntry('0', { key: ['lantern'], content: 'The lantern burns whale oil.' }),
+            mkEntry('0', { key: ['lantern', 'eastern light'], content: 'The eastern light burns whale oil on a sixteen-hour cycle.' }),
+        );
+        const node = renderReplacementOverview(model);
+        expect(node.querySelector('[data-change-kind="mod"] h4').textContent).toBe('0 · lantern, eastern light');
     });
 });

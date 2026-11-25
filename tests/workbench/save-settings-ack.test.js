@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { describe, test, expect, beforeAll, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach, jest } from '@jest/globals';
+import { installDomReadyJQuery } from '../util/browser-module-context.js';
 import { saveSettingsChecked } from '../../public/scripts/workbench/model/patch.js';
 
 const noop = () => {};
@@ -69,6 +70,7 @@ jest.unstable_mockModule('../../public/scripts/openai.js', () => stubExports([
     'getLastOpenAIGenerationId', 'hydrateOpenAIPresetData', 'loadOpenAISettings',
     'getChatCompletionModel', 'loadProxyPresets', 'bindCurrentChatCompletionPresetToCharacter',
     'clearCharacterBoundChatCompletionPreset', 'maybeApplyCharacterBoundPreset', 'initOpenAI',
+    'captureCharacterBoundSettingsSave',
 ], {
     oai_settings: {},
     openai_settings: [],
@@ -149,7 +151,14 @@ jest.unstable_mockModule('../../public/scripts/instruct-mode.js', () => stubExpo
     'formatInstructModeChat', 'formatInstructModePrompt', 'formatInstructModeExamples',
     'formatInstructModeStoryString', 'getInstructStoppingSequences',
 ], { force_output_sequence: {} }));
-jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({ initLocales: asyncNoop, t: (s, ...v) => (Array.isArray(s) ? String.raw(s, ...v) : String(s)) }));
+jest.unstable_mockModule('../../public/scripts/i18n.js', () => ({
+    initLocales: asyncNoop,
+    addLocaleData: noop,
+    getCurrentLocale: () => 'en',
+    translate: (s) => String(s ?? ''),
+    createScopedI18n: () => ({ i18n: (s) => String(s ?? ''), i18nFormat: (s) => String(s ?? '') }),
+    t: (s, ...v) => (Array.isArray(s) ? String.raw(s, ...v) : String(s)),
+}));
 jest.unstable_mockModule('../../public/scripts/tokenizers.js', () => stubExports([
     'getFriendlyTokenizerName', 'getTokenCount', 'getTokenCountAsync',
     'initTokenizers', 'saveTokenCacheDebounced', 'flushTokenCacheSave',
@@ -223,7 +232,11 @@ jest.unstable_mockModule('../../public/scripts/reasoning.js', () => stubExports(
     'extractReasoningBlocksFromData', 'extractReasoningDetailsFromData', 'extractReasoningFromData',
     'extractReasoningSignatureFromData', 'initReasoning', 'parseReasoningInSwipes', 'PromptReasoning',
     'registerReasoningSlashCommands', 'removeReasoningFromString', 'updateReasoningUI',
-], { ReasoningHandler: StubClass, ReasoningType: {} }));
+], {
+    extractNativeTurnFromData: () => ({ nativeParts: null, nativeContentBlocks: null, responsesOutputItems: null }),
+    ReasoningHandler: StubClass,
+    ReasoningType: {},
+}));
 jest.unstable_mockModule('../../public/scripts/util/AccountStorage.js', () => ({
     accountStorage: { getState: () => ({}), init: noop },
 }));
@@ -242,7 +255,7 @@ jest.unstable_mockModule('../../public/scripts/itemized-prompts.js', () => stubE
 jest.unstable_mockModule('../../public/scripts/system-messages.js', () => stubExports([
     'getSystemMessageByType', 'initSystemMessages', 'sendSystemMessage',
 ], { SAFETY_CHAT: '', system_message_types: {}, system_messages: {} }));
-jest.unstable_mockModule('../../public/scripts/announcements.js', () => ({ initAnnouncements: noop }));
+jest.unstable_mockModule('../../public/scripts/announcements.js', () => ({ initAnnouncements: noop, whenCriticalAnnouncementsDone: asyncNoop }));
 jest.unstable_mockModule('../../public/scripts/floor-state.js', () => stubExports([
     'settleChatChanged', 'settleMessageDeleted', 'settleMessageSwipeDeleted', 'settleMessageSwiped',
 ]));
@@ -265,9 +278,11 @@ jest.unstable_mockModule('../../public/scripts/swipe-picker.js', () => ({
 jest.unstable_mockModule('../../public/scripts/self-profiler.js', () => ({ bootSelfProfilerFromStorage: noop }));
 jest.unstable_mockModule('../../public/scripts/ws-delivery.js', () => ({
     createLukerDelivery: noop,
+    getLukerResponseMeta: () => null,
     installFetchProxy: noop,
     installFetchProxyForAllIframes: noop,
     installLifecycleHooks: noop,
+    onLukerResponseMeta: () => noop,
 }));
 jest.unstable_mockModule('../../public/scripts/settings-resource-read.js', () => ({ loadSettingsEnvelope: asyncNoop }));
 jest.unstable_mockModule('../../public/scripts/named-resource-read.js', () => ({
@@ -291,7 +306,12 @@ globalThis.window = Object.assign(globalThis, {
     removeEventListener: noop,
 });
 globalThis.toastr = { error: jest.fn(), warning: jest.fn(), info: jest.fn(), success: jest.fn(), subscribe: noop, options: {} };
-globalThis.$.ajaxPrefilter = noop;
+const jqueryEnv = installDomReadyJQuery({
+    selectionMethods: {
+        css: () => '',
+    },
+    staticProperties: { ajaxPrefilter: noop },
+});
 Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
     value: { getItem: () => null, setItem: noop, removeItem: noop },
@@ -300,6 +320,12 @@ Object.defineProperty(globalThis, 'localStorage', {
 const scriptMod = await import('../../public/script.js');
 const { saveSettings, getSettings } = scriptMod;
 const { extension_settings } = await import('../../public/scripts/extensions.js');
+const toastrStub = { error: jest.fn(), warning: jest.fn(), info: jest.fn(), success: jest.fn(), subscribe: noop, options: {} };
+globalThis.toastr = toastrStub;
+
+afterAll(() => {
+    jqueryEnv.restore();
+});
 
 describe('public/script.js saveSettings onSaved ack chain', () => {
     let origFetch;
@@ -341,14 +367,16 @@ describe('public/script.js saveSettings onSaved ack chain', () => {
             .rejects.toMatchObject({ code: 'write-failed' });
     });
 
-    test('chains multiple overlapping saveSettings onSaved callbacks through mergeSettingsSaveOptions', async () => {
+    test('serializes overlapping saveSettings attempts and invokes each onSaved callback in completion order', async () => {
         const deferred = [];
+        const started = Array.from({ length: 3 }, () => Promise.withResolvers());
         const fetchUrls = [];
         globalThis.fetch = jest.fn((url) => {
             fetchUrls.push(url);
             let resolve;
             const promise = new Promise((r) => { resolve = r; });
             deferred.push({ resolve });
+            started[deferred.length - 1].resolve();
             return promise;
         });
 
@@ -356,7 +384,7 @@ describe('public/script.js saveSettings onSaved ack chain', () => {
         const p1 = saveSettings(0, { directSave: true, onSaved: () => order.push('ack1') });
         expect(fetchUrls).toHaveLength(1);
 
-        // Overlapping saves while p1 is in flight queue into settingsSaveQueuedOptions
+        // Overlapping saves capture their own snapshots and chain onto settingsSaveInFlight
         extension_settings.wb_queued = { step: 2 };
         const p2 = saveSettings(0, { directSave: true, onSaved: () => order.push('ack2') });
         extension_settings.wb_queued = { step: 3 };
@@ -365,24 +393,34 @@ describe('public/script.js saveSettings onSaved ack chain', () => {
         // Second fetch has not fired while the first save is still in flight
         expect(fetchUrls).toHaveLength(1);
 
-        // Complete first save -> ack1 fires, then queued drain triggers second fetch
+        // Complete first save -> ack1 fires, then p2 triggers second fetch
         deferred[0].resolve({ ok: true, status: 200, statusText: 'OK' });
-        await new Promise(r => setTimeout(r, 10));
+        await p1;
+        await started[1].promise;
         expect(order).toEqual(['ack1']);
         expect(fetchUrls).toHaveLength(2);
 
-        // Complete queued save -> BOTH ack2 and ack3 fire via mergeSettingsSaveOptions
+        // Complete second save -> ack2 fires, then p3 triggers third fetch
         deferred[1].resolve({ ok: true, status: 200, statusText: 'OK' });
+        await p2;
+        await started[2].promise;
+        expect(order).toEqual(['ack1', 'ack2']);
+        expect(fetchUrls).toHaveLength(3);
+
+        // Complete third save -> ack3 fires
+        deferred[2].resolve({ ok: true, status: 200, statusText: 'OK' });
         await Promise.all([p1, p2, p3]);
         expect(order).toEqual(['ack1', 'ack2', 'ack3']);
     });
 
-    test('queued save failure does not invoke queued onSaved callbacks', async () => {
+    test('queued save failure does not invoke failed attempt onSaved callbacks', async () => {
         const deferred = [];
+        const started = Array.from({ length: 3 }, () => Promise.withResolvers());
         globalThis.fetch = jest.fn(() => {
             let resolve;
             const promise = new Promise((r) => { resolve = r; });
             deferred.push({ resolve });
+            started[deferred.length - 1].resolve();
             return promise;
         });
 
@@ -393,10 +431,16 @@ describe('public/script.js saveSettings onSaved ack chain', () => {
         const p3 = saveSettings(0, { directSave: true, onSaved: () => order.push('ack3') });
 
         deferred[0].resolve({ ok: true, status: 200, statusText: 'OK' });
-        await new Promise(r => setTimeout(r, 10));
+        await p1;
+        await started[1].promise;
         expect(order).toEqual(['ack1']);
 
         deferred[1].resolve({ ok: false, status: 500, statusText: 'Server Error' });
+        await p2;
+        await started[2].promise;
+        expect(order).toEqual(['ack1']);
+
+        deferred[2].resolve({ ok: false, status: 500, statusText: 'Server Error' });
         await Promise.all([p1, p2, p3]);
         expect(order).toEqual(['ack1']);
     });
