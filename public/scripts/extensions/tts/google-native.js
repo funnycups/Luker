@@ -34,7 +34,7 @@ export class GoogleNativeTtsProvider {
                 <label for="google-tts-conn-source">Connection source:</label>
                 <select id="google-tts-conn-source">
                     <option value="global">Follow the chat connection</option>
-                    <option value="attribution">Use the API connection selected for NPC attribution</option>
+                    <option value="attribution">Use the "Attribution API connection"</option>
                 </select>
                 <small id="google-tts-conn-status"></small>
             </div>
@@ -174,9 +174,9 @@ export class GoogleNativeTtsProvider {
     }
 
     /**
-     * Connection fields shared by TTS requests: reverse_proxy / proxy_password / base_url / secret_id.
+     * Connection fields for native TTS generation requests: reverse_proxy / proxy_password / base_url / secret_id.
      * global: follow the global chat connection (reverse proxy only when it is a valid URL).
-     * attribution: use the connection profile selected for NPC attribution; if no profile is selected, same as global.
+     * attribution: use the connection profile selected as the "Attribution API connection"; if none is selected, same as global.
      * A missing profile or a non-MakerSuite source throws instead of silently falling back to the chat connection.
      */
     buildConnectionFields() {
@@ -226,7 +226,7 @@ export class GoogleNativeTtsProvider {
         }
         const name = String(extension_settings?.tts?.npcAttributionApiPresetName ?? '').trim();
         if (!name) {
-            el.text('No API connection is selected for NPC attribution; same as following the chat connection.');
+            el.text('No "Attribution API connection" is selected; same as following the chat connection.');
             return;
         }
         try {
