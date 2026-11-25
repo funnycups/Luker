@@ -1,167 +1,621 @@
-import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { Registry } from './registry.js';
-import { ResourceScope } from './scope.js';
-import { failureGroup, failureEvents } from './errors.js';
-import { RunDiagnostics } from './diagnostics.js';
+import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { failureFrom, failureGroup } from './errors.js';
 
-/**
- * @typedef {object} RunOptions
- * @property {string} projectRoot
- * @property {string} profile
- * @property {string[]} command
- * @property {string} source
- * @property {string} [exportEnvironmentTo]
- * @property {AbortSignal} [signal] Actual execution cancellation; never persisted.
- * @property {(request: object) => unknown|Promise<unknown>} [authorityHandler] Execution-bound adapter commands; never persisted.
- *
- * @typedef {{ status: 'passed'|'failed'|'cancelled', error?: Error }} Outcome
- * @typedef {object} ResourceRecord
- * @property {string} runId
- * @property {string} scopeId
- * @property {string} resourceId
- * @property {string} kind
- * @property {string} [label]
- * @property {null|{path: string, dev: number|null, ino: number|null, realPath?: string}|ProcessLocator} locator
- * @property {'owned'|'borrowed'} owner
- * @property {'registered'|'allocating'|'created'|'acquired'|'ready'|'borrowed'|'stopped'|'exited'|'released'|'disposed'|'cleanup-failed'} state
- * @property {string[]} dependencies
- * @property {{path: string, dev: number|null, ino: number|null}} [startupLog]
- * @property {{path: string, dev: number|null, ino: number|null, acknowledged: string|null, completion?: string, publication?: {path: string, dev: number, ino: number}, directory?: {path: string, dev: number, ino: number}}} [terminal]
- *
- * @typedef {{ path: string, resourceId: string, ownership: 'owned', dev: number, ino: number }} OwnedDirectory
- * @typedef {{ path: string, ownership: 'borrowed' }} BorrowedDirectory
- * @typedef {{ runId: string, scopeId: string, resourceId: string, directoryPath: string, createDirectory: () => ResourceRecord['locator'], publish: (identity: ResourceRecord['locator']) => Promise<void> }} DirectoryAcquisition
- * @typedef {ResourceRecord & {removeDirectory: () => void}} DirectoryRelease
- * @typedef {{startProcess: () => Promise<ProcessLease>}} ProcessAcquisition
- * @typedef {ResourceRecord & {stopProcess: () => Promise<void>}} ProcessRelease
- * @typedef {{ name: string, scopeId: string, sha256: string, length: number, contentType: string, readStatus: 'complete', dev: number, ino: number }} ArtifactRef
- * @typedef {{ format: 'diagnostic-index-v1', version: string, projectRoot: string, runId: string, profile: string, source: string, outcome: 'failed'|'cancelled', artifacts: ArtifactRef[], errors: object[], storage: {bundle: {path: string, dev: number, ino: number}}, slotPath: string }} DiagnosticIndex
- * @typedef {{name: string, bytes: Uint8Array, contentType: string}} DiagnosticCapture
- * @typedef {{name: string, contentType: string, stage?: 'capture'|'complete', produce: () => Uint8Array|Promise<Uint8Array>}} DiagnosticProducer
- * @typedef {{label: string, stage: 'capture'|'drain'|'complete', callback: () => void|Promise<void>}} Finalizer
- * @typedef {{label: string, start: (signal: AbortSignal|undefined) => unknown|Promise<unknown>}} Continuation
- * @typedef {{ runId: string, profile: string, status: 'passed'|'failed'|'cancelled', errors: Error[], resources: ResourceRecord[], diagnosticIndex: DiagnosticIndex|null }} RunSummary
- * @typedef {{platform: 'darwin'|'linux', bootId: string, pid: number, startTime: string, uid: number}} NativeProcessIdentity
- * @typedef {{code: number|null, signal: string|null}} ProcessExit
- * @typedef {{runId: string, executionId: string, native: NativeProcessIdentity, control: {host: '127.0.0.1', port: number}}} ExecutionAuthority
- * @typedef {ExecutionAuthority & {resourceId: string, scopeId: string, ownerExecutionId: string, runtime: {version: string, execPath: string, sourceSHA256: string}}} ProcessAuthority
- * @typedef {{executionId: string, ownerExecutionId: string, controller: null|ProcessAuthority, worker: null|{allocation?: 'never-started', pid?: number, native?: null|NativeProcessIdentity, exit?: ProcessExit}}} ProcessLocator
- * @typedef {{label: string, command: string[], readyLine: string|{pattern: string}, cwd?: string, env?: Record<string, string>, sensitiveValues?: string[], dependsOn?: string[], signal?: AbortSignal, stopSignal?: 'SIGTERM'|'SIGKILL'}} ProcessOptions
- * @typedef {{resourceId: string, runId: string, scopeId: string, executionId: string, pid: number, identity: NativeProcessIdentity, startupLog: string, readyLine: string, exited: Promise<ProcessExit>, stop: () => Promise<void>}} ProcessLease
- * @typedef {{recovered: string[], active: string[], ignored: string[]}} RecoveryReport
- */
+const FINALIZER_STAGES = ['capture', 'drain', 'complete'];
+const DEFAULT_READY_TIMEOUT_MS = 60_000;
+const STOP_GRACE_MS = 5_000;
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE = /\u001b\[[0-9;]*[a-zA-Z]/g;
 
-export class TestRun {
-    #root;
-    #disposal;
-    #finishing;
+function stripAnsi(text) {
+    return String(text ?? '').replace(ANSI_ESCAPE, '');
+}
 
-    constructor(registry, signal, exportEnvironmentTo) {
-        this.registry = registry;
-        this.runId = registry.runId;
-        this.registryPath = registry.file;
-        this.active = true;
-        this.signal = signal;
-        this.exportEnvironmentTo = exportEnvironmentTo;
-        this.diagnostics = new RunDiagnostics(registry);
-        this.#root = new ResourceScope(this, { kind: 'run', label: registry.profile });
+function validateExpectedExit(expected) {
+    if (!expected || typeof expected !== 'object' || Array.isArray(expected)) {
+        throw new TypeError('Expected process exit requires an expectation object');
+    }
+    const { code, signal } = expected;
+    if (code === undefined && signal === undefined) {
+        throw new TypeError('Expected process exit requires code or signal');
+    }
+    return { code, signal };
+}
+
+function spawnManagedProcess(scope, run, options) {
+    if (!options || typeof options !== 'object') {
+        throw new TypeError('Managed process requires options');
+    }
+    const {
+        label = 'process',
+        command,
+        cwd,
+        env = {},
+        readyLine,
+        expectedExit: initialExpectedExit = null,
+        readyTimeoutMs = DEFAULT_READY_TIMEOUT_MS,
+        signal: abortSignal,
+    } = options;
+    if (!Array.isArray(command) || command.length === 0 || command.some(part => typeof part !== 'string')) {
+        throw new TypeError('Managed process requires a non-empty command array of strings');
+    }
+    const onSpawnReady = readyLine && typeof readyLine === 'object' && readyLine.onSpawn === true;
+    const readyRegex = readyLine && typeof readyLine === 'object' && typeof readyLine.pattern === 'string'
+        ? new RegExp(readyLine.pattern)
+        : null;
+    let expectedExit = initialExpectedExit ? validateExpectedExit(initialExpectedExit) : null;
+
+    return scope.acquire({
+        kind: 'process',
+        label,
+        allocate: async (handle) => {
+            if (abortSignal?.aborted) throw abortSignal.reason ?? new Error(`Process ${label} aborted before spawn`);
+            const child = spawn(command[0], command.slice(1), {
+                cwd,
+                env: { ...process.env, ...env },
+                stdio: ['ignore', 'pipe', 'pipe'],
+            });
+
+            let output = '';
+            let lineBuffer = '';
+            let matchedLine = '';
+            let exited = null;
+            let stopping = false;
+            let killing = false;
+            let settledReady = false;
+            let resolveReady;
+            let rejectReady;
+            const readyPromise = new Promise((resolve, reject) => {
+                resolveReady = resolve;
+                rejectReady = reject;
+            });
+            let resolveExit;
+            const exitPromise = new Promise(resolve => {
+                resolveExit = resolve;
+            });
+
+            const matchesExpected = actual => expectedExit !== null
+                && (expectedExit.code === undefined || actual.code === expectedExit.code)
+                && (expectedExit.signal === undefined || actual.signal === expectedExit.signal);
+
+            const makeStartupError = (detail) => {
+                const err = new Error(
+                    `${output.includes('EADDRINUSE') ? 'Port conflict during' : 'Process'} startup (${label}): ${detail}\n${output}`,
+                );
+                if (output.includes('EADDRINUSE')) err.code = 'EADDRINUSE';
+                err.startupLog = output;
+                return err;
+            };
+
+            const finishReady = (line = '') => {
+                if (settledReady) return;
+                settledReady = true;
+                matchedLine = line;
+                clearTimeout(readyTimer);
+                resolveReady();
+            };
+
+            const failReady = (err) => {
+                if (settledReady) return;
+                settledReady = true;
+                clearTimeout(readyTimer);
+                rejectReady(err);
+            };
+
+            const readyTimer = setTimeout(() => {
+                failReady(makeStartupError(`timed out after ${readyTimeoutMs}ms waiting for readiness`));
+            }, readyTimeoutMs);
+            readyTimer.unref?.();
+
+            const onChunk = (chunk) => {
+                const text = chunk.toString('utf8');
+                output += text;
+                if (readyRegex && !settledReady) {
+                    lineBuffer += text;
+                    const lines = lineBuffer.split(/\r?\n/);
+                    lineBuffer = lines.pop() ?? '';
+                    for (const line of lines) {
+                        const clean = stripAnsi(line);
+                        if (readyRegex.test(clean)) {
+                            finishReady(clean);
+                            return;
+                        }
+                    }
+                    const cleanTail = stripAnsi(lineBuffer);
+                    if (readyRegex.test(cleanTail)) {
+                        finishReady(cleanTail);
+                    }
+                }
+            };
+
+            child.stdout?.on('data', onChunk);
+            child.stderr?.on('data', onChunk);
+
+            child.once('spawn', () => {
+                if (onSpawnReady || !readyRegex) finishReady('');
+            });
+
+            child.once('error', (err) => {
+                const failure = failureFrom(err, `Failed to spawn process ${label}`);
+                failReady(failure);
+                if (!exited) {
+                    exited = { code: null, signal: null, error: failure };
+                    resolveExit(exited);
+                }
+            });
+
+            child.once('close', (code, sig) => {
+                exited = { code, signal: sig };
+                const isExpected = stopping || killing || matchesExpected(exited);
+                if (!settledReady) {
+                    if (onSpawnReady && isExpected) finishReady('');
+                    else failReady(makeStartupError(`exited before ready (code=${code}, signal=${sig})`));
+                } else if (!isExpected) {
+                    run.recordError(new Error(`Process ${label} exited unexpectedly (code=${code}, signal=${sig})`));
+                }
+                resolveExit(exited);
+            });
+
+            const stop = async () => {
+                if (exited) return exited;
+                stopping = true;
+                if (child.exitCode === null && child.signalCode === null) {
+                    try { child.kill('SIGTERM'); } catch { /* already gone */ }
+                }
+                const grace = new Promise(resolve => {
+                    const timer = setTimeout(() => resolve('timeout'), STOP_GRACE_MS);
+                    timer.unref?.();
+                    exitPromise.then(() => { clearTimeout(timer); resolve('exited'); });
+                });
+                const outcome = await grace;
+                if (outcome === 'timeout' && !exited && child.exitCode === null && child.signalCode === null) {
+                    try { child.kill('SIGKILL'); } catch { /* already gone */ }
+                }
+                return await exitPromise;
+            };
+
+            const onAbort = () => {
+                failReady(abortSignal.reason ?? new Error(`Process ${label} aborted`));
+                void stop();
+            };
+            abortSignal?.addEventListener('abort', onAbort, { once: true });
+
+            handle.onDispose(stop);
+
+            try {
+                await readyPromise;
+            } catch (err) {
+                await stop().catch(() => {});
+                throw err;
+            } finally {
+                abortSignal?.removeEventListener('abort', onAbort);
+            }
+
+            return Object.freeze({
+                resourceId: handle.resourceId,
+                runId: handle.runId,
+                scopeId: handle.scopeId,
+                get pid() { return child.pid ?? null; },
+                get output() { return output; },
+                get startupLog() { return output; },
+                get readyLine() { return matchedLine; },
+                get killed() { return killing; },
+                exited: exitPromise,
+                waitForExit: () => exitPromise,
+                expectExit(expected) {
+                    expectedExit = validateExpectedExit(expected);
+                },
+                async kill(sig = 'SIGKILL') {
+                    if (exited) return { ...exited };
+                    killing = true;
+                    try { child.kill(sig); } catch { /* already gone */ }
+                    return await exitPromise;
+                },
+                stop,
+            });
+        },
+        dispose: async (record) => {
+            if (typeof record.disposeFn === 'function') {
+                await record.disposeFn();
+            }
+        },
+    });
+}
+
+export class ResourceScope {
+    #run;
+    #parent;
+    #children = [];
+    #entries = [];
+    #finalizers = [];
+    #continuations = [];
+    #disposal = null;
+
+    constructor(run, descriptor, parent = null) {
+        if (!descriptor || typeof descriptor.kind !== 'string' || !descriptor.kind || typeof descriptor.label !== 'string' || !descriptor.label) {
+            throw new TypeError('A scope requires a nonempty kind and label');
+        }
+        this.#run = run;
+        this.#parent = parent;
+        this.scopeId = randomUUID();
+        this.record = {
+            scopeId: this.scopeId,
+            parentId: parent?.scopeId ?? null,
+            kind: descriptor.kind,
+            label: descriptor.label,
+            state: 'active',
+        };
     }
 
-    recordError(error) {
-        this.registry.reportError(error);
+    get transport() { return 'local'; }
+
+    #sharedOwner() {
+        let scope = this;
+        while (scope.#parent !== null && scope.record.kind !== 'worker') {
+            scope = scope.#parent;
+        }
+        return scope;
     }
 
-    scope(descriptor) {
-        if (!this.active) return Promise.reject(new Error(`Run ${this.runId} is finishing or finished`));
-        return this.#root.child(descriptor);
+    get sharedScopeId() {
+        return this.#sharedOwner().scopeId;
     }
 
-    /** Close admission and release resources without publishing a test outcome. */
+    #hasResource(resourceId) {
+        if (this.#entries.some(entry => entry.record.resourceId === resourceId)) return true;
+        return this.#parent ? this.#parent.#hasResource(resourceId) : false;
+    }
+
+    #findDirectoryEntry(resourceId) {
+        const hit = this.#entries.find(entry => entry.record.resourceId === resourceId && entry.record.kind === 'directory');
+        if (hit) return hit;
+        return this.#parent ? this.#parent.#findDirectoryEntry(resourceId) : null;
+    }
+
+    async child(descriptor) {
+        if (this.record.state !== 'active') throw new Error(`Scope ${this.scopeId} is ${this.record.state}`);
+        const child = new ResourceScope(this.#run, descriptor, this);
+        this.#children.push(child);
+        return child;
+    }
+
+    acquireShared(descriptor) {
+        return this.#sharedOwner().acquire(descriptor);
+    }
+
+    releaseShared(resource) {
+        return this.#sharedOwner().release(resource);
+    }
+
+    async acquire({ kind, label, allocate, dispose, options = {} }) {
+        if (this.record.state !== 'active') throw new Error(`Scope ${this.scopeId} is ${this.record.state}`);
+        if (typeof kind !== 'string' || !kind) throw new TypeError('A resource requires a kind');
+        if (typeof label !== 'string' || !label) throw new TypeError('A resource requires a nonempty label');
+        if (typeof allocate !== 'function') throw new TypeError('A resource requires an allocate function');
+
+        const resourceId = randomUUID();
+        const record = {
+            runId: this.#run.runId,
+            scopeId: this.scopeId,
+            resourceId,
+            kind,
+            label,
+            owner: 'owned',
+            state: 'allocating',
+            locator: null,
+            disposeFn: null,
+        };
+        const entry = {
+            record,
+            dispose: typeof dispose === 'function' ? dispose : async () => {},
+            options,
+            disposed: false,
+            releaseReported: false,
+        };
+        this.#entries.push(entry);
+
+        const handle = Object.freeze({
+            runId: this.#run.runId,
+            scopeId: this.scopeId,
+            resourceId,
+            onDispose(fn) {
+                record.disposeFn = fn;
+            },
+            setLocator(locator) {
+                record.locator = locator;
+            },
+        });
+
+        try {
+            const value = await allocate(handle, options);
+            record.state = 'ready';
+            return value;
+        } catch (error) {
+            const primary = failureFrom(error, `Resource ${resourceId} allocation failed`);
+            this.#run.recordError(primary);
+            const cleanupErrors = await this.#releaseEntry(entry);
+            if (cleanupErrors.length) {
+                throw failureGroup([primary, ...cleanupErrors], `Allocation and cleanup failed for ${label}`);
+            }
+            throw primary;
+        }
+    }
+
+    directory(label = 'temp directory') {
+        return this.acquire({
+            kind: 'directory',
+            label,
+            allocate: async (handle) => {
+                const base = this.#run.ensureTempRoot();
+                const dirPath = path.join(base, handle.resourceId);
+                fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+                const realPath = fs.realpathSync(dirPath);
+                const receipt = Object.freeze({
+                    resourceId: handle.resourceId,
+                    runId: handle.runId,
+                    scopeId: handle.scopeId,
+                    path: realPath,
+                    ownership: 'owned',
+                    label,
+                });
+                handle.setLocator({ path: realPath });
+                return receipt;
+            },
+            dispose: async (record) => {
+                const target = record.locator?.path;
+                if (target && fs.existsSync(target)) {
+                    fs.rmSync(target, { recursive: true, force: true });
+                }
+            },
+        });
+    }
+
+    async verifyDirectory(directory) {
+        const entry = directory && typeof directory.resourceId === 'string'
+            ? this.#findDirectoryEntry(directory.resourceId)
+            : null;
+        if (!entry || entry.record.owner !== 'owned') {
+            throw new Error(`Directory does not belong to this scope: ${directory?.resourceId ?? directory?.path}`);
+        }
+        const dirPath = entry.record.locator?.path;
+        if (!dirPath || !fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+            throw new Error(`Managed directory is missing: ${dirPath}`);
+        }
+        return Object.freeze({
+            resourceId: entry.record.resourceId,
+            runId: entry.record.runId,
+            scopeId: entry.record.scopeId,
+            path: dirPath,
+            ownership: 'owned',
+            label: entry.record.label,
+        });
+    }
+
+    async borrowDirectory(directory) {
+        if (typeof directory !== 'string' || !path.isAbsolute(directory)) {
+            throw new TypeError('A borrowed directory requires an absolute path');
+        }
+        if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) {
+            throw new Error(`Borrowed directory does not exist: ${directory}`);
+        }
+        const realPath = fs.realpathSync(directory);
+        const resourceId = randomUUID();
+        const record = {
+            runId: this.#run.runId,
+            scopeId: this.scopeId,
+            resourceId,
+            kind: 'directory',
+            label: 'borrowed directory',
+            owner: 'borrowed',
+            state: 'registered',
+            locator: { path: realPath },
+        };
+        this.#entries.push({ record, dispose: async () => {}, options: {}, disposed: false, releaseReported: false });
+        return Object.freeze({
+            resourceId,
+            runId: this.#run.runId,
+            scopeId: this.scopeId,
+            path: realPath,
+            ownership: 'borrowed',
+        });
+    }
+
+    process(options) {
+        return spawnManagedProcess(this, this.#run, options);
+    }
+
+    async onFinalize({ label, stage = 'drain', callback }) {
+        if (typeof label !== 'string' || !label || !FINALIZER_STAGES.includes(stage) || typeof callback !== 'function') {
+            throw new TypeError('Scope finalization requires a label, capture/drain/complete stage and callback');
+        }
+        const id = randomUUID();
+        this.#finalizers.push({ id, label, stage, callback, ran: false });
+        return id;
+    }
+
+    async captureDiagnostic() {
+        return null;
+    }
+
+    async diagnostic() {
+        return null;
+    }
+
+    async continuation({ label, start }) {
+        if (typeof label !== 'string' || !label || typeof start !== 'function') {
+            throw new TypeError('Scope continuation requires a label and start callback');
+        }
+        const operation = (async () => {
+            try {
+                return await start();
+            } catch (value) {
+                const error = failureFrom(value, `Continuation ${label} rejected`);
+                this.#run.recordError(error);
+                throw error;
+            }
+        })();
+        const settled = Promise.allSettled([operation]);
+        this.#continuations.push(async () => {
+            const [receipt] = await settled;
+            if (receipt.status === 'rejected') throw receipt.reason;
+        });
+        return Object.freeze({ settled: operation });
+    }
+
+    async release(resource) {
+        const resourceId = typeof resource === 'string' ? resource : resource?.resourceId;
+        if (typeof resourceId !== 'string' || !resourceId) {
+            throw new TypeError('A resource release requires a resource identity');
+        }
+        const entry = this.#entries.find(item => item.record.resourceId === resourceId);
+        if (!entry) {
+            if (this.#hasResource(resourceId)) return [];
+            throw new Error(`Resource ${resourceId} is not owned by scope ${this.scopeId}`);
+        }
+        const errors = await this.#releaseEntry(entry);
+        entry.releaseReported = true;
+        return errors;
+    }
+
+    async #releaseEntry(entry) {
+        if (entry.disposed) return [];
+        const { record } = entry;
+        if (record.owner !== 'owned') {
+            entry.disposed = true;
+            record.state = 'released';
+            return [];
+        }
+        try {
+            await entry.dispose(record, entry.options);
+            entry.disposed = true;
+            record.state = 'disposed';
+            return [];
+        } catch (cause) {
+            const error = failureFrom(cause, `Cannot dispose resource ${record.resourceId} (${record.kind})`);
+            record.state = 'cleanup-failed';
+            this.#run.recordError(error);
+            return [error];
+        }
+    }
+
+    async #runFinalizerStage(stage, errors) {
+        for (const child of [...this.#children].reverse()) {
+            await child.#runFinalizerStage(stage, errors);
+        }
+        const entries = this.#finalizers.filter(item => item.stage === stage && !item.ran).reverse();
+        for (const item of entries) {
+            item.ran = true;
+            try {
+                await item.callback();
+            } catch (value) {
+                const error = failureFrom(value, `Finalizer ${item.label} failed`);
+                this.#run.recordError(error);
+                errors.push(error);
+            }
+        }
+        if (stage === 'drain') {
+            for (const wait of this.#continuations.splice(0)) {
+                try {
+                    await wait();
+                } catch (value) {
+                    errors.push(failureFrom(value, 'Scope continuation failed'));
+                }
+            }
+        }
+    }
+
     dispose() {
         if (this.#disposal) return this.#disposal;
-        this.active = false;
+        this.record.state = 'disposing';
         this.#disposal = (async () => {
             const errors = [];
-            try { await this.#root.prepare(); }
-            catch (error) { this.recordError(error); errors.push(error); }
-            try { await this.#root.dispose(); }
-            catch (error) { this.recordError(error); errors.push(error); }
-            if (this.exportEnvironmentTo !== undefined) {
-                try { await this.diagnostics.exportEnvironment(this.exportEnvironmentTo); }
-                catch (error) { this.recordError(error); errors.push(error); if (!this.registry.environmentExport.archive) this.registry.environmentExport.state = 'failed'; }
-                try { await this.registry.save(); }
-                catch (error) { this.recordError(error); errors.push(error); }
+            for (const stage of FINALIZER_STAGES) {
+                await this.#runFinalizerStage(stage, errors);
             }
-            const originals = [...new Set(errors.flatMap(failureEvents))];
-            if (originals.length) throw failureGroup(originals, `Cannot dispose run ${this.runId}`);
+            for (const child of [...this.#children].reverse()) {
+                try {
+                    await child.dispose();
+                } catch (err) {
+                    errors.push(...(err instanceof AggregateError ? err.errors : [err]));
+                }
+            }
+            for (const entry of [...this.#entries].reverse()) {
+                const released = await this.#releaseEntry(entry);
+                if (!entry.releaseReported) {
+                    errors.push(...released);
+                }
+            }
+            this.record.state = 'disposed';
+            if (errors.length) {
+                throw failureGroup(errors, `Cannot dispose scope ${this.scopeId}`);
+            }
         })();
         return this.#disposal;
     }
-
-    /** @param {Outcome} outcome @returns {Promise<RunSummary>} */
-    finish(outcome) {
-        if (this.#finishing) return this.#finishing;
-        if (!outcome || !['passed', 'failed', 'cancelled'].includes(outcome.status) || (outcome.error !== undefined && !(outcome.error instanceof Error))) {
-            return Promise.reject(new TypeError('Run outcome requires passed, failed or cancelled status and an optional Error'));
-        }
-        this.active = false;
-        this.#finishing = (async () => {
-            if (outcome.error !== undefined) this.recordError(outcome.error);
-            try {
-                await this.dispose();
-            } catch (error) {
-                this.recordError(error);
-            }
-            let failed = false;
-            try { await this.registry.closeAuthority(); }
-            catch (error) { this.recordError(error); failed = true; }
-            this.registry.status = this.registry.errors.length ? 'failed' : outcome.status;
-            try {
-                if (this.registry.status !== 'passed') {
-                    await this.diagnostics.captureLogs();
-                    await this.diagnostics.publish({ status: outcome.status === 'cancelled' ? 'cancelled' : 'failed' });
-                } else await this.diagnostics.discard();
-            } catch (error) {
-                this.recordError(error); this.registry.status = 'failed';
-                const persistence = value => value?.publication?.registryPath === this.registryPath || value instanceof AggregateError && value.errors.some(persistence);
-                if (persistence(error)) failed = true;
-            }
-            try {
-                await this.registry.save();
-            } catch (error) {
-                this.recordError(error);
-                this.registry.status = 'failed';
-                failed = true;
-            }
-            try { this.registry.concludeWriter(); }
-            catch (error) { this.recordError(error); this.registry.status = 'failed'; failed = true; }
-            if (failed) throw failureGroup([...this.registry.errors], `Cannot finish run ${this.runId}: registry ${this.registryPath}`);
-            return Object.freeze({
-                runId: this.runId, profile: this.registry.profile, status: this.registry.status,
-                errors: Object.freeze([...this.registry.errors]), resources: structuredClone(this.registry.resources), diagnosticIndex: this.registry.diagnosticIndex,
-            });
-        })();
-        return this.#finishing;
-    }
 }
 
-/** @param {RunOptions} options @returns {Promise<TestRun>} */
-export async function createRun(options) {
-    if (!options || typeof options.projectRoot !== 'string' || !path.isAbsolute(options.projectRoot)) throw new TypeError('Run projectRoot must be an absolute real directory');
-    for (const name of ['profile', 'source']) {
-        if (typeof options[name] !== 'string' || !options[name]) throw new TypeError(`Run ${name} must be a nonempty string`);
-    }
-    if (!Array.isArray(options.command) || options.command.length === 0 || options.command.some(value => typeof value !== 'string')) throw new TypeError('Run command must contain its executable and arguments');
-    if (options.exportEnvironmentTo !== undefined && (typeof options.exportEnvironmentTo !== 'string' || !path.isAbsolute(options.exportEnvironmentTo))) throw new TypeError('Environment export requires an explicit absolute destination');
-    if (options.signal !== undefined && !(options.signal instanceof AbortSignal)) throw new TypeError('Run signal must be an AbortSignal');
-    if (options.authorityHandler !== undefined && typeof options.authorityHandler !== 'function') throw new TypeError('Run authorityHandler must be a function');
-    const exportEnvironmentTo = options.exportEnvironmentTo;
-    const registry = await Registry.create({ ...options, projectRoot: path.resolve(options.projectRoot) }, randomUUID());
-    const run = new TestRun(registry, options.signal, exportEnvironmentTo);
-    try { await registry.save(); await run.diagnostics.ensure(); }
-    catch (error) {
-        return registry.rejectAdmission(error);
-    }
+export async function createRun({ profile = 'unit' } = {}) {
+    const runId = randomUUID();
+    const scopes = [];
+    const errors = [];
+    let tempRoot = null;
+    let active = true;
+    let finished = null;
+
+    const run = {
+        runId,
+        profile,
+        get active() { return active; },
+        get errors() { return errors; },
+        ensureTempRoot() {
+            if (!tempRoot) {
+                const root = path.join(fs.realpathSync(os.tmpdir()), `luker-test-${runId}`);
+                fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+                tempRoot = root;
+            }
+            return tempRoot;
+        },
+        recordError(error) {
+            const normalized = failureFrom(error);
+            if (!errors.includes(normalized)) errors.push(normalized);
+            return normalized;
+        },
+        async scope(descriptor) {
+            if (!active) throw new Error(`Run ${runId} is finished`);
+            const scope = new ResourceScope(run, descriptor, null);
+            scopes.push(scope);
+            return scope;
+        },
+        finish({ status = 'passed' } = {}) {
+            if (finished) return finished;
+            active = false;
+            finished = (async () => {
+                for (const scope of [...scopes].reverse()) {
+                    try {
+                        await scope.dispose();
+                    } catch (err) {
+                        for (const item of (err instanceof AggregateError ? err.errors : [err])) {
+                            run.recordError(item);
+                        }
+                    }
+                }
+                if (tempRoot && fs.existsSync(tempRoot)) {
+                    try {
+                        fs.rmSync(tempRoot, { recursive: true, force: true });
+                    } catch (err) {
+                        run.recordError(err);
+                    }
+                }
+                const finalStatus = status === 'passed' && errors.length === 0 ? 'passed' : 'failed';
+                return { runId, status: finalStatus, errors: [...errors] };
+            })();
+            return finished;
+        },
+    };
+
     return run;
 }

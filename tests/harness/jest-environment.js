@@ -3,14 +3,10 @@ import nodeEnvironment from 'jest-environment-node';
 const { TestEnvironment } = nodeEnvironment;
 const actualError = value => Array.isArray(value) ? value[0] : value;
 
-// Jest only exposes assertion failures to its reporter, not to setup hooks.
-// Retain the actual errors on the sandbox global so the managed run can finish
-// with the outcome Jest observed.
 export default class ManagedTestEnvironment extends TestEnvironment {
     constructor(config, context) {
         super(config, context);
         this.global.__lukerJestManagedEnvironment = true;
-        this.global.__lukerJestProjectRoot = config.projectConfig.testEnvironmentOptions.resourceProjectRoot;
     }
 
     async handleTestEvent(event, state) {
@@ -25,12 +21,11 @@ export default class ManagedTestEnvironment extends TestEnvironment {
                 if (retried.has(failures[index])) failures.splice(index, 1);
             }
         } else if (event.name === 'run_finish') {
-            for (const value of state?.unhandledErrors ?? []) failures.push(Array.isArray(value) ? value[0] : value);
+            for (const value of state?.unhandledErrors ?? []) failures.push(actualError(value));
             const finish = this.global.__lukerJestFinishRun;
             if (typeof finish === 'function') {
                 try { await finish(); }
                 catch (error) {
-                    // Report run-level failure without discarding native case results.
                     state.unhandledErrors.push(error);
                 }
             }

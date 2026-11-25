@@ -579,95 +579,60 @@ test('cross-store moves never delete source before acknowledged destination and 
     }
 });
 
-test('persisted invalid-entry cleanup fails honestly and racing a real edit preserves the newly saved sibling', async ({ page, resources }) => {
+test('invalid persisted regex entries are skipped read-only without background writes and dropped cleanly on explicit edit', async ({ page, resources }) => {
     test.setTimeout(120_000);
     const corruptExt = {
         ...INITIAL_EXT_A,
         regex_scripts: [INITIAL_SCOPED_SCRIPT, null],
     };
     await bootstrapScenario(resources, {
-        scenarioId: '104-regex-cleanup-race',
+        scenarioId: '104-regex-readonly-skip',
         extA: corruptExt,
     });
 
-    // Subcase A: Cleanup failure keeps persisted/live invalid entry intact and does NOT falsely claim automatic removal.
-    const charsDir = resolve(server.dataRoot, 'default-user', 'characters');
-    await awaitMainUI(page, server.baseURL);
-    chmodSync(charsDir, 0o555);
-    try {
-        const failedCleanup = page.waitForResponse(r => r.url().endsWith('/api/characters/merge-attributes'));
-        await selectCharacterByName(page, NAME_A);
-        expect((await failedCleanup).status()).toBe(500);
-        await expect(page.locator('#toast-container .toast-error')).toBeVisible();
-        await expect(page.locator('#toast-container .toast-error')).not.toContainText('were removed automatically');
-        const mirrorsWhileOffline = await readRegexMirrors(page);
-        expect(mirrorsWhileOffline.liveA.regex_scripts).toEqual([INITIAL_SCOPED_SCRIPT, null]);
-    } finally {
-        chmodSync(charsDir, 0o755);
-    }
-
-    // Subcase B: Reload with corrupt card, hold cleanup's merge-attributes response via observeOperations,
-    // save a real new sibling script via UI editor while cleanup is in flight -> BOTH survive and null is removed!
-    const observer = await observeOperations({
-        page,
-        scope: resources,
-        baseURL: server.baseURL,
-        patterns: ['Request', 'Response'].map(requestStage => ({ urlPattern: '*/api/characters/merge-attributes*', requestStage })),
-        networkFilter: e => new URL(e.request.url).pathname.endsWith('/api/characters/merge-attributes'),
-        readStored: () => readDiskCard(AVATAR_A),
-        recordBodies: true,
-        enableDebugger: false,
-    });
-    const heldResponses = [];
-    let releaseFirstResolver = null;
-    observer.hold('hold-first-cleanup-response', ({ response, event }) => {
-        if (!response) return false;
-        if (heldResponses.length === 0) {
-            heldResponses.push(event);
-            releaseFirstResolver?.(event);
-            return true;
+    const mergeRequests = [];
+    page.on('request', r => {
+        if (r.url().endsWith('/api/characters/merge-attributes')) {
+            mergeRequests.push(r.postData());
         }
-        return false;
-    }, { repeat: false });
+    });
 
-    try {
-        const firstHeldPromise = new Promise(r => { releaseFirstResolver = r; });
-        await page.reload();
-        await awaitMainUI(page, server.baseURL);
-        await selectCharacterByName(page, NAME_A);
-        const firstCleanupEvent = await firstHeldPromise;
+    // Selecting the character and opening Regex Editor must NOT trigger unprompted background writes.
+    await awaitMainUI(page, server.baseURL);
+    await selectCharacterByName(page, NAME_A);
+    await openRegexDrawer(page);
+    expect(mergeRequests).toEqual([]);
+    expect(readDiskCard(AVATAR_A).extensions.regex_scripts).toEqual([INITIAL_SCOPED_SCRIPT, null]);
 
-        // While cleanup POST is still held, open the real "+ Scoped" editor and save a new sibling script.
-        await openRegexDrawer(page);
-        await page.locator('#open_scoped_editor').click();
-        const popup = page.locator('dialog.popup[open]').last();
-        await expect(popup).toBeVisible();
-        await fillRegexEditor(popup, {
-            scriptName: 'Sibling Saved During Cleanup',
-            findRegex: '/harbor/g',
-            replaceString: 'ANCHORAGE',
-            placements: [1],
-        });
-        await popup.locator('.popup-button-ok').first().click();
+    const mirrorsBeforeEdit = await readRegexMirrors(page);
+    expect(mirrorsBeforeEdit.scopedRowIds).toEqual([INITIAL_SCOPED_SCRIPT.id]);
 
-        // Release the held cleanup response; the queued real edit executes next and must survive intact.
-        await observer.release(firstCleanupEvent);
-        await expect(popup).toBeHidden();
+    // Explicitly saving a new sibling script via UI editor drops the invalid null entry cleanly.
+    await page.locator('#open_scoped_editor').click();
+    const popup = page.locator('dialog.popup[open]').last();
+    await expect(popup).toBeVisible();
+    await fillRegexEditor(popup, {
+        scriptName: 'Sibling Saved Explicitly',
+        findRegex: '/harbor/g',
+        replaceString: 'ANCHORAGE',
+        placements: [1],
+    });
+    const saveResponse = page.waitForResponse(r => r.url().endsWith('/api/characters/merge-attributes') && r.status() === 200);
+    await popup.locator('.popup-button-ok').first().click();
+    await saveResponse;
+    await expect(popup).toBeHidden();
 
-        const finalMirrors = await readRegexMirrors(page);
-        expect(finalMirrors.liveA.regex_scripts.map(s => s.scriptName)).toEqual([
-            INITIAL_SCOPED_SCRIPT.scriptName,
-            'Sibling Saved During Cleanup',
-        ]);
-        expect(readDiskCard(AVATAR_A).extensions.regex_scripts.map(s => s.scriptName)).toEqual([
-            INITIAL_SCOPED_SCRIPT.scriptName,
-            'Sibling Saved During Cleanup',
-        ]);
-        expect(finalMirrors.jsonA).toEqual(finalMirrors.liveA);
-        expect(finalMirrors.editorExtensions).toEqual(finalMirrors.liveA);
-    } finally {
-        await observer.close();
-    }
+    const finalMirrors = await readRegexMirrors(page);
+    expect(finalMirrors.liveA.regex_scripts.map(s => s.scriptName)).toEqual([
+        INITIAL_SCOPED_SCRIPT.scriptName,
+        'Sibling Saved Explicitly',
+    ]);
+    expect(readDiskCard(AVATAR_A).extensions.regex_scripts.map(s => s.scriptName)).toEqual([
+        INITIAL_SCOPED_SCRIPT.scriptName,
+        'Sibling Saved Explicitly',
+    ]);
+    expect(finalMirrors.jsonA).toEqual(finalMirrors.liveA);
+    expect(finalMirrors.editorExtensions).toEqual(finalMirrors.liveA);
 });
 
 test('selected character change during pending scoped write keeps ownership on original character and preset failure keeps editor open', async ({ page, resources }) => {

@@ -36,9 +36,6 @@ jobs:
       - name: Check plugin import boundaries
         run: npm run lint:plugin-imports
 
-      - name: Check test resource ownership boundaries
-        run: npm run lint:test-ownership
-
   run-tests:
     name: ✅ Run Unit & Local Storage Tests on PR
     runs-on: ubuntu-latest
@@ -70,10 +67,6 @@ jobs:
 
       - name: Run managed local storage tests
         run: npm run test:storage:local --prefix tests -- --maxWorkers=3
-
-      - name: Run native harness lifecycle tests
-        working-directory: tests
-        run: node --test harness/resource-scope.test.mjs harness/resource-recovery.test.mjs harness/diagnostic-retention.test.mjs harness/seed-and-profiles.test.mjs harness/jest-lifecycle.test.mjs harness/entrypoints.test.mjs
 
   run-storage-sql:
     name: ✅ Run SQL Storage Integration Tests on PR
@@ -164,32 +157,3 @@ jobs:
         # The DB fixtures share one MySQL/Postgres service; tmpfs keeps DDL in
         # memory, while bounding workers avoids connection/lock spikes.
         run: npm run test:storage:sql --prefix tests
-
-  run-browser-harness:
-    name: ✅ Run Browser & Observation Harness Tests on PR
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            tests/package-lock.json
-
-      - name: Install root dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Install test dependencies
-        run: npm ci --ignore-scripts --prefix tests
-
-      - name: Install Chromium for Playwright
-        run: npx --prefix tests playwright install --with-deps chromium
-
-      - name: Run browser lifecycle and operation observation suites
-        run: node tests/harness/run.js --profile unit --file tests/harness/browser-lifecycle.test.mjs --file tests/harness/operation-observation.test.mjs

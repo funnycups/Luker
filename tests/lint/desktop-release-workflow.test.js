@@ -3,6 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parse as parseYaml } from 'yaml';
+import { testWithResources } from '../harness/jest.js';
+import {
+    PackagedDesktopArtifactError,
+    resolvePackagedDesktopArtifact,
+} from '../e2e/_lib/desktop-artifact.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW = path.join(REPO_ROOT, '.github', 'workflows', 'desktop-release.yml');
@@ -220,4 +225,89 @@ test('the upload globs cover every file the build emits', () => {
     for (const name of names) {
         expect(patterns.some(pattern => globToRegExp(pattern).test(`${DIST}/${name}`))).toBe(true);
     }
+});
+
+test('the release workflow never couples build jobs to tests/', () => {
+    const workflow = readWorkflow();
+    expect(runSteps(workflow).map(step => step.run).join('\n')).not.toMatch(/tests\//);
+});
+
+testWithResources('resolvePackagedDesktopArtifact matches electron-builder layouts on macOS, Windows, and Linux', async (scope) => {
+    const dist = await scope.directory('desktop-packaged-layouts');
+    const desktopManifest = JSON.parse(fs.readFileSync(DESKTOP_PACKAGE, 'utf8'));
+    const productName = desktopManifest.build.productName;
+    const linuxBinary = desktopManifest.build.linux?.executableName
+        ?? desktopManifest.build.executableName
+        ?? desktopManifest.name;
+
+    const layouts = [
+        {
+            platform: 'darwin',
+            arch: 'arm64',
+            executable: path.join('mac-arm64', `${productName}.app`, 'Contents', 'MacOS', productName),
+            resources: path.join('mac-arm64', `${productName}.app`, 'Contents', 'Resources'),
+            mode: 0o755,
+        },
+        {
+            platform: 'darwin',
+            arch: 'x64',
+            executable: path.join('mac', `${productName}.app`, 'Contents', 'MacOS', productName),
+            resources: path.join('mac', `${productName}.app`, 'Contents', 'Resources'),
+            mode: 0o755,
+        },
+        {
+            platform: 'win32',
+            arch: 'x64',
+            executable: path.join('win-unpacked', `${productName}.exe`),
+            resources: path.join('win-unpacked', 'resources'),
+            mode: 0o644,
+        },
+        {
+            platform: 'win32',
+            arch: 'arm64',
+            executable: path.join('win-arm64-unpacked', `${productName}.exe`),
+            resources: path.join('win-arm64-unpacked', 'resources'),
+            mode: 0o644,
+        },
+        {
+            platform: 'linux',
+            arch: 'x64',
+            executable: path.join('linux-unpacked', linuxBinary),
+            resources: path.join('linux-unpacked', 'resources'),
+            mode: 0o755,
+        },
+        {
+            platform: 'linux',
+            arch: 'arm64',
+            executable: path.join('linux-arm64-unpacked', linuxBinary),
+            resources: path.join('linux-arm64-unpacked', 'resources'),
+            mode: 0o755,
+        },
+    ];
+
+    for (const layout of layouts) {
+        const execPath = path.join(dist.path, layout.executable);
+        const backendPkg = path.join(dist.path, layout.resources, 'luker', 'package.json');
+        fs.mkdirSync(path.dirname(execPath), { recursive: true });
+        fs.mkdirSync(path.dirname(backendPkg), { recursive: true });
+        fs.writeFileSync(execPath, `binary-${layout.platform}-${layout.arch}`, { mode: layout.mode });
+        fs.writeFileSync(backendPkg, JSON.stringify({ name: 'luker', version: '2.9.0-test' }));
+
+        const artifact = resolvePackagedDesktopArtifact({
+            artifactDir: dist.path,
+            platform: layout.platform,
+            arch: layout.arch,
+        });
+        expect(artifact.kind).toBe('packaged');
+        expect(artifact.platform).toBe(layout.platform);
+        expect(artifact.arch).toBe(layout.arch);
+        expect(artifact.appVersion).toBe('2.9.0-test');
+        expect(artifact.executablePath).toBe(fs.realpathSync(execPath));
+        expect(artifact.resourcesDir).toBe(fs.realpathSync(path.join(dist.path, layout.resources)));
+        expect(artifact.executableSHA256).toMatch(/^[a-f0-9]{64}$/);
+    }
+
+    const empty = await scope.directory('desktop-packaged-empty');
+    expect(() => resolvePackagedDesktopArtifact({ artifactDir: empty.path, platform: 'linux', arch: 'x64' }))
+        .toThrow(PackagedDesktopArtifactError);
 });

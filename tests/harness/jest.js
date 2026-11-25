@@ -76,7 +76,7 @@ export { currentScopeForResources };
  * Wrap a Jest case with an explicit managed scope. The scope is released after
  * the body, including when the body fails.
  * @param {string} name
- * @param {(scope: import('./resources/scope.js').ResourceScope) => void|Promise<void>} body
+ * @param {(scope: import('./resources/run.js').ResourceScope) => void|Promise<void>} body
  * @param {number} [timeout]
  */
 export function testWithResources(name, body, timeout) {
@@ -125,7 +125,7 @@ export function testWithResources(name, body, timeout) {
 /**
  * Acquire a file-scoped scenario once for all cases. The returned getter is
  * available after Jest runs the file's beforeAll hooks.
- * @param {(scope: import('./resources/scope.js').ResourceScope) => unknown|Promise<unknown>} factory
+ * @param {(scope: import('./resources/run.js').ResourceScope) => unknown|Promise<unknown>} factory
  */
 export function suiteResources(factory) {
     if (typeof factory !== 'function') throw new TypeError('Suite resources require a factory');

@@ -2,7 +2,6 @@
     "projects": [
         {
             "displayName": "unit",
-            "globalSetup": "<rootDir>/util/global-setup.js",
             "testEnvironment": "<rootDir>/harness/jest-environment.js",
             "transform": {},
             "setupFiles": [
@@ -37,7 +36,6 @@
         },
         {
             "displayName": "storage-local",
-            "globalSetup": "<rootDir>/util/global-setup.js",
             "testEnvironment": "<rootDir>/harness/jest-environment.js",
             "transform": {},
             "setupFiles": [
@@ -81,7 +79,6 @@
         },
         {
             "displayName": "storage-sql",
-            "globalSetup": "<rootDir>/util/global-setup.js",
             "testEnvironment": "<rootDir>/harness/jest-environment.js",
             "transform": {},
             "setupFiles": [

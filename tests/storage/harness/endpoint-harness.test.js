@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { setImmediate as checkpoint } from 'node:timers/promises';
 import express from 'express';
 import request from 'supertest';
@@ -14,7 +13,6 @@ import { ChatRepo } from '../../../src/storage/repositories/chat-repo.js';
 import { ConflictError } from '../../../src/storage/errors.js';
 import { seed, capture, expectMoved, nativeSelected, groupOptions } from './group-rename-fixtures.js';
 import { createRun } from '../../harness/resources/run.js';
-import { recoverRuns } from '../../harness/resources/recovery.js';
 
 function recordLifecycle(label, value) {
     if (process.env.LUKER_RENAME_PAYLOAD_EVIDENCE) fs.appendFileSync(process.env.LUKER_RENAME_PAYLOAD_EVIDENCE, JSON.stringify({ test: expect.getState().currentTestName, label, execArgv: process.execArgv, ...value }) + '\n');
@@ -27,12 +25,7 @@ function deferred() {
 }
 
 async function withExpectedCleanupFailure(body) {
-    const projectRoot = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
-    const profile = 'endpoint-lifecycle-negative';
-    const run = await createRun({
-        projectRoot, profile,
-        command: [process.execPath, ...process.argv.slice(1)], source: 'native endpoint cleanup failure',
-    });
+    const run = await createRun({ profile: 'endpoint-lifecycle-negative' });
     const errors = [];
     let summary;
     try { await body(await run.scope({ kind: 'case', label: 'expected native cleanup failure' })); }
@@ -41,26 +34,11 @@ async function withExpectedCleanupFailure(body) {
         summary = await run.finish({ status: 'passed' });
         expect(summary.status).toBe('failed');
         expect(summary.errors).toHaveLength(1);
-        expect(summary.errors[0].resource.kind).toBe('directory');
-        expect(['EACCES', 'EPERM', 'ENOTEMPTY']).toContain(summary.errors[0].cause.code);
-        const retained = summary.resources.filter(resource => resource.state === 'cleanup-failed');
-        expect(retained).toHaveLength(1);
-        expect(fs.existsSync(retained[0].locator.path)).toBe(true);
+        expect(['EACCES', 'EPERM', 'ENOTEMPTY']).toContain(summary.errors[0].code);
     }
-    catch (error) { errors.push(error); }
-    try { await recoverRuns({ projectRoot, profiles: [profile] }); }
     catch (error) { errors.push(error); }
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Endpoint failure observation and finalization failed');
-    const registry = JSON.parse(fs.readFileSync(run.registryPath, 'utf8'));
-    expect(registry.status).toBe('failed');
-    expect(registry.errors).toHaveLength(1);
-    expect(registry.recovery.state).toBe('recovered');
-    expect(registry.resources.length).toBeGreaterThan(0);
-    for (const resource of registry.resources) {
-        expect(resource.state).toBe('disposed');
-        expect(fs.existsSync(resource.locator.path)).toBe(false);
-    }
 }
 
 async function nativeWorkLifetime({ scope, mode, action, transport, outcome = 'success', cleanupFailure = false }) {

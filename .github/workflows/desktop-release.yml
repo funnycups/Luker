@@ -61,9 +61,6 @@ jobs:
         working-directory: desktop-app
         run: node scripts/build-desktop.mjs mac
 
-      - name: Verify packaged desktop artifact metadata
-        run: node -e "import('./tests/e2e/_lib/desktop.js').then(m => console.log(JSON.stringify(m.resolvePackagedDesktopArtifact(), null, 2)))"
-
       - name: Upload the Apple Silicon disk image
         uses: actions/upload-artifact@v4
         with:
@@ -117,9 +114,6 @@ jobs:
         working-directory: desktop-app
         run: node scripts/build-desktop.mjs win
 
-      - name: Verify packaged desktop artifact metadata
-        run: node -e "import('./tests/e2e/_lib/desktop.js').then(m => console.log(JSON.stringify(m.resolvePackagedDesktopArtifact(), null, 2)))"
-
       - name: Upload the Intel installer
         uses: actions/upload-artifact@v4
         with:
@@ -172,9 +166,6 @@ jobs:
       - name: Build Linux artifacts
         working-directory: desktop-app
         run: node scripts/build-desktop.mjs linux
-
-      - name: Verify packaged desktop artifact metadata
-        run: node -e "import('./tests/e2e/_lib/desktop.js').then(m => console.log(JSON.stringify(m.resolvePackagedDesktopArtifact(), null, 2)))"
 
       - name: Upload the Intel AppImage
         uses: actions/upload-artifact@v4
