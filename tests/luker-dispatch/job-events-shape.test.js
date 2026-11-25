@@ -70,13 +70,10 @@ describe('runLukerDispatch — job.events envelope shape (WS delivery contract)'
         // Expected sequence:
         //   1. chunk (dispatch)
         //   2. chunk (dispatch)
-        //   3. end (dispatch's emit.end — flips safeEmit terminal-lock)
-        //   4. chunk (runner-appended trailer via emit.trailer, which
-        //      bypasses safeEmit's lock — see context.js emit.trailer)
-        // The runner's own ctx.emit.end() after the trailer is a no-op
-        // because safeEmit already latched terminal on step 3.
+        //   3. meta (runner-emitted out-of-band metadata)
+        //   4. end (runner-emitted terminal envelope)
         const kinds = job.events.map(e => e?.data?.kind);
-        expect(kinds).toEqual(['chunk', 'chunk', 'end', 'chunk']);
+        expect(kinds).toEqual(['chunk', 'chunk', 'meta', 'end']);
 
         // Each chunk entry's `data.data` is a Uint8Array / Buffer, NOT a
         // string. WS delivery `eventToFrame` base64-encodes bytes before
@@ -101,14 +98,12 @@ describe('runLukerDispatch — job.events envelope shape (WS delivery contract)'
 
         const job = getTaskByRequestId('events-envelope-end-1', 'events-shape-alice');
         expect(job).not.toBeNull();
-        // Streaming case: dispatch's emit.end lands as the terminal envelope,
-        // then the runner appends its trailer chunk (`data: {"luker":{...}}\n\n`)
-        // via emit.trailer which bypasses safeEmit's terminal-lock. So the
-        // stored sequence ends with the trailer chunk. The `end` entry sits
-        // one before last.
-        const endEntry = job.events.find(e => e?.data?.kind === 'end');
-        expect(endEntry).toBeDefined();
+        // Streaming case: runner emits out-of-band `meta` then `end` as the
+        // terminal envelope.
+        const endEntry = job.events[job.events.length - 1];
+        expect(endEntry?.data?.kind).toBe('end');
         expect(endEntry.data.data).toBeNull();
+        if (job.persistenceTimer) { clearTimeout(job.persistenceTimer); job.persistenceTimer = null; }
     });
 
     test('emit.head lands as a `{kind:"head", data:{status, headers}}` envelope entry that ws-delivery eventToFrame turns into a head wire frame', async () => {
@@ -146,7 +141,7 @@ describe('runLukerDispatch — job.events envelope shape (WS delivery contract)'
         function eventToFrameGuardMirror(entry) {
             const data = entry?.data;
             if (!data || typeof data !== 'object') return null;
-            if (!['head', 'chunk', 'end', 'error'].includes(data.kind)) return null;
+            if (!['head', 'chunk', 'meta', 'end', 'error'].includes(data.kind)) return null;
             return { type: data.kind };  // shape-check only
         }
 
@@ -175,12 +170,12 @@ describe('runLukerDispatch — job.events envelope shape (WS delivery contract)'
     });
 
     test('job.text is still accumulated from streaming chunks via accumulateChunkTextIntoJob (envelope shape does not break the recovery text feed)', async () => {
-        const req = fakeRequest({ requestId: 'events-envelope-text-1', body: { stream: true } });
+        const req = fakeRequest({ requestId: 'events-envelope-text-1', body: { stream: true, chat_completion_source: 'openai' } });
         const res = fakeResponse();
         const select = () => async (ctx) => {
             ctx.emit.chunk(new TextEncoder().encode(
                 'data: {"choices":[{"delta":{"content":"Hello, "}}]}\n\n' +
-                'data: {"choices":[{"delta":{"content":"world!"}}]}\n\n',
+                'data: {"choices":[{"delta":{"content":"world!"},"finish_reason":"stop"}]}\n\n',
             ));
             ctx.emit.end();
         };
@@ -194,11 +189,11 @@ describe('runLukerDispatch — job.events envelope shape (WS delivery contract)'
     });
 
     test('SSE frame split across two chunks reassembles for text accumulation (partial-chunk buffer on job._sseBuffer)', async () => {
-        const req = fakeRequest({ requestId: 'events-envelope-split-1', body: { stream: true } });
+        const req = fakeRequest({ requestId: 'events-envelope-split-1', body: { stream: true, chat_completion_source: 'openai' } });
         const res = fakeResponse();
         const select = () => async (ctx) => {
             ctx.emit.chunk(new TextEncoder().encode('data: {"choices":[{"delta":{"conte'));
-            ctx.emit.chunk(new TextEncoder().encode('nt":"reassembled"}}]}\n\n'));
+            ctx.emit.chunk(new TextEncoder().encode('nt":"reassembled"},"finish_reason":"stop"}]}\n\n'));
             ctx.emit.end();
         };
         await runLukerDispatch(req, res, { endpoint: 'test', select });
@@ -216,11 +211,11 @@ describe('runLukerDispatch — job.events envelope shape (WS delivery contract)'
     });
 
     test('CRLF line endings from proxy-wrapped upstreams are normalized before text extraction', async () => {
-        const req = fakeRequest({ requestId: 'events-envelope-crlf-1', body: { stream: true } });
+        const req = fakeRequest({ requestId: 'events-envelope-crlf-1', body: { stream: true, chat_completion_source: 'openai' } });
         const res = fakeResponse();
         const select = () => async (ctx) => {
             ctx.emit.chunk(new TextEncoder().encode(
-                'data: {"choices":[{"delta":{"content":"crlf"}}]}\r\n\r\n',
+                'data: {"choices":[{"delta":{"content":"crlf"},"finish_reason":"stop"}]}\r\n\r\n',
             ));
             ctx.emit.end();
         };
@@ -234,7 +229,7 @@ describe('runLukerDispatch — job.events envelope shape (WS delivery contract)'
     });
 
     test('non-streaming request stores a single chunk envelope + end, and job.text extracts the response content', async () => {
-        const req = fakeRequest({ requestId: 'events-envelope-nonstream-1', body: { stream: false } });
+        const req = fakeRequest({ requestId: 'events-envelope-nonstream-1', body: { stream: false, chat_completion_source: 'openai' } });
         const res = fakeResponse();
         const nonStreamBody = JSON.stringify({
             choices: [{ message: { content: 'the whole message at once' } }],
@@ -249,12 +244,9 @@ describe('runLukerDispatch — job.events envelope shape (WS delivery contract)'
 
         const job = getTaskByRequestId('events-envelope-nonstream-1', 'events-shape-alice');
         expect(job).not.toBeNull();
-        // Non-stream has NO runner trailer appended (it would corrupt
-        // response.json() on the client). Exactly: one chunk envelope +
-        // one end envelope.
-        expect(job.events).toHaveLength(2);
-        expect(job.events[0].data.kind).toBe('chunk');
-        expect(job.events[1].data.kind).toBe('end');
+        // Non-stream emits verbatim JSON chunk, out-of-band meta, and terminal end.
+        expect(job.events.map(e => e.data?.kind)).toEqual(['chunk', 'meta', 'end']);
+        expect(new TextDecoder().decode(job.events[0].data.data)).toBe(nonStreamBody);
         expect(job.text).toBe('the whole message at once');
         if (job.persistenceTimer) { clearTimeout(job.persistenceTimer); job.persistenceTimer = null; }
     });

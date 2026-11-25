@@ -2,34 +2,22 @@
 import { dispatchLog as console } from '../../logging.js';
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 //
-// Shared "OpenAI-compatible" chat-completions dispatch. Covers 13 providers
-// that all speak the OpenAI Chat Completions wire format and share a single
-// fetch/stream tail. Extracted from the legacy else-if cascade at
-// src/endpoints/backends/chat-completions.js:2947-3396 (lines ~3251-3378 for
-// the shared tail after the 13 per-provider branches).
+// Shared OpenAI-compatible chat-completions dispatch covering 13 providers
+// that speak the OpenAI Chat Completions wire format and share one upstream
+// fetch/relay tail.
 //
 // Providers routed here (dispatch key = ctx.body.chat_completion_source):
 //   OPENAI, OPENROUTER, CUSTOM, PERPLEXITY, GROQ, FIREWORKS, NANOGPT,
 //   POLLINATIONS, MOONSHOT, COMETAPI, ZAI, SILICONFLOW, WORKERS_AI
 //
-// Everything else (CLAUDE, AI21, MAKERSUITE, VERTEXAI, MISTRALAI, COHERE,
-// DEEPSEEK, AIMLAPI, XAI, CHUTES, MINIMAX, ELECTRONHUB, AZURE_OPENAI) has
-// its own dedicated dispatch file.
-//
 // Consumes a DispatchContext (see src/luker-dispatch/context.js) and emits
 // head/chunk/end/error events; never touches Express request/response.
-//
-// Follows the 8-step template established by claude.js. Per-provider quirks
-// (URL, key resolution, extra headers, body params) live in `resolveXxx`
-// resolvers; the shared tail handles the fetch, stream forwarding, and
-// error mapping.
 
 import {
     CHAT_COMPLETION_SOURCES,
     GEMINI_SAFETY,
     OPENAI_FIXED_REASONING_EFFORT,
     OPENAI_REASONING_EFFORT_MODELS,
-    OPENAI_VERBOSITY_MODELS,
     OPENROUTER_HEADERS,
     POLLINATIONS_ENDPOINT,
     SILICONFLOW_ENDPOINT,
@@ -56,17 +44,25 @@ import {
     postProcessPrompt,
     PROMPT_PROCESSING_TYPE,
     renameAssistantReasoningToReasoningContent,
+    stripNonChatReplayFields,
 } from '../../../prompt-converters.js';
-import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { GeminiHistoryCache } from '../../gemini-history-cache.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { resolveOpenAIEffort, passthroughReasoningEffort, applyReasoningExclude, normalizeReasoningToken } from './reasoning-params.js';
 import { applyAdditionalParameters } from './custom-params.js';
+import {
+    emitCapabilityConflict,
+    handleProviderDispatchError,
+    relayUpstreamResponse,
+    resolveClaudeCacheConfig,
+} from './upstream-relay.js';
+import {
+    resolveOpenAIModelCapabilities,
+    validateOpenAIChatCapabilities,
+} from '../../../../public/scripts/lib/provider-capabilities.js';
 
 const geminiHistoryCache = new GeminiHistoryCache();
 
-// Provider base URLs (mirror the constants defined at the top of
-// src/endpoints/backends/chat-completions.js:95-122).
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_PERPLEXITY = 'https://api.perplexity.ai';
 const API_GROQ = 'https://api.groq.com/openai/v1';
@@ -75,7 +71,6 @@ const API_POLLINATIONS = 'https://gen.pollinations.ai/v1';
 const API_POLLINATIONS_ANON = 'https://text.pollinations.ai/v1';
 const API_MOONSHOT = 'https://api.moonshot.ai/v1';
 const API_FIREWORKS = 'https://api.fireworks.ai/inference/v1';
-const API_COMETAPI = 'https://api.cometapi.com/v1';
 const API_ZAI_COMMON = 'https://api.z.ai/api/paas/v4';
 const API_ZAI_CODING = 'https://api.z.ai/api/coding/paas/v4';
 const API_SILICONFLOW = 'https://api.siliconflow.com/v1';
@@ -94,14 +89,12 @@ function getAffinityKey() {
     return affinityKey;
 }
 
-// Cache for cacheable (writing) OpenRouter model IDs. Populated on-demand by
-// isOpenRouterModelCacheable; mirrors the module-scope cache used by the
-// legacy handler (chat-completions.js:171).
+// Cache for cacheable (writing) OpenRouter model IDs, populated on demand by
+// isOpenRouterModelCacheable.
 const openRouterCacheableModels = [];
 
 /**
- * Build a minimal Express-request shim for legacy helpers that expect
- * `.body` (e.g. getPromptNames).
+ * Build a minimal request shim for helpers expecting `.body` (e.g. getPromptNames).
  * @param {object} ctx DispatchContext
  * @returns {{ body: any }}
  */
@@ -110,34 +103,7 @@ function shim(ctx) {
 }
 
 /**
- * Mirror of legacy resolveClaudeCacheConfig() in chat-completions.js:134.
- * Reads UI-driven body fields with config.yaml fallback.
- * @param {object} body ctx.body
- */
-function resolveClaudeCacheConfig(body) {
-    const sysFromBody = body?.claude_enable_system_prompt_cache;
-    const depthFromBody = body?.claude_caching_at_depth;
-    const ttlFromBody = body?.claude_extended_ttl;
-
-    const enableSystemPromptCache = typeof sysFromBody === 'boolean'
-        ? sysFromBody
-        : getConfigValue('claude.enableSystemPromptCache', false, 'boolean');
-
-    const useExtendedTtl = typeof ttlFromBody === 'boolean'
-        ? ttlFromBody
-        : getConfigValue('claude.extendedTTL', false, 'boolean');
-    const cacheTTL = useExtendedTtl ? '1h' : '5m';
-
-    const depthRaw = typeof depthFromBody === 'number'
-        ? depthFromBody
-        : getConfigValue('claude.cachingAtDepth', -1, 'number');
-    const cachingAtDepth = Number.isInteger(depthRaw) && depthRaw >= 0 ? depthRaw : -1;
-
-    return { cacheTTL, enableSystemPromptCache, cachingAtDepth };
-}
-
-/**
- * Mirror of legacy resolveGeminiSystemPromptCache() in chat-completions.js:160.
+ * Resolve Gemini system-prompt caching toggle from body or config.yaml.
  * @param {object} body ctx.body
  */
 function resolveGeminiSystemPromptCache(body) {
@@ -148,7 +114,6 @@ function resolveGeminiSystemPromptCache(body) {
 }
 
 /**
- * Mirror of legacy getOpenRouterTransforms() in chat-completions.js:223.
  * @param {object} body ctx.body
  * @returns {string[] | undefined}
  */
@@ -161,7 +126,6 @@ function getOpenRouterTransforms(body) {
 }
 
 /**
- * Mirror of legacy getOpenRouterPlugins() in chat-completions.js:239.
  * @param {object} body ctx.body
  * @returns {any[]}
  */
@@ -172,8 +136,7 @@ function getOpenRouterPlugins(body) {
 }
 
 /**
- * Mirror of legacy isOpenRouterModelCacheable() in chat-completions.js:179.
- * Uses ctx.fetch so tests can stub.
+ * Query OpenRouter's models endpoint to verify prompt-cache write support.
  * @param {object} ctx DispatchContext
  * @param {string} modelId
  * @returns {Promise<boolean|null>} true/false when verified from the models
@@ -210,8 +173,8 @@ async function isOpenRouterModelCacheable(ctx, modelId) {
 }
 
 /**
- * Mirror of legacy setJsonObjectFormat() in chat-completions.js:255.
- * Mutates bodyParams and appends a schema-hint user message.
+ * Mutates bodyParams to request `json_object` output and appends a schema-hint
+ * user message for providers without native json_schema support.
  * @param {object} bodyParams
  * @param {any[]} messages
  * @param {object} jsonSchema
@@ -231,7 +194,7 @@ function setJsonObjectFormat(bodyParams, messages, jsonSchema) {
 // or throws (async allowed) to short-circuit dispatch.
 // ---------------------------------------------------------------------------
 
-/** OPENAI — chat-completions.js:2947-2966 */
+/** OPENAI */
 async function resolveOpenAI(ctx) {
     const body = ctx.body;
     const isTextCompletion = detectTextCompletion(body);
@@ -247,6 +210,10 @@ async function resolveOpenAI(ctx) {
         bodyParams.top_logprobs = bodyParams.logprobs;
         bodyParams.logprobs = true;
     }
+    if (!isTextCompletion && body.stream) {
+        // Native OpenAI Chat Completions streaming requires explicit opt-in to emit usage.
+        bodyParams.stream_options = { include_usage: true };
+    }
     if (getConfigValue('openai.randomizeUserId', false, 'boolean')) {
         bodyParams.user = uuidv4();
     }
@@ -254,7 +221,7 @@ async function resolveOpenAI(ctx) {
     return { apiUrl, apiKey, headers, bodyParams };
 }
 
-/** OPENROUTER — chat-completions.js:2967-3055 */
+/** OPENROUTER */
 async function resolveOpenRouter(ctx) {
     const body = ctx.body;
     const apiUrl = 'https://openrouter.ai/api/v1';
@@ -343,7 +310,7 @@ async function resolveOpenRouter(ctx) {
     return { apiUrl, apiKey, headers, bodyParams, geminiCacheOptions };
 }
 
-/** CUSTOM — chat-completions.js:3056-3083 */
+/** CUSTOM */
 async function resolveCustom(ctx) {
     const body = ctx.body;
     const isTextCompletion = detectTextCompletion(body);
@@ -374,7 +341,7 @@ async function resolveCustom(ctx) {
     return { apiUrl, apiKey, headers, bodyParams };
 }
 
-/** PERPLEXITY — chat-completions.js:3084-3099 */
+/** PERPLEXITY */
 async function resolvePerplexity(ctx) {
     const body = ctx.body;
     const apiUrl = API_PERPLEXITY;
@@ -384,7 +351,7 @@ async function resolvePerplexity(ctx) {
     const bodyParams = {};
     const effort = passthroughReasoningEffort(body.reasoning_effort);
     if (effort) bodyParams.reasoning_effort = effort;
-    body.messages = postProcessPrompt(body.messages, PROMPT_PROCESSING_TYPE.STRICT, getPromptNames(shim(ctx)));
+    body.messages = postProcessPrompt(stripNonChatReplayFields(body.messages), PROMPT_PROCESSING_TYPE.STRICT, getPromptNames(shim(ctx)));
     if (body.json_schema) {
         bodyParams.response_format = {
             type: 'json_schema',
@@ -394,7 +361,7 @@ async function resolvePerplexity(ctx) {
     return { apiUrl, apiKey, headers, bodyParams };
 }
 
-/** GROQ — chat-completions.js:3100-3115 */
+/** GROQ */
 async function resolveGroq(ctx) {
     const body = ctx.body;
     const apiUrl = API_GROQ;
@@ -427,7 +394,7 @@ async function resolveGroq(ctx) {
     return { apiUrl, apiKey, headers, bodyParams };
 }
 
-/** FIREWORKS — chat-completions.js:3116-3131 (structurally identical to GROQ) */
+/** FIREWORKS */
 async function resolveFireworks(ctx) {
     const body = ctx.body;
     const apiUrl = API_FIREWORKS;
@@ -456,7 +423,7 @@ async function resolveFireworks(ctx) {
     return { apiUrl, apiKey, headers, bodyParams };
 }
 
-/** NANOGPT — chat-completions.js:3132-3168 */
+/** NANOGPT */
 async function resolveNanogpt(ctx) {
     const body = ctx.body;
     const apiUrl = API_NANOGPT;
@@ -489,7 +456,7 @@ async function resolveNanogpt(ctx) {
     return { apiUrl, apiKey, headers, bodyParams };
 }
 
-/** POLLINATIONS — chat-completions.js:3169-3184 (uses readSecret with secret_id, not readProviderSecret) */
+/** POLLINATIONS (uses explicit secret_id lookup) */
 async function resolvePollinations(ctx) {
     const body = ctx.body;
     const isAnonymous = body.pollinations_endpoint === POLLINATIONS_ENDPOINT.ANONYMOUS;
@@ -587,7 +554,7 @@ function applyMoonshotReasoningParams(bodyParams, model, effort) {
     }
 }
 
-/** MOONSHOT — chat-completions.js:3185-3195 */
+/** MOONSHOT */
 async function resolveMoonshot(ctx) {
     const body = ctx.body;
     const apiUrl = normalizeProviderBaseUrl('moonshot', body.reverse_proxy || body.base_url || API_MOONSHOT);
@@ -610,22 +577,12 @@ async function resolveMoonshot(ctx) {
     return { apiUrl, apiKey, headers, bodyParams };
 }
 
-/** COMETAPI — chat-completions.js:3196-3203 (temporarily disabled upstream) */
-async function resolveCometapi(ctx) {
-    const body = ctx.body;
-    // Mirror legacy behavior: read config then throw. The throw propagates to
-    // dispatchOpenAICompatible's catch and becomes emit.error.
-    const apiUrl = API_COMETAPI;
-    const apiKey = ctx.secrets.read(SECRET_KEYS.COMETAPI);
-    const headers = {};
-    /** @type {any} */
-    const bodyParams = { reasoning_effort: body.reasoning_effort };
-    // Preserve unused reads to avoid dead-code warnings and match legacy sequencing.
-    void apiUrl; void apiKey; void headers; void bodyParams;
+/** COMETAPI (temporarily disabled upstream) */
+async function resolveCometapi() {
     throw new Error('This provider is temporarily disabled.');
 }
 
-/** ZAI — chat-completions.js:3204-3217 */
+/** ZAI */
 async function resolveZai(ctx) {
     const body = ctx.body;
     const defaultApiUrl = body.zai_endpoint === ZAI_ENDPOINT.CODING ? API_ZAI_CODING : API_ZAI_COMMON;
@@ -647,7 +604,7 @@ async function resolveZai(ctx) {
     return { apiUrl, apiKey, headers, bodyParams };
 }
 
-/** SILICONFLOW — chat-completions.js:3218-3227 */
+/** SILICONFLOW */
 async function resolveSiliconflow(ctx) {
     const body = ctx.body;
     const apiUrl = body.siliconflow_endpoint === SILICONFLOW_ENDPOINT.CN
@@ -668,9 +625,8 @@ async function resolveSiliconflow(ctx) {
 }
 
 /**
- * WORKERS_AI — chat-completions.js:3228-3245.
- * Uses readSecret with secret_id (not readProviderSecret) and constructs a
- * per-account URL. Missing account_id short-circuits (throws → emit.error).
+ * WORKERS_AI
+ * Uses explicit secret_id lookup and constructs a per-account URL.
  */
 async function resolveWorkersai(ctx) {
     const body = ctx.body;
@@ -712,7 +668,7 @@ const RESOLVERS = {
 };
 
 /**
- * Detect text-completion mode. Mirrors chat-completions.js:2945.
+ * Detect text-completion mode.
  * @param {object} body ctx.body
  */
 function detectTextCompletion(body) {
@@ -749,15 +705,17 @@ export async function dispatchOpenAICompatible(ctx) {
         if (source === CHAT_COMPLETION_SOURCES.CUSTOM) {
             const effort = passthroughReasoningEffort(body.reasoning_effort);
             if (effort) bodyParams.reasoning_effort = effort;
-        } else if (source === CHAT_COMPLETION_SOURCES.OPENAI && OPENAI_REASONING_EFFORT_MODELS.includes(body.model)) {
+        } else if (source === CHAT_COMPLETION_SOURCES.OPENAI
+            && (OPENAI_REASONING_EFFORT_MODELS.includes(body.model)
+                || resolveOpenAIModelCapabilities(body.model).supportsReasoningEffort)) {
             const fixed = OPENAI_FIXED_REASONING_EFFORT[body.model];
             const effort = fixed ?? resolveOpenAIEffort(body.reasoning_effort, body.model);
             if (effort) bodyParams.reasoning_effort = effort;
         }
 
-        // Verbosity — OPENAI/CUSTOM only, gated by model regex.
+        // Verbosity — OPENAI/CUSTOM only, gated by model capability.
         if (body.verbosity && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI].includes(source)) {
-            if (OPENAI_VERBOSITY_MODELS.test(body.model)) {
+            if (resolveOpenAIModelCapabilities(body.model).supportsVerbosity) {
                 bodyParams.verbosity = body.verbosity;
             }
         }
@@ -783,6 +741,13 @@ export async function dispatchOpenAICompatible(ctx) {
 
         // Tools/tool_choice (chat-completion only).
         if (!isTextCompletion && Array.isArray(body.tools) && body.tools.length > 0) {
+            if (source === CHAT_COMPLETION_SOURCES.OPENAI) {
+                const capabilityConflict = validateOpenAIChatCapabilities({ model: body.model, hasTools: true });
+                if (capabilityConflict) {
+                    emitCapabilityConflict(ctx, capabilityConflict, 'OpenAI');
+                    return;
+                }
+            }
             bodyParams.tools = body.tools;
             bodyParams.tool_choice = body.tool_choice;
         }
@@ -803,7 +768,7 @@ export async function dispatchOpenAICompatible(ctx) {
 
         /** @type {any} */
         const requestBody = {
-            'messages': isTextCompletion === false ? body.messages : undefined,
+            'messages': isTextCompletion === false ? stripNonChatReplayFields(body.messages) : undefined,
             'prompt': isTextCompletion === true ? textPrompt : undefined,
             'model': body.model,
             'temperature': body.temperature,
@@ -847,49 +812,12 @@ export async function dispatchOpenAICompatible(ctx) {
             signal: ctx.signal,
         });
 
-        // Architectural contract: every dispatch emits a single head frame
-        // immediately after the upstream fetch resolves, regardless of
-        // status. The WebSocket delivery layer (ws-delivery) uses head to
-        // release the client-side `await headPromise`; without it the
-        // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: resp.status, headers: resp.headers });
-
-        if (!resp.ok) {
-            let errText = '';
-            try { errText = await resp.text(); } catch { /* body already consumed */ }
-            console.error('Chat completion request error: ', errText);
-            const msg = `OpenAI-compatible upstream ${resp.status}: ${errText}`;
-            const err = new Error(msg);
-            ctx.inspection.fail(err, resp?.status ?? 502);
-            // Surface upstream status + body to the client via chunk + end
-            // (head already emitted above). Client sees
-            // Response.status=<upstream> and Response.body readable so
-            // callers can do `await response.text()` or
-            // `await response.json()` for structured error inspection
-            // (matches legacy handler shape which returned
-            // `.status(4xx).send({error:{...}})`).
-            if (errText) {
-                ctx.emit.chunk(new TextEncoder().encode(errText));
-            }
-            ctx.emit.end();
-            return;
-        }
-
-        if (body.stream) {
-            console.info('Streaming request in progress');
-            await pipeResponseBodyToEmit(resp, ctx);
-        } else {
-            const buf = await resp.arrayBuffer();
-            try {
-                const json = JSON.parse(new TextDecoder().decode(buf));
-                console.debug('Chat Completion response:', json);
-            } catch { /* non-JSON body — skip debug log */ }
-            ctx.emit.chunk(new Uint8Array(buf));
-            ctx.emit.end();
-        }
+        await relayUpstreamResponse(ctx, resp, {
+            label: 'OpenAI-compatible',
+            stream: Boolean(requestBody.stream),
+            logResponse: (json) => console.debug('Chat Completion response:', json),
+        });
     } catch (err) {
-        try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
-        console.error('Generation failed', err);
-        ctx.emit.error(err);
+        handleProviderDispatchError(ctx, err, 'OpenAI-compatible');
     }
 }

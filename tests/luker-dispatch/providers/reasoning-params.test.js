@@ -3,7 +3,6 @@ import { describe, expect, test } from '@jest/globals';
 import {
     REASONING_TOKENS,
     normalizeReasoningToken,
-    clampReasoningToken,
     resolveOpenAIEffort,
     passthroughReasoningEffort,
 } from '../../../src/luker-dispatch/providers/chat-completions/reasoning-params.js';
@@ -21,22 +20,12 @@ describe('normalizeReasoningToken', () => {
     });
 });
 
-describe('clampReasoningToken', () => {
-    test('auto is always legal', () => {
-        expect(clampReasoningToken('auto', ['low', 'high'])).toBe('auto');
-    });
-    test('keeps a legal token', () => {
-        expect(clampReasoningToken('high', ['auto', 'low', 'high'])).toBe('high');
-    });
-    test('falls to nearest lower legal token', () => {
-        expect(clampReasoningToken('xhigh', ['auto', 'low', 'medium'])).toBe('medium');
-    });
-});
-
 describe('resolveOpenAIEffort', () => {
-    test('auto is omitted and off is none', () => {
+    test('auto is omitted and off is none (low for gpt-6-astra and gpt-6.1-sol)', () => {
         expect(resolveOpenAIEffort('auto', 'gpt-5')).toBeUndefined();
         expect(resolveOpenAIEffort('off', 'gpt-5')).toBe('none');
+        expect(resolveOpenAIEffort('off', 'gpt-6-astra')).toBe('low');
+        expect(resolveOpenAIEffort('off', 'gpt-6.1-sol')).toBe('low');
     });
     test('minimal stays minimal on base gpt-5 and drops to low elsewhere', () => {
         expect(resolveOpenAIEffort('minimal', 'gpt-5')).toBe('minimal');
@@ -60,5 +49,14 @@ describe('passthroughReasoningEffort', () => {
     test('maps off to none and auto to undefined', () => {
         expect(passthroughReasoningEffort('off')).toBe('none');
         expect(passthroughReasoningEffort('auto')).toBeUndefined();
+    });
+});
+
+describe('dead exports cleanup', () => {
+    test('removed reasoning helper exports are not exported', async () => {
+        const mod = await import('../../../src/luker-dispatch/providers/chat-completions/reasoning-params.js');
+        expect(mod.isReasoningOff).toBeUndefined();
+        expect(mod.isReasoningAuto).toBeUndefined();
+        expect(mod.clampReasoningToken).toBeUndefined();
     });
 });

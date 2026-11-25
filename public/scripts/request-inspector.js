@@ -247,7 +247,13 @@ function buildInfoCell(item) {
     }
     const msgs = item.messageCount != null ? `${item.messageCount} ${t`msgs`}` : '';
     const tokens = item.usage?.prompt_tokens != null ? ` \u00B7 ${formatTokens(item.usage.prompt_tokens)}\u2192${formatTokens(item.usage.completion_tokens)}` : '';
-    return `${msgs}${tokens}`;
+    const ptBadge = item.plainTextFunctionCall?.enabled
+        ? ` <span class="ri-list-badge ri-list-badge-pt">${escapeHtml(t`Plain-Text Function Call`)}</span>`
+        : '';
+    const parseErrBadge = item.parseError
+        ? ` <span class="ri-list-badge ri-list-badge-err">${escapeHtml(t`Parse Failed`)}</span>`
+        : '';
+    return `${msgs}${tokens}${ptBadge}${parseErrBadge}`;
 }
 
 function buildTableHtml(items) {
@@ -304,7 +310,109 @@ function formatToolCallArgsJson(args) {
     try { return JSON.stringify(args, null, 2); } catch { return String(args); }
 }
 
+function formatDiagnosticPayload(rawDiagnostic) {
+    if (rawDiagnostic == null) return '';
+    if (typeof rawDiagnostic === 'string') return rawDiagnostic;
+    try { return JSON.stringify(rawDiagnostic, null, 2); } catch { return String(rawDiagnostic); }
+}
+
+function buildPlainTextStatusBadge(status) {
+    switch (status) {
+        case 'parsed':
+            return `<span class="ri-pt-status ri-pt-status-parsed">${escapeHtml(t`Parsed`)}</span>`;
+        case 'parse_failed':
+            return `<span class="ri-pt-status ri-pt-status-failed">${escapeHtml(t`Parse Failed`)}</span>`;
+        case 'parsing':
+        case 'pending':
+            return `<span class="ri-pt-status ri-pt-status-parsing">${escapeHtml(t`Parsing...`)}</span>`;
+        case 'aborted':
+            return `<span class="ri-pt-status ri-pt-status-aborted">${escapeHtml(t`Aborted`)}</span>`;
+        case 'network_error':
+            return `<span class="ri-pt-status ri-pt-status-failed">${escapeHtml(t`Network Error`)}</span>`;
+        default:
+            return '';
+    }
+}
+
+function buildPlainTextCallRegionHtml(part, regionIdx, q) {
+    const status = String(part?.status || 'parsed');
+    const statusBadge = buildPlainTextStatusBadge(status);
+    const hasRaw = typeof part?.callRegionRaw === 'string' && part.callRegionRaw.length > 0;
+    const toggleBtn = hasRaw
+        ? `<button type="button" class="ri-pt-raw-toggle menu_button" data-region-idx="${regionIdx}" data-mode="parsed">${escapeHtml(t`Show Call Raw Text`)}</button>`
+        : '';
+
+    let parsedBodyHtml = '';
+    if (status === 'parsed') {
+        const calls = Array.isArray(part.calls) ? part.calls : [];
+        parsedBodyHtml = calls.map((call) => {
+            const argsJson = formatToolCallArgsJson(call?.args);
+            const idLine = call?.id ? `<span class="ri-tool-call-id" title="${escapeHtml(call.id)}">${escapeHtml(call.id)}</span>` : '';
+            return `
+ <div class="ri-tool-call">
+ <div class="ri-tool-call-header">
+ <span class="ri-tool-call-badge">${escapeHtml(t`Function Call`)}</span>
+ <span class="ri-tool-call-name">${highlightHtml(call?.name || '?', q)}</span>
+ ${idLine}
+ </div>
+ <pre class="ri-tool-call-args">${highlightHtml(argsJson, q)}</pre>
+ </div>`;
+        }).join('\n');
+    } else if (status === 'parsing' || status === 'pending') {
+        parsedBodyHtml = `<div class="ri-pt-parsing-note">${escapeHtml(t`Parsing plain-text function call...`)}</div>`;
+    } else {
+        const errMsg = part?.error || t`Parse Failed`;
+        parsedBodyHtml = `
+ <div class="ri-pt-error-box">
+ <div class="ri-pt-error-title">${escapeHtml(t`Parse Failed`)}</div>
+ <pre class="ri-pt-error-msg">${highlightHtml(errMsg, q)}</pre>
+ </div>`;
+    }
+
+    const rawViewHtml = hasRaw
+        ? `<div class="ri-pt-raw-view" hidden><pre class="ri-msg-content ri-pt-raw-text">${highlightHtml(part.callRegionRaw, q)}</pre></div>`
+        : '';
+
+    return `
+ <div class="ri-pt-call-region ri-pt-call-region-${escapeHtml(status)}" data-region-idx="${regionIdx}">
+ <div class="ri-pt-header">
+ <span class="ri-pt-badge">${escapeHtml(t`Plain-Text Function Call`)}</span>
+ ${statusBadge}
+ ${toggleBtn}
+ </div>
+ <div class="ri-pt-parsed-view">${parsedBodyHtml}</div>
+ ${rawViewHtml}
+ </div>`;
+}
+
+function buildProtocolParseErrorHtml(detail, q) {
+    const pe = detail?.parseError;
+    if (!pe || typeof pe !== 'object') return '';
+    const diagText = formatDiagnosticPayload(detail.rawDiagnostic);
+    return `
+ <div class="ri-parse-error-box">
+ <div class="ri-parse-error-header">
+ <span class="ri-pt-status ri-pt-status-failed">${escapeHtml(t`Protocol Parse Error`)}</span>
+ </div>
+ <table class="ri-kv ri-parse-error-kv">
+ <tr><td>${escapeHtml(t`Expected Protocol`)}</td><td class="ri-mono">${escapeHtml(String(pe.protocol || 'unknown'))}</td></tr>
+ <tr><td>${escapeHtml(t`Stage`)}</td><td class="ri-mono">${escapeHtml(String(pe.stage || 'payload'))}</td></tr>
+ <tr><td>${escapeHtml(t`Location`)}</td><td class="ri-mono">${escapeHtml(String(pe.location || 'root'))}</td></tr>
+ <tr><td>${escapeHtml(t`Error`)}</td><td class="ri-error-text">${highlightHtml(String(pe.message || detail.error || ''), q)}</td></tr>
+ </table>
+ ${diagText ? `
+ <details class="ri-wire-meta">
+ <summary>${escapeHtml(t`Raw Diagnostic Payload`)}</summary>
+ <pre class="ri-msg-content">${highlightHtml(diagText, q)}</pre>
+ </details>` : ''}
+ </div>`;
+}
+
 function buildResponseBodyHtml(detail, q) {
+    if (detail?.parseError) {
+        return buildProtocolParseErrorHtml(detail, q);
+    }
+
     const parts = Array.isArray(detail.responseParts) ? detail.responseParts : [];
 
     if (!parts.length) {
@@ -313,8 +421,11 @@ function buildResponseBodyHtml(detail, q) {
     }
 
     const blocks = [];
+    let ptRegionIdx = 0;
     for (const part of parts) {
-        if (part?.type === 'tool_call') {
+        if (part?.type === 'plain_text_tool_calls') {
+            blocks.push(buildPlainTextCallRegionHtml(part, ptRegionIdx++, q));
+        } else if (part?.type === 'tool_call') {
             const argsJson = formatToolCallArgsJson(part.args);
             const idLine = part.id ? `<span class="ri-tool-call-id" title="${escapeHtml(part.id)}">${escapeHtml(part.id)}</span>` : '';
             blocks.push(`
@@ -651,7 +762,11 @@ function buildChatDetailBody(detail) {
     }
 
     const toolCallCount = Array.isArray(detail.responseParts)
-        ? detail.responseParts.filter(p => p?.type === 'tool_call').length
+        ? detail.responseParts.reduce((count, p) => {
+            if (p?.type === 'tool_call') return count + 1;
+            if (p?.type === 'plain_text_tool_calls' && Array.isArray(p.calls)) return count + p.calls.length;
+            return count;
+        }, 0)
         : 0;
     const reasoningCount = Array.isArray(detail.responseParts)
         ? detail.responseParts.filter(p => p?.type === 'reasoning').length
@@ -664,6 +779,12 @@ function buildChatDetailBody(detail) {
         ? `${t`Response Body`} (${(detail.responseText || '').length.toLocaleString()} ${t`chars`}, ${respHeaderExtras})`
         : `${t`Response Body`} (${(detail.responseText || '').length.toLocaleString()} ${t`chars`})`;
 
+    const toolsSource = (detail.wireRequest && normalizeWireTools(detail.wireRequest).tools.length > 0)
+        ? detail.wireRequest
+        : (detail.plainTextFunctionCall?.tools?.length
+            ? { tools: detail.plainTextFunctionCall.tools, tool_choice: detail.plainTextFunctionCall.toolChoice }
+            : detail.wireRequest);
+
     return `
  <div class="ri-detail-section">
  <h4>${responseHeader}</h4>
@@ -672,7 +793,7 @@ function buildChatDetailBody(detail) {
 
  ${buildWireRequestHtml(detail, q)}
 
- ${buildToolsSectionHtml(detail.wireRequest, q)}
+ ${buildToolsSectionHtml(toolsSource, q)}
 
  <div class="ri-detail-section">
  <h4>${t`Source Messages`} (${detail.messageCount})</h4>
@@ -735,6 +856,28 @@ function buildChatDetailHtml(detail) {
         (norm && norm !== native) ? `<tr><td>${t`Finish Reason`}</td><td class="ri-mono">${escapeHtml(norm)}</td></tr>` : '',
     ].join('');
 
+    const pt = detail.plainTextFunctionCall;
+    const ptRows = pt?.enabled
+        ? [
+            `<tr><td>${t`Plain-Text Function Call`}</td><td><span class="ri-pt-badge">${escapeHtml(t`Plain-Text Function Call`)}</span> ${buildPlainTextStatusBadge(pt.status)}</td></tr>`,
+            (Number(detail.attempt || pt.attempt || 1) > 1 || Number(pt.maxAttempts || 1) > 1)
+                ? `<tr><td>${t`Attempt`}</td><td class="ri-mono">${escapeHtml(String(detail.attempt || pt.attempt || 1))} / ${escapeHtml(String(pt.maxAttempts || 1))}</td></tr>`
+                : '',
+            detail.retryOf
+                ? `<tr><td>${t`Retry Of`}</td><td><button type="button" class="ri-jump-entry menu_button" data-id="${escapeHtml(detail.retryOf)}">${escapeHtml(String(detail.retryOf).slice(0, 8))}</button></td></tr>`
+                : '',
+            Array.isArray(detail.retryEntryIds) && detail.retryEntryIds.length > 0
+                ? `<tr><td>${t`Retry Attempts`}</td><td>${detail.retryEntryIds.map((rid, idx) => `<button type="button" class="ri-jump-entry menu_button" data-id="${escapeHtml(rid)}">#${idx + 2} (${escapeHtml(String(rid).slice(0, 8))})</button>`).join(' ')}</td></tr>`
+                : '',
+            detail.originalError
+                ? `<tr><td>${t`Original Error`}</td><td class="ri-error-text">${escapeHtml(detail.originalError)}</td></tr>`
+                : '',
+            (pt.finalStatus && pt.finalStatus !== pt.status)
+                ? `<tr><td>${t`Final Status`}</td><td>${buildPlainTextStatusBadge(pt.finalStatus)}</td></tr>`
+                : '',
+        ].filter(Boolean).join('')
+        : '';
+
     return `
  <div class="ri-detail">
  <div class="ri-detail-header">
@@ -767,6 +910,7 @@ function buildChatDetailHtml(detail) {
  <tr><td>${t`Status`}</td><td>${statusIcon(detail.status)} ${escapeHtml(detail.status)}</td></tr>
  <tr><td>HTTP</td><td>${detail.httpStatus ?? '\u2014'}</td></tr>
  ${finishRows}
+ ${ptRows}
  <tr><td>${t`Duration`}</td><td>${formatDuration(detail.durationMs)}</td></tr>
  <tr><td>${t`Prompt Tokens`}</td><td>${formatTokens(usage.prompt_tokens)}</td></tr>
  <tr><td>${t`Completion Tokens`}</td><td>${formatTokens(usage.completion_tokens)}</td></tr>
@@ -1102,7 +1246,7 @@ async function openInspectorPanel(initialRequestId = '') {
         content.find('.ri-list-body').html(buildTableHtml(cachedList));
     });
 
-    content.on('click', '.ri-row', async function () {
+    content.on('click', '.ri-row, .ri-jump-entry', async function () {
         const id = $(this).data('id');
         if (!id) return;
         currentDetailSearch = '';
@@ -1113,6 +1257,21 @@ async function openInspectorPanel(initialRequestId = '') {
         content.html(buildDetailHtml(detail));
         bindLazyImagePreviews(content[0]);
         content.closest('.popup-content').scrollTop(0);
+    });
+
+    content.on('click', '.ri-pt-raw-toggle', function () {
+        const $btn = $(this);
+        const $region = $btn.closest('.ri-pt-call-region');
+        const showingRaw = $btn.attr('data-mode') === 'raw';
+        if (showingRaw) {
+            $region.find('.ri-pt-raw-view').attr('hidden', 'hidden');
+            $region.find('.ri-pt-parsed-view').removeAttr('hidden');
+            $btn.attr('data-mode', 'parsed').text(t`Show Call Raw Text`);
+        } else {
+            $region.find('.ri-pt-parsed-view').attr('hidden', 'hidden');
+            $region.find('.ri-pt-raw-view').removeAttr('hidden');
+            $btn.attr('data-mode', 'raw').text(t`Show Parsed Calls`);
+        }
     });
 
     content.on('click', '.ri-abort, .ri-abort-btn', async function (event) {

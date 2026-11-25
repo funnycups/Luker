@@ -203,4 +203,42 @@ describe('dispatchMinimax', () => {
         expect(body.thinking).toBeUndefined();
         expect(body.reasoning_effort).toBeUndefined();
     });
+
+    test('applies documented 2048 max_tokens cap only to M2-her and forwards higher max_tokens for MiniMax-M3', async () => {
+        const m2HerCtx = fakeCtx({ body: { model: 'M2-her', max_tokens: 8192 } });
+        await dispatchMinimax(m2HerCtx);
+        expect(JSON.parse(m2HerCtx.fetch.mock.calls[0][1].body).max_tokens).toBe(2048);
+
+        const m3Ctx = fakeCtx({ body: { model: 'MiniMax-M3', max_tokens: 8192 } });
+        await dispatchMinimax(m3Ctx);
+        expect(JSON.parse(m3Ctx.fetch.mock.calls[0][1].body).max_tokens).toBe(8192);
+    });
+
+    test('strips foreign replay fields before merging consecutive same-role assistant messages', async () => {
+        const ctx = fakeCtx({
+            body: {
+                messages: [
+                    { role: 'user', content: 'start' },
+                    {
+                        role: 'assistant',
+                        content: 'first part',
+                        native_content_blocks: [{ type: 'text', text: 'first part' }],
+                        reasoning_blocks: [{ type: 'thinking', thinking: 't1', signature: 's1' }],
+                    },
+                    {
+                        role: 'assistant',
+                        content: 'second part',
+                        native_parts: [{ text: 'second part' }],
+                        responses_output_items: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'second part' }] }],
+                    },
+                ],
+            },
+        });
+        await dispatchMinimax(ctx);
+
+        const wireBody = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+        expect(wireBody.messages).toHaveLength(2);
+        expect(wireBody.messages[0]).toEqual({ role: 'user', content: 'start' });
+        expect(wireBody.messages[1]).toEqual({ role: 'assistant', content: 'first part\n\nsecond part' });
+    });
 });

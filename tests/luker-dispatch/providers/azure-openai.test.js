@@ -104,6 +104,28 @@ describe('dispatchAzureOpenAI', () => {
         await dispatchAzureOpenAI(drop);
         const dropped = JSON.parse(drop.fetch.mock.calls[0][1].body);
         expect(dropped.reasoning_effort).toBeUndefined();
+
+        const sol = fakeCtx({ body: { model: 'gpt-6.1-sol', reasoning_effort: 'off' } });
+        await dispatchAzureOpenAI(sol);
+        const solBody = JSON.parse(sol.fetch.mock.calls[0][1].body);
+        expect(solBody.reasoning_effort).toBe('low');
+    });
+
+    test('rejects Chat Completions tool calls on gpt-6-astra and gpt-6.1-sol with 400 conflict', async () => {
+        for (const model of ['gpt-6-astra', 'gpt-6.1-sol']) {
+            const ctx = fakeCtx({
+                body: {
+                    model,
+                    tools: [{ type: 'function', function: { name: 'ping', parameters: { type: 'object' } } }],
+                },
+            });
+            await dispatchAzureOpenAI(ctx);
+            expect(ctx.fetch).not.toHaveBeenCalled();
+            expect(ctx._emitted.find(e => e.kind === 'head')?.data.status).toBe(400);
+            const payload = JSON.parse(new TextDecoder().decode(ctx._emitted.find(e => e.kind === 'chunk').data));
+            expect(payload.error.code).toBe('openai_chat_tools_require_responses');
+            expect(payload.error.non_retryable).toBe(true);
+        }
     });
 
     test('missing configuration (no api key): emits error, no fetch', async () => {

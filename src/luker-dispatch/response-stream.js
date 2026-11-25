@@ -17,7 +17,9 @@
 export async function pipeResponseBodyToEmit(resp, ctx) {
     const body = resp?.body;
     if (!body) {
-        ctx.emit.error(new Error('upstream response has no body'));
+        const err = new Error('upstream response has no body');
+        try { ctx.inspection?.fail?.(err, 502); } catch { /* inspection best-effort */ }
+        ctx.emit.error(err);
         return;
     }
 
@@ -27,6 +29,9 @@ export async function pipeResponseBodyToEmit(resp, ctx) {
         try {
             // eslint-disable-next-line no-constant-condition
             while (true) {
+                if (ctx.signal?.aborted) {
+                    throw new DOMException('aborted', 'AbortError');
+                }
                 const { done, value } = await reader.read();
                 if (done) break;
                 if (value && value.byteLength) ctx.emit.chunk(value);
@@ -41,6 +46,12 @@ export async function pipeResponseBodyToEmit(resp, ctx) {
     // Node stream case (node-fetch v3 PassThrough / Readable)
     if (typeof body.on === 'function') {
         await new Promise((resolve, reject) => {
+            if (ctx.signal?.aborted) {
+                const abortErr = new DOMException('aborted', 'AbortError');
+                try { body.destroy?.(abortErr); } catch { /* best-effort */ }
+                reject(abortErr);
+                return;
+            }
             const onData = (chunk) => {
                 if (chunk && chunk.length) {
                     ctx.emit.chunk(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
@@ -56,7 +67,7 @@ export async function pipeResponseBodyToEmit(resp, ctx) {
                 reject(err);
             };
             const onAbort = () => {
-                try { body.destroy?.(new Error('aborted')); } catch { /* best-effort */ }
+                try { body.destroy?.(new DOMException('aborted', 'AbortError')); } catch { /* best-effort */ }
             };
             const cleanup = () => {
                 try { body.off?.('data', onData); } catch { /* best-effort */ }
@@ -72,5 +83,7 @@ export async function pipeResponseBodyToEmit(resp, ctx) {
         return;
     }
 
-    ctx.emit.error(new Error('upstream response body is neither Web ReadableStream nor Node Readable'));
+    const err = new Error('upstream response body is neither Web ReadableStream nor Node Readable');
+    try { ctx.inspection?.fail?.(err, 502); } catch { /* inspection best-effort */ }
+    ctx.emit.error(err);
 }

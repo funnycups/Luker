@@ -163,4 +163,50 @@ describe('installFetchProxy', () => {
         });
         expect(resp.headers.get('content-type')).toBe('image/png');
     });
+
+    test('surfaces WS meta frames via getLukerResponseMeta and onLukerResponseMeta without mutating response.body', async () => {
+        const {
+            installFetchProxy,
+            getLukerResponseMeta,
+            onLukerResponseMeta,
+        } = await import('../public/scripts/ws-delivery.js');
+        let capturedOnMeta = null;
+        let closeStream = null;
+        mockDelivery.subscribe.mockImplementation((_id, _headers, opts) => {
+            capturedOnMeta = opts.onMeta;
+            const encoder = new TextEncoder();
+            return {
+                stream: new ReadableStream({
+                    start(c) {
+                        c.enqueue(encoder.encode('{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}'));
+                        closeStream = () => c.close();
+                    },
+                }),
+                headPromise: Promise.resolve({ status: 200, headers: { 'content-type': 'application/json' } }),
+                unsubscribe: jest.fn(),
+            };
+        });
+        installFetchProxy(mockDelivery, { originalFetch });
+        const resp = await window.fetch(PROXY_URL, {
+            method: 'POST',
+            headers: {},
+            body: JSON.stringify({ stream: false }),
+        });
+        const observed = [];
+        onLukerResponseMeta(resp, (m) => observed.push(m));
+        capturedOnMeta({ generation_id: 'test-uuid-fixed', persisted: true, status: 'completed' });
+        closeStream();
+
+        const rawText = await resp.text();
+        expect(rawText).toBe('{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}');
+        expect(rawText).not.toContain('"luker"');
+        expect(getLukerResponseMeta(resp)).toEqual({
+            generation_id: 'test-uuid-fixed',
+            persisted: true,
+            status: 'completed',
+        });
+        expect(observed).toEqual([
+            { generation_id: 'test-uuid-fixed', persisted: true, status: 'completed' },
+        ]);
+    });
 });

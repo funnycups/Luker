@@ -112,9 +112,9 @@ describe('resolveFunctionCallMode', () => {
         expect(resolveFunctionCallMode({ requestedMode: 'prompt_xml', plainTextEnabled: true })).toBe('prompt_xml');
     });
 
-    test('"prompt_json" forces prompt_json regardless of setting', () => {
-        expect(resolveFunctionCallMode({ requestedMode: 'prompt_json', plainTextEnabled: false })).toBe('prompt_json');
-        expect(resolveFunctionCallMode({ requestedMode: 'prompt_json', plainTextEnabled: true })).toBe('prompt_json');
+    test('unknown mode strings (including removed alias) fall back to auto behavior', () => {
+        expect(resolveFunctionCallMode({ requestedMode: 'prompt_json', plainTextEnabled: false })).toBe('native');
+        expect(resolveFunctionCallMode({ requestedMode: 'prompt_json', plainTextEnabled: true })).toBe('prompt_xml');
     });
 
     test('missing/empty requestedMode behaves like "auto"', () => {

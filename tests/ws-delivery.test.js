@@ -8,10 +8,43 @@ import {
 
 async function startTestServer({ verifyTicket }) {
     const httpServer = http.createServer((req, res) => res.end('ok'));
+    const sockets = new Set();
+    const clients = new Set();
+    httpServer.on('connection', (socket) => {
+        sockets.add(socket);
+        socket.once('close', () => sockets.delete(socket));
+    });
     const delivery = createDeliveryServer({ httpServer, verifyTicket });
-    await new Promise(r => httpServer.listen(0, r));
+    await new Promise(r => httpServer.listen(0, '127.0.0.1', r));
     const port = httpServer.address().port;
-    return { port, close: async () => { await delivery.close(); await new Promise(r => httpServer.close(r)); } };
+    return {
+        port,
+        connect(ticket) {
+            const ws = connectWs(port, ticket);
+            clients.add(ws);
+            return ws;
+        },
+        close: async () => {
+            const clientClosures = [...clients].map((ws) => {
+                if (ws.readyState === WebSocket.CLOSED) return Promise.resolve();
+                return new Promise((resolve) => {
+                    ws.once('close', resolve);
+                    if (ws.readyState === WebSocket.CONNECTING) {
+                        ws.on('error', () => {});
+                        ws.terminate();
+                    } else if (ws.readyState !== WebSocket.CLOSING) {
+                        ws.close();
+                    }
+                });
+            });
+            clients.clear();
+            const closedSockets = [...sockets].map(socket => new Promise(resolve => socket.once('close', resolve)));
+            await delivery.close();
+            httpServer.closeAllConnections();
+            await new Promise(r => httpServer.close(r));
+            await Promise.all([...clientClosures, ...closedSockets]);
+        },
+    };
 }
 
 function connectWs(port, ticket) {
@@ -54,7 +87,7 @@ describe('ws-delivery server', () => {
             verifyTicket: () => { throw new Error('bad ticket'); },
         });
         try {
-            const ws = connectWs(server.port, 'bogus');
+            const ws = server.connect('bogus');
             await waitClose(ws);
             expect(ws.readyState).toBe(WebSocket.CLOSED);
         } finally { await server.close(); }
@@ -65,7 +98,7 @@ describe('ws-delivery server', () => {
             verifyTicket: () => ({ user_handle: 'alice' }),
         });
         try {
-            const ws = connectWs(server.port, 'good');
+            const ws = server.connect('good');
             await waitOpen(ws);
             expect(ws.readyState).toBe(WebSocket.OPEN);
             ws.close();
@@ -79,7 +112,7 @@ describe('ws-delivery server', () => {
         try {
             const request = { user: { profile: { handle: 'alice' }, directories: {} }, body: {} };
             const job = createGenerationJob(request, { job_id: 'deliv-1', persist_target: null });
-            const ws = connectWs(server.port, 'good');
+            const ws = server.connect('good');
             await waitOpen(ws);
             const nextMsg = makeMsgQueue(ws);
             ws.send(JSON.stringify({ type: 'subscribe', request_id: 'deliv-1' }));
@@ -101,7 +134,7 @@ describe('ws-delivery server', () => {
         try {
             const request = { user: { profile: { handle: 'alice' }, directories: {} }, body: {} };
             createGenerationJob(request, { job_id: 'deliv-2', persist_target: null });
-            const ws = connectWs(server.port, 'good');
+            const ws = server.connect('good');
             await waitOpen(ws);
             const nextMsg = makeMsgQueue(ws);
             ws.send(JSON.stringify({ type: 'subscribe', request_id: 'deliv-2' }));
@@ -119,7 +152,7 @@ describe('ws-delivery server', () => {
         try {
             const request = { user: { profile: { handle: 'alice' }, directories: {} }, body: {} };
             const job = createGenerationJob(request, { job_id: 'b64-test-1', persist_target: null });
-            const ws = connectWs(server.port, 'good');
+            const ws = server.connect('good');
             await waitOpen(ws);
             const nextMsg = makeMsgQueue(ws);
             ws.send(JSON.stringify({ type: 'subscribe', request_id: 'b64-test-1' }));
@@ -140,7 +173,7 @@ describe('ws-delivery server', () => {
         try {
             const request = { user: { profile: { handle: 'alice' }, directories: {} }, body: {} };
             const job = createGenerationJob(request, { job_id: 'b64-test-2', persist_target: null });
-            const ws = connectWs(server.port, 'good');
+            const ws = server.connect('good');
             await waitOpen(ws);
             const nextMsg = makeMsgQueue(ws);
             ws.send(JSON.stringify({ type: 'subscribe', request_id: 'b64-test-2' }));
@@ -150,6 +183,27 @@ describe('ws-delivery server', () => {
             const msg = await nextMsg();
             expect(msg.type).toBe('chunk');
             expect(msg.data).toBe(preEncoded);
+            ws.close();
+        } finally { await server.close(); }
+    });
+
+    test('delivers dedicated out-of-band meta frame without altering chunk frames', async () => {
+        const server = await startTestServer({
+            verifyTicket: () => ({ user_handle: 'alice' }),
+        });
+        try {
+            const request = { user: { profile: { handle: 'alice' }, directories: {} }, body: {} };
+            const job = createGenerationJob(request, { job_id: 'meta-test-1', persist_target: null });
+            const ws = server.connect('good');
+            await waitOpen(ws);
+            const nextMsg = makeMsgQueue(ws);
+            ws.send(JSON.stringify({ type: 'subscribe', request_id: 'meta-test-1' }));
+            await new Promise(r => setTimeout(r, 20));
+            appendGenerationEvent(job, { kind: 'meta', data: { generation_id: 'meta-test-1', persisted: true, status: 'completed' } });
+            const msg = await nextMsg();
+            expect(msg.type).toBe('meta');
+            expect(msg.request_id).toBe('meta-test-1');
+            expect(msg.meta).toEqual({ generation_id: 'meta-test-1', persisted: true, status: 'completed' });
             ws.close();
         } finally { await server.close(); }
     });
@@ -166,7 +220,7 @@ describe('ws-delivery server', () => {
             appendGenerationEvent(job, { kind: 'chunk', data: 'Ag==' });
             appendGenerationEvent(job, { kind: 'chunk', data: 'Aw==' });
 
-            const ws = connectWs(server.port, 'good');
+            const ws = server.connect('good');
             await waitOpen(ws);
             const nextMsg = makeMsgQueue(ws);
             ws.send(JSON.stringify({ type: 'resume', request_id: 'deliv-3', from_seq: 2 }));
@@ -197,7 +251,7 @@ describe('ws-delivery server', () => {
             const request = { user: { profile: { handle: 'alice' }, directories: {} }, body: {} };
             const job = createGenerationJob(request, { job_id: 'dedup-1', persist_target: null });
 
-            const ws1 = connectWs(server.port, 'good');
+            const ws1 = server.connect('good');
             await waitOpen(ws1);
             const nextMsg1 = makeMsgQueue(ws1);
             ws1.send(JSON.stringify({ type: 'subscribe', request_id: 'dedup-1' }));
@@ -205,7 +259,7 @@ describe('ws-delivery server', () => {
 
             // Second connection from same user, subscribes to same job (the
             // client thinks ws1 is dead and is reconnecting).
-            const ws2 = connectWs(server.port, 'good');
+            const ws2 = server.connect('good');
             await waitOpen(ws2);
             const nextMsg2 = makeMsgQueue(ws2);
             ws2.send(JSON.stringify({ type: 'resume', request_id: 'dedup-1', from_seq: 1 }));
@@ -252,7 +306,7 @@ describe('ws-delivery server', () => {
         // the ws-delivery path really let an error through.
         process.prependListener('uncaughtException', record);
         try {
-            const ws = connectWs(server.port, 'good');
+            const ws = server.connect('good');
             // Client-side noop error handler — unrelated wiring shouldn't
             // pollute the process-level probe.
             ws.on('error', () => {});

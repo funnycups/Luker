@@ -2,23 +2,9 @@
 import { dispatchLog as console } from '../../logging.js';
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 //
-// Pure dispatch for Azure OpenAI chat completions. Extracted from legacy
-// `sendAzureOpenAIRequest` (src/endpoints/backends/chat-completions.js:2064-2157).
+// Pure dispatch for Azure OpenAI chat completions.
 // Consumes a DispatchContext (see src/luker-dispatch/context.js) and emits
 // head/chunk/end/error events; never touches Express request/response.
-//
-// Follows the 8-step template established by claude.js (see that file's
-// header for the full recipe). Azure OpenAI specifics:
-//   - URL is constructed from body.azure_base_url +
-//     `/openai/deployments/${azure_deployment_name}/chat/completions`
-//     with `?api-version={azure_api_version}` query param.
-//   - Auth uses `api-key` header (Azure convention), NOT `Authorization: Bearer`.
-//   - Request body is whitelist-copied from AZURE_OPENAI_KEYS only.
-//   - json_schema translated to Azure/OpenAI-native response_format shape
-//     (name/strict/schema; strict defaults to true if not specified).
-//   - logprobs>0 (numeric) is translated to top_logprobs + boolean logprobs.
-//   - reasoning_effort is only set for models in OPENAI_REASONING_EFFORT_MODELS,
-//     honoring OPENAI_FIXED_REASONING_EFFORT and the canonical token mapping.
 
 import {
     AZURE_OPENAI_KEYS,
@@ -26,10 +12,19 @@ import {
     OPENAI_REASONING_EFFORT_MODELS,
 } from '../../../constants.js';
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
+import { stripNonChatReplayFields } from '../../../prompt-converters.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
-import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { applyAdditionalParameters } from './custom-params.js';
 import { resolveOpenAIEffort } from './reasoning-params.js';
+import {
+    emitCapabilityConflict,
+    handleProviderDispatchError,
+    relayUpstreamResponse,
+} from './upstream-relay.js';
+import {
+    resolveOpenAIModelCapabilities,
+    validateOpenAIChatCapabilities,
+} from '../../../../public/scripts/lib/provider-capabilities.js';
 
 /**
  * Dispatch an Azure OpenAI chat completion request through the transport-agnostic
@@ -53,12 +48,23 @@ export async function dispatchAzureOpenAI(ctx) {
     }
 
     try {
+        if (Array.isArray(body.tools) && body.tools.length > 0) {
+            const capabilityConflict = validateOpenAIChatCapabilities({ model: body.model, hasTools: true });
+            if (capabilityConflict) {
+                emitCapabilityConflict(ctx, capabilityConflict, 'Azure OpenAI');
+                return;
+            }
+        }
+
         // Whitelist body fields per AZURE_OPENAI_KEYS.
         const apiRequestBody = /** @type {any} */ ({});
         for (const key of AZURE_OPENAI_KEYS) {
             if (Object.hasOwn(body, key)) {
                 apiRequestBody[key] = body[key];
             }
+        }
+        if (Array.isArray(apiRequestBody.messages)) {
+            apiRequestBody.messages = stripNonChatReplayFields(apiRequestBody.messages);
         }
 
         // Structured Output translation.
@@ -81,7 +87,9 @@ export async function dispatchAzureOpenAI(ctx) {
 
         // Reasoning effort gating.
         const azureFixed = OPENAI_FIXED_REASONING_EFFORT[body.model];
-        apiRequestBody.reasoning_effort = OPENAI_REASONING_EFFORT_MODELS.includes(body.model)
+        const supportsAzureReasoningEffort = OPENAI_REASONING_EFFORT_MODELS.includes(body.model)
+            || resolveOpenAIModelCapabilities(body.model).supportsReasoningEffort;
+        apiRequestBody.reasoning_effort = supportsAzureReasoningEffort
             ? (azureFixed ?? resolveOpenAIEffort(body.reasoning_effort, body.model))
             : undefined;
 
@@ -106,50 +114,11 @@ export async function dispatchAzureOpenAI(ctx) {
             headers,
         });
 
-        // Architectural contract: every dispatch emits a single head frame
-        // immediately after the upstream fetch resolves, regardless of
-        // status. The WebSocket delivery layer (ws-delivery) uses head to
-        // release the client-side `await headPromise`; without it the
-        // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: resp.status, headers: resp.headers });
-
-        if (!resp.ok) {
-            let errText = '';
-            try { errText = await resp.text(); } catch { /* body already consumed */ }
-            const msg = `Azure OpenAI upstream ${resp.status}: ${errText}`;
-            ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
-            // Surface upstream status + body to the client via chunk + end
-            // (head already emitted above). Client sees
-            // Response.status=<upstream> and Response.body readable so
-            // callers can do `await response.text()` or
-            // `await response.json()` for structured error inspection
-            // (matches legacy handler shape which returned
-            // `.status(4xx).send({error:{...}})`).
-            if (errText) {
-                ctx.emit.chunk(new TextEncoder().encode(errText));
-            }
-            ctx.emit.end();
-            return;
-        }
-
-        if (body.stream) {
-            await pipeResponseBodyToEmit(resp, ctx);
-        } else {
-            const buf = await resp.arrayBuffer();
-            try {
-                const json = JSON.parse(new TextDecoder().decode(buf));
-                console.debug('Azure OpenAI response:', json);
-            } catch { /* non-JSON body — skip debug log */ }
-            ctx.emit.chunk(new Uint8Array(buf));
-            ctx.emit.end();
-        }
+        await relayUpstreamResponse(ctx, resp, {
+            label: 'Azure OpenAI',
+            stream: Boolean(apiRequestBody.stream),
+        });
     } catch (err) {
-        if (err?.name === 'AbortError') {
-            try { ctx.inspection.abort(); } catch { /* inspection best-effort */ }
-        } else {
-            try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
-            console.error('Azure OpenAI request failed: ', err);
-        }
-        ctx.emit.error(err);
+        handleProviderDispatchError(ctx, err, 'Azure OpenAI');
     }
 }

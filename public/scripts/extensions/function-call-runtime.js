@@ -686,6 +686,45 @@ function parseFunctionCallsFromXmlText(source, allowSet = null) {
     return calls;
 }
 
+/**
+ * Strictly parse `<function_calls>` XML from the post-trigger region only.
+ * Never falls back to scanning earlier prose or `<thought>` blocks, never
+ * accepts unexpected prose between the trigger signal and `<function_calls>`,
+ * and never silently drops malformed or missing tags.
+ *
+ * @param {string} afterTrigger Substring immediately following the trigger signal
+ * @returns {Array<{ id: string, name: string, args: Record<string, any> }>}
+ */
+export function parseStrictPlainTextFunctionCallsAfterTrigger(afterTrigger) {
+    const trimmed = String(afterTrigger || '').trim();
+    if (!trimmed) {
+        throw new Error(`Missing <${FUNCTION_CALLS_TAG}> tag after trigger signal.`);
+    }
+
+    const callsBlock = extractXmlTagBlock(trimmed, FUNCTION_CALLS_TAG);
+    if (!callsBlock) {
+        if (trimmed.includes(`<${FUNCTION_CALLS_TAG}>`) && !trimmed.includes(`</${FUNCTION_CALLS_TAG}>`)) {
+            throw new Error(`Missing closing </${FUNCTION_CALLS_TAG}> tag.`);
+        }
+        throw new Error(`Missing <${FUNCTION_CALLS_TAG}> tag after trigger signal.`);
+    }
+
+    if (callsBlock.start > 0) {
+        throw new Error(`Unexpected text between trigger signal and <${FUNCTION_CALLS_TAG}>.`);
+    }
+
+    const trailing = trimmed.slice(callsBlock.end).trim();
+    if (trailing) {
+        throw new Error(`Unexpected trailing text after </${FUNCTION_CALLS_TAG}>.`);
+    }
+
+    const calls = parseFunctionCallsFromXmlText(callsBlock.full, null);
+    if (calls.length === 0) {
+        throw new Error(`No <${FUNCTION_CALL_TAG}> blocks found inside <${FUNCTION_CALLS_TAG}>.`);
+    }
+    return calls;
+}
+
 export function extractAllFunctionCalls(responseData, allowedNames = null) {
     const toolCalls = responseData?.choices?.[0]?.message?.tool_calls;
     if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
@@ -1018,17 +1057,17 @@ export function isToolCallMandatory({ toolChoice = 'auto', requiredFunctionName 
  * Semantics:
  *   - 'auto' (default): respect the plain-text setting — switch to 'prompt_xml' when enabled, else 'native'.
  *   - 'native': force native tool calling, ignoring the setting.
- *   - 'prompt_xml' / 'prompt_json': force the corresponding plain-text protocol, ignoring the setting.
+ *   - 'prompt_xml': force plain-text XML tool calling, ignoring the setting.
  *   - empty / unknown: treated as 'auto'.
  *
  * @param {object} [options]
- * @param {'auto'|'native'|'prompt_xml'|'prompt_json'|string} [options.requestedMode='auto']
+ * @param {'auto'|'native'|'prompt_xml'|string} [options.requestedMode='auto']
  * @param {boolean} [options.plainTextEnabled=false]
- * @returns {'native'|'prompt_xml'|'prompt_json'}
+ * @returns {'native'|'prompt_xml'}
  */
 export function resolveFunctionCallMode({ requestedMode = 'auto', plainTextEnabled = false } = {}) {
     const mode = String(requestedMode || '').trim().toLowerCase() || 'auto';
-    if (mode === 'native' || mode === 'prompt_xml' || mode === 'prompt_json') {
+    if (mode === 'native' || mode === 'prompt_xml') {
         return mode;
     }
     return plainTextEnabled ? 'prompt_xml' : 'native';
@@ -1520,6 +1559,37 @@ export function formatToolCallForModel(toolName, toolArguments) {
     ].join('\n');
 }
 
+function hasNativeToolOrPlainTextCallReplay(message) {
+    const containsPlainTextMarkup = (str) => typeof str === 'string'
+        && (/<Function_[A-Za-z0-9]+_Start\/>/.test(str) || str.includes(`<${FUNCTION_CALLS_TAG}>`));
+    if (Array.isArray(message.native_content_blocks)) {
+        for (const block of message.native_content_blocks) {
+            if (!block || typeof block !== 'object') continue;
+            if (block.type === 'tool_use' || block.type === 'server_tool_use') return true;
+            if (block.type === 'text' && containsPlainTextMarkup(block.text)) return true;
+        }
+    }
+    if (Array.isArray(message.native_parts)) {
+        for (const part of message.native_parts) {
+            if (!part || typeof part !== 'object') continue;
+            if (part.functionCall || part.function_call) return true;
+            if (!part.thought && containsPlainTextMarkup(part.text)) return true;
+        }
+    }
+    if (Array.isArray(message.responses_output_items)) {
+        for (const item of message.responses_output_items) {
+            if (!item || typeof item !== 'object') continue;
+            if (item.type === 'function_call') return true;
+            if (item.type === 'message' && Array.isArray(item.content)) {
+                for (const c of item.content) {
+                    if (containsPlainTextMarkup(c?.text)) return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 export function normalizeToolMessagesForPlainTextFunctionCalling(messages = [], options = {}) {
     const toolResultTag = String(options?.resultTag || 'tool_result');
     const triggerSignal = String(options?.triggerSignal || '').trim();
@@ -1553,6 +1623,16 @@ export function normalizeToolMessagesForPlainTextFunctionCalling(messages = [], 
                 .filter(Boolean)
                 .join('\n\n');
             delete next.tool_calls;
+        }
+
+        // Strip opaque native replay envelopes whenever tool calls were
+        // rewritten or the native blocks carry native tool calls / stale
+        // plain-text triggers, so Claude / Gemini / OpenAI Responses converters
+        // do not short-circuit over the normalized plain-text `next.content`.
+        if (toolCalls.length > 0 || hasNativeToolOrPlainTextCallReplay(next)) {
+            delete next.native_content_blocks;
+            delete next.native_parts;
+            delete next.responses_output_items;
         }
 
         if (role !== 'tool') {

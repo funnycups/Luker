@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { getConfigValue, tryParse } from './util.js';
+import { resolveGeminiModelCapabilities } from '../public/scripts/lib/provider-capabilities.js';
 
 const PROMPT_PLACEHOLDER = getConfigValue('promptPlaceholder', 'Let\'s get started.');
 
@@ -265,17 +266,49 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
     };
 
     messages.forEach((message) => {
+        if (message.role === 'assistant' && Array.isArray(message.native_content_blocks) && message.native_content_blocks.length > 0) {
+            // Replay exact ordered native Anthropic blocks verbatim (preserving
+            // interleaved thinking/text/citations/tool_use/server_tool_use/
+            // web_search_tool_result positions for prefix-bound signatures and
+            // pause_turn continuation).
+            message.content = message.native_content_blocks
+                .filter(block => block && typeof block === 'object')
+                .map(block => structuredClone(block));
+            delete message.name;
+            delete message.tool_calls;
+            delete message.tool_call_id;
+            delete message.reasoning_blocks;
+            delete message.reasoning;
+            delete message.signature;
+            delete message.reasoning_details;
+            delete message.native_content_blocks;
+            delete message.native_parts;
+            delete message.responses_output_items;
+            return;
+        }
+
         const reasoningBlocks = message.role === 'assistant'
             ? extractReasoningBlocks(message.reasoning_blocks)
             : [];
 
-        if (message.role === 'assistant' && message.tool_calls) {
-            message.content = message.tool_calls.map((tc) => ({
+        if (message.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+            const prefixBlocks = [];
+            if (typeof message.content === 'string' && message.content.trim().length > 0) {
+                prefixBlocks.push({ type: 'text', text: message.name ? `${message.name}: ${message.content}` : message.content });
+            } else if (Array.isArray(message.content)) {
+                for (const block of message.content) {
+                    if (block && typeof block === 'object') {
+                        prefixBlocks.push(block);
+                    }
+                }
+            }
+            const toolUseBlocks = message.tool_calls.map((tc) => ({
                 type: 'tool_use',
                 id: tc.id,
                 name: tc.function.name,
                 input: parse(tc.function.arguments),
             }));
+            message.content = [...prefixBlocks, ...toolUseBlocks];
         }
 
         if (message.role === 'tool') {
@@ -359,6 +392,9 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
         delete message.reasoning;
         delete message.signature;
         delete message.reasoning_details;
+        delete message.native_content_blocks;
+        delete message.native_parts;
+        delete message.responses_output_items;
     });
 
     // Images in assistant messages should be moved to the next user message
@@ -453,12 +489,36 @@ export function convertClaudeMessages(messages, prefillString, useSysPrompt, use
 }
 
 /**
+ * Strip provider-specific internal replay envelopes that non-owning chat
+ * completion endpoints reject as unknown message keys.
+ * @param {any} messages
+ * @returns {any}
+ */
+export function stripNonChatReplayFields(messages) {
+    if (!Array.isArray(messages)) return messages;
+    return messages.map((msg) => {
+        if (!msg || typeof msg !== 'object') return msg;
+        if (!('native_parts' in msg) && !('native_content_blocks' in msg)
+            && !('responses_output_items' in msg) && !('reasoning_blocks' in msg)) {
+            return msg;
+        }
+        const clone = { ...msg };
+        delete clone.native_parts;
+        delete clone.native_content_blocks;
+        delete clone.responses_output_items;
+        delete clone.reasoning_blocks;
+        return clone;
+    });
+}
+
+/**
  * Convert a prompt from the ChatML objects to the format used by Cohere.
  * @param {object[]} messages Array of messages
  * @param {PromptNames} names Prompt names
  * @returns {{chatHistory: object[]}} Prompt for Cohere
  */
 export function convertCohereMessages(messages, names) {
+    messages = stripNonChatReplayFields(messages);
     if (messages.length === 0) {
         messages.unshift({
             role: 'user',
@@ -529,9 +589,10 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
 
     const system_instruction = { parts: sysPrompt.map(text => ({ text })) };
     const toolNameMap = {};
+    const genuineToolCallIds = new Set();
 
-    // https://ai.google.dev/gemini-api/docs/latest-model#prefilled-model-turn-validation
-    const noPrefillModel = /gemini-3\.[67]-flash|gemini-3\.5-flash-lite|gemini-4/.test(model);
+    const geminiCaps = resolveGeminiModelCapabilities(model);
+    const noPrefillModel = geminiCaps.noPrefill;
 
     const contents = [];
     messages.forEach((message, index) => {
@@ -543,23 +604,68 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
             message.role = noPrefillModel && index === messages.length - 1 ? 'user' : 'model';
         }
 
+        // When exact native Gemini Parts were captured for this model turn, replay them
+        // verbatim in original order so per-Part thoughtSignature, interleaved text,
+        // functionCall ids, and inlineData remain intact.
+        if (message.role === 'model' && Array.isArray(message.native_parts) && message.native_parts.length > 0) {
+            const nativeParts = message.native_parts
+                .filter(part => part && typeof part === 'object')
+                .map(part => structuredClone(part));
+            const fallbackToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+            let nativeCallIdx = 0;
+            for (const part of nativeParts) {
+                const fc = part.functionCall ?? part.function_call;
+                if (fc?.name) {
+                    const fallbackId = fallbackToolCalls[nativeCallIdx]?.id || `gemini_call_${nativeCallIdx + 1}`;
+                    nativeCallIdx += 1;
+                    if (typeof fc.id === 'string' && fc.id.length > 0) {
+                        toolNameMap[fc.id] = fc.name;
+                        genuineToolCallIds.add(fc.id);
+                    }
+                    if (fallbackId) {
+                        // Overwrite in chronological order so multi-turn fallback IDs
+                        // (`gemini_call_1`) resolve to the most recent model turn.
+                        toolNameMap[fallbackId] = fc.name;
+                        if (!(typeof fc.id === 'string' && fc.id.length > 0)) {
+                            genuineToolCallIds.delete(fallbackId);
+                        }
+                    }
+                }
+            }
+            for (const tc of fallbackToolCalls) {
+                if (tc?.id && tc?.function?.name && !Object.hasOwn(toolNameMap, tc.id)) {
+                    toolNameMap[tc.id] = tc.function.name;
+                }
+            }
+            if (nativeParts.length > 0) {
+                contents.push({
+                    role: message.role,
+                    parts: nativeParts,
+                });
+                return;
+            }
+        }
+
         // Convert the content to an array of parts
         if (!Array.isArray(message.content)) {
-            const content = (() => {
-                const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
-                const hasToolCallId = typeof message.tool_call_id === 'string' && message.tool_call_id.length > 0;
+            const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+            const hasToolCallId = typeof message.tool_call_id === 'string' && message.tool_call_id.length > 0;
 
-                if (hasToolCalls) {
-                    return { type: 'tool_calls', tool_calls: message.tool_calls };
+            if (hasToolCalls) {
+                const textStr = String(message.content ?? '');
+                const combined = [];
+                if (textStr.length > 0) {
+                    combined.push({ type: 'text', text: textStr });
                 }
-
-                if (hasToolCallId) {
-                    return { type: 'tool_call_id', tool_call_id: message.tool_call_id, content: String(message.content ?? '') };
-                }
-
-                return { type: 'text', text: String(message.content ?? '') };
-            })();
-            message.content = [content];
+                combined.push({ type: 'tool_calls', tool_calls: message.tool_calls });
+                message.content = combined;
+            } else if (hasToolCallId) {
+                message.content = [{ type: 'tool_call_id', tool_call_id: message.tool_call_id, content: String(message.content ?? '') }];
+            } else {
+                message.content = [{ type: 'text', text: String(message.content ?? '') }];
+            }
+        } else if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+            message.content = [...message.content, { type: 'tool_calls', tool_calls: message.tool_calls }];
         }
 
         // similar story as claude
@@ -603,7 +709,7 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
                     };
 
                     // https://ai.google.dev/gemini-api/docs/gemini-3#media_resolution
-                    if ((/gemini-3/.test(model) || /gemini-4/.test(model)) && mediaResolution) {
+                    if (geminiCaps.supportsMediaResolution && mediaResolution) {
                         part.mediaResolution = {
                             level: mediaResolution,
                         };
@@ -617,25 +723,36 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
                 parts.push({ text: part.text });
             } else if (part.type === 'tool_call_id') {
                 const name = toolNameMap[part.tool_call_id] ?? 'unknown';
+                const hasGenuineId = Boolean(part.tool_call_id && genuineToolCallIds.has(part.tool_call_id));
                 parts.push({
                     functionResponse: {
                         name: name,
                         response: { name: name, content: part.content },
-                        ...(part.tool_call_id ? { id: part.tool_call_id } : {}),
+                        ...(hasGenuineId ? { id: part.tool_call_id } : {}),
                     },
                 });
             } else if (part.type === 'tool_calls') {
                 part.tool_calls.forEach((toolCall) => {
+                    const rawId = typeof toolCall.id === 'string' ? toolCall.id : '';
+                    const isSyntheticFallback = /^gemini_call_\d+$/.test(rawId);
+                    const wireId = rawId && !isSyntheticFallback ? rawId : '';
                     parts.push({
                         functionCall: {
                             name: toolCall.function.name,
                             args: tryParse(toolCall.function.arguments) ?? toolCall.function.arguments,
-                            ...(toolCall.id ? { id: toolCall.id } : {}),
+                            ...(wireId ? { id: wireId } : {}),
                         },
                         ...(toolCall.signature ? { thoughtSignature: toolCall.signature } : {}),
                     });
 
-                    toolNameMap[toolCall.id] = toolCall.function.name;
+                    if (rawId) {
+                        toolNameMap[rawId] = toolCall.function.name;
+                        if (wireId) {
+                            genuineToolCallIds.add(wireId);
+                        } else {
+                            genuineToolCallIds.delete(rawId);
+                        }
+                    }
                 });
             } else if (part.type === 'image_url') {
                 const imageUrl = part.image_url?.url;
@@ -652,20 +769,23 @@ export function convertGooglePrompt(messages, model, useSysPrompt, names) {
         });
 
         // https://ai.google.dev/gemini-api/docs/gemini-3#migrating_from_other_models
-        // Inject stored thought signatures, or fall back to bypass magic for Gemini 3
-        if (/gemini-3/.test(model) || /gemini-4/.test(model) || /gemini-2\.5/.test(model)) {
+        // Inject stored thought signatures, or fall back to bypass magic for Gemini 3/4
+        if (geminiCaps.supportsThoughtSignature) {
             const skipSignatureMagic = 'skip_thought_signature_validator';
             const textSignature = message.signature;
 
             parts.forEach((part) => {
+                if (part.thoughtSignature) {
+                    return;
+                }
                 if (enableThoughtSignatures && textSignature && typeof part.text === 'string') {
                     part.thoughtSignature = textSignature;
-                } else if (/gemini-3/.test(model) || /gemini-4/.test(model)) {
-                    // Gemini 3: Fall back to bypass magic for function calls (mandatory) and images
+                } else if (geminiCaps.requiresToolThoughtSignature) {
+                    // Gemini 3/4: Fall back to bypass magic for function calls (mandatory) and images
                     if (part.functionCall && !part.thoughtSignature) {
                         part.thoughtSignature = skipSignatureMagic;
                     }
-                    if (/-image/.test(model) && message.role === 'model') {
+                    if (geminiCaps.requiresImageThoughtSignature && message.role === 'model') {
                         if (typeof part.text === 'string' || part.inlineData) {
                             part.thoughtSignature = skipSignatureMagic;
                         }
@@ -725,6 +845,7 @@ export function convertAI21Messages(messages, names) {
     if (!Array.isArray(messages)) {
         return [];
     }
+    messages = stripNonChatReplayFields(messages);
 
     // Collect all the system messages up until the first instance of a non-system message, and then remove them from the messages array.
     let i = 0, systemPrompt = '';
@@ -797,6 +918,7 @@ export function convertMistralMessages(messages, names) {
     if (!Array.isArray(messages)) {
         return [];
     }
+    messages = stripNonChatReplayFields(messages);
 
     // Make the last assistant message a prefill
     const prefixEnabled = getConfigValue('mistral.enablePrefix', false, 'boolean');
@@ -975,6 +1097,10 @@ export function mergeMessages(messages, names, { strict = false, placeholders = 
             }
 
             message.role = 'user';
+            delete message.native_content_blocks;
+            delete message.native_parts;
+            delete message.responses_output_items;
+            delete message.reasoning_blocks;
         }
         delete message.name;
         if (!tools) {
@@ -983,10 +1109,24 @@ export function mergeMessages(messages, names, { strict = false, placeholders = 
         }
     });
 
-    // Squash consecutive messages with the same role
+    const hasNativeReplayBlocks = (msg) => Boolean(
+        (Array.isArray(msg?.native_content_blocks) && msg.native_content_blocks.length > 0)
+        || (Array.isArray(msg?.native_parts) && msg.native_parts.length > 0)
+        || (Array.isArray(msg?.responses_output_items) && msg.responses_output_items.length > 0),
+    );
+
+    // Squash consecutive messages with the same role, refusing to merge across
+    // assistant turns carrying native replay envelopes (thinking signatures,
+    // pause_turn server tool blocks, encrypted reasoning items).
     messages.forEach((message) => {
-        if (mergedMessages.length > 0 && mergedMessages[mergedMessages.length - 1].role === message.role && message.content && message.role !== 'tool') {
-            mergedMessages[mergedMessages.length - 1].content += '\n\n' + message.content;
+        const prev = mergedMessages.length > 0 ? mergedMessages[mergedMessages.length - 1] : null;
+        if (prev
+            && prev.role === message.role
+            && message.content
+            && message.role !== 'tool'
+            && !hasNativeReplayBlocks(prev)
+            && !hasNativeReplayBlocks(message)) {
+            prev.content += '\n\n' + message.content;
         } else {
             mergedMessages.push(message);
         }
@@ -1414,6 +1554,30 @@ export function calculateGoogleBudgetTokens(maxTokens, reasoningEffort, model) {
         }
 
         return null;
+    }
+
+    function getNanoBananaBudget() {
+        // https://ai.google.dev/gemini-api/docs/image-generation (verified 2026-11-25)
+        // Nano Banana 2.1 accepts thinkingLevel: minimal | medium | high.
+        switch (reasoningEffort) {
+            case REASONING_EFFORT.auto:
+                return null;
+            case REASONING_EFFORT.min:
+            case 'minimal':
+            case REASONING_EFFORT.low:
+                return 'minimal';
+            case REASONING_EFFORT.medium:
+                return 'medium';
+            case REASONING_EFFORT.high:
+            case REASONING_EFFORT.max:
+            case 'xhigh':
+                return 'high';
+        }
+        return null;
+    }
+
+    if (/nano-banana/i.test(model)) {
+        return getNanoBananaBudget();
     }
 
     if (/gemini-3[.\d]*-pro/.test(model)) {

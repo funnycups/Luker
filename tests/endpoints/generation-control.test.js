@@ -3,6 +3,7 @@ import express from 'express';
 import request from 'supertest';
 import {
     createGenerationJob,
+    completeGenerationJobFromText,
     getTaskByRequestId,
 } from '../../src/endpoints/backends/luker-generation.js';
 import { generationControlRouter } from '../../src/endpoints/generation-control.js';
@@ -87,6 +88,37 @@ describe('POST /api/generation/:request_id/abort', () => {
         expect(res.status).toBe(200);
         expect(controller.signal.aborted).toBe(true);
         expect(abortReason).toBe('client abort');
+    });
+
+    test('aborted job cannot transition back to awaiting_ack or arm auto-persist on late completion', async () => {
+        const req = makeRequestForOwner('alice');
+        const job = createGenerationJob(req, {
+            job_id: 'abort-no-reopen-1',
+            persist_target: { avatar_url: 'alice.png', file_name: 'chat.jsonl' },
+        });
+        const app = makeApp('alice');
+        const res = await request(app).post('/api/generation/abort-no-reopen-1/abort').send();
+        expect(res.status).toBe(200);
+        expect(job.status).toBe('failed');
+
+        await completeGenerationJobFromText(req, job, 'late assistant output', 'gpt-4o');
+        expect(job.status).toBe('failed');
+        expect(job.persistenceTimer).toBeNull();
+        expect(job.persisted).toBe(false);
+    });
+
+    test('aborting an already-completed job returns aborted:false without clobbering status', async () => {
+        const req = makeRequestForOwner('alice');
+        const job = createGenerationJob(req, { job_id: 'abort-already-done-1', persist_target: null });
+        job.status = 'completed';
+        job.persisted = true;
+
+        const app = makeApp('alice');
+        const res = await request(app).post('/api/generation/abort-already-done-1/abort').send();
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ aborted: false });
+        expect(job.status).toBe('completed');
+        expect(job.persisted).toBe(true);
     });
 });
 

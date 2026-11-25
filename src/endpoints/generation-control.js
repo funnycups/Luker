@@ -58,6 +58,9 @@ generationControlRouter.post('/:request_id/abort', (req, res) => {
         const aborted = withDispatchLogging(true, () => abortGenerationJobForInspector(job, 'Aborted by caller'));
         return res.json({ aborted });
     }
+    if (['completed', 'failed', 'cancelled'].includes(String(job.status || ''))) {
+        return res.json({ aborted: false });
+    }
     if (job.abortController) {
         try { job.abortController.abort('client abort'); } catch { /* already aborted */ }
     }

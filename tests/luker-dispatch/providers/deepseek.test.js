@@ -223,4 +223,37 @@ describe('dispatchDeepSeek', () => {
         expect(body.thinking).toBeUndefined();
         expect(body.reasoning_effort).toBeUndefined();
     });
+
+    test('strips foreign replay fields before post-processing consecutive assistant messages', async () => {
+        const ctx = fakeCtx({
+            body: {
+                messages: [
+                    { role: 'user', content: 'start' },
+                    {
+                        role: 'assistant',
+                        content: 'first part',
+                        native_content_blocks: [{ type: 'text', text: 'first part' }],
+                        reasoning_blocks: [{ type: 'thinking', thinking: 't1', signature: 's1' }],
+                    },
+                    {
+                        role: 'assistant',
+                        content: 'second part',
+                        native_parts: [{ text: 'second part' }],
+                        responses_output_items: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'second part' }] }],
+                    },
+                ],
+            },
+        });
+        await dispatchDeepSeek(ctx);
+
+        const wireBody = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+        expect(wireBody.messages).toHaveLength(2);
+        expect(wireBody.messages[0]).toEqual({ role: 'user', content: 'start' });
+        expect(wireBody.messages[1]).toEqual({
+            role: 'assistant',
+            content: 'first part\n\nsecond part',
+            prefix: true,
+            reasoning_content: ' ',
+        });
+    });
 });

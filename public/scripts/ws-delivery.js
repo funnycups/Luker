@@ -4,6 +4,48 @@ const TICKET_PROTOCOL_PREFIX = 'luker-ws-ticket.';
 const TRANSIENT_SESSION_HEADER = 'X-Luker-Transient-Session';
 const DEFAULT_RECONNECT_BACKOFF_MS = 500;
 
+/**
+ * Out-of-band Luker metadata store keyed by proxied `Response` instances.
+ * Internal server metadata (`generation_id`, `persisted`, `status`,
+ * `plain_text_function_call`, etc.) arrives on dedicated WS `meta` frames and
+ * is never mixed into `response.body`.
+ * @type {WeakMap<object, { latest: object | null, listeners: Set<(meta: object) => void> }>}
+ */
+const responseMetaStore = new WeakMap();
+
+/**
+ * Read the latest out-of-band Luker metadata received for a proxied Response.
+ * @param {Response|null|undefined} response
+ * @returns {object|null}
+ */
+export function getLukerResponseMeta(response) {
+    if (!response || (typeof response !== 'object' && typeof response !== 'function')) return null;
+    const slot = responseMetaStore.get(response);
+    return slot?.latest ? { ...slot.latest } : null;
+}
+
+/**
+ * Subscribe to out-of-band Luker metadata frames received for a proxied
+ * Response. Invokes `listener` immediately when metadata has already arrived.
+ * @param {Response|null|undefined} response
+ * @param {(meta: object) => void} listener
+ * @returns {() => void} Disposer
+ */
+export function onLukerResponseMeta(response, listener) {
+    if (!response || typeof listener !== 'function') return () => {};
+    const slot = responseMetaStore.get(response);
+    if (!slot) return () => {};
+    if (slot.latest) {
+        try {
+            listener({ ...slot.latest });
+        } catch (err) {
+            console.warn('[ws-delivery] onLukerResponseMeta listener threw:', err?.message || err);
+        }
+    }
+    slot.listeners.add(listener);
+    return () => { slot.listeners.delete(listener); };
+}
+
 function readTransientSessionHeader(headers) {
     if (!headers || typeof headers !== 'object') return undefined;
     for (const [key, value] of Object.entries(headers)) {
@@ -243,6 +285,16 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 }
                 const bytes = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0));
                 try { entry.controller.enqueue(bytes); } catch { /* ignore */ }
+            } else if (msg.type === 'meta') {
+                if (typeof msg.seq === 'number') entry.lastSeq = msg.seq;
+                armEntryTimer(msg.request_id, entry);
+                const incoming = (msg.meta && typeof msg.meta === 'object') ? msg.meta : {};
+                entry.meta = { ...(entry.meta || {}), ...incoming };
+                if (typeof entry.onMeta === 'function') {
+                    try { entry.onMeta({ ...entry.meta }); } catch (cbErr) {
+                        console.warn('[ws-delivery] onMeta callback threw:', cbErr?.message || cbErr);
+                    }
+                }
             } else if (msg.type === 'end') {
                 disarmEntryTimer(entry);
                 detachAbortListener(entry);
@@ -279,15 +331,17 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
                 }
                 // Structured error frame from dispatch (thrown Error path).
                 // If head hasn't resolved, surface as HTTP 502 with the
-                // error message as body so callers can do `await response.text()`
-                // or `await response.json()` for diagnostics without hanging.
-                // If head already resolved (error mid-stream), error the
-                // caller's stream so `for await response.body` throws.
+                // legacy handler's JSON error body so every backend client
+                // (chat-completion, kobold, text-generation) can parse the
+                // message and show the user-visible failure. If head already
+                // resolved (error mid-stream), error the caller's stream so
+                // `for await response.body` throws.
                 if (!entry.headResolved) {
                     entry.headResolved = true;
                     const errMsg = msg.message || msg.code || 'ws delivery error';
-                    entry.resolveHead({ status: 502, headers: { 'content-type': 'text/plain' } });
-                    try { entry.controller.enqueue(new TextEncoder().encode(errMsg)); } catch { /* ignore */ }
+                    const body = JSON.stringify({ error: { message: errMsg } });
+                    entry.resolveHead({ status: 502, headers: { 'content-type': 'application/json' } });
+                    try { entry.controller.enqueue(new TextEncoder().encode(body)); } catch { /* ignore */ }
                     try { entry.controller.close(); } catch { /* ignore */ }
                 } else {
                     try { entry.controller.error(new Error(msg.message || msg.code || 'ws delivery error')); } catch { /* ignore */ }
@@ -399,6 +453,8 @@ export function createLukerDelivery({ reconnectBackoffMs = DEFAULT_RECONNECT_BAC
             // its own AbortController so retry / auto-continue paths see a
             // user-style stop, not a retriable transport failure.
             onServerAbort: typeof options.onServerAbort === 'function' ? options.onServerAbort : null,
+            onMeta: typeof options.onMeta === 'function' ? options.onMeta : null,
+            meta: null,
             timeoutTimer: null,
             detachAbort: null,
         };
@@ -613,12 +669,12 @@ function defaultShouldProxy(url) {
 
 export function installFetchProxy(delivery, options = {}) {
     // Default target = top window; iframe callers pass `iframe.contentWindow`
-    // so the proxy lands in the iframe's realm. TavernHelper (JS-Slash-Runner)
-    // and similar third-party runtimes execute user scripts inside a
-    // `TH-render` iframe whose own `window.fetch` was never proxied, so calls
-    // to `/api/backends/*/generate` from those scripts hit the runner's
-    // immediate `{}` body and never subscribe to the WS delivery — see
-    // installFetchProxyForAllIframes below for the iframe lifecycle driver.
+    // so the proxy lands in the iframe's realm. Script runtimes that sandbox
+    // user scripts inside their own same-origin iframe leave that iframe's
+    // `window.fetch` unproxied, so calls to `/api/backends/*/generate` from
+    // those scripts hit the runner's immediate `{}` body and never subscribe
+    // to the WS delivery — see installFetchProxyForAllIframes below for the
+    // iframe lifecycle driver.
     const targetWindow = options.targetWindow || window;
 
     // Idempotency: re-install on the same window is a no-op that returns the
@@ -713,6 +769,10 @@ export function installFetchProxy(delivery, options = {}) {
         httpResp.headers.forEach((v, k) => {
             if (k.toLowerCase().startsWith('x-luker-')) initialHeaders[k] = v;
         });
+        const metaSlot = {
+            latest: null,
+            listeners: new Set(),
+        };
         const { stream, headPromise } = delivery.subscribe(requestId, initialHeaders, {
             transientSessionId,
             timeoutMs: requestTimeoutMs,
@@ -730,6 +790,16 @@ export function installFetchProxy(delivery, options = {}) {
             onServerAbort: typeof options.onServerAbort === 'function'
                 ? options.onServerAbort
                 : null,
+            onMeta: (meta) => {
+                metaSlot.latest = { ...(metaSlot.latest || {}), ...(meta || {}) };
+                for (const listener of [...metaSlot.listeners]) {
+                    try {
+                        listener({ ...metaSlot.latest });
+                    } catch (err) {
+                        console.warn('[ws-delivery] response meta listener threw:', err?.message || err);
+                    }
+                }
+            },
         });
         console.info(`[ws-delivery] proxiedFetch subscribe request_id=${requestId} url=${String(url).split('?')[0]}`);
         // Wait for the dispatch to publish upstream {status, headers} via a
@@ -749,10 +819,12 @@ export function installFetchProxy(delivery, options = {}) {
             'content-type': defaultContentType,
             ...(head.headers || {}),
         };
-        return new Response(stream, {
+        const resp = new Response(stream, {
             status: head.status || 200,
             headers: mergedHeaders,
         });
+        responseMetaStore.set(resp, metaSlot);
+        return resp;
     }
 
     targetWindow.fetch = proxiedFetch;
@@ -772,8 +844,8 @@ export function installFetchProxy(delivery, options = {}) {
  * `contentWindow` access is the browser contract for cross-origin isolation,
  * not an actionable failure).
  *
- * Motivation: TavernHelper's JS-Slash-Runner (and any script runtime that
- * sandboxes user scripts inside `<iframe>`) gives each script its own
+ * Motivation: any script runtime that sandboxes user scripts inside
+ * `<iframe>` gives each script its own
  * `window.fetch` untouched by the top-window proxy. Under the runner-based
  * `/generate` architecture (src/luker-dispatch/runner.js) the HTTP body is
  * always `{}` and the real payload lands over WebSocket delivery, so iframe
@@ -783,11 +855,11 @@ export function installFetchProxy(delivery, options = {}) {
  *
  * Lifecycle coverage is deliberately three-step and none is optional:
  *   1. Patch existing iframes at install time — covers iframes that already
- *      landed in the DOM before delivery boot (unlikely for TH-render at
- *      first-load, but not zero for pre-warmed / pinned messages).
- *   2. MutationObserver — TH-render iframes are runtime-created (per rendered
+ *      landed in the DOM before delivery boot (unlikely for sandbox iframes
+ *      at first-load, but not zero for pre-warmed / pinned messages).
+ *   2. MutationObserver — sandbox iframes are runtime-created (per rendered
  *      message / per script activation); without this, we cover exactly zero
- *      TavernHelper scripts in the common case.
+ *      such scripts in the common case.
  *   3. `iframe.load` event re-patch — browsers reset `contentWindow.fetch`
  *      on navigate / reload / srcdoc rewrite. `installFetchProxy` is
  *      idempotent per-window so redundant patch calls are harmless.
@@ -830,7 +902,7 @@ export function installFetchProxyForAllIframes(delivery, options = {}) {
     }
 
     // Step 2 + 3: watch for iframes added at any depth. `subtree: true` so we
-    // pick up iframes wrapped inside a container element (TH-render wraps
+    // pick up iframes wrapped inside a container element (sandbox runtimes wrap
     // iframes inside a `.mes` bubble subtree, not as direct <body> children).
     const mo = new MutationObserver(mutations => {
         for (const m of mutations) {

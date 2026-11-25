@@ -135,6 +135,154 @@ describe('buildResponsesRequestBody', () => {
         });
         expect(requestBody.tool_choice).toEqual({ type: 'function', name: 'f' });
     });
+
+    test('forwards json_schema into text.format and preserves tool.function.strict', () => {
+        const requestBody = buildResponsesRequestBody({
+            model: 'gpt-5.5',
+            json_schema: {
+                name: 'result_obj',
+                description: 'Structured result',
+                strict: true,
+                value: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
+            },
+            tools: [
+                { type: 'function', function: { name: 'loose_fn', strict: false, parameters: { type: 'object' } } },
+                { type: 'function', function: { name: 'strict_fn', strict: true, parameters: { type: 'object' } } },
+            ],
+        });
+        expect(requestBody.text).toEqual({
+            format: {
+                type: 'json_schema',
+                name: 'result_obj',
+                description: 'Structured result',
+                strict: true,
+                schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
+            },
+        });
+        expect(requestBody.tools[0].strict).toBe(false);
+        expect(requestBody.tools[1].strict).toBe(true);
+    });
+
+    test('suppresses temperature and top_p on Responses reasoning models unless effort is none on gpt-5.1-5.4', () => {
+        const reasoningReq = buildResponsesRequestBody({
+            model: 'o4-mini',
+            temperature: 0.7,
+            top_p: 0.9,
+            messages: [{ role: 'user', content: 'hi' }],
+        });
+        expect(reasoningReq.temperature).toBeUndefined();
+        expect(reasoningReq.top_p).toBeUndefined();
+
+        const gpt54Off = buildResponsesRequestBody({
+            model: 'gpt-5.4',
+            reasoning_effort: 'off',
+            temperature: 0.7,
+            top_p: 0.9,
+            messages: [{ role: 'user', content: 'hi' }],
+        });
+        expect(gpt54Off.temperature).toBe(0.7);
+        expect(gpt54Off.top_p).toBe(0.9);
+    });
+
+    test('replays responses_output_items verbatim in original order including encrypted reasoning items', () => {
+        const outputItems = [
+            { type: 'reasoning', id: 'rs_1', encrypted_content: 'enc_payload', summary: [{ type: 'summary_text', text: 'plan' }] },
+            { type: 'message', id: 'msg_1', role: 'assistant', content: [{ type: 'output_text', text: 'Running lookup' }] },
+            { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'lookup', arguments: '{"q":"x"}' },
+        ];
+        const requestBody = buildResponsesRequestBody({
+            model: 'gpt-5.5',
+            messages: [
+                { role: 'user', content: 'hi' },
+                {
+                    role: 'assistant',
+                    content: 'Running lookup',
+                    responses_output_items: outputItems,
+                    tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{"q":"x"}' } }],
+                },
+                { role: 'tool', tool_call_id: 'call_1', content: '{"ok":true}' },
+            ],
+        });
+        expect(requestBody.input).toEqual([
+            { role: 'user', content: 'hi' },
+            ...outputItems,
+            { type: 'function_call_output', call_id: 'call_1', output: '{"ok":true}' },
+        ]);
+    });
+
+    test('gates reasoning against known non-reasoning models while allowing unknown custom models', () => {
+        for (const model of ['gpt-4o', 'gpt-4.1', 'gpt-5-chat-latest']) {
+            const req = buildResponsesRequestBody({
+                model,
+                reasoning_effort: 'high',
+                include_reasoning: true,
+            });
+            expect(req.reasoning).toBeUndefined();
+            expect(req.include).toBeUndefined();
+        }
+
+        const customReq = buildResponsesRequestBody({
+            model: 'my-custom-reasoning-model',
+            reasoning_effort: 'high',
+            include_reasoning: true,
+        });
+        expect(customReq.reasoning).toEqual({ effort: 'high', summary: 'auto' });
+        expect(customReq.include).toEqual(['reasoning.encrypted_content']);
+    });
+
+    test('attaches include reasoning.encrypted_content when reasoning is active with store:false, and omits when effort is off', () => {
+        const activeReq = buildResponsesRequestBody({
+            model: 'gpt-5.5',
+            reasoning_effort: 'medium',
+        });
+        expect(activeReq.store).toBe(false);
+        expect(activeReq.include).toEqual(['reasoning.encrypted_content']);
+
+        const offReq = buildResponsesRequestBody({
+            model: 'gpt-5.6',
+            reasoning_effort: 'off',
+            include_reasoning: true,
+        });
+        expect(offReq.reasoning).toEqual({ effort: 'none' });
+        expect(offReq.include).toBeUndefined();
+    });
+
+    test('attaches include reasoning.encrypted_content on known reasoning models with default auto effort and include_reasoning:false', () => {
+        for (const model of ['gpt-5.5', 'o4-mini', 'gpt-6-astra']) {
+            const req = buildResponsesRequestBody({
+                model,
+                reasoning_effort: 'auto',
+                include_reasoning: false,
+            });
+            expect(req.store).toBe(false);
+            expect(req.reasoning).toBeUndefined();
+            expect(req.include).toEqual(['reasoning.encrypted_content']);
+        }
+
+        // Unknown custom models without explicit reasoning settings do not guess include.
+        const customAuto = buildResponsesRequestBody({
+            model: 'my-custom-model',
+            reasoning_effort: 'auto',
+            include_reasoning: false,
+        });
+        expect(customAuto.include).toBeUndefined();
+    });
+
+    test('forwards verbosity to text.verbosity on supported models without clobbering json_schema', () => {
+        const req = buildResponsesRequestBody({
+            model: 'gpt-5.5',
+            verbosity: 'low',
+            json_schema: { name: 'r', value: { type: 'object' } },
+        });
+        expect(req.text.verbosity).toBe('low');
+        expect(req.text.format.type).toBe('json_schema');
+
+        const unsupported = buildResponsesRequestBody({
+            model: 'gpt-4o',
+            verbosity: 'low',
+        });
+        expect(unsupported.text).toBeUndefined();
+    });
 });
 
 describe('dispatchOpenAIResponses', () => {
@@ -198,5 +346,60 @@ describe('dispatchOpenAIResponses', () => {
         expect(ctx._attachCalls).toHaveLength(1);
         const [, attachedKey] = ctx._attachCalls[0];
         expect(attachedKey).toBe('plugin-proxy-key');
+    });
+
+    test('suppresses reasoning.encrypted_content when custom_include_body sets store:true or reasoning.effort:none, and honors custom_exclude_body', async () => {
+        const storeTrueCtx = fakeCtx({
+            body: {
+                model: 'gpt-5.5',
+                responses_url: 'http://127.0.0.1:9/v1',
+                reasoning_effort: 'medium',
+                custom_include_body: 'store: true\n',
+            },
+            secretMap: { api_key_openai_responses: 'rk' },
+        });
+        await dispatchOpenAIResponses(storeTrueCtx);
+        const storeTrueSent = JSON.parse(storeTrueCtx.fetch.mock.calls[0][1].body);
+        expect(storeTrueSent.store).toBe(true);
+        expect(storeTrueSent.include).toBeUndefined();
+
+        const effortNoneCtx = fakeCtx({
+            body: {
+                model: 'gpt-5.5',
+                responses_url: 'http://127.0.0.1:9/v1',
+                custom_include_body: 'reasoning:\n  effort: none\n',
+            },
+            secretMap: { api_key_openai_responses: 'rk' },
+        });
+        await dispatchOpenAIResponses(effortNoneCtx);
+        const effortNoneSent = JSON.parse(effortNoneCtx.fetch.mock.calls[0][1].body);
+        expect(effortNoneSent.include).toBeUndefined();
+
+        const excludeIncludeCtx = fakeCtx({
+            body: {
+                model: 'gpt-5.5',
+                responses_url: 'http://127.0.0.1:9/v1',
+                custom_exclude_body: 'include',
+            },
+            secretMap: { api_key_openai_responses: 'rk' },
+        });
+        await dispatchOpenAIResponses(excludeIncludeCtx);
+        const excludeIncludeSent = JSON.parse(excludeIncludeCtx.fetch.mock.calls[0][1].body);
+        expect(excludeIncludeSent.include).toBeUndefined();
+
+        const mergeIncludeCtx = fakeCtx({
+            body: {
+                model: 'gpt-5.5',
+                responses_url: 'http://127.0.0.1:9/v1',
+                custom_include_body: 'include:\n  - web_search_call.action.sources\n',
+            },
+            secretMap: { api_key_openai_responses: 'rk' },
+        });
+        await dispatchOpenAIResponses(mergeIncludeCtx);
+        const mergeIncludeSent = JSON.parse(mergeIncludeCtx.fetch.mock.calls[0][1].body);
+        expect(mergeIncludeSent.include).toEqual([
+            'web_search_call.action.sources',
+            'reasoning.encrypted_content',
+        ]);
     });
 });

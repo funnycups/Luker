@@ -99,9 +99,7 @@ const WS_RETRY_DELAY_MS = 2000;
 const WS_OPEN_TIMEOUT_MS = 5000;
 
 /**
- * Wait for ComfyUI prompt completion via WebSocket (preferred) or
- * polling fallback. Behaviour identical to the legacy helper at
- * src/endpoints/stable-diffusion.js:576-701.
+ * Wait for prompt completion using execution events or history polling.
  */
 async function waitForComfyCompletion(baseUrl, promptId, clientId, signal, ctxFetch) {
     const parsedBase = new URL(baseUrl);
@@ -116,33 +114,40 @@ async function waitForComfyCompletion(baseUrl, promptId, clientId, signal, ctxFe
         try {
             const ws = new WebSocket(wsUrl);
 
-            await new Promise((resolve, reject) => {
+            const result = await new Promise((resolve, reject) => {
+                let timeout;
+                function cleanup() {
+                    clearTimeout(openTimeout);
+                    clearTimeout(timeout);
+                    signal?.removeEventListener('abort', onAbort);
+                }
+                function fail(error) {
+                    cleanup();
+                    ws.close();
+                    reject(error);
+                }
+                function onAbort() {
+                    fail(new Error('Aborted'));
+                }
                 const openTimeout = setTimeout(() => {
+                    cleanup();
                     ws.terminate();
                     reject(new Error('WS open timeout'));
                 }, WS_OPEN_TIMEOUT_MS);
-                ws.on('open', () => { clearTimeout(openTimeout); resolve(); });
-                ws.on('error', (err) => { clearTimeout(openTimeout); reject(err); });
-            });
-
-            if (attempt > 0) {
-                console.debug(`[ComfyUI] WebSocket reconnected (attempt ${attempt + 1})`);
-            } else {
-                console.debug('[ComfyUI] WebSocket connected, waiting for completion...');
-            }
-
-            const result = await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    ws.close();
-                    reject(new Error('ComfyUI generation timed out'));
-                }, Math.max(deadline - Date.now(), 1000));
+                ws.on('open', () => {
+                    clearTimeout(openTimeout);
+                    if (attempt > 0) {
+                        console.debug(`[ComfyUI] WebSocket reconnected (attempt ${attempt + 1})`);
+                    } else {
+                        console.debug('[ComfyUI] WebSocket connected, waiting for completion...');
+                    }
+                    timeout = setTimeout(() => {
+                        fail(new Error('ComfyUI generation timed out'));
+                    }, Math.max(deadline - Date.now(), 1000));
+                });
 
                 if (signal) {
-                    signal.addEventListener('abort', () => {
-                        clearTimeout(timeout);
-                        ws.close();
-                        reject(new Error('Aborted'));
-                    }, { once: true });
+                    signal.addEventListener('abort', onAbort, { once: true });
                 }
 
                 ws.on('message', (rawData) => {
@@ -151,20 +156,18 @@ async function waitForComfyCompletion(baseUrl, promptId, clientId, signal, ctxFe
                     try { msg = JSON.parse(rawData.toString()); } catch { return; }
 
                     if (msg.type === 'executing' && msg.data?.prompt_id === promptId && msg.data?.node === null) {
-                        clearTimeout(timeout);
+                        cleanup();
                         ws.close();
                         resolve('done');
                     } else if (msg.type === 'execution_error' && msg.data?.prompt_id === promptId) {
-                        clearTimeout(timeout);
-                        ws.close();
                         const d = msg.data;
-                        reject(new Error(`ComfyUI generation failed.\n\n${d.node_type || 'Unknown'} [${d.node_id || '?'}] ${d.exception_type || 'Error'}: ${d.exception_message || 'Unknown error'}`));
+                        fail(new Error(`ComfyUI generation failed.\n\n${d.node_type || 'Unknown'} [${d.node_id || '?'}] ${d.exception_type || 'Error'}: ${d.exception_message || 'Unknown error'}`));
                     }
                 });
 
-                ws.on('error', (err) => { clearTimeout(timeout); ws.close(); reject(err); });
+                ws.on('error', fail);
                 ws.on('close', (code) => {
-                    clearTimeout(timeout);
+                    cleanup();
                     reject(new Error(`ComfyUI WebSocket closed (code: ${code})`));
                 });
             });

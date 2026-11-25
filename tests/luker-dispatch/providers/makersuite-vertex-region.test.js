@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
 
 import { beforeAll, describe, expect, jest, test } from '@jest/globals';
+import { currentScopeForResources } from '../../harness/storage-scope.js';
 
 // Full (service account) auth exchanges a JWT for an access token through
 // node-fetch. That token exchange is the only upstream call made before the
@@ -23,8 +23,8 @@ beforeAll(async () => {
     ({ dispatchMakerSuite } = await import('../../../src/luker-dispatch/providers/chat-completions/makersuite.js'));
 });
 
-function createSecretsRoot(secrets) {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'luker-vertex-region-'));
+async function createSecretsRoot(secrets) {
+    const root = (await currentScopeForResources().directory('luker-vertex-region')).path;
     fs.writeFileSync(path.join(root, 'secrets.json'), JSON.stringify(secrets, null, 4));
     return root;
 }
@@ -86,7 +86,7 @@ function requestUrl(ctx) {
 describe('Vertex AI chat completions region endpoints', () => {
     test('express mode with a project id keeps /locations/eu/ and uses the eu multi-region host', async () => {
         const directories = {
-            root: createSecretsRoot({
+            root: await createSecretsRoot({
                 api_key_vertexai: [{ value: 'vertex-express-key', active: true }],
             }),
         };
@@ -108,7 +108,7 @@ describe('Vertex AI chat completions region endpoints', () => {
 
     test('express mode with a project id keeps /locations/us/ and uses the us multi-region host', async () => {
         const directories = {
-            root: createSecretsRoot({
+            root: await createSecretsRoot({
                 api_key_vertexai: [{ value: 'vertex-express-key', active: true }],
             }),
         };
@@ -130,7 +130,7 @@ describe('Vertex AI chat completions region endpoints', () => {
 
     test('express mode without a project id uses the multi-region host', async () => {
         const directories = {
-            root: createSecretsRoot({
+            root: await createSecretsRoot({
                 api_key_vertexai: [{ value: 'vertex-express-key', active: true }],
             }),
         };
@@ -158,9 +158,9 @@ describe('Vertex AI chat completions region endpoints', () => {
             private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
         });
 
-        function fullModeCtx(region) {
+        async function fullModeCtx(region) {
             const directories = {
-                root: createSecretsRoot({
+                root: await createSecretsRoot({
                     vertexai_service_account_json: [{ value: serviceAccountJson, active: true }],
                 }),
             };
@@ -175,7 +175,7 @@ describe('Vertex AI chat completions region endpoints', () => {
         }
 
         test('eu uses the eu multi-region host and keeps /locations/eu/', async () => {
-            const ctx = fullModeCtx('eu');
+            const ctx = await fullModeCtx('eu');
             await dispatchMakerSuite(ctx);
 
             expect(requestUrl(ctx)).toBe(
@@ -184,7 +184,7 @@ describe('Vertex AI chat completions region endpoints', () => {
         });
 
         test('us uses the us multi-region host and keeps /locations/us/', async () => {
-            const ctx = fullModeCtx('us');
+            const ctx = await fullModeCtx('us');
             await dispatchMakerSuite(ctx);
 
             expect(requestUrl(ctx)).toBe(
@@ -193,7 +193,7 @@ describe('Vertex AI chat completions region endpoints', () => {
         });
 
         test('global keeps the global host and /locations/global/', async () => {
-            const ctx = fullModeCtx('global');
+            const ctx = await fullModeCtx('global');
             await dispatchMakerSuite(ctx);
 
             expect(requestUrl(ctx)).toBe(
@@ -202,7 +202,7 @@ describe('Vertex AI chat completions region endpoints', () => {
         });
 
         test('single regions keep the location-prefixed host', async () => {
-            const ctx = fullModeCtx('europe-west2');
+            const ctx = await fullModeCtx('europe-west2');
             await dispatchMakerSuite(ctx);
 
             expect(requestUrl(ctx)).toBe(

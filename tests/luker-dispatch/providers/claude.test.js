@@ -91,15 +91,7 @@ describe('dispatchClaude', () => {
         expect(init.signal).toBe(ctx.signal);
     });
 
-    test('non-streaming: feeds raw Anthropic body to inspector alongside OAI-normalized payload (Task 2D)', async () => {
-        // Pre-fix: runner called completeInspection(payload, payload) with
-        // the OAI-normalized reply for both args. extractUsageFromClaude
-        // then looked for usage.cache_read_input_tokens on the flat-normalized
-        // usage shape (which only has prompt_tokens/prompt_tokens_details)
-        // and always returned cache_read=null / cache_write=null. Passing
-        // the raw Anthropic body as rawApiResponse lets the extractor read
-        // native cache_creation_input_tokens / cache_read_input_tokens
-        // plus content[].type='thinking' blocks (signature preserved).
+    test('non-streaming: relays verbatim Anthropic body and feeds native JSON to inspector', async () => {
         const rawAnthropic = {
             id: 'msg_cache_1',
             type: 'message',
@@ -116,22 +108,22 @@ describe('dispatchClaude', () => {
                 cache_read_input_tokens: 800,
             },
         };
+        const rawText = JSON.stringify(rawAnthropic);
         const ctx = fakeCtx({
-            onFetch: jest.fn(async () => new Response(JSON.stringify(rawAnthropic), {
+            onFetch: jest.fn(async () => new Response(rawText, {
                 status: 200,
                 headers: { 'content-type': 'application/json' },
             })),
         });
         await dispatchClaude(ctx);
 
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        expect(Buffer.from(chunks[0].data).toString('utf8')).toBe(rawText);
+
         expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
-        const [oaiArg, rawArg] = ctx.inspection.complete.mock.calls[0];
-        // First arg = OAI-normalized (has choices[].message).
-        expect(oaiArg).toBeDefined();
-        expect(oaiArg.choices?.[0]?.message?.content).toBe('answer');
-        expect(oaiArg.choices?.[0]?.message?.reasoning_content).toBe('internal reasoning');
-        // Second arg = raw Anthropic body (preserves cache_* + thinking
-        // block with signature).
+        const [payloadArg, rawArg] = ctx.inspection.complete.mock.calls[0];
+        expect(payloadArg).toEqual(rawAnthropic);
         expect(rawArg).toEqual(rawAnthropic);
         expect(rawArg.usage.cache_creation_input_tokens).toBe(500);
         expect(rawArg.usage.cache_read_input_tokens).toBe(800);
@@ -165,6 +157,23 @@ describe('dispatchClaude', () => {
 
         expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
         expect(ctx.inspection.fail.mock.calls[0][1]).toBe(400);
+    });
+
+    test('missing API key with custom base_url or reverse_proxy succeeds and omits empty x-api-key header', async () => {
+        for (const body of [
+            { base_url: 'https://claude-proxy.example.com/v1' },
+            { reverse_proxy: 'https://claude-rev.example.com/v1' },
+        ]) {
+            const ctx = fakeCtx({ secret: '', body });
+            await dispatchClaude(ctx);
+
+            expect(ctx.fetch).toHaveBeenCalledTimes(1);
+            const [url, init] = ctx.fetch.mock.calls[0];
+            expect(String(url)).toMatch(/\/v1\/messages$/);
+            expect('x-api-key' in init.headers).toBe(false);
+            expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+            expect(ctx._emitted.find(e => e.kind === 'head')?.data.status).toBe(200);
+        }
     });
 
     test('streaming: forwards upstream SSE chunks verbatim then end', async () => {
@@ -502,6 +511,174 @@ describe('dispatchClaude', () => {
         test('legacy min token maps to minimal on an extended-thinking model', async () => {
             const { sent } = await send({ model: 'claude-opus-4-5', max_tokens: 8192, reasoning_effort: 'min' });
             expect(sent.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 });
+        });
+    });
+
+    describe('structured output and forced tool capability rules', () => {
+        test('modern Claude 4.5+/5+ models use native output_config.format for json_schema', async () => {
+            for (const model of ['claude-sonnet-4-5', 'claude-opus-4-6', 'claude-opus-5-5', 'claude-haiku-5-5']) {
+                const ctx = fakeCtx({
+                    body: {
+                        model,
+                        json_schema: { name: 'reply', value: { type: 'object', properties: { ok: { type: 'boolean' } } } },
+                    },
+                });
+                await dispatchClaude(ctx);
+                expect(ctx.fetch).toHaveBeenCalledTimes(1);
+                const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+                expect(sent.output_config?.format).toEqual({
+                    type: 'json_schema',
+                    schema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+                });
+                expect(sent.tools).toBeUndefined();
+                expect(sent.tool_choice).toBeUndefined();
+            }
+        });
+
+        test('legacy Claude 3.5 falls back to forced schema tool for json_schema', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    model: 'claude-3-5-sonnet-20241022',
+                    json_schema: { name: 'reply', value: { type: 'object', properties: { ok: { type: 'boolean' } } } },
+                },
+            });
+            await dispatchClaude(ctx);
+            expect(ctx.fetch).toHaveBeenCalledTimes(1);
+            const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            expect(sent.output_config?.format).toBeUndefined();
+            expect(sent.tool_choice).toEqual({ type: 'tool', name: 'reply' });
+            expect(sent.tools?.[0]?.name).toBe('reply');
+        });
+
+        test('rejects forced tool_choice with manual thinking or incompatible adaptive-thinking models with 400 conflict', async () => {
+            const toolBody = {
+                tools: [{ type: 'function', function: { name: 'do_thing', parameters: { type: 'object' } } }],
+                tool_choice: { type: 'function', function: { name: 'do_thing' } },
+            };
+
+            const manualCtx = fakeCtx({
+                body: { model: 'claude-sonnet-4-5', max_tokens: 4096, reasoning_effort: 'low', ...toolBody },
+            });
+            await dispatchClaude(manualCtx);
+            expect(manualCtx.fetch).not.toHaveBeenCalled();
+            expect(manualCtx._emitted.find(e => e.kind === 'head')?.data.status).toBe(400);
+            const manualErr = JSON.parse(new TextDecoder().decode(manualCtx._emitted.find(e => e.kind === 'chunk').data));
+            expect(manualErr.error.code).toBe('claude_manual_thinking_forced_tool_conflict');
+            expect(manualErr.error.non_retryable).toBe(true);
+
+            const adaptiveCtx = fakeCtx({
+                body: { model: 'claude-opus-5-5', reasoning_effort: 'high', ...toolBody },
+            });
+            await dispatchClaude(adaptiveCtx);
+            expect(adaptiveCtx.fetch).not.toHaveBeenCalled();
+            expect(adaptiveCtx._emitted.find(e => e.kind === 'head')?.data.status).toBe(400);
+            const adaptiveErr = JSON.parse(new TextDecoder().decode(adaptiveCtx._emitted.find(e => e.kind === 'chunk').data));
+            expect(adaptiveErr.error.code).toBe('claude_adaptive_thinking_forced_tool_conflict');
+        });
+
+        test('allows forced tool_choice with adaptive thinking on compatible models (opus-4-7, haiku-5-5)', async () => {
+            for (const model of ['claude-opus-4-7', 'claude-haiku-5-5']) {
+                const ctx = fakeCtx({
+                    body: {
+                        model,
+                        reasoning_effort: 'high',
+                        tools: [{ type: 'function', function: { name: 'do_thing', parameters: { type: 'object' } } }],
+                        tool_choice: { type: 'function', function: { name: 'do_thing' } },
+                    },
+                });
+                await dispatchClaude(ctx);
+                expect(ctx.fetch).toHaveBeenCalledTimes(1);
+            }
+        });
+
+        test('pause_turn continuation keeps trailing assistant role and unmodified native content blocks on noPrefill/adaptive models', async () => {
+            const pausedBlocks = [
+                { type: 'thinking', thinking: 'Searching latest data', signature: 'sig_pause_1' },
+                { type: 'server_tool_use', id: 'srvtoolu_1', name: 'web_search', input: { query: 'test query' } },
+                { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_1', content: [{ type: 'web_search_result', url: 'https://example.com', title: 'Example' }] },
+            ];
+            const ctx = fakeCtx({
+                body: {
+                    model: 'claude-opus-4-7',
+                    reasoning_effort: 'high',
+                    enable_web_search: true,
+                    claude_pause_turn_continuation: true,
+                    messages: [
+                        { role: 'user', content: 'Look this up.' },
+                        { role: 'assistant', content: '', native_content_blocks: pausedBlocks },
+                    ],
+                },
+            });
+            await dispatchClaude(ctx);
+            expect(ctx.fetch).toHaveBeenCalledTimes(1);
+            const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            expect(sent.messages).toHaveLength(2);
+            expect(sent.messages[1].role).toBe('assistant');
+            expect(sent.messages[1].content).toEqual(pausedBlocks);
+        });
+
+        test('completed web-search assistant turn WITHOUT claude_pause_turn_continuation still rewrites trailing assistant to user on noPrefill models', async () => {
+            const completedBlocks = [
+                { type: 'thinking', thinking: 'Looked it up', signature: 'sig_done_1' },
+                { type: 'server_tool_use', id: 'srvtoolu_done', name: 'web_search', input: { query: 'tide' } },
+                { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_done', content: [{ type: 'web_search_result', url: 'https://example.com', title: 'Tide' }] },
+                { type: 'text', text: 'High tide is at 18:40.' },
+            ];
+            const ctx = fakeCtx({
+                body: {
+                    model: 'claude-opus-4-7',
+                    reasoning_effort: 'high',
+                    enable_web_search: true,
+                    messages: [
+                        { role: 'user', content: 'When is high tide?' },
+                        { role: 'assistant', content: 'High tide is at 18:40.', native_content_blocks: completedBlocks },
+                    ],
+                },
+            });
+            await dispatchClaude(ctx);
+            expect(ctx.fetch).toHaveBeenCalledTimes(1);
+            const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            expect(sent.messages[sent.messages.length - 1].role).toBe('user');
+        });
+
+        test('Claude 4.6 adaptive thinking drops temperature, top_p, and top_k', async () => {
+            const prevEnv = process.env.SILLYTAVERN_CLAUDE_ENABLEADAPTIVETHINKING;
+            process.env.SILLYTAVERN_CLAUDE_ENABLEADAPTIVETHINKING = 'true';
+            try {
+                const ctx = fakeCtx({
+                    body: {
+                        model: 'claude-opus-4-6',
+                        reasoning_effort: 'high',
+                        temperature: 0.7,
+                        top_p: 0.9,
+                        top_k: 40,
+                    },
+                });
+                await dispatchClaude(ctx);
+                const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+                expect(sent.thinking).toEqual({ type: 'adaptive' });
+                expect(sent.temperature).toBeUndefined();
+                expect(sent.top_p).toBeUndefined();
+                expect(sent.top_k).toBeUndefined();
+            } finally {
+                if (prevEnv === undefined) delete process.env.SILLYTAVERN_CLAUDE_ENABLEADAPTIVETHINKING;
+                else process.env.SILLYTAVERN_CLAUDE_ENABLEADAPTIVETHINKING = prevEnv;
+            }
+        });
+
+        test('AbortError records inspection abort instead of error', async () => {
+            const ac = new AbortController();
+            const ctx = fakeCtx({
+                onFetch: jest.fn(async () => {
+                    ac.abort();
+                    throw new DOMException('aborted', 'AbortError');
+                }),
+            });
+            ctx.signal = ac.signal;
+            ctx.inspection.abort = jest.fn();
+            await dispatchClaude(ctx);
+            expect(ctx.inspection.abort).toHaveBeenCalledTimes(1);
+            expect(ctx.inspection.fail).not.toHaveBeenCalled();
         });
     });
 });

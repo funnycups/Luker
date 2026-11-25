@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { jest } from '@jest/globals';
 import { dispatchMakerSuite } from '../../../src/luker-dispatch/providers/chat-completions/makersuite.js';
+import {
+    ProtocolParseError,
+    WIRE_PROTOCOLS,
+    isParsedTurnEmpty,
+    parseProtocolResponse,
+} from '../../../public/scripts/lib/protocol-parser/index.js';
 
 /**
  * Build a fake DispatchContext matching src/luker-dispatch/context.js shape.
@@ -83,7 +89,7 @@ function fakeCtx({
 }
 
 describe('dispatchMakerSuite', () => {
-    test('MAKERSUITE non-streaming: normalizes Gemini JSON to OpenAI shape then end', async () => {
+    test('MAKERSUITE non-streaming: relays verbatim native Gemini JSON then end', async () => {
         const ctx = fakeCtx();
         await dispatchMakerSuite(ctx);
 
@@ -94,10 +100,9 @@ describe('dispatchMakerSuite', () => {
         const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
         expect(chunks).toHaveLength(1);
         const parsed = JSON.parse(Buffer.from(chunks[0].data).toString('utf8'));
-        // normalizeGeminiResponseToOAI returns an OpenAI-shaped envelope.
-        expect(parsed.choices).toBeDefined();
-        expect(Array.isArray(parsed.choices)).toBe(true);
-        expect(parsed.choices[0].message.content).toBe('hello back');
+        expect(parsed.choices).toBeUndefined();
+        expect(Array.isArray(parsed.candidates)).toBe(true);
+        expect(parsed.candidates[0].content.parts[0].text).toBe('hello back');
 
         expect(ctx.fetch).toHaveBeenCalledTimes(1);
         const [url, init] = ctx.fetch.mock.calls[0];
@@ -132,15 +137,7 @@ describe('dispatchMakerSuite', () => {
         expect(funcResp.functionResponse.id).toBe('gemini-call-1');
     });
 
-    test('MAKERSUITE non-streaming: feeds raw Gemini body to inspector alongside OAI-normalized reply (Task 2D)', async () => {
-        // extractUsageFromGemini reads usageMetadata.cachedContentTokenCount
-        // + candidatesTokenCount from the raw shape; extractPartsFromPayload
-        // walks raw.candidates[0].content.parts for thoughtSignature,
-        // inlineData, functionCall. The OAI-normalized reply flattens
-        // usageMetadata → usage.prompt_tokens/completion_tokens/
-        // prompt_tokens_details and drops thoughtSignature entirely, so
-        // rawApiResponse must reach the inspector for the extractors to
-        // see the source-of-truth fields.
+    test('MAKERSUITE non-streaming: relays verbatim Gemini body and feeds native JSON to inspector', async () => {
         const rawGemini = {
             candidates: [{
                 content: {
@@ -159,20 +156,22 @@ describe('dispatchMakerSuite', () => {
                 totalTokenCount: 120,
             },
         };
+        const rawText = JSON.stringify(rawGemini);
         const ctx = fakeCtx({
-            onFetch: jest.fn(async () => new Response(JSON.stringify(rawGemini), {
+            onFetch: jest.fn(async () => new Response(rawText, {
                 status: 200,
                 headers: { 'content-type': 'application/json' },
             })),
         });
         await dispatchMakerSuite(ctx);
 
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        expect(Buffer.from(chunks[0].data).toString('utf8')).toBe(rawText);
+
         expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
-        const [oaiArg, rawArg] = ctx.inspection.complete.mock.calls[0];
-        // First arg = OAI-normalized (has choices[].message).
-        expect(oaiArg.choices?.[0]?.message?.content).toBe('final answer');
-        // Second arg = raw Gemini body (preserves usageMetadata +
-        // thoughtSignature).
+        const [payloadArg, rawArg] = ctx.inspection.complete.mock.calls[0];
+        expect(payloadArg).toEqual(rawGemini);
         expect(rawArg).toEqual(rawGemini);
         expect(rawArg.usageMetadata.cachedContentTokenCount).toBe(60);
         expect(rawArg.candidates[0].content.parts[0].thoughtSignature).toBe('thought-sig-1');
@@ -241,7 +240,7 @@ describe('dispatchMakerSuite', () => {
         expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
     });
 
-    test('MAKERSUITE HTTP 200 with top-level error object: forwards error payload instead of normalizing to empty choices', async () => {
+    test('MAKERSUITE HTTP 200 with top-level error object: forwards error payload verbatim instead of normalizing to empty choices', async () => {
         const rawError = {
             error: { code: 502, message: 'upstream stream closed', status: 'UNAVAILABLE' },
             extra: { detail: 'preserved' },
@@ -270,7 +269,7 @@ describe('dispatchMakerSuite', () => {
         expect(ctx.inspection.complete).toHaveBeenCalledWith(rawError, rawError);
     });
 
-    test('MAKERSUITE HTTP 200 with array-wrapped error object: unwraps error envelope instead of normalizing to empty choices', async () => {
+    test('MAKERSUITE HTTP 200 with array-wrapped error object: relays native payload verbatim for protocol parser classification', async () => {
         const rawArrayError = [{
             error: { code: 503, message: 'service unavailable', status: 'UNAVAILABLE' },
         }];
@@ -286,25 +285,24 @@ describe('dispatchMakerSuite', () => {
         const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
         expect(chunks).toHaveLength(1);
         const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
-        expect(parsed).toEqual(rawArrayError[0]);
+        expect(parsed).toEqual(rawArrayError);
         expect(parsed.choices).toBeUndefined();
 
         expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
         expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
-        expect(ctx.inspection.complete).toHaveBeenCalledWith(rawArrayError[0], rawArrayError);
+        expect(ctx.inspection.complete).toHaveBeenCalledWith(rawArrayError, rawArrayError);
     });
 
-    test('MAKERSUITE 200 with empty candidates array + promptFeedback.blockReason: emits head 200 + `{error:{message}}` chunk (blocked, terminal)', async () => {
-        // Blocked-prompt branch is TERMINAL — retrying against the same
-        // safety filter burns quota. Delivered as HTTP 200 + `{error:{message}}`
-        // (Express default) so the client's `data.error` handler fires with
-        // the descriptive block-reason message. HTTP 500 would bury the
-        // message inside the `!response.ok` generic throw.
+    test('MAKERSUITE 200 with empty candidates array + promptFeedback.blockReason: relays native Gemini JSON verbatim and shared parser classifies terminal provider_error', async () => {
+        const rawPayload = {
+            candidates: [],
+            promptFeedback: { blockReason: 'SAFETY' },
+        };
         const ctx = fakeCtx({
-            onFetch: jest.fn(async () => new Response(JSON.stringify({
-                candidates: [],
-                promptFeedback: { blockReason: 'SAFETY' },
-            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawPayload), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
         });
         await dispatchMakerSuite(ctx);
 
@@ -318,161 +316,151 @@ describe('dispatchMakerSuite', () => {
         const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
         expect(chunks).toHaveLength(1);
         const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
-        expect(parsed.error).toBeDefined();
-        expect(parsed.error.message).toContain('no candidate');
-        expect(parsed.error.message).toContain('SAFETY');
+        expect(parsed).toEqual(rawPayload);
+        expect(parsed.error).toBeUndefined();
 
         const ends = ctx._emitted.filter(e => e.kind === 'end');
         expect(ends).toHaveLength(1);
 
-        // Blocked payload routes through inspection.complete (not .fail):
-        // dispatch signals "the fetch itself succeeded, hand the payload to
-        // the inspector for classification". The inspector's provider-error
-        // detection (see request-inspector.js hasProviderError) then reads
-        // `payload.error` and marks the entry status='error' with the block
-        // message, so the UI shows a failed request that carries the
-        // descriptive reason instead of a silent green tick.
         expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
         const [payloadArg, rawArg] = ctx.inspection.complete.mock.calls[0];
-        expect(payloadArg.error.message).toContain('no candidate');
-        expect(rawArg.promptFeedback.blockReason).toBe('SAFETY');
+        expect(payloadArg).toEqual(rawPayload);
+        expect(rawArg).toEqual(rawPayload);
+
+        // Shared parser classifies promptFeedback.blockReason as terminal provider_error.
+        let blockedErr = null;
+        try {
+            parseProtocolResponse(WIRE_PROTOCOLS.GEMINI, parsed);
+        } catch (err) {
+            blockedErr = err;
+        }
+        expect(blockedErr).toBeInstanceOf(ProtocolParseError);
+        expect(blockedErr.stage).toBe('provider_error');
+        expect(blockedErr.message).toContain('SAFETY');
     });
 
-    test('MAKERSUITE 200 with empty candidates array + NO blockReason: emits normalized OAI shape with empty content (transient — client retries)', async () => {
-        // Transient-empty branch: upstream returned zero candidates but did
-        // NOT flag prompt-block. Likely a model flake; forward as legal OAI
-        // 200 + empty choices so the client-side empty-response detector
-        // (openai.js:isChatCompletionResponseEmpty) triggers withRetry.
+    test('MAKERSUITE 200 with empty candidates array + NO blockReason: relays native Gemini JSON verbatim and shared parser classifies retriable empty turn', async () => {
+        const rawPayload = { candidates: [] };
         const ctx = fakeCtx({
-            onFetch: jest.fn(async () => new Response(JSON.stringify({
-                candidates: [],
-                // no promptFeedback.blockReason
-            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawPayload), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
         });
         await dispatchMakerSuite(ctx);
 
-        const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs).toHaveLength(0);
-
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
         const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
         expect(chunks).toHaveLength(1);
         const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
-        // Not a `{error:{message}}` envelope any more — it's the normalized
-        // OAI shape with empty content, which the client detector treats as
-        // retriable.
+        expect(parsed).toEqual(rawPayload);
+
+        const turn = parseProtocolResponse(WIRE_PROTOCOLS.GEMINI, parsed);
+        expect(isParsedTurnEmpty(turn)).toBe(true);
+    });
+
+    test('MAKERSUITE 200 with candidate empty text AND deterministic blocked finishReason (BLOCKLIST): relays native Gemini JSON verbatim and shared parser classifies terminal provider_error', async () => {
+        const rawPayload = {
+            candidates: [{
+                content: { role: 'model', parts: [] },
+                finishReason: 'BLOCKLIST',
+            }],
+        };
+        const ctx = fakeCtx({
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawPayload), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
+        });
+        await dispatchMakerSuite(ctx);
+
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
+        expect(parsed).toEqual(rawPayload);
         expect(parsed.error).toBeUndefined();
-        expect(Array.isArray(parsed.choices)).toBe(true);
-        expect(parsed.choices).toHaveLength(1);
-        expect(parsed.choices[0].message.content).toBe('');
-        expect(parsed.choices[0].message.tool_calls).toBeUndefined();
-    });
-
-    test('MAKERSUITE 200 with candidate but empty text AND deterministic blocked finishReason (BLOCKLIST): emits head 200 + `{error:{message}}` chunk (terminal)', async () => {
-        // Output-blocked by a deterministic filter (hard keyword blocklist).
-        // TERMINAL — retry deterministically hits the same list.
-        const ctx = fakeCtx({
-            onFetch: jest.fn(async () => new Response(JSON.stringify({
-                candidates: [{
-                    content: { role: 'model', parts: [] },
-                    finishReason: 'BLOCKLIST',
-                }],
-            }), { status: 200, headers: { 'content-type': 'application/json' } })),
-        });
-        await dispatchMakerSuite(ctx);
-
-        const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs).toHaveLength(0);
-
-        const heads = ctx._emitted.filter(e => e.kind === 'head');
-        expect(heads).toHaveLength(1);
-        expect(heads[0].data.status).toBe(200);
-
-        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
-        expect(chunks).toHaveLength(1);
-        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
-        expect(parsed.error).toBeDefined();
-        expect(parsed.error.message).toContain('Candidate text empty');
-        expect(parsed.error.message).toContain('BLOCKLIST');
-
-        const ends = ctx._emitted.filter(e => e.kind === 'end');
-        expect(ends).toHaveLength(1);
-
         expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
+
+        let blocklistErr = null;
+        try {
+            parseProtocolResponse(WIRE_PROTOCOLS.GEMINI, parsed);
+        } catch (err) {
+            blocklistErr = err;
+        }
+        expect(blocklistErr).toBeInstanceOf(ProtocolParseError);
+        expect(blocklistErr.stage).toBe('provider_error');
+        expect(blocklistErr.message).toContain('BLOCKLIST');
     });
 
-    test('MAKERSUITE 200 with candidate but empty text and probabilistic filter (SAFETY): emits normalized OAI shape with empty content (transient — client retries)', async () => {
-        // Gemini's SAFETY / RECITATION / PROHIBITED_CONTENT filters are
-        // probabilistic — same prompt + different sampling can flip the
-        // verdict, so they flow through the transient/retriable branch.
+    test('MAKERSUITE 200 with candidate empty text and probabilistic filter (SAFETY): relays native Gemini JSON verbatim as retriable empty turn', async () => {
+        const rawPayload = {
+            candidates: [{
+                content: { role: 'model', parts: [] },
+                finishReason: 'SAFETY',
+            }],
+        };
         const ctx = fakeCtx({
-            onFetch: jest.fn(async () => new Response(JSON.stringify({
-                candidates: [{
-                    content: { role: 'model', parts: [] },
-                    finishReason: 'SAFETY',
-                }],
-            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawPayload), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
         });
         await dispatchMakerSuite(ctx);
 
-        const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs).toHaveLength(0);
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+        const parsed = JSON.parse(new TextDecoder().decode(ctx._emitted.find(e => e.kind === 'chunk').data));
+        expect(parsed).toEqual(rawPayload);
 
-        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
-        expect(chunks).toHaveLength(1);
-        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
-        expect(parsed.error).toBeUndefined();
-        expect(Array.isArray(parsed.choices)).toBe(true);
-        expect(parsed.choices[0].message.content).toBe('');
-        expect(parsed.choices[0].message.tool_calls).toBeUndefined();
+        const turn = parseProtocolResponse(WIRE_PROTOCOLS.GEMINI, parsed);
+        expect(isParsedTurnEmpty(turn)).toBe(true);
+        expect(turn.finishReason).toBe('content_filter');
     });
 
-    test('MAKERSUITE 200 with candidate but empty text and probabilistic filter (PROHIBITED_CONTENT): emits normalized OAI shape with empty content (regression: observed to flip on retry)', async () => {
-        // Regression: user log 2026-... surfaced PROHIBITED_CONTENT during a
-        // long-context RP call; a subsequent identical call went STOP normal.
-        // Confirms PROHIBITED_CONTENT is probabilistic in practice → retriable.
+    test('MAKERSUITE 200 with candidate empty text and probabilistic filter (PROHIBITED_CONTENT): relays native Gemini JSON verbatim as retriable empty turn', async () => {
+        const rawPayload = {
+            candidates: [{
+                content: { role: 'model', parts: [] },
+                finishReason: 'PROHIBITED_CONTENT',
+            }],
+        };
         const ctx = fakeCtx({
-            onFetch: jest.fn(async () => new Response(JSON.stringify({
-                candidates: [{
-                    content: { role: 'model', parts: [] },
-                    finishReason: 'PROHIBITED_CONTENT',
-                }],
-            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawPayload), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
         });
         await dispatchMakerSuite(ctx);
 
-        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
-        expect(chunks).toHaveLength(1);
-        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
-        expect(parsed.error).toBeUndefined();
-        expect(parsed.choices[0].message.content).toBe('');
+        const parsed = JSON.parse(new TextDecoder().decode(ctx._emitted.find(e => e.kind === 'chunk').data));
+        expect(parsed).toEqual(rawPayload);
+
+        const turn = parseProtocolResponse(WIRE_PROTOCOLS.GEMINI, parsed);
+        expect(isParsedTurnEmpty(turn)).toBe(true);
     });
 
-    test('MAKERSUITE 200 with candidate but empty text and finishReason=STOP: emits normalized OAI shape with empty content (transient — client retries)', async () => {
-        // Model completed STOP but produced nothing usable (e.g. all parts
-        // are thoughts, or a truly blank text). Not policy-blocked → treat
-        // as transient and let client-side withRetry decide.
+    test('MAKERSUITE 200 with candidate empty text and finishReason=STOP: relays native Gemini JSON verbatim as retriable empty turn', async () => {
+        const rawPayload = {
+            candidates: [{
+                content: { role: 'model', parts: [] },
+                finishReason: 'STOP',
+            }],
+        };
         const ctx = fakeCtx({
-            onFetch: jest.fn(async () => new Response(JSON.stringify({
-                candidates: [{
-                    content: { role: 'model', parts: [] },
-                    finishReason: 'STOP',
-                }],
-            }), { status: 200, headers: { 'content-type': 'application/json' } })),
+            onFetch: jest.fn(async () => new Response(JSON.stringify(rawPayload), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+            })),
         });
         await dispatchMakerSuite(ctx);
 
-        const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs).toHaveLength(0);
+        expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+        const parsed = JSON.parse(new TextDecoder().decode(ctx._emitted.find(e => e.kind === 'chunk').data));
+        expect(parsed).toEqual(rawPayload);
 
-        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
-        expect(chunks).toHaveLength(1);
-        const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
-        expect(parsed.error).toBeUndefined();
-        expect(Array.isArray(parsed.choices)).toBe(true);
-        expect(parsed.choices[0].message.content).toBe('');
-        expect(parsed.choices[0].message.tool_calls).toBeUndefined();
-        // finish_reason 'stop' propagates through normalizeGeminiResponseToOAI.
-        expect(parsed.choices[0].finish_reason).toBe('stop');
+        const turn = parseProtocolResponse(WIRE_PROTOCOLS.GEMINI, parsed);
+        expect(isParsedTurnEmpty(turn)).toBe(true);
+        expect(turn.finishReason).toBe('stop');
     });
 
     test('MAKERSUITE ctx.signal aborted mid-request: fetch AbortError caught, emits error, no chunk', async () => {
@@ -659,5 +647,168 @@ describe('dispatchMakerSuite', () => {
         // End-to-end: still emits chunk + end for the default OK response.
         const kinds = ctx._emitted.map(e => e.kind);
         expect(kinds[kinds.length - 1]).toBe('end');
+    });
+
+    describe('image mode, tools, and capability conflicts', () => {
+        test('gemini-nano-banana-2.1 and gemini-3-pro-image preserve systemInstruction, imageConfig, and googleSearch in image mode', async () => {
+            for (const model of ['gemini-nano-banana-2.1', 'gemini-3-pro-image', 'gemini-3.1-flash-image']) {
+                const ctx = fakeCtx({
+                    body: {
+                        model,
+                        request_images: true,
+                        request_image_resolution: '2K',
+                        request_image_aspect_ratio: '16:9',
+                        use_sysprompt: true,
+                        enable_web_search: true,
+                    },
+                });
+                await dispatchMakerSuite(ctx);
+                expect(ctx.fetch).toHaveBeenCalledTimes(1);
+                const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+                expect(sent.generationConfig.responseModalities).toEqual(['text', 'image']);
+                expect(sent.generationConfig.imageConfig).toEqual({ imageSize: '2K', aspectRatio: '16:9' });
+                expect(sent.systemInstruction?.parts?.[0]?.text).toBe('you are helpful');
+                expect(sent.tools).toEqual([{ googleSearch: {} }]);
+            }
+        });
+
+        test('gemini-2.5-flash-image preserves systemInstruction and aspectRatio while omitting unsupported imageSize', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    model: 'gemini-2.5-flash-image',
+                    request_images: true,
+                    request_image_resolution: '2K',
+                    request_image_aspect_ratio: '1:1',
+                    use_sysprompt: true,
+                },
+            });
+            await dispatchMakerSuite(ctx);
+            const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            expect(sent.generationConfig.responseModalities).toEqual(['text', 'image']);
+            expect(sent.generationConfig.imageConfig).toEqual({ aspectRatio: '1:1' });
+            expect(sent.systemInstruction?.parts?.[0]?.text).toBe('you are helpful');
+        });
+
+        test('unknown future model honors explicit request_images without requiring allowlist update', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    model: 'gemini-future-canvas-v9',
+                    request_images: true,
+                    use_sysprompt: true,
+                },
+            });
+            await dispatchMakerSuite(ctx);
+            expect(ctx.fetch).toHaveBeenCalledTimes(1);
+            const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            expect(sent.generationConfig.responseModalities).toEqual(['text', 'image']);
+            expect(sent.generationConfig.imageConfig).toBeUndefined();
+            expect(sent.systemInstruction?.parts?.[0]?.text).toBe('you are helpful');
+        });
+
+        test('Gemini 3 and Gemini 4 allow combining functionDeclarations and googleSearch', async () => {
+            for (const model of ['gemini-3.1-pro-preview', 'gemini-4-argon']) {
+                const ctx = fakeCtx({
+                    body: {
+                        model,
+                        enable_web_search: true,
+                        tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object', properties: { q: { type: 'string' } } } } }],
+                    },
+                });
+                await dispatchMakerSuite(ctx);
+                expect(ctx.fetch).toHaveBeenCalledTimes(1);
+                const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+                expect(sent.tools).toHaveLength(2);
+                expect(sent.tools[0].functionDeclarations[0].name).toBe('lookup');
+                expect(sent.tools[1]).toEqual({ googleSearch: {} });
+            }
+        });
+
+        test('emits explicit non-retryable HTTP 400 conflict without fetching on incompatible combinations', async () => {
+            const cases = [
+                {
+                    body: { model: 'gemini-2.5-flash', request_images: true },
+                    expectedCode: 'gemini_image_output_unsupported',
+                },
+                {
+                    body: {
+                        model: 'gemini-3-pro-image',
+                        request_images: true,
+                        tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }],
+                    },
+                    expectedCode: 'gemini_function_calling_unsupported',
+                },
+                {
+                    body: { model: 'gemini-3.1-flash-lite-image', request_images: true, enable_web_search: true },
+                    expectedCode: 'gemini_web_search_unsupported',
+                },
+                {
+                    body: {
+                        model: 'gemini-2.5-flash',
+                        enable_web_search: true,
+                        tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }],
+                    },
+                    expectedCode: 'gemini_builtin_and_function_tools_conflict',
+                },
+            ];
+
+            for (const { body, expectedCode } of cases) {
+                const ctx = fakeCtx({ body });
+                await dispatchMakerSuite(ctx);
+                expect(ctx.fetch).not.toHaveBeenCalled();
+                const heads = ctx._emitted.filter(e => e.kind === 'head');
+                expect(heads).toHaveLength(1);
+                expect(heads[0].data.status).toBe(400);
+                const payload = JSON.parse(new TextDecoder().decode(ctx._emitted.find(e => e.kind === 'chunk').data));
+                expect(payload.error.type).toBe('capability_conflict');
+                expect(payload.error.code).toBe(expectedCode);
+                expect(payload.error.non_retryable).toBe(true);
+                expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
+            }
+        });
+
+        test('gemini-nano-banana-2.1 forwards thinkingLevel and strips unsupported text sampling and seed', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    model: 'gemini-nano-banana-2.1',
+                    request_images: true,
+                    request_image_resolution: '2K',
+                    reasoning_effort: 'high',
+                    include_reasoning: true,
+                    temperature: 0.8,
+                    top_p: 0.9,
+                    top_k: 40,
+                    seed: 42,
+                },
+            });
+            await dispatchMakerSuite(ctx);
+            expect(ctx.fetch).toHaveBeenCalledTimes(1);
+            const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            expect(sent.generationConfig.thinkingConfig).toEqual({
+                includeThoughts: true,
+                thinkingLevel: 'high',
+            });
+            expect(sent.generationConfig.imageConfig).toEqual({ imageSize: '2K' });
+            expect(sent.generationConfig.temperature).toBeUndefined();
+            expect(sent.generationConfig.topP).toBeUndefined();
+            expect(sent.generationConfig.topK).toBeUndefined();
+            expect(sent.generationConfig.seed).toBeUndefined();
+        });
+
+        test('streaming non-2xx upstream response records inspection failure and relays error body', async () => {
+            const ctx = fakeCtx({
+                body: { model: 'gemini-2.5-flash', stream: true },
+                onFetch: jest.fn(async () => new Response(JSON.stringify({ error: { message: 'Quota exceeded' } }), {
+                    status: 429,
+                    headers: { 'content-type': 'application/json' },
+                })),
+            });
+            await dispatchMakerSuite(ctx);
+            expect(ctx.inspection.fail).toHaveBeenCalledTimes(1);
+            expect(ctx.inspection.fail.mock.calls[0][1]).toBe(429);
+            const heads = ctx._emitted.filter(e => e.kind === 'head');
+            expect(heads).toHaveLength(1);
+            expect(heads[0].data.status).toBe(429);
+            expect(ctx._emitted.some(e => e.kind === 'end')).toBe(true);
+        });
     });
 });

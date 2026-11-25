@@ -2,13 +2,20 @@
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import sanitize from 'sanitize-filename';
 
-import { CHAT_COMPLETION_SOURCES } from '../../constants.js';
 import { appendMessagesToChatFile } from '../chats.js';
 import { getConfigValue } from '../../util.js';
 import { stripJsonlExt } from '../../storage/name-validation.js';
 import { dispatchLog as console, withDispatchLogging } from '../../luker-dispatch/logging.js';
+import {
+    ProtocolParseError,
+    createProtocolStreamParser,
+    createSseFramer,
+    parseProtocolResponse,
+    resolveWireProtocol,
+} from '../../../public/scripts/lib/protocol-parser/index.js';
 import {
     getRequestTransientSession,
     getTransientSessionForUser,
@@ -17,6 +24,8 @@ import {
 } from '../../transient-sessions.js';
 
 const generationJobs = new Map();
+// In-memory job registry bounds: cap retained job snapshots and per-job event
+// replay queues so long-running servers do not grow heap unboundedly.
 const LUKER_GENERATION_JOB_MAX_ITEMS = 128;
 const LUKER_GENERATION_JOB_TTL_MS = 2 * 60 * 60 * 1000;
 const LUKER_GENERATION_JOB_MAX_EVENTS = 8000;
@@ -39,245 +48,156 @@ function normalizePersistAvatarDirectory(avatarUrl) {
     return sanitize(path.basename(raw));
 }
 
-function extractTextFromOpenAIMessageContent(content) {
-    return extractTextFromStructuredContent(content);
-}
-
-function normalizeGenerationSource(source) {
-    return String(source || '').trim().toLowerCase();
-}
-
-function isStructuredThinkingPart(part) {
-    if (!part || typeof part !== 'object') {
-        return false;
-    }
-
-    return Boolean(part.thought)
-        || part.type === 'thinking'
-        || Array.isArray(part.thinking)
-        || typeof part.thinking === 'string';
-}
-
-function extractTextFromStructuredContent(content, options = {}) {
-    const skipThoughts = options.skipThoughts !== false;
-
-    if (typeof content === 'string') {
-        return content;
-    }
-
-    if (Array.isArray(content)) {
-        return content.map(part => extractTextFromStructuredContent(part, { skipThoughts })).join('');
-    }
-
-    if (!content || typeof content !== 'object') {
-        return '';
-    }
-
-    if (skipThoughts && isStructuredThinkingPart(content)) {
-        return '';
-    }
-
-    if (typeof content.text === 'string') {
-        return content.text;
-    }
-
-    if (typeof content.content === 'string') {
-        return content.content;
-    }
-
-    if (Array.isArray(content.content)) {
-        return extractTextFromStructuredContent(content.content, { skipThoughts });
-    }
-
-    if (content.content && typeof content.content === 'object') {
-        return extractTextFromStructuredContent(content.content, { skipThoughts });
-    }
-
-    if (Array.isArray(content.text)) {
-        return extractTextFromStructuredContent(content.text, { skipThoughts });
-    }
-
-    if (Array.isArray(content.message?.content)) {
-        return extractTextFromStructuredContent(content.message.content, { skipThoughts });
-    }
-
+function extractLegacyTextGenFinalPayload(payload) {
+    if (!payload) return '';
+    if (typeof payload === 'string') return payload;
+    if (typeof payload !== 'object') return '';
+    if (typeof payload.results?.[0]?.text === 'string') return payload.results[0].text;
+    if (typeof payload.choices?.[0]?.text === 'string') return payload.choices[0].text;
+    if (typeof payload.response === 'string') return payload.response;
+    if (typeof payload.token === 'string') return payload.token;
+    if (typeof payload.content === 'string') return payload.content;
+    if (typeof payload.text === 'string') return payload.text;
+    if (typeof payload.output === 'string') return payload.output;
     return '';
 }
 
-function extractTextFromGeminiParts(parts, options = {}) {
-    if (!Array.isArray(parts)) {
-        return '';
-    }
-
-    const joiner = typeof options.joiner === 'string' ? options.joiner : '';
-    const nonThoughtText = parts
-        .filter(part => !part?.thought)
-        .map(part => typeof part?.text === 'string' ? part.text : '')
-        .filter(Boolean);
-
-    return nonThoughtText.join(joiner);
-}
-
-function extractTextFromStreamingPayload(payload, source) {
-    const normalizedSource = normalizeGenerationSource(source);
-    const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
-    const defaultContent = choice?.delta?.content ?? choice?.message?.content ?? choice?.text ?? '';
-
-    switch (normalizedSource) {
-        case CHAT_COMPLETION_SOURCES.OPENAI_RESPONSES:
-            if (payload?.type === 'response.output_text.delta' && typeof payload.delta === 'string') {
-                return payload.delta;
+function feedLegacySseFrames(job, frames) {
+    for (const frame of frames) {
+        const raw = typeof frame?.data === 'string' ? frame.data.trim() : '';
+        if (!raw || raw === '[DONE]') continue;
+        try {
+            const parsed = JSON.parse(raw);
+            const extracted = extractLegacyTextGenFinalPayload(parsed);
+            if (extracted) {
+                job.text += extracted;
             }
-            return '';
-        case CHAT_COMPLETION_SOURCES.CLAUDE:
-            return typeof payload?.delta?.text === 'string' ? payload.delta.text : '';
-        case CHAT_COMPLETION_SOURCES.MAKERSUITE:
-        case CHAT_COMPLETION_SOURCES.VERTEXAI:
-            return extractTextFromGeminiParts(payload?.candidates?.[0]?.content?.parts);
-        case CHAT_COMPLETION_SOURCES.COHERE:
-            return payload?.delta?.message?.content?.text ?? payload?.delta?.message?.tool_plan ?? '';
-        case CHAT_COMPLETION_SOURCES.DEEPSEEK:
-        case CHAT_COMPLETION_SOURCES.XAI:
-            return choice?.delta?.content ?? '';
-        case CHAT_COMPLETION_SOURCES.OPENROUTER:
-            return extractTextFromOpenAIMessageContent(defaultContent);
-        case CHAT_COMPLETION_SOURCES.CUSTOM:
-        case CHAT_COMPLETION_SOURCES.POLLINATIONS:
-        case CHAT_COMPLETION_SOURCES.AIMLAPI:
-        case CHAT_COMPLETION_SOURCES.MOONSHOT:
-        case CHAT_COMPLETION_SOURCES.COMETAPI:
-        case CHAT_COMPLETION_SOURCES.ELECTRONHUB:
-        case CHAT_COMPLETION_SOURCES.NANOGPT:
-        case CHAT_COMPLETION_SOURCES.ZAI:
-        case CHAT_COMPLETION_SOURCES.SILICONFLOW:
-        case CHAT_COMPLETION_SOURCES.CHUTES:
-        case CHAT_COMPLETION_SOURCES.AZURE_OPENAI:
-        case CHAT_COMPLETION_SOURCES.AI21:
-            return extractTextFromOpenAIMessageContent(defaultContent);
-        case CHAT_COMPLETION_SOURCES.MISTRALAI: {
-            const content = choice?.delta?.content ?? choice?.message?.content ?? choice?.text ?? '';
-            return extractTextFromOpenAIMessageContent(content);
+        } catch {
+            // Non-JSON SSE event payloads are ignored for legacy text extraction.
         }
-        default:
-            return extractTextFromOpenAIMessageContent(defaultContent);
     }
 }
 
-export function extractTextFromFinalPayload(payload) {
-    if (!payload) {
-        return '';
+function applyParsedTurnToJob(job, turn) {
+    if (!job || !turn) return;
+    job.parsedTurn = turn;
+    if (typeof turn.text === 'string') {
+        job.text = turn.text;
     }
+}
 
-    if (typeof payload === 'string') {
-        return payload;
+function isSseFramedText(text) {
+    const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const trimmed = normalized.trimStart();
+    if (!trimmed) return false;
+    return /^(?:data:|event:|id:|retry:|:)/.test(trimmed);
+}
+
+function feedJobStreamFrame(job, protocol, rawData, eventName = '') {
+    if (!rawData || job.parseError) return;
+    if (!job._protocolParser) {
+        job._protocolParser = createProtocolStreamParser(protocol);
     }
-
-    if (typeof payload !== 'object') {
-        return '';
-    }
-
-    const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
-    if (choice) {
-        const choiceContent = choice?.message?.content ?? choice?.delta?.content ?? choice?.text ?? '';
-        const extractedChoiceText = extractTextFromOpenAIMessageContent(choiceContent);
-        if (extractedChoiceText) {
-            return extractedChoiceText;
+    try {
+        const delta = job._protocolParser.feedFrame(rawData, eventName);
+        if (delta.textDelta) {
+            job.text = String(job.text || '') + delta.textDelta;
         }
-        if (typeof choice?.message?.tool_plan === 'string') {
-            return choice.message.tool_plan;
+    } catch (err) {
+        if (err instanceof ProtocolParseError) {
+            job.parseError = err.toDiagnostic();
+            if (err.stage === 'provider_error') {
+                applyParsedTurnToJob(job, job._protocolParser.getSnapshot());
+            }
+        } else {
+            console.error('[LukerGeneration] Unexpected error while parsing stream frame:', err);
         }
     }
+}
 
-    const result = Array.isArray(payload?.results) ? payload.results[0] : null;
-    if (result) {
-        const resultContent = result?.message?.content ?? result?.content ?? result?.text ?? '';
-        const extractedResultText = extractTextFromOpenAIMessageContent(resultContent);
-        if (extractedResultText) {
-            return extractedResultText;
+/**
+ * Flush any buffered SSE tail frames and finalize the shared protocol stream
+ * parser on a generation job when the upstream stream ends.
+ * @param {object} job
+ */
+export function finalizeJobProtocolStream(job) {
+    if (!job) return;
+    if (job._utf8Decoder) {
+        const tailText = job._utf8Decoder.end();
+        job._utf8Decoder = null;
+        if (tailText) {
+            accumulateChunkTextIntoJob(job, tailText);
         }
-        if (typeof result?.message?.tool_plan === 'string') {
-            return result.message.tool_plan;
+    }
+    const protocol = resolveWireProtocol(job?.requestMeta?.api);
+    if (!protocol) {
+        if (job._sseFramer) {
+            feedLegacySseFrames(job, job._sseFramer.flush());
+        }
+        return;
+    }
+
+    if (job._sseFramer) {
+        const tailFrames = job._sseFramer.flush();
+        for (const frame of tailFrames) {
+            feedJobStreamFrame(job, protocol, frame.data, frame.event);
+        }
+        const invalidDiagnostic = job._sseFramer.getInvalidDiagnostic?.();
+        if (!job._protocolParser && !job.parseError && invalidDiagnostic) {
+            job.parseError = new ProtocolParseError({
+                protocol,
+                stage: 'sse',
+                location: 'stream',
+                message: 'Expected text/event-stream SSE frames, received non-SSE response body.',
+                rawDiagnostic: invalidDiagnostic,
+            }).toDiagnostic();
         }
     }
-
-    const responseContentText = extractTextFromGeminiParts(payload?.responseContent?.parts, { joiner: '\n\n' });
-    if (responseContentText) {
-        return responseContentText;
+    if (job._protocolParser && !job.parseError) {
+        try {
+            const turn = job._protocolParser.finish();
+            applyParsedTurnToJob(job, turn);
+        } catch (err) {
+            if (err instanceof ProtocolParseError) {
+                job.parseError = err.toDiagnostic();
+            } else {
+                console.error('[LukerGeneration] Unexpected error while finalizing stream parser:', err);
+            }
+        }
     }
-
-    const payloadContentText = extractTextFromOpenAIMessageContent(payload?.content);
-    if (payloadContentText) {
-        return payloadContentText;
-    }
-
-    const payloadMessageContentText = extractTextFromOpenAIMessageContent(payload?.message?.content);
-    if (payloadMessageContentText) {
-        return payloadMessageContentText;
-    }
-
-    if (typeof payload?.message?.tool_plan === 'string') {
-        return payload.message.tool_plan;
-    }
-    if (typeof payload.response === 'string') {
-        return payload.response;
-    }
-    if (typeof payload.token === 'string') {
-        return payload.token;
-    }
-    if (typeof payload.text === 'string') {
-        return payload.text;
-    }
-    if (typeof payload.output === 'string') {
-        return payload.output;
-    }
-    if (Array.isArray(payload?.output)) {
-        const out = [];
-        for (const item of payload.output) {
-            if (item?.type === 'message' && Array.isArray(item.content)) {
-                for (const part of item.content) {
-                    if (part?.type === 'output_text' && typeof part.text === 'string') {
-                        out.push(part.text);
-                    }
+    if (!job._sseFramer && !job.parseError && !job.parsedTurn) {
+        const remaining = String(job._sseBuffer || '').trim();
+        if (remaining) {
+            job._sseBuffer = '';
+            try {
+                const parsed = JSON.parse(remaining);
+                const turn = parseProtocolResponse(protocol, parsed);
+                applyParsedTurnToJob(job, turn);
+                job._streamMode = 'json';
+            } catch (err) {
+                if (err instanceof ProtocolParseError) {
+                    job.parseError = err.toDiagnostic();
+                } else {
+                    job.parseError = new ProtocolParseError({
+                        protocol,
+                        stage: 'json',
+                        location: 'body',
+                        message: `Malformed non-streaming JSON response: ${err?.message || err}`,
+                        cause: err,
+                        rawDiagnostic: remaining,
+                    }).toDiagnostic();
                 }
             }
         }
-        if (out.length > 0) return out.join('');
-    }
-
-    return '';
-}
-
-export function extractTextFromStreamingFrameData(rawData, source = '') {
-    if (!rawData || rawData === '[DONE]') {
-        return '';
-    }
-
-    try {
-        const parsed = JSON.parse(rawData);
-        if (parsed?.luker && typeof parsed.luker === 'object') {
-            return '';
-        }
-        return extractTextFromStreamingPayload(parsed, source) || extractTextFromFinalPayload(parsed);
-    } catch {
-        return '';
     }
 }
 
 /**
  * Given a raw chunk emitted from a dispatch (Uint8Array / Buffer / string),
- * attempt to extract text content and append to `job.text`. Supports both:
- *   - SSE frames (`\n\n` delimited, `data: ` prefixed lines), including
- *     multiple frames per chunk and partial frames spanning chunks (buffered
- *     on `job._sseBuffer`).
- *   - A single JSON object payload (non-streaming case, no SSE framing).
- *
- * Silently returns for other shapes (binary image bytes, unrelated bytes).
- * Never throws.
- *
- * The runner calls this on every `chunk` event so `job.text` stays in sync
- * with the streamed content. `appendGenerationEvent` still stores the raw
- * event verbatim in `job.events[]` for WS replay; text extraction is a
- * separate channel and does not alter the events array.
+ * feed the shared protocol parser for the job's declared wire protocol so
+ * `job.text` and `job.parsedTurn` stay in sync with streamed or non-streamed
+ * content. Non-chat backends (kobold/novelai/textgen/image) use the legacy
+ * non-chat text extractor and never touch chat protocol parsers.
  *
  * @param {object} job
  * @param {Uint8Array | Buffer | string} chunkBytes
@@ -290,7 +210,13 @@ export function accumulateChunkTextIntoJob(job, chunkBytes) {
         text = chunkBytes;
     } else if (chunkBytes instanceof Uint8Array || Buffer.isBuffer(chunkBytes)) {
         try {
-            text = Buffer.from(chunkBytes).toString('utf8');
+            if (!job._utf8Decoder) {
+                job._utf8Decoder = new StringDecoder('utf8');
+            }
+            const buf = Buffer.isBuffer(chunkBytes)
+                ? chunkBytes
+                : Buffer.from(chunkBytes.buffer, chunkBytes.byteOffset, chunkBytes.byteLength);
+            text = job._utf8Decoder.write(buf);
         } catch {
             return;
         }
@@ -300,49 +226,94 @@ export function accumulateChunkTextIntoJob(job, chunkBytes) {
     if (!text) return;
 
     const source = job?.requestMeta?.api || '';
-    job._sseBuffer = String(job._sseBuffer || '') + text;
-    // Normalize CRLF → LF before framing. Some upstream proxies (nginx-
-    // wrapped Anthropic, Claude passthrough proxies) emit CRLF instead of
-    // LF; without normalization the \n\n frame delimiter never matches and
-    // job.text never accumulates. Legacy forwardStreamingWithGenerationJob
-    // did this on every buffer append; the refactor must mirror it exactly.
-    job._sseBuffer = job._sseBuffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-
-    // If the buffer looks like SSE (has a frame delimiter, or begins with a
-    // `data:` line), parse SSE frames. Last split element may be a partial
-    // frame — keep it in the buffer for the next call.
-    if (job._sseBuffer.includes('\n\n') || job._sseBuffer.startsWith('data:')) {
-        const frames = job._sseBuffer.split('\n\n');
-        job._sseBuffer = frames.pop() || '';
-        for (const frame of frames) {
-            if (!frame) continue;
-            // .trimEnd() + .slice(5).trimStart() matches legacy parsing
-            // exactly. Full .trim() strips payload-internal trailing
-            // whitespace in Claude thinking/tool_use deltas.
-            const dataLines = frame
-                .split('\n')
-                .map(line => line.replace(/\s+$/, ''))
-                .filter(line => line.startsWith('data:'))
-                .map(line => line.slice(5).replace(/^\s+/, ''));
-            if (dataLines.length === 0) continue;
-            const payload = dataLines.join('\n');
-            if (!payload || payload === '[DONE]') continue;
-            const deltaText = extractTextFromStreamingFrameData(payload, source);
-            if (deltaText) job.text += deltaText;
+    const protocol = resolveWireProtocol(source);
+    if (!protocol) {
+        if (job._streamMode == null) {
+            const probe = String(job._sseBuffer || '') + text;
+            if (job?._isStream === true || (job?._isStream !== false && isSseFramedText(probe))) {
+                job._streamMode = 'sse';
+                job._sseFramer = createSseFramer();
+                const combined = String(job._sseBuffer || '') + text;
+                job._sseBuffer = '';
+                feedLegacySseFrames(job, job._sseFramer.push(combined));
+                return;
+            }
+        }
+        if (job._streamMode === 'sse') {
+            feedLegacySseFrames(job, job._sseFramer.push(text));
+            return;
+        }
+        job._sseBuffer = String(job._sseBuffer || '') + text;
+        const trimmed = job._sseBuffer.trim();
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                const extracted = extractLegacyTextGenFinalPayload(parsed);
+                if (extracted) {
+                    job.text += extracted;
+                    job._sseBuffer = '';
+                }
+            } catch {
+                // Incomplete JSON chunk — keep buffering until complete.
+            }
         }
         return;
     }
 
-    // No SSE framing yet — try treating the buffer as a complete JSON payload
-    // (non-streaming dispatch). Only attempt if it plausibly starts with JSON;
-    // if extraction succeeds, clear the buffer so a subsequent chunk starts
-    // fresh. Otherwise keep buffering (chunk may be partial JSON).
-    const trimmed = job._sseBuffer.trim();
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        const deltaText = extractTextFromStreamingFrameData(trimmed, source);
-        if (deltaText) {
-            job.text += deltaText;
+    if (job._streamMode == null) {
+        const probe = String(job._sseBuffer || '') + text;
+        if (job?._isStream === true || (job?._isStream !== false && isSseFramedText(probe))) {
+            job._streamMode = 'sse';
+            job._sseFramer = createSseFramer();
+            const combined = String(job._sseBuffer || '') + text;
             job._sseBuffer = '';
+            const frames = job._sseFramer.push(combined);
+            for (const frame of frames) {
+                feedJobStreamFrame(job, protocol, frame.data, frame.event);
+            }
+            return;
+        }
+        job._sseBuffer = String(job._sseBuffer || '') + text;
+        const trimmed = job._sseBuffer.trim();
+        if (trimmed.startsWith('{')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                const turn = parseProtocolResponse(protocol, parsed);
+                applyParsedTurnToJob(job, turn);
+                job._sseBuffer = '';
+                job._streamMode = 'json';
+            } catch (err) {
+                if (err instanceof ProtocolParseError) {
+                    job.parseError = err.toDiagnostic();
+                    job._sseBuffer = '';
+                }
+                // SyntaxError from partial JSON chunk keeps buffering.
+            }
+        }
+        return;
+    }
+
+    if (job._streamMode === 'sse') {
+        const frames = job._sseFramer.push(text);
+        for (const frame of frames) {
+            feedJobStreamFrame(job, protocol, frame.data, frame.event);
+        }
+        return;
+    }
+
+    job._sseBuffer = String(job._sseBuffer || '') + text;
+    const trimmed = job._sseBuffer.trim();
+    if (trimmed.startsWith('{')) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            const turn = parseProtocolResponse(protocol, parsed);
+            applyParsedTurnToJob(job, turn);
+            job._sseBuffer = '';
+        } catch (err) {
+            if (err instanceof ProtocolParseError) {
+                job.parseError = err.toDiagnostic();
+                job._sseBuffer = '';
+            }
         }
     }
 }
@@ -544,6 +515,15 @@ export function createGenerationJob(request, options) {
         job.events = [];
         job.lastSeq = 0;
         job.text = '';
+        job.parsedTurn = null;
+        job.parseError = null;
+        job._protocolParser = null;
+        job._sseFramer = null;
+        job._sseBuffer = '';
+        job._streamMode = null;
+        job._utf8Decoder = null;
+        job._lastNotifiedTextLen = 0;
+        job._lastTextNotifyAt = 0;
     }
 
     clearGenerationJobPersistenceTimer(job);
@@ -558,6 +538,10 @@ export function createGenerationJob(request, options) {
     job.finishedAt = null;
     job.persistenceInFlight = false;
     job.requestMeta = buildGenerationJobRequestMeta(request, persistTarget);
+    const hasExplicitStream = request.body?.stream !== undefined || request.body?.streaming !== undefined;
+    job._isStream = hasExplicitStream
+        ? Boolean(request.body?.stream || request.body?.streaming)
+        : null;
     job.modelName = String(request.body?.model || '');
     if (!Array.isArray(job.events)) {
         job.events = [];
@@ -595,9 +579,19 @@ export function appendGenerationEvent(job, rawData) {
     }
     job.updatedAt = Date.now();
 
-    const deltaText = extractTextFromStreamingFrameData(rawData, job?.requestMeta?.api);
-    if (deltaText) {
-        job.text += deltaText;
+    if (typeof rawData === 'string') {
+        const protocol = resolveWireProtocol(job?.requestMeta?.api);
+        if (protocol) {
+            feedJobStreamFrame(job, protocol, rawData);
+        } else {
+            try {
+                const parsed = JSON.parse(rawData);
+                const extracted = extractLegacyTextGenFinalPayload(parsed);
+                if (extracted) job.text += extracted;
+            } catch {
+                // Raw non-JSON event frames are still recorded in job.events verbatim.
+            }
+        }
     }
 
     notifyJobSubscribers(job, { type: 'event', entry });
@@ -672,7 +666,9 @@ export function failGenerationJob(job, errorMessage = 'Unknown error occurred') 
     if (!job) {
         return;
     }
-    if (job.status === 'cancelled') {
+    if (job.status === 'cancelled' || job.status === 'failed' || job.status === 'completed') {
+        clearGenerationJobPersistenceTimer(job);
+        job.abortController = null;
         return;
     }
     clearGenerationJobPersistenceTimer(job);
@@ -691,9 +687,52 @@ async function persistGeneratedReply(job, text, generationId = '', modelName = '
         return false;
     }
 
-    const finalText = String(text || '');
+    const turn = job?.parsedTurn || null;
+    const finalText = String(text || '') || String(turn?.refusal || '');
     if (!finalText) {
         return false;
+    }
+
+    const messageExtra = {
+        api: String(job?.requestMeta?.api || 'unknown'),
+        model: modelName || job?.modelName || job?.requestMeta?.model || '',
+        luker_server_persisted: true,
+        ...(generationId ? { luker_generation_id: generationId } : {}),
+    };
+    if (turn) {
+        if (typeof turn.reasoning === 'string' && turn.reasoning.length > 0) {
+            messageExtra.reasoning = turn.reasoning;
+        }
+        if (typeof turn.signature === 'string' && turn.signature.length > 0) {
+            messageExtra.reasoning_signature = turn.signature;
+        }
+        if (Array.isArray(turn.reasoningBlocks) && turn.reasoningBlocks.length > 0) {
+            messageExtra.reasoning_blocks = turn.reasoningBlocks;
+        }
+        if (Array.isArray(turn.reasoningDetails) && turn.reasoningDetails.length > 0) {
+            messageExtra.reasoning_details = turn.reasoningDetails;
+        }
+        if (Array.isArray(turn.nativeParts) && turn.nativeParts.length > 0) {
+            messageExtra.native_parts = turn.nativeParts;
+        }
+        if (Array.isArray(turn.nativeContentBlocks) && turn.nativeContentBlocks.length > 0) {
+            messageExtra.native_content_blocks = turn.nativeContentBlocks;
+        }
+        if (Array.isArray(turn.responsesOutputItems) && turn.responsesOutputItems.length > 0) {
+            messageExtra.responses_output_items = turn.responsesOutputItems;
+        }
+        if (Array.isArray(turn.citations) && turn.citations.length > 0) {
+            messageExtra.citations = turn.citations;
+        }
+        if (typeof turn.finishReason === 'string' && turn.finishReason.length > 0) {
+            messageExtra.finish_reason = turn.finishReason;
+        }
+        if (typeof turn.refusal === 'string' && turn.refusal.length > 0) {
+            messageExtra.refusal = turn.refusal;
+        }
+        if (Number.isFinite(turn.usage?.completion_tokens)) {
+            messageExtra.token_count = turn.usage.completion_tokens;
+        }
     }
 
     const message = {
@@ -702,12 +741,7 @@ async function persistGeneratedReply(job, text, generationId = '', modelName = '
         is_system: false,
         send_date: new Date().toISOString(),
         mes: finalText,
-        extra: {
-            api: String(job?.requestMeta?.api || 'unknown'),
-            model: modelName || job?.modelName || job?.requestMeta?.model || '',
-            luker_server_persisted: true,
-            ...(generationId ? { luker_generation_id: generationId } : {}),
-        },
+        extra: messageExtra,
     };
 
     const directories = job?.requestMeta?.directories;
@@ -730,7 +764,7 @@ async function persistGeneratedReply(job, text, generationId = '', modelName = '
             // Route through ChatRepo so writes land in the active engine,
             // not just the FS scratch directory. (filePath is still passed
             // so the sidecar gen-id helpers see a stable key.)
-            handle: job?.requestMeta?.handle,
+            handle: job?.handle || job?.requestMeta?.handle,
             charDir: '',
             name: groupId,
             isGroup: true,
@@ -758,7 +792,7 @@ async function persistGeneratedReply(job, text, generationId = '', modelName = '
             chatMetadata: persistTarget.chat_metadata || {},
             integritySlug: persistTarget.integrity || '',
             force: Boolean(persistTarget.force),
-            handle: job?.requestMeta?.handle,
+            handle: job?.handle || job?.requestMeta?.handle,
             charDir: avatar,
             name: baseName,
             isGroup: false,
@@ -773,13 +807,23 @@ export async function completeGenerationJobFromText(request, job, text, modelNam
     if (!job) {
         return false;
     }
-    if (job.status === 'cancelled') {
+    if (job.status === 'cancelled' || job.status === 'failed') {
         clearGenerationJobPersistenceTimer(job);
         job.persistenceInFlight = false;
         job.updatedAt = Date.now();
-        job.finishedAt = Date.now();
+        job.finishedAt = job.finishedAt || Date.now();
         job.abortController = null;
         job.persisted = false;
+        return false;
+    }
+    if (job.status === 'completed') {
+        clearGenerationJobPersistenceTimer(job);
+        job.abortController = null;
+        return Boolean(job.persisted);
+    }
+    if (job.abortController?.signal?.aborted) {
+        const reason = job.abortController.signal.reason;
+        failGenerationJob(job, reason instanceof Error ? reason.message : String(reason || 'Aborted'));
         return false;
     }
 
@@ -797,14 +841,12 @@ export async function completeGenerationJobFromText(request, job, text, modelNam
         job.persistenceTimer = setTimeout(() => {
             void persistGenerationJobIfUnacked(job);
         }, LUKER_GENERATION_ACK_GRACE_MS);
+        // A pending grace period must not keep the process alive: while serving,
+        // the HTTP listener does, and shutdown exits without waiting for it.
+        job.persistenceTimer.unref?.();
     }
     notifyJobStatus(job);
     return false;
-}
-
-export async function completeGenerationJobFromPayload(request, job, payload, modelName = '') {
-    const text = extractTextFromFinalPayload(payload);
-    return await completeGenerationJobFromText(request, job, text, modelName);
 }
 
 /**
@@ -905,14 +947,23 @@ export function cancelGenerationJobForRequest(request, jobId, reason = 'Cancelle
     return { ok: true, status: 200, cancelled: true, job };
 }
 
-async function persistGenerationJobIfUnacked(job) {
-    if (!job || job.status === 'cancelled' || job.status === 'failed' || job.persisted || job.acked) {
+export async function persistGenerationJobIfUnacked(job) {
+    if (!job
+        || job.status === 'cancelled'
+        || job.status === 'failed'
+        || job.status === 'completed'
+        || job.persisted
+        || job.acked
+        || job.parseError
+        || job.abortController?.signal?.aborted) {
+        clearGenerationJobPersistenceTimer(job);
         return Boolean(job?.persisted);
     }
 
     clearGenerationJobPersistenceTimer(job);
 
-    if (!job.text) {
+    const persistableText = job.text || String(job.parsedTurn?.refusal || '');
+    if (!persistableText) {
         job.status = 'completed';
         job.updatedAt = Date.now();
         job.finishedAt = Date.now();
@@ -926,7 +977,7 @@ async function persistGenerationJobIfUnacked(job) {
     notifyJobStatus(job);
 
     try {
-        const persisted = await persistGeneratedReply(job, job.text, job.id, job.modelName);
+        const persisted = await persistGeneratedReply(job, persistableText, job.id, job.modelName);
         job.persisted = Boolean(persisted);
         job.status = persisted ? 'completed' : 'failed';
         job.error = persisted ? '' : 'Generation could not be persisted on server.';

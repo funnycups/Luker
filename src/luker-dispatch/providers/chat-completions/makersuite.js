@@ -2,31 +2,12 @@
 import { dispatchLog as console } from '../../logging.js';
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 //
-// Pure dispatch for Google MakerSuite (Google AI Studio) AND Google Vertex AI
-// chat completions. Extracted from legacy `sendMakerSuiteRequest`
-// (src/endpoints/backends/chat-completions.js:825-1148, ~330 lines).
-// Both CHAT_COMPLETION_SOURCES.MAKERSUITE and CHAT_COMPLETION_SOURCES.VERTEXAI
-// route through this single function; distinguished by
-// `ctx.body.chat_completion_source`.
-//
+// Pure dispatch for Google MakerSuite (Google AI Studio) and Google Vertex AI
+// chat completions. Both CHAT_COMPLETION_SOURCES.MAKERSUITE and
+// CHAT_COMPLETION_SOURCES.VERTEXAI route through this function, distinguished
+// by `ctx.body.chat_completion_source`.
 // Consumes a DispatchContext (see src/luker-dispatch/context.js) and emits
 // head/chunk/end/error events; never touches Express request/response.
-//
-// Follows the 8-step template established by claude.js. Google specifics:
-//   - MAKERSUITE: regular API key auth (SECRET_KEYS.MAKERSUITE), URL is
-//     {base}/{apiVersion}/models/{model}:{generateContent|streamGenerateContent}
-//     ?key={apiKey}[&alt=sse]
-//   - VERTEXAI: service-account (`full`), express-mode API key, or reverse-proxy
-//     auth via getVertexAIAuth(). URL varies by authType (express/full/proxy)
-//     and by region (`global` uses no region prefix).
-//   - Both build the same Gemini-shaped body (contents/safetySettings/
-//     generationConfig/systemInstruction/tools/toolConfig).
-//   - Non-streaming responses are normalized to OpenAI shape via
-//     normalizeGeminiResponseToOAI before emission.
-//
-// getVertexAIAuth() and readProviderSecret() expect an Express-request-like
-// shape (`request.body`, `request.user.directories`); we synthesize a minimal
-// shim from ctx.body + ctx.user.directories so we can reuse them verbatim.
 
 import util from 'node:util';
 
@@ -47,22 +28,27 @@ import {
     buildGeminiFunctionDeclaration,
     convertGeminiToolChoice,
     getConfigValue,
-    modelIdMatchesFamily,
-    tryParse,
 } from '../../../util.js';
-import { normalizeGeminiResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
+import {
+    resolveGeminiModelCapabilities,
+    validateGeminiRequestCapabilities,
+} from '../../../../public/scripts/lib/provider-capabilities.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
-import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { applyAdditionalParameters } from './custom-params.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
+import {
+    emitCapabilityConflict,
+    handleProviderDispatchError,
+    relayUpstreamResponse,
+} from './upstream-relay.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 
 const API_MAKERSUITE = 'https://generativelanguage.googleapis.com';
 const API_VERTEX_AI = 'https://us-central1-aiplatform.googleapis.com';
 
 /**
- * Build a minimal Express-request shim for legacy helpers (getVertexAIAuth,
- * readProviderSecret) that expect `.body` and `.user.directories`.
+ * Build a minimal request shim for helpers (getVertexAIAuth) that expect
+ * `.body` and `.user.directories`.
  * @param {object} ctx DispatchContext
  * @returns {{ body: any, user: { directories: any } }}
  */
@@ -71,27 +57,6 @@ function buildLegacyRequestShim(ctx) {
         body: ctx.body,
         user: { directories: ctx.user?.directories },
     };
-}
-
-/**
- * Resolve MAKERSUITE API key honoring proxy_password override and optional
- * `secret_id` in body (via ctx.secrets.read).
- * @param {object} ctx DispatchContext
- * @returns {string}
- */
-function resolveMakerSuiteApiKey(ctx) {
-    const body = ctx.body || {};
-    if (typeof body.proxy_password === 'string' && body.proxy_password) {
-        return body.proxy_password;
-    }
-    const requestedId = typeof body.secret_id === 'string'
-        ? body.secret_id.trim()
-        : (typeof body.secretId === 'string' ? body.secretId.trim() : '');
-    if (requestedId) {
-        const byId = ctx.secrets.read(SECRET_KEYS.MAKERSUITE, { secretId: requestedId });
-        if (byId) return byId;
-    }
-    return ctx.secrets.read(SECRET_KEYS.MAKERSUITE) || '';
 }
 
 /**
@@ -143,7 +108,8 @@ export async function dispatchMakerSuite(ctx) {
             ctx.emit.error(err);
             return;
         }
-        apiKey = resolveMakerSuiteApiKey(ctx);
+        const bodyApiKey = typeof body.proxy_password === 'string' ? body.proxy_password : '';
+        apiKey = bodyApiKey || ctx.secrets.read(SECRET_KEYS.MAKERSUITE) || '';
 
         if (!body.base_url && !body.reverse_proxy && !apiKey) {
             console.warn(`${apiName} API key is missing.`);
@@ -163,10 +129,9 @@ export async function dispatchMakerSuite(ctx) {
     const requestImages = Boolean(body.request_images);
     const reasoningEffort = String(body.reasoning_effort);
     const includeReasoning = Boolean(body.include_reasoning);
-    const aspectRatio = String(body.request_image_aspect_ratio);
-    const imageSize = String(body.request_image_resolution);
-    const isGemma3 = /gemma-3/.test(model);
-    const isLearnLM = model.includes('learnlm');
+    const aspectRatio = typeof body.request_image_aspect_ratio === 'string' ? body.request_image_aspect_ratio.trim() : '';
+    const imageSize = typeof body.request_image_resolution === 'string' ? body.request_image_resolution.trim() : '';
+    const caps = resolveGeminiModelCapabilities(model);
 
     const responseMimeType = body.responseMimeType ?? (body.json_schema ? 'application/json' : undefined);
     const responseSchema = body.responseSchema ?? (body.json_schema ? body.json_schema.value : undefined);
@@ -183,123 +148,105 @@ export async function dispatchMakerSuite(ctx) {
         seed: body.seed,
     };
 
+    const functionDeclarations = [];
+    const customTools = [];
+    if (Array.isArray(body.tools) && body.tools.length > 0) {
+        for (const tool of body.tools) {
+            if (tool?.type === 'function') {
+                const functionDeclaration = buildGeminiFunctionDeclaration(tool.function);
+                if (functionDeclaration) {
+                    functionDeclarations.push(functionDeclaration);
+                }
+            } else if (tool && tool[tool.type]) {
+                switch (tool.type) {
+                    case 'google_search':
+                    case 'googleSearch':
+                        customTools.push({ googleSearch: tool[tool.type] });
+                        break;
+                    case 'code_execution':
+                    case 'codeExecution':
+                        customTools.push({ codeExecution: tool[tool.type] });
+                        break;
+                    case 'url_context':
+                    case 'urlContext':
+                        customTools.push({ urlContext: tool[tool.type] });
+                        break;
+                    default:
+                        customTools.push({ [tool.type]: tool[tool.type] });
+                        break;
+                }
+            }
+        }
+    }
+
+    const hasBuiltinSearch = customTools.some(t => Object.hasOwn(t, 'googleSearch'));
+    const capabilityConflict = validateGeminiRequestCapabilities({
+        model,
+        requestImages,
+        hasFunctionTools: functionDeclarations.length > 0,
+        enableWebSearch,
+        hasCustomBuiltinTools: customTools.length > 0,
+        hasBuiltinSearch,
+    });
+    if (capabilityConflict) {
+        emitCapabilityConflict(ctx, capabilityConflict, apiName);
+        return;
+    }
+
     function getGeminiBody() {
-        // #region UGLY MODEL LISTS AREA
-        const imageGenerationModels = [
-            'gemini-2.0-flash-exp',
-            'gemini-2.0-flash-exp-image-generation',
-            'gemini-2.0-flash-preview-image-generation',
-            'gemini-2.5-flash-image-preview',
-            'gemini-2.5-flash-image',
-            'gemini-3-pro-image',
-            'gemini-3.1-flash-image',
-        ];
-
-        const isThinkingConfigModel = m => (modelIdMatchesFamily(m, /^gemini-2.5-(flash|pro)/) && !/-image(-preview)?$/.test(m)) || (modelIdMatchesFamily(m, /^gemini-3[.\d]*-(flash|pro)/)) || modelIdMatchesFamily(m, /^gemini-4/);
-        const isImageSizeModel = m => modelIdMatchesFamily(m, /^gemini-[34]/);
-        // https://ai.google.dev/gemini-api/docs/latest-model#api-changes-and-parameter-updates
-        // Gemini 4 inherits the Gemini 3.6+ shape: sampling parameters are
-        // deprecated for "all future Gemini model releases".
-        const noSamplingModel = modelIdMatchesFamily(model, /^gemini-3\.[678]-flash|^gemini-3\.5-flash-lite/) || modelIdMatchesFamily(model, /^gemini-4/);
-
-        const noSearchModels = [
-            'gemini-2.0-flash-lite',
-            'gemini-2.0-flash-lite-001',
-            'gemini-2.0-flash-lite-preview-02-05',
-            'gemini-robotics-er-1.5-preview',
-        ];
-        // #endregion
-
         if (!Array.isArray(generationConfig.stopSequences) || !generationConfig.stopSequences.length) {
             delete generationConfig.stopSequences;
         }
 
-        if (noSamplingModel) {
+        if (!caps.supportsSampling) {
             delete generationConfig.temperature;
             delete generationConfig.topP;
             delete generationConfig.topK;
             delete generationConfig.candidateCount;
         }
+        if (caps.supportsSeed === false) {
+            delete generationConfig.seed;
+        }
 
-        const enableImageModality = requestImages && imageGenerationModels.includes(model);
-        const enableImageConfig = enableImageModality && (aspectRatio || imageSize);
+        const enableImageModality = requestImages && caps.imageOutput !== 'unsupported';
         if (enableImageModality) {
             generationConfig.responseModalities = ['text', 'image'];
-            if (enableImageConfig) {
-                generationConfig.imageConfig = {};
-                if (imageSize && isImageSizeModel(model)) {
-                    generationConfig.imageConfig.imageSize = imageSize;
-                }
-                if (aspectRatio) {
-                    generationConfig.imageConfig.aspectRatio = aspectRatio;
-                }
+            const imageConfig = {};
+            if (imageSize && caps.imageSize) {
+                imageConfig.imageSize = imageSize;
+            }
+            if (aspectRatio) {
+                imageConfig.aspectRatio = aspectRatio;
+            }
+            if (Object.keys(imageConfig).length > 0) {
+                generationConfig.imageConfig = imageConfig;
             }
         }
 
-        const useSystemPrompt = !enableImageModality && !isGemma3 && body.use_sysprompt;
+        const useSystemPrompt = caps.systemInstruction && Boolean(body.use_sysprompt);
 
         const tools = [];
         const prompt = convertGooglePrompt(body.messages, model, useSystemPrompt, getPromptNames({ body }));
         const safetySettings = [...GEMINI_SAFETY, ...(useVertexAi ? VERTEX_SAFETY : [])];
 
-        if (Array.isArray(body.tools) && body.tools.length > 0 && !enableImageModality && !isGemma3) {
-            const functionDeclarations = [];
-            const customTools = [];
-            for (const tool of body.tools) {
-                if (tool.type === 'function') {
-                    const functionDeclaration = buildGeminiFunctionDeclaration(tool.function);
-                    if (functionDeclaration) {
-                        functionDeclarations.push(functionDeclaration);
-                    }
-                } else if (tool[tool.type]) {
-                    switch (tool.type) {
-                        case 'google_search':
-                        case 'googleSearch':
-                            customTools.push({ googleSearch: tool[tool.type] });
-                            break;
-                        case 'code_execution':
-                        case 'codeExecution':
-                            customTools.push({ codeExecution: tool[tool.type] });
-                            break;
-                        case 'url_context':
-                        case 'urlContext':
-                            customTools.push({ urlContext: tool[tool.type] });
-                            break;
-                        default:
-                            customTools.push({ [tool.type]: tool[tool.type] });
-                            break;
-                    }
-                }
-            }
-            if (functionDeclarations.length > 0) {
-                tools.push({ functionDeclarations });
-            }
-            // Custom tools are only supported when no function calling is present
-            if (functionDeclarations.length === 0 && customTools.length > 0) {
-                tools.push(...customTools);
-            }
+        if (functionDeclarations.length > 0) {
+            tools.push({ functionDeclarations });
+        }
+        if (customTools.length > 0) {
+            tools.push(...customTools);
+        }
+        if (enableWebSearch && !hasBuiltinSearch) {
+            tools.push({ googleSearch: {} });
         }
 
-        if (enableWebSearch && !enableImageModality && !isGemma3 && !isLearnLM && !noSearchModels.includes(model)) {
-            // Tool use with function calling is unsupported
-            if (!tools.some(t => Array.isArray(t.functionDeclarations) && t.functionDeclarations.length > 0)) {
-                tools.push({ googleSearch: {} });
-            }
-        }
-
-        if (isThinkingConfigModel(model)) {
+        if (caps.thinkingMode !== 'none') {
             const reasoningToken = normalizeReasoningToken(reasoningEffort);
             const thinkingConfig = { includeThoughts: includeReasoning };
 
             if (reasoningToken === 'off') {
-                const supportsOff = (modelIdMatchesFamily(model, /^gemini-(2\.5-(flash|flash-lite)|3[.\d]*-(flash|pro))/) && !modelIdMatchesFamily(model, /^gemini-2\.5-pro/))
-                    || modelIdMatchesFamily(model, /^gemini-4/);
-                if (supportsOff) {
-                    if (modelIdMatchesFamily(model, /^gemini-3/) || modelIdMatchesFamily(model, /^gemini-4/)) {
-                        const lacksMinimalThinking = modelIdMatchesFamily(model, /^gemini-3\.7-flash/)
-                            || modelIdMatchesFamily(model, /^gemini-3[.\d]*-pro/)
-                            || modelIdMatchesFamily(model, /^gemini-4/);
-                        thinkingConfig.thinkingLevel = lacksMinimalThinking ? 'low' : 'minimal';
+                if (caps.thinkingSupportsOff) {
+                    if (caps.thinkingMode === 'level') {
+                        thinkingConfig.thinkingLevel = caps.thinkingSupportsMinimal ? 'minimal' : 'low';
                     } else {
                         thinkingConfig.thinkingBudget = 0;
                     }
@@ -377,7 +324,9 @@ export async function dispatchMakerSuite(ctx) {
                 const serviceAccountJson = ctx.secrets.read(SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT);
                 if (!serviceAccountJson) {
                     console.warn('Vertex AI Service Account JSON is missing.');
-                    ctx.emit.error(new Error('Vertex AI Service Account JSON is missing'));
+                    const err = new Error('Vertex AI Service Account JSON is missing');
+                    ctx.inspection.fail(err, 400);
+                    ctx.emit.error(err);
                     return;
                 }
 
@@ -387,7 +336,9 @@ export async function dispatchMakerSuite(ctx) {
                     projectId = getProjectIdFromServiceAccount(serviceAccount);
                 } catch (error) {
                     console.error('Failed to extract project ID from Service Account JSON:', error);
-                    ctx.emit.error(new Error('Failed to extract project ID from Service Account JSON'));
+                    const err = new Error('Failed to extract project ID from Service Account JSON');
+                    ctx.inspection.fail(err, 400);
+                    ctx.emit.error(err);
                     return;
                 }
                 const region = body.vertexai_region || 'us-central1';
@@ -411,160 +362,13 @@ export async function dispatchMakerSuite(ctx) {
             signal: ctx.signal,
         });
 
-        // Architectural contract: every dispatch emits a single head frame
-        // immediately after the upstream fetch resolves, regardless of
-        // status. The WebSocket delivery layer (ws-delivery) uses head to
-        // release the client-side `await headPromise`; without it the
-        // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: generateResponse.status, headers: generateResponse.headers });
-
-        if (stream) {
-            await pipeResponseBodyToEmit(generateResponse, ctx);
-        } else {
-            if (!generateResponse.ok) {
-                let errorText = '';
-                try { errorText = await generateResponse.text(); } catch { /* body already consumed */ }
-                console.warn(`${apiName} API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
-                const msg = `${apiName} upstream ${generateResponse.status}: ${errorText}`;
-                ctx.inspection.fail(new Error(msg), generateResponse?.status ?? 502);
-                // Legacy shape: always deliver a JSON envelope so client-side
-                // `await response.json()` succeeds (parses upstream body when
-                // possible, falls back to `{error:true}` sentinel for empty
-                // or non-JSON bodies). Matches
-                // `res.status(500).send(tryParse(errorText) ?? {error:true})`.
-                const envelope = errorText ? (tryParse(errorText) ?? { error: true }) : { error: true };
-                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(envelope)));
-                ctx.emit.end();
-                return;
-            }
-
-            /** @type {any} */
-            const generateResponseJson = await generateResponse.json();
-
-            // Some proxies and upstream gateways return HTTP 200 with a JSON
-            // error payload (e.g. after flushing headers for non-streaming
-            // keep-alive). Forward the error body intact instead of falling
-            // through to candidate normalization and fabricating an empty reply.
-            const errorPayload = (generateResponseJson && typeof generateResponseJson === 'object' && !Array.isArray(generateResponseJson) && generateResponseJson.error)
-                ? generateResponseJson
-                : (Array.isArray(generateResponseJson) && generateResponseJson[0] && typeof generateResponseJson[0] === 'object' && generateResponseJson[0].error
-                    ? generateResponseJson[0]
-                    : null);
-            if (errorPayload) {
-                console.warn(`${apiName} API returned HTTP 200 with error payload`, generateResponseJson);
-                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(errorPayload)));
-                ctx.emit.end();
-                try { ctx.inspection.complete(errorPayload, generateResponseJson); } catch { /* inspection best-effort */ }
-                return;
-            }
-
-            const candidates = generateResponseJson?.candidates;
-            const hasBlockedFinishReason = (() => {
-                const raw = String(candidates?.[0]?.finishReason || '').toUpperCase();
-                // Deterministic filters only: hard keyword blocklist (BLOCKLIST)
-                // and PII-pattern detector (SPII). Retrying against these
-                // burns quota with certainty of same outcome.
-                //
-                // The probabilistic filters (SAFETY, RECITATION,
-                // PROHIBITED_CONTENT) are intentionally NOT here — same prompt
-                // + different sampling can flip the verdict, so they flow
-                // through the transient/retriable branch below.
-                return ['BLOCKLIST', 'SPII'].includes(raw);
-            })();
-            const promptBlockReason = generateResponseJson?.promptFeedback?.blockReason;
-
-            if (!candidates || candidates.length === 0) {
-                // Distinguish "prompt was blocked" (terminal, don't retry) from
-                // "upstream returned zero candidates with no reason" (retriable
-                // — likely transient model flake). Blocked → keep the descriptive
-                // error envelope so toastr shows the block reason. Empty-with-no-
-                // reason → emit a legal 200 with empty candidates so the client-
-                // side empty-response detector (openai.js:isChatCompletionResponseEmpty)
-                // triggers withRetry.
-                if (promptBlockReason) {
-                    let message = `${apiName} API returned no candidate\nPrompt was blocked due to : ${promptBlockReason}`;
-                    console.warn(message, generateResponseJson);
-                    // Legacy shape: `res.send({error:{message}})` (Express default
-                    // HTTP 200 with the error envelope). The head frame at line
-                    // 392 above already carried the upstream 200 status, so we
-                    // only emit chunk+end here. Client:
-                    //   • response.ok stays true → skips the `!response.ok`
-                    //     raw-throw path at openai.js.
-                    //   • `.json()` parses cleanly → `data.error` branch fires →
-                    //     toastr shows the block-reason message.
-                    // Using HTTP 500 here would bury the descriptive block
-                    // reason inside the generic "Got response status 500"
-                    // substring.
-                    const errPayload = { error: { message } };
-                    const errBody = JSON.stringify(errPayload);
-                    ctx.emit.chunk(new TextEncoder().encode(errBody));
-                    ctx.emit.end();
-                    try { ctx.inspection.complete(errPayload, generateResponseJson); } catch { /* inspection best-effort */ }
-                    return;
-                }
-
-                // No candidates, no block reason → transient. Forward the raw
-                // Gemini shape after normalizing to OAI so the client's empty-
-                // response detector sees `choices` (post-normalization) or the
-                // absence thereof and can decide to retry.
-                console.warn(`${apiName} API returned no candidate (transient, no block reason)`, generateResponseJson);
-                const reply = normalizeGeminiResponseToOAI(generateResponseJson);
-                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(reply)));
-                ctx.emit.end();
-                try { ctx.inspection.complete(reply, generateResponseJson); } catch { /* inspection best-effort */ }
-                return;
-            }
-
-            const responseContent = candidates[0].content ?? candidates[0].output;
-            const functionCall = (candidates?.[0]?.content?.parts ?? []).some(part => part.functionCall || part.function_call);
-            const inlineData = (candidates?.[0]?.content?.parts ?? []).some(part => part.inlineData);
-            console.debug(`${apiName} response:`, util.inspect(generateResponseJson, { depth: 5, colors: true }));
-
-            const responseText = typeof responseContent === 'string' ? responseContent : responseContent?.parts?.filter(part => !part.thought)?.map(part => part.text)?.join('\n\n');
-            if (!responseText && !functionCall && !inlineData) {
-                // Same split as the no-candidate branch: safety/content-policy
-                // finishReasons are terminal (retry burns quota and hits the
-                // same filter); anything else (STOP with genuinely empty
-                // parts, OTHER, MALFORMED_FUNCTION_CALL, undefined) is treated
-                // as a transient model flake and forwarded as a legal empty
-                // response so client-side withRetry can kick in.
-                if (hasBlockedFinishReason) {
-                    let message = `${apiName} Candidate text empty (finishReason=${candidates[0].finishReason})`;
-                    console.warn(message, generateResponseJson);
-                    const errPayload = { error: { message } };
-                    const errBody = JSON.stringify(errPayload);
-                    ctx.emit.chunk(new TextEncoder().encode(errBody));
-                    ctx.emit.end();
-                    try { ctx.inspection.complete(errPayload, generateResponseJson); } catch { /* inspection best-effort */ }
-                    return;
-                }
-
-                console.warn(`${apiName} Candidate text empty (transient, finishReason=${candidates[0].finishReason ?? 'undefined'})`, generateResponseJson);
-                const reply = normalizeGeminiResponseToOAI(generateResponseJson);
-                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(reply)));
-                ctx.emit.end();
-                try { ctx.inspection.complete(reply, generateResponseJson); } catch { /* inspection best-effort */ }
-                return;
-            }
-
-            const reply = normalizeGeminiResponseToOAI(generateResponseJson);
-            ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(reply)));
-            ctx.emit.end();
-            // Route the raw Gemini body to the inspector alongside the
-            // OAI-normalized reply. extractUsageFromGemini (source =
-            // 'makersuite' | 'vertexai') reads usageMetadata.
-            // cachedContentTokenCount + candidatesTokenCount from the raw
-            // shape; extractPartsFromPayload walks raw.candidates[0].
-            // content.parts for thoughtSignature / inlineData / functionCall.
-            // Without passing rawApiResponse, the runner falls back to
-            // completeInspection(reply, reply) which loses those fields.
-            // See runner.js:290 for the status-guard that skips the
-            // fallback once ctx.inspection.complete has already run.
-            try { ctx.inspection.complete(reply, generateResponseJson); } catch { /* inspection best-effort */ }
-        }
+        await relayUpstreamResponse(ctx, generateResponse, {
+            label: apiName,
+            stream,
+            completeInspection: true,
+            logResponse: (json) => console.debug(`${apiName} response:`, util.inspect(json, { depth: 5, colors: true })),
+        });
     } catch (error) {
-        console.error(`Error communicating with ${apiName} API:`, error);
-        try { ctx.inspection.fail(error?.message || `${apiName} request failed`, 500); } catch { /* inspection best-effort */ }
-        ctx.emit.error(error);
+        handleProviderDispatchError(ctx, error, apiName);
     }
 }

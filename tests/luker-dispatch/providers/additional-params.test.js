@@ -71,7 +71,7 @@ function buildBody(source) {
     return body;
 }
 
-function fakeCtx(source) {
+function fakeCtx(source, { onFetch } = {}) {
     const submitted = [];
     const ac = new AbortController();
     const body = buildBody(source);
@@ -96,8 +96,12 @@ function fakeCtx(source) {
         body,
         user: { handle: 'alice', directories: {}, profile: { handle: 'alice' } },
         signal: ac.signal,
+        setStreamMode: jest.fn(),
         fetch: jest.fn(async (url, init) => {
             submitted.push({ url: String(url), init });
+            if (typeof onFetch === 'function') {
+                return onFetch(url, init);
+            }
             return new Response(JSON.stringify(responsePayload), {
                 status: 200,
                 headers: { 'content-type': 'application/json' },
@@ -125,6 +129,8 @@ function fakeCtx(source) {
     };
 }
 
+const BODY_STREAM_SOURCES = SOURCES.filter(source => source !== 'makersuite' && source !== 'vertexai');
+
 describe.each(SOURCES)('additional parameters: %s', (source) => {
     test('merges include body and headers into the outbound request', async () => {
         const ctx = fakeCtx(source);
@@ -149,5 +155,42 @@ describe.each(SOURCES)('additional parameters: %s', (source) => {
         const { init } = ctx._submitted[0];
         const requestBody = JSON.parse(init.body);
         expect(Object.hasOwn(requestBody, excludedKey)).toBe(false);
+    });
+});
+
+describe.each(BODY_STREAM_SOURCES)('stream override relay sync: %s', (source) => {
+    test('custom_include_body stream: false overrides body.stream: true in relayUpstreamResponse and setStreamMode', async () => {
+        const ctx = fakeCtx(source);
+        ctx.body.stream = true;
+        ctx.body.custom_include_body = 'stream: false\n';
+
+        await selectChatCompletionDispatch(ctx.body)(ctx);
+
+        const { init } = ctx._submitted[0];
+        expect(JSON.parse(init.body).stream).toBe(false);
+        expect(ctx.setStreamMode).toHaveBeenLastCalledWith(false);
+        expect(ctx.emit.error).not.toHaveBeenCalled();
+        expect(ctx.emit.end).toHaveBeenCalledTimes(1);
+    });
+
+    test('custom_include_body stream: true overrides body.stream: false in relayUpstreamResponse and setStreamMode', async () => {
+        const sseBody = 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n';
+        const ctx = fakeCtx(source, {
+            onFetch: async () => new Response(sseBody, {
+                status: 200,
+                headers: { 'content-type': 'text/event-stream' },
+            }),
+        });
+        ctx.body.stream = false;
+        ctx.body.custom_include_body = 'stream: true\n';
+
+        await selectChatCompletionDispatch(ctx.body)(ctx);
+
+        const { init } = ctx._submitted[0];
+        expect(JSON.parse(init.body).stream).toBe(true);
+        expect(ctx.setStreamMode).toHaveBeenLastCalledWith(true);
+        expect(ctx.inspection.complete).not.toHaveBeenCalled();
+        expect(ctx.emit.error).not.toHaveBeenCalled();
+        expect(ctx.emit.end).toHaveBeenCalledTimes(1);
     });
 });

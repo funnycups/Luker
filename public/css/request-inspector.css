@@ -385,6 +385,150 @@
     overflow: auto;
 }
 
+/* ---- Plain-Text Function Call & Protocol Parse Error ---- */
+
+.ri-pt-call-region {
+    margin: 8px 0;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #4fc3f7) 55%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor, #1a1a2e) 55%, transparent);
+    overflow: hidden;
+}
+
+.ri-pt-call-region-parse_failed,
+.ri-pt-call-region-network_error {
+    border-color: color-mix(in srgb, #f44336 60%, transparent);
+}
+
+.ri-pt-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 6px 10px;
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor, #335) 18%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #444) 35%, transparent);
+}
+
+.ri-pt-badge {
+    font-size: 0.78em;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: color-mix(in srgb, #2196f3 30%, transparent);
+    color: #90caf9;
+    white-space: nowrap;
+}
+
+.ri-pt-status {
+    font-size: 0.75em;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+
+.ri-pt-status-parsed {
+    background: color-mix(in srgb, #4caf50 25%, transparent);
+    color: #a5d6a7;
+}
+
+.ri-pt-status-failed {
+    background: color-mix(in srgb, #f44336 25%, transparent);
+    color: #ef9a9a;
+}
+
+.ri-pt-status-parsing {
+    background: color-mix(in srgb, #2196f3 25%, transparent);
+    color: #90caf9;
+}
+
+.ri-pt-status-aborted {
+    background: color-mix(in srgb, #ff9800 25%, transparent);
+    color: #ffcc80;
+}
+
+.ri-pt-raw-toggle {
+    margin-left: auto;
+    padding: 2px 8px;
+    font-size: 0.78em;
+    width: auto;
+}
+
+.ri-pt-parsed-view,
+.ri-pt-raw-view {
+    padding: 6px 10px;
+}
+
+.ri-pt-error-box {
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: color-mix(in srgb, #f44336 12%, transparent);
+    border: 1px solid color-mix(in srgb, #f44336 35%, transparent);
+}
+
+.ri-pt-error-title {
+    font-weight: 600;
+    color: #ef9a9a;
+    margin-bottom: 4px;
+}
+
+.ri-pt-error-msg {
+    margin: 0;
+    font-size: 0.85em;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--SmartThemeBodyColor, #eee);
+}
+
+.ri-pt-parsing-note {
+    font-size: 0.85em;
+    opacity: 0.8;
+    padding: 4px 2px;
+}
+
+.ri-parse-error-box {
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, #f44336 55%, transparent);
+    background: color-mix(in srgb, #f44336 10%, transparent);
+}
+
+.ri-parse-error-header {
+    margin-bottom: 8px;
+}
+
+.ri-parse-error-kv {
+    margin-bottom: 8px;
+}
+
+.ri-jump-entry {
+    display: inline-flex;
+    padding: 1px 6px;
+    font-size: 0.8em;
+    font-family: var(--monoFontFamily, monospace);
+    width: auto;
+}
+
+.ri-list-badge {
+    display: inline-block;
+    font-size: 0.72em;
+    padding: 0 5px;
+    border-radius: 3px;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.ri-list-badge-pt {
+    background: color-mix(in srgb, #2196f3 25%, transparent);
+    color: #90caf9;
+}
+
+.ri-list-badge-err {
+    background: color-mix(in srgb, #f44336 25%, transparent);
+    color: #ef9a9a;
+}
+
 /* ---- Tools (request tool definitions) ---- */
 
 .ri-tools-head {

@@ -170,4 +170,24 @@ describe('dispatchAI21', () => {
         const errs = ctx._emitted.filter(e => e.kind === 'error');
         expect(errs.length).toBeGreaterThan(0);
     });
+
+    test('forces stream:false and notifies ctx.setStreamMode(false) when tools or n > 1 are sent', async () => {
+        for (const extra of [
+            { tools: [{ type: 'function', function: { name: 'fn', parameters: { type: 'object' } } }] },
+            { n: 2 },
+        ]) {
+            const setStreamMode = jest.fn();
+            const ctx = fakeCtx({ body: { stream: true, ...extra } });
+            ctx.setStreamMode = setStreamMode;
+            await dispatchAI21(ctx);
+
+            const sentBody = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            expect(sentBody.stream).toBe(false);
+            expect(setStreamMode).toHaveBeenCalledWith(false);
+            expect(ctx.inspection.attach.mock.calls[0][2].stream).toBe(false);
+            const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+            expect(chunks).toHaveLength(1);
+            expect(JSON.parse(Buffer.from(chunks[0].data).toString('utf8')).choices[0].message.content).toBe('hello back');
+        }
+    });
 });

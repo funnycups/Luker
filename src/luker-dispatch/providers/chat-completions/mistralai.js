@@ -2,21 +2,16 @@
 import { dispatchLog as console } from '../../logging.js';
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 //
-// Pure dispatch for MistralAI chat completions. Extracted from legacy
-// `sendMistralAIRequest` (src/endpoints/backends/chat-completions.js:1237-1321).
+// Pure dispatch for MistralAI chat completions.
 // Consumes a DispatchContext (see src/luker-dispatch/context.js) and emits
 // head/chunk/end/error events; never touches Express request/response.
-//
-// Follows the 8-step template established by claude.js (see that file's
-// header for the full recipe). Like CLAUDE, supports reverse_proxy /
-// base_url / proxy_password overrides.
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { convertMistralMessages, getPromptNames } from '../../../prompt-converters.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
-import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { applyAdditionalParameters } from './custom-params.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
+import { handleProviderDispatchError, relayUpstreamResponse } from './upstream-relay.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 
 const API_MISTRAL = 'https://api.mistral.ai/v1';
@@ -37,7 +32,7 @@ export async function dispatchMistralAI(ctx) {
     const bodyApiKey = typeof body.proxy_password === 'string' ? body.proxy_password : '';
     const apiKey = bodyApiKey || ctx.secrets.read(SECRET_KEYS.MISTRALAI) || '';
 
-    if (!apiKey) {
+    if (!apiKey && !body.base_url && !body.reverse_proxy) {
         console.warn('MistralAI API key is missing.');
         const err = new Error('MistralAI API key is missing');
         ctx.inspection.fail(err, 400);
@@ -102,7 +97,7 @@ export async function dispatchMistralAI(ctx) {
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'chat/completions' : apiUrl + '/chat/completions';
         const headers = {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
+            ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
         };
         applyAdditionalParameters(requestBody, headers, body);
         ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(headers, apiKey, ['authorization']), requestBody);
@@ -116,47 +111,11 @@ export async function dispatchMistralAI(ctx) {
             headers,
         });
 
-        // Architectural contract: every dispatch emits a single head frame
-        // immediately after the upstream fetch resolves, regardless of
-        // status. The WebSocket delivery layer (ws-delivery) uses head to
-        // release the client-side `await headPromise`; without it the
-        // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: resp.status, headers: resp.headers });
-
-        if (!resp.ok) {
-            let errText = '';
-            try { errText = await resp.text(); } catch { /* body already consumed */ }
-            console.warn(`MistralAI API returned error: ${resp.status} ${resp.statusText} ${errText}`);
-            const msg = `MistralAI upstream ${resp.status}: ${errText}`;
-            ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
-            // Surface upstream status + body to the client via chunk + end
-            // (head already emitted above). Client sees
-            // Response.status=<upstream> and Response.body readable so
-            // callers can do `await response.text()` or
-            // `await response.json()` for structured error inspection
-            // (matches legacy handler shape which returned
-            // `.status(4xx).send({error:{...}})`).
-            if (errText) {
-                ctx.emit.chunk(new TextEncoder().encode(errText));
-            }
-            ctx.emit.end();
-            return;
-        }
-
-        if (body.stream) {
-            await pipeResponseBodyToEmit(resp, ctx);
-        } else {
-            const buf = await resp.arrayBuffer();
-            try {
-                const json = JSON.parse(new TextDecoder().decode(buf));
-                console.debug('MistralAI response:', json);
-            } catch { /* non-JSON body — skip debug log */ }
-            ctx.emit.chunk(new Uint8Array(buf));
-            ctx.emit.end();
-        }
+        await relayUpstreamResponse(ctx, resp, {
+            label: 'MistralAI',
+            stream: Boolean(requestBody.stream),
+        });
     } catch (err) {
-        try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
-        console.error('Error communicating with MistralAI API: ', err);
-        ctx.emit.error(err);
+        handleProviderDispatchError(ctx, err, 'MistralAI');
     }
 }

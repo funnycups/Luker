@@ -4,8 +4,6 @@ import WebSocket from 'ws';
 import { createDeliveryServer } from '../src/ws-delivery.js';
 import { runLukerDispatch } from '../src/luker-dispatch/runner.js';
 
-global.WebSocket = WebSocket;
-
 async function startServer() {
     const app = express();
     app.use(express.json());
@@ -22,20 +20,22 @@ async function startServer() {
             },
         }));
     const httpServer = http.createServer(app);
+    const sockets = new Set();
+    httpServer.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
     const delivery = createDeliveryServer({ httpServer, verifyTicket: () => ({ user_handle: 'alice' }) });
-    await new Promise(r => httpServer.listen(0, r));
-    return {
-        port: httpServer.address().port,
-        close: async () => {
-            await delivery.close();
-            await new Promise(r => httpServer.close(r));
-        },
-    };
+    await new Promise(r => httpServer.listen(0, '127.0.0.1', r));
+    return { port: httpServer.address().port, close: async () => {
+        const closed = [...sockets].map(socket => new Promise(resolve => socket.once('close', resolve)));
+        delivery.close();
+        httpServer.closeAllConnections();
+        await new Promise(resolve => httpServer.close(resolve));
+        await Promise.all(closed);
+    } };
 }
 
 test('end-to-end: HTTP POST → task created → WS subscribe → chunk delivered', async () => {
     const server = await startServer();
-    let ws;
+    let ws = null;
     try {
         const requestId = 'e2e-1';
         const httpResp = await fetch(`http://127.0.0.1:${server.port}/api/backends/chat-completions/generate`, {
@@ -48,7 +48,10 @@ test('end-to-end: HTTP POST → task created → WS subscribe → chunk delivere
         await httpResp.json();
 
         ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/ws-delivery`, ['luker-ws-ticket.dummy']);
-        await new Promise(r => ws.once('open', r));
+        await new Promise((resolve, reject) => {
+            ws.once('open', resolve);
+            ws.once('error', reject);
+        });
         // Match production JS client (public/scripts/ws-delivery.js): always
         // resume from seq 1 to avoid the setImmediate race where the dispatch
         // may have already run and events accumulated before the client's WS
@@ -59,21 +62,30 @@ test('end-to-end: HTTP POST → task created → WS subscribe → chunk delivere
         // miss frames that arrive back-to-back (chunk + end may fire in the
         // same tick; a per-iteration `once` pattern loses the second one).
         const messages = [];
-        const done = new Promise(resolve => {
+        const done = new Promise((resolve, reject) => {
             ws.on('message', (raw) => {
                 const msg = JSON.parse(String(raw));
                 messages.push(msg);
                 if (msg.type === 'end') resolve();
             });
+            ws.once('error', reject);
         });
         ws.send(JSON.stringify({ type: 'resume', request_id: requestId, from_seq: 1 }));
         await done;
         const chunkMsg = messages.find(m => m.type === 'chunk');
         expect(chunkMsg.data).toBe(Buffer.from([104, 105]).toString('base64'));
-        expect(messages.some(m => m.type === 'end')).toBe(true);
+        const metaIdx = messages.findIndex(m => m.type === 'meta');
+        const endIdx = messages.findIndex(m => m.type === 'end');
+        expect(metaIdx).toBeGreaterThan(-1);
+        expect(endIdx).toBeGreaterThan(metaIdx);
+        expect(messages[metaIdx].meta).toEqual(expect.objectContaining({
+            generation_id: requestId,
+            persisted: expect.any(Boolean),
+            status: expect.any(String),
+        }));
     } finally {
         if (ws && ws.readyState !== WebSocket.CLOSED) {
-            const closed = new Promise(r => ws.once('close', r));
+            const closed = new Promise(resolve => ws.once('close', resolve));
             ws.close();
             await closed;
         }

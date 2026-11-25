@@ -16,7 +16,6 @@ import {
     getConfigValue,
     mergeObjectWithYaml,
     trimTrailingSlash,
-    uuidv4,
 } from '../../util.js';
 import { normalizeProviderBaseUrl } from '../../util/base-url.js';
 import { createProxyBoundFetch, createRequestProxyAgent } from '../../request-proxy.js';
@@ -77,289 +76,6 @@ const API_COMETAPI = 'https://api.cometapi.com/v1';
 const API_SILICONFLOW = 'https://api.siliconflow.com/v1';
 const API_SILICONFLOW_CN = 'https://api.siliconflow.cn/v1';
 const API_WORKERS_AI = 'https://api.cloudflare.com/client/v4/accounts';
-
-const CLAUDE_STOP_REASON_TO_OAI = {
-    end_turn: 'stop',
-    max_tokens: 'length',
-    stop_sequence: 'stop',
-    tool_use: 'tool_calls',
-    pause_turn: 'stop',
-    refusal: 'content_filter',
-};
-
-/**
- * Normalize a Claude usage object into OpenAI snake_case shape:
- * `{ prompt_tokens, completion_tokens, total_tokens, prompt_tokens_details? }`.
- * `prompt_tokens_details` is emitted only when Claude reports cache reads
- * or writes; OpenAI itself uses the same `cached_tokens` key on that
- * sub-object, so downstream `usage` consumers see one shape across providers.
- * Returns `undefined` if the source has no usage fields at all.
- * @param {any} raw Claude `usage` object
- * @returns {object|undefined}
- */
-function normalizeClaudeUsage(raw) {
-    if (!raw || typeof raw !== 'object') return undefined;
-    const promptTokens = Number(raw.input_tokens);
-    const completionTokens = Number(raw.output_tokens);
-    if (!Number.isFinite(promptTokens) && !Number.isFinite(completionTokens)) return undefined;
-    const prompt = Number.isFinite(promptTokens) ? promptTokens : 0;
-    const completion = Number.isFinite(completionTokens) ? completionTokens : 0;
-    const out = {
-        prompt_tokens: prompt,
-        completion_tokens: completion,
-        total_tokens: prompt + completion,
-    };
-    const cacheRead = Number(raw.cache_read_input_tokens);
-    const cacheCreate = Number(raw.cache_creation_input_tokens);
-    const details = {};
-    if (Number.isFinite(cacheRead)) details.cached_tokens = cacheRead;
-    if (Number.isFinite(cacheCreate)) details.cache_creation_tokens = cacheCreate;
-    if (Object.keys(details).length) out.prompt_tokens_details = details;
-    return out;
-}
-
-/**
- * Normalize a Gemini `usageMetadata` object into OpenAI snake_case shape.
- * Gemini reports `thoughtsTokenCount` separately from `candidatesTokenCount`;
- * those reasoning tokens are billed as output, so they are folded into
- * `completion_tokens` and additionally surfaced under
- * `completion_tokens_details.reasoning_tokens` (the OpenAI o-series shape).
- * Returns `undefined` if the source has no usage fields at all.
- * @param {any} meta Gemini `usageMetadata` object
- * @returns {object|undefined}
- */
-function normalizeGeminiUsage(meta) {
-    if (!meta || typeof meta !== 'object') return undefined;
-    const promptTokens = Number(meta.promptTokenCount);
-    const candidatesTokens = Number(meta.candidatesTokenCount);
-    const thoughtsTokens = Number(meta.thoughtsTokenCount);
-    const totalTokens = Number(meta.totalTokenCount);
-    if (!Number.isFinite(promptTokens) && !Number.isFinite(candidatesTokens) && !Number.isFinite(totalTokens)) {
-        return undefined;
-    }
-    const prompt = Number.isFinite(promptTokens) ? promptTokens : 0;
-    const candidates = Number.isFinite(candidatesTokens) ? candidatesTokens : 0;
-    const thoughts = Number.isFinite(thoughtsTokens) ? thoughtsTokens : 0;
-    const completion = candidates + thoughts;
-    const total = Number.isFinite(totalTokens) ? totalTokens : (prompt + completion);
-    const out = {
-        prompt_tokens: prompt,
-        completion_tokens: completion,
-        total_tokens: total,
-    };
-    const cached = Number(meta.cachedContentTokenCount);
-    if (Number.isFinite(cached)) {
-        out.prompt_tokens_details = { cached_tokens: cached };
-    }
-    if (Number.isFinite(thoughtsTokens)) {
-        out.completion_tokens_details = { reasoning_tokens: thoughts };
-    }
-    return out;
-}
-
-/**
- * Normalize a Cohere v2 usage object into OpenAI snake_case shape. Prefers
- * Cohere's `billed_units` (the chargeable counts) over `tokens` (raw counts
- * that include system prompts). Also accepts already-OpenAI-shaped usage
- * for forward-compat with future Cohere endpoints or proxies.
- * Returns `undefined` if the source has no usage fields at all.
- * @param {any} raw Cohere `usage` object
- * @returns {object|undefined}
- */
-function normalizeCohereUsage(raw) {
-    if (!raw || typeof raw !== 'object') return undefined;
-    const billed = raw.billed_units;
-    const tokens = raw.tokens;
-    const candidate = (billed && typeof billed === 'object') ? billed
-        : (tokens && typeof tokens === 'object') ? tokens
-            : raw;
-    const prompt = Number(candidate.input_tokens ?? candidate.prompt_tokens);
-    const completion = Number(candidate.output_tokens ?? candidate.completion_tokens);
-    if (!Number.isFinite(prompt) && !Number.isFinite(completion)) return undefined;
-    const p = Number.isFinite(prompt) ? prompt : 0;
-    const c = Number.isFinite(completion) ? completion : 0;
-    return {
-        prompt_tokens: p,
-        completion_tokens: c,
-        total_tokens: p + c,
-    };
-}
-
-/**
- * Normalize a non-streaming Claude Messages API response into OAI chat-completion shape.
- * Preserves the original `content` array on the reply for callers that still need it.
- * @param {any} raw Claude response JSON
- * @returns {object} OAI chat-completion shaped reply
- */
-export function normalizeClaudeResponseToOAI(raw) {
-    const content = Array.isArray(raw?.content) ? raw.content : [];
-    let text = '';
-    let thinking = '';
-    const toolCalls = [];
-    // Anthropic requires thinking / redacted_thinking blocks to be echoed verbatim
-    // in subsequent turns (including their signature field). Preserve them here
-    // so downstream can round-trip the full block on the next request.
-    const reasoningBlocks = [];
-
-    for (const block of content) {
-        if (!block || typeof block !== 'object') continue;
-        const type = String(block.type || '');
-        if (type === 'text') {
-            text += String(block.text || '');
-        } else if (type === 'thinking') {
-            thinking += String(block.thinking || '');
-            const preserved = { type: 'thinking', thinking: String(block.thinking || '') };
-            if (typeof block.signature === 'string' && block.signature.length > 0) {
-                preserved.signature = block.signature;
-            }
-            reasoningBlocks.push(preserved);
-        } else if (type === 'redacted_thinking') {
-            reasoningBlocks.push({ type: 'redacted_thinking', data: String(block.data || '') });
-        } else if (type === 'tool_use') {
-            toolCalls.push({
-                id: String(block.id || ''),
-                type: 'function',
-                function: {
-                    name: String(block.name || ''),
-                    arguments: JSON.stringify(block.input ?? {}),
-                },
-            });
-        }
-        // tool_result / server_tool_use stay accessible via reply.content.
-    }
-
-    const message = { role: 'assistant', content: text };
-    if (thinking) message.reasoning_content = thinking;
-    if (reasoningBlocks.length) message.reasoning_blocks = reasoningBlocks;
-    if (toolCalls.length) message.tool_calls = toolCalls;
-
-    const finishReason = CLAUDE_STOP_REASON_TO_OAI[String(raw?.stop_reason || '')] ?? 'stop';
-
-    const reply = {
-        choices: [{ message, finish_reason: finishReason, index: 0 }],
-        content,
-    };
-    const usage = normalizeClaudeUsage(raw?.usage);
-    if (usage) reply.usage = usage;
-    return reply;
-}
-
-const GEMINI_FINISH_REASON_TO_OAI = {
-    STOP: 'stop',
-    MAX_TOKENS: 'length',
-    SAFETY: 'content_filter',
-    RECITATION: 'content_filter',
-    PROHIBITED_CONTENT: 'content_filter',
-    BLOCKLIST: 'content_filter',
-    SPII: 'content_filter',
-    MALFORMED_FUNCTION_CALL: 'stop',
-    OTHER: 'stop',
-};
-
-/**
- * Normalize a non-streaming Google generateContent response into OAI chat-completion shape.
- * Preserves the original candidate `content` object on the reply as `responseContent`
- * so existing readers (thought signatures, inlineData images) keep working.
- * @param {any} raw Google response JSON
- * @returns {object} OAI chat-completion shaped reply
- */
-export function normalizeGeminiResponseToOAI(raw) {
-    const candidate = Array.isArray(raw?.candidates) ? raw.candidates[0] : null;
-    const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
-    let text = '';
-    let thinking = '';
-    const toolCalls = [];
-    let hasFunctionCall = false;
-
-    for (const part of parts) {
-        if (!part || typeof part !== 'object') continue;
-        const fc = part.functionCall ?? part.function_call;
-        if (fc) {
-            hasFunctionCall = true;
-            const args = fc.args ?? fc.arguments ?? {};
-            toolCalls.push({
-                id: String(fc.id || `call_${uuidv4().replaceAll('-', '')}`),
-                type: 'function',
-                function: {
-                    name: String(fc.name || ''),
-                    arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
-                },
-            });
-        } else if (part.thought && typeof part.text === 'string') {
-            thinking += part.text;
-        } else if (typeof part.text === 'string') {
-            text += part.text;
-        }
-        // inlineData / fileData / thoughtSignature stay accessible via reply.responseContent.
-    }
-
-    const message = { role: 'assistant', content: text };
-    if (thinking) message.reasoning_content = thinking;
-    if (toolCalls.length) message.tool_calls = toolCalls;
-
-    const rawReason = String(candidate?.finishReason || '').toUpperCase();
-    let finishReason = GEMINI_FINISH_REASON_TO_OAI[rawReason] ?? 'stop';
-    if (hasFunctionCall) finishReason = 'tool_calls';
-
-    const reply = {
-        choices: [{ message, finish_reason: finishReason, index: 0 }],
-        responseContent: candidate?.content,
-    };
-    const usage = normalizeGeminiUsage(raw?.usageMetadata);
-    if (usage) reply.usage = usage;
-    return reply;
-}
-
-const COHERE_FINISH_REASON_TO_OAI = {
-    complete: 'stop',
-    max_tokens: 'length',
-    stop_sequence: 'stop',
-    tool_call: 'tool_calls',
-    error: 'stop',
-    timeout: 'stop',
-};
-
-/**
- * Normalize a non-streaming Cohere v2 chat response into OAI chat-completion shape.
- * Cohere `tool_calls` are already OAI-shaped (function.name + arguments string);
- * the only restructuring is lifting `message` + `finish_reason` into `choices[0]`.
- * @param {any} raw Cohere response JSON
- * @returns {object} OAI chat-completion shaped reply
- */
-export function normalizeCohereResponseToOAI(raw) {
-    const rawMessage = raw?.message ?? {};
-    const content = typeof rawMessage.content === 'string'
-        ? rawMessage.content
-        : Array.isArray(rawMessage.content)
-            ? rawMessage.content.filter(c => c?.type === 'text').map(c => String(c?.text || '')).join('')
-            : '';
-    const toolCalls = Array.isArray(rawMessage.tool_calls)
-        ? rawMessage.tool_calls.map(call => ({
-            id: String(call?.id || ''),
-            type: 'function',
-            function: {
-                name: String(call?.function?.name || ''),
-                arguments: String(call?.function?.arguments ?? ''),
-            },
-        }))
-        : [];
-
-    const message = { role: 'assistant', content };
-    if (typeof rawMessage.tool_plan === 'string' && rawMessage.tool_plan) {
-        message.reasoning_content = rawMessage.tool_plan;
-    }
-    if (toolCalls.length) message.tool_calls = toolCalls;
-
-    const finishReason = COHERE_FINISH_REASON_TO_OAI[String(raw?.finish_reason || '').toLowerCase()] ?? 'stop';
-
-    const reply = {
-        id: raw?.id,
-        choices: [{ message, finish_reason: finishReason, index: 0 }],
-    };
-    const usage = normalizeCohereUsage(raw?.usage);
-    if (usage) reply.usage = usage;
-    return reply;
-}
 
 export const router = express.Router();
 
@@ -1160,20 +876,18 @@ export function selectChatCompletionDispatch(body) {
 }
 
 router.post('/generate', (req, res) => {
-    // Handler-level preamble (applies before any provider dispatch runs).
-    // These mutations are provider-agnostic and were run once by the
-    // legacy handler before the switch statement. The refactor to
-    // per-provider dispatch functions missed re-adding them, so user's
-    // `custom_prompt_post_processing` selection and `json_schema` flatten
-    // were silently ignored for every source.
     const body = req.body || {};
     const postProcessingType = body.custom_prompt_post_processing;
-    if (Array.isArray(body.messages) && postProcessingType) {
+    // Defer `custom_prompt_post_processing` to a runner hook so plain-text
+    // function-calling expansion (history normalization + protocol injection)
+    // runs BEFORE post-processing on both Attempt 1 and retry rounds.
+    const postProcessMessages = postProcessingType
+        ? (messages) => (Array.isArray(messages)
+            ? postProcessPrompt(messages, postProcessingType, getPromptNames(req))
+            : messages)
+        : null;
+    if (postProcessMessages) {
         console.info('Applying custom prompt post-processing of type', postProcessingType);
-        body.messages = postProcessPrompt(
-            body.messages,
-            postProcessingType,
-            getPromptNames(req));
     }
     if (body.json_schema?.value) {
         body.json_schema.value = flattenSchema(body.json_schema.value, body.chat_completion_source);
@@ -1181,6 +895,7 @@ router.post('/generate', (req, res) => {
     return runLukerDispatch(req, res, {
         endpoint: 'chat-completions',
         select: (b) => selectChatCompletionDispatch(b),
+        postProcessMessages,
     });
 });
 

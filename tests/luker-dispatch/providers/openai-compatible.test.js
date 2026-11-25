@@ -1195,5 +1195,103 @@ describe('dispatchOpenAICompatible', () => {
             const parsed = JSON.parse(init.body);
             expect(parsed.transforms).toEqual([]);
         });
+
+        test('OPENAI streaming chat sets stream_options.include_usage=true; gpt-6.1-sol maps off->low and rejects Chat tools', async () => {
+            const streamCtx = fakeCtx({
+                body: { model: 'gpt-5.4', stream: true },
+                secretMap: { api_key_openai: 'oa-key' },
+                onFetch: jest.fn(async () => new Response('data: [DONE]\n\n', {
+                    status: 200,
+                    headers: { 'content-type': 'text/event-stream' },
+                })),
+            });
+            await dispatchOpenAICompatible(streamCtx);
+            const streamSent = JSON.parse(streamCtx.fetch.mock.calls[0][1].body);
+            expect(streamSent.stream_options).toEqual({ include_usage: true });
+
+            const solEffortCtx = fakeCtx({
+                body: { model: 'gpt-6.1-sol', reasoning_effort: 'off' },
+                secretMap: { api_key_openai: 'oa-key' },
+            });
+            await dispatchOpenAICompatible(solEffortCtx);
+            const solSent = JSON.parse(solEffortCtx.fetch.mock.calls[0][1].body);
+            expect(solSent.reasoning_effort).toBe('low');
+
+            for (const model of ['gpt-6-astra', 'gpt-6.1-sol']) {
+                const conflictCtx = fakeCtx({
+                    body: {
+                        model,
+                        tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }],
+                    },
+                    secretMap: { api_key_openai: 'oa-key' },
+                });
+                await dispatchOpenAICompatible(conflictCtx);
+                expect(conflictCtx.fetch).not.toHaveBeenCalled();
+                expect(conflictCtx._emitted.find(e => e.kind === 'head')?.data.status).toBe(400);
+                const payload = JSON.parse(new TextDecoder().decode(conflictCtx._emitted.find(e => e.kind === 'chunk').data));
+                expect(payload.error.code).toBe('openai_chat_tools_require_responses');
+                expect(payload.error.non_retryable).toBe(true);
+            }
+        });
+
+        test('strips internal cross-protocol replay metadata fields from outgoing Chat Completions messages', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    model: 'gpt-4o',
+                    messages: [
+                        { role: 'user', content: 'hi' },
+                        {
+                            role: 'assistant',
+                            content: 'hello',
+                            native_parts: [{ text: 'hello' }],
+                            native_content_blocks: [{ type: 'text', text: 'hello' }],
+                            responses_output_items: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'hello' }] }],
+                            reasoning_blocks: [{ type: 'thinking', thinking: 't', signature: 's' }],
+                        },
+                    ],
+                },
+                secretMap: { api_key_openai: 'oa-key' },
+            });
+            await dispatchOpenAICompatible(ctx);
+            const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            const assistant = sent.messages[1];
+            expect(assistant.native_parts).toBeUndefined();
+            expect(assistant.native_content_blocks).toBeUndefined();
+            expect(assistant.responses_output_items).toBeUndefined();
+            expect(assistant.reasoning_blocks).toBeUndefined();
+        });
+
+        test('PERPLEXITY strips foreign replay fields before strict role-alternation merging', async () => {
+            const ctx = fakeCtx({
+                body: {
+                    chat_completion_source: CHAT_COMPLETION_SOURCES.PERPLEXITY,
+                    model: 'sonar',
+                    messages: [
+                        { role: 'user', content: 'start' },
+                        {
+                            role: 'assistant',
+                            content: 'first part',
+                            native_content_blocks: [{ type: 'text', text: 'first part' }],
+                            reasoning_blocks: [{ type: 'thinking', thinking: 't1', signature: 's1' }],
+                        },
+                        {
+                            role: 'assistant',
+                            content: 'second part',
+                            native_parts: [{ text: 'second part' }],
+                            responses_output_items: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'second part' }] }],
+                        },
+                        { role: 'user', content: 'follow up' },
+                    ],
+                },
+                secretMap: { api_key_perplexity: 'pk' },
+            });
+            await dispatchOpenAICompatible(ctx);
+            const sent = JSON.parse(ctx.fetch.mock.calls[0][1].body);
+            expect(sent.messages).toEqual([
+                { role: 'user', content: 'start' },
+                { role: 'assistant', content: 'first part\n\nsecond part' },
+                { role: 'user', content: 'follow up' },
+            ]);
+        });
     });
 });

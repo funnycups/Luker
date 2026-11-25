@@ -4,16 +4,11 @@ import fetch from 'node-fetch';
 import { createProxyBoundFetch, createRequestProxyAgent } from '../request-proxy.js';
 import { readSecret, getRequestedSecretId } from '../endpoints/secrets.js';
 import {
-    createGenerationJob,
-    appendGenerationEvent,
-    getJobFromRequest,
-} from '../endpoints/backends/luker-generation.js';
-import {
     startInspection,
     attachInspectionEndpoint,
     completeInspection,
-    completeInspectionFromStream,
     failInspection,
+    findEntry,
     startImageInspection,
     completeImageInspection,
     failImageInspection,
@@ -88,8 +83,19 @@ function pickWhitelistedHeaders(headers) {
     return out;
 }
 
-export function createDispatchContext({ request, task, abortController, onEmit, onCloseHandlers }) {
+export function createDispatchContext({ request, abortController, onEmit, onCloseHandlers, onStreamMode }) {
     let terminal = false;
+
+    function setStreamMode(isStream) {
+        const normalized = Boolean(isStream);
+        if (typeof onStreamMode === 'function') {
+            try { onStreamMode(normalized); } catch (error) { console.warn('[Dispatch] onStreamMode threw', error); }
+        }
+        const entry = findEntry(request);
+        if (entry && entry.type === 'chat') {
+            entry.stream = normalized;
+        }
+    }
 
     function safeEmit(event) {
         if (terminal) return;
@@ -97,7 +103,8 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
             terminal = true;
         }
         try { onEmit(event); } catch (error) { console.warn('[Dispatch] onEmit threw', error); }
-    }    return {
+    }
+    return {
         body: request.body,
         user: {
             handle: request.user?.profile?.handle,
@@ -113,6 +120,7 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
         abort() {
             try { abortController.abort(); } catch { /* ignore */ }
         },
+        setStreamMode,
         fetch: createProxyBoundFetch(fetch, createRequestProxyAgent(request.body?.network_proxy)),
 
         // Register a callback that fires when the underlying HTTP request
@@ -165,27 +173,15 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
             },
         },
 
-        generation: {
-            startJob({ persist_target } = {}) {
-                const job = createGenerationJob(request, {
-                    job_id: task.id,
-                    persist_target: persist_target || null,
-                });
-                return job;
-            },
-            appendEvent(job, rawData) {
-                appendGenerationEvent(job, rawData);
-            },
-            hasActiveKeepAliveJob() {
-                return Boolean(getJobFromRequest(request));
-            },
-        },
-
         inspection: {
             start() { startInspection(request); },
-            attach(url, apiKey, wirePayload) { attachInspectionEndpoint(request, url, apiKey, wirePayload); },
+            attach(url, apiKey, wirePayload) {
+                attachInspectionEndpoint(request, url, apiKey, wirePayload);
+                if (wirePayload && typeof wirePayload === 'object' && typeof wirePayload.stream === 'boolean') {
+                    setStreamMode(wirePayload.stream);
+                }
+            },
             complete(payload, rawApiResponse) { completeInspection(request, payload, rawApiResponse); },
-            completeFromStream(events, accumulatedText) { completeInspectionFromStream(request, events, accumulatedText); },
             fail(err, httpStatus) {
                 const msg = err && err.message ? err.message : String(err || '');
                 failInspection(request, msg, httpStatus);
@@ -251,24 +247,12 @@ export function createDispatchContext({ request, task, abortController, onEmit, 
                 }
                 safeEmit({ kind: 'error', data: { message: full } });
             },
-            // Runner-only escape hatch: append a chunk AFTER the dispatch has
-            // already emitted a terminal `end`/`error`. Legacy behavior
-            // appended a `data: {"luker":{...}}\n\n` trailer frame to the tail
-            // of every streaming chat/text response so the frontend
-            // (openai.js:4316 / kai-settings.js / nai-settings.js /
-            // textgen-settings.js / script.js) could learn the server-side
-            // `generation_id` + `persisted` flag from the stream itself.
-            //
-            // Refactor's `safeEmit` locks the terminal state on the first
-            // `end`/`error` and drops every subsequent emit — including the
-            // runner's trailer. This bypass exists so the runner can still
-            // append the trailer without introducing an ordering coupling
-            // (dispatch must emit chunks first, then runner appends trailer,
-            // then real terminal fires). Bypass is NOT exposed to dispatches
-            // and does NOT reopen the terminal flag: the next `emit.end` /
-            // `emit.error` after a trailer is still a no-op.
-            trailer(bytes) {
-                try { onEmit({ kind: 'chunk', data: bytes }); } catch (error) { console.warn('[Dispatch] onEmit threw (trailer)', error); }
+            // Emit out-of-band Luker metadata (generation_id, persisted, status,
+            // plain-text function-call results) over the dedicated WS `meta`
+            // channel instead of injecting synthetic frames into response.body.
+            meta(metaObj) {
+                if (!metaObj || typeof metaObj !== 'object') return;
+                try { onEmit({ kind: 'meta', data: metaObj }); } catch (error) { console.warn('[Dispatch] onEmit threw (meta)', error); }
             },
         },
     };

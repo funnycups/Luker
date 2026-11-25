@@ -3,21 +3,28 @@ import { dispatchLog as console } from '../../logging.js';
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 //
 // OpenAI Responses API chat-completion dispatch. Speaks the /v1/responses
-// wire format: ST's chat-completions generate_data is mapped onto a
-// Responses request body (instructions/input/tools/reasoning), the upstream
-// response is passed through verbatim — streaming SSE frames are semantic
-// Responses events that the browser adapts into chat chunks (see
-// public/scripts/openai-responses.js).
+// wire format: chat-completions generate_data is mapped onto a Responses
+// request body (instructions/input/tools/reasoning), and the upstream response
+// is relayed verbatim for client and inspector parsing through the shared
+// protocol parser.
 //
 // Consumes a DispatchContext (see src/luker-dispatch/context.js) and emits
 // head/chunk/end/error events; never touches Express.
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
+import { excludeKeysByYaml } from '../../../util.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
-import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
 import { applyAdditionalParameters } from './custom-params.js';
 import { resolveOpenAIEffort } from './reasoning-params.js';
+import {
+    handleProviderDispatchError,
+    relayUpstreamResponse,
+} from './upstream-relay.js';
+import {
+    openAIResponsesSupportsSampling,
+    resolveOpenAIModelCapabilities,
+} from '../../../../public/scripts/lib/provider-capabilities.js';
 
 const DEFAULT_RESPONSES_BASE_URL = 'https://api.openai.com/v1';
 
@@ -66,14 +73,52 @@ function convertMessageContent(content) {
 }
 
 /**
+ * Attach `reasoning.encrypted_content` to `requestBody.include` whenever
+ * reasoning is active and stateless (`store === false`). Runs after additional
+ * parameter overrides in `dispatchOpenAIResponses` so `store: true` or
+ * `reasoning.effort: 'none'` overrides suppress encrypted reasoning inclusion,
+ * and user-provided `include` entries are preserved.
+ * @param {Record<string, any>} requestBody
+ * @param {object} body
+ */
+function applyResponsesEncryptedReasoningInclude(requestBody, body) {
+    if (requestBody.store !== false) {
+        return;
+    }
+    const model = requestBody.model ?? body?.model;
+    const caps = resolveOpenAIModelCapabilities(model);
+    if (caps.isKnownNonReasoningModel) {
+        return;
+    }
+    const effort = requestBody.reasoning && typeof requestBody.reasoning === 'object'
+        ? requestBody.reasoning.effort
+        : resolveOpenAIEffort(body?.reasoning_effort, model, { responsesApi: true });
+    if (effort === 'none') {
+        return;
+    }
+    const reasoningActive = Boolean(requestBody.reasoning) || caps.supportsReasoningEffort;
+    if (!reasoningActive) {
+        return;
+    }
+    if (Array.isArray(requestBody.include)) {
+        if (!requestBody.include.includes('reasoning.encrypted_content')) {
+            requestBody.include.push('reasoning.encrypted_content');
+        }
+    } else if (requestBody.include === undefined) {
+        requestBody.include = ['reasoning.encrypted_content'];
+    }
+}
+
+/**
  * Build a Responses API request body from ST chat-completions generate_data.
  * Chat parameters with no Responses equivalent (stop / logit_bias / n /
  * penalties / seed) are intentionally dropped; they can be injected via the
  * CUSTOM-shared custom_include_body YAML blob.
  * @param {object} body generate_data
+ * @param {{ applyEncryptedInclude?: boolean }} [options]
  * @returns {object} Responses create-request body
  */
-export function buildResponsesRequestBody(body) {
+export function buildResponsesRequestBody(body, { applyEncryptedInclude = true } = {}) {
     const messages = Array.isArray(body.messages) ? body.messages : [];
     /** @type {string[]} */
     const instructionsParts = [];
@@ -92,6 +137,17 @@ export function buildResponsesRequestBody(body) {
                 call_id: String(message.tool_call_id || ''),
                 output: stringifyMessageContent(message.content),
             });
+            continue;
+        }
+        if (role === 'assistant' && Array.isArray(message.responses_output_items) && message.responses_output_items.length > 0) {
+            // Replay exact finalized Responses output items verbatim in original order
+            // (preserving reasoning id/summary/encrypted_content, message id/metadata,
+            // and function_call items for stateless store:false continuation).
+            for (const item of message.responses_output_items) {
+                if (item && typeof item === 'object') {
+                    input.push(structuredClone(item));
+                }
+            }
             continue;
         }
         if (role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
@@ -129,16 +185,36 @@ export function buildResponsesRequestBody(body) {
         requestBody.max_output_tokens = maxTokens;
     }
 
-    const temperature = Number(body.temperature);
-    if (Number.isFinite(temperature)) requestBody.temperature = temperature;
-    const topP = Number(body.top_p);
-    if (Number.isFinite(topP)) requestBody.top_p = topP;
-
+    const caps = resolveOpenAIModelCapabilities(body.model);
     const responsesEffort = resolveOpenAIEffort(body.reasoning_effort, body.model, { responsesApi: true });
-    if (responsesEffort || body.include_reasoning) {
+    if (!caps.isKnownNonReasoningModel && (responsesEffort || body.include_reasoning)) {
         requestBody.reasoning = {};
         if (responsesEffort) requestBody.reasoning.effort = responsesEffort;
         if (body.include_reasoning && responsesEffort !== 'none') requestBody.reasoning.summary = 'auto';
+    }
+
+    if (openAIResponsesSupportsSampling(body.model, responsesEffort)) {
+        const temperature = Number(body.temperature);
+        if (Number.isFinite(temperature)) requestBody.temperature = temperature;
+        const topP = Number(body.top_p);
+        if (Number.isFinite(topP)) requestBody.top_p = topP;
+    }
+
+    if (body.json_schema) {
+        requestBody.text = {
+            format: {
+                type: 'json_schema',
+                name: body.json_schema.name || 'response',
+                ...(body.json_schema.description ? { description: body.json_schema.description } : {}),
+                schema: body.json_schema.value,
+                strict: body.json_schema.strict ?? true,
+            },
+        };
+    }
+
+    if (body.verbosity && caps.supportsVerbosity) {
+        requestBody.text ??= {};
+        requestBody.text.verbosity = body.verbosity;
     }
 
     /** @type {object[]} */
@@ -146,12 +222,16 @@ export function buildResponsesRequestBody(body) {
     if (Array.isArray(body.tools)) {
         for (const tool of body.tools) {
             if (tool?.type === 'function' && tool.function?.name) {
-                tools.push({
+                const fnTool = {
                     type: 'function',
                     name: tool.function.name,
                     description: tool.function.description,
                     parameters: tool.function.parameters,
-                });
+                };
+                if (typeof tool.function.strict === 'boolean') {
+                    fnTool.strict = tool.function.strict;
+                }
+                tools.push(fnTool);
             }
         }
     }
@@ -166,6 +246,10 @@ export function buildResponsesRequestBody(body) {
         } else {
             requestBody.tool_choice = body.tool_choice;
         }
+    }
+
+    if (applyEncryptedInclude) {
+        applyResponsesEncryptedReasoningInclude(requestBody, body);
     }
 
     return requestBody;
@@ -196,8 +280,10 @@ export async function dispatchOpenAIResponses(ctx) {
 
         /** @type {any} */
         const headers = {};
-        const requestBody = buildResponsesRequestBody(body);
+        const requestBody = buildResponsesRequestBody(body, { applyEncryptedInclude: false });
         applyAdditionalParameters(requestBody, headers, body);
+        applyResponsesEncryptedReasoningInclude(requestBody, body);
+        excludeKeysByYaml(requestBody, body?.custom_exclude_body);
 
         const endpointUrl = `${apiUrl}/responses`;
         const requestHeaders = {
@@ -216,37 +302,12 @@ export async function dispatchOpenAIResponses(ctx) {
             signal: ctx.signal,
         });
 
-        // Architectural contract: exactly one head frame right after the
-        // upstream fetch resolves (see openai-compatible.js for rationale).
-        ctx.emit.head({ status: resp.status, headers: resp.headers });
-
-        if (!resp.ok) {
-            let errText = '';
-            try { errText = await resp.text(); } catch { /* body already consumed */ }
-            console.error('Responses request error: ', errText);
-            const err = new Error(`Responses upstream ${resp.status}: ${errText}`);
-            ctx.inspection.fail(err, resp?.status ?? 502);
-            if (errText) {
-                ctx.emit.chunk(new TextEncoder().encode(errText));
-            }
-            ctx.emit.end();
-            return;
-        }
-
-        if (body.stream) {
-            await pipeResponseBodyToEmit(resp, ctx);
-        } else {
-            const buf = await resp.arrayBuffer();
-            try {
-                const json = JSON.parse(new TextDecoder().decode(buf));
-                console.debug('Responses result:', json?.status);
-            } catch { /* non-JSON body — skip debug log */ }
-            ctx.emit.chunk(new Uint8Array(buf));
-            ctx.emit.end();
-        }
+        await relayUpstreamResponse(ctx, resp, {
+            label: 'Responses',
+            stream: Boolean(requestBody.stream),
+            logResponse: (json) => console.debug('Responses result:', json?.status),
+        });
     } catch (err) {
-        try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
-        console.error('Generation failed', err);
-        ctx.emit.error(err);
+        handleProviderDispatchError(ctx, err, 'Responses');
     }
 }

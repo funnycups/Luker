@@ -6,7 +6,14 @@ import { randomUUID } from 'node:crypto';
 import { getConfigValue } from './util.js';
 import { ByteBudgetLedger } from './util/byte-budget.js';
 import { getGlobalProxyInfo } from './request-proxy.js';
-import { joinReasoningDetailsText, mergeReasoningDetails } from '../public/scripts/util/reasoning-details.js';
+import {
+    ProtocolParseError,
+    createProtocolStreamParser,
+    extractProviderErrorMessage,
+    parseProtocolResponse,
+    resolveWireProtocol,
+    toInspectorUsage,
+} from '../public/scripts/lib/protocol-parser/index.js';
 import { getRequestTransientSession } from './transient-sessions.js';
 
 const RING_BUFFER_SIZE = 200;
@@ -107,8 +114,7 @@ function pushEntry(handle, entry) {
     buf.push(entry);
     inspectorLedger.track(entry);
     if (buf.length > RING_BUFFER_SIZE) {
-        inspectorLedger.untrack(buf[0]);
-        buf.shift();
+        removeEntry(handle, buf[0]);
     }
     enforceByteBudget();
 }
@@ -411,6 +417,34 @@ export function startInspection(request) {
         status: 'running',
         httpStatus: null,
         error: '',
+        parseError: null,
+        rawDiagnostic: null,
+        plainTextFunctionCall: request?.__lukerPlainTextMeta
+            ? {
+                enabled: true,
+                mode: String(request.__lukerPlainTextMeta.mode || 'prompt_xml'),
+                triggerSignal: String(request.__lukerPlainTextMeta.triggerSignal || ''),
+                tools: Array.isArray(request.__lukerPlainTextMeta.tools) ? request.__lukerPlainTextMeta.tools : [],
+                toolChoice: request.__lukerPlainTextMeta.toolChoice ?? 'auto',
+                status: 'pending',
+                failureReason: null,
+                error: '',
+                calls: [],
+                displayText: '',
+                rawResponseText: '',
+                callRegionRaw: '',
+                callSpan: null,
+                attempt: Number.isInteger(request.__lukerPlainTextMeta.attempt) ? request.__lukerPlainTextMeta.attempt : 1,
+                maxAttempts: Number.isInteger(request.__lukerPlainTextMeta.maxAttempts) ? request.__lukerPlainTextMeta.maxAttempts : 1,
+                retryOf: request.__lukerPlainTextMeta.retryOf || null,
+                originalError: String(request.__lukerPlainTextMeta.originalError || ''),
+                finalStatus: null,
+            }
+            : null,
+        retryOf: request?.__inspectorRetryOf || null,
+        attempt: Number.isInteger(request?.__inspectorAttempt) ? request.__inspectorAttempt : 1,
+        retryEntryIds: [],
+        originalError: String(request?.__inspectorOriginalError || ''),
         // Normalized OpenAI-shape stop reason (stop/length/tool_calls/content_filter/…).
         // For native providers we translate their vocabulary into OAI's on capture so
         // list-scan filters and cross-provider stats stay comparable. `null` = never
@@ -474,6 +508,13 @@ function markEntryAborted(entry, reason) {
     entry.status = 'aborted';
     entry.durationMs = Date.now() - entry.timestamp;
     entry.error = String(reason || '');
+    if (entry.plainTextFunctionCall?.enabled
+        && (entry.plainTextFunctionCall.status === 'pending' || entry.plainTextFunctionCall.status === 'parsing')) {
+        entry.plainTextFunctionCall.status = 'aborted';
+        entry.plainTextFunctionCall.failureReason = 'aborted';
+        entry.plainTextFunctionCall.error = entry.error;
+        entry.plainTextFunctionCall.finalStatus = 'aborted';
+    }
     return true;
 }
 
@@ -543,13 +584,13 @@ export function getAbortKind(entry) {
     return '';
 }
 
-// ---- Usage extraction helpers ----
+// ---- Shared protocol parser integration ----
 
 /**
  * SSE events come in two shapes depending on the caller:
  *   - inspector stream tap pushes plain strings (the SSE data line)
  *   - luker-generation jobs push { seq, data, ts } objects
- * Normalize to the string data line.
+ * Normalize to the string data line while preserving payload whitespace.
  */
 function normalizeEvent(e) {
     let raw = '';
@@ -557,912 +598,53 @@ function normalizeEvent(e) {
     else if (e && typeof e.data === 'string') raw = e.data;
     if (!raw) return '';
     if (raw.startsWith('data:')) {
-        raw = raw.slice(5).replace(/^\s+/, '');
+        raw = raw.startsWith('data: ') ? raw.slice(6) : raw.slice(5);
     }
     return raw;
 }
 
-// ---- Provider-error detection ----
-//
-// Some upstream providers return HTTP 200 with a body that carries an `error`
-// field instead of the usual choices/candidates payload — OpenAI-compatible
-// APIs sometimes surface rate-limit or context-length failures this way, and
-// SSE streams can inject `data: {"error":{...}}` frames mid-stream. Luker's
-// makersuite dispatch also constructs `{error:{message}}` payloads on its own
-// for Gemini's blocked-prompt / blocked-output branches so the client's
-// `data.error` handler fires with a descriptive message.
-//
-// These paths hit `completeInspection*` (dispatch signals "the fetch itself
-// succeeded, hand the payload to the inspector"), so without an `error`
-// field check they'd be marked status='success' with an empty response body
-// — a silent classification bug. The three helpers below are pure structural
-// checks: `error != null` and nothing else, no heuristics.
-
-/**
- * True when a non-streaming payload carries a top-level `error` field. Handles
- * both `error: 'string'` and `error: { message | code | type | ... }` shapes.
- * @param {*} payload
- * @returns {boolean}
- */
-function hasProviderError(payload) {
-    return payload != null
- && typeof payload === 'object'
- && payload.error != null;
+function applyParsedTurnToEntry(entry, turn) {
+    Object.assign(entry.usage, toInspectorUsage(turn.usage));
+    entry.responseText = turn.text;
+    entry.responseParts = turn.parts;
+    entry.finishReason = turn.finishReason;
+    entry.nativeFinishReason = turn.nativeFinishReason;
 }
 
-/**
- * Scan SSE events (tail-first, since the terminal frame is where providers
- * inject an `error` payload) and return the first frame's parsed `error`
- * value if any. Returns `null` when no error frame is present.
- * @param {Array<string|{data:string}>} events
- * @returns {*|null}
- */
-function findErrorFrameInStreamEvents(events) {
-    if (!Array.isArray(events) || events.length === 0) return null;
-    for (let i = events.length - 1; i >= 0; i--) {
-        const raw = normalizeEvent(events[i]);
-        if (!raw || raw === '[DONE]') continue;
-        let parsed;
-        try { parsed = JSON.parse(raw); } catch { continue; }
-        if (parsed?.luker) continue;
-        if (parsed?.error != null) return parsed.error;
-    }
-    return null;
-}
-
-/**
- * Coerce a provider-error value into a display string. Prefers `.message`,
- * falls back to `.code` / `.type`, then to `String(...)` for plain strings,
- * finally `JSON.stringify(...)` for opaque objects. Never returns empty
- * (falls back to `'error'` when the input is `{}`).
- * @param {*} err
- * @returns {string}
- */
-function extractProviderErrorMessage(err) {
-    if (err == null) return 'error';
-    if (typeof err === 'string') return err;
-    if (typeof err !== 'object') return String(err);
-    if (typeof err.message === 'string' && err.message) return err.message;
-    if (typeof err.code === 'string' && err.code) return err.code;
-    if (typeof err.type === 'string' && err.type) return err.type;
-    try {
-        const s = JSON.stringify(err);
-        return s && s !== '{}' ? s : 'error';
-    } catch {
-        return 'error';
+function applyParseFailureToEntry(entry, err, rawDiagnostic) {
+    entry.status = 'error';
+    entry.error = err.message;
+    entry.parseError = err instanceof ProtocolParseError
+        ? err.toDiagnostic()
+        : { protocol: String(entry.source || 'unknown'), stage: 'payload', location: 'root', message: String(err?.message || err) };
+    entry.rawDiagnostic = rawDiagnostic;
+    entry.responseText = '';
+    entry.responseParts = [];
+    entry.finishReason = null;
+    entry.nativeFinishReason = null;
+    if (entry.plainTextFunctionCall?.enabled
+        && (entry.plainTextFunctionCall.status === 'pending' || entry.plainTextFunctionCall.status === 'parsing')) {
+        entry.plainTextFunctionCall.status = 'parse_failed';
+        entry.plainTextFunctionCall.failureReason = 'syntax';
+        entry.plainTextFunctionCall.error = entry.error;
+        entry.plainTextFunctionCall.finalStatus = 'parse_failed';
     }
 }
 
-function extractUsageFromOAI(payload) {
-    const usage = payload?.usage;
-    if (!usage || typeof usage !== 'object') return {};
-    const inputDetails = usage.prompt_tokens_details
-        ?? usage.prompt_token_details
-        ?? usage.input_tokens_details
-        ?? usage.input_token_details;
-    return {
-        prompt_tokens: usage.prompt_tokens ?? null,
-        completion_tokens: usage.completion_tokens ?? null,
-        total_tokens: usage.total_tokens ?? null,
-        cache_read: inputDetails?.cached_tokens
-            ?? inputDetails?.cache_read_input_tokens
-            ?? usage.cache_read_input_tokens
-            ?? usage.prompt_cache_hit_tokens
-            ?? usage.cached_tokens
-            ?? usage.cachedContentTokenCount
-            ?? payload?.usageMetadata?.cachedContentTokenCount
-            ?? null,
-        cache_write: inputDetails?.cache_creation_tokens
-            ?? inputDetails?.cache_creation_input_tokens
-            ?? usage.cache_creation_input_tokens
-            ?? usage.prompt_cache_miss_tokens
-            ?? usage.cache_write
-            ?? null,
-    };
-}
-
-function extractUsageFromClaude(payload) {
-    const usage = payload?.usage;
-    if (!usage || typeof usage !== 'object') return {};
-    return {
-        prompt_tokens: usage.input_tokens ?? null,
-        completion_tokens: usage.output_tokens ?? null,
-        total_tokens: (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) || null,
-        cache_read: usage.cache_read_input_tokens ?? null,
-        cache_write: usage.cache_creation_input_tokens ?? null,
-    };
-}
-
-function extractUsageFromGemini(payload) {
-    const meta = payload?.usageMetadata;
-    if (!meta || typeof meta !== 'object') return {};
-    return {
-        prompt_tokens: meta.promptTokenCount ?? null,
-        completion_tokens: meta.candidatesTokenCount ?? null,
-        total_tokens: meta.totalTokenCount ?? null,
-        cache_read: meta.cachedContentTokenCount ?? null,
-        cache_write: null,
-    };
-}
-
-function extractUsageFromResponses(payload) {
-    const usage = payload?.usage;
-    if (!usage || typeof usage !== 'object') return {};
-    const promptTokens = usage.input_tokens ?? usage.prompt_tokens ?? null;
-    const completionTokens = usage.output_tokens ?? usage.completion_tokens ?? null;
-    let totalTokens = usage.total_tokens ?? null;
-    if (totalTokens == null && (promptTokens != null || completionTokens != null)) {
-        totalTokens = (promptTokens ?? 0) + (completionTokens ?? 0);
-    }
-    const inputDetails = usage.input_tokens_details
-        ?? usage.input_token_details
-        ?? usage.prompt_tokens_details
-        ?? usage.prompt_token_details;
-    const cacheRead = inputDetails?.cached_tokens
-        ?? inputDetails?.cache_read_input_tokens
-        ?? inputDetails?.cache_read_tokens
-        ?? usage.cache_read_input_tokens
-        ?? usage.cache_read_tokens
-        ?? usage.prompt_cache_hit_tokens
-        ?? usage.cached_tokens
-        ?? usage.cachedContentTokenCount
-        ?? payload?.usageMetadata?.cachedContentTokenCount
-        ?? null;
-    const cacheWrite = inputDetails?.cache_creation_tokens
-        ?? inputDetails?.cache_creation_input_tokens
-        ?? inputDetails?.cache_write_tokens
-        ?? usage.cache_creation_input_tokens
-        ?? usage.cache_creation_tokens
-        ?? usage.cache_write_input_tokens
-        ?? usage.cache_write_tokens
-        ?? usage.cache_write
-        ?? usage.prompt_cache_miss_tokens
-        ?? null;
-    return {
-        prompt_tokens: promptTokens,
-        completion_tokens: completionTokens,
-        total_tokens: totalTokens,
-        cache_read: cacheRead,
-        cache_write: cacheWrite,
-    };
-}
-
-// ---- Finish-reason extraction helpers ----
-
-// Claude stop_reason → OAI finish_reason. Kept in sync with the mapping used
-// on the response-normalization path (src/endpoints/backends/chat-completions.js
-// CLAUDE_STOP_REASON_TO_OAI) so inspector-normalized values match what the
-// client saw in `choices[0].finish_reason`. `pause_turn` and `refusal` have
-// no OAI vocabulary equivalent; leave them null on the normalized field and
-// rely on `nativeFinishReason` to carry the truth.
-const CLAUDE_STOP_TO_OAI = {
-    end_turn: 'stop',
-    stop_sequence: 'stop',
-    max_tokens: 'length',
-    tool_use: 'tool_calls',
-};
-
-// Gemini candidates[0].finishReason → OAI. Mirrors
-// GEMINI_FINISH_REASON_TO_OAI in the response normalizer. `OTHER`,
-// `MALFORMED_FUNCTION_CALL`, and `IMAGE_*` variants deliberately fall
-// through to null so the raw value is the sole source of truth for those.
-const GEMINI_FINISH_TO_OAI = {
-    STOP: 'stop',
-    MAX_TOKENS: 'length',
-    SAFETY: 'content_filter',
-    RECITATION: 'content_filter',
-    BLOCKLIST: 'content_filter',
-    PROHIBITED_CONTENT: 'content_filter',
-    SPII: 'content_filter',
-    LANGUAGE: 'content_filter',
-};
-
-// Cohere finish_reason → OAI. Mirrors COHERE_FINISH_REASON_TO_OAI.
-const COHERE_FINISH_TO_OAI = {
-    COMPLETE: 'stop',
-    STOP_SEQUENCE: 'stop',
-    MAX_TOKENS: 'length',
-    TOOL_CALL: 'tool_calls',
-    ERROR: null,
-};
-
-/**
- * Pull finish/stop reason from a non-streaming response.
- * Returns `{ finishReason, nativeFinishReason }` — either or both may be null
- * when the provider didn't send one (rare) or the payload shape doesn't
- * match the source. `nativeFinishReason` is preserved verbatim (Gemini's
- * SAFETY casing matters; OpenRouter passes through arbitrary upstream tags).
- *
- * @param {object} payload OAI-normalized reply
- * @param {object} [rawApiResponse] provider-native body (Claude/Gemini/Cohere)
- * @param {string} source backend id from body.chat_completion_source
- * @returns {{finishReason: string|null, nativeFinishReason: string|null}}
- */
-function extractFinishReasonFromPayload(payload, rawApiResponse, source) {
-    let nativeFinishReason = null;
-    let finishReason = null;
-
-    if (source === 'claude' && rawApiResponse?.stop_reason) {
-        nativeFinishReason = String(rawApiResponse.stop_reason);
-        finishReason = CLAUDE_STOP_TO_OAI[nativeFinishReason] ?? null;
-    } else if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse?.candidates)) {
-        const raw = rawApiResponse.candidates[0]?.finishReason;
-        if (raw) {
-            nativeFinishReason = String(raw);
-            finishReason = GEMINI_FINISH_TO_OAI[nativeFinishReason] ?? null;
-        }
-    } else if (source === 'cohere' && rawApiResponse?.finish_reason) {
-        nativeFinishReason = String(rawApiResponse.finish_reason);
-        finishReason = COHERE_FINISH_TO_OAI[nativeFinishReason] ?? null;
-    }
-
-    const respObj = (source === 'openai_responses' && rawApiResponse) ? rawApiResponse : payload;
-    if (source === 'openai_responses' || Array.isArray(respObj?.output)) {
-        const hasToolCall = Array.isArray(respObj?.output) && respObj.output.some(item => item?.type === 'function_call');
-        const status = respObj?.status ? String(respObj.status) : null;
-        const incompleteReason = respObj?.incomplete_details?.reason ? String(respObj.incomplete_details.reason) : null;
-        nativeFinishReason = status;
-        finishReason = hasToolCall
-            ? 'tool_calls'
-            : (status === 'completed'
-                ? 'stop'
-                : (status === 'incomplete'
-                    ? (incompleteReason === 'content_filter' ? 'content_filter' : 'length')
-                    : (status ?? null)));
-    }
-
-    // Fall back / augment from the OAI-shaped choices array. This is the
-    // primary path for OpenAI, DeepSeek, Mistral, xAI, AIMLAPI, OpenRouter,
-    // Azure, MiniMax, Chutes, ElectronHub, AI21, and any other OAI-compatible
-    // upstream that goes through the runner catch-all. OpenRouter also
-    // surfaces `native_finish_reason` on the choice — that's the upstream
-    // provider's original string (e.g. Groq's `length`, Together's `eos`),
-    // which is exactly what "native" means here even though the runner didn't
-    // see a separate raw body.
-    const choice = payload?.choices?.[0];
-    if (choice) {
-        if (!finishReason && choice.finish_reason) {
-            finishReason = String(choice.finish_reason);
-        }
-        if (!nativeFinishReason && choice.native_finish_reason) {
-            nativeFinishReason = String(choice.native_finish_reason);
-        } else if (!nativeFinishReason && choice.finish_reason) {
-            // For plain-OAI providers, native == normalized. Copy so the UI
-            // always has something to show when a reason exists at all.
-            nativeFinishReason = String(choice.finish_reason);
-        }
-    }
-
-    return { finishReason, nativeFinishReason };
-}
-
-/**
- * Pull finish reason from SSE events. Walks in reverse — the finish-carrying
- * frame is always at the tail of a well-formed stream (Claude message_delta,
- * Gemini final candidates chunk, OAI final delta with finish_reason set).
- *
- * @param {Array<string|{data:string}>} events
- * @param {string} source
- * @returns {{finishReason: string|null, nativeFinishReason: string|null}}
- */
-export function extractFinishReasonFromStreamEvents(events, source) {
-    if (!Array.isArray(events) || events.length === 0) {
-        return { finishReason: null, nativeFinishReason: null };
-    }
-
-    for (let i = events.length - 1; i >= 0; i--) {
-        const raw = normalizeEvent(events[i]);
-        if (!raw || raw === '[DONE]') continue;
-
-        let parsed;
-        try { parsed = JSON.parse(raw); } catch { continue; }
-        if (parsed?.luker) continue;
-
-        if (source === 'claude') {
-            // Anthropic streaming emits message_delta with the terminal
-            // stop_reason once the model releases the turn. Nothing else on
-            // the stream carries it.
-            if (parsed?.type === 'message_delta' && parsed?.delta?.stop_reason) {
-                const native = String(parsed.delta.stop_reason);
-                return { finishReason: CLAUDE_STOP_TO_OAI[native] ?? null, nativeFinishReason: native };
-            }
-            continue;
-        }
-
-        if (source === 'makersuite' || source === 'vertexai') {
-            const raw2 = parsed?.candidates?.[0]?.finishReason;
-            if (raw2) {
-                const native = String(raw2);
-                return { finishReason: GEMINI_FINISH_TO_OAI[native] ?? null, nativeFinishReason: native };
-            }
-            continue;
-        }
-
-        if (source === 'openai_responses' || parsed?.type === 'response.completed' || parsed?.type === 'response.incomplete') {
-            const resp = parsed?.response || parsed;
-            const status = resp?.status ? String(resp.status) : (parsed?.type === 'response.completed' ? 'completed' : 'incomplete');
-            const hasToolCalls = events.some(ev => {
-                const evRaw = normalizeEvent(ev);
-                if (!evRaw || evRaw === '[DONE]') return false;
-                let evParsed;
-                try { evParsed = JSON.parse(evRaw); } catch { return false; }
-                if (evParsed?.type === 'response.output_item.added') {
-                    return evParsed?.item?.type === 'function_call';
-                }
-                return evParsed?.type === 'response.function_call_arguments.delta';
-            });
-            const incompleteReason = resp?.incomplete_details?.reason ? String(resp.incomplete_details.reason) : null;
-            const norm = hasToolCalls
-                ? 'tool_calls'
-                : (status === 'completed'
-                    ? 'stop'
-                    : (status === 'incomplete'
-                        ? (incompleteReason === 'content_filter' ? 'content_filter' : 'length')
-                        : status));
-            return { finishReason: norm, nativeFinishReason: status };
-        }
-
-        // OpenAI / OpenAI-compatible. finish_reason on the choice (either
-        // in delta or on the choice itself for providers that fold it in).
-        // Also pick up OpenRouter's `native_finish_reason` when present.
-        const choice = parsed?.choices?.[0];
-        if (!choice) continue;
-        const norm = choice.finish_reason ?? choice.delta?.finish_reason;
-        const nat = choice.native_finish_reason ?? choice.delta?.native_finish_reason;
-        if (norm || nat) {
-            return {
-                finishReason: norm ? String(norm) : null,
-                nativeFinishReason: nat ? String(nat) : (norm ? String(norm) : null),
-            };
-        }
-    }
-
-    return { finishReason: null, nativeFinishReason: null };
-}
-
-/**
- * Extract usage from SSE stream events.
- * @param {string[]} events
- * @param {string} source
- * @returns {object}
- */
-export function extractUsageFromStreamEvents(events, source) {
-    if (!Array.isArray(events) || events.length === 0) return {};
-
-    for (let i = events.length - 1; i >= 0; i--) {
-        const raw = normalizeEvent(events[i]);
-        if (!raw || raw === '[DONE]') continue;
-
-        let parsed;
-        try {
-            parsed = JSON.parse(raw);
-        } catch {
-            continue;
-        }
-
-        if (parsed?.luker) continue;
-
-        if (source === 'claude') {
-            if (parsed?.type === 'message_delta' && parsed?.usage) {
-                return extractUsageFromClaude({ usage: parsed.usage });
-            }
-            if (parsed?.type === 'message_start' && parsed?.message?.usage) {
-                return extractUsageFromClaude({ usage: parsed.message.usage });
-            }
-        }
-
-        if (source === 'makersuite' || source === 'vertexai') {
-            if (parsed?.usageMetadata) {
-                return extractUsageFromGemini(parsed);
-            }
-        }
-
-        if (source === 'openai_responses' || parsed?.type === 'response.completed' || parsed?.type === 'response.incomplete') {
-            const usageObj = parsed?.response?.usage || parsed?.usage;
-            if (usageObj) {
-                return extractUsageFromResponses({ usage: usageObj });
-            }
-        }
-
-        if (parsed?.usage) {
-            const oai = extractUsageFromOAI(parsed);
-            if (oai.prompt_tokens != null) return oai;
-            const respUsage = extractUsageFromResponses(parsed);
-            if (respUsage.prompt_tokens != null) return respUsage;
-        }
-    }
-
-    return {};
-}
-
-/**
- * Extract response text from SSE stream events as a fallback when the caller
- * didn't accumulate text itself.
- * @param {string[]} events
- * @param {string} source
- * @returns {string}
- */
-function extractTextFromStreamEvents(events, source) {
-    if (!Array.isArray(events) || events.length === 0) return '';
-    const out = [];
-    for (const ev of events) {
-        const raw = normalizeEvent(ev);
-        if (!raw || raw === '[DONE]') continue;
-        let parsed;
-        try { parsed = JSON.parse(raw); } catch { continue; }
-        if (parsed?.luker) continue;
-
-        if (source === 'claude') {
-            if (parsed?.type === 'content_block_delta' && parsed?.delta?.type === 'text_delta') {
-                out.push(parsed.delta.text || '');
-            }
-            continue;
-        }
-        if (source === 'makersuite' || source === 'vertexai') {
-            const parts = parsed?.candidates?.[0]?.content?.parts;
-            if (Array.isArray(parts)) {
-                for (const p of parts) if (typeof p?.text === 'string') out.push(p.text);
-            }
-            continue;
-        }
-        if (source === 'openai_responses' || parsed?.type?.startsWith?.('response.')) {
-            if (parsed?.type === 'response.output_text.delta' && typeof parsed.delta === 'string') {
-                out.push(parsed.delta);
-            }
-            continue;
-        }
-        // OpenAI / generic
-        const delta = parsed?.choices?.[0]?.delta?.content
- ?? parsed?.choices?.[0]?.text
- ?? parsed?.choices?.[0]?.message?.content;
-        if (typeof delta === 'string') out.push(delta);
-        else if (Array.isArray(delta)) {
-            for (const p of delta) if (p?.type === 'text' && typeof p.text === 'string') out.push(p.text);
-        }
-    }
-    return out.join('');
-}
-
-/**
- * Extract ordered response parts from SSE stream events.
- * Each part is either {type:'text', text} or
- * {type:'tool_call', id, name, args}.
- *
- * Handles three streaming dialects:
- *   - Claude: content_block_start / content_block_delta with index-keyed
- *     blocks of either text_delta or input_json_delta
- *   - Gemini: candidates[0].content.parts containing text or functionCall
- *   - OpenAI (and OpenAI-compatible): delta.content text + index-keyed
- *     delta.tool_calls increments whose function.arguments is appended as
- *     a JSON string
- */
-function extractPartsFromStreamEvents(events, source) {
-    if (!Array.isArray(events) || events.length === 0) return [];
-
-    if (source === 'claude') {
-        /** @type {Map<number, {type:string,text:string,name:string,id:string,inputJson:string,thinking:string,signature:string,data:string}>} */
-        const blocks = new Map();
-        const order = [];
-        const ensureBlock = (idx) => {
-            let b = blocks.get(idx);
-            if (!b) {
-                b = { type: 'text', text: '', name: '', id: '', inputJson: '', thinking: '', signature: '', data: '' };
-                blocks.set(idx, b);
-                order.push(idx);
-            }
-            return b;
-        };
-        for (const ev of events) {
-            const raw = normalizeEvent(ev);
-            if (!raw || raw === '[DONE]') continue;
-            let parsed;
-            try { parsed = JSON.parse(raw); } catch { continue; }
-            if (parsed?.luker) continue;
-
-            if (parsed?.type === 'content_block_start') {
-                const idx = parsed.index ?? 0;
-                const cb = parsed.content_block || {};
-                const b = ensureBlock(idx);
-                b.type = cb.type || 'text';
-                if (cb.type === 'text' && typeof cb.text === 'string') b.text = cb.text;
-                if (cb.type === 'thinking' && typeof cb.thinking === 'string') b.thinking = cb.thinking;
-                if (cb.type === 'thinking' && typeof cb.signature === 'string') b.signature = cb.signature;
-                if (cb.type === 'redacted_thinking' && typeof cb.data === 'string') b.data = cb.data;
-                if (cb.name) b.name = cb.name;
-                if (cb.id) b.id = cb.id;
-            } else if (parsed?.type === 'content_block_delta') {
-                const idx = parsed.index ?? 0;
-                const b = ensureBlock(idx);
-                const d = parsed.delta;
-                if (d?.type === 'text_delta' && typeof d.text === 'string') b.text += d.text;
-                else if (d?.type === 'input_json_delta' && typeof d.partial_json === 'string') b.inputJson += d.partial_json;
-                else if (d?.type === 'thinking_delta' && typeof d.thinking === 'string') b.thinking += d.thinking;
-                else if (d?.type === 'signature_delta' && typeof d.signature === 'string') b.signature += d.signature;
-            }
-        }
-
-        const parts = [];
-        for (const idx of order) {
-            const b = blocks.get(idx);
-            if (!b) continue;
-            if (b.type === 'text') {
-                if (b.text) parts.push({ type: 'text', text: b.text });
-            } else if (b.type === 'tool_use') {
-                parts.push({ type: 'tool_call', id: b.id, name: b.name, args: coerceToolArgs(b.inputJson) });
-            } else if (b.type === 'thinking') {
-                parts.push({ type: 'reasoning', kind: 'thinking', text: b.thinking, signature: b.signature });
-            } else if (b.type === 'redacted_thinking') {
-                parts.push({ type: 'reasoning', kind: 'redacted_thinking', data: b.data });
-            }
-        }
-        return parts;
-    }
-
-    if (source === 'makersuite' || source === 'vertexai') {
-        const parts = [];
-        let textAccum = '';
-        const flushText = () => {
-            if (textAccum) { parts.push({ type: 'text', text: textAccum }); textAccum = ''; }
-        };
-        for (const ev of events) {
-            const raw = normalizeEvent(ev);
-            if (!raw || raw === '[DONE]') continue;
-            let parsed;
-            try { parsed = JSON.parse(raw); } catch { continue; }
-            if (parsed?.luker) continue;
-            const geminiParts = parsed?.candidates?.[0]?.content?.parts;
-            if (!Array.isArray(geminiParts)) continue;
-            for (const p of geminiParts) {
-                if (typeof p?.text === 'string') {
-                    textAccum += p.text;
-                } else if (p?.functionCall) {
-                    flushText();
-                    parts.push({ type: 'tool_call', id: '', name: p.functionCall.name || '', args: p.functionCall.args ?? {} });
-                } else if (p?.inlineData) {
-                    // Gemini streams image output as inlineData parts.
-                    flushText();
-                    parts.push({ type: 'image', mime: p.inlineData.mimeType || '', data: p.inlineData.data || '' });
-                }
-            }
-        }
-        flushText();
-        return parts;
-    }
-
-    if (source === 'openai_responses') {
-        const parts = [];
-        let textAccum = '';
-        let reasoningAccum = '';
-        /** @type {Map<number, {id: string, name: string, argsStr: string}>} */
-        const toolCalls = new Map();
-        const toolOrder = [];
-
-        const flushText = () => {
-            if (textAccum) { parts.push({ type: 'text', text: textAccum }); textAccum = ''; }
-        };
-        const flushReasoning = () => {
-            if (reasoningAccum) { parts.push({ type: 'reasoning', kind: 'text', text: reasoningAccum }); reasoningAccum = ''; }
-        };
-
-        for (const ev of events) {
-            const raw = normalizeEvent(ev);
-            if (!raw || raw === '[DONE]') continue;
-            let parsed;
-            try { parsed = JSON.parse(raw); } catch { continue; }
-            if (parsed?.luker) continue;
-
-            const type = parsed?.type;
-            if (type === 'response.output_text.delta' && typeof parsed.delta === 'string') {
-                flushReasoning();
-                textAccum += parsed.delta;
-            } else if ((type === 'response.reasoning_text.delta' || type === 'response.reasoning_summary_text.delta') && typeof parsed.delta === 'string') {
-                flushText();
-                reasoningAccum += parsed.delta;
-            } else if (type === 'response.output_item.added') {
-                const item = parsed.item;
-                if (item?.type === 'function_call') {
-                    const idx = Number(parsed.output_index ?? toolOrder.length);
-                    toolCalls.set(idx, {
-                        id: String(item.call_id || item.id || ''),
-                        name: String(item.name || ''),
-                        argsStr: '',
-                    });
-                    if (!toolOrder.includes(idx)) toolOrder.push(idx);
-                }
-            } else if (type === 'response.function_call_arguments.delta') {
-                const idx = Number(parsed.output_index ?? 0);
-                const tc = toolCalls.get(idx);
-                if (tc && typeof parsed.delta === 'string') {
-                    tc.argsStr += parsed.delta;
-                }
-            }
-        }
-        flushReasoning();
-        flushText();
-        for (const idx of toolOrder) {
-            const tc = toolCalls.get(idx);
-            if (tc) {
-                parts.push({
-                    type: 'tool_call',
-                    id: tc.id,
-                    name: tc.name,
-                    args: coerceToolArgs(tc.argsStr),
-                });
-            }
-        }
-        return parts;
-    }
-
-    // OpenAI / OpenAI-compatible
-    let textAccum = '';
-    let reasoningTextAccum = '';
-    /** @type {object[]} reasoning_details merged with the provider's stream semantics */
-    const reasoningDetails = [];
-    /** @type {Map<number, {id:string,name:string,argsStr:string}>} */
-    const toolCalls = new Map();
-    const toolOrder = [];
-    const ensureToolCall = (idx) => {
-        let t = toolCalls.get(idx);
-        if (!t) {
-            t = { id: '', name: '', argsStr: '' };
-            toolCalls.set(idx, t);
-            toolOrder.push(idx);
-        }
-        return t;
-    };
-    const ingestReasoningDetails = (arr) => mergeReasoningDetails(reasoningDetails, arr);
-    for (const ev of events) {
-        const raw = normalizeEvent(ev);
-        if (!raw || raw === '[DONE]') continue;
-        let parsed;
-        try { parsed = JSON.parse(raw); } catch { continue; }
-        if (parsed?.luker) continue;
-        const delta = parsed?.choices?.[0]?.delta;
-        if (!delta) continue;
-        const content = delta.content;
-        if (typeof content === 'string') textAccum += content;
-        else if (Array.isArray(content)) {
-            for (const p of content) if (p?.type === 'text' && typeof p.text === 'string') textAccum += p.text;
-        }
-        if (typeof delta.reasoning_content === 'string') reasoningTextAccum += delta.reasoning_content;
-        if (typeof delta.reasoning === 'string') reasoningTextAccum += delta.reasoning;
-        if (Array.isArray(delta.reasoning_details)) ingestReasoningDetails(delta.reasoning_details);
-        if (Array.isArray(delta.tool_calls)) {
-            for (const tc of delta.tool_calls) {
-                const idx = tc?.index ?? 0;
-                const t = ensureToolCall(idx);
-                if (tc?.id) t.id = tc.id;
-                if (tc?.function?.name) t.name = tc.function.name;
-                if (typeof tc?.function?.arguments === 'string') t.argsStr += tc.function.arguments;
-            }
-        }
-    }
-
-    const parts = [];
-    // Dual-channel streams deliver the same thinking as both `reasoning` and
-    // `reasoning_details`. Keep one copy — the structured entries.
-    const detailsText = joinReasoningDetailsText(reasoningDetails);
-    const reasoningIsDuplicated = reasoningTextAccum && detailsText && reasoningTextAccum === detailsText;
-    if (reasoningTextAccum && !reasoningIsDuplicated) parts.push({ type: 'reasoning', kind: 'text', text: reasoningTextAccum });
-    if (reasoningDetails.length) {
-        parts.push({ type: 'reasoning', kind: 'details', details: reasoningDetails });
-    }
-    if (textAccum) parts.push({ type: 'text', text: textAccum });
-    for (const idx of toolOrder) {
-        const t = toolCalls.get(idx);
-        parts.push({ type: 'tool_call', id: t.id, name: t.name, args: coerceToolArgs(t.argsStr) });
-    }
-    return parts;
-}
-
-/**
- * Extract response text from a non-streaming payload.
- * @param {object} payload OpenAI-shaped payload (post-conversion in chat-completions)
- * @param {string} source backend identifier
- * @param {object} [rawApiResponse] native API response (pre-conversion), if available
- * @returns {string}
- */
-function extractTextFromPayload(payload, source, rawApiResponse) {
-    if (rawApiResponse) {
-        if (source === 'claude' && Array.isArray(rawApiResponse.content)) {
-            return rawApiResponse.content
-                .filter(p => p?.type === 'text' && typeof p.text === 'string')
-                .map(p => p.text)
-                .join('');
-        }
-        if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse.candidates)) {
-            const parts = rawApiResponse.candidates[0]?.content?.parts;
-            if (Array.isArray(parts)) {
-                return parts.filter(p => typeof p?.text === 'string').map(p => p.text).join('');
-            }
-        }
-    }
-    const respObj = (source === 'openai_responses' && rawApiResponse) ? rawApiResponse : payload;
-    if (source === 'openai_responses' || Array.isArray(respObj?.output)) {
-        const out = [];
-        for (const item of Array.isArray(respObj?.output) ? respObj.output : []) {
-            if (item?.type === 'message' && Array.isArray(item.content)) {
-                for (const part of item.content) {
-                    if (part?.type === 'output_text' && typeof part.text === 'string') {
-                        out.push(part.text);
-                    }
-                }
-            }
-        }
-        if (out.length > 0) return out.join('');
-    }
-    const choice = payload?.choices?.[0];
-    const msgContent = choice?.message?.content ?? choice?.text;
-    if (typeof msgContent === 'string') return msgContent;
-    if (Array.isArray(msgContent)) {
-        return msgContent
-            .filter(p => p?.type === 'text' && typeof p.text === 'string')
-            .map(p => p.text)
-            .join('');
-    }
+function extractLegacyTextGenText(payload) {
+    if (!payload || typeof payload !== 'object') return '';
+    if (typeof payload.results?.[0]?.text === 'string') return payload.results[0].text;
+    if (typeof payload.output === 'string') return payload.output;
+    if (typeof payload.choices?.[0]?.text === 'string') return payload.choices[0].text;
+    if (typeof payload.response === 'string') return payload.response;
+    if (typeof payload.text === 'string') return payload.text;
     return '';
 }
 
 /**
- * Coerce a tool-call args field into a plain object (parsing JSON strings).
- * Falls back to the original value if parsing fails.
- */
-function coerceToolArgs(raw) {
-    if (raw == null) return {};
-    if (typeof raw === 'string') {
-        try { return JSON.parse(raw); } catch { return raw; }
-    }
-    return raw;
-}
-
-/**
- * Extract ordered response parts from a non-streaming payload.
- * Each part is either {type:'text', text} or
- * {type:'tool_call', id, name, args}.
- */
-function extractPartsFromPayload(payload, source, rawApiResponse) {
-    const parts = [];
-
-    if (rawApiResponse) {
-        if (source === 'claude' && Array.isArray(rawApiResponse.content)) {
-            for (const p of rawApiResponse.content) {
-                if (p?.type === 'text' && typeof p.text === 'string') {
-                    if (p.text) parts.push({ type: 'text', text: p.text });
-                } else if (p?.type === 'tool_use') {
-                    parts.push({ type: 'tool_call', id: p.id || '', name: p.name || '', args: p.input ?? {} });
-                } else if (p?.type === 'thinking') {
-                    parts.push({
-                        type: 'reasoning',
-                        kind: 'thinking',
-                        text: typeof p.thinking === 'string' ? p.thinking : '',
-                        signature: typeof p.signature === 'string' ? p.signature : '',
-                    });
-                } else if (p?.type === 'redacted_thinking') {
-                    parts.push({
-                        type: 'reasoning',
-                        kind: 'redacted_thinking',
-                        data: typeof p.data === 'string' ? p.data : '',
-                    });
-                }
-            }
-            return parts;
-        }
-        if ((source === 'makersuite' || source === 'vertexai') && Array.isArray(rawApiResponse.candidates)) {
-            const geminiParts = rawApiResponse.candidates[0]?.content?.parts;
-            if (Array.isArray(geminiParts)) {
-                for (const p of geminiParts) {
-                    if (typeof p?.text === 'string') {
-                        if (p.text) parts.push({ type: 'text', text: p.text });
-                    } else if (p?.functionCall) {
-                        parts.push({ type: 'tool_call', id: '', name: p.functionCall.name || '', args: p.functionCall.args ?? {} });
-                    } else if (p?.inlineData) {
-                        // Gemini image output — keep the bytes so the Inspector
-                        // can render the actual image instead of dropping it.
-                        parts.push({ type: 'image', mime: p.inlineData.mimeType || '', data: p.inlineData.data || '' });
-                    }
-                }
-                return parts;
-            }
-        }
-    }
-
-    const respObj = (source === 'openai_responses' && rawApiResponse) ? rawApiResponse : payload;
-    if (source === 'openai_responses' || Array.isArray(respObj?.output)) {
-        for (const item of Array.isArray(respObj?.output) ? respObj.output : []) {
-            if (item?.type === 'message' && Array.isArray(item.content)) {
-                for (const p of item.content) {
-                    if (p?.type === 'output_text' && typeof p.text === 'string' && p.text) {
-                        parts.push({ type: 'text', text: p.text });
-                    }
-                }
-            } else if (item?.type === 'reasoning') {
-                for (const summary of Array.isArray(item.summary) ? item.summary : []) {
-                    if (summary?.type === 'summary_text' && typeof summary.text === 'string' && summary.text) {
-                        parts.push({ type: 'reasoning', kind: 'thinking', text: summary.text });
-                    }
-                }
-                if (typeof item.text === 'string' && item.text) {
-                    parts.push({ type: 'reasoning', kind: 'thinking', text: item.text });
-                }
-            } else if (item?.type === 'function_call') {
-                parts.push({
-                    type: 'tool_call',
-                    id: String(item.call_id || item.id || ''),
-                    name: String(item.name || ''),
-                    args: coerceToolArgs(item.arguments),
-                });
-            }
-        }
-        return parts;
-    }
-
-    const choice = payload?.choices?.[0];
-    if (choice) {
-        const msg = choice?.message || {};
-        const msgDetails = Array.isArray(msg.reasoning_details) && msg.reasoning_details.length
-            ? msg.reasoning_details
-            : null;
-        const msgReasoningText = (typeof msg.reasoning_content === 'string' && msg.reasoning_content)
-            ? msg.reasoning_content
-            : (typeof msg.reasoning === 'string' && msg.reasoning ? msg.reasoning : '');
-        // Dual-channel payloads carry the same thinking twice; keep the
-        // structured entries and drop the duplicated plain string.
-        const msgDetailsText = msgDetails ? joinReasoningDetailsText(msgDetails) : '';
-        if (msgReasoningText && !(msgDetailsText && msgReasoningText === msgDetailsText)) {
-            parts.push({ type: 'reasoning', kind: 'text', text: msgReasoningText });
-        }
-        if (msgDetails) {
-            parts.push({ type: 'reasoning', kind: 'details', details: msgDetails });
-        }
-        if (Array.isArray(msg.reasoning_blocks) && msg.reasoning_blocks.length) {
-            for (const b of msg.reasoning_blocks) {
-                if (b?.type === 'thinking') {
-                    parts.push({
-                        type: 'reasoning',
-                        kind: 'thinking',
-                        text: typeof b.thinking === 'string' ? b.thinking : '',
-                        signature: typeof b.signature === 'string' ? b.signature : '',
-                    });
-                } else if (b?.type === 'redacted_thinking') {
-                    parts.push({
-                        type: 'reasoning',
-                        kind: 'redacted_thinking',
-                        data: typeof b.data === 'string' ? b.data : '',
-                    });
-                }
-            }
-        }
-        const msgContent = msg.content ?? choice?.text;
-        if (typeof msgContent === 'string' && msgContent) {
-            parts.push({ type: 'text', text: msgContent });
-        } else if (Array.isArray(msgContent)) {
-            for (const p of msgContent) {
-                if (p?.type === 'text' && typeof p.text === 'string' && p.text) {
-                    parts.push({ type: 'text', text: p.text });
-                }
-            }
-        }
-        const tcs = msg.tool_calls;
-        if (Array.isArray(tcs)) {
-            for (const tc of tcs) {
-                parts.push({
-                    type: 'tool_call',
-                    id: tc?.id || '',
-                    name: tc?.function?.name || tc?.name || '',
-                    args: coerceToolArgs(tc?.function?.arguments ?? tc?.arguments),
-                });
-            }
-        }
-        const fc = msg.function_call;
-        if (fc) {
-            parts.push({ type: 'tool_call', id: '', name: fc.name || '', args: coerceToolArgs(fc.arguments) });
-        }
-    }
-    return parts;
-}
-
-/**
- * Complete an inspection with success + usage data from a non-streaming response.
+ * Complete an inspection from a non-streaming response using the shared
+ * strict protocol parser. Never switches protocols on mismatch and never
+ * renders invalid responses as valid output.
  * @param {import('express').Request} request
  * @param {object} payload
  * @param {object} [rawApiResponse]
@@ -1477,66 +659,69 @@ export function completeInspection(request, payload, rawApiResponse) {
     entry.status = 'success';
     entry.durationMs = Date.now() - entry.timestamp;
     entry.httpStatus = 200;
+    entry.parseError = null;
+    entry.rawDiagnostic = null;
 
-    const source = entry.source;
-    let usage = {};
-
-    if (rawApiResponse) {
-        if (source === 'claude') {
-            usage = extractUsageFromClaude(rawApiResponse);
-        } else if (source === 'makersuite' || source === 'vertexai') {
-            usage = extractUsageFromGemini(rawApiResponse);
-        } else if (source === 'openai_responses') {
-            usage = extractUsageFromResponses(rawApiResponse);
+    const protocol = resolveWireProtocol(entry.source);
+    if (!protocol) {
+        if (payload && typeof payload === 'object' && payload.error != null) {
+            entry.status = 'error';
+            entry.error = extractProviderErrorMessage(payload.error);
+        } else {
+            const text = extractLegacyTextGenText(rawApiResponse ?? payload);
+            entry.responseText = text;
+            entry.responseParts = text ? [{ type: 'text', text }] : [];
         }
+        inspectorLedger.retouch(entry);
+        enforceByteBudget();
+        return;
     }
 
-    if (!usage.prompt_tokens) {
-        if (source === 'openai_responses' || payload?.usage?.input_tokens != null || Array.isArray(payload?.output)) {
-            const respUsage = extractUsageFromResponses(payload);
-            if (respUsage.prompt_tokens != null) {
-                usage = respUsage;
+    const wirePayload = (rawApiResponse !== undefined && rawApiResponse !== null) ? rawApiResponse : payload;
+
+    try {
+        const turn = parseProtocolResponse(protocol, wirePayload);
+        applyParsedTurnToEntry(entry, turn);
+        // Preserve upstream provider-error classification if a caller still
+        // passes an explicit error envelope alongside rawApiResponse.
+        if (payload && typeof payload === 'object' && payload.error != null) {
+            entry.status = 'error';
+            entry.error = extractProviderErrorMessage(payload.error);
+        }
+    } catch (err) {
+        if (err instanceof ProtocolParseError && err.stage === 'provider_error') {
+            entry.status = 'error';
+            entry.error = err.message;
+            if (entry.plainTextFunctionCall?.enabled
+                && (entry.plainTextFunctionCall.status === 'pending' || entry.plainTextFunctionCall.status === 'parsing')) {
+                entry.plainTextFunctionCall.status = 'network_error';
+                entry.plainTextFunctionCall.failureReason = 'network';
+                entry.plainTextFunctionCall.error = entry.error;
+                entry.plainTextFunctionCall.finalStatus = 'network_error';
             }
+        } else {
+            applyParseFailureToEntry(entry, err, {
+                kind: 'non-streaming',
+                protocol,
+                payload: wirePayload,
+            });
         }
     }
 
-    if (!usage.prompt_tokens) {
-        const oaiUsage = extractUsageFromOAI(payload);
-        if (oaiUsage.prompt_tokens) {
-            usage = oaiUsage;
-        }
-    }
-
-    Object.assign(entry.usage, usage);
-    entry.responseText = extractTextFromPayload(payload, source, rawApiResponse);
-    entry.responseParts = extractPartsFromPayload(payload, source, rawApiResponse);
-
-    const fr = extractFinishReasonFromPayload(payload, rawApiResponse, source);
-    entry.finishReason = fr.finishReason;
-    entry.nativeFinishReason = fr.nativeFinishReason;
-
-    // HTTP 200 but body carries `{ error: {...} }` — provider signalled failure
-    // through the payload instead of a non-2xx status. Reclassify from success
-    // to error and surface the message; `httpStatus` stays 200 (truthful) so
-    // the UI shows the "HTTP OK, body was an error" case explicitly.
-    if (hasProviderError(payload)) {
-        entry.status = 'error';
-        entry.error = extractProviderErrorMessage(payload.error);
-    }
-
-    // responseText / responseParts can carry megabytes — re-estimate the
-    // record and evict older ones if the budget no longer holds.
     inspectorLedger.retouch(entry);
     enforceByteBudget();
 }
 
 /**
- * Complete an inspection from streaming events.
+ * Complete an inspection from streaming SSE events using the shared strict
+ * protocol parser. Invalid JSON, cross-protocol mismatches, broken tool
+ * correlation, and premature EOF fail with structured parseError + rawDiagnostic.
+ *
  * @param {import('express').Request} request
- * @param {string[]} events
- * @param {string} [accumulatedText] caller-side accumulated text (preferred over re-parsing events)
+ * @param {Array<string|{data:string,event?:string}>} events
+ * @param {string} [_accumulatedText] Deprecated legacy parameter; text is derived solely from the shared parser
  */
-export function completeInspectionFromStream(request, events, accumulatedText) {
+export function completeInspectionFromStream(request, events, _accumulatedText) {
     const entry = findEntry(request);
     if (!entry) return;
     if (entry.status === 'aborted') return;
@@ -1544,38 +729,181 @@ export function completeInspectionFromStream(request, events, accumulatedText) {
     entry.status = 'success';
     entry.durationMs = Date.now() - entry.timestamp;
     entry.httpStatus = 200;
+    entry.parseError = null;
+    entry.rawDiagnostic = null;
 
-    const usage = extractUsageFromStreamEvents(events, entry.source);
-    Object.assign(entry.usage, usage);
-
-    entry.responseParts = extractPartsFromStreamEvents(events, entry.source);
-
-    if (typeof accumulatedText === 'string' && accumulatedText.length) {
-        entry.responseText = accumulatedText;
-    } else {
-        entry.responseText = entry.responseParts
-            .filter(p => p.type === 'text')
-            .map(p => p.text)
-            .join('') || extractTextFromStreamEvents(events, entry.source);
+    const protocol = resolveWireProtocol(entry.source);
+    if (!protocol) {
+        const text = typeof _accumulatedText === 'string' ? _accumulatedText : '';
+        entry.responseText = text;
+        entry.responseParts = text ? [{ type: 'text', text }] : [];
+        inspectorLedger.retouch(entry);
+        enforceByteBudget();
+        return;
     }
 
-    const fr = extractFinishReasonFromStreamEvents(events, entry.source);
-    entry.finishReason = fr.finishReason;
-    entry.nativeFinishReason = fr.nativeFinishReason;
+    const normalizedEvents = Array.isArray(events) ? events : [];
+    const parser = createProtocolStreamParser(protocol);
 
-    // SSE stream carried a `data: {"error":{...}}` frame — provider aborted
-    // mid-stream (rate limit, context length, policy trigger, upstream cut).
-    // Reclassify from success to error and surface the message; already
-    // accumulated deltas stay in responseText / responseParts so the user can
-    // see how far the model got before the stream broke.
-    const providerError = findErrorFrameInStreamEvents(events);
-    if (providerError != null) {
-        entry.status = 'error';
-        entry.error = extractProviderErrorMessage(providerError);
+    try {
+        for (const ev of normalizedEvents) {
+            const raw = normalizeEvent(ev);
+            if (!raw) continue;
+            const eventName = (ev && typeof ev === 'object' && typeof ev.event === 'string') ? ev.event : '';
+            parser.feedFrame(raw, eventName);
+        }
+        const turn = parser.finish();
+        applyParsedTurnToEntry(entry, turn);
+    } catch (err) {
+        if (err instanceof ProtocolParseError && err.stage === 'provider_error') {
+            const partial = parser.getSnapshot();
+            applyParsedTurnToEntry(entry, partial);
+            entry.status = 'error';
+            entry.error = err.message;
+            if (entry.plainTextFunctionCall?.enabled
+                && (entry.plainTextFunctionCall.status === 'pending' || entry.plainTextFunctionCall.status === 'parsing')) {
+                entry.plainTextFunctionCall.status = 'network_error';
+                entry.plainTextFunctionCall.failureReason = 'network';
+                entry.plainTextFunctionCall.error = entry.error;
+                entry.plainTextFunctionCall.finalStatus = 'network_error';
+            }
+        } else {
+            applyParseFailureToEntry(entry, err, {
+                kind: 'stream',
+                protocol,
+                events: normalizedEvents.map(normalizeEvent),
+            });
+        }
     }
 
     inspectorLedger.retouch(entry);
     enforceByteBudget();
+}
+
+/**
+ * Mark an inspection as failed with a structured parse error and labeled raw
+ * diagnostic payload (e.g. non-JSON body returned on HTTP 200).
+ * @param {import('express').Request} request
+ * @param {Error} err
+ * @param {*} rawDiagnostic
+ * @param {number} [httpStatus]
+ */
+export function failInspectionParseError(request, err, rawDiagnostic, httpStatus = 200) {
+    const entry = findEntry(request);
+    if (!entry) return;
+    if (entry.status === 'aborted') return;
+
+    entry.durationMs = Date.now() - entry.timestamp;
+    entry.httpStatus = httpStatus;
+    applyParseFailureToEntry(entry, err, rawDiagnostic);
+    inspectorLedger.retouch(entry);
+    enforceByteBudget();
+}
+
+/**
+ * Update live plain-text function-call metadata on a running inspection entry
+ * (e.g. transitioning into `parsing` while streaming or recording abort/network
+ * failure reasons).
+ * @param {import('express').Request} request
+ * @param {object} patch
+ */
+export function updateInspectionPlainTextState(request, patch) {
+    const entry = findEntry(request);
+    if (!entry || !patch || typeof patch !== 'object') return;
+    if (!entry.plainTextFunctionCall) {
+        entry.plainTextFunctionCall = { enabled: true };
+    }
+    Object.assign(entry.plainTextFunctionCall, patch);
+    inspectorLedger.retouch(entry);
+}
+
+/**
+ * Apply the authoritative backend plain-text function-call parse result onto
+ * an inspection entry, preserving preceding thinking/text parts in exact order
+ * and replacing only the call region with a toggleable `plain_text_tool_calls`
+ * part.
+ * @param {import('express').Request} request
+ * @param {{ turn: object, ptResult: object, config: object, attempt?: number, maxAttempts?: number, retryOf?: string|null, originalError?: string }} params
+ */
+export function applyInspectionPlainTextResult(request, {
+    turn,
+    ptResult,
+    config,
+    responseParts = null,
+    attempt = 1,
+    maxAttempts = 1,
+    retryOf = null,
+    originalError = '',
+} = {}) {
+    const entry = findEntry(request);
+    if (!entry || !ptResult) return;
+    if (entry.status === 'aborted') return;
+
+    const existing = entry.plainTextFunctionCall || {};
+    entry.plainTextFunctionCall = {
+        ...existing,
+        enabled: true,
+        mode: String(config?.mode || existing.mode || 'prompt_xml'),
+        triggerSignal: String(config?.triggerSignal || existing.triggerSignal || ''),
+        tools: Array.isArray(config?.tools) ? config.tools : (existing.tools || []),
+        toolChoice: config?.toolChoice ?? existing.toolChoice ?? 'auto',
+        status: ptResult.status,
+        failureReason: ptResult.failureReason || null,
+        error: String(ptResult.error || ''),
+        calls: Array.isArray(ptResult.calls) ? ptResult.calls : [],
+        displayText: String(ptResult.displayText ?? ''),
+        rawResponseText: String(ptResult.rawResponseText ?? turn?.text ?? ''),
+        callRegionRaw: String(ptResult.callRegionRaw ?? ''),
+        callSpan: ptResult.callSpan ? { ...ptResult.callSpan } : null,
+        attempt,
+        maxAttempts,
+        retryOf: retryOf || entry.retryOf || null,
+        originalError: String(originalError || entry.originalError || ''),
+        finalStatus: ptResult.status,
+    };
+
+    if (Array.isArray(responseParts)) {
+        entry.responseParts = responseParts;
+    }
+
+    if (ptResult.status === 'parsed') {
+        entry.responseText = ptResult.displayText ?? '';
+        entry.finishReason = 'tool_calls';
+    } else if (ptResult.status === 'parse_failed' || ptResult.status === 'network_error') {
+        entry.status = 'error';
+        entry.error = ptResult.error || 'Plain-text function call parse failed.';
+        entry.responseText = ptResult.displayText ?? '';
+    }
+
+    inspectorLedger.retouch(entry);
+    enforceByteBudget();
+}
+
+/**
+ * Link a retry inspection entry back to its original failed attempt so the
+ * Request Inspector UI shows the complete retry chain and final status.
+ * @param {string} handle
+ * @param {string} originalEntryId
+ * @param {string} retryEntryId
+ * @param {string} finalStatus
+ */
+export function linkInspectionRetry(handle, originalEntryId, retryEntryId, finalStatus) {
+    const h = String(handle || '');
+    if (!h || !originalEntryId || !retryEntryId) return;
+    const buf = buffers.get(h);
+    if (!buf) return;
+    const original = buf.find(e => e.id === originalEntryId);
+    if (!original) return;
+    if (!Array.isArray(original.retryEntryIds)) {
+        original.retryEntryIds = [];
+    }
+    if (!original.retryEntryIds.includes(retryEntryId)) {
+        original.retryEntryIds.push(retryEntryId);
+    }
+    if (original.plainTextFunctionCall) {
+        original.plainTextFunctionCall.finalStatus = finalStatus || original.plainTextFunctionCall.finalStatus;
+    }
+    inspectorLedger.retouch(original);
 }
 
 /**
@@ -1593,6 +921,13 @@ export function failInspection(request, errorMessage, httpStatus) {
     entry.durationMs = Date.now() - entry.timestamp;
     entry.httpStatus = httpStatus ?? null;
     entry.error = String(errorMessage || 'Unknown error');
+    if (entry.plainTextFunctionCall?.enabled
+        && (entry.plainTextFunctionCall.status === 'pending' || entry.plainTextFunctionCall.status === 'parsing')) {
+        entry.plainTextFunctionCall.status = 'network_error';
+        entry.plainTextFunctionCall.failureReason = 'network';
+        entry.plainTextFunctionCall.error = entry.error;
+        entry.plainTextFunctionCall.finalStatus = 'network_error';
+    }
 
     // error strings are bounded but can still carry a whole provider body.
     inspectorLedger.retouch(entry);
@@ -2177,6 +1512,10 @@ export function failEmbeddingInspection(request, errorMessage, httpStatus) {
 
 export const router = express.Router();
 
+// Transport bound for `/list` summary search snippets (up to 200 entries sent
+// in one JSON response); full request/response bodies are served on `/:id`.
+const INSPECTOR_LIST_SEARCH_SNIPPET_MAX_CHARS = 8192;
+
 function buildSearchSnippet(entry) {
     if (entry.type === 'image') {
         return [entry.source, entry.model, entry.prompt, entry.negativePrompt, entry.error].filter(Boolean).join(' ');
@@ -2199,7 +1538,9 @@ function buildSearchSnippet(entry) {
             hitsText,
             entry.error,
         ].filter(Boolean).join(' ');
-        return combined.length > 8192 ? combined.slice(0, 8192) : combined;
+        return combined.length > INSPECTOR_LIST_SEARCH_SNIPPET_MAX_CHARS
+            ? combined.slice(0, INSPECTOR_LIST_SEARCH_SNIPPET_MAX_CHARS)
+            : combined;
     }
     const messageText = Array.isArray(entry.fullMessages)
         ? entry.fullMessages.map(m => {
@@ -2210,7 +1551,9 @@ function buildSearchSnippet(entry) {
         }).join(' ')
         : '';
     const combined = [entry.source, entry.model, entry.error, messageText, entry.responseText || ''].filter(Boolean).join(' ');
-    return combined.length > 8192 ? combined.slice(0, 8192) : combined;
+    return combined.length > INSPECTOR_LIST_SEARCH_SNIPPET_MAX_CHARS
+        ? combined.slice(0, INSPECTOR_LIST_SEARCH_SNIPPET_MAX_CHARS)
+        : combined;
 }
 
 router.get('/list', (req, res) => {
@@ -2256,6 +1599,23 @@ router.get('/list', (req, res) => {
             base.maxTokens = e.maxTokens;
             base.usage = e.usage;
             base.responseChars = (e.responseText || '').length;
+            if (e.plainTextFunctionCall?.enabled) {
+                base.plainTextFunctionCall = {
+                    enabled: true,
+                    status: e.plainTextFunctionCall.status,
+                    callCount: Array.isArray(e.plainTextFunctionCall.calls) ? e.plainTextFunctionCall.calls.length : 0,
+                    attempt: e.attempt || 1,
+                    retryOf: e.retryOf || null,
+                    finalStatus: e.plainTextFunctionCall.finalStatus || e.plainTextFunctionCall.status,
+                };
+            }
+            if (e.parseError) {
+                base.parseError = {
+                    protocol: e.parseError.protocol,
+                    stage: e.parseError.stage,
+                    message: e.parseError.message,
+                };
+            }
         }
         return base;
     });
@@ -2307,9 +1667,7 @@ router.get('/:id/export', (req, res) => {
     const entry = buf.find(e => e.id === req.params.id);
     if (!entry) return res.status(404).send({ error: 'Not found' });
 
-    // Re-compute schema snapshot at export time so caller can compare with
-    // `messageSchemaAtCapture`. If the two disagree, something downstream
-    // mutated `body.messages` in place after `startInspection`.
+    // Compute a compact per-message shape summary for exported diagnostic files.
     const exportMessages = Array.isArray(entry.fullMessages) ? entry.fullMessages : [];
     const messageSchemaAtExport = exportMessages.map(m => {
         const content = m?.content;

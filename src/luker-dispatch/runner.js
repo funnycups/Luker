@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { randomUUID } from 'node:crypto';
+import { StringDecoder } from 'node:string_decoder';
 import {
     createGenerationJob,
     appendGenerationEvent,
     accumulateChunkTextIntoJob,
+    finalizeJobProtocolStream,
     completeGenerationJobFromText,
     failGenerationJob,
     attachJobToRequest,
@@ -11,11 +13,27 @@ import {
     releaseTransientGenerationJobs,
 } from '../endpoints/backends/luker-generation.js';
 import {
+    applyInspectionPlainTextResult,
     completeInspection,
     completeInspectionFromStream,
+    failInspectionParseError,
     findEntry,
+    updateInspectionPlainTextState,
 } from '../request-inspector.js';
+import {
+    ProtocolParseError,
+    createSseFramer,
+    parseProtocolResponse,
+    resolveWireProtocol,
+} from '../../public/scripts/lib/protocol-parser/index.js';
 import { createDispatchContext } from './context.js';
+import {
+    applyPlainTextResultToResponseParts,
+    buildClientPlainTextMeta,
+    evaluatePlainTextToolCallTurn,
+    preparePlainTextToolRequest,
+    runPlainTextFormatCorrectionRetries,
+} from './plain-text-tool-calling.js';
 import { createRequestProxyAgent } from '../request-proxy.js';
 import {
     assertTransientMediaRead,
@@ -59,7 +77,7 @@ function normalizeDispatchHeadEvent(event, { endpoint, isStream }) {
     };
 }
 
-export async function runLukerDispatch(request, response, { endpoint, select }) {
+export async function runLukerDispatch(request, response, { endpoint, select, postProcessMessages = null }) {
     let session;
     try {
         session = getRequestTransientSession(request);
@@ -76,11 +94,40 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
     }
     // Prefer the client-supplied job_id (from body.luker_generation.job_id)
     // when present so /jobs/status?id=<uuid> queries hit the same job the
-    // runner created. Legacy client code (openai.js:4201) pre-generates a
-    // uuid and stashes it in the body so it can poll for auto-persist.
+    // runner created. The client pre-generates a uuid and stashes it in the
+    // body so it can poll for auto-persist.
     const bodyJobId = String(request.body?.luker_generation?.job_id || '').trim();
     const headerId = String(request.headers?.['x-luker-request-id'] || '').trim();
     const requestId = bodyJobId || headerId || randomUUID();
+
+    // Prepare backend-owned plain-text function calling orchestration before
+    // selecting the provider so `luker_plain_text_tools` and native
+    // `tools`/`tool_choice` are stripped before upstream dispatch and invalid
+    // explicit trigger signals fail fast with HTTP 400.
+    let plainTextSession;
+    try {
+        plainTextSession = preparePlainTextToolRequest(request.body || {});
+    } catch (error) {
+        response.status(error.status || 400).json({ error: error.message });
+        return;
+    }
+    request.body = plainTextSession.dispatchBody;
+    if (typeof postProcessMessages === 'function' && Array.isArray(request.body?.messages)) {
+        request.body.messages = postProcessMessages(request.body.messages);
+    }
+    if (plainTextSession.active) {
+        request.__lukerPlainTextMeta = {
+            enabled: true,
+            mode: plainTextSession.config.mode,
+            triggerSignal: plainTextSession.config.triggerSignal,
+            tools: plainTextSession.config.tools,
+            toolChoice: plainTextSession.config.toolChoice,
+            attempt: 1,
+            maxAttempts: plainTextSession.config.retry.maxAttempts,
+            retryOf: null,
+            originalError: '',
+        };
+    }
 
     let dispatchFn;
     try {
@@ -160,10 +207,8 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
     response.setHeader('x-luker-generation-id', requestId);
     // Initial snapshot only — always '0' because dispatch has not yet run
     // and headers are flushed by response.json() below (setHeader after flush
-    // is a no-op). The real persisted state is delivered via the SSE trailer
-    // `data.luker.persisted` after dispatch completes; frontend consumers
-    // (openai.js:4360, kai.js:261, nai.js:780, textgen.js:1347, script.js:565)
-    // read this header as an initial snapshot and overwrite from the trailer.
+    // is a no-op). The authoritative persisted/status metadata is delivered
+    // over the dedicated WS `meta` channel before the terminal `end` frame.
     response.setHeader('x-luker-server-persisted', '0');
     response.json({});
 
@@ -211,74 +256,101 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
         // envelope object would silently yield '' delta for every frame
         // (JSON.parse('[object Object]') throws → caught → empty).
         const inspectionEvents = [];
-        let sseBuffer = '';
-        // SSE frame parsing 1:1 copied from legacy
-        // forwardStreamingWithGenerationJob (luker-generation.js in the
-        // pre-refactor tree). Do NOT simplify or "modernize" any step:
-        //   - CRLF → LF normalization on every append (nginx-wrapped
-        //     Anthropic and Claude passthrough proxies emit CRLF)
-        //   - `while (indexOf) { slice frame; slice buffer; }` loop instead
-        //     of split.pop (keeps partial frame consumption explicit)
-        //   - .trimEnd() then .slice(5).trimStart() per line (NOT full
-        //     .trim() — that strips payload-internal trailing whitespace
-        //     in Claude thinking/tool_use deltas)
-        //   - separate tail flush after chunks stop (last frame may not
-        //     terminate with \n\n)
-        //
-        // Only feeds `inspectionEvents`. `job.events` receives envelopes
-        // in `onEmit` directly; `job.text` is accumulated in `onEmit` via
-        // `accumulateChunkTextIntoJob` on the raw bytes.
+        const inspectionDecoder = new StringDecoder('utf8');
+        let inspectionDecoderFlushed = false;
+        const sseFramer = createSseFramer();
         function flushSseFrames(chunkText) {
-            sseBuffer += chunkText;
-            sseBuffer = sseBuffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            let delimiterIndex = sseBuffer.indexOf('\n\n');
-            while (delimiterIndex !== -1) {
-                const frame = sseBuffer.slice(0, delimiterIndex);
-                sseBuffer = sseBuffer.slice(delimiterIndex + 2);
-                const dataLines = frame
-                    .split('\n')
-                    .map(line => line.replace(/\s+$/, ''))
-                    .filter(line => line.startsWith('data:'))
-                    .map(line => line.slice(5).replace(/^\s+/, ''));
-                if (dataLines.length > 0) {
-                    const payload = dataLines.join('\n');
-                    if (payload) {
-                        inspectionEvents.push(payload);
-                    }
-                }
-                delimiterIndex = sseBuffer.indexOf('\n\n');
+            const frames = sseFramer.push(chunkText);
+            for (const frame of frames) {
+                inspectionEvents.push({ event: frame.event, data: frame.data });
+            }
+        }
+        function flushInspectionDecoder(isStream) {
+            if (inspectionDecoderFlushed) return;
+            inspectionDecoderFlushed = true;
+            const tail = inspectionDecoder.end();
+            if (!tail) return;
+            if (isStream) {
+                flushSseFrames(tail);
+            } else {
+                inspectionEvents.push(tail);
             }
         }
         function flushSseTailBuffer() {
-            if (!sseBuffer) return;
-            const tail = sseBuffer;
-            sseBuffer = '';
-            if (!tail.trim()) return;
-            const dataLines = tail
-                .split('\n')
-                .map(line => line.replace(/\s+$/, ''))
-                .filter(line => line.startsWith('data:'))
-                .map(line => line.slice(5).replace(/^\s+/, ''));
-            if (dataLines.length === 0) return;
-            const payload = dataLines.join('\n');
-            if (payload) {
-                inspectionEvents.push(payload);
+            flushInspectionDecoder(true);
+            const tailFrames = sseFramer.flush();
+            for (const frame of tailFrames) {
+                inspectionEvents.push({ event: frame.event, data: frame.data });
             }
         }
+        let dispatchSawError = false;
+        let dispatchErrorMessage = '';
+        let endEmitted = false;
+        let upstreamHeadStatus = 200;
+        let effectiveIsStream = Boolean(request.body?.stream || request.body?.streaming);
+        job._isStream = effectiveIsStream;
+        let initialPlainTextMetaEmitted = false;
+        const plainTextStreamDetector = plainTextSession.active ? plainTextSession.createDetector() : null;
+        let lastDetectedJobTextLen = 0;
+        let livePlainTextParsingNotified = false;
         const ctx = createDispatchContext({
-            request, task: job, abortController,
+            request, abortController,
             onCloseHandlers,
+            onStreamMode: (streamMode) => {
+                effectiveIsStream = Boolean(streamMode);
+                job._isStream = effectiveIsStream;
+            },
             onEmit: (rawEvent) => {
-                const isStream = Boolean(request.body?.stream || request.body?.streaming);
-                const event = normalizeDispatchHeadEvent(rawEvent, { endpoint, isStream });
-                // Store every envelope (head / chunk / end / error) in
-                // `job.events` so `ws-delivery.js:eventToFrame` can turn
-                // each entry into the exact wire frame the browser's WS
-                // handler dispatches on (`msg.type`). Without this,
-                // eventToFrame's `typeof data !== 'object'` guard returns
-                // null for every entry and NOTHING reaches the client —
-                // Response bodies stay pending forever.
+                const event = normalizeDispatchHeadEvent(rawEvent, { endpoint, isStream: effectiveIsStream });
+                if (event?.kind === 'end') {
+                    // Defer appending the terminal `end` envelope until the
+                    // runner has completed inspection, plain-text evaluation,
+                    // generation-job persistence, and emitted the dedicated
+                    // `meta` frame, so wire ordering is always
+                    // `head -> chunk* -> meta -> end`.
+                    if (effectiveIsStream) {
+                        flushSseTailBuffer();
+                        finalizeJobProtocolStream(job);
+                    } else {
+                        flushInspectionDecoder(false);
+                        finalizeJobProtocolStream(job);
+                    }
+                    return;
+                }
+                if (event?.kind === 'error') {
+                    dispatchSawError = true;
+                    dispatchErrorMessage = String(event.data?.message || 'Dispatch error');
+                    appendGenerationEvent(job, event);
+                    failGenerationJob(job, dispatchErrorMessage);
+                    return;
+                }
+                if (event?.kind === 'head') {
+                    upstreamHeadStatus = Number(event.data?.status ?? 200);
+                }
+                // Store every envelope (head / chunk / meta) in `job.events`
+                // so `ws-delivery.js:eventToFrame` turns each entry into the
+                // exact wire frame the browser's WS handler dispatches on.
                 appendGenerationEvent(job, event);
+                if (event?.kind === 'head' && plainTextSession.active && !initialPlainTextMetaEmitted && upstreamHeadStatus >= 200 && upstreamHeadStatus < 300) {
+                    initialPlainTextMetaEmitted = true;
+                    // Publish trigger metadata out-of-band right after head so
+                    // streaming clients can mask the post-trigger call region
+                    // during live rendering without generating triggers locally.
+                    appendGenerationEvent(job, {
+                        kind: 'meta',
+                        data: {
+                            generation_id: job.id,
+                            plain_text_function_call: {
+                                enabled: true,
+                                mode: plainTextSession.config.mode,
+                                status: 'pending',
+                                triggerSignal: plainTextSession.config.triggerSignal,
+                                attempt: 1,
+                                maxAttempts: plainTextSession.config.retry.maxAttempts,
+                            },
+                        },
+                    });
+                }
                 if (event?.kind === 'chunk') {
                     // Chunk-only side channels:
                     //   - accumulate job.text so /jobs/status recovery
@@ -288,6 +360,21 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                     //     completeInspectionFromStream at dispatch tail.
                     const bytes = event.data;
                     accumulateChunkTextIntoJob(job, bytes);
+                    // Live backend detection of entering plain-text call syntax
+                    // during streaming keeps Request Inspector in `parsing`
+                    // state until terminal completion or interruption.
+                    if (plainTextStreamDetector && effectiveIsStream && typeof job.text === 'string' && job.text.length > lastDetectedJobTextLen) {
+                        const textDelta = job.text.slice(lastDetectedJobTextLen);
+                        lastDetectedJobTextLen = job.text.length;
+                        const processed = plainTextStreamDetector.processTextDelta(textDelta);
+                        if (processed.detected && !livePlainTextParsingNotified) {
+                            livePlainTextParsingNotified = true;
+                            updateInspectionPlainTextState(request, {
+                                status: 'parsing',
+                                triggerSignal: plainTextSession.config.triggerSignal,
+                            });
+                        }
+                    }
                     // Throttled status push so a reconnecting client's
                     // recovery preview streams live instead of freezing at
                     // its subscribe-time snapshot until awaiting_ack.
@@ -296,10 +383,17 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                     if (bytes && typeof bytes === 'string') {
                         text = bytes;
                     } else if (bytes && (bytes instanceof Uint8Array || Buffer.isBuffer(bytes))) {
-                        try { text = Buffer.from(bytes).toString('utf8'); } catch { text = ''; }
+                        try {
+                            const buf = Buffer.isBuffer(bytes)
+                                ? bytes
+                                : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+                            text = inspectionDecoder.write(buf);
+                        } catch {
+                            text = '';
+                        }
                     }
                     if (!text) return;
-                    if (isStream) {
+                    if (effectiveIsStream) {
                         flushSseFrames(text);
                     } else {
                         // Non-stream: the chunk is the full upstream JSON
@@ -309,132 +403,293 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
                         // payload to the inspector.
                         inspectionEvents.push(text);
                     }
-                } else if (event?.kind === 'end') {
-                    // Tail-flush any SSE residue that never received a
-                    // closing \n\n. Real providers (Claude, OpenAI usage
-                    // deltas) often ship the terminal frame without the
-                    // closing separator; without this, the final
-                    // usage/message_delta payload never lands in the
-                    // inspector.
-                    if (sseBuffer) {
-                        if (!sseBuffer.endsWith('\n\n')) {
-                            flushSseFrames('\n\n');
-                        } else {
-                            flushSseFrames('');
-                        }
-                    }
-                    sseBuffer = '';
                 }
-                // `head` and `error` intentionally have no side channel —
-                // they're already in `job.events` for WS delivery, and
-                // failInspection / completeInspection paths in the outer
-                // try/catch cover the inspector surface.
             },
         });
         try {
             await dispatchFn(ctx);
-            // Advance the generation job to `awaiting_ack` FIRST so the
-            // trailer we emit next reports the current `persisted` flag
-            // accurately. `completeGenerationJobFromText` arms the 15s
-            // auto-persist grace timer; `job.persisted` flips to `true`
-            // asynchronously when the timer fires (or when a fast synchronous
-            // persistence path completes it inline in tests). Callers that
-            // need the final flag still poll /jobs/status — the trailer just
-            // carries whatever state we can observe *right now*.
-            //
-            // Legacy handlers called this via `finalizePayloadWithJob` /
-            // `forwardStreamingWithGenerationJob`; the refactor initially
-            // called it AFTER emitting the trailer, guaranteeing every
-            // trailer reported `persisted: false` and `status: 'running'`.
-            try {
-                await completeGenerationJobFromText(request, job, job.text || '', request.body?.model || '');
-            } catch { /* generation-job best-effort; never crash background */ }
-            // Emit the legacy trailer SSE frame carrying luker.generation_id
-            // + persisted + status. Frontend openai.js:4316 reads this frame
-            // to learn the job id and persist flag. Legacy
-            // forwardStreamingWithGenerationJob appended this at stream tail;
-            // the refactor dropped it. ONLY for streaming — non-stream body
-            // is a single JSON blob that `await response.json()` would fail
-            // to parse if an SSE-shaped frame were appended.
-            //
-            // Uses `emit.trailer` (context.js) which bypasses safeEmit's
-            // terminal-lock: dispatches emit `end` at their own tail, and
-            // without the bypass every trailer would be silently dropped.
-            const isStream = Boolean(request.body?.stream || request.body?.streaming);
-            if (isStream) {
+            if (dispatchSawError) {
                 try {
-                    const trailer = JSON.stringify({
-                        luker: {
-                            generation_id: job.id,
-                            persisted: Boolean(job.persisted),
-                            status: job.status,
-                        },
-                    });
-                    ctx.emit.trailer(new TextEncoder().encode(`data: ${trailer}\n\n`));
-                } catch { /* best-effort */ }
-            }
-            // Finish providers that do not emit their own terminal event.
-            ctx.emit.end();
-            // Runner-side inspector complete. Only advance `type: 'chat'`
-            // entries — SD dispatches use `startImageInspection` (creates a
-            // `type: 'image'` entry with its own completeImage lifecycle),
-            // and calling completeInspectionFromStream on an image entry
-            // would clobber its already-set responseText/parts/usage.
-            //
-            // For NON-streaming chat requests, inspectionEvents contains a
-            // single decoded string = the full upstream JSON body.
-            // completeInspectionFromStream tries to parse it as SSE frames
-            // ("data: {...}\n\n") and yields empty usage/parts. Detect the
-            // non-stream case via body.stream and route to completeInspection
-            // with the parsed payload instead — matches legacy
-            // finalizePayloadWithJob→completeInspection semantics so
-            // inspector UI shows usage + parts for non-stream Claude / OAI /
-            // Gemini / etc.
-            try {
-                const entry = findEntry(request);
-                // Don't overwrite terminal states set by the dispatch itself:
-                //   - failInspection (upstream 4xx/5xx handled in dispatch's
-                //     !resp.ok branch — sets status='error' + real httpStatus)
-                //   - abortInspection (user-cancelled)
-                //   - completeInspection (dispatch that owns the raw upstream
-                //     body — Claude / MakerSuite / VertexAI / Cohere — calls
-                //     ctx.inspection.complete(oai, raw) directly so the
-                //     extractors see provider-native fields like
-                //     usage.cache_read_input_tokens, usageMetadata.
-                //     cachedContentTokenCount, thinking blocks with
-                //     signatures. Runner-side completeInspection can only
-                //     pass (payload, payload) which loses the raw shape.)
-                // Without this guard, upstream Claude 400 requests come back
-                // as status='success' httpStatus=200 in the inspector UI
-                // because runner-side completeInspection unconditionally
-                // rewrites status/httpStatus regardless of prior state.
-                if (entry && entry.type === 'chat' && entry.status === 'running') {
-                    if (isStream) {
-                        // Grab any final frame that didn't terminate with
-                        // \n\n before extractors run — otherwise
-                        // usage/message_delta frames at the very tail get
-                        // dropped and responseParts + usage come back empty.
-                        flushSseTailBuffer();
-                        completeInspectionFromStream(request, inspectionEvents, job.text || '');
-                    } else {
-                        // Best-effort JSON parse of accumulated single-frame
-                        // body; if it fails (unexpected non-JSON payload)
-                        // fall back to the streaming path so we at least set
-                        // status/duration/httpStatus and don't leave the
-                        // entry perma-pending.
-                        let payload = null;
-                        try {
-                            payload = JSON.parse(inspectionEvents.join(''));
-                        } catch { /* fall through */ }
-                        if (payload && typeof payload === 'object') {
-                            completeInspection(request, payload, payload);
+                    const entry = findEntry(request);
+                    if (entry && entry.status === 'running') {
+                        if (abortController.signal.aborted) {
+                            ctx.inspection.abort();
+                        } else if (entry.type === 'image') {
+                            ctx.inspection.failImage(new Error(dispatchErrorMessage || 'Dispatch error'), 500);
                         } else {
-                            completeInspectionFromStream(request, inspectionEvents, job.text || '');
+                            ctx.inspection.fail(new Error(dispatchErrorMessage || 'Dispatch error'), 500);
+                        }
+                    }
+                } catch (err) {
+                    console.error('[Runner] Failed to finalize errored request inspection:', err);
+                }
+            } else {
+                // Flush providers that did not call ctx.emit.end() themselves
+                // before computing final job.text / job.parsedTurn.
+                ctx.emit.end();
+
+                const isSuccessStatus = upstreamHeadStatus >= 200 && upstreamHeadStatus < 300;
+                const isAborted = abortController.signal.aborted || job.status === 'cancelled';
+                // Runner-side inspector completion runs BEFORE plain-text
+                // evaluation and BEFORE emitting `meta` + `end` so the
+                // inspector entry is complete and race-free the moment the
+                // client observes stream completion.
+                try {
+                    const entry = findEntry(request);
+                    if (entry && entry.type === 'chat' && entry.status === 'running') {
+                        if (isAborted) {
+                            ctx.inspection.abort();
+                        } else if (!isSuccessStatus) {
+                            ctx.inspection.fail(new Error(`Upstream returned HTTP ${upstreamHeadStatus}`), upstreamHeadStatus);
+                        } else if (effectiveIsStream) {
+                            flushSseTailBuffer();
+                            const invalidSse = sseFramer.getInvalidDiagnostic?.();
+                            const protocol = resolveWireProtocol(entry.source);
+                            if (protocol && inspectionEvents.length === 0 && invalidSse) {
+                                const parseErr = new ProtocolParseError({
+                                    protocol,
+                                    stage: 'sse',
+                                    location: 'stream',
+                                    message: 'Expected text/event-stream SSE frames, received non-SSE response body.',
+                                    rawDiagnostic: invalidSse,
+                                });
+                                failInspectionParseError(request, parseErr, {
+                                    kind: 'streaming',
+                                    protocol,
+                                    rawBody: invalidSse,
+                                }, 200);
+                            } else {
+                                completeInspectionFromStream(request, inspectionEvents, job.text || '');
+                            }
+                        } else {
+                            const rawBody = inspectionEvents.join('');
+                            try {
+                                const payload = JSON.parse(rawBody);
+                                completeInspection(request, payload, payload);
+                            } catch (parseCause) {
+                                const protocol = resolveWireProtocol(entry.source) || entry.source || 'unknown';
+                                const parseErr = new ProtocolParseError({
+                                    protocol,
+                                    stage: 'json',
+                                    location: 'body',
+                                    message: `Malformed non-streaming JSON response: ${parseCause.message}`,
+                                    cause: parseCause,
+                                    rawDiagnostic: rawBody,
+                                });
+                                failInspectionParseError(request, parseErr, {
+                                    kind: 'non-streaming',
+                                    protocol,
+                                    rawBody,
+                                }, 200);
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.error('[Runner] Failed to finalize request inspection:', err);
+                }
+
+                // Validate non-streaming chat protocol responses even when
+                // Request Inspector is disabled (transient sessions) or when
+                // the response body is empty, so malformed JSON never silently
+                // falls through to plain-text evaluation or awaiting_ack.
+                if (isSuccessStatus && !isAborted && !effectiveIsStream && !job.parseError && (!job.parsedTurn || job._streamMode !== 'json')) {
+                    const protocol = resolveWireProtocol(request.body?.chat_completion_source);
+                    if (protocol) {
+                        const rawBody = inspectionEvents.join('');
+                        try {
+                            const turn = parseProtocolResponse(protocol, JSON.parse(rawBody));
+                            job.parsedTurn = turn;
+                            if (typeof turn.text === 'string') {
+                                job.text = turn.text;
+                            }
+                            job._streamMode = 'json';
+                        } catch (parseCause) {
+                            const parseErr = parseCause instanceof ProtocolParseError
+                                ? parseCause
+                                : new ProtocolParseError({
+                                    protocol,
+                                    stage: 'json',
+                                    location: 'body',
+                                    message: `Malformed non-streaming JSON response: ${parseCause?.message || parseCause}`,
+                                    cause: parseCause,
+                                    rawDiagnostic: rawBody,
+                                });
+                            job.parsedTurn = null;
+                            job.text = '';
+                            job.parseError = parseErr.toDiagnostic();
                         }
                     }
                 }
-            } catch { /* inspector best-effort, never fails the request */ }
+
+                // Backend plain-text function-calling evaluation & configured
+                // format-correction retries. Upstream HTTP bytes already passed
+                // through untouched; authoritative results travel via WS `meta`.
+                let clientPlainTextMeta = null;
+                if (plainTextSession.active && isSuccessStatus) {
+                    const entry1 = findEntry(request);
+                    const hasProtocolFailure = Boolean(job.parseError || entry1?.parseError || entry1?.status === 'error');
+                    if (isAborted) {
+                        updateInspectionPlainTextState(request, {
+                            status: 'aborted',
+                            failureReason: 'aborted',
+                            error: 'Aborted',
+                        });
+                        clientPlainTextMeta = buildClientPlainTextMeta({
+                            status: 'aborted',
+                            displayText: '',
+                            calls: [],
+                            toolCalls: [],
+                            error: 'Aborted',
+                            failureReason: 'aborted',
+                        }, {
+                            mode: plainTextSession.config.mode,
+                            triggerSignal: plainTextSession.config.triggerSignal,
+                            attempt: 1,
+                            maxAttempts: plainTextSession.config.retry.maxAttempts,
+                            inspectorEntryId: entry1?.id || null,
+                        });
+                    } else if (!hasProtocolFailure) {
+                        const initialTurn = job.parsedTurn || {
+                            text: job.text || entry1?.responseText || '',
+                            parts: Array.isArray(entry1?.responseParts) ? entry1.responseParts : [],
+                        };
+
+                        const attempt1Result = evaluatePlainTextToolCallTurn(initialTurn, plainTextSession.config);
+                        const attempt1Parts = applyPlainTextResultToResponseParts(
+                            Array.isArray(initialTurn.parts) && initialTurn.parts.length > 0 ? initialTurn.parts : entry1?.responseParts,
+                            attempt1Result,
+                            {
+                                triggerSignal: plainTextSession.config.triggerSignal,
+                                attempt: 1,
+                                maxAttempts: plainTextSession.config.retry.maxAttempts,
+                                retryOf: null,
+                                originalError: '',
+                            },
+                        );
+                        applyInspectionPlainTextResult(request, {
+                            turn: initialTurn,
+                            ptResult: attempt1Result,
+                            config: plainTextSession.config,
+                            responseParts: attempt1Parts,
+                            attempt: 1,
+                            maxAttempts: plainTextSession.config.retry.maxAttempts,
+                            retryOf: null,
+                            originalError: '',
+                        });
+
+                        let finalTurn = initialTurn;
+                        let finalResult = attempt1Result;
+                        let finalAttempt = 1;
+                        let finalRetryOf = null;
+                        let finalOriginalError = '';
+                        let finalEntryId = entry1?.id || null;
+
+                        if (attempt1Result.status === 'parse_failed'
+                            && plainTextSession.config.retry.enabled
+                            && plainTextSession.config.retry.maxAttempts > 1) {
+                            const retryOutcome = await runPlainTextFormatCorrectionRetries({
+                                originalRequest: request,
+                                cleanDispatchBody: plainTextSession.dispatchBody,
+                                baseMessages: plainTextSession.baseMessages,
+                                postProcessMessages,
+                                select,
+                                abortController,
+                                initialEntryId: entry1?.id || null,
+                                initialTurn,
+                                initialPtResult: attempt1Result,
+                                config: plainTextSession.config,
+                            });
+                            finalTurn = retryOutcome.turn || finalTurn;
+                            finalResult = retryOutcome.ptResult;
+                            finalAttempt = retryOutcome.attempt;
+                            finalRetryOf = retryOutcome.retryOf;
+                            finalOriginalError = retryOutcome.originalError;
+                            finalEntryId = retryOutcome.inspectorEntryId || finalEntryId;
+                        }
+
+                        if (finalResult.status === 'parsed') {
+                            job.text = finalResult.displayText;
+                            const baseTurn = finalAttempt > 1 ? finalTurn : (job.parsedTurn || finalTurn);
+                            if (baseTurn) {
+                                const sanitizedTurn = { ...baseTurn, text: finalResult.displayText };
+                                delete sanitizedTurn.nativeContentBlocks;
+                                delete sanitizedTurn.nativeParts;
+                                delete sanitizedTurn.responsesOutputItems;
+                                job.parsedTurn = sanitizedTurn;
+                            }
+                        } else if (finalResult.status === 'none' && finalAttempt > 1) {
+                            job.text = finalResult.displayText ?? '';
+                            if (finalTurn) {
+                                job.parsedTurn = finalTurn;
+                            }
+                        } else if (finalResult.status === 'parse_failed' || finalResult.status === 'network_error' || finalResult.status === 'aborted') {
+                            // Never persist broken XML call markup into chat history.
+                            job.text = '';
+                        }
+
+                        clientPlainTextMeta = buildClientPlainTextMeta(finalResult, {
+                            mode: plainTextSession.config.mode,
+                            triggerSignal: plainTextSession.config.triggerSignal,
+                            attempt: finalAttempt,
+                            maxAttempts: plainTextSession.config.retry.maxAttempts,
+                            retryOf: finalRetryOf,
+                            originalError: finalOriginalError,
+                            inspectorEntryId: finalEntryId,
+                            replacedTurn: finalAttempt > 1 ? finalTurn : null,
+                        });
+                    }
+                }
+
+                // Advance the generation job FIRST so the `meta` frame we emit
+                // next reports the accurate `persisted` flag and `status`.
+                // Non-2xx upstream statuses, protocol parse errors / in-stream
+                // provider errors, and aborted jobs must fail rather than
+                // entering `awaiting_ack` with an auto-persist grace timer.
+                const protocolParseError = job.parseError || findEntry(request)?.parseError || null;
+                const abortedNow = isAborted || abortController.signal.aborted || job.status === 'cancelled';
+                try {
+                    if (abortedNow || job.status === 'failed') {
+                        if (job.status !== 'cancelled' && job.status !== 'failed') {
+                            const reason = abortController.signal.reason;
+                            failGenerationJob(job, reason instanceof Error ? reason.message : String(reason || 'Aborted'));
+                        }
+                    } else if (!isSuccessStatus) {
+                        failGenerationJob(job, `Upstream returned HTTP ${upstreamHeadStatus}`);
+                    } else if (protocolParseError) {
+                        failGenerationJob(job, protocolParseError.message || 'Upstream protocol parse error');
+                    } else {
+                        await completeGenerationJobFromText(request, job, job.text || '', request.body?.model || '');
+                    }
+                } catch (err) {
+                    console.error('[Runner] Failed to update generation job state:', err);
+                }
+                // Emit dedicated out-of-band WS `meta` frame for BOTH streaming
+                // and non-streaming requests so upstream response.body stays
+                // 100% verbatim upstream wire bytes with zero synthetic frames.
+                ctx.emit.meta({
+                    generation_id: job.id,
+                    persisted: Boolean(job.persisted),
+                    status: job.status,
+                    ...(clientPlainTextMeta ? { plain_text_function_call: clientPlainTextMeta } : {}),
+                });
+                if (!endEmitted) {
+                    endEmitted = true;
+                    appendGenerationEvent(job, { kind: 'end', data: null });
+                }
+            }
         } catch (err) {
+            if (plainTextSession.active) {
+                const isAbort = err?.name === 'AbortError' || abortController.signal.aborted;
+                try {
+                    updateInspectionPlainTextState(request, {
+                        status: isAbort ? 'aborted' : 'network_error',
+                        failureReason: isAbort ? 'aborted' : 'network',
+                        error: err?.message || String(err || ''),
+                    });
+                } catch (updateErr) {
+                    console.error('[Runner] Failed to update plain-text inspection state:', updateErr);
+                }
+            }
             // Order matters: (1) surface to client through emit.error so the
             // WS delivery layer flips the terminal-lock and abandons any
             // buffered chunks; (2) transition the generation job from
@@ -450,14 +705,20 @@ export async function runLukerDispatch(request, response, { endpoint, select }) 
             try { failGenerationJob(job, err?.message || String(err)); } catch (e) { console.warn('[Runner] failGenerationJob threw:', e); }
             try {
                 const entry = findEntry(request);
-                if (entry && entry.type === 'chat') {
-                    // Explicit 500: an unhandled dispatch throw is not an
-                    // upstream 4xx (those go through the dispatch's own
-                    // !resp.ok branch which sets httpStatus to the real
-                    // upstream code). Route through ctx.inspection.fail so
-                    // dispatches that override the inspection facade (tests)
-                    // see the same call site.
-                    ctx.inspection.fail(err, 500);
+                if (entry && entry.status === 'running') {
+                    if (err?.name === 'AbortError' || abortController.signal.aborted) {
+                        ctx.inspection.abort();
+                    } else if (entry.type === 'image') {
+                        ctx.inspection.failImage(err, 500);
+                    } else {
+                        // Explicit 500: an unhandled dispatch throw is not an
+                        // upstream 4xx (those go through the dispatch's own
+                        // !resp.ok branch which sets httpStatus to the real
+                        // upstream code). Route through ctx.inspection.fail so
+                        // dispatches that override the inspection facade (tests)
+                        // see the same call site.
+                        ctx.inspection.fail(err, 500);
+                    }
                 }
             } catch (e) { console.warn('[Runner] inspection.fail threw:', e); }
         }

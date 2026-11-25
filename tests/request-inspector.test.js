@@ -25,8 +25,8 @@ import {
     createTransientSession,
 } from '../src/transient-sessions.js';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
+import { currentScopeForResources } from './harness/storage-scope.js';
 
 // Each test gets a unique handle so the module-level ring buffer stays
 // isolated between cases; findEntry() keys on handle + __inspectorId.
@@ -179,7 +179,10 @@ describe('request-inspector: 200-but-error detection', () => {
             startInspection(req);
             completeInspectionFromStream(
                 req,
-                [JSON.stringify({ choices: [{ delta: { content: 'ok' } }] })],
+                [
+                    JSON.stringify({ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }),
+                    '[DONE]',
+                ],
                 'ok',
             );
 
@@ -206,22 +209,38 @@ describe('request-inspector: 200-but-error detection', () => {
             expect(e.error).toBe('upstream timeout');
         });
 
-        test('non-JSON frames and [DONE] sentinel do not trip false positives', () => {
-            const req = newRequest();
-            startInspection(req);
+        test('[DONE] sentinel completes cleanly while malformed non-JSON frames fail inspection with parseError', () => {
+            const okReq = newRequest();
+            startInspection(okReq);
             completeInspectionFromStream(
-                req,
+                okReq,
                 [
                     JSON.stringify({ choices: [{ delta: { content: 'a' } }] }),
                     '[DONE]',
-                    'garbage-not-json',
                 ],
                 'a',
             );
+            const okEntry = getEntry(okReq);
+            expect(okEntry.status).toBe('success');
+            expect(okEntry.error).toBe('');
+            expect(okEntry.responseText).toBe('a');
 
-            const e = getEntry(req);
-            expect(e.status).toBe('success');
-            expect(e.error).toBe('');
+            const badReq = newRequest();
+            startInspection(badReq);
+            completeInspectionFromStream(
+                badReq,
+                [
+                    JSON.stringify({ choices: [{ delta: { content: 'a' } }] }),
+                    'garbage-not-json',
+                    '[DONE]',
+                ],
+                'a',
+            );
+            const badEntry = getEntry(badReq);
+            expect(badEntry.status).toBe('error');
+            expect(badEntry.parseError).toMatchObject({ protocol: 'openai-chat', stage: 'json' });
+            expect(badEntry.rawDiagnostic?.events).toContain('garbage-not-json');
+            expect(badEntry.responseText).toBe('');
         });
     });
 });
@@ -395,7 +414,7 @@ describe('request-inspector: openai_responses support', () => {
         expect(entry.usage.cache_write).toBe(45);
         expect(entry.responseText).toBe('Hello world!');
         expect(entry.responseParts).toEqual([
-            { type: 'reasoning', kind: 'text', text: 'Hmm...' },
+            { type: 'reasoning', kind: 'thinking', text: 'Hmm...' },
             { type: 'text', text: 'Hello world!' },
         ]);
         expect(entry.finishReason).toBe('stop');
@@ -475,7 +494,7 @@ describe('request-inspector: openai_responses support', () => {
 
         const entry = getEntry(req);
         expect(entry.finishReason).toBe('content_filter');
-        expect(entry.nativeFinishReason).toBe('incomplete');
+        expect(entry.nativeFinishReason).toBe('content_filter');
     });
 
     test('streaming incomplete with content_filter reason maps to content_filter', () => {
@@ -491,7 +510,7 @@ describe('request-inspector: openai_responses support', () => {
 
         const entry = getEntry(req);
         expect(entry.finishReason).toBe('content_filter');
-        expect(entry.nativeFinishReason).toBe('incomplete');
+        expect(entry.nativeFinishReason).toBe('content_filter');
     });
 
     test('streaming incomplete without content_filter reason still maps to length', () => {
@@ -507,7 +526,7 @@ describe('request-inspector: openai_responses support', () => {
 
         const entry = getEntry(req);
         expect(entry.finishReason).toBe('length');
-        expect(entry.nativeFinishReason).toBe('incomplete');
+        expect(entry.nativeFinishReason).toBe('max_output_tokens');
     });
 });
 
@@ -557,7 +576,7 @@ describe('request-inspector: reasoning_details accumulation and dedup', () => {
         const events = [
             'data: {"choices":[{"delta":{"reasoning":"Let","reasoning_details":[{"type":"reasoning.text","text":"Let","format":"anthropic-claude-v1","index":0}]}}]}',
             'data: {"choices":[{"delta":{"reasoning":" me","reasoning_details":[{"type":"reasoning.text","text":" me","format":"anthropic-claude-v1","index":0}]}}]}',
-            'data: {"choices":[{"delta":{"reasoning":" think.","reasoning_details":[{"type":"reasoning.text","text":" think.","signature":"sig-abc","format":"anthropic-claude-v1","index":0}]}}]}',
+            'data: {"choices":[{"delta":{"reasoning":" think.","reasoning_details":[{"type":"reasoning.text","text":" think.","signature":"sig-abc","format":"anthropic-claude-v1","index":0}]},"finish_reason":"stop"}]}',
         ];
 
         completeInspectionFromStream(req, events);
@@ -584,7 +603,7 @@ describe('request-inspector: reasoning_details accumulation and dedup', () => {
 
         const events = [
             'data: {"choices":[{"delta":{"reasoning":"abc","reasoning_details":[{"type":"reasoning.text","text":"ab","format":"anthropic-claude-v1","index":0}]}}]}',
-            'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"X","index":0}]}}]}',
+            'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"X","index":0}]},"finish_reason":"stop"}]}',
         ];
 
         completeInspectionFromStream(req, events);
@@ -610,7 +629,7 @@ describe('request-inspector: reasoning_details accumulation and dedup', () => {
         startInspection(req);
 
         const events = [
-            'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"a","format":"anthropic-claude-v1","index":0},{"type":"reasoning.text","text":"b","index":0},{"type":"reasoning.encrypted","id":"rs_1","data":"blob-1","format":"openai-responses-v1","index":0},{"type":"reasoning.encrypted","id":"rs_2","data":"blob-2","index":0},{"type":"reasoning.text","text":"c","index":0},{"type":"reasoning.summary","summary":"s1","format":"openai-responses-v1","index":0},{"type":"reasoning.summary","summary":"s2","index":0}]}}]}',
+            'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"a","format":"anthropic-claude-v1","index":0},{"type":"reasoning.text","text":"b","index":0},{"type":"reasoning.encrypted","id":"rs_1","data":"blob-1","format":"openai-responses-v1","index":0},{"type":"reasoning.encrypted","id":"rs_2","data":"blob-2","index":0},{"type":"reasoning.text","text":"c","index":0},{"type":"reasoning.summary","summary":"s1","format":"openai-responses-v1","index":0},{"type":"reasoning.summary","summary":"s2","index":0}]},"finish_reason":"stop"}]}',
         ];
 
         completeInspectionFromStream(req, events);
@@ -635,7 +654,7 @@ describe('request-inspector: reasoning_details accumulation and dedup', () => {
         const req = newRequest('custom');
         startInspection(req);
 
-        completeInspectionFromStream(req, ['data: {"choices":[{"delta":{"reasoning":"plain thought"}}]}']);
+        completeInspectionFromStream(req, ['data: {"choices":[{"delta":{"reasoning":"plain thought"},"finish_reason":"stop"}]}']);
 
         const entry = getEntry(req);
         expect(entry.responseParts).toEqual([
@@ -762,6 +781,29 @@ describe('request-inspector: abort', () => {
         expect(getEntry(req).status).toBe('aborted');
     });
 
+    test('capacity eviction aborts and releases a running request controller', () => {
+        const req = newRequest('openai');
+        startEmbeddingInspection(req, {
+            source: 'openai', model: 'embedding-model', routeKind: 'query',
+            inputCount: 1, inputCharTotal: 2, inputTexts: [{ index: 0, text: 'hi' }],
+        });
+        const entry = getEntry(req);
+        const signal = getInspectionAbortSignal(req);
+        for (let index = 0; index < 200; index++) {
+            const next = newRequest();
+            next.user = req.user;
+            startInspection(next);
+            completeInspection(next, { choices: [{ message: { content: 'retained' } }] });
+        }
+
+        expect(getEntry(req)).toBeNull();
+        expect(getBufferForHandle(req.user.profile.handle)).toHaveLength(200);
+        expect(signal.aborted).toBe(true);
+        expect(getAbortKind(entry)).toBe('');
+        completeEmbeddingInspection(req, { resultCount: 1, vectorDim: 3 });
+        expect(getEntry(req)).toBeNull();
+    });
+
     test('completeEmbeddingInspection cannot overwrite an aborted entry', () => {
         const req = newRequest('openai');
         startEmbeddingInspection(req, {
@@ -853,7 +895,7 @@ describe('request-inspector: abort route', () => {
 
 describe('request-inspector: transient session isolation', () => {
     test('skips chat, image, and embedding inspection for owned transient sessions without clearing ordinary entries', async () => {
-        const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'luker-ri-transient-'));
+        const tempRoot = (await currentScopeForResources().directory('luker-ri-transient')).path;
         const directories = { userImages: path.join(tempRoot, 'images') };
         await fs.mkdir(directories.userImages, { recursive: true });
         const handle = `ri-transient-${Date.now()}`;
@@ -900,7 +942,6 @@ describe('request-inspector: transient session isolation', () => {
             expect(getBufferForHandle(handle)).toEqual(before);
         } finally {
             if (session) await closeTransientSession(session).catch(() => {});
-            await fs.rm(tempRoot, { recursive: true, force: true });
         }
     });
 });

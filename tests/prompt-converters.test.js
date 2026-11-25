@@ -228,6 +228,15 @@ describe('calculateGoogleBudgetTokens', () => {
         expect(mod.calculateGoogleBudgetTokens(8192, 'max', 'gemini-3-pro-image')).toBe('high');
     });
 
+    test('gemini-nano-banana-2.1 maps thinking levels to minimal, medium, and high', () => {
+        expect(mod.calculateGoogleBudgetTokens(8192, 'auto', 'gemini-nano-banana-2.1')).toBeNull();
+        expect(mod.calculateGoogleBudgetTokens(8192, 'minimal', 'gemini-nano-banana-2.1')).toBe('minimal');
+        expect(mod.calculateGoogleBudgetTokens(8192, 'low', 'gemini-nano-banana-2.1')).toBe('minimal');
+        expect(mod.calculateGoogleBudgetTokens(8192, 'medium', 'gemini-nano-banana-2.1')).toBe('medium');
+        expect(mod.calculateGoogleBudgetTokens(8192, 'high', 'gemini-nano-banana-2.1')).toBe('high');
+        expect(mod.calculateGoogleBudgetTokens(8192, 'max', 'gemini-nano-banana-2.1')).toBe('high');
+    });
+
     describe('gemini-3 pro', () => {
         test('auto returns null', () => expect(mod.calculateGoogleBudgetTokens(8192, 'auto', 'gemini-3.0-pro')).toBeNull());
 
@@ -802,6 +811,69 @@ describe('mergeMessages', () => {
         const types = result[0].content.map(c => c.type);
         expect(types).toContain('text');
         expect(types).toContain('image_url');
+    });
+
+    test('refuses to merge consecutive messages carrying native replay blocks', () => {
+        const cases = [
+            { native_content_blocks: [{ type: 'thinking', thinking: 't', signature: 'sig' }, { type: 'text', text: 'A' }] },
+            { native_parts: [{ text: 'A', thoughtSignature: 'gsig' }] },
+            { responses_output_items: [{ type: 'reasoning', encrypted_content: 'enc' }, { type: 'message', content: [{ type: 'output_text', text: 'A' }] }] },
+        ];
+        for (const envelope of cases) {
+            const prevHasEnvelope = mod.mergeMessages([
+                { role: 'assistant', content: 'A', ...envelope },
+                { role: 'assistant', content: 'B' },
+            ], names);
+            expect(prevHasEnvelope).toHaveLength(2);
+            expect(prevHasEnvelope[0].content).toBe('A');
+            expect(prevHasEnvelope[1].content).toBe('B');
+
+            const nextHasEnvelope = mod.mergeMessages([
+                { role: 'assistant', content: 'A' },
+                { role: 'assistant', content: 'B', ...envelope },
+            ], names);
+            expect(nextHasEnvelope).toHaveLength(2);
+            expect(nextHasEnvelope[0].content).toBe('A');
+            expect(nextHasEnvelope[1].content).toBe('B');
+        }
+    });
+
+    test('single mode strips native replay blocks and merges all turns into one user message', () => {
+        const messages = [
+            { role: 'system', content: 'System prompt' },
+            { role: 'user', content: 'Hello' },
+            {
+                role: 'assistant',
+                content: 'Reply A',
+                native_content_blocks: [{ type: 'thinking', thinking: 't', signature: 'sig' }, { type: 'text', text: 'Reply A' }],
+                reasoning_blocks: [{ type: 'thinking', thinking: 't', signature: 'sig' }],
+            },
+            {
+                role: 'assistant',
+                content: 'Reply B',
+                native_parts: [{ text: 'Reply B', thoughtSignature: 'gsig' }],
+                responses_output_items: [{ type: 'reasoning', encrypted_content: 'enc' }],
+            },
+            { role: 'user', content: 'Follow up' },
+        ];
+
+        const singleResult = mod.mergeMessages(structuredClone(messages), names, { single: true });
+        expect(singleResult).toHaveLength(1);
+        expect(singleResult[0].role).toBe('user');
+        expect(singleResult[0].content).toBe('System prompt\n\nUser: Hello\n\nBot: Reply A\n\nBot: Reply B\n\nUser: Follow up');
+        expect(singleResult[0].native_content_blocks).toBeUndefined();
+        expect(singleResult[0].native_parts).toBeUndefined();
+        expect(singleResult[0].responses_output_items).toBeUndefined();
+        expect(singleResult[0].reasoning_blocks).toBeUndefined();
+
+        const postProcessed = mod.postProcessPrompt(structuredClone(messages), mod.PROMPT_PROCESSING_TYPE.SINGLE, names);
+        expect(postProcessed).toHaveLength(1);
+        expect(postProcessed[0].role).toBe('user');
+        expect(postProcessed[0].content).toBe('System prompt\n\nUser: Hello\n\nBot: Reply A\n\nBot: Reply B\n\nUser: Follow up');
+        expect(postProcessed[0].native_content_blocks).toBeUndefined();
+        expect(postProcessed[0].native_parts).toBeUndefined();
+        expect(postProcessed[0].responses_output_items).toBeUndefined();
+        expect(postProcessed[0].reasoning_blocks).toBeUndefined();
     });
 });
 
@@ -1473,6 +1545,53 @@ describe('convertClaudeMessages', () => {
             expect(message.reasoning_details).toBeUndefined();
         }
     });
+
+    test('replays native_content_blocks verbatim in original interleaved order and strips internal replay fields', () => {
+        const blocks = [
+            { type: 'thinking', thinking: 'step 1', signature: 'sig-1' },
+            { type: 'text', text: 'Searching now.', citations: [{ type: 'char_location', cited_text: 'fact' }] },
+            { type: 'server_tool_use', id: 'srv_1', name: 'web_search', input: { query: 'news' } },
+            { type: 'web_search_tool_result', tool_use_id: 'srv_1', content: [{ type: 'web_search_result', url: 'https://example.com' }] },
+            { type: 'thinking', thinking: 'step 2', signature: 'sig-2' },
+            { type: 'tool_use', id: 'toolu_1', name: 'lookup', input: { q: 'x' } },
+        ];
+        const messages = [
+            { role: 'user', content: 'q' },
+            {
+                role: 'assistant',
+                content: 'Searching now.',
+                native_content_blocks: blocks,
+                tool_calls: [{ id: 'toolu_1', type: 'function', function: { name: 'lookup', arguments: '{"q":"x"}' } }],
+            },
+            { role: 'tool', tool_call_id: 'toolu_1', content: '{"ok":true}' },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, true, names);
+        const assistant = result.messages.find(m => m.role === 'assistant');
+        expect(assistant.content).toEqual(blocks);
+        expect(assistant.native_content_blocks).toBeUndefined();
+        expect(assistant.native_parts).toBeUndefined();
+        expect(assistant.responses_output_items).toBeUndefined();
+    });
+
+    test('preserves assistant text prefix alongside tool_calls when native_content_blocks is absent', () => {
+        const messages = [
+            { role: 'user', content: 'q' },
+            {
+                role: 'assistant',
+                content: 'Let me check that for you.',
+                reasoning_blocks: [{ type: 'thinking', thinking: 'plan', signature: 'sig-p' }],
+                tool_calls: [{ id: 'toolu_2', type: 'function', function: { name: 'lookup', arguments: '{"k":"v"}' } }],
+            },
+            { role: 'tool', tool_call_id: 'toolu_2', content: 'done' },
+        ];
+        const result = mod.convertClaudeMessages(messages, '', false, true, names);
+        const assistant = result.messages.find(m => m.role === 'assistant');
+        expect(assistant.content).toEqual([
+            { type: 'thinking', thinking: 'plan', signature: 'sig-p' },
+            { type: 'text', text: 'Let me check that for you.' },
+            { type: 'tool_use', id: 'toolu_2', name: 'lookup', input: { k: 'v' } },
+        ]);
+    });
 });
 
 
@@ -1635,6 +1754,30 @@ describe('convertGooglePrompt', () => {
         expect(funcResp.functionResponse.id).toBe('gemini-call-1');
     });
 
+    test('omits synthetic gemini_call_N ids on wire and resolves repeated ids chronologically', () => {
+        const messages = [
+            { role: 'user', content: 'step 1' },
+            { role: 'assistant', tool_calls: [
+                { id: 'gemini_call_1', function: { name: 'first_tool', arguments: '{"a":1}' } },
+            ] },
+            { role: 'tool', content: 'res1', tool_call_id: 'gemini_call_1' },
+            { role: 'assistant', tool_calls: [
+                { id: 'gemini_call_1', function: { name: 'second_tool', arguments: '{"b":2}' } },
+            ] },
+            { role: 'tool', content: 'res2', tool_call_id: 'gemini_call_1' },
+        ];
+        const result = mod.convertGooglePrompt(messages, 'gemini-2.5-flash', false, names);
+        const parts = result.contents.flatMap(c => c.parts);
+        const calls = parts.filter(p => p.functionCall);
+        const resps = parts.filter(p => p.functionResponse);
+        expect(calls).toHaveLength(2);
+        expect(resps).toHaveLength(2);
+        expect(calls[0].functionCall).toEqual({ name: 'first_tool', args: { a: 1 } });
+        expect(calls[1].functionCall).toEqual({ name: 'second_tool', args: { b: 2 } });
+        expect(resps[0].functionResponse).toEqual({ name: 'first_tool', response: { name: 'first_tool', content: 'res1' } });
+        expect(resps[1].functionResponse).toEqual({ name: 'second_tool', response: { name: 'second_tool', content: 'res2' } });
+    });
+
     test('keeps ids distinct for parallel calls to the same function', () => {
         const messages = [
             { role: 'user', content: 'search both' },
@@ -1716,6 +1859,64 @@ describe('convertGooglePrompt', () => {
         expect(result.system_instruction.parts).toHaveLength(0);
         // System message should be in contents as user
         expect(result.contents[0].role).toBe('user');
+    });
+
+    test('replays native_parts verbatim preserving per-part thoughtSignature and functionCall/functionResponse id mapping', () => {
+        const nativeParts = [
+            { thought: true, text: 'thinking step', thoughtSignature: 'sig-thought-1' },
+            { text: 'Let me run two tools.' },
+            { functionCall: { id: 'gem_c1', name: 'lookup', args: { q: 'a' } }, thoughtSignature: 'sig-call-1' },
+            { functionCall: { id: 'gem_c2', name: 'lookup', args: { q: 'b' } } },
+        ];
+        const messages = [
+            { role: 'user', content: 'check both' },
+            {
+                role: 'assistant',
+                content: 'Let me run two tools.',
+                native_parts: nativeParts,
+                tool_calls: [
+                    { id: 'gem_c1', type: 'function', function: { name: 'lookup', arguments: '{"q":"a"}' } },
+                    { id: 'gem_c2', type: 'function', function: { name: 'lookup', arguments: '{"q":"b"}' } },
+                ],
+            },
+            { role: 'tool', tool_call_id: 'gem_c1', content: '{"a":1}' },
+            { role: 'tool', tool_call_id: 'gem_c2', content: '{"b":2}' },
+        ];
+        const result = mod.convertGooglePrompt(messages, 'gemini-3-pro', false, names);
+        const modelTurn = result.contents.find(c => c.role === 'model');
+        expect(modelTurn.parts).toEqual(nativeParts);
+        const toolTurn = result.contents[result.contents.indexOf(modelTurn) + 1];
+        expect(toolTurn.role).toBe('user');
+        expect(toolTurn.parts.map(p => p.functionResponse)).toEqual([
+            { id: 'gem_c1', name: 'lookup', response: { name: 'lookup', content: '{"a":1}' } },
+            { id: 'gem_c2', name: 'lookup', response: { name: 'lookup', content: '{"b":2}' } },
+        ]);
+    });
+
+    test('preserves assistant text prefix before functionCall and never overwrites existing thoughtSignature', () => {
+        const messages = [
+            { role: 'user', content: 'search' },
+            {
+                role: 'assistant',
+                content: 'Checking now.',
+                tool_calls: [
+                    {
+                        id: 'tc_sig',
+                        type: 'function',
+                        signature: 'real-call-signature',
+                        function: { name: 'search', arguments: '{"q":"cats"}' },
+                    },
+                ],
+            },
+            { role: 'tool', tool_call_id: 'tc_sig', content: 'ok' },
+        ];
+        const result = mod.convertGooglePrompt(messages, 'gemini-3-pro', false, names);
+        const modelTurn = result.contents.find(c => c.role === 'model');
+        expect(modelTurn.parts[0]).toEqual({ text: 'Checking now.' });
+        expect(modelTurn.parts[1]).toEqual({
+            functionCall: { id: 'tc_sig', name: 'search', args: { q: 'cats' } },
+            thoughtSignature: 'real-call-signature',
+        });
     });
 });
 
@@ -1883,5 +2084,55 @@ describe('cachingAtDepthForOpenRouterClaude', () => {
         ];
         mod.cachingAtDepthForOpenRouterClaude(messages, 0, '300');
         expect(typeof messages[1].content).toBe('string');
+    });
+});
+
+describe('Gemini native_parts fallback tool-call id mapping and opaque metadata stripping', () => {
+    test('convertGooglePrompt resolves functionResponse.name when native_parts omits functionCall.id', () => {
+        const prompt = mod.convertGooglePrompt([
+            { role: 'user', content: 'Check weather' },
+            {
+                role: 'assistant',
+                content: '',
+                native_parts: [
+                    { text: 'Thinking...', thought: true, thoughtSignature: 'sig-1' },
+                    { functionCall: { name: 'get_weather', args: { city: 'Bryn' } }, thoughtSignature: 'sig-2' },
+                ],
+                tool_calls: [
+                    { id: 'gemini_call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Bryn"}' } },
+                ],
+            },
+            { role: 'tool', tool_call_id: 'gemini_call_1', content: 'Sunny 20C' },
+        ], 'gemini-2.5-pro', true, { userName: 'User', charName: 'Char', startsWithGroupName: () => false });
+
+        const toolRespTurn = prompt.contents[2];
+        expect(toolRespTurn.role).toBe('user');
+        expect(toolRespTurn.parts[0].functionResponse.name).toBe('get_weather');
+        expect(toolRespTurn.parts[0].functionResponse.id).toBeUndefined();
+    });
+
+    test('convertCohereMessages, convertAI21Messages, and convertMistralMessages strip opaque replay fields', () => {
+        const names = { userName: 'User', charName: 'Char', startsWithGroupName: () => false };
+        const sample = () => ([
+            { role: 'user', content: 'Hello' },
+            {
+                role: 'assistant',
+                content: 'Reply',
+                native_parts: [{ text: 'Reply' }],
+                native_content_blocks: [{ type: 'text', text: 'Reply' }],
+                responses_output_items: [{ type: 'message' }],
+                reasoning_blocks: [{ type: 'thinking', thinking: 'hmm' }],
+            },
+        ]);
+
+        const cohereMsg = mod.convertCohereMessages(sample(), names).chatHistory[1];
+        const ai21Msg = mod.convertAI21Messages(sample(), names)[1];
+        const mistralMsg = mod.convertMistralMessages(sample(), names)[1];
+        for (const msg of [cohereMsg, ai21Msg, mistralMsg]) {
+            expect(msg.native_parts).toBeUndefined();
+            expect(msg.native_content_blocks).toBeUndefined();
+            expect(msg.responses_output_items).toBeUndefined();
+            expect(msg.reasoning_blocks).toBeUndefined();
+        }
     });
 });

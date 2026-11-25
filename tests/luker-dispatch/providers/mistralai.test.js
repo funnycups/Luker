@@ -96,19 +96,21 @@ describe('dispatchMistralAI', () => {
         expect(ctx.fetch).not.toHaveBeenCalled();
     });
 
-    test('missing API key (WITH reverse_proxy): still fails early (legacy strict guard)', async () => {
-        // Legacy MistralAI (pre-dispatch) required an API key even when
-        // reverse_proxy was set — unlike DeepSeek/xAI/Claude which allow
-        // key-less reverse_proxy. Dispatch preserves that strict contract.
-        const ctx = fakeCtx({
-            secret: '',
-            body: { reverse_proxy: 'https://proxy.example.com/v1' },
-        });
-        await dispatchMistralAI(ctx);
+    test('missing API key with reverse_proxy or custom base_url succeeds and omits empty Authorization header', async () => {
+        for (const body of [
+            { reverse_proxy: 'https://proxy.example.com/v1' },
+            { base_url: 'https://custom-mistral.example.com/v1' },
+        ]) {
+            const ctx = fakeCtx({ secret: '', body });
+            await dispatchMistralAI(ctx);
 
-        const errs = ctx._emitted.filter(e => e.kind === 'error');
-        expect(errs.length).toBeGreaterThan(0);
-        expect(ctx.fetch).not.toHaveBeenCalled();
+            expect(ctx.fetch).toHaveBeenCalledTimes(1);
+            const [url, init] = ctx.fetch.mock.calls[0];
+            expect(String(url)).toMatch(/\/v1\/chat\/completions$/);
+            expect('Authorization' in init.headers).toBe(false);
+            expect(ctx._emitted.filter(e => e.kind === 'error')).toHaveLength(0);
+            expect(ctx._emitted.find(e => e.kind === 'head')?.data.status).toBe(200);
+        }
     });
 
     test('streaming: forwards upstream SSE chunks verbatim then end', async () => {

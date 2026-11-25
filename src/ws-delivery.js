@@ -63,6 +63,14 @@ function eventToFrame(requestId, entry) {
         }
         return { type: 'chunk', request_id: requestId, seq: entry.seq, data: payload };
     }
+    if (data.kind === 'meta') {
+        return {
+            type: 'meta',
+            request_id: requestId,
+            seq: entry.seq,
+            meta: (data.data && typeof data.data === 'object') ? data.data : {},
+        };
+    }
     if (data.kind === 'end') {
         return { type: 'end', request_id: requestId, seq: entry.seq };
     }

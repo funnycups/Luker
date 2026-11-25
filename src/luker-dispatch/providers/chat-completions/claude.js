@@ -2,26 +2,12 @@
 import { dispatchLog as console } from '../../logging.js';
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 //
-// Pure dispatch for Claude (Anthropic) chat completions. Extracted from
-// legacy `sendClaudeRequest` (src/endpoints/backends/chat-completions.js).
+// Pure dispatch for Anthropic Claude chat completions.
 // Consumes a DispatchContext (see src/luker-dispatch/context.js) and emits
 // head/chunk/end/error events; never touches Express request/response.
-//
-// TEMPLATE: subsequent providers (4.2-4.26) should mirror this shape:
-//   1) resolve secret via ctx.secrets.read (with secret_id + fallback)
-//   2) build upstream request body/headers (copy from legacy sendXRequest)
-//   3) ctx.inspection.start() / ctx.inspection.attach(url) before fetch
-//   4) ctx.fetch(url, { signal: ctx.signal })
-//   5) on !resp.ok: read body text, ctx.inspection.fail, ctx.emit.error, return
-//   6) streaming: read resp.body as ReadableStream, ctx.emit.chunk per read,
-//      then ctx.emit.end
-//   7) non-streaming: ctx.emit.chunk(bytes of upstream JSON) + ctx.emit.end
-//   8) try/catch around 3-7: ctx.inspection.fail + ctx.emit.error
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
-import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
-import { normalizeClaudeResponseToOAI } from '../../../endpoints/backends/chat-completions.js';
 import {
     convertClaudeMessages,
     cachingAtDepthForClaude,
@@ -31,60 +17,24 @@ import {
 import { normalizeReasoningToken } from './reasoning-params.js';
 import { applyAdditionalParameters } from './custom-params.js';
 import {
+    emitCapabilityConflict,
+    handleProviderDispatchError,
+    relayUpstreamResponse,
+    resolveClaudeCacheConfig,
+} from './upstream-relay.js';
+import {
     buildClaudeTool,
     color,
     convertClaudeToolChoice,
     getConfigValue,
-    modelIdMatchesFamily,
 } from '../../../util.js';
+import {
+    resolveClaudeModelCapabilities,
+    validateClaudeRequestCapabilities,
+} from '../../../../public/scripts/lib/provider-capabilities.js';
 import { normalizeProviderBaseUrl } from '../../../util/base-url.js';
 
 const API_CLAUDE = 'https://api.anthropic.com/v1';
-
-const enableAdaptiveThinking = getConfigValue('claude.enableAdaptiveThinking', true, 'boolean');
-
-function resolveClaudeCacheConfig(body) {
-    const sysFromBody = body?.claude_enable_system_prompt_cache;
-    const depthFromBody = body?.claude_caching_at_depth;
-    const ttlFromBody = body?.claude_extended_ttl;
-
-    const enableSystemPromptCache = typeof sysFromBody === 'boolean'
-        ? sysFromBody
-        : getConfigValue('claude.enableSystemPromptCache', false, 'boolean');
-
-    const useExtendedTtl = typeof ttlFromBody === 'boolean'
-        ? ttlFromBody
-        : getConfigValue('claude.extendedTTL', false, 'boolean');
-    const cacheTTL = useExtendedTtl ? '1h' : '5m';
-
-    const depthRaw = typeof depthFromBody === 'number'
-        ? depthFromBody
-        : getConfigValue('claude.cachingAtDepth', -1, 'number');
-    const cachingAtDepth = Number.isInteger(depthRaw) && depthRaw >= 0 ? depthRaw : -1;
-
-    return { cacheTTL, enableSystemPromptCache, cachingAtDepth };
-}
-
-/**
- * Read Claude API key honoring optional `secret_id` in body, then falling back
- * to the active CLAUDE secret. Mirrors readProviderSecret() semantics without
- * requiring Express request shape.
- * @param {object} ctx DispatchContext
- * @returns {string}
- */
-function resolveClaudeApiKey(ctx) {
-    const requestedId = typeof ctx.body?.secret_id === 'string'
-        ? ctx.body.secret_id.trim()
-        : (typeof ctx.body?.secretId === 'string' ? ctx.body.secretId.trim() : '');
-
-    if (requestedId) {
-        const byId = ctx.secrets.read(SECRET_KEYS.CLAUDE, { secretId: requestedId });
-        if (byId) return byId;
-    }
-    // Prefer ctx.secrets.read for consistency; fall through to active secret.
-    const active = ctx.secrets.read(SECRET_KEYS.CLAUDE);
-    return active || '';
-}
 
 /**
  * Dispatch a Claude chat completion request through the transport-agnostic
@@ -98,11 +48,11 @@ export async function dispatchClaude(ctx) {
     const body = ctx.body || {};
     ctx.inspection.start();
 
-    // Direct body-supplied password wins (legacy: proxy_password override).
+    // Direct body-supplied password wins (proxy_password override).
     const bodyApiKey = typeof body.proxy_password === 'string' ? body.proxy_password : '';
-    const secretKey = bodyApiKey || resolveClaudeApiKey(ctx);
+    const secretKey = bodyApiKey || ctx.secrets.read(SECRET_KEYS.CLAUDE) || '';
 
-    if (!secretKey && !body.reverse_proxy) {
+    if (!secretKey && !body.base_url && !body.reverse_proxy) {
         console.warn('Claude API key is missing.');
         // Legacy shape: `.status(400).send({error:true})`. Surface the missing
         // key as an HTTP 400 with a parseable JSON envelope via head+chunk+
@@ -154,13 +104,15 @@ export async function dispatchClaude(ctx) {
             useTools,
             getPromptNames({ body }),
         );
-        const useThinking = modelIdMatchesFamily(body.model, /^claude-(3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5|haiku-5-5)/);
-        const useWebSearch = modelIdMatchesFamily(body.model, /^claude-(3-5|3-7|opus-4|sonnet-4|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/) && Boolean(body.enable_web_search);
-        const isLimitedSampling = modelIdMatchesFamily(body.model, /^claude-(opus-4-1|sonnet-4-5|haiku-4-5|opus-4-5|opus-4-6|sonnet-4-6)/);
-        const useVerbosity = modelIdMatchesFamily(body.model, /^claude-(opus-4-5|opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/);
-        const noPrefillModel = modelIdMatchesFamily(body.model, /^claude-(opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/);
-        const isAdaptiveModel = modelIdMatchesFamily(body.model, /^claude-(haiku-5|opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5)/) || (enableAdaptiveThinking && modelIdMatchesFamily(body.model, /^claude-(opus-4-6|sonnet-4-6)/));
-        const noSamplingModel = modelIdMatchesFamily(body.model, /^claude-(opus-4-7|opus-4-8|fable-5|mythos-5|mythos-preview|opus-5|sonnet-5|haiku-5-5)/);
+        const enableAdaptiveThinking = getConfigValue('claude.enableAdaptiveThinking', true, 'boolean');
+        const caps = resolveClaudeModelCapabilities(body.model, { enableAdaptiveThinking });
+        const useThinking = caps.supportsThinking;
+        const useWebSearch = caps.supportsWebSearch && Boolean(body.enable_web_search);
+        const isLimitedSampling = caps.limitedSampling;
+        const useVerbosity = caps.supportsVerbosity;
+        const noPrefillModel = caps.noPrefill;
+        const isAdaptiveModel = caps.adaptiveThinking;
+        const noSamplingModel = caps.noSampling;
         let fixThinkingPrefill = false;
 
         const stopSequences = [];
@@ -224,13 +176,12 @@ export async function dispatchClaude(ctx) {
         }
 
         if (body.json_schema) {
-            if (modelIdMatchesFamily(body.model, /^claude-fable-5-1/)) {
-                // Fable 5.1 rejects forced tools, but supports native JSON outputs.
-                requestBody.output_config = {
-                    format: {
-                        type: 'json_schema',
-                        schema: body.json_schema.value,
-                    },
+            if (caps.supportsNativeStructuredOutput) {
+                // Claude 4.1+/4.5+/4.6+/4.7+/5+ support native structured outputs via output_config.format.
+                requestBody.output_config ??= {};
+                requestBody.output_config.format = {
+                    type: 'json_schema',
+                    schema: body.json_schema.value,
                 };
             } else {
                 const jsonTool = buildClaudeTool({
@@ -270,16 +221,14 @@ export async function dispatchClaude(ctx) {
 
         const reasoningToken = normalizeReasoningToken(body.reasoning_effort);
         const includeReasoning = Boolean(body.include_reasoning);
-        const isAlwaysThinking = modelIdMatchesFamily(body.model, /^claude-(fable-5|mythos-5|mythos-preview|opus-5-5)/);
-        const canDisable = modelIdMatchesFamily(body.model, /^claude-(sonnet-5|opus-5|haiku-5-5|sonnet-5-5|opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|opus-4-5|sonnet-4-5|haiku-4-5)/);
 
         const budgetTokens = calculateClaudeBudgetTokens(requestBody.max_tokens, reasoningToken, requestBody.stream, isAdaptiveModel);
 
-        if (reasoningToken === 'off' && canDisable && !isAlwaysThinking) {
-            if (modelIdMatchesFamily(body.model, /^claude-sonnet-5-5/)) {
+        if (reasoningToken === 'off' && caps.canDisableThinking && !caps.alwaysThinking) {
+            if (caps.offThinkingMode === 'between_tools') {
                 fixThinkingPrefill = true;
                 requestBody.thinking = { type: 'between_tools' };
-            } else if (modelIdMatchesFamily(body.model, /^claude-(opus-4-6|sonnet-4-6|opus-4-7|opus-4-8|opus-4-5|sonnet-4-5|haiku-4-5)/)) {
+            } else if (caps.offThinkingMode === 'omit') {
                 // Thinking is off by default on these models; send nothing.
             } else {
                 fixThinkingPrefill = true;
@@ -293,6 +242,8 @@ export async function dispatchClaude(ctx) {
             }
             requestBody.output_config ??= {};
             requestBody.output_config.effort = budgetTokens;
+            delete requestBody.temperature;
+            delete requestBody.top_p;
             delete requestBody.top_k;
         } else if (useThinking && Number.isInteger(budgetTokens)) {
             fixThinkingPrefill = true;
@@ -308,14 +259,18 @@ export async function dispatchClaude(ctx) {
             delete requestBody.top_p;
             delete requestBody.top_k;
         } else if (useThinking && includeReasoning && (reasoningToken === 'auto' || reasoningToken === 'off')
-            && modelIdMatchesFamily(body.model, /^claude-(fable|mythos-5|mythos-preview|opus-5|sonnet-5)/)) {
+            && caps.defaultThinkingRequiresDisplay) {
             // These families think by default; readable summaries require an explicit display request.
             fixThinkingPrefill = true;
             requestBody.thinking = { type: 'adaptive', display: 'summarized' };
         }
 
-        if ((fixThinkingPrefill || noPrefillModel) && convertedPrompt.messages.length && convertedPrompt.messages[convertedPrompt.messages.length - 1].role === 'assistant') {
-            convertedPrompt.messages[convertedPrompt.messages.length - 1].role = 'user';
+        const lastClaudeMessage = convertedPrompt.messages.length
+            ? convertedPrompt.messages[convertedPrompt.messages.length - 1]
+            : null;
+        const isPauseTurnResume = Boolean(body.claude_pause_turn_continuation);
+        if ((fixThinkingPrefill || noPrefillModel) && !isPauseTurnResume && lastClaudeMessage?.role === 'assistant') {
+            lastClaudeMessage.role = 'user';
         }
 
         if (useVerbosity && body.verbosity && !requestBody.output_config?.effort) {
@@ -330,11 +285,22 @@ export async function dispatchClaude(ctx) {
 
         applyAdditionalParameters(requestBody, additionalHeaders, body);
 
+        const capabilityConflict = validateClaudeRequestCapabilities({
+            model: body.model,
+            thinking: requestBody.thinking,
+            toolChoice: requestBody.tool_choice,
+            enableAdaptiveThinking,
+        });
+        if (capabilityConflict) {
+            emitCapabilityConflict(ctx, capabilityConflict, 'Claude');
+            return;
+        }
+
         const fetchUrl = apiUrl.endsWith('/') ? apiUrl + 'messages' : apiUrl + '/messages';
         const requestHeaders = {
             'Content-Type': 'application/json',
             'anthropic-version': '2023-06-01',
-            'x-api-key': secretKey,
+            ...(secretKey ? { 'x-api-key': secretKey } : {}),
             ...additionalHeaders,
         };
         ctx.inspection.attach(fetchUrl, resolveEffectiveApiKey(requestHeaders, secretKey, ['x-api-key']), requestBody);
@@ -348,77 +314,12 @@ export async function dispatchClaude(ctx) {
             headers: requestHeaders,
         });
 
-        // Architectural contract: every dispatch emits a single head frame
-        // immediately after the upstream fetch resolves, regardless of
-        // status. The WebSocket delivery layer (ws-delivery) uses head to
-        // release the client-side `await headPromise`; without it the
-        // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: resp.status, headers: resp.headers });
-
-        if (!resp.ok) {
-            let errText = '';
-            try { errText = await resp.text(); } catch { /* body already consumed */ }
-            console.warn(`Claude API returned error: ${resp.status} ${resp.statusText}\n${errText}`);
-            const msg = `Claude upstream ${resp.status}: ${errText}`;
-            ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
-            // Surface upstream status + body to the client via chunk + end
-            // (head already emitted above). Client sees
-            // Response.status=<upstream> and Response.body readable so
-            // callers can do `await response.text()` or
-            // `await response.json()` for structured error inspection
-            // (matches legacy handler shape which returned
-            // `.status(4xx).send({error:{...}})`).
-            if (errText) {
-                ctx.emit.chunk(new TextEncoder().encode(errText));
-            }
-            ctx.emit.end();
-            return;
-        }
-
-        if (body.stream) {
-            await pipeResponseBodyToEmit(resp, ctx);
-        } else {
-            // Non-streaming Claude returns Anthropic-shaped JSON
-            // (content: [{type,text}], stop_reason, usage: {input_tokens,
-            // output_tokens}). Frontend consumers (openai.js:4515 for main
-            // chat, generate-task.js:807 for iter studio) expect OAI shape
-            // (choices[0].message.content). Legacy sendClaudeRequest called
-            // normalizeClaudeResponseToOAI before response.send; the refactor
-            // dropped it so both non-stream paths returned raw Anthropic body
-            // and consumers saw `undefined` / `no choices` errors.
-            const anthropicJson = await resp.json();
-            console.debug('Claude response:', anthropicJson);
-            if (anthropicJson && typeof anthropicJson === 'object' && !Array.isArray(anthropicJson) && anthropicJson.error) {
-                console.warn('Claude API returned HTTP 200 with error payload', anthropicJson);
-                ctx.emit.chunk(new TextEncoder().encode(JSON.stringify(anthropicJson)));
-                ctx.emit.end();
-                try { ctx.inspection.complete(anthropicJson, anthropicJson); } catch { /* inspection best-effort */ }
-                return;
-            }
-            const oai = normalizeClaudeResponseToOAI(anthropicJson);
-            const oaiBytes = new TextEncoder().encode(JSON.stringify(oai));
-            ctx.emit.chunk(oaiBytes);
-            ctx.emit.end();
-            // Feed BOTH the normalized OAI payload and the raw Anthropic
-            // body to the inspector. Runner-side completeInspection only
-            // has access to the OAI reply (that's what dispatch emits on
-            // the chunk bus) and would call completeInspection(oai, oai)
-            // — extractUsageFromClaude then walks the OAI-normalized
-            // usage shape and misses Anthropic-native fields:
-            //   • usage.cache_creation_input_tokens (cache_write)
-            //   • usage.cache_read_input_tokens (cache_read)
-            //   • content[].type='thinking' blocks with .signature
-            //   • content[].type='tool_use' blocks (extractPartsFromPayload
-            //     for source='claude' walks raw.content directly)
-            // Calling ctx.inspection.complete here marks the entry as
-            // 'success' so the runner's status-guard skips the fallback
-            // path (entry.status === 'running' check in runner.js:300).
-            try { ctx.inspection.complete(oai, anthropicJson); } catch { /* inspection best-effort */ }
-        }
+        await relayUpstreamResponse(ctx, resp, {
+            label: 'Claude',
+            stream: Boolean(requestBody.stream),
+            completeInspection: true,
+        });
     } catch (err) {
-        // AbortError, network error, or any body-construction throw.
-        try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
-        console.error('Error communicating with Claude: ', err);
-        ctx.emit.error(err);
+        handleProviderDispatchError(ctx, err, 'Claude');
     }
 }

@@ -63,25 +63,33 @@ describe('pipeResponseBodyToEmit', () => {
         // Give the stream a tick to emit 'first', then abort.
         await new Promise(r => setImmediate(r));
         ac.abort();
-        await expect(p).rejects.toThrow(/aborted/);
+        await expect(p).rejects.toMatchObject({ name: 'AbortError', message: expect.stringMatching(/aborted/) });
         expect(body.destroyed).toBe(true);
         // No 'end' should have been emitted after abort.
         expect(emitted.find(e => e.kind === 'end')).toBeUndefined();
     });
 
-    test('no body: emits error', async () => {
+    test('no body: emits error and fails inspection when present', async () => {
         const { ctx, emitted } = makeCtx();
+        const failCalls = [];
+        ctx.inspection = { fail: (...args) => failCalls.push(args) };
         await pipeResponseBodyToEmit({ body: null }, ctx);
         expect(emitted.length).toBe(1);
         expect(emitted[0].kind).toBe('error');
         expect(emitted[0].data.message).toMatch(/no body/);
+        expect(failCalls).toHaveLength(1);
+        expect(failCalls[0][1]).toBe(502);
     });
 
-    test('unknown body shape: emits error', async () => {
+    test('unknown body shape: emits error and fails inspection when present', async () => {
         const { ctx, emitted } = makeCtx();
+        const failCalls = [];
+        ctx.inspection = { fail: (...args) => failCalls.push(args) };
         await pipeResponseBodyToEmit({ body: { foo: 'bar' } }, ctx);
         expect(emitted.length).toBe(1);
         expect(emitted[0].kind).toBe('error');
         expect(emitted[0].data.message).toMatch(/neither Web ReadableStream nor Node Readable/);
+        expect(failCalls).toHaveLength(1);
+        expect(failCalls[0][1]).toBe(502);
     });
 });

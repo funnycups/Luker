@@ -68,7 +68,7 @@ function fakeCtx({ body = {}, onFetch, secret = 'cohere-fake-key', signal } = {}
 }
 
 describe('dispatchCohere', () => {
-    test('non-streaming: emits single chunk with OAI-normalized JSON then end', async () => {
+    test('non-streaming: emits single chunk with verbatim native Cohere v2 JSON then end', async () => {
         const ctx = fakeCtx();
         await dispatchCohere(ctx);
 
@@ -80,12 +80,11 @@ describe('dispatchCohere', () => {
         expect(chunks).toHaveLength(1);
         const text = Buffer.from(chunks[0].data).toString('utf8');
         const parsed = JSON.parse(text);
-        // Legacy sendCohereRequest normalizes the upstream body via
-        // normalizeCohereResponseToOAI before returning; the dispatch
-        // provider must preserve that transformation.
-        expect(parsed.choices[0].message.role).toBe('assistant');
-        expect(parsed.choices[0].message.content).toBe('hello back');
-        expect(parsed.choices[0].finish_reason).toBe('stop');
+        expect(parsed.choices).toBeUndefined();
+        expect(parsed.id).toBe('cohere-1');
+        expect(parsed.message.role).toBe('assistant');
+        expect(parsed.message.content[0].text).toBe('hello back');
+        expect(parsed.finish_reason).toBe('complete');
 
         expect(ctx.fetch).toHaveBeenCalledTimes(1);
         const [url, init] = ctx.fetch.mock.calls[0];
@@ -95,15 +94,7 @@ describe('dispatchCohere', () => {
         expect(init.signal).toBe(ctx.signal);
     });
 
-    test('non-streaming: feeds raw Cohere body to inspector alongside OAI-normalized reply (Task 2D)', async () => {
-        // Cohere's raw response has tool_plan reasoning + nested
-        // usage.tokens/billed_units that the OAI-normalized reply flattens
-        // away. Passing rawApiResponse to the inspector is forward-compat
-        // wiring for source='cohere' extractors that need the pre-flatten
-        // shape (currently the inspector routes Cohere usage through
-        // extractUsageFromOAI on the normalized payload; the raw body
-        // arriving unchanged means future cohere-specific extractors can
-        // land without touching this dispatch call site again).
+    test('non-streaming: relays verbatim Cohere body and feeds native JSON to inspector', async () => {
         const rawCohere = {
             id: 'cohere-raw-1',
             message: {
@@ -117,21 +108,22 @@ describe('dispatchCohere', () => {
                 tokens: { input_tokens: 42, output_tokens: 7 },
             },
         };
+        const rawText = JSON.stringify(rawCohere);
         const ctx = fakeCtx({
-            onFetch: jest.fn(async () => new Response(JSON.stringify(rawCohere), {
+            onFetch: jest.fn(async () => new Response(rawText, {
                 status: 200,
                 headers: { 'content-type': 'application/json' },
             })),
         });
         await dispatchCohere(ctx);
 
+        const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
+        expect(chunks).toHaveLength(1);
+        expect(Buffer.from(chunks[0].data).toString('utf8')).toBe(rawText);
+
         expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
-        const [oaiArg, rawArg] = ctx.inspection.complete.mock.calls[0];
-        // First arg = OAI-normalized (message lifted into choices[0]).
-        expect(oaiArg.choices?.[0]?.message?.content).toBe('raw answer');
-        expect(oaiArg.choices?.[0]?.message?.reasoning_content).toBe('i will call the search tool');
-        // Second arg = raw Cohere body (preserves nested usage.tokens +
-        // billed_units + top-level message.tool_plan).
+        const [payloadArg, rawArg] = ctx.inspection.complete.mock.calls[0];
+        expect(payloadArg).toEqual(rawCohere);
         expect(rawArg).toEqual(rawCohere);
         expect(rawArg.usage.tokens.input_tokens).toBe(42);
         expect(rawArg.usage.billed_units.output_tokens).toBe(7);
@@ -228,7 +220,7 @@ describe('dispatchCohere', () => {
         expect(ctx.inspection.complete).toHaveBeenCalledWith(rawError, rawError);
     });
 
-    test('non-streaming HTTP 200 with native string message error: surfaces error envelope instead of normalizing to empty choices', async () => {
+    test('non-streaming HTTP 200 with native string message error: forwards raw payload verbatim instead of normalizing to empty choices', async () => {
         const rawError = { message: 'invalid api token' };
         const ctx = fakeCtx({
             onFetch: jest.fn(async () => new Response(JSON.stringify(rawError), {
@@ -242,15 +234,12 @@ describe('dispatchCohere', () => {
         const chunks = ctx._emitted.filter(e => e.kind === 'chunk');
         expect(chunks).toHaveLength(1);
         const parsed = JSON.parse(new TextDecoder().decode(chunks[0].data));
-        expect(parsed).toEqual({
-            message: 'invalid api token',
-            error: { message: 'invalid api token' },
-        });
+        expect(parsed).toEqual(rawError);
         expect(parsed.choices).toBeUndefined();
 
         expect(ctx._emitted.filter(e => e.kind === 'end')).toHaveLength(1);
         expect(ctx.inspection.complete).toHaveBeenCalledTimes(1);
-        expect(ctx.inspection.complete).toHaveBeenCalledWith(parsed, rawError);
+        expect(ctx.inspection.complete).toHaveBeenCalledWith(rawError, rawError);
     });
 
     test('ctx.signal aborted mid-request: fetch AbortError caught, emits error, no chunk', async () => {

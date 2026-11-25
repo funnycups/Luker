@@ -2,28 +2,18 @@
 import { dispatchLog as console } from '../../logging.js';
 // Copyright (C) 2026 FunnyCups (https://github.com/funnycups)
 //
-// Pure dispatch for MiniMax chat completions. Extracted from legacy
-// `sendMinimaxRequest` (src/endpoints/backends/chat-completions.js:1983-2058).
+// Pure dispatch for MiniMax chat completions.
 // Consumes a DispatchContext (see src/luker-dispatch/context.js) and emits
 // head/chunk/end/error events; never touches Express request/response.
-//
-// Follows the 8-step template established by claude.js (see that file's
-// header for the full recipe). MiniMax specifics:
-//   - Two upstream regions selected by body.minimax_endpoint (global vs cn).
-//   - Secret read honors optional body.secret_id (legacy readSecret third arg)
-//     via ctx.secrets.read(key, { secretId }); no active-secret fallback,
-//     matching legacy behavior which passes the id straight through.
-//   - Consecutive same-role messages are merged (PROMPT_PROCESSING_TYPE.MERGE)
-//     to avoid MiniMax "invalid chat setting (2013)".
-//   - Model 'M2-her' caps max_tokens at 2048.
 
 import { SECRET_KEYS } from '../../../endpoints/secrets.js';
 import { MINIMAX_ENDPOINT } from '../../../constants.js';
-import { getPromptNames, postProcessPrompt, PROMPT_PROCESSING_TYPE } from '../../../prompt-converters.js';
+import { getPromptNames, postProcessPrompt, PROMPT_PROCESSING_TYPE, stripNonChatReplayFields } from '../../../prompt-converters.js';
 import { resolveEffectiveApiKey } from '../../../request-inspector.js';
-import { pipeResponseBodyToEmit } from '../../response-stream.js';
 import { applyAdditionalParameters } from './custom-params.js';
 import { normalizeReasoningToken } from './reasoning-params.js';
+import { handleProviderDispatchError, relayUpstreamResponse } from './upstream-relay.js';
+import { resolveMinimaxModelCapabilities } from '../../../../public/scripts/lib/provider-capabilities.js';
 
 const API_MINIMAX = 'https://api.minimax.io/v1';
 const API_MINIMAX_CN = 'https://api.minimaxi.com/v1';
@@ -55,8 +45,9 @@ export async function dispatchMinimax(ctx) {
 
     try {
         // MiniMax does not allow consecutive messages with the same role.
-        // Merge them into a single message to avoid "invalid chat setting (2013)".
-        const messages = postProcessPrompt(body.messages, PROMPT_PROCESSING_TYPE.MERGE, getPromptNames({ body }));
+        // Strip foreign replay envelopes first so consecutive same-role turns
+        // merge cleanly instead of tripping "invalid chat setting (2013)".
+        const messages = postProcessPrompt(stripNonChatReplayFields(body.messages), PROMPT_PROCESSING_TYPE.MERGE, getPromptNames({ body }));
 
         const bodyParams = {};
 
@@ -65,11 +56,16 @@ export async function dispatchMinimax(ctx) {
             bodyParams.tool_choice = body.tool_choice;
         }
 
+        const minimaxCaps = resolveMinimaxModelCapabilities(body.model);
+        const maxTokens = minimaxCaps.maxOutputTokens !== null && Number.isFinite(Number(body.max_tokens))
+            ? Math.min(Number(body.max_tokens), minimaxCaps.maxOutputTokens)
+            : body.max_tokens;
+
         const requestBody = {
             'messages': messages,
             'model': body.model,
             'temperature': body.temperature,
-            'max_tokens': body.model === 'M2-her' ? Math.min(body.max_tokens, 2048) : body.max_tokens,
+            'max_tokens': maxTokens,
             'stream': body.stream,
             'top_p': body.top_p,
             'stop': body.stop,
@@ -99,47 +95,11 @@ export async function dispatchMinimax(ctx) {
             headers,
         });
 
-        // Architectural contract: every dispatch emits a single head frame
-        // immediately after the upstream fetch resolves, regardless of
-        // status. The WebSocket delivery layer (ws-delivery) uses head to
-        // release the client-side `await headPromise`; without it the
-        // client hangs on subscribe races with setImmediate dispatch.
-        ctx.emit.head({ status: resp.status, headers: resp.headers });
-
-        if (!resp.ok) {
-            let errText = '';
-            try { errText = await resp.text(); } catch { /* body already consumed */ }
-            console.warn('MiniMax returned error: ', errText);
-            const msg = `MiniMax upstream ${resp.status}: ${errText}`;
-            ctx.inspection.fail(new Error(msg), resp?.status ?? 502);
-            // Surface upstream status + body to the client via chunk + end
-            // (head already emitted above). Client sees
-            // Response.status=<upstream> and Response.body readable so
-            // callers can do `await response.text()` or
-            // `await response.json()` for structured error inspection
-            // (matches legacy handler shape which returned
-            // `.status(4xx).send({error:{...}})`).
-            if (errText) {
-                ctx.emit.chunk(new TextEncoder().encode(errText));
-            }
-            ctx.emit.end();
-            return;
-        }
-
-        if (body.stream) {
-            await pipeResponseBodyToEmit(resp, ctx);
-        } else {
-            const buf = await resp.arrayBuffer();
-            try {
-                const json = JSON.parse(new TextDecoder().decode(buf));
-                console.debug('MiniMax response:', json);
-            } catch { /* non-JSON body — skip debug log */ }
-            ctx.emit.chunk(new Uint8Array(buf));
-            ctx.emit.end();
-        }
+        await relayUpstreamResponse(ctx, resp, {
+            label: 'MiniMax',
+            stream: Boolean(requestBody.stream),
+        });
     } catch (err) {
-        try { ctx.inspection.fail(err); } catch { /* inspection best-effort */ }
-        console.error('Error communicating with MiniMax: ', err);
-        ctx.emit.error(err);
+        handleProviderDispatchError(ctx, err, 'MiniMax');
     }
 }

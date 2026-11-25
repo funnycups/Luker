@@ -285,5 +285,37 @@ describe('createDispatchContext', () => {
             // Also OK with just url (old signature).
             expect(() => ctx.inspection.attach('https://example.test/txt2img')).not.toThrow();
         });
+
+        test('dead generation facade and completeFromStream helper are removed', () => {
+            const { ctx } = baseFixture();
+            expect(ctx.generation).toBeUndefined();
+            expect(ctx.inspection.completeFromStream).toBeUndefined();
+        });
+
+        test('setStreamMode and inspection.attach synchronize effective stream mode', async () => {
+            const { findEntry } = await import('../../src/request-inspector.js');
+            const modes = [];
+            const ac = new AbortController();
+            const handle = `stream-sync-${++handleSeq}`;
+            const request = {
+                body: { model: 'jamba-1.5-large', stream: true },
+                user: { profile: { handle }, directories: {} },
+                headers: {},
+            };
+            const ctx = createDispatchContext({
+                request,
+                abortController: ac,
+                onEmit: () => {},
+                onStreamMode: (mode) => modes.push(mode),
+            });
+            ctx.inspection.start();
+            expect(findEntry(request).stream).toBe(true);
+            ctx.inspection.attach('https://api.ai21.com/studio/v1/chat/completions', 'k', { stream: false });
+            expect(modes).toEqual([false]);
+            expect(findEntry(request).stream).toBe(false);
+            ctx.setStreamMode(true);
+            expect(modes).toEqual([false, true]);
+            expect(findEntry(request).stream).toBe(true);
+        });
     });
 });

@@ -50,6 +50,7 @@ jest.unstable_mockModule('../../src/endpoints/backends/luker-generation.js', () 
     // This mock is a no-op because the persisted-trailer test only cares
     // about `job.persisted` and `job.status` values on the trailer frame.
     accumulateChunkTextIntoJob: () => {},
+    finalizeJobProtocolStream: () => {},
     // Throttled live-text status push (no-op here; this file only asserts
     // the trailer frame's persisted/status values).
     notifyJobTextProgress: () => {},
@@ -87,26 +88,25 @@ function fakeResponse() {
     };
 }
 
-describe('runLukerDispatch — trailer reads job.persisted AFTER completeGenerationJobFromText', () => {
-    test('persisted=true + status=completed round-trip into the trailer envelope', async () => {
-        const req = fakeRequest({ requestId: 'trailer-persisted-1', body: { stream: true } });
+describe('runLukerDispatch — meta frame reads job.persisted AFTER completeGenerationJobFromText', () => {
+    test('persisted=true + status=completed round-trip into the out-of-band meta frame before end', async () => {
+        const req = fakeRequest({ requestId: 'meta-persisted-1', body: { stream: true } });
         const res = fakeResponse();
-        const trailerFrames = [];
+        const metaFrames = [];
         const select = () => async (ctx) => {
-            const orig = ctx.emit.trailer;
-            ctx.emit.trailer = (bytes) => { trailerFrames.push(bytes); orig(bytes); };
+            const orig = ctx.emit.meta;
+            ctx.emit.meta = (metaObj) => { metaFrames.push(metaObj); orig(metaObj); };
             ctx.emit.chunk(new TextEncoder().encode('data: {"delta":"y"}\n\n'));
             ctx.emit.end();
         };
         await runLukerDispatch(req, res, { endpoint: 'test', select });
         await new Promise(r => setTimeout(r, 20));
-        expect(trailerFrames).toHaveLength(1);
-        const decoded = new TextDecoder().decode(trailerFrames[0]);
-        expect(decoded.startsWith('data: ')).toBe(true);
-        expect(decoded.endsWith('\n\n')).toBe(true);
-        const payload = JSON.parse(decoded.slice(6).trim());
-        expect(payload.luker.persisted).toBe(true);
-        expect(payload.luker.status).toBe('completed');
-        expect(payload.luker.generation_id).toBe('trailer-persisted-1');
+        expect(metaFrames).toHaveLength(1);
+        expect(metaFrames[0]).toEqual({
+            generation_id: 'meta-persisted-1',
+            persisted: true,
+            status: 'completed',
+        });
+        expect(req.lukerGenerationJob.events.map(e => e.data?.kind)).toEqual(['chunk', 'meta', 'end']);
     });
 });

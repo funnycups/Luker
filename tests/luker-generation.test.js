@@ -17,11 +17,14 @@ import {
     getGenerationJobForRequest,
     appendGenerationEvent,
     accumulateChunkTextIntoJob,
+    finalizeJobProtocolStream,
+    completeGenerationJobFromText,
     subscribeToJob,
     getPersistChatKey,
     failGenerationJob,
     notifyJobTextProgress,
     abortGenerationJobForInspector,
+    persistGenerationJobIfUnacked,
     releaseTransientGenerationJobs,
 } from '../src/endpoints/backends/luker-generation.js';
 import {
@@ -29,9 +32,10 @@ import {
     closeTransientSession,
     createTransientSession,
 } from '../src/transient-sessions.js';
+import { initStorage } from '../src/storage/index.js';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
+import { currentScopeForResources } from './harness/storage-scope.js';
 
 let idCounter = 0;
 function uniqueJobId(prefix) {
@@ -141,25 +145,31 @@ describe('createGenerationJob', () => {
         expect(j1).toBe(j2);
     });
 
-    test('reusing a job resets transient fields but keeps identity', () => {
+    test('reusing a job resets transient and stream state but keeps identity', () => {
         const jobId = uniqueJobId('create-reset');
         const j1 = createGenerationJob(baseRequest(), { job_id: jobId });
+        const previousController = new AbortController();
+        j1.abortController = previousController;
         j1.status = 'failed';
         j1.error = 'boom';
         j1.acked = true;
         j1.text = 'stale';
-        // events array pre-existing is cleared on reuse
         j1.events.push({ seq: 999, data: 'stale', ts: 0 });
+        j1.lastSeq = 999;
 
         const j2 = createGenerationJob(baseRequest(), { job_id: jobId });
         expect(j2).toBe(j1);
         expect(j2.status).toBe('running');
         expect(j2.error).toBe('');
         expect(j2.acked).toBe(false);
-        // text is reset on reuse so a retry does not replay the old stream
+        // A retry re-POSTs the same job_id: the previous attempt's buffered
+        // stream must not replay into the new attempt.
         expect(j2.text).toBe('');
-        // events array is reset for the same reason
-        expect(j2.events.length).toBe(0);
+        expect(j2.events).toEqual([]);
+        expect(j2.lastSeq).toBe(0);
+        // The previous attempt's upstream request is aborted, not left running.
+        expect(previousController.signal.aborted).toBe(true);
+        expect(j2.abortController).toBeNull();
     });
 });
 
@@ -264,8 +274,9 @@ describe('appendGenerationEvent', () => {
         const job = createGenerationJob(req, { job_id: jobId });
         expect(job.requestMeta.api).toBe('claude');
 
-        appendGenerationEvent(job, JSON.stringify({ delta: { text: 'foo' } }));
-        appendGenerationEvent(job, JSON.stringify({ delta: { text: 'bar' } }));
+        appendGenerationEvent(job, JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+        appendGenerationEvent(job, JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'foo' } }));
+        appendGenerationEvent(job, JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'bar' } }));
         expect(job.text).toBe('foobar');
     });
 
@@ -344,13 +355,15 @@ describe('accumulateChunkTextIntoJob', () => {
         expect(job.text).toBe('Hello, world');
     });
 
-    test('SSE Claude: event lines are ignored, data lines feed the extractor', () => {
+    test('SSE Claude: event lines are handled, data lines feed the shared parser', () => {
         const job = makeJob('claude');
         const sse =
+            'event: content_block_start\n' +
+            `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })}\n\n` +
             'event: content_block_delta\n' +
-            `data: ${JSON.stringify({ delta: { text: 'foo' } })}\n\n` +
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'foo' } })}\n\n` +
             'event: content_block_delta\n' +
-            `data: ${JSON.stringify({ delta: { text: 'bar' } })}\n\n`;
+            `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'bar' } })}\n\n`;
         accumulateChunkTextIntoJob(job, enc(sse));
         expect(job.text).toBe('foobar');
     });
@@ -741,7 +754,7 @@ describe('notifyJobTextProgress', () => {
 
 describe('releaseTransientGenerationJobs', () => {
     test('releases only the closed session jobs and preservesOrdinaryGenerationRecovery', async () => {
-        const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'luker-gen-transient-'));
+        const tempRoot = (await currentScopeForResources().directory('luker-gen-transient')).path;
         const directories = { userImages: path.join(tempRoot, 'images') };
         await fs.mkdir(directories.userImages, { recursive: true });
         let sessionA;
@@ -772,7 +785,140 @@ describe('releaseTransientGenerationJobs', () => {
         } finally {
             if (sessionA) await closeTransientSession(sessionA).catch(() => {});
             if (sessionB) await closeTransientSession(sessionB).catch(() => {});
-            await fs.rm(tempRoot, { recursive: true, force: true });
         }
+    });
+});
+
+describe('disconnect fallback persistence metadata', () => {
+    test('persists citations, finish_reason, and native_content_blocks on unacked Claude completion', async () => {
+        const tempRoot = (await currentScopeForResources().directory('luker-gen-fallback-claude')).path;
+        const groupChatsDir = path.join(tempRoot, 'group_chats');
+        const backupsDir = path.join(tempRoot, 'backups');
+        await fs.mkdir(groupChatsDir, { recursive: true });
+        await fs.mkdir(backupsDir, { recursive: true });
+        await initStorage({
+            mode: 'fs',
+            directoriesByHandle: () => ({ root: tempRoot, chats: tempRoot, groupChats: groupChatsDir, backups: backupsDir }),
+        });
+        const groupId = 'group-fallback-citations';
+        const chatFile = path.join(groupChatsDir, `${groupId}.jsonl`);
+        await fs.writeFile(chatFile, `${JSON.stringify({ chat_metadata: {} })}\n`, 'utf8');
+
+        const req = baseRequest({
+            body: { model: 'claude-sonnet-4-6', chat_completion_source: 'claude' },
+            user: {
+                profile: { handle: 'alice' },
+                directories: { chats: tempRoot, groupChats: groupChatsDir },
+            },
+        });
+        const job = createGenerationJob(req, {
+            job_id: uniqueJobId('fallback-citations'),
+            persist_target: { kind: 'group', id: groupId, char_name: 'Iris' },
+        });
+        const citation = {
+            type: 'web_search_result_location',
+            url: 'https://example.com/source',
+            title: 'Source Article',
+            cited_text: 'Verified detail.',
+        };
+        accumulateChunkTextIntoJob(job, JSON.stringify({
+            id: 'msg_fb_1',
+            type: 'message',
+            role: 'assistant',
+            stop_reason: 'end_turn',
+            content: [
+                { type: 'thinking', thinking: 'Checking source', signature: 'sig_fb' },
+                { type: 'text', text: 'Verified answer.', citations: [citation] },
+            ],
+            usage: { input_tokens: 12, output_tokens: 18 },
+        }));
+        finalizeJobProtocolStream(job);
+        await completeGenerationJobFromText(req, job, job.text, 'claude-sonnet-4-6');
+
+        const persisted = await persistGenerationJobIfUnacked(job);
+        expect(persisted).toBe(true);
+
+        const lines = (await fs.readFile(chatFile, 'utf8')).split('\n').map(l => l.trim()).filter(Boolean).map(l => JSON.parse(l));
+        const saved = lines.at(-1);
+        expect(saved.mes).toBe('Verified answer.');
+        expect(saved.extra.finish_reason).toBe('stop');
+        expect(saved.extra.citations).toEqual([citation]);
+        expect(saved.extra.native_content_blocks).toHaveLength(2);
+        expect(saved.extra.token_count).toBe(18);
+    });
+
+    test('persists refusal-only replies with extra.refusal when assistant text is empty', async () => {
+        const tempRoot = (await currentScopeForResources().directory('luker-gen-fallback-refusal')).path;
+        const groupChatsDir = path.join(tempRoot, 'group_chats');
+        const backupsDir = path.join(tempRoot, 'backups');
+        await fs.mkdir(groupChatsDir, { recursive: true });
+        await fs.mkdir(backupsDir, { recursive: true });
+        await initStorage({
+            mode: 'fs',
+            directoriesByHandle: () => ({ root: tempRoot, chats: tempRoot, groupChats: groupChatsDir, backups: backupsDir }),
+        });
+        const groupId = 'group-fallback-refusal';
+        const chatFile = path.join(groupChatsDir, `${groupId}.jsonl`);
+        await fs.writeFile(chatFile, `${JSON.stringify({ chat_metadata: {} })}\n`, 'utf8');
+
+        const req = baseRequest({
+            body: { model: 'gpt-5', chat_completion_source: 'openai' },
+            user: {
+                profile: { handle: 'alice' },
+                directories: { chats: tempRoot, groupChats: groupChatsDir },
+            },
+        });
+        const job = createGenerationJob(req, {
+            job_id: uniqueJobId('fallback-refusal'),
+            persist_target: { kind: 'group', id: groupId, char_name: 'Iris' },
+        });
+        accumulateChunkTextIntoJob(job, JSON.stringify({
+            id: 'chatcmpl_refusal',
+            object: 'chat.completion',
+            choices: [{
+                index: 0,
+                message: { role: 'assistant', content: null, refusal: 'I cannot fulfill that request.' },
+                finish_reason: 'content_filter',
+            }],
+        }));
+        finalizeJobProtocolStream(job);
+        await completeGenerationJobFromText(req, job, job.text, 'gpt-5');
+
+        const persisted = await persistGenerationJobIfUnacked(job);
+        expect(persisted).toBe(true);
+
+        const lines = (await fs.readFile(chatFile, 'utf8')).split('\n').map(l => l.trim()).filter(Boolean).map(l => JSON.parse(l));
+        const saved = lines.at(-1);
+        expect(saved.mes).toBe('I cannot fulfill that request.');
+        expect(saved.extra.refusal).toBe('I cannot fulfill that request.');
+        expect(saved.extra.finish_reason).toBe('content_filter');
+    });
+
+    test('accumulates non-chat streaming SSE frames (Kobold/NovelAI/TextGen) into job.text', () => {
+        const req = baseRequest({ body: { api_type: 'kobold', streaming: true } });
+        const job = createGenerationJob(req, { job_id: uniqueJobId('legacy-sse') });
+        accumulateChunkTextIntoJob(job, Buffer.from('data: {"token":"Hello "}\n\n'));
+        accumulateChunkTextIntoJob(job, Buffer.from('data: {"choices":[{"text":"world"}]}\n\ndata: [DONE]\n\n'));
+        finalizeJobProtocolStream(job);
+        expect(job.text).toBe('Hello world');
+    });
+
+    test('resets UTF-8 decoder and text progress throttle state when recycling a job_id', () => {
+        const jobId = uniqueJobId('recycle-decoder');
+        const req1 = baseRequest({ body: { model: 'gpt-4o', chat_completion_source: 'openai', stream: true } });
+        const job1 = createGenerationJob(req1, { job_id: jobId });
+        // Feed leading bytes of a 3-byte UTF-8 char without completing it.
+        accumulateChunkTextIntoJob(job1, Buffer.from([0xe4, 0xb8]));
+        job1._lastNotifiedTextLen = 42;
+        job1._lastTextNotifyAt = Date.now();
+
+        const req2 = baseRequest({ body: { model: 'gpt-4o', chat_completion_source: 'openai', stream: false } });
+        const job2 = createGenerationJob(req2, { job_id: jobId });
+        expect(job2._utf8Decoder).toBeNull();
+        expect(job2._lastNotifiedTextLen).toBe(0);
+        expect(job2._lastTextNotifyAt).toBe(0);
+        accumulateChunkTextIntoJob(job2, Buffer.from('{"choices":[{"message":{"content":"clean"}}]}'));
+        finalizeJobProtocolStream(job2);
+        expect(job2.text).toBe('clean');
     });
 });
