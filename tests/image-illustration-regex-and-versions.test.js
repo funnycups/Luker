@@ -474,7 +474,7 @@ describe('Illustration promptOnly regex, <img alt> context, version switching, l
             pipeline: { cancelForMessage() {} },
             imageService: {
                 getAvailableLoras: async () => ({ names: [], includeWeight: false }),
-                getCapabilities: async () => currentCaps,
+                getCapabilitiesSnapshot: () => currentCaps,
                 generate: async (prompt, opts) => {
                     generateCalls.push({ prompt, opts });
                     return `/user/images/replayed_${generateCalls.length}.png`;

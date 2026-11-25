@@ -1,3 +1,5 @@
+import { computeImageCapabilities } from '../capabilities.js';
+
 export function createImageService({ bridge, queue, getQueueConfig, context = null }) {
     return {
         configure(options) {
@@ -5,6 +7,16 @@ export function createImageService({ bridge, queue, getQueueConfig, context = nu
         },
         async getAvailableLoras() {
             return bridge.getAvailableLoras();
+        },
+        getCapabilitiesSnapshot() {
+            if (typeof bridge.getCapabilitiesSnapshot === 'function') {
+                return bridge.getCapabilitiesSnapshot();
+            }
+            const sdSettings = context?.extensionSettings?.sd;
+            if (sdSettings && typeof sdSettings === 'object') {
+                return computeImageCapabilities(sdSettings);
+            }
+            return null;
         },
         async getCapabilities() {
             if (typeof bridge.getCapabilities === 'function') {

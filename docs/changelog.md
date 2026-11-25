@@ -2,6 +2,12 @@
 
 This changelog covers every Luker release, from v1.0.0 to the current development version.
 
+## Unreleased
+
+### Image generation
+
+- Fixed clicking an inline illustration blocking the action dialog on a backend workflow request.
+
 ## v2.9.0-rc.5 (2026-11-25)
 
 ### Workbench

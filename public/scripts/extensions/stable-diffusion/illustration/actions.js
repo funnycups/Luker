@@ -111,11 +111,8 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
             if (controller.signal.aborted) {
                 throw createActionAbortError();
             }
-            if (overrideReferences === undefined && rawSavedReferences.length > 0 && typeof imageService.getCapabilities === 'function') {
-                const caps = await imageService.getCapabilities();
-                if (controller.signal.aborted) {
-                    throw createActionAbortError();
-                }
+            if (overrideReferences === undefined && rawSavedReferences.length > 0 && typeof imageService.getCapabilitiesSnapshot === 'function') {
+                const caps = imageService.getCapabilitiesSnapshot();
                 const filtered = filterReplayReferences(rawSavedReferences, caps);
                 savedReferences = filtered.references;
                 if (filtered.skipped.length > 0) {
@@ -249,20 +246,15 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         await run();
     }
 
-    async function showActions(target) {
+    function showActions(target) {
         const resolved = resolveTarget(target);
         if (!resolved) {
             return false;
         }
         const { messageId, record } = resolved;
         let supportsSourceImage = false;
-        if (record.status === 'ready' && record.imageUrl && typeof imageService.getCapabilities === 'function') {
-            try {
-                const caps = await imageService.getCapabilities();
-                supportsSourceImage = Boolean(caps?.supportsSourceImage);
-            } catch {
-                supportsSourceImage = false;
-            }
+        if (record.status === 'ready' && record.imageUrl && typeof imageService.getCapabilitiesSnapshot === 'function') {
+            supportsSourceImage = Boolean(imageService.getCapabilitiesSnapshot()?.supportsSourceImage);
         }
 
         const isFailed = record.status === 'failed';
@@ -495,7 +487,7 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
 
     $('#chat').on('click', '.mes_text [data-illustration-id]', function (event) {
         event.preventDefault();
-        void showActions(this);
+        showActions(this);
     });
 
     return { handleClick: showActions, cancelForMessage, cancelFrom, cancelAll };

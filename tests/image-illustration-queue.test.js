@@ -44,3 +44,15 @@ test('schedules the bridge with prompt, character and signal', async () => {
         characterName: 'Seraphina', signal: controller.signal,
     });
 });
+
+test('getCapabilitiesSnapshot delegates to bridge snapshot without calling async getCapabilities', () => {
+    const snapshot = { supportsSourceImage: true, supportsCharacterReference: false };
+    const bridge = {
+        getCapabilities: jest.fn(async () => { throw new Error('must not call async'); }),
+        getCapabilitiesSnapshot: jest.fn(() => snapshot),
+        generateImage: jest.fn(),
+    };
+    const service = createImageService({ bridge, queue: new GenerationQueue() });
+    expect(service.getCapabilitiesSnapshot()).toBe(snapshot);
+    expect(bridge.getCapabilities).not.toHaveBeenCalled();
+});
