@@ -154,6 +154,73 @@ describe('iteration-library/render-scheduler', () => {
         await scheduler.flush();
         expect(handler).not.toHaveBeenCalled();
     });
+
+    test('handler errors propagate when onError is omitted and do not wedge subsequent runs', async () => {
+        let attempt = 0;
+        const handler = jest.fn(async () => {
+            attempt += 1;
+            if (attempt <= 2) throw new Error(`boom-${attempt}`);
+        });
+        const frames = [];
+        const scheduler = createRenderScheduler({
+            handler,
+            frameRequester: (fn) => { frames.push(fn); },
+        });
+
+        scheduler.schedule();
+        await expect(frames[0]()).rejects.toThrow('boom-1');
+
+        scheduler.schedule();
+        await expect(scheduler.flush()).rejects.toThrow('boom-2');
+
+        // Still operable after throwing on both frame and flush paths.
+        scheduler.schedule();
+        await expect(scheduler.flush()).resolves.toBeUndefined();
+        expect(handler).toHaveBeenCalledTimes(3);
+    });
+
+    test('concurrent flush() calls and mid-flush animation frames never overlap handler()', async () => {
+        let active = 0;
+        let maxActive = 0;
+        const gates = [deferred(), deferred()];
+        let callIndex = 0;
+        const handler = jest.fn(async () => {
+            const idx = callIndex++;
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            try {
+                await gates[idx]?.promise;
+            } finally {
+                active -= 1;
+            }
+        });
+        const frames = [];
+        const scheduler = createRenderScheduler({
+            handler,
+            frameRequester: (fn) => { frames.push(fn); },
+        });
+
+        scheduler.schedule();
+        const flush1 = scheduler.flush();
+        const flush2 = scheduler.flush();
+
+        // Schedule a second mutation while the first flush is still in flight
+        // AND fire the stale queued frame callback.
+        scheduler.schedule();
+        const staleFrame = frames[0]();
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(maxActive).toBe(1);
+
+        gates[0].resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+        gates[1].resolve();
+        await Promise.all([flush1, flush2, staleFrame]);
+
+        expect(maxActive).toBe(1);
+        expect(handler).toHaveBeenCalledTimes(2);
+    });
 });
 
 describe('iteration-library/render-scheduler — default frame requester', () => {

@@ -46,17 +46,6 @@ export async function captureDryRunPayload(context, eventName, opts = {}) {
 }
 
 /**
- * For CHAT_COMPLETION_PROMPT_READY payloads: extract the chat array.
- * The event payload is `{chat, dryRun}`; callers receive the full
- * payload from captureDryRunPayload, this helper unwraps the array.
- */
-export function unwrapCapturedChat(payload) {
-    if (Array.isArray(payload)) return payload;
-    if (payload && Array.isArray(payload.chat)) return payload.chat;
-    return null;
-}
-
-/**
  * Concatenate every system message's content from a captured prompt
  * array, in order, separated by blank lines. Mirrors the popup's
  * pre-existing `assembledPrompt.systemPrompt` shape so the renderer is

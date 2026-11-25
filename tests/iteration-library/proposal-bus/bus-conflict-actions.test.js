@@ -67,13 +67,13 @@ describe('ProposalBus — forceDiscard', () => {
         await handler.write({ type: 'preset' }, { a: 99 });
         handler.write.mockClear();
         await bus.approve(id);
-        const before = bus._testOnly_entries().find((e) => e.id === id);
+        const before = bus.listEntries().find((e) => e.id === id);
         expect(before.status).toBe('conflict');
 
         const result = bus.forceDiscard(id);
         expect(result).toEqual({ ok: true, status: 'rolledBack' });
 
-        const after = bus._testOnly_entries().find((e) => e.id === id);
+        const after = bus.listEntries().find((e) => e.id === id);
         expect(after.status).toBe('rolledBack');
         expect(after.rolledBackAt).toEqual(expect.any(Number));
         // The whole point of force-discard: do NOT write to ST. The user
@@ -150,7 +150,7 @@ describe('ProposalBus — event router wires conflict-state buttons', () => {
         const consumed = await bus.handleClick(evt);
         expect(consumed).toBe(true);
         expect(evt.preventDefault).toHaveBeenCalled();
-        expect(bus._testOnly_entries().find((e) => e.id === id).status).toBe('rolledBack');
+        expect(bus.listEntries().find((e) => e.id === id).status).toBe('rolledBack');
     });
 
     test('export-record click routes to bus.exportRecord and dispatches the event', async () => {

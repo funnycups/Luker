@@ -4,17 +4,16 @@
 /**
  * Lorebook write tools shared by iter popups. Mirror of `lorebook-reads.js`.
  *
- * Architecture: plugin-agnostic. Two-phase contract:
+ * Architecture: plugin-agnostic. Two-step flow:
  *
- *   1. `runLorebookWriteTool(call, { context })` — proposal phase. Returns
+ *   1. `runLorebookWriteTool(call, { context })` — proposal step. Returns
  *      `{ before, after, kind, ... }` WITHOUT touching disk. Popups capture
  *      the result as a pending diff card the user reviews.
  *
- *   2. `applyLorebookProposal(context, { kind, args })` — apply phase.
- *      Re-derives `after` from `args` against the entry's CURRENT on-disk
- *      state and writes once. Re-derivation lets multiple approved
- *      proposals chain correctly and surfaces concurrent drift as a fresh
- *      validation error rather than clobbering.
+ *   2. Commit happens outside this module: the popup stages the result
+ *      on its ProposalBus, and the shared lorebook entry target
+ *      (`proposal-bus/targets/lorebook-entry.js`) writes the approved
+ *      entry after the bus has checked every touched field for drift.
  *
  * Why writes are character-scoped: the popups that invoke writes (e.g.
  * orchestrator iter-studio) shape the iteration around one card. Global
@@ -27,7 +26,7 @@
  */
 
 import { lorebookHelpers as H, LorebookError } from './_lorebook-helpers.js';
-import { STATE_ERROR_REASONS } from '../../state-errors.js';
+import { STATE_ERROR_REASONS } from '../../lib/state-errors.js';
 
 const TOOL_NAMES = Object.freeze({
     LOREBOOK_UPDATE_ENTRY: 'lorebook_update_entry',
@@ -85,7 +84,8 @@ export const LOREBOOK_WRITE_TOOL_DEFS = [
     },
 ];
 
-async function computeUpdate(context, args, { missingReason = STATE_ERROR_REASONS.VALIDATION_TARGET } = {}) {
+async function computeUpdate(context, args) {
+    const missingReason = STATE_ERROR_REASONS.VALIDATION_TARGET;
     const bookName = String(args?.book_name || '').trim();
     if (!bookName) throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_update_entry requires book_name' });
     const uid = H.asFiniteInteger(args?.uid, null);
@@ -123,7 +123,8 @@ async function computeUpdate(context, args, { missingReason = STATE_ERROR_REASON
     };
 }
 
-async function computeStrReplace(context, args, { missingReason = STATE_ERROR_REASONS.VALIDATION_TARGET } = {}) {
+async function computeStrReplace(context, args) {
+    const missingReason = STATE_ERROR_REASONS.VALIDATION_TARGET;
     const bookName = String(args?.book_name || '').trim();
     if (!bookName) throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'lorebook_str_replace_in_entry requires book_name' });
     const uid = H.asFiniteInteger(args?.uid, null);
@@ -176,65 +177,8 @@ async function computeStrReplace(context, args, { missingReason = STATE_ERROR_RE
 }
 
 /**
- * Commit an approved lorebook-edit proposal to disk. Loads the book, copies
- * the supplied `after` entry into `data.entries[uid]` (preserving uid as the
- * address), and saves. Iter-studio's Apply path calls this once per approved
- * pending edit, sequentially.
- */
-export async function applyLorebookCommit(context, { book_name, uid, after } = {}) {
-    const bookName = String(book_name || '').trim();
-    if (!bookName) throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'applyLorebookCommit: book_name is required' });
-    if (!Number.isInteger(uid) || uid < 0) {
-        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'applyLorebookCommit: uid must be a non-negative integer' });
-    }
-    if (!after || typeof after !== 'object' || Array.isArray(after)) {
-        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'applyLorebookCommit: after must be an object' });
-    }
-    const data = await context.loadWorldInfo(bookName);
-    if (!data) throw new LorebookError({ reason: STATE_ERROR_REASONS.CONFLICT, hint: `World book "${bookName}" not found` });
-    const entry = data.entries?.[uid];
-    if (!entry) throw new LorebookError({ reason: STATE_ERROR_REASONS.CONFLICT, hint: `Entry uid ${uid} not found in "${bookName}"` });
-    Object.assign(entry, after);
-    entry.uid = uid;
-    await context.saveWorldInfo(bookName, data, true, { refreshEditor: true });
-    return { ok: true, book_name: bookName, uid };
-}
-
-/**
- * Apply-time commit that re-derives the after-image from the proposal's
- * original tool args against the entry's CURRENT on-disk state, then
- * writes once. The popup approval flow calls this so:
- *
- *   1. Multiple approved proposals on the same book#uid chain correctly
- *      (B lands on top of A's already-committed mutation rather than B's
- *      stale `after` snapshot clobbering A's change).
- *   2. Concurrent drift (a parallel session edited the book between
- *      proposal time and Apply time) surfaces as a fresh validation
- *      error — for `str_replace`, the unique-match guard fires; for
- *      `update`, the shallow merge lands on the current content rather
- *      than the proposal author's expectation.
- */
-export async function applyLorebookProposal(context, { kind, args } = {}) {
-    const safeArgs = (args && typeof args === 'object') ? args : {};
-    let computed;
-    if (kind === 'update') {
-        computed = await computeUpdate(context, safeArgs, { missingReason: STATE_ERROR_REASONS.CONFLICT });
-    } else if (kind === 'str_replace') {
-        computed = await computeStrReplace(context, safeArgs, { missingReason: STATE_ERROR_REASONS.CONFLICT });
-    } else {
-        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `applyLorebookProposal: unknown kind "${kind}"` });
-    }
-    return applyLorebookCommit(context, {
-        book_name: computed.book_name,
-        uid: computed.uid,
-        after: computed.after,
-    });
-}
-
-/**
  * Execute one lorebook write tool. Plugin-agnostic — proposal mode only;
- * returns the {before, after, ...} envelope without touching disk. Commit
- * via `applyLorebookProposal` after user approval.
+ * returns the {before, after, ...} envelope without touching disk.
  *
  * @param {object} call — `{ id, name, args }` from the runner
  * @param {object} ctx

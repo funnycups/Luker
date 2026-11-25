@@ -22,7 +22,7 @@ describe('ProposalBus — reject + reset', () => {
             kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
         });
         bus.reject(id);
-        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        const entry = bus.listEntries().find((e) => e.id === id);
         expect(entry.status).toBe('rejected');
         expect(typeof entry.decidedAt).toBe('number');
     });
@@ -60,7 +60,7 @@ describe('ProposalBus — reject + reset', () => {
         });
         bus.reject(id);
         bus.reset(id);
-        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        const entry = bus.listEntries().find((e) => e.id === id);
         expect(entry.status).toBe('pending');
         expect(entry.decidedAt).toBe(null);
     });
@@ -74,7 +74,7 @@ describe('ProposalBus — reject + reset', () => {
         });
         await bus.approve(id);
         bus.reset(id);
-        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        const entry = bus.listEntries().find((e) => e.id === id);
         expect(entry.status).toBe('committed');
     });
 

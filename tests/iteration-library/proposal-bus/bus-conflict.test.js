@@ -31,7 +31,7 @@ describe('ProposalBus — conflict detection (patch-based)', () => {
         expect(out.ok).toBe(false);
         expect(out.status).toBe('conflict');
         expect(handler.write).not.toHaveBeenCalled();
-        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        const entry = bus.listEntries().find((e) => e.id === id);
         expect(entry.status).toBe('conflict');
         expect(entry.conflictError).toMatchObject({
             targetType: 'preset',
@@ -72,7 +72,7 @@ describe('ProposalBus — conflict detection (patch-based)', () => {
         expect(out.ok).toBe(false);
         expect(out.status).toBe('conflict');
         expect(out.error).toContain('network broke');
-        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        const entry = bus.listEntries().find((e) => e.id === id);
         expect(entry.status).toBe('conflict');
         expect(entry.conflictError.reason).toBe('CONFLICT');
         expect(entry.conflictError.hint).toContain('network broke');

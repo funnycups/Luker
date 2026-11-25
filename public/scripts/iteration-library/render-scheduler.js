@@ -5,14 +5,11 @@
  * iteration-library/render-scheduler — coalesce a burst of render
  * requests into one paint.
  *
- * Each iter-studio popup (orchestrator, CPA, CEA, MG schema) used to
- * own a hand-rolled `scheduleBusRender` driven by `queueMicrotask`. The
- * microtask flush ran at the end of the current async job, so each
- * `bus.propose()` / `bus.approve()` / `bus.drainOutcomes()` produced its
- * own render even when called back-to-back in a tool-call round —
- * dozens of full re-renders per LLM round, each rebuilding every diff
- * card in the popup. Trace-20260617T154806 captured 1,079 renders in
- * 106s of one chat send (~64s main thread).
+ * Each iter-studio popup used to own a hand-rolled `scheduleBusRender`
+ * driven by `queueMicrotask`. Because a microtask runs at the end of the
+ * current job, consecutive `bus.propose()` / `bus.approve()` /
+ * `bus.drainOutcomes()` mutations within a single tool-call round each
+ * triggered an O(cards) full re-render instead of coalescing per frame.
  *
  * This module batches schedule() calls into the next animation frame:
  *
@@ -68,13 +65,26 @@ export function createRenderScheduler({ handler, frameRequester, onError } = {})
         try {
             await handler();
         } catch (err) {
+            const error = err instanceof Error ? err : new Error(String(err));
             if (typeof onError === 'function') {
-                try { onError(err instanceof Error ? err : new Error(String(err))); } catch { /* onError must not wedge the scheduler either */ }
+                try {
+                    onError(error);
+                } catch (hookErr) {
+                    console.error('[render-scheduler] onError handler threw:', hookErr);
+                }
+            } else {
+                throw error;
             }
         } finally {
             running = false;
             queueIfDirty();
         }
+    }
+
+    function startRun() {
+        const run = runOnce();
+        inflight = run.catch(() => {});
+        return run;
     }
 
     function queueIfDirty() {
@@ -85,12 +95,11 @@ export function createRenderScheduler({ handler, frameRequester, onError } = {})
         requestFrame(async () => {
             framed = false;
             if (disposed) return;
-            // flush() may have consumed the dirty flag between scheduling
-            // and firing — re-check before running so we don't double-
-            // render on top of a manual flush.
-            if (!dirty) return;
-            inflight = runOnce();
-            await inflight;
+            // flush() may have consumed the dirty flag or started a run
+            // between scheduling and firing — re-check before running so
+            // we never overlap two handler invocations.
+            if (!dirty || running) return;
+            await startRun();
         });
     }
 
@@ -106,12 +115,14 @@ export function createRenderScheduler({ handler, frameRequester, onError } = {})
     }
 
     async function flush() {
-        if (disposed) return;
-        // Wait for any in-flight handler so flush()'s caller doesn't race
-        // a frame-driven render against its own teardown persist.
-        await inflight;
-        if (!dirty) return;
-        await runOnce();
+        while (!disposed) {
+            if (running) {
+                await inflight;
+                continue;
+            }
+            if (!dirty) return;
+            await startRun();
+        }
     }
 
     function dispose() {

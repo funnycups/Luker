@@ -23,10 +23,9 @@ export function safeClone(value) {
     try {
         return structuredClone(value);
     } catch {
-        try {
-            return JSON.parse(JSON.stringify(value));
-        } catch {
-            return value;
-        }
+        // Live character records can hold browser-side non-cloneable descriptors
+        // that fail structuredClone; fall back to JSON round-trip and let errors
+        // propagate if that also fails so callers never silently receive a live ref.
+        return JSON.parse(JSON.stringify(value));
     }
 }

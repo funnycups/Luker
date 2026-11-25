@@ -99,23 +99,19 @@ export async function describeCtxPath({ path }) {
         out.parameterCount = value.length;
         out.functionName = value.name || '';
         try {
-            const src = String(value).replace(/\s+/g, ' ');
-            out.sourcePreview = src.length > 280 ? src.slice(0, 277) + '...' : src;
+            out.sourcePreview = String(value).replace(/\s+/g, ' ');
         } catch { out.sourcePreview = ''; }
     } else if (typeof value === 'object') {
         out.type = 'object';
         const subKeys = Object.keys(value);
         out.subKeyCount = subKeys.length;
-        out.subKeys = subKeys.slice(0, 60).map(k => {
+        out.subKeys = subKeys.map(k => {
             const v = value[k];
             let t = typeof v;
             if (v === null) t = 'null';
             else if (Array.isArray(v)) t = 'array';
             return { key: k, type: t };
         });
-        if (subKeys.length > 60) {
-            out.note = `${subKeys.length - 60} more keys not shown; descend further with a more specific path`;
-        }
     } else {
         out.type = typeof value;
         try { out.value = JSON.stringify(value); } catch { out.value = String(value); }

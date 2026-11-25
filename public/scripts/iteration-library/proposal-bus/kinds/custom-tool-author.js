@@ -8,9 +8,12 @@
  * concurrent drift surfaces as an error rather than a stale snapshot
  * clobber.
  */
+// Proposals carry `before === after` and the target replays the captured
+// op, so the kind opts out of rollback.
 export const customToolAuthor = {
     kind: 'custom-tool-author',
     targetType: 'orch-custom-tool',
+    inverseAvailable: false,
 };
 
 export function createCustomToolAuthorHandler(_opts = {}) {

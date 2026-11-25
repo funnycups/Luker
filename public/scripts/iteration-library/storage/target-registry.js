@@ -1,4 +1,4 @@
-import { STATE_ERROR_REASONS } from '../../state-errors.js';
+import { STATE_ERROR_REASONS } from '../../lib/state-errors.js';
 
 export class UnknownTargetError extends Error {
     constructor(target) {
@@ -28,6 +28,10 @@ export function registerTarget(typeKey, handler) {
         console.warn(`target-registry: handler for type '${typeKey}' is being overwritten`);
     }
     handlers.set(typeKey, handler);
+}
+
+export function hasTarget(typeKey) {
+    return typeof typeKey === 'string' && handlers.has(typeKey);
 }
 
 export function resolveTarget(target) {

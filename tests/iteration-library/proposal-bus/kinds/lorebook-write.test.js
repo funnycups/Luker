@@ -6,7 +6,7 @@ describe('lorebook-write kind descriptor', () => {
     test('factory returns descriptor with kind + targetType', () => {
         const h = createLorebookWriteHandler();
         expect(h.kind).toBe('lorebook-write');
-        expect(h.targetType).toBe('lorebook');
+        expect(h.targetType).toBe('orch-lorebook');
     });
 
     test('exported descriptor matches the factory output', () => {

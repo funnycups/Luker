@@ -80,7 +80,7 @@ describe('ProposalBus — turn-scoped actions (patch-based)', () => {
         await seedChainedTurn(bus, 'm1', 3);
         const out = bus.rejectAllPendingInTurn(buildMessage('m1', 3));
         expect(out.count).toBe(3);
-        const stillPending = bus._testOnly_entries().filter((e) => e.status === 'pending');
+        const stillPending = bus.listEntries().filter((e) => e.status === 'pending');
         expect(stillPending).toHaveLength(0);
     });
 
@@ -97,7 +97,6 @@ describe('ProposalBus — turn-scoped actions (patch-based)', () => {
                 before: { v: i }, after: { v: i + 1 },
             });
             await bus.approve(id);
-            await new Promise((r) => setTimeout(r, 2));
         }
         expect(handler._get()).toEqual({ v: 3 });
         const out = await bus.rollbackAllInTurn(buildMessage('m1', 3));

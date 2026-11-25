@@ -8,9 +8,7 @@
  * `luker_lib_*`) live in `styles.css` and are loaded once via
  * ensureUiStylesheetInjected().
  */
-export * as toolcall from './toolcall.js';
 export * as message from './message.js';
 export * as diff from './diff.js';
-export * as apply from './apply.js';
 
 export { ensureUiStylesheetInjected } from './styles.js';

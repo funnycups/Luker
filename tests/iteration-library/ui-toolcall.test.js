@@ -214,4 +214,36 @@ describe('renderToolCallChip', () => {
         expect(html).toContain('返回了 2 个值');
         expect(html).not.toContain('Returned 2 values');
     });
+
+    it('renders full untruncated array and object arguments inside expanded details while keeping summary chip compact', () => {
+        const longText = 'this-string-is-definitely-longer-than-twenty-characters';
+        const html = renderToolCallChip(
+            {
+                id: 'full-args',
+                name: 'lorebook_update_entry',
+                args: {
+                    uids: [10, 20, 30, 40, 50],
+                    patch: {
+                        first: longText,
+                        second: 'value-2',
+                        third: 'value-3',
+                        fourth: 'value-4',
+                        nested: { deepKey: 'deep-nested-value' },
+                    },
+                },
+            },
+            { toolDisplay: {}, i18n: ident },
+        );
+        const detailsMatch = html.match(/<details class="luker_lib_toolcall_details">([\s\S]*?)<\/details>/);
+        expect(detailsMatch).not.toBeNull();
+        const detailsBody = detailsMatch[1];
+        expect(detailsBody).toContain('40');
+        expect(detailsBody).toContain('50');
+        expect(detailsBody).toContain(longText);
+        expect(detailsBody).toContain('fourth');
+        expect(detailsBody).toContain('value-4');
+        expect(detailsBody).toContain('deep-nested-value');
+        expect(detailsBody).not.toContain('more)');
+        expect(detailsBody).not.toContain('{…}');
+    });
 });

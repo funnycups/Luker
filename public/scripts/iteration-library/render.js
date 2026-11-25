@@ -2,18 +2,15 @@
  * iteration-library — render helpers.
  *
  * Plugin-owned popups call these from their `renderMessageCard` (or
- * equivalent) when they want the same chat formatting the pre-Plan-2 popups
- * used: bullets, code blocks, bold/italic, etc. Output is DOMPurify-
+ * equivalent) when they want standard markdown chat formatting:
+ * bullets, code blocks, bold/italic, etc. Output is DOMPurify-
  * sanitized, so embedding via `innerHTML` is XSS-safe even with AI replies.
  *
  * showdown + DOMPurify are loaded lazily from `public/lib.js` so unit tests
  * that don't mock the lib bundle keep working — the renderer falls back to
  * a plain HTML-escape if the lazy import fails or hasn't resolved yet.
  */
-
-function escapeHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]));
-}
+import { escapeHtml } from '../lib/html-escape.js';
 
 let _mdConverter = null;
 let _mdSanitizer = null;
@@ -34,7 +31,9 @@ export async function ensureMarkdownDeps() {
                 });
                 _mdSanitizer = lib.DOMPurify;
                 return true;
-            } catch (_e) {
+            } catch (err) {
+                _mdInitPromise = null;
+                console.error('[iteration-library/render] failed to load markdown dependencies:', err);
                 return false;
             }
         })();

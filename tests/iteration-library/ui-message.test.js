@@ -2,11 +2,9 @@
  * @jest-environment jsdom
  */
 import { renderMessageCard, bindChainBrokenBanner } from '../../public/scripts/iteration-library/ui/message.js';
-import { renderApplyControls } from '../../public/scripts/iteration-library/ui/apply.js';
 
 const ident = (s) => s;
 const noopEdit = () => '<div class="edit-card"></div>';
-const applyHook = (i18n) => (m) => renderApplyControls(m, { i18n: i18n || ident });
 
 describe('renderMessageCard', () => {
     it('renders user message body as escaped html with <br>', () => {
@@ -84,21 +82,14 @@ describe('renderMessageCard', () => {
         expect(html).toContain('hits: 2');
     });
 
-    it('shows ✓ Applied stamp + Rollback button when message.appliedAt is set and not rolled back', () => {
+    it('places the renderApplyControls hook output between the edits and the regenerate row', () => {
         const html = renderMessageCard(
             { id: 'm7', role: 'assistant', content: 'x', edits: [{ op: 'set', path: 'a', oldValue: 1, newValue: 2 }], appliedAt: Date.now(), appliedTarget: 'character' },
-            { toolDisplay: {}, renderEditCard: noopEdit, renderApplyControls: applyHook(), isLast: true, i18n: ident },
+            { toolDisplay: {}, renderEditCard: noopEdit, renderApplyControls: (m) => `<div class="apply-hook" data-msg="${m.id}"></div>`, isLast: true, i18n: ident },
         );
-        expect(html).toMatch(/Applied/);
-        expect(html).toContain('rollback');
-    });
-
-    it('shows Rolled back stamp when message.rolledBackAt is set', () => {
-        const html = renderMessageCard(
-            { id: 'm8', role: 'assistant', content: 'x', edits: [], rolledBackAt: Date.now() },
-            { toolDisplay: {}, renderEditCard: noopEdit, renderApplyControls: applyHook(), isLast: true, i18n: ident },
-        );
-        expect(html).toMatch(/Rolled back|回滚|回退/);
+        expect(html).toContain('<div class="apply-hook" data-msg="m7"></div>');
+        expect(html.indexOf('apply-hook')).toBeGreaterThan(html.indexOf('edit-card'));
+        expect(html.indexOf('apply-hook')).toBeLessThan(html.indexOf('regenerate'));
     });
 
     it('shows Regenerate button on every non-auto assistant message', () => {
@@ -119,26 +110,6 @@ describe('renderMessageCard', () => {
             { toolDisplay: {}, renderEditCard: noopEdit, i18n: ident },
         );
         expect(auto).not.toContain('regenerate');
-    });
-
-    it('translates appliedTarget through i18n in the applied-stamp line', () => {
-        // The applied-line carries `message.appliedTarget` as the first
-        // interpolation arg. The renderer must run that target value
-        // through opts.i18n before substituting it so stored English
-        // keys ('preset', 'schema', 'character') surface in the user's
-        // locale at render time. Before the fix, the target flowed
-        // straight into the template as raw English.
-        const dict = { preset: '预设' };
-        const i18n = (s, ...vals) => {
-            const tpl = Object.hasOwn(dict, s) ? dict[s] : s;
-            return vals.reduce((acc, v, i) => acc.replace(new RegExp('\\$\\{' + i + '\\}', 'g'), v), tpl);
-        };
-        const html = renderMessageCard(
-            { id: 'm12', role: 'assistant', content: 'x', edits: [{ op: 'set' }], appliedAt: Date.now(), appliedTarget: 'preset' },
-            { toolDisplay: {}, renderEditCard: noopEdit, renderApplyControls: applyHook(i18n), isLast: true, i18n },
-        );
-        expect(html).toContain('预设');
-        expect(html).not.toContain('Applied to preset at');
     });
 
     it('skips rendering an empty assistant turn entirely (no content / tools / edits / status)', () => {

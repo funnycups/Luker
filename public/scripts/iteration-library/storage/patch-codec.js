@@ -1,5 +1,5 @@
 import { applyPatch, compare } from '../../util/fast-json-patch.js';
-import { STATE_ERROR_REASONS } from '../../state-errors.js';
+import { STATE_ERROR_REASONS } from '../../lib/state-errors.js';
 
 export class PatchConflictError extends Error {
     constructor({ targetType, targetName = null, opIndex, jsonPath, reason: legacyReason, reasonCode = STATE_ERROR_REASONS.CONFLICT, hint = null }) {
@@ -82,22 +82,48 @@ export function decodeBackward(currentState, inversePatch, ctx = {}) {
 export function deriveForward(before, after) {
     return compare(before, after);
 }
-// caller passes [oldest..newest]; we walk newest→oldest to reconstruct backwards
-export function replayBackward(currentState, inversePatches) {
-    if (!Array.isArray(inversePatches) || inversePatches.length === 0) {
-        return { state: currentState, appliedCount: 0 };
-    }
-    let state = currentState;
-    let appliedCount = 0;
-    for (let i = inversePatches.length - 1; i >= 0; i--) {
-        try {
-            state = decodeBackward(state, inversePatches[i]);
-            appliedCount += 1;
-        } catch {
-            return { state, appliedCount };
-        }
-    }
-    return { state, appliedCount };
-}
 // alias: same wrapping as decodeBackward — used in bus.approve to apply forward ops
 export const applyOps = decodeBackward;
+
+// RFC 6901 reader; returns undefined on a missing/invalid path so callers can
+// distinguish "key absent in both sides" from "value differs".
+export function readJsonPointer(doc, pointer) {
+    if (pointer === '') return doc;
+    if (typeof pointer !== 'string' || pointer.charCodeAt(0) !== 47) return undefined;
+    const parts = pointer.slice(1).split('/').map((seg) => seg.replace(/~1/g, '/').replace(/~0/g, '~'));
+    let node = doc;
+    for (const seg of parts) {
+        if (node === null || node === undefined) return undefined;
+        if (Array.isArray(node)) {
+            if (!/^(0|[1-9][0-9]*)$/.test(seg)) return undefined;
+            node = node[Number(seg)];
+        } else if (typeof node === 'object') {
+            if (!Object.prototype.hasOwnProperty.call(node, seg)) return undefined;
+            node = node[seg];
+        } else {
+            return undefined;
+        }
+    }
+    return node;
+}
+
+// Array patches shift indexes. Validate their containing array rather than
+// reconstructing a slot from an already modified document.
+export function expectationPaths(ops, document) {
+    return [...new Set(ops.map((op) => {
+        const parts = op.path.split('/');
+        for (let i = 1; i < parts.length; i++) {
+            const parent = parts.slice(0, i).join('/');
+            if (Array.isArray(readJsonPointer(document, parent))) return parent;
+        }
+        return op.path;
+    }))];
+}
+
+export function captureDriftExpectations(ops, document) {
+    return expectationPaths(ops, document).map((path) => {
+        const value = readJsonPointer(document, path);
+        return value === undefined ? { path, exists: false }
+            : { path, exists: true, value: JSON.parse(JSON.stringify(value)) };
+    });
+}

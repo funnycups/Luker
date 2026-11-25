@@ -16,7 +16,10 @@
  * without inspecting entry state.
  *
  * Payload model: each entry stores the RFC 6902 inverse patch
- * `compare(after, before)` for its turn. Live read/write is routed
+ * `compare(after, before)` for its turn, plus the forward patch
+ * `compare(before, after)` so a pending entry restored from a serialized
+ * session (where the in-memory `_pendingAfter` snapshot is absent) can
+ * still be approved. Live read/write is routed
  * through the target-registry handler (target.type → {read, write,
  * describe}); the bus never touches popup-specific persistence.
  *
@@ -33,12 +36,13 @@ function makeId(kindId, seq) {
     return `${kindId}_${seq}_${rand}`;
 }
 
-function makeEntry({ id, kind, target, inverse, after, sourceCallId, meta }) {
+function makeEntry({ id, kind, target, inverse, forward, after, sourceCallId, meta }) {
     return {
         id,
         kind,
         target,
         inverse,
+        forward,
         _pendingAfter: after,
         sourceCallId: sourceCallId == null ? null : String(sourceCallId),
         status: 'pending',
@@ -54,9 +58,18 @@ function makeEntry({ id, kind, target, inverse, after, sourceCallId, meta }) {
 import { renderProposalCard } from './render-card.js';
 import { renderTurnActions } from './render-turn.js';
 import { dispatch as dispatchProposalClick } from './event-router.js';
-import { encodeInverse, decodeBackward, deriveForward, applyOps, PatchConflictError } from '../storage/patch-codec.js';
+import {
+    encodeInverse,
+    decodeBackward,
+    deriveForward,
+    applyOps,
+    PatchConflictError,
+    readJsonPointer,
+    expectationPaths,
+    captureDriftExpectations as captureExpectations,
+} from '../storage/patch-codec.js';
 import { resolveTarget } from '../storage/target-registry.js';
-import { STATE_ERROR_REASONS } from '../../state-errors.js';
+import { STATE_ERROR_REASONS, CONFLICT_CODES } from '../../lib/state-errors.js';
 
 export function createBus(opts = {}) {
     const i18n = typeof opts.i18n === 'function' ? opts.i18n : (s) => String(s ?? '');
@@ -82,30 +95,55 @@ export function createBus(opts = {}) {
         kinds.set(kindId, handler || {});
     }
 
+    // Rollback writes `decodeBackward(current, inverse)`. An entry whose
+    // kind opts out (`inverseAvailable: false`) or whose inverse is empty
+    // has nothing to undo; writing would re-run a replaying target such
+    // as skill-registry.
+    function isReversibleEntry(entry) {
+        const handler = kinds.get(entry?.kind);
+        if (handler && handler.inverseAvailable === false) return false;
+        return Array.isArray(entry?.inverse) && entry.inverse.length > 0;
+    }
+
     function resolveTargetSafe(target) {
         return resolveTarget(target);
     }
 
-    // RFC 6901 reader; returns undefined on a missing/invalid path so the caller can use
-    // deepEqual to distinguish "key absent in both sides" from "value differs"
-    function readJsonPointer(doc, pointer) {
-        if (pointer === '') return doc;
-        if (typeof pointer !== 'string' || pointer.charCodeAt(0) !== 47) return undefined;
-        const parts = pointer.slice(1).split('/').map((seg) => seg.replace(/~1/g, '/').replace(/~0/g, '~'));
-        let node = doc;
-        for (const seg of parts) {
-            if (node === null || node === undefined) return undefined;
-            if (Array.isArray(node)) {
-                if (!/^(0|[1-9][0-9]*)$/.test(seg)) return undefined;
-                node = node[Number(seg)];
-            } else if (typeof node === 'object') {
-                if (!Object.prototype.hasOwnProperty.call(node, seg)) return undefined;
-                node = node[seg];
-            } else {
-                return undefined;
+    function checkExpectations(expectations, current, ctx) {
+        for (const expected of expectations) {
+            const value = readJsonPointer(current, expected.path);
+            if (expected.exists !== (value !== undefined) || !deepEqual(expected.value, value)) {
+                throw new PatchConflictError({
+                    ...ctx, opIndex: -1, jsonPath: expected.path,
+                    reason: 'external modification on patched path',
+                });
             }
         }
-        return node;
+    }
+
+    function legacyExpectations(entry, current, ctx, rollback) {
+        const ops = rollback ? entry.inverse : entry.forward;
+        if (!Array.isArray(ops)) throw notRestorableError();
+        // Legacy patches do not record array lengths or insertion boundaries.
+        // Refuse them rather than interpreting external elements as originals.
+        const allOps = Array.isArray(entry.forward)
+            ? [...entry.inverse, ...entry.forward]
+            : ops;
+        if (expectationPaths(ops, current).some((path) => Array.isArray(readJsonPointer(current, path)))
+            || allOps.some((op) => Array.isArray(op.value))) {
+            throw notRestorableError();
+        }
+        if (!Array.isArray(entry.forward)) {
+            if (!rollback) throw notRestorableError();
+            // Pre-branch committed entries carry `inverse` without `forward` or
+            // `driftExpectations`. Non-array inverse patches can still safely
+            // roll back via `decodeBackward`, which validates path existence.
+            return [];
+        }
+        const expected = rollback
+            ? applyOps(applyOps(current, entry.inverse, ctx), entry.forward, ctx)
+            : applyOps(applyOps(current, entry.forward, ctx), entry.inverse, ctx);
+        return captureExpectations(ops, expected);
     }
 
     function deepEqual(a, b) {
@@ -137,16 +175,22 @@ export function createBus(opts = {}) {
             throw new Error(`ProposalBus: kind '${kind}' expects target.type='${handler.targetType}', got '${target?.type}'`);
         }
         const inverse = encodeInverse(before, after);
+        const forward = deriveForward(before, after);
         seq += 1;
         const entry = makeEntry({
             id: makeId(kind, seq),
             kind,
             target,
             inverse,
+            forward,
             after,
             sourceCallId,
             meta,
         });
+        entry.driftExpectations = {
+            before: captureExpectations(forward, before),
+            after: captureExpectations(inverse, after),
+        };
         entries.push(entry);
         onChange();
         return { id: entry.id, target };
@@ -190,38 +234,6 @@ export function createBus(opts = {}) {
         return out;
     }
 
-    /**
-     * @deprecated retained for the primitive's unit-tests. The
-     * studios now compute the gate via `listPending()` +
-     * `messageResolver` because the "batch" boundary is the assistant
-     * MESSAGE (many tool_calls per message), not the tool_call
-     * (`sourceCallId`) alone. hasPendingSiblingsFor's tool-call-grouped
-     * semantics only match reality when a single message emits a
-     * single tool_call — the trivial case — so keeping it as a bus
-     * primitive would mislead future callers. See the studios'
-     * `hasPendingInSameAssistantTurn` for the correct gate.
-     */
-    function hasPendingSiblingsFor(outcomeEntryIds) {
-        const idSet = new Set();
-        for (const id of outcomeEntryIds || []) {
-            if (id) idSet.add(String(id));
-        }
-        if (idSet.size === 0) return false;
-        const callIds = new Set();
-        for (const e of entries) {
-            if (!idSet.has(String(e.id))) continue;
-            const cid = String(e.sourceCallId || '');
-            if (cid) callIds.add(cid);
-        }
-        if (callIds.size === 0) return false;
-        for (const e of entries) {
-            if (e.status !== 'pending') continue;
-            if (idSet.has(String(e.id))) continue;
-            if (callIds.has(String(e.sourceCallId || ''))) return true;
-        }
-        return false;
-    }
-
     function deepTargetMatch(a, b) {
         if (a === b) return true;
         if (!a || !b) return false;
@@ -236,31 +248,14 @@ export function createBus(opts = {}) {
         let state = await handler.read(target);
         const candidates = entries.filter((e) =>
             e.status === 'pending' && e.kind === kind && deepTargetMatch(e.target, target));
+        const codecCtx = { targetType: target.type, targetName: target.name || null };
         for (const entry of candidates) {
-            if (entry._pendingAfter === undefined) continue;
             try {
-                const proposeBefore = applyOps(entry._pendingAfter, entry.inverse, {
-                    targetType: target.type, targetName: target.name || null,
-                });
-                const forward = deriveForward(proposeBefore, entry._pendingAfter);
-                for (const op of forward) {
-                    if (!op || typeof op.path !== 'string') continue;
-                    if (!deepEqual(readJsonPointer(proposeBefore, op.path), readJsonPointer(state, op.path))) {
-                        const err = new PatchConflictError({
-                            targetType: target.type,
-                            targetName: target.name || null,
-                            opIndex: -1,
-                            jsonPath: op.path,
-                            reason: 'external modification on patched path',
-                        });
-                        events.dispatchEvent(new CustomEvent('bus:chain-broken', { detail: { kind, target, error: err } }));
-                        return state;
-                    }
-                }
-                state = applyOps(state, forward, {
-                    targetType: target.type, targetName: target.name || null,
-                });
+                state = applyEntryForward(entry, state, codecCtx);
             } catch (err) {
+                // A legacy entry with no forward patch cannot be approved
+                // either; leave it out of the chain instead of locking it.
+                if (err?.conflictCode === CONFLICT_CODES.NOT_RESTORABLE) continue;
                 events.dispatchEvent(new CustomEvent('bus:chain-broken', { detail: { kind, target, error: err } }));
                 return state;
             }
@@ -321,16 +316,91 @@ export function createBus(opts = {}) {
         };
     }
 
-    function parkConflict(entry, err) {
+    function parkConflict(entry, err, { recordOutcome = true, emitChange = true } = {}) {
         const inferred = inferReasonFromError(err);
+        const code = typeof err?.conflictCode === 'string' ? { code: err.conflictCode } : {};
         entry.status = 'conflict';
         entry.decidedAt = Date.now();
         entry.conflictError = err instanceof PatchConflictError
             ? { targetType: err.targetType, targetName: err.targetName, jsonPath: err.jsonPath, reason: inferred.reason, hint: inferred.hint }
-            : { reason: inferred.reason, hint: inferred.hint };
-        enqueueOutcome(entry, { error: inferred.hint, reason: inferred.reason, hint: inferred.hint });
-        onChange();
+            : { reason: inferred.reason, hint: inferred.hint, ...code };
+        if (recordOutcome) {
+            enqueueOutcome(entry, { error: inferred.hint, reason: inferred.reason, hint: inferred.hint });
+        }
+        if (emitChange) {
+            onChange();
+        }
         return { ok: false, status: 'conflict', error: inferred.hint, reason: inferred.reason, hint: inferred.hint };
+    }
+
+    function notRestorableError() {
+        const err = new Error('proposal saved by an older version cannot be applied after a reload');
+        err.reason = STATE_ERROR_REASONS.REPLAY_BROKEN;
+        err.hint = err.message;
+        err.conflictCode = CONFLICT_CODES.NOT_RESTORABLE;
+        return err;
+    }
+
+    /**
+     * Resolve the forward patch to re-apply and the propose-time
+     * before-state to drift-check it against.
+     *
+     * In-session entries hold `_pendingAfter`: the before-state is the
+     * inverse applied to it. Restored entries carry only the persisted
+     * `forward` + `inverse` pair. Persisted expectations preserve array
+     * boundaries. Legacy object patches can recover touched values, but
+     * ambiguous array patches are refused. Entries
+     * with neither (sessions saved before `forward` was persisted) cannot
+     * be rebuilt unless their inverse is empty, in which case forward is
+     * empty too.
+     */
+    function resolveApprovePlan(entry, current, ctx) {
+        if (entry._pendingAfter !== undefined) {
+            const proposeBefore = applyOps(entry._pendingAfter, entry.inverse, ctx);
+            return { proposeBefore, forward: deriveForward(proposeBefore, entry._pendingAfter) };
+        }
+        let forward = null;
+        if (Array.isArray(entry.forward)) forward = entry.forward;
+        else if (Array.isArray(entry.inverse) && entry.inverse.length === 0) forward = [];
+        if (!forward) throw notRestorableError();
+        const proposeBefore = applyOps(applyOps(current, forward, ctx), entry.inverse, ctx);
+        return { proposeBefore, forward };
+    }
+
+    /**
+     * Re-apply an entry's forward turn onto `current`. Re-applying the
+     * forward ops preserves path-disjoint external edits because
+     * fast-json-patch only touches the paths it visits. Path-overlap
+     * conflict: if a path the forward turn writes has been mutated since
+     * propose, `replace` would silently overwrite the foreign value, so
+     * each touched path is checked against the propose-time before first.
+     *
+     * @throws {PatchConflictError} on drift or an op that no longer applies.
+     */
+    function applyEntryForward(entry, current, ctx) {
+        if (entry.driftExpectations?.before) {
+            if (!Array.isArray(entry.forward)) throw notRestorableError();
+            checkExpectations(entry.driftExpectations.before, current, ctx);
+            return applyOps(current, entry.forward, ctx);
+        }
+        const { proposeBefore, forward } = resolveApprovePlan(entry, current, ctx);
+        if (entry._pendingAfter === undefined && forward.length) {
+            checkExpectations(legacyExpectations(entry, current, ctx, false), current, ctx);
+            return applyOps(current, forward, ctx);
+        }
+        for (const op of forward) {
+            if (!op || typeof op.path !== 'string') continue;
+            if (!deepEqual(readJsonPointer(proposeBefore, op.path), readJsonPointer(current, op.path))) {
+                throw new PatchConflictError({
+                    targetType: ctx.targetType,
+                    targetName: ctx.targetName,
+                    opIndex: -1,
+                    jsonPath: op.path,
+                    reason: 'external modification on patched path',
+                });
+            }
+        }
+        return applyOps(current, forward, ctx);
     }
 
     async function approve(id, _ctx) {
@@ -339,45 +409,24 @@ export function createBus(opts = {}) {
         if (entry.status !== 'pending' && entry.status !== 'conflict') {
             return { ok: false, status: entry.status };
         }
-        const handler = resolveTargetSafe(entry.target);
+        // Resolve inside the try: a hydrated entry whose target type has no
+        // registered handler (legacy session, popup not mounted) parks as a
+        // conflict instead of throwing out of approve.
+        let handler;
         let current;
         try {
+            handler = resolveTargetSafe(entry.target);
             current = await handler.read(entry.target);
         } catch (err) {
             return parkConflict(entry, err);
         }
+        const codecCtx = {
+            targetType: entry.target.type,
+            targetName: entry.target.name || null,
+        };
         let nextLive;
         try {
-            // Reconstruct the propose-time before-state: apply the stored
-            // inverse to the propose-time after to invert it back.
-            const proposeBefore = applyOps(entry._pendingAfter, entry.inverse, {
-                targetType: entry.target.type,
-                targetName: entry.target.name || null,
-            });
-            // Derive the original forward turn (the ops the AI/user wrote at
-            // propose time). Re-applying this set to `current` preserves
-            // path-disjoint external edits because fast-json-patch only
-            // touches the paths it visits.
-            const forward = deriveForward(proposeBefore, entry._pendingAfter);
-            // Path-overlap conflict: if a path the forward turn writes has
-            // been mutated externally since propose, fast-json-patch's
-            // replace would silently overwrite the foreign value. Pre-check
-            // each touched path against the propose-time before to catch this.
-            for (const op of forward) {
-                if (!deepEqual(readJsonPointer(proposeBefore, op.path), readJsonPointer(current, op.path))) {
-                    throw new PatchConflictError({
-                        targetType: entry.target.type,
-                        targetName: entry.target.name || null,
-                        opIndex: -1,
-                        jsonPath: op.path,
-                        reason: 'external modification on patched path',
-                    });
-                }
-            }
-            nextLive = applyOps(current, forward, {
-                targetType: entry.target.type,
-                targetName: entry.target.name || null,
-            });
+            nextLive = applyEntryForward(entry, current, codecCtx);
         } catch (err) {
             return parkConflict(entry, err);
         }
@@ -390,12 +439,20 @@ export function createBus(opts = {}) {
         entry.decidedAt = Date.now();
         entry.committedAt = Date.now();
         entry.conflictError = null;
+        // A restored entry has no in-memory after-state; the written state
+        // matches the propose-time after on every patched path, which is
+        // what the rollback drift check reads.
+        if (entry._pendingAfter === undefined) entry._pendingAfter = nextLive;
         // Forward-commit notification. Fires only here (never on
         // rollback / reject), with a shallow copy so the hook cannot
         // mutate bus state. A throwing hook must not break the commit
         // contract — the write already landed.
         if (onCommitted) {
-            try { onCommitted({ ...entry }); } catch { /* hook must not break commit */ }
+            try {
+                onCommitted({ ...entry });
+            } catch (err) {
+                console.error('[ProposalBus] onCommitted hook threw:', err);
+            }
         }
         // Keep _pendingAfter on the committed entry so rollback can pre-check
         // path-overlap drift against it. It is still stripped at serialize.
@@ -474,51 +531,33 @@ export function createBus(opts = {}) {
         return { ok: true, detail };
     }
 
-    function wrapConflict(err, target) {
-        if (err instanceof PatchConflictError) return err;
-        return new PatchConflictError({
-            targetType: target?.type || 'unknown',
-            targetName: target?.name || null,
-            opIndex: -1,
-            jsonPath: '',
-            reason: String(err?.message || err || 'unknown'),
-        });
-    }
-
-    async function rollback(id, _ctx) {
+    async function rollbackEntry(id, _ctx, { recordOutcome = true, emitChange = true } = {}) {
         const entry = findEntry(id);
         if (!entry) return { ok: false, status: 'unknown' };
         if (entry.status !== 'committed') {
             return { ok: false, status: entry.status };
         }
-        const handler = resolveTargetSafe(entry.target);
+        if (!isReversibleEntry(entry)) {
+            return { ok: false, status: entry.status, reason: 'not_reversible' };
+        }
+        let handler;
         let current;
         try {
+            handler = resolveTargetSafe(entry.target);
             current = await handler.read(entry.target);
         } catch (err) {
-            const error = wrapConflict(err, entry.target);
-            events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error } }));
-            return parkConflict(entry, error);
+            events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error: err } }));
+            return parkConflict(entry, err, { recordOutcome, emitChange });
         }
-        // Path-overlap drift guard: when we still have the propose-time after
-        // in memory (in-session committed entry), the current value at each
-        // path the inverse touches must match — otherwise an external mutation
-        // happened on a path we are about to overwrite.
-        if (entry._pendingAfter !== undefined && Array.isArray(entry.inverse)) {
-            for (const op of entry.inverse) {
-                if (!op || typeof op.path !== 'string') continue;
-                if (!deepEqual(readJsonPointer(entry._pendingAfter, op.path), readJsonPointer(current, op.path))) {
-                    const error = new PatchConflictError({
-                        targetType: entry.target.type,
-                        targetName: entry.target.name || null,
-                        opIndex: -1,
-                        jsonPath: op.path,
-                        reason: 'external modification on patched path',
-                    });
-                    events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error } }));
-                    return parkConflict(entry, error);
-                }
-            }
+        try {
+            const ctx = { targetType: entry.target.type, targetName: entry.target.name || null };
+            const expectations = entry.driftExpectations?.after
+                ?? (entry._pendingAfter !== undefined ? captureExpectations(entry.inverse, entry._pendingAfter)
+                    : legacyExpectations(entry, current, ctx, true));
+            checkExpectations(expectations, current, ctx);
+        } catch (err) {
+            events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error: err } }));
+            return parkConflict(entry, err, { recordOutcome, emitChange });
         }
         let previous;
         try {
@@ -527,23 +566,29 @@ export function createBus(opts = {}) {
                 targetName: entry.target.name || null,
             });
         } catch (err) {
-            const error = wrapConflict(err, entry.target);
-            events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error } }));
-            return parkConflict(entry, error);
+            events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error: err } }));
+            return parkConflict(entry, err, { recordOutcome, emitChange });
         }
         try {
             await handler.write(entry.target, previous);
         } catch (err) {
-            const error = wrapConflict(err, entry.target);
-            events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error } }));
-            return parkConflict(entry, error);
+            events.dispatchEvent(new CustomEvent('bus:rollback-failed', { detail: { entryId: id, error: err } }));
+            return parkConflict(entry, err, { recordOutcome, emitChange });
         }
         entry.status = 'rolledBack';
         entry.rolledBackAt = Date.now();
         delete entry._pendingAfter;
-        enqueueOutcome(entry);
-        onChange();
+        if (recordOutcome) {
+            enqueueOutcome(entry);
+        }
+        if (emitChange) {
+            onChange();
+        }
         return { ok: true, status: 'rolledBack' };
+    }
+
+    async function rollback(id, ctx) {
+        return rollbackEntry(id, ctx, { recordOutcome: true, emitChange: true });
     }
 
     function callIdSetFromMessage(message) {
@@ -577,8 +622,8 @@ export function createBus(opts = {}) {
     async function rollbackAllInTurn(message, ctx) {
         const callIds = callIdSetFromMessage(message);
         const committed = entries
-            .filter((e) => e.status === 'committed' && callIds.has(String(e.sourceCallId || '')))
-            .sort((a, b) => (b.committedAt || 0) - (a.committedAt || 0));
+            .filter((e) => e.status === 'committed' && isReversibleEntry(e) && callIds.has(String(e.sourceCallId || '')))
+            .sort((a, b) => (b.committedAt || 0) - (a.committedAt || 0) || entries.indexOf(b) - entries.indexOf(a));
         const results = [];
         for (const e of committed) {
             const r = await rollback(e.id, ctx);
@@ -592,7 +637,7 @@ export function createBus(opts = {}) {
      * the supplied messages. Used by `regenerateFromMessage` to undo the
      * disk effects of assistant turns about to be truncated from the chat.
      *
-     * Walks the union message list, gathers committed entries, sorts by
+     * Walks the union message list, gathers committed reversible entries, sorts by
      * committedAt desc so dependent later commits unwind before earlier
      * ones, then rollbacks in sequence. Stops at the first failure so the
      * caller can surface "regenerate aborted — these commits could not be
@@ -611,17 +656,44 @@ export function createBus(opts = {}) {
             return { results: [], ok: true, failedAt: null };
         }
         const committed = entries
-            .filter((e) => e.status === 'committed' && callIds.has(String(e.sourceCallId || '')))
-            .sort((a, b) => (b.committedAt || 0) - (a.committedAt || 0));
+            .filter((e) => e.status === 'committed' && isReversibleEntry(e) && callIds.has(String(e.sourceCallId || '')))
+            .sort((a, b) => (b.committedAt || 0) - (a.committedAt || 0) || entries.indexOf(b) - entries.indexOf(a));
         const results = [];
         for (const e of committed) {
-            const r = await rollback(e.id, ctx);
+            // Discarded turns are about to be truncated from history: suppress
+            // outcome-queue entries and mid-rewind onChange renders so an async
+            // drain cannot hijack the imminent re-send. On failure, emit one
+            // onChange so the caller's preserved history renders the conflict.
+            const r = await rollbackEntry(e.id, ctx, { recordOutcome: false, emitChange: false });
             results.push({ id: e.id, target: e.target, ...r });
             if (!r.ok) {
+                onChange();
                 return { results, ok: false, failedAt: { id: e.id, target: e.target, ...r } };
             }
         }
         return { results, ok: true, failedAt: null };
+    }
+
+    /** Discard owned entries without change notifications or follow-up outcomes. */
+    function discardEntries(ids) {
+        const selected = new Set(ids);
+        let rejected = 0;
+        for (const entry of entries) {
+            if ((entry.status === 'pending' || entry.status === 'conflict') && selected.has(entry.id)) {
+                entry.status = 'rejected';
+                entry.decidedAt = Date.now();
+                entry.conflictError = null;
+                rejected += 1;
+            }
+        }
+        let prunedOutcomes = 0;
+        for (let i = outcomeQueue.length - 1; i >= 0; i--) {
+            if (selected.has(outcomeQueue[i].id)) {
+                outcomeQueue.splice(i, 1);
+                prunedOutcomes += 1;
+            }
+        }
+        return { rejected, prunedOutcomes };
     }
 
     /**
@@ -637,7 +709,7 @@ export function createBus(opts = {}) {
             for (const id of callIdSetFromMessage(m)) callIds.add(id);
         }
         if (callIds.size === 0) return 0;
-        return entries.filter((e) => e.status === 'committed' && callIds.has(String(e.sourceCallId || ''))).length;
+        return entries.filter((e) => e.status === 'committed' && isReversibleEntry(e) && callIds.has(String(e.sourceCallId || ''))).length;
     }
 
     function serialize() {
@@ -727,16 +799,14 @@ export function createBus(opts = {}) {
         let committed = 0;
         for (const e of entries) {
             if (!callIds.has(String(e.sourceCallId || ''))) continue;
+            if (!kinds.has(e.kind)) continue;
             // Conflicts are not user-actionable here: they don't accept
             // approve / reject from the bulk path either, and counting
             // them would surface "Approve all pending (3)" buttons that
             // commit nothing on click. Pending is the only count this row
             // can act on.
             if (e.status === 'pending') pending++;
-            else if (e.status === 'committed') {
-                const handler = kinds.get(e.kind);
-                if (handler && handler.inverseAvailable !== false) committed++;
-            }
+            else if (e.status === 'committed' && isReversibleEntry(e)) committed++;
         }
         const msgId = typeof message === 'string' ? message : String(message?.id || '');
         return renderTurnActions({ pendingCount: pending, committedCount: committed, messageId: msgId, i18n });
@@ -758,7 +828,6 @@ export function createBus(opts = {}) {
             return out;
         },
         hasOutstanding,
-        hasPendingSiblingsFor,
         listPending,
         getCurrentPendingState,
         approve,
@@ -771,6 +840,7 @@ export function createBus(opts = {}) {
         rejectAllPendingInTurn,
         rollbackAllInTurn,
         rollbackAllInMessages,
+        discardEntries,
         countCommittedInMessages,
         serialize,
         hydrate,
@@ -782,8 +852,9 @@ export function createBus(opts = {}) {
         handleClick,
         setMessageResolver,
         events,
-        _testOnly_entries: () => entries.map((e) => ({ ...e })),
-        _testOnly_outcomeQueue: () => outcomeQueue.slice(),
+        // Shallow copies in proposal order; studios iterate them for
+        // auto-approve, drain bookkeeping and turn-level state.
+        listEntries: () => entries.map((e) => ({ ...e })),
     };
     return returnedApi;
 }

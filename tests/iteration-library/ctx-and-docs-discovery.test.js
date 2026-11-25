@@ -96,6 +96,33 @@ describe('describeCtxPath', () => {
         const out = await mod.describeCtxPath({ path: '' });
         expect(out.ok).toBe(false);
     });
+
+    test('does not truncate long function sourcePreview or objects with >60 subKeys', async () => {
+        const longComment = 'segment_'.repeat(50);
+        const bigObj = {};
+        for (let i = 0; i < 75; i++) bigObj[`key_${String(i).padStart(2, '0')}`] = i;
+        const longFn = new Function('x', `/* ${longComment} */ return x;`);
+        const prevLuker = globalThis.Luker;
+        globalThis.Luker = {
+            getContext: () => ({ longFn, bigObj }),
+        };
+        try {
+            const fnOut = await mod.describeCtxPath({ path: 'longFn' });
+            expect(fnOut.ok).toBe(true);
+            expect(fnOut.sourcePreview.length).toBeGreaterThan(280);
+            expect(fnOut.sourcePreview).toContain(longComment);
+            expect(fnOut.sourcePreview.endsWith('...')).toBe(false);
+
+            const objOut = await mod.describeCtxPath({ path: 'bigObj' });
+            expect(objOut.ok).toBe(true);
+            expect(objOut.subKeyCount).toBe(75);
+            expect(objOut.subKeys).toHaveLength(75);
+            expect(objOut.subKeys.some(k => k.key === 'key_74')).toBe(true);
+            expect(objOut.note).toBeUndefined();
+        } finally {
+            globalThis.Luker = prevLuker;
+        }
+    });
 });
 
 describe('listLukerDocs', () => {

@@ -36,7 +36,7 @@ describe('ProposalBus — auto-approve', () => {
             kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
         });
         await new Promise((r) => setImmediate(r));
-        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        const entry = bus.listEntries().find((e) => e.id === id);
         expect(entry.status).toBe('committed');
         expect(handler.write).toHaveBeenCalledTimes(1);
     });
@@ -56,7 +56,7 @@ describe('ProposalBus — auto-approve', () => {
             kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
         });
         await new Promise((r) => setImmediate(r));
-        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        const entry = bus.listEntries().find((e) => e.id === id);
         expect(entry.status).toBe('conflict');
         // hasOutstanding excludes conflicts so the AI loop continues —
         // the conflict outcome is in the queue for drainOutcomes to

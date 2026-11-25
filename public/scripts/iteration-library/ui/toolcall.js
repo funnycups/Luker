@@ -1,4 +1,5 @@
 import { renderInlineTextDiffHtml } from '../text-diff.js';
+import { escapeHtml, escapeHtmlText } from '../../lib/html-escape.js';
 
 /**
  * Render one tool call as a CardApp-Studio-style one-liner with optional
@@ -61,12 +62,12 @@ export function renderToolCallChip(call, opts = {}) {
     // when inspecting the rendered DOM.
     const summaryParts = [];
     if (statusIcon) summaryParts.push(`<span class="luker_lib_toolcall_status">${statusIcon}</span>`);
-    summaryParts.push(`<span class="luker_lib_toolcall_icon">${escapeHtml(icon)}</span>`);
-    summaryParts.push(`<span class="luker_lib_toolcall_label">${escapeHtml(label)}</span>`);
-    if (summaryText) summaryParts.push(`<span class="luker_lib_toolcall_summary_text">${escapeHtml(summaryText)}</span>`);
+    summaryParts.push(`<span class="luker_lib_toolcall_icon">${escapeHtmlText(icon)}</span>`);
+    summaryParts.push(`<span class="luker_lib_toolcall_label">${escapeHtmlText(label)}</span>`);
+    if (summaryText) summaryParts.push(`<span class="luker_lib_toolcall_summary_text">${escapeHtmlText(summaryText)}</span>`);
 
     const lines = [
-        `<div class="luker_lib_toolcall luker_lib_toolcall_${escapeHtmlAttr(type)}">`,
+        `<div class="luker_lib_toolcall luker_lib_toolcall_${escapeHtml(type)}">`,
         '<div class="luker_lib_toolcall_summary">',
         ...summaryParts,
         '</div>',
@@ -109,7 +110,7 @@ function renderFieldRows(obj) {
         const v = obj[k];
         const valueHtml = renderArgValue(v);
         rowLines.push('<div class="luker_lib_toolcall_arg_row">');
-        rowLines.push(`<label class="luker_lib_toolcall_arg_key">${escapeHtml(k)}</label>`);
+        rowLines.push(`<label class="luker_lib_toolcall_arg_key">${escapeHtmlText(k)}</label>`);
         rowLines.push('<div class="luker_lib_toolcall_arg_value">');
         rowLines.push(valueHtml);
         rowLines.push('</div>');
@@ -140,8 +141,7 @@ function stringEditOpFromToolName(name) {
  * in the diff zoom-overlay header. Covers the field naming across the
  * str-edit tool families:
  *   - book_name + uid [+ field]  → lorebook_str_replace_in_entry,
- *                                   cea_str_replace_lorebook_entry_field,
- *                                   luker_card_str_replace_in_lorebook_entry
+ *                                   cea_str_replace_lorebook_entry_field
  *   - field                      → cea_str_replace_card_field
  *   - identifier                 → preset_str_*_in_prompt
  *   - path                       → preset_str_replace / _insert / _delete
@@ -214,7 +214,7 @@ function tryRenderArgsDiff(name, args, i18n) {
 
     return [
         '<details class="luker_lib_toolcall_details">',
-        `<summary>${escapeHtml(i18n('Arguments'))}</summary>`,
+        `<summary>${escapeHtmlText(i18n('Arguments'))}</summary>`,
         metaHtml,
         diffBlock,
         '</details>',
@@ -229,7 +229,7 @@ function renderArgsDetails(name, args, i18n) {
     if (!rows) return '';
     return [
         '<details class="luker_lib_toolcall_details">',
-        `<summary>${escapeHtml(i18n('Arguments'))}</summary>`,
+        `<summary>${escapeHtmlText(i18n('Arguments'))}</summary>`,
         '<div class="luker_lib_toolcall_arg_rows">',
         rows,
         '</div>',
@@ -240,23 +240,20 @@ function renderArgsDetails(name, args, i18n) {
 function renderArgValue(v) {
     if (typeof v === 'string') {
         if (v.length > 120) {
-            return `<pre class="luker_lib_toolcall_long_value">${escapeHtml(v)}</pre>`;
+            return `<pre class="luker_lib_toolcall_long_value">${escapeHtmlText(v)}</pre>`;
         }
-        return `<span class="luker_lib_toolcall_short_value">${escapeHtml(v)}</span>`;
+        return `<span class="luker_lib_toolcall_short_value">${escapeHtmlText(v)}</span>`;
     }
     if (v && typeof v === 'object') {
-        const inner = Array.isArray(v)
-            ? `[ ${v.slice(0, 3).map(formatScalar).join(', ')}${v.length > 3 ? `, … (${v.length - 3} more)` : ''} ]`
-            : `{ ${Object.keys(v).slice(0, 3).map(k => `${k}: ${formatScalar(v[k])}`).join(', ')}${Object.keys(v).length > 3 ? `, … (${Object.keys(v).length - 3} more)` : ''} }`;
-        return `<code class="luker_lib_toolcall_obj_value">${escapeHtml(inner)}</code>`;
+        let json;
+        try {
+            json = JSON.stringify(v, null, 2);
+        } catch {
+            json = String(v);
+        }
+        return `<pre class="luker_lib_toolcall_long_value luker_lib_toolcall_obj_value">${escapeHtmlText(json)}</pre>`;
     }
-    return `<span class="luker_lib_toolcall_scalar_value">${escapeHtml(String(v))}</span>`;
-}
-
-function formatScalar(v) {
-    if (typeof v === 'string') return v.length > 20 ? `"${v.slice(0, 17)}…"` : `"${v}"`;
-    if (v && typeof v === 'object') return '{…}';
-    return String(v);
+    return `<span class="luker_lib_toolcall_scalar_value">${escapeHtmlText(String(v))}</span>`;
 }
 
 function renderResultDetails(result, i18n) {
@@ -270,9 +267,9 @@ function renderResultDetails(result, i18n) {
     const open = false;
     let bodyHtml;
     if (typeof result === 'string') {
-        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtml(result)}</pre>`;
+        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtmlText(result)}</pre>`;
     } else if (result === null || result === undefined) {
-        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtml(String(result))}</pre>`;
+        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtmlText(String(result))}</pre>`;
     } else if (typeof result === 'object') {
         let json;
         try {
@@ -283,38 +280,16 @@ function renderResultDetails(result, i18n) {
             // something.
             json = String(result);
         }
-        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtml(json)}</pre>`;
+        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtmlText(json)}</pre>`;
     } else {
-        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtml(String(result))}</pre>`;
+        bodyHtml = `<pre class="luker_lib_toolcall_result_pre">${escapeHtmlText(String(result))}</pre>`;
     }
     return [
         `<details class="luker_lib_toolcall_result"${open ? ' open' : ''}>`,
-        `<summary>${escapeHtml(i18n('Result'))}</summary>`,
+        `<summary>${escapeHtmlText(i18n('Result'))}</summary>`,
         '<div class="luker_lib_toolcall_result_body">',
         bodyHtml,
         '</div>',
         '</details>',
     ].join('\n');
-}
-
-function escapeHtml(s) {
-    // Text-content escape only. We intentionally leave `"` and `'` alone so
-    // the truncated KV summary can render `a: "short"` verbatim. Attribute
-    // positions use `escapeHtmlAttr` below.
-    return String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-}
-
-// Wider escape for attribute interpolation (also escapes `"` and `'`) so
-// any user-controlled string that ends up in an HTML attribute position
-// can't break out of the attribute. The only such position in this file
-// is the `type` enum, but using the helper deliberately documents the
-// intent and stays safe if the interpolation surface grows.
-function escapeHtmlAttr(s) {
-    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        '\'': '&#39;',
-    }[c]));
 }

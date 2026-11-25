@@ -1,6 +1,7 @@
 import { renderToolCallChip } from './toolcall.js';
 import { STR } from './strings.js';
 import { resolveAssistantDisplay } from './reasoning.js';
+import { escapeHtml, escapeHtmlText } from '../../lib/html-escape.js';
 
 /**
  * @param {Object} message - Persisted iter message
@@ -22,9 +23,7 @@ import { resolveAssistantDisplay } from './reasoning.js';
  *                                               to renderDiffCard" path on whether the turn
  *                                               is still pending vs. already applied.
  * @param {Function} [opts.renderApplyControls]  (message) => html. Rendered between
- *                                               the edit cards and the regen row. Popups
- *                                               typically wire `renderApplyControls`
- *                                               from `iteration-library/ui/apply.js`.
+ *                                               the edit cards and the regen row.
  *                                               When omitted, message turns with edits
  *                                               do not render Apply/Reject affordances
  *                                               (suitable for read-only renders or tests).
@@ -47,8 +46,8 @@ export function renderMessageCard(message, opts = {}) {
     if (role === 'system') {
         const sysBody = renderMd
             ? renderMd(String(message.content || ''))
-            : `<em>${escapeHtml(String(message.content || ''))}</em>`;
-        return `<div class="luker_lib_message luker_lib_message_system" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">
+            : `<em>${escapeHtmlText(String(message.content || ''))}</em>`;
+        return `<div class="luker_lib_message luker_lib_message_system" data-luker-lib-msg-id="${escapeHtml(msgId)}">
             ${sysBody}
         </div>`;
     }
@@ -60,7 +59,7 @@ export function renderMessageCard(message, opts = {}) {
         // visible as the next assistant turn.
         if (message.auto) return '';
         const cls = 'luker_lib_message luker_lib_message_user';
-        const body = escapeHtml(String(message.content || '')).replace(/\n/g, '<br>');
+        const body = escapeHtmlText(String(message.content || '')).replace(/\n/g, '<br>');
         // Edit affordance: clicking pulls the message text back into the
         // composer textarea, truncates the chat to just before this turn,
         // and rolls back every commit those discarded turns made. The
@@ -68,14 +67,14 @@ export function renderMessageCard(message, opts = {}) {
         // (sending then re-fires the normal send pipeline). Without the
         // rollback step, edit-and-resend would regenerate against a disk
         // state already polluted by the prior round's commits.
-        const editBtn = `<button class="luker_lib_message_user_edit menu_button menu_button_small" ${actionAttr}="edit-user-message" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}" title="${escapeHtmlAttr(i18n('Edit and regenerate from here'))}">${escapeHtml(i18n('Edit'))}</button>`;
-        return `<div class="${cls}" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">${body}${editBtn}</div>`;
+        const editBtn = `<button class="luker_lib_message_user_edit menu_button menu_button_small" ${actionAttr}="edit-user-message" data-luker-lib-msg-id="${escapeHtml(msgId)}" title="${escapeHtml(i18n('Edit and regenerate from here'))}">${escapeHtmlText(i18n('Edit'))}</button>`;
+        return `<div class="${cls}" data-luker-lib-msg-id="${escapeHtml(msgId)}">${body}${editBtn}</div>`;
     }
 
     // assistant
     const display = resolveAssistantDisplay(message);
     const content = display.body;
-    const bodyHtml = renderMd ? renderMd(content) : escapeHtml(content).replace(/\n/g, '<br>');
+    const bodyHtml = renderMd ? renderMd(content) : escapeHtmlText(content).replace(/\n/g, '<br>');
 
     // Reasoning / thinking chain — display only, never sent back to API.
     // Sources: a separate reasoning string, reasoningBlocks / reasoningDetails,
@@ -85,12 +84,12 @@ export function renderMessageCard(message, opts = {}) {
     if (reasoningText.length > 0) {
         const reasoningBody = renderMd
             ? renderMd(reasoningText)
-            : escapeHtml(reasoningText).replace(/\n/g, '<br>');
+            : escapeHtmlText(reasoningText).replace(/\n/g, '<br>');
         reasoningHtml = `<details class="luker_lib_reasoning_details">
             <summary class="luker_lib_reasoning_summary">
-                <span class="luker_lib_reasoning_label">${escapeHtml(i18n('Thinking'))}</span>
+                <span class="luker_lib_reasoning_label">${escapeHtmlText(i18n('Thinking'))}</span>
                 <span class="luker_lib_reasoning_arrow fa-solid fa-chevron-down" aria-hidden="true"></span>
-                <button type="button" class="luker_lib_reasoning_copy" data-luker-lib-copy-reasoning title="${escapeHtmlAttr(i18n('Copy'))}" aria-label="${escapeHtmlAttr(i18n('Copy'))}"><i class="fa-solid fa-copy" aria-hidden="true"></i></button>
+                <button type="button" class="luker_lib_reasoning_copy" data-luker-lib-copy-reasoning title="${escapeHtml(i18n('Copy'))}" aria-label="${escapeHtml(i18n('Copy'))}"><i class="fa-solid fa-copy" aria-hidden="true"></i></button>
             </summary>
             <div class="luker_lib_reasoning_body">${reasoningBody}</div>
         </details>`;
@@ -139,14 +138,12 @@ export function renderMessageCard(message, opts = {}) {
         && edits.length === 0
         && toolCalls.every(tc => toolDisplay[String(tc?.name || '')]?.type === 'read');
     const readOnlyHint = allRead
-        ? `<div class="luker_lib_message_readonly_hint">${escapeHtml(i18n('AI read the indicated data and is waiting to act on the result next round.'))}</div>`
+        ? `<div class="luker_lib_message_readonly_hint">${escapeHtmlText(i18n('AI read the indicated data and is waiting to act on the result next round.'))}</div>`
         : '';
 
-    // Apply / Rollback / Rolled-back row. Popups wire renderApplyControls
-    // from iteration-library/ui/apply.js — that helper handles all three
-    // states (pending edits → Apply+Reject; applied → status + Rollback
-    // button; rolled back → muted status). When the hook is omitted, the
-    // message renders without any apply affordance.
+    // Apply / Rollback / Rolled-back row supplied by the popup's
+    // renderApplyControls hook. When the hook is omitted, the message
+    // renders without any apply affordance.
     const applyControlsHtml = typeof opts.renderApplyControls === 'function'
         ? opts.renderApplyControls(message)
         : '';
@@ -154,13 +151,13 @@ export function renderMessageCard(message, opts = {}) {
     const showRegen = !message.auto;
     const regenHtml = showRegen
         ? `<div class="luker_lib_message_actions">
-            <button class="menu_button menu_button_small" ${actionAttr}="regenerate" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">
-                ${escapeHtml(i18n('Regenerate'))}
+            <button class="menu_button menu_button_small" ${actionAttr}="regenerate" data-luker-lib-msg-id="${escapeHtml(msgId)}">
+                ${escapeHtmlText(i18n('Regenerate'))}
             </button>
         </div>`
         : '';
 
-    return `<div class="luker_lib_message luker_lib_message_assistant" data-luker-lib-msg-id="${escapeHtmlAttr(msgId)}">
+    return `<div class="luker_lib_message luker_lib_message_assistant" data-luker-lib-msg-id="${escapeHtml(msgId)}">
         ${reasoningHtml}
         ${bodyHtml}
         ${readOnlyHint}
@@ -169,26 +166,6 @@ export function renderMessageCard(message, opts = {}) {
         ${applyControlsHtml}
         ${regenHtml}
     </div>`;
-}
-
-function escapeHtml(s) {
-    // Same narrowing as toolcall.js: only & < > escaped. Quotes can appear in
-    // text-content positions because we never interpolate user-controlled values
-    // into attribute positions without going through `escapeHtmlAttr`.
-    return String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-}
-
-// Wider escape for attribute interpolation (msg-id, data-attrs, etc.) so
-// any user-controlled string that ends up in an HTML attribute position
-// can't break out of the attribute.
-function escapeHtmlAttr(s) {
-    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        '\'': '&#39;',
-    }[c]));
 }
 
 /**

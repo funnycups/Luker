@@ -8,8 +8,8 @@
 // `inverseAvailable: false` keeps the proposal-card chrome from
 // surfacing a Rollback button that would only mislead. The
 // target-registry handler for type='preset' models the read/write
-// boundary; if anyone bypasses the UI and calls bus.rollback directly,
-// the target handler is still the place to refuse the write.
+// boundary; bus.rollback refuses entries of this kind without calling
+// the handler.
 export const presetClone = {
     kind: 'preset-clone',
     targetType: 'preset',

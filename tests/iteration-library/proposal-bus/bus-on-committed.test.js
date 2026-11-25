@@ -83,23 +83,29 @@ describe('ProposalBus — onCommitted hook', () => {
         });
         await new Promise((r) => setImmediate(r));
 
-        expect(bus._testOnly_entries().find((e) => e.id === id).status).toBe('committed');
+        expect(bus.listEntries().find((e) => e.id === id).status).toBe('committed');
         expect(onCommitted).toHaveBeenCalledTimes(1);
     });
 
-    test('a throwing hook does not break the commit contract', async () => {
+    test('a throwing hook logs the error and does not break the commit contract', async () => {
         const handler = liveHandler({ a: 1 });
         registerTarget('preset', handler);
         const onCommitted = jest.fn(() => { throw new Error('hook boom'); });
-        const bus = createBus({ onCommitted });
-        bus.registerKind('k', { targetType: 'preset' });
-        const { id } = await bus.propose({
-            kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
-        });
+        const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const bus = createBus({ onCommitted });
+            bus.registerKind('k', { targetType: 'preset' });
+            const { id } = await bus.propose({
+                kind: 'k', target: { type: 'preset' }, before: { a: 1 }, after: { a: 2 },
+            });
 
-        const result = await bus.approve(id);
-        expect(result).toEqual({ ok: true, status: 'committed' });
-        expect(handler._get()).toEqual({ a: 2 });
-        expect(bus._testOnly_entries().find((e) => e.id === id).status).toBe('committed');
+            const result = await bus.approve(id);
+            expect(result).toEqual({ ok: true, status: 'committed' });
+            expect(handler._get()).toEqual({ a: 2 });
+            expect(bus.listEntries().find((e) => e.id === id).status).toBe('committed');
+            expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('onCommitted'), expect.any(Error));
+        } finally {
+            errSpy.mockRestore();
+        }
     });
 });

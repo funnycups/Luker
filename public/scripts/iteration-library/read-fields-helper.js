@@ -78,7 +78,7 @@ function _basicLodashGet(obj, path) {
  * Shared by `readFieldsByPaths` and `readFieldsByEnum` so the
  * unserializable-guard behaviour is identical across studios.
  */
-export function truncateForRead(value) {
+function truncateForRead(value) {
     try {
         JSON.stringify(value);
     } catch {

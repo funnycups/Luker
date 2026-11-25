@@ -76,7 +76,8 @@
  *     authoring tool.
  */
 
-import { STATE_ERROR_REASONS } from '../../state-errors.js';
+import { STATE_ERROR_REASONS } from '../../lib/state-errors.js';
+import { hasTarget, registerTarget } from '../storage/target-registry.js';
 
 /**
  * Structured error thrown by skill iter-studio handlers and the
@@ -165,21 +166,23 @@ export function isSkillIterStudioTool(name) {
 // ────────────────────────────────────────────────────────────────────────────
 
 function normalizeScope(scope, defaultScope = null) {
-    if (!scope) {
+    if (scope === undefined || scope === null) {
         if (defaultScope) return normalizeScope(defaultScope);
         return { kind: 'global' };
     }
-    if (scope === 'global' || scope === 'all') return { kind: 'global' };
-    if (typeof scope === 'string') return { kind: 'global' };
+    if (scope === 'global') return { kind: 'global' };
+    if (typeof scope !== 'object' || Array.isArray(scope)) {
+        throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `invalid scope: ${JSON.stringify(scope)}` });
+    }
     if (scope.kind === 'global') return { kind: 'global' };
-    if (scope.kind === 'preset' && scope.name) {
-        return { kind: 'preset', name: String(scope.name) };
+    if (scope.kind === 'preset' && typeof scope.name === 'string' && scope.name.trim()) {
+        return { kind: 'preset', name: scope.name.trim() };
     }
-    if (scope.kind === 'orch-preset' && scope.mode && scope.name) {
-        return { kind: 'orch-preset', mode: String(scope.mode), name: String(scope.name) };
+    if (scope.kind === 'orch-preset' && typeof scope.mode === 'string' && scope.mode.trim() && typeof scope.name === 'string' && scope.name.trim()) {
+        return { kind: 'orch-preset', mode: scope.mode.trim(), name: scope.name.trim() };
     }
-    if (scope.kind === 'character' && scope.characterFile) {
-        return { kind: 'character', characterFile: String(scope.characterFile) };
+    if (scope.kind === 'character' && typeof scope.characterFile === 'string' && scope.characterFile.trim()) {
+        return { kind: 'character', characterFile: scope.characterFile.trim() };
     }
     throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `invalid scope: ${JSON.stringify(scope)}` });
 }
@@ -257,12 +260,38 @@ function composeSkillMd(name, description, body) {
     return `---\nname: ${name}\ndescription: ${description}\n---\n${safeBody.startsWith('\n') ? safeBody : `\n${safeBody}`}`;
 }
 
+// Error-body codes the skills REST API uses to refuse a pinned write or
+// delete because the skill on disk changed (src/skills/repository.js
+// SKILL_REFUSAL_CODES).
+const SKILL_REFUSAL_CODES = new Set(['sha256_mismatch', 'installed_hash_mismatch', 'file_exists', 'skill_exists']);
+
+// Server refusals of a pinned write or delete mean the skill changed on
+// disk after the proposal; surface them as a proposal conflict.
+async function withDriftConflict(name, path, commit) {
+    try {
+        return await commit();
+    } catch (err) {
+        if (SKILL_REFUSAL_CODES.has(err?.body?.code)) {
+            const where = path ? `${name}/${path}` : name;
+            throw new SkillProposalError({ reason: STATE_ERROR_REASONS.CONFLICT, hint: `${where} changed on disk after this proposal was made` });
+        }
+        throw err;
+    }
+}
+
 async function readFileSafe(scope, name, path) {
+    const file = await readFileWithHash(scope, name, path);
+    return file ? file.content : null;
+}
+
+async function readFileWithHash(scope, name, path) {
     const skillsApi = getSkillsApi();
     try {
         const raw = await skillsApi.readFile({ scope, name, path });
-        if (typeof raw === 'string') return raw;
-        if (raw && typeof raw.content === 'string') return raw.content;
+        if (typeof raw === 'string') return { content: raw, sha256: '' };
+        if (raw && typeof raw.content === 'string') {
+            return { content: raw.content, sha256: typeof raw.sha256 === 'string' ? raw.sha256 : '' };
+        }
         return null;
     } catch (err) {
         // Treat any read failure (typically a 404 for newly-created files)
@@ -345,16 +374,17 @@ export async function commitApprovedSkillProposal(op) {
                     });
                 }
             }
-            return skillsApi.install({ scope: args.scope, payload: { files } });
+            return withDriftConflict(args.name, '', () => skillsApi.install({ scope: args.scope, payload: { files } }));
         }
         case 'skill_update_content':
-            return skillsApi.writeFile({
+            return withDriftConflict(args.name, args.path, () => skillsApi.writeFile({
                 scope: args.scope,
                 name: args.name,
                 path: args.path,
                 content: args.content,
                 expectedSha256: args.expectedSha256,
-            });
+                expectAbsent: args.expectAbsent === true,
+            }));
         case 'skill_edit_content':
             return skillsApi.editFile({
                 scope: args.scope,
@@ -368,25 +398,47 @@ export async function commitApprovedSkillProposal(op) {
             // Re-derive after-image against current on-disk SKILL.md so a
             // parallel-session edit lands cleanly. If the file vanished
             // between proposal and apply, surface that as the error.
-            const current = await readFileSafe(args.scope, args.name, 'SKILL.md');
+            const current = await readFileWithHash(args.scope, args.name, 'SKILL.md');
             if (current === null) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.CONFLICT, hint: `SKILL.md not found at apply time: ${args.name}` });
-            const newContent = applyFrontmatterPatch(current, args.patch);
-            return skillsApi.writeFile({
+            const newContent = applyFrontmatterPatch(current.content, args.patch);
+            return withDriftConflict(args.name, 'SKILL.md', () => skillsApi.writeFile({
                 scope: args.scope,
                 name: args.name,
                 path: 'SKILL.md',
                 content: newContent,
-            });
+                expectedSha256: current.sha256 || undefined,
+            }));
         }
         case 'skill_rename':
             return skillsApi.rename(args.scope, args.fromName, args.toName);
         case 'skill_change_scope':
             return skillsApi.moveScope(args.name, args.fromScope, args.toScope);
         case 'skill_delete':
-            return skillsApi.delete(args.scope, args.name);
+            return withDriftConflict(args.name, '', () => skillsApi.delete(args.scope, args.name, {
+                expectedInstalledHash: args.expectedInstalledHash,
+            }));
         default:
             throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `commitApprovedSkillProposal: unknown op ${op.name}` });
     }
+}
+
+/**
+ * Register the `'skill-registry'` proposal target once per page. Skill
+ * proposals carry the captured op on `target._op`; approve replays it
+ * through `commitApprovedSkillProposal`. The skill-author kind opts out of
+ * rollback, so the bus never calls `write` for an undo.
+ */
+export function ensureSkillRegistryTarget() {
+    if (hasTarget('skill-registry')) return;
+    registerTarget('skill-registry', {
+        read: async (target) => ({ skill: target?.name || '', path: target?.path || '' }),
+        write: async (target, _next) => {
+            if (target?._op) {
+                await commitApprovedSkillProposal(target._op);
+            }
+        },
+        describe: (target) => String(target?.name || 'skill'),
+    });
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -633,7 +685,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
     ),
     fn(
         'skill_update_content',
-        'PROPOSAL: stage a full-file replacement of a file inside an existing skill. The change is NOT written to disk by this call — the user reviews a line-by-line diff card and the write commits at Apply time. Pair with expectedSha256 (optional) for optimistic concurrency at commit time. You will receive `"proposed": true` as the success contract.',
+        'PROPOSAL: stage a full-file replacement of a file inside an existing skill. The change is NOT written to disk by this call — the user reviews a line-by-line diff card and the write commits at Apply time. If the file changes on disk before Apply, the write is refused as a conflict. You will receive `"proposed": true` as the success contract.',
         {
             type: 'object',
             properties: {
@@ -641,7 +693,7 @@ export const SKILL_ITER_STUDIO_TOOL_DEFS = Object.freeze([
                 scope: SCOPE_SCHEMA,
                 path: { type: 'string', description: 'File path within the skill (e.g. SKILL.md, examples/foo.md).' },
                 content: { type: 'string', description: 'Full new file content.' },
-                expectedSha256: { type: 'string', description: 'Optional sha256 of the pre-edit file content for optimistic concurrency.' },
+                expectedSha256: { type: 'string', description: 'Optional sha256 from skill_read_content. Pins the version your content is based on; omit to pin the version on disk now.' },
             },
             required: ['name', 'path', 'content'],
         },
@@ -916,13 +968,14 @@ const HANDLERS = {
         const scope = normalizeScope(args.scope, mctx?.defaultScope);
         const name = String(args.name);
         const path = String(args.path);
-        const before = await readFileSafe(scope, name, path);
+        const current = await readFileWithHash(scope, name, path);
+        const expectedSha256 = args.expectedSha256 || current?.sha256 || undefined;
         return proposalReturn({
             kind: 'content',
             skillName: name,
             scope,
             path,
-            before,
+            before: current ? current.content : null,
             after: String(args.content),
             op: {
                 name: 'skill_update_content',
@@ -931,7 +984,8 @@ const HANDLERS = {
                     scope,
                     path,
                     content: String(args.content),
-                    expectedSha256: args.expectedSha256,
+                    ...(expectedSha256 ? { expectedSha256 } : {}),
+                    ...(current ? {} : { expectAbsent: true }),
                 },
             },
         });
@@ -1046,13 +1100,17 @@ const HANDLERS = {
         if (!args?.name) throw new SkillProposalError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: 'name is required' });
         const scope = normalizeScope(args.scope, mctx?.defaultScope);
         const name = String(args.name);
+        const entry = await getSkillsApi().get(name, scope);
         return proposalReturn({
             kind: 'delete',
             skillName: name,
             scope,
             before: { exists: true },
             after: { exists: false },
-            op: { name: 'skill_delete', args: { name, scope } },
+            op: {
+                name: 'skill_delete',
+                args: { name, scope, ...(entry?.installedHash ? { expectedInstalledHash: entry.installedHash } : {}) },
+            },
         });
     },
 

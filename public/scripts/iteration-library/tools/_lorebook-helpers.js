@@ -12,7 +12,7 @@
  * editor-assistant')` and without re-implementing the parse/match logic.
  */
 
-import { STATE_ERROR_REASONS } from '../../state-errors.js';
+import { STATE_ERROR_REASONS } from '../../lib/state-errors.js';
 
 /**
  * Structured error thrown by lorebook helpers, reads, and writes. Carries
@@ -29,17 +29,18 @@ import { STATE_ERROR_REASONS } from '../../state-errors.js';
  * has since vanished on the apply path.
  */
 export class LorebookError extends Error {
-    constructor({ reason, hint }) {
+    constructor({ reason, hint, code = '' }) {
         super(`[lorebook] ${reason}: ${hint}`);
         this.name = 'LorebookError';
         this.reason = reason;
         this.hint = String(hint || '').slice(0, 120);
+        // Optional machine-readable discriminator for callers that map a
+        // helper failure onto their own error contract.
+        if (code) this.code = String(code);
     }
 }
 
-const QUERY_LIMIT_DEFAULT = 10;
-const QUERY_LIMIT_MAX = 20;
-const DETAIL_LIMIT_MAX = 10;
+// Algorithmic half-window around a query substring match for excerpt rendering.
 const MATCH_EXCERPT_RADIUS = 70;
 
 const SEARCH_MODE = Object.freeze({
@@ -64,21 +65,16 @@ function normalizeText(value) {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
 }
 
-function clipText(value, maxLength = 80) {
-    const text = String(value ?? '');
-    if (text.length <= maxLength) return text;
-    return `${text.slice(0, maxLength)}…`;
-}
-
 function normalizeSearchMode(value) {
     const normalized = String(value || '').trim().toLowerCase();
     return normalized === SEARCH_MODE.ACTIVATION ? SEARCH_MODE.ACTIVATION : SEARCH_MODE.ANY;
 }
 
-function normalizeQueryLimit(value, fallback = QUERY_LIMIT_DEFAULT) {
-    const numeric = asFiniteInteger(value, fallback);
-    if (!Number.isInteger(numeric)) return fallback;
-    return Math.max(1, Math.min(QUERY_LIMIT_MAX, numeric));
+function normalizeQueryLimit(value) {
+    if (value === undefined || value === null || value === '') return null;
+    const numeric = asFiniteInteger(value, null);
+    if (!Number.isInteger(numeric) || numeric < 1) return null;
+    return numeric;
 }
 
 function normalizeUidRange(value) {
@@ -108,7 +104,7 @@ function normalizeUidRange(value) {
         throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `Invalid lorebook range: ${text}` });
     }
     if (start > end) {
-        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `Invalid lorebook range: ${text}. Range start must be <= end.` });
+        throw new LorebookError({ reason: STATE_ERROR_REASONS.VALIDATION_ARGS, hint: `Invalid lorebook range: ${text}. Range start must be <= end.`, code: 'RANGE_REVERSED' });
     }
     return { start, end };
 }
@@ -122,7 +118,6 @@ function normalizeDetailUids(value) {
         if (!Number.isInteger(uid) || uid < 0 || seen.has(uid)) continue;
         seen.add(uid);
         unique.push(uid);
-        if (unique.length >= DETAIL_LIMIT_MAX) break;
     }
     return unique;
 }
@@ -212,8 +207,8 @@ function normalizeToolEntry(entry, uid, { includeContent = false, includeLayout 
 
 function summarizeListEntry(entry, uid) {
     const normalized = normalizeToolEntry(entry, uid);
-    const name = clipText(normalized.comment, 120).trim()
-        || clipText(normalized.key[0] || '', 120).trim()
+    const name = String(normalized.comment || '').trim()
+        || String(normalized.key[0] || '').trim()
         || `#${normalized.uid}`;
     return { uid: normalized.uid, name, enabled: normalized.enabled };
 }
@@ -278,9 +273,10 @@ async function loadBookByName(context, bookName, { missingReason = STATE_ERROR_R
         throw new LorebookError({ reason: missingReason, hint: `World book "${trimmed}" not found` });
     }
     const data = await context.loadWorldInfo(trimmed);
-    const lorebookData = (data && typeof data === 'object')
-        ? (data.entries && typeof data.entries === 'object' ? data : { ...data, entries: {} })
-        : { entries: {} };
+    if (!data || typeof data !== 'object') {
+        throw new LorebookError({ reason: missingReason, hint: `World book "${trimmed}" not found` });
+    }
+    const lorebookData = data.entries && typeof data.entries === 'object' ? data : { ...data, entries: {} };
     return { bookName: trimmed, lorebookData };
 }
 
@@ -293,9 +289,45 @@ function resolveCharacterByAvatar(context, avatar) {
     return characters[context?.characterId] || null;
 }
 
+/**
+ * World books visible to `character`, in binding-strength order
+ * (character → character_aux → chat → global). A book bound at several
+ * scopes is tagged by the first. `ctxRoot` is the Luker context (may
+ * be null); `chatMetadata` is the caller's chat metadata.
+ *
+ * @returns {Array<[string, 'character' | 'character_aux' | 'chat' | 'global']>}
+ */
+function collectWorldBookSources(ctxRoot, character, chatMetadata) {
+    const out = [];
+    const seen = new Set();
+    const push = (name, scope) => {
+        const trimmed = String(name || '').trim();
+        if (!trimmed || seen.has(trimmed)) return;
+        seen.add(trimmed);
+        out.push([trimmed, scope]);
+    };
+
+    push(character?.data?.extensions?.world, 'character');
+
+    if (character?.avatar && typeof ctxRoot?.getCharaFilename === 'function' && typeof ctxRoot?.getCharaAuxWorlds === 'function') {
+        const fileName = ctxRoot.getCharaFilename(null, { manualAvatarKey: character.avatar });
+        for (const name of ctxRoot.getCharaAuxWorlds(fileName) || []) push(name, 'character_aux');
+    }
+
+    const getChatNames = ctxRoot?.chatWorldInfo?.getNames;
+    if (typeof getChatNames === 'function') {
+        for (const name of getChatNames(chatMetadata) || []) push(name, 'chat');
+    }
+
+    const globalSelection = ctxRoot?.chatWorldInfo?.globalSelection;
+    if (Array.isArray(globalSelection)) {
+        for (const name of globalSelection) push(name, 'global');
+    }
+    return out;
+}
+
 export const lorebookHelpers = Object.freeze({
-    QUERY_LIMIT_MAX,
-    DETAIL_LIMIT_MAX,
+    MATCH_EXCERPT_RADIUS,
     SEARCH_MODE,
     asFiniteInteger,
     normalizeText,
@@ -311,4 +343,5 @@ export const lorebookHelpers = Object.freeze({
     buildEntryMatch,
     loadBookByName,
     resolveCharacterByAvatar,
+    collectWorldBookSources,
 });

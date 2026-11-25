@@ -2,14 +2,11 @@
  * iteration-library — runner primitives.
  *
  * Re-exports the low-level LLM call mechanics from public/scripts/lib/. This
- * file is the library's umbrella; plugin-owned popups should import from
- * here rather than digging into `lib/iter-tool-calling.js` directly so the
- * public surface has a single stable home.
+ * file exposes the documented runner surface. Consumers needing other
+ * lib helpers import their submodules directly.
  *
  * Conversation-state advancement (`session.messages.push`, turn-by-turn
- * state machine) is intentionally NOT extracted from
- * iteration-studio/runner.js — that logic is UI-layer and stays in the
- * shell until the relevant plugin owns its own popup.
+ * state machine) is owned by the plugin popups.
  */
 
 export {
@@ -18,6 +15,7 @@ export {
     buildPendingToolResults,
     buildPersistentToolCallsFromRawCalls,
     buildPersistentToolHistoryMessages,
+    collectIterToolCallIds,
     createPersistentToolTurnMessage,
     makeAiIterationMessageId,
 } from '../lib/iter-tool-calling.js';

@@ -32,7 +32,7 @@ describe('bus.propose (patch-based)', () => {
             after: { x: 1 },
         });
         expect(typeof out.id).toBe('string');
-        const entries = bus._testOnly_entries();
+        const entries = bus.listEntries();
         expect(entries).toHaveLength(1);
         expect(entries[0].inverse).toEqual([]);
         expect(entries[0].target).toEqual({ type: 'preset' });
@@ -51,7 +51,7 @@ describe('bus.propose (patch-based)', () => {
             before: { a: 1 },
             after: { a: 2 },
         });
-        const entries = bus._testOnly_entries();
+        const entries = bus.listEntries();
         expect(entries[0].inverse).toEqual([{ op: 'replace', path: '/a', value: 1 }]);
     });
 

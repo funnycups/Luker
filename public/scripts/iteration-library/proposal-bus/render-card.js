@@ -17,20 +17,15 @@
  * popups never see these attribute names directly.
  */
 
-import { STR, rollbackFailKeyForTargetType } from '../ui/strings.js';
-
-function escapeHtml(s) {
-    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;',
-    }[c]));
-}
+import { conflictSummaryKey } from '../ui/strings.js';
+import { escapeHtml } from '../../lib/html-escape.js';
 
 function formatTime(ts) {
-    if (!ts) return '';
-    try {
-        const d = new Date(Number(ts));
-        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-    } catch { return ''; }
+    const ms = Number(ts);
+    if (!ts || !Number.isFinite(ms)) return '';
+    const d = new Date(ms);
+    if (Number.isNaN(d.getTime())) return '';
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 function statusChip(entry, i18n) {
@@ -75,7 +70,7 @@ function conflictBlock(entry, i18n) {
     const reason = info && (info.hint || info.reason || info.error);
     const targetType = (info && info.targetType) || entry?.target?.type || '';
     const idAttr = escapeHtml(entry.id);
-    const messageEnglish = rollbackFailKeyForTargetType(targetType) || STR.previewFail_generic;
+    const messageEnglish = conflictSummaryKey(info, targetType);
     const message = i18n(messageEnglish);
     const errLine = reason
         ? `<div class="iter_proposal_conflict_error">${escapeHtml(i18n('Error: ${0}', String(reason)))}</div>`

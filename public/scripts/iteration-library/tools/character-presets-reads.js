@@ -39,7 +39,7 @@
  *     tool_result either way (matching the `runLorebookReadTool` contract).
  */
 
-import { STATE_ERROR_REASONS, STATE_HINT_MAX_LENGTH } from '../../state-errors.js';
+import { STATE_ERROR_REASONS, STATE_HINT_MAX_LENGTH } from '../../lib/state-errors.js';
 
 function makeFailure(reason, hint, error) {
     const safeHint = String(hint == null ? '' : hint).slice(0, STATE_HINT_MAX_LENGTH);

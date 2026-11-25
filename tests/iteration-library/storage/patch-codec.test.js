@@ -2,7 +2,6 @@ import {
     encodeInverse,
     decodeBackward,
     deriveForward,
-    replayBackward,
     PatchConflictError,
 } from '/scripts/iteration-library/storage/patch-codec.js';
 
@@ -74,45 +73,6 @@ describe('decodeBackward', () => {
             expect(err.opIndex).toBe(1);
             expect(err.jsonPath).toBe('/nope');
         }
-    });
-});
-
-describe('replayBackward', () => {
-    test('empty chain → currentState verbatim, appliedCount 0', () => {
-        const current = { a: 1 };
-        const out = replayBackward(current, []);
-        expect(out).toEqual({ state: current, appliedCount: 0 });
-    });
-
-    test('applies in newest-to-oldest order (array index reversed)', () => {
-        // Caller is expected to pass patches in turn order [oldest..newest].
-        // replayBackward replays newest first to walk back through history.
-        const final = { v: 3 };
-        const inverses = [
-            [{ op: 'replace', path: '/v', value: 1 }],  // turn 1 inverse: 2 → 1
-            [{ op: 'replace', path: '/v', value: 2 }],  // turn 2 inverse: 3 → 2
-        ];
-        const out = replayBackward(final, inverses);
-        expect(out).toEqual({ state: { v: 1 }, appliedCount: 2 });
-    });
-
-    test('mid-chain failure → returns partial state at the failure point, never throws', () => {
-        const final = { v: 3 };
-        const inverses = [
-            [{ op: 'replace', path: '/v', value: 1 }],
-            [{ op: 'replace', path: '/missing', value: 0 }],   // will fail
-            [{ op: 'replace', path: '/v', value: 2 }],
-        ];
-        const out = replayBackward(final, inverses);
-        // newest first: index 2 succeeds (v 3→2), index 1 fails, index 0 never tried
-        expect(out.state).toEqual({ v: 2 });
-        expect(out.appliedCount).toBe(1);
-    });
-
-    test('single-patch chain that fails on first op → returns currentState, appliedCount 0', () => {
-        const out = replayBackward({ a: 1 }, [[{ op: 'remove', path: '/nope' }]]);
-        expect(out.state).toEqual({ a: 1 });
-        expect(out.appliedCount).toBe(0);
     });
 });
 

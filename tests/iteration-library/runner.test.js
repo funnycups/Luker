@@ -21,6 +21,7 @@ describe('iteration-library/runner — public surface', () => {
         expect(runner.buildExecutionToolCalls).toBe(iterToolCalling.buildExecutionToolCalls);
         expect(runner.buildPendingToolResults).toBe(iterToolCalling.buildPendingToolResults);
         expect(runner.makeAiIterationMessageId).toBe(iterToolCalling.makeAiIterationMessageId);
+        expect(runner.collectIterToolCallIds).toBe(iterToolCalling.collectIterToolCallIds);
     });
 
     test('abortUtils namespace re-exports lib/abort-utils', () => {

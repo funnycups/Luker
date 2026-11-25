@@ -19,21 +19,13 @@
  * shell `i18n.js` import dropped (callers pass `i18n` via options) and
  * all `luker_iter_*` selectors / data attrs renamed to `luker_lib_*`.
  */
-
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll('\'', '&#39;');
-}
+import { escapeHtml } from '../lib/html-escape.js';
 
 function defaultI18n(s) {
     return String(s ?? '');
 }
 
-export function closeExpandedDiff(rootElement) {
+function closeExpandedDiff(rootElement) {
     const root = rootElement instanceof Element ? rootElement : null;
     if (!(root instanceof HTMLElement)) {
         return;
@@ -91,7 +83,7 @@ export function openExpandedDiff(rootElement, triggerElement, options = {}) {
     root.append(overlay);
 }
 
-export function beginLineDiffResize(splitterElement, pointerEvent) {
+function beginLineDiffResize(splitterElement, pointerEvent) {
     const splitter = splitterElement instanceof HTMLElement ? splitterElement : null;
     const pointer = pointerEvent instanceof PointerEvent ? pointerEvent : null;
     const dual = splitter?.closest?.('.luker_lib_diff_dual');

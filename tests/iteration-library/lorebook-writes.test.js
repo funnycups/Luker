@@ -4,10 +4,9 @@
  *
  * The module is plugin-agnostic: it owns the proposal computation
  * (`runLorebookWriteTool` — returns {before, after, kind} without touching
- * disk) and the apply-time commit (`applyLorebookProposal` — re-derives
- * from args against the entry's CURRENT on-disk state and writes once).
- * Both paths only need a SillyTavern-shaped context (loadWorldInfo +
- * saveWorldInfo); no cross-plugin dispatcher.
+ * disk). Approval chains run through the real ProposalBus and the shared
+ * lorebook entry target. Everything only needs a SillyTavern-shaped
+ * context (loadWorldInfo + saveWorldInfo); no cross-plugin dispatcher.
  */
 
 import { describe, test, expect, jest } from '@jest/globals';
@@ -16,19 +15,28 @@ import {
     LOREBOOK_WRITE_TOOL_NAMES,
     isLorebookWriteTool,
     runLorebookWriteTool,
-    applyLorebookProposal,
-    applyLorebookCommit,
 } from '../../public/scripts/iteration-library/tools/lorebook-writes.js';
+import { createBus } from '../../public/scripts/iteration-library/proposal-bus/bus.js';
+import { clearRegistry } from '../../public/scripts/iteration-library/storage/target-registry.js';
+import {
+    LOREBOOK_ENTRY_TARGET_TYPE,
+    ensureLorebookEntryTarget,
+} from '../../public/scripts/iteration-library/proposal-bus/targets/lorebook-entry.js';
+import { lorebookWrite } from '../../public/scripts/iteration-library/proposal-bus/kinds/lorebook-write.js';
+import { createWorldInfoHarness, worldInfoContext } from './real-worldinfo-context.js';
+let harness;
+beforeEach(async () => { harness = await createWorldInfoHarness(); });
 
 function makeBook(entries) {
     return { entries: structuredClone(entries) };
 }
 
 function makeContext(books) {
-    const state = structuredClone(books);
+    const { disk: state, context } = worldInfoContext(harness, books);
     return {
-        loadWorldInfo: jest.fn(async (name) => state[name] ?? null),
-        saveWorldInfo: jest.fn(async (name, data) => { state[name] = data; }),
+        ...context,
+        loadWorldInfo: jest.spyOn(context, 'loadWorldInfo'),
+        saveWorldInfo: jest.spyOn(context, 'saveWorldInfo'),
         _state: state,
     };
 }
@@ -154,53 +162,113 @@ describe('runLorebookWriteTool — proposal mode (no disk writes)', () => {
     });
 });
 
-describe('applyLorebookProposal — apply-time commit re-derives from args', () => {
-    test('update kind: writes once with the patch applied to current on-disk state', async () => {
-        const ctx = makeContext({
-            'B': makeBook({ 5: { uid: 5, content: 'live', disable: false } }),
-        });
-        const res = await applyLorebookProposal(ctx, {
-            kind: 'update',
-            args: { book_name: 'B', uid: 5, patch: { disable: true } },
-        });
-        expect(res).toEqual({ ok: true, book_name: 'B', uid: 5 });
-        expect(ctx.saveWorldInfo).toHaveBeenCalledTimes(1);
-        expect(ctx._state['B'].entries[5].disable).toBe(true);
+describe('runLorebookWriteTool — cases ported from the CEA approval-flow suite', () => {
+    test('rejects an empty patch object', async () => {
+        const ctx = makeContext({ BookA: makeBook({ 5: { uid: 5 } }) });
+        const out = await runLorebookWriteTool(
+            { name: 'lorebook_update_entry', args: { book_name: 'BookA', uid: 5, patch: {} } },
+            { context: ctx },
+        );
+        expect(out.ok).toBe(false);
+        expect(out.error).toMatch(/patch must contain at least one field/);
     });
 
-    test('str_replace kind: writes new content derived from current entry', async () => {
-        const ctx = makeContext({
-            'B': makeBook({ 7: { uid: 7, content: 'foo bar baz' } }),
-        });
-        const res = await applyLorebookProposal(ctx, {
-            kind: 'str_replace',
-            args: { book_name: 'B', uid: 7, oldString: 'bar', newString: 'qux' },
-        });
-        expect(res.ok).toBe(true);
-        expect(ctx._state['B'].entries[7].content).toBe('foo qux baz');
+    test('after keeps the addressed uid when the patch tries to overwrite it', async () => {
+        const ctx = makeContext({ BookA: makeBook({ 5: { uid: 5, content: 'x' } }) });
+        const out = await runLorebookWriteTool(
+            { name: 'lorebook_update_entry', args: { book_name: 'BookA', uid: 5, patch: { uid: 999, content: 'y' } } },
+            { context: ctx },
+        );
+        expect(out.ok).toBe(true);
+        expect(out.result.after.uid).toBe(5);
+        expect(out.result.updated_fields).toEqual(['content']);
     });
 
-    test('rejects unknown kind', async () => {
-        const ctx = makeContext({});
-        await expect(applyLorebookProposal(ctx, { kind: 'wat', args: {} })).rejects.toThrow(/unknown kind/);
+    test('rejects a multi-site oldString without replaceAll', async () => {
+        const ctx = makeContext({ BookA: makeBook({ 5: { uid: 5, content: 'must must must' } }) });
+        const out = await runLorebookWriteTool(
+            { name: 'lorebook_str_replace_in_entry', args: { book_name: 'BookA', uid: 5, oldString: 'must', newString: 'might' } },
+            { context: ctx },
+        );
+        expect(out.ok).toBe(false);
+        expect(out.error).toMatch(/more than once/);
+    });
+
+    test('accepts an empty newString to delete a clause', async () => {
+        const ctx = makeContext({ BookA: makeBook({ 5: { uid: 5, content: 'keep [DROP THIS] tail' } }) });
+        const out = await runLorebookWriteTool(
+            { name: 'lorebook_str_replace_in_entry', args: { book_name: 'BookA', uid: 5, oldString: ' [DROP THIS]', newString: '' } },
+            { context: ctx },
+        );
+        expect(out.ok).toBe(true);
+        expect(out.result.after.content).toBe('keep tail');
     });
 });
 
-describe('applyLorebookCommit — direct commit with a pre-computed after', () => {
-    test('merges after over the live entry, preserving uid as the address', async () => {
-        const ctx = makeContext({
-            'B': makeBook({ 5: { uid: 5, content: 'old', _bookkeeping: 'keep-me' } }),
+describe('approval chains through the shared entry target — ported from the CEA approval-flow suite', () => {
+    function busFor(ctx) {
+        clearRegistry();
+        ensureLorebookEntryTarget(ctx);
+        const bus = createBus();
+        bus.registerKind('lorebook-write', lorebookWrite);
+        return bus;
+    }
+
+    async function propose(bus, ctx, id, name, args) {
+        const out = await runLorebookWriteTool({ id, name, args }, { context: ctx });
+        expect(out.ok).toBe(true);
+        return bus.propose({
+            kind: 'lorebook-write',
+            target: { type: LOREBOOK_ENTRY_TARGET_TYPE, name: out.result.book_name, uid: out.result.uid },
+            before: out.result.before,
+            after: out.result.after,
+            sourceCallId: id,
         });
-        await applyLorebookCommit(ctx, { book_name: 'B', uid: 5, after: { content: 'new', uid: 999 } });
-        expect(ctx._state['B'].entries[5].content).toBe('new');
-        // uid is the address — apply must NOT honor a uid in after.
-        expect(ctx._state['B'].entries[5].uid).toBe(5);
-        // unrelated bookkeeping fields are preserved (Object.assign merge).
-        expect(ctx._state['B'].entries[5]._bookkeeping).toBe('keep-me');
+    }
+
+    test('two update proposals on disjoint fields of one uid both land', async () => {
+        const ctx = makeContext({ BookA: makeBook({ 5: { uid: 5, content: 'a', disable: false, comment: 'fmt' } }) });
+        const bus = busFor(ctx);
+        const a = await propose(bus, ctx, 'c1', 'lorebook_update_entry', { book_name: 'BookA', uid: 5, patch: { disable: true } });
+        const b = await propose(bus, ctx, 'c2', 'lorebook_update_entry', { book_name: 'BookA', uid: 5, patch: { comment: 'new comment' } });
+        expect((await bus.approve(a.id)).status).toBe('committed');
+        expect((await bus.approve(b.id)).status).toBe('committed');
+        expect(ctx._state.BookA.entries[5]).toEqual({ uid: 5, content: 'a', disable: true, comment: 'new comment' });
     });
 
-    test('throws on missing book / uid', async () => {
-        const ctx = makeContext({});
-        await expect(applyLorebookCommit(ctx, { book_name: '', uid: 0, after: {} })).rejects.toThrow(/book_name/);
+    test('a str_replace proposed after an approved update matches the updated content', async () => {
+        const ctx = makeContext({ BookA: makeBook({ 5: { uid: 5, content: 'must use markdown always' } }) });
+        const bus = busFor(ctx);
+        const a = await propose(bus, ctx, 'c1', 'lorebook_update_entry', { book_name: 'BookA', uid: 5, patch: { content: 'must use markdown sometimes' } });
+        expect((await bus.approve(a.id)).status).toBe('committed');
+        const b = await propose(bus, ctx, 'c2', 'lorebook_str_replace_in_entry', {
+            book_name: 'BookA', uid: 5, oldString: 'must use markdown', newString: 'prefers markdown',
+        });
+        expect((await bus.approve(b.id)).status).toBe('committed');
+        expect(ctx._state.BookA.entries[5].content).toBe('prefers markdown sometimes');
+    });
+
+    test('a str_replace computed before an update to the same field parks as a conflict', async () => {
+        const ctx = makeContext({ BookA: makeBook({ 5: { uid: 5, content: 'must use markdown always' } }) });
+        const bus = busFor(ctx);
+        const a = await propose(bus, ctx, 'c1', 'lorebook_update_entry', { book_name: 'BookA', uid: 5, patch: { content: 'must use markdown sometimes' } });
+        const b = await propose(bus, ctx, 'c2', 'lorebook_str_replace_in_entry', {
+            book_name: 'BookA', uid: 5, oldString: 'always', newString: 'often',
+        });
+        expect((await bus.approve(a.id)).status).toBe('committed');
+        expect(await bus.approve(b.id)).toMatchObject({ ok: false, status: 'conflict' });
+        expect(ctx._state.BookA.entries[5].content).toBe('must use markdown sometimes');
+        expect(ctx.saveWorldInfo).toHaveBeenCalledTimes(1);
+    });
+
+    test('a str_replace whose oldString drifted away fails at proposal time without saving', async () => {
+        const ctx = makeContext({ BookA: makeBook({ 5: { uid: 5, content: 'the world has shifted' } }) });
+        const out = await runLorebookWriteTool(
+            { name: 'lorebook_str_replace_in_entry', args: { book_name: 'BookA', uid: 5, oldString: 'must use markdown', newString: 'prefers markdown' } },
+            { context: ctx },
+        );
+        expect(out.ok).toBe(false);
+        expect(out.error).toMatch(/not found/);
+        expect(ctx.saveWorldInfo).not.toHaveBeenCalled();
     });
 });

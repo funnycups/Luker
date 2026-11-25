@@ -11,9 +11,6 @@
 // tests/e2e/regression/118-iter-studio-batch-approval-gate.e2e.js
 // for the black-box behavior under real DOM + rAF + LLM.
 //
-// hasPendingSiblingsFor is retained for backwards compat but
-// intentionally NOT re-covered here as a public contract; a
-// deprecation JSDoc lives on it in bus.js.
 
 import { jest } from '@jest/globals';
 import { createBus } from '/scripts/iteration-library/proposal-bus/bus.js';

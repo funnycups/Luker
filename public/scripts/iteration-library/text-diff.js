@@ -8,10 +8,7 @@
  * write any rendering code to get line numbers, splitter, expand-to-
  * fullscreen, and collapsible long-diff `<details>`.
  *
- * Originated in `extensions/orchestrator/line-diff.js`, lifted into the
- * iteration-studio shell as `inline-text-diff.js`, then deleted with the
- * shell in the library overhaul. Re-introduced here as a
- * generic, i18n-injectable building block — no shell coupling, no
+ * A generic, i18n-injectable building block — no shell coupling, no
  * sibling `i18n.js` dependency. Pairs with `zoom-overlay.js`, which
  * popups call once via `attachZoomOverlay(popupRoot)`.
  *
@@ -20,6 +17,7 @@
  * data attributes were s/luker_iter_diff/luker_lib_diff/g across the
  * board; the CSS var `--luker-iter-split-left` became `--luker-lib-split-left`.
  */
+import { escapeHtml } from '../lib/html-escape.js';
 
 const LINE_DIFF_LONG_CHAR_THRESHOLD = 900;
 const LINE_DIFF_LONG_LINE_THRESHOLD = 18;
@@ -123,15 +121,6 @@ export function ensureStylesheetInjected() {
     link.rel = 'stylesheet';
     link.href = STYLESHEET_HREF;
     document.head.appendChild(link);
-}
-
-function escapeHtml(value) {
-    return String(value ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll('\'', '&#39;');
 }
 
 /**
@@ -492,4 +481,10 @@ export function renderInlineTextDiffHtml(beforeValue, afterValue, optionsOrLabel
         </div>
     </div>
 </details>`;
+}
+
+export function renderInlineTextDiffElement(beforeValue, afterValue, options = {}) {
+    const template = document.createElement('template');
+    template.innerHTML = renderInlineTextDiffHtml(beforeValue, afterValue, options);
+    return template.content.firstElementChild;
 }

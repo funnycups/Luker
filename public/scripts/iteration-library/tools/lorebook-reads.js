@@ -17,9 +17,7 @@
  * helper-api injection, no cross-plugin dispatcher.
  *
  * Exports:
- *   - LOREBOOK_READ_TOOL_NAMES — short canonical names. The legacy
- *     `luker_card_*` wire names are an implementation detail of CEA,
- *     not part of this shared surface.
+ *   - LOREBOOK_READ_TOOL_NAMES — short canonical names.
  *   - isLorebookReadTool(name): boolean — runtime predicate.
  *   - LOREBOOK_READ_TOOL_DEFS — OpenAI-style function definitions ready
  *     to splice into a popup's tool catalog.
@@ -29,7 +27,7 @@
  */
 
 import { lorebookHelpers as H, LorebookError } from './_lorebook-helpers.js';
-import { STATE_ERROR_REASONS } from '../../state-errors.js';
+import { STATE_ERROR_REASONS } from '../../lib/state-errors.js';
 
 const TOOL_NAMES = Object.freeze({
     WORLD_BOOK_LIST: 'world_book_list',
@@ -51,7 +49,7 @@ export const LOREBOOK_READ_TOOL_DEFS = [
         type: 'function',
         function: {
             name: TOOL_NAMES.WORLD_BOOK_LIST,
-            description: 'List world book names visible to the character being designed, tagged with their scope (character, character_aux, chat, global). Call before lorebook_list / lorebook_query / lorebook_get to know which book names exist.',
+            description: 'List world book names visible to the active character, tagged with their scope (character, character_aux, chat, global). Call before lorebook_list / lorebook_query / lorebook_get to know which book names exist.',
             parameters: { type: 'object', properties: {}, additionalProperties: false },
         },
     },
@@ -84,7 +82,7 @@ export const LOREBOOK_READ_TOOL_DEFS = [
                     search_mode: { type: 'string', enum: ['any', 'activation'] },
                     constant: { type: 'boolean' },
                     enabled: { type: 'boolean' },
-                    limit: { type: 'integer', minimum: 1, maximum: H.QUERY_LIMIT_MAX },
+                    limit: { type: 'integer', minimum: 1 },
                 },
                 required: ['book_name'],
                 additionalProperties: false,
@@ -100,7 +98,7 @@ export const LOREBOOK_READ_TOOL_DEFS = [
                 type: 'object',
                 properties: {
                     book_name: { type: 'string', description: 'Required. Target world book.' },
-                    uids: { type: 'array', items: { type: 'integer' }, minItems: 1, maxItems: H.DETAIL_LIMIT_MAX },
+                    uids: { type: 'array', items: { type: 'integer' }, minItems: 1 },
                 },
                 required: ['book_name', 'uids'],
                 additionalProperties: false,
@@ -111,36 +109,8 @@ export const LOREBOOK_READ_TOOL_DEFS = [
 
 async function listWorldBooks(context, avatar) {
     const character = H.resolveCharacterByAvatar(context, avatar);
-    const books = [];
-    const sources = {};
-    const push = (name, source) => {
-        const trimmed = String(name || '').trim();
-        if (!trimmed || sources[trimmed]) return;
-        sources[trimmed] = source;
-        books.push(trimmed);
-    };
-
-    push(character?.data?.extensions?.world, 'character');
-
-    const ctxRoot = (typeof Luker !== 'undefined' && Luker.getContext) ? Luker.getContext() : null;
-    const getCharaFilename = ctxRoot?.getCharaFilename;
-    const getCharaAuxWorlds = ctxRoot?.getCharaAuxWorlds;
-    const getChatWorldInfoNames = ctxRoot?.chatWorldInfo?.getNames;
-    const globalSelection = ctxRoot?.chatWorldInfo?.globalSelection;
-
-    if (typeof getCharaFilename === 'function' && typeof getCharaAuxWorlds === 'function' && character?.avatar) {
-        const fileName = getCharaFilename(null, { manualAvatarKey: character.avatar });
-        for (const name of getCharaAuxWorlds(fileName) || []) push(name, 'character_aux');
-    }
-    if (typeof getChatWorldInfoNames === 'function') {
-        try {
-            for (const name of getChatWorldInfoNames(context?.chatMetadata) || []) push(name, 'chat');
-        } catch { /* chat metadata may be unavailable */ }
-    }
-    if (Array.isArray(globalSelection)) {
-        for (const name of globalSelection) push(name, 'global');
-    }
-    return { books, sources };
+    const pairs = H.collectWorldBookSources(context, character, context?.chatMetadata);
+    return { books: pairs.map(([name]) => name), sources: Object.fromEntries(pairs) };
 }
 
 async function listEntries(context, args) {
@@ -208,7 +178,7 @@ async function queryEntries(context, args) {
     return {
         book_name: state.bookName,
         total_hits: hits.length,
-        entries: hits.slice(0, limit).map(({ _score, ...entry }) => entry),
+        entries: (limit === null ? hits : hits.slice(0, limit)).map(({ _score, ...entry }) => entry),
     };
 }
 

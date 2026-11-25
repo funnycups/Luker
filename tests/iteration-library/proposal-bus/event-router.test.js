@@ -53,7 +53,7 @@ describe('ProposalBus — event router', () => {
         const consumed = await bus.handleClick(evt);
         expect(consumed).toBe(true);
         expect(evt.preventDefault).toHaveBeenCalled();
-        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        const entry = bus.listEntries().find((e) => e.id === id);
         expect(entry.status).toBe('committed');
     });
 
@@ -67,7 +67,7 @@ describe('ProposalBus — event router', () => {
         const evt = fakeClick({ action: 'reject', proposalId: id });
         const consumed = await bus.handleClick(evt);
         expect(consumed).toBe(true);
-        const entry = bus._testOnly_entries().find((e) => e.id === id);
+        const entry = bus.listEntries().find((e) => e.id === id);
         expect(entry.status).toBe('rejected');
     });
 

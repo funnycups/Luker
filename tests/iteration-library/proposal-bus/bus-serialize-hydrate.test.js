@@ -58,14 +58,14 @@ describe('bus.serialize/hydrate (v3)', () => {
             }],
             outcomeQueue: [],
         });
-        expect(bus._testOnly_entries()).toHaveLength(1);
-        expect(bus._testOnly_entries()[0].inverse).toEqual([{ op: 'replace', path: '/a', value: 1 }]);
+        expect(bus.listEntries()).toHaveLength(1);
+        expect(bus.listEntries()[0].inverse).toEqual([{ op: 'replace', path: '/a', value: 1 }]);
     });
 
     test('hydrate rejects version 2 (no silent acceptance)', () => {
         const bus = createBus();
         bus.hydrate({ version: 2, entries: [], outcomeQueue: [] });
-        expect(bus._testOnly_entries()).toHaveLength(0);
+        expect(bus.listEntries()).toHaveLength(0);
     });
 
     test('hydrate preserves seq from id', () => {
