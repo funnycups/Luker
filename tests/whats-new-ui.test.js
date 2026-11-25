@@ -240,6 +240,65 @@ describe('showWhatsNewModal', () => {
         expect(document.querySelector('.wn-backdrop')).toBeNull();
         expect(onAck).toHaveBeenCalledTimes(1);
     });
+
+    test('pins body-hosted backdrop to visualViewport, focuses dialog panel without focus ring on Got it, and cleans up viewport listeners on dismiss', async () => {
+        const origVV = globalThis.visualViewport;
+        const origRAF = globalThis.requestAnimationFrame;
+        const origCAF = globalThis.cancelAnimationFrame;
+        const vvListeners = new Map();
+        const mockVV = {
+            width: 390,
+            height: 844,
+            offsetLeft: 0,
+            offsetTop: 12,
+            addEventListener: (ev, fn) => {
+                if (!vvListeners.has(ev)) vvListeners.set(ev, new Set());
+                vvListeners.get(ev).add(fn);
+            },
+            removeEventListener: (ev, fn) => vvListeners.get(ev)?.delete(fn),
+        };
+        Object.defineProperty(globalThis, 'visualViewport', { value: mockVV, configurable: true });
+        globalThis.requestAnimationFrame = (cb) => setTimeout(cb, 0);
+        globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+
+        try {
+            const modalPromise = showWhatsNewModal({ ...releasePayload, sections: [] });
+            const backdrop = /** @type {HTMLElement} */ (document.querySelector('.wn-backdrop'));
+            const panel = /** @type {HTMLElement} */ (backdrop.querySelector('.wn-dialog'));
+            const closeBtn = /** @type {HTMLButtonElement} */ (backdrop.querySelector('.wn-head .lw-ibtn'));
+            const gotItBtn = /** @type {HTMLButtonElement} */ (backdrop.querySelector('button.lw-btn.is-primary'));
+
+            expect(backdrop.style.position).toBe('fixed');
+            expect(backdrop.style.top).toBe('12px');
+            expect(backdrop.style.width).toBe('390px');
+            expect(backdrop.style.height).toBe('844px');
+            expect(vvListeners.get('resize')?.size).toBe(1);
+
+            // Initial focus lands on panel (no stray focus-visible ring on Got it), and Tab enters controls cleanly.
+            await new Promise(r => setTimeout(r, 10));
+            expect(document.activeElement).toBe(panel);
+            expect(document.activeElement).not.toBe(gotItBtn);
+
+            const tabFromPanel = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+            document.dispatchEvent(tabFromPanel);
+            expect(tabFromPanel.defaultPrevented).toBe(true);
+            expect(document.activeElement).toBe(closeBtn);
+
+            // Visual viewport resize updates backdrop box in pixels.
+            mockVV.height = 610;
+            for (const fn of vvListeners.get('resize') || []) fn();
+            await new Promise(r => setTimeout(r, 10));
+            expect(backdrop.style.height).toBe('610px');
+
+            gotItBtn.click();
+            await modalPromise;
+            expect(vvListeners.get('resize')?.size).toBe(0);
+        } finally {
+            Object.defineProperty(globalThis, 'visualViewport', { value: origVV, configurable: true });
+            globalThis.requestAnimationFrame = origRAF;
+            globalThis.cancelAnimationFrame = origCAF;
+        }
+    });
 });
 
 describe('initWhatsNew coordination', () => {

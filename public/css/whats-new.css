@@ -1,24 +1,35 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
  * Post-update "What's New" modal built on lens-shared tokens (.lw-dialog).
+ *
+ * Selectors qualify `.lw-dialog-backdrop.wn-backdrop` (specificity >= 0,3,0) so
+ * modal overrides stay authoritative even when Workbench / lens stylesheets
+ * `@import` lens-shared/tokens.css later in document order.
  */
 
 body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
-    z-index: 30010;
+    z-index: 2147482000;
     align-items: center;
-    padding: 20px 16px;
+    align-items: safe center;
+    padding:
+        max(20px, env(safe-area-inset-top, 0px))
+        max(16px, env(safe-area-inset-right, 0px))
+        max(20px, env(safe-area-inset-bottom, 0px))
+        max(16px, env(safe-area-inset-left, 0px));
 }
 
-.wn-backdrop .wn-dialog {
+.lw-dialog-backdrop.wn-backdrop .wn-dialog {
     width: min(620px, 100%);
-    max-height: min(82vh, 720px);
+    max-height: min(100%, 82vh, 720px);
+    max-height: min(100%, 82dvh, 720px);
 }
 
-.wn-backdrop .wn-head {
+.lw-dialog-backdrop.wn-backdrop .wn-head {
+    flex: none;
     gap: 12px;
     padding: 14px 14px 14px 18px;
 }
 
-.wn-backdrop .wn-head-badge {
+.lw-dialog-backdrop.wn-backdrop .wn-head-badge {
     display: grid;
     place-items: center;
     flex: none;
@@ -29,7 +40,7 @@ body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
     color: var(--lw-accent);
 }
 
-.wn-backdrop .wn-head-main {
+.lw-dialog-backdrop.wn-backdrop .wn-head-main {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -38,34 +49,41 @@ body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
     min-width: 0;
 }
 
-.wn-backdrop .wn-title {
+.lw-dialog-backdrop.wn-backdrop .wn-title {
     flex: 0 1 auto;
+    margin: 0;
     font-size: 15px;
     line-height: 1.3;
     color: var(--lw-text);
 }
 
-.wn-backdrop .wn-meta-pills {
+.lw-dialog-backdrop.wn-backdrop .wn-meta-pills {
     display: inline-flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 6px;
 }
 
-.wn-backdrop .wn-range-pill {
+.lw-dialog-backdrop.wn-backdrop .wn-range-pill {
     font-family: var(--lw-mono);
     font-size: 11px;
 }
 
-.wn-backdrop .wn-body {
+.lw-dialog-backdrop.wn-backdrop .wn-body {
+    flex: 1 1 auto;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 12px;
     padding: 16px 18px;
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
 }
 
-.wn-backdrop .wn-version {
+.lw-dialog-backdrop.wn-backdrop .wn-version {
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -73,9 +91,11 @@ body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
     border-radius: var(--lw-r);
     background: var(--lw-surface-2);
     border: 1px solid var(--lw-border);
+    content-visibility: auto;
+    contain-intrinsic-size: auto 240px;
 }
 
-.wn-backdrop .wn-version-head {
+.lw-dialog-backdrop.wn-backdrop .wn-version-head {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -84,20 +104,20 @@ body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
     border-bottom: 1px solid var(--lw-border);
 }
 
-.wn-backdrop .wn-version-label {
+.lw-dialog-backdrop.wn-backdrop .wn-version-label {
     font-family: var(--lw-mono);
     font-size: 13px;
     font-weight: 600;
     color: var(--lw-text);
 }
 
-.wn-backdrop .wn-version-date {
+.lw-dialog-backdrop.wn-backdrop .wn-version-date {
     font-size: 11.5px;
     color: var(--lw-faint);
     font-variant-numeric: tabular-nums;
 }
 
-.wn-backdrop .wn-md {
+.lw-dialog-backdrop.wn-backdrop .wn-md {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -106,7 +126,7 @@ body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
     color: var(--lw-text);
 }
 
-.wn-backdrop .wn-md h4 {
+.lw-dialog-backdrop.wn-backdrop .wn-md h4 {
     margin: 4px 0 0;
     font-size: 12px;
     font-weight: 600;
@@ -114,16 +134,17 @@ body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
     color: var(--lw-muted);
 }
 
-.wn-backdrop .wn-md h4:first-child {
+.lw-dialog-backdrop.wn-backdrop .wn-md h4:first-child {
     margin-top: 0;
 }
 
-.wn-backdrop .wn-md p {
+.lw-dialog-backdrop.wn-backdrop .wn-md p {
     margin: 0;
+    overflow-wrap: anywhere;
 }
 
-.wn-backdrop .wn-md ul,
-.wn-backdrop .wn-md ol {
+.lw-dialog-backdrop.wn-backdrop .wn-md ul,
+.lw-dialog-backdrop.wn-backdrop .wn-md ol {
     margin: 0;
     padding-left: 18px;
     display: flex;
@@ -131,11 +152,11 @@ body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
     gap: 5px;
 }
 
-.wn-backdrop .wn-md li {
+.lw-dialog-backdrop.wn-backdrop .wn-md li {
     overflow-wrap: anywhere;
 }
 
-.wn-backdrop .wn-md code {
+.lw-dialog-backdrop.wn-backdrop .wn-md code {
     padding: 1px 5px;
     border-radius: var(--lw-r-xs);
     background: var(--lw-hover);
@@ -144,22 +165,24 @@ body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
     line-height: inherit;
     font-family: var(--lw-mono);
     font-size: 12px;
+    overflow-wrap: anywhere;
 }
 
-.wn-backdrop .wn-md a.lw-link {
+.lw-dialog-backdrop.wn-backdrop .wn-md a.lw-link {
     display: inline;
     font-size: inherit;
     font-weight: 500;
     text-decoration: none;
+    overflow-wrap: anywhere;
 }
 
-.wn-backdrop .wn-md a.lw-link:hover,
-.wn-backdrop .wn-foot-links a.lw-link:hover {
+.lw-dialog-backdrop.wn-backdrop .wn-md a.lw-link:hover,
+.lw-dialog-backdrop.wn-backdrop .wn-foot-links a.lw-link:hover {
     text-decoration: underline;
     filter: none;
 }
 
-.wn-backdrop .wn-empty-note {
+.lw-dialog-backdrop.wn-backdrop .wn-empty-note {
     margin: 0;
     padding: 6px 2px;
     font-size: 13.5px;
@@ -167,7 +190,8 @@ body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
     color: var(--lw-muted);
 }
 
-.wn-backdrop .wn-foot {
+.lw-dialog-backdrop.wn-backdrop .wn-foot {
+    flex: none;
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
@@ -175,44 +199,61 @@ body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
     padding: 12px 18px 14px;
 }
 
-.wn-backdrop .wn-foot-links {
+.lw-dialog-backdrop.wn-backdrop .wn-foot .lw-btn.is-primary {
+    margin-left: auto;
+}
+
+.lw-dialog-backdrop.wn-backdrop .wn-foot-links {
     display: inline-flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 14px;
 }
 
-.wn-backdrop .wn-foot-links a.lw-link {
+.lw-dialog-backdrop.wn-backdrop .wn-foot-links a.lw-link {
     text-decoration: none;
     font-size: 12.5px;
 }
 
-.wn-backdrop .wn-foot-links a.lw-link:hover {
+.lw-dialog-backdrop.wn-backdrop .wn-foot-links a.lw-link:hover {
     text-decoration: underline;
 }
 
 @media (max-width: 720px) {
     body > .lw-dialog-backdrop.lw-surface.wn-backdrop {
-        padding: 16px 12px;
+        padding:
+            calc(12px + env(safe-area-inset-top, 0px))
+            calc(12px + env(safe-area-inset-right, 0px))
+            calc(12px + env(safe-area-inset-bottom, 0px))
+            calc(12px + env(safe-area-inset-left, 0px));
     }
 
-    .wn-backdrop .wn-dialog {
-        max-height: calc(100dvh - 32px);
+    .lw-dialog-backdrop.wn-backdrop .wn-dialog {
+        max-height: 100%;
     }
 
-    .wn-backdrop .wn-head {
-        padding: 12px 12px 12px 14px;
+    .lw-dialog-backdrop.wn-backdrop .wn-head {
+        padding: 12px 10px 12px 14px;
     }
 
-    .wn-backdrop .wn-body {
+    .lw-dialog-backdrop.wn-backdrop .wn-head .lw-ibtn {
+        width: 36px;
+        height: 36px;
+    }
+
+    .lw-dialog-backdrop.wn-backdrop .wn-body {
         padding: 12px 14px;
     }
 
-    .wn-backdrop .wn-foot {
+    .lw-dialog-backdrop.wn-backdrop .wn-version {
+        padding: 11px 12px;
+    }
+
+    .lw-dialog-backdrop.wn-backdrop .wn-foot {
         padding: 10px 14px 12px;
     }
 
-    .wn-backdrop .wn-foot .lw-btn {
+    .lw-dialog-backdrop.wn-backdrop .wn-foot .lw-btn {
         height: 36px;
         padding: 0 16px;
         font-size: 13px;

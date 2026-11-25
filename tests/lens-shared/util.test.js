@@ -247,6 +247,8 @@ describe('lens-shared ui primitives', () => {
         styleEl.textContent = cssText;
         document.head.appendChild(styleEl);
         expect(getComputedStyle(bodyBackdrop).position).toBe('fixed');
+        expect(bodyBackdrop.style.width).toBe(`${Math.round(window.innerWidth)}px`);
+        expect(bodyBackdrop.style.height).toBe(`${Math.round(window.innerHeight)}px`);
         styleEl.remove();
 
         bodyBackdrop.querySelector('.lw-btn.is-primary').click();

@@ -6,9 +6,10 @@
 
 import { h } from './lens-shared/util.js';
 import { button, iconButton, sharedIcon } from './lens-shared/ui.js';
+import { fitToViewport } from './lens-shared/viewport.js';
 import { loadPrefs } from './workbench/prefs.js';
 
-const TOKENS_CSS_ID = 'lw-tokens-css';
+const TOKENS_CSS_ID = 'luker-lens-shared-tokens-css';
 const WHATS_NEW_CSS_ID = 'lw-whats-new-css';
 const DOCS_ORIGIN = 'https://luker.cups.moe';
 
@@ -33,21 +34,28 @@ function makeTranslator(translateFn) {
  * @param {Document} [doc]
  */
 export function ensureWhatsNewStyles(doc = globalThis.document) {
-    if (!doc?.head) return;
-    if (!doc.getElementById(TOKENS_CSS_ID) && !doc.querySelector('link[href*="lens-shared/tokens.css"]')) {
-        const link = doc.createElement('link');
-        link.id = TOKENS_CSS_ID;
-        link.rel = 'stylesheet';
-        link.href = new URL('./lens-shared/tokens.css', import.meta.url).href;
-        doc.head.appendChild(link);
+    const links = [];
+    if (!doc?.head) return links;
+    let tokensLink = doc.getElementById(TOKENS_CSS_ID) || doc.querySelector('link[href*="lens-shared/tokens.css"]');
+    if (!tokensLink) {
+        tokensLink = doc.createElement('link');
+        tokensLink.id = TOKENS_CSS_ID;
+        tokensLink.rel = 'stylesheet';
+        tokensLink.href = new URL('./lens-shared/tokens.css', import.meta.url).href;
+        doc.head.appendChild(tokensLink);
     }
-    if (!doc.getElementById(WHATS_NEW_CSS_ID) && !doc.querySelector('link[href*="css/whats-new.css"]')) {
-        const link = doc.createElement('link');
-        link.id = WHATS_NEW_CSS_ID;
-        link.rel = 'stylesheet';
-        link.href = new URL('../css/whats-new.css', import.meta.url).href;
-        doc.head.appendChild(link);
+    links.push(tokensLink);
+
+    let wnLink = doc.getElementById(WHATS_NEW_CSS_ID) || doc.querySelector('link[href*="css/whats-new.css"]');
+    if (!wnLink) {
+        wnLink = doc.createElement('link');
+        wnLink.id = WHATS_NEW_CSS_ID;
+        wnLink.rel = 'stylesheet';
+        wnLink.href = new URL('../css/whats-new.css', import.meta.url).href;
+        doc.head.appendChild(wnLink);
     }
+    links.push(wnLink);
+    return links;
 }
 
 /**
@@ -208,7 +216,8 @@ export function renderChangelogMarkdown(source) {
  * @returns {Promise<void>}
  */
 export function showWhatsNewModal(payload, { onAck = null, host = document.body, translate = null } = {}) {
-    ensureWhatsNewStyles(host?.ownerDocument || document);
+    const doc = host?.ownerDocument || document;
+    const styleLinks = ensureWhatsNewStyles(doc);
     const tr = makeTranslator(translate);
     const isDev = payload?.kind === 'dev';
 
@@ -276,9 +285,10 @@ export function showWhatsNewModal(payload, { onAck = null, host = document.body,
         }));
     }
 
-    const doc = host?.ownerDocument || document;
     const returnFocus = doc.activeElement;
     let settled = false;
+    let viewportFit = null;
+    const pendingStyleCleanups = [];
 
     return new Promise((resolve) => {
         const focusableSelector = 'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
@@ -301,12 +311,12 @@ export function showWhatsNewModal(payload, { onAck = null, host = document.body,
                 const last = focusables[focusables.length - 1];
                 const active = doc.activeElement;
                 if (event.shiftKey) {
-                    if (active === first || !panel.contains(active)) {
+                    if (active === first || !panel.contains(active) || active === panel) {
                         event.preventDefault();
                         event.stopPropagation();
                         /** @type {HTMLElement} */ (last).focus({ preventScroll: true });
                     }
-                } else if (active === last || !panel.contains(active)) {
+                } else if (active === last || !panel.contains(active) || active === panel) {
                     event.preventDefault();
                     event.stopPropagation();
                     /** @type {HTMLElement} */ (first).focus({ preventScroll: true });
@@ -317,6 +327,10 @@ export function showWhatsNewModal(payload, { onAck = null, host = document.body,
         const dismiss = async () => {
             if (settled) return;
             settled = true;
+            for (const cleanup of pendingStyleCleanups) cleanup();
+            pendingStyleCleanups.length = 0;
+            viewportFit?.destroy();
+            viewportFit = null;
             doc.removeEventListener('keydown', onDocumentKeydown, true);
             backdrop.remove();
             if (returnFocus?.isConnected && typeof returnFocus.focus === 'function') {
@@ -366,7 +380,18 @@ export function showWhatsNewModal(payload, { onAck = null, host = document.body,
 
         doc.addEventListener('keydown', onDocumentKeydown, true);
         host.appendChild(backdrop);
-        globalThis.requestAnimationFrame?.(() => gotItBtn.focus({ preventScroll: true }));
+        if (host === doc.body) {
+            backdrop.style.position = 'fixed';
+            viewportFit = fitToViewport(backdrop, { resetAnimation: false });
+            for (const link of styleLinks) {
+                if (!link.sheet) {
+                    const onLoad = () => viewportFit?.refresh();
+                    link.addEventListener('load', onLoad, { once: true });
+                    pendingStyleCleanups.push(() => link.removeEventListener('load', onLoad));
+                }
+            }
+        }
+        globalThis.requestAnimationFrame?.(() => panel.focus({ preventScroll: true }));
     });
 }
 

@@ -393,6 +393,19 @@
 body > .lw-dialog-backdrop,
 body > .lw-dialog-backdrop.lw-surface {
     position: fixed;
+    top: 0;
+    left: 0;
+    right: auto;
+    bottom: auto;
+    width: 100vw;
+    width: 100dvw;
+    height: 100vh;
+    height: 100dvh;
+    height: var(--doc-height, 100dvh);
+    z-index: 2147482000;
+}
+body:has(> .lw-dialog-backdrop) #toast-container {
+    z-index: 2147483000;
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog {
     display: flex; flex-direction: column; width: min(480px, 100%); max-height: 100%;
@@ -401,13 +414,17 @@ body > .lw-dialog-backdrop.lw-surface {
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog.is-wide { width: min(760px, 100%); }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog-head {
-    display: flex; align-items: center; gap: 10px;
+    flex: none; display: flex; align-items: center; gap: 10px;
     padding: 12px 12px 12px 18px; border-bottom: 1px solid var(--lw-border);
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog-title { flex: 1; margin: 0; font-size: 14px; font-weight: 600; }
-:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog-body { display: grid; gap: 14px; padding: 16px 18px; overflow: auto; }
+:is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog-body {
+    flex: 1 1 auto; min-height: 0;
+    display: grid; gap: 14px; padding: 16px 18px;
+    overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+}
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-dialog-foot {
-    display: flex; justify-content: flex-end; gap: 8px;
+    flex: none; display: flex; justify-content: flex-end; gap: 8px;
     padding: 10px 16px 14px; border-top: 1px solid var(--lw-border);
 }
 :is(.lw-surface, .wbench, .mlens, .olens, .rpdock) .lw-confirm-text { display: grid; gap: 8px; font-size: 13px; line-height: 1.55; color: var(--lw-text); }

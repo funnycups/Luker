@@ -4,6 +4,7 @@
 // built with h() using textContent / createTextNode — never innerHTML.
 
 import { h } from './util.js';
+import { fitToViewport } from './viewport.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const circle = (cx, cy, r) => `M${cx - r} ${cy}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
@@ -261,10 +262,14 @@ export function confirmDialog(hostOrOptions, maybeOptions) {
     let settled = false;
     let busy = false;
 
+    let viewportFit = null;
+
     return new Promise((resolve) => {
         const close = (result) => {
             if (settled) return;
             settled = true;
+            viewportFit?.destroy();
+            viewportFit = null;
             backdrop.remove();
             if (returnFocus?.isConnected && typeof returnFocus.focus === 'function') {
                 returnFocus.focus({ preventScroll: true });
@@ -309,6 +314,10 @@ export function confirmDialog(hostOrOptions, maybeOptions) {
         }, panel);
 
         host.appendChild(backdrop);
+        if (host === (host?.ownerDocument?.body || document.body)) {
+            backdrop.style.position = 'fixed';
+            viewportFit = fitToViewport(backdrop, { resetAnimation: false });
+        }
         globalThis.requestAnimationFrame?.(() => confirmBtn.focus({ preventScroll: true }));
     });
 }
