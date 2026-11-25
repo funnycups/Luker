@@ -22,7 +22,7 @@ Studio uses a three-panel layout that overlays Luker's main UI:
 
 ### Left: AI Chat and Sessions
 
-The left panel hosts the Studio AI assistant. Every change to the CardApp originates here:
+The left panel hosts the Studio AI assistant. Every change to the CardApp originates here, and you can attach UI mockups or screenshots via **Attach images**, clipboard paste, or drag-and-drop; attached images stay in multi-turn context and are removed automatically when clearing chat or deleting sessions:
 
 ![Studio AI chat panel](/images/cardapp-studio/studio-ai-chat.png)
 

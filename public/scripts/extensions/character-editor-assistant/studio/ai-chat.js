@@ -17,6 +17,10 @@ import { applyEdits } from '../../../lib/edits/index.js';
 import { requireStoredPrompt } from '../../../lib/prompt-values.js';
 import { showConflictResolution } from '../../../lib/edits/conflict-ui.js';
 import {
+    hydrateMessagesForLlm,
+    normalizeImageAttachments,
+} from '../../../lib/multimodal-messages.js';
+import {
     listCtxKeys,
     describeCtxPath,
     listLukerDocs,
@@ -1639,6 +1643,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
         abortSignal = null,
         character: explicitCharacter = null,
         systemPrompt,
+        attachments = [],
         onToolCall = null,
         onAssistantText = null,
         onPendingApproval = null,
@@ -1657,10 +1662,16 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
     }
     const character = explicitCharacter || ctx.characters.find(card => card?.avatar && getCharaFilename(null, { manualAvatarKey: card.avatar }) === charId);
 
-    // Add user message
-    conversationMessages.push({ role: 'user', content: userMessage });
+    // Add lightweight user message (attachments stay path-only in persisted history)
+    const normalizedAttachments = normalizeImageAttachments(attachments);
+    conversationMessages.push({
+        role: 'user',
+        content: String(userMessage ?? ''),
+        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+    });
 
     let lastAssistantText = '';
+    const imageCache = new Map();
 
     const runLoop = async () => {
         // Multi-round tool calling loop. Program-driven: any tool call this round
@@ -1669,6 +1680,15 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
             if (abortSignal?.aborted) {
                 throw new Error('Request aborted');
             }
+
+            const hasAttachments = conversationMessages.some(m => Array.isArray(m?.attachments) && m.attachments.length > 0);
+            const outboundMessages = hasAttachments
+                ? await hydrateMessagesForLlm(conversationMessages, {
+                    context: ctx,
+                    cache: imageCache,
+                    signal: abortSignal,
+                })
+                : conversationMessages;
 
             // Studio is a dev/authoring tool — the character card is visible (so the
             // AI knows the persona it's authoring without GETting first), but world
@@ -1679,7 +1699,7 @@ export async function sendAIMessage(charId, conversationMessages, userMessage, o
             const generateTaskOpts = {
                 taskMessages: [
                     { role: 'system', content: systemPrompt },
-                    ...conversationMessages,
+                    ...outboundMessages,
                 ],
                 includeCharacterCard: true,
                 worldInfoSource: 'none',

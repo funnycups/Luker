@@ -20,6 +20,19 @@ import { fetchFileList, fetchFileContent, saveFileContent } from './file-api.js'
 import { parseCardAppFilePath } from './file-path.js';
 import { escapeHtml } from '../../../lib/html-escape.js';
 import { i18n as t, i18nFormat as tFormat } from '../i18n.js';
+import {
+    createImageAttachmentTray,
+    renderMessageAttachments,
+} from '../../../lens-shared/image-attachments.js';
+import {
+    buildAttachmentSummaryLabel,
+    collectAttachmentPathsFromRecords,
+} from '../../../lib/multimodal-messages.js';
+import {
+    deleteChatAttachments,
+    isAiAttachmentPath,
+    uploadChatAttachments,
+} from '../../../lib/chat-attachments-store.js';
 
 // Markdown converter for AI messages
 const mdConverter = new showdown.Converter({
@@ -112,6 +125,7 @@ let conversationMessages = [];
 let isSending = false;
 let activeAbortController = null;
 let currentSessionId = null;
+let attachmentTray = null;
 
 // Mobile tab state — purely UI; CSS @media handles whether the tab bar is shown.
 let mobileActiveTab = 'left';
@@ -199,19 +213,41 @@ async function loadAllSessions() {
  *
  * @param {Array} sessions
  */
-async function saveAllSessions(sessions) {
+function collectSessionsAttachmentPaths(sessions) {
+    if (!Array.isArray(sessions) || sessions.length === 0) return [];
+    const allMessages = [];
+    for (const s of sessions) {
+        if (Array.isArray(s?.messages)) {
+            allMessages.push(...s.messages);
+        }
+    }
+    return collectAttachmentPathsFromRecords(allMessages, { filter: isAiAttachmentPath });
+}
+
+async function cleanupRemovedAttachments(paths) {
+    if (!Array.isArray(paths) || paths.length === 0) return;
+    if (typeof globalThis.fetch !== 'function') return;
+    try {
+        await deleteChatAttachments(getContext(), paths);
+    } catch (err) {
+        console.warn(`[${MODULE_NAME}] Failed to clean up session attachments:`, err);
+    }
+}
+
+async function saveAllSessions(sessions, { previousSessions = null } = {}) {
     const avatar = getCurrentAvatar();
     if (!avatar) {
         const err = new Error(formatSaveSessionsError('VALIDATION_TARGET'));
         err.reason = 'VALIDATION_TARGET';
         throw err;
     }
+    const keptSessions = sessions.map(s => ({
+        ...s,
+        messages: Array.isArray(s.messages) ? s.messages : [],
+    }));
     const data = {
         version: SESSION_VERSION,
-        sessions: sessions.map(s => ({
-            ...s,
-            messages: Array.isArray(s.messages) ? s.messages : [],
-        })),
+        sessions: keptSessions,
     };
     const result = await updateCharacterState(avatar, SESSION_NAMESPACE, () => data);
     if (!result?.ok) {
@@ -220,6 +256,12 @@ async function saveAllSessions(sessions) {
         err.reason = result?.reason;
         err.hint = result?.hint;
         throw err;
+    }
+    if (Array.isArray(previousSessions)) {
+        const beforePaths = collectSessionsAttachmentPaths(previousSessions);
+        const afterSet = new Set(collectSessionsAttachmentPaths(keptSessions));
+        const droppedPaths = beforePaths.filter(p => !afterSet.has(p));
+        await cleanupRemovedAttachments(droppedPaths);
     }
 }
 
@@ -264,10 +306,15 @@ async function saveCurrentSession(sessionId, messages, summary = null) {
  * Delete a session by ID.
  * @param {string} sessionId
  */
-async function deleteSession(sessionId) {
+async function deleteSession(sessionId, extraDroppedPaths = []) {
     const sessions = await loadAllSessions();
     const filtered = sessions.filter(s => s.id !== sessionId);
-    await saveAllSessions(filtered);
+    await saveAllSessions(filtered, { previousSessions: sessions });
+    if (Array.isArray(extraDroppedPaths) && extraDroppedPaths.length > 0) {
+        const keptSet = new Set(collectSessionsAttachmentPaths(filtered));
+        const extra = extraDroppedPaths.filter(p => isAiAttachmentPath(p) && !keptSet.has(p));
+        await cleanupRemovedAttachments(extra);
+    }
 }
 
 /**
@@ -277,8 +324,9 @@ async function deleteSession(sessionId) {
  */
 function generateSessionSummary(messages) {
     const firstUserMsg = messages.find(m => m.role === 'user');
-    if (!firstUserMsg || !firstUserMsg.content) return 'New session';
-    const text = String(firstUserMsg.content).trim();
+    if (!firstUserMsg) return 'New session';
+    const text = buildAttachmentSummaryLabel(firstUserMsg.content, firstUserMsg.attachments, t('[Image]'));
+    if (!text) return 'New session';
     return text.length > 50 ? text.substring(0, 47) + '...' : text;
 }
 
@@ -924,10 +972,34 @@ export async function openCardAppStudio(charId) {
     if (chatEl && conversationMessages.length > 0) {
         for (const msg of conversationMessages) {
             if (msg.role === 'user') {
-                renderChatMessage('user', msg.content);
+                renderChatMessage('user', msg.content, null, msg.attachments);
             } else if (msg.role === 'assistant' && msg.content) {
                 renderChatMessage('assistant', msg.content);
             }
+        }
+    }
+
+    // Mount shared image attachment tray onto the CardApp Studio composer
+    const composerEl = document.querySelector(`#${STUDIO_PANEL_LEFT_ID} .card-app-studio-composer`);
+    const studioInputEl = composerEl?.querySelector('[data-studio-input]');
+    const actionsEl = composerEl?.querySelector('.card-app-studio-composer-actions');
+    if (composerEl && studioInputEl) {
+        attachmentTray?.destroy();
+        attachmentTray = createImageAttachmentTray({
+            composerEl,
+            textareaEl: studioInputEl,
+            buttonClass: 'card-app-studio-att-btn',
+            onError: (msg) => {
+                if (typeof toastr !== 'undefined') toastr.error(msg);
+            },
+        });
+        composerEl.insertBefore(attachmentTray.trayEl, studioInputEl);
+        if (actionsEl) {
+            actionsEl.insertBefore(attachmentTray.fileInput, actionsEl.firstChild);
+            actionsEl.insertBefore(attachmentTray.attachButton, actionsEl.firstChild);
+        } else {
+            composerEl.appendChild(attachmentTray.fileInput);
+            composerEl.appendChild(attachmentTray.attachButton);
         }
     }
 
@@ -942,6 +1014,9 @@ export async function openCardAppStudio(charId) {
 
 async function closeCardAppStudio() {
     if (!isStudioOpen) return;
+
+    attachmentTray?.destroy();
+    attachmentTray = null;
 
     // Destroy CM6 editor
     destroyCMEditor();
@@ -1124,7 +1199,7 @@ function getToolDisplay(name) {
     return map[name] || { icon: '🔧', label: name };
 }
 
-function renderChatMessage(role, content, toolInfo = null) {
+function renderChatMessage(role, content, toolInfo = null, attachments = []) {
     const chatEl = document.querySelector('[data-studio-chat]');
     if (!chatEl) return;
     const msgEl = document.createElement('div');
@@ -1139,9 +1214,15 @@ function renderChatMessage(role, content, toolInfo = null) {
     } else if (role === 'assistant') {
         msgEl.innerHTML = `<div class="card-app-studio-msg-content">${renderMarkdown(content)}</div>`;
     } else if (role === 'user') {
-        const pre = document.createElement('pre');
-        pre.textContent = content;
-        msgEl.appendChild(pre);
+        if (content) {
+            const pre = document.createElement('pre');
+            pre.textContent = content;
+            msgEl.appendChild(pre);
+        }
+        const attGrid = renderMessageAttachments(attachments);
+        if (attGrid) {
+            msgEl.appendChild(attGrid);
+        }
     } else {
         msgEl.textContent = content;
     }
@@ -1258,6 +1339,7 @@ function syncComposerState() {
     if (sendBtn) sendBtn.disabled = isSending;
     if (stopBtn) stopBtn.disabled = !isSending;
     if (input) input.disabled = isSending;
+    attachmentTray?.setDisabled(isSending);
 }
 
 /**
@@ -1369,7 +1451,7 @@ async function loadSessionById(sessionId) {
             chatEl.innerHTML = '';
             for (const msg of conversationMessages) {
                 if (msg.role === 'user') {
-                    renderChatMessage('user', msg.content);
+                    renderChatMessage('user', msg.content, null, msg.attachments);
                 } else if (msg.role === 'assistant' && msg.content) {
                     renderChatMessage('assistant', msg.content);
                 }
@@ -1414,14 +1496,32 @@ async function handleAISend() {
     const input = document.querySelector('[data-studio-input]');
     if (!input || !currentCharId) return;
     const userText = input.value.trim();
-    if (!userText || isSending) return;
-    input.value = '';
+    const hasPendingImages = Boolean(attachmentTray?.hasItems());
+    if ((!userText && !hasPendingImages) || isSending) return;
     isSending = true;
     const controller = new AbortController();
     activeAbortController = controller;
     syncComposerState();
-    renderChatMessage('user', userText);
+
+    let attachments = [];
+    if (hasPendingImages) {
+        try {
+            attachments = await attachmentTray.commit(
+                files => uploadChatAttachments(getContext(), files, { signal: controller.signal }),
+            );
+        } catch (err) {
+            isSending = false;
+            if (activeAbortController === controller) activeAbortController = null;
+            syncComposerState();
+            if (typeof toastr !== 'undefined') toastr.error(String(err?.message || err));
+            return;
+        }
+    }
+
+    input.value = '';
+    renderChatMessage('user', userText, null, attachments);
     let loadingEl = showLoadingMessage();
+    const messageCountBefore = conversationMessages.length;
     try {
         // Read preset config from CEA settings
         const ceaSettings = extension_settings?.character_editor_assistant || {};
@@ -1430,6 +1530,7 @@ async function handleAISend() {
         const result = await sendAIMessage(currentCharId, conversationMessages, userText, {
             abortSignal: controller.signal,
             character: currentCharacter,
+            attachments,
             llmPresetName,
             apiPresetName: apiProfileName,
             systemPrompt: ceaSettings.cardAppStudioSystemPrompt,
@@ -1474,6 +1575,9 @@ async function handleAISend() {
         }
     } catch (err) {
         if (loadingEl?.parentNode) loadingEl.remove();
+        if (conversationMessages.length === messageCountBefore && attachments.length > 0) {
+            await cleanupRemovedAttachments(attachments.map(a => a.path));
+        }
         renderChatMessage('assistant', err.message === 'Request aborted' ? t('(Request cancelled)') : tFormat('Error: ${0}', err.message));
     } finally {
         if (activeAbortController === controller) activeAbortController = null;
@@ -1527,8 +1631,11 @@ async function handleStudioClick(e) {
             break;
         case 'clear-chat': {
             try {
+                const livePaths = collectAttachmentPathsFromRecords(conversationMessages, { filter: isAiAttachmentPath });
                 if (currentSessionId) {
-                    await deleteSession(currentSessionId);
+                    await deleteSession(currentSessionId, livePaths);
+                } else {
+                    await cleanupRemovedAttachments(livePaths);
                 }
                 conversationMessages = [];
                 currentSessionId = generateSessionId();

@@ -120,6 +120,7 @@ body.card-app-studio-active #sheld {
 }
 .card-app-studio-composer-buttons { display: flex; gap: 6px; margin-top: 8px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .card-app-studio-composer-actions { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+.card-app-studio-att-btn { width: 32px; height: 32px; }
 .card-app-studio-auto-apply { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--SmartThemeBodyColor, #ccc); cursor: pointer; user-select: none; }
 .card-app-studio-toggle { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
 .card-app-studio-toggle input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }

@@ -141,6 +141,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Character Editor Assistant
 
+- Added lossless image attachment support to CardApp Studio AI chat with multi-turn replay and automatic cleanup when clearing or deleting sessions.
 - Fixed CardApp Studio file and session attributes breaking when their values contain quotes.
 - Fixed CardApp Studio AI file creation reporting false drift for missing files and mishandling quoted file paths.
 - Corrected the editor's default prompt and post-replace instructions to name the available world book editing tools.

@@ -22,7 +22,7 @@ Studio 采用三栏布局，覆盖在 Luker 主界面之上：
 
 ### 左侧：AI 对话与会话
 
-左侧是 Studio 的 AI 助手对话区。所有对 CardApp 的修改均从这里发起：
+左侧是 Studio 的 AI 助手对话区。所有对 CardApp 的修改均从这里发起，支持通过**添加图片**、粘贴或拖拽附带界面草图或截图；图片会随多轮对话保留在上下文中，清空对话或删除会话时自动清理：
 
 ![Studio AI 助手对话区](/images/cardapp-studio/studio-ai-chat.png)
 
