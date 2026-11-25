@@ -93,10 +93,11 @@ export function askTools(sources = {}, extraPluginTools = []) {
             include_global: { type: 'boolean', description: 'Also include global variables (default false).' },
             op_floors: { type: 'integer', description: 'How many recent floors with variable ops to inspect (1-30, default 10).' },
         }));
-        list.push(fn('wb_read_regex', 'Read regex scripts active in Luker (global, character-scoped, preset-scoped, and plugin-registered regex providers) to diagnose swallowed text, broken formatting, or status bar issues.', {
+        list.push(fn('wb_read_regex', 'Read regex scripts active in Luker (global, character-scoped, preset-scoped, and plugin-registered regex providers) to diagnose swallowed text, broken formatting, or status bar issues. Pass id to read one script\'s full untruncated findRegex and replaceString.', {
+            id: { type: 'string', description: 'Optional script id to read full untruncated findRegex and replaceString (ignores only_enabled).' },
             scope: { type: 'string', enum: ['all', 'global', 'character', 'preset', 'plugin'], description: 'Default all.' },
             search: { type: 'string', description: 'Filter by script name or regex pattern.' },
-            only_enabled: { type: 'boolean', description: 'Default true.' },
+            only_enabled: { type: 'boolean', description: 'Default true (ignored when id is set).' },
         }));
         list.push(fn('wb_read_connections', 'Read redacted API connection profiles, active connection, main source, and Workbench Ask AI target.'));
         list.push(fn('wb_read_skills', 'Read Skills inventory across global, preset, orchestrator-preset, and character scopes.'));

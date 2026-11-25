@@ -834,13 +834,16 @@ function readVariables({ search = '', include_global = false, op_floors = 10 } =
     return out;
 }
 
+const REGEX_PREVIEW_CHARS = 300; // cap-ok: 列表模式下的单条正则预览上限，传 id 可读取完整 findRegex 与 replaceString
+
 /** 读取 Luker 生效的正则脚本（全局/角色/预设/插件通道），排查吞字、乱码或状态栏异常。 */
-function readRegexScripts({ scope = 'all', search = '', only_enabled = true } = {}) {
+function readRegexScripts({ scope = 'all', search = '', only_enabled = true, id = '' } = {}) {
     const ctx = getContext();
     if (!ctx?.regex) return { available: false, message: '当前环境未暴露正则接口' };
     const regexDisabled = Array.isArray(ctx.extensionSettings?.disabledExtensions)
         && ctx.extensionSettings.disabledExtensions.includes('regex');
     const types = ctx.regex.SCRIPT_TYPES || { GLOBAL: 0, SCOPED: 1, PRESET: 2 };
+    const targetId = String(id || '').trim();
     const needle = String(search || '').trim().toLowerCase();
     const scriptKey = (s) => `${String(s?.id || '')}|${String(s?.scriptName || '')}`;
 
@@ -848,12 +851,19 @@ function readRegexScripts({ scope = 'all', search = '', only_enabled = true } = 
     const pushList = (bucketScope, list, allowedKeys = null) => {
         for (const s of Array.isArray(list) ? list : []) {
             if (!s || typeof s !== 'object') continue;
-            if (only_enabled && s.disabled) continue;
-            const hay = `${s.scriptName || ''} ${s.findRegex || ''} ${s.replaceString || ''} ${s.__runtime_owner || ''}`.toLowerCase();
-            if (needle && !hay.includes(needle)) continue;
+            if (targetId) {
+                if (String(s.id || '') !== targetId) continue;
+            } else {
+                if (only_enabled && s.disabled) continue;
+                const hay = `${s.scriptName || ''} ${s.findRegex || ''} ${s.replaceString || ''} ${s.__runtime_owner || ''}`.toLowerCase();
+                if (needle && !hay.includes(needle)) continue;
+            }
             const lanes = typeof ctx.regex.getPluginLanes === 'function'
                 ? ctx.regex.getPluginLanes(s)
                 : (Array.isArray(s.pluginLanes) ? s.pluginLanes : (s.pluginOnly ? ['request', 'reply'] : []));
+            const findRaw = String(s.findRegex || '');
+            const replaceRaw = String(s.replaceString || '');
+            const previewTruncated = !targetId && (findRaw.length > REGEX_PREVIEW_CHARS || replaceRaw.length > REGEX_PREVIEW_CHARS);
             buckets.push({
                 scope: bucketScope,
                 id: String(s.id || ''),
@@ -861,8 +871,13 @@ function readRegexScripts({ scope = 'all', search = '', only_enabled = true } = 
                 enabled: !s.disabled,
                 ...(bucketScope === 'character' || bucketScope === 'preset' ? { allowed: Boolean(allowedKeys?.has(scriptKey(s))) } : {}),
                 ...(bucketScope === 'plugin' ? { owner: String(s.__runtime_owner || '') } : {}),
-                findRegex: String(s.findRegex || '').slice(0, 300), // cap-ok: 单条正则匹配式预览上限
-                replacePreview: String(s.replaceString || '').slice(0, 300), // cap-ok: 单条替换串预览上限
+                ...(targetId
+                    ? { findRegex: findRaw, replaceString: replaceRaw }
+                    : {
+                        findRegex: findRaw.slice(0, REGEX_PREVIEW_CHARS),
+                        replacePreview: replaceRaw.slice(0, REGEX_PREVIEW_CHARS),
+                        ...(previewTruncated ? { truncated: true } : {}),
+                    }),
                 placement: Array.isArray(s.placement) ? s.placement : [],
                 markdownOnly: Boolean(s.markdownOnly),
                 promptOnly: Boolean(s.promptOnly),
@@ -1160,10 +1175,12 @@ function formatInspectorContent(content) {
     return JSON.stringify(content);
 }
 
+const INSPECTOR_MSG_PREVIEW_CHARS = 3000; // cap-ok: 列表或末尾模式单条消息预览上限，传 message_index 可读取全文
+
 /** 将单条请求消息格式化为适合模型诊断的文本片段。 */
-function formatInspectorMessage(m, index, maxChars = 3000) {
+function formatInspectorMessage(m, index, maxChars = INSPECTOR_MSG_PREVIEW_CHARS) {
     const raw = formatInspectorContent(m?.content);
-    const truncated = raw.length > maxChars;
+    const truncated = Number.isFinite(maxChars) && raw.length > maxChars;
     return {
         index,
         role: m?.role || '',
@@ -1171,6 +1188,7 @@ function formatInspectorMessage(m, index, maxChars = 3000) {
         ...(m?.tool_call_id ? { toolCallId: String(m.tool_call_id) } : {}),
         chars: raw.length,
         content: truncated ? `${raw.slice(0, maxChars)}…` : raw,
+        ...(truncated ? { truncated: true } : {}),
         ...(Array.isArray(m?.tool_calls) && m.tool_calls.length
             ? { toolCalls: m.tool_calls.map(tc => tc?.function?.name || tc?.name || '') }
             : {}),
@@ -1288,7 +1306,7 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
                 if (isExplicitFiniteNumber(message_index)) {
                     const idx = Math.floor(Number(message_index));
                     if (idx >= 0 && idx < allMsgs.length) {
-                        out.messages = [formatInspectorMessage(allMsgs[idx], idx, 10000)]; // cap-ok: 单条精读放宽至 10000 字
+                        out.messages = [formatInspectorMessage(allMsgs[idx], idx, Infinity)];
                     } else {
                         out.messages = [];
                         out.messageError = `消息索引 ${idx} 越界（共 ${allMsgs.length} 条，范围 0–${Math.max(0, allMsgs.length - 1)}）`;
@@ -1297,9 +1315,9 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
                     const tailCount = Math.max(1, Math.min(20, Math.floor(Number(tail_messages)))); // cap-ok: 末尾消息窗口上限 20 条
                     const startIdx = Math.max(0, allMsgs.length - tailCount);
                     out.omittedHeadMessages = startIdx;
-                    out.messages = allMsgs.slice(startIdx).map((m, i) => formatInspectorMessage(m, startIdx + i, 2800)); // cap-ok: 末尾模式每条消息上限
+                    out.messages = allMsgs.slice(startIdx).map((m, i) => formatInspectorMessage(m, startIdx + i, INSPECTOR_MSG_PREVIEW_CHARS));
                 } else {
-                    out.messages = allMsgs.map((m, idx) => formatInspectorMessage(m, idx, 3000)); // cap-ok: 常规模式单条消息上限
+                    out.messages = allMsgs.map((m, idx) => formatInspectorMessage(m, idx, INSPECTOR_MSG_PREVIEW_CHARS));
                 }
             }
             if (part !== 'messages') {

@@ -561,8 +561,21 @@ describe('workbench Ask model & source readers', () => {
             }),
         };
 
+        const longMsg = 'M'.repeat(12000);
         globalThis.fetch = jest.fn(async (url) => {
             const target = String(url);
+            if (target.includes('/api/request-inspector/req-long')) {
+                return {
+                    ok: true,
+                    json: async () => ({
+                        id: 'req-long',
+                        type: 'chat',
+                        status: 'success',
+                        fullMessages: [{ role: 'system', content: longMsg }],
+                        responseText: 'ok',
+                    }),
+                };
+            }
             if (target.includes('/api/request-inspector/req-chat')) {
                 return {
                     ok: true,
@@ -734,11 +747,22 @@ describe('workbench Ask model & source readers', () => {
         expect(emptyIdxRes.messages[1].content).not.toContain('AAAA');
         expect(emptyIdxRes.messages[2].toolCallId).toBe('call_42');
         expect(emptyIdxRes.messages[2].name).toBe('wb_read_chat');
-        // Numeric 0 DOES select only message 0
+        // Numeric 0 DOES select only message 0; message_index returns full untruncated content (>10000 chars)
         const zeroIdxRes = await readers.wb_read_request({ id: 'req-chat', message_index: 0 });
         expect(zeroIdxRes.messages).toHaveLength(1);
         expect(zeroIdxRes.messages[0].index).toBe(0);
         expect(zeroIdxRes.messages[0].content).toBe('sys 0');
+        expect(zeroIdxRes.messages[0].truncated).toBeUndefined();
+
+        const longFull = await readers.wb_read_request({ id: 'req-long', message_index: 0 });
+        expect(longFull.messages[0].content).toBe(longMsg);
+        expect(longFull.messages[0].truncated).toBeUndefined();
+        const longList = await readers.wb_read_request({ id: 'req-long' });
+        expect(longList.messages[0].content).toBe(`${'M'.repeat(3000)}…`);
+        expect(longList.messages[0].truncated).toBe(true);
+        const longTail = await readers.wb_read_request({ id: 'req-long', tail_messages: 1 });
+        expect(longTail.messages[0].content).toBe(`${'M'.repeat(3000)}…`);
+        expect(longTail.messages[0].truncated).toBe(true);
 
         // Non-chat request types: image & embedding
         const imgRes = await readers.wb_read_request({ id: 'req-image' });
@@ -799,6 +823,8 @@ describe('workbench Ask model & source readers', () => {
 
     test('wb_read_preset, wb_read_regex, wb_read_variables, wb_read_world_info_trace, and wb_read_chat use real Luker runtime structures', async () => {
         const globalScript = { id: 'r-global', scriptName: 'Global Strip', findRegex: '/<status>[\\s\\S]*?<\\/status>/g', replaceString: '', disabled: false, markdownOnly: true };
+        const longStatusBarHtml = `<div class="status">${'<span>stat</span>'.repeat(40)}</div>`;
+        const longDisabledScript = { id: 'r-status-html', scriptName: 'Status Bar HTML', findRegex: '/<sb>([\\s\\S]*?)<\\/sb>/g', replaceString: longStatusBarHtml, disabled: true, markdownOnly: true };
         const charAllowed = { id: 'r-char-ok', scriptName: 'Char Format Allowed', findRegex: '/foo/g', replaceString: 'bar', disabled: false };
         const charBlocked = { id: 'r-char-no', scriptName: 'Char Format Unapproved', findRegex: '/baz/g', replaceString: 'qux', disabled: false };
         const presetAllowed = { id: 'r-pre-ok', scriptName: 'Preset Allowed', findRegex: '/a/g', replaceString: 'b', disabled: false };
@@ -891,7 +917,7 @@ describe('workbench Ask model & source readers', () => {
                 regex: {
                     SCRIPT_TYPES: { GLOBAL: 0, SCOPED: 1, PRESET: 2 },
                     getScriptsByType: (type, { allowedOnly = false } = {}) => {
-                        if (type === 0) return [globalScript];
+                        if (type === 0) return [globalScript, longDisabledScript];
                         if (type === 1) return allowedOnly ? [charAllowed] : [charAllowed, charBlocked];
                         if (type === 2) return allowedOnly ? [presetAllowed] : [presetAllowed, presetBlocked];
                         return [];
@@ -958,6 +984,19 @@ describe('workbench Ask model & source readers', () => {
             { id: 'r-pre-ok', allowed: true },
             { id: 'r-pre-no', allowed: false },
         ]);
+
+        // List mode clips long replaceString to 300 chars and flags truncated; id mode returns full content even when disabled
+        const globalListAll = await readers.wb_read_regex({ scope: 'global', only_enabled: false });
+        const longPreviewRow = globalListAll.scripts.find(s => s.id === 'r-status-html');
+        expect(longPreviewRow.truncated).toBe(true);
+        expect(longPreviewRow.replacePreview).toBe(longStatusBarHtml.slice(0, 300));
+        expect(longPreviewRow.replaceString).toBeUndefined();
+
+        const fullById = await readers.wb_read_regex({ id: 'r-status-html' });
+        expect(fullById.scripts).toHaveLength(1);
+        expect(fullById.scripts[0].enabled).toBe(false);
+        expect(fullById.scripts[0].replaceString).toBe(longStatusBarHtml);
+        expect(fullById.scripts[0].truncated).toBeUndefined();
 
         // wb_read_preset: real preset_lorebook metadata only, origin='character', dual-key sampling fallbacks
         const presetSummary = await readers.wb_read_preset({});
