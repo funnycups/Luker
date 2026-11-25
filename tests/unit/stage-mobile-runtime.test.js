@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 import {
+    collectDuplicateOnnxWasmEntries,
     shouldPruneNodeModulesEntry,
     stageMobileRuntime,
     writeDeterministicTar,
@@ -41,8 +42,26 @@ describe('stage-mobile-runtime', () => {
         // Pruned directories
         expect(shouldPruneNodeModulesEntry('foo/__tests__', true)).toBe(true);
         expect(shouldPruneNodeModulesEntry('foo/__mocks__', true)).toBe(true);
+        expect(shouldPruneNodeModulesEntry('foo/__image_snapshots__', true)).toBe(true);
+        expect(shouldPruneNodeModulesEntry('foo/test', true)).toBe(true);
+        expect(shouldPruneNodeModulesEntry('foo/tests', true)).toBe(true);
+        expect(shouldPruneNodeModulesEntry('foo/example', true)).toBe(true);
+        expect(shouldPruneNodeModulesEntry('foo/examples', true)).toBe(true);
+        expect(shouldPruneNodeModulesEntry('foo/fixtures', true)).toBe(true);
+        expect(shouldPruneNodeModulesEntry('foo/benchmark', true)).toBe(true);
+        expect(shouldPruneNodeModulesEntry('foo/benchmarks', true)).toBe(true);
+        expect(shouldPruneNodeModulesEntry('foo/src/__image_snapshots__/snap.png', false)).toBe(true);
+        expect(shouldPruneNodeModulesEntry('@jimp/plugins/node_modules/@jimp/plugin-blit/test/a.png', false)).toBe(true);
         expect(shouldPruneNodeModulesEntry('foo/coverage', true)).toBe(true);
         expect(shouldPruneNodeModulesEntry('foo/.github', true)).toBe(true);
+
+        // Preserved package roots whose package name matches a pruned directory name
+        expect(shouldPruneNodeModulesEntry('test', true)).toBe(false);
+        expect(shouldPruneNodeModulesEntry('test/index.js', false)).toBe(false);
+        expect(shouldPruneNodeModulesEntry('@scope/test', true)).toBe(false);
+        expect(shouldPruneNodeModulesEntry('@scope/test/index.js', false)).toBe(false);
+        expect(shouldPruneNodeModulesEntry('foo/node_modules/examples', true)).toBe(false);
+        expect(shouldPruneNodeModulesEntry('foo/node_modules/examples/index.js', false)).toBe(false);
 
         // Preserved runtime and compliance files (including `doc/` runtime folders like `yaml/dist/doc/directives.js`)
         expect(shouldPruneNodeModulesEntry('yaml/dist/doc', true)).toBe(false);
@@ -113,14 +132,30 @@ describe('stage-mobile-runtime', () => {
         fs.writeFileSync(path.join(repoRoot, 'dist', 'lib.optional.bundle.js'), '// optional\n');
         fs.writeFileSync(path.join(repoRoot, 'dist', 'codemirror.bundle.js'), '// cm\n');
 
-        // node_modules with prod-pkg, dev-pkg, and __tests__
+        // node_modules with prod-pkg, dev-pkg, __tests__/test/examples, and duplicate ONNX wasm binaries
         fs.mkdirSync(path.join(repoRoot, 'node_modules', 'prod-pkg', '__tests__'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'node_modules', 'prod-pkg', 'test'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'node_modules', 'prod-pkg', 'examples'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, 'node_modules', 'prod-pkg', 'package.json'), '{"name":"prod-pkg"}');
         fs.writeFileSync(path.join(repoRoot, 'node_modules', 'prod-pkg', 'index.js'), 'module.exports = 1;');
         fs.writeFileSync(path.join(repoRoot, 'node_modules', 'prod-pkg', 'index.d.ts'), 'export const x: number;');
         fs.writeFileSync(path.join(repoRoot, 'node_modules', 'prod-pkg', 'README.md'), '# Readme');
         fs.writeFileSync(path.join(repoRoot, 'node_modules', 'prod-pkg', 'LICENSE.md'), 'MIT');
         fs.writeFileSync(path.join(repoRoot, 'node_modules', 'prod-pkg', '__tests__', 'spec.js'), 'test()');
+        fs.writeFileSync(path.join(repoRoot, 'node_modules', 'prod-pkg', 'test', 'fixture.png'), 'png');
+        fs.writeFileSync(path.join(repoRoot, 'node_modules', 'prod-pkg', 'examples', 'demo.js'), 'demo()');
+
+        fs.mkdirSync(path.join(repoRoot, 'node_modules', 'sillytavern-transformers', 'dist'), { recursive: true });
+        fs.mkdirSync(path.join(repoRoot, 'node_modules', 'onnxruntime-web', 'dist'), { recursive: true });
+        fs.writeFileSync(path.join(repoRoot, 'node_modules', 'sillytavern-transformers', 'dist', 'ort-wasm-simd.wasm'), Buffer.from('same-wasm-bytes'));
+        fs.writeFileSync(path.join(repoRoot, 'node_modules', 'sillytavern-transformers', 'dist', 'ort-wasm.wasm'), Buffer.from('transformers-version'));
+        fs.writeFileSync(path.join(repoRoot, 'node_modules', 'onnxruntime-web', 'dist', 'ort-wasm-simd.wasm'), Buffer.from('same-wasm-bytes'));
+        fs.writeFileSync(path.join(repoRoot, 'node_modules', 'onnxruntime-web', 'dist', 'ort-wasm.wasm'), Buffer.from('different-version-bytes'));
+        fs.writeFileSync(path.join(repoRoot, 'node_modules', 'onnxruntime-web', 'dist', 'ort-web.node.js'), 'module.exports = {};');
+
+        expect(collectDuplicateOnnxWasmEntries(path.join(repoRoot, 'node_modules'))).toEqual(
+            new Set(['onnxruntime-web/dist/ort-wasm-simd.wasm']),
+        );
 
         fs.mkdirSync(path.join(repoRoot, 'node_modules', 'dev-pkg'), { recursive: true });
         fs.writeFileSync(path.join(repoRoot, 'node_modules', 'dev-pkg', 'index.js'), 'module.exports = 2;');
@@ -182,6 +217,12 @@ describe('stage-mobile-runtime', () => {
         expect(fs.existsSync(path.join(outputDir, 'node_modules', 'prod-pkg', 'index.d.ts'))).toBe(false);
         expect(fs.existsSync(path.join(outputDir, 'node_modules', 'prod-pkg', 'README.md'))).toBe(false);
         expect(fs.existsSync(path.join(outputDir, 'node_modules', 'prod-pkg', '__tests__'))).toBe(false);
+        expect(fs.existsSync(path.join(outputDir, 'node_modules', 'prod-pkg', 'test'))).toBe(false);
+        expect(fs.existsSync(path.join(outputDir, 'node_modules', 'prod-pkg', 'examples'))).toBe(false);
+        expect(fs.existsSync(path.join(outputDir, 'node_modules', 'sillytavern-transformers', 'dist', 'ort-wasm-simd.wasm'))).toBe(true);
+        expect(fs.existsSync(path.join(outputDir, 'node_modules', 'onnxruntime-web', 'dist', 'ort-wasm-simd.wasm'))).toBe(false);
+        expect(fs.existsSync(path.join(outputDir, 'node_modules', 'onnxruntime-web', 'dist', 'ort-wasm.wasm'))).toBe(true);
+        expect(fs.existsSync(path.join(outputDir, 'node_modules', 'onnxruntime-web', 'dist', 'ort-web.node.js'))).toBe(true);
         expect(fs.existsSync(path.join(outputDir, 'node_modules', 'dev-pkg'))).toBe(false);
         expect(fs.existsSync(path.join(outputDir, 'node_modules', '@types'))).toBe(false);
     });
@@ -225,6 +266,10 @@ describe('stage-mobile-runtime', () => {
             fs.writeFileSync(path.join(repoRoot, 'dist', bundle), `// ${bundle}\n`);
         }
 
+        const tarOutDir = makeTempDir('luker-stage-idem-tar-');
+        tempDirs.push(tarOutDir);
+        const tarPath = path.join(tarOutDir, 'runtime-bundle.tar');
+        const tarSizeFile = path.join(outputDir, 'runtime-bundle-size.txt');
         const versionFile = path.join(outputDir, 'runtime-tree-version.txt');
         const fakeGitExec = (_cmd, args) => {
             const target = args[args.length - 1];
@@ -238,18 +283,25 @@ describe('stage-mobile-runtime', () => {
         const first = stageMobileRuntime({
             repoRoot,
             outputDir,
+            tarPath,
+            tarSizeFilePath: tarSizeFile,
             versionFilePath: versionFile,
             execFileSyncImpl: fakeGitExec,
         });
         expect(fs.readFileSync(versionFile, 'utf8').trim()).toBe(first.treeVersion);
+        expect(fs.readFileSync(tarSizeFile, 'utf8').trim()).toBe(String(first.tarBytes));
+        expect(first.tarBytes).toBe(fs.statSync(tarPath).size);
 
         const second = stageMobileRuntime({
             repoRoot,
             outputDir,
+            tarPath,
+            tarSizeFilePath: tarSizeFile,
             versionFilePath: versionFile,
             execFileSyncImpl: fakeGitExec,
         });
         expect(second.treeVersion).toBe(first.treeVersion);
+        expect(second.tarBytes).toBe(first.tarBytes);
     });
 
     test('writeDeterministicTar creates a POSIX USTAR/PAX tar archive that preserves short and >100 char paths', () => {

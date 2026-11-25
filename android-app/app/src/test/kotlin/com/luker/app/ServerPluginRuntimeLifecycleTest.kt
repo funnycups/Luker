@@ -85,13 +85,17 @@ class ServerPluginRuntimeLifecycleTest {
         }
         tarOut.write(ByteArray(1024))
 
+        val tarBytes = tarOut.toByteArray()
         val assetArchive = File(context.cacheDir, "runtime-tar-assets.apk")
         ZipOutputStream(assetArchive.outputStream()).use { zip ->
             zip.putNextEntry(ZipEntry("assets/runtime-tree-version.txt"))
             zip.write("sha256-testtarversion\n".toByteArray())
             zip.closeEntry()
+            zip.putNextEntry(ZipEntry("assets/runtime-bundle-size.txt"))
+            zip.write("${tarBytes.size}\n".toByteArray())
+            zip.closeEntry()
             zip.putNextEntry(ZipEntry("assets/runtime-bundle.tar"))
-            zip.write(tarOut.toByteArray())
+            zip.write(tarBytes)
             zip.closeEntry()
         }
         val isolatedAssets = android.content.res.AssetManager::class.java.getDeclaredConstructor().apply {
@@ -105,18 +109,23 @@ class ServerPluginRuntimeLifecycleTest {
         val entry = File(plugins, "demo/index.js")
         entry.parentFile!!.mkdirs()
         entry.writeText("persistent-plugin-from-tar")
+        val progressUpdates = mutableListOf<Pair<Long, Long>>()
         try {
             File(runtime, ".runtime-version").apply {
                 parentFile?.mkdirs()
                 writeText("stale-marker")
             }
             File(runtime, "stale-file.txt").writeText("remove-me")
-            LukerRuntimeManager.prepareRuntime(context, isolatedAssets, null)
+            LukerRuntimeManager.prepareRuntime(context, isolatedAssets) { processed, total ->
+                progressUpdates.add(processed to total)
+            }
             assertEquals("export default 1;", File(runtime, "server.js").readText())
             assertEquals("layout=5;tree=sha256-testtarversion", File(runtime, ".runtime-version").readText())
             assertFalse(File(runtime, "stale-file.txt").exists())
             assertEquals("persistent-plugin-from-tar", entry.readText())
             assertTrue(Files.isSymbolicLink(File(runtime, "_server-plugins").toPath()))
+            assertTrue(progressUpdates.isNotEmpty())
+            assertEquals(tarBytes.size.toLong() to tarBytes.size.toLong(), progressUpdates.last())
         } finally {
             ServerPluginRuntime.detach(runtime)
         }

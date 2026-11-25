@@ -25,6 +25,7 @@ object LukerRuntimeManager {
     private const val RUNTIME_TREE_VERSION_ASSET_PATH = "runtime-tree-version.txt"
     private const val LEGACY_RUNTIME_TREE_VERSION_ASSET_PATH = ".runtime-tree-version"
     private const val RUNTIME_BUNDLE_TAR_ASSET_PATH = "runtime-bundle.tar"
+    private const val RUNTIME_BUNDLE_SIZE_ASSET_PATH = "runtime-bundle-size.txt"
     private const val RUNTIME_DIR_NAME = "luker-runtime"
     private const val PERSISTENT_DATA_DIR_NAME = "luker-data"
     private const val CONFIG_FILE_NAME = "config.yaml"
@@ -513,14 +514,26 @@ object LukerRuntimeManager {
         }.getOrDefault(false)
     }
 
+    private fun readBundledTarTotalBytes(assetManager: AssetManager): Long {
+        val recorded = runCatching {
+            assetManager.open(RUNTIME_BUNDLE_SIZE_ASSET_PATH).bufferedReader(Charsets.UTF_8).use {
+                it.readText().trim().toLongOrNull()
+            }
+        }.getOrNull()
+        if (recorded != null && recorded > 0L) {
+            return recorded
+        }
+        return runCatching {
+            assetManager.openFd(RUNTIME_BUNDLE_TAR_ASSET_PATH).use { it.length }
+        }.getOrDefault(0L)
+    }
+
     private fun extractBundledTarArchive(
         assetManager: AssetManager,
         runtimeRoot: File,
         onProgress: ((Long, Long) -> Unit)?,
     ) {
-        val totalBytes = runCatching {
-            assetManager.openFd(RUNTIME_BUNDLE_TAR_ASSET_PATH).use { it.length }
-        }.getOrDefault(0L)
+        val totalBytes = readBundledTarTotalBytes(assetManager)
         LukerDebugTrail.append("native", "runtime tar extract start bytes=$totalBytes")
         assetManager.open(RUNTIME_BUNDLE_TAR_ASSET_PATH, AssetManager.ACCESS_STREAMING).use { rawStream ->
             BufferedInputStream(rawStream, 64 * 1024).use { buffered ->

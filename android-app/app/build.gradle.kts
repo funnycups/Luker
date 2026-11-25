@@ -56,6 +56,7 @@ val prepareNodeProject by tasks.registering(Exec::class) {
     val outAssetsDir = generatedNodeProjectDir.get().asFile
     val outStagingDir = stagingNodeProjectDir.get().asFile
     val tarFile = File(outAssetsDir, "runtime-bundle.tar")
+    val tarSizeFile = File(outAssetsDir, "runtime-bundle-size.txt")
     val versionFile = File(outAssetsDir, "runtime-tree-version.txt")
     val bootstrapFile = file("src/main/assets/nodejs-project/bootstrap.js")
 
@@ -75,6 +76,8 @@ val prepareNodeProject by tasks.registering(Exec::class) {
         bootstrapFile.absolutePath,
         "--tar",
         tarFile.absolutePath,
+        "--tar-size-file",
+        tarSizeFile.absolutePath,
         "--version-file",
         versionFile.absolutePath,
     )
@@ -89,6 +92,7 @@ val prepareNodeProject by tasks.registering(Exec::class) {
     inputs.dir(File(projectRootDir, "src"))
     inputs.dir(File(projectRootDir, "dist/_webpack"))
     outputs.file(tarFile)
+    outputs.file(tarSizeFile)
     outputs.file(versionFile)
 }
 
@@ -199,7 +203,6 @@ android {
         // underscore-prefixed directories from APK assets. Node packages keep
         // runtime modules in such directories, so requiring them fails on device.
         ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
-        noCompress += "tar"
     }
 
     packaging {

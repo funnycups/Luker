@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 export const RUNTIME_TREE_VERSION_FILE = '.runtime-tree-version';
 export const PACKAGED_RUNTIME_TREE_VERSION_FILE = 'runtime-tree-version.txt';
+export const PACKAGED_RUNTIME_BUNDLE_SIZE_FILE = 'runtime-bundle-size.txt';
 
 const TOP_LEVEL_ITEMS = [
     'server.js',
@@ -66,6 +67,14 @@ function resolvePrebuiltBundlesDir(repoRoot) {
 const PRUNED_NODE_MODULES_DIR_NAMES = new Set([
     '__tests__',
     '__mocks__',
+    '__image_snapshots__',
+    'test',
+    'tests',
+    'example',
+    'examples',
+    'fixtures',
+    'benchmark',
+    'benchmarks',
     'coverage',
     '.github',
     '.git',
@@ -151,6 +160,25 @@ const PRESERVED_COMPLIANCE_PREFIXES = [
     'patents',
 ];
 
+function isPackageRootSegment(segments, index) {
+    let pkgStart = 0;
+    for (let i = 0; i < index; i++) {
+        if (segments[i] === 'node_modules') {
+            pkgStart = i + 1;
+        }
+    }
+    if (segments[index] === 'node_modules') {
+        return true;
+    }
+    if (index === pkgStart) {
+        return true;
+    }
+    if (index === pkgStart + 1 && segments[pkgStart].startsWith('@')) {
+        return true;
+    }
+    return false;
+}
+
 /**
  * Determine whether an entry inside `node_modules/` (given its path relative to `node_modules/`)
  * should be pruned from mobile runtime bundles.
@@ -167,16 +195,17 @@ export function shouldPruneNodeModulesEntry(relativePath, isDirectory) {
     }
 
     for (let i = 0; i < segments.length - 1; i++) {
-        if (PRUNED_NODE_MODULES_DIR_NAMES.has(segments[i].toLowerCase())) {
+        if (!isPackageRootSegment(segments, i) && PRUNED_NODE_MODULES_DIR_NAMES.has(segments[i].toLowerCase())) {
             return true;
         }
     }
 
-    const baseName = segments[segments.length - 1];
+    const lastIndex = segments.length - 1;
+    const baseName = segments[lastIndex];
     const lowerBase = baseName.toLowerCase();
 
     if (isDirectory) {
-        return PRUNED_NODE_MODULES_DIR_NAMES.has(lowerBase);
+        return !isPackageRootSegment(segments, lastIndex) && PRUNED_NODE_MODULES_DIR_NAMES.has(lowerBase);
     }
 
     for (const prefix of PRESERVED_COMPLIANCE_PREFIXES) {
@@ -244,6 +273,49 @@ export function collectDevOnlyNodeModulePrefixes(repoRoot) {
     return devPrefixes;
 }
 
+/**
+ * Collect duplicate `ort-wasm*.wasm` paths under `node_modules/onnxruntime-web/dist/`
+ * when byte-identical copies already exist under `node_modules/sillytavern-transformers/dist/`
+ * (the directory configured as `env.backends.onnx.wasm.wasmPaths` in `src/transformers.js`).
+ *
+ * @param {string} nodeModulesSrc
+ * @returns {Set<string>} Relative paths under `node_modules/` safe to skip
+ */
+export function collectDuplicateOnnxWasmEntries(nodeModulesSrc) {
+    const duplicates = new Set();
+    const transformersDist = path.join(nodeModulesSrc, 'sillytavern-transformers', 'dist');
+    const onnxDist = path.join(nodeModulesSrc, 'onnxruntime-web', 'dist');
+    if (!fs.existsSync(transformersDist) || !fs.existsSync(onnxDist)) {
+        return duplicates;
+    }
+
+    for (const entry of fs.readdirSync(onnxDist, { withFileTypes: true })) {
+        if (!/^ort-wasm.*\.wasm$/i.test(entry.name)) {
+            continue;
+        }
+        const onnxFile = path.join(onnxDist, entry.name);
+        const transformersFile = path.join(transformersDist, entry.name);
+        if (!fs.existsSync(transformersFile)) {
+            continue;
+        }
+        let onnxStat;
+        let transformersStat;
+        try {
+            onnxStat = fs.statSync(onnxFile);
+            transformersStat = fs.statSync(transformersFile);
+        } catch {
+            continue;
+        }
+        if (!onnxStat.isFile() || !transformersStat.isFile() || onnxStat.size !== transformersStat.size) {
+            continue;
+        }
+        if (Buffer.compare(fs.readFileSync(onnxFile), fs.readFileSync(transformersFile)) === 0) {
+            duplicates.add(`onnxruntime-web/dist/${entry.name}`);
+        }
+    }
+    return duplicates;
+}
+
 function isUnderDevOnlyPackage(relToNodeModules, devPrefixes) {
     if (devPrefixes.size === 0) {
         return false;
@@ -278,7 +350,9 @@ export function computeRuntimeTreeVersion(rootDir) {
     function walk(currentDir, relativePrefix) {
         const entries = fs.readdirSync(currentDir, { withFileTypes: true })
             .filter(entry => !(relativePrefix === ''
-                && (entry.name === RUNTIME_TREE_VERSION_FILE || entry.name === PACKAGED_RUNTIME_TREE_VERSION_FILE)))
+                && (entry.name === RUNTIME_TREE_VERSION_FILE
+                    || entry.name === PACKAGED_RUNTIME_TREE_VERSION_FILE
+                    || entry.name === PACKAGED_RUNTIME_BUNDLE_SIZE_FILE)))
             .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
         for (const entry of entries) {
@@ -468,6 +542,7 @@ export function writeDeterministicTar(sourceDir, tarFilePath) {
  * @param {string} options.outputDir
  * @param {string} [options.bootstrapPath]
  * @param {string} [options.tarPath]
+ * @param {string} [options.tarSizeFilePath]
  * @param {string} [options.versionFilePath]
  * @param {Function} [options.execFileSyncImpl]
  */
@@ -476,6 +551,7 @@ export function stageMobileRuntime({
     outputDir,
     bootstrapPath = null,
     tarPath = null,
+    tarSizeFilePath = null,
     versionFilePath = null,
     execFileSyncImpl = execFileSync,
 }) {
@@ -605,6 +681,7 @@ export function stageMobileRuntime({
         throw new Error(`Missing node_modules directory: ${nodeModulesSrc}`);
     }
     const devPrefixes = collectDevOnlyNodeModulePrefixes(repoRoot);
+    const duplicateOnnxWasmPaths = collectDuplicateOnnxWasmEntries(nodeModulesSrc);
     const nodeModulesDst = path.join(outputDir, 'node_modules');
 
     function copyPrunedNodeModules(currentSrc, currentDst, relPrefix) {
@@ -641,6 +718,11 @@ export function stageMobileRuntime({
                 continue;
             }
 
+            if (!isDir && duplicateOnnxWasmPaths.has(relPath)) {
+                prunedCount += 1;
+                continue;
+            }
+
             const fullDst = path.join(currentDst, entry.name);
             if (isDir) {
                 copyPrunedNodeModules(fullSrc, fullDst, relPath);
@@ -657,6 +739,10 @@ export function stageMobileRuntime({
     if (tarPath) {
         const tarStats = writeDeterministicTar(outputDir, tarPath);
         tarBytes = tarStats.totalBytes;
+        if (tarSizeFilePath) {
+            fs.mkdirSync(path.dirname(tarSizeFilePath), { recursive: true });
+            fs.writeFileSync(tarSizeFilePath, `${tarBytes}\n`, 'utf8');
+        }
     }
 
     return {
@@ -673,6 +759,7 @@ function parseCliArgs(argv) {
         outputDir: null,
         bootstrapPath: null,
         tarPath: null,
+        tarSizeFilePath: null,
         versionFilePath: null,
     };
 
@@ -686,6 +773,8 @@ function parseCliArgs(argv) {
             parsed.bootstrapPath = argv[++i];
         } else if (arg === '--tar') {
             parsed.tarPath = argv[++i];
+        } else if (arg === '--tar-size-file') {
+            parsed.tarSizeFilePath = argv[++i];
         } else if (arg === '--version-file') {
             parsed.versionFilePath = argv[++i];
         }
@@ -698,7 +787,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
     const repoRoot = path.resolve(cli.repoRoot || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
     if (!cli.outputDir) {
         console.error(
-            'Usage: node scripts/stage-mobile-runtime.mjs --output-dir <dir> [--repo-root <dir>] [--bootstrap <file>] [--tar <file>] [--version-file <file>]',
+            'Usage: node scripts/stage-mobile-runtime.mjs --output-dir <dir> [--repo-root <dir>] [--bootstrap <file>] [--tar <file>] [--tar-size-file <file>] [--version-file <file>]',
         );
         process.exit(1);
     }
@@ -707,6 +796,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
         outputDir: path.resolve(cli.outputDir),
         bootstrapPath: cli.bootstrapPath ? path.resolve(cli.bootstrapPath) : null,
         tarPath: cli.tarPath ? path.resolve(cli.tarPath) : null,
+        tarSizeFilePath: cli.tarSizeFilePath ? path.resolve(cli.tarSizeFilePath) : null,
         versionFilePath: cli.versionFilePath ? path.resolve(cli.versionFilePath) : null,
     });
     console.log(
