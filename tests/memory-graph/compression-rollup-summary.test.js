@@ -676,6 +676,28 @@ describe('runCompressionLoop hierarchical & flat', () => {
         expect(m1.parentId).toBe(rollups[0].id);
         expect(m2.parentId).toBe(rollups[0].id);
     });
+
+    test('skips automatic compression when autoCompressionEnabled is false', async () => {
+        const momentSpec = makeMomentSpec();
+        const settings = {
+            ...extensionSettingsMock.memory_graph,
+            autoCompressionEnabled: false,
+            nodeTypeSchema: [momentSpec],
+        };
+        const store = createEmptyStore();
+        createNode(store, { type: 'moment', title: 'M1', fields: { detail: 'A' }, seqTo: 1 });
+        createNode(store, { type: 'moment', title: 'M2', fields: { detail: 'B' }, seqTo: 2 });
+
+        const context = {
+            generateTask: jest.fn(async () => ({
+                toolCalls: [{ name: 'luker_rpg_summary', args: { summary: 'Should not run.' } }],
+            })),
+        };
+        const changed = await runCompressionLoop(context, store, settings, { typeIds: ['moment'] });
+        expect(changed).toBe(false);
+        expect(context.generateTask).not.toHaveBeenCalled();
+        expect(Object.values(store.nodes).filter(isRollupNode)).toHaveLength(0);
+    });
 });
 
 describe('runExtractionForStore fail-loud batch compression', () => {
@@ -964,6 +986,46 @@ describe('runManualCompression workingStore isolation & fail-loud commits', () =
 
         const persisted = await getFloorState().get();
         expect(Object.values(persisted.state.nodes).filter(isRollupNode)).toHaveLength(0);
+    });
+
+    test('runs and commits manual compression when autoCompressionEnabled is false', async () => {
+        configureEventSchema();
+        extensionSettingsMock.memory_graph.autoCompressionEnabled = false;
+        const chat = makeChatForTurns(4);
+        let call = 0;
+        const { context, generateTask, getFloorState } = makeFloorStateHarness(chat, async () => {
+            call += 1;
+            return { toolCalls: [{ name: 'luker_rpg_summary', args: { summary: `Manual arc #${call}` } }] };
+        });
+
+        await ensureMemoryStoreLoaded(context, { force: true });
+        await commitGraphUiMutation(context, getChatKey(context), {
+            afterStore: makeSeededManualCompressionStore(),
+            replaceGraph: true,
+            seq: 4,
+        });
+
+        await runManualCompression(context, extensionSettingsMock.memory_graph, {
+            selectedTypeIds: ['event'],
+            scope: 'all',
+            mode: 'schema',
+            maxRoundsPerType: 5,
+        });
+
+        expect(generateTask).toHaveBeenCalledTimes(2);
+        expect(toastrErrors).toEqual([]);
+        expect(toastrSuccesses).toHaveLength(1);
+        expect(toastrSuccesses[0]).toMatch(/Manual compression completed/);
+
+        const cached = JSON.parse(getRawGraphJson(context));
+        const rollups = Object.values(cached.nodes).filter(isRollupNode);
+        expect(rollups).toHaveLength(2);
+        for (const leaf of Object.values(cached.nodes).filter(n => !isRollupNode(n))) {
+            expect(leaf.parentId).toBeTruthy();
+        }
+
+        const persisted = await getFloorState().get();
+        expect(Object.values(persisted.state.nodes).filter(isRollupNode)).toHaveLength(2);
     });
 });
 

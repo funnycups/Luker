@@ -10304,7 +10304,7 @@ export async function runManualCompression(context, settings, values) {
         let highestRoundSeqTo = getStoreCoveredSeqTo(workingStore);
         let completedRounds = 0;
         try {
-            const changed = await runCompressionLoop(context, workingStore, settings, {
+            const changed = await compressSemanticTypesIfNeeded(context, workingStore, settings, {
                 typeIds: values.selectedTypeIds,
                 force: values.mode === 'force' || values.mode === 'flat',
                 flatten: values.mode === 'flat',

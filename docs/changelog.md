@@ -14,6 +14,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 
 ### Memory Graph
 
+- Fixed Memory Graph manual compression being skipped when Auto compression is disabled.
 - Added rollup node compaction to Memory graph content AI iteration in Workbench.
 - Added a from-floor rebuild mode alongside recent-turn rebuild in the Memory Graph range rebuild modal, with live range preview.
 - Fixed the Memory Graph inspector listing the same event multiple times across different relation edges, merging them into one row with relation tags.
