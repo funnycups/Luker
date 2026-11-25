@@ -1,52 +1,33 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 FunnyCups
 
-const __ctx = Luker.getContext();
-const extension_settings = __ctx.extensionSettings;
-const getContext = Luker.getContext;
-const addLocaleData = __ctx.addLocaleData;
-const translate = __ctx.translate;
-const Popup = __ctx.Popup;
-const escapeHtml = __ctx.escapeHtml;
 import { ensureSimulationReviewLocaleData } from '../../iteration-library/simulation-review/i18n/index.js';
-import { cloneJsonValue, isPlainObject } from '../json-state-journal.js';
-import {
-    buildBaseSystemPrompt,
-    buildOrchestratorOptimizeModeBlock,
-    buildJailbreakOnlyModeBlock,
-} from './cpa-iteration/system-prompts.js';
+import { escapeHtml } from '../../lib/html-escape.js';
 import { openSkillManagerPanel } from '../../skills/skill-manager-panel.js';
 import { initializePromptDefaults } from '../../lib/prompt-values.js';
+import { cloneJsonValue, isPlainObject } from '../json-state-journal.js';
+import {
+    MODULE_NAME,
+    PROMPT_DEFAULTS,
+    PROMPT_FIELDS,
+    defaultSettings,
+} from './defaults.js';
+import { i18n, i18nFormat } from './i18n.js';
 import { mountBehaviorSummary } from '../../lens-shared/behavior-summary.js';
+import { getOpenAIPresetNames as getSharedOpenAIPresetNames } from '../../lens-shared/preset-selectors.js';
 import { buildCpaSummaryModel } from './behavior-summary-model.js';
 
-const DEFAULT_CPA_BASE_SYSTEM_PROMPT = buildBaseSystemPrompt();
-const DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE = buildOrchestratorOptimizeModeBlock();
-const DEFAULT_CPA_MODE_JAILBREAK_ONLY = buildJailbreakOnlyModeBlock();
+const __ctx = Luker.getContext();
+const saveSettingsDebounced = __ctx.saveSettingsDebounced;
+const extension_settings = __ctx.extensionSettings;
+const getContext = Luker.getContext;
+const Popup = __ctx.Popup;
 
-const MODULE_NAME = 'completion_preset_assistant';
 const UI_BLOCK_ID = 'completion_preset_assistant_settings';
 const OPEN_BUTTON_ID = 'completion_preset_assistant_open';
 const CREATE_BUTTON_ID = 'completion_preset_assistant_create';
 const SKILLS_BUTTON_ID = 'completion_preset_assistant_bundle_skills';
 const OPENAI_BUTTON_ID = 'completion_preset_assistant_openai_button';
-const TOOL_CALL_RETRY_MAX = 10;
-
-const defaultSettings = {
-    requestLlmPresetName: '',
-    requestApiPresetName: '',
-    includeWorldInfo: false,
-    toolCallRetryMax: 2,
-    iterBaseSystemPrompt: DEFAULT_CPA_BASE_SYSTEM_PROMPT,
-    iterModePromptOrchestratorOptimize: DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE,
-    iterModePromptJailbreakOnly: DEFAULT_CPA_MODE_JAILBREAK_ONLY,
-};
-
-const PROMPT_FIELDS = [
-    { key: 'iterBaseSystemPrompt', id: 'cpa_iter_base_system_prompt', label: 'Iteration base prompt' },
-    { key: 'iterModePromptOrchestratorOptimize', id: 'cpa_iter_mode_orchestrator_prompt', label: 'Orchestrator optimization mode prompt' },
-    { key: 'iterModePromptJailbreakOnly', id: 'cpa_iter_mode_jailbreak_prompt', label: 'Jailbreak-only mode prompt' },
-];
 
 const CPA_SUMMARY_FIELDS = Object.freeze({
     iterBaseSystemPrompt: '#cpa_iter_base_system_prompt',
@@ -60,20 +41,6 @@ function clone(value, fallback = {}) {
     return cloneJsonValue(value, fallback);
 }
 
-function i18n(text) {
-    return translate(String(text || ''));
-}
-
-function i18nFormat(text, ...values) {
-    return i18n(text).replace(/\$\{(\d+)\}/g, (_, idx) => String(values[Number(idx)] ?? ''));
-}
-
-function toInteger(value, fallback = 0) {
-    const num = Number(value);
-    if (!Number.isFinite(num)) return fallback;
-    return Math.floor(num);
-}
-
 function ensureSettings() {
     if (!extension_settings[MODULE_NAME] || typeof extension_settings[MODULE_NAME] !== 'object') {
         extension_settings[MODULE_NAME] = clone(defaultSettings);
@@ -85,288 +52,17 @@ function ensureSettings() {
     }
     settings.requestLlmPresetName = String(settings.requestLlmPresetName || '').trim();
     settings.requestApiPresetName = String(settings.requestApiPresetName || '').trim();
-    settings.includeWorldInfo = settings.includeWorldInfo === true;
-    settings.toolCallRetryMax = Math.max(0, Math.min(TOOL_CALL_RETRY_MAX, toInteger(settings.toolCallRetryMax, defaultSettings.toolCallRetryMax)));
+    delete settings.includeWorldInfo;
+    delete settings.toolCallRetryMax;
     delete settings.iterSystemPrompt;
-    if (initializePromptDefaults(settings, {
-        iterBaseSystemPrompt: DEFAULT_CPA_BASE_SYSTEM_PROMPT,
-        iterModePromptOrchestratorOptimize: DEFAULT_CPA_MODE_ORCHESTRATOR_OPTIMIZE,
-        iterModePromptJailbreakOnly: DEFAULT_CPA_MODE_JAILBREAK_ONLY,
-    })) {
-        __ctx.saveSettingsDebounced();
+    if (initializePromptDefaults(settings, PROMPT_DEFAULTS)) {
+        saveSettingsDebounced();
     }
     return settings;
 }
 
-function registerLocaleData() {
-    addLocaleData('zh-cn', {
-        // Live UI strings owned by main.js
-        'Completion Preset Assistant': '聊天补全预设助手',
-        'Open Assistant': '打开助手',
-        'Open in Workbench': '在工作台中打开',
-        'Workbench is unavailable.': '工作台当前不可用。',
-        'Regenerate aborted': '重新生成已中止',
-        'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新生成已中止——无法回退 ${0} 上的提交：${1}',
-        'Edit': '编辑',
-        'Edit and regenerate from here': '编辑并从此处重新生成',
-        'Edit message — saving will regenerate from this turn:': '编辑消息——保存将从此轮开始重新生成：',
-        'Create New Preset': '新建预设',
-        'Bundle skills with this preset': '将 Skills 打包到此预设',
-        'No preset is currently selected.': '当前未选择预设。',
-        'Enter a name for the new preset.': '请输入新预设名称。',
-        'Preset already exists: ${0}': '预设已存在：${0}',
-        'Preset created: ${0}': '已创建预设：${0}',
-        'Create preset failed.': '创建预设失败。',
-        'Iteration AI prompt preset (params + prompt)': '迭代 AI 的提示词预设',
-        'Iteration AI API preset (Connection profile)': '迭代 AI 的 API 预设',
-        'Include world info (simulate current chat)': '包含世界书信息（按当前聊天重新模拟）',
-        'Tool-call retries on invalid/missing tool call (N)': '工具调用重试次数（无效/缺失时）',
-        'Iteration System Prompts (advanced)': '迭代系统提示词（高级）',
-        'Base prompt (sent in every mode)': '基础提示词（每种模式都会发送）',
-        'Mode addition — orchestrator-optimize': '模式追加 —— 编排器适配',
-        'Mode addition — jailbreak-only': '模式追加 —— 仅保留破限',
-        'Reset to default': '重置为默认',
-        'AI request failed: ${0}': '模型请求失败：${0}',
-        '(none)': '（无）',
-        '(current)': '（当前）',
-        // Strings consumed by the iteration-studio adapter via deps.i18n
-        'Compare with': '对比参考',
-        'Compare with reference': '与参考预设比较',
-        'Show full diff': '查看完整差异',
-        'Show reference diff': '查看参考差异',
-        'No edits to show for this message.': '此消息没有可显示的编辑。',
-        'Pick a reference preset first.': '请先选择一个参考预设。',
-        'Rollback to here': '回滚到这里',
-        'Edits for message ${0}': '消息 ${0} 的编辑',
-        'Live ↔ ${0}': '当前 ↔ ${0}',
-        'rolled back': '已回滚',
-        'edit(s)': '条编辑',
-        'Editing mode': '编辑模式',
-        'General editing': '通用编辑',
-        'Adapt for orchestrator': '编排器适配',
-        'Jailbreak-only': '仅保留破限',
-        // Shared iteration-library diff renderer strings (per-leaf cards,
-        // list-op context strips, etc). Keys defined by
-        // iteration-library/ui/diff.js + text-diff.js — translated here so
-        // CPA diff cards aren't half-English.
-        'Before': '修改前',
-        'After': '修改后',
-        'Line diff': '逐行差异',
-        'Reorder ${0}': '重排 ${0}',
-        '"${0}": [${1}] → [${2}]': '「${0}」：[${1}] → [${2}]',
-        '[${0}] → [${1}]': '[${0}] → [${1}]',
-        'Insert into ${0}': '向 ${0} 插入',
-        '+ "${0}" (${1})': '+ 「${0}」（${1}）',
-        '+ (${0})': '+ （${0}）',
-        'Remove from ${0}': '从 ${0} 移除',
-        '− "${0}" (at [${1}])': '− 「${0}」（位于 [${1}]）',
-        '− at [${0}]': '− 位于 [${0}]',
-        'after ${0}': '在 ${0} 之后',
-        'before ${0}': '在 ${0} 之前',
-        'at end': '在末尾',
-        'Field updated': '字段更新',
-        'Profile updated': '配置更新',
-        'working profile': '工作配置',
-        '(root)': '（根）',
-        '(${0}${1} bytes)': '（${0}${1} 字节）',
-        // Skill proposal cards (skill authoring goes through per-card user
-        // review in Workbench before commit).
-        'Update skill file': '更新 Skill 文件',
-        'Update skill frontmatter': '更新 Skill 元信息',
-        'Create skill': '新建 Skill',
-        'Rename skill': '重命名 Skill',
-        'Move skill scope': '移动 Skill 作用域',
-        'Delete skill': '删除 Skill',
-        'Approve': '通过',
-        'Reject': '拒绝',
-        'Undo decision': '撤销决定',
-        'Approved': '已通过',
-        'Rejected': '已拒绝',
-        'Pending approval': '等待审核',
-        'Name': '名称',
-        'Scope': '作用域',
-        '(unknown scope)': '（未知作用域）',
-        'global': '全局',
-        'preset:${0}': '预设：${0}',
-        'character:${0}': '角色卡：${0}',
-        'No content change': '内容无变化',
-        'Plus ${0} additional file(s): ${1}': '另含 ${0} 个附加文件：${1}',
-        'Skill "${0}" (${1}) will be deleted on Apply. All files removed; this cannot be undone.': '应用后将删除 Skill「${0}」（${1}），所有文件都会被移除；该操作无法撤销。',
-        'Skill commit failed at ${0} (${1}): ${2}': 'Skill 提交失败：${0}（${1}）：${2}',
-        'Skill commit halted: ${0} (${1}) failed (${2}). Remaining approved skill edits left in the pending list for retry.': 'Skill 提交中止：${0}（${1}）失败（${2}）。剩余已通过的 Skill 编辑保留在待审列表中供重试。',
-        'Committed ${0} skill edit(s)': '已提交 ${0} 项 Skill 编辑',
-        // Clone proposal cards (Bug 1 漏 A 修复:复制预设也走审批流程,
-        // 同时把当前会话整体迁移到新预设——Bug 2 修复)。
-        'Clone preset': '复制预设',
-        'On Apply: a new preset "${0}" will be created as a copy of "${1}", the popup target will switch to it, and this conversation will be migrated to the new preset.':
-            '应用后将以「${1}」为模板创建新预设「${0}」,弹窗目标会切换到新预设,当前会话也会一并迁移到该预设下。',
-        'Cloned preset to "${0}"': '已复制预设到「${0}」',
-        'Clone failed: cloneAndSwitchTarget is not available.': '复制失败：cloneAndSwitchTarget 不可用。',
-        'Clone failed: ${0}': '复制失败：${0}',
-        'Clone succeeded but session migration failed: ${0}': '复制成功,但会话迁移失败：${0}',
-        'Session moved to "${0}"': '会话已迁移到「${0}」',
-        // Patch-storage conflict UI (shared keys; each extension owns its locale table).
-        'Cannot undo this change: the preset has been modified elsewhere.':
-            '无法回退此次修改：预设的相关内容已经发生改变。',
-        'Cannot undo this change: the memory graph schema has been modified elsewhere.':
-            '无法回退此次修改：记忆图谱的相关内容已经发生改变。',
-        'Cannot undo this change: the character card has been modified elsewhere.':
-            '无法回退此次修改：角色卡的相关内容已经发生改变。',
-        'Cannot undo this change: the world book has been modified elsewhere.':
-            '无法回退此次修改：世界书的相关内容已经发生改变。',
-        'Cannot undo this change: the profile has been modified elsewhere.':
-            '无法回退此次修改：配置文件的相关内容已经发生改变。',
-        'Cannot undo this change: the skills have been modified elsewhere.':
-            '无法回退此次修改：技能的相关内容已经发生改变。',
-        'Cannot show details for this change: related content has been modified.':
-            '无法显示此步的修改详情：相关内容已经发生改变。',
-        'Cannot continue editing in this session: the underlying content has changed. Please start a new session.':
-            '无法继续在此次会话中修改：基础内容已变化，请新建会话。',
-        'Discard this step anyway': '仍然丢弃此步',
-        'Export change details': '导出修改详情',
-        'View raw record': '查看原始记录',
-        'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
-            '会话「${0}」无法迁移到新格式，已跳过，该会话不可用。',
-        'Completion Preset Assistant behavior summary': '聊天补全预设助手行为摘要',
-        'Prompts & AI': '提示词与 AI',
-        'All 3 iteration prompts': '全部 3 项迭代提示词',
-        '${promptStatus} use built-in defaults — AI connection and preset are configured in Workbench → Settings.': '${promptStatus}均使用内置默认值 —— 连接与预设在工作台 → 设置中配置。',
-        '${customCount} iteration prompts use custom overrides — AI connection and preset are configured in Workbench → Settings.': '${customCount} 项迭代提示词使用了自定义覆盖 —— 连接与预设在工作台 → 设置中配置。',
-    });
-    addLocaleData('zh-tw', {
-        'Completion Preset Assistant': '聊天補全預設助手',
-        'Open Assistant': '開啟助手',
-        'Open in Workbench': '在工作台中開啟',
-        'Workbench is unavailable.': '工作台目前無法使用。',
-        'Regenerate aborted': '重新產生已中止',
-        'Regenerate aborted — could not roll back commit on ${0}: ${1}': '重新產生已中止——無法回退 ${0} 上的提交：${1}',
-        'Edit': '編輯',
-        'Edit and regenerate from here': '編輯並從此處重新產生',
-        'Edit message — saving will regenerate from this turn:': '編輯訊息——儲存將從此輪開始重新產生：',
-        'Create New Preset': '新建預設',
-        'Bundle skills with this preset': '將 Skills 打包到此預設',
-        'No preset is currently selected.': '目前未選擇預設。',
-        'Enter a name for the new preset.': '請輸入新預設名稱。',
-        'Preset already exists: ${0}': '預設已存在：${0}',
-        'Preset created: ${0}': '已建立預設：${0}',
-        'Create preset failed.': '建立預設失敗。',
-        'Iteration AI prompt preset (params + prompt)': '迭代 AI 的提示詞預設',
-        'Iteration AI API preset (Connection profile)': '迭代 AI 的 API 預設',
-        'Include world info (simulate current chat)': '包含世界書資訊（按目前聊天重新模擬）',
-        'Tool-call retries on invalid/missing tool call (N)': '工具調用重試次數（無效/缺失時）',
-        'Iteration System Prompts (advanced)': '迭代系統提示詞（進階）',
-        'Base prompt (sent in every mode)': '基礎提示詞（每種模式都會傳送）',
-        'Mode addition — orchestrator-optimize': '模式追加 —— 編排器適配',
-        'Mode addition — jailbreak-only': '模式追加 —— 僅保留破限',
-        'Reset to default': '重置為預設',
-        'AI request failed: ${0}': '模型請求失敗：${0}',
-        '(none)': '（無）',
-        '(current)': '（目前）',
-        'Compare with': '對比參考',
-        'Compare with reference': '與參考預設比較',
-        'Show full diff': '查看完整差異',
-        'Show reference diff': '查看參考差異',
-        'No edits to show for this message.': '此訊息沒有可顯示的編輯。',
-        'Pick a reference preset first.': '請先選擇一個參考預設。',
-        'Rollback to here': '回滾到這裡',
-        'Edits for message ${0}': '訊息 ${0} 的編輯',
-        'Live ↔ ${0}': '目前 ↔ ${0}',
-        'rolled back': '已回滾',
-        'edit(s)': '條編輯',
-        'Editing mode': '編輯模式',
-        'General editing': '通用編輯',
-        'Adapt for orchestrator': '編排器適配',
-        'Jailbreak-only': '僅保留破限',
-        'Before': '修改前',
-        'After': '修改後',
-        'Line diff': '逐行差異',
-        'Reorder ${0}': '重排 ${0}',
-        '"${0}": [${1}] → [${2}]': '「${0}」：[${1}] → [${2}]',
-        '[${0}] → [${1}]': '[${0}] → [${1}]',
-        'Insert into ${0}': '向 ${0} 插入',
-        '+ "${0}" (${1})': '+ 「${0}」（${1}）',
-        '+ (${0})': '+ （${0}）',
-        'Remove from ${0}': '從 ${0} 移除',
-        '− "${0}" (at [${1}])': '− 「${0}」（位於 [${1}]）',
-        '− at [${0}]': '− 位於 [${0}]',
-        'after ${0}': '在 ${0} 之後',
-        'before ${0}': '在 ${0} 之前',
-        'at end': '在末尾',
-        'Field updated': '欄位更新',
-        'Profile updated': '設定更新',
-        'working profile': '工作設定',
-        '(root)': '（根）',
-        '(${0}${1} bytes)': '（${0}${1} 位元組）',
-        // Skill proposal cards (see zh-cn block for context).
-        'Update skill file': '更新 Skill 檔案',
-        'Update skill frontmatter': '更新 Skill 元資訊',
-        'Create skill': '新建 Skill',
-        'Rename skill': '重新命名 Skill',
-        'Move skill scope': '移動 Skill 作用域',
-        'Delete skill': '刪除 Skill',
-        'Approve': '通過',
-        'Reject': '拒絕',
-        'Undo decision': '撤銷決定',
-        'Approved': '已通過',
-        'Rejected': '已拒絕',
-        'Pending approval': '等待審核',
-        'Name': '名稱',
-        'Scope': '作用域',
-        '(unknown scope)': '（未知作用域）',
-        'global': '全域',
-        'preset:${0}': '預設：${0}',
-        'character:${0}': '角色卡：${0}',
-        'No content change': '內容無變化',
-        'Plus ${0} additional file(s): ${1}': '另含 ${0} 個附加檔案：${1}',
-        'Skill "${0}" (${1}) will be deleted on Apply. All files removed; this cannot be undone.': '套用後將刪除 Skill「${0}」（${1}），所有檔案都會被移除；此操作無法撤銷。',
-        'Skill commit failed at ${0} (${1}): ${2}': 'Skill 提交失敗：${0}（${1}）：${2}',
-        'Skill commit halted: ${0} (${1}) failed (${2}). Remaining approved skill edits left in the pending list for retry.': 'Skill 提交中止：${0}（${1}）失敗（${2}）。剩餘已通過的 Skill 編輯保留在待審列表中供重試。',
-        'Committed ${0} skill edit(s)': '已提交 ${0} 項 Skill 編輯',
-        // Clone proposal cards (見 zh-cn 區塊說明)。
-        'Clone preset': '複製預設',
-        'On Apply: a new preset "${0}" will be created as a copy of "${1}", the popup target will switch to it, and this conversation will be migrated to the new preset.':
-            '套用後將以「${1}」為範本建立新預設「${0}」,彈窗目標會切換到新預設,目前的對話也會一併遷移到該預設下。',
-        'Cloned preset to "${0}"': '已複製預設到「${0}」',
-        'Clone failed: cloneAndSwitchTarget is not available.': '複製失敗：cloneAndSwitchTarget 不可用。',
-        'Clone failed: ${0}': '複製失敗：${0}',
-        'Clone succeeded but session migration failed: ${0}': '複製成功,但對話遷移失敗：${0}',
-        'Session moved to "${0}"': '對話已遷移到「${0}」',
-        // Patch-storage conflict UI (shared keys).
-        'Cannot undo this change: the preset has been modified elsewhere.':
-            '無法回退此次修改：預設的相關內容已經發生改變。',
-        'Cannot undo this change: the memory graph schema has been modified elsewhere.':
-            '無法回退此次修改：記憶圖譜的相關內容已經發生改變。',
-        'Cannot undo this change: the character card has been modified elsewhere.':
-            '無法回退此次修改：角色卡的相關內容已經發生改變。',
-        'Cannot undo this change: the world book has been modified elsewhere.':
-            '無法回退此次修改：世界書的相關內容已經發生改變。',
-        'Cannot undo this change: the profile has been modified elsewhere.':
-            '無法回退此次修改：設定檔的相關內容已經發生改變。',
-        'Cannot undo this change: the skills have been modified elsewhere.':
-            '無法回退此次修改：技能的相關內容已經發生改變。',
-        'Cannot show details for this change: related content has been modified.':
-            '無法顯示此步的修改詳情：相關內容已經發生改變。',
-        'Cannot continue editing in this session: the underlying content has changed. Please start a new session.':
-            '無法繼續在此次會話中修改：基礎內容已變化，請新建會話。',
-        'Discard this step anyway': '仍然丟棄此步',
-        'Export change details': '匯出修改詳情',
-        'View raw record': '檢視原始記錄',
-        'Session "${0}" cannot be migrated to the new format. It has been skipped and is unavailable.':
-            '會話「${0}」無法遷移到新格式，已跳過，該會話不可用。',
-        'Completion Preset Assistant behavior summary': '聊天補全預設助手行為摘要',
-        'Prompts & AI': '提示詞與 AI',
-        'All 3 iteration prompts': '全部 3 項迭代提示詞',
-        '${promptStatus} use built-in defaults — AI connection and preset are configured in Workbench → Settings.': '${promptStatus}均使用內建預設值 —— 連線與預設在工作台 → 設定中設定。',
-        '${customCount} iteration prompts use custom overrides — AI connection and preset are configured in Workbench → Settings.': '${customCount} 項迭代提示詞使用了自訂覆寫 —— 連線與預設在工作台 → 設定中設定。',
-    });
-}
-
 function getOpenAIPresetNames(context = getContext()) {
-    const refs = Array.isArray(context?.presets?.list?.('openai')) ? context.presets.list('openai') : [];
-    return refs
-        .map(ref => String(ref?.name || '').trim())
-        .filter(Boolean)
-        .sort((left, right) => left.localeCompare(right));
+    return getSharedOpenAIPresetNames(context, { sort: true });
 }
 
 function getCurrentTargetRef(context = getContext()) {
@@ -443,15 +139,6 @@ async function handleCreateNewPreset() {
     }
 }
 
-/**
- * Open the Skill Manager popup pre-filtered to the currently-selected preset.
- *
- * Surfaces the same Skill Manager that the orchestrator config exposes, but
- * seeded with `initialScope = preset/<presetName>` so the user lands
- * directly on the skills already bound to this preset. From there they can
- * Import / Create / Move skills into the preset scope, or switch to the
- * Browse-bundled tab to install bundled scaffolds.
- */
 async function openBundleSkillsForCurrentPreset() {
     const context = getContext();
     const targetRef = getCurrentTargetRef(context);
@@ -547,7 +234,12 @@ function mountSummary(root) {
 
 function refreshUiState() {
     const settings = ensureSettings();
-    for (const { key, id } of PROMPT_FIELDS) jQuery(`#${id}`).val(settings[key] ?? '');
+    for (const { key, id } of PROMPT_FIELDS) {
+        const field = jQuery(`#${id}`);
+        if (field.length && field[0] !== document.activeElement) {
+            field.val(settings[key] ?? '');
+        }
+    }
     ensureOpenAiToolbarButton();
     summaryHandle?.refresh?.();
 }
@@ -570,13 +262,18 @@ function bindUi() {
     });
     root.on('input.cpa', '[data-cpa-prompt]', function () {
         ensureSettings()[this.dataset.cpaPrompt] = this.value;
-        getContext().saveSettingsDebounced();
+        saveSettingsDebounced();
     });
     root.on('click.cpa', '[data-cpa-reset-prompt]', function () {
         const key = this.dataset.cpaResetPrompt;
-        ensureSettings()[key] = defaultSettings[key];
+        const nextValue = defaultSettings[key] ?? '';
+        ensureSettings()[key] = nextValue;
+        const fieldDef = PROMPT_FIELDS.find(f => f.key === key);
+        if (fieldDef) {
+            root.find(`#${fieldDef.id}`).val(nextValue);
+        }
         refreshUiState();
-        getContext().saveSettingsDebounced();
+        saveSettingsDebounced();
     });
 
     jQuery(document).on('click.cpaOpen', `#${OPENAI_BUTTON_ID}`, async function () {
@@ -613,11 +310,11 @@ function ensureUi(context = getContext()) {
                 </div>
             </div>
             <details class="marginTop10">
-                <summary data-i18n="Advanced prompts">${escapeHtml(i18n('Advanced prompts'))}</summary>
+                <summary>${escapeHtml(i18n('Advanced prompts'))}</summary>
                 ${PROMPT_FIELDS.map(({ key, id, label }) => `
                 <div class="flex-container alignItemsBaseline">
-                    <label for="${id}" data-i18n="${label}">${escapeHtml(i18n(label))}</label>
-                    <button type="button" id="cpa_reset_${id.slice(4)}" class="menu_button" data-cpa-reset-prompt="${key}" data-i18n="Reset to default">${escapeHtml(i18n('Reset to default'))}</button>
+                    <label for="${id}">${escapeHtml(i18n(label))}</label>
+                    <button type="button" id="cpa_reset_${id.slice(4)}" class="menu_button" data-cpa-reset-prompt="${key}">${escapeHtml(i18n('Reset to default'))}</button>
                 </div>
                 <textarea id="${id}" class="text_pole" rows="6" data-cpa-prompt="${key}"></textarea>`).join('')}
             </details>
@@ -634,7 +331,6 @@ function getPresetEventCollection(event = null) {
 }
 
 jQuery(async () => {
-    registerLocaleData();
     ensureSimulationReviewLocaleData();
     ensureSettings();
     ensureUi();

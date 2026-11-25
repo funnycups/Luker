@@ -124,31 +124,23 @@ jest.unstable_mockModule('../../public/scripts/iteration-library/tools/skill-ite
 }));
 
 let buildToolCatalog;
-let EDITABLE_TOOL_NAMES;
 let READ_TOOL_NAMES;
-let classifyToolCall;
 let normalizeToolCallToEdit;
-let TOOL_DISPLAY;
-let isCpaControlCall;
 let runCpaReadTool;
 
 beforeAll(async () => {
     ({
         buildToolCatalog,
-        EDITABLE_TOOL_NAMES,
         READ_TOOL_NAMES,
-        classifyToolCall,
         normalizeToolCallToEdit,
-        TOOL_DISPLAY,
-        isCpaControlCall,
         runCpaReadTool,
-    } = await import('../../public/scripts/extensions/completion-preset-assistant/cpa-iteration/tools.js'));
+    } = await import('../../public/scripts/workbench/targets/preset-tools.js'));
 });
 
 const call = (name, args) => ({ function: { name, arguments: JSON.stringify(args) } });
 
 describe('CPA — tools', () => {
-    test('buildToolCatalog returns at least 17 tools, all with display labels', () => {
+    test('buildToolCatalog returns at least 17 tools', () => {
         // The full 17-tool catalog appears when hasReference=true. With
         // hasReference=false the catalog is 15 tools (preset_copy_from_reference
         // and preset_read_reference_fields are gated behind a selected reference).
@@ -156,7 +148,7 @@ describe('CPA — tools', () => {
         expect(catalog.length).toBeGreaterThanOrEqual(17);
         for (const def of catalog) {
             expect(def.type).toBe('function');
-            expect(TOOL_DISPLAY[def.function.name]).toBeTruthy();
+            expect(def.function?.name).toBeTruthy();
         }
     });
 
@@ -203,15 +195,6 @@ describe('CPA — tools', () => {
             { live: { main: 'this has foo in it' } },
         );
         expect(edits[0]).toMatchObject({ op: 'str_insert', path: 'main', after_text: 'foo', insert_text: 'bar' });
-    });
-
-    test('classifyToolCall returns "editable" for editable tools, "control" otherwise', () => {
-        expect(classifyToolCall(call('preset_set_field', {}))).toBe('editable');
-        const allTools = buildToolCatalog({ hasReference: true }).map(d => d.function.name);
-        const nonEditable = allTools.find(n => !EDITABLE_TOOL_NAMES.has(n));
-        if (nonEditable) {
-            expect(classifyToolCall(call(nonEditable, {}))).toBe('control');
-        }
     });
 
     test('malformed JSON args → returns null', async () => {
@@ -269,20 +252,6 @@ describe('CPA control tools — program-driven auto-continue', () => {
         expect(names).not.toContain('luker_cpa_continue_iteration');
         expect(names).not.toContain('luker_cpa_finalize_iteration');
     });
-
-    test('isCpaControlCall returns false for edit tools and the legacy continue / finalize names', () => {
-        // CPA has no popup-side control tools today. A legacy emission of
-        // continue / finalize from a stale session replay must NOT route
-        // through onControlCall — it should pass through onToolCall and
-        // normalize to a no-op edit.
-        expect(isCpaControlCall({ name: 'luker_cpa_continue_iteration' })).toBe(false);
-        expect(isCpaControlCall({ name: 'luker_cpa_finalize_iteration' })).toBe(false);
-        expect(isCpaControlCall({ name: 'preset_set_field' })).toBe(false);
-        expect(isCpaControlCall({ name: '' })).toBe(false);
-        expect(isCpaControlCall({})).toBe(false);
-        expect(isCpaControlCall(null)).toBe(false);
-        expect(isCpaControlCall(undefined)).toBe(false);
-    });
 });
 
 describe('CPA — preset_clone_to_new (proposal-mode read tool)', () => {
@@ -301,10 +270,6 @@ describe('CPA — preset_clone_to_new (proposal-mode read tool)', () => {
         expect(def.function.parameters.additionalProperties).toBe(false);
         expect(def.function.parameters.properties).toHaveProperty('new_name');
         expect(def.function.parameters.properties).toHaveProperty('reason');
-    });
-
-    test('TOOL_DISPLAY contains preset_clone_to_new', () => {
-        expect(TOOL_DISPLAY.preset_clone_to_new).toBeTruthy();
     });
 
     test('READ_TOOL_NAMES contains preset_clone_to_new (routed through read dispatcher)', () => {
@@ -426,7 +391,7 @@ describe('CPA — runCpaSkillTool (proposal-mode passthrough)', () => {
     let runCpaSkillTool;
 
     beforeAll(async () => {
-        ({ runCpaSkillTool } = await import('../../public/scripts/extensions/completion-preset-assistant/cpa-iteration/tools.js'));
+        ({ runCpaSkillTool } = await import('../../public/scripts/workbench/targets/preset-tools.js'));
     });
 
     beforeEach(() => {

@@ -111,7 +111,7 @@ let buildSimulateSourceMessages;
 
 beforeAll(async () => {
     ({ buildSimulateSourceMessages } = await import(
-        '../../public/scripts/extensions/completion-preset-assistant/cpa-iteration/tools.js'
+        '../../public/scripts/workbench/targets/preset-tools.js'
     ));
 });
 

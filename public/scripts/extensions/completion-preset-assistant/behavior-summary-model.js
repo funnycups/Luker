@@ -9,6 +9,7 @@ import {
     buildOrchestratorOptimizeModeBlock,
     buildJailbreakOnlyModeBlock,
 } from './cpa-iteration/system-prompts.js';
+import { i18n as defaultTranslate } from './i18n.js';
 
 const PROMPT_KEYS = Object.freeze([
     'iterBaseSystemPrompt',
@@ -27,11 +28,6 @@ function getDefaultPrompts() {
         });
     }
     return cachedDefaults;
-}
-
-function defaultTranslate(text) {
-    const fn = globalThis.Luker?.getContext?.()?.translate;
-    return typeof fn === 'function' ? fn(String(text ?? '')) : String(text ?? '');
 }
 
 /**
