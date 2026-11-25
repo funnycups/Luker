@@ -1246,6 +1246,7 @@ describe('workbench Ask model & source readers', () => {
         expect(memSearch.matched).toBe(1);
         expect(memSearch.nodes[0].id).toBe('n_new');
 
+        const longExtract = 'E'.repeat(420);
         const memSchema = await memProvider.readers.wb_read_memory({ part: 'schema' }, memCtx);
         expect(memSchema.scope).toBe('character');
         expect(memSchema.types[0]).toEqual({
@@ -1262,6 +1263,54 @@ describe('workbench Ask model & source readers', () => {
                 summarizeInstruction: longSummarize.slice(0, 240),
             },
         });
+
+        // Passing type to part="schema" filters to that type and returns full untruncated instructions
+        const fullSchemaCtx = {
+            ...memCtx,
+            getExtensionApi: () => ({
+                getAdvancedScopeInfo: () => ({ scope: 'global', settings: {} }),
+                getSchemaScopeInfo: () => ({
+                    scope: 'global',
+                    schema: [
+                        {
+                            id: 'event',
+                            label: '事件',
+                            alwaysInject: true,
+                            extractHint: longExtract,
+                            extractionInstructions: longExtract,
+                            tableColumns: ['summary'],
+                            columnHints: { summary: longExtract },
+                            compression: { mode: 'hierarchical', threshold: 20, summarizeInstruction: longSummarize },
+                        },
+                        {
+                            id: 'thread',
+                            label: '伏笔',
+                            alwaysInject: true,
+                            extractHint: 'short',
+                            extractionInstructions: 'short',
+                            tableColumns: ['title'],
+                            columnHints: {},
+                            compression: null,
+                        },
+                    ],
+                }),
+                getLastRecallProjection: async () => null,
+            }),
+        };
+        const singleSchema = await memProvider.readers.wb_read_memory({ part: 'schema', type: 'event' }, fullSchemaCtx);
+        expect(singleSchema.types).toHaveLength(1);
+        expect(singleSchema.types[0].id).toBe('event');
+        expect(singleSchema.types[0].extractHint).toBe(longExtract);
+        expect(singleSchema.types[0].extractionInstructions).toBe(longExtract);
+        expect(singleSchema.types[0].columnHints.summary).toBe(longExtract);
+        expect(singleSchema.types[0].compression.summarizeInstruction).toBe(longSummarize);
+
+        // Omitted settings.enabled defaults to false (matching memory-graph defaultSettings.enabled = false)
+        const defaultDisabledProvider = createMemoryAskProvider(() => null, {
+            getSettings: () => ({}),
+        });
+        const disabledSnap = await defaultDisabledProvider.getSnapshot(fullSchemaCtx);
+        expect(disabledSnap.enabled).toBe(false);
     });
 
     test('wb_read_orch reads notes purely via readFloorStateSnapshot without polluting ctx and filters last_run by chatId with hyphenated Agenda agents', async () => {

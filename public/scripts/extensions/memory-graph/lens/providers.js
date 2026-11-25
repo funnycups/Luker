@@ -67,7 +67,7 @@ export async function buildMemorySnapshot(ctx, deps = {}) {
 
     const out = {
         installed: true,
-        enabled: true,
+        enabled: false,
         nodes: 0,
         events: 0,
         unmerged: 0,
@@ -88,7 +88,7 @@ export async function buildMemorySnapshot(ctx, deps = {}) {
     };
 
     const settings = typeof getSettings === 'function' ? getSettings() : {};
-    out.enabled = settings?.enabled !== false;
+    out.enabled = Boolean(settings?.enabled);
     out.recallMethod = String(settings?.recallMethod || '');
     out.recallEnabled = settings?.recallEnabled !== false;
     out.autoExtractionEnabled = settings?.autoExtractionEnabled !== false;
@@ -211,7 +211,7 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                             description: 'Default summary. Use search/nodes to find specific memory entries or schema to inspect memory types and compression rules.',
                         },
                         query: { type: 'string', description: 'Keyword to match against node id, type, title, or fields (used with search/nodes).' },
-                        type: { type: 'string', description: 'Optional node type id filter (used with search/nodes).' },
+                        type: { type: 'string', description: 'Optional node type id filter (used with search, nodes, or schema; with schema returns full untruncated instructions).' },
                         include_archived: { type: 'boolean', description: 'Include archived nodes when searching/listing (default true).' },
                         limit: { type: 'integer', description: 'Max nodes to return (1-50, default 20).' },
                     },
@@ -233,24 +233,40 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
                 if (part === 'schema') {
                     const settings = typeof deps.getSettings === 'function' ? deps.getSettings() : {};
                     const schemaInfo = mg.getSchemaScopeInfo?.(c, settings);
-                    const schema = Array.isArray(schemaInfo?.schema)
+                    const rawSchema = Array.isArray(schemaInfo?.schema)
                         ? schemaInfo.schema
                         : (typeof deps.getEffectiveNodeTypeSchema === 'function' ? deps.getEffectiveNodeTypeSchema(c, settings) : []);
+                    const schemaList = Array.isArray(rawSchema) ? rawSchema : [];
+                    const typeNeedle = String(type || '').trim().toLowerCase();
+                    const filtered = typeNeedle
+                        ? schemaList.filter(t => String(t?.id || '').toLowerCase() === typeNeedle)
+                        : schemaList;
+                    const full = Boolean(typeNeedle);
                     return {
                         scope: schemaInfo?.scope || 'global',
-                        types: (Array.isArray(schema) ? schema : []).map(t => ({
+                        types: filtered.map(t => ({
                             id: t?.id,
                             label: t?.label || t?.name || t?.id,
-                            extractHint: String(t?.extractHint || '').slice(0, 300), // cap-ok: per-type extract hint preview cap
-                            extractionInstructions: String(t?.extractionInstructions || '').slice(0, 300), // cap-ok: per-type extraction instructions preview cap
+                            extractHint: full
+                                ? String(t?.extractHint || '')
+                                : String(t?.extractHint || '').slice(0, 300), // cap-ok: per-type extract hint preview cap when listing all types
+                            extractionInstructions: full
+                                ? String(t?.extractionInstructions || '')
+                                : String(t?.extractionInstructions || '').slice(0, 300), // cap-ok: per-type extraction instructions preview cap when listing all types
                             alwaysInject: Boolean(t?.alwaysInject ?? t?.persistent),
                             tableColumns: Array.isArray(t?.tableColumns) ? t.tableColumns.filter(Boolean).map(String) : [],
-                            columnHints: truncateFieldMap(t?.columnHints, 200),
+                            columnHints: full
+                                ? (t?.columnHints && typeof t.columnHints === 'object' ? { ...t.columnHints } : {})
+                                : truncateFieldMap(t?.columnHints, 200),
                             compression: t?.compression && typeof t.compression === 'object'
                                 ? {
                                     ...t.compression,
                                     ...(typeof t.compression.summarizeInstruction === 'string'
-                                        ? { summarizeInstruction: t.compression.summarizeInstruction.slice(0, 240) } // cap-ok: summarize instruction preview cap
+                                        ? {
+                                            summarizeInstruction: full
+                                                ? t.compression.summarizeInstruction
+                                                : t.compression.summarizeInstruction.slice(0, 240), // cap-ok: summarize instruction preview cap when listing all types
+                                        }
                                         : {}),
                                 }
                                 : null,
