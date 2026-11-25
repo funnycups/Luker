@@ -114,6 +114,19 @@ callPopup(text: string, type: string, ...): Promise<any>
 
 旧版弹窗助手，使用字符串键的类型（`'text'`、`'confirm'`、`'input'` 等）。请迁移到 `callGenericPopup`，使用数字 `POPUP_TYPE` 值。
 
+### openRequestInspector
+
+```ts
+openRequestInspector(requestId?: string): Promise<void>
+```
+
+打开 Luker 的请求检查器弹窗。传入非空 `requestId` 时直接展示对应请求的详情视图；若记录不存在或已过期，则回退到请求列表并给出提示。
+
+```js
+const ctx = Luker.getContext();
+await ctx.openRequestInspector('req_abc123');
+```
+
 ## 加载器
 
 ### loader.show / loader.hide

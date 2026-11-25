@@ -26,6 +26,35 @@ function activeChatId(ctx) {
     return id ? String(id) : '';
 }
 
+function truncateFieldMap(record, maxLen = 300) {
+    if (!record || typeof record !== 'object') return {};
+    const out = {};
+    for (const [k, v] of Object.entries(record)) {
+        if (v === null || v === undefined) continue;
+        let text;
+        if (typeof v === 'string') {
+            text = v;
+        } else {
+            try {
+                text = JSON.stringify(v);
+            } catch {
+                text = String(v);
+            }
+        }
+        if (typeof text !== 'string') continue;
+        out[k] = text.length > maxLen ? text.slice(0, maxLen) : text; // cap-ok: per-field value preview cap
+    }
+    return out;
+}
+
+function nodeRecencyKey(node) {
+    const end = node?.floor_range?.end;
+    if (typeof end === 'number' && Number.isFinite(end)) return end;
+    const seq = node?.seq_to;
+    if (typeof seq === 'number' && Number.isFinite(seq)) return seq;
+    return -1;
+}
+
 export async function buildMemorySnapshot(ctx, deps = {}) {
     const mg = ctx?.getExtensionApi?.('memory-graph');
     if (!mg) return null;
@@ -38,25 +67,39 @@ export async function buildMemorySnapshot(ctx, deps = {}) {
 
     const out = {
         installed: true,
+        enabled: false,
         nodes: 0,
         events: 0,
         unmerged: 0,
+        countsByType: {},
         core: 0,
         focus: 0,
         coreHistory: [],
         compression: false,
         threshold: 0,
         maxSeqDistance: null,
+        recallMethod: '',
+        recallEnabled: true,
+        autoExtractionEnabled: true,
+        updateEvery: null,
         floors: chatFloors(ctx),
         types: 0,
         scope: 'global',
     };
 
     const settings = typeof getSettings === 'function' ? getSettings() : {};
+    out.enabled = Boolean(settings?.enabled);
+    out.recallMethod = String(settings?.recallMethod || '');
+    out.recallEnabled = settings?.recallEnabled !== false;
+    out.autoExtractionEnabled = settings?.autoExtractionEnabled !== false;
     const adv = mg.getAdvancedScopeInfo?.(ctx, settings);
     if (adv) {
         out.maxSeqDistance = Number(adv?.settings?.[HORIZON_KEY] ?? settings?.[HORIZON_KEY] ?? 0);
         out.scope = adv?.scope || 'global';
+    }
+    const rawUpdateEvery = adv?.settings?.updateEvery ?? settings?.updateEvery;
+    if (rawUpdateEvery !== null && rawUpdateEvery !== undefined && rawUpdateEvery !== '' && Number.isFinite(Number(rawUpdateEvery))) {
+        out.updateEvery = Number(rawUpdateEvery);
     }
     const schemaInfo = mg.getSchemaScopeInfo?.(ctx, settings);
     if (schemaInfo) {
@@ -72,6 +115,15 @@ export async function buildMemorySnapshot(ctx, deps = {}) {
         const read = store ? getMemoryGraphReadApi(store, ctx) : null;
         const nodes = read?.listNodes?.({ activeOnly: false }) || [];
         out.nodes = nodes.length;
+        const countsByType = {};
+        for (const node of nodes) {
+            const typeId = String(node?.type || 'unknown');
+            if (!countsByType[typeId]) countsByType[typeId] = { total: 0, active: 0, archived: 0 };
+            countsByType[typeId].total++;
+            if (node?.archived) countsByType[typeId].archived++;
+            else countsByType[typeId].active++;
+        }
+        out.countsByType = countsByType;
         const events = nodes.filter(node => node?.type === 'event' && !node.archived);
         out.events = events.length;
         out.unmerged = events.filter(node => !(Number(node.semantic_depth) > 0) && !node.parent_id).length;
@@ -149,24 +201,131 @@ export function createMemoryAskProvider(getCtx, deps = {}) {
             type: 'function',
             function: {
                 name: 'wb_read_memory',
-                description: 'Memory graph: what it injected last time (core = always, focus = recalled), counts per type, and key settings.',
+                description: 'Memory graph: inspect summary & counts per type, last injected core/focus text, schema definitions, or search/list memory nodes by keyword or type to diagnose forgotten facts.',
                 parameters: {
                     type: 'object',
                     properties: {
-                        part: { type: 'string', enum: ['summary', 'core', 'focus'], description: 'Default summary.' },
+                        part: {
+                            type: 'string',
+                            enum: ['summary', 'core', 'focus', 'search', 'nodes', 'schema'],
+                            description: 'Default summary. Use search/nodes to find specific memory entries or schema to inspect memory types and compression rules.',
+                        },
+                        query: { type: 'string', description: 'Keyword to match against node id, type, title, or fields (used with search/nodes).' },
+                        type: { type: 'string', description: 'Optional node type id filter (used with search, nodes, or schema; with schema returns full untruncated instructions).' },
+                        include_archived: { type: 'boolean', description: 'Include archived nodes when searching/listing (default true).' },
+                        limit: { type: 'integer', description: 'Max nodes to return (1-50, default 20).' },
                     },
                     additionalProperties: false,
                 },
             },
         }],
         readers: {
-            wb_read_memory: async ({ part = 'summary' } = {}, ctx) => {
+            wb_read_memory: async ({ part = 'summary', query = '', type = '', include_archived = true, limit = 20 } = {}, ctx) => {
                 const c = ctx || getCtx();
                 const mg = c?.getExtensionApi?.('memory-graph');
                 if (!mg) return { error: i18n('No memory graph') };
+                if (part === 'core' || part === 'focus') {
+                    const proj = await mg.getLastRecallProjection?.(c);
+                    return part === 'core'
+                        ? String(proj?.blocks?.corePacket || i18n('(empty)'))
+                        : String(proj?.blocks?.focusPacket || i18n('(empty)'));
+                }
+                if (part === 'schema') {
+                    const settings = typeof deps.getSettings === 'function' ? deps.getSettings() : {};
+                    const schemaInfo = mg.getSchemaScopeInfo?.(c, settings);
+                    const rawSchema = Array.isArray(schemaInfo?.schema)
+                        ? schemaInfo.schema
+                        : (typeof deps.getEffectiveNodeTypeSchema === 'function' ? deps.getEffectiveNodeTypeSchema(c, settings) : []);
+                    const schemaList = Array.isArray(rawSchema) ? rawSchema : [];
+                    const typeNeedle = String(type || '').trim().toLowerCase();
+                    const filtered = typeNeedle
+                        ? schemaList.filter(t => String(t?.id || '').toLowerCase() === typeNeedle)
+                        : schemaList;
+                    const full = Boolean(typeNeedle);
+                    return {
+                        scope: schemaInfo?.scope || 'global',
+                        types: filtered.map(t => ({
+                            id: t?.id,
+                            label: t?.label || t?.name || t?.id,
+                            extractHint: full
+                                ? String(t?.extractHint || '')
+                                : String(t?.extractHint || '').slice(0, 300), // cap-ok: per-type extract hint preview cap when listing all types
+                            extractionInstructions: full
+                                ? String(t?.extractionInstructions || '')
+                                : String(t?.extractionInstructions || '').slice(0, 300), // cap-ok: per-type extraction instructions preview cap when listing all types
+                            alwaysInject: Boolean(t?.alwaysInject ?? t?.persistent),
+                            tableColumns: Array.isArray(t?.tableColumns) ? t.tableColumns.filter(Boolean).map(String) : [],
+                            columnHints: full
+                                ? (t?.columnHints && typeof t.columnHints === 'object' ? { ...t.columnHints } : {})
+                                : truncateFieldMap(t?.columnHints, 200),
+                            compression: t?.compression && typeof t.compression === 'object'
+                                ? {
+                                    ...t.compression,
+                                    ...(typeof t.compression.summarizeInstruction === 'string'
+                                        ? {
+                                            summarizeInstruction: full
+                                                ? t.compression.summarizeInstruction
+                                                : t.compression.summarizeInstruction.slice(0, 240), // cap-ok: summarize instruction preview cap when listing all types
+                                        }
+                                        : {}),
+                                }
+                                : null,
+                        })),
+                    };
+                }
+                if (part === 'search' || part === 'nodes') {
+                    if (!activeChatId(c) || typeof deps.ensureMemoryStoreLoaded !== 'function' || typeof deps.getMemoryGraphReadApi !== 'function') {
+                        return { error: 'No open chat or memory store is unreadable', nodes: [] };
+                    }
+                    const store = await deps.ensureMemoryStoreLoaded(c);
+                    const read = store ? deps.getMemoryGraphReadApi(store, c) : null;
+                    const allNodes = read?.listNodes?.({ activeOnly: !include_archived }) || [];
+                    const needle = String(query || '').trim().toLowerCase();
+                    const typeNeedle = String(type || '').trim().toLowerCase();
+                    const maxItems = Math.max(1, Math.min(50, Math.floor(Number(limit) || 20))); // cap-ok: cap memory nodes returned per call
+                    const matched = allNodes.filter(node => {
+                        if (!node || typeof node !== 'object') return false;
+                        if (typeNeedle && String(node.type || '').toLowerCase() !== typeNeedle) return false;
+                        if (!needle) return true;
+                        let fieldsText = '';
+                        if (node.fields && typeof node.fields === 'object') {
+                            try { fieldsText = JSON.stringify(node.fields); } catch { fieldsText = ''; }
+                        }
+                        const hay = [
+                            node.id,
+                            node.type,
+                            node.title,
+                            fieldsText,
+                        ].filter(Boolean).join(' ').toLowerCase();
+                        return hay.includes(needle);
+                    });
+                    // Sort descending by floor range end / node seq watermark so newest nodes appear first.
+                    matched.sort((a, b) => nodeRecencyKey(b) - nodeRecencyKey(a));
+                    return {
+                        totalInGraph: allNodes.length,
+                        matched: matched.length,
+                        nodes: matched.slice(0, maxItems).map(n => {
+                            const fields = truncateFieldMap(n.fields, 300);
+                            const rawPreview = n?.fields?.summary ?? n?.fields?.note ?? '';
+                            const summaryPreview = (typeof rawPreview === 'string' ? rawPreview : String(rawPreview)).slice(0, 300); // cap-ok: node summary preview cap
+                            return {
+                                id: n.id,
+                                type: n.type,
+                                level: n.level || 'episodic',
+                                title: n.title || '',
+                                fields,
+                                summaryPreview,
+                                seqTo: (Number.isFinite(n.seq_to) && n.seq_to >= 0) ? n.seq_to : null,
+                                floorRange: n.floor_range || null,
+                                archived: Boolean(n.archived),
+                                parentId: n.parent_id || null,
+                                depth: Number(n.semantic_depth || 0),
+                                semanticRollup: Boolean(n.semantic_rollup),
+                            };
+                        }),
+                    };
+                }
                 const proj = await mg.getLastRecallProjection?.(c);
-                if (part === 'core') return String(proj?.blocks?.corePacket || i18n('(empty)'));
-                if (part === 'focus') return String(proj?.blocks?.focusPacket || i18n('(empty)'));
                 const snap = await buildMemorySnapshot(c, deps);
                 return { ...snap, lastRecall: proj?.at ? new Date(proj.at).toLocaleString(dateLocale(c)) : i18n('Not recalled yet') };
             },

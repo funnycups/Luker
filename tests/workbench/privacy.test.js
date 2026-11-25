@@ -157,7 +157,11 @@ describe('workbench privacy and redaction', () => {
 
     test('askTools, askReaders, and runAsk enforce sources gating on read tools', async () => {
         const disabledSources = { content: false, plugins: false, frontLogs: false, serverLogs: false, inspector: false };
-        expect(askTools(disabledSources).map(t => t.function.name)).toEqual(['wb_answer']);
+        expect(askTools(disabledSources).map(t => t.function.name)).toEqual([
+            'wb_list_luker_docs',
+            'wb_read_luker_doc',
+            'wb_answer',
+        ]);
 
         globalThis.Luker = {
             getContext: () => ({
@@ -171,9 +175,17 @@ describe('workbench privacy and redaction', () => {
         const gatedReaders = askReaders({ sources: disabledSources, suggestions: () => [{ text: 'Leaked suggestion', why: 'secret' }] });
         expect(gatedReaders.wb_read_chat).toBeUndefined();
         expect(gatedReaders.wb_read_character).toBeUndefined();
+        expect(gatedReaders.wb_read_world_info_trace).toBeUndefined();
+        expect(gatedReaders.wb_read_variables).toBeUndefined();
+        expect(gatedReaders.wb_read_regex).toBeUndefined();
+        expect(gatedReaders.wb_read_connections).toBeUndefined();
+        expect(gatedReaders.wb_read_skills).toBeUndefined();
         expect(gatedReaders.wb_list_requests).toBeUndefined();
         expect(gatedReaders.wb_read_frontend_logs).toBeUndefined();
+        expect(gatedReaders.wb_read_luker_env).toBeUndefined();
         expect(gatedReaders.wb_read_suggestions).toBeUndefined();
+        expect(typeof gatedReaders.wb_list_luker_docs).toBe('function');
+        expect(typeof gatedReaders.wb_read_luker_doc).toBe('function');
 
         // Even if someone passes a reader directly to runAsk while sources.content is false, runAsk refuses to invoke it.
         const chatSpy = jest.fn(async () => ({ messages: [{ text: 'Leaked!' }] }));
@@ -200,5 +212,81 @@ describe('workbench privacy and redaction', () => {
         const out = await wrapped.wb_read_chat({});
         expect(out.text).not.toContain('dXNlcjpwYXNz');
         expect(out.accessToken).toBe('***');
+    });
+
+    test('content and plugins source toggles own disjoint tools without cross-source leakage', async () => {
+        globalThis.Luker = {
+            getContext: () => ({
+                chatCompletionSettings: { chat_completion_source: 'openai' },
+                connectionProfiles: {
+                    list: () => [{
+                        name: 'SecretProfile',
+                        api: 'openai',
+                        model: 'gpt-secret-4o',
+                        'api-url': 'https://internal.secret.local/v1',
+                        'network-proxy': 'http://user:pass@proxy.secret.local:8080',
+                    }],
+                },
+                listExtensionNames: () => ['memory-graph', 'orchestrator', 'search-tools'],
+                skills: {
+                    list: async () => [
+                        { name: 'global-style', scope: { kind: 'global' }, description: 'Global writing guide' },
+                        { name: 'orch-flow', scope: { kind: 'orch-preset', presetId: 'p1' }, description: 'Orch preset skill' },
+                        { name: 'char-secret', scope: { kind: 'character', avatar: 'alice.png' }, description: 'Character private skill' },
+                        { name: 'preset-secret', scope: { kind: 'preset', presetName: 'MyRP' }, description: 'Preset private skill' },
+                    ],
+                },
+                extensionSettings: {
+                    workbench: { ai: { ask: { connection: 'SecretAskConn', preset: 'SecretAskPreset' } } },
+                    search_tools: { enabled: false, preRequestEnabled: true, provider: 'tavily' },
+                    disabledExtensions: [],
+                },
+            }),
+        };
+
+        // plugins=true, content=false -> wb_read_luker_env is present and reveals no connections/skills/askTarget
+        const pluginsOnlySources = { content: false, plugins: true, inspector: false, frontLogs: false, serverLogs: false };
+        const pluginsOnlyToolNames = askTools(pluginsOnlySources).map(t => t.function.name);
+        expect(pluginsOnlyToolNames).toContain('wb_read_luker_env');
+        expect(pluginsOnlyToolNames).not.toContain('wb_read_connections');
+        expect(pluginsOnlyToolNames).not.toContain('wb_read_skills');
+
+        const pluginsOnlyReaders = askReaders({ sources: pluginsOnlySources, redactText: true });
+        expect(typeof pluginsOnlyReaders.wb_read_luker_env).toBe('function');
+        expect(pluginsOnlyReaders.wb_read_connections).toBeUndefined();
+        expect(pluginsOnlyReaders.wb_read_skills).toBeUndefined();
+
+        const summary = await pluginsOnlyReaders.wb_read_luker_env({ part: 'summary' });
+        expect(summary.activeConnection).toBeUndefined();
+        expect(summary.connectionProfileCount).toBeUndefined();
+        expect(summary.workbenchAskTarget).toBeUndefined();
+        const summaryJson = JSON.stringify(summary);
+        expect(summaryJson).not.toContain('SecretProfile');
+        expect(summaryJson).not.toContain('SecretAskConn');
+        expect(summaryJson).not.toContain('SecretAskPreset');
+        expect(summaryJson).not.toContain('gpt-secret-4o');
+
+        // content=true, plugins=false -> wb_read_connections & wb_read_skills are present, wb_read_luker_env is absent
+        const contentOnlySources = { content: true, plugins: false, inspector: false, frontLogs: false, serverLogs: false };
+        const contentOnlyToolNames = askTools(contentOnlySources).map(t => t.function.name);
+        expect(contentOnlyToolNames).toContain('wb_read_connections');
+        expect(contentOnlyToolNames).toContain('wb_read_skills');
+        expect(contentOnlyToolNames).not.toContain('wb_read_luker_env');
+
+        const contentOnlyReaders = askReaders({ sources: contentOnlySources, redactText: true });
+        expect(typeof contentOnlyReaders.wb_read_connections).toBe('function');
+        expect(typeof contentOnlyReaders.wb_read_skills).toBe('function');
+        expect(contentOnlyReaders.wb_read_luker_env).toBeUndefined();
+
+        const conns = await contentOnlyReaders.wb_read_connections({});
+        expect(conns.profiles[0].name).toBe('SecretProfile');
+        expect(conns.workbenchAskTarget).toEqual({ apiPresetName: 'SecretAskConn', llmPresetName: 'SecretAskPreset' });
+        expect(JSON.stringify(conns)).not.toContain('internal.secret.local');
+        expect(JSON.stringify(conns)).not.toContain('proxy.secret.local');
+
+        const skills = await contentOnlyReaders.wb_read_skills({});
+        expect(skills.available).toBe(true);
+        expect(skills.total).toBe(4);
+        expect(skills.skills.map(s => s.name)).toEqual(['global-style', 'orch-flow', 'char-secret', 'preset-secret']);
     });
 });

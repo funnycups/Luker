@@ -6,10 +6,13 @@
 
 import { getFrontendLogsSnapshot } from '../frontend-log-manager.js';
 import { accountLocalStorage } from '../lens-shared/current-account.js';
+import { describeToolChoice, normalizeRequestId, normalizeWireTools } from '../request-inspector-tools.js';
+import { joinReasoningDetailsText } from '../util/reasoning-details.js';
 import { i18n, i18nFormat } from './i18n.js';
 import { askSystemPrompt } from './model/ask.js';
 import { buildBudget } from './model/budget.js';
 import { SourceError } from './model/errors.js';
+import { listLukerDocs, readLukerDoc } from '../iteration-library/tools/ctx-and-docs-discovery.js';
 import { attribute, describeRequest, finishOverview, redactReaders } from './model/requests.js';
 import { resolveAiRow } from './model/ai-source.js';
 import { createSessionStore } from './model/sessions.js';
@@ -171,6 +174,26 @@ function worldPart(ctx, card) {
     return { global, character: card?.books || [] };
 }
 
+function variablesPart(ctx) {
+    const count = Object.keys(ctx?.chatMetadata?.variables || {}).length;
+    const opFloors = (Array.isArray(ctx?.chat) ? ctx.chat : [])
+        .filter(m => Array.isArray(m?.extra?.var_ops) && m.extra.var_ops.length > 0)
+        .length;
+    return { count, opFloors };
+}
+
+function regexPart(ctx) {
+    const disabled = Array.isArray(ctx?.extensionSettings?.disabledExtensions)
+        && ctx.extensionSettings.disabledExtensions.includes('regex');
+    let enabledCount = null;
+    if (!disabled && typeof ctx?.regex?.getScripts === 'function') {
+        try {
+            enabledCount = (ctx.regex.getScripts({ allowedOnly: true }) || []).filter(s => s && !s.disabled).length;
+        } catch { enabledCount = null; }
+    }
+    return { disabled, enabledCount };
+}
+
 export function connectionName(ctx = getContext()) {
     try {
         const sel = typeof document !== 'undefined' ? document.getElementById('connection_profiles') : null;
@@ -203,7 +226,7 @@ async function collectProviderSnapshots(ctx, registry = defaultRegistry) {
 }
 
 /**
- * @returns {Promise<{ chat, providers, memory, orch, budget, preset, card, world, connection, at } | null>}
+ * @returns {Promise<{ chat, providers, memory, orch, budget, preset, card, world, variables, regex, connection, at } | null>}
  */
 export async function loadSnapshot(registry = defaultRegistry) {
     const ctx = getContext();
@@ -222,6 +245,8 @@ export async function loadSnapshot(registry = defaultRegistry) {
         preset: presetPart(ctx),
         card,
         world: worldPart(ctx, card),
+        variables: variablesPart(ctx),
+        regex: regexPart(ctx),
         connection: connectionName(ctx),
         at: Date.now(),
     };
@@ -355,6 +380,7 @@ export async function aiRequest(role, { messages, tools = [], signal = null, act
     if (!tools.length) throw new SourceError('bad-call', i18n('An AI call needs at least one tool'));
     const runnerFn = ctx.iterationLibrary?.runner?.requestToolCallsWithRetry
         || (await import('../iteration-library/runner.js')).requestToolCallsWithRetry;
+    const isAsk = role === 'ask';
     const result = await runnerFn(ctx, { toolCallRetryMax: 2 }, {
         taskMessages: messages,
         runtimeWorldInfo: null,
@@ -364,14 +390,21 @@ export async function aiRequest(role, { messages, tools = [], signal = null, act
         abortSignal: signal,
         includeAssistantText: true,
         allowNoToolCalls: true,
+        // 「问问」属于诊断与咨询任务，不附带角色卡槽位，同时保留用户配置的生成预设（如 plugin-only / 纯破限预设）。
+        ...(isAsk ? { includeCharacterCard: false } : {}),
         ...(activity !== undefined ? { activity } : {}),
     });
-    const calls = (Array.isArray(result?.toolCalls) ? result.toolCalls : []).map((c, i) => ({
-        id: String(c?.id || `wb_${Date.now().toString(36)}_${i}`),
-        name: String(c?.name || ''),
-        args: c?.args && typeof c.args === 'object' ? c.args : {},
-    }));
-    const reasoning = String(result?.reasoning || '').trim();
+    const calls = (Array.isArray(result?.toolCalls) ? result.toolCalls : []).map((c, i) => {
+        const sig = c?.raw?.signature || c?.raw?.thoughtSignature;
+        return {
+            id: String(c?.id || `wb_${Date.now().toString(36)}_${i}`),
+            name: String(c?.name || ''),
+            args: c?.args && typeof c.args === 'object' ? c.args : {},
+            ...(sig ? { signature: sig } : {}),
+            ...(c?.raw?.extra_content ? { extra_content: c.raw.extra_content } : {}),
+        };
+    });
+    const reasoning = typeof result?.reasoning === 'string' && result.reasoning.length > 0 ? result.reasoning : '';
     const reasoningBlocks = Array.isArray(result?.reasoningBlocks) && result.reasoningBlocks.length ? result.reasoningBlocks : undefined;
     const reasoningDetails = Array.isArray(result?.reasoningDetails) && result.reasoningDetails.length ? result.reasoningDetails : undefined;
     const reasoningMeta = {
@@ -412,10 +445,16 @@ async function inspectorList() {
 }
 
 export async function inspectorDetail(id) {
+    const safeId = normalizeRequestId(id);
+    if (!safeId) throw new SourceError('inspector', i18n('Invalid request ID'));
     const ctx = getContext();
-    const res = await fetch(`/api/request-inspector/${encodeURIComponent(id)}`, { headers: ctx?.getRequestHeaders?.() || {} });
+    const res = await fetch(`/api/request-inspector/${encodeURIComponent(safeId)}`, { headers: ctx?.getRequestHeaders?.() || {} });
     if (!res.ok) throw new SourceError('inspector', i18nFormat('This request is unreadable (HTTP ${0})', res.status));
-    return res.json();
+    const data = await res.json();
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        throw new SourceError('inspector', i18n('This request returned an invalid response'));
+    }
+    return data;
 }
 
 /** Request list, newest first, with a guessed source. */
@@ -482,7 +521,15 @@ export async function serverLogs({ limit = 60, search = '' } = {}) {
     }));
 }
 
-function chatMessages({ from, to, floors } = {}) {
+function isExplicitFiniteNumber(value) {
+    return value !== null
+        && value !== undefined
+        && value !== ''
+        && typeof value !== 'boolean'
+        && Number.isFinite(Number(value));
+}
+
+function chatMessages({ from, to, floors, search = '' } = {}) {
     const ctx = getContext();
     const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
     if (!chat.length) return { total: 0, messages: [] };
@@ -493,31 +540,78 @@ function chatMessages({ from, to, floors } = {}) {
     const numFloors = isAll ? null : Math.max(0, hasNumericFloor ? Number(configured) : 2);
     const maxSpan = isAll ? chat.length : (numFloors === 0 ? 1 : numFloors * 2 + 1);
 
+    const formatFloor = (i) => {
+        const m = chat[i];
+        if (!m) return null;
+        const swipesCount = Array.isArray(m.swipes) ? m.swipes.length : 0;
+        const varOpsCount = Array.isArray(m.extra?.var_ops) ? m.extra.var_ops.length : 0;
+        return {
+            floor: i,
+            who: m.is_user ? '用户' : m.is_system ? '系统' : (m.name || i18n('Character')),
+            text: String(m.mes || '').slice(0, 4000), // cap-ok: 单楼层文本上限，避免单条超长回复占满单次工具预算
+            model: m.extra?.model || '',
+            ...(swipesCount > 1 ? { swipes: swipesCount, swipeId: Number(m.swipe_id || 0) } : {}),
+            ...(varOpsCount > 0 ? { varOpsCount } : {}),
+            ...(m.extra?.reasoning ? { hasReasoning: true } : {}),
+        };
+    };
+
+    const needle = String(search || '').trim().toLowerCase();
+    if (needle) {
+        const hits = [];
+        for (let i = 0; i <= last; i++) {
+            const m = chat[i];
+            if (!m) continue;
+            const text = String(m.mes || '');
+            if (text.toLowerCase().includes(needle)) hits.push(i);
+        }
+        const cappedBySetting = !isAll && hits.length > maxSpan;
+        const picked = cappedBySetting ? hits.slice(-maxSpan) : hits;
+        return {
+            total: chat.length,
+            search: String(search).trim(),
+            totalMatches: hits.length,
+            matchedFloors: hits.slice(-30), // cap-ok: 最多返回最近 30 个命中楼层号索引，方便模型分段翻阅
+            maxSpan,
+            cappedBySetting,
+            ...(cappedBySetting ? { hint: `当前设置限制每次最多读取 ${maxSpan} 楼；可不带 search 指定 from/to 分段读取其余命中楼层，或在设置中调大「聊天原文最多带几楼」。` } : {}),
+            messages: picked.map(formatFloor).filter(Boolean),
+        };
+    }
+
     let start;
     let end;
-    if (Number.isFinite(Number(from)) || Number.isFinite(Number(to))) {
-        start = Number.isFinite(Number(from)) ? Math.max(0, Number(from)) : Math.max(0, Number(to) - maxSpan + 1);
-        end = Number.isFinite(Number(to)) ? Math.min(last, Number(to)) : Math.min(last, start + maxSpan - 1);
+    let cappedBySetting = false;
+    const hasFrom = isExplicitFiniteNumber(from);
+    const hasTo = isExplicitFiniteNumber(to);
+    if (hasFrom || hasTo) {
+        const fromNum = hasFrom ? Math.floor(Number(from)) : null;
+        const toNum = hasTo ? Math.floor(Number(to)) : null;
+        start = hasFrom ? Math.max(0, fromNum) : Math.max(0, toNum - maxSpan + 1);
+        end = hasTo ? Math.min(last, toNum) : Math.min(last, start + maxSpan - 1);
         if (!isAll && end - start + 1 > maxSpan) {
             end = Math.min(last, start + maxSpan - 1);
+            cappedBySetting = true;
         }
     } else {
         start = isAll ? 0 : Math.max(0, last - maxSpan + 1);
         end = last;
+        cappedBySetting = !isAll && chat.length > maxSpan;
     }
 
     const out = [];
     for (let i = start; i <= end && i <= last; i++) {
-        const m = chat[i];
-        if (!m) continue;
-        out.push({
-            floor: i,
-            who: m.is_user ? '用户' : m.is_system ? '系统' : (m.name || i18n('Character')),
-            text: String(m.mes || '').slice(0, 4000), // cap-ok: per-floor message bound so one long reply does not crowd out neighboring floors within MAX_TOOL_CHARS
-            model: m.extra?.model || '',
-        });
+        const row = formatFloor(i);
+        if (row) out.push(row);
     }
-    return { total: chat.length, messages: out };
+    return {
+        total: chat.length,
+        returnedRange: out.length ? [out[0].floor, out[out.length - 1].floor] : [],
+        maxSpan,
+        cappedBySetting,
+        ...(cappedBySetting ? { hint: `当前设置限制单次最多读取 ${maxSpan} 楼（已返回 ${start}–${end} 楼）；如需查更早内容可传 search 或分段传 from/to。` } : {}),
+        messages: out,
+    };
 }
 
 function characterFields({ fields } = {}) {
@@ -556,13 +650,19 @@ export async function boundBooks(ctx = getContext()) {
     return [...names].filter(Boolean);
 }
 
-async function worldInfo({ search = '' } = {}) {
+async function worldInfo({ search = '', book = '', only_enabled = false, offset = 0 } = {}) {
     const ctx = getContext();
     const books = await boundBooks(ctx);
-    const needle = String(search || '').toLowerCase();
+    const bookNeedle = String(book || '').trim().toLowerCase();
+    const targetBooks = bookNeedle ? books.filter(b => b.toLowerCase().includes(bookNeedle)) : books;
+    const needle = String(search || '').trim().toLowerCase();
+    const skip = Math.max(0, Math.floor(Number(offset) || 0));
+    const maxEntries = 60; // cap-ok: 单次最多返回 60 条世界书条目元数据/正文，配合 offset 支持分页
     const out = [];
     const errors = [];
-    outer: for (const name of books) {
+    let totalMatched = 0;
+    let truncated = false;
+    for (const name of targetBooks) {
         let data = null;
         try {
             data = await ctx.loadWorldInfo?.(name);
@@ -573,21 +673,388 @@ async function worldInfo({ search = '' } = {}) {
         }
         const entries = Object.values(data?.entries || {});
         for (const e of entries) {
+            const enabled = !e.disable;
+            if (only_enabled && !enabled) continue;
             const keys = [...(e.key || []), ...(e.keysecondary || [])].map(String);
             const hay = `${keys.join(' ')} ${e.comment || ''} ${e.content || ''}`.toLowerCase();
             if (needle && !hay.includes(needle)) continue;
+            totalMatched++;
+            if (totalMatched <= skip) continue;
+            if (out.length >= maxEntries) {
+                truncated = true;
+                continue;
+            }
             out.push({
                 book: name,
+                uid: e.uid,
                 title: e.comment || keys[0] || `#${e.uid}`,
                 keys,
-                enabled: !e.disable,
+                enabled,
                 constant: Boolean(e.constant),
+                position: e.position ?? null,
+                depth: e.depth ?? null,
+                order: e.order ?? null,
+                probability: e.useProbability ? (e.probability ?? 100) : 100,
                 content: needle ? String(e.content || '') : undefined,
             });
-            if (out.length >= 60) break outer; // cap-ok: bounds world-info entry list before JSON serialization and MAX_TOOL_CHARS clipping
         }
     }
-    return errors.length ? { books, entries: out, errors } : { books, entries: out };
+    return {
+        books,
+        totalMatched,
+        ...(skip ? { offset: skip } : {}),
+        ...(truncated ? { truncated: true } : {}),
+        entries: out,
+        ...(errors.length ? { errors } : {}),
+    };
+}
+
+/** 读取当前聊天的世界书激活链路追踪快照，用于诊断为何某条目触发或未触发。 */
+async function worldInfoTrace({ search = '', only_activated = false, limit = 40 } = {}) {
+    const ctx = getContext();
+    const snap = await ctx?.chatWorldInfo?.getActivationTrace?.();
+    if (!snap || !Array.isArray(snap.entries)) {
+        return { available: false, message: '当前环境未提供世界书激活追踪数据' };
+    }
+    if (!snap.entries.length) {
+        return { scopeKey: snap.scopeKey, total: 0, entries: [], message: '当前聊天尚未产生世界书扫描追踪记录（至少生成一次回复后才会记录）' };
+    }
+
+    const maxItems = Math.max(1, Math.min(80, Math.floor(Number(limit) || 40))); // cap-ok: 限制单次返回追踪条目数在上下文安全范围内
+    const needle = String(search || '').trim().toLowerCase();
+
+    // 尝试批量关联书内条目标题与关键词，便于模型直呼条目名而非仅看 uid。
+    const titleIndex = new Map();
+    const bookNames = [...new Set(snap.entries.map(e => String(e.world || '')).filter(Boolean))];
+    await Promise.all(bookNames.map(async (bookName) => {
+        try {
+            const data = await ctx.loadWorldInfo?.(bookName);
+            for (const entry of Object.values(data?.entries || {})) {
+                titleIndex.set(`${bookName}.${entry.uid}`, {
+                    title: entry.comment || (entry.key || [])[0] || `#${entry.uid}`,
+                    keys: [...(entry.key || []), ...(entry.keysecondary || [])].map(String),
+                });
+            }
+        } catch { /* 单本世界书读取失败不影响追踪摘要 */ }
+    }));
+
+    const rows = [];
+    for (const item of snap.entries) {
+        const realScan = Array.isArray(item.recentScans) && item.recentScans.length ? item.recentScans[0] : null;
+        const dryScan = Array.isArray(item.recentDryRunScans) && item.recentDryRunScans.length ? item.recentDryRunScans[0] : null;
+        const latest = realScan || dryScan;
+        const activated = Boolean(latest?.activated);
+        if (only_activated && !activated) continue;
+
+        const meta = titleIndex.get(`${item.world}.${item.uid}`) || {};
+        const activation = activated ? (latest?.lastActivation || null) : null;
+        const lastActivation = item.lastActivation || item.lastDryRunActivation || null;
+        const attempts = Array.isArray(latest?.attempts) ? latest.attempts.slice(0, 6) : []; // cap-ok: 保留最近 6 条尝试原因摘要
+        const hay = `${item.world} ${item.uid} ${meta.title || ''} ${(meta.keys || []).join(' ')} ${JSON.stringify(activation || '')} ${JSON.stringify(lastActivation || '')} ${JSON.stringify(attempts)}`.toLowerCase();
+        if (needle && !hay.includes(needle)) continue;
+
+        rows.push({
+            world: item.world,
+            uid: item.uid,
+            title: meta.title || `#${item.uid}`,
+            keys: meta.keys || [],
+            activated,
+            dryRunOnly: !realScan && Boolean(dryScan),
+            lastActivatedAt: item.lastActivatedAt ? new Date(item.lastActivatedAt).toLocaleTimeString('zh-CN', { hour12: false }) : null,
+            activation,
+            lastActivation,
+            attempts,
+        });
+    }
+
+    // 激活的条目优先排在前面，其次按世界书与 uid 排序。
+    rows.sort((a, b) => Number(b.activated) - Number(a.activated) || a.world.localeCompare(b.world) || a.uid - b.uid);
+    return {
+        scopeKey: snap.scopeKey,
+        totalTracked: snap.entries.length,
+        matched: rows.length,
+        activatedCount: rows.filter(r => r.activated).length,
+        entries: rows.slice(0, maxItems),
+    };
+}
+
+/** 读取当前聊天变量、可选全局变量与最近带变量操作的楼层日志（Variable Op Log）。 */
+function readVariables({ search = '', include_global = false, op_floors = 10 } = {}) {
+    const ctx = getContext();
+    if (!ctx) return { error: 'Luker 上下文不可用' };
+    const needle = String(search || '').trim().toLowerCase();
+    const maxOpFloors = Math.max(1, Math.min(30, Math.floor(Number(op_floors) || 10))); // cap-ok: 限制单次返回含变量操作的楼层数
+
+    const filterObject = (obj) => {
+        if (!obj || typeof obj !== 'object') return {};
+        const entries = Object.entries(obj);
+        if (!needle) return Object.fromEntries(entries.slice(0, 80)); // cap-ok: 避免超多变量一次撑爆上下文
+        return Object.fromEntries(entries.filter(([k, v]) => {
+            const text = `${k} ${typeof v === 'string' ? v : JSON.stringify(v ?? '')}`.toLowerCase();
+            return text.includes(needle);
+        }));
+    };
+
+    const rawLocal = ctx.chatMetadata?.variables && typeof ctx.chatMetadata.variables === 'object'
+        ? ctx.chatMetadata.variables
+        : {};
+    const localKeysTotal = Object.keys(rawLocal).length;
+    const localVariables = filterObject(rawLocal);
+
+    const out = {
+        localTotalKeys: localKeysTotal,
+        localVariables,
+    };
+
+    if (include_global) {
+        const rawGlobal = ctx.extensionSettings?.variables?.global && typeof ctx.extensionSettings.variables.global === 'object'
+            ? ctx.extensionSettings.variables.global
+            : {};
+        out.globalTotalKeys = Object.keys(rawGlobal).length;
+        out.globalVariables = filterObject(rawGlobal);
+    }
+
+    const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+    const floorOps = [];
+    for (let i = chat.length - 1; i >= 0 && floorOps.length < maxOpFloors; i--) {
+        const m = chat[i];
+        const ops = Array.isArray(m?.extra?.var_ops) ? m.extra.var_ops : [];
+        if (!ops.length) continue;
+        const filteredOps = needle
+            ? ops.filter(op => `${op?.key || ''} ${op?.path || ''} ${op?.op || ''} ${JSON.stringify(op?.value ?? '')}`.toLowerCase().includes(needle))
+            : ops;
+        if (needle && !filteredOps.length) continue;
+        floorOps.push({
+            floor: i,
+            who: m.is_user ? '用户' : (m.name || i18n('Character')),
+            ops: filteredOps.slice(0, 30), // cap-ok: 单楼层最多展示 30 条变量操作
+        });
+    }
+    out.recentFloorOps = floorOps;
+    return out;
+}
+
+const REGEX_PREVIEW_CHARS = 300; // cap-ok: 列表模式下的单条正则预览上限，传 id 可读取完整 findRegex 与 replaceString
+
+/** 读取 Luker 生效的正则脚本（全局/角色/预设/插件通道），排查吞字、乱码或状态栏异常。 */
+function readRegexScripts({ scope = 'all', search = '', only_enabled = true, id = '' } = {}) {
+    const ctx = getContext();
+    if (!ctx?.regex) return { available: false, message: '当前环境未暴露正则接口' };
+    const regexDisabled = Array.isArray(ctx.extensionSettings?.disabledExtensions)
+        && ctx.extensionSettings.disabledExtensions.includes('regex');
+    const types = ctx.regex.SCRIPT_TYPES || { GLOBAL: 0, SCOPED: 1, PRESET: 2 };
+    const targetId = String(id || '').trim();
+    const needle = String(search || '').trim().toLowerCase();
+    const scriptKey = (s) => `${String(s?.id || '')}|${String(s?.scriptName || '')}`;
+
+    const buckets = [];
+    const pushList = (bucketScope, list, allowedKeys = null) => {
+        for (const s of Array.isArray(list) ? list : []) {
+            if (!s || typeof s !== 'object') continue;
+            if (targetId) {
+                if (String(s.id || '') !== targetId) continue;
+            } else {
+                if (only_enabled && s.disabled) continue;
+                const hay = `${s.scriptName || ''} ${s.findRegex || ''} ${s.replaceString || ''} ${s.__runtime_owner || ''}`.toLowerCase();
+                if (needle && !hay.includes(needle)) continue;
+            }
+            const lanes = typeof ctx.regex.getPluginLanes === 'function'
+                ? ctx.regex.getPluginLanes(s)
+                : (Array.isArray(s.pluginLanes) ? s.pluginLanes : (s.pluginOnly ? ['request', 'reply'] : []));
+            const findRaw = String(s.findRegex || '');
+            const replaceRaw = String(s.replaceString || '');
+            const previewTruncated = !targetId && (findRaw.length > REGEX_PREVIEW_CHARS || replaceRaw.length > REGEX_PREVIEW_CHARS);
+            buckets.push({
+                scope: bucketScope,
+                id: String(s.id || ''),
+                name: String(s.scriptName || s.id || '未命名正则'),
+                enabled: !s.disabled,
+                ...(bucketScope === 'character' || bucketScope === 'preset' ? { allowed: Boolean(allowedKeys?.has(scriptKey(s))) } : {}),
+                ...(bucketScope === 'plugin' ? { owner: String(s.__runtime_owner || '') } : {}),
+                ...(targetId
+                    ? { findRegex: findRaw, replaceString: replaceRaw }
+                    : {
+                        findRegex: findRaw.slice(0, REGEX_PREVIEW_CHARS),
+                        replacePreview: replaceRaw.slice(0, REGEX_PREVIEW_CHARS),
+                        ...(previewTruncated ? { truncated: true } : {}),
+                    }),
+                placement: Array.isArray(s.placement) ? s.placement : [],
+                markdownOnly: Boolean(s.markdownOnly),
+                promptOnly: Boolean(s.promptOnly),
+                minDepth: s.minDepth ?? null,
+                maxDepth: s.maxDepth ?? null,
+                ...(Array.isArray(lanes) && lanes.length ? { pluginLanes: lanes } : {}),
+            });
+        }
+    };
+
+    try {
+        if (scope === 'all' || scope === 'global') pushList('global', ctx.regex.getScriptsByType?.(types.GLOBAL, { allowedOnly: false }));
+        if (scope === 'all' || scope === 'character') {
+            const scopedAll = ctx.regex.getScriptsByType?.(types.SCOPED, { allowedOnly: false }) || [];
+            const scopedAllowed = ctx.regex.getScriptsByType?.(types.SCOPED, { allowedOnly: true }) || [];
+            pushList('character', scopedAll, new Set(scopedAllowed.map(scriptKey)));
+        }
+        if (scope === 'all' || scope === 'preset') {
+            const presetAll = ctx.regex.getScriptsByType?.(types.PRESET, { allowedOnly: false }) || [];
+            const presetAllowed = ctx.regex.getScriptsByType?.(types.PRESET, { allowedOnly: true }) || [];
+            pushList('preset', presetAll, new Set(presetAllowed.map(scriptKey)));
+        }
+        if (scope === 'all' || scope === 'plugin') {
+            const allScripts = ctx.regex.getScripts?.({ allowedOnly: false }) || [];
+            const runtimeOnly = allScripts.filter(s => Boolean(s?.__runtime_owner));
+            pushList('plugin', runtimeOnly);
+        }
+    } catch (err) {
+        return { regexExtensionEnabled: !regexDisabled, error: String(err?.message || err), scripts: buckets };
+    }
+
+    return {
+        regexExtensionEnabled: !regexDisabled,
+        totalMatched: buckets.length,
+        scripts: buckets.slice(0, 80), // cap-ok: 限制单次返回正则脚本条数
+    };
+}
+
+function parseProfileBool(value) {
+    if (typeof value === 'boolean') return value;
+    const norm = String(value ?? '').trim().toLowerCase();
+    return norm === 'true' || norm === '1' || norm === 'yes' || norm === 'on';
+}
+
+/** 读取脱敏后的 API 连接配置列表、当前活动连接与工作台问问目标。 */
+function readConnections(registry = defaultRegistry) {
+    const ctx = getContext();
+    if (!ctx) return { error: 'Luker 上下文不可用' };
+    const list = ctx.connectionProfiles?.list?.() || [];
+    const profiles = list.map(p => ({
+        name: String(p?.name || ''),
+        api: String(p?.api || p?.mode || ''),
+        model: String(p?.model || ''),
+        proxy: String(p?.proxy || ''),
+        plainTextFunctionCalling: parseProfileBool(p?.['function-calling-plain-text']),
+        rpmLimit: p?.['rpm-limit'] ?? null,
+        requestTimeout: p?.['request-timeout'] ?? null,
+        maxRetries: p?.['max-request-retries'] ?? null,
+        hasCustomUrl: Boolean(String(p?.['api-url'] || '').trim()),
+        hasNetworkProxy: Boolean(String(p?.['network-proxy'] || '').trim()),
+    }));
+    return {
+        activeConnection: connectionName(ctx),
+        mainSource: String(ctx.chatCompletionSettings?.chat_completion_source || ''),
+        workbenchAskTarget: aiTarget('ask', readSettings(ctx), registry),
+        profiles,
+    };
+}
+
+/** 读取跨作用域（全局/预设/编排方案/角色卡）的 Skills 技能清单。 */
+async function readSkills() {
+    const ctx = getContext();
+    if (!ctx) return { error: 'Luker 上下文不可用' };
+    if (typeof ctx.skills?.list !== 'function') return { available: false };
+    try {
+        const items = await ctx.skills.list({ scope: 'all' });
+        const list = Array.isArray(items) ? items : [];
+        return {
+            available: true,
+            total: list.length,
+            skills: list.slice(0, 60).map(s => ({ // cap-ok: 限制技能清单返回条数
+                name: String(s?.name || ''),
+                scope: s?.scope || null,
+                description: String(s?.description || '').slice(0, 160), // cap-ok: 技能简述上限
+            })),
+        };
+    } catch (err) {
+        return { available: false, error: String(err?.message || err) };
+    }
+}
+
+/** 读取脱敏后的 Luker 运行环境与扩展状态（扩展清单、Hook Order、搜索工具、同步）。 */
+async function readLukerEnv({ part = 'summary' } = {}, registry = defaultRegistry) {
+    const ctx = getContext();
+    if (!ctx) return { error: 'Luker 上下文不可用' };
+
+    const safeExtensions = () => {
+        const installed = ctx.listExtensionNames?.() || [];
+        const disabled = Array.isArray(ctx.extensionSettings?.disabledExtensions)
+            ? ctx.extensionSettings.disabledExtensions.map(String)
+            : [];
+        const disabledSet = new Set(disabled);
+        const hookOrder = ctx.extensionSettings?.hook_order?.orderByEvent || null;
+        return {
+            installedCount: installed.length,
+            enabled: installed.filter(n => !disabledSet.has(n)),
+            disabled,
+            ...(hookOrder && Object.keys(hookOrder).length ? { hookOrder } : {}),
+        };
+    };
+
+    const safeSearchTools = () => {
+        const st = ctx.extensionSettings?.search_tools;
+        if (!st || typeof st !== 'object') return { installed: false };
+        return {
+            installed: true,
+            enabled: Boolean(st.enabled),
+            preRequestEnabled: Boolean(st.preRequestEnabled),
+            provider: String(st.provider || ''),
+            lorebookPosition: st.lorebookPosition ?? null,
+            lorebookDepth: st.lorebookDepth ?? null,
+        };
+    };
+
+    const safeSync = async () => {
+        try {
+            const res = await fetch('/api/sync/v1/status', { headers: ctx.getRequestHeaders?.() || {} });
+            if (!res.ok) return { available: false, httpStatus: res.status };
+            const data = await res.json();
+            const backends = Object.entries(data?.backends || {}).map(([id, b]) => ({
+                id,
+                kind: b?.kind || b?.type || '',
+                label: String(b?.label || ''),
+                running: Boolean(b?.running),
+                lastSyncAt: b?.lastSync?.at || b?.lastSync?.finishedAt || null,
+                lastError: b?.lastSync?.error || '',
+                pendingError: typeof b?.pendingError === 'string'
+                    ? b.pendingError
+                    : String(b?.pendingError?.message || b?.pendingError?.code || ''),
+                stalledCount: Array.isArray(b?.lastSync?.stalled) ? b.lastSync.stalled.length : 0,
+            }));
+            const errors = Array.isArray(data?.errors)
+                ? data.errors
+                : (data?.errors && typeof data.errors === 'object'
+                    ? Object.entries(data.errors).map(([backendId, err]) => ({
+                        backendId,
+                        ...(err && typeof err === 'object' ? err : { message: String(err) }),
+                    }))
+                    : []);
+            return {
+                available: true,
+                backendCount: backends.length,
+                backends,
+                pendingConflicts: Array.isArray(data?.conflicts) ? data.conflicts.length : 0,
+                pendingNotices: Array.isArray(data?.notices) ? data.notices.length : 0,
+                errors,
+            };
+        } catch (err) {
+            return { available: false, error: String(err?.message || err) };
+        }
+    };
+
+    if (part === 'extensions') return safeExtensions();
+    if (part === 'search_tools') return safeSearchTools();
+    if (part === 'sync') return safeSync();
+
+    const ext = safeExtensions();
+    const st = safeSearchTools();
+    return {
+        accountsEnabled: Boolean(ctx.accountsEnabled),
+        isMobile: typeof ctx.isMobile === 'function' ? Boolean(ctx.isMobile()) : false,
+        locale: typeof ctx.getCurrentLocale === 'function' ? ctx.getCurrentLocale() : '',
+        enabledExtensionsCount: ext.enabled.length,
+        disabledExtensionsCount: ext.disabled.length,
+        searchTools: st,
+        registeredAskProviders: registry.getAskProviders().map(p => ({ id: p.id, label: p.label })),
+    };
 }
 
 function presetDetail({ entry = '' } = {}) {
@@ -598,17 +1065,67 @@ function presetDetail({ entry = '' } = {}) {
     const byId = new Map((body.prompts || []).map(p => [p.identifier, p]));
     const items = (order?.order || []).map(o => ({ ...byId.get(o.identifier), enabled: o.enabled })).filter(p => p.identifier);
     if (entry) {
-        const hit = items.find(p => p.name === entry || p.identifier === entry);
-        return hit ? { name: hit.name, enabled: hit.enabled, role: hit.role, content: String(hit.content || '') } : { error: `没有叫「${entry}」的条目` };
+        const needle = String(entry).trim();
+        const needleLower = needle.toLowerCase();
+        let hit = items.find(p => p.name === needle || p.identifier === needle);
+        if (!hit) {
+            hit = items.find(p => String(p.name || '').toLowerCase() === needleLower || String(p.identifier || '').toLowerCase() === needleLower);
+        }
+        if (!hit) {
+            const fuzzy = items.filter(p => String(p.name || '').toLowerCase().includes(needleLower) || String(p.identifier || '').toLowerCase().includes(needleLower));
+            if (fuzzy.length === 1) {
+                hit = fuzzy[0];
+            } else if (fuzzy.length > 1) {
+                return {
+                    error: `「${entry}」匹配到多个条目，请指定更精确的名称`,
+                    candidates: fuzzy.slice(0, 15).map(p => ({ name: p.name || p.identifier, identifier: p.identifier, enabled: p.enabled })),
+                };
+            }
+        }
+        return hit
+            ? { name: hit.name, identifier: hit.identifier, enabled: hit.enabled, role: hit.role, injection_position: hit.injection_position ?? null, injection_depth: hit.injection_depth ?? null, content: String(hit.content || '') }
+            : { error: `没有叫「${entry}」的条目`, available: items.slice(0, 30).map(p => p.name || p.identifier) };
+    }
+    const pl = body.extensions?.preset_lorebook;
+    let presetLorebook = null;
+    if (pl && typeof pl === 'object' && (pl.name || pl.data)) {
+        const plName = String(pl.name || '');
+        let globalSel = [];
+        try { globalSel = [...(ctx?.chatWorldInfo?.globalSelection || [])].map(String); } catch { globalSel = []; }
+        presetLorebook = {
+            name: plName,
+            entryCount: pl.data?.entries && typeof pl.data.entries === 'object' ? Object.keys(pl.data.entries).length : 0,
+            activeInGlobal: Boolean(plName && globalSel.includes(plName)),
+        };
     }
     return {
         name: live?.ref?.name || '',
-        settings: { temperature: body.temperature, max_context: body.openai_max_context, max_tokens: body.openai_max_tokens, stream: body.stream_openai },
+        origin: live?.ref?.origin?.kind || 'global',
+        settings: {
+            temperature: body.temperature ?? body.temp_openai,
+            top_p: body.top_p ?? body.top_p_openai,
+            top_k: body.top_k ?? body.top_k_openai,
+            min_p: body.min_p,
+            frequency_penalty: body.frequency_penalty ?? body.freq_pen_openai,
+            presence_penalty: body.presence_penalty ?? body.pres_pen_openai,
+            repetition_penalty: body.repetition_penalty,
+            max_context: body.openai_max_context,
+            max_tokens: body.openai_max_tokens,
+            stream: body.stream_openai,
+            show_thoughts: body.show_thoughts,
+            reasoning_effort: body.reasoning_effort,
+            function_calling: body.function_calling,
+            enable_web_search: body.enable_web_search,
+            squash_system_messages: body.squash_system_messages,
+            has_assistant_prefill: Boolean(String(body.assistant_prefill || '').trim()),
+        },
+        ...(presetLorebook ? { presetLorebook } : {}),
         entries: items.map(p => ({
             name: p.name || p.identifier,
+            identifier: p.identifier,
             enabled: p.enabled,
             marker: Boolean(p.marker),
-            preview: p.marker ? '（系统占位：角色卡 / 世界书 / 聊天等）' : String(p.content || '').slice(0, 120), // cap-ok: short entry preview when listing all preset entries; full entry is read via entry param
+            preview: p.marker ? '（系统占位：角色卡 / 世界书 / 聊天等）' : String(p.content || '').slice(0, 120), // cap-ok: 列表模式下的短预览，完整内容通过 entry 参数读取
         })),
     };
 }
@@ -623,6 +1140,93 @@ export function askToolsForProviders(registry = defaultRegistry) {
     return tools;
 }
 
+/** 将消息 content 转为诊断可读文本，将多模态图片块替换为 [image] 避免 base64 占满预算。 */
+function formatInspectorContent(content) {
+    if (typeof content === 'string') return content;
+    if (content == null) return '';
+    if (Array.isArray(content)) {
+        const parts = [];
+        for (const part of content) {
+            if (typeof part === 'string') {
+                parts.push(part);
+                continue;
+            }
+            if (!part || typeof part !== 'object') continue;
+            if (part.type === 'text' || typeof part.text === 'string') {
+                parts.push(String(part.text ?? ''));
+                continue;
+            }
+            if (
+                part.type === 'image_url'
+                || part.type === 'image'
+                || part.type === 'input_image'
+                || part.inlineData
+                || part.inline_data
+                || part.fileData
+                || part.file_data
+            ) {
+                parts.push('[image]');
+                continue;
+            }
+            parts.push(JSON.stringify(part));
+        }
+        return parts.join('\n');
+    }
+    return JSON.stringify(content);
+}
+
+const INSPECTOR_MSG_PREVIEW_CHARS = 3000; // cap-ok: 列表或末尾模式单条消息预览上限，传 message_index 可读取全文
+
+/** 将单条请求消息格式化为适合模型诊断的文本片段。 */
+function formatInspectorMessage(m, index, maxChars = INSPECTOR_MSG_PREVIEW_CHARS) {
+    const raw = formatInspectorContent(m?.content);
+    const truncated = Number.isFinite(maxChars) && raw.length > maxChars;
+    return {
+        index,
+        role: m?.role || '',
+        ...(m?.name ? { name: String(m.name) } : {}),
+        ...(m?.tool_call_id ? { toolCallId: String(m.tool_call_id) } : {}),
+        chars: raw.length,
+        content: truncated ? `${raw.slice(0, maxChars)}…` : raw,
+        ...(truncated ? { truncated: true } : {}),
+        ...(Array.isArray(m?.tool_calls) && m.tool_calls.length
+            ? { toolCalls: m.tool_calls.map(tc => tc?.function?.name || tc?.name || '') }
+            : {}),
+    };
+}
+
+/** 从请求检查器记录的 responseParts 中提取可读明文思考内容（跳过加密块与签名）。 */
+function extractInspectorReasoningText(detail) {
+    const parts = Array.isArray(detail?.responseParts) ? detail.responseParts : [];
+    const chunks = [];
+    for (const p of parts) {
+        if (p?.type !== 'reasoning') continue;
+        if ((p.kind === 'text' || p.kind === 'thinking') && typeof p.text === 'string' && p.text) {
+            chunks.push(p.text);
+        } else if (p.kind === 'details' && Array.isArray(p.details)) {
+            const text = joinReasoningDetailsText(p.details);
+            if (text) chunks.push(text);
+        }
+    }
+    return chunks.join('\n').trim();
+}
+
+/** 从请求检查器记录的 responseParts 中提取模型发出的工具调用摘要。 */
+function extractInspectorReplyToolCalls(detail) {
+    const parts = Array.isArray(detail?.responseParts) ? detail.responseParts : [];
+    const calls = [];
+    for (const p of parts) {
+        if (p?.type !== 'tool_call') continue;
+        const rawArgs = p.args == null ? '' : (typeof p.args === 'string' ? p.args : JSON.stringify(p.args));
+        calls.push({
+            ...(p.id ? { id: String(p.id) } : {}),
+            name: String(p.name || ''),
+            argsPreview: rawArgs.slice(0, 600), // cap-ok: 单条回复工具调用参数预览上限
+        });
+    }
+    return calls.slice(0, 30); // cap-ok: 单次回复最多展示 30 条工具调用摘要
+}
+
 /** Reader functions keyed by tool name (see model/ask.js), gated by `sources`. */
 export function askReaders({ redactText = true, suggestions = () => [], sources = null, registry = defaultRegistry } = {}) {
     const on = (key) => !sources || sources[key] !== false;
@@ -634,16 +1238,112 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
             const pick = list.filter(e => !only_errors || e.status === 'error' || e.error).slice(0, Math.max(1, Math.min(60, limit))); // cap-ok: matches Ask tool schema limit to keep response within LLM context window
             return pick.map(e => describeRequest(e, e.attr));
         };
-        readers.wb_read_request = async ({ id, part = 'both' } = {}) => {
+        readers.wb_read_request = async ({
+            id,
+            part = 'both',
+            tail_messages = 0,
+            message_index = null,
+            include_reasoning = false,
+            include_tools = false,
+        } = {}) => {
             const d = await inspectorDetail(id);
-            const msgs = (d.fullMessages || []).map(m => ({
-                role: m.role,
-                // cap-ok: per-message bound in request inspector dump so later messages and reply remain visible within MAX_TOOL_CHARS
-                content: typeof m.content === 'string' ? m.content.slice(0, 3000) : JSON.stringify(m.content).slice(0, 3000),
-            }));
-            const out = { id: d.id, model: d.model, status: d.status, httpStatus: d.httpStatus, error: d.error, durationMs: d.durationMs, usage: d.usage, finishReason: d.finishReason };
-            if (part !== 'reply') out.messages = msgs;
-            if (part !== 'messages') out.reply = String(d.responseText || '').slice(0, 6000); // cap-ok: bounds responseText alongside messages within MAX_TOOL_CHARS
+            const reqType = d.type || 'chat';
+            const out = {
+                id: d.id,
+                type: reqType,
+                source: d.source || '',
+                model: d.model,
+                status: d.status,
+                httpStatus: d.httpStatus,
+                error: d.error,
+                abortKind: d.abortKind || '',
+                durationMs: d.durationMs,
+            };
+            if (reqType === 'image') {
+                if (d.prompt) out.prompt = String(d.prompt).slice(0, 4000); // cap-ok: 生图提示词预览上限
+                if (d.negativePrompt) out.negativePrompt = String(d.negativePrompt).slice(0, 2000); // cap-ok: 负向提示词预览上限
+                if (d.width != null) out.width = d.width;
+                if (d.height != null) out.height = d.height;
+                if (d.steps != null) out.steps = d.steps;
+                if (d.sampler) out.sampler = d.sampler;
+                return out;
+            }
+            if (reqType === 'embedding') {
+                if (d.operation) out.operation = d.operation;
+                if (d.routeKind) out.routeKind = d.routeKind;
+                if (d.collectionId != null) out.collectionId = d.collectionId;
+                if (Array.isArray(d.collectionIds) && d.collectionIds.length) out.collectionIds = d.collectionIds;
+                if (d.query) out.query = String(d.query).slice(0, 1000); // cap-ok: 重排查询词上限
+                if (d.inputCount != null) out.inputCount = d.inputCount;
+                if (d.inputCharTotal != null) out.inputCharTotal = d.inputCharTotal;
+                if (Array.isArray(d.inputTexts) && d.inputTexts.length) {
+                    out.inputTexts = d.inputTexts.slice(0, 12).map((item, idx) => ({ // cap-ok: 最多展示前 12 条向量输入文本预览
+                        index: item?.index ?? idx,
+                        text: String(typeof item === 'string' ? item : (item?.text ?? '')).slice(0, 400), // cap-ok: 单条输入文本预览上限
+                    }));
+                }
+                if (d.topK != null) out.topK = d.topK;
+                if (d.threshold != null) out.threshold = d.threshold;
+                if (d.resultCount != null) out.resultCount = d.resultCount;
+                if (d.vectorDim != null) out.vectorDim = d.vectorDim;
+                if (Array.isArray(d.hits) && d.hits.length) {
+                    out.hits = d.hits.slice(0, 20).map(hit => ({ // cap-ok: 最多展示前 20 条向量命中摘要
+                        ...(hit?.collectionId != null ? { collectionId: hit.collectionId } : {}),
+                        ...(hit?.index != null ? { index: hit.index } : {}),
+                        ...(hit?.hash != null ? { hash: hit.hash } : {}),
+                        ...(hit?.score != null ? { score: hit.score } : {}),
+                        text: String(hit?.text ?? '').slice(0, 400), // cap-ok: 单条命中文本预览上限
+                    }));
+                }
+                return out;
+            }
+            const allMsgs = Array.isArray(d.fullMessages) ? d.fullMessages : [];
+            out.promptCharLength = d.promptCharLength ?? null;
+            out.totalMessages = allMsgs.length;
+            out.usage = d.usage;
+            out.finishReason = d.finishReason;
+            if (part !== 'reply') {
+                if (isExplicitFiniteNumber(message_index)) {
+                    const idx = Math.floor(Number(message_index));
+                    if (idx >= 0 && idx < allMsgs.length) {
+                        out.messages = [formatInspectorMessage(allMsgs[idx], idx, Infinity)];
+                    } else {
+                        out.messages = [];
+                        out.messageError = `消息索引 ${idx} 越界（共 ${allMsgs.length} 条，范围 0–${Math.max(0, allMsgs.length - 1)}）`;
+                    }
+                } else if (Number(tail_messages) > 0) {
+                    const tailCount = Math.max(1, Math.min(20, Math.floor(Number(tail_messages)))); // cap-ok: 末尾消息窗口上限 20 条
+                    const startIdx = Math.max(0, allMsgs.length - tailCount);
+                    out.omittedHeadMessages = startIdx;
+                    out.messages = allMsgs.slice(startIdx).map((m, i) => formatInspectorMessage(m, startIdx + i, INSPECTOR_MSG_PREVIEW_CHARS));
+                } else {
+                    out.messages = allMsgs.map((m, idx) => formatInspectorMessage(m, idx, INSPECTOR_MSG_PREVIEW_CHARS));
+                }
+            }
+            if (part !== 'messages') {
+                out.reply = String(d.responseText || '').slice(0, 6000); // cap-ok: 回复正文与消息共存时的上限
+                const replyToolCalls = extractInspectorReplyToolCalls(d);
+                if (replyToolCalls.length) {
+                    out.replyToolCalls = replyToolCalls;
+                }
+            }
+            if (include_reasoning) {
+                const reasoning = extractInspectorReasoningText(d);
+                if (reasoning) {
+                    out.reasoning = reasoning.slice(0, 4000); // cap-ok: 思考过程摘要上限
+                }
+            }
+            if (include_tools) {
+                const { tools: wireTools, toolChoice } = normalizeWireTools(d.wireRequest);
+                if (wireTools.length) {
+                    out.tools = wireTools.slice(0, 40).map(t => ({ // cap-ok: 最多展示 40 个工具摘要
+                        name: t.name,
+                        description: String(t.description || '').slice(0, 120), // cap-ok: 单条工具描述预览上限
+                    }));
+                }
+                const choiceLabel = describeToolChoice(toolChoice);
+                if (choiceLabel) out.toolChoice = choiceLabel;
+            }
             return out;
         };
     }
@@ -660,14 +1360,20 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
         readers.wb_read_chat = async (args) => chatMessages(args);
         readers.wb_read_character = async (args) => characterFields(args);
         readers.wb_read_world_info = async (args) => worldInfo(args);
+        readers.wb_read_world_info_trace = async (args) => worldInfoTrace(args);
         readers.wb_read_preset = async (args) => presetDetail(args);
         readers.wb_read_last_prompt = async () => {
             const snap = await loadSnapshot(registry);
             return snap?.budget || { error: '还没有提示词数据（要先生成一次回复，且是对话补全接口）' };
         };
+        readers.wb_read_variables = async (args) => readVariables(args);
+        readers.wb_read_regex = async (args) => readRegexScripts(args);
+        readers.wb_read_connections = async () => readConnections(registry);
+        readers.wb_read_skills = async () => readSkills();
     }
 
     if (on('plugins')) {
+        readers.wb_read_luker_env = async (args) => readLukerEnv(args, registry);
         readers.wb_read_suggestions = async () => suggestions().map(s => ({ text: s.text, why: s.why }));
         const ctx = getContext();
         for (const p of registry.getAskProviders()) {
@@ -681,7 +1387,14 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
         }
     }
 
-    return redactReaders(readers, redactText);
+    const redacted = redactReaders(readers, redactText);
+    // Built-in product docs come from Luker's docs/ tree and contain no user secrets;
+    // keep them available regardless of local-data source toggles and do not mangle doc URLs.
+    redacted.wb_list_luker_docs = async ({ filter = '', include_translations = false } = {}) =>
+        listLukerDocs({ filter, includeTranslations: Boolean(include_translations) });
+    redacted.wb_read_luker_doc = async ({ path = '' } = {}) =>
+        readLukerDoc({ path });
+    return redacted;
 }
 
 /** Compact overview sent with every question, filtered by `sources` & redaction. */
@@ -711,19 +1424,31 @@ export async function askOverview({
         const chat = chatInfo(ctx);
         const card = cardPart(ctx, chat);
         const preset = presetPart(ctx);
+        const books = await boundBooks(ctx);
         let memoryTokens = 0;
         if (effectiveSources.plugins) {
             const { memoryTokens: mTok } = await collectProviderSnapshots(ctx, registry);
             memoryTokens = mTok;
         }
         const budget = chat.chatId && chat.floors > 0 ? await budgetPart(memoryTokens) : null;
-        raw.聊天 = chat.label ? `${chat.label}，${chat.floors} 楼` : '没有打开聊天';
+        raw.聊天 = chat.label ? `${chat.label}${chat.group ? '（群聊）' : ''}，${chat.floors} 楼` : '没有打开聊天';
         raw.角色卡 = card?.name || i18n('None selected');
+        raw.世界书 = books.length ? books : '无绑定';
         raw.预设 = preset?.name || '';
         raw.连接 = connectionName(ctx);
         raw.提示词 = budget
             ? Object.fromEntries([['合计', budget.total], ['上限', budget.max], ...budget.parts.map(p => [p.label, p.tokens])])
             : '没有数据';
+        const vars = variablesPart(ctx);
+        if (vars.count > 0 || vars.opFloors > 0) {
+            raw.变量 = { 聊天变量数: vars.count, 含操作日志楼层数: vars.opFloors };
+        }
+        const regexInfo = regexPart(ctx);
+        if (regexInfo.disabled) {
+            raw.正则 = '扩展已关闭';
+        } else if (regexInfo.enabledCount !== null) {
+            raw.正则 = `启用 ${regexInfo.enabledCount} 条`;
+        }
     }
 
     if (effectiveSources.plugins && ctx) {
@@ -737,6 +1462,16 @@ export async function askOverview({
             } catch {
                 raw[key] = i18n('Unreadable');
             }
+        }
+        const installedExt = ctx.listExtensionNames?.();
+        const searchToolsCfg = ctx.extensionSettings?.search_tools;
+        const searchOn = Boolean(searchToolsCfg?.enabled || searchToolsCfg?.preRequestEnabled);
+        if (Array.isArray(installedExt) && installedExt.length) {
+            const disabled = new Set(Array.isArray(ctx.extensionSettings?.disabledExtensions) ? ctx.extensionSettings.disabledExtensions : []);
+            raw.环境 = {
+                启用扩展数: installedExt.filter(n => !disabled.has(n)).length,
+                联网搜索: searchOn ? '开' : '关',
+            };
         }
     }
 
@@ -758,6 +1493,16 @@ export async function askOverview({
         pluginKeys,
         redactText,
     });
+}
+
+/** 打开请求检查器弹窗并定位到指定请求 ID。 */
+export async function openRequestInspectorById(requestId = '') {
+    const ctx = getContext();
+    if (typeof ctx?.openRequestInspector === 'function') {
+        return ctx.openRequestInspector(requestId);
+    }
+    const mod = await import('../request-inspector.js');
+    return mod.openRequestInspector?.(requestId);
 }
 
 /** Latest non-user, non-system reply in the active chat. */
@@ -783,6 +1528,7 @@ export function createLukerSource(registry = defaultRegistry) {
         createSessions: () => createSessions(),
         runRules: (snap, opts) => runRules(snap, opts),
         listRequests: (opts) => listRequests(opts),
+        openRequestInspector: (id) => openRequestInspectorById(id),
         frontendLogCount: () => frontendLogCount(),
         debugLoggingOn: () => debugLoggingOn(),
         enableDebugLogging: () => enableDebugLogging(),

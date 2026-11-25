@@ -49,6 +49,14 @@ const SHIPPED_CHANGELOG_FILES = [
     'docs/zh-CN/changelog.md',
     'docs/zh-TW/changelog.md',
 ];
+const EXCLUDED_DOC_DIRS = new Set(['.vitepress', 'node_modules', 'dist', 'cache', 'superpowers']);
+
+function isShippableDocMarkdown(relativePath) {
+    const normalized = String(relativePath || '').replaceAll(path.sep, '/');
+    if (!normalized.startsWith('docs/') || !normalized.toLowerCase().endsWith('.md')) return false;
+    const segments = normalized.split('/').slice(1);
+    return !segments.some(seg => EXCLUDED_DOC_DIRS.has(seg) || seg.startsWith('.'));
+}
 
 const BUNDLE_FILES = ['lib.core.bundle.js', 'lib.optional.bundle.js', 'codemirror.bundle.js'];
 
@@ -103,6 +111,16 @@ export function copyBackendTree({ repoRoot = REPO_ROOT, staging = STAGING_BACKEN
         entry,
         files: listShippableFiles(repoRoot, entry),
     }));
+    const docMarkdownFiles = listShippableFiles(repoRoot, 'docs').filter(isShippableDocMarkdown);
+    if (docMarkdownFiles.length === 0) {
+        throw new Error(`git reports no shippable markdown files under docs/ in ${repoRoot}`);
+    }
+    for (const relative of SHIPPED_CHANGELOG_FILES) {
+        const source = path.join(repoRoot, relative);
+        if (!fs.existsSync(source)) {
+            throw new Error(`shipped changelog missing from the checkout: ${relative}`);
+        }
+    }
 
     fs.rmSync(staging, { recursive: true, force: true });
     fs.mkdirSync(staging, { recursive: true });
@@ -127,11 +145,9 @@ export function copyBackendTree({ repoRoot = REPO_ROOT, staging = STAGING_BACKEN
         }
     }
 
-    for (const relative of SHIPPED_CHANGELOG_FILES) {
+    const shippedDocs = new Set([...docMarkdownFiles, ...SHIPPED_CHANGELOG_FILES]);
+    for (const relative of shippedDocs) {
         const source = path.join(repoRoot, relative);
-        if (!fs.existsSync(source)) {
-            throw new Error(`shipped changelog missing from the checkout: ${relative}`);
-        }
         const destination = path.join(staging, relative);
         fs.mkdirSync(path.dirname(destination), { recursive: true });
         fs.copyFileSync(source, destination);

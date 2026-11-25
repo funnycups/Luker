@@ -2715,6 +2715,10 @@ export function getContext() {
         updateChatState,
         deleteChatState,
         createFloorState,
+        readFloorStateSnapshot: async (opts) => {
+            const mod = await import('./floor-state.js');
+            return mod.readFloorStateSnapshot?.(opts) ?? { ok: false, state: null };
+        },
         presets: {
             list: listPresetRefs,
             listDocuments: listPresetDocuments,
@@ -3040,6 +3044,14 @@ export function getContext() {
             getNames: getChatWorldInfoNames,
             setSelection: setChatWorldInfoSelection,
             get globalSelection() { return selected_world_info; },
+            getActivationTrace: async (scopeKey, opts) => {
+                const mod = await import('./world-info.js');
+                return mod.getActivationTraceSnapshot?.(scopeKey, opts) ?? null;
+            },
+        },
+        openRequestInspector: async (requestId = '') => {
+            const mod = await import('./request-inspector.js');
+            return mod.openRequestInspector?.(requestId);
         },
         openai: {
             get proxies() { return proxies; },

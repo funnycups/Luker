@@ -1,11 +1,11 @@
 /* Shared by Q&A and AI iteration: side column, chat, composer, answers. */
 .wbench .wb-src, .wbench .wb-sess { flex: none; width: 210px; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--wb-border); background: var(--wb-surface); }
-.wbench .wb-src-head { position: relative; padding: 12px 12px 6px; }
+.wbench .wb-src-head { position: relative; padding: 10px 12px 4px; }
 .wbench .wb-src-title { font-size: 12.5px; font-weight: 650; }
 .wbench .wb-src-close { position: absolute; right: 6px; top: 6px; }
-.wbench .wb-src-list { flex: 1; overflow: auto; padding: 2px 6px 8px; }
-.wbench .wb-src-group { padding: 10px 8px 3px; font-size: 11px; color: var(--wb-faint); }
-.wbench .wb-src-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--wb-r-sm); font-size: 12.5px; }
+.wbench .wb-src-list { flex: 1; overflow: auto; padding: 2px 6px 6px; }
+.wbench .wb-src-group { padding: 7px 8px 2px; font-size: 11px; color: var(--wb-faint); }
+.wbench .wb-src-item { display: flex; align-items: center; gap: 8px; padding: 3.5px 8px; border-radius: var(--wb-r-sm); font-size: 12px; }
 .wbench .wb-src-st { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--wb-accent); }
 .wbench .wb-src-st.is-warn { background: var(--wb-amber); }
 .wbench .wb-src-st.is-off { background: var(--wb-faint); opacity: 0.5; }
@@ -29,6 +29,9 @@
 .wbench .wb-reads.is-live { color: var(--wb-muted); }
 .wbench .wb-reads .wb-spinner { width: 12px; height: 12px; }
 .wbench .wb-ans-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.wbench .wb-req-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.wbench .wb-req-link { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border: 1px solid var(--wb-border); border-radius: 999px; background: var(--wb-surface); color: var(--wb-muted); font-family: var(--wb-mono); font-size: 11px; cursor: pointer; max-width: 100%; }
+.wbench .wb-req-link:hover { color: var(--wb-text); border-color: var(--wb-accent); background: var(--wb-hover); }
 .wbench .wb-sent { width: 100%; border: 1px dashed var(--wb-border-strong); border-radius: var(--wb-r); font-size: 12px; }
 .wbench .wb-sent summary { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--wb-muted); cursor: pointer; list-style: none; }
 .wbench .wb-sent summary::-webkit-details-marker { display: none; }

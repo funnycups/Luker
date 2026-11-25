@@ -12,6 +12,7 @@ import {
     describeToolChoice,
     buildToolParamRows,
     countToolParams,
+    normalizeRequestId,
 } from './request-inspector-tools.js';
 import {
     extractMessageReasoning,
@@ -192,10 +193,13 @@ async function fetchList() {
 }
 
 async function fetchDetail(id) {
+    const safeId = normalizeRequestId(id);
+    if (!safeId) return null;
     try {
-        const res = await fetch(`/api/request-inspector/${id}`);
+        const res = await fetch(`/api/request-inspector/${encodeURIComponent(safeId)}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
+        const data = await res.json();
+        return data && typeof data === 'object' && !Array.isArray(data) ? data : null;
     } catch (err) {
         console.error(`[${MODULE_NAME}] Failed to fetch detail:`, err);
         return null;
@@ -1057,10 +1061,36 @@ async function refreshInspectorView(content) {
     content.html(buildListHtml(items));
 }
 
-async function openInspectorPanel() {
-    const items = await fetchList();
+/**
+ * 打开请求检查器弹窗；传入 requestId 时直接定位并展示对应请求详情。
+ *
+ * @param {string} [requestId='']
+ */
+export async function openRequestInspector(requestId = '') {
+    return openInspectorPanel(requestId);
+}
+
+async function openInspectorPanel(initialRequestId = '') {
+    const targetId = String(initialRequestId || '').trim();
     const content = $('<div class="ri-container"></div>');
-    content.html(buildListHtml(items));
+    currentDetailSearch = '';
+    cachedDetail = null;
+    if (targetId) {
+        const detail = await fetchDetail(targetId);
+        if (detail) {
+            cachedDetail = detail;
+            content.html(buildDetailHtml(detail));
+            bindLazyImagePreviews(content[0]);
+        } else {
+            cachedDetail = null;
+            const items = await fetchList();
+            content.html(buildListHtml(items));
+            globalThis.toastr?.info?.(t`Request record not found or expired.`, t`Request Inspector`);
+        }
+    } else {
+        const items = await fetchList();
+        content.html(buildListHtml(items));
+    }
 
     content.on('click', '.ri-filter-btn', function () {
         currentFilter = $(this).data('filter');
@@ -1126,10 +1156,10 @@ async function openInspectorPanel() {
     });
 
     content.on('click', '.ri-export', function () {
-        const id = $(this).data('id');
+        const id = normalizeRequestId($(this).data('id'));
         if (!id) return;
         const a = document.createElement('a');
-        a.href = `/api/request-inspector/${id}/export`;
+        a.href = `/api/request-inspector/${encodeURIComponent(id)}/export`;
         a.download = '';
         document.body.appendChild(a);
         a.click();

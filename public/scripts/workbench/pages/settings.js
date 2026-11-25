@@ -58,8 +58,8 @@ export function sourceDefs() {
         { key: 'inspector', name: i18n('Request inspector'), note: i18n('Full content, duration and status of the last 200 requests') },
         { key: 'frontLogs', name: i18n('Frontend logs'), note: i18n('Browser console output, cleared on reload') },
         { key: 'serverLogs', name: i18n('Server logs'), note: i18n('Only admins can read these in multi-user mode') },
-        { key: 'content', name: i18n('Current content'), note: i18n('Chat, character card, world books, preset, connection profile') },
-        { key: 'plugins', name: i18n('Installed extensions'), note: i18n('Memory graph, orchestration, token records, suggestions') },
+        { key: 'content', name: i18n('Current content'), note: i18n('Chat, character card, world books, preset, variables (including optional global), regex, connection profile, skills') },
+        { key: 'plugins', name: i18n('Installed extensions'), note: i18n('Memory graph, orchestration, image generation, environment & extensions, suggestions') },
     ];
 }
 

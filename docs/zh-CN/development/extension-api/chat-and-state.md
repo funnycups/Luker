@@ -434,6 +434,28 @@ reducer 必须返回普通对象。返回数组、基础类型、`null`、`undef
 `fs.update` reducer 内部抛出的异常现在会被捕获并以 `{ok: false, reason: 'VALIDATION_ARGS', hint: 'reducer threw: ...'}` 形式返回，而不再向上冒泡。原本依赖异常抛出的插件代码需要改为检查 `result.ok` 与 `result.hint`。
 :::
 
+### readFloorStateSnapshot
+
+```ts
+readFloorStateSnapshot(options: { namespace: string }): Promise<
+    | { ok: true, state: object | null }
+    | { ok: false, state: null, reason: string, hint?: string }
+>
+```
+
+获取当前聊天指定楼层状态命名空间的纯只读快照。该函数读取 `<namespace>__floor_log` 并在内存中按当前聊天的活动 swipe 重放幸存提交，不会注册楼层状态实例、不会触发历史数据迁移、不会写入孤儿备份，也不会修改任何持久化聊天状态。
+
+- 提交日志为空时返回 `{ ok: true, state: null }`。
+- 失败时返回 `{ ok: false, state: null, reason, hint? }`，`reason` 取值来自 `STATE_ERROR_REASONS`（包括 `VALIDATION_ARGS`、无活动聊天时的 `VALIDATION_TARGET`、`REPLAY_BROKEN`、`TRANSPORT_ERROR`、`HTTP_ERROR`）。
+
+```js
+const ctx = Luker.getContext();
+const snap = await ctx.readFloorStateSnapshot({ namespace: 'my-plugin' });
+if (snap.ok) {
+    console.log('Current floor state:', snap.state);
+}
+```
+
 ### 整盘替换日志（导入 / 重建）
 
 `update` 和 `patch` 均为 append-only——每次调用均在现有历史末尾追加一条提交。当你要整盘替换历史（导入备份、从聊天重建、重置到已知基线）时，请用 `reset(commits)`：

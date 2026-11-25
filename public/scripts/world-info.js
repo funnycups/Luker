@@ -621,6 +621,54 @@ function getEntryActivationTrace(scopeKey, worldName, uid) {
     return bucket.get(`${String(worldName || '')}.${String(uid || '')}`) || null;
 }
 
+function safeCloneTraceValue(value) {
+    if (value === null || value === undefined) return value;
+    try {
+        return structuredClone(value);
+    } catch {
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch {
+            return null;
+        }
+    }
+}
+
+/**
+ * 返回当前（或指定）聊天作用域下的世界书激活链路追踪只读快照，供工作台等诊断模块使用。
+ *
+ * @param {string} [scopeKey]
+ * @param {{ maxScans?: number }} [options]
+ * @returns {{ scopeKey: string, entries: Array<object> }}
+ */
+export function getActivationTraceSnapshot(scopeKey = getActivationTraceScopeKey(), options = {}) {
+    const key = String(scopeKey || 'chat:none');
+    const bucket = wiActivationTraceByScope.get(key);
+    if (!bucket || bucket.size === 0) {
+        return { scopeKey: key, entries: [] };
+    }
+    const scanLimit = Math.max(1, Math.floor(Number(options?.maxScans) || 1));
+    const entries = [];
+    for (const item of bucket.values()) {
+        if (!item || typeof item !== 'object') continue;
+        entries.push({
+            world: String(item.world || ''),
+            uid: Number(item.uid),
+            lastActivatedAt: item.lastActivatedAt || null,
+            lastActivation: item.lastActivation ? safeCloneTraceValue(item.lastActivation) : null,
+            recentScans: Array.isArray(item.recentScans)
+                ? (safeCloneTraceValue(item.recentScans.slice(0, scanLimit)) ?? [])
+                : [],
+            lastDryRunScanAt: item.lastDryRunScanAt || null,
+            lastDryRunActivation: item.lastDryRunActivation ? safeCloneTraceValue(item.lastDryRunActivation) : null,
+            recentDryRunScans: Array.isArray(item.recentDryRunScans)
+                ? (safeCloneTraceValue(item.recentDryRunScans.slice(0, scanLimit)) ?? [])
+                : [],
+        });
+    }
+    return { scopeKey: key, entries };
+}
+
 function getScanStateName(stateValue) {
     return Object.entries(scan_state).find(([_, value]) => value === stateValue)?.[0] || String(stateValue);
 }

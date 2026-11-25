@@ -340,6 +340,23 @@ context.chatWorldInfo.globalSelection: string[]
 
 使用者全域啟用世界書清單（在每個聊天均生效的那些）的唯讀實時快照。要修改請用 `worldInfoEntry.setGlobalSelection`——直接寫入不會持久化。
 
+### chatWorldInfo.getActivationTrace
+
+```ts
+context.chatWorldInfo.getActivationTrace(
+    scopeKey?: string,
+    options?: { maxScans?: number },
+): Promise<{ scopeKey: string, entries: Array<object> } | null>
+```
+
+回傳目前聊天（或指定 `scopeKey`，預設為 `chat:<currentChatId>`）的世界書啟用鏈路追蹤唯讀快照。每筆記錄包含 `world`、`uid`、`lastActivatedAt`、`lastActivation`、`recentScans`（筆數受 `options.maxScans` 控制，預設 `1`）、`lastDryRunScanAt`、`lastDryRunActivation` 與 `recentDryRunScans`。
+
+```js
+const ctx = Luker.getContext();
+const trace = await ctx.chatWorldInfo.getActivationTrace();
+console.log(trace?.scopeKey, trace?.entries.length);
+```
+
 ## 位置常數
 
 ### context.constants.wiAnchor

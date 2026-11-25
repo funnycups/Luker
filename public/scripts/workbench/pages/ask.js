@@ -19,8 +19,8 @@ import { withActivityLease } from '../../activity-guard.js';
 const CHIP_KEYS = [
     'Why was this reply written this way',
     'Why did that error happen',
+    'Why did world book or variables not work',
     'Which extension uses the most tokens',
-    'What was in the prompt sent to the model this time',
     'Write a bug report for me with the debug info',
 ];
 
@@ -179,6 +179,12 @@ export function createAskPage(app) {
             }
         }
 
+        const varKeysCount = Number(snap?.variables?.count || 0);
+        const regexExtensionDisabled = Boolean(snap?.regex?.disabled);
+        const regexEnabledCount = snap?.regex && snap.regex.enabledCount !== undefined
+            ? snap.regex.enabledCount
+            : null;
+
         put(side,
             h('div', { class: 'wb-src-head' },
                 h('div', { class: 'wb-src-title', text: i18n('What Ask can see') }),
@@ -199,6 +205,13 @@ export function createAskPage(app) {
                 item(i18n('Character card'), snap?.card?.name || i18n('None selected'), 'content'),
                 item(i18n('World book'), snap?.card?.books?.length ? i18nFormat('${0} book(s)', snap.card.books.length) : '—', 'content'),
                 item(i18n('Preset'), snap?.preset?.name || '—', 'content'),
+                item(i18n('Variables'), varKeysCount > 0 ? i18nFormat('${0} keys', varKeysCount) : '—', 'content'),
+                item(
+                    i18n('Regex scripts'),
+                    regexExtensionDisabled ? i18n('Off') : (regexEnabledCount == null ? '—' : i18nFormat('${0} enabled scripts', regexEnabledCount)),
+                    'content',
+                    regexExtensionDisabled ? 'off' : 'ok',
+                ),
                 item(i18n('Connection profile'), snap?.connection || '—', 'content'),
                 h('div', { class: 'wb-src-group', text: i18n('Installed extensions') }),
                 providerItems,
@@ -379,10 +392,37 @@ export function createAskPage(app) {
             } },
         ]);
         const askSources = app.settings().ask?.sources || {};
+        const reqIds = Array.isArray(t.requestIds) ? [...new Set(t.requestIds.map(String).filter(Boolean))] : [];
+        const openReq = async (reqId) => {
+            if (typeof app.source.openRequestInspector === 'function') {
+                try {
+                    await app.source.openRequestInspector(reqId);
+                    return;
+                } catch { /* 回退到复制 ID */ }
+            }
+            copyText(reqId);
+            app.toast(i18n('Request ID copied'));
+        };
+        const snap = app.snapshot?.();
+        const hasOpenChat = Boolean(snap?.chat?.chatId || snap?.chat?.label);
+        const registeredTargets = app.iterateTargets?.() || [];
+        const canJumpSuggest = Boolean(
+            t.suggest
+            && wsName(t.suggest)
+            && (t.suggest !== 'memory_graph' || hasOpenChat)
+            && (!registeredTargets.length || registeredTargets.some(target => target?.id === t.suggest)),
+        );
         return h('div', { class: 'wb-msg-ai' },
             reads ? h('div', { class: 'wb-reads' }, icon('eye', { size: 12 }), h('span', { text: i18nFormat('Read ${0}', reads) })) : null,
             t.error ? h('div', { class: 'wb-msg-error', text: t.error }) : renderMarkdown(t.answer),
-            t.suggest && wsName(t.suggest) ? h('div', { class: 'wb-ans-acts' },
+            reqIds.length ? h('div', { class: 'wb-req-links' },
+                reqIds.map(id => h('button', {
+                    type: 'button',
+                    class: 'wb-req-link',
+                    title: i18nFormat('Inspect request ${0}', id),
+                    onClick: () => void openReq(id),
+                }, icon('eye', { size: 11 }), h('span', { text: id.length > 18 ? `${id.slice(0, 16)}…` : id })))) : null,
+            canJumpSuggest ? h('div', { class: 'wb-ans-acts' },
                 button(i18nFormat('Go edit ${0}', wsName(t.suggest)), () => app.go('ai', { ws: t.suggest, draft: t.fixPrompt || '', from: t.answer }), { iconName: 'spark' })) : null,
             t.sent ? h('details', { class: 'wb-sent' },
                 h('summary', null, icon('up', { size: 12 }), h('span', { text: i18nFormat('Sent to the AI (about ${0} tokens)', formatTokens(Math.round(t.sent / 1.6))) })),
@@ -471,7 +511,7 @@ export function createAskPage(app) {
                 paintBody();
             }
 
-            const history = buildAskHistory(priorTurns, 6);
+            const history = buildAskHistory(priorTurns, 10);
             let turn;
             try {
                 const result = await withActivityLease({

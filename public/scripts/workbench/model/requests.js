@@ -4,19 +4,30 @@
 // overview privacy gating. Pure.
 
 const RULES = [
+    // workbench Ask & connection test (must precede domain rules so Ask's own
+    // system prompt and tool outputs mentioning orchestrator/search/image/memory
+    // are not hijacked)
+    {
+        kind: 'workbench',
+        label: '工作台',
+        test: /你是 Luker 原生「工作台」.*助手「问问」|「工作台」插件的只读助手「问问」|这是连接测试。调用\s*wb_ok\b/,
+    },
     // memory-graph
     { kind: 'memory', label: '记忆图 · 召回规划', test: /memory recall planner|recall_query_context|candidate_nodes/i },
     { kind: 'memory', label: '记忆图 · 提取', test: /dialogue_batch|memory (graph )?extract|extract(ion)? (batch|schema)|mg_upsert|luker_rpg_memory/i },
     { kind: 'memory', label: '记忆图 · 压缩', test: /rollup|summarize the (following|child)|compress(ion)? (rule|instruction)/i },
-    // orchestrator / search
+    // orchestrator / search / sd illustration & studio
     { kind: 'orch', label: '编排', test: /luker_orch|orchestrat|agenda_planner|\bdirector\b.*\bdispatch/i },
-    { kind: 'search', label: '联网搜索', test: /search_tools|web_search|search agent/i },
+    { kind: 'search', label: '联网搜索', test: /search_tools|luker_web_search|luker_search_agent|web_search|search agent/i },
+    { kind: 'image', label: 'AI 插图 / 画室', test: /\b(?:add_image_prompt|explore_characters|generate_image|search_character_sources|visit_character_page|fetch_reference_image|save_character_profile|stage_character_profile|read_character_profiles)\b|visualInspection/i },
     // iteration studios
     { kind: 'iterate', label: 'AI 迭代 · 记忆图配置', test: /mg_schema_|mg_config_|schema iteration|configuration-editor ai/i },
     { kind: 'iterate', label: 'AI 迭代 · 记忆图内容', test: /mg_graph_|graph-editor ai|graph revision/i },
     { kind: 'iterate', label: 'AI 迭代 · 预设', test: /cpa_|completion preset assistant/i },
+    { kind: 'iterate', label: 'AI 迭代 · 世界书', test: /this session edits world books only|帮用户修改「(?:世界书|世界書|World book)」/i },
     { kind: 'iterate', label: 'AI 迭代 · 角色卡', test: /cea_|character editor assistant/i },
-    { kind: 'workbench', label: '工作台', test: /wb_(read|ask|ok)|工作台/ },
+    { kind: 'iterate', label: 'AI 迭代 · 图像生成', test: /\bsd_(?:list|read|update|upsert|delete|create|remove|search|inspect|test|simulate)_|illustration_prompt/i },
+    { kind: 'workbench', label: '工作台', test: /wb_(read|list|search|answer|ask|ok)|工作台/ },
 ];
 
 function textOf(messages) {
@@ -144,10 +155,10 @@ export function redactReaders(readers, enabled) {
     }]));
 }
 
-const CONTENT_OVERVIEW_KEYS = ['聊天', '角色卡', '预设', '连接', '提示词', 'chat', 'character', 'preset', 'connection', 'promptBudget'];
+const CONTENT_OVERVIEW_KEYS = ['聊天', '角色卡', '预设', '连接', '提示词', '世界书', '变量', '正则', 'chat', 'character', 'preset', 'connection', 'promptBudget', 'worldBooks', 'variables', 'regex'];
 const INSPECTOR_OVERVIEW_KEYS = ['最近的请求', 'requests'];
 const FRONT_LOGS_OVERVIEW_KEYS = ['调试日志开关', 'frontendLogs', 'debugLogging'];
-const PLUGIN_OVERVIEW_KEYS = ['记忆图', '编排', '扩展', 'extensions', 'plugins'];
+const PLUGIN_OVERVIEW_KEYS = ['记忆图', '编排', '图像生成', '扩展', '环境', 'extensions', 'plugins', 'environment'];
 
 /** Applies the Ask settings (sources + redaction) to an overview before sending. */
 export function finishOverview(overview, {

@@ -73,6 +73,9 @@ function makeCheckout() {
     fs.mkdirSync(path.join(repo, 'docs', 'zh-CN'), { recursive: true });
     fs.mkdirSync(path.join(repo, 'docs', 'zh-TW'), { recursive: true });
     fs.mkdirSync(path.join(repo, 'docs', 'guide'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'docs', 'public'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'docs', '.vitepress', 'cache'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'docs', 'superpowers'), { recursive: true });
     for (const entry of ['server.js', 'webpack.config.js', 'package.json', 'package-lock.json', 'plugins.js']) {
         fs.writeFileSync(path.join(repo, entry), '');
     }
@@ -89,6 +92,10 @@ function makeCheckout() {
     fs.writeFileSync(path.join(repo, 'docs', 'zh-CN', 'changelog.md'), '# Changelog\n');
     fs.writeFileSync(path.join(repo, 'docs', 'zh-TW', 'changelog.md'), '# Changelog\n');
     fs.writeFileSync(path.join(repo, 'docs', 'guide', 'getting-started.md'), '# Guide\n');
+    fs.writeFileSync(path.join(repo, 'docs', 'public', 'shot.png'), 'png');
+    fs.writeFileSync(path.join(repo, 'docs', '.vitepress', 'config.ts'), 'export default {};\n');
+    fs.writeFileSync(path.join(repo, 'docs', '.vitepress', 'cache', 'temp.md'), '# temp\n');
+    fs.writeFileSync(path.join(repo, 'docs', 'superpowers', 'draft.md'), '# draft\n');
     fs.writeFileSync(path.join(repo, '.gitignore'), [
         'public/settings.json',
         '/plugins/*',
@@ -115,18 +122,27 @@ test('staging ships the tracked trees and none of the gitignored state in them',
     expect(fs.existsSync(path.join(staging, 'docs', 'changelog.md'))).toBe(true);
     expect(fs.existsSync(path.join(staging, 'docs', 'zh-CN', 'changelog.md'))).toBe(true);
     expect(fs.existsSync(path.join(staging, 'docs', 'zh-TW', 'changelog.md'))).toBe(true);
-    expect(fs.existsSync(path.join(staging, 'docs', 'guide', 'getting-started.md'))).toBe(false);
+    expect(fs.existsSync(path.join(staging, 'docs', 'guide', 'getting-started.md'))).toBe(true);
+    expect(fs.existsSync(path.join(staging, 'docs', 'public', 'shot.png'))).toBe(false);
+    expect(fs.existsSync(path.join(staging, 'docs', '.vitepress', 'config.ts'))).toBe(false);
+    expect(fs.existsSync(path.join(staging, 'docs', '.vitepress', 'cache', 'temp.md'))).toBe(false);
+    expect(fs.existsSync(path.join(staging, 'docs', 'superpowers', 'draft.md'))).toBe(false);
     fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('.dockerignore whitelists the three changelog markdown files after *.md', () => {
+test('.dockerignore whitelists shippable docs markdown after *.md and excludes non-runtime docs dirs', () => {
     const lines = fs.readFileSync(path.join(REPO_ROOT, '.dockerignore'), 'utf8')
         .split(/\r?\n/)
         .map(line => line.trim());
     const wildcardIdx = lines.indexOf('*.md');
     expect(wildcardIdx).toBeGreaterThan(-1);
-    for (const entry of ['!/docs/changelog.md', '!/docs/zh-CN/changelog.md', '!/docs/zh-TW/changelog.md']) {
-        expect(lines.indexOf(entry)).toBeGreaterThan(wildcardIdx);
+    const topMdIdx = lines.indexOf('!/docs/*.md');
+    const nestedMdIdx = lines.indexOf('!/docs/**/*.md');
+    expect(topMdIdx).toBeGreaterThan(wildcardIdx);
+    expect(nestedMdIdx).toBeGreaterThan(wildcardIdx);
+    const lastAllowIdx = Math.max(topMdIdx, nestedMdIdx);
+    for (const excluded of ['/docs/public', '/docs/.vitepress', '/docs/node_modules', '/docs/dist', '/docs/cache', '/docs/superpowers']) {
+        expect(lines.indexOf(excluded)).toBeGreaterThan(lastAllowIdx);
     }
 });
 

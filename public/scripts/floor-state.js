@@ -67,6 +67,7 @@ async function makeDefaultDeps() {
         deleteChatState: script.deleteChatState,
         buildObjectPatchOperationsAsync: script.buildObjectPatchOperationsAsync,
         getChat: () => script.chat,
+        getCurrentChatId: script.getCurrentChatId,
     };
 }
 
@@ -162,6 +163,88 @@ export async function settleBranchCreated(payload) {
 export async function createFloorState(options) {
     const deps = await makeDefaultDeps();
     return createFloorStateWithDeps(options, deps);
+}
+
+/**
+ * Pure read-only snapshot of a floor-state namespace.
+ *
+ * Unlike `createFloorState()`, this helper never registers into `allInstances`,
+ * never runs legacy migration, never writes `__orphans` backups or truncates
+ * broken logs, and never calls `updateChatState` / `deleteChatState`.
+ *
+ * @param {{ namespace: string }} options
+ * @param {object|null} [depsOverride=null]
+ * @returns {Promise<{ ok: boolean, state: object|null, reason?: string, hint?: string }>}
+ */
+export async function readFloorStateSnapshot(options, depsOverride = null) {
+    const namespace = String(options?.namespace ?? '').trim().toLowerCase();
+    if (!namespace || namespace.endsWith(LOG_SUFFIX)) {
+        return {
+            ok: false,
+            state: null,
+            reason: STATE_ERROR_REASONS.VALIDATION_ARGS,
+            hint: !namespace
+                ? 'readFloorStateSnapshot requires a non-empty namespace'
+                : `namespace must not end with "${LOG_SUFFIX}"`,
+        };
+    }
+
+    const runtime = depsOverride || await makeDefaultDeps();
+    if (typeof runtime?.getChatState !== 'function') {
+        return { ok: false, state: null, reason: STATE_ERROR_REASONS.VALIDATION_ARGS };
+    }
+
+    if (typeof runtime.getCurrentChatId === 'function') {
+        const chatId = String(runtime.getCurrentChatId() || '').trim();
+        if (!chatId) {
+            return { ok: false, state: null, reason: STATE_ERROR_REASONS.VALIDATION_TARGET };
+        }
+    }
+
+    const chat = typeof runtime.getChat === 'function' ? runtime.getChat() : null;
+    if (!Array.isArray(chat) && typeof runtime.getCurrentChatId !== 'function') {
+        return { ok: false, state: null, reason: STATE_ERROR_REASONS.VALIDATION_TARGET };
+    }
+
+    const logNamespace = `${namespace}${LOG_SUFFIX}`;
+    let logResult;
+    try {
+        logResult = await runtime.getChatState(logNamespace);
+    } catch (error) {
+        return {
+            ok: false,
+            state: null,
+            reason: STATE_ERROR_REASONS.TRANSPORT_ERROR,
+            hint: String(error?.message || error).slice(0, 120),
+        };
+    }
+    if (logResult && logResult.ok === false) {
+        return {
+            ok: false,
+            state: null,
+            reason: logResult.reason || STATE_ERROR_REASONS.HTTP_ERROR,
+            ...(logResult.hint ? { hint: logResult.hint } : {}),
+        };
+    }
+
+    const rawLog = logResult?.ok ? logResult.state : logResult;
+    const log = normalizeLog(rawLog);
+    if (log.commits.length === 0) {
+        return { ok: true, state: null };
+    }
+
+    const swipeMap = buildSwipeMapFromChat(Array.isArray(chat) ? chat : []);
+    try {
+        const state = computeTargetState(log.commits, swipeMap);
+        return { ok: true, state: state === null ? null : structuredClone(state) };
+    } catch (error) {
+        return {
+            ok: false,
+            state: null,
+            reason: STATE_ERROR_REASONS.REPLAY_BROKEN,
+            hint: String(error?.message || error).slice(0, 120),
+        };
+    }
 }
 
 /**

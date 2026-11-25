@@ -24,6 +24,16 @@ const SHIPPED_CHANGELOG_FILES = [
     'docs/zh-CN/changelog.md',
     'docs/zh-TW/changelog.md',
 ];
+const EXCLUDED_DOC_DIRS = new Set(['.vitepress', 'node_modules', 'dist', 'cache', 'superpowers']);
+
+export function isShippableDocMarkdown(relativePath) {
+    const normalized = String(relativePath || '').replaceAll(path.sep, '/');
+    if (!normalized.startsWith('docs/') || !normalized.toLowerCase().endsWith('.md')) {
+        return false;
+    }
+    const segments = normalized.split('/').slice(1);
+    return !segments.some(seg => EXCLUDED_DOC_DIRS.has(seg) || seg.startsWith('.'));
+}
 
 const PREBUILT_BUNDLES = [
     'lib.core.bundle.js',
@@ -537,12 +547,38 @@ export function stageMobileRuntime({
         }
     }
 
+    const docsRoot = path.join(repoRoot, 'docs');
+    if (!fs.existsSync(docsRoot)) {
+        throw new Error(`Missing required runtime directory: ${docsRoot}`);
+    }
+    const docMarkdownFiles = listGitShippableFiles(repoRoot, 'docs', execFileSyncImpl).filter(isShippableDocMarkdown);
+    if (docMarkdownFiles.length === 0) {
+        throw new Error('No git-shippable markdown docs found under docs');
+    }
+    const stagedDocFiles = new Set();
+    for (const relFile of docMarkdownFiles) {
+        const srcFile = path.join(repoRoot, relFile);
+        let stat;
+        try {
+            stat = fs.statSync(srcFile);
+        } catch {
+            continue;
+        }
+        if (!stat.isFile()) {
+            continue;
+        }
+        copyFileCounted(srcFile, path.join(outputDir, relFile));
+        stagedDocFiles.add(relFile.replaceAll(path.sep, '/'));
+    }
+
     for (const relFile of SHIPPED_CHANGELOG_FILES) {
         const srcFile = path.join(repoRoot, relFile);
         if (!fs.existsSync(srcFile)) {
             throw new Error(`Missing required changelog file: ${srcFile}`);
         }
-        copyFileCounted(srcFile, path.join(outputDir, relFile));
+        if (!stagedDocFiles.has(relFile)) {
+            copyFileCounted(srcFile, path.join(outputDir, relFile));
+        }
     }
 
     const defaultConfigPath = path.join(repoRoot, 'default', 'config.yaml');

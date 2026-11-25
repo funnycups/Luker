@@ -114,6 +114,19 @@ callPopup(text: string, type: string, ...): Promise<any>
 
 Legacy popup helper using string-keyed types (`'text'`, `'confirm'`, `'input'`, etc.). Migrate to `callGenericPopup` with the numeric `POPUP_TYPE` values.
 
+### openRequestInspector
+
+```ts
+openRequestInspector(requestId?: string): Promise<void>
+```
+
+Opens Luker's Request Inspector popup. When a non-empty `requestId` is provided, opens that request's detail view directly; if the record cannot be found or has expired, falls back to the request list view and shows a notification.
+
+```js
+const ctx = Luker.getContext();
+await ctx.openRequestInspector('req_abc123');
+```
+
 ## Loader
 
 ### loader.show / loader.hide
