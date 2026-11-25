@@ -1225,6 +1225,7 @@ export function createIllustrationBridge() {
             transientSessionId = undefined,
             skipActivityTracking = false,
             skipActivityLease = false,
+            onRetry = undefined,
             signal = undefined,
             loras = [],
         } = {}) {
@@ -1273,6 +1274,7 @@ export function createIllustrationBridge() {
                         attribution,
                         subdir,
                         transientSessionId,
+                        onRetry,
                     },
                 );
                 if (capturedError) {
@@ -4594,6 +4596,7 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
             label: 'image-generation',
             onAttempt: (attempt, _err, _delay, maxRetries) => {
                 activity?.setRetry(attempt, maxRetries);
+                structuredOptions?.onRetry?.(attempt, maxRetries);
                 toastr.info(
                     t`Retrying image generation… (${attempt}/${maxRetries})`,
                     t`Image generation failed`,

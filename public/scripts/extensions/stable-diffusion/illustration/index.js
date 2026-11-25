@@ -141,6 +141,12 @@ export async function initIllustration(bridge) {
         comfyBridge: bridge?.comfyBridge || null,
     });
     let actions = null;
+    const beginActivityJob = typeof bridge.beginActivityJob === 'function'
+        ? options => {
+            clearIllustrationErrorToast();
+            return bridge.beginActivityJob(options);
+        }
+        : null;
     const pipeline = createIllustrationPipeline({
         context,
         imageService,
@@ -150,12 +156,7 @@ export async function initIllustration(bridge) {
             notifyError: notifyIllustrationError,
             t,
             translate,
-            beginActivityJob: typeof bridge.beginActivityJob === 'function'
-                ? options => {
-                    clearIllustrationErrorToast();
-                    return bridge.beginActivityJob(options);
-                }
-                : null,
+            beginActivityJob,
             saveChat: () => context.saveChat(),
             updateMessageBlock: (messageId, message) => context.updateMessageBlock(messageId, message),
             notifyMessageChanged: messageId => emitMessageChanged(context, messageId),
@@ -226,6 +227,7 @@ export async function initIllustration(bridge) {
         ensureSwipes,
         toast: (message, type = 'error') => toastr[type]?.(message, t`Image Generation`),
         notifyError: notifyIllustrationError,
+        beginActivityJob,
         t,
     });
 

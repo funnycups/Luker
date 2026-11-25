@@ -41,7 +41,7 @@ function messageContentFingerprint(message) {
     });
 }
 
-export function initIllustrationActions({ context, pipeline, imageService, settings, ensureSwipes, toast, notifyError, t }) {
+export function initIllustrationActions({ context, pipeline, imageService, settings, ensureSwipes, toast, notifyError, beginActivityJob = null, t }) {
     const actionControllers = new Map();
     const reportError = typeof notifyError === 'function'
         ? notifyError
@@ -135,110 +135,147 @@ export function initIllustrationActions({ context, pipeline, imageService, setti
         const controllerKey = `${messageId}:${swipeId}:${targetRecordId}`;
         actionControllers.set(controllerKey, { messageId, swipeId, recordId: targetRecordId, controller });
 
+        const activityJob = typeof beginActivityJob === 'function'
+            ? beginActivityJob({
+                kind: 'illustration',
+                messageIndex: messageId,
+                abort: () => {
+                    if (!controller.signal.aborted) {
+                        controller.abort('Illustration action cancelled');
+                    }
+                },
+            })
+            : null;
+        activityJob?.setPrompt(prompt);
+        activityJob?.addSection('image', { kind: 'image', title: t`Image` });
+        const onControllerAbort = () => {
+            activityJob?.updateSection('image', { status: 'aborted' });
+            activityJob?.finish('aborted');
+        };
+        controller.signal.addEventListener('abort', onControllerAbort, { once: true });
+
         let loras = [];
         let savedReferences = rawSavedReferences;
         let imageUrl;
         try {
-            if (controller.signal.aborted) {
-                throw createActionAbortError();
-            }
-            if (overrideReferences === undefined && rawSavedReferences.length > 0 && typeof imageService.getCapabilitiesSnapshot === 'function') {
-                const caps = imageService.getCapabilitiesSnapshot();
-                const filtered = filterReplayReferences(rawSavedReferences, caps);
-                savedReferences = filtered.references;
-                if (filtered.skipped.length > 0) {
-                    toast(t`Some saved reference images were skipped because they are disabled in the current preset.`, 'warning');
-                }
-            }
-            if (savedLoras.length > 0) {
-                const loraState = await imageService.getAvailableLoras();
+            try {
                 if (controller.signal.aborted) {
                     throw createActionAbortError();
                 }
-                loras = resolveReplayLoras(savedLoras, loraState.names, dropped => {
-                    toast(t`Some LoRAs are unavailable and were skipped: ${dropped.join(', ')}`, 'warning');
-                }).loras;
+                if (overrideReferences === undefined && rawSavedReferences.length > 0 && typeof imageService.getCapabilitiesSnapshot === 'function') {
+                    const caps = imageService.getCapabilitiesSnapshot();
+                    const filtered = filterReplayReferences(rawSavedReferences, caps);
+                    savedReferences = filtered.references;
+                    if (filtered.skipped.length > 0) {
+                        toast(t`Some saved reference images were skipped because they are disabled in the current preset.`, 'warning');
+                    }
+                }
+                if (savedLoras.length > 0) {
+                    const loraState = await imageService.getAvailableLoras();
+                    if (controller.signal.aborted) {
+                        throw createActionAbortError();
+                    }
+                    loras = resolveReplayLoras(savedLoras, loraState.names, dropped => {
+                        toast(t`Some LoRAs are unavailable and were skipped: ${dropped.join(', ')}`, 'warning');
+                    }).loras;
+                }
+                imageUrl = await imageService.generate(prompt, {
+                    characterName: String(message.name || ''),
+                    negativePrompt: savedNegative,
+                    aspectRatio: savedAspectRatio || undefined,
+                    references: savedReferences.length > 0 ? savedReferences : undefined,
+                    characterPrompts: savedCharPrompts.length > 0 ? savedCharPrompts : undefined,
+                    signal: controller.signal,
+                    ...(activityJob ? { onRetry: (attempt, maxRetries) => activityJob.setRetry?.(attempt, maxRetries) } : {}),
+                    loras,
+                });
+                if (controller.signal.aborted) {
+                    throw createActionAbortError();
+                }
+            } finally {
+                if (actionControllers.get(controllerKey)?.controller === controller) {
+                    actionControllers.delete(controllerKey);
+                }
             }
-            imageUrl = await imageService.generate(prompt, {
-                characterName: String(message.name || ''),
-                negativePrompt: savedNegative,
-                aspectRatio: savedAspectRatio || undefined,
-                references: savedReferences.length > 0 ? savedReferences : undefined,
-                characterPrompts: savedCharPrompts.length > 0 ? savedCharPrompts : undefined,
-                signal: controller.signal,
-                loras,
-            });
-            if (controller.signal.aborted) {
-                throw createActionAbortError();
-            }
-        } finally {
-            if (actionControllers.get(controllerKey)?.controller === controller) {
-                actionControllers.delete(controllerKey);
-            }
-        }
 
-        if (context.chatId !== chatId) {
-            throw new Error('Chat changed, generated image discarded.');
-        }
-        const currentMessage = context.chat?.[messageId];
-        if (!currentMessage) {
-            throw new Error('Message not found.');
-        }
-        if ((currentMessage.swipe_id ?? 0) !== swipeId || messageContentFingerprint(currentMessage) !== beforeFingerprint) {
-            throw new Error('Message changed, generated image discarded.');
-        }
-        const liveReplaceRecord = getIllustrationRecord(currentMessage, replaceRecord.id);
-        if (!liveReplaceRecord) {
-            throw new Error('Message changed, generated image discarded.');
-        }
-
-        const record = createIllustrationRecord({
-            id: makeIllustrationId(),
-            prompt,
-            negativePrompt: savedNegative,
-            aspectRatio: savedAspectRatio,
-            references: savedReferences,
-            characterPrompts: savedCharPrompts,
-            locked: Boolean(liveReplaceRecord.locked),
-            imageUrl,
-            status: 'ready',
-            parentId: parent.id,
-            anchorAfter: replaceRecord.anchorAfter,
-            anchorBefore: replaceRecord.anchorBefore,
-            loras,
-        });
-        const html = buildImageTag({
-            id: record.id,
-            imageUrl: record.imageUrl,
-            prompt: record.prompt,
-            width: settings.imageDisplayWidth,
-        });
-        if (replaceRecord.status === 'failed') {
-            // Failed badges are session-only and never enter message text, so
-            // place the replacement at the original anchors instead.
-            const replaced = replaceIllustrationMarkup(currentMessage.mes, replaceRecord.id, html);
-            currentMessage.mes = replaced !== currentMessage.mes
-                ? replaced
-                : insertTagsAtAnchors(String(currentMessage.mes || ''), [{
-                    id: record.id,
-                    html,
-                    insertAfter: replaceRecord.anchorAfter,
-                    insertBefore: replaceRecord.anchorBefore,
-                }]).text;
-            removeIllustrationRecord(currentMessage, replaceRecord.id);
-        } else {
-            const replaced = replaceIllustrationMarkup(currentMessage.mes, replaceRecord.id, html);
-            if (hadTagBefore && replaced === currentMessage.mes) {
+            if (context.chatId !== chatId) {
+                throw new Error('Chat changed, generated image discarded.');
+            }
+            const currentMessage = context.chat?.[messageId];
+            if (!currentMessage) {
+                throw new Error('Message not found.');
+            }
+            if ((currentMessage.swipe_id ?? 0) !== swipeId || messageContentFingerprint(currentMessage) !== beforeFingerprint) {
                 throw new Error('Message changed, generated image discarded.');
             }
-            currentMessage.mes = replaced;
+            const liveReplaceRecord = getIllustrationRecord(currentMessage, replaceRecord.id);
+            if (!liveReplaceRecord) {
+                throw new Error('Message changed, generated image discarded.');
+            }
+
+            const record = createIllustrationRecord({
+                id: makeIllustrationId(),
+                prompt,
+                negativePrompt: savedNegative,
+                aspectRatio: savedAspectRatio,
+                references: savedReferences,
+                characterPrompts: savedCharPrompts,
+                locked: Boolean(liveReplaceRecord.locked),
+                imageUrl,
+                status: 'ready',
+                parentId: parent.id,
+                anchorAfter: replaceRecord.anchorAfter,
+                anchorBefore: replaceRecord.anchorBefore,
+                loras,
+            });
+            const html = buildImageTag({
+                id: record.id,
+                imageUrl: record.imageUrl,
+                prompt: record.prompt,
+                width: settings.imageDisplayWidth,
+            });
+            if (replaceRecord.status === 'failed') {
+                // Failed badges are session-only and never enter message text, so
+                // place the replacement at the original anchors instead.
+                const replaced = replaceIllustrationMarkup(currentMessage.mes, replaceRecord.id, html);
+                currentMessage.mes = replaced !== currentMessage.mes
+                    ? replaced
+                    : insertTagsAtAnchors(String(currentMessage.mes || ''), [{
+                        id: record.id,
+                        html,
+                        insertAfter: replaceRecord.anchorAfter,
+                        insertBefore: replaceRecord.anchorBefore,
+                    }]).text;
+                removeIllustrationRecord(currentMessage, replaceRecord.id);
+            } else {
+                const replaced = replaceIllustrationMarkup(currentMessage.mes, replaceRecord.id, html);
+                if (hadTagBefore && replaced === currentMessage.mes) {
+                    throw new Error('Message changed, generated image discarded.');
+                }
+                currentMessage.mes = replaced;
+            }
+            appendIllustrationRecords(currentMessage, [record]);
+            syncMessageSwipeData(currentMessage, ensureSwipes);
+            context.updateMessageBlock(messageId, currentMessage);
+            await emitMessageChanged(context, messageId);
+            await context.saveChat();
+
+            activityJob?.updateSection('image', { status: 'done', meta: { imageUrl } });
+            activityJob?.finish('done');
+            return record;
+        } catch (error) {
+            if (error?.name === 'AbortError' || controller.signal.aborted) {
+                activityJob?.updateSection('image', { status: 'aborted' });
+                activityJob?.finish('aborted');
+            } else {
+                activityJob?.updateSection('image', { status: 'failed' });
+                activityJob?.setError(String(error?.message || error));
+                activityJob?.finish('failed');
+            }
+            throw error;
+        } finally {
+            controller.signal.removeEventListener('abort', onControllerAbort);
         }
-        appendIllustrationRecords(currentMessage, [record]);
-        syncMessageSwipeData(currentMessage, ensureSwipes);
-        context.updateMessageBlock(messageId, currentMessage);
-        await emitMessageChanged(context, messageId);
-        await context.saveChat();
-        return record;
     }
 
     async function requestPrompt(initialPrompt, titleLabel = t`Image prompt`) {
