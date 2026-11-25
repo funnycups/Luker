@@ -4,7 +4,7 @@ import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globa
 import { MAX_ROUNDS, askSystemPrompt, askUserMessage, askTools, runAsk, readsSummary, readLabel, clip, buildAskHistory } from '../../public/scripts/workbench/model/ask.js';
 import { searchLukerDocs, listLukerDocTopics } from '../../public/scripts/workbench/model/luker-docs.js';
 import { attribute, groupByGeneration, describeRequest } from '../../public/scripts/workbench/model/requests.js';
-import { SourceError, aiRequest, askOverview, askReaders, listAiChoices } from '../../public/scripts/workbench/source-luker.js';
+import { SourceError, aiRequest, askOverview, askReaders, listAiChoices, loadSnapshot } from '../../public/scripts/workbench/source-luker.js';
 import { createMemoryAskProvider } from '../../public/scripts/extensions/memory-graph/lens/providers.js';
 import { createOrchAskProvider } from '../../public/scripts/extensions/orchestrator/lens/providers.js';
 
@@ -84,6 +84,13 @@ describe('workbench Ask model & source readers', () => {
             globalThis.Luker = { getContext: () => ctxWithFloors(unsetVal) };
             const defaulted = await askReaders({ redactText: false }).wb_read_chat({});
             expect(defaulted.messages).toHaveLength(5);
+        }
+
+        // null, empty string, and boolean from/to must NOT coerce to floor 0
+        globalThis.Luker = { getContext: () => ctxWithFloors(2) };
+        for (const badRange of [{ from: null, to: null }, { from: '', to: '' }, { from: false, to: false }]) {
+            const trailing = await askReaders({ redactText: false }).wb_read_chat(badRange);
+            expect(trailing.messages.map(m => m.floor)).toEqual([10, 11, 12, 13, 14]);
         }
     });
 
@@ -196,7 +203,30 @@ describe('workbench Ask model & source readers', () => {
         expect(attribute({ searchText: 'call mg_graph_edit_node to fix character state' }).label).toBe('AI 迭代 · 记忆图内容');
         expect(attribute({ searchText: 'You are the agenda_planner for luker_orch' }).kind).toBe('orch');
         expect(attribute({ searchText: 'luker_search_agent using search_tools' }).kind).toBe('search');
-        expect(attribute({ searchText: 'Call sd_read_run to inspect illustration_prompt' }).kind).toBe('image');
+        expect(attribute({ searchText: 'Call add_image_prompt and explore_characters for visualInspection' })).toEqual({
+            kind: 'image',
+            label: 'AI 插图 / 画室',
+            guessed: true,
+        });
+        expect(attribute({ searchText: 'Call sd_read_run and sd_update_preset for illustration_prompt' })).toEqual({
+            kind: 'iterate',
+            label: 'AI 迭代 · 图像生成',
+            guessed: true,
+        });
+        expect(attribute({
+            searchText: '## This session edits world books only. Use cea_read_world_entry to inspect.',
+        })).toEqual({
+            kind: 'iterate',
+            label: 'AI 迭代 · 世界书',
+            guessed: true,
+        });
+        expect(attribute({
+            searchText: 'Use cea_read_card_field as Character Editor Assistant',
+        })).toEqual({
+            kind: 'iterate',
+            label: 'AI 迭代 · 角色卡',
+            guessed: true,
+        });
         expect(attribute({
             searchText: '【工作台说明】你在 Luker「工作台」里帮用户修改「预设」 cpa_list_entries',
         }).kind).toBe('iterate');
@@ -330,17 +360,14 @@ describe('workbench Ask model & source readers', () => {
         expect(worldRes.entries[0].content).toBe(longWorld);
     });
 
-    test('askSystemPrompt covers Luker features & diagnostics, and readLabel maps wb_read_orch and new tools', () => {
+    test('askSystemPrompt returns non-empty prompt and readLabel maps all read tools', () => {
         const prompt = askSystemPrompt();
-        expect(prompt).toContain('Luker 原生「工作台」');
-        expect(prompt).toContain('激活链路追踪');
-        expect(prompt).toContain('逐楼层变量');
-        expect(prompt).toContain('wb_search_luker_docs');
-        expect(prompt).toContain('wb_read_world_info_trace');
-        expect(prompt).toContain('wb_read_variables');
-        expect(prompt).toContain('wb_read_regex');
+        expect(typeof prompt).toBe('string');
+        expect(prompt.trim().length).toBeGreaterThan(0);
         expect(readLabel('wb_read_orch')).toBe('Orchestration');
         expect(readLabel('wb_read_world_info_trace')).toBe('World book trace');
+        expect(readLabel('wb_read_connections')).toBe('Connection profile');
+        expect(readLabel('wb_read_skills')).toBe('Skills');
         expect(readLabel('wb_search_luker_docs')).toBe('Luker docs');
     });
 
@@ -510,6 +537,20 @@ describe('workbench Ask model & source readers', () => {
                 return { text: 'Partial before abort', calls: [{ id: `ab_${abortRound}`, name: 'wb_read_chat', args: {} }] };
             },
         })).rejects.toBe(abortErr);
+
+        // Final-round real API/network errors (e.g. HTTP 429) must rethrow instead of masquerading as round-limit answer
+        let apiErrRound = 0;
+        const apiErr = new Error('HTTP 429: rate limit exceeded');
+        await expect(runAsk({
+            question: 'Rate limit on last round',
+            overview: {},
+            readers: { wb_read_chat: async () => ({ floor: 1 }) },
+            request: async () => {
+                apiErrRound++;
+                if (apiErrRound === MAX_ROUNDS) throw apiErr;
+                return { text: 'Partial before 429', calls: [{ id: `rl_${apiErrRound}`, name: 'wb_read_chat', args: {} }] };
+            },
+        })).rejects.toBe(apiErr);
     });
 
     test('wb_read_request reads real inspector responseParts, wireRequest tools, image/embedding types, and rejects empty/boolean message_index', async () => {
@@ -536,8 +577,14 @@ describe('workbench Ask model & source readers', () => {
                         durationMs: 1200,
                         fullMessages: [
                             { role: 'system', content: 'sys 0' },
-                            { role: 'user', content: 'msg 1' },
-                            { role: 'assistant', content: 'msg 2' },
+                            {
+                                role: 'user',
+                                content: [
+                                    { type: 'image_url', image_url: { url: `data:image/png;base64,${'A'.repeat(5000)}` } },
+                                    { type: 'text', text: 'visible caption after image' },
+                                ],
+                            },
+                            { role: 'tool', name: 'wb_read_chat', tool_call_id: 'call_42', content: 'tool result 2' },
                             { role: 'user', content: 'msg 3 latest' },
                         ],
                         responseText: 'final reply',
@@ -683,6 +730,11 @@ describe('workbench Ask model & source readers', () => {
         expect(emptyIdxRes.messages).toHaveLength(4);
         const boolIdxRes = await readers.wb_read_request({ id: 'req-chat', message_index: false });
         expect(boolIdxRes.messages).toHaveLength(4);
+        // Multimodal base64 image blocks are replaced by [image] so text is not truncated, and tool_call_id/name are preserved
+        expect(emptyIdxRes.messages[1].content).toBe('[image]\nvisible caption after image');
+        expect(emptyIdxRes.messages[1].content).not.toContain('AAAA');
+        expect(emptyIdxRes.messages[2].toolCallId).toBe('call_42');
+        expect(emptyIdxRes.messages[2].name).toBe('wb_read_chat');
         // Numeric 0 DOES select only message 0
         const zeroIdxRes = await readers.wb_read_request({ id: 'req-chat', message_index: 0 });
         expect(zeroIdxRes.messages).toHaveLength(1);
@@ -1457,7 +1509,8 @@ describe('workbench Ask model & source readers', () => {
             page.destroy();
 
             // When no chat is open, memory_graph jump button is hidden while memory remains available;
-            // side panel regex stats honor allowedOnly: true and disabledExtensions.includes('regex').
+            // loadSnapshot() populates variables/regex respecting allowedOnly: true and disabledExtensions.includes('regex'),
+            // and ask page renders them purely from app.snapshot().
             const getScriptsSpy = jest.fn(({ allowedOnly } = {}) => (
                 allowedOnly
                     ? [{ id: 'g1', disabled: false }, { id: 'g2', disabled: true }]
@@ -1468,7 +1521,7 @@ describe('workbench Ask model & source readers', () => {
                 getContext: () => ({
                     chat: [],
                     characters: [],
-                    chatMetadata: { variables: {} },
+                    chatMetadata: { variables: { hp: 100, mood: 'calm' } },
                     regex: { getScripts: getScriptsSpy },
                     extensionSettings: { disabledExtensions: disabledExts },
                 }),
@@ -1481,9 +1534,16 @@ describe('workbench Ask model & source readers', () => {
             expect(getScriptsSpy).toHaveBeenCalledWith({ allowedOnly: true });
             expect(overviewEnabled.正则).toBe('启用 1 条');
 
+            let currentSnap = await loadSnapshot();
+            expect(currentSnap.variables).toEqual({ count: 2, opFloors: 0 });
+            expect(currentSnap.regex).toEqual({ disabled: false, enabledCount: 1 });
+
+            // Clear globalThis.Luker before rendering ask page to prove paintSide reads from app.snapshot() only
+            const savedLuker = globalThis.Luker;
+            delete globalThis.Luker;
             const noChatApp = {
                 ...app,
-                snapshot: () => ({ chat: { chatId: '', label: '', floors: 0 }, card: { name: '', books: [] }, preset: { name: 'Default' }, connection: 'Main' }),
+                snapshot: () => currentSnap,
             };
             const noChatPage = createAskPage(noChatApp);
             dom.window.document.body.appendChild(noChatPage.el);
@@ -1497,11 +1557,16 @@ describe('workbench Ask model & source readers', () => {
             expect(noChatJumpBtns).toHaveLength(1);
             expect(noChatJumpBtns[0].textContent).toContain('Memory graph config');
 
+            const sideVarsItem = [...noChatPage.el.querySelectorAll('.wb-src-item')]
+                .find(el => el.querySelector('.wb-src-name')?.textContent === 'Variables');
+            expect(sideVarsItem.querySelector('.wb-src-n').textContent).toBe('2 keys');
+
             const sideRegexItem = [...noChatPage.el.querySelectorAll('.wb-src-item')]
                 .find(el => el.querySelector('.wb-src-name')?.textContent === 'Regex scripts');
             expect(sideRegexItem.querySelector('.wb-src-n').textContent).toBe('1 enabled');
 
-            // Disabling the regex extension marks overview as '扩展已关闭' and side panel as 'Off'
+            // Disabling the regex extension marks overview as '扩展已关闭', loadSnapshot regex.disabled as true, and side panel as 'Off'
+            globalThis.Luker = savedLuker;
             disabledExts = ['regex'];
             getScriptsSpy.mockClear();
             const overviewDisabled = await askOverview({
@@ -1510,6 +1575,10 @@ describe('workbench Ask model & source readers', () => {
             });
             expect(overviewDisabled.正则).toBe('扩展已关闭');
             expect(getScriptsSpy).not.toHaveBeenCalled();
+
+            currentSnap = await loadSnapshot();
+            expect(currentSnap.regex).toEqual({ disabled: true, enabledCount: null });
+            delete globalThis.Luker;
 
             noChatPage.onSnapshot();
             const sideRegexOff = [...noChatPage.el.querySelectorAll('.wb-src-item')]

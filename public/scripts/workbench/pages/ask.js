@@ -179,16 +179,11 @@ export function createAskPage(app) {
             }
         }
 
-        const ctx = globalThis.Luker?.getContext?.() ?? globalThis.lukerContext ?? null;
-        const varKeysCount = Object.keys(ctx?.chatMetadata?.variables || {}).length;
-        const regexExtensionDisabled = Array.isArray(ctx?.extensionSettings?.disabledExtensions)
-            && ctx.extensionSettings.disabledExtensions.includes('regex');
-        let regexEnabledCount = null;
-        if (!regexExtensionDisabled && typeof ctx?.regex?.getScripts === 'function') {
-            try {
-                regexEnabledCount = (ctx.regex.getScripts({ allowedOnly: true }) || []).filter(s => s && !s.disabled).length;
-            } catch { regexEnabledCount = null; }
-        }
+        const varKeysCount = Number(snap?.variables?.count || 0);
+        const regexExtensionDisabled = Boolean(snap?.regex?.disabled);
+        const regexEnabledCount = snap?.regex && snap.regex.enabledCount !== undefined
+            ? snap.regex.enabledCount
+            : null;
         const anySourceOn = allowed.inspector !== false || allowed.frontLogs !== false || allowed.serverLogs !== false || allowed.content !== false || allowed.plugins !== false;
 
         put(side,

@@ -174,6 +174,26 @@ function worldPart(ctx, card) {
     return { global, character: card?.books || [] };
 }
 
+function variablesPart(ctx) {
+    const count = Object.keys(ctx?.chatMetadata?.variables || {}).length;
+    const opFloors = (Array.isArray(ctx?.chat) ? ctx.chat : [])
+        .filter(m => Array.isArray(m?.extra?.var_ops) && m.extra.var_ops.length > 0)
+        .length;
+    return { count, opFloors };
+}
+
+function regexPart(ctx) {
+    const disabled = Array.isArray(ctx?.extensionSettings?.disabledExtensions)
+        && ctx.extensionSettings.disabledExtensions.includes('regex');
+    let enabledCount = null;
+    if (!disabled && typeof ctx?.regex?.getScripts === 'function') {
+        try {
+            enabledCount = (ctx.regex.getScripts({ allowedOnly: true }) || []).filter(s => s && !s.disabled).length;
+        } catch { enabledCount = null; }
+    }
+    return { disabled, enabledCount };
+}
+
 export function connectionName(ctx = getContext()) {
     try {
         const sel = typeof document !== 'undefined' ? document.getElementById('connection_profiles') : null;
@@ -206,7 +226,7 @@ async function collectProviderSnapshots(ctx, registry = defaultRegistry) {
 }
 
 /**
- * @returns {Promise<{ chat, providers, memory, orch, budget, preset, card, world, connection, at } | null>}
+ * @returns {Promise<{ chat, providers, memory, orch, budget, preset, card, world, variables, regex, connection, at } | null>}
  */
 export async function loadSnapshot(registry = defaultRegistry) {
     const ctx = getContext();
@@ -225,6 +245,8 @@ export async function loadSnapshot(registry = defaultRegistry) {
         preset: presetPart(ctx),
         card,
         world: worldPart(ctx, card),
+        variables: variablesPart(ctx),
+        regex: regexPart(ctx),
         connection: connectionName(ctx),
         at: Date.now(),
     };
@@ -499,6 +521,14 @@ export async function serverLogs({ limit = 60, search = '' } = {}) {
     }));
 }
 
+function isExplicitFiniteNumber(value) {
+    return value !== null
+        && value !== undefined
+        && value !== ''
+        && typeof value !== 'boolean'
+        && Number.isFinite(Number(value));
+}
+
 function chatMessages({ from, to, floors, search = '' } = {}) {
     const ctx = getContext();
     const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
@@ -552,9 +582,13 @@ function chatMessages({ from, to, floors, search = '' } = {}) {
     let start;
     let end;
     let cappedBySetting = false;
-    if (Number.isFinite(Number(from)) || Number.isFinite(Number(to))) {
-        start = Number.isFinite(Number(from)) ? Math.max(0, Number(from)) : Math.max(0, Number(to) - maxSpan + 1);
-        end = Number.isFinite(Number(to)) ? Math.min(last, Number(to)) : Math.min(last, start + maxSpan - 1);
+    const hasFrom = isExplicitFiniteNumber(from);
+    const hasTo = isExplicitFiniteNumber(to);
+    if (hasFrom || hasTo) {
+        const fromNum = hasFrom ? Math.floor(Number(from)) : null;
+        const toNum = hasTo ? Math.floor(Number(to)) : null;
+        start = hasFrom ? Math.max(0, fromNum) : Math.max(0, toNum - maxSpan + 1);
+        end = hasTo ? Math.min(last, toNum) : Math.min(last, start + maxSpan - 1);
         if (!isAll && end - start + 1 > maxSpan) {
             end = Math.min(last, start + maxSpan - 1);
             cappedBySetting = true;
@@ -1091,13 +1125,50 @@ export function askToolsForProviders(registry = defaultRegistry) {
     return tools;
 }
 
+/** 将消息 content 转为诊断可读文本，将多模态图片块替换为 [image] 避免 base64 占满预算。 */
+function formatInspectorContent(content) {
+    if (typeof content === 'string') return content;
+    if (content == null) return '';
+    if (Array.isArray(content)) {
+        const parts = [];
+        for (const part of content) {
+            if (typeof part === 'string') {
+                parts.push(part);
+                continue;
+            }
+            if (!part || typeof part !== 'object') continue;
+            if (part.type === 'text' || typeof part.text === 'string') {
+                parts.push(String(part.text ?? ''));
+                continue;
+            }
+            if (
+                part.type === 'image_url'
+                || part.type === 'image'
+                || part.type === 'input_image'
+                || part.inlineData
+                || part.inline_data
+                || part.fileData
+                || part.file_data
+            ) {
+                parts.push('[image]');
+                continue;
+            }
+            parts.push(JSON.stringify(part));
+        }
+        return parts.join('\n');
+    }
+    return JSON.stringify(content);
+}
+
 /** 将单条请求消息格式化为适合模型诊断的文本片段。 */
 function formatInspectorMessage(m, index, maxChars = 3000) {
-    const raw = typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content ?? '');
+    const raw = formatInspectorContent(m?.content);
     const truncated = raw.length > maxChars;
     return {
         index,
         role: m?.role || '',
+        ...(m?.name ? { name: String(m.name) } : {}),
+        ...(m?.tool_call_id ? { toolCallId: String(m.tool_call_id) } : {}),
         chars: raw.length,
         content: truncated ? `${raw.slice(0, maxChars)}…` : raw,
         ...(Array.isArray(m?.tool_calls) && m.tool_calls.length
@@ -1215,12 +1286,7 @@ export function askReaders({ redactText = true, suggestions = () => [], sources 
             out.usage = d.usage;
             out.finishReason = d.finishReason;
             if (part !== 'reply') {
-                const hasMessageIndex = message_index !== null
-                    && message_index !== undefined
-                    && message_index !== ''
-                    && typeof message_index !== 'boolean'
-                    && Number.isFinite(Number(message_index));
-                if (hasMessageIndex) {
+                if (isExplicitFiniteNumber(message_index)) {
                     const idx = Math.floor(Number(message_index));
                     if (idx >= 0 && idx < allMsgs.length) {
                         out.messages = [formatInspectorMessage(allMsgs[idx], idx, 10000)]; // cap-ok: 单条精读放宽至 10000 字
@@ -1353,20 +1419,15 @@ export async function askOverview({
         raw.提示词 = budget
             ? Object.fromEntries([['合计', budget.total], ['上限', budget.max], ...budget.parts.map(p => [p.label, p.tokens])])
             : '没有数据';
-        const localVarCount = Object.keys(ctx.chatMetadata?.variables || {}).length;
-        const varOpFloors = (Array.isArray(ctx.chat) ? ctx.chat : []).filter(m => Array.isArray(m?.extra?.var_ops) && m.extra.var_ops.length > 0).length;
-        if (localVarCount > 0 || varOpFloors > 0) {
-            raw.变量 = { 聊天变量数: localVarCount, 含操作日志楼层数: varOpFloors };
+        const vars = variablesPart(ctx);
+        if (vars.count > 0 || vars.opFloors > 0) {
+            raw.变量 = { 聊天变量数: vars.count, 含操作日志楼层数: vars.opFloors };
         }
-        const regexExtensionDisabled = Array.isArray(ctx.extensionSettings?.disabledExtensions)
-            && ctx.extensionSettings.disabledExtensions.includes('regex');
-        if (regexExtensionDisabled) {
+        const regexInfo = regexPart(ctx);
+        if (regexInfo.disabled) {
             raw.正则 = '扩展已关闭';
-        } else if (ctx.regex?.getScripts) {
-            try {
-                const enabledRegex = (ctx.regex.getScripts({ allowedOnly: true }) || []).filter(s => s && !s.disabled).length;
-                raw.正则 = `启用 ${enabledRegex} 条`;
-            } catch { /* 忽略正则读取异常 */ }
+        } else if (regexInfo.enabledCount !== null) {
+            raw.正则 = `启用 ${regexInfo.enabledCount} 条`;
         }
     }
 

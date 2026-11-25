@@ -16,16 +16,17 @@ const RULES = [
     { kind: 'memory', label: '记忆图 · 召回规划', test: /memory recall planner|recall_query_context|candidate_nodes/i },
     { kind: 'memory', label: '记忆图 · 提取', test: /dialogue_batch|memory (graph )?extract|extract(ion)? (batch|schema)|mg_upsert|luker_rpg_memory/i },
     { kind: 'memory', label: '记忆图 · 压缩', test: /rollup|summarize the (following|child)|compress(ion)? (rule|instruction)/i },
-    // orchestrator / search / sd illustration
+    // orchestrator / search / sd illustration & studio
     { kind: 'orch', label: '编排', test: /luker_orch|orchestrat|agenda_planner|\bdirector\b.*\bdispatch/i },
     { kind: 'search', label: '联网搜索', test: /search_tools|luker_web_search|luker_search_agent|web_search|search agent/i },
-    { kind: 'image', label: 'AI 插图 / 画室', test: /sd_read_run|sd_propose_|illustration_prompt|character_exploration|visualInspection/i },
+    { kind: 'image', label: 'AI 插图 / 画室', test: /\b(?:add_image_prompt|explore_characters|generate_image|search_character_sources|visit_character_page|fetch_reference_image|save_character_profile|stage_character_profile|read_character_profiles)\b|visualInspection/i },
     // iteration studios
     { kind: 'iterate', label: 'AI 迭代 · 记忆图配置', test: /mg_schema_|mg_config_|schema iteration|configuration-editor ai/i },
     { kind: 'iterate', label: 'AI 迭代 · 记忆图内容', test: /mg_graph_|graph-editor ai|graph revision/i },
     { kind: 'iterate', label: 'AI 迭代 · 预设', test: /cpa_|completion preset assistant/i },
+    { kind: 'iterate', label: 'AI 迭代 · 世界书', test: /this session edits world books only|帮用户修改「(?:世界书|世界書|World book)」/i },
     { kind: 'iterate', label: 'AI 迭代 · 角色卡', test: /cea_|character editor assistant/i },
-    { kind: 'iterate', label: 'AI 迭代 · 世界书', test: /lorebook_write|wb_world_|worldbook assistant/i },
+    { kind: 'iterate', label: 'AI 迭代 · 图像生成', test: /\bsd_(?:list|read|update|upsert|delete|create|remove|search|inspect|test|simulate)_|illustration_prompt/i },
     { kind: 'workbench', label: '工作台', test: /wb_(read|list|search|answer|ask|ok)|工作台/ },
 ];
 

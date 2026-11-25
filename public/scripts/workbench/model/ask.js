@@ -46,7 +46,7 @@ export function askTools(sources = {}, extraPluginTools = []) {
         list.push(fn('wb_read_request', 'Read one request in detail: status, error, usage, messages, reply, optional reasoning and tools. For large main-chat prompts, pass tail_messages (e.g. 6) or message_index to inspect specific messages without truncation.', {
             id: { type: 'string', description: 'Request id from overview or wb_list_requests.' },
             part: { type: 'string', enum: ['messages', 'reply', 'both'], description: 'Default both.' },
-            tail_messages: { type: 'integer', description: 'Only return the last N messages (plus system overview) so recent context is not clipped.' },
+            tail_messages: { type: 'integer', description: 'Only return the last N messages so recent context is not clipped.' },
             message_index: { type: 'integer', description: 'Read one specific 0-based message index in detail (ignores tail_messages).' },
             include_reasoning: { type: 'boolean', description: 'Include model reasoning/thinking excerpt if recorded.' },
             include_tools: { type: 'boolean', description: 'Include summary of tool definitions sent with this request.' },
@@ -217,6 +217,12 @@ export function buildAskHistory(turns, maxTurns = 10) {
     return out.slice(-maxTurns);
 }
 
+function isNoToolCallsError(err) {
+    if (!err) return false;
+    if (err.code === 'no_tool_calls') return true;
+    return /did not contain any matching tool calls/i.test(String(err.message || err));
+}
+
 /**
  * 执行一次完整的「问问」多轮工具调用直到产出最终答案或到达轮数上限。
  * @param {{ question, overview, readers: Record<string, (args) => Promise<any>>, request(messages, tools) => Promise<{text, calls, reasoning?, reasoningBlocks?, reasoningDetails?}>,
@@ -247,7 +253,7 @@ export async function runAsk({ question, overview, readers, request, sources = {
         try {
             resp = await request(requestMessages, offered);
         } catch (err) {
-            if (lastRound && !signal?.aborted && err?.name !== 'AbortError' && err?.code !== 'aborted') {
+            if (lastRound && !signal?.aborted && isNoToolCallsError(err)) {
                 return {
                     answer: lastAssistantText || i18n('(The AI read a lot without reaching a conclusion — try asking something more specific)'),
                     suggest: '',
