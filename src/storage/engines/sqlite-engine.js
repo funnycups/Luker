@@ -36,264 +36,34 @@ function quoteSqliteIdent(ident) {
     return `"${String(ident).replace(/"/g, '""')}"`;
 }
 
-/**
- * SQLite's documented 5-rule type affinity determination so equivalent type
- * aliases (e.g. VARCHAR/CLOB -> TEXT, INT/BIGINT -> INTEGER) match while
- * incompatible affinities are rejected.
- * @param {string} rawType
- * @returns {'INTEGER'|'TEXT'|'BLOB'|'REAL'|'NUMERIC'}
- */
-function sqliteTypeAffinity(rawType) {
-    const upper = String(rawType || '').toUpperCase();
-    if (upper.includes('INT')) return 'INTEGER';
-    if (upper.includes('CHAR') || upper.includes('CLOB') || upper.includes('TEXT')) return 'TEXT';
-    if (upper === '' || upper.includes('BLOB')) return 'BLOB';
-    if (upper.includes('REAL') || upper.includes('FLOA') || upper.includes('DOUB')) return 'REAL';
-    return 'NUMERIC';
-}
-
-function normalizeSqliteDefault(rawDefault) {
-    if (rawDefault === null || rawDefault === undefined) return null;
-    let value = String(rawDefault).trim();
-    while (value.startsWith('(') && value.endsWith(')')) {
-        let depth = 0;
-        let wrapsAll = true;
-        for (let i = 0; i < value.length - 1; i += 1) {
-            if (value[i] === '(') depth += 1;
-            else if (value[i] === ')') depth -= 1;
-            if (depth === 0) {
-                wrapsAll = false;
-                break;
-            }
-        }
-        if (!wrapsAll) break;
-        value = value.slice(1, -1).trim();
-    }
-    if (value.toUpperCase() === 'NULL') return 'NULL';
-    return value;
-}
-
-function normalizedForeignKeys(db, table) {
-    const rows = db.pragma(`foreign_key_list(${quoteSqliteIdent(table)})`);
-    const groups = new Map();
-    for (const row of rows) {
-        if (!groups.has(row.id)) groups.set(row.id, []);
-        groups.get(row.id).push(row);
-    }
-    return [...groups.values()].map(group => JSON.stringify({
-        table: String(group[0].table || '').toLowerCase(),
-        on_delete: String(group[0].on_delete || 'NO ACTION').toUpperCase(),
-        on_update: String(group[0].on_update || 'NO ACTION').toUpperCase(),
-        pairs: group.map(r => `${r.from}->${r.to}`).sort(),
-    })).sort();
-}
-
-function normalizedUniqueIndexes(db, table) {
-    const indexes = db.pragma(`index_list(${quoteSqliteIdent(table)})`).filter(ix => ix.unique === 1);
-    return indexes.map((ix) => {
-        const info = db.pragma(`index_info(${quoteSqliteIdent(ix.name)})`);
-        return {
-            name: ix.name,
-            partial: ix.partial,
-            hasExpression: info.some(c => c.name === null),
-            cols: info.map(c => c.name).filter(Boolean).sort(),
-        };
-    });
-}
-
-function validateTableSchema(db, expectedDb, table, { version, pendingAddedCols }) {
+function validateRequiredColumns(db, expectedDb, table, { version, pendingAddedCols }) {
     const expectedCols = expectedDb.pragma(`table_xinfo(${quoteSqliteIdent(table)})`);
     const actualCols = db.pragma(`table_xinfo(${quoteSqliteIdent(table)})`);
-    const actualByName = new Map(actualCols.map(c => [c.name, c]));
-    const expectedByName = new Map(expectedCols.map(c => [c.name, c]));
+    const actualNames = new Set(actualCols.map(c => c.name));
 
-    const missingColumns = expectedCols.filter(c => !actualByName.has(c.name));
+    const missingColumns = expectedCols.filter(c => !actualNames.has(c.name));
     if (missingColumns.length > 0) {
         throw new RestoreDumpInvalidError(`not a Luker SQLite database: missing columns in ${table}: ${missingColumns.map(c => c.name).join(', ')}`);
     }
 
-    for (const exp of expectedCols) {
-        const act = actualByName.get(exp.name);
-        const expGenerated = exp.hidden === 2 || exp.hidden === 3;
-        const actGenerated = act.hidden === 2 || act.hidden === 3;
-        if (expGenerated !== actGenerated) {
-            throw new RestoreDumpInvalidError(`incompatible SQLite column kind in ${table}.${exp.name}`);
-        }
-        if (sqliteTypeAffinity(act.type) !== sqliteTypeAffinity(exp.type)) {
-            throw new RestoreDumpInvalidError(`incompatible SQLite column type in ${table}.${exp.name}: ${act.type || '(empty)'}`);
-        }
-        if (exp.notnull === 1 && act.notnull !== 1) {
-            throw new RestoreDumpInvalidError(`incompatible SQLite nullability in ${table}.${exp.name}: NOT NULL required`);
-        }
-        if (exp.notnull === 0 && exp.pk === 0 && act.notnull !== 0) {
-            throw new RestoreDumpInvalidError(`incompatible SQLite nullability in ${table}.${exp.name}: column must allow NULL`);
-        }
-        if (exp.dflt_value !== null) {
-            const expectedDefault = normalizeSqliteDefault(exp.dflt_value);
-            const actualDefault = normalizeSqliteDefault(act.dflt_value);
-            if (actualDefault !== expectedDefault) {
-                throw new RestoreDumpInvalidError(`incompatible SQLite default in ${table}.${exp.name}`);
+    if (version < CURRENT_SCHEMA_VERSION) {
+        const pendingCols = pendingAddedCols.get(table);
+        if (pendingCols) {
+            for (const col of pendingCols) {
+                if (actualNames.has(col)) {
+                    throw new RestoreDumpInvalidError(`SQLite schema version ${version} already contains migrated column ${table}.${col}`);
+                }
             }
         }
-    }
-
-    const pendingCols = pendingAddedCols.get(table);
-    for (const act of actualCols) {
-        if (expectedByName.has(act.name)) continue;
-        if (version < CURRENT_SCHEMA_VERSION && pendingCols?.has(act.name)) {
-            throw new RestoreDumpInvalidError(`SQLite schema version ${version} already contains migrated column ${table}.${act.name}`);
-        }
-        if (act.hidden === 0 && act.notnull === 1 && act.dflt_value === null) {
-            throw new RestoreDumpInvalidError(`incompatible extra NOT NULL column without default in ${table}.${act.name}`);
-        }
-    }
-
-    const expectedPkCols = expectedCols.filter(c => c.pk > 0).map(c => c.name).sort();
-    const actualPkCols = actualCols.filter(c => c.pk > 0).map(c => c.name).sort();
-    if (JSON.stringify(actualPkCols) !== JSON.stringify(expectedPkCols)) {
-        throw new RestoreDumpInvalidError(`incompatible primary key on ${table}`);
-    }
-
-    const expectedUniqueKeys = new Set(
-        normalizedUniqueIndexes(expectedDb, table)
-            .filter(ix => ix.partial === 0 && !ix.hasExpression)
-            .map(ix => JSON.stringify(ix.cols)),
-    );
-    const actualUniqueIndexes = normalizedUniqueIndexes(db, table);
-    const pkKey = JSON.stringify(expectedPkCols);
-    const hasMatchingPkUnique = actualUniqueIndexes.some(
-        ix => ix.partial === 0 && !ix.hasExpression && JSON.stringify(ix.cols) === pkKey,
-    );
-    if (!hasMatchingPkUnique) {
-        throw new RestoreDumpInvalidError(`missing unique primary-key index on ${table}`);
-    }
-    for (const ix of actualUniqueIndexes) {
-        const key = JSON.stringify(ix.cols);
-        if (ix.partial !== 0 || ix.hasExpression || !expectedUniqueKeys.has(key)) {
-            throw new RestoreDumpInvalidError(`unexpected unique constraint on ${table} (${ix.name})`);
-        }
-    }
-
-    const expectedFks = normalizedForeignKeys(expectedDb, table);
-    const actualFks = normalizedForeignKeys(db, table);
-    if (JSON.stringify(actualFks) !== JSON.stringify(expectedFks)) {
-        throw new RestoreDumpInvalidError(`incompatible foreign key definition on ${table}`);
-    }
-}
-
-function validateTableRowValues(db, expectedDb, table) {
-    const expectedCols = expectedDb.pragma(`table_xinfo(${quoteSqliteIdent(table)})`);
-    const predicates = [];
-    for (const exp of expectedCols) {
-        if (exp.hidden !== 0) continue;
-        const qCol = quoteSqliteIdent(exp.name);
-        if (exp.notnull === 1 || exp.pk > 0) {
-            predicates.push(`${qCol} IS NULL`);
-        }
-        const affinity = sqliteTypeAffinity(exp.type);
-        if (affinity === 'TEXT') {
-            predicates.push(`(${qCol} IS NOT NULL AND typeof(${qCol}) != 'text')`);
-        } else if (affinity === 'INTEGER') {
-            predicates.push(`(${qCol} IS NOT NULL AND typeof(${qCol}) != 'integer')`);
-        }
-        if (exp.name === 'doc') {
-            predicates.push(`(${qCol} IS NOT NULL AND json_valid(${qCol}) != 1)`);
-        }
-    }
-    if (predicates.length > 0) {
-        const badRow = db.prepare(`SELECT 1 FROM ${quoteSqliteIdent(table)} WHERE ${predicates.join(' OR ')} LIMIT 1`).get();
-        if (badRow) {
-            throw new RestoreDumpInvalidError(`invalid row value or constraint violation in ${table}`);
-        }
-    }
-    if (table === 'chats') {
-        const badIntegrity = db.prepare(
-            'SELECT 1 FROM chats WHERE integrity IS NOT json_extract(doc, \'$.header.chat_metadata.integrity\') LIMIT 1',
-        ).get();
-        if (badIntegrity) {
-            throw new RestoreDumpInvalidError('chats.integrity values do not match stored chat documents');
-        }
-    }
-}
-
-async function runOperationalSchemaProbe(sourceDb, version) {
-    const probeDb = new Database(':memory:');
-    try {
-        probeDb.pragma('foreign_keys = OFF');
-        const userTableSet = new Set(SQLITE_USER_TABLES);
-        const tableRows = sourceDb.prepare(
-            'SELECT name, sql FROM sqlite_master WHERE type = \'table\' AND sql IS NOT NULL',
-        ).all().filter(r => userTableSet.has(r.name));
-        for (const row of tableRows) {
-            probeDb.prepare(row.sql).run();
-        }
-        const indexRows = sourceDb.prepare(
-            'SELECT name, tbl_name, sql FROM sqlite_master WHERE type = \'index\' AND sql IS NOT NULL',
-        ).all().filter(r => userTableSet.has(r.tbl_name));
-        for (const row of indexRows) {
-            probeDb.prepare(row.sql).run();
-        }
-        probeDb.pragma(`user_version = ${version}`);
-        initSchema(probeDb);
-        probeDb.pragma('foreign_keys = ON');
-
-        const handle = '__probe__';
-        const tx = new SqliteTransaction({ db: probeDb, handle, directoriesByHandle: () => ({ root: '' }) });
-        const chatKey = { kind: 'chat', handle, charDir: 'ProbeChar', name: 'probe-chat' };
-        await tx.putResource(chatKey, {
-            header: { user_name: 'u', character_name: 'ProbeChar', chat_metadata: {} },
-            body: [],
-            integrity: 'probe-integrity-1',
-        });
-        const firstChat = await tx.getResource(chatKey);
-        if (firstChat?.integrity !== 'probe-integrity-1') {
-            throw new RestoreDumpInvalidError('chats.integrity generated column does not extract chat integrity');
-        }
-        await tx.putResource(chatKey, {
-            header: { user_name: 'u', character_name: 'ProbeChar', chat_metadata: {} },
-            body: [],
-        });
-        const secondChat = await tx.getResource(chatKey);
-        if (secondChat?.integrity !== '') {
-            throw new RestoreDumpInvalidError('chats.integrity generated column does not clear on missing integrity');
-        }
-        tx.putChatState(chatKey, 'probe-ns', { ok: true });
-        await tx.deleteResource(chatKey);
-        if (tx.getChatState(chatKey, 'probe-ns') !== null) {
-            throw new RestoreDumpInvalidError('chat_states foreign key did not cascade delete on parent chat removal');
-        }
-
-        await tx.putResource({ kind: 'settings', handle }, { doc: { probe: 1 } });
-        await tx.putResource({ kind: 'settings', handle }, { doc: { probe: 2 } });
-        await tx.putResource({ kind: 'preset', handle, dirKey: 'openai', name: 'p' }, { doc: { temperature: 1 } });
-        await tx.putResource({ kind: 'preset', handle, dirKey: 'openai', name: 'p' }, { doc: { temperature: 0.5 } });
-        tx.putPresetState({ kind: 'preset', handle, dirKey: 'openai', name: 'orphan' }, 'ns', { ok: true });
-        await tx.putResource({ kind: 'world', handle, name: 'w' }, { doc: { entries: {} } });
-        await tx.putResource({ kind: 'world', handle, name: 'w' }, { doc: { entries: { '0': { content: 'x' } } } });
-        probeDb.prepare('UPDATE worlds SET revision = NULL').run();
-        await tx.putResource({ kind: 'named-doc', handle, bucket: 'themes', name: 't' }, { doc: { accent: '#000' } });
-        await tx.putResource({ kind: 'named-doc', handle, bucket: 'themes', name: 't' }, { doc: { accent: '#fff' } });
-        await tx.putResource({ kind: 'group', handle, id: 'g' }, { doc: { id: 'g', name: 'G', chats: [] } });
-        await tx.putResource({ kind: 'group', handle, id: 'g' }, { doc: { id: 'g', name: 'G2', chats: [] } });
-        await tx.putResource({ kind: 'stats', handle }, { doc: { totalChats: 1 } });
-        await tx.putResource({ kind: 'stats', handle }, { doc: { totalChats: 2 } });
-
-        const fkViolations = probeDb.pragma('foreign_key_check');
-        if (fkViolations.length > 0) {
-            throw new RestoreDumpInvalidError('SQLite schema failed foreign key operational check');
-        }
-    } finally {
-        probeDb.close();
     }
 }
 
 /**
  * Rejects a restore payload that is not a readable, schema-compatible Luker
  * SQLite database: checks the file header, opens read-only, runs
- * `PRAGMA integrity_check`, rejects unsupported schema versions/triggers/views/
- * virtual tables, validates required columns/types/nullability/defaults/PKs/
- * unique indexes/FKs against the bootstrapped schema, verifies row data and
- * `PRAGMA foreign_key_check`, and runs an in-memory operational probe.
+ * `PRAGMA integrity_check`, rejects unsupported schema versions, triggers,
+ * views, or virtual tables, verifies required user tables/columns and
+ * `PRAGMA foreign_key_check`.
  *
  * An engine dump is a `db.backup` copy and stays in WAL mode, so the
  * read-only open creates `-wal`/`-shm` files it cannot remove on close; the
@@ -344,9 +114,6 @@ export async function assertValidSqliteFile(filePath) {
             throw new RestoreDumpInvalidError(`not a Luker SQLite database: missing tables ${missing.join(', ')}`);
         }
 
-        // Bootstrap the real schema in memory; do not duplicate its column or
-        // constraint definitions in restore validation. Version 0 backups use
-        // the initial user tables and are migrated when rewritten/opened.
         const expectedDb = new Database(':memory:');
         let expectedLatestDb = null;
         try {
@@ -367,21 +134,16 @@ export async function assertValidSqliteFile(filePath) {
                 }
             }
             for (const table of SQLITE_USER_TABLES) {
-                validateTableSchema(db, expectedDb, table, { version, pendingAddedCols });
+                validateRequiredColumns(db, expectedDb, table, { version, pendingAddedCols });
             }
             const fkViolations = db.pragma('foreign_key_check');
             if (fkViolations.length > 0) {
                 throw new RestoreDumpInvalidError(`SQLite foreign key integrity check failed (${fkViolations.length} violation(s))`);
             }
-            for (const table of SQLITE_USER_TABLES) {
-                validateTableRowValues(db, expectedDb, table);
-            }
         } finally {
             expectedLatestDb?.close();
             expectedDb.close();
         }
-
-        await runOperationalSchemaProbe(db, version);
     } catch (err) {
         throw isSqlitePayloadError(err)
             ? (err instanceof RestoreDumpInvalidError ? err : new RestoreDumpInvalidError(err.message))

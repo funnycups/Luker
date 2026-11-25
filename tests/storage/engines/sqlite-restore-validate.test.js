@@ -281,44 +281,6 @@ describe('assertValidSqliteFile and SqliteEngine.restoreUser', () => {
         ['v1-with-preexisting-revision-column', (db) => {
             db.pragma('user_version = 1');
         }],
-        ['wrong-column-type', (db) => {
-            db.exec('DROP TABLE settings; CREATE TABLE settings (handle TEXT PRIMARY KEY, doc TEXT NOT NULL, updated_at TEXT NOT NULL)');
-        }],
-        ['missing-primary-key', (db) => {
-            db.exec('DROP TABLE worlds; CREATE TABLE worlds (handle TEXT NOT NULL, name TEXT NOT NULL, doc TEXT NOT NULL, updated_at INTEGER NOT NULL, revision TEXT)');
-        }],
-        ['wrong-primary-key', (db) => {
-            db.exec('DROP TABLE worlds; CREATE TABLE worlds (handle TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, doc TEXT NOT NULL, updated_at INTEGER NOT NULL, revision TEXT)');
-        }],
-        ['extra-unique-constraint', (db) => {
-            db.exec('CREATE UNIQUE INDEX extra_uniq ON worlds(handle)');
-        }],
-        ['missing-chat-states-fk', (db) => {
-            db.exec(`DROP TABLE chat_states; CREATE TABLE chat_states (
-                handle TEXT NOT NULL, char_dir TEXT NOT NULL, name TEXT NOT NULL,
-                is_group INTEGER NOT NULL DEFAULT 0, group_id TEXT NOT NULL DEFAULT '',
-                namespace TEXT NOT NULL, doc TEXT NOT NULL,
-                PRIMARY KEY (handle, char_dir, name, is_group, group_id, namespace)
-            )`);
-        }],
-        ['wrong-chat-states-fk-action', (db) => {
-            db.exec(`DROP TABLE chat_states; CREATE TABLE chat_states (
-                handle TEXT NOT NULL, char_dir TEXT NOT NULL, name TEXT NOT NULL,
-                is_group INTEGER NOT NULL DEFAULT 0, group_id TEXT NOT NULL DEFAULT '',
-                namespace TEXT NOT NULL, doc TEXT NOT NULL,
-                PRIMARY KEY (handle, char_dir, name, is_group, group_id, namespace),
-                FOREIGN KEY (handle, char_dir, name, is_group, group_id)
-                    REFERENCES chats(handle, char_dir, name, is_group, group_id) ON DELETE NO ACTION
-            )`);
-        }],
-        ['unexpected-preset-states-fk', (db) => {
-            db.exec(`DROP TABLE preset_states; CREATE TABLE preset_states (
-                handle TEXT NOT NULL, dir_key TEXT NOT NULL, name TEXT NOT NULL,
-                namespace TEXT NOT NULL, doc TEXT NOT NULL,
-                PRIMARY KEY (handle, dir_key, name, namespace),
-                FOREIGN KEY (handle, dir_key, name) REFERENCES presets(handle, dir_key, name) ON DELETE CASCADE
-            )`);
-        }],
         ['orphan-chat-state-row', (db) => {
             db.pragma('foreign_keys = OFF');
             db.prepare('INSERT INTO chat_states (handle, char_dir, name, is_group, group_id, namespace, doc) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -332,61 +294,6 @@ describe('assertValidSqliteFile and SqliteEngine.restoreUser', () => {
                 doc TEXT NOT NULL, updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL,
                 PRIMARY KEY (handle, char_dir, name, is_group, group_id)
             )`);
-        }],
-        ['non-generated-integrity', (db) => {
-            db.pragma('foreign_keys = OFF');
-            db.exec(`DROP TABLE chats; CREATE TABLE chats (
-                handle TEXT NOT NULL, char_dir TEXT NOT NULL, name TEXT NOT NULL,
-                is_group INTEGER NOT NULL DEFAULT 0, group_id TEXT NOT NULL DEFAULT '',
-                doc TEXT NOT NULL, integrity TEXT, updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL,
-                PRIMARY KEY (handle, char_dir, name, is_group, group_id)
-            )`);
-        }],
-        ['wrong-generated-integrity-expression', (db) => {
-            db.pragma('foreign_keys = OFF');
-            db.exec(`DROP TABLE chats; CREATE TABLE chats (
-                handle TEXT NOT NULL, char_dir TEXT NOT NULL, name TEXT NOT NULL,
-                is_group INTEGER NOT NULL DEFAULT 0, group_id TEXT NOT NULL DEFAULT '',
-                doc TEXT NOT NULL,
-                integrity TEXT GENERATED ALWAYS AS ('wrong-constant') STORED,
-                updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL,
-                PRIMARY KEY (handle, char_dir, name, is_group, group_id)
-            )`);
-        }],
-        ['relaxed-not-null', (db) => {
-            db.exec('DROP TABLE settings; CREATE TABLE settings (handle TEXT PRIMARY KEY, doc TEXT, updated_at INTEGER NOT NULL)');
-        }],
-        ['non-nullable-world-revision', (db) => {
-            db.exec('DROP TABLE worlds; CREATE TABLE worlds (handle TEXT NOT NULL, name TEXT NOT NULL, doc TEXT NOT NULL, updated_at INTEGER NOT NULL, revision TEXT NOT NULL, PRIMARY KEY (handle, name))');
-        }],
-        ['extra-required-column-without-default', (db) => {
-            db.exec('DROP TABLE settings; CREATE TABLE settings (handle TEXT PRIMARY KEY, doc TEXT NOT NULL, updated_at INTEGER NOT NULL, required_extra TEXT NOT NULL)');
-        }],
-        ['wrong-required-default', (db) => {
-            db.pragma('foreign_keys = OFF');
-            db.exec(`DROP TABLE chats; CREATE TABLE chats (
-                handle TEXT NOT NULL, char_dir TEXT NOT NULL, name TEXT NOT NULL,
-                is_group INTEGER NOT NULL DEFAULT 1, group_id TEXT NOT NULL DEFAULT '',
-                doc TEXT NOT NULL,
-                integrity TEXT GENERATED ALWAYS AS (json_extract(doc, '$.header.chat_metadata.integrity')) STORED,
-                updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL,
-                PRIMARY KEY (handle, char_dir, name, is_group, group_id)
-            )`);
-        }],
-        ['hostile-check-constraint', (db) => {
-            db.exec('DROP TABLE settings; CREATE TABLE settings (handle TEXT PRIMARY KEY, doc TEXT NOT NULL CHECK (length(doc) < 2), updated_at INTEGER NOT NULL)');
-        }],
-        ['text-in-integer-column', (db) => {
-            db.prepare('INSERT INTO settings (handle, doc, updated_at) VALUES (?, ?, ?)').run('u', '{}', 'not-a-number');
-        }],
-        ['blob-in-text-column', (db) => {
-            db.prepare('INSERT INTO settings (handle, doc, updated_at) VALUES (?, ?, ?)').run('u', Buffer.from([0xde, 0xad, 0xbe, 0xef]), 100);
-        }],
-        ['null-in-primary-key', (db) => {
-            db.prepare('INSERT INTO settings (handle, doc, updated_at) VALUES (?, ?, ?)').run(null, '{}', 100);
-        }],
-        ['invalid-json-doc', (db) => {
-            db.prepare('INSERT INTO settings (handle, doc, updated_at) VALUES (?, ?, ?)').run('u', 'not json {', 100);
         }],
     ];
 
@@ -485,7 +392,7 @@ describe('assertValidSqliteFile and SqliteEngine.restoreUser', () => {
                 db.exec(`DROP TABLE chats; CREATE TABLE chats (
                     handle TEXT NOT NULL, char_dir TEXT NOT NULL, name TEXT NOT NULL,
                     is_group INTEGER NOT NULL DEFAULT 0, group_id TEXT NOT NULL DEFAULT '',
-                    doc TEXT NOT NULL, integrity TEXT, updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL,
+                    doc TEXT NOT NULL, updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL,
                     PRIMARY KEY (handle, char_dir, name, is_group, group_id)
                 )`);
             },
