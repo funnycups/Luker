@@ -91,6 +91,28 @@ describe('renderChangelogMarkdown', () => {
         expect(wikiLink?.textContent).toBe('Article');
         expect(items[1].textContent).toBe('See Article for details.');
     });
+
+    test('unwraps VitePress <span v-pre> wrappers while keeping code literals and other raw HTML escaped', () => {
+        const md = [
+            '- 修复了 <span v-pre>`{{each}}`</span> 遍历内联 JSON 字面量时，字面量内含 <span v-pre>`}}`</span> 的问题，例如 <span v-pre>`{{each::{"a":1,"b":2}}}`</span>。',
+            '- Literal `<span v-pre>` and `</span>` in code stay intact, and <span>other</span> stays escaped.',
+        ].join('\n');
+
+        const root = renderChangelogMarkdown(md);
+        const items = root.querySelectorAll('ul > li');
+        expect(items).toHaveLength(2);
+
+        const codes0 = Array.from(items[0].querySelectorAll('code')).map(el => el.textContent);
+        expect(codes0).toEqual(['{{each}}', '}}', '{{each::{"a":1,"b":2}}}']);
+        expect(items[0].textContent).toBe('修复了 {{each}} 遍历内联 JSON 字面量时，字面量内含 }} 的问题，例如 {{each::{"a":1,"b":2}}}。');
+        expect(items[0].textContent).not.toContain('<span v-pre>');
+        expect(items[0].textContent).not.toContain('</span>');
+
+        const codes1 = Array.from(items[1].querySelectorAll('code')).map(el => el.textContent);
+        expect(codes1).toEqual(['<span v-pre>', '</span>']);
+        expect(items[1].querySelectorAll('span')).toHaveLength(0);
+        expect(items[1].textContent).toContain('<span>other</span>');
+    });
 });
 
 describe('resolveWhatsNewTheme', () => {

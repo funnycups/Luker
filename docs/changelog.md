@@ -57,6 +57,7 @@ This changelog covers every Luker release, from v1.0.0 to the current developmen
 - Fixed <span v-pre>`{{each}}`</span> rendering nothing for an inline JSON literal that contains <span v-pre>`}}`</span> or ends right before the closing braces, such as <span v-pre>`{{each::{"a":1,"b":2}}}`</span>.
 - Fixed scoped regex persistence silently swallowing write failures or removing the source entry before the target scope save succeeded.
 - Fixed missing content in long mobile extension settings drawers and skipped empty blur layers when Blur Strength is set to zero.
+- Fixed post-update changelog notices displaying raw formatting tags around macro examples.
 
 ### Workbench
 

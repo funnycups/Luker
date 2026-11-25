@@ -194,6 +194,27 @@ describe('parseChangelogMarkdown', () => {
         expect(tw.unreleased?.markdown).toContain('修復了更新 Docker 映像檔後登入狀態失效的問題');
         expect(tw.releases[0].markdown).not.toContain('完整更新日誌');
     });
+
+    test('unwraps VitePress <span v-pre> wrappers while preserving inline code and other HTML tags', () => {
+        const md = [
+            '## Unreleased',
+            '',
+            '### Fixes',
+            '',
+            '- Fixed <span v-pre>`{{each}}`</span> containing <span v-pre>`}}`</span> such as <span v-pre>`{{each::{"a":1,"b":2}}}`</span>.',
+            '- Kept `<span v-pre>` and `</span>` inside inline code, and <span v-pre>`</span>`</span> inside a wrapper.',
+            '- Kept unclosed <span v-pre>`{{x}}` and unrelated <span>tags</span> intact.',
+        ].join('\n');
+
+        const parsed = parseChangelogMarkdown(md);
+        expect(parsed.unreleased?.markdown).toBe([
+            '### Fixes',
+            '',
+            '- Fixed `{{each}}` containing `}}` such as `{{each::{"a":1,"b":2}}}`.',
+            '- Kept `<span v-pre>` and `</span>` inside inline code, and `</span>` inside a wrapper.',
+            '- Kept unclosed <span v-pre>`{{x}}` and unrelated <span>tags</span> intact.',
+        ].join('\n'));
+    });
 });
 
 describe('loadChangelogForLocale', () => {

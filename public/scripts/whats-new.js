@@ -166,13 +166,82 @@ function renderInline(text, { allowBold = true } = {}) {
     return out;
 }
 
+const INLINE_OR_VPRE_RE = /`[^`]+`|<span\s+v-pre\s*>|<span(?:\s[^>]*)?>|<\/span\s*>/gi;
+const VPRE_OPEN_RE = /^<span\s+v-pre\s*>$/i;
+
+/**
+ * Unwraps VitePress `<span v-pre>...</span >` wrappers used to shield `{{...}}`
+ * macro literals from Vue template compilation, while preserving inline code
+ * spans and all other HTML tags verbatim.
+ * @param {string} line
+ * @returns {string}
+ */
+function stripVitePressVPre(line) {
+    const str = String(line || '');
+    let out = '';
+    let last = 0;
+    let openTag = null;
+    let inner = '';
+    let innerSpanDepth = 0;
+
+    for (const match of str.matchAll(INLINE_OR_VPRE_RE)) {
+        const token = match[0];
+        const idx = match.index ?? 0;
+        const between = str.slice(last, idx);
+
+        if (openTag !== null) {
+            inner += between;
+        } else {
+            out += between;
+        }
+
+        if (token.startsWith('`')) {
+            if (openTag !== null) {
+                inner += token;
+            } else {
+                out += token;
+            }
+        } else if (token.startsWith('</')) {
+            if (openTag !== null) {
+                if (innerSpanDepth > 0) {
+                    innerSpanDepth -= 1;
+                    inner += token;
+                } else {
+                    out += inner;
+                    openTag = null;
+                    inner = '';
+                }
+            } else {
+                out += token;
+            }
+        } else if (VPRE_OPEN_RE.test(token)) {
+            if (openTag !== null) {
+                out += openTag + inner;
+            }
+            openTag = token;
+            inner = '';
+            innerSpanDepth = 0;
+        } else if (openTag !== null) {
+            innerSpanDepth += 1;
+            inner += token;
+        } else {
+            out += token;
+        }
+
+        last = idx + token.length;
+    }
+
+    const tail = str.slice(last);
+    return openTag !== null ? out + openTag + inner + tail : out + tail;
+}
+
 /**
  * Renders a changelog section's Markdown safely into DOM nodes.
  * @param {string} source
  * @returns {HTMLElement}
  */
 export function renderChangelogMarkdown(source) {
-    const lines = String(source || '').replace(/\r\n?/g, '\n').split('\n');
+    const lines = String(source || '').replace(/\r\n?/g, '\n').split('\n').map(stripVitePressVPre);
     const root = h('div', { class: 'wn-md' });
     const listRe = /^\s*([-*•]|\d+[.)、])\s+/;
     const headingRe = /^#{1,4}\s+/;

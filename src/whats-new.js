@@ -14,6 +14,8 @@ const HEX_REVISION_RE = /^[0-9a-f]{6,40}$/i;
 const UNRELEASED_HEADING_RE = /^##\s+(?:Unreleased|未发布|未發布)\s*$/i;
 const RELEASE_HEADING_RE = /^##\s+v([^\s(]+)(?:\s*\(([^)]+)\))?\s*$/i;
 const COMPARE_FOOTER_LINE_RE = /^\*\*(?:Full Changelog|完整更新日志|完整更新日誌)\*\*[：:].*$/i;
+const INLINE_OR_VPRE_RE = /`[^`]+`|<span\s+v-pre\s*>|<span(?:\s[^>]*)?>|<\/span\s*>/gi;
+const VPRE_OPEN_RE = /^<span\s+v-pre\s*>$/i;
 
 /**
  * @typedef {Object} ChangelogSection
@@ -72,13 +74,81 @@ export function resolveChangelogLocale(locale) {
 }
 
 /**
- * Cleans a raw changelog section body by stripping per-version compare footers
- * and surrounding blank lines.
+ * Unwraps VitePress `<span v-pre>...</span >` wrappers used to shield `{{...}}`
+ * macro literals from Vue template compilation, while preserving inline code
+ * spans and all other HTML tags verbatim.
+ * @param {string} line
+ * @returns {string}
+ */
+function stripVitePressVPre(line) {
+    const str = String(line || '');
+    let out = '';
+    let last = 0;
+    let openTag = null;
+    let inner = '';
+    let innerSpanDepth = 0;
+
+    for (const match of str.matchAll(INLINE_OR_VPRE_RE)) {
+        const token = match[0];
+        const idx = match.index ?? 0;
+        const between = str.slice(last, idx);
+
+        if (openTag !== null) {
+            inner += between;
+        } else {
+            out += between;
+        }
+
+        if (token.startsWith('`')) {
+            if (openTag !== null) {
+                inner += token;
+            } else {
+                out += token;
+            }
+        } else if (token.startsWith('</')) {
+            if (openTag !== null) {
+                if (innerSpanDepth > 0) {
+                    innerSpanDepth -= 1;
+                    inner += token;
+                } else {
+                    out += inner;
+                    openTag = null;
+                    inner = '';
+                }
+            } else {
+                out += token;
+            }
+        } else if (VPRE_OPEN_RE.test(token)) {
+            if (openTag !== null) {
+                out += openTag + inner;
+            }
+            openTag = token;
+            inner = '';
+            innerSpanDepth = 0;
+        } else if (openTag !== null) {
+            innerSpanDepth += 1;
+            inner += token;
+        } else {
+            out += token;
+        }
+
+        last = idx + token.length;
+    }
+
+    const tail = str.slice(last);
+    return openTag !== null ? out + openTag + inner + tail : out + tail;
+}
+
+/**
+ * Cleans a raw changelog section body by stripping per-version compare footers,
+ * VitePress `v-pre` wrappers, and surrounding blank lines.
  * @param {string[]} bodyLines
  * @returns {string}
  */
 function normalizeSectionBody(bodyLines) {
-    const filtered = bodyLines.filter(line => !COMPARE_FOOTER_LINE_RE.test(line.trim()));
+    const filtered = bodyLines
+        .filter(line => !COMPARE_FOOTER_LINE_RE.test(line.trim()))
+        .map(stripVitePressVPre);
     return filtered.join('\n').trim();
 }
 

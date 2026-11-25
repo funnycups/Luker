@@ -78,6 +78,7 @@ test('fresh install stays silent; multi-version upgrade displays changelog, rewr
         expect(versionText).toContain('v2.9.0-rc.4');
         expect(versionText).toContain('v2.9.0-rc.3');
         expect(versionText).not.toContain('v2.9.0-rc.2');
+        expect(versionText).not.toContain('<span v-pre>');
 
         const docLink = backdrop.locator('.wn-body a[href="https://luker.cups.moe/zh-CN/features/workbench"]');
         await expect(docLink).toHaveCount(1);
