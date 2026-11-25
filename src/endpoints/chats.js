@@ -3375,26 +3375,31 @@ router.post('/import', validateAvatarUrlMiddleware, async function (request, res
 });
 
 router.post('/group/get', async (request, response) => {
-    if (!request.body || !request.body.id) {
-        return response.sendStatus(400);
-    }
+    try {
+        if (!request.body || !request.body.id) {
+            return response.sendStatus(400);
+        }
 
-    const id = stripJsonlExt(String(request.body.id));
-    const handle = request.user.profile.handle;
-    const chat = await getChatRepo().get(handle, '', id, { isGroup: true, groupId: id });
-    if (chat == null) {
-        // Match legacy /group/get behavior: return empty array for missing chats.
-        return response.send([]);
+        const id = stripJsonlExt(String(request.body.id));
+        const handle = request.user.profile.handle;
+        const chat = await getChatRepo().get(handle, '', id, { isGroup: true, groupId: id });
+        if (chat == null) {
+            // Match legacy /group/get behavior: return empty array for missing chats.
+            return response.send([]);
+        }
+        // Reconstruct the legacy "header + messages" array shape from the Repo.
+        const headerWithIntegrity = {
+            ...(chat.header ?? {}),
+            chat_metadata: {
+                ...(chat.header?.chat_metadata ?? {}),
+                integrity: chat.integrity,
+            },
+        };
+        return response.send([headerWithIntegrity, ...(chat.body ?? [])]);
+    } catch (error) {
+        console.error(error);
+        return response.status(500).send({ corrupted: true });
     }
-    // Reconstruct the legacy "header + messages" array shape from the Repo.
-    const headerWithIntegrity = {
-        ...(chat.header ?? {}),
-        chat_metadata: {
-            ...(chat.header?.chat_metadata ?? {}),
-            integrity: chat.integrity,
-        },
-    };
-    return response.send([headerWithIntegrity, ...(chat.body ?? [])]);
 });
 
 router.post('/group/info', async (request, response) => {

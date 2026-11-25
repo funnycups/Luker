@@ -235,12 +235,19 @@ export async function loadGroupChat(chatId) {
             body: JSON.stringify({ id: chatId }),
         });
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            const errorPayload = typeof response.json === 'function'
+                ? await response.json().catch(() => null)
+                : null;
+            const error = new Error(`HTTP ${response.status}`);
+            if (errorPayload?.corrupted) {
+                error.corrupted = true;
+            }
+            throw error;
         }
         const data = await response.json().catch(() => {
             throw new Error('Invalid JSON response');
         });
-        if (!Array.isArray(data)) {
+        if (!Array.isArray(data) || (data.length > 0 && (!data[0] || typeof data[0] !== 'object' || Array.isArray(data[0])))) {
             throw new Error('Expected a chat message array');
         }
         return data;
@@ -321,7 +328,10 @@ export async function getGroupChat(groupId, reload = false) {
         return;
     }
     if (!ownsChat()) return;
-    const metadata = data?.[0]?.chat_metadata ?? {};
+    const rawMetadata = data?.[0]?.chat_metadata;
+    const metadata = (rawMetadata && typeof rawMetadata === 'object' && !Array.isArray(rawMetadata))
+        ? rawMetadata
+        : {};
     const freshChat = !metadata.tainted && !data.length;
     const target = { is_group: true, id: chat_id };
 
@@ -338,6 +348,7 @@ export async function getGroupChat(groupId, reload = false) {
         metadata.integrity = uuidv4();
     }
     updateChatMetadata(metadata, true);
+    consumePendingForceOverwrite(target);
     if (freshChat) {
         invalidateChatWriteSnapshot(target);
     } else {
@@ -719,6 +730,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
             console.debug('[ChatWrite] Group save dropped: no active group chat target.');
             return false;
         }
+        consumePendingForceOverwrite(context?.target ?? { is_group: true, id: group.chat_id });
         console.error('[ChatWrite] Group save refused: chat not fully loaded (integrity missing).');
         toastr.error(
             t`Refusing to save: chat is not fully loaded. Reload the page to prevent data loss.`,
@@ -732,11 +744,17 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     const resolvedGroupId = String(saveContext?.groupId || groupId || '').trim();
     const group = groups.find(x => String(x?.id || '') === resolvedGroupId);
     if (!group) {
+        if (saveContext?.target) {
+            consumePendingForceOverwrite(saveContext.target);
+        }
         console.warn('Group not found', resolvedGroupId);
         return false;
     }
     const chatId = saveContext?.target?.id ?? group.chat_id;
     if (!chatId) {
+        if (saveContext?.target) {
+            consumePendingForceOverwrite(saveContext.target);
+        }
         console.warn('Group chat id is empty', resolvedGroupId);
         return false;
     }
@@ -850,21 +868,53 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
     }
 
     if (!response.ok) {
+        const conflictSnapshot = { attempted: false, snapshot: null, error: null, corrupted: false };
         const conflictResolution = !effectiveForce
             ? await resolveChatWriteConflictForTarget(response, target, metadataSnapshot, retryAttempt, {
                 endpoint: requestSummary?.endpoint ?? 'group save',
                 opSummary: requestSummary?.opSummary ?? null,
                 sentIntegrity: metadataSnapshot?.integrity,
+                onServerSnapshot: (result) => {
+                    conflictSnapshot.attempted = true;
+                    conflictSnapshot.snapshot = result?.snapshot ?? null;
+                    conflictSnapshot.error = result?.error ?? null;
+                    conflictSnapshot.corrupted = Boolean(result?.corrupted);
+                },
             })
             : 'none';
         if (conflictResolution !== 'none') {
             if (conflictResolution === 'integrity' || conflictResolution === 'snapshot') {
-                const loaded = await loadGroupChat(chatId);
-                const loadedMetadata = loaded[0]?.chat_metadata ?? {};
-                const loadedMessages = Object.hasOwn(loaded[0] ?? {}, 'chat_metadata') ? loaded.slice(1) : loaded;
-                seedChatMetadataSnapshot(target, loadedMetadata);
-                seedChatMessageSnapshot(target, loadedMessages);
-                applyIntegrityFromWritePayloadToTarget(loadedMetadata, target, metadataSnapshot);
+                // Reuse the single /api/chats/group/get result fetched during conflict
+                // diagnostics; rethrow read failures to abort the retry rather than
+                // overwriting concurrent server edits.
+                let serverSnapshot = null;
+                if (conflictSnapshot.attempted) {
+                    if (conflictSnapshot.error) {
+                        throw conflictSnapshot.error;
+                    }
+                    serverSnapshot = conflictSnapshot.snapshot;
+                } else if (conflictResolution === 'integrity') {
+                    const loaded = await loadGroupChat(chatId);
+                    if (loaded.length === 0) {
+                        serverSnapshot = { metadata: {}, messages: [], existsOnServer: false };
+                    } else {
+                        const rawMeta = loaded[0]?.chat_metadata;
+                        const loadedMetadata = (rawMeta && typeof rawMeta === 'object' && !Array.isArray(rawMeta))
+                            ? rawMeta
+                            : {};
+                        const loadedMessages = Object.hasOwn(loaded[0] ?? {}, 'chat_metadata') ? loaded.slice(1) : loaded;
+                        serverSnapshot = { metadata: loadedMetadata, messages: loadedMessages, existsOnServer: true };
+                    }
+                }
+                if (serverSnapshot) {
+                    if (serverSnapshot.existsOnServer === false) {
+                        invalidateChatWriteSnapshot(target);
+                    } else {
+                        seedChatMetadataSnapshot(target, serverSnapshot.metadata);
+                        seedChatMessageSnapshot(target, serverSnapshot.messages);
+                        applyIntegrityFromWritePayloadToTarget(serverSnapshot.metadata, target, metadataSnapshot);
+                    }
+                }
             }
             return await saveGroupChatInternal(resolvedGroupId, shouldSaveGroup, force, retryAttempt + 1, {
                 ...(saveContext ?? {}),
@@ -881,6 +931,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
             // but force=true skipped the resolver. Invalidate explicitly here
             // so the next save re-syncs from BE truth.
             invalidateChatWriteSnapshot(target);
+            consumePendingForceOverwrite(target);
             toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Group Chat could not be saved`);
             console.error('Group chat could not be saved', response);
             return false;
@@ -888,6 +939,7 @@ async function saveGroupChatInternal(groupId, shouldSaveGroup, force = false, re
         // 409 + resolver returned 'none' (retryAttempt > 0): the resolver's
         // early-return doesn't invalidate, but the optimistic commit is stale.
         invalidateChatWriteSnapshot(target);
+        consumePendingForceOverwrite(target);
         toastr.error(t`Group chat changed on server. Reloaded once and save still failed.`, t`Group Chat could not be saved`);
         return false;
     }
@@ -914,6 +966,7 @@ async function saveGroupChat(groupId, shouldSaveGroup, force = false, retryAttem
             return await saveGroupChatInternal(groupId, shouldSaveGroup, force, retryAttempt, saveContext);
         } catch (error) {
             invalidateChatWriteSnapshot(saveContext.target);
+            consumePendingForceOverwrite(saveContext.target);
             const chatId = saveContext.target.id;
             toastr.error(t`Group chat ${chatId} could not be saved. Check the server connection and retry saving.`, t`Group Chat could not be saved`, { escapeHtml: true });
             console.error(`Group chat ${chatId} could not be saved`, error);
